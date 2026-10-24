@@ -111,18 +111,21 @@ func writeRescueTree(out string, files []apiv1.RescueTreeFile) ([]rescueReceiptF
 	if err := reserveOutputDir(abs); err != nil {
 		return nil, err
 	}
-	parent := filepath.Dir(abs)
-	tmp, err := os.MkdirTemp(parent, ".rescue-read-")
-	if err != nil {
-		return nil, err
+	if err := os.Mkdir(abs, 0o700); err != nil {
+		return nil, errors.New("--out already exists")
 	}
 	ok := false
 	defer func() {
-		if !ok {
-			_ = os.RemoveAll(tmp)
+		if ok {
+			return
 		}
+		fi, statErr := os.Lstat(abs)
+		if statErr != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			return
+		}
+		_ = os.RemoveAll(abs)
 	}()
-	root, err := os.OpenRoot(tmp)
+	root, err := os.OpenRoot(abs)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +150,8 @@ func writeRescueTree(out string, files []apiv1.RescueTreeFile) ([]rescueReceiptF
 		if werr != nil || cerr != nil || n != len(f.Bytes) {
 			return nil, errors.New("writing the rescue tree failed")
 		}
-		full := filepath.Join(tmp, filepath.FromSlash(f.Path))
-		rel, err := filepath.Rel(tmp, full)
+		full := filepath.Join(abs, filepath.FromSlash(f.Path))
+		rel, err := filepath.Rel(abs, full)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, errors.New("writing the rescue tree failed")
 		}
@@ -156,9 +159,6 @@ func writeRescueTree(out string, files []apiv1.RescueTreeFile) ([]rescueReceiptF
 			return nil, err
 		}
 		receipt = append(receipt, rescueReceiptFile{Path: f.Path, Mode: f.Mode, SHA256: f.SHA256, Bytes: len(f.Bytes)})
-	}
-	if err := os.Rename(tmp, abs); err != nil {
-		return nil, err
 	}
 	ok = true
 	return receipt, nil

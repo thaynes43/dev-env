@@ -2,8 +2,6 @@ package apiserver
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -16,8 +14,8 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
-	"github.com/thaynes43/dev-env/internal/shelf"
 )
 
 const (
@@ -32,59 +30,76 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 	sh := &fakeShelf{}
 	f.srv.Shelf = sh
 	before := sessionNames(t, f)
+	sh.tree = protocol.RescueTree{OK: true, Files: []protocol.RescueTreeFile{{Path: "README.md", Bytes: []byte("PLANTED-SECRET")}}}
+
 	name := "byte-1006-170000"
 	uid := f.podlessRescue(name, treeRepo, humanSA, "")
 	id := name + "/" + treeStamp
-	sh.tree = goodTree(id)
 	path := treePath(name, uid, treePod, "")
-
-	w := f.do(http.MethodGet, path, tokHuman, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("human parent: %d %s", w.Code, w.Body.String())
+	e := wantError(t, f.do(http.MethodGet, path, tokHuman, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	if strings.Contains(e.Message, "PLANTED-SECRET") || len(sh.trees) != 0 || len(sh.held) != 0 {
+		t.Fatalf("human reached bytes: %s trees %v", e.Message, sh.trees)
 	}
-	got := decode[apiv1.RescueTree](t, w)
-	sum := sha256.Sum256([]byte("edited\n"))
-	if got.ID != id || got.SessionUID != uid || got.PodUID != treePod || got.Repo != treeRepo || got.Commit != treeCommit || len(got.Files) != 1 || got.Files[0].SHA256 != hex.EncodeToString(sum[:]) || string(got.Files[0].Bytes) != "edited\n" {
-		t.Fatalf("tree %+v", got)
-	}
-	if w2 := f.do(http.MethodGet, path, tokHuman, nil); w2.Code != http.StatusOK {
-		t.Fatalf("repeat: %d %s", w2.Code, w2.Body.String())
-	}
-	if len(sh.held) != 0 || len(sh.trees) != 2 {
-		t.Fatalf("held %v trees %v", sh.held, sh.trees)
-	}
-	if names := sessionNames(t, f); len(names) != len(before)+1 || !names[name] {
-		t.Fatalf("sessions changed: before %v after %v", before, names)
+	if w := f.do(http.MethodGet, path, tokHuman, nil); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "edited") {
+		t.Fatalf("repeat: %d %s", w.Code, w.Body.String())
 	}
 
-	// Listing is not byte permission. The client can list and cannot read.
 	sh.list.Rescues = []protocol.RescueEntry{{ID: id, Session: name, Name: treeStamp, Finished: true}}
 	if w := f.do(http.MethodGet, apiv1.RescuesPath, tokClient, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), id) {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
 	}
-	e := wantError(t, f.do(http.MethodGet, path, tokClient, nil), http.StatusForbidden, apiv1.CodeForbidden)
-	if strings.Contains(e.Message, humanSA) || len(sh.trees) != 2 {
-		t.Fatalf("other owner leaked or reached the shelf: %s trees %v", e.Message, sh.trees)
+	e = wantError(t, f.do(http.MethodGet, path, tokClient, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	if strings.Contains(e.Message, humanSA) || len(sh.trees) != 0 {
+		t.Fatalf("client leaked or reached the shelf: %s trees %v", e.Message, sh.trees)
 	}
-
 	clientName := "byte-1006-170001"
 	clientUID := f.podlessRescue(clientName, treeRepo, clientSA, "")
-	sh.tree = goodTree(clientName + "/" + treeStamp)
-	if w := f.do(http.MethodGet, treePath(clientName, clientUID, treePod, ""), tokClient, nil); w.Code != http.StatusOK {
-		t.Fatalf("owning client: %d %s", w.Code, w.Body.String())
-	}
+	wantError(t, f.do(http.MethodGet, treePath(clientName, clientUID, treePod, ""), tokClient, nil), http.StatusForbidden, apiv1.CodeForbidden)
 
 	own := "byte-1006-170002"
 	ownTok := f.sessionPod(own, "dev", 0)
 	ownUID := f.markRescue(own, treeRepo, "")
-	sh.tree = goodTree(own + "/" + treeStamp)
-	if w := f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), ownTok, nil); w.Code != http.StatusOK {
-		t.Fatalf("own session: %d %s", w.Code, w.Body.String())
+	withheld := wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if !strings.Contains(withheld.Message, "not served") || strings.Contains(withheld.Message, "PLANTED-SECRET") || len(sh.trees) != 0 {
+		t.Fatalf("own session served bytes: %s trees %v", withheld.Message, sh.trees)
 	}
 	otherTok := f.sessionPod("byte-1006-170003", "dev", 0)
 	e = wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), otherTok, nil), http.StatusForbidden, apiv1.CodeForbidden)
 	if strings.Contains(e.Message, humanSA) {
 		t.Fatalf("sibling leaked %s", e.Message)
+	}
+
+	parentName := "byte-1006-170010"
+	parentTok := f.sessionPod(parentName, "dev", 0)
+	parentUID := string(f.session(parentName).UID)
+	named := "byte-1006-170011"
+	f.podlessRescue(named, treeRepo, parentName, "")
+	wantError(t, f.do(http.MethodGet, treePath(named, string(f.session(named).UID), treePod, ""), parentTok, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	proved := "byte-1006-170012"
+	f.childRescue(proved, parentName, parentUID)
+	child := wantError(t, f.do(http.MethodGet, treePath(proved, string(f.session(proved).UID), treePod, ""), parentTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if !strings.Contains(child.Message, "not served") || len(sh.trees) != 0 {
+		t.Fatalf("proved child: %s trees %v", child.Message, sh.trees)
+	}
+
+	omitted := f.session(own)
+	omitted.Status.Rescue.OmittedRefs = 1
+	if err := f.c.Status().Update(context.Background(), omitted); err != nil {
+		t.Fatal(err)
+	}
+	e = wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if !strings.Contains(e.Message, "incomplete") || len(sh.trees) != 0 {
+		t.Fatalf("omitted refs: %s", e.Message)
+	}
+	omitted = f.session(own)
+	omitted.Status.Rescue.OmittedRefs = 0
+	omitted.Status.Rescue.UnpushedRefs[0].Commit = strings.Repeat("b", 40)
+	if err := f.c.Status().Update(context.Background(), omitted); err != nil {
+		t.Fatal(err)
+	}
+	e = wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if !strings.Contains(e.Message, "canonical") || len(sh.trees) != 0 {
+		t.Fatalf("absent commit: %s", e.Message)
 	}
 
 	deep := "byte-1006-170004"
@@ -98,62 +113,71 @@ func TestReadRescueTreeAuthorizesTheParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantError(t, f.do(http.MethodGet, treePath(canary, f.markRescue(canary, treeRepo, ""), treePod, ""), canaryTok, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	pilot := "byte-1006-170013"
+	pilotTok := f.sessionPod(pilot, "dev", 0)
+	ps := f.session(pilot)
+	ps.Annotations = map[string]string{projectcanary.PilotAnnotation: "pilot"}
+	if err := f.c.Update(context.Background(), ps); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, f.do(http.MethodGet, treePath(pilot, f.markRescue(pilot, treeRepo, ""), treePod, ""), pilotTok, nil), http.StatusForbidden, apiv1.CodeForbidden)
 	wantError(t, f.do(http.MethodGet, apiv1.RescueTreePath(name, treeStamp), tokStranger, nil), http.StatusForbidden, apiv1.CodeForbidden)
 
-	trees := len(sh.trees)
-	wantError(t, f.do(http.MethodGet, apiv1.RescueTreePath("missing-1006-170000", treeStamp)+query(uid, treePod, ""), tokHuman, nil), http.StatusNotFound, apiv1.CodeNotFound)
-	wantError(t, f.do(http.MethodGet, apiv1.RescueTreePath("Not_A_Name", treeStamp)+query(uid, treePod, ""), tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	wantError(t, f.do(http.MethodGet, treePath(name, "22222222-2222-4222-8222-222222222222", treePod, ""), tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	wantError(t, f.do(http.MethodGet, treePath(name, uid, "33333333-3333-4333-8333-333333333333", ""), tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	wantError(t, f.do(http.MethodGet, strings.Replace(treePath(name, uid, treePod, ""), "repo="+treeRepo, "repo=dev-env", 1), tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	wantError(t, f.do(http.MethodGet, treePath(name, uid, treePod, "")+"&extra=1", tokHuman, nil), http.StatusBadRequest, apiv1.CodeBadRequest)
-	f.supersede(name)
-	wantError(t, f.do(http.MethodGet, path, tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	if len(sh.trees) != trees {
-		t.Fatalf("a refused binding called the shelf: %v", sh.trees[trees:])
+	wantError(t, f.do(http.MethodGet, apiv1.RescueTreePath("missing-1006-170000", treeStamp)+query(ownUID, treePod, ""), ownTok, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodGet, apiv1.RescueTreePath("missing-1006-170000", treeStamp)+query(uid, treePod, ""), tokHuman, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	wantError(t, f.do(http.MethodGet, apiv1.RescueTreePath("Not_A_Name", treeStamp)+query(ownUID, treePod, ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodGet, treePath(own, "22222222-2222-4222-8222-222222222222", treePod, ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodGet, treePath(own, ownUID, "33333333-3333-4333-8333-333333333333", ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodGet, strings.Replace(treePath(own, ownUID, treePod, ""), "repo="+treeRepo, "repo=dev-env", 1), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, "")+"&extra=1", ownTok, nil), http.StatusBadRequest, apiv1.CodeBadRequest)
+	f.supersede(own)
+	wantError(t, f.do(http.MethodGet, treePath(own, ownUID, treePod, ""), ownTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if len(sh.trees) != 0 || len(sh.held) != 0 {
+		t.Fatalf("a refused binding called the shelf: trees %v held %v", sh.trees, sh.held)
 	}
 
 	projectName := "byte-1006-170006"
+	projectTok := f.sessionPod(projectName, "dev", 0)
 	snap := treeSnapshot(t, "dev-env", treeRepo)
-	projectUID := f.podlessRescue(projectName, treeRepo, humanSA, snap)
+	projectUID := f.markRescue(projectName, treeRepo, snap)
 	if gotSnap := f.session(projectName).Annotations[v1alpha1.AnnotationProjectSnapshot]; gotSnap == "" {
 		t.Fatal("project snapshot was not stored")
 	}
-	projectPath := treePath(projectName, projectUID, treePod, "dev-env")
-	sh.tree = goodTree(projectName + "/" + treeStamp)
-	w = f.do(http.MethodGet, projectPath, tokHuman, nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("project: %d %s", w.Code, w.Body.String())
+	e = wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, "dev-env"), projectTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	if !strings.Contains(e.Message, "not served") || strings.Contains(e.Message, "PLANTED-SECRET") {
+		t.Fatalf("project: %s", e.Message)
 	}
-	if got := decode[apiv1.RescueTree](t, w); got.Project != "dev-env" {
-		t.Fatalf("project field %q body %s", got.Project, w.Body.String())
+	wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, ""), projectTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, "other"), projectTok, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodGet, treePath(name, uid, treePod, "dev-env"), tokHuman, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	if len(sh.trees) != 0 {
+		t.Fatal("the shelf was asked for file bytes")
 	}
-	wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, ""), tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	wantError(t, f.do(http.MethodGet, treePath(projectName, projectUID, treePod, "other"), tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	wantError(t, f.do(http.MethodGet, treePath(name, uid, treePod, "dev-env"), tokHuman, nil), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantNames := []string{name, clientName, own, "byte-1006-170003", parentName, named, proved, deep, canary, pilot, projectName}
+	after := sessionNames(t, f)
+	if len(after) != len(before)+len(wantNames) {
+		t.Fatalf("a read created a session: before %d after %d %v", len(before), len(after), after)
+	}
+	for _, n := range wantNames {
+		if !after[n] {
+			t.Fatalf("missing %s in %v", n, after)
+		}
+	}
+}
 
-	secret := []byte("PLANTED-SECRET")
-	sh.tree = protocol.RescueTree{Code: protocol.RescueTreeIncomplete, Files: []protocol.RescueTreeFile{{Path: "README.md", Bytes: secret}}}
-	refused := f.do(http.MethodGet, projectPath, tokHuman, nil)
-	e = wantError(t, refused, http.StatusUnprocessableEntity, apiv1.CodeInvalid)
-	if strings.Contains(refused.Body.String(), "PLANTED-SECRET") {
-		t.Fatal("incomplete response contained file bytes")
+func (f *fixture) childRescue(name, parent, parentUID string) string {
+	f.t.Helper()
+	s := &v1alpha1.AgentSession{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: uuid.NewUUID()},
+		Spec: v1alpha1.AgentSessionSpec{
+			Repo: treeRepo, Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p",
+			Parent: parent, UsageCaptureParentUID: parentUID,
+		},
 	}
-	sum = sha256.Sum256(secret)
-	sh.tree = protocol.RescueTree{OK: true, ID: projectName + "/" + treeStamp, Repo: treeRepo, Commit: treeCommit, Ref: "refs/heads/rescue/x", Files: []protocol.RescueTreeFile{{Path: "README.md", Mode: "100644", SHA256: hex.EncodeToString(sum[:]), Bytes: append([]byte(nil), secret...)}}}
-	sh.tree.Files[0].SHA256 = strings.Repeat("ab", 32)
-	w = f.do(http.MethodGet, projectPath, tokHuman, nil)
-	if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "PLANTED-SECRET") {
-		t.Fatalf("hash mismatch: %d %s", w.Code, w.Body.String())
+	if err := f.c.Create(context.Background(), s); err != nil {
+		f.t.Fatal(err)
 	}
-	sh.err = shelf.ErrNoShelf
-	wantError(t, f.do(http.MethodGet, projectPath, tokHuman, nil), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
-	sh.err = nil
-	sh.tree = protocol.RescueTree{Code: protocol.RescueTreeNotFound}
-	wantError(t, f.do(http.MethodGet, projectPath, tokHuman, nil), http.StatusNotFound, apiv1.CodeNotFound)
-	if after := sessionNames(t, f); len(after) != len(before)+7 {
-		t.Fatalf("a read created a session: %v", after)
-	}
+	return f.markRescue(name, treeRepo, "")
 }
 
 func (f *fixture) podlessRescue(name, repo, parent, snapshot string) string {
@@ -185,6 +209,10 @@ func (f *fixture) markRescue(name, repo, snapshot string) string {
 	s.Status.Rescue = &v1alpha1.RescueStatus{
 		Stamp: treeStamp, Result: v1alpha1.RescueVerified, PodUID: treePod,
 		LastBundle: "rescue/" + name + "/" + treeStamp + "/manifest.json",
+		UnpushedRefs: []v1alpha1.RescuedRef{{
+			Repo: "/home/dev/repos/" + repo, Name: "refs/heads/rescue/" + name + "-" + treeStamp,
+			Commit: treeCommit, Bundle: "rescue/" + name + "/" + treeStamp + "/" + repo + ".bundle",
+		}},
 	}
 	if err := f.c.Status().Update(context.Background(), s); err != nil {
 		f.t.Fatal(err)
@@ -215,15 +243,6 @@ func query(sessionUID, podUID, project string) string {
 		q.Set("project", project)
 	}
 	return "?" + q.Encode()
-}
-
-func goodTree(id string) protocol.RescueTree {
-	body := []byte("edited\n")
-	sum := sha256.Sum256(body)
-	return protocol.RescueTree{
-		OK: true, ID: id, Repo: treeRepo, Commit: treeCommit, Ref: "refs/heads/rescue/" + id,
-		Files: []protocol.RescueTreeFile{{Path: "README.md", Mode: "100644", SHA256: hex.EncodeToString(sum[:]), Bytes: body}},
-	}
 }
 
 func treeSnapshot(t *testing.T, project, repo string) string {

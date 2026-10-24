@@ -165,9 +165,9 @@ type RepoBundle struct {
 	// are exactly Refs.
 	Verified bool   `json:"verified,omitempty"`
 	Error    string `json:"error,omitempty"`
-	// TreeArchives are tar copies of this bundle's rescue-branch trees. A thin
-	// bundle does not carry the objects reachable from origin, so a read that
-	// has no clone uses these bytes. Restore does not fetch them.
+	// TreeArchives is unused. File bytes are not stored beside the bundle.
+	// Older manifests may still name a tar; a read does not serve it. Restore
+	// does not fetch one.
 	TreeArchives []TreeArchive `json:"treeArchives,omitempty"`
 	// TreeRefused is a code, not a path, when a rescue branch's tree is not a
 	// set of regular files. The thin bundle stays valid for restore.

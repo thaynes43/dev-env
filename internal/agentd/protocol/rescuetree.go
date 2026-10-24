@@ -4,6 +4,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -17,6 +18,15 @@ const (
 	// TreeNotRegular is RepoBundle.TreeRefused when the rescue tree contains
 	// a symlink, a gitlink, or a path that is not a regular file.
 	TreeNotRegular = "not-regular"
+	// TreeCaptureFailed is RepoBundle.TreeRefused when reading the tree's
+	// metadata failed. The thin bundle stays valid.
+	TreeCaptureFailed = "capture-failed"
+	// TreeTooLarge is RepoBundle.TreeRefused when the tree's blobs could not
+	// fit the existing 8 MiB response cap. The thin bundle stays valid.
+	TreeTooLarge = "too-large"
+	// TreeWithheld is RepoBundle.TreeRefused when the tree was not stored.
+	// File bytes are not written to the shared volume and are not served.
+	TreeWithheld = "withheld"
 )
 
 // RescueTree is what `agentd ctl rescue-tree` prints. OK is false for a
@@ -72,11 +82,30 @@ func AcceptableRescueTreePath(p string) bool {
 		return false
 	}
 	for _, part := range strings.Split(p, "/") {
-		if part == "" || part == "." || part == ".." || part == ".git" {
+		if unsafeTreeComponent(part) {
 			return false
 		}
 	}
 	return true
+}
+
+func unsafeTreeComponent(part string) bool {
+	if part == "" || part == "." || part == ".." || strings.Contains(part, ":") {
+		return true
+	}
+	folded := foldGitComponent(part)
+	return folded == ".git" || folded == ".git~1" || folded == "git~1"
+}
+
+func foldGitComponent(part string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimRight(part, " .") {
+		if unicode.Is(unicode.Cf, r) {
+			continue
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }
 
 // RegularTreeMode reports whether mode is a regular-file mode the rescue

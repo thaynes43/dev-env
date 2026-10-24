@@ -429,7 +429,7 @@ func shelfCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv f
 }
 
 // rescueTreeCtl is `ctl rescue-tree --repo R --commit SHA <session>/<stamp>`.
-// It prints a rescue-branch tree. It does not change the rescue.
+// It prints a refusal. It does not return file bytes or change the rescue.
 func rescueTreeCtl(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
 	fs := flag.NewFlagSet("ctl rescue-tree", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

@@ -217,11 +217,9 @@ func bundleRepo(ctx context.Context, r Runner, s Settings, rr protocol.RepoRescu
 	if err := checkBundle(ctx, r, s, rr.Path, dst, rb.Refs); err != nil {
 		return fail("after the copy: %v", err)
 	}
-	archives, refused, err := writeRescueTreeArchives(ctx, r, rr.Path, absDir, relDir, rb.Refs)
-	if err != nil {
-		return fail("rescue tree: %s", cmdDetail(err))
-	}
-	rb.TreeArchives, rb.TreeRefused = archives, refused
+	// Tree bytes are not stored. A capture failure must not fail this bundle.
+	rb.TreeRefused = classifyRescueTree(ctx, r, rr.Path, rb.Refs)
+	rb.TreeArchives = nil
 	rb.SHA256, rb.Size, rb.Verified = sum, size, true
 	return rb
 }

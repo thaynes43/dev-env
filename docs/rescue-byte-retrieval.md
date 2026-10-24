@@ -1,6 +1,6 @@
 # Rescue byte retrieval
 
-`agent-run rescue read` copies one rescue-branch tree into a new directory. It does not start a model, create an AgentSession, check out a repository, or run hooks.
+`agent-run rescue read` asks for one rescue-branch tree. It does not start a model, create an AgentSession, check out a repository, or run hooks. The API does not return file bytes.
 
 ```
 agent-run rescue read <session>/<stamp> \
@@ -9,47 +9,47 @@ agent-run rescue read <session>/<stamp> \
   [--project <name>] --out <new-directory>
 ```
 
-The API is `GET /v1/rescues/{session}/{stamp}/tree`. The operator reads it by exec of `agentd ctl rescue-tree` in the existing shelf pod. There is no new service, credential, ServiceAccount, Role, or network policy.
+The API is `GET /v1/rescues/{session}/{stamp}/tree`. A caller that passes the binding checks receives `422` and the message that rescued file bytes are not served. The handler does not exec the shelf. There is no new service, credential, ServiceAccount, Role, or network policy.
 
-## What the bytes are
+## What is stored
 
-A rescue of dirty work runs `git add -A` on a copy of the index and commits that tree on `refs/heads/rescue/...`. The worktree and the real index stay as they were. The commit contains the worktree bytes of tracked and untracked files, including files that match HEAD. It does not contain ignored files. A staged blob that differs from the worktree is not the rescued blob: the worktree wins.
+A rescue of dirty work runs `git add -A` on a copy of the index and commits that tree on `refs/heads/rescue/...`. The worktree and the real index stay as they were. The commit contains the Git blob of tracked and untracked files, including files that match HEAD. It does not contain ignored files. A staged blob that differs from the worktree is not the rescued blob: the worktree wins. Those blobs are Git objects after clean, end-of-line, and ident filters. They are not a claim that a worktree byte was served.
 
-The thin bundle is still written, and `git bundle verify` still runs in the clone. That bundle omits objects reachable from origin. On the shelf, `git bundle list-heads` can name the rescue commit, and `git bundle verify` cannot rebuild the tree. Measured on a five-file fixture: the thin bundle was 583 bytes and `git bundle verify` in an empty repository failed for a missing prerequisite. `git archive` of the same commit was 10240 bytes. A full bundle of only the rescue ref was 802 bytes and fetched, and it also carried ancestor history. This path does not store that history.
+The thin bundle is still written, and `git bundle verify` still runs in the clone. That bundle omits objects reachable from origin. On the shelf, `git bundle list-heads` can name the rescue commit, and `git bundle verify` cannot rebuild the tree without the base objects. Measured on a five-file fixture: the thin bundle was 583 bytes and `git bundle verify` in an empty repository failed for a missing prerequisite. A full bundle of only the rescue ref also carried ancestor history. This path does not store that history and does not write a plaintext tree tar.
 
-The disposable rescue fixture in the agentd tests writes six regular files. Its tree tar was 7168 bytes and the JSON response was 1024 bytes. The rescue itself took about 50 ms. Both are far under the existing 8 MiB response cap. The thin bundle for that fixture was about 1 KiB; its exact size follows the worktree path recorded in the rescue commit message.
+After the thin bundle is verified, agentd classifies each rescue-branch tree from `git ls-tree -r -l -z` only. It does not read blob bodies and it does not write a tar. A failure of that listing sets `treeRefused` to `capture-failed`. A symlink, a gitlink, or a path that is not a regular file sets `not-regular` and does not record the link target. A tree whose base64 JSON would exceed the existing 8 MiB response cap sets `too-large`. Any other tree sets `withheld`. None of those codes fails the thin bundle or a verified stop.
 
-During rescue, after the thin bundle is verified, agentd writes a tar of each rescue-branch tree beside the bundle. The tar is built from `git ls-tree -r -z` and `git cat-file --batch`, with hooks disabled, not from `git archive`. Restore ignores the tar. A tree that is not only regular files (`100644` or `100755`) sets `treeRefused` to `not-regular` and omits the tar. The thin bundle stays valid, and a byte read of that rescue is refused.
+Object reads set `GIT_NO_REPLACE_OBJECTS=1`, `GIT_NO_LAZY_FETCH=1`, `GIT_CONFIG_NOSYSTEM=1`, and `GIT_CONFIG_GLOBAL=/dev/null`, and they unset the variables that would point Git at another object store. A replace ref does not choose the bytes that are classified. The manifest hash of a planted tar is not proof of the commit. `ReadRescueTree` does not return file bytes.
 
-## Who can read
+## Who may ask
 
 `GET /v1/rescues` stays metadata. Being allowed to list a rescue is not permission to read its bytes.
 
-The caller class is the class that may restore: human, client, or a session that can still create. A coordinator cannot restore, so a coordinator cannot read bytes. A canary or pilot session cannot create, so it cannot read bytes. A session deeper than the create limit cannot read bytes.
+D-10 and D-48 keep rescue bundles inside the cluster. A human and a client are refused. A coordinator is refused. The only caller that reaches the binding checks is an in-cluster session:
 
-Byte egress is narrower than restore. Restore lets that caller class create a session from any complete rescue. A byte read also requires the existing `spec.parent` identity:
+- the session itself, when the session UID matches the caller
+- its direct child, when `spec.parent` is that session and `spec.usageCaptureParentUID` is that session's UID
 
-- a human or client may read only a session whose `spec.parent` is that caller
-- a session may read its own rescue, or a rescue whose `spec.parent` is that session
+A parent name without that stored UID is refused. A sibling is refused. A canary, a pilot, and a session past the create-depth limit are refused. The other parent's name is not returned. This uses fields sessions already store. It does not add a role, a grant, or an allowlist.
 
-A sibling session is refused. The other parent's name is not returned. This uses the parent field sessions already store. It does not add a role, a grant, or an allowlist.
+The session object must still exist. Its rescue record must be `Verified`, not superseded, and bound to the requested session UID, pod UID, stamp, repository, and manifest path. The requested commit must be a `refs/heads/rescue/...` entry in `status.rescue.unpushedRefs`, with the same repository base name and the same bundle directory as `lastBundle`. `omittedRefs` greater than zero refuses the request, because the canonical list is then incomplete. A project query is required when the session has a project snapshot, and it must name that snapshot. A missing session cannot prove those bindings, so a reaped session is refused here even though restore can still fetch its bundle.
 
-The session object must still exist. Its rescue record must be `Verified`, not superseded, and bound to the requested session UID, pod UID, stamp, repository, and manifest path. A project query is required when the session has a project snapshot, and it must name that snapshot. A missing session cannot prove those bindings, so a reaped session is refused here even though restore can still fetch its bundle.
+Passing those checks still does not return file bytes. The read does not call `hold-rescue` and does not change the rescue directory.
 
-The read does not call `hold-rescue` and does not change the rescue directory.
+Serving those bytes to a human or a client, or storing a plaintext copy of the tree on the shared volume, is a different authority. DESIGN-001 was not changed. The choice between handing the existing thin bundle to an in-cluster recipient that already has the base, and handing a bounded delta against that base, is recorded for the design lead. Neither is implemented here.
 
 ## Limits already in force
 
-The shelf exec and `agent-run` both stop at 8 MiB of response (`maxOutput` and `maxResponse`). This path does not raise that cap and does not add another one. A tree whose JSON exceeds it fails closed. A dev-env worktree measured about 13 MiB without `.git`, so a rescue of this repository is larger than the existing response cap. The installed drill uses a small tree.
+The shelf exec and `agent-run` both stop at 8 MiB of response (`maxOutput` and `maxResponse`, `8 << 20`). This path does not raise that cap and does not add another deadline. Classification estimates the base64 size before it would allocate blob bodies, and it does not allocate them. A dev-env worktree measured about 12 MiB of tracked files, so a whole-tree JSON of this repository is larger than the existing response cap. The shelf container memory limit is 256 MiB. The installed shelf image does not contain this route.
 
-The read refuses a path that is absolute, escapes the rescue directory, contains `..` or `.git`, or is a symlink. It refuses a tar entry that is not a regular file. `--out` must be a new directory, must not exist, and must not pass through a symlink. The command prints paths and SHA-256 hashes, not file contents. A failed read leaves no `--out` directory.
+`agent-run rescue read` still refuses to write a response that fails its own checks. `--out` must be a new directory. The command creates it with `mkdir` so a directory that appears in between is not replaced. `--out` must not pass through a symlink, so a path whose ancestor is a symlink (macOS `/tmp` and `/var`) is refused. A path component that folds to `.git`, `.git~1`, or `git~1`, or that contains `:`, is refused. The command prints hashes, not file contents, and only when a response matches the request. The server does not produce that response.
 
 ## Proof classes
 
 | Class | Route |
 | --- | --- |
 | Public handoff excerpt | published context, separate from this path |
-| Rescue one-tree bytes | `agent-run rescue read` |
+| Rescue one-tree bytes | not served; the thin bundle remains the rescue artifact |
 | Private native history | history archive, not this path |
 
-A commit id, a bundle hash, or a rescue list entry is not acceptance of the file bytes. #101 is not accepted by this source path. The installed drill is a later stage.
+A commit id, a bundle hash, a header label, or a rescue list entry is not acceptance of file bytes. #101 is not accepted by this source path. The installed drill is a later stage and waits on the artifact choice.

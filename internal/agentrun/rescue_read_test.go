@@ -75,6 +75,15 @@ func TestRescueReadWritesOnlyAVerifiedTree(t *testing.T) {
 	if string(mustRead(t, filepath.Join(out, "README.md"))) != marker {
 		t.Fatal("a collision rewrote the directory")
 	}
+	empty := filepath.Join(parent, "empty-exists")
+	if err := os.Mkdir(empty, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h.mustRun(ExitFailed, "rescue", "read", id, "--repo", "haynes-ops", "--commit", commit, "--session-uid", sessionUID, "--pod-uid", podUID, "--out", empty)
+	entries, err := os.ReadDir(empty)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("an empty directory was replaced: %v %v", entries, err)
+	}
 
 	linkParent := t.TempDir()
 	real := filepath.Join(linkParent, "real")
@@ -109,6 +118,13 @@ func TestRescueReadWritesOnlyAVerifiedTree(t *testing.T) {
 	h.mustRun(ExitFailed, "rescue", "read", id, "--repo", "haynes-ops", "--commit", commit, "--session-uid", sessionUID, "--pod-uid", podUID, "--out", filepath.Join(parent, "mismatch"))
 	if _, err := os.Stat(filepath.Join(parent, "mismatch")); !os.IsNotExist(err) {
 		t.Fatalf("hash mismatch created --out: %v", err)
+	}
+	gitPath := saved
+	gitPath.Files = []apiv1.RescueTreeFile{{Path: ".GIT/config", Mode: "100644", SHA256: hex.EncodeToString(sum[:]), Bytes: body}}
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, gitPath) }
+	h.mustRun(ExitFailed, "rescue", "read", id, "--repo", "haynes-ops", "--commit", commit, "--session-uid", sessionUID, "--pod-uid", podUID, "--out", filepath.Join(parent, "gitpath"))
+	if _, err := os.Stat(filepath.Join(parent, "gitpath")); !os.IsNotExist(err) {
+		t.Fatalf("unsafe path created --out: %v", err)
 	}
 	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, saved) }
 	h.mustRun(ExitOK, "rescue", "read", id, "--repo", "haynes-ops", "--commit", commit, "--session-uid", sessionUID, "--pod-uid", podUID, "--out", filepath.Join(parent, "retry"), "-o", "json")

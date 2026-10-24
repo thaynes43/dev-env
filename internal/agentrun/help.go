@@ -338,11 +338,13 @@ the layout are listed as unrecognized and never pruned.
   --session <name>   only this session's rescues
   -o json            the API's list as JSON
 
-rescue read copies one rescue-branch tree into a new directory. It does not
-start a session, check out a repository, or run hooks. The commit must be the
-rescue branch's tip; the session's branch commit is not enough. --out must not
-exist. A repeat into the same directory is refused. The command prints each
-path and its SHA-256, not the file bytes.
+rescue read asks for one rescue-branch tree. It does not start a session.
+The API does not return file bytes: rescue bundles stay in the cluster (D-10,
+D-48). A human or client is refused. A session is refused unless it is that
+session, by UID, or the direct child whose stored parent UID is that session.
+--out must not exist and must not pass through a symlink, so a path whose
+ancestor is a symlink (macOS /tmp and /var) is refused. The command prints
+hashes, not file bytes, and only after the response matches the request.
   --repo <name>         the clone the rescue holds
   --commit <oid>        the rescue-branch commit
   --session-uid <uid>   the rescued session's UID
