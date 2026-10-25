@@ -1,6 +1,6 @@
 # Saga: distributed-dev-env (dev-env v2)
 
-**Current source pointer, 2026-10-24 Story189 Packet A:** the [provider allowance contract](designs/030-provider-allowance-contract.md) is a source-only typed observation and cached-read document. It does not accept Epic187, Story188, or a collector. Packets B–F stay held. Older installed-state paragraphs below remain historical.
+**Current source pointer, 2026-10-25 Story190 C1:** the [consolidated usage report](../../../docs/usage-consolidation-report.md) is a pure projector over caller-authorized allowance reads and initial-invocation observations. It does not accept Epic187, Story188, a collector, portal, or provider coverage. The [provider allowance contract](designs/030-provider-allowance-contract.md) remains a source-only typed observation and cached-read document. Packets B–F stay held. Older installed-state paragraphs below remain historical.
 
 **Current2026-10-19 Story110:** [source/release/operator delivery and exact009
 access hold](verification/owned-operator-replacement-2026-10-19.md#delivered-checkpoint--2026-10-19-0934-utc)
