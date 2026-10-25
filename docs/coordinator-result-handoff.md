@@ -152,7 +152,7 @@ git -C "$dest" checkout --detach "$pin"
 sha256sum "$dest/scripts/upgrade-agent/deliver_reviewed_pr.py"
 # expect 1e451ca00c80d176d8f08a142f40cb491b94e8936610389e7c61137db90a21e0
 export DEV_ENV_SHARED_GUARD_CHECKOUT="$dest"
-nice -n 19 python3 -O -B -m unittest discover -s scripts/delivery -p 'test_*.py' -v
+nice -n 19 python3 -I -B -O -m unittest discover -s scripts/delivery -p 'test_*.py' -v
 ```
 
 That checkout has to be a complete copy of the commit, including the helper blob. The commands above are. A blobless or sparse partial clone does not have the objects the dirty-helper test clones, and the tests will not fetch the missing objects. Hosted CI checks out that same commit with `actions/checkout` (`fetch-depth: 1`, no sparse filter) and sets `DEV_ENV_SHARED_GUARD_CHECKOUT`. The wrapper itself takes `--shared-checkout` and does not read that variable.
@@ -160,7 +160,7 @@ That checkout has to be a complete copy of the commit, including the helper blob
 The evidence file is a coordinator attestation. It does not grant authority. Required fields are exact: repository `thaynes43/dev-env`, the pull request number, `reviewedCommit` equal to the delivered head, `nativeVerdict` of `PASS` or `PASS-with-minors`, every finding `resolved` or `not-applicable` with a concrete reason, `scopeAuthorization.scope` of `source-only`, `pendingHolds` as an empty array, `writableImplementer` as boolean false, and a `receipt` hash plus source for the original native result. Unknown required values refuse. Zero and false must be those JSON types. Do not put provider, model, tokens, or other secrets in the file. The audit records `nativeEvidenceProvenance` and `configurationProvenance` as `Unknown`.
 
 ```bash
-python3 scripts/delivery/deliver_dev_env_pr.py deliver \
+python3 -I -B scripts/delivery/deliver_dev_env_pr.py deliver \
   --pr 545 \
   --head "$head" \
   --expected-main "$main" \
@@ -169,4 +169,4 @@ python3 scripts/delivery/deliver_dev_env_pr.py deliver \
   --audit-output audit.json
 ```
 
-`deliver` writes the audit, refuses a mismatched or dirty helper, and invokes the pinned guard once. The guard runs this wrapper's `preflight` subcommand. Preflight reads the open pull request and current `main`, writes those observations, then applies the evidence and check gates. `CI - Success` must be green. A named advisory failure may be the only failing check. Advisory success does not replace required CI or the native verdict. An unknown, blocked, behind, draft, or conflicting result refuses. Action-specific holds stay in force: a non-empty `pendingHolds` or a true `writableImplementer` refuses.
+`deliver` writes the audit, refuses a mismatched, hash-mismatched, or dirty checkout, and invokes the pinned guard once. The guard runs this wrapper's `preflight` subcommand. Both nested commands use isolated Python interpreters. The supported top-level route above must also use `-I`: a wrapper already started without isolation cannot undo imports it has already loaded. Preflight reads the open pull request and current `main`, writes those observations, then applies the evidence and check gates. `CI - Success` must be green. A named advisory failure may be the only failing check. Advisory success does not replace required CI or the native verdict. An unknown, blocked, behind, draft, or conflicting result refuses. Action-specific holds stay in force: a non-empty `pendingHolds` or a true `writableImplementer` refuses.
