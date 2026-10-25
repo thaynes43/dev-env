@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -73,7 +71,6 @@ func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, 
 	opts := &client.ListOptions{Namespace: portalReaderNamespace, Limit: int64(limit)}
 	if cursor != nil {
 		opts.Continue = cursor.Continue
-		opts.Raw = &metav1.ListOptions{ResourceVersion: cursor.RV}
 	}
 	var list v1alpha1.AgentSessionList
 	if err := s.Live.List(ctx, &list, opts); err != nil {

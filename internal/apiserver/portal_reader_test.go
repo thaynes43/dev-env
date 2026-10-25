@@ -66,8 +66,8 @@ func TestPortalReaderSessionSummaries(t *testing.T) {
 		t.Fatalf("second page %+v", rest)
 	}
 	continued := live.lists[len(live.lists)-1]
-	if continued.Continue == "" || continued.Raw == nil || continued.Raw.ResourceVersion != "7" || continued.Limit != 2 {
-		t.Fatalf("continuation lost its snapshot: %+v", continued)
+	if continued.Continue == "" || continued.Raw != nil || continued.Limit != 2 {
+		t.Fatalf("continuation did not use the opaque snapshot token alone: %+v", continued)
 	}
 	live.changed = true
 	if f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2&cursor="+rest.NextCursor, "tok-portal", nil).Code == http.StatusOK {
@@ -159,7 +159,10 @@ func (p *portalLive) List(_ context.Context, list client.ObjectList, opts ...cli
 		copied.Raw = &raw
 	}
 	p.lists = append(p.lists, copied)
-	if p.changed || (lo.Raw != nil && lo.Raw.ResourceVersion != "" && lo.Raw.ResourceVersion != p.rv) {
+	if lo.Continue != "" && lo.Raw != nil && lo.Raw.ResourceVersion != "" {
+		return errors.New("continue must not set resourceVersion")
+	}
+	if p.changed {
 		return apierrors.NewResourceExpired("expired")
 	}
 	items := append([]v1alpha1.AgentSession{}, p.sessions...)

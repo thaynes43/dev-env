@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -333,5 +335,84 @@ func TestProjectCollectionPagesAndSessionObjects(t *testing.T) {
 		if !strings.Contains(w.Body.String(), "Tasks unavailable") || strings.Contains(w.Body.String(), "The completed task read returned no work packages") || strings.Contains(w.Body.String(), "DUP") {
 			t.Fatalf("malformed collection looked complete: %s", w.Body.String())
 		}
+	}
+}
+
+func TestPortalProductDecodersRejectNullsAndKeepExplicitZeroValues(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	session := `{"sessions":[],"limit":50,"complete":false,"freshness":"observed","observedAt":"2026-10-25T11:59:00Z","nextCursor":"next"}`
+	for name, body := range map[string]string{
+		"complete": strings.Replace(session, `"complete":false`, `"complete":null`, 1),
+		"sessions": strings.Replace(session, `"sessions":[]`, `"sessions":null`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeSessionPage([]byte(body), now); err == nil {
+				t.Fatal("null session field was accepted")
+			}
+		})
+	}
+	page, err := decodeSessionPage([]byte(session), now)
+	if err != nil || page.Complete || len(page.Sessions) != 0 || page.NextCursor != "next" {
+		t.Fatalf("explicit false and empty array changed: page=%+v err=%v", page, err)
+	}
+
+	task := `{"total":0,"count":0,"pageSize":50,"offset":1,"_embedded":{"elements":[]},"_links":{}}`
+	for name, body := range map[string]string{
+		"total":    strings.Replace(task, `"total":0`, `"total":null`, 1),
+		"count":    strings.Replace(task, `"count":0`, `"count":null`, 1),
+		"pageSize": strings.Replace(task, `"pageSize":50`, `"pageSize":null`, 1),
+		"offset":   strings.Replace(task, `"offset":1`, `"offset":null`, 1),
+		"elements": strings.Replace(task, `"elements":[]`, `"elements":null`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, _, err := decodeTaskPage([]byte(body), 1, map[int]struct{}{}); err == nil {
+				t.Fatal("null task field was accepted")
+			}
+		})
+	}
+	rows, total, complete, err := decodeTaskPage([]byte(task), 1, map[int]struct{}{})
+	if err != nil || total != 0 || !complete || len(rows) != 0 {
+		t.Fatalf("explicit zero values changed: rows=%v total=%d complete=%t err=%v", rows, total, complete, err)
+	}
+}
+
+func TestSessionSourceReadKeepsTheWorstPage(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name   string
+		pages  []string
+		notice string
+	}{
+		{name: "unknown then stale", pages: []string{"unknown", "stale"}, notice: "Session freshness is unknown."},
+		{name: "stale then unknown", pages: []string{"stale", "unknown"}, notice: "Session freshness is unknown."},
+		{name: "observed", pages: []string{"observed", "observed"}, notice: "The completed session read returned no dev-env sessions."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cert, ca := mintNamed(t, operatorPortalHost)
+			requests := 0
+			server := serveTLS(t, cert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				freshness := test.pages[requests-1]
+				complete := requests == len(test.pages)
+				next := ""
+				if !complete {
+					next = `,"nextCursor":"next"`
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"sessions":[],"limit":50,"complete":` + strconv.FormatBool(complete) + `,"freshness":"` + freshness + `","observedAt":"2026-10-25T11:59:00Z"` + next + `}`))
+			}))
+			tokenPath := filepath.Join(t.TempDir(), "operator")
+			if err := os.WriteFile(tokenPath, []byte(fixtureOperatorToken("dev-env-operator", now.Add(time.Hour))+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source, err := newSessionSource(tokenPath, ca, func() time.Time { return now }, routeDial(map[string]string{operatorPortalHost: server}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := source.Read(context.Background())
+			if err != nil || requests != len(test.pages) || page.Notice != test.notice {
+				t.Fatalf("page=%+v requests=%d err=%v", page, requests, err)
+			}
+		})
 	}
 }
