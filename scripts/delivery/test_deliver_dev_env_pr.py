@@ -306,7 +306,7 @@ class DeliveryTests(unittest.TestCase):
     def command(self, subcommand: str, checkout: Path | None = None) -> list[str]:
         root = checkout or self.checkout
         return [
-            sys.executable,
+            *delivery.python_command(),
             str(Path(delivery.__file__).resolve()),
             subcommand,
             "--pr",
@@ -331,8 +331,8 @@ class DeliveryTests(unittest.TestCase):
         proc_timeout: int = 30,
     ) -> subprocess.CompletedProcess[str]:
         argv = self.command(subcommand, checkout)
-        if optimize:
-            argv.insert(1, "-O")
+        if optimize and not sys.flags.optimize:
+            argv.insert(len(delivery.python_command()), "-O")
         env = os.environ.copy()
         env["PATH"] = str(self.bin) + os.pathsep + env.get("PATH", "")
         env["DELIVER_FAKE_LOG"] = str(self.log)
@@ -533,7 +533,7 @@ class DeliveryTests(unittest.TestCase):
                 if self.count.exists():
                     self.count.unlink()
                 self.write_evidence(document)
-                proc = self.run_wrapper()
+                proc = self.run_wrapper(optimize=True)
                 self.assert_refused(proc, snippet)
 
     def test_secret_marker_is_not_retained(self) -> None:
@@ -682,7 +682,7 @@ class DeliveryTests(unittest.TestCase):
         helper.write_bytes(helper.read_bytes() + b"\n")
         self.write_evidence()
         proc = self.run_wrapper(checkout=clone)
-        self.assert_refused(proc, "shared guard helper is dirty")
+        self.assert_refused(proc, "shared guard checkout is dirty")
         self.assertEqual(self.rows(), [])
         audit = json.loads(self.audit.read_text(encoding="utf-8"))
         self.assertNotEqual(audit["pin"]["observedSha256"], delivery.PINNED_SHA256)
@@ -721,7 +721,7 @@ class DeliveryTests(unittest.TestCase):
 
     def test_guard_command_has_one_source_only_preflight(self) -> None:
         self.write_evidence()
-        namespace = delivery.build_parser().parse_args(self.command("deliver")[2:])
+        namespace = delivery.build_parser().parse_args(self.command("deliver")[len(delivery.python_command()) + 1 :])
         command = delivery.guard_command(namespace)
         self.assertEqual(command.count("--source-only"), 1)
         self.assertIn("preflight", command)
@@ -729,7 +729,11 @@ class DeliveryTests(unittest.TestCase):
         self.assertNotIn("flux", command)
         for flag in ("--admin", "--force", "--auto", "--auto-merge", "--reconcile", "--delete-branch"):
             self.assertNotIn(flag, command)
-        self.assertTrue(command[1].endswith(delivery.PINNED_PATH) or command[2].endswith(delivery.PINNED_PATH))
+        python = delivery.python_command()
+        self.assertEqual(command[: len(python)], python)
+        self.assertTrue(command[len(python)].endswith(delivery.PINNED_PATH))
+        preflight = command.index("preflight")
+        self.assertEqual(command[preflight - len(python) - 1 : preflight - 1], python)
 
     def test_runtime_gates_are_not_asserts(self) -> None:
         for lineno, line in enumerate(Path(delivery.__file__).read_text(encoding="utf-8").splitlines(), start=1):
@@ -738,6 +742,36 @@ class DeliveryTests(unittest.TestCase):
 
     def test_representative_optimize_refusal(self) -> None:
         self.write_evidence(evidence(nativeVerdict="PASS", pendingHolds=["security"]))
+        proc = self.run_wrapper(optimize=True)
+        self.assert_refused(proc, "pending holds are active")
+
+    def test_untracked_helper_sibling_refuses_before_any_command(self) -> None:
+        clone = self.temp / "clone"
+        subprocess.run(["git", "clone", "--local", str(self.checkout), str(clone)], check=True, capture_output=True)
+        sibling = clone / "scripts" / "upgrade-agent" / "subprocess.py"
+        sibling.write_text("raise SystemExit('shadow executed')\n", encoding="utf-8")
+        self.write_evidence()
+        proc = self.run_wrapper(checkout=clone, optimize=True)
+        self.assert_refused(proc, "shared guard checkout is dirty")
+        self.assertEqual(self.rows(), [])
+
+    def test_isolated_pythonpath_keeps_valid_and_invalid_paths_bounded(self) -> None:
+        poison = self.temp / "poison"
+        poison.mkdir()
+        (poison / "subprocess.py").write_text("raise SystemExit('PYTHONPATH shadow executed')\n", encoding="utf-8")
+        original = os.environ.get("PYTHONPATH")
+        self.addCleanup(
+            lambda: os.environ.__setitem__("PYTHONPATH", original)
+            if original is not None
+            else os.environ.pop("PYTHONPATH", None)
+        )
+        os.environ["PYTHONPATH"] = str(poison)
+        self.write_evidence()
+        proc = self.run_wrapper(optimize=True)
+        self.assert_one_guarded_merge(proc)
+        self.log.write_text("", encoding="utf-8")
+        self.count.unlink()
+        self.write_evidence(evidence(pendingHolds=["security"]))
         proc = self.run_wrapper(optimize=True)
         self.assert_refused(proc, "pending holds are active")
 

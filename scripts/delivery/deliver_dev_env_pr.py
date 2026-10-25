@@ -126,7 +126,12 @@ class DeliveryError(Exception):
 
 
 def python_command() -> list[str]:
-    command = [sys.executable]
+    # This wrapper, the pinned helper, and its preflight must not import a
+    # sibling module or a module supplied through PYTHONPATH.  ``-I`` also
+    # makes the script directory unavailable to imports.  Callers must use
+    # this same isolated invocation for the top-level wrapper: a wrapper that
+    # has already been imported cannot retroactively isolate those imports.
+    command = [sys.executable, "-I", "-B"]
     if sys.flags.optimize:
         command.append("-" + ("O" * sys.flags.optimize))
     return command
@@ -282,8 +287,6 @@ def observe_pin(checkout_text: str) -> dict[str, object]:
                 "status",
                 "--porcelain",
                 "--untracked-files=all",
-                "--",
-                PINNED_PATH,
             ],
         )
     except subprocess.TimeoutExpired:
@@ -319,7 +322,7 @@ def pin_refusal(observed: dict[str, object]) -> str | None:
     if observed.get("observedHead") != PINNED_COMMIT:
         return "shared guard head mismatch"
     if observed.get("dirty") is not False:
-        return "shared guard helper is dirty"
+        return "shared guard checkout is dirty"
     if observed.get("observedSha256") != PINNED_SHA256:
         return "shared guard hash mismatch"
     return None
