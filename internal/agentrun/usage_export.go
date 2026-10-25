@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -113,7 +114,7 @@ func (a *app) usageExport(ctx context.Context, args []string) error {
 		"a missing, unavailable, disabled, malformed, or overflowed capture is a coverage gap, not zero usage",
 	}}
 	if len(allowances) > 0 {
-		view.AllowanceInput = "CallerProvidedValidatedSnapshots"
+		view.AllowanceInput = "CallerProvidedSnapshots"
 	} else {
 		view.Gaps = append(view.Gaps, "allowance input is Unconfigured; no provider read occurred")
 	}
@@ -129,7 +130,7 @@ func (a *app) usageExport(ctx context.Context, args []string) error {
 		view.Reads = append(view.Reads, read)
 		if err != nil {
 			view.Failure = &usageExportSafeFailure{Stage: "selected_session_read", SelectionIndex: i}
-			view.Gaps = append(view.Gaps, "selected read stopped before complete coverage; no later selected Session was read")
+			view.Gaps = append(view.Gaps, "selected read stopped before complete coverage; no later selected session was read")
 			return a.finishUsageExport(outputDir, allowances, observations, associations, view, ExitFailed)
 		}
 		if direct != nil {
@@ -165,8 +166,10 @@ func (a *app) usageExportRead(ctx context.Context, c *conn, selection usageExpor
 		switch {
 		case candidate.Source.SessionUID != session.UID:
 			read.DirectObservation = "SourceUIDMismatch"
+			return read, nil, nil, errors.New("unconfirmed direct observation")
 		case candidate.Validate() != nil:
 			read.DirectObservation = "Invalid"
+			return read, nil, nil, errors.New("unconfirmed direct observation")
 		default:
 			direct = &candidate
 			read.DirectObservation = "Included"
@@ -209,7 +212,7 @@ func (a *app) finishUsageExport(outputDir string, allowances []providerallowance
 		return fail(ExitFailed, "usage-export could not encode private report")
 	}
 	raw = append(raw, '\n')
-	summary := fmt.Sprintf("private usage export\nselected reads: %d\nattribution rows: %d\nwithheld conflicts: %d\nallowance input: %s\n", len(view.Reads), len(report.Attribution.Rows), len(report.Attribution.WithheldConflicts), view.AllowanceInput)
+	summary := usageExportSummary(view, report)
 	if view.Failure != nil {
 		summary += "coverage: stopped before all selected reads completed\n"
 	} else {
@@ -226,6 +229,52 @@ func (a *app) finishUsageExport(outputDir string, allowances []providerallowance
 		return fail(code, "usage-export stopped; private coverage report was written")
 	}
 	return nil
+}
+
+// usageExportSummary is intentionally a small readable rendering of the
+// validated C1 report. It neither exposes the selected Session nor makes an
+// account, currentness, allowance, provider, or charge claim.
+func usageExportSummary(view usageExportSelectionView, report usageconsolidation.Report) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "private usage export\nselected reads: %d\nattribution rows: %d\nwithheld conflicts: %d\n", len(view.Reads), len(report.Attribution.Rows), len(report.Attribution.WithheldConflicts))
+	fmt.Fprintf(&b, "allowance snapshots: %s\n", view.AllowanceInput)
+	fmt.Fprintf(&b, "allowance currentness: %s\n", report.Allowance.CurrentnessAtReportGeneration)
+	for i, row := range report.Attribution.Rows {
+		u := row.Observation
+		fmt.Fprintf(&b, "row %d:\n", i+1)
+		fmt.Fprintf(&b, "  session: %s\n  attempt: %s\n  observedAt: %s\n  scope: initial-only\n", quoteUsageValue(u.Source.SessionUID), quoteUsageValue(u.Source.AttemptID), quoteUsageValue(u.ObservedAt.UTC().Format("2006-01-02T15:04:05Z07:00")))
+		fmt.Fprintf(&b, "  requested model: %s\n  actual model state: %s\n  provenance: %s\n", quoteUsageValue(u.Source.RequestedModel), quoteUsageValue(u.ActualModelState), quoteUsageValue(u.Provenance))
+		if len(u.ServedModels) == 0 {
+			fmt.Fprintln(&b, "  served models: Unknown")
+		} else {
+			for _, model := range u.ServedModels {
+				fmt.Fprintf(&b, "  served model: %s; input=%s output=%s cache-read=%s cache-creation=%s; %s\n", quoteUsageValue(model.Model), tokenText(model.InputTokens), tokenText(model.OutputTokens), tokenText(model.CacheReadInputTokens), tokenText(model.CacheCreationInputTokens), costText(model.Cost))
+			}
+		}
+		fmt.Fprintf(&b, "  tokens: input=%s output=%s cache-read=%s cache-creation=%s\n  %s\n", tokenText(u.InputTokens), tokenText(u.OutputTokens), tokenText(u.CacheReadInputTokens), tokenText(u.CacheCreationInputTokens), costText(u.Cost))
+	}
+	if view.Failure != nil {
+		fmt.Fprintln(&b, "coverage: stopped before all selected reads completed")
+	} else {
+		fmt.Fprintln(&b, "coverage: selected reads completed; omitted work remains a gap")
+	}
+	return b.String()
+}
+
+func quoteUsageValue(value string) string { return strconv.Quote(value) }
+
+func tokenText(token protocol.TokenObservation) string {
+	if token.State != protocol.UsageReported || token.Amount == nil {
+		return "Unknown"
+	}
+	return strconv.FormatInt(*token.Amount, 10)
+}
+
+func costText(cost protocol.CostObservation) string {
+	if cost.State != protocol.UsageReported {
+		return "CLI-equivalent estimate: Unknown (NOT charge)"
+	}
+	return "CLI-equivalent estimate: " + quoteUsageValue(cost.Amount) + " " + quoteUsageValue(cost.Unit) + " (NOT charge)"
 }
 
 func readUsageExportManifest(path string) (usageExportManifest, error) {

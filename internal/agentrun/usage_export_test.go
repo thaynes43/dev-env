@@ -41,6 +41,9 @@ func TestUsageExportSelectedReadsArePrivateAndBounded(t *testing.T) {
 	manifest := exportManifest(t, h, usageExportSelection{Name: "selected-a", ExpectedUID: exportUIDA, Project: "project", Repository: "repo", Task: "task"})
 	out := filepath.Join(h.dir, "private-export")
 	s := exportSession("selected-a", exportUIDA)
+	zero := int64(0)
+	s.UsageObservation.InputTokens = protocol.TokenObservation{State: protocol.UsageReported, Amount: &zero}
+	s.UsageObservation.Cost = protocol.CostObservation{State: protocol.UsageReported, Amount: "0", Unit: "USD", Kind: protocol.UsageCLIEstimate}
 	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		if r.Header.Get(apiv1.AttributionHeader) != apiv1.AttributionProvider || r.Header.Get(apiv1.UsageCaptureHeader) != apiv1.UsageCaptureDirectV1 {
 			t.Errorf("missing attribution/capture headers: %q %q", r.Header.Get(apiv1.AttributionHeader), r.Header.Get(apiv1.UsageCaptureHeader))
@@ -66,13 +69,22 @@ func TestUsageExportSelectedReadsArePrivateAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"CANARY private prompt", "CANARY condition"} {
-		if strings.Contains(string(report), forbidden) || strings.Contains(h.stdout.String(), forbidden) || strings.Contains(h.stderr.String(), forbidden) {
+	summary, err := os.ReadFile(filepath.Join(out, "summary.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"CANARY private prompt", "CANARY condition", "Session", "backend error"} {
+		if strings.Contains(string(report), forbidden) || strings.Contains(string(summary), forbidden) || strings.Contains(h.stdout.String(), forbidden) || strings.Contains(h.stderr.String(), forbidden) {
 			t.Fatal("private session content escaped", forbidden)
 		}
 	}
 	if !strings.Contains(string(report), `"allowanceInput": "Unconfigured"`) || !strings.Contains(string(report), `"project": "project"`) || !strings.Contains(string(report), `"requestedModel"`) {
 		t.Fatal("expected projected evidence missing", string(report))
+	}
+	for _, want := range []string{"row 1:", `session: "` + exportUIDA + `"`, "scope: initial-only", `requested model: "`, "actual model state: \"Unknown\"", "tokens: input=0", "CLI-equivalent estimate: \"0\" \"USD\" (NOT charge)", "allowance snapshots: Unconfigured", "allowance currentness: Unknown"} {
+		if !strings.Contains(string(summary), want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
+		}
 	}
 }
 
@@ -114,6 +126,75 @@ func TestUsageExportRefusalStopsWithoutRawError(t *testing.T) {
 	}
 }
 
+func TestUsageExportRejectsUnsafeDirectObservationBeforeLaterRead(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*protocol.UsageObservation)
+		state  string
+	}{
+		{name: "source_uid_mismatch", state: "SourceUIDMismatch", mutate: func(u *protocol.UsageObservation) {
+			u.Source.SessionUID = exportUIDB
+			u.ID = protocol.UsageObservationID(u.Source)
+		}},
+		{name: "invalid", state: "Invalid", mutate: func(u *protocol.UsageObservation) { u.ID = "invalid" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			manifest := exportManifest(t, h, usageExportSelection{Name: "selected-a", ExpectedUID: exportUIDA}, usageExportSelection{Name: "selected-b", ExpectedUID: exportUIDB})
+			out := filepath.Join(h.dir, "private-export")
+			s := exportSession("selected-a", exportUIDA)
+			tc.mutate(s.UsageObservation)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Path != apiv1.SessionPath("selected-a") {
+					t.Fatal("later selected read occurred", r.URL.Path)
+				}
+				writeTestJSON(w, http.StatusOK, s)
+			}
+			h.mustRun(ExitFailed, "usage-export", "--manifest", manifest, "--output-dir", out)
+			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 {
+				t.Fatal("unsafe direct observation retried or continued", h.api.requests(), h.sleeps)
+			}
+			raw, err := os.ReadFile(filepath.Join(out, "report.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc usageExportDocument
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if len(doc.Report.Attribution.Rows) != 0 || len(doc.Selection.Reads) != 1 || doc.Selection.Reads[0].DirectObservation != tc.state || doc.Selection.Failure == nil {
+				t.Fatalf("unsafe direct observation entered output: %#v", doc)
+			}
+			for _, forbidden := range []string{"invalid", exportUIDB, "Session", "backend error"} {
+				if strings.Contains(string(raw), forbidden) || strings.Contains(h.stdout.String(), forbidden) || strings.Contains(h.stderr.String(), forbidden) {
+					t.Fatalf("unsafe observation escaped %q", forbidden)
+				}
+			}
+		})
+	}
+}
+
+func TestUsageExportMissingDirectIsACoverageGap(t *testing.T) {
+	h := newHarness(t)
+	manifest := exportManifest(t, h, usageExportSelection{Name: "selected-a", ExpectedUID: exportUIDA})
+	out := filepath.Join(h.dir, "private-export")
+	s := exportSession("selected-a", exportUIDA)
+	s.UsageObservation = nil
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, s) }
+	h.mustRun(ExitOK, "usage-export", "--manifest", manifest, "--output-dir", out)
+	if len(h.api.requests()) != 1 {
+		t.Fatal("missing direct observation should not retry", h.api.requests())
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc usageExportDocument
+	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.Selection.Reads) != 1 || doc.Selection.Reads[0].DirectObservation != "Unavailable" || len(doc.Report.Attribution.Rows) != 0 {
+		t.Fatalf("missing direct observation was not a gap: %v %#v", err, doc)
+	}
+}
+
 func TestUsageExportCaptureOverlapAndConflictRemainVisible(t *testing.T) {
 	h := newHarness(t)
 	manifest := exportManifest(t, h,
@@ -151,6 +232,37 @@ func TestUsageExportCaptureOverlapAndConflictRemainVisible(t *testing.T) {
 	}
 	if len(doc.Report.Attribution.Rows) != 1 || len(doc.Report.Attribution.WithheldConflicts) != 1 || doc.Report.Attribution.WithheldConflicts[0].SessionUID != exportUIDB {
 		t.Fatal("direct/captured conflict should be withheld", doc.Report.Attribution)
+	}
+}
+
+func TestUsageExportIdenticalDirectAndCaptureCountsOnce(t *testing.T) {
+	h := newHarness(t)
+	manifest := exportManifest(t, h, usageExportSelection{Name: "selected-a", ExpectedUID: exportUIDA}, usageExportSelection{Name: "selected-b", ExpectedUID: exportUIDB})
+	out := filepath.Join(h.dir, "private-export")
+	parent, child := exportSession("selected-a", exportUIDA), exportSession("selected-b", exportUIDB)
+	captured := *child.UsageObservation
+	parent.CapturedUsage = &apiv1.CapturedUsage{Available: true, Scope: apiv1.CapturedUsageScope, Coverage: apiv1.CapturedUsageCoverage, Retention: apiv1.CapturedUsageRetention, Receipts: []apiv1.CapturedUsageReceipt{{
+		Key: apiv1.CapturedUsageKey(exportUIDA, exportUIDB, captured.Source.PodUID, captured.Source.AttemptID, captured.ID), ParentUID: exportUIDA, CapturedAt: captured.ObservedAt, Observation: &captured,
+	}}}
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Path == apiv1.SessionPath("selected-a") {
+			writeTestJSON(w, http.StatusOK, parent)
+			return
+		}
+		if r.URL.Path == apiv1.SessionPath("selected-b") {
+			writeTestJSON(w, http.StatusOK, child)
+			return
+		}
+		t.Fatal("unexpected route", r.URL.Path)
+	}
+	h.mustRun(ExitOK, "usage-export", "--manifest", manifest, "--output-dir", out)
+	raw, err := os.ReadFile(filepath.Join(out, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc usageExportDocument
+	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.Report.Attribution.Rows) != 2 || len(doc.Report.Attribution.WithheldConflicts) != 0 {
+		t.Fatalf("identical direct/captured observation was not deduplicated: %v %#v", err, doc.Report.Attribution)
 	}
 }
 
@@ -197,7 +309,7 @@ func TestUsageExportPreservesProvidedAllowanceSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(report), `"allowanceInput": "CallerProvidedValidatedSnapshots"`) || !strings.Contains(string(report), `"servedAt": "2026-10-24T17:00:00Z"`) || !strings.Contains(string(report), `"decimal": "0.36"`) {
+	if !strings.Contains(string(report), `"allowanceInput": "CallerProvidedSnapshots"`) || !strings.Contains(string(report), `"servedAt": "2026-10-24T17:00:00Z"`) || !strings.Contains(string(report), `"decimal": "0.36"`) {
 		t.Fatal("allowance snapshot was changed or omitted", string(report))
 	}
 }

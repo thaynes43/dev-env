@@ -515,10 +515,11 @@ oversized view is unavailable, not zero usage and not a partial receipt list.
 
 Writes a private, bounded report for only the Sessions explicitly named in a
 local manifest. Every selection binds a DNS-label name to its expected UID; a
-mismatch, refusal, malformed answer, redirect, or unconfirmed read stops later
-reads. The command makes no list, history, log, console, provider, or auth-store
-request. Each selected Session is read once, without retry or redirect, with the
-existing provider-v1 attribution and direct-v1 capture headers.
+mismatch, refusal, malformed answer, redirect, unconfirmed read, invalid direct
+observation, or direct source-UID mismatch stops later reads. The command makes no
+list, history, log, console, provider, or auth-store request. Each selected Session
+is read once, without retry or redirect, with the existing provider-v1 attribution
+and direct-v1 capture headers.
 
 The manifest is a strict JSON object with a nonempty ` + "`selections`" + ` array.
 Each item is ` + "`{\"name\":\"...\",\"expectedUID\":\"...\"}`" + ` and may add
@@ -526,9 +527,10 @@ Each item is ` + "`{\"name\":\"...\",\"expectedUID\":\"...\"}`" + ` and may add
 and apply only to an exactly matching session UID. Duplicate names or UIDs are
 refused before connecting.
 
-Each optional --allowance-read is a caller-provided, already validated
-providerallowance.read.v1 snapshot. It is decoded locally only: this command has
-no provider reader, credentials, currentness inference, or account/model/cost
+Each optional --allowance-read is a caller-provided providerallowance.read.v1
+snapshot claim. Local decoding validates only the DTO contract; it is not an
+independent source, binding, validation, or authorization attestation. This command
+has no provider reader, credentials, currentness inference, or account/model/cost
 totals. With none, allowance input is explicitly Unconfigured.
 
 --output-dir must not exist. The command creates it mode 0700 and creates only

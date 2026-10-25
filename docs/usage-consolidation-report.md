@@ -55,18 +55,25 @@ projector. Its strict local manifest names a finite set of Session name/expected
 UID bindings; optional project, repository, and task labels remain caller
 metadata and apply only to their exact UID. Each named Session read is one
 no-redirect, no-retry GET using existing provider-v1 attribution and direct-v1
-capture support. The exporter validates the returned name and UID, validates a
-direct observation's source UID, and uses the existing capture normalizer before
-calling `Project`.
+capture support. The exporter validates the returned name and UID. An invalid direct
+observation or one whose source UID does not match stops the selection before capture
+normalization or any later GET; that observation is never projected. A missing direct
+observation is a coverage gap, not an error or zero usage. Otherwise the exporter
+uses the existing capture normalizer before calling `Project`.
 
 The command never lists or discovers Sessions, scans descendants, or reads
 history, logs, consoles, provider data, credentials, or an auth store. A
 refusal, mismatch, or malformed response stops subsequent reads and writes only
 safe selection/coverage metadata; raw API errors and Sessions cannot enter the
 report. It accepts only supplied, strictly decoded existing
-`providerallowance.read.v1` snapshots and never polls a provider. Missing input
-is explicitly `Unconfigured`, not zero or a currentness claim.
+`providerallowance.read.v1` snapshot claims and never polls a provider. Local DTO
+validation is not an independent source, binding, validation, or authorization
+attestation. Missing input is explicitly `Unconfigured`, not zero or a currentness
+claim; report currentness is `Unknown`.
 
 The report and concise text summary are private local files in a newly created
-0700 directory, both 0600. They are bounded evidence only, not a public artifact
-or live usage monitor.
+0700 directory, both 0600. The summary preserves each projected row's requested and
+actual model state, served-model observations, time, and Unknown-versus-zero token
+counters. It labels costs only as CLI-equivalent estimates, never charges, and emits
+no totals. They are bounded evidence only, not a public artifact or live usage
+monitor.
