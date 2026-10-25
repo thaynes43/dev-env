@@ -70,8 +70,17 @@ type AllowanceView struct {
 // AttributionView contains one row per unambiguous initial invocation. It has
 // no aggregate counters, model/account totals, or currency total.
 type AttributionView struct {
-	Rows     []AttributionRow `json:"rows"`
-	Coverage Coverage         `json:"coverage"`
+	Rows              []AttributionRow `json:"rows"`
+	WithheldConflicts []ConflictGroup  `json:"withheldConflicts"`
+	Coverage          Coverage         `json:"coverage"`
+}
+
+// ConflictGroup identifies an initial-invocation group withheld because its
+// otherwise valid replays disagree. It contains neither a payload nor totals.
+type ConflictGroup struct {
+	SessionUID string `json:"sessionUID"`
+	AttemptID  string `json:"attemptID"`
+	Reason     string `json:"reason"`
 }
 
 // Coverage states scope and known omissions; it never treats omitted work as zero.
@@ -122,7 +131,7 @@ func Project(in Input, limits Limits) (Report, error) {
 		}
 	}
 
-	rows, err := projectRows(in.InitialInvocations, in.Associations)
+	rows, conflicts, err := projectRows(in.InitialInvocations, in.Associations)
 	if err != nil {
 		return Report{}, err
 	}
@@ -141,7 +150,8 @@ func Project(in Input, limits Limits) (Report, error) {
 			}},
 		},
 		Attribution: AttributionView{
-			Rows: rows,
+			Rows:              rows,
+			WithheldConflicts: conflicts,
 			Coverage: Coverage{Scope: InitialManagedInvocationOnly, Gaps: []string{
 				"later conversation turns are not measured",
 				"uncaptured or off-platform work is not measured",
@@ -153,15 +163,15 @@ func Project(in Input, limits Limits) (Report, error) {
 	}, nil
 }
 
-func projectRows(observations []protocol.UsageObservation, associations []UIDAssociation) ([]AttributionRow, error) {
+func projectRows(observations []protocol.UsageObservation, associations []UIDAssociation) ([]AttributionRow, []ConflictGroup, error) {
 	groups := make(map[string][]candidate, len(observations))
 	for _, observation := range observations {
 		if err := observation.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid initial invocation: %w", err)
+			return nil, nil, fmt.Errorf("invalid initial invocation: %w", err)
 		}
 		canonical, err := json.Marshal(observation)
 		if err != nil {
-			return nil, fmt.Errorf("canonical initial invocation: %w", err)
+			return nil, nil, fmt.Errorf("canonical initial invocation: %w", err)
 		}
 		identity := observation.Source.SessionUID + "\x00" + observation.Source.AttemptID
 		groups[identity] = append(groups[identity], candidate{observation: observation, canonical: canonical})
@@ -174,14 +184,20 @@ func projectRows(observations []protocol.UsageObservation, associations []UIDAss
 	}
 	sort.Strings(identities)
 	rows := make([]AttributionRow, 0, len(identities))
+	conflicts := make([]ConflictGroup, 0)
 	for _, identity := range identities {
 		candidates := groups[identity]
 		if conflicted(candidates) {
+			conflicts = append(conflicts, ConflictGroup{
+				SessionUID: candidates[0].observation.Source.SessionUID,
+				AttemptID:  candidates[0].observation.Source.AttemptID,
+				Reason:     "ConflictingInitialInvocationReplay",
+			})
 			continue
 		}
 		observation, err := clone(candidates[0].observation)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		labels, ok := labelsByUID[observation.Source.SessionUID]
 		if !ok {
@@ -189,7 +205,7 @@ func projectRows(observations []protocol.UsageObservation, associations []UIDAss
 		}
 		rows = append(rows, AttributionRow{Observation: observation, Labels: labels})
 	}
-	return rows, nil
+	return rows, conflicts, nil
 }
 
 func conflicted(candidates []candidate) bool {

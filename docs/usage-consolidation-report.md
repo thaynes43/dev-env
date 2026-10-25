@@ -23,8 +23,13 @@ models, every per-metric Unknown versus explicit zero, partial observations, and
 `ProviderCLIEquivalentEstimate` as an estimate rather than an actual charge. It
 does not emit task, model, account, token, currency, or dollar totals. Replayed
 identical `(SessionUID, AttemptID)` observations make one row. Any different
-payload for that identity suppresses its entire ambiguous group; input ordering
-does not change the result. Different explicit attempts remain separate rows.
+valid payload for that identity, including one with a different observation ID,
+suppresses its entire ambiguous group. The deterministic `withheldConflicts`
+metadata retains that group's session UID, attempt ID, and the fixed conflict
+reason without retaining either payload or emitting totals. Therefore an
+all-conflicting input is distinguishable from no input. Input ordering does not
+change rows or conflict metadata. Different explicit attempts remain separate
+rows.
 
 Only exactly matching caller-supplied session-UID associations label a row.
 Missing or conflicting associations return `Unknown` project, repository, and

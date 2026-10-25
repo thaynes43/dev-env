@@ -35,39 +35,80 @@ func TestProjectPreservesSeparateSnapshotsAndRoundTrips(t *testing.T) {
 	}
 }
 
-func TestProjectAttributionReplayConflictsLabelsAndPermutation(t *testing.T) {
+func TestProjectAttributionConflictsAreExplicitAndPermutationStable(t *testing.T) {
 	a := observation("session-a", "a", "requested-a")
-	a.InputTokens = reported(0)
-	a.ServedModels, a.ActualModelState, a.BillingBasis = []protocol.ModelUsage{model("served-a", reported(3), protocol.CostObservation{State: protocol.UsageReported, Amount: "0", Unit: "USD", Kind: protocol.UsageCLIEstimate})}, protocol.UsageProviderReported, protocol.UsageSubscription
-	b := observation("session-a", "b", "requested-b")
-	b.ServedModels, b.ActualModelState = []protocol.ModelUsage{model("served-b", reported(0), protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown})}, protocol.UsageProviderReported
 	conflict := a
-	conflict.ResultState = "Partial"
-	first, err := Project(Input{InitialInvocations: []protocol.UsageObservation{a, a, conflict, b}, Associations: []UIDAssociation{{SessionUID: "session-a", Project: "p", Repository: "r", Task: "t"}}}, DefaultLimits)
+	conflict.Source.RequestedModel = "requested-conflict"
+	conflict.ID = protocol.UsageObservationID(conflict.Source)
+	first, err := Project(Input{InitialInvocations: []protocol.UsageObservation{a, a, conflict}, Associations: []UIDAssociation{{SessionUID: "session-a", Project: "p", Repository: "r", Task: "t"}}}, DefaultLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Attribution.Rows) != 1 || first.Attribution.Rows[0].Observation.Source.AttemptID != b.Source.AttemptID {
+	if len(first.Attribution.Rows) != 0 {
 		t.Fatalf("ambiguous attempt was not suppressed: %#v", first.Attribution.Rows)
 	}
-	if first.Attribution.Rows[0].Labels != (Labels{Project: "p", Repository: "r", Task: "t"}) {
-		t.Fatal("exact association missing")
+	wantConflict := []ConflictGroup{{SessionUID: "session-a", AttemptID: a.Source.AttemptID, Reason: "ConflictingInitialInvocationReplay"}}
+	if !reflect.DeepEqual(first.Attribution.WithheldConflicts, wantConflict) {
+		t.Fatalf("conflict metadata = %#v, want %#v", first.Attribution.WithheldConflicts, wantConflict)
 	}
-	second, err := Project(Input{InitialInvocations: []protocol.UsageObservation{b, conflict, a, a}, Associations: []UIDAssociation{{SessionUID: "session-a", Project: "p", Repository: "r", Task: "t"}}}, DefaultLimits)
+	empty, err := Project(Input{}, DefaultLimits)
+	if err != nil || reflect.DeepEqual(first, empty) {
+		t.Fatalf("all-conflicting input is indistinguishable from empty: %v %#v", err, first)
+	}
+	second, err := Project(Input{InitialInvocations: []protocol.UsageObservation{conflict, a, a}, Associations: []UIDAssociation{{SessionUID: "session-a", Project: "p", Repository: "r", Task: "t"}}}, DefaultLimits)
 	if err != nil || !reflect.DeepEqual(first, second) {
 		t.Fatalf("permutation changed output: %v", err)
 	}
-	missing, err := Project(Input{InitialInvocations: []protocol.UsageObservation{b}}, DefaultLimits)
+	exactReplay, err := Project(Input{InitialInvocations: []protocol.UsageObservation{a, a}, Associations: []UIDAssociation{{SessionUID: "session-a", Project: "p", Repository: "r", Task: "t"}}}, DefaultLimits)
+	if err != nil || len(exactReplay.Attribution.Rows) != 1 || len(exactReplay.Attribution.WithheldConflicts) != 0 || exactReplay.Attribution.Rows[0].Labels != (Labels{Project: "p", Repository: "r", Task: "t"}) {
+		t.Fatalf("exact replay was not retained once: %v %#v", err, exactReplay.Attribution)
+	}
+	differentAttempt := observation("session-a", "b", "requested-b")
+	separate, err := Project(Input{InitialInvocations: []protocol.UsageObservation{a, differentAttempt}}, DefaultLimits)
+	if err != nil || len(separate.Attribution.Rows) != 2 || len(separate.Attribution.WithheldConflicts) != 0 {
+		t.Fatalf("different explicit attempts did not remain separate: %v %#v", err, separate.Attribution)
+	}
+}
+
+func TestProjectAttributionPreservesFiniteControls(t *testing.T) {
+	unknownActual := observation("session-unknown", "a", "requested-only")
+	unknownActual.InputTokens = reported(0)
+	unknownActual.Cost = protocol.CostObservation{State: protocol.UsageReported, Amount: "0", Unit: "USD", Kind: protocol.UsageCLIEstimate}
+	served := observation("session-served", "b", "requested-served")
+	served.ServedModels = []protocol.ModelUsage{
+		model("served-a", reported(0), protocol.CostObservation{State: protocol.UsageReported, Amount: "0", Unit: "USD", Kind: protocol.UsageCLIEstimate}),
+		model("served-b", protocol.TokenObservation{State: protocol.UsageUnknown}, protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown}),
+	}
+	served.ActualModelState, served.BillingBasis = protocol.UsageProviderReported, protocol.UsageSubscription
+	report, err := Project(Input{InitialInvocations: []protocol.UsageObservation{served, unknownActual}}, DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Attribution.Rows) != 2 || len(report.Attribution.WithheldConflicts) != 0 {
+		t.Fatalf("conflict-free controls changed: %#v", report.Attribution)
+	}
+	rows := make(map[string]protocol.UsageObservation, len(report.Attribution.Rows))
+	for _, row := range report.Attribution.Rows {
+		rows[row.Observation.Source.SessionUID] = row.Observation
+	}
+	gotUnknown := rows[unknownActual.Source.SessionUID]
+	if gotUnknown.Source.RequestedModel != "requested-only" || gotUnknown.ActualModelState != protocol.UsageUnknown || len(gotUnknown.ServedModels) != 0 || gotUnknown.InputTokens.Amount == nil || *gotUnknown.InputTokens.Amount != 0 || gotUnknown.Cost.Kind != protocol.UsageCLIEstimate {
+		t.Fatalf("unknown actual-model or explicit estimate changed: %#v", gotUnknown)
+	}
+	gotServed := rows[served.Source.SessionUID]
+	if gotServed.Source.RequestedModel != "requested-served" || gotServed.ActualModelState != protocol.UsageProviderReported || len(gotServed.ServedModels) != 2 || gotServed.ServedModels[0].InputTokens.Amount == nil || *gotServed.ServedModels[0].InputTokens.Amount != 0 || gotServed.ServedModels[0].Cost.Kind != protocol.UsageCLIEstimate || gotServed.ServedModels[1].InputTokens.State != protocol.UsageUnknown || gotServed.ServedModels[1].Cost.State != protocol.UsageUnknown {
+		t.Fatalf("served models or partial metrics changed: %#v", gotServed)
+	}
+	if gotServed.BillingBasis != protocol.UsageSubscription {
+		t.Fatalf("billing basis provenance changed: %#v", gotServed)
+	}
+	missing, err := Project(Input{InitialInvocations: []protocol.UsageObservation{served}}, DefaultLimits)
 	if err != nil || missing.Attribution.Rows[0].Labels != unknownLabels() {
 		t.Fatalf("missing labels: %v %#v", err, missing)
 	}
-	conflictingLabels, err := Project(Input{InitialInvocations: []protocol.UsageObservation{b}, Associations: []UIDAssociation{{SessionUID: "session-a", Project: "one", Repository: "r", Task: "t"}, {SessionUID: "session-a", Project: "two", Repository: "r", Task: "t"}}}, DefaultLimits)
+	conflictingLabels, err := Project(Input{InitialInvocations: []protocol.UsageObservation{served}, Associations: []UIDAssociation{{SessionUID: "session-served", Project: "one", Repository: "r", Task: "t"}, {SessionUID: "session-served", Project: "two", Repository: "r", Task: "t"}}}, DefaultLimits)
 	if err != nil || conflictingLabels.Attribution.Rows[0].Labels != unknownLabels() {
 		t.Fatalf("conflicting labels: %v %#v", err, conflictingLabels)
-	}
-	row := first.Attribution.Rows[0].Observation
-	if row.Source.RequestedModel != "requested-b" || len(row.ServedModels) != 1 || row.ServedModels[0].Model != "served-b" || row.ServedModels[0].InputTokens.Amount == nil || *row.ServedModels[0].InputTokens.Amount != 0 || row.ServedModels[0].OutputTokens.Amount != nil || row.ServedModels[0].Cost.State != protocol.UsageUnknown {
-		t.Fatal("requested/actual or partial per-model provenance changed", row)
 	}
 }
 
