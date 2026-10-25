@@ -87,9 +87,7 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 		if err != nil {
 			return page, err
 		}
-		if decoded.Freshness == "unknown" || decoded.Freshness == "stale" {
-			freshness = decoded.Freshness
-		}
+		freshness = worstFreshness(freshness, decoded.Freshness)
 		for _, row := range decoded.Sessions {
 			page.Rows = append(page.Rows, portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{{Label: "Phase", Value: shown(row.Phase)}, {Label: "Freshness", Value: shown(row.Freshness)}, {Label: "UID", Value: shown(row.UID)}}})
 		}
@@ -171,8 +169,8 @@ func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, err
 	if !ok || limit < 1 || limit > 100 || limit != productPageSize {
 		return page, portal.ErrUnavailable
 	}
-	var complete bool
-	if json.Unmarshal(obj["complete"], &complete) != nil {
+	complete, ok := jsonBool(obj["complete"])
+	if !ok {
 		return page, portal.ErrUnavailable
 	}
 	var freshness string
@@ -182,8 +180,8 @@ func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, err
 	if _, err := observationTime(obj["observedAt"], now); err != nil {
 		return page, err
 	}
-	var rows []json.RawMessage
-	if json.Unmarshal(obj["sessions"], &rows) != nil || len(rows) > limit {
+	rows, ok := jsonArray(obj["sessions"])
+	if !ok || len(rows) > limit {
 		return page, portal.ErrUnavailable
 	}
 	names, uids := map[string]struct{}{}, map[string]struct{}{}
@@ -283,8 +281,8 @@ func decodeTaskPage(body []byte, page int, seen map[int]struct{}) ([]portal.Prod
 	if !ok {
 		return nil, 0, false, portal.ErrUnavailable
 	}
-	var elements []json.RawMessage
-	if json.Unmarshal(rawElements, &elements) != nil || len(elements) != count {
+	elements, ok := jsonArray(rawElements)
+	if !ok || len(elements) != count {
 		return nil, 0, false, portal.ErrUnavailable
 	}
 	links, err := jsonObject(obj["_links"])
@@ -367,14 +365,62 @@ func jsonObject(data []byte) (map[string]json.RawMessage, error) {
 
 func jsonInt(raw json.RawMessage) (int, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	var n int
-	if dec.Decode(&n) != nil || n < 0 {
+	dec.UseNumber()
+	var value any
+	if dec.Decode(&value) != nil {
 		return 0, false
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return 0, false
 	}
+	number, ok := value.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(number.String())
+	if err != nil || n < 0 {
+		return 0, false
+	}
 	return n, true
+}
+
+func jsonBool(raw json.RawMessage) (bool, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	var value any
+	if dec.Decode(&value) != nil {
+		return false, false
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return false, false
+	}
+	valueBool, ok := value.(bool)
+	return valueBool, ok
+}
+
+func jsonArray(raw json.RawMessage) ([]json.RawMessage, bool) {
+	var values []json.RawMessage
+	if json.Unmarshal(raw, &values) != nil || values == nil {
+		return nil, false
+	}
+	return values, true
+}
+
+func worstFreshness(current, next string) string {
+	if sessionFreshnessRank(next) > sessionFreshnessRank(current) {
+		return next
+	}
+	return current
+}
+
+func sessionFreshnessRank(value string) int {
+	switch value {
+	case "observed":
+		return 0
+	case "stale":
+		return 1
+	default:
+		return 2
+	}
 }
 
 func observationTime(raw json.RawMessage, now time.Time) (time.Time, error) {
