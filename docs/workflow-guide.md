@@ -320,8 +320,9 @@ authoritative for whether that provider is admitted.
 Replace `SESSION` with the returned name. Attach is for the owner/client identity,
 including the trusted v1 client; session agents use the message API. `attach`
 and `detach` execute into a running session using the caller's Kubernetes
-rights, and are refused from an ordinary session pod. Detach with `Ctrl-b d`
-and the session keeps running. A Pending session is waiting for capacity, not a
+rights, and are refused from an ordinary session pod. `detach SESSION`
+disconnects every attached client; `Ctrl-b d` detaches only your client.
+The session keeps running. A Pending session is waiting for capacity, not a
 reason to launch duplicates.
 
 `--repo` starts an ordinary repository session; it does not select an accepted
