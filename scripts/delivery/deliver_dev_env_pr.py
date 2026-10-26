@@ -632,6 +632,14 @@ def checks_refusal(observed: dict[str, object]) -> tuple[str | None, int]:
     for name, outcomes in grouped.items():
         if name == REQUIRED_CHECK:
             continue
+        # Normalize only outcomes already exempted for this named optional
+        # advisory. Keep every observed run in the audit and count any failure.
+        allowed_advisory = {"green", "nonzero"}
+        if name in CONDITIONAL_SKIP_CHECKS:
+            allowed_advisory.add("skipped")
+        if name in ADVISORY_CHECKS and outcomes <= allowed_advisory:
+            advisory_failures += int("nonzero" in outcomes)
+            continue
         if len(outcomes) != 1:
             return f"conflicting duplicate check: {name}", advisory_failures
         outcome = next(iter(outcomes))

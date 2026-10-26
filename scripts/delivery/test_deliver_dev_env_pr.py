@@ -9,6 +9,7 @@ fetch or execute an unverified copy. gh and flux are temporary fakes.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import shutil
@@ -98,6 +99,14 @@ def checks():
         rows = [check("CI - Success", conclusion="FAILURE") if item["name"] == "CI - Success" else item for item in rows]
     if mode == "ci_skipped":
         rows = [check("CI - Success", conclusion="SKIPPED") if item["name"] == "CI - Success" else item for item in rows]
+    if mode == "advisory_duplicate_terminal":
+        rows.append(check("Claude advisory review", conclusion="SKIPPED"))
+    if mode == "advisory_duplicate_running":
+        rows.append(check("Claude advisory review", status="IN_PROGRESS", conclusion=None))
+    if mode == "advisory_duplicate_unknown":
+        rows.append(check("Claude advisory review", conclusion="NEUTRAL"))
+    if mode == "lint_duplicate":
+        rows.append(check("Lint", conclusion="FAILURE"))
     if mode == "ci_duplicate":
         rows.append(check("CI - Success", conclusion="FAILURE"))
     if mode == "lint_skipped":
@@ -130,7 +139,7 @@ if argv[:2] == ["pr", "view"]:
     if mode == "postmerge_timeout" and count >= 3:
         time.sleep(360)
         raise SystemExit(0)
-    merged = count >= 3 and mode in {"green", "all_green", "agent_skipped", "postmerge_bad_head"}
+    merged = count >= 3 and mode in {"green", "all_green", "agent_skipped", "postmerge_bad_head", "advisory_duplicate_terminal"}
     if mode == "postmerge_open" and count >= 3:
         merged = False
     if mode == "postmerge_bad_head" and count >= 3:
@@ -448,6 +457,29 @@ class DeliveryTests(unittest.TestCase):
         proc = self.run_wrapper()
         self.assert_one_guarded_merge(proc)
 
+    def test_terminal_advisory_duplicates_merge_once_and_retain_audit(self) -> None:
+        self.mode = "advisory_duplicate_terminal"
+        self.write_evidence()
+        self.assert_one_guarded_merge(self.run_wrapper())
+        audit = json.loads(self.audit.read_text(encoding="utf-8"))
+        outcomes = [row["conclusion"] for row in audit["pullRequestObservation"]["checks"]
+                    if row["name"] == "Claude advisory review"]
+        self.assertEqual(outcomes, ["FAILURE", "SKIPPED"])
+
+    def test_named_advisory_terminal_sets_and_order_are_equivalent(self) -> None:
+        def row(name: str, conclusion: str) -> dict[str, str]:
+            return {"name": name, "status": "COMPLETED", "conclusion": conclusion}
+
+        for name in delivery.ADVISORY_CHECKS:
+            for size in (1, 2, 3):
+                for outcomes in itertools.combinations(("SUCCESS", "FAILURE", "SKIPPED"), size):
+                    for order in itertools.permutations(outcomes):
+                        with self.subTest(name=name, outcomes=order):
+                            checks = [row("CI - Success", "SUCCESS")]
+                            checks.extend(row(name, value) for value in order)
+                            expected = (None, int("FAILURE" in outcomes))
+                            self.assertEqual(delivery.checks_refusal({"rollupComplete": True, "checks": checks}), expected)
+
     def test_preflight_alone_does_not_merge(self) -> None:
         self.write_evidence()
         proc = self.run_wrapper("preflight")
@@ -590,6 +622,9 @@ class DeliveryTests(unittest.TestCase):
             "ci_running": "required check running: CI - Success",
             "ci_fail": "required check failed: CI - Success",
             "ci_duplicate": "conflicting duplicate check: CI - Success",
+            "advisory_duplicate_running": "conflicting duplicate check: Claude advisory review",
+            "advisory_duplicate_unknown": "conflicting duplicate check: Claude advisory review",
+            "lint_duplicate": "conflicting duplicate check: Lint",
             "ci_skipped": "required check skipped: CI - Success",
             "lint_skipped": "skipped check: Lint",
             "lint_running": "running check: Lint",
