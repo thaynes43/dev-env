@@ -77,3 +77,22 @@ actual model state, served-model observations, time, and Unknown-versus-zero tok
 counters. It labels costs only as CLI-equivalent estimates, never charges, and emits
 no totals. They are bounded evidence only, not a public artifact or live usage
 monitor.
+
+## Codex native on-demand input (C3)
+
+The existing managed-host reader may make one documented metadata-only native
+read on its already authenticated same-UID Unix control socket. It initializes
+the connection, calls `account/read` with `refreshToken: false`, then calls
+`account/rateLimits/read` with `excludeResetCreditDetails: true` and
+`supportsLunaReserve: false`. Its resulting `providerallowance.read.v1` value
+is an input to the existing `usage-export --allowance-read` path, not a new
+export transport. It never starts or connects to another host, reads identity
+or auth files, calls account activity/usage/spending/model, or makes thread,
+turn, login, refresh, reset, or redemption calls.
+
+The native protocol does not supply a provider-observation timestamp. The
+reader preserves the fetch time as capture/receipt data only and retains
+provider observation and freshness as `Unknown`; it never infers a reset,
+current allowance, account identity, cost, task attribution, or permit. The
+legacy single view and keyed bucketed views remain separate measures and are
+never summed.
