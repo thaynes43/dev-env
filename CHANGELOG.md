@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.45.0](https://github.com/thaynes43/dev-env/compare/v2.44.0...v2.45.0) (2026-10-26)
+
+
+### Features
+
+* add private on-demand usage export ([#552](https://github.com/thaynes43/dev-env/issues/552)) ([7e56810](https://github.com/thaynes43/dev-env/commit/7e56810a4f4db54f03f903612efdc27e28b2b59a))
+* add usage consolidation report projector ([#551](https://github.com/thaynes43/dev-env/issues/551)) ([44383f6](https://github.com/thaynes43/dev-env/commit/44383f644ed8c7b4d73dfd0a3ece406102854d67))
+* **delivery:** invoke the pinned haynes-ops guard for source-only PRs ([#546](https://github.com/thaynes43/dev-env/issues/546)) ([84991e9](https://github.com/thaynes43/dev-env/commit/84991e9f9f52f7432b119119222bffc5a1097428))
+* **portal:** add fenced PostgreSQL sessions and current authorization ([#529](https://github.com/thaynes43/dev-env/issues/529)) ([d4d21ef](https://github.com/thaynes43/dev-env/commit/d4d21ef9d8f6682cabe1a45b78f5fd3726f50ef1))
+* **portal:** assemble the internal read-only runtime ([#541](https://github.com/thaynes43/dev-env/issues/541)) ([fa8b1e2](https://github.com/thaynes43/dev-env/commit/fa8b1e2cf3af91e33bf0558873d70920e569751d))
+* **portal:** fence sessions on their actual PostgreSQL connection ([#531](https://github.com/thaynes43/dev-env/issues/531)) ([0b14da9](https://github.com/thaynes43/dev-env/commit/0b14da986f067b9a4f1f92ad1a85667f2dfd0e1d))
+* **portal:** make Attention readable on a phone ([#528](https://github.com/thaynes43/dev-env/issues/528)) ([190a815](https://github.com/thaynes43/dev-env/commit/190a8152479589be03ed282ce5808007ab97ce4c))
+* **portal:** serve session summaries and project work packages ([#545](https://github.com/thaynes43/dev-env/issues/545)) ([8d655b2](https://github.com/thaynes43/dev-env/commit/8d655b212a070f6b7edd52c9ff0c69396f24070a))
+* **providerallowance:** add the Story189 source contract ([#543](https://github.com/thaynes43/dev-env/issues/543)) ([edfd9c3](https://github.com/thaynes43/dev-env/commit/edfd9c3dd7bc27438f000e15a9c3dab390ab6d07))
+* **trials:** check synthetic stopped handoffs offline ([#532](https://github.com/thaynes43/dev-env/issues/532)) ([2854dbe](https://github.com/thaynes43/dev-env/commit/2854dbea0ab9c06f5065c08990d5d3e9cd4cc423))
+
+
+### Bug Fixes
+
+* **agentd:** publish the TTY fixture receipt only when complete ([#544](https://github.com/thaynes43/dev-env/issues/544)) ([2da71e8](https://github.com/thaynes43/dev-env/commit/2da71e8f844ba46305433b08ca5b360e5e83d121))
+* **agentd:** retain own-SA kubeconfig at zero grants ([#555](https://github.com/thaynes43/dev-env/issues/555)) ([25763f5](https://github.com/thaynes43/dev-env/commit/25763f554ed654b5cfeb8ff0fb9d0a0758a792fc))
+* allow terminal outcomes of optional advisory duplicates ([#554](https://github.com/thaynes43/dev-env/issues/554)) ([7976b1a](https://github.com/thaynes43/dev-env/commit/7976b1ad1ff50aef2b2a82e639a369546821b610))
+* **delivery:** isolate pinned guard execution ([#549](https://github.com/thaynes43/dev-env/issues/549)) ([44d9c27](https://github.com/thaynes43/dev-env/commit/44d9c2772fd33bc30f0bdfa784ba1df5d12da686))
+* **deps:** update module github.com/go-jose/go-jose/v4 to v4.1.6 ([#535](https://github.com/thaynes43/dev-env/issues/535)) ([e279fe4](https://github.com/thaynes43/dev-env/commit/e279fe4fb60896a3d63f6f8c340b5e2e74a8e39d))
+* **deps:** update module golang.org/x/time to v0.16.0 ([#537](https://github.com/thaynes43/dev-env/issues/537)) ([480e0cd](https://github.com/thaynes43/dev-env/commit/480e0cde55c7863dbc88084316ccdb0ffe0e0ae5))
+* **portal:** bind work packages to canonical TaskClaim keys ([#542](https://github.com/thaynes43/dev-env/issues/542)) ([5b39ebb](https://github.com/thaynes43/dev-env/commit/5b39ebb13f3651c8aa741a2b4358bc1eecf6dd30))
+* **portal:** enforce page and JSON reader contracts ([#550](https://github.com/thaynes43/dev-env/issues/550)) ([3221ca7](https://github.com/thaynes43/dev-env/commit/3221ca79f4d7fddf73b0cfafc71a24de28f13663))
+
 ## [2.44.0](https://github.com/thaynes43/dev-env/compare/v2.43.0...v2.44.0) (2026-10-23)
 
 
