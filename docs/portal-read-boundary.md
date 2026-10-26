@@ -61,9 +61,12 @@ separate from the requested model. Each token counter keeps `Unknown` apart from
 an explicit zero. Cache read tokens can overlap input tokens and are never added
 to them. Cost is shown only as the existing CLI-equivalent estimate, never as a
 charge or a subscription quota. Nothing is summed, and the account allowance is
-`Unknown`. The portal refuses a row without `activity`, an unknown key, a null,
-a word outside its set, or an `Unknown` scope that carries a reported value. The
-page shows a fixed coverage note with connected rows.
+`Unknown`. The portal accepts a row of exactly the six base keys, or those six
+and a valid `activity`; a row without `activity` renders every activity field
+`Unknown`, never zero. It refuses a null or malformed `activity`, an unknown key,
+a null, a word outside its set, an `Unknown` scope that carries a reported value,
+or a mode other than `task` whose usage scope is not `Unknown`. The page shows a
+fixed coverage note with connected rows.
 
 Task outcome, worker liveness, review, authority and release are displayed
 separately. Canonical links are constructed from validated numeric work-package

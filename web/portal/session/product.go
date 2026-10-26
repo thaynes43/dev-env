@@ -226,12 +226,9 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSu
 	if err != nil {
 		return row, err
 	}
-	for _, key := range []string{"name", "uid", "repo", "phase", "observedAt", "freshness", "activity"} {
-		if _, ok := obj[key]; !ok {
-			return row, portal.ErrUnavailable
-		}
-	}
-	if len(obj) != 7 {
+	// A row is the six base keys, or those six and a valid activity object.
+	// Without activity every activity field renders Unknown.
+	if !exactKeys(obj, []string{"name", "uid", "repo", "phase", "observedAt", "freshness"}, "activity") {
 		return row, portal.ErrUnavailable
 	}
 	var name, uid, repo, phase, freshness string
@@ -245,11 +242,15 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSu
 	if err != nil {
 		return row, err
 	}
-	activity, err := decodeSessionActivity(obj["activity"], now)
-	if err != nil {
-		return row, err
+	row = apiv1.PortalSessionSummary{Name: name, UID: uid, Repo: repo, Phase: phase, ObservedAt: observed, Freshness: freshness}
+	if rawActivity, ok := obj["activity"]; ok {
+		activity, err := decodeSessionActivity(rawActivity, now)
+		if err != nil {
+			return apiv1.PortalSessionSummary{}, err
+		}
+		row.Activity = &activity
 	}
-	return apiv1.PortalSessionSummary{Name: name, UID: uid, Repo: repo, Phase: phase, ObservedAt: observed, Freshness: freshness, Activity: &activity}, nil
+	return row, nil
 }
 
 func sessionPhase(phase string) bool {

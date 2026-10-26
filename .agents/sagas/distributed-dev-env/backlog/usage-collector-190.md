@@ -62,8 +62,9 @@ Source only; no deployment, activation, credential, grant, DB or network change.
   descendant rollups, remote/TUI consumption, history or log reads, and any
   change to the default six-key summary.
 - **Acceptance:** without the view, rows keep exactly six keys; with it, Unknown
-  stays distinct from zero, requested and served models stay separate, usage
-  appears only for task sessions, and the portal refuses legacy rows, nulls,
-  unknown keys and inconsistent Unknown scopes. Required CI and an independent
+  stays distinct from zero, requested and served models stay separate, and
+  usage appears only for task sessions. The portal accepts a six-key row and
+  renders its activity Unknown, and refuses nulls, unknown keys, inconsistent
+  Unknown scopes and a non-task mode carrying measured usage. Required CI and an independent
   exact-head review precede merge. A portal image with U1 needs an operator with
   U1; the earlier image keeps working against either operator.

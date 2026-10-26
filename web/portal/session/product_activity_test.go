@@ -91,11 +91,16 @@ func TestSessionActivityDecoderFailsClosed(t *testing.T) {
 	if _, err := decodeSessionPage([]byte(activityPage(good)), now); err != nil {
 		t.Fatal(err)
 	}
-	legacy := `{"name":"worker","uid":"uid-worker","repo":"dev-env","phase":"Running","observedAt":"2026-10-25T11:59:00Z","freshness":"observed"}`
 	cases := map[string]string{
-		"legacy row without activity": legacy,
-		"activity null":               strings.Replace(good, reportedActivity, `"activity":null`, 1),
-		"extra row key":               strings.Replace(good, `"phase":"Running"`, `"phase":"Running","prompt":"SECRET"`, 1),
+		"activity null":            strings.Replace(good, reportedActivity, `"activity":null`, 1),
+		"activity not object":      strings.Replace(good, reportedActivity, `"activity":"busy"`, 1),
+		"extra row key":            strings.Replace(good, `"phase":"Running"`, `"phase":"Running","prompt":"SECRET"`, 1),
+		"legacy row extra key":     strings.Replace(legacyRow("worker"), `"phase":"Running"`, `"phase":"Running","prompt":"SECRET"`, 1),
+		"legacy row missing a key": strings.Replace(legacyRow("worker"), `"freshness":"observed"`, `"freshnessX":"observed"`, 1),
+		// Usage covers task sessions only: another mode cannot carry a measured scope.
+		"remote mode with reported usage":  strings.Replace(good, `"mode":"task"`, `"mode":"remote"`, 1),
+		"local mode with reported usage":   strings.Replace(good, `"mode":"task"`, `"mode":"local"`, 1),
+		"Unknown mode with reported usage": strings.Replace(good, `"mode":"task"`, `"mode":"Unknown"`, 1),
 	}
 	mutate := map[string][2]string{
 		"activity extra key":         {`"mode":"task"`, `"mode":"task","prompt":"SECRET"`},
@@ -152,6 +157,45 @@ func TestSessionActivityDecoderFailsClosed(t *testing.T) {
 				t.Fatalf("accepted %s", row)
 			}
 		})
+	}
+}
+
+func legacyRow(name string) string {
+	return `{"name":"` + name + `","uid":"uid-` + name + `","repo":"dev-env","phase":"Running","observedAt":"2026-10-25T11:59:00Z","freshness":"observed"}`
+}
+
+// A row with only the six base keys is accepted and renders every activity
+// field Unknown, never zero; it can sit beside activity rows on one page.
+func TestSessionLegacyRowRendersUnknownActivity(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	page, err := decodeSessionPage([]byte(activityPage(legacyRow("legacy"), activityRow("worker", reportedActivity))), now)
+	if err != nil || len(page.Sessions) != 2 || page.Sessions[0].Activity != nil || page.Sessions[1].Activity == nil {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+	row := sessionRow(page.Sessions[0])
+	got := map[string]string{}
+	for _, f := range row.Fields {
+		got[f.Label] = f.Value
+	}
+	for _, label := range []string{"Agent state", "Last activity", "Mode", "Requested model", "Served model (provider reported)", "Usage scope", "Input tokens", "Output tokens", "Cache read tokens", "Cache create tokens", "Cost estimate"} {
+		if got[label] != "Unknown" {
+			t.Errorf("legacy %s = %q, want Unknown", label, got[label])
+		}
+	}
+	if got["Phase"] != "Running" || got["Freshness"] != "observed" || got["UID"] != "uid-legacy" || row.Title != "legacy" || len(row.Fields) != len(sessionRow(page.Sessions[1]).Fields) {
+		t.Fatalf("legacy row %+v", row)
+	}
+}
+
+// Non-task modes are accepted when their usage is entirely Unknown.
+func TestSessionNonTaskModesAcceptUnknownUsage(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	for _, mode := range []string{"remote", "local", "Unknown"} {
+		activity := strings.Replace(unknownActivity, `"mode":"remote"`, `"mode":"`+mode+`"`, 1)
+		page, err := decodeSessionPage([]byte(activityPage(activityRow("s", activity))), now)
+		if err != nil || page.Sessions[0].Activity.Mode != mode || page.Sessions[0].Activity.Usage.Scope != "Unknown" {
+			t.Fatalf("%s: page=%+v err=%v", mode, page, err)
+		}
 	}
 }
 

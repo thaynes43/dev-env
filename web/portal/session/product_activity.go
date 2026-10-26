@@ -21,7 +21,9 @@ const sessionUsageNote = "Usage is each task session's first managed invocation,
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
 // lastActivity is the one optional key; a null, an unknown key or a word outside
-// its fixed set makes the whole read unavailable.
+// its fixed set makes the whole read unavailable. Usage covers task sessions
+// only, so any other mode must carry an Unknown usage scope, which in turn
+// carries no reported value.
 func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSessionActivity, error) {
 	var a apiv1.PortalSessionActivity
 	obj, err := jsonObject(raw)
@@ -49,6 +51,9 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	usage, err := decodeSessionUsage(obj["usage"])
 	if err != nil {
 		return a, err
+	}
+	if mode != "task" && usage.Scope != protocol.UsageUnknown {
+		return a, portal.ErrUnavailable
 	}
 	a.Mode, a.AgentState, a.RequestedModel, a.Usage = mode, state, model, usage
 	return a, nil
@@ -189,27 +194,30 @@ func oneOf(value string, set ...string) bool {
 }
 
 // sessionRow renders one summary. Requested and served models stay separate,
-// each counter keeps Unknown apart from zero, and nothing is summed.
+// each counter keeps Unknown apart from zero, and nothing is summed. A row
+// without activity renders every activity field Unknown.
 func sessionRow(row apiv1.PortalSessionSummary) portal.ProductRow {
-	fields := []portal.ProductField{{Label: "Phase", Value: shown(row.Phase)}}
-	if a := row.Activity; a != nil {
-		u := a.Usage
-		fields = append(fields,
-			portal.ProductField{Label: "Agent state", Value: shown(a.AgentState)},
-			portal.ProductField{Label: "Last activity", Value: activityTime(a.LastActivity)},
-			portal.ProductField{Label: "Mode", Value: shown(a.Mode)},
-			portal.ProductField{Label: "Requested model", Value: shown(a.RequestedModel)},
-			portal.ProductField{Label: "Served model (provider reported)", Value: servedModelsText(u.ServedModels)},
-			portal.ProductField{Label: "Usage scope", Value: usageScopeText(u)},
-			portal.ProductField{Label: "Input tokens", Value: tokenText(u.InputTokens)},
-			portal.ProductField{Label: "Output tokens", Value: tokenText(u.OutputTokens)},
-			portal.ProductField{Label: "Cache read tokens", Value: tokenText(u.CacheReadInputTokens)},
-			portal.ProductField{Label: "Cache create tokens", Value: tokenText(u.CacheCreationInputTokens)},
-			portal.ProductField{Label: "Cost estimate", Value: costText(u.Cost)},
-		)
+	a := row.Activity
+	if a == nil {
+		a = &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: unknownSessionUsage()}
 	}
-	fields = append(fields, portal.ProductField{Label: "Freshness", Value: shown(row.Freshness)}, portal.ProductField{Label: "UID", Value: shown(row.UID)})
-	return portal.ProductRow{Title: shown(row.Name), Fields: fields}
+	u := a.Usage
+	return portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{
+		{Label: "Phase", Value: shown(row.Phase)},
+		{Label: "Agent state", Value: shown(a.AgentState)},
+		{Label: "Last activity", Value: activityTime(a.LastActivity)},
+		{Label: "Mode", Value: shown(a.Mode)},
+		{Label: "Requested model", Value: shown(a.RequestedModel)},
+		{Label: "Served model (provider reported)", Value: servedModelsText(u.ServedModels)},
+		{Label: "Usage scope", Value: usageScopeText(u)},
+		{Label: "Input tokens", Value: tokenText(u.InputTokens)},
+		{Label: "Output tokens", Value: tokenText(u.OutputTokens)},
+		{Label: "Cache read tokens", Value: tokenText(u.CacheReadInputTokens)},
+		{Label: "Cache create tokens", Value: tokenText(u.CacheCreationInputTokens)},
+		{Label: "Cost estimate", Value: costText(u.Cost)},
+		{Label: "Freshness", Value: shown(row.Freshness)},
+		{Label: "UID", Value: shown(row.UID)},
+	}}
 }
 
 func activityTime(at *time.Time) string {
@@ -260,4 +268,12 @@ func groupDigits(digits string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// unknownSessionUsage is usage with nothing measured.
+func unknownSessionUsage() apiv1.PortalSessionUsage {
+	unknown := protocol.TokenObservation{State: protocol.UsageUnknown}
+	return apiv1.PortalSessionUsage{Scope: protocol.UsageUnknown, ResultState: protocol.UsageUnknown, ServedModels: []string{},
+		InputTokens: unknown, OutputTokens: unknown, CacheReadInputTokens: unknown, CacheCreationInputTokens: unknown,
+		Cost: protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown}}
 }
