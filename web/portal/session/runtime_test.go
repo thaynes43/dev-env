@@ -271,7 +271,7 @@ func TestAccessTokenPairMustMatchVerifiedIdentityAndHash(t *testing.T) {
 }
 
 func TestServerValuesDoNotFormatAsCredentials(t *testing.T) {
-	for _, value := range []any{Record{CSRF: "SECRET-CANARY", accessToken: "SECRET-CANARY"}, Login{State: "SECRET-CANARY"}, codeTokens{accessToken: "SECRET-CANARY"}, PostgresConfig{Password: "SECRET-CANARY", Key: "SECRET-CANARY"}, CodeConfig{ClientSecret: "SECRET-CANARY"}, sessionPayload{AccessToken: "SECRET-CANARY"}, sessionReference{principal: portal.Principal{Subject: "SECRET-CANARY"}}, CurrentAuthorizationConfig{Subject: "SECRET-CANARY"}, CurrentAuthorizer{subject: "SECRET-CANARY"}, &Record{CSRF: "SECRET-CANARY"}, &CodeConfig{ClientSecret: "SECRET-CANARY"}} {
+	for _, value := range []any{Record{CSRF: "SECRET-CANARY", accessToken: "SECRET-CANARY"}, Login{State: "SECRET-CANARY"}, codeTokens{accessToken: "SECRET-CANARY"}, PostgresConfig{Password: "SECRET-CANARY", Key: "SECRET-CANARY"}, CodeConfig{ClientSecret: "SECRET-CANARY"}, sessionPayload{AccessToken: "SECRET-CANARY"}, sessionReference{principal: portal.Principal{Subject: "SECRET-CANARY"}}, CurrentAuthorizationConfig{UserInfoURL: "SECRET-CANARY"}, CurrentAuthorizer{endpoint: "SECRET-CANARY"}, &Record{CSRF: "SECRET-CANARY"}, &CodeConfig{ClientSecret: "SECRET-CANARY"}} {
 		for _, format := range []string{"%v", "%+v", "%#v"} {
 			if strings.Contains(fmt.Sprintf(format, value), "SECRET-CANARY") {
 				t.Fatal("formatting leaked credential")

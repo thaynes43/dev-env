@@ -156,9 +156,7 @@ func LoadProduction(root string) (Runtime, error) {
 	password, passwordErr := text("secrets/DB_PASSWORD")
 	key, keyErr := text("secrets/SESSION_AEAD_KEY")
 	generation, generationErr := text("secrets/SESSION_GENERATION")
-	// config/subject is the existing issuer-plus-subject pin. It is not a 1Password property.
-	subject, subjectErr := text("config/subject")
-	if err != nil || secretErr != nil || userErr != nil || passwordErr != nil || keyErr != nil || generationErr != nil || subjectErr != nil || clientID != productionClientID || dbUser != productionDBUser || !bearerText(secret) || !bearerText(password) || !identityText(subject) {
+	if err != nil || secretErr != nil || userErr != nil || passwordErr != nil || keyErr != nil || generationErr != nil || clientID != productionClientID || dbUser != productionDBUser || !bearerText(secret) || !bearerText(password) {
 		return Runtime{}, errProductionConfig
 	}
 	decoded, err := base64.StdEncoding.Strict().DecodeString(key)
@@ -224,7 +222,7 @@ func LoadProduction(root string) (Runtime, error) {
 	if !roots.AppendCertsFromPEM(issuerCA) {
 		return Runtime{}, errProductionConfig
 	}
-	authorizer, err := NewCurrentAuthorizer(CurrentAuthorizationConfig{Issuer: productionIssuer, Subject: subject, UserInfoURL: productionUserInfo, Store: store, Now: time.Now, Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}})
+	authorizer, err := NewCurrentAuthorizer(CurrentAuthorizationConfig{Issuer: productionIssuer, UserInfoURL: productionUserInfo, Store: store, Now: time.Now, Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}})
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}

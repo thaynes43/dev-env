@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"io"
@@ -17,20 +16,22 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
+// CurrentAuthorizationConfig has no subject pin: access is by live group
+// membership (Tom, 2026-10-26: "manage users by group not by ID").
 type CurrentAuthorizationConfig struct {
-	Issuer, Subject, UserInfoURL string
-	Store                        Store
-	Now                          func() time.Time
+	Issuer, UserInfoURL string
+	Store               Store
+	Now                 func() time.Time
 	// Dedicated TLS transport; arbitrary clients/redirect policies are rejected.
 	Transport *http.Transport
 	Timeout   time.Duration
 }
 
 type CurrentAuthorizer struct {
-	issuer, subject, endpoint string
-	store                     Store
-	now                       func() time.Time
-	client                    *http.Client
+	issuer, endpoint string
+	store            Store
+	now              func() time.Time
+	client           *http.Client
 }
 
 func NewCurrentAuthorizer(c CurrentAuthorizationConfig) (*CurrentAuthorizer, error) {
@@ -43,7 +44,7 @@ func newCurrentAuthorizer(c CurrentAuthorizationConfig, dial func(context.Contex
 		return nil, portal.ErrUnavailable
 	}
 	endpoint, err := configuredURL(c.UserInfoURL)
-	if err != nil || endpoint.Host != issuer.Host || endpoint.Path != "/application/o/userinfo/" || !identityText(c.Subject) || c.Store == nil || c.Now == nil || c.Timeout <= 0 || c.Timeout > 10*time.Second || c.Transport == nil || c.Transport.TLSClientConfig == nil {
+	if err != nil || endpoint.Host != issuer.Host || endpoint.Path != "/application/o/userinfo/" || c.Store == nil || c.Now == nil || c.Timeout <= 0 || c.Timeout > 10*time.Second || c.Transport == nil || c.Transport.TLSClientConfig == nil {
 		return nil, portal.ErrUnavailable
 	}
 	t := c.Transport.Clone()
@@ -66,16 +67,18 @@ func newCurrentAuthorizer(c CurrentAuthorizationConfig, dial func(context.Contex
 	if dial != nil {
 		t.DialContext = dial
 	}
-	return &CurrentAuthorizer{issuer: c.Issuer, subject: c.Subject, endpoint: c.UserInfoURL, store: c.Store, now: c.Now, client: &http.Client{Transport: t, Timeout: c.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &CurrentAuthorizer{issuer: c.Issuer, endpoint: c.UserInfoURL, store: c.Store, now: c.Now, client: &http.Client{Transport: t, Timeout: c.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // Authorize consults the exact request-private session, never a subject index.
 // Old claims, login policy and any earlier successful call grant nothing here.
+// Any subject may hold a session; access needs live UserInfo for that same
+// subject with portal_is_active and portal_is_admin, the Authentik group check.
 func (a *CurrentAuthorizer) Authorize(ctx context.Context, p portal.Principal, r portal.Resource) error {
 	if a == nil || a.store == nil || a.client == nil || a.now == nil {
 		return portal.ErrUnavailable
 	}
-	if p.Issuer != a.issuer || subtle.ConstantTimeCompare([]byte(p.Subject), []byte(a.subject)) != 1 || !allowedResource(r) {
+	if p.Issuer != a.issuer || !identityText(p.Subject) || !allowedResource(r) {
 		return portal.ErrDenied
 	}
 	ref, ok := ctx.Value(sessionContextKey{}).(sessionReference)

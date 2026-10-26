@@ -16,7 +16,7 @@ import (
 )
 
 func currentFixture(f *authFixture, trip tripFunc) *CurrentAuthorizer {
-	return &CurrentAuthorizer{issuer: f.e.config.Verifier.issuer, subject: "synthetic-subject", endpoint: "https://issuer.example/application/o/userinfo/", store: f.store, now: func() time.Time { return f.now }, client: &http.Client{Transport: trip, Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &CurrentAuthorizer{issuer: f.e.config.Verifier.issuer, endpoint: "https://issuer.example/application/o/userinfo/", store: f.store, now: func() time.Time { return f.now }, client: &http.Client{Transport: trip, Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 func userInfoResponse(body string) *http.Response {
@@ -224,7 +224,7 @@ func TestCurrentAuthorizationDefaultDenyAndTransport(t *testing.T) {
 
 func TestCurrentAuthorizationConstructorTLSAndEndpoint(t *testing.T) {
 	for _, mode := range []string{"valid", "http", "cross-host", "wrong-path", "redirect-query", "noTLS", "skipTLS", "wrong-peer", "custom-dial", "proxy"} {
-		c := CurrentAuthorizationConfig{Issuer: "https://issuer.example/portal/", Subject: "synthetic-subject", UserInfoURL: "https://issuer.example/application/o/userinfo/", Store: &memoryStore{}, Now: time.Now, Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
+		c := CurrentAuthorizationConfig{Issuer: "https://issuer.example/portal/", UserInfoURL: "https://issuer.example/application/o/userinfo/", Store: &memoryStore{}, Now: time.Now, Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
 		switch mode {
 		case "http":
 			c.UserInfoURL = "http://issuer.example/application/o/userinfo/"
@@ -284,6 +284,38 @@ func TestUserInfoServiceErrorsRemainUnavailable(t *testing.T) {
 			}
 			if !errors.Is(err, want) {
 				t.Fatal("provider diagnostic classification lost")
+			}
+		})
+	}
+}
+
+// Access is by live group membership, not a pinned subject (Tom, 2026-10-26).
+func TestCurrentAuthorizationIsByGroupNotSubject(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		allowed    bool
+	}{
+		{"member", `{"sub":"another-member","portal_is_active":true,"portal_is_admin":true}`, true},
+		{"not-in-group", `{"sub":"another-member","portal_is_active":true,"portal_is_admin":false}`, false},
+		{"inactive", `{"sub":"another-member","portal_is_active":false,"portal_is_admin":true}`, false},
+		{"other-users-userinfo", `{"sub":"synthetic-subject","portal_is_active":true,"portal_is_admin":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupAuth(t)
+			f.subject = "another-member"
+			f.login(t)
+			r := f.e.bind(f.request("GET", LandingPath, ""))
+			p, err := f.e.Authenticate(r)
+			if err != nil || p.Subject != "another-member" {
+				t.Fatalf("fixture login: %v %q", err, p.Subject)
+			}
+			a := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(tc.body), nil })
+			err = a.Authorize(r.Context(), p, portal.Resource{Project: "dev-env", Environment: "internal"})
+			if tc.allowed && err != nil {
+				t.Fatalf("group member denied: %v", err)
+			}
+			if !tc.allowed && !errors.Is(err, portal.ErrDenied) {
+				t.Fatalf("want ErrDenied, got %v", err)
 			}
 		})
 	}
