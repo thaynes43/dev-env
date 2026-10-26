@@ -86,60 +86,61 @@ func main() {
 }
 
 type options struct {
-	directoryEnabled              bool
-	directoryProjects             []string
-	metadataDiscoveryProjects     []string
-	retainedCommonRules           bool
-	contextsEnabled               bool
-	contextReadProjects           []string
-	inboxEnabled                  bool
-	inboxProjects                 []string
-	inboxCoordinatorReadProjects  []string
-	taskClaimsEnabled             bool
-	taskClaimReadProjects         []string
-	ownedRootPolicy               string
-	nativeFixtureEnabled          bool
-	nativeFixtureImage            string
-	taskBudgetsEnabled            bool
-	taskBudgetNamespace           string
-	taskBudgetWorkerImage         string
-	assignedTaskBudgets           map[string]string
-	sessionNamespace              string
-	templatesNamespace            string
-	templatesName                 string
-	leaderElect                   bool
-	metricsAddr                   string
-	probeAddr                     string
-	apiURL                        string
-	apiAddr                       string
-	apiTLSDir                     string
-	humanSA                       string
-	clientSAs                     []string
-	grantApprovalURL              string
-	coordinatorEnabled            bool
-	portalReaderEnabled           bool
-	privatePilot                  *projectcanary.PilotPolicy
-	privateProjectTasks           bool
-	managedCodexTasks             bool
-	privateHistoryRetention       bool
-	privateTerminalRecord         bool
-	privateExecutorStop           bool
-	homeHistoryArchive            bool
-	historyArchiveReads           bool
-	coordinationArchiveReads      bool
-	coordinationRetention         bool
-	coordinationRetentionGrace    time.Duration
-	homeExpiryDelete              bool
-	homeExpiryGrace               time.Duration
-	privateProjectCanariesEnabled bool
-	privateProjectCanaries        *projectcanary.Policy
-	managedChildDecisions         bool
-	coordinatorHosts              []apiserver.CoordinatorHost
-	standbyEnabled                bool
-	childUsageCapture             bool
-	standbyRepo, standbyModel     string
-	standbyProfile, standbyEffort string
-	catalogBinding                *apiserver.CatalogBinding
+	directoryEnabled                bool
+	directoryProjects               []string
+	metadataDiscoveryProjects       []string
+	retainedCommonRules             bool
+	contextsEnabled                 bool
+	contextReadProjects             []string
+	inboxEnabled                    bool
+	inboxProjects                   []string
+	inboxCoordinatorReadProjects    []string
+	taskClaimsEnabled               bool
+	taskClaimReadProjects           []string
+	ownedRootPolicy                 string
+	nativeFixtureEnabled            bool
+	nativeFixtureImage              string
+	taskBudgetsEnabled              bool
+	taskBudgetNamespace             string
+	taskBudgetWorkerImage           string
+	assignedTaskBudgets             map[string]string
+	sessionNamespace                string
+	templatesNamespace              string
+	templatesName                   string
+	leaderElect                     bool
+	metricsAddr                     string
+	probeAddr                       string
+	apiURL                          string
+	apiAddr                         string
+	apiTLSDir                       string
+	humanSA                         string
+	clientSAs                       []string
+	grantApprovalURL                string
+	coordinatorEnabled              bool
+	portalReaderEnabled             bool
+	portalAdmissionBootstrapEnabled bool
+	privatePilot                    *projectcanary.PilotPolicy
+	privateProjectTasks             bool
+	managedCodexTasks               bool
+	privateHistoryRetention         bool
+	privateTerminalRecord           bool
+	privateExecutorStop             bool
+	homeHistoryArchive              bool
+	historyArchiveReads             bool
+	coordinationArchiveReads        bool
+	coordinationRetention           bool
+	coordinationRetentionGrace      time.Duration
+	homeExpiryDelete                bool
+	homeExpiryGrace                 time.Duration
+	privateProjectCanariesEnabled   bool
+	privateProjectCanaries          *projectcanary.Policy
+	managedChildDecisions           bool
+	coordinatorHosts                []apiserver.CoordinatorHost
+	standbyEnabled                  bool
+	childUsageCapture               bool
+	standbyRepo, standbyModel       string
+	standbyProfile, standbyEffort   string
+	catalogBinding                  *apiserver.CatalogBinding
 }
 
 func parseFlags(args []string) (options, error) {
@@ -170,6 +171,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.standbyEffort, "standby-effort", "xhigh", "effort of the standby remote session; empty leaves the CLI's default")
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.portalReaderEnabled, "enable-portal-reader", false, "accept the dev-agents/dev-env-v2-portal ServiceAccount for paginated dev-env session summaries only")
+	fs.BoolVar(&o.portalAdmissionBootstrapEnabled, "enable-portal-admission-bootstrap", false, "enable the separately permitted one-shot fixed CLOSED portal admission bootstrap action")
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
@@ -656,8 +658,9 @@ func run(args []string) error {
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,
 			},
-			PrivatePilot: o.privatePilot,
-			Projects:     o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
+			PortalAdmissionBootstrap: &apiserver.PortalAdmissionBootstrap{Enabled: o.portalAdmissionBootstrapEnabled},
+			PrivatePilot:             o.privatePilot,
+			Projects:                 o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
 			ChildUsageCapture:        o.childUsageCapture,

@@ -214,6 +214,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.show(ctx, rest)
 	case "usage-export":
 		return a.usageExport(ctx, rest)
+	case "portal-admission-bootstrap":
+		return a.portalAdmissionBootstrap(ctx, rest)
 	case "reap":
 		return a.reap(ctx, rest)
 	case "fleet":
@@ -270,7 +272,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 }
 
 // commands are the words agent-run takes first, built or not yet.
-var commands = []string{"run", "list", "directory", "canary", "show", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "breakglass", "declare-activity", "maintenance", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
+var commands = []string{"run", "list", "directory", "canary", "show", "usage-export", "portal-admission-bootstrap", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "breakglass", "declare-activity", "maintenance", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
 
 // nearestCommand is the command within two edits of word, or "".
 func nearestCommand(word string) string {

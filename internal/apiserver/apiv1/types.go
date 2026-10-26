@@ -19,7 +19,25 @@ const (
 	PilotPreflightPath = "/v1/private-pilot/preflight"
 	FleetPath          = "/v1/fleet"
 	CanariesPath       = "/v1/canaries"
+	// PortalAdmissionBootstrapPath is a deliberately fixed, one-shot action.
+	// It is unreachable unless the operator enables its separate fixed permit.
+	PortalAdmissionBootstrapPath = "/v1/portal-admission/bootstrap"
 )
+
+// PortalAdmissionBootstrapRequest contains no Kubernetes object, identity, or
+// target selector. The request ID selects an already-configured fixed permit.
+type PortalAdmissionBootstrapRequest struct {
+	RequestID string `json:"requestID"`
+}
+
+// PortalAdmissionBootstrapResult is an intentionally small, non-secret receipt.
+// It never exposes permit contents, bearer material, or request headers.
+type PortalAdmissionBootstrapResult struct {
+	Disposition string `json:"disposition"`
+	RequestID   string `json:"requestID"`
+	TargetUID   string `json:"targetUID,omitempty"`
+	TargetRV    string `json:"targetResourceVersion,omitempty"`
+}
 
 func CanaryResultPath(id string) string { return CanariesPath + "/" + id + "/result" }
 

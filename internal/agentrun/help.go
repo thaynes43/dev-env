@@ -23,6 +23,8 @@ Usage:
                                               show one session; --captured-usage adds direct-child receipts
   agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>]
                                               export selected usage evidence privately
+  agent-run portal-admission-bootstrap --request-id <id> [-o json]
+                                              make the separately permitted fixed CLOSED bootstrap call once
   agent-run log <name> [--tail N]                 print the end of a session's log
   agent-run msg <name> "<text>"                   send a message into a session's TUI
   agent-run reap <name>...                        rescue, stop and archive sessions

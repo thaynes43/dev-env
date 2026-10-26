@@ -142,6 +142,9 @@ type Server struct {
 	// GrantApprovalURL is the base URL of the broker's approval page; a pending
 	// grant's view links to it plus the grant's name. Empty links nothing.
 	GrantApprovalURL string
+	// PortalAdmissionBootstrap is nil by default. Its handler is a fixed action,
+	// not a general Kubernetes write API.
+	PortalAdmissionBootstrap *PortalAdmissionBootstrap
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -249,6 +252,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.HistoryPath, s.serve(route{coordinator: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.listHistory}}))
 	mux.Handle(apiv1.HistoryPath+"/{session}", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.getHistory}}))
 	mux.Handle(apiv1.HistoryPath+"/{session}/file", s.serve(route{coordinator: true, history: true, identityGuard: s.historyRoutesOn, methods: map[string]handler{http.MethodGet: s.readHistoryFile}}))
+	mux.Handle(apiv1.PortalAdmissionBootstrapPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalAdmissionBootstrap}}))
 	// The keeper login (NB-01): the workbench only, checked in each handler.
 	mux.Handle(apiv1.KeeperLoginPath+"/{provider}", s.serve(route{methods: map[string]handler{
 		http.MethodGet:    s.keeperLoginStatus,
