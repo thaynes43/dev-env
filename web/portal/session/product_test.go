@@ -369,12 +369,12 @@ func TestPortalProductDecodersRejectNullsAndKeepExplicitZeroValues(t *testing.T)
 		"elements": strings.Replace(task, `"elements":[]`, `"elements":null`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, _, err := decodeTaskPage([]byte(body), 1, map[int]struct{}{}); err == nil {
+			if _, _, _, err := decodeTaskPage([]byte(body), 1, map[int]struct{}{}, time.Time{}); err == nil {
 				t.Fatal("null task field was accepted")
 			}
 		})
 	}
-	rows, total, complete, err := decodeTaskPage([]byte(task), 1, map[int]struct{}{})
+	rows, total, complete, err := decodeTaskPage([]byte(task), 1, map[int]struct{}{}, time.Time{})
 	if err != nil || total != 0 || !complete || len(rows) != 0 {
 		t.Fatalf("explicit zero values changed: rows=%v total=%d complete=%t err=%v", rows, total, complete, err)
 	}
@@ -418,5 +418,26 @@ func TestSessionSourceReadKeepsTheWorstPage(t *testing.T) {
 				t.Fatalf("page=%+v requests=%d err=%v", page, requests, err)
 			}
 		})
+	}
+}
+
+// A rendered product page allows exactly its embedded stylesheet; a refusal
+// keeps the strict policy with no style source.
+func TestProductPagesSendTheirStylesheetPolicyOnly(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	handler := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+	for _, path := range []string{SessionsPath, TasksPath} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, f.request(http.MethodGet, path, ""))
+		if w.Code != http.StatusOK || w.Header().Get("Content-Security-Policy") != portal.ProductPolicy {
+			t.Fatalf("%s: %d %q", path, w.Code, w.Header().Get("Content-Security-Policy"))
+		}
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, f.request(http.MethodPost, SessionsPath, ""))
+	if w.Code == http.StatusOK || strings.Contains(w.Header().Get("Content-Security-Policy"), "style-src") {
+		t.Fatalf("refusal carried the product stylesheet policy: %d %q", w.Code, w.Header().Get("Content-Security-Policy"))
 	}
 }

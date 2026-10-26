@@ -65,8 +65,8 @@ charge or a subscription quota. Nothing is summed, and the account allowance is
 and a valid `activity`; a row without `activity` renders every activity field
 `Unknown`, never zero. It refuses a null or malformed `activity`, an unknown key,
 a null, a word outside its set, an `Unknown` scope that carries a reported value,
-or a mode other than `task` whose usage scope is not `Unknown`. The page shows a
-fixed coverage note with connected rows.
+or a mode other than `task` whose usage scope is not `Unknown`. The Usage view
+below states the same coverage.
 
 Task outcome, worker liveness, review, authority and release are displayed
 separately. Canonical links are constructed from validated numeric work-package
@@ -86,6 +86,42 @@ removed; blank/invisible-only text becomes Unknown. No raw HTML, Markdown,
 remote resources or scripts are rendered. Responses use no-store, a restrictive
 CSP, no-referrer and nosniff. These source checks do not establish deployed
 authentication, session security, proxy trust, CSRF, SSRF or ingress isolation.
+
+## Sessions and Tasks presentation
+
+The Sessions and Tasks pages are the approved "Agents" design (Astra v2,
+2026-10-26): charcoal, dark first, lilac accents, with a coordinated light
+theme chosen by `prefers-color-scheme`. Both are server-rendered with no
+script. They keep the two existing routes; nothing new is fetched or routed.
+
+- **Shell.** A top bar (Agents, Tasks, Automations and Watchdog marked
+  Planned, Usage), a provider allowance strip whose values are `Unknown`, a rail,
+  a grouped list and a workspace. Sessions are grouped Needs attention, In
+  progress, Stopped and State Unknown, newest activity first. Tasks are grouped
+  by status. Counts appear only for a complete read.
+- **Selection.** Each list item links to an in-page anchor (`#s1`, `#t1`). CSS
+  `:target` shows that item's detail; with no anchor the first item's detail is
+  shown. On a phone the list shows first, the detail replaces it, and a back
+  link returns to `#list`. A bottom bar replaces the rail.
+- **Usage view (`#usage`).** Measured sessions as "k of N", account
+  allowance and billed cost `Unknown`, one row per session with input, output,
+  cache read, cache create and the CLI-equivalent estimate, and a coverage
+  panel. A session without measured usage shows `Unknown` in every cell. No
+  totals are computed.
+- **Planned view (`#planned`).** Automations (reminders, scheduled runs and
+  media workflows) and Watchdog are listed as Planned. No scheduler, monitor or
+  backend exists for them.
+- **Fixture label.** Fixture previews say "Fixture preview · sample data".
+
+A rendered Sessions or Tasks page sends `portal.ProductPolicy`: `default-src
+'none'`, `style-src` with the SHA-256 of the embedded `views.css` and nothing
+else, `base-uri 'none'`, `form-action 'self'`, `frame-ancestors 'none'`. The
+session layer's stricter policy, which has no `style-src`, stays on every
+refusal. With only the session layer's policy, Chromium blocks the page's
+inline stylesheet under `default-src 'none'`; this was checked on the fixture
+preview on 2026-10-26. `html/template` drops CSS comments from template
+text, so `views.css` carries none; a test hashes the rendered `<style>` against
+the policy.
 
 ## Mobile presentation
 
@@ -123,7 +159,17 @@ GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
   ./web/portal/preview --output /tmp/portal-attention.html
 ```
 
-Open that local file to inspect the mobile page. The command reuses
+Open that local file to inspect the mobile page. The Sessions and Tasks pages
+render the same way from `scripts/trials/portal_product/sessions.json` and
+`tasks.json`, a synthetic operator page and OpenProject collection with a fixed
+clock, through the live decoders and page builders:
+
+```sh
+GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
+  go run -p 1 ./web/portal/preview --product "$(mktemp -d)"
+```
+
+That writes `sessions.html` and `tasks.html`, labelled as fixture previews. The command reuses
 `scripts/trials/portal_attention/fixtures.json` and its fixed observation time;
 it does not connect to OpenProject, Authentik, a provider or the operator. The
 preview's issuer and subject are invented `.example` fixture values. The

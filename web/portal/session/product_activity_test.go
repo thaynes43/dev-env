@@ -21,67 +21,153 @@ func activityRow(name, activity string) string {
 	return `{"name":"` + name + `","uid":"uid-` + name + `","repo":"dev-env","phase":"Running","observedAt":"2026-10-25T11:59:00Z","freshness":"observed",` + activity + `}`
 }
 
-func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
-	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	page, err := decodeSessionPage([]byte(activityPage(activityRow("worker", reportedActivity), activityRow("remote", unknownActivity))), now)
-	if err != nil || len(page.Sessions) != 2 {
-		t.Fatalf("page=%+v err=%v", page, err)
-	}
-	product := portal.ProductPage{Title: "Sessions", Notice: "Connected session summaries.", Note: sessionUsageNote, Connected: true, ObservedAt: "2026-10-25T12:00:00Z"}
-	for _, row := range page.Sessions {
-		product.Rows = append(product.Rows, sessionRow(row))
-	}
-	fields := func(row portal.ProductRow) map[string]string {
-		out := map[string]string{}
-		for _, f := range row.Fields {
+// rowFields collects a row's detail values by label: tiles, panels and context.
+func rowFields(row portal.ProductRow) map[string]string {
+	out := map[string]string{}
+	for _, section := range row.Sections {
+		for _, f := range append(append([]portal.ProductField{}, section.Metrics...), section.Fields...) {
 			out[f.Label] = f.Value
 		}
-		return out
 	}
-	worker := fields(product.Rows[0])
+	for _, f := range row.Context {
+		out[f.Label] = f.Value
+	}
+	return out
+}
+
+func findRow(t *testing.T, page portal.ProductPage, title string) portal.ProductRow {
+	t.Helper()
+	for _, g := range page.Groups {
+		for _, row := range g.Rows {
+			if row.Title == title {
+				return row
+			}
+		}
+	}
+	t.Fatalf("no row %q", title)
+	return portal.ProductRow{}
+}
+
+func usageRow(t *testing.T, page portal.ProductPage, name string) map[string]portal.ProductUsageCell {
+	t.Helper()
+	for _, row := range page.Usage.Rows {
+		if row.Name == name {
+			out := map[string]portal.ProductUsageCell{}
+			for _, c := range row.Cells {
+				out[c.Label] = c
+			}
+			return out
+		}
+	}
+	t.Fatalf("no usage row %q", name)
+	return nil
+}
+
+func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	decoded, err := decodeSessionPage([]byte(activityPage(activityRow("worker", reportedActivity), activityRow("remote", unknownActivity))), now)
+	if err != nil || len(decoded.Sessions) != 2 {
+		t.Fatalf("page=%+v err=%v", decoded, err)
+	}
+	page := sessionsPage(decoded.Sessions, true, "observed", now)
+	worker := findRow(t, page, "worker")
 	for label, want := range map[string]string{
 		"Agent state":                      "busy",
-		"Last activity":                    "2026-10-25T11:58:00Z",
+		"Last activity":                    "2m ago · 25 Oct 2026, 11:58 UTC",
 		"Mode":                             "task",
 		"Requested model":                  "claude-opus-5-5",
 		"Served model (provider reported)": "claude-haiku-4-5, claude-opus-5-5",
-		"Usage scope":                      "First managed invocation (partial result)",
-		"Input tokens":                     "1,234,567",
-		"Output tokens":                    "0",
-		"Cache read tokens":                "5,000",
-		"Cache create tokens":              "Unknown",
+		"Scope":                            "First managed invocation (partial result)",
+		"Input":                            "1,234,567",
+		"Output":                           "0",
+		"Cache read":                       "5,000",
+		"Cache create":                     "Unknown",
 		"Cost estimate":                    "0.75 USD (CLI-equivalent estimate, not a charge)",
+		"UID":                              "uid-worker",
 	} {
-		if worker[label] != want {
-			t.Errorf("worker %s = %q, want %q", label, worker[label], want)
+		if got := rowFields(worker)[label]; got != want {
+			t.Errorf("worker %s = %q, want %q", label, got, want)
 		}
 	}
-	remote := fields(product.Rows[1])
-	for _, label := range []string{"Last activity", "Served model (provider reported)", "Usage scope", "Input tokens", "Output tokens", "Cache read tokens", "Cache create tokens", "Cost estimate"} {
-		if remote[label] != "Unknown" {
-			t.Errorf("remote %s = %q, want Unknown", label, remote[label])
+	if worker.Meta != "In 1.2M · Out 0" || worker.Status != (portal.ProductStatus{Text: "Busy", Tone: "busy"}) || !worker.MonoTitle {
+		t.Fatalf("worker list item %+v", worker)
+	}
+	remote := findRow(t, page, "remote")
+	fields := rowFields(remote)
+	for _, label := range []string{"Last activity", "Scope"} {
+		if fields[label] != "Unknown" {
+			t.Errorf("remote %s = %q, want Unknown", label, fields[label])
 		}
 	}
-	if remote["Requested model"] != "claude-opus-5-5" || remote["Mode"] != "remote" {
-		t.Fatalf("remote %+v", remote)
+	for _, label := range []string{"Input", "Output", "Cache read", "Cache create", "Cost estimate"} {
+		if _, ok := fields[label]; ok {
+			t.Errorf("remote shows %s although nothing was measured", label)
+		}
 	}
-	body, err := portal.RenderProduct(product)
+	if fields["Requested model"] != "claude-opus-5-5" || fields["Mode"] != "remote" || remote.Meta != "Usage Unknown" {
+		t.Fatalf("remote %+v", fields)
+	}
+	w := usageRow(t, page, "worker")
+	if w["Input"].Value != "1,234,567" || w["Output"].Value != "0" || w["Output"].Unknown || w["Cache read"].Value != "5,000" || !w["Cache create"].Unknown || w["Est. cost"].Value != "0.75 USD" {
+		t.Fatalf("worker usage cells %+v", w)
+	}
+	for label, cell := range usageRow(t, page, "remote") {
+		if cell.Value != "Unknown" || !cell.Unknown {
+			t.Errorf("remote usage %s = %+v, want Unknown", label, cell)
+		}
+	}
+	if page.Usage.Stats[0].Value != "1 of 2" || page.Usage.Stats[1].Value != "Unknown" || page.Usage.Stats[2].Value != "Unknown" {
+		t.Fatalf("usage stats %+v", page.Usage.Stats)
+	}
+	page.ObservedAt = "2026-10-25T12:00:00Z"
+	body, err := portal.RenderProduct(page)
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(body)
-	if !strings.Contains(html, "first managed invocation") || !strings.Contains(html, "not a charge") || !strings.Contains(html, "Unknown, not zero") {
-		t.Fatalf("coverage note missing: %s", html)
-	}
-	// No total of any two counters or of the served models appears.
-	for _, total := range []string{"1,239,567", "1239567", "1,234,567 total", "Total"} {
-		if strings.Contains(html, total) {
-			t.Fatalf("rendered a total %q", total)
+	for _, want := range []string{"Initial invocations only", "can overlap input; never added", "not a charge", "None computed", `href="#s1"`, `id="usage"`, `id="planned"`, "Automations", "Watchdog", ">Planned<"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rendered page lacks %q", want)
 		}
 	}
-	disconnected, err := portal.RenderProduct(portal.ProductPage{Title: "Sessions", Notice: "Sessions unavailable", Note: sessionUsageNote})
-	if err != nil || strings.Contains(string(disconnected), "first managed invocation") {
-		t.Fatalf("coverage note shown without connected rows: %s", disconnected)
+	// No total of any counters, sessions or served models appears.
+	for _, total := range []string{"1,239,567", "1239567", "1,234,567 total", "Total tokens", "Fixture preview"} {
+		if strings.Contains(html, total) {
+			t.Fatalf("rendered %q", total)
+		}
+	}
+	partial := sessionsPage(decoded.Sessions, false, "observed", now)
+	if partial.Complete || partial.ListCount != "Partial list" || partial.Usage.Stats[0].Value != "1 listed" {
+		t.Fatalf("incomplete read was counted: %+v", partial)
+	}
+	disconnected, err := portal.RenderProduct(portal.ProductPage{Title: "Sessions", Notice: "Sessions unavailable", Usage: page.Usage, Groups: page.Groups})
+	if err != nil || strings.Contains(string(disconnected), "Initial invocations only") || strings.Contains(string(disconnected), "worker") || !strings.Contains(string(disconnected), "Sessions unavailable") {
+		t.Fatalf("disconnected page showed rows or usage: %s", disconnected)
+	}
+}
+
+// Sessions are grouped by what they need, then by most recent activity.
+func TestSessionsPageGroupsByAttention(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	waiting := strings.Replace(unknownActivity, `"agentState":"idle"`, `"agentState":"waiting"`, 1)
+	exited := strings.Replace(reportedActivity, `"agentState":"busy"`, `"agentState":"exited"`, 1)
+	decoded, err := decodeSessionPage([]byte(activityPage(activityRow("a-busy", reportedActivity), activityRow("b-exited", exited), activityRow("c-waiting", waiting), legacyRow("d-legacy"))), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := sessionsPage(decoded.Sessions, true, "observed", now)
+	var got []string
+	for _, g := range page.Groups {
+		for _, row := range g.Rows {
+			got = append(got, g.Title+":"+row.Title+":"+row.ID)
+		}
+	}
+	want := []string{"Needs attention:c-waiting:s1", "In progress:a-busy:s2", "In progress:d-legacy:s3", "Stopped:b-exited:s4"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("groups %v, want %v", got, want)
+	}
+	if !page.Groups[0].Attention || page.Notice != "Connected session summaries." || !page.Quiet {
+		t.Fatalf("page %+v", page)
 	}
 }
 
@@ -172,17 +258,19 @@ func TestSessionLegacyRowRendersUnknownActivity(t *testing.T) {
 	if err != nil || len(page.Sessions) != 2 || page.Sessions[0].Activity != nil || page.Sessions[1].Activity == nil {
 		t.Fatalf("page=%+v err=%v", page, err)
 	}
-	row := sessionRow(page.Sessions[0])
-	got := map[string]string{}
-	for _, f := range row.Fields {
-		got[f.Label] = f.Value
-	}
-	for _, label := range []string{"Agent state", "Last activity", "Mode", "Requested model", "Served model (provider reported)", "Usage scope", "Input tokens", "Output tokens", "Cache read tokens", "Cache create tokens", "Cost estimate"} {
+	row := sessionRow(page.Sessions[0], now)
+	got := rowFields(row)
+	for _, label := range []string{"Agent state", "Last activity", "Mode", "Requested model", "Scope"} {
 		if got[label] != "Unknown" {
 			t.Errorf("legacy %s = %q, want Unknown", label, got[label])
 		}
 	}
-	if got["Phase"] != "Running" || got["Freshness"] != "observed" || got["UID"] != "uid-legacy" || row.Title != "legacy" || len(row.Fields) != len(sessionRow(page.Sessions[1]).Fields) {
+	for _, label := range []string{"Input", "Output", "Cache read", "Cache create", "Cost estimate"} {
+		if _, ok := got[label]; ok {
+			t.Errorf("legacy row shows %s", label)
+		}
+	}
+	if got["Phase"] != "Running" || got["Freshness"] != "observed" || got["UID"] != "uid-legacy" || row.Title != "legacy" || row.Meta != "Usage Unknown" || row.Description != "model Unknown · mode Unknown" || row.Age != "Unknown" {
 		t.Fatalf("legacy row %+v", row)
 	}
 }

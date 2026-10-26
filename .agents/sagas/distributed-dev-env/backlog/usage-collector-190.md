@@ -68,3 +68,9 @@ Source only; no deployment, activation, credential, grant, DB or network change.
   Unknown scopes and a non-task mode carrying measured usage. Required CI and an independent
   exact-head review precede merge. A portal image with U1 needs an operator with
   U1; the earlier image keeps working against either operator.
+- **Presentation (2026-10-26):** after Tom rejected the first look, U1 renders
+  in the approved Astra v2 "Agents" design: dark-first charcoal and lilac, a
+  script-free shell over the two existing routes, a Usage view without totals
+  and a Planned view for Automations and Watchdog. It includes the narrow
+  product-page CSP header that allows only the embedded stylesheet. See
+  [portal read boundary](../../../../docs/portal-read-boundary.md).
