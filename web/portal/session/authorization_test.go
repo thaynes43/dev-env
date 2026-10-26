@@ -37,6 +37,10 @@ func TestCurrentUserInfoStrictClaims(t *testing.T) {
 		`{"sub":"synthetic-subject","portal_is_active":true,"portal_is_admin":true,"portal_is_admin":false}`,
 		`{"sub":"other","sub":"synthetic-subject","portal_is_active":true,"portal_is_admin":true}`,
 		`{"sub":["synthetic-subject"],"portal_is_active":true,"portal_is_admin":true}`,
+		// Missing claims deny: without the Authentik mapping, UserInfo has only sub.
+		`{"sub":"synthetic-subject"}`,
+		`{"sub":"synthetic-subject","portal_is_active":true}`,
+		`{"sub":"synthetic-subject","portal_is_admin":true}`,
 	} {
 		if validUserInfo([]byte(body), "synthetic-subject") {
 			t.Fatal("malformed or denied current claims accepted")
@@ -299,6 +303,9 @@ func TestCurrentAuthorizationIsByGroupNotSubject(t *testing.T) {
 		{"not-in-group", `{"sub":"another-member","portal_is_active":true,"portal_is_admin":false}`, false},
 		{"inactive", `{"sub":"another-member","portal_is_active":false,"portal_is_admin":true}`, false},
 		{"other-users-userinfo", `{"sub":"synthetic-subject","portal_is_active":true,"portal_is_admin":true}`, false},
+		{"no-portal-claims", `{"sub":"another-member"}`, false},
+		{"only-active", `{"sub":"another-member","portal_is_active":true}`, false},
+		{"only-admin", `{"sub":"another-member","portal_is_admin":true}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := setupAuth(t)
