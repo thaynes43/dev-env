@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,12 +13,6 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
-
-// sessionUsageNote states the Sessions view's usage coverage on every connected read.
-const sessionUsageNote = "Usage is each task session's first managed invocation, as its provider reported it. " +
-	"Interactive and remote sessions, later turns and account allowance are Unknown, not zero. " +
-	"Cache read tokens can overlap input tokens and are not added to them. " +
-	"Cost is a CLI-equivalent list-price estimate, not a charge."
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
 // lastActivity is the one optional key; a null, an unknown key or a word outside
@@ -193,16 +188,41 @@ func oneOf(value string, set ...string) bool {
 	return false
 }
 
-// sessionsPage builds the Sessions page. Counts appear only for a complete
-// read; they count sessions and never add token or cost values.
-func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time) portal.ProductPage {
-	page := portal.ProductPage{Title: "Sessions", Connected: true, Note: sessionUsageNote, NoteTitle: "About usage numbers"}
-	for _, s := range sessions {
-		page.Rows = append(page.Rows, sessionRow(s, now))
+// sessionGroups are the Sessions list groups, in display order.
+var sessionGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: true}, {Title: "In progress"}, {Title: "Stopped"}, {Title: "State Unknown"}}
+
+func sessionGroup(phase string, a *apiv1.PortalSessionActivity) int {
+	state := protocol.UsageUnknown
+	if a != nil {
+		state = a.AgentState
 	}
+	switch state {
+	case protocol.AgentWaiting, protocol.AgentFailed, protocol.AgentInterrupted:
+		return 0
+	case protocol.AgentBusy, protocol.AgentPending, protocol.AgentIdle:
+		return 1
+	case protocol.AgentExited:
+		return 2
+	}
+	switch phase {
+	case "Failed":
+		return 0
+	case "Running", "Pending", "Idle":
+		return 1
+	case "Suspended", "Archived", "Draining":
+		return 2
+	}
+	return 3
+}
+
+// sessionsPage builds the Sessions page: groups ordered by attention, then
+// most recent activity, and the Usage view. It counts sessions; it never adds
+// token or cost values.
+func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time) portal.ProductPage {
+	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete}
 	switch {
 	case !complete:
-		page.Notice = "Sessions read is incomplete. This is not the full inventory."
+		page.Notice, page.ListCount = "Sessions read is incomplete. This is not the full inventory.", "Partial list"
 	case freshness != "observed":
 		page.Notice = "Session freshness is " + freshness + "."
 	case len(sessions) == 0:
@@ -210,81 +230,160 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	default:
 		page.Notice, page.Quiet = "Connected session summaries.", true
 	}
-	if complete {
-		var busy, waiting, measured int
-		for _, s := range sessions {
-			if a := s.Activity; a != nil {
-				switch a.AgentState {
-				case protocol.AgentBusy:
-					busy++
-				case protocol.AgentWaiting:
-					waiting++
-				}
-				if a.Usage.Scope == protocol.UsageInitial {
-					measured++
-				}
-			}
+	ordered := append([]apiv1.PortalSessionSummary(nil), sessions...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		gi, gj := sessionGroup(ordered[i].Phase, ordered[i].Activity), sessionGroup(ordered[j].Phase, ordered[j].Activity)
+		if gi != gj {
+			return gi < gj
 		}
-		page.Summary = []portal.ProductStat{
-			{Label: "Sessions", Value: strconv.Itoa(len(sessions))},
-			{Label: "Busy", Value: strconv.Itoa(busy), Tone: "busy"},
-			{Label: "Waiting", Value: strconv.Itoa(waiting), Tone: "wait"},
-			{Label: "Usage measured", Value: strconv.Itoa(measured) + " of " + strconv.Itoa(len(sessions))},
+		ti, tj := lastActivity(ordered[i]), lastActivity(ordered[j])
+		if !ti.Equal(tj) {
+			return ti.After(tj)
 		}
+		return ordered[i].Name < ordered[j].Name
+	})
+	page.Groups = make([]portal.ProductGroup, len(sessionGroups))
+	copy(page.Groups, sessionGroups)
+	usage := &portal.ProductUsage{
+		Scope: "Initial invocations only", ScopeNote: "Later turns, interactive and remote sessions, and account usage are not captured.",
+		Columns: []string{"Session", "Input", "Output", "Cache read", "Cache create", "Est. cost"},
+		Coverage: []portal.ProductField{
+			{Label: "Measured", Value: "First managed invocation of task sessions"},
+			{Label: "Interactive and remote sessions", Value: "Unknown"},
+			{Label: "Later turns", Value: "Unknown"},
+			{Label: "Account allowance", Value: "Unknown"},
+			{Label: "Served model", Value: "Provider reported, where measured"},
+			{Label: "Cache read tokens", Value: "Separate counter; can overlap input; never added"},
+			{Label: "Cost", Value: "CLI-equivalent list-price estimate; not a charge"},
+			{Label: "Totals", Value: "None computed"},
+		},
 	}
+	measured := 0
+	for i, s := range ordered {
+		id := "s" + strconv.Itoa(i+1)
+		row := sessionRow(s, now)
+		row.ID = id
+		g := sessionGroup(s.Phase, s.Activity)
+		page.Groups[g].Rows = append(page.Groups[g].Rows, row)
+		usageRow, ok := sessionUsageRow(id, s)
+		if ok {
+			measured++
+		}
+		usage.Rows = append(usage.Rows, usageRow)
+	}
+	if complete && len(sessions) > 0 {
+		page.ListCount = strconv.Itoa(len(sessions)) + " sessions · dev-env"
+	}
+	countText := strconv.Itoa(measured) + " of " + strconv.Itoa(len(sessions))
+	if !complete {
+		countText = strconv.Itoa(measured) + " listed"
+	}
+	usage.Stats = []portal.ProductStat{
+		{Label: "Measured sessions", Value: countText, Note: "Task sessions' first invocation"},
+		{Label: "Account allowance", Value: "Unknown", Note: "No allowance source connected", Tone: "muted"},
+		{Label: "Billed cost", Value: "Unknown", Note: "Estimates are not charges", Tone: "muted"},
+	}
+	page.Usage = usage
 	return page
 }
 
-// sessionRow renders one summary. Requested and served models stay separate,
-// each counter keeps Unknown apart from zero, and nothing is summed. A row
-// without activity renders every activity field Unknown. The card shows input,
-// output and the cost estimate; the full record is in Details.
-func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow {
-	a := row.Activity
-	if a == nil {
-		a = &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: unknownSessionUsage()}
+func lastActivity(s apiv1.PortalSessionSummary) time.Time {
+	if s.Activity == nil || s.Activity.LastActivity == nil {
+		return time.Time{}
 	}
+	return *s.Activity.LastActivity
+}
+
+// sessionUsageRow is one Usage table row. A session without measured usage
+// keeps every cell Unknown; it is never listed as zero.
+func sessionUsageRow(id string, s apiv1.PortalSessionSummary) (portal.ProductUsageRow, bool) {
+	a := activityOrUnknown(s.Activity)
 	u := a.Usage
-	out := portal.ProductRow{Title: shown(row.Name), Status: sessionStatus(row.Phase, a.AgentState)}
-	sub := []string{"mode Unknown", "model Unknown", "activity Unknown"}
-	if a.Mode != protocol.UsageUnknown {
-		sub[0] = a.Mode
-	}
+	row := portal.ProductUsageRow{ID: id, Name: shown(s.Name), Sub: "requested model Unknown"}
 	if a.RequestedModel != protocol.UsageUnknown {
-		sub[1] = a.RequestedModel
+		row.Sub = a.RequestedModel + " requested"
 	}
+	cell := func(label, value string) portal.ProductUsageCell {
+		return portal.ProductUsageCell{Label: label, Value: value, Unknown: value == "Unknown"}
+	}
+	measured := u.Scope == protocol.UsageInitial
+	if measured && len(u.ServedModels) > 0 {
+		row.Sub += " · served " + servedModelsText(u.ServedModels)
+	}
+	row.Cells = []portal.ProductUsageCell{
+		cell("Input", tokenText(u.InputTokens)), cell("Output", tokenText(u.OutputTokens)),
+		cell("Cache read", tokenText(u.CacheReadInputTokens)), cell("Cache create", tokenText(u.CacheCreationInputTokens)),
+		cell("Est. cost", shortCost(u.Cost)),
+	}
+	return row, measured
+}
+
+func activityOrUnknown(a *apiv1.PortalSessionActivity) *apiv1.PortalSessionActivity {
+	if a != nil {
+		return a
+	}
+	return &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: unknownSessionUsage()}
+}
+
+// sessionRow renders one summary as a list item and its detail. Requested and
+// served models stay separate, each counter keeps Unknown apart from zero, and
+// nothing is summed. A row without activity renders every activity field Unknown.
+func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow {
+	a := activityOrUnknown(row.Activity)
+	u := a.Usage
+	mode, model := a.Mode, a.RequestedModel
+	if mode == protocol.UsageUnknown {
+		mode = "mode Unknown"
+	}
+	if model == protocol.UsageUnknown {
+		model = "model Unknown"
+	}
+	active := "activity Unknown"
 	if a.LastActivity != nil {
-		sub[2] = "active " + portal.Ago(*a.LastActivity, now)
+		active = "active " + portal.Ago(*a.LastActivity, now)
 	}
-	out.Subtitle = strings.Join(sub, " · ")
+	out := portal.ProductRow{
+		Title: shown(row.Name), MonoTitle: true, Kicker: "dev-env", Crumb: shown(row.Name),
+		Status: sessionStatus(row.Phase, a.AgentState), Description: model + " · " + mode,
+		Age: compactAgo(a.LastActivity, now), Badges: []string{mode, model, active}, ContextTitle: "Session context",
+	}
+	if row.Freshness != "observed" {
+		out.Badges = append(out.Badges, "freshness "+shown(row.Freshness))
+	}
+	usage := portal.ProductSection{Title: "Usage"}
 	if u.Scope == protocol.UsageInitial {
-		cost := "Unknown"
-		if u.Cost.State == protocol.UsageReported && u.Cost.Valid() {
-			cost = u.Cost.Amount + " USD"
+		out.Meta = "In " + compactTokens(u.InputTokens) + " · Out " + compactTokens(u.OutputTokens)
+		usage.Metrics = []portal.ProductField{
+			{Label: "Input", Value: tokenText(u.InputTokens)}, {Label: "Output", Value: tokenText(u.OutputTokens)},
+			{Label: "Cache read", Value: tokenText(u.CacheReadInputTokens)}, {Label: "Cache create", Value: tokenText(u.CacheCreationInputTokens)},
 		}
-		out.Metrics = []portal.ProductField{{Label: "Input", Value: tokenText(u.InputTokens)}, {Label: "Output", Value: tokenText(u.OutputTokens)}, {Label: "Est. cost", Value: cost}}
-		out.Aside = "Served by " + servedModelsText(u.ServedModels)
-		if u.ResultState == "Partial" {
-			out.Aside += " · partial result"
+		usage.Fields = []portal.ProductField{
+			{Label: "Served model (provider reported)", Value: servedModelsText(u.ServedModels), Mono: len(u.ServedModels) > 0},
+			{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},
+			{Label: "Cost estimate", Value: costText(u.Cost)},
+			{Label: "Scope", Value: usageScopeText(u)},
 		}
+		usage.Note = "Counters are reported separately; cache reads can overlap input. Nothing is added."
 	} else {
-		out.Aside = "Usage Unknown"
+		out.Meta = "Usage Unknown"
+		usage.Fields = []portal.ProductField{{Label: "Scope", Value: "Unknown"}, {Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown}}
+		usage.Note = "Usage is measured only for a task session's first managed invocation."
 	}
-	out.Fields = []portal.ProductField{
-		{Label: "Phase", Value: shown(row.Phase)},
+	lastSeen := activityTime(a.LastActivity)
+	if a.LastActivity != nil {
+		lastSeen = portal.Ago(*a.LastActivity, now) + " · " + a.LastActivity.UTC().Format("2 Jan 2006, 15:04 UTC")
+	}
+	out.Sections = []portal.ProductSection{usage, {Title: "Activity", Fields: []portal.ProductField{
 		{Label: "Agent state", Value: shown(a.AgentState)},
-		{Label: "Last activity", Value: activityTime(a.LastActivity)},
-		{Label: "Mode", Value: shown(a.Mode)},
-		{Label: "Requested model", Value: shown(a.RequestedModel)},
-		{Label: "Served model (provider reported)", Value: servedModelsText(u.ServedModels)},
-		{Label: "Usage scope", Value: usageScopeText(u)},
-		{Label: "Input tokens", Value: tokenText(u.InputTokens)},
-		{Label: "Output tokens", Value: tokenText(u.OutputTokens)},
-		{Label: "Cache read tokens", Value: tokenText(u.CacheReadInputTokens)},
-		{Label: "Cache create tokens", Value: tokenText(u.CacheCreationInputTokens)},
-		{Label: "Cost estimate", Value: costText(u.Cost)},
+		{Label: "Last activity", Value: lastSeen},
+		{Label: "Phase", Value: shown(row.Phase)},
 		{Label: "Freshness", Value: shown(row.Freshness)},
-		{Label: "UID", Value: shown(row.UID)},
+	}}}
+	out.Context = []portal.ProductField{
+		{Label: "Project", Value: "dev-env"},
+		{Label: "Mode", Value: shown(a.Mode)},
+		{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},
+		{Label: "UID", Value: shown(row.UID), Mono: true},
 	}
 	return out
 }
@@ -310,6 +409,42 @@ func sessionStatus(phase, agent string) portal.ProductStatus {
 	tone := map[string]string{"Running": "ok", "Pending": "info", "Idle": "info", "Draining": "wait", "Failed": "bad"}[phase]
 	return portal.ProductStatus{Text: shown(phase), Tone: tone}
 }
+
+// compactAgo is the list's short age: 2m, 3h, 4d, now or Unknown.
+func compactAgo(at *time.Time, now time.Time) string {
+	if at == nil {
+		return "Unknown"
+	}
+	text := portal.Ago(*at, now)
+	if text == "just now" {
+		return "now"
+	}
+	return strings.TrimSuffix(text, " ago")
+}
+
+// compactTokens shortens one reported counter for the list; Unknown stays Unknown.
+func compactTokens(m protocol.TokenObservation) string {
+	if m.State != protocol.UsageReported || !m.Valid() {
+		return "Unknown"
+	}
+	n := *m.Amount
+	switch {
+	case n < 1000:
+		return strconv.FormatInt(n, 10)
+	case n < 1_000_000:
+		return strconv.FormatFloat(float64(n)/1000, 'f', 1, 64) + "k"
+	default:
+		return strconv.FormatFloat(float64(n)/1_000_000, 'f', 1, 64) + "M"
+	}
+}
+
+func shortCost(c protocol.CostObservation) string {
+	if c.State != protocol.UsageReported || !c.Valid() {
+		return "Unknown"
+	}
+	return c.Amount + " USD"
+}
+
 func activityTime(at *time.Time) string {
 	if at == nil || at.IsZero() {
 		return "Unknown"

@@ -112,6 +112,7 @@ func (s *TaskSource) Read(ctx context.Context) (portal.ProductPage, error) {
 	total := 0
 	haveTotal := false
 	complete := false
+	var all []portal.ProductRow
 	for pageNo := 1; pageNo <= productPageCap; pageNo++ {
 		body, err := productGet(ctx, s.client, taskCollectionURL(pageNo), token, productHALLimit, mediaHAL)
 		if err != nil {
@@ -123,13 +124,13 @@ func (s *TaskSource) Read(ctx context.Context) (portal.ProductPage, error) {
 		}
 		total = pageTotal
 		haveTotal = true
-		page.Rows = append(page.Rows, rows...)
+		all = append(all, rows...)
 		if done {
 			complete = true
 			break
 		}
 	}
-	return tasksPage(page.Rows, complete), nil
+	return tasksPage(all, complete), nil
 }
 
 func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, error) {
@@ -464,31 +465,39 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	id := strconv.Itoa(element.ID)
 	status := shown(element.Links.Status.Title)
 	accountable := shown(element.CustomField1)
-	sub := "#" + id + " · " + accountable
-	if accountable == "Unknown" {
-		sub = "#" + id + " · accountable Unknown"
-	}
+	repos := shown(element.CustomField3)
+	updatedAgo, age := "updated Unknown", "Unknown"
 	if updated, err := time.Parse(time.RFC3339, element.UpdatedAt); err == nil {
-		sub += " · updated " + portal.Ago(updated, now)
+		updatedAgo, age = "updated "+portal.Ago(updated, now), compactAgo(&updated, now)
 	}
-	aside := ""
-	if repos := shown(element.CustomField3); repos != "Unknown" {
-		aside = repos
+	description := repos
+	if repos == "Unknown" {
+		description = "Repositories Unknown"
+	}
+	meta := accountable
+	if accountable == "Unknown" {
+		meta = "Accountable Unknown"
 	}
 	return portal.ProductRow{
-		Title:    shown(element.Subject),
-		Link:     "https://work.haynesnetwork.com/work_packages/" + id,
-		Status:   portal.ProductStatus{Text: status, Tone: taskTone(status)},
-		Subtitle: sub,
-		Aside:    aside,
-		Fields: []portal.ProductField{
+		Title: shown(element.Subject), Kicker: "#" + id, Crumb: "#" + id,
+		Link: "https://work.haynesnetwork.com/work_packages/" + id, LinkLabel: "Open in OpenProject",
+		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: meta, Age: age,
+		Badges: []string{updatedAgo, description}, ContextTitle: "Work package",
+		Sections: []portal.ProductSection{
+			{Title: "Ownership", Fields: []portal.ProductField{
+				{Label: "Accountable", Value: accountable},
+				{Label: "Assignee", Value: shown(element.Links.Assignee.Title)},
+				{Label: "Responsible", Value: shown(element.Links.Responsible.Title)},
+			}},
+			{Title: "Dates", Fields: []portal.ProductField{
+				{Label: "Created", Value: shownDate(element.CreatedAt)},
+				{Label: "Updated", Value: shownDate(element.UpdatedAt)},
+			}},
+		},
+		Context: []portal.ProductField{
+			{Label: "Work package", Value: "#" + id, Mono: true},
 			{Label: "Status", Value: status},
-			{Label: "Assignee", Value: shown(element.Links.Assignee.Title)},
-			{Label: "Accountable", Value: accountable},
-			{Label: "Responsible", Value: shown(element.Links.Responsible.Title)},
-			{Label: "Repositories", Value: shown(element.CustomField3)},
-			{Label: "Created", Value: shownTime(element.CreatedAt)},
-			{Label: "Updated", Value: shownTime(element.UpdatedAt)},
+			{Label: "Repositories", Value: repos},
 		},
 	}, nil
 }
@@ -496,49 +505,66 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 // taskTone colors a work-package status by what it asks of a reader. An
 // unrecognized status is muted, never guessed.
 func taskTone(status string) string {
-	switch strings.ToLower(status) {
-	case "in progress", "in review", "developed", "tested":
-		return "busy"
-	case "needs answer", "needs approval", "on hold", "blocked", "feedback":
+	switch taskGroup(status) {
+	case 0:
 		return "wait"
-	case "new", "scheduled", "specified", "planned", "confirmed", "to be scheduled":
+	case 1:
+		return "busy"
+	case 2:
 		return "info"
-	case "closed", "done", "accepted", "resolved", "rejected":
-		return "muted"
 	default:
 		return "muted"
 	}
 }
 
-// tasksPage builds the Tasks page. Counts appear only for a complete read.
+var taskGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: true}, {Title: "In progress"}, {Title: "Planned"}, {Title: "Closed"}, {Title: "Other status"}}
+
+func taskGroup(status string) int {
+	switch strings.ToLower(status) {
+	case "needs answer", "needs approval", "on hold", "blocked", "feedback":
+		return 0
+	case "in progress", "in review", "developed", "tested":
+		return 1
+	case "new", "scheduled", "specified", "planned", "confirmed", "to be scheduled":
+		return 2
+	case "closed", "done", "accepted", "resolved", "rejected":
+		return 3
+	default:
+		return 4
+	}
+}
+
+// tasksPage groups work packages by status, keeping the collection's order
+// inside each group. Counts appear only for a complete read.
 func tasksPage(rows []portal.ProductRow, complete bool) portal.ProductPage {
-	page := portal.ProductPage{Title: "Tasks", Connected: true, Rows: rows}
+	page := portal.ProductPage{Title: "Tasks", ListTitle: "All tasks", Connected: true, Complete: complete}
 	switch {
 	case !complete:
-		page.Notice = "Tasks read is incomplete. This is not the full inventory."
+		page.Notice, page.ListCount = "Tasks read is incomplete. This is not the full inventory.", "Partial list"
 	case len(rows) == 0:
 		page.Notice = "The completed task read returned no work packages."
 	default:
 		page.Notice, page.Quiet = "Connected project 3 work packages.", true
+		page.ListCount = strconv.Itoa(len(rows)) + " work packages · haynes-engineering"
 	}
-	if complete {
-		var active, waiting int
-		for _, row := range rows {
-			switch row.Status.Tone {
-			case "busy":
-				active++
-			case "wait":
-				waiting++
-			}
-		}
-		page.Summary = []portal.ProductStat{
-			{Label: "Work packages", Value: strconv.Itoa(len(rows))},
-			{Label: "In progress", Value: strconv.Itoa(active), Tone: "busy"},
-			{Label: "Waiting", Value: strconv.Itoa(waiting), Tone: "wait"},
+	page.Groups = make([]portal.ProductGroup, len(taskGroups))
+	copy(page.Groups, taskGroups)
+	ordered := make([][]portal.ProductRow, len(taskGroups))
+	for _, row := range rows {
+		g := taskGroup(row.Status.Text)
+		ordered[g] = append(ordered[g], row)
+	}
+	n := 0
+	for g := range ordered {
+		for _, row := range ordered[g] {
+			n++
+			row.ID = "t" + strconv.Itoa(n)
+			page.Groups[g].Rows = append(page.Groups[g].Rows, row)
 		}
 	}
 	return page
 }
+
 func projectThree(element halWorkPackage) bool {
 	if element.Links.Project.Href != "/api/v3/projects/3" {
 		return false
@@ -686,12 +712,13 @@ func shown(value string) string {
 	return value
 }
 
-func shownTime(value string) string {
+// shownDate is an RFC 3339 time for people, in UTC; anything else is Unknown.
+func shownDate(value string) string {
 	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
 		return "Unknown"
 	}
-	return parsed.UTC().Format(time.RFC3339)
+	return parsed.UTC().Format("2 Jan 2006, 15:04 UTC")
 }
 
 func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {

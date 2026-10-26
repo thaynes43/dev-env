@@ -74,35 +74,88 @@ type groupView struct {
 	Rows             []rowView
 }
 
-// ProductField is one label and value.
-type ProductField struct{ Label, Value string }
+// ProductField is one label and value. Mono sets identifiers in monospace.
+type ProductField struct {
+	Label, Value string
+	Mono         bool
+}
 
-// ProductStatus is a row's status chip. Tone is one of ok, busy, wait, bad,
-// info or muted; anything else renders muted.
+// ProductStatus is a status badge. Tone is one of ok, busy, wait, bad, info
+// or muted; anything else renders muted.
 type ProductStatus struct{ Text, Tone string }
 
-// ProductStat is one summary tile. Tone follows ProductStatus.
-type ProductStat struct{ Label, Value, Tone string }
+// ProductStat is one usage headline figure. A muted tone marks Unknown.
+type ProductStat struct{ Label, Value, Note, Tone string }
 
-// ProductRow is one card. Metrics are the few values worth scanning; Fields is
-// the full record, shown behind a Details disclosure.
+// ProductSection is one panel of a row's detail: optional tiles, key-value
+// rows and one short note.
+type ProductSection struct {
+	Title           string
+	Metrics, Fields []ProductField
+	Note            string
+}
+
+// ProductRow is one list item and its detail. ID is the in-page anchor, s or t
+// followed by digits; a row with any other ID is not rendered.
 type ProductRow struct {
-	Title, Link, Subtitle, Aside string
-	Status                       ProductStatus
-	Metrics, Fields              []ProductField
+	ID, Title, Kicker, Description, Meta, Age string
+	Crumb, Link, LinkLabel, ContextTitle      string
+	MonoTitle                                 bool
+	Status                                    ProductStatus
+	Badges                                    []string
+	Sections                                  []ProductSection
+	Context                                   []ProductField
 }
 
-// ProductPage is one product view. Summary, Note and Rows are shown only when
-// Connected. Quiet marks an ordinary notice. Preview labels fixture data.
+// ProductGroup is one titled list group. Attention marks the group the rail's
+// Needs attention link opens.
+type ProductGroup struct {
+	Title     string
+	Attention bool
+	Rows      []ProductRow
+}
+
+// ProductUsageCell is one table cell; Unknown dims it.
+type ProductUsageCell struct {
+	Label, Value string
+	Unknown      bool
+}
+
+// ProductUsageRow is one session's usage row, linked to its detail by ID.
+type ProductUsageRow struct {
+	ID, Name, Sub string
+	Cells         []ProductUsageCell
+}
+
+// ProductUsage is the Sessions page's Usage view. It holds no totals.
+type ProductUsage struct {
+	Stats            []ProductStat
+	Scope, ScopeNote string
+	Columns          []string
+	Rows             []ProductUsageRow
+	Coverage         []ProductField
+}
+
+// ProductPage is one product view. Groups and Usage render only when
+// Connected, and counts only when Complete: an incomplete read has no count.
+// Quiet marks an ordinary notice; Preview labels fixture data.
 type ProductPage struct {
-	Title, Notice, ObservedAt string
-	Note, NoteTitle           string
-	Connected, Quiet, Preview bool
-	Summary                   []ProductStat
-	Rows                      []ProductRow
+	Title, Notice, ObservedAt           string
+	ListTitle, ListCount                string
+	Connected, Complete, Quiet, Preview bool
+	Groups                              []ProductGroup
+	Usage                               *ProductUsage
 }
 
-var productTones = map[string]bool{"ok": true, "busy": true, "wait": true, "bad": true, "info": true, "muted": true}
+const (
+	productSessionsHref = "/portal/projects/dev-env/environments/internal/sessions"
+	productTasksHref    = "/portal/projects/dev-env/environments/internal/tasks"
+)
+
+var (
+	productTones = map[string]bool{"ok": true, "busy": true, "wait": true, "bad": true, "info": true, "muted": true}
+	productID    = regexp.MustCompile(`^[st][0-9]{1,4}$`)
+)
 
 func productTone(tone string) string {
 	if productTones[tone] {
@@ -111,25 +164,74 @@ func productTone(tone string) string {
 	return "muted"
 }
 
+type productGroupView struct {
+	ID, Title, Count string
+	Rows             []ProductRow
+}
+
+type productRowView struct {
+	ProductRow
+	Default bool
+}
+
 func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
-		Policy, Title, Current, Notice, ObservedAt, ObservedLabel, Note, NoteTitle string
-		Quiet, Preview                                                             bool
-		Summary                                                                    []ProductStat
-		Rows                                                                       []ProductRow
+		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
+		SessionsHref, TasksHref, UsageHref, PlannedHref, AttentionHref     string
+		ListTitle, ListCount, SessionCount, TaskCount, AttentionCount      string
+		Quiet, Preview, Banner, HasRows                                    bool
+		Groups                                                             []productGroupView
+		Rows                                                               []productRowView
+		Usage                                                              *ProductUsage
 	}{Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
-		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Quiet: page.Quiet && page.Connected, Preview: page.Preview}
+		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
+		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage", PlannedHref: "#planned",
+		ListTitle: page.ListTitle}
+	view.Section = "Agents"
+	if view.Current == "tasks" {
+		view.Section = "Tasks"
+	}
+	if view.ListTitle == "" {
+		view.ListTitle = page.Title
+	}
 	if page.Connected {
-		view.Note, view.NoteTitle = page.Note, page.NoteTitle
-		for _, stat := range page.Summary {
-			stat.Tone = productTone(stat.Tone)
-			view.Summary = append(view.Summary, stat)
+		view.Quiet, view.ListCount, view.Usage = page.Quiet, page.ListCount, page.Usage
+		if view.Current == "sessions" && page.Usage != nil {
+			view.UsageHref = "#usage"
 		}
-		for _, row := range page.Rows {
-			row.Status.Tone = productTone(row.Status.Tone)
-			view.Rows = append(view.Rows, row)
+		total := 0
+		for i, group := range page.Groups {
+			g := productGroupView{ID: "g" + strconv.Itoa(i+1), Title: group.Title}
+			for _, row := range group.Rows {
+				if !productID.MatchString(row.ID) {
+					continue
+				}
+				row.Status.Tone = productTone(row.Status.Tone)
+				g.Rows = append(g.Rows, row)
+				view.Rows = append(view.Rows, productRowView{ProductRow: row, Default: len(view.Rows) == 0})
+			}
+			if len(g.Rows) == 0 {
+				continue
+			}
+			if page.Complete {
+				g.Count = strconv.Itoa(len(g.Rows))
+			}
+			total += len(g.Rows)
+			if group.Attention && page.Complete {
+				view.AttentionHref, view.AttentionCount = "#"+g.ID, g.Count
+			}
+			view.Groups = append(view.Groups, g)
+		}
+		switch {
+		case !page.Complete:
+		case view.Current == "sessions":
+			view.SessionCount = strconv.Itoa(total)
+		default:
+			view.TaskCount = strconv.Itoa(total)
 		}
 	}
+	view.HasRows = len(view.Rows) > 0
+	view.Banner = view.HasRows && !view.Quiet && view.Notice != ""
 	var body bytes.Buffer
 	if err := viewsTemplate.Execute(&body, view); err != nil {
 		return nil, err

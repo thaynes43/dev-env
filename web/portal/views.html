@@ -1,23 +1,68 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
 <meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
 <title>{{.Title}} · dev-env</title><style>/*PORTAL_STYLE*/</style></head>
-<body><header class="bar"><div class="bar-inner"><span class="mark">dev<span>-</span>env</span>
-<nav aria-label="Portal"><a href="/portal/projects/dev-env/environments/internal/sessions"{{if eq .Current "sessions"}} aria-current="page"{{end}}>Sessions</a><a href="/portal/projects/dev-env/environments/internal/tasks"{{if eq .Current "tasks"}} aria-current="page"{{end}}>Tasks</a></nav>
-</div></header>
-<main><div class="head"><h1>{{.Title}}</h1>{{if .Preview}}<span class="tag tag-preview">Fixture preview</span>{{end}}
-<p class="observed">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></p></div>
-<p class="notice{{if .Quiet}} notice-quiet{{end}}" role="status">{{.Notice}}</p>
-{{if .Summary}}<dl class="summary">{{range .Summary}}<div class="stat stat-{{.Tone}}"><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
-{{if .Note}}<details class="about"><summary>{{.NoteTitle}}</summary><p>{{.Note}}</p></details>{{end}}
-{{if .Rows}}<ul class="cards">{{range .Rows}}<li class="card{{if .Link}} card-task{{end}}">
-<div class="card-head"><h2>{{.Title}}</h2>{{if .Status.Text}}<span class="chip chip-{{.Status.Tone}}">{{.Status.Text}}</span>{{end}}</div>
-{{if .Subtitle}}<p class="sub">{{.Subtitle}}</p>{{end}}
-{{if .Metrics}}<dl class="metrics">{{range .Metrics}}<div><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
-{{if .Aside}}<p class="aside">{{.Aside}}</p>{{end}}
-{{if .Link}}<a class="open" href="{{.Link}}" rel="noreferrer">Open in OpenProject →</a>{{end}}
-{{if .Fields}}<details class="more"><summary>Details</summary><dl class="facts">{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></details>{{end}}
-</li>{{end}}</ul>{{end}}
-</main></body></html>
+<body><a class="skip" href="#list">Skip to content</a>
+<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
+<symbol id="i-agents" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></symbol>
+<symbol id="i-tasks" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17"/></symbol>
+<symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-8h11l2.5 8M4 13v6h16v-6M4 13h5l1 2h4l1-2h5"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></symbol>
+<symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></symbol>
+<symbol id="i-calendar" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></symbol>
+<symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+<symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5H5V6h5"/></symbol>
+</svg>
+<header class="topbar"><a class="brand" href="{{.SessionsHref}}"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>
+<nav class="top-nav" aria-label="Product sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}>Tasks</a><a href="{{.PlannedHref}}">Automations <span class="soon">Planned</span></a><a href="{{.PlannedHref}}">Watchdog <span class="soon">Planned</span></a><a href="{{.UsageHref}}">Usage</a></nav>
+{{if .Preview}}<span class="demo-label">Fixture preview · sample data</span>{{end}}<span class="read-only"><span class="dot{{if .Preview}} sample{{end}}"></span>Read-only</span></header>
+<section class="allowance-bar" aria-label="Provider allowance"><div class="allowance-label"><strong>Provider allowance</strong><span>Not inferred from tokens</span></div>
+<div class="allowance"><span class="provider" aria-hidden="true">✳</span><span>Claude Code</span><span class="unknown">Unknown</span><span class="note-text">· not reported</span></div><div class="allowance-divider"></div>
+<div class="allowance secondary"><svg class="i"><use href="#i-bolt"/></svg><span>Codex</span><span class="unknown">Unknown</span></div>
+<span class="allowance-end">No allowance source connected</span><a class="allowance-details" href="{{.UsageHref}}">Usage<svg class="i"><use href="#i-chevron"/></svg></a></section>
+{{if .Banner}}<p class="banner" role="status">{{.Notice}}</p>{{end}}
+<div class="shell">
+<nav class="rail" aria-label="Workspace"><div class="workspace-label"><strong>dev-env</strong><span>Internal · read-only</span></div>
+<a class="rail-link" href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>All sessions{{if .SessionCount}}<span class="count">{{.SessionCount}}</span>{{end}}</a>
+{{if .AttentionHref}}<a class="rail-link" href="{{.AttentionHref}}"><svg class="i"><use href="#i-inbox"/></svg>Needs attention<span class="attention-count">{{.AttentionCount}}</span></a>{{end}}
+<a class="rail-link" href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}><svg class="i"><use href="#i-tasks"/></svg>Tasks{{if .TaskCount}}<span class="count">{{.TaskCount}}</span>{{end}}</a>
+<div class="rail-rule"></div>
+<div class="rail-group"><p class="eyebrow">Projects</p><a class="rail-link" href="{{.SessionsHref}}"><span class="project-icon" aria-hidden="true">⌘</span>dev-env{{if .SessionCount}}<span class="count">{{.SessionCount}}</span>{{end}}</a></div>
+<div class="rail-group"><p class="eyebrow">Workspace</p>
+<a class="rail-link" href="{{.PlannedHref}}"><svg class="i"><use href="#i-clock"/></svg>Automations<span class="planned">Planned</span></a>
+<a class="rail-link" href="{{.PlannedHref}}"><svg class="i"><use href="#i-activity"/></svg>Watchdog<span class="planned">Planned</span></a>
+<a class="rail-link" href="{{.UsageHref}}"><svg class="i"><use href="#i-bolt"/></svg>Usage</a></div>
+<div class="rail-spacer"></div>
+<div class="connection-box">{{if .Preview}}<strong><span class="dot sample"></span>Fixture preview</strong>Synthetic data. No agents or repositories connected.{{else}}<strong><span class="dot"></span>Read-only</strong>Operator summaries and OpenProject tasks.{{end}}</div></nav>
+<section class="list" id="list" aria-labelledby="list-title" tabindex="-1"><div class="list-header"><h1 id="list-title">{{.ListTitle}}</h1>{{if .ListCount}}<p class="list-count">{{.ListCount}}</p>{{end}}</div>
+<div class="list-scroll">{{if not .HasRows}}<p class="list-empty" role="status">{{.Notice}}</p>{{end}}
+{{range .Groups}}<h2 class="group-label" id="{{.ID}}"><span>{{.Title}}</span><span>{{.Count}}</span></h2>
+<ul>{{range .Rows}}<li><a class="item" href="#{{.ID}}"><span class="item-top"><span class="item-kicker">{{.Kicker}}</span><span class="badge tone-{{.Status.Tone}}">{{.Status.Text}}</span></span><h3>{{.Title}}</h3>{{if .Description}}<span class="item-desc">{{.Description}}</span>{{end}}<span class="item-line"><span>{{.Meta}}</span><span>{{.Age}}</span></span></a></li>{{end}}</ul>{{end}}</div>
+<p class="list-foot">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></p></section>
+<main class="workspace" id="main" tabindex="-1">
+{{range .Rows}}<section class="detail{{if .Default}} default{{end}}" id="{{.ID}}" aria-labelledby="{{.ID}}-title" tabindex="-1"><div class="detail-head">
+<p class="crumb"><a class="back" href="#list"><svg class="i"><use href="#i-back"/></svg>{{$.ListTitle}}</a><span>dev-env</span><span>/</span><span>{{$.Section}}</span><span>/</span><span class="mono">{{.Crumb}}</span></p>
+<div class="title-row"><h2 id="{{.ID}}-title"{{if .MonoTitle}} class="mono"{{end}}>{{.Title}}</h2>{{if .Link}}<a class="btn" href="{{.Link}}" rel="noreferrer">{{.LinkLabel}}<svg class="i"><use href="#i-external"/></svg></a>{{end}}</div>
+<p class="meta"><span class="badge tone-{{.Status.Tone}}">{{.Status.Text}}</span>{{range .Badges}}<span class="sep"></span><span>{{.}}</span>{{end}}</p></div>
+<div class="work-area"><div class="panels">{{range .Sections}}<section class="panel"><h3>{{.Title}}</h3>{{if .Metrics}}<dl class="tiles">{{range .Metrics}}<div class="tile"><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}{{if .Fields}}<dl class="kv">{{range .Fields}}<dt>{{.Label}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl>{{end}}{{if .Note}}<p class="note">{{.Note}}</p>{{end}}</section>{{end}}</div>
+<aside class="inspector" aria-labelledby="{{.ID}}-context"><h3 id="{{.ID}}-context">{{.ContextTitle}}</h3><dl class="kv">{{range .Context}}<dt>{{.Label}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl></aside></div></section>
+{{end}}{{if not .HasRows}}<section class="detail default" id="empty" aria-labelledby="empty-title" tabindex="-1"><div class="product-head"><p class="eyebrow">dev-env</p><h2 id="empty-title">{{.Title}}</h2><p>{{.Notice}}</p></div></section>
+{{end}}{{with .Usage}}<section class="detail" id="usage" aria-labelledby="usage-title" tabindex="-1"><div class="product-head"><p class="crumb"><a class="back" href="#list"><svg class="i"><use href="#i-back"/></svg>{{$.ListTitle}}</a><span>dev-env</span><span>/</span><span>Usage</span></p>
+<h2 id="usage-title">Usage</h2><p>Recorded task usage is not account consumption.</p></div>
+<div class="product-body"><dl class="stats">{{range .Stats}}<div class="stat"><dt>{{.Label}}</dt><dd{{if eq .Tone "muted"}} class="unknown"{{end}}>{{.Value}}</dd><dd class="stat-note">{{.Note}}</dd></div>{{end}}</dl>
+<p class="scope-row"><span class="scope-chip">{{.Scope}}</span><span>{{.ScopeNote}}</span></p>
+<div class="usage-grid"><section aria-labelledby="usage-rows"><h3 id="usage-rows">By session</h3><div class="table-wrap"><table><thead><tr>{{range .Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
+<tbody>{{range .Rows}}<tr><td><a href="#{{.ID}}">{{.Name}}</a><small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>
+<aside class="coverage" aria-labelledby="usage-coverage"><p class="eyebrow">Coverage and accounting</p><h3 id="usage-coverage">What these numbers cover</h3><dl class="kv">{{range .Coverage}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></aside></div></div></section>
+{{end}}<section class="detail" id="planned" aria-labelledby="planned-title" tabindex="-1"><div class="product-head"><p class="crumb"><a class="back" href="#list"><svg class="i"><use href="#i-back"/></svg>{{.ListTitle}}</a><span>dev-env</span><span>/</span><span>Planned</span></p>
+<h2 id="planned-title">Planned</h2><p>On the roadmap. Nothing here runs yet.</p></div>
+<div class="product-body"><ul class="plans"><li class="plan"><div class="plan-top"><h3>Automations</h3><span class="badge tone-muted">Planned</span></div><p>Reminders, scheduled runs and media workflows. No scheduler is connected.</p></li>
+<li class="plan"><div class="plan-top"><h3>Watchdog</h3><span class="badge tone-muted">Planned</span></div><p>Signals for stalled or quietly failing sessions. An offline handoff checker exists; live monitoring, alerts and recovery are not built.</p></li></ul></div></section>
+</main></div>
+<footer class="statusbar">{{if .Quiet}}<span role="status">{{.Notice}}</span>{{else}}<span>Read-only portal</span>{{end}}<span class="right">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></span></footer>
+<nav class="mobile-nav" aria-label="Sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}><svg class="i"><use href="#i-tasks"/></svg>Tasks</a><a href="{{.UsageHref}}"><svg class="i"><use href="#i-bolt"/></svg>Usage</a><a href="{{.PlannedHref}}"><svg class="i"><use href="#i-calendar"/></svg>Planned</a></nav>
+</body></html>
