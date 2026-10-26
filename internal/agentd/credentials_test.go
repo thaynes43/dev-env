@@ -379,7 +379,18 @@ func TestDaemonBootRefreshesDefaultKubeconfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := &Daemon{
-		S: Settings{Getenv: func(string) string { return "" }},
+		S: Settings{Getenv: func(key string) string {
+			switch key {
+			case protocol.GrantsDirEnv:
+				return g.Dir
+			case protocol.PodNamespaceEnv:
+				return g.Namespace
+			case protocol.PodUIDEnv:
+				return "synthetic-test-pod-uid"
+			default:
+				return ""
+			}
+		}},
 		Now: func() time.Time { return now },
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		grants: func(func(string) string) Grants {
