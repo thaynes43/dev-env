@@ -29,9 +29,8 @@ import (
 //	<dir>/<grant>/grant.json  name, role, namespaces, expires; no token
 //	<dir>/kubeconfig          KUBECONFIG: a context per grant and "default"
 //
-// The kubeconfig exists only while a grant is installed. Without it kubectl and
-// client-go fall back to the pod's in-cluster config, so a pod with no grant
-// behaves as one built before D-63. Every write runs under a lock on
+// The kubeconfig always has a "default" context while the grants volume and
+// own-ServiceAccount projection are available. Every write runs under a lock on
 // <dir>/.lock, drops expired grants, and replaces the kubeconfig by rename.
 // Nothing here prints or logs a token.
 
@@ -80,6 +79,10 @@ type Grants struct {
 	Namespace string
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// OwnTokenFile and OwnCAFile are the pod's projected ServiceAccount paths.
+	// They are only path references in the generated kubeconfig.
+	OwnTokenFile string
+	OwnCAFile    string
 }
 
 // GrantsFromEnv returns the pod's grants as the environment describes them.
@@ -104,6 +107,20 @@ func (g Grants) now() time.Time {
 		return g.Now()
 	}
 	return time.Now()
+}
+
+func (g Grants) ownTokenFile() string {
+	if g.OwnTokenFile != "" {
+		return g.OwnTokenFile
+	}
+	return ServiceAccountTokenFile
+}
+
+func (g Grants) ownCAFile() string {
+	if g.OwnCAFile != "" {
+		return g.OwnCAFile
+	}
+	return ServiceAccountCAFile
 }
 
 // GrantSpec is what grant-install is told about a grant.
@@ -229,7 +246,8 @@ func (g Grants) Install(spec GrantSpec, token []byte) error {
 
 // Remove deletes the grant's directory and rewrites the kubeconfig. Removing a
 // grant that is not installed is not an error. When the current context was
-// the grant's, it becomes "default"; with no grant left the kubeconfig goes.
+// the grant's, it becomes "default"; with no grant left the default context
+// remains.
 func (g Grants) Remove(name string) error {
 	if err := protocol.ValidGrantName(name); err != nil {
 		return err
@@ -291,6 +309,12 @@ func (g Grants) List() ([]protocol.InstalledGrant, error) {
 
 // KubeconfigPath is the kubeconfig's path, which KUBECONFIG names.
 func (g Grants) KubeconfigPath() string { return filepath.Join(g.Dir, protocol.KubeconfigName) }
+
+// Refresh installs or refreshes the default kubeconfig and drops expired grants.
+// It is safe to call at agentd boot and periodically while the pod is running.
+func (g Grants) Refresh() error {
+	return g.locked(func() error { return g.rewrite(g.now(), "") })
+}
 
 func (g Grants) checkDir() error {
 	fi, err := os.Lstat(g.Dir)
@@ -374,7 +398,7 @@ func (g Grants) readOne(name string) (protocol.InstalledGrant, bool) {
 // rewrite drops expired and broken grants, then writes the kubeconfig: a
 // context per grant, "default" for the pod's own identity, and current = use
 // when it is set, else what it was if that context is still there, else
-// "default". With no grant left it removes the kubeconfig.
+// "default". The default context remains when no grant is left.
 func (g Grants) rewrite(now time.Time, use string) error {
 	entries, err := os.ReadDir(g.Dir)
 	if err != nil {
@@ -398,17 +422,22 @@ func (g Grants) rewrite(now time.Time, use string) error {
 		}
 	}
 	sort.Slice(live, func(i, j int) bool { return live[i].Name < live[j].Name })
-
-	path := g.KubeconfigPath()
-	if len(live) == 0 {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		return nil
-	}
 	if g.Server == "" {
 		return errors.New("KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT are not set, so the kubeconfig cannot name the API server")
 	}
+	if !dnsLabel.MatchString(g.Namespace) || len(g.Namespace) > 63 {
+		return errors.New("the pod namespace is not set or is invalid")
+	}
+	for _, path := range []string{g.ownTokenFile(), g.ownCAFile()} {
+		fi, err := os.Stat(path)
+		if err != nil || !fi.Mode().IsRegular() {
+			if err := os.Remove(g.KubeconfigPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return errors.New("the pod's own ServiceAccount projection is unavailable")
+		}
+	}
+
 	cur := use
 	if cur == "" {
 		cur = g.currentContext()
@@ -420,7 +449,7 @@ func (g Grants) rewrite(now time.Time, use string) error {
 	if err != nil {
 		return err
 	}
-	return writePrivate(path, append(b, '\n'))
+	return writePrivate(g.KubeconfigPath(), append(b, '\n'))
 }
 
 // currentContext is the kubeconfig's current context, or "" when there is no
@@ -487,9 +516,9 @@ func (g Grants) kubeconfig(live []protocol.InstalledGrant, current string) kubec
 		APIVersion: "v1",
 		Kind:       "Config",
 		Clusters: []namedCluster{{Name: clusterName, Cluster: kubeCluster{
-			Server: g.Server, CertificateAuthority: ServiceAccountCAFile,
+			Server: g.Server, CertificateAuthority: g.ownCAFile(),
 		}}},
-		Users:          []namedUser{{Name: agentUser, User: kubeUser{TokenFile: ServiceAccountTokenFile}}},
+		Users:          []namedUser{{Name: agentUser, User: kubeUser{TokenFile: g.ownTokenFile()}}},
 		Contexts:       []namedContext{{Name: protocol.DefaultContext, Context: kubeContext{Cluster: clusterName, User: agentUser, Namespace: g.Namespace}}},
 		CurrentContext: current,
 	}

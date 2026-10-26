@@ -17,7 +17,9 @@ import (
 
 func TestGrantsLifecycle(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
-	g := Grants{Dir: t.TempDir(), Server: "https://[::1]:443", Namespace: "dev-agents", Now: func() time.Time { return now }}
+	g := testGrants(t, now)
+	g.Now = func() time.Time { return now }
+	g.Server = "https://[::1]:443"
 	first := GrantSpec{Name: "grant-first", Role: "dev-env-grant-workloads", Namespaces: []string{"frontend"}, Expires: now.Add(time.Hour)}
 	if err := g.Install(first, []byte("fixture-token-first")); err != nil {
 		t.Fatal(err)
@@ -28,8 +30,8 @@ func TestGrantsLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if kc.Contexts[protocol.DefaultContext].Namespace != "dev-agents" || kc.AuthInfos[agentUser].TokenFile != ServiceAccountTokenFile ||
-			kc.Clusters[clusterName].Server != g.Server || kc.Clusters[clusterName].CertificateAuthority != ServiceAccountCAFile {
+		if kc.Contexts[protocol.DefaultContext].Namespace != "dev-agents" || kc.AuthInfos[agentUser].TokenFile != g.OwnTokenFile ||
+			kc.Clusters[clusterName].Server != g.Server || kc.Clusters[clusterName].CertificateAuthority != g.OwnCAFile {
 			t.Fatal("the kubeconfig does not preserve the pod identity, namespace or API trust")
 		}
 		if kc.AuthInfos[first.Name].Token != "" || kc.AuthInfos[first.Name].TokenFile != filepath.Join(g.Dir, first.Name, "token") {
@@ -98,14 +100,109 @@ func TestGrantsLifecycle(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(g.Dir, first.Name)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a write did not clean the expired token")
 	}
+	kc, err = clientcmd.LoadFromFile(g.KubeconfigPath())
+	if err != nil || kc.CurrentContext != protocol.DefaultContext {
+		t.Fatal("expiry did not retain a usable default kubeconfig")
+	}
 	if err := g.Remove(second.Name); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.Remove(second.Name); err != nil {
 		t.Fatal("repeated removal must succeed")
 	}
-	if _, err := os.Stat(g.KubeconfigPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("the last removal must restore in-cluster fallback")
+	kc, err = clientcmd.LoadFromFile(g.KubeconfigPath())
+	if err != nil || kc.CurrentContext != protocol.DefaultContext || kc.AuthInfos[agentUser].TokenFile != g.OwnTokenFile {
+		t.Fatal("the last removal must retain the default context")
+	}
+}
+
+func testGrants(t *testing.T, now time.Time) Grants {
+	t.Helper()
+	projection := t.TempDir()
+	token, ca := filepath.Join(projection, "token"), filepath.Join(projection, "ca.crt")
+	if err := os.WriteFile(token, []byte("synthetic-own-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ca, []byte("synthetic-ca"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Grants{Dir: t.TempDir(), Server: "https://127.0.0.1:443", Namespace: "dev-agents", Now: func() time.Time { return now }, OwnTokenFile: token, OwnCAFile: ca}
+}
+
+func TestGrantsRefreshCreatesDefaultKubeconfig(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	g := testGrants(t, now)
+	if err := g.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	kc, err := clientcmd.LoadFromFile(g.KubeconfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kc.CurrentContext != protocol.DefaultContext || kc.Clusters[clusterName].Server != g.Server || kc.AuthInfos[agentUser].TokenFile != g.OwnTokenFile || kc.AuthInfos[agentUser].Token != "" {
+		t.Fatal("fresh boot did not create a usable default kubeconfig with path references")
+	}
+	if fi, err := os.Stat(g.KubeconfigPath()); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatal("default kubeconfig is not private")
+	}
+}
+
+func TestGrantsRefreshRetainsSelectedGrant(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	g := testGrants(t, now)
+	selected := GrantSpec{Name: "grant-selected", Role: "dev-env-grant-workloads", Namespaces: []string{"frontend"}, Expires: now.Add(time.Hour)}
+	other := GrantSpec{Name: "grant-other", Role: "dev-env-grant-nodes", Expires: now.Add(time.Hour)}
+	for _, spec := range []GrantSpec{selected, other} {
+		if err := g.Install(spec, []byte("synthetic-grant-token")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := g.Use(selected.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Remove(other.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	kc, err := clientcmd.LoadFromFile(g.KubeconfigPath())
+	if err != nil || kc.CurrentContext != selected.Name || kc.Contexts[selected.Name].Namespace != "frontend" {
+		t.Fatal("refresh or unrelated removal clobbered the selected grant")
+	}
+}
+
+func TestGrantsRefreshRefusesAbsentOwnProjection(t *testing.T) {
+	for _, projection := range []string{"token", "CA"} {
+		t.Run(projection, func(t *testing.T) {
+			now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+			g := testGrants(t, now)
+			g.Now = func() time.Time { return now }
+			spec := GrantSpec{Name: "grant-expired", Role: "dev-env-grant-workloads", Expires: now.Add(time.Hour)}
+			if err := g.Install(spec, []byte("synthetic-grant-token")); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.Use(spec.Name); err != nil {
+				t.Fatal(err)
+			}
+			now = spec.Expires
+			path := g.OwnTokenFile
+			if projection == "CA" {
+				path = g.OwnCAFile
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.Refresh(); err == nil {
+				t.Fatal("missing own ServiceAccount projection refreshed a kubeconfig")
+			}
+			if _, err := os.Stat(filepath.Join(g.Dir, spec.Name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("missing own projection retained an expired grant token directory")
+			}
+			if _, err := os.Stat(g.KubeconfigPath()); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("missing own ServiceAccount projection retained a selected kubeconfig")
+			}
+		})
 	}
 }
 
@@ -140,7 +237,7 @@ func TestGrantsRejectBeforeWriting(t *testing.T) {
 }
 
 func TestGrantsConcurrentInstall(t *testing.T) {
-	g := Grants{Dir: t.TempDir(), Server: "https://127.0.0.1:443", Namespace: "dev-agents"}
+	g := testGrants(t, time.Now())
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 	for _, name := range []string{"grant-one", "grant-two"} {
@@ -186,7 +283,8 @@ func TestGrantsFromEnv(t *testing.T) {
 
 func TestGrantsRefuseSymlinkDirectories(t *testing.T) {
 	store, disk := t.TempDir(), t.TempDir()
-	g := Grants{Dir: store, Server: "https://127.0.0.1:443", Namespace: "dev-agents"}
+	g := testGrants(t, time.Now())
+	g.Dir = store
 	spec := GrantSpec{Name: "grant-test", Role: "dev-env-grant-nodes", Expires: time.Now().Add(time.Hour)}
 	if err := os.Symlink(disk, filepath.Join(store, spec.Name)); err != nil {
 		t.Fatal(err)

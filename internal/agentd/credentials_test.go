@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,13 +19,16 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 func credentialFixture(t *testing.T) (Credentials, CredentialSpec, protocol.CredentialPayload) {
 	t.Helper()
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	c := Credentials{Grants: Grants{Dir: t.TempDir(), Server: "https://127.0.0.1:443", Namespace: "dev-agents", Now: func() time.Time { return now }}, PodUID: "pod-one"}
+	c := Credentials{Grants: testGrants(t, now), PodUID: "pod-one"}
 	s := CredentialSpec{Name: "grant-pve", GrantUID: "uid-one", PodUID: c.PodUID, Expires: now.Add(time.Hour)}
 	p := protocol.CredentialPayload{Version: 1, Credential: "proxmox", TokenID: "dev-env@pve!grant-" + s.GrantUID, TokenSecret: "fixture-private-value"}
 	return c, s, p
@@ -348,5 +354,70 @@ func TestDaemonRemovesExpiredCredentials(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expiry supervisor did not stop")
+	}
+}
+
+func TestDaemonBootRefreshesDefaultKubeconfig(t *testing.T) {
+	const token = "synthetic-own-token"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			t.Error("client-go did not resolve the projected token file")
+			http.Error(w, "missing token", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	g := testGrants(t, now)
+	g.Server = server.URL
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(g.OwnCAFile, certificate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(g.OwnTokenFile, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{
+		S: Settings{Getenv: func(key string) string {
+			switch key {
+			case protocol.GrantsDirEnv:
+				return g.Dir
+			case protocol.PodNamespaceEnv:
+				return g.Namespace
+			case protocol.PodUIDEnv:
+				return "synthetic-test-pod-uid"
+			default:
+				return ""
+			}
+		}},
+		Now: func() time.Time { return now },
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		grants: func(func(string) string) Grants {
+			return g
+		},
+	}
+	d.expireCredentials()
+
+	config, err := clientcmd.BuildConfigFromFlags("", g.KubeconfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := rest.HTTPClientFor(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("resolved kubeconfig endpoint status = %d", response.StatusCode)
 	}
 }

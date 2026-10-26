@@ -21,6 +21,10 @@ import (
 // protocol.ExitNoGrantsDir, which tells the broker the pod predates D-63.
 func grantCtl(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
 	g := agentd.GrantsFromEnv(getenv)
+	return grantCtlWithGrants(g, args, stdin, stdout, stderr, getenv)
+}
+
+func grantCtlWithGrants(g agentd.Grants, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) int {
 	fail := func(err error) int {
 		_, _ = fmt.Fprintf(stderr, "%s: %s: %v\n", binaryName, args[0], err)
 		if errors.Is(err, agentd.ErrNoGrantsDir) {
