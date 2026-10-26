@@ -13,7 +13,8 @@ import (
 const HandoffAnnotation = "dev-env.haynesops.com/grant-decision"
 
 // ManualApproverAnnotation marks a GrantPolicy as a delegated decision scope,
-// not a standing approval. Its value is the exact coordinator principal.
+// not a standing approval. Its value is the exact coordinator or parent-session
+// principal, including the current session and pod UIDs for a parent session.
 const ManualApproverAnnotation = "dev-env.haynesops.com/decision-approver"
 
 // Handoff is not an authentication mechanism. The operator must derive the
@@ -56,7 +57,7 @@ func ValidRelayRef(s string) bool {
 		return false
 	}
 	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._:/", c)) {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("-._:/", c) {
 			return false
 		}
 	}

@@ -48,6 +48,11 @@ func (b *Broker) pendingHandoff(ctx context.Context, g *v1alpha1.AccessGrant) (b
 	if dec.Decode(&h) != nil || dec.Decode(new(any)) != io.EOF || h.Principal == "" || (h.Decision != "approve" && h.Decision != "deny") || len(h.Reason) > 512 {
 		return b.rejectHandoff(ctx, g)
 	}
+	// This handoff has no verified fresh human-account authentication. The
+	// existing break-glass freshness hold remains in force.
+	if h.Decision == "approve" && g.Spec.Type == v1alpha1.GrantBreakglass {
+		return b.rejectHandoff(ctx, g)
+	}
 	if strings.HasPrefix(h.Principal, "coordinator/") || strings.HasPrefix(h.Principal, "session/") {
 		if !grantdecision.ValidRelayRef(h.RelayRef) {
 			return b.rejectHandoff(ctx, g)

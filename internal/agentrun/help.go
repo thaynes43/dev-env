@@ -593,7 +593,7 @@ grant release names one grant. The grant object stays as the audit record.
 
 grant decision show prints a JSON summary for review. Submit reads that reviewed
 summary on stdin and sends the selected decision through the authenticated API.
-Only an authenticated human or explicitly delegated coordinator can submit; broker acceptance
+Only an authenticated human, delegated coordinator or parent session can submit; broker acceptance
 is separate and must be checked with grant show. This does not establish that a
 phone answer is a human attestation. The feature is disabled until its guard and
 acceptance checks are complete.

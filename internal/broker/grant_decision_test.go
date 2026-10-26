@@ -224,3 +224,25 @@ func TestParentSessionRelayRequiresLiveActorAndExplicitPolicy(t *testing.T) {
 		t.Fatal("relay not attributed to parent")
 	}
 }
+
+func TestHandoffCannotApproveBreakglassWithoutFreshAccountAuthentication(t *testing.T) {
+	f := credentialCase(t)
+	g := f.getGrant()
+	g.Spec.Type = v1alpha1.GrantBreakglass
+	g.Spec.Credential = nil
+	g.Spec.Kube = &v1alpha1.KubeGrant{Role: v1alpha1.RoleBreakglass}
+	g.Status.Phase = v1alpha1.GrantPending
+	binding, err := grantdecision.Bind(g, f.pod.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := grantdecision.Handoff{Binding: binding, Principal: "human/dev-env-system/dev-env-human", Decision: "approve"}
+	raw, _ := json.Marshal(h)
+	g.Annotations = map[string]string{grantdecision.HandoffAnnotation: string(raw)}
+	if handled, _, err := f.b.pendingHandoff(context.Background(), g); err != nil || !handled {
+		t.Fatal("breakglass handoff not refused")
+	}
+	if f.getGrant().Status.Phase == v1alpha1.GrantActive {
+		t.Fatal("breakglass became active without freshness")
+	}
+}

@@ -32,3 +32,7 @@ A session delegate principal binds its session name, session UID and current pod
 The child retains its immutable parent name. Older children do not all record a
 parent session UID; the policy grants the current explicitly named parent incarnation,
 and any available historical parent UID must agree.
+
+Break-glass approval through this handoff remains closed: it does not supply the
+existing fresh human-account authentication required for break-glass. A recent
+tool event or unauthenticated phone-answer text is not that proof.

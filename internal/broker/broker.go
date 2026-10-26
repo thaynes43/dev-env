@@ -255,6 +255,7 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released by its session", now)
 	}
+	var approvedPodUID types.UID
 	// Manual decisions are for the exact approved pod, not a later pod with
 	// the same session name. The UID label gives egress the same fence even
 	// if replacement races the policy create. Standing grants are unchanged.
@@ -264,6 +265,7 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		if !ok || pod == nil || !h.Binding.Matches(g, pod.UID) {
 			return b.end(ctx, g, v1alpha1.GrantReleased, "", "approved pod or request changed", now)
 		}
+		approvedPodUID = pod.UID
 		if g.Spec.Type == v1alpha1.GrantEgress {
 			if err := b.labelManualPod(ctx, pod); err != nil {
 				return ctrl.Result{}, err
@@ -296,6 +298,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		changed = g.Status.ServiceAccount != g.Name
 		if b.Installer != nil {
 			if pod := b.sessionPod(ctx, sess, true); pod != nil {
+				if approvedPodUID != "" && pod.UID != approvedPodUID {
+					return b.end(ctx, g, v1alpha1.GrantReleased, "", "approved pod changed before installation", b.now())
+				}
 				var installed bool
 				res, installed, err = b.install(ctx, g, pod, now)
 				if err != nil || g.Status.Phase != v1alpha1.GrantActive {
