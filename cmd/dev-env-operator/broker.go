@@ -20,6 +20,7 @@ type brokerOptions struct {
 	policyNamespace     string
 	leaderElect         bool
 	enableProxmoxGrants bool
+	grantDecisionEnabled bool
 	metricsAddr         string
 	probeAddr           string
 }
@@ -35,6 +36,7 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.StringVar(&o.sessionNamespace, "session-namespace", "dev-agents", "namespace of the AgentSessions, their pods, the AccessGrants and the grant ServiceAccounts (D-54)")
 	fs.StringVar(&o.policyNamespace, "policy-namespace", ownNamespace, "namespace of the GrantPolicies; the broker's leader-election Lease lives there too")
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "elect one leader among the replicas; only the leader reconciles")
+	fs.BoolVar(&o.grantDecisionEnabled, "enable-grant-decisions", false, "consume human decision handoffs only after the admission guard is enforced")
 	fs.BoolVar(&o.enableProxmoxGrants, "enable-proxmox-grants", false, "enable keeper-backed Proxmox grants after node trust and acceptance are configured")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
@@ -73,6 +75,7 @@ func runBroker(args []string) error {
 		SessionNamespace:    o.sessionNamespace,
 		PolicyNamespace:     o.policyNamespace,
 		EnableProxmoxGrants: o.enableProxmoxGrants,
+		GrantDecisionEnabled: o.grantDecisionEnabled,
 		LeaderElect:         o.leaderElect,
 		MetricsAddr:         o.metricsAddr,
 		ProbeAddr:           o.probeAddr,

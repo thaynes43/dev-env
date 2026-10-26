@@ -20,6 +20,7 @@ type Binding struct {
 	GrantUID   types.UID `json:"grantUID"`
 	SessionUID types.UID `json:"sessionUID"`
 	PodUID     types.UID `json:"podUID"`
+	Generation int64     `json:"generation"`
 	ScopeHash  string    `json:"scopeHash"`
 }
 
@@ -34,7 +35,7 @@ func Bind(g *v1alpha1.AccessGrant, podUID types.UID) (Binding, error) {
 	if err != nil {
 		return Binding{}, err
 	}
-	return Binding{GrantUID: g.UID, SessionUID: g.Spec.Requester.SessionUID, PodUID: podUID, ScopeHash: hash}, nil
+	return Binding{GrantUID: g.UID, SessionUID: g.Spec.Requester.SessionUID, PodUID: podUID, Generation: g.Generation, ScopeHash: hash}, nil
 }
 
 // Matches is a binding check, not an authorization check. The caller must

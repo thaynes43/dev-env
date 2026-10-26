@@ -142,6 +142,8 @@ type Server struct {
 	// GrantApprovalURL is the base URL of the broker's approval page; a pending
 	// grant's view links to it plus the grant's name. Empty links nothing.
 	GrantApprovalURL string
+	// GrantDecisionEnabled remains false until the handoff admission guard is installed.
+	GrantDecisionEnabled bool
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -232,6 +234,7 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:  s.listGrants,
 		http.MethodPost: s.createGrant,
 	}}))
+	mux.Handle(apiv1.GrantsPath+"/{name}/decision", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.inspectGrantDecision, http.MethodPost: s.submitGrantDecision}}))
 	mux.Handle(apiv1.GrantsPath+"/{name}", s.serve(route{methods: map[string]handler{
 		http.MethodGet:    s.getGrant,
 		http.MethodDelete: s.releaseGrant,

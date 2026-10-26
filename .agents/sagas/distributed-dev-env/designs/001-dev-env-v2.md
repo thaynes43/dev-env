@@ -3553,6 +3553,14 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   release. Release changes the hash. Deterministic encoding is build-specific;
   changes across versions fail closed. This hash is neither authentication nor
   approval. No decision adapter is enabled by these fields.
+- **Decision handoff (2026-10-26, proposed source, default off).** Authenticated
+  human callers and configured coordinators for their direct children can submit
+  an exact bound decision to a protected AccessGrant annotation. The broker
+  validates the request, session and pod again and alone writes status. A policy
+  bearing `dev-env.haynesops.com/decision-approver` bounds a named coordinator's
+  manual decisions and never auto-approves. The operator/broker-only annotation
+  admission guard is a prerequisite; phone answer attestation, generic credential
+  installation and live acceptance are not yet implemented.
 - **Who may request.** Only a session, because a grant is installed in a session's
   pod. Tom and clients get a 403 that says grants are requested by sessions and
   approved on the broker's page. A session being reaped gets a 409.

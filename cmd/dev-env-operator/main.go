@@ -116,6 +116,7 @@ type options struct {
 	humanSA                       string
 	clientSAs                     []string
 	grantApprovalURL              string
+	grantDecisionEnabled          bool
 	coordinatorEnabled            bool
 	portalReaderEnabled           bool
 	privatePilot                  *projectcanary.PilotPolicy
@@ -161,6 +162,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.apiAddr, "api-bind-address", ":8443", "address of the /v1 API (HTTPS, D-46); 0 turns it off")
 	fs.StringVar(&o.apiTLSDir, "api-tls-dir", "/etc/dev-env-operator/api-tls", "directory holding the /v1 API's tls.crt and tls.key, the cert-manager Secret's mount")
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
+	fs.BoolVar(&o.grantDecisionEnabled, "enable-grant-decisions", false, "enable human decision handoffs only after the admission guard is enforced")
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.childUsageCapture, "enable-child-usage-capture", false, "copy an accepted direct child's initial usage observation onto its parent Session; default off (OpenProject #109)")
@@ -672,6 +674,7 @@ func run(args []string) error {
 			Templates:                apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
 			Log:                      ctrl.Log.WithName("api"),
 			GrantApprovalURL:         o.grantApprovalURL,
+			GrantDecisionEnabled:     o.grantDecisionEnabled,
 		}
 		// The standby session is default off. It is made through the API's own
 		// creation path and found again by its label (Story110 T25, plan 03).

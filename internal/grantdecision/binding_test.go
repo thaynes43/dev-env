@@ -22,6 +22,7 @@ func TestBindingFencesIdentityAndEveryRequestChange(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*v1alpha1.AccessGrant){
 		"grant replacement":   func(x *v1alpha1.AccessGrant) { x.UID = "grant-two" },
+		"generation":          func(x *v1alpha1.AccessGrant) { x.Generation++ },
 		"session replacement": func(x *v1alpha1.AccessGrant) { x.Spec.Requester.SessionUID = "other" },
 		"scope":               func(x *v1alpha1.AccessGrant) { x.Spec.Egress.FQDNs[0] = "other.example.com" },
 		"port":                func(x *v1alpha1.AccessGrant) { x.Spec.Egress.Ports[0].Port = 80 },

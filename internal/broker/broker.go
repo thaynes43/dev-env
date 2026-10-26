@@ -101,6 +101,8 @@ type Broker struct {
 	// EnableProxmoxGrants permits new PVE execution requests. Existing jobs
 	// still clean up when this is disabled.
 	EnableProxmoxGrants bool
+	// GrantDecisionEnabled requires the operator-only handoff admission guard.
+	GrantDecisionEnabled bool
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.
@@ -183,6 +185,11 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 // pending answers a grant that waits: released, timed out, approved by a
 // policy, or still waiting for Tom, who is told once.
 func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (ctrl.Result, error) {
+	if b.GrantDecisionEnabled {
+		if handled, result, err := b.pendingHandoff(ctx, g); handled || err != nil {
+			return result, err
+		}
+	}
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released before an answer", now)
 	}

@@ -45,6 +45,8 @@ type Options struct {
 	PolicyNamespace string
 	// EnableProxmoxGrants is false until keeper/node trust and acceptance pass.
 	EnableProxmoxGrants bool
+	// GrantDecisionEnabled requires the decision annotation admission guard.
+	GrantDecisionEnabled bool
 	// LeaderElect elects one leader among the replicas; only it reconciles.
 	LeaderElect bool
 	// LeaseDuration, RenewDeadline and RetryPeriod tune leader election; zero
@@ -135,6 +137,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		SessionNamespace:    o.SessionNamespace,
 		PolicyNamespace:     o.PolicyNamespace,
 		EnableProxmoxGrants: o.EnableProxmoxGrants,
+		GrantDecisionEnabled: o.GrantDecisionEnabled,
 		Clock:               clk,
 		Notifier:            o.Notifier,
 		Installer:           o.Installer,
