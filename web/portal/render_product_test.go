@@ -24,7 +24,7 @@ func TestProductPolicyHashesTheRenderedStylesheet(t *testing.T) {
 	if !strings.Contains(ProductPolicy, "style-src "+hash+";") {
 		t.Fatalf("policy %q does not allow the rendered stylesheet %s", ProductPolicy, hash)
 	}
-	for _, want := range []string{"default-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'"} {
+	for _, want := range []string{"default-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"} {
 		if !strings.Contains(ProductPolicy, want) {
 			t.Errorf("product policy lacks %q", want)
 		}

@@ -97,8 +97,11 @@ script. They keep the two existing routes; nothing new is fetched or routed.
 - **Shell.** A top bar (Agents, Tasks, Automations and Watchdog marked
   Planned, Usage), a provider allowance strip whose values are `Unknown`, a rail,
   a grouped list and a workspace. Sessions are grouped Needs attention, In
-  progress, Stopped and State Unknown, newest activity first. Tasks are grouped
-  by status. Counts appear only for a complete read.
+  progress, Stopped and State Unknown, newest activity first. A Suspended,
+  Archived or Failed phase decides the group and the badge; agentd's last
+  reported state outlives the pod, so it appears only in Activity, labelled as
+  last reported. Tasks are grouped by status. Counts appear only for a
+  complete read.
 - **Selection.** Each list item links to an in-page anchor (`#s1`, `#t1`). CSS
   `:target` shows that item's detail; with no anchor the first item's detail is
   shown. On a phone the list shows first, the detail replaces it, and a back
@@ -115,7 +118,7 @@ script. They keep the two existing routes; nothing new is fetched or routed.
 
 A rendered Sessions or Tasks page sends `portal.ProductPolicy`: `default-src
 'none'`, `style-src` with the SHA-256 of the embedded `views.css` and nothing
-else, `base-uri 'none'`, `form-action 'self'`, `frame-ancestors 'none'`. The
+else, `base-uri 'none'`, `form-action 'none'`, `frame-ancestors 'none'`. The
 session layer's stricter policy, which has no `style-src`, stays on every
 refusal. With only the session layer's policy, Chromium blocks the page's
 inline stylesheet under `default-src 'none'`; this was checked on the fixture

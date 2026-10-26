@@ -31,8 +31,8 @@ var (
 	exactHead     = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	contentPolicy = policy(pageStyle)
 	// ProductPolicy is the Sessions and Tasks pages' Content-Security-Policy: no
-	// script, no external resource, and only the embedded views stylesheet.
-	ProductPolicy = strings.Replace(policy(viewsStyle), "form-action 'none'", "form-action 'self'", 1)
+	// script, no form, no external resource, and only the embedded views stylesheet.
+	ProductPolicy = policy(viewsStyle)
 	// Only the embedded, repository-owned CSS enters this template source.
 	pageTemplate  = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
 	viewsTemplate = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))

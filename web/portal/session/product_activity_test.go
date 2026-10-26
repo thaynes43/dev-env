@@ -17,6 +17,10 @@ func activityPage(rows ...string) string {
 	return `{"sessions":[` + strings.Join(rows, ",") + `],"limit":50,"complete":true,"freshness":"observed","observedAt":"2026-10-25T11:59:00Z"}`
 }
 
+func activityRowPhase(name, phase, activity string) string {
+	return strings.Replace(activityRow(name, activity), `"phase":"Running"`, `"phase":"`+phase+`"`, 1)
+}
+
 func activityRow(name, activity string) string {
 	return `{"name":"` + name + `","uid":"uid-` + name + `","repo":"dev-env","phase":"Running","observedAt":"2026-10-25T11:59:00Z","freshness":"observed",` + activity + `}`
 }
@@ -72,7 +76,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 	page := sessionsPage(decoded.Sessions, true, "observed", now)
 	worker := findRow(t, page, "worker")
 	for label, want := range map[string]string{
-		"Agent state":                      "busy",
+		"Last reported agent state":        "busy",
 		"Last activity":                    "2m ago · 25 Oct 2026, 11:58 UTC",
 		"Mode":                             "task",
 		"Requested model":                  "claude-opus-5-5",
@@ -143,6 +147,45 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 	disconnected, err := portal.RenderProduct(portal.ProductPage{Title: "Sessions", Notice: "Sessions unavailable", Usage: page.Usage, Groups: page.Groups})
 	if err != nil || strings.Contains(string(disconnected), "Initial invocations only") || strings.Contains(string(disconnected), "worker") || !strings.Contains(string(disconnected), "Sessions unavailable") {
 		t.Fatalf("disconnected page showed rows or usage: %s", disconnected)
+	}
+}
+
+// A stopped or failed phase outranks agentd's last reported state, which
+// outlives the pod; that state stays visible in Activity as history.
+func TestSessionPhaseOutranksLastAgentState(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	state := func(word string) string {
+		return strings.Replace(unknownActivity, `"agentState":"idle"`, `"agentState":"`+word+`"`, 1)
+	}
+	for _, test := range []struct {
+		name, phase, agent, group, badge, tone string
+	}{
+		{"suspended-idle", "Suspended", "idle", "Stopped", "Suspended", "muted"},
+		{"archived-busy", "Archived", "busy", "Stopped", "Archived", "muted"},
+		{"failed-exited", "Failed", "exited", "Needs attention", "Failed", "bad"},
+		{"failed-busy", "Failed", "busy", "Needs attention", "Failed", "bad"},
+		{"running-busy", "Running", "busy", "In progress", "Busy", "busy"},
+		{"running-waiting", "Running", "waiting", "Needs attention", "Waiting", "wait"},
+		{"draining-busy", "Draining", "busy", "In progress", "Busy", "busy"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoded, err := decodeSessionPage([]byte(activityPage(activityRowPhase(test.name, test.phase, state(test.agent)))), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			page := sessionsPage(decoded.Sessions, true, "observed", now)
+			var group string
+			for _, g := range page.Groups {
+				if len(g.Rows) == 1 {
+					group = g.Title
+				}
+			}
+			row := findRow(t, page, test.name)
+			fields := rowFields(row)
+			if group != test.group || row.Status != (portal.ProductStatus{Text: test.badge, Tone: test.tone}) || fields["Last reported agent state"] != test.agent || fields["Phase"] != test.phase {
+				t.Fatalf("group %q status %+v fields %v", group, row.Status, fields)
+			}
+		})
 	}
 }
 
@@ -260,7 +303,7 @@ func TestSessionLegacyRowRendersUnknownActivity(t *testing.T) {
 	}
 	row := sessionRow(page.Sessions[0], now)
 	got := rowFields(row)
-	for _, label := range []string{"Agent state", "Last activity", "Mode", "Requested model", "Scope"} {
+	for _, label := range []string{"Last reported agent state", "Last activity", "Mode", "Requested model", "Scope"} {
 		if got[label] != "Unknown" {
 			t.Errorf("legacy %s = %q, want Unknown", label, got[label])
 		}

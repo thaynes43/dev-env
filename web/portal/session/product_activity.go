@@ -191,7 +191,16 @@ func oneOf(value string, set ...string) bool {
 // sessionGroups are the Sessions list groups, in display order.
 var sessionGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: true}, {Title: "In progress"}, {Title: "Stopped"}, {Title: "State Unknown"}}
 
+// sessionGroup puts a stopped or failed phase first. agentd's last reported
+// state outlives the pod, so after a suspend, an archive or a failure it is
+// history, not what the session is doing now.
 func sessionGroup(phase string, a *apiv1.PortalSessionActivity) int {
+	switch phase {
+	case "Failed":
+		return 0
+	case "Suspended", "Archived":
+		return 2
+	}
 	state := protocol.UsageUnknown
 	if a != nil {
 		state = a.AgentState
@@ -205,11 +214,9 @@ func sessionGroup(phase string, a *apiv1.PortalSessionActivity) int {
 		return 2
 	}
 	switch phase {
-	case "Failed":
-		return 0
 	case "Running", "Pending", "Idle":
 		return 1
-	case "Suspended", "Archived", "Draining":
+	case "Draining":
 		return 2
 	}
 	return 3
@@ -374,7 +381,7 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 		lastSeen = portal.Ago(*a.LastActivity, now) + " · " + a.LastActivity.UTC().Format("2 Jan 2006, 15:04 UTC")
 	}
 	out.Sections = []portal.ProductSection{usage, {Title: "Activity", Fields: []portal.ProductField{
-		{Label: "Agent state", Value: shown(a.AgentState)},
+		{Label: "Last reported agent state", Value: shown(a.AgentState)},
 		{Label: "Last activity", Value: lastSeen},
 		{Label: "Phase", Value: shown(row.Phase)},
 		{Label: "Freshness", Value: shown(row.Freshness)},
@@ -388,8 +395,15 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	return out
 }
 
-// sessionStatus prefers agentd's state word and falls back to the phase.
+// sessionStatus shows a stopped or failed phase first, then agentd's state
+// word, then the phase.
 func sessionStatus(phase, agent string) portal.ProductStatus {
+	switch phase {
+	case "Failed":
+		return portal.ProductStatus{Text: "Failed", Tone: "bad"}
+	case "Suspended", "Archived":
+		return portal.ProductStatus{Text: phase, Tone: "muted"}
+	}
 	switch agent {
 	case protocol.AgentBusy:
 		return portal.ProductStatus{Text: "Busy", Tone: "busy"}
