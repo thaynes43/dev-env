@@ -44,7 +44,9 @@ func (a *app) portalAdmissionBootstrap(ctx context.Context, args []string) error
 	var receipt apiv1.PortalAdmissionBootstrapResult
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if (status != http.StatusCreated && status != http.StatusOK) || !utf8.Valid(raw) || dec.Decode(&receipt) != nil || dec.Decode(new(any)) != io.EOF || receipt.RequestID != requestID || (receipt.Disposition != "Created" && receipt.Disposition != "Present") || strings.TrimSpace(receipt.TargetUID) == "" || strings.TrimSpace(receipt.TargetRV) == "" {
+	decodeErr := dec.Decode(&receipt)
+	validPair := status == http.StatusCreated && receipt.Disposition == "Created" || status == http.StatusOK && receipt.Disposition == "Present"
+	if !validPair || !utf8.Valid(raw) || decodeErr != nil || dec.Decode(new(any)) != io.EOF || receipt.RequestID != requestID || strings.TrimSpace(receipt.TargetUID) == "" || strings.TrimSpace(receipt.TargetRV) == "" {
 		return fail(ExitUnconfirmed, "portal admission bootstrap receipt is unconfirmed; do not repeat the POST")
 	}
 	return a.printJSON(receipt)

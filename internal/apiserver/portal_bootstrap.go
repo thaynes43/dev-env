@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -49,40 +51,53 @@ func (s *Server) portalAdmissionBootstrap(ctx context.Context, _ http.ResponseWr
 	if c == nil || c.kind != kindSession || c.session == nil || c.pod == nil {
 		return 0, nil, forbidden("portal admission bootstrap requires its configured session pod")
 	}
-	var req apiv1.PortalAdmissionBootstrapRequest
-	dec := json.NewDecoder(io.LimitReader(r.Body, 1024))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || dec.Decode(new(any)) != io.EOF || len(validation.IsDNS1123Label(req.RequestID)) != 0 {
+	req, err := strictPortalBootstrapRequest(r.Body)
+	if err != nil || len(validation.IsDNS1123Label(req.RequestID)) != 0 {
 		return 0, nil, badRequest("portal admission bootstrap requires one valid requestID")
+	}
+	current, err := s.livePortalBootstrapCaller(ctx, c)
+	if err != nil {
+		return 0, nil, err
 	}
 	permitKey := types.NamespacedName{Namespace: portalBootstrapPermitNamespace, Name: portalBootstrapPermitName}
 	var permit corev1.ConfigMap
 	if err := s.Live.Get(ctx, permitKey, &permit); err != nil {
 		return 0, nil, fromKubeError(err, "read fixed bootstrap permit")
 	}
-	if err := validPortalBootstrapPermit(&permit, req.RequestID, string(c.session.UID), string(c.pod.UID), s.now()); err != nil {
+	if err := validPortalBootstrapPermit(&permit, req.RequestID, current, c.pod.UID, s.now()); err != nil {
 		return 0, nil, err
 	}
 	targetKey := types.NamespacedName{Namespace: portalBootstrapTargetNamespace, Name: portalBootstrapTargetName}
 	var existing corev1.ConfigMap
-	if err := s.Live.Get(ctx, targetKey, &existing); err == nil {
-		if exactPortalBootstrapTarget(&existing) {
-			return http.StatusOK, apiv1.PortalAdmissionBootstrapResult{Disposition: "Present", RequestID: req.RequestID, TargetUID: string(existing.UID), TargetRV: existing.ResourceVersion}, nil
-		}
-		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "portal admission target already exists with unexpected content")
-	} else if !apierrors.IsNotFound(err) {
+	err = s.Live.Get(ctx, targetKey, &existing)
+	if err != nil && !apierrors.IsNotFound(err) {
 		return 0, nil, fromKubeError(err, "read portal admission target")
 	}
-	// Consume first, via resourceVersion CAS. Any error after this update is
-	// deliberately terminal: there is no automatic replay or second create.
+	if err == nil && !exactPortalBootstrapTarget(&existing) {
+		return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "portal admission target already exists with unexpected content")
+	}
+	// Consume first, via resourceVersion CAS.  The permit is the durable receipt:
+	// a replay, timeout, process restart, or later target deletion cannot make a
+	// second CREATE eligible.
 	permit.Data["state"] = "consumed"
 	permit.Data["attemptedAt"] = s.now().UTC().Format(time.RFC3339Nano)
+	permit.Data["outcome"] = "CreateAttempted"
+	permit.Data["permitUID"] = string(permit.UID)
+	permit.Data["sessionGeneration"] = fmt.Sprint(current.Generation)
+	if err == nil {
+		permit.Data["outcome"] = "Present"
+		permit.Data["targetUID"] = string(existing.UID)
+		permit.Data["targetRV"] = existing.ResourceVersion
+	}
 	if err := s.Client.Update(ctx, &permit); err != nil {
 		return 0, nil, fromKubeError(err, "consume fixed bootstrap permit")
 	}
+	if err == nil {
+		return http.StatusOK, apiv1.PortalAdmissionBootstrapResult{Disposition: "Present", RequestID: req.RequestID, TargetUID: string(existing.UID), TargetRV: existing.ResourceVersion}, nil
+	}
 	// Re-read after consumption: a concurrent producer may have made the fixed
 	// witness while this request was reserving its one attempt.
-	err := s.Live.Get(ctx, targetKey, &existing)
+	err = s.Live.Get(ctx, targetKey, &existing)
 	if err == nil {
 		if exactPortalBootstrapTarget(&existing) {
 			return http.StatusOK, apiv1.PortalAdmissionBootstrapResult{Disposition: "Present", RequestID: req.RequestID, TargetUID: string(existing.UID), TargetRV: existing.ResourceVersion}, nil
@@ -102,11 +117,17 @@ func (s *Server) portalAdmissionBootstrap(ctx context.Context, _ http.ResponseWr
 	if target.UID == "" || target.ResourceVersion == "" {
 		return 0, nil, internal("portal admission target receipt is incomplete")
 	}
+	permit.Data["outcome"] = "Created"
+	permit.Data["targetUID"] = string(target.UID)
+	permit.Data["targetRV"] = target.ResourceVersion
+	if err := s.Client.Update(ctx, &permit); err != nil {
+		return 0, nil, internal("portal admission target receipt could not be recorded; do not repeat the POST")
+	}
 	return http.StatusCreated, apiv1.PortalAdmissionBootstrapResult{Disposition: "Created", RequestID: req.RequestID, TargetUID: string(target.UID), TargetRV: target.ResourceVersion}, nil
 }
 
-func validPortalBootstrapPermit(p *corev1.ConfigMap, requestID, sessionUID, podUID string, now time.Time) error {
-	if p.UID == "" || p.Data == nil || p.Data["state"] != "active" || p.Data["requestID"] != requestID || p.Data["sessionUID"] != sessionUID || p.Data["podUID"] != podUID || p.Data["payloadDigest"] != portalBootstrapDigest() {
+func validPortalBootstrapPermit(p *corev1.ConfigMap, requestID string, sess *v1alpha1.AgentSession, podUID types.UID, now time.Time) error {
+	if p.UID == "" || p.Data == nil || p.Data["state"] != "active" || p.Data["requestID"] != requestID || p.Data["sessionUID"] != string(sess.UID) || p.Data["podUID"] != string(podUID) || p.Data["payloadDigest"] != portalBootstrapDigest() || p.Data["permitUID"] != string(p.UID) || p.Data["sessionGeneration"] != fmt.Sprint(sess.Generation) {
 		return forbidden("portal admission bootstrap permit does not match this fixed caller and request")
 	}
 	expires, err := time.Parse(time.RFC3339, p.Data["expiresAt"])
@@ -114,6 +135,54 @@ func validPortalBootstrapPermit(p *corev1.ConfigMap, requestID, sessionUID, podU
 		return forbidden("portal admission bootstrap permit is expired or revoked")
 	}
 	return nil
+}
+
+func (s *Server) livePortalBootstrapCaller(ctx context.Context, c *caller) (*v1alpha1.AgentSession, error) {
+	var sess v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: c.session.Namespace, Name: c.session.Name}, &sess); err != nil || sess.UID != c.session.UID || !sess.DeletionTimestamp.IsZero() {
+		return nil, forbidden("portal admission bootstrap caller session is no longer live")
+	}
+	var pod corev1.Pod
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: c.pod.Namespace, Name: c.pod.Name}, &pod); err != nil || pod.UID != c.pod.UID || !pod.DeletionTimestamp.IsZero() || pod.Spec.ServiceAccountName != c.identity.ServiceAccount {
+		return nil, forbidden("portal admission bootstrap caller pod is no longer live")
+	}
+	owner := metav1.GetControllerOf(&pod)
+	if owner == nil || owner.Kind != "AgentSession" || owner.UID != sess.UID {
+		return nil, forbidden("portal admission bootstrap caller ownership changed")
+	}
+	return &sess, nil
+}
+
+func strictPortalBootstrapRequest(body io.Reader) (apiv1.PortalAdmissionBootstrapRequest, error) {
+	b, err := io.ReadAll(io.LimitReader(body, 1025))
+	if err != nil || len(b) > 1024 {
+		return apiv1.PortalAdmissionBootstrapRequest{}, io.ErrUnexpectedEOF
+	}
+	dec := json.NewDecoder(strings.NewReader(string(b)))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return apiv1.PortalAdmissionBootstrapRequest{}, io.ErrUnexpectedEOF
+	}
+	var req apiv1.PortalAdmissionBootstrapRequest
+	seen := map[string]bool{}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return req, err
+		}
+		name, ok := key.(string)
+		if !ok || seen[name] || name != "requestID" {
+			return req, io.ErrUnexpectedEOF
+		}
+		seen[name] = true
+		if err := dec.Decode(&req.RequestID); err != nil {
+			return req, err
+		}
+	}
+	if tok, err = dec.Token(); err != nil || tok != json.Delim('}') || dec.Decode(new(any)) != io.EOF || !seen["requestID"] {
+		return req, io.ErrUnexpectedEOF
+	}
+	return req, nil
 }
 
 func exactPortalBootstrapTarget(cm *corev1.ConfigMap) bool {
