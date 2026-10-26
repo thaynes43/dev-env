@@ -281,9 +281,10 @@ already provide the operator CA, the existing ConfigMap route is:
 
 ```bash
 guide_ca="$HOME/.cache/dev-env-api-ca.crt"
+mkdir -p "$HOME/.cache" &&
 kubectl -n dev-agents get configmap dev-env-api-ca \
-  -o jsonpath='{.data.ca\.crt}' > "$guide_ca"
-test -s "$guide_ca"
+  -o jsonpath='{.data.ca\.crt}' > "$guide_ca" &&
+test -s "$guide_ca" &&
 export DEV_ENV_API_CA_FILE="$guide_ca"
 ```
 
@@ -328,8 +329,10 @@ project snapshot. `--project <name> [--repo <name>] -p ...` is a separate,
 headless managed-task entrypoint: the server selects the declared repository and
 rules and remains authoritative for catalog admission. It cannot combine with
 `--local` or `--interactive`. `--profile` selects a template profile only where
-the caller is allowed to choose it; a session child inherits its parent's
-profile. Starting a native thread does not select a Kubernetes profile.
+the caller is allowed to choose it. A session child normally inherits its
+parent's profile. The exception is a Codex remote host created by a workbench
+session: omit `--profile`; the server uses the default profile, not workbench.
+Starting a native thread does not select a Kubernetes profile.
 
 A headless `-p` task runs its prompt once. `msg` applies to a local TUI session; a headless task does not accept messages. Coordinator custody of that result is recorded separately in the [coordinator result handoff](coordinator-result-handoff.md). A delivery receipt is not acknowledgment, ownership, or completion. The offline checker only validates a bounded handoff record.
 

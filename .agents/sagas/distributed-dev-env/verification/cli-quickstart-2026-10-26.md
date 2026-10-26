@@ -48,8 +48,9 @@ Source anchors inspected at the baseline:
   restriction, provider/model handling, and profile request field.
 - `internal/agentrun/attach.go`: attach/detach caller restriction and
   Kubernetes-rights requirement.
-- `internal/apiserver/apiv1/types.go`: a child session inherits its parent's
-  profile.
+- `internal/apiserver/validate.go`: child profile inheritance and the explicit
+  workbench-created Codex remote-host exception (omit the profile; the server
+  selects the default profile).
 
 ## Correction and limits
 
