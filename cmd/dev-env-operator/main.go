@@ -86,61 +86,64 @@ func main() {
 }
 
 type options struct {
-	directoryEnabled                bool
-	directoryProjects               []string
-	metadataDiscoveryProjects       []string
-	retainedCommonRules             bool
-	contextsEnabled                 bool
-	contextReadProjects             []string
-	inboxEnabled                    bool
-	inboxProjects                   []string
-	inboxCoordinatorReadProjects    []string
-	taskClaimsEnabled               bool
-	taskClaimReadProjects           []string
-	ownedRootPolicy                 string
-	nativeFixtureEnabled            bool
-	nativeFixtureImage              string
-	taskBudgetsEnabled              bool
-	taskBudgetNamespace             string
-	taskBudgetWorkerImage           string
-	assignedTaskBudgets             map[string]string
-	sessionNamespace                string
-	templatesNamespace              string
-	templatesName                   string
-	leaderElect                     bool
-	metricsAddr                     string
-	probeAddr                       string
-	apiURL                          string
-	apiAddr                         string
-	apiTLSDir                       string
-	humanSA                         string
-	clientSAs                       []string
-	grantApprovalURL                string
-	coordinatorEnabled              bool
-	portalReaderEnabled             bool
+	directoryEnabled              bool
+	directoryProjects             []string
+	metadataDiscoveryProjects     []string
+	retainedCommonRules           bool
+	contextsEnabled               bool
+	contextReadProjects           []string
+	inboxEnabled                  bool
+	inboxProjects                 []string
+	inboxCoordinatorReadProjects  []string
+	taskClaimsEnabled             bool
+	taskClaimReadProjects         []string
+	ownedRootPolicy               string
+	nativeFixtureEnabled          bool
+	nativeFixtureImage            string
+	taskBudgetsEnabled            bool
+	taskBudgetNamespace           string
+	taskBudgetWorkerImage         string
+	assignedTaskBudgets           map[string]string
+	sessionNamespace              string
+	templatesNamespace            string
+	templatesName                 string
+	leaderElect                   bool
+	metricsAddr                   string
+	probeAddr                     string
+	apiURL                        string
+	apiAddr                       string
+	apiTLSDir                     string
+	humanSA                       string
+	clientSAs                     []string
+	grantApprovalURL              string
+	coordinatorEnabled            bool
+	portalReaderEnabled           bool
+	privatePilot                  *projectcanary.PilotPolicy
+	privateProjectTasks           bool
+	managedCodexTasks             bool
+	privateHistoryRetention       bool
+	privateTerminalRecord         bool
+	privateExecutorStop           bool
+	homeHistoryArchive            bool
+	historyArchiveReads           bool
+	coordinationArchiveReads      bool
+	coordinationRetention         bool
+	coordinationRetentionGrace    time.Duration
+	homeExpiryDelete              bool
+	homeExpiryGrace               time.Duration
+	privateProjectCanariesEnabled bool
+	privateProjectCanaries        *projectcanary.Policy
+	managedChildDecisions         bool
+	coordinatorHosts              []apiserver.CoordinatorHost
+	standbyEnabled                bool
+	childUsageCapture             bool
+	standbyRepo, standbyModel     string
+	standbyProfile, standbyEffort string
+	catalogBinding                *apiserver.CatalogBinding
+
 	portalAdmissionBootstrapEnabled bool
-	privatePilot                    *projectcanary.PilotPolicy
-	privateProjectTasks             bool
-	managedCodexTasks               bool
-	privateHistoryRetention         bool
-	privateTerminalRecord           bool
-	privateExecutorStop             bool
-	homeHistoryArchive              bool
-	historyArchiveReads             bool
-	coordinationArchiveReads        bool
-	coordinationRetention           bool
-	coordinationRetentionGrace      time.Duration
-	homeExpiryDelete                bool
-	homeExpiryGrace                 time.Duration
-	privateProjectCanariesEnabled   bool
-	privateProjectCanaries          *projectcanary.Policy
-	managedChildDecisions           bool
-	coordinatorHosts                []apiserver.CoordinatorHost
-	standbyEnabled                  bool
-	childUsageCapture               bool
-	standbyRepo, standbyModel       string
-	standbyProfile, standbyEffort   string
-	catalogBinding                  *apiserver.CatalogBinding
+	portalBootstrapPermitUID        string
+	portalBootstrapPermitRV         string
 }
 
 func parseFlags(args []string) (options, error) {
@@ -172,6 +175,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.portalReaderEnabled, "enable-portal-reader", false, "accept the dev-agents/dev-env-v2-portal ServiceAccount for paginated dev-env session summaries only")
 	fs.BoolVar(&o.portalAdmissionBootstrapEnabled, "enable-portal-admission-bootstrap", false, "enable the separately permitted one-shot fixed CLOSED portal admission bootstrap action")
+	fs.StringVar(&o.portalBootstrapPermitUID, "portal-admission-bootstrap-permit-uid", "", "externally approved one-use permit UID (required when enabled)")
+	fs.StringVar(&o.portalBootstrapPermitRV, "portal-admission-bootstrap-permit-resource-version", "", "externally approved initial permit resourceVersion (required when enabled)")
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
@@ -219,6 +224,10 @@ func parseFlags(args []string) (options, error) {
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" {
 		return o, errors.New("--session-namespace, --templates-namespace and --templates-name must not be empty")
 	}
+	if err := (&apiserver.PortalAdmissionBootstrap{Enabled: o.portalAdmissionBootstrapEnabled, ExpectedPermitUID: o.portalBootstrapPermitUID, ExpectedPermitResourceVersion: o.portalBootstrapPermitRV}).Validate(); err != nil {
+		return o, err
+	}
+
 	if o.portalReaderEnabled && o.sessionNamespace != "dev-agents" {
 		return o, errors.New("--enable-portal-reader requires --session-namespace=dev-agents")
 	}
@@ -636,6 +645,14 @@ func run(args []string) error {
 			directories = directoryStore
 			directoryContexts = &contextpublication.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
+		bootstrap := &apiserver.PortalAdmissionBootstrap{Enabled: o.portalAdmissionBootstrapEnabled, ExpectedPermitUID: o.portalBootstrapPermitUID, ExpectedPermitResourceVersion: o.portalBootstrapPermitRV}
+		if o.portalAdmissionBootstrapEnabled {
+			bootstrap.CreateClosed, err = apiserver.NewPortalBootstrapCreator(cfg)
+			if err != nil {
+				return fmt.Errorf("configure fixed portal bootstrap creator: %w", err)
+			}
+		}
+
 		api := &apiserver.Server{
 			SessionDirectory: directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
@@ -658,7 +675,7 @@ func run(args []string) error {
 				// (D-66).
 				ActivityNamespace: o.templatesNamespace,
 			},
-			PortalAdmissionBootstrap: &apiserver.PortalAdmissionBootstrap{Enabled: o.portalAdmissionBootstrapEnabled},
+			PortalAdmissionBootstrap: bootstrap,
 			PrivatePilot:             o.privatePilot,
 			Projects:                 o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,

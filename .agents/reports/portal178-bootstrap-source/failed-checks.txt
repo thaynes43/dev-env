@@ -1,0 +1,68 @@
+Failed check receipts (source-only synthetic tests). No skips counted as passes.
+
+/tmp/pr553-unit-1.log
+ok  	github.com/thaynes43/dev-env/internal/apiserver	0.595s
+--- FAIL: TestPortalBootstrapCLIReceipts (0.07s)
+        portal_bootstrap_test.go:49: agent-run ["portal-admission-bootstrap" "--request-id" "request-178"]: exit 0, want 6
+FAIL
+FAIL	github.com/thaynes43/dev-env/internal/agentrun	0.081s
+ok  	github.com/thaynes43/dev-env/cmd/dev-env-operator	0.012s [no tests to run]
+FAIL
+
+/tmp/pr553-focused-2.log
+--- FAIL: TestPortalBootstrapRealAdmissionAndRBAC (12.19s)
+    portal_bootstrap_envtest_test.go:130: context deadline exceeded
+FAIL
+FAIL	github.com/thaynes43/dev-env/internal/apiserver	13.804s
+ok  	github.com/thaynes43/dev-env/internal/agentrun	0.069s
+ok  	github.com/thaynes43/dev-env/cmd/dev-env-operator	0.012s [no tests to run]
+FAIL
+
+/tmp/pr553-envtest-3.log
+    portal_bootstrap_envtest_test.go:132: admission readiness: context deadline exceeded; last response: context deadline exceeded
+--- FAIL: TestPortalBootstrapRealAdmissionAndRBAC (12.86s)
+FAIL
+FAIL	github.com/thaynes43/dev-env/internal/apiserver	14.035s
+FAIL
+
+/tmp/pr553-envtest-4.log
+    portal_bootstrap_envtest_test.go:140: admission readiness: context deadline exceeded; last response: context deadline exceeded; first responses: [allowed allowed allowed allowed allowed]
+--- FAIL: TestPortalBootstrapRealAdmissionAndRBAC (12.14s)
+FAIL
+FAIL	github.com/thaynes43/dev-env/internal/apiserver	13.254s
+FAIL
+
+/tmp/pr553-envtest-5.log
+    portal_bootstrap_envtest_test.go:142: admission readiness: context deadline exceeded; last response: context deadline exceeded; first responses: [allowed allowed allowed allowed allowed]; policy={ParamKind:nil MatchConstraints:&MatchResources{NamespaceSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ObjectSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ResourceRules:[]NamedRuleWithOperations{NamedRuleWithOperations{ResourceNames:[],RuleWithOperations:RuleWithOperations{Operations:[CREATE],Rule:Rule{APIGroups:[],APIVersions:[v1],Resources:[configmaps],Scope:**,},},},},ExcludeResourceRules:[]NamedRuleWithOperations{},MatchPolicy:*Equivalent,} Validations:[{Expression:request.userInfo.username == 'system:serviceaccount:dev-env-system:dev-env-operator' && request.namespace == 'dev-agents' && object.metadata.name == 'dev-env-v2-portal-admission' && has(object.data) && size(object.data) == 2 && object.data['schema'] == '1' && object.data['state'] == 'closed' && !has(object.binaryData) && !has(object.immutable) && (!has(object.metadata.labels) || size(object.metadata.labels) == 0) && (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) && (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) && (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0) && (!has(object.metadata.generateName) || object.metadata.generateName == '') Message:only the exact operator may create the complete fixed CLOSED witness Reason:<nil> MessageExpression:}] FailurePolicy:0x35f8d4da75f0 AuditAnnotations:[] MatchConditions:[] Variables:[]} status={ObservedGeneration:0 TypeChecking:nil Conditions:[]} binding={PolicyName:portal-bootstrap-fixture ParamRef:nil MatchResources:&MatchResources{NamespaceSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ObjectSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ResourceRules:[]NamedRuleWithOperations{NamedRuleWithOperations{ResourceNames:[],RuleWithOperations:RuleWithOperations{Operations:[CREATE],Rule:Rule{APIGroups:[],APIVersions:[v1],Resources:[configmaps],Scope:**,},},},},ExcludeResourceRules:[]NamedRuleWithOperations{},MatchPolicy:*Equivalent,} ValidationActions:[Deny]}
+--- FAIL: TestPortalBootstrapRealAdmissionAndRBAC (33.01s)
+FAIL
+FAIL	github.com/thaynes43/dev-env/internal/apiserver	34.103s
+FAIL
+
+/tmp/pr553-envtest-6.log
+    portal_bootstrap_envtest_test.go:155: admission readiness: context deadline exceeded; last response: context deadline exceeded; first responses: [allowed allowed allowed allowed allowed]; policy={ParamKind:nil MatchConstraints:&MatchResources{NamespaceSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ObjectSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ResourceRules:[]NamedRuleWithOperations{NamedRuleWithOperations{ResourceNames:[],RuleWithOperations:RuleWithOperations{Operations:[CREATE],Rule:Rule{APIGroups:[],APIVersions:[v1],Resources:[configmaps],Scope:**,},},},},ExcludeResourceRules:[]NamedRuleWithOperations{},MatchPolicy:*Equivalent,} Validations:[{Expression:request.userInfo.username == 'system:serviceaccount:dev-env-system:dev-env-operator' && request.namespace == 'dev-agents' && object.metadata.name == 'dev-env-v2-portal-admission' && has(object.data) && size(object.data) == 2 && object.data['schema'] == '1' && object.data['state'] == 'closed' && !has(object.binaryData) && !has(object.immutable) && (!has(object.metadata.labels) || size(object.metadata.labels) == 0) && (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) && (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) && (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0) && (!has(object.metadata.generateName) || object.metadata.generateName == '') Message:only the exact operator may create the complete fixed CLOSED witness Reason:<nil> MessageExpression:}] FailurePolicy:0xc77067dcb80 AuditAnnotations:[] MatchConditions:[] Variables:[]} status={ObservedGeneration:0 TypeChecking:nil Conditions:[]} binding={PolicyName:portal-bootstrap-fixture ParamRef:nil MatchResources:&MatchResources{NamespaceSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ObjectSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ResourceRules:[]NamedRuleWithOperations{NamedRuleWithOperations{ResourceNames:[],RuleWithOperations:RuleWithOperations{Operations:[CREATE],Rule:Rule{APIGroups:[],APIVersions:[v1],Resources:[configmaps],Scope:**,},},},},ExcludeResourceRules:[]NamedRuleWithOperations{},MatchPolicy:*Equivalent,} ValidationActions:[Deny]}
+--- FAIL: TestPortalBootstrapRealAdmissionAndRBAC (33.78s)
+FAIL
+FAIL	github.com/thaynes43/dev-env/internal/apiserver	33.810s
+FAIL
+
+/tmp/pr553-envtest-7.log
+    portal_bootstrap_envtest_test.go:161: admission readiness: context deadline exceeded; last response: context deadline exceeded; first responses: [allowed allowed allowed allowed allowed]; policy={ParamKind:nil MatchConstraints:&MatchResources{NamespaceSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ObjectSelector:&v1.LabelSelector{MatchLabels:map[string]string{},MatchExpressions:[]LabelSelectorRequirement{},},ResourceRules:[]NamedRuleWithOperations{NamedRuleWithOperations{ResourceNames:[],RuleWithOperations:RuleWithOperations{Operations:[CREATE],Rule:Rule{APIGroups:[*],APIVersions:[*],Resources:[*],Scope:**,},},},},ExcludeResourceRules:[]NamedRuleWithOperations{},MatchPolicy:*Equivalent,} Validations:[{Expression:false Message:diagnostic deny Reason:<nil> MessageExpression:}] FailurePolicy:0x1b061c7e0170 AuditAnnotations:[] MatchConditions:[] Variables:[]} status={ObservedGeneration:0 TypeChecking:nil Conditions:[]} binding={PolicyName:portal-bootstrap-fixture ParamRef:nil MatchResources:nil ValidationActions:[Deny]}
+--- FAIL: TestPortalBootstrapRealAdmissionAndRBAC (33.92s)
+FAIL
+FAIL	github.com/thaynes43/dev-env/internal/apiserver	33.939s
+FAIL
+
+Corrections:
+- unit-1: CLI bounded case incorrectly passed because json.RawMessage decoding
+  strips outer whitespace. Fixed by limiting the raw HTTP response to 1024+1.
+- focused-2 and envtest-3 through envtest-7: readiness required IsForbidden,
+  while the policy default returned HTTP 422 after propagation (early probes
+  were allowed before propagation). Captured dedicated server logs identified
+  actual 422 denials. Added explicit reason Forbidden; runtime-error assertion
+  accepts an actual policy-bound Forbidden/Invalid denial. Exact matching and
+  failurePolicy Fail were preserved. Temporary deny-all/wildcard diagnostic
+  used only in envtest-7 was removed before passing the exact fixture.
+- No failed check established an external blocker. Final focused-tests receipt
+  includes the passing real API proof. Local raw server diagnostics were kept
+  private; only the synthetic failure details are recorded here.

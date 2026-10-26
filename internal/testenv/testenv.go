@@ -36,7 +36,11 @@ type Env struct {
 // Start starts the API server and installs every CRD in config/crd/. It fails if
 // the binaries or the CRD directory cannot be found, so a suite never passes by
 // not running.
-func Start() (*Env, error) {
+func Start() (*Env, error) { return StartWithAPIServer(nil) }
+
+// StartWithAPIServer starts an isolated server with optional fixture-specific
+// flags or output. It uses the same pinned assets and CRDs as Start.
+func StartWithAPIServer(configure func(*envtest.APIServer)) (*Env, error) {
 	root, err := moduleRoot()
 	if err != nil {
 		return nil, err
@@ -48,8 +52,13 @@ func Start() (*Env, error) {
 
 	env := &envtest.Environment{
 		BinaryAssetsDirectory: assets,
+		// These fixtures must never inherit USE_EXISTING_CLUSTER from a pod/CI environment.
+		UseExistingCluster:    new(bool),
 		CRDDirectoryPaths:     []string{filepath.Join(root, "config", "crd")},
 		ErrorIfCRDPathMissing: true,
+	}
+	if configure != nil {
+		configure(env.ControlPlane.GetAPIServer())
 	}
 	cfg, err := env.Start()
 	if err != nil {

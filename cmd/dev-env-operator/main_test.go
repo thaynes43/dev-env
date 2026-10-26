@@ -307,3 +307,27 @@ func TestPortalReaderFlag(t *testing.T) {
 		t.Fatal("portal account was also accepted as the human caller")
 	}
 }
+
+func TestPortalBootstrapFlagsDefaultOffAndPinned(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.portalAdmissionBootstrapEnabled || o.portalBootstrapPermitUID != "" || o.portalBootstrapPermitRV != "" {
+		t.Fatalf("unexpected defaults: %v", err)
+	}
+	o, err = parseFlags([]string{"--enable-portal-admission-bootstrap", "--portal-admission-bootstrap-permit-uid=permit-uid", "--portal-admission-bootstrap-permit-resource-version=42"})
+	if err != nil || !o.portalAdmissionBootstrapEnabled || o.portalBootstrapPermitUID != "permit-uid" || o.portalBootstrapPermitRV != "42" {
+		t.Fatalf("pinned flags refused: %v", err)
+	}
+}
+
+func TestPortalBootstrapFlagsRefuseUnanchoredEnable(t *testing.T) {
+	for _, args := range [][]string{
+		{"--enable-portal-admission-bootstrap"},
+		{"--enable-portal-admission-bootstrap", "--portal-admission-bootstrap-permit-uid=permit-uid"},
+		{"--enable-portal-admission-bootstrap", "--portal-admission-bootstrap-permit-uid=permit-uid", "--portal-admission-bootstrap-permit-resource-version=bad"},
+		{"--enable-portal-admission-bootstrap", "--portal-admission-bootstrap-permit-uid=bad uid", "--portal-admission-bootstrap-permit-resource-version=42"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("unanchored action enabled", args)
+		}
+	}
+}

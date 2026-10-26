@@ -93,7 +93,7 @@ cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D
                          `ctl history-export|history-archive` (DESIGN-025 H4), `ctl coord-archive put [--mark]|mark|lookup|get` (DESIGN-024 R2; journal grace, recorded-time or pinned get)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
 internal/version/        the build identity every binary's `version` prints
-internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
+internal/testenv/        starts isolated envtest (including fixture-specific API admission flags; never USE_EXISTING_CLUSTER) (kube-apiserver + etcd) with config/crd/ installed, for test suites
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
 internal/controller/     the AgentSession reconciler: each session's pod and volume (D-44), the reap finalizer and the
                          guarded deletes (D-45): the rescue by exec before a suspend deletes a pod, and the archive of
@@ -109,6 +109,9 @@ internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenRev
                          session directory, task budgets and archived history (DESIGN-025 8). Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
+internal/apiserver/portal_bootstrap_client.go  fixed CREATE transport with REST retries and redirects disabled
+internal/apiserver/portal_bootstrap.go  default-disabled fixed CLOSED action; external permit UID/initial-RV pin, consumed receipt reconciliation; isolated admission fixture in testdata/portal-bootstrap/
+internal/agentrun/portal_bootstrap.go  one-shot fixed bootstrap CLI; strict bounded receipt, no redirect or POST replay
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
 internal/maintenancecontract/ bounded offline upgrade-shepherd envelope validator and correlation evaluator; a candidate is not operational deferral

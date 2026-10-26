@@ -1,0 +1,42 @@
+# ISOLATED ENVTEST FIXTURE ONLY. This is not active GitOps configuration.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: portal-bootstrap-fixture
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [configmaps]
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:dev-env-system:dev-env-operator' &&
+        request.namespace == 'dev-agents' &&
+        object.metadata.name == 'dev-env-v2-portal-admission' &&
+        has(object.data) && size(object.data) == 2 &&
+        object.data['schema'] == '1' && object.data['state'] == 'closed' &&
+        !has(object.binaryData) && !has(object.immutable) &&
+        (!has(object.metadata.labels) || size(object.metadata.labels) == 0) &&
+        (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) &&
+        (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) &&
+        (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0) &&
+        (!has(object.metadata.generateName) || object.metadata.generateName == '')
+      reason: Forbidden
+      message: only the exact operator may create the complete fixed CLOSED witness
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: portal-bootstrap-fixture
+spec:
+  policyName: portal-bootstrap-fixture
+  validationActions: [Deny]
+  matchResources:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [configmaps]

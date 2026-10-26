@@ -78,6 +78,8 @@ type conn struct {
 	// Explicit once reads must reject an oversized body before JSON decoding
 	// can turn a truncated valid prefix into an apparently complete value.
 	rejectOversizeResponse bool
+	// responseLimit bounds a fixed-action receipt before JSON decoding; zero uses maxResponse.
+	responseLimit int64
 }
 
 // connOpts are the connection flags.

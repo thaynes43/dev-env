@@ -1,5 +1,17 @@
 # HANDOFF: start here
 
+## PR553 CLOSED bootstrap source handoff — 2026-10-26 UTC
+
+The [finite source acceptance report](reports/portal178-bootstrap-source/RESULT.md)
+records the default-disabled fixed CLOSED bootstrap action, externally pinned
+permit UID/initial resourceVersion, durable one-use/drift fences and isolated
+API/CLI/admission/RBAC tests. PR553 remains a draft for the coordinator's
+independent exact-head review and required CI. Source readiness is not
+installation or activation. Production permissions/configuration, live bootstrap,
+portal opening and the other owner holds remain outside this source handoff.
+The two earlier writer checkpoints were incomplete; their facts remain history.
+
+
 ## Current state — 2026-10-22 UTC (v2 release 2.39.1; documentation reconciliation)
 
 This block supersedes the installed-version and open-item summaries in the

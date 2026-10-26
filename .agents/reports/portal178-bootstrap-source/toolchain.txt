@@ -1,0 +1,23 @@
+Toolchain receipt at 2026-10-26T01:54:54.677924+00:00
+Official archive: https://go.dev/dl/go1.27.2.linux-amd64.tar.gz
+Download: curl -fL --retry 1 (official redirects followed)
+Actual bytes: 70590635
+Actual archive SHA256: ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+Matched required size 70590635 and SHA256 before extraction and execution.
+Compiler: go version go1.27.2 linux/amd64
+Compiler path: /home/dev/.local/portal553-toolchain/go/bin/go
+No system/profile installation, OS substitution, redirect HTML or binary-hash substitution.
+
+Envtest: sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
+Install: GOTOOLCHAIN=local GOMAXPROCS=2 nice -n19 flock /tmp/portal553-go.lock go install -p1 (task-local GOBIN)
+Use: nice -n19 bin/tools/setup-envtest use 1.35.0 --bin-dir bin/tools/envtest -p path
+Result: bin/tools/envtest/k8s/1.35.0-linux-amd64
+Tool default --verify=true verifies the official archive checksum during download.
+Official index: https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/HEAD/envtest-releases.yaml
+Official archive: https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v1.35.0/envtest-v1.35.0-linux-amd64.tar.gz
+Index SHA512: 130369c16f076e724d089189afaede960316f5f5dea6cf57be7a4fc6f09c77342893192509790e4056e116e232dff832ed863f5bd55dcb55d38f3ab834828a11
+kube-apiserver --version: Kubernetes v1.35.0
+Actual isolated admission/RBAC test PASS, not a skip or policy-token substitute.
+
+Pinned go.mod/go.sum and default module checksum validation used. No new repo dependencies.
+Prior wrong checksum expectation remains Unknown; no corruption claim.

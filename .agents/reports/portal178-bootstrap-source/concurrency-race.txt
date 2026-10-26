@@ -1,0 +1,7 @@
+Started UTC: 2026-10-26T01:48:29.275922+00:00
+Command: nice -n 19 flock /tmp/portal553-go.lock /home/dev/.local/portal553-toolchain/go/bin/go test -race -p 1 ./internal/apiserver -run ^TestPortalBootstrapConcurrentReplicasCAS$ -count=1
+GOTOOLCHAIN=local GOMAXPROCS=2
+ok  	github.com/thaynes43/dev-env/internal/apiserver	1.461s
+
+Exit: 0
+Elapsed seconds: 153.449

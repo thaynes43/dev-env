@@ -1,0 +1,285 @@
+Started UTC: 2026-10-26T01:46:01.483206+00:00
+Command: nice -n 19 flock /tmp/portal553-go.lock /home/dev/.local/portal553-toolchain/go/bin/go test -p 1 ./internal/apiserver ./internal/agentrun ./cmd/dev-env-operator ./internal/testenv -run TestPortalBootstrap|TestTokenReviewer|TestIdentityFrom -count=1 -v
+GOTOOLCHAIN=local GOMAXPROCS=2
+=== RUN   TestTokenReviewer
+=== RUN   TestTokenReviewer/not_authenticated
+=== RUN   TestTokenReviewer/another_audience
+--- PASS: TestTokenReviewer (0.04s)
+    --- PASS: TestTokenReviewer/not_authenticated (0.00s)
+    --- PASS: TestTokenReviewer/another_audience (0.00s)
+=== RUN   TestIdentityFrom
+--- PASS: TestIdentityFrom (0.00s)
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/wrong-actor
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/wrong-name
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/wrong-namespace
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/open
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/schema
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/missing
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/extra-data
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/binary
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/labels
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/annotations
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/finalizers
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/owner
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/immutable
+=== RUN   TestPortalBootstrapRealAdmissionAndRBAC/generate-name
+--- PASS: TestPortalBootstrapRealAdmissionAndRBAC (5.56s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/wrong-actor (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/wrong-name (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/wrong-namespace (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/open (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/schema (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/missing (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/extra-data (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/binary (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/labels (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/annotations (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/finalizers (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/owner (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/immutable (0.00s)
+    --- PASS: TestPortalBootstrapRealAdmissionAndRBAC/generate-name (0.00s)
+=== RUN   TestPortalBootstrapCreateReplayRestartAndDrift
+=== RUN   TestPortalBootstrapCreateReplayRestartAndDrift/created
+=== RUN   TestPortalBootstrapCreateReplayRestartAndDrift/existing
+--- PASS: TestPortalBootstrapCreateReplayRestartAndDrift (0.03s)
+    --- PASS: TestPortalBootstrapCreateReplayRestartAndDrift/created (0.02s)
+    --- PASS: TestPortalBootstrapCreateReplayRestartAndDrift/existing (0.01s)
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178"}__________________
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178"}_x
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178","requestID":"other
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"RequestID":"request-178"}
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178","x":1}
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/[]
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/null
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{}
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":null}
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":1}
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"bad/selector"}
+=== RUN   TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178�"}
+--- PASS: TestPortalBootstrapStrictBodyBeforeMutation (0.09s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178"}__________________ (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178"}_x (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178","requestID":"other (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"RequestID":"request-178"} (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178","x":1} (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/[] (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/null (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{} (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":null} (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":1} (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"bad/selector"} (0.01s)
+    --- PASS: TestPortalBootstrapStrictBodyBeforeMutation/{"requestID":"request-178�"} (0.01s)
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/disabled
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/missing-anchor
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/bad-anchor
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/forged-uid
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/recreated
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/generation
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/expired
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/revoked
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/blank-revocation
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/sessionUID
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/podUID
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/requestID
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/payloadDigest
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/state
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/human
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/client
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/stranger
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/owner-name
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/owner-version
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/owner-kind
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/owner-uid
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/sa
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/pod-uid
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/pod-deleting
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/pod-stopped
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/session-uid
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/session-deleting
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/mode
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/operating-mode
+=== RUN   TestPortalBootstrapPermitAndCallerRefusals/phase
+--- PASS: TestPortalBootstrapPermitAndCallerRefusals (0.29s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/disabled (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/missing-anchor (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/bad-anchor (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/forged-uid (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/recreated (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/generation (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/expired (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/revoked (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/blank-revocation (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/sessionUID (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/podUID (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/requestID (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/payloadDigest (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/state (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/human (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/client (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/stranger (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/owner-name (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/owner-version (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/owner-kind (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/owner-uid (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/sa (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/pod-uid (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/pod-deleting (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/pod-stopped (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/session-uid (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/session-deleting (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/mode (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/operating-mode (0.01s)
+    --- PASS: TestPortalBootstrapPermitAndCallerRefusals/phase (0.01s)
+=== RUN   TestPortalBootstrapTimeoutsAndReceiptFailure
+=== RUN   TestPortalBootstrapTimeoutsAndReceiptFailure/before-create
+=== RUN   TestPortalBootstrapTimeoutsAndReceiptFailure/after-create
+=== RUN   TestPortalBootstrapTimeoutsAndReceiptFailure/receipt
+=== RUN   TestPortalBootstrapTimeoutsAndReceiptFailure/consume-before
+=== RUN   TestPortalBootstrapTimeoutsAndReceiptFailure/consume-after
+--- PASS: TestPortalBootstrapTimeoutsAndReceiptFailure (0.04s)
+    --- PASS: TestPortalBootstrapTimeoutsAndReceiptFailure/before-create (0.01s)
+    --- PASS: TestPortalBootstrapTimeoutsAndReceiptFailure/after-create (0.01s)
+    --- PASS: TestPortalBootstrapTimeoutsAndReceiptFailure/receipt (0.01s)
+    --- PASS: TestPortalBootstrapTimeoutsAndReceiptFailure/consume-before (0.01s)
+    --- PASS: TestPortalBootstrapTimeoutsAndReceiptFailure/consume-after (0.01s)
+=== RUN   TestPortalBootstrapConcurrentReplicasCAS
+--- PASS: TestPortalBootstrapConcurrentReplicasCAS (0.01s)
+=== RUN   TestPortalBootstrapConcurrentProducer
+=== RUN   TestPortalBootstrapConcurrentProducer/after-consume
+=== RUN   TestPortalBootstrapConcurrentProducer/already-exists
+--- PASS: TestPortalBootstrapConcurrentProducer (0.02s)
+    --- PASS: TestPortalBootstrapConcurrentProducer/after-consume (0.01s)
+    --- PASS: TestPortalBootstrapConcurrentProducer/already-exists (0.01s)
+=== RUN   TestPortalBootstrapFreshUncachedBoundary
+=== RUN   TestPortalBootstrapFreshUncachedBoundary/session-mode
+=== RUN   TestPortalBootstrapFreshUncachedBoundary/session-generation
+=== RUN   TestPortalBootstrapFreshUncachedBoundary/pod-owner
+=== RUN   TestPortalBootstrapFreshUncachedBoundary/pod-uid
+=== RUN   TestPortalBootstrapFreshUncachedBoundary/pod-deleted
+=== RUN   TestPortalBootstrapFreshUncachedBoundary/expired-at-consume
+--- PASS: TestPortalBootstrapFreshUncachedBoundary (0.05s)
+    --- PASS: TestPortalBootstrapFreshUncachedBoundary/session-mode (0.01s)
+    --- PASS: TestPortalBootstrapFreshUncachedBoundary/session-generation (0.01s)
+    --- PASS: TestPortalBootstrapFreshUncachedBoundary/pod-owner (0.01s)
+    --- PASS: TestPortalBootstrapFreshUncachedBoundary/pod-uid (0.01s)
+    --- PASS: TestPortalBootstrapFreshUncachedBoundary/pod-deleted (0.01s)
+    --- PASS: TestPortalBootstrapFreshUncachedBoundary/expired-at-consume (0.01s)
+=== RUN   TestPortalBootstrapPermitCannotBeRearmed
+--- PASS: TestPortalBootstrapPermitCannotBeRearmed (0.02s)
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure/open
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure/extra
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure/binary
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure/metadata
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure/read-before
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure/read-after
+=== RUN   TestPortalBootstrapUnexpectedTargetAndReadFailure/present-receipt
+--- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure (0.07s)
+    --- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure/open (0.01s)
+    --- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure/extra (0.01s)
+    --- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure/binary (0.01s)
+    --- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure/metadata (0.01s)
+    --- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure/read-before (0.01s)
+    --- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure/read-after (0.01s)
+    --- PASS: TestPortalBootstrapUnexpectedTargetAndReadFailure/present-receipt (0.01s)
+=== RUN   TestPortalBootstrapTokenReviewAudience
+=== RUN   TestPortalBootstrapTokenReviewAudience/dev-env-operator
+=== RUN   TestPortalBootstrapTokenReviewAudience/https://kubernetes.default.svc
+--- PASS: TestPortalBootstrapTokenReviewAudience (0.02s)
+    --- PASS: TestPortalBootstrapTokenReviewAudience/dev-env-operator (0.01s)
+    --- PASS: TestPortalBootstrapTokenReviewAudience/https://kubernetes.default.svc (0.01s)
+=== RUN   TestPortalBootstrapPortalClassDoesNotInheritAction
+--- PASS: TestPortalBootstrapPortalClassDoesNotInheritAction (0.01s)
+=== RUN   TestPortalBootstrapRevocationOrTerminationAfterConsume
+=== RUN   TestPortalBootstrapRevocationOrTerminationAfterConsume/revoked
+=== RUN   TestPortalBootstrapRevocationOrTerminationAfterConsume/pod-stopped
+=== RUN   TestPortalBootstrapRevocationOrTerminationAfterConsume/expired
+--- PASS: TestPortalBootstrapRevocationOrTerminationAfterConsume (0.03s)
+    --- PASS: TestPortalBootstrapRevocationOrTerminationAfterConsume/revoked (0.01s)
+    --- PASS: TestPortalBootstrapRevocationOrTerminationAfterConsume/pod-stopped (0.01s)
+    --- PASS: TestPortalBootstrapRevocationOrTerminationAfterConsume/expired (0.01s)
+=== RUN   TestPortalBootstrapLostDurableReceiptResponse
+--- PASS: TestPortalBootstrapLostDurableReceiptResponse (0.01s)
+=== RUN   TestPortalBootstrapFullBodyBoundary
+--- PASS: TestPortalBootstrapFullBodyBoundary (0.01s)
+PASS
+ok  	github.com/thaynes43/dev-env/internal/apiserver	6.324s
+=== RUN   TestPortalBootstrapCLIReceipts
+=== RUN   TestPortalBootstrapCLIReceipts/present
+=== RUN   TestPortalBootstrapCLIReceipts/created
+=== RUN   TestPortalBootstrapCLIReceipts/contradictory-200
+=== RUN   TestPortalBootstrapCLIReceipts/contradictory-201
+=== RUN   TestPortalBootstrapCLIReceipts/other-success
+=== RUN   TestPortalBootstrapCLIReceipts/unbound-request
+=== RUN   TestPortalBootstrapCLIReceipts/empty-uid
+=== RUN   TestPortalBootstrapCLIReceipts/invalid-uid
+=== RUN   TestPortalBootstrapCLIReceipts/invalid-version
+=== RUN   TestPortalBootstrapCLIReceipts/empty-version
+=== RUN   TestPortalBootstrapCLIReceipts/duplicate
+=== RUN   TestPortalBootstrapCLIReceipts/case-alias
+=== RUN   TestPortalBootstrapCLIReceipts/unknown
+=== RUN   TestPortalBootstrapCLIReceipts/malformed
+=== RUN   TestPortalBootstrapCLIReceipts/trailing
+=== RUN   TestPortalBootstrapCLIReceipts/utf8
+=== RUN   TestPortalBootstrapCLIReceipts/shape
+=== RUN   TestPortalBootstrapCLIReceipts/null
+=== RUN   TestPortalBootstrapCLIReceipts/oversize
+=== RUN   TestPortalBootstrapCLIReceipts/bounded
+=== RUN   TestPortalBootstrapCLIReceipts/redirect
+=== RUN   TestPortalBootstrapCLIReceipts/refusal
+=== RUN   TestPortalBootstrapCLIReceipts/uncertain
+--- PASS: TestPortalBootstrapCLIReceipts (0.07s)
+    --- PASS: TestPortalBootstrapCLIReceipts/present (0.01s)
+    --- PASS: TestPortalBootstrapCLIReceipts/created (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/contradictory-200 (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/contradictory-201 (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/other-success (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/unbound-request (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/empty-uid (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/invalid-uid (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/invalid-version (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/empty-version (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/duplicate (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/case-alias (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/unknown (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/malformed (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/trailing (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/utf8 (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/shape (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/null (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/oversize (0.01s)
+    --- PASS: TestPortalBootstrapCLIReceipts/bounded (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/redirect (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/refusal (0.00s)
+    --- PASS: TestPortalBootstrapCLIReceipts/uncertain (0.00s)
+=== RUN   TestPortalBootstrapCLINoReplayAfterLostResponse
+--- PASS: TestPortalBootstrapCLINoReplayAfterLostResponse (0.00s)
+=== RUN   TestPortalBootstrapCLIRejectsSelectors
+=== RUN   TestPortalBootstrapCLIRejectsSelectors/#00
+=== RUN   TestPortalBootstrapCLIRejectsSelectors/--request-id_request-178_--request-id_request-178
+=== RUN   TestPortalBootstrapCLIRejectsSelectors/--request-id_request-178_--namespace_other
+=== RUN   TestPortalBootstrapCLIRejectsSelectors/--request-id_request-178_caller
+--- PASS: TestPortalBootstrapCLIRejectsSelectors (0.00s)
+    --- PASS: TestPortalBootstrapCLIRejectsSelectors/#00 (0.00s)
+    --- PASS: TestPortalBootstrapCLIRejectsSelectors/--request-id_request-178_--request-id_request-178 (0.00s)
+    --- PASS: TestPortalBootstrapCLIRejectsSelectors/--request-id_request-178_--namespace_other (0.00s)
+    --- PASS: TestPortalBootstrapCLIRejectsSelectors/--request-id_request-178_caller (0.00s)
+=== RUN   TestPortalBootstrapCLITimeoutAfterSend
+--- PASS: TestPortalBootstrapCLITimeoutAfterSend (0.00s)
+PASS
+ok  	github.com/thaynes43/dev-env/internal/agentrun	0.077s
+=== RUN   TestPortalBootstrapFlagsDefaultOffAndPinned
+--- PASS: TestPortalBootstrapFlagsDefaultOffAndPinned (0.00s)
+=== RUN   TestPortalBootstrapFlagsRefuseUnanchoredEnable
+--- PASS: TestPortalBootstrapFlagsRefuseUnanchoredEnable (0.00s)
+PASS
+ok  	github.com/thaynes43/dev-env/cmd/dev-env-operator	0.014s
+testing: warning: no tests to run
+PASS
+ok  	github.com/thaynes43/dev-env/internal/testenv	0.007s [no tests to run]
+
+Exit: 0
+Elapsed seconds: 13.835

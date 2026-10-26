@@ -320,3 +320,24 @@ Authentik logging remain external gates. UI/infra/Future121 ownership is unchang
 ### M6 production assembly, 2026-10-24
 
 The internal portal executable is `dev-env-portal`. It loads the mounted contract, wires the existing session engine, current authorizer, PostgreSQL store, and same-connection fence, and listens only on TLS port 8443 for `dev-env-v2.haynesops.com`. Unconfigured `NewRuntimeAssembly` remains unavailable. Production attention stays on `UnavailableReader`. Sessions and Tasks are separate optional reads. `config/operator-api-url` is `https://dev-env-operator.dev-env-system.svc.cluster.local:8443`. `config/openproject-base-url` is `https://openproject-web.frontend.svc.cluster.local:8443`. Tasks requests `/api/v3/projects/3/work_packages?offset=<page>&pageSize=50&filters=%5B%5D` and treats offset as a page number. The portal ServiceAccount is refused unless `--enable-portal-reader` is on, and it cannot also be a human, client, session, or coordinator. Session pages use a bounded namespace list and the snapshot continuation token. Freshness comes from `status.agent.lastHeartbeat`. `secrets/OPERATOR_TOKEN` and `secrets/OPENPROJECT_TOKEN` are independent: absent means that view is not connected, and a present malformed file fails startup. The operator token is re-read per request, must expire in the future, and its only audience is `dev-env-operator`. The operator flag `--enable-portal-reader` defaults off. When on, only `system:serviceaccount:dev-agents:dev-env-v2-portal` may `GET /v1/sessions`, and only for namespace `dev-agents` and repository `dev-env`, with the narrow summary page. No new Kubernetes RBAC and no TaskClaim path. Tasks reads project 3's work-package collection and does not follow another origin. Schema 2 bindings remain a deferred attention parser, not the Tasks inventory. The #177 group contract remains the offline checker in `scripts/trials/workflow_handoff`. Canonical 1Password item is existing `HaynesKube/dev-env`; proposed items `dev-env-v2-portal`, `dev-env-v2-portal-runtime`, and `dev-env-v2-portal-migration` are superseded and are not selectors. OIDC client id value `dev-env-v2-portal-internal`, the provider, and the callback are unchanged. Runtime field population on that same item stays held. Consumers may stage inert individual `remoteRef.property` entries for `DB_USERNAME`, `DB_PASSWORD`, `SESSION_AEAD_KEY`, and `SESSION_GENERATION`; that definition is not population, installation, SecretSynced, or an access grant. Startup still fails closed until those files are mounted. The subject pin stays the existing issuer-plus-subject input in `config/subject`, not a new item property. This source does not install, populate, or read the item.
+
+### PR553 finite CLOSED bootstrap source acceptance — 2026-10-26
+
+The default-disabled operator action consumes one externally pinned permit
+incarnation. Operator configuration pins both its UID and its initial
+resourceVersion; data asserting its own UID is insufficient. An active permit
+must still have that exact version. Consumption records the original version
+and permanently retires creation authority, including observation of an already
+CLOSED witness. A changed/recreated permit cannot rearm it. Configuration is
+immutable for the running server; activation must pin the reviewed permit.
+
+Repeat requests only reconcile an authoritative recorded target UID against a
+fresh named read. Missing/replaced witnesses are drift. An unrecorded creation
+outcome remains consumed/uncertain and needs manual disposition: matching
+payload alone cannot prove provenance. No target update, patch or delete exists.
+Fresh Session/Pod ownership, mode and liveness checks run at consumption.
+
+Acceptance requires deterministic API/CLI fault and concurrency tests plus an
+isolated real API admission/RBAC fixture; test fixtures grant no production
+permissions. Source CI and independent review precede separate activation.
+No live permit, request, RBAC, policy, deployment or portal opening is in PR553.

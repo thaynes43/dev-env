@@ -406,3 +406,11 @@ installed (2026-10-20).
    something else.
 6. **Messaging.** Send a message between two sessions with `agent-run msg` and
    read it.
+
+### CLOSED witness source prerequisite — PR553, 2026-10-26
+
+The finite [bootstrap source acceptance report](../../../reports/portal178-bootstrap-source/RESULT.md)
+records tests and failure receipts. The action remains default-disabled and
+requires an externally pinned permit UID/initial RV. Coordinator-owned exact-head
+CI/review and separate activation negatives/GitOps remain gates; source acceptance
+does not open portal access or remove any existing CA/DB/usage/owner hold.

@@ -1,0 +1,9 @@
+Started UTC: 2026-10-26T01:47:32.662180+00:00
+Command: nice -n 19 flock /tmp/portal553-go.lock /home/dev/.local/portal553-toolchain/go/bin/go test -p 1 ./internal/agentrun ./cmd/dev-env-operator ./internal/testenv -count=1
+GOTOOLCHAIN=local GOMAXPROCS=2
+ok  	github.com/thaynes43/dev-env/internal/agentrun	1.791s
+ok  	github.com/thaynes43/dev-env/cmd/dev-env-operator	0.059s
+ok  	github.com/thaynes43/dev-env/internal/testenv	0.024s
+
+Exit: 0
+Elapsed seconds: 5.006

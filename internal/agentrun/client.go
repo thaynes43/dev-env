@@ -207,7 +207,11 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 		return 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	limit := int64(maxResponse)
+	responseLimit := int64(maxResponse)
+	if c.responseLimit > 0 && c.responseLimit < responseLimit {
+		responseLimit = c.responseLimit
+	}
+	limit := responseLimit
 	if c.rejectOversizeResponse {
 		limit++
 	}
@@ -215,7 +219,7 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	if err != nil {
 		return 0, nil, err
 	}
-	if c.rejectOversizeResponse && len(raw) > maxResponse {
+	if c.rejectOversizeResponse && int64(len(raw)) > responseLimit {
 		return resp.StatusCode, nil, errOversizeResponse
 	}
 	return resp.StatusCode, raw, nil
