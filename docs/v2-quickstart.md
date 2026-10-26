@@ -26,17 +26,29 @@ Dates are UTC.
 
 - In a v2 session, `agent-run` is the v2 client. There is nothing to set up.
 - In the v1 pod, `agent-run` is still v1's launcher. The v2 client is a separate
-  binary. Set it up in each shell:
+  binary. Do not overwrite the v1 launcher. Select a v2 executable that is
+  already present in that environment, store its path in a shell variable, and
+  record its exact version before using it:
 
   ```bash
-  kubectl -n dev-agents get configmap dev-env-api-ca \
-    -o jsonpath='{.data.ca\.crt}' > ~/.cache/dev-env-api-ca.crt
-  export DEV_ENV_API_CA_FILE=~/.cache/dev-env-api-ca.crt
-  alias v2="$HOME/.local/bin/agent-run-v2.35.0"   # or the newest agent-run-v2.* there
+  v2=/path/to/an/already-installed/agent-run-v2
+  "$v2" version
   ```
 
-  The CA is public. The examples below say `agent-run`; in the v1 pod, type `v2`.
-  You need the v1 pod only for the few jobs in section 8.
+  The older `agent-run-v2.35.0` example was a historical filename, not an
+  install or release-asset contract. This guide does not establish where to
+  download a v2 binary; use a release-approved binary supplied to the caller.
+  The examples below say `agent-run`; in the v1 pod, type `"$v2"` instead.
+
+  API access is discovered from the caller. A v2 session uses its projected
+  API identity; an already-authorized in-cluster caller such as v1 uses its
+  own ServiceAccount identity. If that caller needs the operator CA supplied
+  explicitly, set `DEV_ENV_API_CA_FILE` (or pass `--ca-file`) to the approved
+  PEM file; the CA is trust material, not an authorization token. A laptop
+  path uses its existing authorized kubeconfig and a temporary local
+  port-forward. None of these paths is a general new laptop-login ceremony.
+  Use `agent-run --help` from the selected binary for its current discovery
+  and precedence rules. You need the v1 pod only for the few jobs in section 8.
 
 ## 1. A Claude session on your phone
 
@@ -301,6 +313,13 @@ agent-run --project dev-env --agent codex --model gpt-6-luna -p "Summarize the o
   `sigo-alumni`, `haynes-ops`, `haynesnetwork`, `hass-sandbox`, `cigar-journal`
   and `libretto`. A Codex task with `--repo` is refused; use `--project`. A
   Codex task on a repo outside the catalog still runs from v1 (section 8).
+- `--repo` names an ordinary repository; it does not select an accepted project
+  snapshot, Kubernetes profile, or native-thread profile. `--project` asks the
+  server to select a declared project's repository and rules for a **new
+  headless task**. It cannot be combined with `--local` or `--interactive`.
+  The server, rather than this flag, remains authoritative for catalog
+  admission. `--profile` is separate: a child task inherits its parent's
+  profile. Starting a native thread does not choose a profile.
 - Every session clones the catalog repos when it starts. With eight repos, one
   slow clone sometimes hit the two-minute limit and the step reported
   `Partial`. The session still ran. 2.38.0 abandons a stalled clone and retries

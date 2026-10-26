@@ -227,7 +227,8 @@ that role into a provider, contact the cluster, or change Activity.
 In the current v1 pod, the command named `agent-run` is **v1's shell launcher**.
 V2 is a different Go binary. Do not overwrite the v1 command or assume identical
 verbs mean identical behavior. The examples below use `v2run` as a shell array
-holding the explicitly selected v2 binary.
+holding an explicitly selected v2 binary that is already installed for the
+caller.
 
 Since 2026-10-20 ordinary work runs on v2: see the [quick start](v2-quickstart.md),
 whose "Which `agent-run`" section sets up the v2 client in the v1 pod. Until v1
@@ -251,57 +252,52 @@ prompt at creation; an interactive session gets its first prompt after its
 banner is checked. No laptop kubeconfig ceremony is required for Tom's current
 workflow.
 
-### Prepare a v2 CLI from a fresh task worktree
+### Select the v2 CLI and connection path
 
-Use a unique task name. These commands assume the existing canonical clone is
-`/home/dev/repos/dev-env`. Run each step only if the previous one succeeds.
-The single shell script stops on errors; it never implements in the canonical
-clone.
+Do not build current source merely to obtain a client: a source checkout is not
+evidence that its binary is the installed or released client. Select the exact
+v2 binary already supplied to the caller and inspect its own help:
 
 ```bash
-set -e
-guide_task="dev-env-cli-$(date -u +%Y%m%d-%H%M%S)"
-guide_checkout="/home/dev/work/$guide_task"
-
-git -C /home/dev/repos/dev-env fetch --prune origin
-guide_base=$(git -C /home/dev/repos/dev-env rev-parse 'origin/main^{commit}')
-git -C /home/dev/repos/dev-env worktree add \
-  "$guide_checkout" -b "agent/$guide_task" "$guide_base"
-cd "$guide_checkout"
-PATH="/home/dev/.local/go/bin:$PATH" make build
-v2run=("$guide_checkout/bin/agent-run")
+v2run=(/path/to/an/already-installed/agent-run-v2)
 "${v2run[@]}" version
-```
-
-The current pod's Go installation is `/home/dev/.local/go/bin`; the command
-above makes it available even in a shell that did not load the interactive
-profile. `make build` uses the repository's bounded Go settings. Build once; reuse that
-binary for the steps below. On this shared pod, do not run CPU burners or wide
-test/build loops. Images build in CI.
-
-The v2 client also needs the public operator CA. In v1, write it from the
-existing ConfigMap; the CLI reads this file and mints its own short-lived caller
-token using the pod's identity:
-
-```bash
-guide_ca="/tmp/$guide_task-operator-ca.crt"
-kubectl -n dev-agents get configmap dev-env-api-ca \
-  -o jsonpath='{.data.ca\.crt}' > "$guide_ca"
-test -s "$guide_ca"
-export DEV_ENV_API_CA_FILE="$guide_ca"
-"${v2run[@]}" fleet
 "${v2run[@]}" help run
 ```
 
-The CA is public trust material, not a token. Do not print or save a minted
-credential to use these instructions. External clients have a separate optional
-path in the [external CLI handoff](../.agents/handoffs/2026-10-08-laptop-access.md).
+This repository documents neither a general release asset nor a general client
+installation route. Use the release-approved binary made available to the
+caller; do not infer an asset URL from a source branch or choose a filename by
+version sorting.
+
+Connection is caller-specific. A session pod discovers its projected API
+identity. An already-authorized in-cluster caller, including v1, uses its own
+ServiceAccount identity; it may need the approved public operator CA passed
+with `DEV_ENV_API_CA_FILE` or `--ca-file`. A laptop uses its existing authorized
+kubeconfig and a temporary local port-forward. The CA is trust material, not a
+credential, and these facts do not create a new laptop authorization path.
+Consult the selected binary's top-level help for the current API, token and CA
+precedence. For an already-authorized v1 caller whose environment does not
+already provide the operator CA, the existing ConfigMap route is:
+
+```bash
+guide_ca="$HOME/.cache/dev-env-api-ca.crt"
+mkdir -p "$HOME/.cache" &&
+kubectl -n dev-agents get configmap dev-env-api-ca \
+  -o jsonpath='{.data.ca\.crt}' > "$guide_ca" &&
+test -s "$guide_ca" &&
+export DEV_ENV_API_CA_FILE="$guide_ca"
+```
+
+Do not print or save a minted credential. External clients have a separate
+optional path in the [external CLI handoff](../.agents/handoffs/2026-10-08-laptop-access.md).
 
 ### Start and follow a v2 session
 
-These examples start **Claude**, the currently supported v2 agent. Run a task
-or start a local session according to the work you actually need; each command
-creates a separate pod.
+These examples start **Claude**. Run a task or start a local session according
+to the work you actually need; each command creates a separate pod. Use a full
+provider model ID and an effort level that the selected binary says it accepts.
+For non-Claude agents, the CLI requires an explicit model but the operator is
+authoritative for whether that provider is admitted.
 
 ```bash
 # A bounded headless task. The prompt runs once.
@@ -316,13 +312,28 @@ creates a separate pod.
 "${v2run[@]}" list --repo dev-env
 "${v2run[@]}" show SESSION
 "${v2run[@]}" log SESSION --tail 40
+"${v2run[@]}" fleet
 "${v2run[@]}" attach SESSION
+"${v2run[@]}" detach SESSION
 ```
 
 Replace `SESSION` with the returned name. Attach is for the owner/client identity,
-including the trusted v1 client; session agents use the message API. Detach with
-`Ctrl-b d` and the session keeps running. A Pending session is waiting for
-capacity, not a reason to launch duplicates.
+including the trusted v1 client; session agents use the message API. `attach`
+and `detach` execute into a running session using the caller's Kubernetes
+rights, and are refused from an ordinary session pod. `detach SESSION`
+disconnects every attached client; `Ctrl-b d` detaches only your client.
+The session keeps running. A Pending session is waiting for capacity, not a
+reason to launch duplicates.
+
+`--repo` starts an ordinary repository session; it does not select an accepted
+project snapshot. `--project <name> [--repo <name>] -p ...` is a separate,
+headless managed-task entrypoint: the server selects the declared repository and
+rules and remains authoritative for catalog admission. It cannot combine with
+`--local` or `--interactive`. `--profile` selects a template profile only where
+the caller is allowed to choose it. A session child normally inherits its
+parent's profile. The exception is a Codex remote host created by a workbench
+session: omit `--profile`; the server uses the default profile, not workbench.
+Starting a native thread does not select a Kubernetes profile.
 
 A headless `-p` task runs its prompt once. `msg` applies to a local TUI session; a headless task does not accept messages. Coordinator custody of that result is recorded separately in the [coordinator result handoff](coordinator-result-handoff.md). A delivery receipt is not acknowledgment, ownership, or completion. The offline checker only validates a bounded handoff record.
 
