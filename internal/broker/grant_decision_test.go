@@ -40,8 +40,8 @@ func TestPendingHandoffBindsScopeAndDoesNotTrustStalePod(t *testing.T) {
 		t.Fatal(err)
 	}
 	g = f.getGrant()
-	if handled, _, err := f.b.pendingHandoff(context.Background(), g); err != nil || handled {
-		t.Fatal("stale pod accepted")
+	if handled, _, err := f.b.pendingHandoff(context.Background(), g); err != nil || !handled {
+		t.Fatal("stale pod was not rejected and cleared")
 	}
 	if f.getGrant().Status.Phase == v1alpha1.GrantActive {
 		t.Fatal("stale grant became active")
@@ -49,6 +49,9 @@ func TestPendingHandoffBindsScopeAndDoesNotTrustStalePod(t *testing.T) {
 	bad.Binding = binding
 	encoded, _ = json.Marshal(bad)
 	g = f.getGrant()
+	if g.Annotations == nil {
+		g.Annotations = map[string]string{}
+	}
 	g.Annotations[grantdecision.HandoffAnnotation] = string(encoded)
 	if err := f.c.Update(context.Background(), g); err != nil {
 		t.Fatal(err)
@@ -91,8 +94,8 @@ func TestPendingHandoffRejectsStaleAndUntrusted(t *testing.T) {
 			mutate(g, &h)
 			encoded, _ := json.Marshal(h)
 			g.Annotations = map[string]string{grantdecision.HandoffAnnotation: string(encoded)}
-			if handled, _, err := f.b.pendingHandoff(context.Background(), g); err != nil || handled {
-				t.Fatal("invalid decision accepted")
+			if handled, _, err := f.b.pendingHandoff(context.Background(), g); err != nil || !handled {
+				t.Fatal("invalid decision was not rejected and cleared")
 			}
 			if f.getGrant().Status.Phase == v1alpha1.GrantActive {
 				t.Fatal("invalid decision activated grant")
@@ -198,11 +201,19 @@ func TestParentSessionRelayRequiresLiveActorAndExplicitPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	g = f.getGrant()
-	if handled, _, err := f.b.pendingHandoff(ctx, g); err != nil || handled {
-		t.Fatal("undelegated parent was accepted")
+	if handled, _, err := f.b.pendingHandoff(ctx, g); err != nil || !handled {
+		t.Fatal("undelegated parent was not rejected and cleared")
 	}
 	policy := &v1alpha1.GrantPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: systemNS, Name: "parent-delegation", Annotations: map[string]string{grantdecision.ManualApproverAnnotation: principal}}, Spec: v1alpha1.GrantPolicySpec{Profiles: []string{"full"}, Repos: []string{"haynes-ops"}, Type: v1alpha1.GrantEgress, Egress: &v1alpha1.EgressPolicy{FQDNs: []string{"example.com"}, Ports: []v1alpha1.GrantPort{{Port: 443}}}, MaxTTL: metav1.Duration{Duration: time.Hour}}}
 	if err := f.c.Create(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	g = f.getGrant()
+	if g.Annotations == nil {
+		g.Annotations = map[string]string{}
+	}
+	g.Annotations[grantdecision.HandoffAnnotation] = string(encoded)
+	if err := f.c.Update(ctx, g); err != nil {
 		t.Fatal(err)
 	}
 	g = f.getGrant()
