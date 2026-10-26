@@ -43,7 +43,7 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 }
 
 // NewRuntimeAssembly is the unconfigured process. It stays unavailable.
-// The executable uses LoadProduction. A static generation or restored database is no witness.
+// The executable uses LoadProduction.
 func NewRuntimeAssembly() http.Handler { return NewAssembly(AssemblyConfig{}) }
 
 // The body cap covers the read boundary's 24 bounded text rows. No data or

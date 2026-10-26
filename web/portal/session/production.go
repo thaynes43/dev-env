@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -67,7 +66,7 @@ func (r Runtime) Close() {
 }
 
 // LoadProduction validates the mounted contract and wires the existing session,
-// authorizer, fence, and metadata reader. Missing metadata tokens disable reads.
+// authorizer, and metadata reader. It reads no admission or witness input. Missing metadata tokens disable reads.
 // They do not select a fixture reader or the system CA pool.
 func LoadProduction(root string) (Runtime, error) {
 	if root == "" {
@@ -82,21 +81,6 @@ func LoadProduction(root string) (Runtime, error) {
 		return nil
 	}
 	if pinned("config/origin", productionOrigin) != nil || pinned("config/issuer", productionIssuer) != nil || pinned("config/authorization-url", productionAuthorization) != nil || pinned("config/token-url", productionToken) != nil || pinned("config/userinfo-url", productionUserInfo) != nil || pinned("config/jwks-url", productionJWKS) != nil || pinned("config/openproject-base-url", openProjectPortalOrigin) != nil || pinned("config/operator-api-url", operatorPortalOrigin) != nil {
-		return Runtime{}, errProductionConfig
-	}
-	admissionURL, err := text("config/admission-api-url")
-	if err != nil {
-		return Runtime{}, errProductionConfig
-	}
-	admissionUID, err := text("config/admission-uid")
-	if err != nil || !boundedIdentifier(admissionUID) {
-		return Runtime{}, errProductionConfig
-	}
-	admissionToken, err := text("config/admission-token-file")
-	if err != nil || !filepath.IsAbs(admissionToken) {
-		return Runtime{}, errProductionConfig
-	}
-	if _, err := readBearerFile(admissionToken); err != nil {
 		return Runtime{}, errProductionConfig
 	}
 	authStyle, err := text("config/auth-style")
@@ -131,25 +115,6 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
-	perSecondText, err := text("config/witness-gets-per-second")
-	if err != nil {
-		return Runtime{}, errProductionConfig
-	}
-	perSecond, err := strconv.ParseFloat(perSecondText, 64)
-	if err != nil {
-		return Runtime{}, errProductionConfig
-	}
-	burstText, err := text("config/witness-get-burst")
-	if err != nil {
-		return Runtime{}, errProductionConfig
-	}
-	burst, err := strconv.Atoi(burstText)
-	if err != nil {
-		return Runtime{}, errProductionConfig
-	}
-	if _, ok := witnessBudget(perSecond, burst); !ok {
-		return Runtime{}, errProductionConfig
-	}
 	clientID, err := text("secrets/OIDC_CLIENT_ID")
 	secret, secretErr := text("secrets/OIDC_CLIENT_SECRET")
 	dbUser, userErr := text("secrets/DB_USERNAME")
@@ -164,11 +129,10 @@ func LoadProduction(root string) (Runtime, error) {
 		return Runtime{}, errProductionConfig
 	}
 	postgresCA, err := readMountedBytes(root, "ca/ca.crt", 64<<10)
-	admissionCA, admissionErr := readMountedBytes(root, "ca/admission-ca.crt", 64<<10)
 	issuerCA, issuerErr := readMountedBytes(root, "ca/issuer-ca.crt", 64<<10)
 	openProjectCA, openErr := readMountedBytes(root, "ca/openproject-ca.crt", 64<<10)
 	operatorCA, operatorErr := readMountedBytes(root, "ca/operator-ca.crt", 64<<10)
-	if err != nil || admissionErr != nil || issuerErr != nil || openErr != nil || operatorErr != nil || !pemPool(postgresCA) || !pemPool(admissionCA) || !pemPool(issuerCA) || !pemPool(openProjectCA) || !pemPool(operatorCA) {
+	if err != nil || issuerErr != nil || openErr != nil || operatorErr != nil || !pemPool(postgresCA) || !pemPool(issuerCA) || !pemPool(openProjectCA) || !pemPool(operatorCA) {
 		return Runtime{}, errProductionConfig
 	}
 	certPEM, err := readMountedBytes(root, "tls/tls.crt", 64<<10)
@@ -188,11 +152,7 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
-	fence, err := NewKubernetesFence(AdmissionConfig{APIURL: admissionURL, CA: admissionCA, TokenFile: admissionToken, UID: admissionUID, Timeout: 5 * time.Second, WitnessGetsPerSecond: perSecond, WitnessGetBurst: burst})
-	if err != nil {
-		return Runtime{}, errProductionConfig
-	}
-	store, err := NewPostgresStore(PostgresConfig{Host: productionDBHost, Username: dbUser, Password: password, CA: postgresCA, Key: key, Generation: generation, Fence: fence, Now: time.Now, Timeout: 5 * time.Second})
+	store, err := NewPostgresStore(PostgresConfig{Host: productionDBHost, Username: dbUser, Password: password, CA: postgresCA, Key: key, Generation: generation, Now: time.Now, Timeout: 5 * time.Second})
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}

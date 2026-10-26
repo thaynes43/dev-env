@@ -109,7 +109,7 @@ func commitLossPool(t *testing.T) (*pgxpool.Pool, <-chan int) {
 				return
 			}
 			length := binary.BigEndian.Uint32(header[1:])
-			if length < 4 || length > maximumAdmission {
+			if length < 4 || length > 16*1024 {
 				return
 			}
 			body := make([]byte, length-4)
@@ -136,14 +136,12 @@ func commitLossPool(t *testing.T) (*pgxpool.Pool, <-chan int) {
 	return pool, result
 }
 
-func testActualLostCommitResponse(t *testing.T, admin *pgxpool.Pool, a *PostgresStore, record Record) {
+func testActualLostCommitResponse(t *testing.T, admin *pgxpool.Pool, record Record) {
 	t.Helper()
-	fence, _ := newAdmissionFixture(t, poolIncarnation(t, a.pool))
 	h := Handle{211}
 	s := fixtureStore(t)
 	pool, writeResult := commitLossPool(t)
 	s.pool = pool
-	s.fence = fence
 	if err := s.PutSession(context.Background(), h, record); !errors.Is(err, portal.ErrUnavailable) {
 		t.Fatal("lost actual COMMIT response returned success")
 	}
@@ -158,7 +156,6 @@ func testActualLostCommitResponse(t *testing.T, admin *pgxpool.Pool, a *Postgres
 	readStore := fixtureStore(t)
 	readPool, readResult := commitLossPool(t)
 	readStore.pool = readPool
-	readStore.fence = fence
 	got, err := readStore.GetSession(context.Background(), h)
 	if !errors.Is(err, portal.ErrUnavailable) || got.Principal.Subject != "" || got.accessToken != "" {
 		t.Fatal("read payload escaped after lost actual COMMIT response")

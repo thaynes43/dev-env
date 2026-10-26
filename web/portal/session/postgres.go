@@ -28,7 +28,6 @@ type PostgresConfig struct {
 	CA                       []byte
 	// Key is standard base64 of exactly 32 bytes, held outside DB backups.
 	Key, Generation string
-	Fence           RecoveryFence
 	Now             func() time.Time
 	Timeout         time.Duration
 }
@@ -37,15 +36,18 @@ type PostgresStore struct {
 	pool       *pgxpool.Pool
 	seal       cipher.AEAD
 	generation string
-	fence      RecoveryFence
 	now        func() time.Time
 	timeout    time.Duration
+	// beforeCommit is a test seam: nil in production. Tests pause a real
+	// transaction at its pre-commit boundary with it.
+	beforeCommit func(context.Context) error
 }
 
 // NewPostgresStore accepts only the proposed dedicated DB/role and CNPG primary
 // service. Configuration cannot select an admin user, replica, DSN, insecure
 // sslmode, Unix socket, ambient password/service file or plaintext fallback.
-// The constructor opens no connection; operations bind the fence to their transaction.
+// The constructor opens no connection. There is no recovery witness: a database
+// restart or failover needs no human action (Tom, 2026-10-26, DESIGN-029).
 func NewPostgresStore(c PostgresConfig) (*PostgresStore, error) {
 	if c.Host != "postgres16-rw.database.svc.cluster.local" || c.Username != "dev_env_v2_portal_runtime" || c.Password == "" || len(c.Password) > 4096 {
 		return nil, portal.ErrUnavailable
@@ -100,7 +102,7 @@ func postgresPoolConfig(host, username, password string, roots *x509.CertPool) (
 
 func newPostgresStore(c PostgresConfig) (*PostgresStore, error) {
 	key, err := base64.StdEncoding.Strict().DecodeString(c.Key)
-	if err != nil || !canonicalKey(c.Key) || len(key) != 32 || c.Fence == nil || c.Now == nil || c.Timeout <= 0 || c.Timeout > 10*time.Second || !validGeneration(c.Generation) {
+	if err != nil || !canonicalKey(c.Key) || len(key) != 32 || c.Now == nil || c.Timeout <= 0 || c.Timeout > 10*time.Second || !validGeneration(c.Generation) {
 		return nil, portal.ErrUnavailable
 	}
 	block, err := aes.NewCipher(key)
@@ -111,7 +113,7 @@ func newPostgresStore(c PostgresConfig) (*PostgresStore, error) {
 	if err != nil {
 		return nil, portal.ErrUnavailable
 	}
-	return &PostgresStore{seal: seal, generation: c.Generation, fence: c.Fence, now: c.Now, timeout: c.Timeout}, nil
+	return &PostgresStore{seal: seal, generation: c.Generation, now: c.Now, timeout: c.Timeout}, nil
 }
 
 func validGeneration(s string) bool {
@@ -180,7 +182,7 @@ func (s *PostgresStore) decrypt(row rowContext, data []byte, out any) error {
 // run never retries a statement/commit. A lost commit response is unavailable,
 // even if the write actually committed. The browser must start a fresh login.
 func (s *PostgresStore) run(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
-	if s == nil || s.pool == nil || s.fence == nil {
+	if s == nil || s.pool == nil {
 		return portal.ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
@@ -195,27 +197,20 @@ func (s *PostgresStore) run(ctx context.Context, fn func(context.Context, pgx.Tx
 	return s.runAcquired(ctx, tx, fn)
 }
 
-// runAcquired receives only the transaction already acquired by run. Neither
-// measurement nor session SQL can select another connection from the pool.
+// runAcquired receives only the transaction already acquired by run, so session
+// SQL cannot select another connection from the pool.
 func (s *PostgresStore) runAcquired(ctx context.Context, tx pgx.Tx, fn func(context.Context, pgx.Tx) error) error {
 	defer func() { _ = tx.Rollback(ctx) }()
-	snapshot, err := s.fence.Check(ctx, tx, s.generation)
-	if err != nil {
+	if _, err := tx.Exec(ctx, "SET LOCAL synchronous_commit = on"); err != nil {
 		return portal.ErrUnavailable
 	}
-	if _, err = tx.Exec(ctx, "SET LOCAL synchronous_commit = on"); err != nil {
-		return portal.ErrUnavailable
-	}
-	if err = fn(ctx, tx); err != nil {
+	if err := fn(ctx, tx); err != nil {
 		return normalize(err)
 	}
-	if s.fence.Recheck(ctx, snapshot) != nil {
+	if s.beforeCommit != nil && s.beforeCommit(ctx) != nil {
 		return portal.ErrUnavailable
 	}
-	if tx.Commit(ctx) != nil {
-		return portal.ErrUnavailable
-	}
-	if ctx.Err() != nil || s.fence.Recheck(ctx, snapshot) != nil {
+	if tx.Commit(ctx) != nil || ctx.Err() != nil {
 		return portal.ErrUnavailable
 	}
 	return nil

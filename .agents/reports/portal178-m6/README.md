@@ -1,5 +1,9 @@
 # M6 same-connection recovery fence — source acceptance pending
 
+> **Superseded 2026-10-26.** Tom dropped the recovery witness and fence: a
+> PostgreSQL restart or failover must need no human action. See DESIGN-029,
+> "Recovery witness dropped, 2026-10-26". This record is historical.
+
 Story [178](https://work.haynesnetwork.com/work_packages/178), under Epic 120 / Saga 85.
 Fresh baseline `d4d21ef9d8f6682cabe1a45b78f5fd3726f50ef1` includes accepted
 PR 529. Sole source implementer dev-env-1023-205407; one implementer, no children.
