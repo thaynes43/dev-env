@@ -24,16 +24,22 @@ var viewsSource string
 //go:embed attention.css
 var pageStyle string
 
+//go:embed views.css
+var viewsStyle string
+
 var (
 	exactHead     = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	contentPolicy = policy()
+	contentPolicy = policy(pageStyle)
+	// ProductPolicy is the Sessions and Tasks pages' Content-Security-Policy: no
+	// script, no external resource, and only the embedded views stylesheet.
+	ProductPolicy = strings.Replace(policy(viewsStyle), "form-action 'none'", "form-action 'self'", 1)
 	// Only the embedded, repository-owned CSS enters this template source.
 	pageTemplate  = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
-	viewsTemplate = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
+	viewsTemplate = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
 )
 
-func policy() string {
-	digest := sha256.Sum256([]byte(pageStyle))
+func policy(style string) string {
+	digest := sha256.Sum256([]byte(style))
 	return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 }
 
@@ -67,33 +73,95 @@ type groupView struct {
 	ID, Title, Count string
 	Rows             []rowView
 }
+
+// ProductField is one label and value.
 type ProductField struct{ Label, Value string }
+
+// ProductStatus is a row's status chip. Tone is one of ok, busy, wait, bad,
+// info or muted; anything else renders muted.
+type ProductStatus struct{ Text, Tone string }
+
+// ProductStat is one summary tile. Tone follows ProductStatus.
+type ProductStat struct{ Label, Value, Tone string }
+
+// ProductRow is one card. Metrics are the few values worth scanning; Fields is
+// the full record, shown behind a Details disclosure.
 type ProductRow struct {
-	Title, Link string
-	Fields      []ProductField
+	Title, Link, Subtitle, Aside string
+	Status                       ProductStatus
+	Metrics, Fields              []ProductField
 }
 
-// ProductPage is one connected product view. Note is a fixed coverage statement
-// shown only with connected rows.
+// ProductPage is one product view. Summary, Note and Rows are shown only when
+// Connected. Quiet marks an ordinary notice. Preview labels fixture data.
 type ProductPage struct {
-	Title, Notice, Note, ObservedAt string
-	Connected                       bool
-	Rows                            []ProductRow
+	Title, Notice, ObservedAt string
+	Note, NoteTitle           string
+	Connected, Quiet, Preview bool
+	Summary                   []ProductStat
+	Rows                      []ProductRow
+}
+
+var productTones = map[string]bool{"ok": true, "busy": true, "wait": true, "bad": true, "info": true, "muted": true}
+
+func productTone(tone string) string {
+	if productTones[tone] {
+		return tone
+	}
+	return "muted"
 }
 
 func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
-		Policy, Title, Notice, Note, ObservedAt string
-		Rows                                    []ProductRow
-	}{Policy: strings.TrimSuffix(contentPolicy, "; frame-ancestors 'none'"), Title: page.Title, Notice: page.Notice, ObservedAt: page.ObservedAt}
+		Policy, Title, Current, Notice, ObservedAt, ObservedLabel, Note, NoteTitle string
+		Quiet, Preview                                                             bool
+		Summary                                                                    []ProductStat
+		Rows                                                                       []ProductRow
+	}{Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
+		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Quiet: page.Quiet && page.Connected, Preview: page.Preview}
 	if page.Connected {
-		view.Rows, view.Note = page.Rows, page.Note
+		view.Note, view.NoteTitle = page.Note, page.NoteTitle
+		for _, stat := range page.Summary {
+			stat.Tone = productTone(stat.Tone)
+			view.Summary = append(view.Summary, stat)
+		}
+		for _, row := range page.Rows {
+			row.Status.Tone = productTone(row.Status.Tone)
+			view.Rows = append(view.Rows, row)
+		}
 	}
 	var body bytes.Buffer
 	if err := viewsTemplate.Execute(&body, view); err != nil {
 		return nil, err
 	}
 	return body.Bytes(), nil
+}
+
+// observedLabel is the page time for people; the datetime attribute keeps RFC 3339.
+func observedLabel(value string) string {
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "Unknown"
+	}
+	return t.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+// Ago is a short relative time; a zero or future time is Unknown.
+func Ago(t, now time.Time) string {
+	if t.IsZero() || now.IsZero() || t.After(now) {
+		return "Unknown"
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 type pageView struct {

@@ -193,16 +193,84 @@ func oneOf(value string, set ...string) bool {
 	return false
 }
 
+// sessionsPage builds the Sessions page. Counts appear only for a complete
+// read; they count sessions and never add token or cost values.
+func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time) portal.ProductPage {
+	page := portal.ProductPage{Title: "Sessions", Connected: true, Note: sessionUsageNote, NoteTitle: "About usage numbers"}
+	for _, s := range sessions {
+		page.Rows = append(page.Rows, sessionRow(s, now))
+	}
+	switch {
+	case !complete:
+		page.Notice = "Sessions read is incomplete. This is not the full inventory."
+	case freshness != "observed":
+		page.Notice = "Session freshness is " + freshness + "."
+	case len(sessions) == 0:
+		page.Notice = "The completed session read returned no dev-env sessions."
+	default:
+		page.Notice, page.Quiet = "Connected session summaries.", true
+	}
+	if complete {
+		var busy, waiting, measured int
+		for _, s := range sessions {
+			if a := s.Activity; a != nil {
+				switch a.AgentState {
+				case protocol.AgentBusy:
+					busy++
+				case protocol.AgentWaiting:
+					waiting++
+				}
+				if a.Usage.Scope == protocol.UsageInitial {
+					measured++
+				}
+			}
+		}
+		page.Summary = []portal.ProductStat{
+			{Label: "Sessions", Value: strconv.Itoa(len(sessions))},
+			{Label: "Busy", Value: strconv.Itoa(busy), Tone: "busy"},
+			{Label: "Waiting", Value: strconv.Itoa(waiting), Tone: "wait"},
+			{Label: "Usage measured", Value: strconv.Itoa(measured) + " of " + strconv.Itoa(len(sessions))},
+		}
+	}
+	return page
+}
+
 // sessionRow renders one summary. Requested and served models stay separate,
 // each counter keeps Unknown apart from zero, and nothing is summed. A row
-// without activity renders every activity field Unknown.
-func sessionRow(row apiv1.PortalSessionSummary) portal.ProductRow {
+// without activity renders every activity field Unknown. The card shows input,
+// output and the cost estimate; the full record is in Details.
+func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow {
 	a := row.Activity
 	if a == nil {
 		a = &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: unknownSessionUsage()}
 	}
 	u := a.Usage
-	return portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{
+	out := portal.ProductRow{Title: shown(row.Name), Status: sessionStatus(row.Phase, a.AgentState)}
+	sub := []string{"mode Unknown", "model Unknown", "activity Unknown"}
+	if a.Mode != protocol.UsageUnknown {
+		sub[0] = a.Mode
+	}
+	if a.RequestedModel != protocol.UsageUnknown {
+		sub[1] = a.RequestedModel
+	}
+	if a.LastActivity != nil {
+		sub[2] = "active " + portal.Ago(*a.LastActivity, now)
+	}
+	out.Subtitle = strings.Join(sub, " · ")
+	if u.Scope == protocol.UsageInitial {
+		cost := "Unknown"
+		if u.Cost.State == protocol.UsageReported && u.Cost.Valid() {
+			cost = u.Cost.Amount + " USD"
+		}
+		out.Metrics = []portal.ProductField{{Label: "Input", Value: tokenText(u.InputTokens)}, {Label: "Output", Value: tokenText(u.OutputTokens)}, {Label: "Est. cost", Value: cost}}
+		out.Aside = "Served by " + servedModelsText(u.ServedModels)
+		if u.ResultState == "Partial" {
+			out.Aside += " · partial result"
+		}
+	} else {
+		out.Aside = "Usage Unknown"
+	}
+	out.Fields = []portal.ProductField{
 		{Label: "Phase", Value: shown(row.Phase)},
 		{Label: "Agent state", Value: shown(a.AgentState)},
 		{Label: "Last activity", Value: activityTime(a.LastActivity)},
@@ -217,9 +285,31 @@ func sessionRow(row apiv1.PortalSessionSummary) portal.ProductRow {
 		{Label: "Cost estimate", Value: costText(u.Cost)},
 		{Label: "Freshness", Value: shown(row.Freshness)},
 		{Label: "UID", Value: shown(row.UID)},
-	}}
+	}
+	return out
 }
 
+// sessionStatus prefers agentd's state word and falls back to the phase.
+func sessionStatus(phase, agent string) portal.ProductStatus {
+	switch agent {
+	case protocol.AgentBusy:
+		return portal.ProductStatus{Text: "Busy", Tone: "busy"}
+	case protocol.AgentWaiting:
+		return portal.ProductStatus{Text: "Waiting", Tone: "wait"}
+	case protocol.AgentIdle:
+		return portal.ProductStatus{Text: "Idle", Tone: "info"}
+	case protocol.AgentPending:
+		return portal.ProductStatus{Text: "Starting", Tone: "info"}
+	case protocol.AgentExited:
+		return portal.ProductStatus{Text: "Exited", Tone: "muted"}
+	case protocol.AgentFailed:
+		return portal.ProductStatus{Text: "Failed", Tone: "bad"}
+	case protocol.AgentInterrupted:
+		return portal.ProductStatus{Text: "Interrupted", Tone: "bad"}
+	}
+	tone := map[string]string{"Running": "ok", "Pending": "info", "Idle": "info", "Draining": "wait", "Failed": "bad"}[phase]
+	return portal.ProductStatus{Text: shown(phase), Tone: tone}
+}
 func activityTime(at *time.Time) string {
 	if at == nil || at.IsZero() {
 		return "Unknown"

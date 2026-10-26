@@ -1,5 +1,7 @@
 // Command preview renders the existing finite synthetic Attention fixture
-// through the Go handler. It opens no listener and contacts no service.
+// through the Go handler, and the synthetic Sessions and Tasks fixtures through
+// the live product decoders and page builders. It opens no listener and
+// contacts no service.
 package main
 
 import (
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/web/portal"
+	"github.com/thaynes43/dev-env/web/portal/session"
 )
 
 type fixture struct {
@@ -115,10 +118,18 @@ func render(source io.Reader) ([]byte, error) {
 func main() {
 	output := flag.String("output", "", "output HTML file; run from repository root")
 	scenarios := flag.String("scenarios", "", "directory for offline presentation evidence pages")
+	product := flag.String("product", "", "directory for the Sessions and Tasks fixture previews; run from repository root")
 	flag.Parse()
-	if *output == "" && *scenarios == "" {
-		fmt.Fprintln(os.Stderr, "--output or --scenarios is required")
+	if *output == "" && *scenarios == "" && *product == "" {
+		fmt.Fprintln(os.Stderr, "--output, --scenarios or --product is required")
 		os.Exit(1)
+	}
+	if *product != "" {
+		if err := writeProduct(*product); err != nil {
+			fmt.Fprintf(os.Stderr, "Synthetic product previews unavailable: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Wrote synthetic Sessions and Tasks fixture previews.")
 	}
 	if *scenarios != "" {
 		if err := writeScenarios(*scenarios); err != nil {
@@ -146,4 +157,30 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("Wrote offline synthetic Attention preview.")
+}
+
+// writeProduct renders sessions.html and tasks.html from the committed synthetic
+// fixtures. Both pages carry the Fixture preview label.
+func writeProduct(dir string) error {
+	for _, page := range []struct {
+		fixture, out string
+		render       func(io.Reader) ([]byte, error)
+	}{
+		{"scripts/trials/portal_product/sessions.json", "sessions.html", session.RenderSessionsFixture},
+		{"scripts/trials/portal_product/tasks.json", "tasks.html", session.RenderTasksFixture},
+	} {
+		f, err := os.Open(page.fixture)
+		if err != nil {
+			return err
+		}
+		data, renderErr := page.render(f)
+		closeErr := f.Close()
+		if renderErr != nil || closeErr != nil {
+			return errors.Join(renderErr, closeErr)
+		}
+		if err := os.WriteFile(dir+"/"+page.out, data, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }

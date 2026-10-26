@@ -1,17 +1,23 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
-<title>{{.Title}}</title><style>/*PORTAL_STYLE*/</style></head>
-<body><main><header><p class="eyebrow">Dev-env · Read-only</p>
-<nav><a href="/portal/projects/dev-env/environments/internal/sessions">Sessions</a>
-<a href="/portal/projects/dev-env/environments/internal/tasks">Tasks</a></nav>
-<h1>{{.Title}}</h1>
-<p class="notice" role="status">{{.Notice}}</p>
-{{if .Note}}<p class="scope">{{.Note}}</p>{{end}}
-<p class="observed">Observed: <time datetime="{{.ObservedAt}}">{{.ObservedAt}}</time></p></header>
-{{if .Rows}}<section>{{range .Rows}}<article><h2>{{.Title}}</h2>
-{{if .Link}}<a href="{{.Link}}" rel="noreferrer">Open canonical record</a>{{end}}
-<dl>{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
-</article>{{end}}</section>{{end}}
+<title>{{.Title}} · dev-env</title><style>/*PORTAL_STYLE*/</style></head>
+<body><header class="bar"><div class="bar-inner"><span class="mark">dev<span>-</span>env</span>
+<nav aria-label="Portal"><a href="/portal/projects/dev-env/environments/internal/sessions"{{if eq .Current "sessions"}} aria-current="page"{{end}}>Sessions</a><a href="/portal/projects/dev-env/environments/internal/tasks"{{if eq .Current "tasks"}} aria-current="page"{{end}}>Tasks</a></nav>
+</div></header>
+<main><div class="head"><h1>{{.Title}}</h1>{{if .Preview}}<span class="tag tag-preview">Fixture preview</span>{{end}}
+<p class="observed">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></p></div>
+<p class="notice{{if .Quiet}} notice-quiet{{end}}" role="status">{{.Notice}}</p>
+{{if .Summary}}<dl class="summary">{{range .Summary}}<div class="stat stat-{{.Tone}}"><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
+{{if .Note}}<details class="about"><summary>{{.NoteTitle}}</summary><p>{{.Note}}</p></details>{{end}}
+{{if .Rows}}<ul class="cards">{{range .Rows}}<li class="card{{if .Link}} card-task{{end}}">
+<div class="card-head"><h2>{{.Title}}</h2>{{if .Status.Text}}<span class="chip chip-{{.Status.Tone}}">{{.Status.Text}}</span>{{end}}</div>
+{{if .Subtitle}}<p class="sub">{{.Subtitle}}</p>{{end}}
+{{if .Metrics}}<dl class="metrics">{{range .Metrics}}<div><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
+{{if .Aside}}<p class="aside">{{.Aside}}</p>{{end}}
+{{if .Link}}<a class="open" href="{{.Link}}" rel="noreferrer">Open in OpenProject →</a>{{end}}
+{{if .Fields}}<details class="more"><summary>Details</summary><dl class="facts">{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></details>{{end}}
+</li>{{end}}</ul>{{end}}
 </main></body></html>

@@ -1,0 +1,139 @@
+{
+ "version": 1,
+ "now": "2026-10-26T15:00:00Z",
+ "body": {
+  "total": 4,
+  "count": 4,
+  "pageSize": 50,
+  "offset": 1,
+  "_embedded": {
+   "elements": [
+    {
+     "id": 9101,
+     "subject": "Fixture: portal visual refresh",
+     "createdAt": "2026-10-24T13:00:00Z",
+     "updatedAt": "2026-10-26T14:40:00Z",
+     "customField1": "Synthetic portal owner",
+     "customField3": "dev-env",
+     "description": {
+      "raw": "Synthetic description; never rendered."
+     },
+     "_links": {
+      "project": {
+       "href": "/api/v3/projects/3"
+      },
+      "status": {
+       "title": "In progress"
+      },
+      "assignee": {
+       "title": "Synthetic agent"
+      },
+      "responsible": {
+       "title": "Synthetic owner"
+      }
+     },
+     "_embedded": {
+      "project": {
+       "id": 3,
+       "identifier": "haynes-engineering"
+      }
+     }
+    },
+    {
+     "id": 9102,
+     "subject": "Fixture: usage collector core",
+     "createdAt": "2026-10-24T09:00:00Z",
+     "updatedAt": "2026-10-26T12:05:00Z",
+     "customField1": "Synthetic usage owner",
+     "customField3": "dev-env; haynes-ops",
+     "description": {
+      "raw": "Synthetic description; never rendered."
+     },
+     "_links": {
+      "project": {
+       "href": "/api/v3/projects/3"
+      },
+      "status": {
+       "title": "Needs answer"
+      },
+      "assignee": {
+       "title": "Unassigned"
+      },
+      "responsible": {
+       "title": "Synthetic owner"
+      }
+     },
+     "_embedded": {
+      "project": {
+       "id": 3,
+       "identifier": "haynes-engineering"
+      }
+     }
+    },
+    {
+     "id": 9103,
+     "subject": "Fixture: session summary reader",
+     "createdAt": "2026-10-20T10:00:00Z",
+     "updatedAt": "2026-10-23T18:30:00Z",
+     "customField1": "Synthetic portal owner",
+     "customField3": "dev-env",
+     "description": {
+      "raw": "Synthetic description; never rendered."
+     },
+     "_links": {
+      "project": {
+       "href": "/api/v3/projects/3"
+      },
+      "status": {
+       "title": "Closed"
+      },
+      "assignee": {
+       "title": "Unassigned"
+      },
+      "responsible": {
+       "title": "Synthetic owner"
+      }
+     },
+     "_embedded": {
+      "project": {
+       "id": 3,
+       "identifier": "haynes-engineering"
+      }
+     }
+    },
+    {
+     "id": 9104,
+     "subject": "Fixture: internal route and TLS",
+     "createdAt": "2026-10-25T16:00:00Z",
+     "updatedAt": "2026-10-25T16:00:00Z",
+     "customField1": "",
+     "customField3": "haynes-ops",
+     "description": {
+      "raw": "Synthetic description; never rendered."
+     },
+     "_links": {
+      "project": {
+       "href": "/api/v3/projects/3"
+      },
+      "status": {
+       "title": "New"
+      },
+      "assignee": {
+       "title": "Unassigned"
+      },
+      "responsible": {
+       "title": "Synthetic owner"
+      }
+     },
+     "_embedded": {
+      "project": {
+       "id": 3,
+       "identifier": "haynes-engineering"
+      }
+     }
+    }
+   ]
+  },
+  "_links": {}
+ }
+}
