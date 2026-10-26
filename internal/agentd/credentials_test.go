@@ -19,9 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 func credentialFixture(t *testing.T) (Credentials, CredentialSpec, protocol.CredentialPayload) {
@@ -411,7 +412,11 @@ func TestDaemonBootRefreshesDefaultKubeconfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("resolved kubeconfig endpoint status = %d", response.StatusCode)
 	}
