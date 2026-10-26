@@ -72,19 +72,22 @@ type ProductRow struct {
 	Title, Link string
 	Fields      []ProductField
 }
+
+// ProductPage is one connected product view. Note is a fixed coverage statement
+// shown only with connected rows.
 type ProductPage struct {
-	Title, Notice, ObservedAt string
-	Connected                 bool
-	Rows                      []ProductRow
+	Title, Notice, Note, ObservedAt string
+	Connected                       bool
+	Rows                            []ProductRow
 }
 
 func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
-		Policy, Title, Notice, ObservedAt string
-		Rows                              []ProductRow
+		Policy, Title, Notice, Note, ObservedAt string
+		Rows                                    []ProductRow
 	}{Policy: strings.TrimSuffix(contentPolicy, "; frame-ancestors 'none'"), Title: page.Title, Notice: page.Notice, ObservedAt: page.ObservedAt}
 	if page.Connected {
-		view.Rows = page.Rows
+		view.Rows, view.Note = page.Rows, page.Note
 	}
 	var body bytes.Buffer
 	if err := viewsTemplate.Execute(&body, view); err != nil {

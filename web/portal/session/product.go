@@ -75,7 +75,7 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 	complete := false
 	freshness := "observed"
 	for n := 0; n < productPageCap; n++ {
-		raw := operatorPortalOrigin + "/v1/sessions?limit=" + strconv.Itoa(productPageSize)
+		raw := operatorPortalOrigin + "/v1/sessions?limit=" + strconv.Itoa(productPageSize) + "&view=" + apiv1.PortalViewActivity
 		if cursor != "" {
 			raw += "&cursor=" + url.QueryEscape(cursor)
 		}
@@ -89,7 +89,7 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 		}
 		freshness = worstFreshness(freshness, decoded.Freshness)
 		for _, row := range decoded.Sessions {
-			page.Rows = append(page.Rows, portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{{Label: "Phase", Value: shown(row.Phase)}, {Label: "Freshness", Value: shown(row.Freshness)}, {Label: "UID", Value: shown(row.UID)}}})
+			page.Rows = append(page.Rows, sessionRow(row))
 		}
 		complete = decoded.Complete
 		cursor = decoded.NextCursor
@@ -98,6 +98,7 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 		}
 	}
 	page.Notice = "Connected session summaries."
+	page.Note = sessionUsageNote
 	if !complete {
 		page.Notice = "Sessions read is incomplete. This is not the full inventory."
 	} else if freshness != "observed" {
@@ -225,12 +226,12 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSu
 	if err != nil {
 		return row, err
 	}
-	for _, key := range []string{"name", "uid", "repo", "phase", "observedAt", "freshness"} {
+	for _, key := range []string{"name", "uid", "repo", "phase", "observedAt", "freshness", "activity"} {
 		if _, ok := obj[key]; !ok {
 			return row, portal.ErrUnavailable
 		}
 	}
-	if len(obj) != 6 {
+	if len(obj) != 7 {
 		return row, portal.ErrUnavailable
 	}
 	var name, uid, repo, phase, freshness string
@@ -244,7 +245,11 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSu
 	if err != nil {
 		return row, err
 	}
-	return apiv1.PortalSessionSummary{Name: name, UID: uid, Repo: repo, Phase: phase, ObservedAt: observed, Freshness: freshness}, nil
+	activity, err := decodeSessionActivity(obj["activity"], now)
+	if err != nil {
+		return row, err
+	}
+	return apiv1.PortalSessionSummary{Name: name, UID: uid, Repo: repo, Phase: phase, ObservedAt: observed, Freshness: freshness, Activity: &activity}, nil
 }
 
 func sessionPhase(phase string) bool {

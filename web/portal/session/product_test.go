@@ -86,7 +86,11 @@ func TestSessionsAndTasksAreIndependent(t *testing.T) {
 	cleanSrv := serveTLS(t, operatorCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sessions":[{"name":"worker","uid":"uid-1","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T16:00:00Z","freshness":"observed"}],"limit":50,"complete":true,"freshness":"observed","observedAt":"2026-10-23T16:00:00Z"}`))
+		if r.URL.Query().Get("view") != "activity" {
+			http.Error(w, "view", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"sessions":[{"name":"worker","uid":"uid-1","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T16:00:00Z","freshness":"observed",` + unknownActivity + `}],"limit":50,"complete":true,"freshness":"observed","observedAt":"2026-10-23T16:00:00Z"}`))
 	}))
 	sessions, err = newSessionSource(operatorToken, operatorCA, func() time.Time { return now }, routeDial(map[string]string{operatorPortalHost: cleanSrv, openProjectPortalHost: opSrv}))
 	if err != nil {
@@ -161,7 +165,7 @@ func TestProductFailsClosedOnRedirectExpiryAndUntrustedCA(t *testing.T) {
 	}))
 	staleSrv := serveTLS(t, operatorCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sessions":[{"name":"older","uid":"uid-2","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T14:00:00Z","freshness":"stale"}],"limit":50,"complete":true,"freshness":"stale","observedAt":"2026-10-23T16:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"sessions":[{"name":"older","uid":"uid-2","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T14:00:00Z","freshness":"stale",` + unknownActivity + `}],"limit":50,"complete":true,"freshness":"stale","observedAt":"2026-10-23T16:00:00Z"}`))
 	}))
 	foreignNext := serveTLS(t, opCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/hal+json")

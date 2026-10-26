@@ -8,6 +8,7 @@
 <a href="/portal/projects/dev-env/environments/internal/tasks">Tasks</a></nav>
 <h1>{{.Title}}</h1>
 <p class="notice" role="status">{{.Notice}}</p>
+{{if .Note}}<p class="scope">{{.Note}}</p>{{end}}
 <p class="observed">Observed: <time datetime="{{.ObservedAt}}">{{.ObservedAt}}</time></p></header>
 {{if .Rows}}<section>{{range .Rows}}<article><h2>{{.Title}}</h2>
 {{if .Link}}<a href="{{.Link}}" rel="noreferrer">Open canonical record</a>{{end}}
