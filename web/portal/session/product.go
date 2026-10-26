@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net"
@@ -728,6 +729,13 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		return
 	}
 	principal, err := c.Session.Authenticate(r)
+	if errors.Is(err, portal.ErrDenied) {
+		// No current session: start sign-in. A signed-in user who lacks access
+		// is refused below by Authorize and never loops back here.
+		w.Header().Set("Location", "/auth/login")
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		authFailure(w, err)
 		return

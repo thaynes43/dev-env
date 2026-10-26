@@ -19,8 +19,8 @@
   --blue-soft: #28354e;
   --red: #f4b0bd;
   --red-soft: #4b2633;
-  --success: #a5d8b6;
-  --success-soft: #263d30;
+  --success: var(--accent);
+  --success-soft: var(--accent-soft);
   --focus: #dfcef8;
   --control-line: #85838d;
   --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
@@ -48,8 +48,8 @@
     --blue-soft: #e9effb;
     --red: #a4364b;
     --red-soft: #fce6eb;
-    --success: #28633e;
-    --success-soft: #e6f3e9;
+    --success: var(--accent);
+    --success-soft: var(--accent-soft);
     --focus: #7652a4;
     --control-line: #8b7b9a;
   }

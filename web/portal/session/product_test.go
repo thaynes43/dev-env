@@ -441,3 +441,39 @@ func TestProductPagesSendTheirStylesheetPolicyOnly(t *testing.T) {
 		t.Fatalf("refusal carried the product stylesheet policy: %d %q", w.Code, w.Header().Get("Content-Security-Policy"))
 	}
 }
+
+// The bare origin lands on Sessions, and a missing session starts sign-in. A
+// signed-in user whom current authority refuses gets the refusal, not a loop.
+func TestEntryRedirects(t *testing.T) {
+	f := setupAuth(t)
+	allow := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	handler := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: allow, Reader: portal.UnavailableReader{}, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+	for _, path := range []string{"/", SessionsPath, TasksPath} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, f.request(http.MethodGet, path, ""))
+		want := "/auth/login"
+		if path == "/" {
+			want = SessionsPath
+		}
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != want || w.Body.Len() != 0 {
+			t.Fatalf("%s without a session: %d %q %q", path, w.Code, w.Header().Get("Location"), w.Body.String())
+		}
+	}
+	for _, r := range []*http.Request{f.request(http.MethodPost, "/", ""), f.request(http.MethodGet, "/?x=1", "")} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code == http.StatusSeeOther || w.Header().Get("Location") != "" {
+			t.Fatalf("%s %s redirected", r.Method, r.URL)
+		}
+	}
+	f.login(t)
+	deny := currentFixture(f, func(*http.Request) (*http.Response, error) {
+		return userInfoResponse(`{"sub":"synthetic-subject","portal_is_active":true,"portal_is_admin":false}`), nil
+	})
+	handler = NewAssembly(AssemblyConfig{Session: f.e, Authorizer: deny, Reader: portal.UnavailableReader{}, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
+	if w.Code != http.StatusForbidden || w.Header().Get("Location") != "" {
+		t.Fatalf("refused user was redirected: %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
