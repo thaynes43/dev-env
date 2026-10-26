@@ -261,7 +261,10 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	// if replacement races the policy create. Standing grants are unchanged.
 	if strings.HasPrefix(g.Status.ApprovedBy, "human/") || strings.HasPrefix(g.Status.ApprovedBy, "coordinator/") || strings.HasPrefix(g.Status.ApprovedBy, "session/") {
 		h, ok := grantdecision.ApprovedHandoff(g)
-		pod := b.sessionPod(ctx, sess, true)
+		pod, err := b.manualSessionPod(ctx, sess, true)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 		if !ok || pod == nil || !h.Binding.Matches(g, pod.UID) {
 			return b.end(ctx, g, v1alpha1.GrantReleased, "", "approved pod or request changed", now)
 		}
@@ -452,22 +455,31 @@ func (b *Broker) lookupSession(ctx context.Context, name string) (*v1alpha1.Agen
 // session, controlled by it, not a hold pod (D-55), not being deleted, and
 // Running when running is true. Otherwise nil.
 func (b *Broker) sessionPod(ctx context.Context, s *v1alpha1.AgentSession, running bool) *corev1.Pod {
+	pod, _ := b.manualSessionPod(ctx, s, running)
+	return pod
+}
+
+// manualSessionPod preserves transient read errors so manual decisions retry.
+func (b *Broker) manualSessionPod(ctx context.Context, s *v1alpha1.AgentSession, running bool) (*corev1.Pod, error) {
 	var pod corev1.Pod
 	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: s.Name}, &pod); err != nil {
-		return nil
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	ref := metav1.GetControllerOf(&pod)
 	switch {
 	case ref == nil || ref.UID != s.UID:
-		return nil
+		return nil, nil
 	case pod.Labels[v1alpha1.LabelSession] != s.Name || pod.Labels[v1alpha1.LabelHold] == "true":
-		return nil
+		return nil, nil
 	case !pod.DeletionTimestamp.IsZero():
-		return nil
+		return nil, nil
 	case running && pod.Status.Phase != corev1.PodRunning:
-		return nil
+		return nil, nil
 	}
-	return &pod
+	return &pod, nil
 }
 
 // mint asks the API server for a token of the grant's ServiceAccount that

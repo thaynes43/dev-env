@@ -3,11 +3,14 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/grantdecision"
@@ -216,6 +219,27 @@ func TestParentSessionRelayRequiresLiveActorAndExplicitPolicy(t *testing.T) {
 	if err := f.c.Update(ctx, g); err != nil {
 		t.Fatal(err)
 	}
+	// Transient reads of the parent session, parent pod, or requester pod
+	// must retain the authenticated handoff for a retry.
+	original := f.b.APIReader.(client.WithWatch)
+	for _, target := range []string{"parent-session", "parent-pod", "requester-pod"} {
+		f.b.APIReader = interceptor.NewClient(original, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			_, isSession := obj.(*v1alpha1.AgentSession)
+			_, isPod := obj.(*corev1.Pod)
+			if (target == "parent-session" && isSession && key.Name == parent.Name) || (target == "parent-pod" && isPod && key.Name == parent.Name) || (target == "requester-pod" && isPod && key.Name == f.s.Name) {
+				return errors.New("temporary read failure")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		}})
+		g = f.getGrant()
+		if handled, _, err := f.b.pendingHandoff(ctx, g); !handled || err == nil {
+			t.Fatalf("%s: transient error was not retried", target)
+		}
+		if got := f.getGrant(); got.Annotations[grantdecision.HandoffAnnotation] != string(encoded) || got.Status.Phase == v1alpha1.GrantActive {
+			t.Fatalf("%s: handoff changed", target)
+		}
+	}
+	f.b.APIReader = original
 	g = f.getGrant()
 	if handled, _, err := f.b.pendingHandoff(ctx, g); err != nil || !handled {
 		t.Fatalf("delegated parent rejected: %v", err)

@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -122,5 +123,27 @@ func TestManualEgressLabelsBeforePolicyAndReleasesOnReplacement(t *testing.T) {
 	}
 	if err := b.APIReader.Get(ctx, client.ObjectKeyFromObject(egress.Object(g.Namespace, g.Name)), &policy); !apierrors.IsNotFound(err) {
 		t.Fatal("UID-bound policy was not removed")
+	}
+}
+
+func TestManualActiveTransientPodReadDoesNotRelease(t *testing.T) {
+	b, g, pod, _, _ := installationFixture(t, &recorder{}, 0)
+	prepareManualGrant(t, b, g, pod)
+	original := b.APIReader.(client.WithWatch)
+	b.APIReader = interceptor.NewClient(original, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Pod); ok {
+			return errors.New("temporary read failure")
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	var session v1alpha1.AgentSession
+	if err := original.Get(context.Background(), client.ObjectKeyFromObject(pod), &session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.active(context.Background(), g, &session, b.now()); err == nil {
+		t.Fatal("transient failure did not retry")
+	}
+	if g.Status.Phase != v1alpha1.GrantActive {
+		t.Fatal("transient failure released grant")
 	}
 }

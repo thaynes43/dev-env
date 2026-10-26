@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -91,15 +92,27 @@ func (b *Broker) pendingHandoff(ctx context.Context, g *v1alpha1.AccessGrant) (b
 			return b.rejectHandoff(ctx, g)
 		}
 		var parent v1alpha1.AgentSession
-		if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: parts[1]}, &parent); err != nil || string(parent.UID) != parts[2] || !parent.DeletionTimestamp.IsZero() {
+		if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: parts[1]}, &parent); err != nil {
+			if apierrors.IsNotFound(err) {
+				return b.rejectHandoff(ctx, g)
+			}
+			return true, ctrl.Result{}, err
+		}
+		if string(parent.UID) != parts[2] || !parent.DeletionTimestamp.IsZero() {
 			return b.rejectHandoff(ctx, g)
 		}
-		parentPod := b.sessionPod(ctx, &parent, true)
+		parentPod, err := b.manualSessionPod(ctx, &parent, true)
+		if err != nil {
+			return true, ctrl.Result{}, err
+		}
 		if parentPod == nil || string(parentPod.UID) != parts[3] {
 			return b.rejectHandoff(ctx, g)
 		}
 	}
-	pod := b.sessionPod(ctx, sess, true)
+	pod, err := b.manualSessionPod(ctx, sess, true)
+	if err != nil {
+		return true, ctrl.Result{}, err
+	}
 	if pod == nil || !h.Binding.Matches(g, pod.UID) {
 		return b.rejectHandoff(ctx, g)
 	}
