@@ -489,6 +489,9 @@ func (d *Daemon) expireCredentials() {
 	if err := c.Expire(); err != nil && !errors.Is(err, ErrNoGrantsDir) {
 		d.Log.Warn("credential expiry cleanup failed")
 	}
+	if err := c.Grants.Refresh(); err != nil && !errors.Is(err, ErrNoGrantsDir) {
+		d.Log.Warn("grant kubeconfig refresh failed")
+	}
 }
 
 // shutdown forwards the pod's SIGTERM to the agent CLI and waits for it to

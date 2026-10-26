@@ -22,7 +22,7 @@ import (
 func credentialFixture(t *testing.T) (Credentials, CredentialSpec, protocol.CredentialPayload) {
 	t.Helper()
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	c := Credentials{Grants: Grants{Dir: t.TempDir(), Server: "https://127.0.0.1:443", Namespace: "dev-agents", Now: func() time.Time { return now }}, PodUID: "pod-one"}
+	c := Credentials{Grants: testGrants(t, now), PodUID: "pod-one"}
 	s := CredentialSpec{Name: "grant-pve", GrantUID: "uid-one", PodUID: c.PodUID, Expires: now.Add(time.Hour)}
 	p := protocol.CredentialPayload{Version: 1, Credential: "proxmox", TokenID: "dev-env@pve!grant-" + s.GrantUID, TokenSecret: "fixture-private-value"}
 	return c, s, p
