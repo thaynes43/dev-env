@@ -131,7 +131,7 @@ func TestProductionMetadataAllowlistAndAssembly(t *testing.T) {
 	if !roots.AppendCertsFromPEM(issuerCA) {
 		t.Fatal("issuer CA rejected")
 	}
-	authorizer, err := newCurrentAuthorizer(CurrentAuthorizationConfig{Issuer: productionIssuer, Subject: "synthetic-subject", UserInfoURL: productionUserInfo, Store: store, Now: time.Now, Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}, dial)
+	authorizer, err := newCurrentAuthorizer(CurrentAuthorizationConfig{Issuer: productionIssuer, UserInfoURL: productionUserInfo, Store: store, Now: time.Now, Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}, dial)
 	if err != nil {
 		t.Fatal("authorizer rejected pinned userinfo")
 	}
@@ -396,7 +396,6 @@ func writeRuntimeDir(t *testing.T, password string) string {
 		"secrets/OIDC_CLIENT_ID": productionClientID, "secrets/OIDC_CLIENT_SECRET": "fixture-only-not-a-credential",
 		"secrets/DB_USERNAME": productionDBUser, "secrets/DB_PASSWORD": password,
 		"secrets/SESSION_AEAD_KEY": base64.StdEncoding.EncodeToString(make([]byte, 32)), "secrets/SESSION_GENERATION": strings.Repeat("g", 32),
-		"config/subject": "SUBJECT-CANARY",
 	}
 	for name, value := range files {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(value+"\n"), 0o600); err != nil {

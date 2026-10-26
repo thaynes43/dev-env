@@ -123,8 +123,10 @@ certificate postgres16-server are references, not permission to read keys.
 
 ## Current authorization and deployment holds
 
-Require pinned issuer+immutable subject, live portal_is_active=true and
-portal_is_admin=true, plus the fixed local metadata allowlist. Authentik
+Require the pinned issuer, a live UserInfo response for the session's own
+subject with portal_is_active=true and portal_is_admin=true, plus the fixed
+local metadata allowlist. Access is by group membership, not by a pinned
+subject (Tom, 2026-10-26; DESIGN-029 "Group-based access"). Authentik
 2026.8.5 UserInfo evaluates provider profile mappings at request time;
 introspection or old ID/access-token claims cannot substitute. The future
 provider-local mapping must evaluate active status and direct membership of the
