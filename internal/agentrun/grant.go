@@ -39,6 +39,8 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return &exitError{code: ExitUsage}
 	}
 	switch args[0] {
+	case "decision":
+		return a.grantDecision(ctx, args[1:])
 	case "list":
 		return a.grantList(ctx, args[1:])
 	case "show":

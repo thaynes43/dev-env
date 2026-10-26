@@ -54,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 const (
@@ -253,6 +254,19 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	}
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released by its session", now)
+	}
+	// Manual decisions are for the exact approved pod, not a later pod with
+	// the same session name. The UID label gives egress the same fence even
+	// if replacement races the policy create. Standing grants are unchanged.
+	if strings.HasPrefix(g.Status.ApprovedBy, "human/") || strings.HasPrefix(g.Status.ApprovedBy, "coordinator/") || strings.HasPrefix(g.Status.ApprovedBy, "session/") {
+		h, ok := grantdecision.ApprovedHandoff(g)
+		pod := b.sessionPod(ctx, sess, true)
+		if !ok || pod == nil || !h.Binding.Matches(g, pod.UID) {
+			return b.end(ctx, g, v1alpha1.GrantReleased, "", "approved pod or request changed", now)
+		}
+		if g.Spec.Type == v1alpha1.GrantEgress {
+			if err := b.labelManualPod(ctx, pod); err != nil { return ctrl.Result{}, err }
+		}
 	}
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)

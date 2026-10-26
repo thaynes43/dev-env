@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -26,7 +27,8 @@ func (b *Broker) pendingHandoff(ctx context.Context, g *v1alpha1.AccessGrant) (b
 	if dec.Decode(&h) != nil || dec.Decode(new(any)) != io.EOF || h.Principal == "" || (h.Decision != "approve" && h.Decision != "deny") || len(h.Reason) > 512 {
 		return false, ctrl.Result{}, nil
 	}
-	if strings.HasPrefix(h.Principal, "coordinator/") {
+	if strings.HasPrefix(h.Principal, "coordinator/") || strings.HasPrefix(h.Principal, "session/") {
+		if !grantdecision.ValidRelayRef(h.RelayRef) { return false, ctrl.Result{}, nil }
 		var policies v1alpha1.GrantPolicyList
 		if err := b.APIReader.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil { return true, ctrl.Result{}, err }
 		allowed := false
@@ -35,13 +37,21 @@ func (b *Broker) pendingHandoff(ctx context.Context, g *v1alpha1.AccessGrant) (b
 			if p.DeletionTimestamp.IsZero() && p.Annotations[grantdecision.ManualApproverAnnotation] == h.Principal && Matches(p, g) { allowed = true; break }
 		}
 		if !allowed { return false, ctrl.Result{}, nil }
-	} else if !strings.HasPrefix(h.Principal, "human/") || strings.TrimPrefix(h.Principal, "human/") == "" {
+	} else if !strings.HasPrefix(h.Principal, "human/") || strings.TrimPrefix(h.Principal, "human/") == "" || h.RelayRef != "" {
 		return false, ctrl.Result{}, nil
 	}
 	sess, err := b.requestingSession(ctx, g)
 	if err != nil { return true, ctrl.Result{}, err }
 	if sess == nil || !sess.DeletionTimestamp.IsZero() { return false, ctrl.Result{}, nil }
 	if strings.HasPrefix(h.Principal, "coordinator/") && sess.Spec.Parent != strings.TrimPrefix(h.Principal, "coordinator/") { return false, ctrl.Result{}, nil }
+	if strings.HasPrefix(h.Principal, "session/") {
+		parts := strings.Split(h.Principal, "/")
+		if len(parts) != 4 || parts[1] == "" || parts[2] == "" || parts[3] == "" || sess.Spec.Parent != parts[1] || string(sess.UID) == parts[2] || (sess.Spec.UsageCaptureParentUID != "" && sess.Spec.UsageCaptureParentUID != parts[2]) { return false, ctrl.Result{}, nil }
+		var parent v1alpha1.AgentSession
+		if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: parts[1]}, &parent); err != nil || string(parent.UID) != parts[2] || !parent.DeletionTimestamp.IsZero() { return false, ctrl.Result{}, nil }
+		parentPod := b.sessionPod(ctx, &parent, true)
+		if parentPod == nil || string(parentPod.UID) != parts[3] { return false, ctrl.Result{}, nil }
+	}
 	pod := b.sessionPod(ctx, sess, true)
 	if pod == nil || !h.Binding.Matches(g, pod.UID) { return false, ctrl.Result{}, nil }
 	d := Decision{By:h.Principal, Approve:h.Decision == "approve", Reason:h.Reason}
@@ -62,6 +72,8 @@ func (b *Broker) pendingHandoff(ctx context.Context, g *v1alpha1.AccessGrant) (b
 		g.Status.EndedAt = &now
 	}
 	if err := b.Client.Status().Update(ctx, g); err != nil { return true, ctrl.Result{}, err }
-	b.decided(log.IntoContext(ctx, b.logger()), g, msg)
+	auditMessage := msg
+	if h.RelayRef != "" { auditMessage = strings.TrimSpace(auditMessage + " relay-reference=" + h.RelayRef) }
+	b.decided(log.IntoContext(ctx, b.logger()), g, auditMessage)
 	return true, ctrl.Result{}, nil
 }

@@ -13,7 +13,8 @@ rechecks the live request, session and pod before its status update. The operato
 does not write grant status. No requester may approve its own grant.
 
 A GrantPolicy annotated `dev-env.haynesops.com/decision-approver` names an exact
-`coordinator/<namespace>/<serviceaccount>` principal and bounds a manual
+`coordinator/<namespace>/<serviceaccount>` or
+`session/<name>/<sessionUID>/<podUID>` principal and bounds a manual
 decision using existing policy matching. Such a policy never auto-approves,
 including when its annotation is empty. Other policies retain their existing
 standing behavior. The broker records the coordinator as the decision maker;
@@ -22,5 +23,5 @@ a phone answer or model-supplied text is not a human attestation.
 Activation requires the separately reviewed handoff annotation admission guard,
 required CI and independent security review. Credential manual approval remains
 refused; selected-field credential installation and old-session expiry cleanup
-are not implemented. Mobile answer provenance and routing beyond the configured
-coordinator host are not implemented. No deployment or usable access is claimed.
+are not implemented. Phone answer provenance is not independently attested; a relay reference is audited
+as supplied metadata. Other coordinator modes remain unsupported. No deployment or usable access is claimed.

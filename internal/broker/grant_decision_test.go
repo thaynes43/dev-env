@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -97,11 +98,48 @@ func TestDelegatedPolicyRequiresExactScopeAndDoesNotAutoApprove(t *testing.T) {
 	if err := f.c.Create(context.Background(), policy); err != nil { t.Fatal(err) }
 	binding, err := grantdecision.Bind(g, f.pod.UID)
 	if err != nil { t.Fatal(err) }
-	h := grantdecision.Handoff{Binding:binding, Principal:principal, Decision:"approve"}
+	h := grantdecision.Handoff{Binding:binding, Principal:principal, Decision:"approve", RelayRef:"question/1-answer/1"}
 	encoded, _ := json.Marshal(h)
 	g.Annotations = map[string]string{grantdecision.HandoffAnnotation:string(encoded)}
 	if err := f.c.Update(context.Background(), g); err != nil { t.Fatal(err) }
 	g = f.getGrant()
 	if handled, _, err := f.b.pendingHandoff(context.Background(), g); err != nil || !handled { t.Fatalf("scoped delegate was not accepted: %v", err) }
 	if f.getGrant().Status.ApprovedBy != principal { t.Fatal("delegate identity not recorded") }
+}
+
+func TestParentSessionRelayRequiresLiveActorAndExplicitPolicy(t *testing.T) {
+	f := credentialCase(t)
+	ctx := context.Background()
+	parent := &v1alpha1.AgentSession{ObjectMeta:metav1.ObjectMeta{Namespace:sessionNS, Name:"parent-one", UID:"parent-uid"}}
+	if err := f.c.Create(ctx, parent); err != nil { t.Fatal(err) }
+	parentPod := &corev1.Pod{ObjectMeta:metav1.ObjectMeta{Namespace:sessionNS, Name:parent.Name, UID:"parent-pod", Labels:map[string]string{v1alpha1.LabelSession:parent.Name}, OwnerReferences:[]metav1.OwnerReference{*metav1.NewControllerRef(parent, v1alpha1.GroupVersion.WithKind("AgentSession"))}}, Status:corev1.PodStatus{Phase:corev1.PodRunning}}
+	if err := f.c.Create(ctx, parentPod); err != nil { t.Fatal(err) }
+	parentPod.Status.Phase = corev1.PodRunning
+	if err := f.c.Status().Update(ctx, parentPod); err != nil { t.Fatal(err) }
+	child := f.s.DeepCopy()
+	child.Spec.Parent = parent.Name
+	if err := f.c.Update(ctx, child); err != nil { t.Fatal(err) }
+	g := f.getGrant()
+	g.Spec.Type = v1alpha1.GrantEgress
+	g.Spec.Credential = nil
+	g.Spec.Egress = &v1alpha1.EgressGrant{FQDNs:[]string{"example.com"}, Ports:[]v1alpha1.GrantPort{{Port:443}}}
+	if err := f.c.Update(ctx, g); err != nil { t.Fatal(err) }
+	g = f.getGrant()
+	g.Status.Phase = v1alpha1.GrantPending
+	if err := f.c.Status().Update(ctx, g); err != nil { t.Fatal(err) }
+	g = f.getGrant()
+	binding, err := grantdecision.Bind(g, f.pod.UID)
+	if err != nil { t.Fatal(err) }
+	principal := "session/parent-one/parent-uid/parent-pod"
+	h := grantdecision.Handoff{Binding:binding, Principal:principal, Decision:"approve", RelayRef:"question/one-answer/one"}
+	encoded, _ := json.Marshal(h)
+	g.Annotations = map[string]string{grantdecision.HandoffAnnotation:string(encoded)}
+	if err := f.c.Update(ctx, g); err != nil { t.Fatal(err) }
+	g = f.getGrant()
+	if handled, _, err := f.b.pendingHandoff(ctx, g); err != nil || handled { t.Fatal("undelegated parent was accepted") }
+	policy := &v1alpha1.GrantPolicy{ObjectMeta:metav1.ObjectMeta{Namespace:systemNS, Name:"parent-delegation", Annotations:map[string]string{grantdecision.ManualApproverAnnotation:principal}}, Spec:v1alpha1.GrantPolicySpec{Profiles:[]string{"full"}, Repos:[]string{"haynes-ops"}, Type:v1alpha1.GrantEgress, Egress:&v1alpha1.EgressPolicy{FQDNs:[]string{"example.com"}, Ports:[]v1alpha1.GrantPort{{Port:443}}}, MaxTTL:metav1.Duration{Duration:time.Hour}}}
+	if err := f.c.Create(ctx, policy); err != nil { t.Fatal(err) }
+	g = f.getGrant()
+	if handled, _, err := f.b.pendingHandoff(ctx, g); err != nil || !handled { t.Fatalf("delegated parent rejected: %v", err) }
+	if got := f.getGrant(); got.Status.ApprovedBy != principal || got.Status.Phase != v1alpha1.GrantActive { t.Fatal("relay not attributed to parent") }
 }

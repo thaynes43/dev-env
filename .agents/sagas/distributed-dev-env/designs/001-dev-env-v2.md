@@ -3554,10 +3554,11 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   changes across versions fail closed. This hash is neither authentication nor
   approval. No decision adapter is enabled by these fields.
 - **Decision handoff (2026-10-26, proposed source, default off).** Authenticated
-  human callers and configured coordinators for their direct children can submit
+  human callers, configured coordinators and explicitly delegated parent sessions
+  for their direct children can submit
   an exact bound decision to a protected AccessGrant annotation. The broker
   validates the request, session and pod again and alone writes status. A policy
-  bearing `dev-env.haynesops.com/decision-approver` bounds a named coordinator's
+  bearing `dev-env.haynesops.com/decision-approver` bounds a named coordinator or parent session's
   manual decisions and never auto-approves. The operator/broker-only annotation
   admission guard is a prerequisite; phone answer attestation, generic credential
   installation and live acceptance are not yet implemented.

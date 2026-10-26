@@ -2,6 +2,7 @@ package egress
 
 import (
 	"strings"
+	"encoding/json"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -10,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // Cilium source-prefixed keys are not Kubernetes label keys. Remove the k8s:
@@ -163,4 +165,24 @@ func TestPolicyOwnershipAndDrift(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManualPolicySelectsOnlyApprovedPodAndRemainsOwnedAtRelease(t *testing.T) {
+	g := testGrant()
+	g.UID = "grant-uid"
+	g.Spec.Requester.SessionUID = "session-uid"
+	g.Status.ApprovedBy = "human/dev-env-system/dev-env-human"
+	b, err := grantdecision.Bind(g, "pod-one")
+	if err != nil { t.Fatal(err) }
+	h := grantdecision.Handoff{Binding:b, Principal:g.Status.ApprovedBy, Decision:"approve"}
+	data, _ := json.Marshal(h)
+	g.Annotations = map[string]string{grantdecision.HandoffAnnotation:string(data)}
+	u := Policy(g.Namespace, g)
+	selector, _, err := unstructured.NestedMap(u.Object, "spec", "endpointSelector")
+	if err != nil { t.Fatal(err) }
+	sel := podSelector(t, selector)
+	if !sel.Matches(labels.Set{v1alpha1.LabelSession:"session-test", grantdecision.PodUIDLabel:"pod-one"}) { t.Fatal("approved pod not selected") }
+	if sel.Matches(labels.Set{v1alpha1.LabelSession:"session-test", grantdecision.PodUIDLabel:"pod-two"}) || sel.Matches(labels.Set{v1alpha1.LabelSession:"session-test"}) { t.Fatal("replacement pod selected") }
+	g.Spec.Release = true
+	if !OwnedBy(u, g.Namespace, g) { t.Fatal("release lost policy ownership") }
 }

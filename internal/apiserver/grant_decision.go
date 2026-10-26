@@ -28,12 +28,13 @@ type grantDecisionRequest struct {
 	Decision        string `json:"decision"`
 	TTL             string `json:"ttl,omitempty"`
 	Reason          string `json:"reason,omitempty"`
+	RelayRef        string `json:"relayRef,omitempty"`
 }
 
 // decisionGrant reads the current request and independently verifies the exact
 // requesting session and running pod. It never treats caller input as identity.
 func (s *Server) decisionGrant(ctx context.Context, r *http.Request, c *caller) (*v1alpha1.AccessGrant, grantdecision.Binding, error) {
-	if !s.GrantDecisionEnabled || (c.kind != kindHuman && c.kind != kindCoordinator) {
+	if !s.GrantDecisionEnabled || (c.kind != kindHuman && c.kind != kindCoordinator && c.kind != kindSession) {
 		return nil, grantdecision.Binding{}, forbidden("grant decision is unavailable to this caller")
 	}
 	key, err := s.grantKey(r)
@@ -52,6 +53,11 @@ func (s *Server) decisionGrant(ctx context.Context, r *http.Request, c *caller) 
 			return nil, grantdecision.Binding{}, err
 		}
 	}
+	if c.kind == kindSession {
+		if c.session == nil || c.pod == nil || c.session.UID == g.Spec.Requester.SessionUID || c.session.Name == g.Spec.Requester.Session || !c.session.DeletionTimestamp.IsZero() || !c.pod.DeletionTimestamp.IsZero() || c.pod.Status.Phase != corev1.PodRunning {
+			return nil, grantdecision.Binding{}, forbidden("only a current parent session may relay a child decision")
+		}
+	}
 	if g.Spec.Release || !g.DeletionTimestamp.IsZero() || (g.Status.Phase != "" && g.Status.Phase != v1alpha1.GrantPending) || !s.now().Before(g.CreationTimestamp.Add(30*time.Minute)) {
 		return nil, grantdecision.Binding{}, newError(http.StatusConflict, apiv1.CodeConflict, "grant is not pending")
 	}
@@ -59,7 +65,10 @@ func (s *Server) decisionGrant(ctx context.Context, r *http.Request, c *caller) 
 	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: g.Namespace, Name: g.Spec.Requester.Session}, &session); err != nil || session.UID != g.Spec.Requester.SessionUID || !session.DeletionTimestamp.IsZero() {
 		return nil, grantdecision.Binding{}, newError(http.StatusConflict, apiv1.CodeConflict, "requesting session is unavailable or replaced")
 	}
-		var pod corev1.Pod
+		if c.kind == kindSession && (session.Spec.Parent != c.session.Name || (session.Spec.UsageCaptureParentUID != "" && session.Spec.UsageCaptureParentUID != string(c.session.UID))) {
+		return nil, grantdecision.Binding{}, forbidden("only a current parent session may relay a child decision")
+	}
+	var pod corev1.Pod
 	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: g.Namespace, Name: session.Name}, &pod); err != nil || pod.UID == "" || !metav1.IsControlledBy(&pod, &session) || !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning || pod.Labels[v1alpha1.LabelHold] == "true" || pod.Labels[v1alpha1.LabelSession] != session.Name {
 		return nil, grantdecision.Binding{}, newError(http.StatusConflict, apiv1.CodeConflict, "requesting pod is unavailable or replaced")
 	}
@@ -79,7 +88,7 @@ func (s *Server) inspectGrantDecision(ctx context.Context, _ http.ResponseWriter
 }
 
 func (s *Server) submitGrantDecision(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	if !s.GrantDecisionEnabled || (c.kind != kindHuman && c.kind != kindCoordinator) {
+	if !s.GrantDecisionEnabled || (c.kind != kindHuman && c.kind != kindCoordinator && c.kind != kindSession) {
 		return 0, nil, forbidden("grant decision is unavailable to this caller")
 	}
 	var req grantDecisionRequest
@@ -88,6 +97,12 @@ func (s *Server) submitGrantDecision(ctx context.Context, w http.ResponseWriter,
 	}
 	if req.Decision != "approve" && req.Decision != "deny" || len(req.Reason) > 512 || (req.Decision == "approve" && req.Reason != "") || (req.Decision == "deny" && req.TTL != "") {
 		return 0, nil, newError(http.StatusUnprocessableEntity, apiv1.CodeInvalid, "invalid grant decision")
+	}
+	if c.kind != kindHuman && !grantdecision.ValidRelayRef(req.RelayRef) {
+		return 0, nil, newError(http.StatusUnprocessableEntity, apiv1.CodeInvalid, "a bounded relay reference is required")
+	}
+	if c.kind == kindHuman && req.RelayRef != "" {
+		return 0, nil, newError(http.StatusUnprocessableEntity, apiv1.CodeInvalid, "human decisions do not carry a relay reference")
 	}
 	if req.TTL != "" {
 		if d, err := time.ParseDuration(req.TTL); err != nil || d <= 0 {
@@ -105,7 +120,10 @@ func (s *Server) submitGrantDecision(ctx context.Context, w http.ResponseWriter,
 	if c.kind == kindCoordinator {
 		principal = "coordinator/" + c.parent
 	}
-	h := grantdecision.Handoff{Binding: binding, Principal: principal, Decision: req.Decision, TTL: req.TTL, Reason: strings.TrimSpace(req.Reason)}
+	if c.kind == kindSession {
+		principal = "session/" + c.session.Name + "/" + string(c.session.UID) + "/" + string(c.pod.UID)
+	}
+	h := grantdecision.Handoff{Binding: binding, Principal: principal, Decision: req.Decision, TTL: req.TTL, Reason: strings.TrimSpace(req.Reason), RelayRef: req.RelayRef}
 	encoded, err := json.Marshal(h)
 	if err != nil {
 		return 0, nil, newError(http.StatusInternalServerError, apiv1.CodeInternal, "could not encode decision")
