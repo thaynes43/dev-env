@@ -154,6 +154,14 @@ func TestParentSessionRelayRequiresDirectChildAndNeverSelf(t *testing.T) {
 	if w := f.do(http.MethodGet, path, childToken, nil); w.Code != http.StatusForbidden {
 		t.Fatalf("self decision: %d", w.Code)
 	}
+	identity := f.auth[parentToken]
+	stale := identity
+	stale.PodUID = "replaced-parent-pod"
+	f.auth[parentToken] = stale
+	if w := f.do(http.MethodGet, path, parentToken, nil); w.Code != http.StatusForbidden {
+		t.Fatalf("stale parent pod: %d", w.Code)
+	}
+	f.auth[parentToken] = identity
 	w := f.do(http.MethodGet, path, parentToken, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("parent summary: %d %s", w.Code, w.Body.String())
