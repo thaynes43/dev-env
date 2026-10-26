@@ -21,6 +21,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // kubeReq is a valid kube grant request.
@@ -670,5 +671,29 @@ func TestGrantName(t *testing.T) {
 	}
 	if len(seen) < 2 {
 		t.Errorf("the random part does not vary: %v", seen)
+	}
+}
+
+func TestGrantViewBindsActualRequest(t *testing.T) {
+	f := newFixture(t)
+	tok := f.sessionPod("scope-test", "full", 0)
+	created := f.request(tok, egressReq(), http.StatusCreated)
+	g := f.grant(created.Name)
+	g.UID = "grant-uid"
+	if err := f.c.Update(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	g = f.grant(created.Name)
+	want, err := grantdecision.ScopeHash(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodGet, apiv1.GrantPath(created.Name), tok, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get grant: %d", w.Code)
+	}
+	got := decode[apiv1.Grant](t, w)
+	if got.UID != string(g.UID) || got.SessionUID != string(g.Spec.Requester.SessionUID) || got.ScopeHash != want {
+		t.Fatalf("grant binding does not reflect the stored request: %+v", got)
 	}
 }

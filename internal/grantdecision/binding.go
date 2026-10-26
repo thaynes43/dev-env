@@ -23,7 +23,8 @@ type Binding struct {
 	ScopeHash  string    `json:"scopeHash"`
 }
 
-// Bind produces a stable digest using Go's deterministic JSON encoding. The
+// Bind uses deterministic JSON encoding for this build. A schema or encoding
+// change in a later build may change the digest and must fail closed. The
 // pod UID is supplied from an independently authenticated, live pod lookup.
 func Bind(g *v1alpha1.AccessGrant, podUID types.UID) (Binding, error) {
 	if g == nil || g.UID == "" || g.Spec.Requester.SessionUID == "" || podUID == "" {
