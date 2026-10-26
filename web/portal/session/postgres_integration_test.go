@@ -24,7 +24,7 @@ import (
 // database then fails that process. A local run without that variable still
 // skips. This suite refuses non-loopback DBs and uses disposable identities.
 // A skip is not DB evidence.
-func integrationPools(t *testing.T) (*pgxpool.Pool, *PostgresStore, *PostgresStore, *fixtureFence) {
+func integrationPools(t *testing.T) (*pgxpool.Pool, *PostgresStore, *PostgresStore) {
 	t.Helper()
 	dsn := os.Getenv("PORTAL_TEST_DATABASE_URL")
 	requireHostedProof(t, dsn == "", "disposable PostgreSQL not configured; no DB proof")
@@ -69,10 +69,8 @@ GRANT USAGE ON SCHEMA portal TO dev_env_v2_portal_runtime;
 GRANT SELECT,INSERT,DELETE ON portal.pending_logins,portal.sessions TO dev_env_v2_portal_runtime;`); err != nil {
 		t.Fatal("fixture grant failed")
 	}
-	fence := &fixtureFence{generation: strings.Repeat("g", 32)}
 	newReplica := func() *PostgresStore {
 		s := fixtureStore(t)
-		s.fence = fence
 		c := integrationRuntimeConfig(t)
 		pool, err := pgxpool.NewWithConfig(ctx, c)
 		if err != nil {
@@ -82,7 +80,7 @@ GRANT SELECT,INSERT,DELETE ON portal.pending_logins,portal.sessions TO dev_env_v
 		t.Cleanup(s.Close)
 		return s
 	}
-	return admin, newReplica(), newReplica(), fence
+	return admin, newReplica(), newReplica()
 }
 
 func integrationRuntimeConfig(t *testing.T) *pgxpool.Config {
@@ -115,7 +113,7 @@ func requireSQLState(t *testing.T, err error, want string) {
 }
 
 func TestPostgresIntegration(t *testing.T) {
-	admin, a, b, fence := integrationPools(t)
+	admin, a, b := integrationPools(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	login := Login{State: strings.Repeat("s", 43), Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), ExpiresAt: now.Add(time.Minute)}
@@ -228,26 +226,7 @@ func TestPostgresIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("post-commit-fence-loss-is-unknown-never-replay", func(t *testing.T) {
-		// Three checks: before txn, before commit, after commit. Inject witness
-		// loss after a real acknowledged commit; caller must receive unavailable.
-		fence.calls = 0
-		fence.failAt = 3
-		h := handle("uncertain-commit")
-		if !errors.Is(a.PutSession(ctx, h, record), portal.ErrUnavailable) {
-			t.Fatal("uncertain postcommit authority returned success")
-		}
-		fence.failAt = 0
-		var count int
-		if admin.QueryRow(ctx, "SELECT count(*) FROM portal.sessions WHERE handle=$1", h[:]).Scan(&count) != nil || count != 1 {
-			t.Fatal("fixture did not reach durable commit")
-		}
-		if !errors.Is(b.PutSession(ctx, h, record), portal.ErrDenied) {
-			t.Fatal("uncertain commit overwrote existing session")
-		}
-	})
-
-	t.Run("recovery-restore-fences-both-tables", func(t *testing.T) {
+	t.Run("restore-is-denied-only-by-generation-rotation", func(t *testing.T) {
 		h, lh := handle("restored-session"), handle("restored-login")
 		if a.PutSession(ctx, h, record) != nil || a.PutLogin(ctx, lh, login) != nil {
 			t.Fatal("restore fixtures failed")
@@ -262,8 +241,7 @@ func TestPostgresIntegration(t *testing.T) {
 		if _, err := b.TakeLogin(ctx, lh, login.State, now); err != nil {
 			t.Fatal("fixture consume failed")
 		}
-		// Simulate restored pre-revocation/consumption data with real SQL. This
-		// is not a live backup/promotion proof; independent witness is synthetic.
+		// Simulate restored pre-revocation/consumption rows with real SQL.
 		if _, err := admin.Exec(ctx, "INSERT INTO portal.sessions (handle,generation,version,expires_at,payload) VALUES ($1,$2,1,$3,$4)", h[:], a.generation, record.ExpiresAt, sessionCipher); err != nil {
 			t.Fatal("restore fixture failed")
 		}
@@ -271,28 +249,21 @@ func TestPostgresIntegration(t *testing.T) {
 		if _, err := admin.Exec(ctx, "INSERT INTO portal.pending_logins (handle,generation,version,state_digest,expires_at,payload) VALUES ($1,$2,1,$3,$4,$5)", lh[:], a.generation, state[:], login.ExpiresAt, loginCipher); err != nil {
 			t.Fatal("restore fixture failed")
 		}
-		fence.unavailable = true
-		if _, err := a.GetSession(ctx, h); !errors.Is(err, portal.ErrUnavailable) {
-			t.Fatal("uncertain recovery allowed session")
-		}
-		if _, err := b.TakeLogin(ctx, lh, login.State, now); !errors.Is(err, portal.ErrUnavailable) {
-			t.Fatal("uncertain recovery allowed login")
-		}
-		fence.unavailable = false
-		fence.generation = strings.Repeat("h", 32)
-		if _, err := a.GetSession(ctx, h); !errors.Is(err, portal.ErrUnavailable) {
-			t.Fatal("old replica generation escaped external fence")
-		}
+		// Rotating SESSION_GENERATION invalidates every restored row.
 		oldGeneration := b.generation
-		b.generation = fence.generation
+		b.generation = strings.Repeat("h", 32)
 		if _, err := b.GetSession(ctx, h); !errors.Is(err, portal.ErrDenied) {
-			t.Fatal("restored old generation session resurrected")
+			t.Fatal("rotated generation authorized a restored session")
 		}
 		if _, err := b.TakeLogin(ctx, lh, login.State, now); !errors.Is(err, portal.ErrDenied) {
-			t.Fatal("restored old pending login resurrected")
+			t.Fatal("rotated generation consumed a restored login")
 		}
 		b.generation = oldGeneration
-		fence.generation = oldGeneration
+		// Accepted residual risk (Tom, 2026-10-26): without rotation, a restored
+		// revoked session authenticates again until it expires.
+		if _, err := a.GetSession(ctx, h); err != nil {
+			t.Fatal("restored session differs from the accepted residual risk")
+		}
 	})
 
 	t.Run("actual-parallel-callback-and-cross-replica-logout", func(t *testing.T) {
@@ -429,10 +400,9 @@ func TestPostgresIntegration(t *testing.T) {
 
 	t.Run("overlapping-legitimate-inserts-wait-and-both-complete", func(t *testing.T) { testOverlappingLegitimateInserts(t, admin, a, b, record) })
 
-	t.Run("actual-lost-commit-response-discards-write-result-and-read-payload", func(t *testing.T) { testActualLostCommitResponse(t, admin, a, record) })
+	t.Run("actual-lost-commit-response-discards-write-result-and-read-payload", func(t *testing.T) { testActualLostCommitResponse(t, admin, record) })
 
-	t.Run("protected-read-witness-count-and-latency", func(t *testing.T) { testProtectedReadCost(t, a) })
-	t.Run("physical-asynchronous-failover-loses-acknowledged-deletes", func(t *testing.T) { testDisposableAsyncFailover(t, admin, a, b) })
+	t.Run("physical-failover-needs-no-human-action", func(t *testing.T) { testDisposableFailover(t, a) })
 
 	t.Run("outage-has-no-fallback", func(t *testing.T) {
 		a.Close()

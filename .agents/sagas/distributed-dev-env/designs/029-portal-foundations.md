@@ -330,3 +330,25 @@ Ruling (Tom, 2026-10-26, #178 journal 1786): "No we should manage users by group
 - `portal_is_admin` is the provider-local mapping's direct-membership check of the pinned existing Admins group. Adding or removing a member of that group in Authentik grants or withdraws access at the next request.
 - Session binding, revocation, CSRF and the resource allowlist are unchanged.
 - In haynes-ops, the Authentik application's user-specific binding goes away in a later reviewed step. The Admins group binding stays.
+
+### Recovery witness dropped, 2026-10-26
+
+Ruling (Tom, 2026-10-26, #178): drop the admission witness and recovery fence.
+PostgreSQL restarts and failovers must need no human action. Later the same day:
+"do the fastest path to a working demo, don't get hung up on edge cases of fancy
+security stuff yet."
+
+- The portal no longer reads `config/admission-api-url`, `config/admission-uid`,
+  `config/admission-token-file`, `config/witness-gets-per-second`,
+  `config/witness-get-burst`, `ca/admission-ca.crt` or the projected admission
+  token. It makes no Kubernetes request and does not measure the backend
+  incarnation. Leftover mounted files are ignored.
+- Accepted risk: after a restore from backup, or a failover that loses an
+  acknowledged revoke, a revoked session can authenticate again until it
+  expires (at most the 12h absolute TTL).
+- Mitigation: delete the session rows, or rotate `SESSION_GENERATION`. Rotation
+  still invalidates every existing session and pending login.
+- This supersedes the M6 recovery contract and its manual close, restore, then
+  CAS-open flow (the "M6 same-connection recovery source" section above and
+  `.agents/reports/portal178-m6/`). Session handling, CSRF, OIDC, group
+  authorization, TLS pins and the PostgreSQL store are otherwise unchanged.

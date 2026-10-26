@@ -1,6 +1,6 @@
 // Command dev-env-portal is the internal read-only portal process.
 // It serves the production assembly from /etc/dev-env-portal and does not
-// select 1Password items, migrate the database, or open admission.
+// select 1Password items or migrate the database.
 package main
 
 import (

@@ -13,53 +13,44 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
-type fixtureFence struct {
-	mu            sync.Mutex
-	generation    string
-	calls, failAt int
-	unavailable   bool
+// fakeTx is one acquired transaction. The embedded pgx.Tx is nil, so any SQL
+// the store path did not expect panics instead of reaching a database.
+type fakeTx struct {
+	pgx.Tx
+	commitErr               error
+	queries, execs, commits int
+	rollbacks               int
 }
 
-func (f *fixtureFence) check(ctx context.Context, generation string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls++
-	if ctx.Err() != nil || f.unavailable || generation != f.generation || (f.failAt > 0 && f.calls >= f.failAt) {
-		return portal.ErrUnavailable
-	}
-	return nil
+func (t *fakeTx) QueryRow(context.Context, string, ...any) pgx.Row {
+	t.queries++
+	return fakeRow{}
 }
+func (t *fakeTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	t.execs++
+	return pgconn.CommandTag{}, nil
+}
+func (t *fakeTx) Commit(context.Context) error   { t.commits++; return t.commitErr }
+func (t *fakeTx) Rollback(context.Context) error { t.rollbacks++; return nil }
 
-func (f *fixtureFence) Check(ctx context.Context, tx pgx.Tx, generation string) (AdmissionSnapshot, error) {
-	if err := f.check(ctx, generation); err != nil {
-		return AdmissionSnapshot{}, err
-	}
-	// Hosted DB fixtures measure the actual acquired connection too.
-	if tx != nil {
-		if _, err := measureIncarnation(ctx, tx); err != nil {
-			return AdmissionSnapshot{}, err
-		}
-	}
-	return AdmissionSnapshot{Generation: generation}, nil
-}
-func (f *fixtureFence) Recheck(ctx context.Context, snapshot AdmissionSnapshot) error {
-	return f.check(ctx, snapshot.Generation)
-}
+type fakeRow struct{}
+
+func (fakeRow) Scan(...any) error { return errors.New("fake row has no data") }
 
 func fixtureStore(t *testing.T) *PostgresStore {
 	t.Helper()
-	s, err := newPostgresStore(PostgresConfig{Key: base64.StdEncoding.EncodeToString(make([]byte, 32)), Generation: strings.Repeat("g", 32), Fence: &fixtureFence{generation: strings.Repeat("g", 32)}, Now: time.Now, Timeout: time.Second})
+	s, err := newPostgresStore(PostgresConfig{Key: base64.StdEncoding.EncodeToString(make([]byte, 32)), Generation: strings.Repeat("g", 32), Now: time.Now, Timeout: time.Second})
 	if err != nil {
 		t.Fatal("fixture store configuration failed")
 	}
@@ -102,7 +93,7 @@ func TestAEADRowTypeVersionGenerationStateExpiryBinding(t *testing.T) {
 				block := make([]byte, 32)
 				block[0] = 1
 				var err error
-				store, err = newPostgresStore(PostgresConfig{Key: base64.StdEncoding.EncodeToString(block), Generation: s.generation, Fence: s.fence, Now: time.Now, Timeout: time.Second})
+				store, err = newPostgresStore(PostgresConfig{Key: base64.StdEncoding.EncodeToString(block), Generation: s.generation, Now: time.Now, Timeout: time.Second})
 				if err != nil {
 					t.Fatal("fixture key failed")
 				}
@@ -123,20 +114,75 @@ func TestAEADRowTypeVersionGenerationStateExpiryBinding(t *testing.T) {
 	}
 }
 
-func TestMissingRecoveryWitnessAndRuntimeDefaultDeny(t *testing.T) {
-	if _, err := newPostgresStore(PostgresConfig{Key: base64.StdEncoding.EncodeToString(make([]byte, 32)), Generation: strings.Repeat("g", 32), Now: time.Now, Timeout: time.Second}); !errors.Is(err, portal.ErrUnavailable) {
-		t.Fatal("missing fence accepted")
-	}
+func TestRuntimeDefaultDeny(t *testing.T) {
 	for _, path := range []string{LandingPath, "/auth/login", "/auth/callback", "/auth/logout"} {
 		w := httptest.NewRecorder()
 		NewRuntimeAssembly().ServeHTTP(w, httptest.NewRequest("GET", "https://portal.example"+path, nil))
 		if w.Code != 503 {
-			t.Fatal("unproven recovery runtime became available")
+			t.Fatal("unconfigured runtime became available")
 		}
 	}
 	s := fixtureStore(t)
 	if _, err := s.GetSession(context.Background(), Handle{}); !errors.Is(err, portal.ErrUnavailable) {
 		t.Fatal("missing database fell back")
+	}
+}
+
+// The recovery witness is gone (Tom, 2026-10-26). A store transaction reads no
+// backend identity, so a PostgreSQL restart or failover, which changes the
+// timeline and postmaster start time, cannot deny a session by itself.
+func TestTransactionReadsNoBackendIdentity(t *testing.T) {
+	for _, mode := range []string{"allow", "session-error", "uncertain-commit", "cancel-after-SQL", "precommit-hook-error"} {
+		t.Run(mode, func(t *testing.T) {
+			tx := &fakeTx{}
+			s := fixtureStore(t)
+			if mode == "uncertain-commit" {
+				tx.commitErr = errors.New("SECRET-COMMIT-CANARY")
+			}
+			if mode == "precommit-hook-error" {
+				s.beforeCommit = func(context.Context) error { return errors.New("SECRET-HOOK-CANARY") }
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sessionSQL := 0
+			err := s.runAcquired(ctx, tx, func(_ context.Context, actual pgx.Tx) error {
+				if actual != tx {
+					t.Fatal("session SQL selected a different connection")
+				}
+				sessionSQL++
+				switch mode {
+				case "cancel-after-SQL":
+					cancel()
+				case "session-error":
+					return portal.ErrDenied
+				}
+				return nil
+			})
+			if tx.queries != 0 || tx.execs != 1 || sessionSQL != 1 || tx.rollbacks != 1 {
+				t.Fatalf("store ran unexpected SQL: queries %d execs %d session %d", tx.queries, tx.execs, sessionSQL)
+			}
+			switch mode {
+			case "allow":
+				if err != nil || tx.commits != 1 {
+					t.Fatal("transaction on any backend was not admitted")
+				}
+			case "session-error":
+				if !errors.Is(err, portal.ErrDenied) || tx.commits != 0 {
+					t.Fatal("denied session SQL committed")
+				}
+			case "precommit-hook-error":
+				if !errors.Is(err, portal.ErrUnavailable) || tx.commits != 0 {
+					t.Fatal("failed precommit hook committed")
+				}
+			default:
+				if !errors.Is(err, portal.ErrUnavailable) || tx.commits != 1 {
+					t.Fatal("uncertain commit returned success or retried")
+				}
+			}
+			if strings.Contains(fmt.Sprint(err), "SECRET") {
+				t.Fatal("commit error leaked")
+			}
+		})
 	}
 }
 

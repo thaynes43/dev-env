@@ -58,6 +58,37 @@ func TestProductionRejectsPartialMetadataAndCanaries(t *testing.T) {
 	}
 }
 
+// The recovery witness is gone (Tom, 2026-10-26). Production needs no admission
+// input, and inputs a not-yet-updated deployment still mounts are ignored.
+func TestProductionLoadsWithoutAdmissionInputs(t *testing.T) {
+	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGSSLCRL", "PGSSLCRLDIR"} {
+		t.Setenv(name, "")
+	}
+	stale := []string{"config/admission-api-url", "config/admission-uid", "config/admission-token-file", "config/witness-gets-per-second", "config/witness-get-burst", "ca/admission-ca.crt"}
+	root := writeRuntimeDir(t, "SECRET-CANARY")
+	for _, name := range stale {
+		if _, err := os.Stat(filepath.Join(root, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("fixture still mounts %s", name)
+		}
+	}
+	rt, err := LoadProduction(root)
+	if err != nil {
+		t.Fatal("production required an admission input")
+	}
+	rt.Close()
+	leftover := writeRuntimeDir(t, "SECRET-CANARY")
+	for _, name := range stale {
+		if err := os.WriteFile(filepath.Join(leftover, name), []byte("not-read\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rt, err = LoadProduction(leftover)
+	if err != nil {
+		t.Fatal("leftover admission inputs were read")
+	}
+	rt.Close()
+}
+
 func TestProductionClosedDatabaseDoesNotServeSecrets(t *testing.T) {
 	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGSSLCRL", "PGSSLCRLDIR"} {
 		t.Setenv(name, "")
@@ -389,10 +420,9 @@ func writeRuntimeDir(t *testing.T, password string) string {
 		"config/origin": productionOrigin, "config/issuer": productionIssuer, "config/authorization-url": productionAuthorization,
 		"config/token-url": productionToken, "config/userinfo-url": productionUserInfo, "config/jwks-url": productionJWKS,
 		"config/openproject-base-url": openProjectPortalOrigin, "config/operator-api-url": operatorPortalOrigin,
-		"config/admission-api-url": "https://kubernetes.default.svc", "config/admission-uid": "synthetic-admission-uid",
-		"config/admission-token-file": filepath.Join(root, "admission-token"), "config/auth-style": "header",
-		"config/login-ttl": "1m", "config/idle-ttl": "30m", "config/absolute-ttl": "1h", "config/fresh-for": "1m",
-		"config/clock-skew": "0s", "config/witness-gets-per-second": "30", "config/witness-get-burst": "57",
+		"config/auth-style": "header",
+		"config/login-ttl":  "1m", "config/idle-ttl": "30m", "config/absolute-ttl": "1h", "config/fresh-for": "1m",
+		"config/clock-skew":      "0s",
 		"secrets/OIDC_CLIENT_ID": productionClientID, "secrets/OIDC_CLIENT_SECRET": "fixture-only-not-a-credential",
 		"secrets/DB_USERNAME": productionDBUser, "secrets/DB_PASSWORD": password,
 		"secrets/SESSION_AEAD_KEY": base64.StdEncoding.EncodeToString(make([]byte, 32)), "secrets/SESSION_GENERATION": strings.Repeat("g", 32),
@@ -402,10 +432,7 @@ func writeRuntimeDir(t *testing.T, password string) string {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "admission-token"), []byte("synthetic-admission-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"ca/ca.crt", "ca/admission-ca.crt", "ca/issuer-ca.crt", "ca/openproject-ca.crt", "ca/operator-ca.crt"} {
+	for _, name := range []string{"ca/ca.crt", "ca/issuer-ca.crt", "ca/openproject-ca.crt", "ca/operator-ca.crt"} {
 		if err := os.WriteFile(filepath.Join(root, name), caPEM, 0o600); err != nil {
 			t.Fatal(err)
 		}
