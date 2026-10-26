@@ -100,7 +100,10 @@ type GrantPort struct {
 // Grant is one grant as the API shows it: GET /v1/grants/{name}, the items of
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
+	SessionUID string `json:"sessionUID,omitempty"`
+	ScopeHash  string `json:"scopeHash,omitempty"`
 
 	// The requester, from the session's token.
 	Session string `json:"session"`

@@ -248,3 +248,14 @@ func TestGrantUseSelectsThePodContext(t *testing.T) {
 	h.mustRun(ExitFailed, "grant", "use", "grant-abc")
 	contains(t, "stderr", h.stderr.String(), "not installed")
 }
+
+func TestGrantShowSummarizesExactRequest(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","uid":"grant-uid","sessionUID":"session-uid","scopeHash":"hash","phase":"Pending","type":"egress","ttl":"30m","reason":"inspect","fqdns":["example.com"],"cidrs":["192.0.2.1/32"],"endpoints":[{"namespace":"media","matchLabels":{"app":"svc"}}],"ports":[{"port":443,"protocol":"TCP"}]}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "show", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), "grant UID: grant-uid", "session UID: session-uid", "scope hash: hash", "fqdn: example.com", "cidr: 192.0.2.1/32", "endpoint: media app=svc", "port: 443/TCP")
+}
