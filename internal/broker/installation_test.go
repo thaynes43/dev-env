@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/clientcmd"
 	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -144,7 +145,15 @@ func TestInstallationRestartAndReplacement(t *testing.T) {
 }
 
 func TestReleaseCleansDeliveredTokenWithoutInstallationStatus(t *testing.T) {
-	inst := &storeInstaller{store: agentd.Grants{Dir: t.TempDir(), Server: "https://127.0.0.1:443", Namespace: "dev-agents"}, podUID: "pod-one"}
+	projectionDir := t.TempDir()
+	ownTokenFile := filepath.Join(projectionDir, "token")
+	ownCAFile := filepath.Join(projectionDir, "ca.crt")
+	for path, contents := range map[string]string{ownTokenFile: "synthetic-own-token\n", ownCAFile: "synthetic-own-ca\n"} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inst := &storeInstaller{store: agentd.Grants{Dir: t.TempDir(), Server: "https://127.0.0.1:443", Namespace: "dev-agents", OwnTokenFile: ownTokenFile, OwnCAFile: ownCAFile}, podUID: "pod-one"}
 	b, g, _, clk, _ := installationFixture(t, inst, 0)
 	inst.store.Now = clk.Now
 	underlying := b.Client
@@ -176,10 +185,22 @@ func TestReleaseCleansDeliveredTokenWithoutInstallationStatus(t *testing.T) {
 	if err := underlying.Get(context.Background(), client.ObjectKeyFromObject(g), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
 		t.Fatal("release retained the grant identity")
 	}
-	for _, path := range []string{filepath.Join(inst.store.Dir, g.Name), inst.store.KubeconfigPath()} {
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("release left the delivered token or selected grant context behind")
-		}
+	if _, err := os.Stat(filepath.Join(inst.store.Dir, g.Name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("release left the delivered token behind")
+	}
+	kubeconfig, err := clientcmd.LoadFromFile(inst.store.KubeconfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultContext, ok := kubeconfig.Contexts["default"]
+	if !ok || kubeconfig.CurrentContext != "default" || len(kubeconfig.Contexts) != 1 || defaultContext.Namespace != "dev-agents" {
+		t.Fatal("release did not retain only the own-ServiceAccount default context")
+	}
+	if _, ok := kubeconfig.Contexts[g.Name]; ok {
+		t.Fatal("release retained the selected grant context")
+	}
+	if kubeconfig.AuthInfos[defaultContext.AuthInfo].TokenFile != ownTokenFile || kubeconfig.Clusters[defaultContext.Cluster].CertificateAuthority != ownCAFile {
+		t.Fatal("retained default context did not reference the synthetic own-ServiceAccount projection")
 	}
 }
 
