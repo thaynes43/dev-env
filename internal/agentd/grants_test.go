@@ -18,6 +18,7 @@ import (
 func TestGrantsLifecycle(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 	g := testGrants(t, now)
+	g.Now = func() time.Time { return now }
 	g.Server = "https://[::1]:443"
 	first := GrantSpec{Name: "grant-first", Role: "dev-env-grant-workloads", Namespaces: []string{"frontend"}, Expires: now.Add(time.Hour)}
 	if err := g.Install(first, []byte("fixture-token-first")); err != nil {
@@ -172,16 +173,36 @@ func TestGrantsRefreshRetainsSelectedGrant(t *testing.T) {
 }
 
 func TestGrantsRefreshRefusesAbsentOwnProjection(t *testing.T) {
-	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
-	g := testGrants(t, now)
-	if err := os.Remove(g.OwnTokenFile); err != nil {
-		t.Fatal(err)
-	}
-	if err := g.Refresh(); err == nil {
-		t.Fatal("missing own ServiceAccount projection created a kubeconfig")
-	}
-	if _, err := os.Stat(g.KubeconfigPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("missing own ServiceAccount projection wrote a fallback kubeconfig")
+	for _, projection := range []string{"token", "CA"} {
+		t.Run(projection, func(t *testing.T) {
+			now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+			g := testGrants(t, now)
+			g.Now = func() time.Time { return now }
+			spec := GrantSpec{Name: "grant-expired", Role: "dev-env-grant-workloads", Expires: now.Add(time.Hour)}
+			if err := g.Install(spec, []byte("synthetic-grant-token")); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.Use(spec.Name); err != nil {
+				t.Fatal(err)
+			}
+			now = spec.Expires
+			path := g.OwnTokenFile
+			if projection == "CA" {
+				path = g.OwnCAFile
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := g.Refresh(); err == nil {
+				t.Fatal("missing own ServiceAccount projection refreshed a kubeconfig")
+			}
+			if _, err := os.Stat(filepath.Join(g.Dir, spec.Name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("missing own projection retained an expired grant token directory")
+			}
+			if _, err := os.Stat(g.KubeconfigPath()); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("missing own ServiceAccount projection retained a selected kubeconfig")
+			}
+		})
 	}
 }
 

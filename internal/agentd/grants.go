@@ -246,7 +246,8 @@ func (g Grants) Install(spec GrantSpec, token []byte) error {
 
 // Remove deletes the grant's directory and rewrites the kubeconfig. Removing a
 // grant that is not installed is not an error. When the current context was
-// the grant's, it becomes "default"; with no grant left the kubeconfig goes.
+// the grant's, it becomes "default"; with no grant left the default context
+// remains.
 func (g Grants) Remove(name string) error {
 	if err := protocol.ValidGrantName(name); err != nil {
 		return err
@@ -399,18 +400,6 @@ func (g Grants) readOne(name string) (protocol.InstalledGrant, bool) {
 // when it is set, else what it was if that context is still there, else
 // "default". The default context remains when no grant is left.
 func (g Grants) rewrite(now time.Time, use string) error {
-	if g.Server == "" {
-		return errors.New("KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT are not set, so the kubeconfig cannot name the API server")
-	}
-	if !dnsLabel.MatchString(g.Namespace) || len(g.Namespace) > 63 {
-		return errors.New("the pod namespace is not set or is invalid")
-	}
-	for _, path := range []string{g.ownTokenFile(), g.ownCAFile()} {
-		fi, err := os.Stat(path)
-		if err != nil || !fi.Mode().IsRegular() {
-			return errors.New("the pod's own ServiceAccount projection is unavailable")
-		}
-	}
 	entries, err := os.ReadDir(g.Dir)
 	if err != nil {
 		return err
@@ -433,6 +422,21 @@ func (g Grants) rewrite(now time.Time, use string) error {
 		}
 	}
 	sort.Slice(live, func(i, j int) bool { return live[i].Name < live[j].Name })
+	if g.Server == "" {
+		return errors.New("KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT are not set, so the kubeconfig cannot name the API server")
+	}
+	if !dnsLabel.MatchString(g.Namespace) || len(g.Namespace) > 63 {
+		return errors.New("the pod namespace is not set or is invalid")
+	}
+	for _, path := range []string{g.ownTokenFile(), g.ownCAFile()} {
+		fi, err := os.Stat(path)
+		if err != nil || !fi.Mode().IsRegular() {
+			if err := os.Remove(g.KubeconfigPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return errors.New("the pod's own ServiceAccount projection is unavailable")
+		}
+	}
 
 	cur := use
 	if cur == "" {

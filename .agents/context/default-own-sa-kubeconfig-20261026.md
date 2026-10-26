@@ -30,3 +30,43 @@ Measured verification: `git diff --check` passed. The serial focused command
 'TestGrants|TestCredentialsCoexistFenceAndExpire|TestDaemonRemovesExpiredCredentials'
 -count=1` could not start and exited 127 because `go` is absent. No live or
 cross-pod execution was attempted.
+
+## 2026-10-26 UTC — correction custody receipt
+
+ACK: custody moved from predecessor task
+`dev-env-1026-035800` (whose source head was
+`18114cee47974a21a0c3f98258702e757bda204d`) to this isolated source task
+`dev-env-1026-041213`, after the predecessor's reported exit. The verified
+remote PR branch matched that exact head before this pass; base remains
+`7976b1ad1ff50aef2b2a82e639a369546821b610`. This task has no operator-supplied
+native task identifier (`AGENTD_SESSION` is unset). Parent source receipt:
+`01a171cd-191b-72ce-94d9-1451d117b036`; access-coordinator receipt:
+`01a17599-3e22-7428-b478-c74104db803b`; existing Sol/root review thread:
+`01a164b6-4fdd-73f2-b49b-738c23b5a709`.
+
+Configured source writer tier was Terra / medium. Actual served model and
+effort are Unknown: this task has no supported runtime receipt for them.
+
+This corrective pass restores `TestGrantsLifecycle`'s closure over its mutable
+clock; moves grant-directory cleanup before own-projection validation; removes
+the stale kubeconfig when that projection is absent after cleanup; and adds a
+single daemon-hook fresh-zero-grant test that resolves the generated config via
+client-go against a synthetic TLS endpoint using synthetic valid certificate and
+token files. It preserves existing namespace, selected-valid-grant, lock,
+private atomic-write, provider-directory, and token-path behavior. The stale
+last-removal comment is corrected.
+
+Measured source state before commit: `git diff --check` passed. The one focused
+serial command, bounded as `GOMAXPROCS=2 nice -n 19 go test -p 1
+./internal/agentd -run
+'TestGrants|TestCredentialsCoexistFenceAndExpire|TestDaemonRemovesExpiredCredentials|TestDaemonBootRefreshesDefaultKubeconfig'
+-count=1`, did not start: `go` and `gofmt` are absent, and `nice` returned exit
+127. No toolchain was installed; source tests and formatter verification are
+therefore not passed. No runtime, deployment, credentials, grants, RBAC, or
+network endpoint outside the synthetic test server was used.
+
+Existing required CI run `40267080572` was observed before this corrective
+commit with Lint `FAILURE` and Test still in progress. Its lint diagnostic was
+not retrieved or inferred in this source pass; coordinator follow-through owns
+the resulting exact-head CI and independent review. This task neither merges
+nor deploys.

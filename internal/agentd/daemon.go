@@ -39,6 +39,9 @@ type Daemon struct {
 	// ProjectCatalog is constructed from trusted pod configuration by the
 	// command. Disabled private bootstrap never invokes its reader.
 	ProjectCatalog *ProjectCatalogSource
+	// grants is a focused test seam for the boot and maintenance refresh hook.
+	// Production always derives grants from the pod environment.
+	grants func(func(string) string) Grants
 
 	failures int
 	// copying is set while a copy of the log to the shared volume runs, so a
@@ -489,7 +492,12 @@ func (d *Daemon) expireCredentials() {
 	if err := c.Expire(); err != nil && !errors.Is(err, ErrNoGrantsDir) {
 		d.Log.Warn("credential expiry cleanup failed")
 	}
-	if err := c.Grants.Refresh(); err != nil && !errors.Is(err, ErrNoGrantsDir) {
+	g := c.Grants
+	if d.grants != nil {
+		g = d.grants(d.S.Getenv)
+	}
+	g.Now = d.now
+	if err := g.Refresh(); err != nil && !errors.Is(err, ErrNoGrantsDir) {
 		d.Log.Warn("grant kubeconfig refresh failed")
 	}
 }

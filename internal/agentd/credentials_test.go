@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +20,8 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func credentialFixture(t *testing.T) (Credentials, CredentialSpec, protocol.CredentialPayload) {
@@ -348,5 +353,55 @@ func TestDaemonRemovesExpiredCredentials(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expiry supervisor did not stop")
+	}
+}
+
+func TestDaemonBootRefreshesDefaultKubeconfig(t *testing.T) {
+	const token = "synthetic-own-token"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			t.Error("client-go did not resolve the projected token file")
+			http.Error(w, "missing token", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	g := testGrants(t, now)
+	g.Server = server.URL
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(g.OwnCAFile, certificate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(g.OwnTokenFile, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{
+		S: Settings{Getenv: func(string) string { return "" }},
+		Now: func() time.Time { return now },
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		grants: func(func(string) string) Grants {
+			return g
+		},
+	}
+	d.expireCredentials()
+
+	config, err := clientcmd.BuildConfigFromFlags("", g.KubeconfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := rest.HTTPClientFor(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("resolved kubeconfig endpoint status = %d", response.StatusCode)
 	}
 }
