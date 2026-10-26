@@ -93,11 +93,6 @@ jobs:
         with:
           path: bin/tools/golangci-lint-*
           key: golangci-lint-${{ runner.os }}-${{ hashFiles('Makefile') }}
-      - name: Temporary formatting diff
-        run: |
-          echo FORMAT_DIFF_BEGIN
-          gofmt -d cmd/dev-env-operator/broker.go cmd/dev-env-operator/main.go internal/agentrun/grant.go internal/agentrun/grant_decision.go internal/agentrun/grant_decision_test.go internal/apiserver/grant_decision.go internal/apiserver/grant_decision_test.go internal/apiserver/server.go internal/broker/broker.go internal/broker/manager.go internal/broker/match.go internal/broker/grant_decision.go internal/broker/grant_decision_test.go internal/broker/manual_pod.go internal/broker/manual_pod_test.go internal/broker/decision_guard_envtest_test.go internal/egress/policy.go internal/egress/policy_test.go internal/grantdecision/binding.go internal/grantdecision/binding_test.go internal/grantdecision/handoff.go
-          echo FORMAT_DIFF_END
       - name: golangci-lint
         run: make lint
 
