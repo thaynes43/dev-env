@@ -559,6 +559,8 @@ A reap returns at once; agent-run show <name> follows it until the session is go
        agent-run grant request --type <type> --reason <why> [--no-wait] [type flags] [-o json]
        agent-run grant release <grant-id> [-o json]
        agent-run grant use <grant-id>|default
+       agent-run grant decision show <grant-id>
+       agent-run grant decision submit <grant-id> --decision approve|deny [--ttl <duration>] [--reason <why>] [--relay-ref <id>]
 
 Read, request, release and use access grants (DESIGN-001 6.12). This is part
 of plan 07 step 7. Request posts the ask. Release asks the broker to end the
@@ -588,6 +590,13 @@ the grant the session already holds.
   --ttl <duration>   such as 45m; empty uses the API default
 
 grant release names one grant. The grant object stays as the audit record.
+
+grant decision show prints a JSON summary for review. Submit reads that reviewed
+summary on stdin and sends the selected decision through the authenticated API.
+Only an authenticated human, delegated coordinator or parent session can submit; broker acceptance
+is separate and must be checked with grant show. This does not establish that a
+phone answer is a human attestation. The feature is disabled until its guard and
+acceptance checks are complete.
 
 grant use runs agentd ctl grant-use. The name is grant-<id> or default.
 It does not call the API.

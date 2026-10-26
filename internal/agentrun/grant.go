@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -38,6 +39,8 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return &exitError{code: ExitUsage}
 	}
 	switch args[0] {
+	case "decision":
+		return a.grantDecision(ctx, args[1:])
 	case "list":
 		return a.grantList(ctx, args[1:])
 	case "show":
@@ -53,7 +56,7 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return nil
 	}
 	_, _ = io.WriteString(a.env.Stderr, commandHelp["grant"])
-	return usageError("unknown grant command %q: it is list, show, request, release or use", args[0])
+	return usageError("unknown grant command %q: it is list, show, request, release, use or decision", args[0])
 }
 
 func (a *app) grantList(ctx context.Context, args []string) error {
@@ -382,6 +385,36 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	a.outf("name: %s\nphase: %s\ntype: %s\nsession: %s\nttl: %s\nexpires: %s\nreason: %s\n",
 		out.Name, out.Phase, out.Type, firstOf(out.Session, "-"), out.TTL, expires, out.Reason)
+	if out.UID != "" {
+		a.outf("grant UID: %s\nsession UID: %s\nscope hash: %s\n", out.UID, out.SessionUID, out.ScopeHash)
+	}
+	if out.Role != "" {
+		a.outf("role: %s\nnamespaces: %s\n", out.Role, strings.Join(out.Namespaces, ", "))
+	}
+	for _, fqdn := range out.FQDNs {
+		a.outf("fqdn: %s\n", fqdn)
+	}
+	for _, cidr := range out.CIDRs {
+		a.outf("cidr: %s\n", cidr)
+	}
+	for _, ep := range out.Endpoints {
+		keys := make([]string, 0, len(ep.MatchLabels))
+		for k := range ep.MatchLabels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		a.outf("endpoint: %s", ep.Namespace)
+		for _, k := range keys {
+			a.outf(" %s=%s", k, ep.MatchLabels[k])
+		}
+		a.outf("\n")
+	}
+	for _, port := range out.Ports {
+		a.outf("port: %d/%s\n", port.Port, firstOf(port.Protocol, "TCP"))
+	}
+	if out.Credential != "" {
+		a.outf("credential: %s (provider authority; inspect before approval)\n", out.Credential)
+	}
 	if out.Message != "" {
 		a.outf("message: %s\n", out.Message)
 	}

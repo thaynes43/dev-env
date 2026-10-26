@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // ManagedBy is the identity label on the broker's grant policies.
@@ -41,6 +42,16 @@ func source(session string) map[string]any {
 			"key": "k8s:" + v1alpha1.LabelHold, "operator": "NotIn", "values": []any{"true"},
 		}},
 	}
+}
+
+// sourceFor retains existing standing-grant behavior; a manual decision is
+// restricted to the exact pod identity recorded in its protected handoff.
+func sourceFor(g *v1alpha1.AccessGrant) map[string]any {
+	sel := source(g.Spec.Requester.Session)
+	if h, ok := grantdecision.ApprovedHandoff(g); ok {
+		sel["matchLabels"].(map[string]any)["k8s:"+grantdecision.PodUIDLabel] = string(h.Binding.PodUID)
+	}
+	return sel
 }
 
 // Policy builds a previously validated egress grant. Every destination opens
@@ -91,7 +102,7 @@ func Policy(namespace string, g *v1alpha1.AccessGrant) *unstructured.Unstructure
 		endpoints = append(endpoints, map[string]any{"matchLabels": labels})
 	}
 	add("toEndpoints", endpoints)
-	u.Object["spec"] = map[string]any{"endpointSelector": source(g.Spec.Requester.Session), "egress": rules}
+	u.Object["spec"] = map[string]any{"endpointSelector": sourceFor(g), "egress": rules}
 	return u
 }
 
@@ -109,7 +120,7 @@ func OwnedBy(u *unstructured.Unstructured, namespace string, g *v1alpha1.AccessG
 		return false
 	}
 	selector, found, err := unstructured.NestedMap(u.Object, "spec", "endpointSelector")
-	return err == nil && found && apiequality.Semantic.DeepEqual(selector, source(g.Spec.Requester.Session))
+	return err == nil && found && apiequality.Semantic.DeepEqual(selector, sourceFor(g))
 }
 
 // Matches also verifies the destinations and ports, so an existing broader

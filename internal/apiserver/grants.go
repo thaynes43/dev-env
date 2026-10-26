@@ -20,6 +20,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // The grant routes (D-56). A session asks for a grant for its own pod; the
@@ -490,6 +491,8 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 	st := g.Status
 	v := apiv1.Grant{
 		Name:            g.Name,
+		UID:             string(g.UID),
+		SessionUID:      string(rq.SessionUID),
 		Session:         rq.Session,
 		Repo:            rq.Repo,
 		Profile:         rq.Profile,
@@ -512,6 +515,7 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 		InstalledPodUID: st.InstalledPodUID,
 		InstalledAt:     timeOf(st.InstalledAt),
 	}
+	v.ScopeHash, _ = grantdecision.ScopeHash(g)
 	if kg := g.Spec.Kube; kg != nil {
 		v.Role, v.Namespaces = kg.Role, kg.Namespaces
 	}

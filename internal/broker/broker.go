@@ -54,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 const (
@@ -101,6 +102,8 @@ type Broker struct {
 	// EnableProxmoxGrants permits new PVE execution requests. Existing jobs
 	// still clean up when this is disabled.
 	EnableProxmoxGrants bool
+	// GrantDecisionEnabled requires the operator-only handoff admission guard.
+	GrantDecisionEnabled bool
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.
@@ -183,6 +186,11 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 // pending answers a grant that waits: released, timed out, approved by a
 // policy, or still waiting for Tom, who is told once.
 func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (ctrl.Result, error) {
+	if b.GrantDecisionEnabled {
+		if handled, result, err := b.pendingHandoff(ctx, g); handled || err != nil {
+			return result, err
+		}
+	}
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released before an answer", now)
 	}
@@ -247,6 +255,26 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released by its session", now)
 	}
+	var approvedPodUID types.UID
+	// Manual decisions are for the exact approved pod, not a later pod with
+	// the same session name. The UID label gives egress the same fence even
+	// if replacement races the policy create. Standing grants are unchanged.
+	if strings.HasPrefix(g.Status.ApprovedBy, "human/") || strings.HasPrefix(g.Status.ApprovedBy, "coordinator/") || strings.HasPrefix(g.Status.ApprovedBy, "session/") {
+		h, ok := grantdecision.ApprovedHandoff(g)
+		pod, err := b.manualSessionPod(ctx, sess, true)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ok || pod == nil || !h.Binding.Matches(g, pod.UID) {
+			return b.end(ctx, g, v1alpha1.GrantReleased, "", "approved pod or request changed", now)
+		}
+		approvedPodUID = pod.UID
+		if g.Spec.Type == v1alpha1.GrantEgress {
+			if err := b.labelManualPod(ctx, pod); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	}
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)
 	}
@@ -273,6 +301,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		changed = g.Status.ServiceAccount != g.Name
 		if b.Installer != nil {
 			if pod := b.sessionPod(ctx, sess, true); pod != nil {
+				if approvedPodUID != "" && pod.UID != approvedPodUID {
+					return b.end(ctx, g, v1alpha1.GrantReleased, "", "approved pod changed before installation", b.now())
+				}
 				var installed bool
 				res, installed, err = b.install(ctx, g, pod, now)
 				if err != nil || g.Status.Phase != v1alpha1.GrantActive {
@@ -424,22 +455,31 @@ func (b *Broker) lookupSession(ctx context.Context, name string) (*v1alpha1.Agen
 // session, controlled by it, not a hold pod (D-55), not being deleted, and
 // Running when running is true. Otherwise nil.
 func (b *Broker) sessionPod(ctx context.Context, s *v1alpha1.AgentSession, running bool) *corev1.Pod {
+	pod, _ := b.manualSessionPod(ctx, s, running)
+	return pod
+}
+
+// manualSessionPod preserves transient read errors so manual decisions retry.
+func (b *Broker) manualSessionPod(ctx context.Context, s *v1alpha1.AgentSession, running bool) (*corev1.Pod, error) {
 	var pod corev1.Pod
 	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: s.Name}, &pod); err != nil {
-		return nil
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	ref := metav1.GetControllerOf(&pod)
 	switch {
 	case ref == nil || ref.UID != s.UID:
-		return nil
+		return nil, nil
 	case pod.Labels[v1alpha1.LabelSession] != s.Name || pod.Labels[v1alpha1.LabelHold] == "true":
-		return nil
+		return nil, nil
 	case !pod.DeletionTimestamp.IsZero():
-		return nil
+		return nil, nil
 	case running && pod.Status.Phase != corev1.PodRunning:
-		return nil
+		return nil, nil
 	}
-	return &pod
+	return &pod, nil
 }
 
 // mint asks the API server for a token of the grant's ServiceAccount that
