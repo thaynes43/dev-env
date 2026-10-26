@@ -132,16 +132,16 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		clk = clock.RealClock{}
 	}
 	b := &Broker{
-		Client:              mgr.GetClient(),
-		APIReader:           mgr.GetAPIReader(),
-		SessionNamespace:    o.SessionNamespace,
-		PolicyNamespace:     o.PolicyNamespace,
-		EnableProxmoxGrants: o.EnableProxmoxGrants,
+		Client:               mgr.GetClient(),
+		APIReader:            mgr.GetAPIReader(),
+		SessionNamespace:     o.SessionNamespace,
+		PolicyNamespace:      o.PolicyNamespace,
+		EnableProxmoxGrants:  o.EnableProxmoxGrants,
 		GrantDecisionEnabled: o.GrantDecisionEnabled,
-		Clock:               clk,
-		Notifier:            o.Notifier,
-		Installer:           o.Installer,
-		Recorder:            mgr.GetEventRecorder(Name),
+		Clock:                clk,
+		Notifier:             o.Notifier,
+		Installer:            o.Installer,
+		Recorder:             mgr.GetEventRecorder(Name),
 	}
 	b.reconciled = o.reconciled
 	if err := b.SetupWithManager(mgr); err != nil {

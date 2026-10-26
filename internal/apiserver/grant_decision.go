@@ -18,17 +18,17 @@ import (
 )
 
 type grantDecisionSummary struct {
-	Grant           apiv1.Grant `json:"grant"`
+	Grant           apiv1.Grant           `json:"grant"`
 	Binding         grantdecision.Binding `json:"binding"`
-	ResourceVersion string `json:"resourceVersion"`
+	ResourceVersion string                `json:"resourceVersion"`
 }
 type grantDecisionRequest struct {
 	Binding         grantdecision.Binding `json:"binding"`
-	ResourceVersion string `json:"resourceVersion"`
-	Decision        string `json:"decision"`
-	TTL             string `json:"ttl,omitempty"`
-	Reason          string `json:"reason,omitempty"`
-	RelayRef        string `json:"relayRef,omitempty"`
+	ResourceVersion string                `json:"resourceVersion"`
+	Decision        string                `json:"decision"`
+	TTL             string                `json:"ttl,omitempty"`
+	Reason          string                `json:"reason,omitempty"`
+	RelayRef        string                `json:"relayRef,omitempty"`
 }
 
 // decisionGrant reads the current request and independently verifies the exact
@@ -65,7 +65,7 @@ func (s *Server) decisionGrant(ctx context.Context, r *http.Request, c *caller) 
 	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: g.Namespace, Name: g.Spec.Requester.Session}, &session); err != nil || session.UID != g.Spec.Requester.SessionUID || !session.DeletionTimestamp.IsZero() {
 		return nil, grantdecision.Binding{}, newError(http.StatusConflict, apiv1.CodeConflict, "requesting session is unavailable or replaced")
 	}
-		if c.kind == kindSession && (session.Spec.Parent != c.session.Name || (session.Spec.UsageCaptureParentUID != "" && session.Spec.UsageCaptureParentUID != string(c.session.UID))) {
+	if c.kind == kindSession && (session.Spec.Parent != c.session.Name || (session.Spec.UsageCaptureParentUID != "" && session.Spec.UsageCaptureParentUID != string(c.session.UID))) {
 		return nil, grantdecision.Binding{}, forbidden("only a current parent session may relay a child decision")
 	}
 	var pod corev1.Pod

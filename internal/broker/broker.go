@@ -265,7 +265,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 			return b.end(ctx, g, v1alpha1.GrantReleased, "", "approved pod or request changed", now)
 		}
 		if g.Spec.Type == v1alpha1.GrantEgress {
-			if err := b.labelManualPod(ctx, pod); err != nil { return ctrl.Result{}, err }
+			if err := b.labelManualPod(ctx, pod); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 	}
 	if g.Spec.Type == v1alpha1.GrantCredential {

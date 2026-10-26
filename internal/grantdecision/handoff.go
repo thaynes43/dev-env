@@ -36,19 +36,29 @@ const PodUIDLabel = "dev-env.haynesops.com/grant-pod-uid"
 // longer matches. The annotation itself is admission-protected.
 func ApprovedHandoff(g *v1alpha1.AccessGrant) (Handoff, bool) {
 	var h Handoff
-	if g == nil || g.Status.ApprovedBy == "" { return h, false }
+	if g == nil || g.Status.ApprovedBy == "" {
+		return h, false
+	}
 	raw := g.Annotations[HandoffAnnotation]
-	if len(raw) == 0 || len(raw) > 4096 || json.Unmarshal([]byte(raw), &h) != nil { return h, false }
-	if h.Decision != "approve" || h.Principal != g.Status.ApprovedBy || h.Binding.GrantUID != g.UID || h.Binding.SessionUID != g.Spec.Requester.SessionUID || h.Binding.PodUID == "" || (!strings.HasPrefix(h.Principal, "human/") && !strings.HasPrefix(h.Principal, "coordinator/") && !strings.HasPrefix(h.Principal, "session/")) { return h, false }
+	if len(raw) == 0 || len(raw) > 4096 || json.Unmarshal([]byte(raw), &h) != nil {
+		return h, false
+	}
+	if h.Decision != "approve" || h.Principal != g.Status.ApprovedBy || h.Binding.GrantUID != g.UID || h.Binding.SessionUID != g.Spec.Requester.SessionUID || h.Binding.PodUID == "" || (!strings.HasPrefix(h.Principal, "human/") && !strings.HasPrefix(h.Principal, "coordinator/") && !strings.HasPrefix(h.Principal, "session/")) {
+		return h, false
+	}
 	return h, true
 }
 
 // ValidRelayRef accepts a bounded reference only; it is audit metadata, not
 // proof that a human answered.
 func ValidRelayRef(s string) bool {
-	if len(s) == 0 || len(s) > 160 { return false }
+	if len(s) == 0 || len(s) > 160 {
+		return false
+	}
 	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._:/", c)) { return false }
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._:/", c)) {
+			return false
+		}
 	}
 	return true
 }

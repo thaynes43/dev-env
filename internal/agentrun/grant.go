@@ -56,7 +56,7 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return nil
 	}
 	_, _ = io.WriteString(a.env.Stderr, commandHelp["grant"])
-	return usageError("unknown grant command %q: it is list, show, request, release or use", args[0])
+	return usageError("unknown grant command %q: it is list, show, request, release, use or decision", args[0])
 }
 
 func (a *app) grantList(ctx context.Context, args []string) error {

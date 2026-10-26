@@ -16,13 +16,13 @@ import (
 
 // brokerOptions are the flags of `dev-env-operator broker` (D-61).
 type brokerOptions struct {
-	sessionNamespace    string
-	policyNamespace     string
-	leaderElect         bool
-	enableProxmoxGrants bool
+	sessionNamespace     string
+	policyNamespace      string
+	leaderElect          bool
+	enableProxmoxGrants  bool
 	grantDecisionEnabled bool
-	metricsAddr         string
-	probeAddr           string
+	metricsAddr          string
+	probeAddr            string
 }
 
 func parseBrokerFlags(args []string) (brokerOptions, error) {
@@ -72,13 +72,13 @@ func runBroker(args []string) error {
 		return err
 	}
 	mgr, _, err := broker.NewManager(cfg, broker.Options{
-		SessionNamespace:    o.sessionNamespace,
-		PolicyNamespace:     o.policyNamespace,
-		EnableProxmoxGrants: o.enableProxmoxGrants,
+		SessionNamespace:     o.sessionNamespace,
+		PolicyNamespace:      o.policyNamespace,
+		EnableProxmoxGrants:  o.enableProxmoxGrants,
 		GrantDecisionEnabled: o.grantDecisionEnabled,
-		LeaderElect:         o.leaderElect,
-		MetricsAddr:         o.metricsAddr,
-		ProbeAddr:           o.probeAddr,
+		LeaderElect:          o.leaderElect,
+		MetricsAddr:          o.metricsAddr,
+		ProbeAddr:            o.probeAddr,
 		// Pushover plugs in at plan 07 step 6; until then the broker logs
 		// that Tom is wanted.
 		Notifier:  broker.LogNotifier{Log: log.WithName("notify")},
