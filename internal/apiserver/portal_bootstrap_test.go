@@ -83,7 +83,26 @@ func bootstrapTarget(t *testing.T, f *fixture, uid string) *corev1.ConfigMap {
 	mustBootstrap(t, f.c.Create(context.Background(), cm))
 	return cm
 }
-func restartBootstrap(f *fixture) { clone := *f.srv; f.srv = &clone; f.h = clone.Handler() }
+
+// Keep the durable store and handler dependencies, but give each simulated
+// process its own Server and mutexes rather than copying a live lock.
+func bootstrapServerInstance(s *Server) *Server {
+	return &Server{
+		Client:                   s.Client,
+		Live:                     s.Live,
+		Auth:                     s.Auth,
+		Policy:                   s.Policy,
+		Templates:                s.Templates,
+		Now:                      s.Now,
+		Log:                      s.Log,
+		PortalAdmissionBootstrap: s.PortalAdmissionBootstrap,
+	}
+}
+
+func restartBootstrap(f *fixture) {
+	f.srv = bootstrapServerInstance(f.srv)
+	f.h = f.srv.Handler()
+}
 func assertBootstrapConsumed(t *testing.T, f *fixture, uid, outcome string) {
 	t.Helper()
 	var p corev1.ConfigMap
@@ -330,7 +349,7 @@ func TestPortalBootstrapConcurrentReplicasCAS(t *testing.T) {
 		}
 		return c.Update(ctx, obj, opts...)
 	}})
-	replica := *f.srv
+	replica := bootstrapServerInstance(f.srv)
 	handlers := []http.Handler{f.h, replica.Handler()}
 	done := make(chan int, 2)
 	for _, h := range handlers {
