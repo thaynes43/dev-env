@@ -34,6 +34,13 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 			c.Session.ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == "/" && r.Method == http.MethodGet && r.URL.RawQuery == "" {
+			// The bare origin (Authentik's app tile) lands on Sessions.
+			authHeaders(w)
+			w.Header().Set("Location", SessionsPath)
+			w.WriteHeader(http.StatusSeeOther)
+			return
+		}
 		if r.URL.Path == SessionsPath || r.URL.Path == TasksPath {
 			serveProduct(w, c.Session.bind(r), c)
 			return

@@ -410,9 +410,9 @@ func sessionStatus(phase, agent string) portal.ProductStatus {
 	case protocol.AgentWaiting:
 		return portal.ProductStatus{Text: "Waiting", Tone: "wait"}
 	case protocol.AgentIdle:
-		return portal.ProductStatus{Text: "Idle", Tone: "info"}
+		return portal.ProductStatus{Text: "Idle", Tone: "muted"}
 	case protocol.AgentPending:
-		return portal.ProductStatus{Text: "Starting", Tone: "info"}
+		return portal.ProductStatus{Text: "Starting", Tone: "muted"}
 	case protocol.AgentExited:
 		return portal.ProductStatus{Text: "Exited", Tone: "muted"}
 	case protocol.AgentFailed:
@@ -420,7 +420,7 @@ func sessionStatus(phase, agent string) portal.ProductStatus {
 	case protocol.AgentInterrupted:
 		return portal.ProductStatus{Text: "Interrupted", Tone: "bad"}
 	}
-	tone := map[string]string{"Running": "ok", "Pending": "info", "Idle": "info", "Draining": "wait", "Failed": "bad"}[phase]
+	tone := map[string]string{"Running": "ok", "Pending": "muted", "Idle": "muted", "Draining": "wait", "Failed": "bad"}[phase]
 	return portal.ProductStatus{Text: shown(phase), Tone: tone}
 }
 

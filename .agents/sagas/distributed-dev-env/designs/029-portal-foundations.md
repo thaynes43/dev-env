@@ -352,3 +352,18 @@ security stuff yet."
   CAS-open flow (the "M6 same-connection recovery source" section above and
   `.agents/reports/portal178-m6/`). Session handling, CSRF, OIDC, group
   authorization, TLS pins and the PostgreSQL store are otherwise unchanged.
+
+### Entry and status colors, 2026-10-26
+
+Tom signed in on the first live deploy. Authentik's app tile opened the bare
+origin, which had no route and showed the read boundary's refusal text. He also
+said the green status icons clash with the theme.
+
+- `GET /` with no query redirects (303) to Sessions.
+- Sessions or Tasks without a current session redirect (303) to `/auth/login`.
+  A signed-in user whom current authority refuses still gets 403, so a
+  refusal never loops back to sign-in.
+- The `ok` tone (the Running badge and the live Read-only dot) uses the accent
+  lavender instead of green, in both color schemes. Idle and Starting turn
+  muted grey so that Running stays the only accent badge. Waiting (amber),
+  Busy (blue) and Failed (red) are unchanged.
