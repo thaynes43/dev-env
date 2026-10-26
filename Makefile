@@ -44,7 +44,7 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) -X $(VERSION_PKG).commit=$(COMMI
 # renovate: datasource=go depName=sigs.k8s.io/controller-tools
 CONTROLLER_TOOLS_VERSION ?= v0.22.0
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
-GOLANGCI_LINT_VERSION ?= v2.14.0
+GOLANGCI_LINT_VERSION ?= v2.15.0
 # setup-envtest downloads kube-apiserver, etcd and kubectl for the envtest suites
 # (from the controller-tools GitHub releases) into bin/tools/envtest/.
 # renovate: datasource=go depName=sigs.k8s.io/controller-runtime/tools/setup-envtest
