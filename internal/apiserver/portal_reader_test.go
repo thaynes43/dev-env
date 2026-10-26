@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -193,4 +194,116 @@ func (p *portalLive) List(_ context.Context, list client.ObjectList, opts ...cli
 		out.Continue = "after:" + out.Items[len(out.Items)-1].Name
 	}
 	return nil
+}
+
+func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
+	f := newFixture(t)
+	now := f.now
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "portal-pod", Namespace: sessionNS, UID: types.UID("pod-uid")}, Spec: corev1.PodSpec{ServiceAccountName: "dev-env-v2-portal", Containers: []corev1.Container{{Name: "portal", Image: "x"}}}}
+	sess := func(name string, mode v1alpha1.SessionMode, model string, agent *v1alpha1.AgentStatus) v1alpha1.AgentSession {
+		return v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: types.UID("uid-" + name)}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Agent: "claude", Mode: mode, Model: model, Prompt: "SECRET-PROMPT", Parent: humanSA}, Status: v1alpha1.AgentSessionStatus{Phase: v1alpha1.PhaseRunning, Agent: agent}}
+	}
+	at := func(when time.Time) *metav1.Time { stamp := metav1.NewTime(when); return &stamp }
+	task := sess("a-task", v1alpha1.ModeTask, "claude-opus-5-5", &v1alpha1.AgentStatus{Status: "busy", LastActivity: at(now.Add(-time.Minute)), LastHeartbeat: at(now)})
+	u := providerObservation("uid-a-task", "pod-a-task", protocol.AgentClaude, "claude-opus-5-5", 1234567, 0, "0.75",
+		servedModel("claude-haiku-4-5", 10, "0.05"), servedModel("claude-opus-5-5", 20, "0.7"))
+	u.CacheReadInputTokens = reportedTokens(5000)
+	task = *withObservation(&task, u)
+	// A remote session holds its own valid observation, but usage covers task sessions only.
+	remote := sess("b-remote", v1alpha1.ModeRemote, "claude-opus-5-5", &v1alpha1.AgentStatus{Status: "idle", LastActivity: at(now.Add(time.Hour))})
+	ru := providerObservation("uid-b-remote", "pod-b-remote", protocol.AgentClaude, "claude-opus-5-5", 7, 7, "0.01")
+	if ru.Validate() != nil {
+		t.Fatal("remote fixture observation is invalid")
+	}
+	remote = *withObservation(&remote, ru)
+	odd := sess("c-odd", "", "opus with spaces", &v1alpha1.AgentStatus{Status: "Busy"})
+	bare := sess("d-bare", v1alpha1.ModeLocal, "claude-opus-5-5", nil)
+	f.srv.Live = &portalLive{pod: pod, rv: "7", sessions: []v1alpha1.AgentSession{task, remote, odd, bare}}
+	id := saIdentity(portalReaderRef)
+	id.PodName, id.PodUID = pod.Name, string(pod.UID)
+	f.auth["tok-portal"] = id
+	f.srv.Policy.PortalReaderEnabled = true
+
+	// Without view=activity every row keeps the six keys earlier portal images require.
+	legacy := f.do(http.MethodGet, apiv1.SessionsPath+"?limit=50", "tok-portal", nil)
+	var raw struct {
+		Sessions []map[string]json.RawMessage `json:"sessions"`
+	}
+	if legacy.Code != http.StatusOK || json.Unmarshal(legacy.Body.Bytes(), &raw) != nil || len(raw.Sessions) != 4 {
+		t.Fatal(legacy.Code, legacy.Body.String())
+	}
+	for _, row := range raw.Sessions {
+		if len(row) != 6 || row["activity"] != nil {
+			t.Fatalf("legacy row changed shape: %v", row)
+		}
+	}
+
+	w := f.do(http.MethodGet, apiv1.SessionsPath+"?limit=50&view=activity", "tok-portal", nil)
+	body := w.Body.String()
+	page := decode[apiv1.PortalSessionPage](t, w)
+	if !page.Complete || len(page.Sessions) != 4 || strings.Contains(body, "SECRET-PROMPT") || strings.Contains(body, "prompt") || strings.Contains(body, "attemptID") || strings.Contains(body, "pod-a-task") || strings.Contains(body, "billingBasis") {
+		t.Fatalf("activity view leaked or lost rows: %s", body)
+	}
+	for _, s := range page.Sessions {
+		if s.Activity == nil {
+			t.Fatalf("activity missing for %s", s.Name)
+		}
+	}
+	a := page.Sessions[0].Activity
+	if a.Mode != "task" || a.AgentState != "busy" || a.LastActivity == nil || !a.LastActivity.Equal(now.Add(-time.Minute).UTC()) || a.RequestedModel != "claude-opus-5-5" {
+		t.Fatalf("task activity %+v", a)
+	}
+	got := a.Usage
+	if got.Scope != protocol.UsageInitial || got.ResultState != "Final" || strings.Join(got.ServedModels, ",") != "claude-haiku-4-5,claude-opus-5-5" ||
+		got.InputTokens.State != protocol.UsageReported || *got.InputTokens.Amount != 1234567 ||
+		got.OutputTokens.State != protocol.UsageReported || *got.OutputTokens.Amount != 0 ||
+		got.CacheReadInputTokens.State != protocol.UsageReported || *got.CacheReadInputTokens.Amount != 5000 ||
+		got.CacheCreationInputTokens.State != protocol.UsageUnknown || got.CacheCreationInputTokens.Amount != nil ||
+		got.Cost != estimate("0.75") {
+		t.Fatalf("task usage %+v", got)
+	}
+	*got.InputTokens.Amount = 1
+	if *task.Status.UsageObservation.InputTokens.Amount != 1234567 {
+		t.Fatal("response aliased the session status")
+	}
+	unknown := func(name string, u apiv1.PortalSessionUsage) {
+		t.Helper()
+		for _, m := range []protocol.TokenObservation{u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens} {
+			if m.State != protocol.UsageUnknown || m.Amount != nil {
+				t.Fatalf("%s counter was not Unknown: %+v", name, u)
+			}
+		}
+		if u.Scope != protocol.UsageUnknown || u.ResultState != protocol.UsageUnknown || u.ServedModels == nil || len(u.ServedModels) != 0 || u.Cost.State != protocol.UsageUnknown || u.Cost.Kind != protocol.UsageUnknown {
+			t.Fatalf("%s usage was not Unknown: %+v", name, u)
+		}
+	}
+	r := page.Sessions[1].Activity
+	if r.Mode != "remote" || r.AgentState != "idle" || r.LastActivity != nil {
+		t.Fatalf("remote activity %+v", r)
+	}
+	unknown("remote", r.Usage)
+	o := page.Sessions[2].Activity
+	if o.Mode != protocol.UsageUnknown || o.AgentState != protocol.UsageUnknown || o.RequestedModel != protocol.UsageUnknown || o.LastActivity != nil {
+		t.Fatalf("words outside their sets were passed through: %+v", o)
+	}
+	unknown("odd", o.Usage)
+	b := page.Sessions[3].Activity
+	if b.Mode != "local" || b.AgentState != protocol.UsageUnknown || b.LastActivity != nil {
+		t.Fatalf("session without agent status %+v", b)
+	}
+	unknown("bare", b.Usage)
+	if !strings.Contains(body, `"servedModels":[]`) || strings.Contains(body, `"lastActivity":null`) {
+		t.Fatalf("empty list or absent time was serialized ambiguously: %s", body)
+	}
+
+	for _, path := range []string{
+		apiv1.SessionsPath + "?view=usage",
+		apiv1.SessionsPath + "?view=",
+		apiv1.SessionsPath + "?view=activity&view=activity",
+		apiv1.SessionsPath + "?view=ACTIVITY",
+	} {
+		if f.do(http.MethodGet, path, "tok-portal", nil).Code == http.StatusOK {
+			t.Fatalf("view accepted %s", path)
+		}
+	}
 }

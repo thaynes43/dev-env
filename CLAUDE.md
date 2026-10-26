@@ -109,7 +109,7 @@ internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenRev
                          session directory, task budgets and archived history (DESIGN-025 8). Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
-internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library only, for agent-run
+internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library and agentd's standard-library protocol only, for agent-run
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
 internal/maintenancecontract/ bounded offline upgrade-shepherd envelope validator and correlation evaluator; a candidate is not operational deferral
 internal/standby/       the leader-only standby runnable (Story110 T25, plan 03): keeps one `remote` Claude AgentSession ready, found by its label, behind `--enable-standby-session` (default off); a ConfigMap-backed circuit breaker allows three creations in 30 minutes

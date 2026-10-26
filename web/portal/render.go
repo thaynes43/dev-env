@@ -24,16 +24,22 @@ var viewsSource string
 //go:embed attention.css
 var pageStyle string
 
+//go:embed views.css
+var viewsStyle string
+
 var (
 	exactHead     = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	contentPolicy = policy()
+	contentPolicy = policy(pageStyle)
+	// ProductPolicy is the Sessions and Tasks pages' Content-Security-Policy: no
+	// script, no form, no external resource, and only the embedded views stylesheet.
+	ProductPolicy = policy(viewsStyle)
 	// Only the embedded, repository-owned CSS enters this template source.
 	pageTemplate  = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
-	viewsTemplate = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
+	viewsTemplate = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
 )
 
-func policy() string {
-	digest := sha256.Sum256([]byte(pageStyle))
+func policy(style string) string {
+	digest := sha256.Sum256([]byte(style))
 	return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 }
 
@@ -67,30 +73,197 @@ type groupView struct {
 	ID, Title, Count string
 	Rows             []rowView
 }
-type ProductField struct{ Label, Value string }
-type ProductRow struct {
-	Title, Link string
-	Fields      []ProductField
+
+// ProductField is one label and value. Mono sets identifiers in monospace.
+type ProductField struct {
+	Label, Value string
+	Mono         bool
 }
+
+// ProductStatus is a status badge. Tone is one of ok, busy, wait, bad, info
+// or muted; anything else renders muted.
+type ProductStatus struct{ Text, Tone string }
+
+// ProductStat is one usage headline figure. A muted tone marks Unknown.
+type ProductStat struct{ Label, Value, Note, Tone string }
+
+// ProductSection is one panel of a row's detail: optional tiles, key-value
+// rows and one short note.
+type ProductSection struct {
+	Title           string
+	Metrics, Fields []ProductField
+	Note            string
+}
+
+// ProductRow is one list item and its detail. ID is the in-page anchor, s or t
+// followed by digits; a row with any other ID is not rendered.
+type ProductRow struct {
+	ID, Title, Kicker, Description, Meta, Age string
+	Crumb, Link, LinkLabel, ContextTitle      string
+	MonoTitle                                 bool
+	Status                                    ProductStatus
+	Badges                                    []string
+	Sections                                  []ProductSection
+	Context                                   []ProductField
+}
+
+// ProductGroup is one titled list group. Attention marks the group the rail's
+// Needs attention link opens.
+type ProductGroup struct {
+	Title     string
+	Attention bool
+	Rows      []ProductRow
+}
+
+// ProductUsageCell is one table cell; Unknown dims it.
+type ProductUsageCell struct {
+	Label, Value string
+	Unknown      bool
+}
+
+// ProductUsageRow is one session's usage row, linked to its detail by ID.
+type ProductUsageRow struct {
+	ID, Name, Sub string
+	Cells         []ProductUsageCell
+}
+
+// ProductUsage is the Sessions page's Usage view. It holds no totals.
+type ProductUsage struct {
+	Stats            []ProductStat
+	Scope, ScopeNote string
+	Columns          []string
+	Rows             []ProductUsageRow
+	Coverage         []ProductField
+}
+
+// ProductPage is one product view. Groups and Usage render only when
+// Connected, and counts only when Complete: an incomplete read has no count.
+// Quiet marks an ordinary notice; Preview labels fixture data.
 type ProductPage struct {
-	Title, Notice, ObservedAt string
-	Connected                 bool
-	Rows                      []ProductRow
+	Title, Notice, ObservedAt           string
+	ListTitle, ListCount                string
+	Connected, Complete, Quiet, Preview bool
+	Groups                              []ProductGroup
+	Usage                               *ProductUsage
+}
+
+const (
+	productSessionsHref = "/portal/projects/dev-env/environments/internal/sessions"
+	productTasksHref    = "/portal/projects/dev-env/environments/internal/tasks"
+)
+
+var (
+	productTones = map[string]bool{"ok": true, "busy": true, "wait": true, "bad": true, "info": true, "muted": true}
+	productID    = regexp.MustCompile(`^[st][0-9]{1,4}$`)
+)
+
+func productTone(tone string) string {
+	if productTones[tone] {
+		return tone
+	}
+	return "muted"
+}
+
+type productGroupView struct {
+	ID, Title, Count string
+	Rows             []ProductRow
+}
+
+type productRowView struct {
+	ProductRow
+	Default bool
 }
 
 func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
-		Policy, Title, Notice, ObservedAt string
-		Rows                              []ProductRow
-	}{Policy: strings.TrimSuffix(contentPolicy, "; frame-ancestors 'none'"), Title: page.Title, Notice: page.Notice, ObservedAt: page.ObservedAt}
-	if page.Connected {
-		view.Rows = page.Rows
+		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
+		SessionsHref, TasksHref, UsageHref, PlannedHref, AttentionHref     string
+		ListTitle, ListCount, SessionCount, TaskCount, AttentionCount      string
+		Quiet, Preview, Banner, HasRows                                    bool
+		Groups                                                             []productGroupView
+		Rows                                                               []productRowView
+		Usage                                                              *ProductUsage
+	}{Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
+		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
+		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage", PlannedHref: "#planned",
+		ListTitle: page.ListTitle}
+	view.Section = "Agents"
+	if view.Current == "tasks" {
+		view.Section = "Tasks"
 	}
+	if view.ListTitle == "" {
+		view.ListTitle = page.Title
+	}
+	if page.Connected {
+		view.Quiet, view.ListCount, view.Usage = page.Quiet, page.ListCount, page.Usage
+		if view.Current == "sessions" && page.Usage != nil {
+			view.UsageHref = "#usage"
+		}
+		total := 0
+		for i, group := range page.Groups {
+			g := productGroupView{ID: "g" + strconv.Itoa(i+1), Title: group.Title}
+			for _, row := range group.Rows {
+				if !productID.MatchString(row.ID) {
+					continue
+				}
+				row.Status.Tone = productTone(row.Status.Tone)
+				g.Rows = append(g.Rows, row)
+				view.Rows = append(view.Rows, productRowView{ProductRow: row, Default: len(view.Rows) == 0})
+			}
+			if len(g.Rows) == 0 {
+				continue
+			}
+			if page.Complete {
+				g.Count = strconv.Itoa(len(g.Rows))
+			}
+			total += len(g.Rows)
+			if group.Attention && page.Complete {
+				view.AttentionHref, view.AttentionCount = "#"+g.ID, g.Count
+			}
+			view.Groups = append(view.Groups, g)
+		}
+		switch {
+		case !page.Complete:
+		case view.Current == "sessions":
+			view.SessionCount = strconv.Itoa(total)
+		default:
+			view.TaskCount = strconv.Itoa(total)
+		}
+	}
+	view.HasRows = len(view.Rows) > 0
+	view.Banner = view.HasRows && !view.Quiet && view.Notice != ""
 	var body bytes.Buffer
 	if err := viewsTemplate.Execute(&body, view); err != nil {
 		return nil, err
 	}
 	return body.Bytes(), nil
+}
+
+// observedLabel is the page time for people; the datetime attribute keeps RFC 3339.
+func observedLabel(value string) string {
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "Unknown"
+	}
+	return t.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+// Ago is a short relative time; a zero or future time is Unknown.
+func Ago(t, now time.Time) string {
+	if t.IsZero() || now.IsZero() || t.After(now) {
+		return "Unknown"
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 type pageView struct {

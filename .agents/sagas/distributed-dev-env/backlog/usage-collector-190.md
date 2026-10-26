@@ -48,3 +48,29 @@ exclusive output directory is mode 0700; `report.json` and `summary.txt` are
 mode 0600, created without overwrite or symlink traversal. They are private
 bounded evidence, not public artifacts, live monitoring, or full Story190/V1
 acceptance. See the saga decision log for the Story190 boundaries.
+
+## U1: usage on the portal Sessions page
+
+Selected 2026-10-26 under the frontend and usage MVP (Stories 178 and 190).
+Source only; no deployment, activation, credential, grant, DB or network change.
+
+- **Included:** the operator portal reader's opt-in `view=activity`, the
+  DESIGN-029 allowlist of mode, agent state, last activity, requested model and
+  the session's own initial-invocation usage; the portal Sessions page that
+  requests and renders it with a fixed coverage note; docs and focused tests.
+- **Excluded:** account allowance, collectors, storage, schedulers, totals,
+  descendant rollups, remote/TUI consumption, history or log reads, and any
+  change to the default six-key summary.
+- **Acceptance:** without the view, rows keep exactly six keys; with it, Unknown
+  stays distinct from zero, requested and served models stay separate, and
+  usage appears only for task sessions. The portal accepts a six-key row and
+  renders its activity Unknown, and refuses nulls, unknown keys, inconsistent
+  Unknown scopes and a non-task mode carrying measured usage. Required CI and an independent
+  exact-head review precede merge. A portal image with U1 needs an operator with
+  U1; the earlier image keeps working against either operator.
+- **Presentation (2026-10-26):** after Tom rejected the first look, U1 renders
+  in the approved Astra v2 "Agents" design: dark-first charcoal and lilac, a
+  script-free shell over the two existing routes, a Usage view without totals
+  and a Planned view for Automations and Watchdog. It includes the narrow
+  product-page CSP header that allows only the embedded stylesheet. See
+  [portal read boundary](../../../../docs/portal-read-boundary.md).

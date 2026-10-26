@@ -74,8 +74,9 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 	cursor := ""
 	complete := false
 	freshness := "observed"
+	var sessions []apiv1.PortalSessionSummary
 	for n := 0; n < productPageCap; n++ {
-		raw := operatorPortalOrigin + "/v1/sessions?limit=" + strconv.Itoa(productPageSize)
+		raw := operatorPortalOrigin + "/v1/sessions?limit=" + strconv.Itoa(productPageSize) + "&view=" + apiv1.PortalViewActivity
 		if cursor != "" {
 			raw += "&cursor=" + url.QueryEscape(cursor)
 		}
@@ -88,24 +89,14 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 			return page, err
 		}
 		freshness = worstFreshness(freshness, decoded.Freshness)
-		for _, row := range decoded.Sessions {
-			page.Rows = append(page.Rows, portal.ProductRow{Title: shown(row.Name), Fields: []portal.ProductField{{Label: "Phase", Value: shown(row.Phase)}, {Label: "Freshness", Value: shown(row.Freshness)}, {Label: "UID", Value: shown(row.UID)}}})
-		}
+		sessions = append(sessions, decoded.Sessions...)
 		complete = decoded.Complete
 		cursor = decoded.NextCursor
 		if complete {
 			break
 		}
 	}
-	page.Notice = "Connected session summaries."
-	if !complete {
-		page.Notice = "Sessions read is incomplete. This is not the full inventory."
-	} else if freshness != "observed" {
-		page.Notice = "Session freshness is " + freshness + "."
-	} else if len(page.Rows) == 0 {
-		page.Notice = "The completed session read returned no dev-env sessions."
-	}
-	return page, nil
+	return sessionsPage(sessions, complete, freshness, s.now()), nil
 }
 
 func (s *TaskSource) Read(ctx context.Context) (portal.ProductPage, error) {
@@ -121,30 +112,25 @@ func (s *TaskSource) Read(ctx context.Context) (portal.ProductPage, error) {
 	total := 0
 	haveTotal := false
 	complete := false
+	var all []portal.ProductRow
 	for pageNo := 1; pageNo <= productPageCap; pageNo++ {
 		body, err := productGet(ctx, s.client, taskCollectionURL(pageNo), token, productHALLimit, mediaHAL)
 		if err != nil {
 			return page, err
 		}
-		rows, pageTotal, done, err := decodeTaskPage(body, pageNo, seen)
+		rows, pageTotal, done, err := decodeTaskPage(body, pageNo, seen, s.now())
 		if err != nil || (haveTotal && pageTotal != total) {
 			return page, portal.ErrUnavailable
 		}
 		total = pageTotal
 		haveTotal = true
-		page.Rows = append(page.Rows, rows...)
+		all = append(all, rows...)
 		if done {
 			complete = true
 			break
 		}
 	}
-	page.Notice = "Connected project 3 work packages."
-	if !complete {
-		page.Notice = "Tasks read is incomplete. This is not the full inventory."
-	} else if len(page.Rows) == 0 {
-		page.Notice = "The completed task read returned no work packages."
-	}
-	return page, nil
+	return tasksPage(all, complete), nil
 }
 
 func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, error) {
@@ -225,12 +211,9 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSu
 	if err != nil {
 		return row, err
 	}
-	for _, key := range []string{"name", "uid", "repo", "phase", "observedAt", "freshness"} {
-		if _, ok := obj[key]; !ok {
-			return row, portal.ErrUnavailable
-		}
-	}
-	if len(obj) != 6 {
+	// A row is the six base keys, or those six and a valid activity object.
+	// Without activity every activity field renders Unknown.
+	if !exactKeys(obj, []string{"name", "uid", "repo", "phase", "observedAt", "freshness"}, "activity") {
 		return row, portal.ErrUnavailable
 	}
 	var name, uid, repo, phase, freshness string
@@ -244,7 +227,15 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSu
 	if err != nil {
 		return row, err
 	}
-	return apiv1.PortalSessionSummary{Name: name, UID: uid, Repo: repo, Phase: phase, ObservedAt: observed, Freshness: freshness}, nil
+	row = apiv1.PortalSessionSummary{Name: name, UID: uid, Repo: repo, Phase: phase, ObservedAt: observed, Freshness: freshness}
+	if rawActivity, ok := obj["activity"]; ok {
+		activity, err := decodeSessionActivity(rawActivity, now)
+		if err != nil {
+			return apiv1.PortalSessionSummary{}, err
+		}
+		row.Activity = &activity
+	}
+	return row, nil
 }
 
 func sessionPhase(phase string) bool {
@@ -256,7 +247,7 @@ func sessionPhase(phase string) bool {
 	}
 }
 
-func decodeTaskPage(body []byte, page int, seen map[int]struct{}) ([]portal.ProductRow, int, bool, error) {
+func decodeTaskPage(body []byte, page int, seen map[int]struct{}, now time.Time) ([]portal.ProductRow, int, bool, error) {
 	obj, err := jsonObject(body)
 	if err != nil {
 		return nil, 0, false, err
@@ -310,7 +301,7 @@ func decodeTaskPage(body []byte, page int, seen map[int]struct{}) ([]portal.Prod
 		if _, dup := seen[element.ID]; dup {
 			return nil, 0, false, portal.ErrUnavailable
 		}
-		row, err := taskRow(element)
+		row, err := taskRow(element, now)
 		if err != nil {
 			return nil, 0, false, err
 		}
@@ -467,24 +458,111 @@ type halWorkPackage struct {
 	} `json:"_embedded"`
 }
 
-func taskRow(element halWorkPackage) (portal.ProductRow, error) {
+func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	if element.ID < 1 || !projectThree(element) {
 		return portal.ProductRow{}, portal.ErrUnavailable
 	}
 	id := strconv.Itoa(element.ID)
+	status := shown(element.Links.Status.Title)
+	accountable := shown(element.CustomField1)
+	repos := shown(element.CustomField3)
+	updatedAgo, age := "updated Unknown", "Unknown"
+	if updated, err := time.Parse(time.RFC3339, element.UpdatedAt); err == nil {
+		updatedAgo, age = "updated "+portal.Ago(updated, now), compactAgo(&updated, now)
+	}
+	description := repos
+	if repos == "Unknown" {
+		description = "Repositories Unknown"
+	}
+	meta := accountable
+	if accountable == "Unknown" {
+		meta = "Accountable Unknown"
+	}
 	return portal.ProductRow{
-		Title: shown(element.Subject),
-		Link:  "https://work.haynesnetwork.com/work_packages/" + id,
-		Fields: []portal.ProductField{
-			{Label: "Status", Value: shown(element.Links.Status.Title)},
-			{Label: "Assignee", Value: shown(element.Links.Assignee.Title)},
-			{Label: "Accountable", Value: shown(element.CustomField1)},
-			{Label: "Responsible", Value: shown(element.Links.Responsible.Title)},
-			{Label: "Repositories", Value: shown(element.CustomField3)},
-			{Label: "Created", Value: shownTime(element.CreatedAt)},
-			{Label: "Updated", Value: shownTime(element.UpdatedAt)},
+		Title: shown(element.Subject), Kicker: "#" + id, Crumb: "#" + id,
+		Link: "https://work.haynesnetwork.com/work_packages/" + id, LinkLabel: "Open in OpenProject",
+		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: meta, Age: age,
+		Badges: []string{updatedAgo, description}, ContextTitle: "Work package",
+		Sections: []portal.ProductSection{
+			{Title: "Ownership", Fields: []portal.ProductField{
+				{Label: "Accountable", Value: accountable},
+				{Label: "Assignee", Value: shown(element.Links.Assignee.Title)},
+				{Label: "Responsible", Value: shown(element.Links.Responsible.Title)},
+			}},
+			{Title: "Dates", Fields: []portal.ProductField{
+				{Label: "Created", Value: shownDate(element.CreatedAt)},
+				{Label: "Updated", Value: shownDate(element.UpdatedAt)},
+			}},
+		},
+		Context: []portal.ProductField{
+			{Label: "Work package", Value: "#" + id, Mono: true},
+			{Label: "Status", Value: status},
+			{Label: "Repositories", Value: repos},
 		},
 	}, nil
+}
+
+// taskTone colors a work-package status by what it asks of a reader. An
+// unrecognized status is muted, never guessed.
+func taskTone(status string) string {
+	switch taskGroup(status) {
+	case 0:
+		return "wait"
+	case 1:
+		return "busy"
+	case 2:
+		return "info"
+	default:
+		return "muted"
+	}
+}
+
+var taskGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: true}, {Title: "In progress"}, {Title: "Planned"}, {Title: "Closed"}, {Title: "Other status"}}
+
+func taskGroup(status string) int {
+	switch strings.ToLower(status) {
+	case "needs answer", "needs approval", "on hold", "blocked", "feedback":
+		return 0
+	case "in progress", "in review", "developed", "tested":
+		return 1
+	case "new", "scheduled", "specified", "planned", "confirmed", "to be scheduled":
+		return 2
+	case "closed", "done", "accepted", "resolved", "rejected":
+		return 3
+	default:
+		return 4
+	}
+}
+
+// tasksPage groups work packages by status, keeping the collection's order
+// inside each group. Counts appear only for a complete read.
+func tasksPage(rows []portal.ProductRow, complete bool) portal.ProductPage {
+	page := portal.ProductPage{Title: "Tasks", ListTitle: "All tasks", Connected: true, Complete: complete}
+	switch {
+	case !complete:
+		page.Notice, page.ListCount = "Tasks read is incomplete. This is not the full inventory.", "Partial list"
+	case len(rows) == 0:
+		page.Notice = "The completed task read returned no work packages."
+	default:
+		page.Notice, page.Quiet = "Connected project 3 work packages.", true
+		page.ListCount = strconv.Itoa(len(rows)) + " work packages · haynes-engineering"
+	}
+	page.Groups = make([]portal.ProductGroup, len(taskGroups))
+	copy(page.Groups, taskGroups)
+	ordered := make([][]portal.ProductRow, len(taskGroups))
+	for _, row := range rows {
+		g := taskGroup(row.Status.Text)
+		ordered[g] = append(ordered[g], row)
+	}
+	n := 0
+	for g := range ordered {
+		for _, row := range ordered[g] {
+			n++
+			row.ID = "t" + strconv.Itoa(n)
+			page.Groups[g].Rows = append(page.Groups[g].Rows, row)
+		}
+	}
+	return page
 }
 
 func projectThree(element halWorkPackage) bool {
@@ -634,12 +712,13 @@ func shown(value string) string {
 	return value
 }
 
-func shownTime(value string) string {
+// shownDate is an RFC 3339 time for people, in UTC; anything else is Unknown.
+func shownDate(value string) string {
 	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
 		return "Unknown"
 	}
-	return parsed.UTC().Format(time.RFC3339)
+	return parsed.UTC().Format("2 Jan 2006, 15:04 UTC")
 }
 
 func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
@@ -695,6 +774,8 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		authFailure(w, portal.ErrUnavailable)
 		return
 	}
+	// The rendered page allows exactly its embedded stylesheet; refusals keep authHeaders' policy.
+	w.Header().Set("Content-Security-Policy", portal.ProductPolicy)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(body)
 }

@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -61,7 +62,7 @@ func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, 
 	if s.Policy.SessionNamespace != portalReaderNamespace || s.Live == nil {
 		return 0, nil, forbidden("the portal reader is not serving the dev-agents session namespace")
 	}
-	limit, cursor, err := portalPageQuery(r.URL.RawQuery)
+	limit, cursor, activity, err := portalPageQuery(r.URL.RawQuery)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -93,6 +94,9 @@ func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, 
 			continue
 		}
 		summary := portalSummary(item, now)
+		if activity {
+			summary.Activity = portalActivity(item, now)
+		}
 		if freshnessRank(summary.Freshness) > freshnessRank(page.Freshness) {
 			page.Freshness = summary.Freshness
 		}
@@ -129,35 +133,43 @@ type portalCursor struct {
 	Limit    int    `json:"limit"`
 }
 
-func portalPageQuery(raw string) (int, *portalCursor, error) {
+// portalPageQuery reads limit, cursor and view. view=activity is the only view;
+// without it each summary keeps its original six keys.
+func portalPageQuery(raw string) (int, *portalCursor, bool, error) {
 	q, err := url.ParseQuery(raw)
 	if err != nil || strings.Contains(raw, ";") {
-		return 0, nil, badRequest("the portal session query is not canonical")
+		return 0, nil, false, badRequest("the portal session query is not canonical")
 	}
 	limit := portalPageDefault
 	var cursor *portalCursor
+	activity := false
 	for key, values := range q {
 		if len(values) != 1 {
-			return 0, nil, badRequest("query parameter %s is repeated", key)
+			return 0, nil, false, badRequest("query parameter %s is repeated", key)
 		}
 		switch key {
 		case "limit":
 			n, err := strconv.Atoi(values[0])
 			if err != nil || n < 1 || n > portalPageMax || strconv.Itoa(n) != values[0] {
-				return 0, nil, badRequest("limit must be from 1 to %d", portalPageMax)
+				return 0, nil, false, badRequest("limit must be from 1 to %d", portalPageMax)
 			}
 			limit = n
 		case "cursor":
 			decoded, err := decodePortalCursor(values[0])
 			if err != nil {
-				return 0, nil, badRequest("the portal session cursor is malformed")
+				return 0, nil, false, badRequest("the portal session cursor is malformed")
 			}
 			cursor = &decoded
+		case "view":
+			if values[0] != apiv1.PortalViewActivity {
+				return 0, nil, false, badRequest("view must be %s", apiv1.PortalViewActivity)
+			}
+			activity = true
 		default:
-			return 0, nil, badRequest("the portal reader does not accept %q", key)
+			return 0, nil, false, badRequest("the portal reader does not accept %q", key)
 		}
 	}
-	return limit, cursor, nil
+	return limit, cursor, activity, nil
 }
 
 func decodePortalCursor(raw string) (portalCursor, error) {
@@ -227,4 +239,58 @@ func portalSummary(s *v1alpha1.AgentSession, now time.Time) apiv1.PortalSessionS
 		}
 	}
 	return apiv1.PortalSessionSummary{Name: s.Name, UID: string(s.UID), Repo: portalSessionRepo, Phase: phaseOf(s), ObservedAt: observed, Freshness: freshness}
+}
+
+// portalActivity is the DESIGN-029 allowlist for one session. Words outside
+// their fixed sets, an unbounded model id and a future activity time are
+// Unknown. Usage comes only from sessionUsage, the session's own validated
+// task observation; it is not summed with anything.
+func portalActivity(s *v1alpha1.AgentSession, now time.Time) *apiv1.PortalSessionActivity {
+	a := &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: portalUsage(sessionUsage(s))}
+	switch s.Spec.Mode {
+	case v1alpha1.ModeTask, v1alpha1.ModeLocal, v1alpha1.ModeRemote:
+		a.Mode = string(s.Spec.Mode)
+	}
+	if protocol.ValidUsageModelID(s.Spec.Model) {
+		a.RequestedModel = s.Spec.Model
+	}
+	if st := s.Status.Agent; st != nil {
+		switch st.Status {
+		case protocol.AgentPending, protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting, protocol.AgentExited, protocol.AgentFailed, protocol.AgentInterrupted:
+			a.AgentState = st.Status
+		}
+		if st.LastActivity != nil && !st.LastActivity.IsZero() && !st.LastActivity.After(now) {
+			at := st.LastActivity.UTC()
+			a.LastActivity = &at
+		}
+	}
+	return a
+}
+
+func portalUsage(u *protocol.UsageObservation) apiv1.PortalSessionUsage {
+	unknown := protocol.TokenObservation{State: protocol.UsageUnknown}
+	out := apiv1.PortalSessionUsage{Scope: protocol.UsageUnknown, ResultState: protocol.UsageUnknown, ServedModels: []string{},
+		InputTokens: unknown, OutputTokens: unknown, CacheReadInputTokens: unknown, CacheCreationInputTokens: unknown,
+		Cost: protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown}}
+	if u == nil || u.Validate() != nil {
+		return out
+	}
+	out.Scope, out.ResultState, out.Cost = protocol.UsageInitial, u.ResultState, u.Cost
+	out.InputTokens, out.OutputTokens = portalTokens(u.InputTokens), portalTokens(u.OutputTokens)
+	out.CacheReadInputTokens, out.CacheCreationInputTokens = portalTokens(u.CacheReadInputTokens), portalTokens(u.CacheCreationInputTokens)
+	if u.ActualModelState == protocol.UsageProviderReported {
+		for _, m := range u.ServedModels {
+			out.ServedModels = append(out.ServedModels, m.Model)
+		}
+	}
+	return out
+}
+
+// portalTokens copies the amount so the response never aliases session status.
+func portalTokens(m protocol.TokenObservation) protocol.TokenObservation {
+	if m.Amount == nil {
+		return protocol.TokenObservation{State: m.State}
+	}
+	amount := *m.Amount
+	return protocol.TokenObservation{State: m.State, Amount: &amount}
 }

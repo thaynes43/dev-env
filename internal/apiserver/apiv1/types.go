@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 // Paths. A session's own routes hang off SessionPath.
@@ -450,14 +452,51 @@ type SessionList struct {
 }
 
 // PortalSessionSummary is the only session object the portal reader returns.
-// It has no prompt, log, environment, outcome, or control fields.
+// It has no prompt, log, environment, outcome, or control fields. Activity is
+// set only for GET /v1/sessions?view=activity; without it a summary keeps the
+// six keys that earlier portal images require.
 type PortalSessionSummary struct {
-	Name       string    `json:"name"`
-	UID        string    `json:"uid"`
-	Repo       string    `json:"repo"`
-	Phase      string    `json:"phase"`
-	ObservedAt time.Time `json:"observedAt"`
-	Freshness  string    `json:"freshness"`
+	Name       string                 `json:"name"`
+	UID        string                 `json:"uid"`
+	Repo       string                 `json:"repo"`
+	Phase      string                 `json:"phase"`
+	ObservedAt time.Time              `json:"observedAt"`
+	Freshness  string                 `json:"freshness"`
+	Activity   *PortalSessionActivity `json:"activity,omitempty"`
+}
+
+// PortalViewActivity is the one value of the portal reader's view parameter.
+const PortalViewActivity = "activity"
+
+// PortalSessionActivity is DESIGN-029's browser allowlist for one session: its
+// mode, agentd's state word, its last activity, its configured model and its
+// own initial invocation usage. A value the operator does not hold is Unknown,
+// never zero. RequestedModel is the configured model, not the served one.
+// LastActivity is absent when it is unknown.
+type PortalSessionActivity struct {
+	Mode           string             `json:"mode"`
+	AgentState     string             `json:"agentState"`
+	LastActivity   *time.Time         `json:"lastActivity,omitempty"`
+	RequestedModel string             `json:"requestedModel"`
+	Usage          PortalSessionUsage `json:"usage"`
+}
+
+// PortalSessionUsage is a task session's own initial managed invocation as its
+// provider reported it (DESIGN-018). Scope is InitialManagedInvocation when the
+// operator holds a valid observation; otherwise Scope, ResultState and every
+// counter are Unknown, and an interactive or remote session is always Unknown.
+// ServedModels lists provider-reported model ids only. Cache read tokens can
+// overlap input tokens and are never added to them. Cost is a CLI list-price
+// equivalent estimate, never a charge or a subscription quota. Nothing is summed.
+type PortalSessionUsage struct {
+	Scope                    string                    `json:"scope"`
+	ResultState              string                    `json:"resultState"`
+	ServedModels             []string                  `json:"servedModels"`
+	InputTokens              protocol.TokenObservation `json:"inputTokens"`
+	OutputTokens             protocol.TokenObservation `json:"outputTokens"`
+	CacheReadInputTokens     protocol.TokenObservation `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens protocol.TokenObservation `json:"cacheCreationInputTokens"`
+	Cost                     protocol.CostObservation  `json:"cost"`
 }
 
 // PortalSessionPage is GET /v1/sessions for the portal reader. Complete is false

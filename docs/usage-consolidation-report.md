@@ -77,3 +77,16 @@ actual model state, served-model observations, time, and Unknown-versus-zero tok
 counters. It labels costs only as CLI-equivalent estimates, never charges, and emits
 no totals. They are bounded evidence only, not a public artifact or live usage
 monitor.
+
+## Portal Sessions view (U1)
+
+The portal's Sessions page shows each dev-env session's mode, agent state, last
+activity, requested model, provider-reported served models, the four
+initial-invocation token counters and the CLI-equivalent cost estimate. It reads
+them from the operator's opt-in `GET /v1/sessions?view=activity`
+([portal read boundary](portal-read-boundary.md)). This is a per-session view of
+the same validated observation `agent-run show` prints, not this projector's
+report. It covers task sessions' initial managed invocations only; interactive
+and remote sessions, later turns and account allowance stay `Unknown`. It emits
+no totals, does not add cache read tokens to input tokens, and labels cost as an
+estimate, not a charge.

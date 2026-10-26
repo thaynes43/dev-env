@@ -86,7 +86,11 @@ func TestSessionsAndTasksAreIndependent(t *testing.T) {
 	cleanSrv := serveTLS(t, operatorCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sessions":[{"name":"worker","uid":"uid-1","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T16:00:00Z","freshness":"observed"}],"limit":50,"complete":true,"freshness":"observed","observedAt":"2026-10-23T16:00:00Z"}`))
+		if r.URL.Query().Get("view") != "activity" {
+			http.Error(w, "view", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"sessions":[{"name":"worker","uid":"uid-1","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T16:00:00Z","freshness":"observed",` + unknownActivity + `}],"limit":50,"complete":true,"freshness":"observed","observedAt":"2026-10-23T16:00:00Z"}`))
 	}))
 	sessions, err = newSessionSource(operatorToken, operatorCA, func() time.Time { return now }, routeDial(map[string]string{operatorPortalHost: cleanSrv, openProjectPortalHost: opSrv}))
 	if err != nil {
@@ -161,7 +165,7 @@ func TestProductFailsClosedOnRedirectExpiryAndUntrustedCA(t *testing.T) {
 	}))
 	staleSrv := serveTLS(t, operatorCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sessions":[{"name":"older","uid":"uid-2","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T14:00:00Z","freshness":"stale"}],"limit":50,"complete":true,"freshness":"stale","observedAt":"2026-10-23T16:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"sessions":[{"name":"older","uid":"uid-2","repo":"dev-env","phase":"Running","observedAt":"2026-10-23T14:00:00Z","freshness":"stale",` + unknownActivity + `}],"limit":50,"complete":true,"freshness":"stale","observedAt":"2026-10-23T16:00:00Z"}`))
 	}))
 	foreignNext := serveTLS(t, opCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/hal+json")
@@ -365,12 +369,12 @@ func TestPortalProductDecodersRejectNullsAndKeepExplicitZeroValues(t *testing.T)
 		"elements": strings.Replace(task, `"elements":[]`, `"elements":null`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, _, err := decodeTaskPage([]byte(body), 1, map[int]struct{}{}); err == nil {
+			if _, _, _, err := decodeTaskPage([]byte(body), 1, map[int]struct{}{}, time.Time{}); err == nil {
 				t.Fatal("null task field was accepted")
 			}
 		})
 	}
-	rows, total, complete, err := decodeTaskPage([]byte(task), 1, map[int]struct{}{})
+	rows, total, complete, err := decodeTaskPage([]byte(task), 1, map[int]struct{}{}, time.Time{})
 	if err != nil || total != 0 || !complete || len(rows) != 0 {
 		t.Fatalf("explicit zero values changed: rows=%v total=%d complete=%t err=%v", rows, total, complete, err)
 	}
@@ -414,5 +418,26 @@ func TestSessionSourceReadKeepsTheWorstPage(t *testing.T) {
 				t.Fatalf("page=%+v requests=%d err=%v", page, requests, err)
 			}
 		})
+	}
+}
+
+// A rendered product page allows exactly its embedded stylesheet; a refusal
+// keeps the strict policy with no style source.
+func TestProductPagesSendTheirStylesheetPolicyOnly(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	handler := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+	for _, path := range []string{SessionsPath, TasksPath} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, f.request(http.MethodGet, path, ""))
+		if w.Code != http.StatusOK || w.Header().Get("Content-Security-Policy") != portal.ProductPolicy {
+			t.Fatalf("%s: %d %q", path, w.Code, w.Header().Get("Content-Security-Policy"))
+		}
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, f.request(http.MethodPost, SessionsPath, ""))
+	if w.Code == http.StatusOK || strings.Contains(w.Header().Get("Content-Security-Policy"), "style-src") {
+		t.Fatalf("refusal carried the product stylesheet policy: %d %q", w.Code, w.Header().Get("Content-Security-Policy"))
 	}
 }

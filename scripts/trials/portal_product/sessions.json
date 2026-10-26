@@ -1,0 +1,215 @@
+{
+ "version": 1,
+ "now": "2026-10-26T15:00:00Z",
+ "body": {
+  "sessions": [
+   {
+    "name": "fixture-portal-polish",
+    "uid": "fixture-uid-portal-polish",
+    "repo": "dev-env",
+    "phase": "Running",
+    "observedAt": "2026-10-26T14:59:30Z",
+    "freshness": "observed",
+    "activity": {
+     "mode": "task",
+     "agentState": "busy",
+     "requestedModel": "claude-opus-5-5",
+     "usage": {
+      "scope": "InitialManagedInvocation",
+      "resultState": "Partial",
+      "servedModels": [
+       "claude-opus-5-5"
+      ],
+      "inputTokens": {
+       "state": "Reported",
+       "amount": 184220
+      },
+      "outputTokens": {
+       "state": "Reported",
+       "amount": 9312
+      },
+      "cacheReadInputTokens": {
+       "state": "Reported",
+       "amount": 1520400
+      },
+      "cacheCreationInputTokens": {
+       "state": "Reported",
+       "amount": 64110
+      },
+      "cost": {
+       "state": "Reported",
+       "amount": "4.12",
+       "unit": "USD",
+       "kind": "ProviderCLIEquivalentEstimate"
+      }
+     },
+     "lastActivity": "2026-10-26T14:58:00Z"
+    }
+   },
+   {
+    "name": "fixture-coordinator",
+    "uid": "fixture-uid-coordinator",
+    "repo": "dev-env",
+    "phase": "Running",
+    "observedAt": "2026-10-26T14:59:10Z",
+    "freshness": "observed",
+    "activity": {
+     "mode": "remote",
+     "agentState": "idle",
+     "requestedModel": "claude-opus-5-5",
+     "usage": {
+      "scope": "Unknown",
+      "resultState": "Unknown",
+      "servedModels": [],
+      "inputTokens": {
+       "state": "Unknown"
+      },
+      "outputTokens": {
+       "state": "Unknown"
+      },
+      "cacheReadInputTokens": {
+       "state": "Unknown"
+      },
+      "cacheCreationInputTokens": {
+       "state": "Unknown"
+      },
+      "cost": {
+       "state": "Unknown",
+       "kind": "Unknown"
+      }
+     },
+     "lastActivity": "2026-10-26T14:41:00Z"
+    }
+   },
+   {
+    "name": "fixture-usage-export",
+    "uid": "fixture-uid-usage-export",
+    "repo": "dev-env",
+    "phase": "Suspended",
+    "observedAt": "2026-10-26T11:20:00Z",
+    "freshness": "observed",
+    "activity": {
+     "mode": "task",
+     "agentState": "exited",
+     "requestedModel": "claude-sonnet-5-5",
+     "usage": {
+      "scope": "InitialManagedInvocation",
+      "resultState": "Final",
+      "servedModels": [
+       "claude-haiku-4-5",
+       "claude-sonnet-5-5"
+      ],
+      "inputTokens": {
+       "state": "Reported",
+       "amount": 48210
+      },
+      "outputTokens": {
+       "state": "Reported",
+       "amount": 0
+      },
+      "cacheReadInputTokens": {
+       "state": "Reported",
+       "amount": 201000
+      },
+      "cacheCreationInputTokens": {
+       "state": "Unknown"
+      },
+      "cost": {
+       "state": "Reported",
+       "amount": "0.38",
+       "unit": "USD",
+       "kind": "ProviderCLIEquivalentEstimate"
+      }
+     },
+     "lastActivity": "2026-10-26T11:18:00Z"
+    }
+   },
+   {
+    "name": "fixture-terminal",
+    "uid": "fixture-uid-terminal",
+    "repo": "dev-env",
+    "phase": "Running",
+    "observedAt": "2026-10-26T14:59:40Z",
+    "freshness": "observed",
+    "activity": {
+     "mode": "local",
+     "agentState": "waiting",
+     "requestedModel": "claude-opus-5-5",
+     "usage": {
+      "scope": "Unknown",
+      "resultState": "Unknown",
+      "servedModels": [],
+      "inputTokens": {
+       "state": "Unknown"
+      },
+      "outputTokens": {
+       "state": "Unknown"
+      },
+      "cacheReadInputTokens": {
+       "state": "Unknown"
+      },
+      "cacheCreationInputTokens": {
+       "state": "Unknown"
+      },
+      "cost": {
+       "state": "Unknown",
+       "kind": "Unknown"
+      }
+     },
+     "lastActivity": "2026-10-26T14:57:00Z"
+    }
+   },
+   {
+    "name": "fixture-codex-review",
+    "uid": "fixture-uid-codex-review",
+    "repo": "dev-env",
+    "phase": "Failed",
+    "observedAt": "2026-10-26T14:30:00Z",
+    "freshness": "observed",
+    "activity": {
+     "mode": "task",
+     "agentState": "failed",
+     "requestedModel": "gpt-6-astra",
+     "usage": {
+      "scope": "InitialManagedInvocation",
+      "resultState": "Final",
+      "servedModels": [
+       "gpt-6-astra"
+      ],
+      "inputTokens": {
+       "state": "Reported",
+       "amount": 73400
+      },
+      "outputTokens": {
+       "state": "Reported",
+       "amount": 5120
+      },
+      "cacheReadInputTokens": {
+       "state": "Unknown"
+      },
+      "cacheCreationInputTokens": {
+       "state": "Unknown"
+      },
+      "cost": {
+       "state": "Unknown",
+       "kind": "Unknown"
+      }
+     },
+     "lastActivity": "2026-10-26T14:29:00Z"
+    }
+   },
+   {
+    "name": "fixture-older-operator",
+    "uid": "fixture-uid-older-operator",
+    "repo": "dev-env",
+    "phase": "Running",
+    "observedAt": "2026-10-26T14:59:00Z",
+    "freshness": "observed"
+   }
+  ],
+  "limit": 50,
+  "complete": true,
+  "freshness": "observed",
+  "observedAt": "2026-10-26T14:59:50Z"
+ }
+}
