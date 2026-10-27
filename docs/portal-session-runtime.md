@@ -444,16 +444,21 @@ the field.
 reference Send uses (a keyed hash of the portal session and principal). The
 prompt is not logged, stored or echoed, and no reservation is kept: the request
 ID becomes the operator's idempotency key, so a resubmitted form returns the same
-session.
+session while that session is unfinished. The portal runs one dispatch at a time
+(one lock around the fresh authorization check and the operator call), so two
+concurrent sends of one form reach the operator one after the other and the
+operator returns the same session to the second. A prompt over 64 KiB of UTF-8
+bytes gets a result page with a field error, not a denial.
 
 **What the user sees.**
 
 - Created or existing: a 303 to the Sessions page with the new agent selected.
   That page is the receipt: name, UID, phase (Pending means the pod is starting)
   and the Remote Control line.
-- Too many portal launches running (429), the operator's refusal (403), a field
-  the operator refused (400 or 422) and an unknown outcome each get a result page
-  with fixed wording. Unknown means the request was sent and no usable answer
+- Too many portal launches running (429), the operator's refusal or missing route
+  (403, 401, 404), a field it refused (400 or 422), a request ID that already
+  started a session with different details (409) and an unknown outcome each get
+  a result page with fixed wording. Unknown means the request was sent and no usable answer
   came back, so a session may or may not exist. The page says to check the Agents
   list; it never retries.
 

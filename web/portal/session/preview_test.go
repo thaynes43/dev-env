@@ -45,7 +45,7 @@ func TestLaunchFixturesAreLabelledAndContactNothing(t *testing.T) {
 		t.Fatalf("launch fixture: %v", err)
 	}
 	results, err := RenderLaunchResultFixtures()
-	if err != nil || len(results) != 4 {
+	if err != nil || len(results) != 5 {
 		t.Fatalf("results: %v %d", err, len(results))
 	}
 	for outcome, page := range results {

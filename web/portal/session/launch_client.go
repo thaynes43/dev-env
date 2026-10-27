@@ -26,6 +26,7 @@ const (
 	launchLimit       launchOutcome = "limit"
 	launchUnavailable launchOutcome = "unavailable"
 	launchInvalid     launchOutcome = "invalid"
+	launchConflict    launchOutcome = "conflict"
 	launchUnknown     launchOutcome = "unknown"
 )
 
@@ -96,6 +97,17 @@ func (c *launchClient) launch(ctx context.Context, request apiv1.PortalLaunchReq
 		return launchResult{Outcome: launchUnknown}
 	}
 	defer func() { _ = response.Body.Close() }()
+	// These answers need no body: the operator refused the caller, has no such
+	// route (its router answers text/plain), hit the cap, or already has a
+	// different launch for this request. Nothing new was created in any of them.
+	switch response.StatusCode {
+	case http.StatusForbidden, http.StatusUnauthorized, http.StatusNotFound:
+		return launchResult{Outcome: launchUnavailable}
+	case http.StatusTooManyRequests:
+		return launchResult{Outcome: launchLimit}
+	case http.StatusConflict:
+		return launchResult{Outcome: launchConflict}
+	}
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
 		return launchResult{Outcome: launchUnknown}
@@ -111,10 +123,6 @@ func (c *launchClient) launch(ctx context.Context, request apiv1.PortalLaunchReq
 			return launchResult{Outcome: launchUnknown}
 		}
 		return launchResult{Outcome: launchCreated, Receipt: receipt}
-	case http.StatusTooManyRequests:
-		return launchResult{Outcome: launchLimit}
-	case http.StatusForbidden:
-		return launchResult{Outcome: launchUnavailable}
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return launchResult{Outcome: launchInvalid, Fields: decodeLaunchFields(data)}
 	}

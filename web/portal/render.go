@@ -945,7 +945,7 @@ func newLaunchView(l *ProductLaunch) *launchView {
 
 // ProductLaunchResult is a launch the portal did not turn into a redirect: the
 // operator refused it, was unavailable, or the outcome is not known. Outcome is
-// limit, unavailable, invalid or unknown; any other value reads unknown.
+// limit, unavailable, invalid, conflict or unknown; any other value reads unknown.
 type ProductLaunchResult struct {
 	Outcome string
 	Fields  []ProductField
@@ -960,8 +960,9 @@ type launchResultState struct{ Status, Headline, Tone, Meaning string }
 var launchResultStates = map[string]launchResultState{
 	"limit":       {"Not started", "Too many launches are running", "wait", "The operator allows only a few unfinished portal-launched sessions at once. Nothing was started. Try again when one has finished or been suspended."},
 	"unavailable": {"Not started", "Launching is unavailable", "bad", "The operator did not accept this launch. Nothing was started."},
-	"invalid":     {"Not started", "The launch was not valid", "bad", "The operator refused one or more fields. Nothing was started. Fix them and launch again."},
-	"unknown":     {"Unknown", "Outcome Unknown", "wait", "The portal cannot tell whether a session was started. Check the Agents list before launching again. Sending this same form again cannot start a second session while the first is unfinished; a freshly loaded form can."},
+	"invalid":     {"Not started", "The launch was not valid", "bad", "One or more fields were not accepted. Nothing was started. Fix them and start the agent again."},
+	"conflict":    {"Not started", "This form already started a session", "wait", "This request already started a session with different details. Nothing new was started. Find that session in the Agents list, or load a fresh form to start another."},
+	"unknown":     {"Unknown", "Outcome Unknown", "wait", "The portal cannot tell whether a session was started. Check the Agents list before starting another. Sending this same form again returns the same session while it is unfinished; a freshly loaded form starts a new one."},
 }
 
 // RenderLaunchResult renders a launch result page. Its policy is ProductPolicy:

@@ -118,7 +118,6 @@ func TestLaunchRefusesTamperedFormsBeforeTheOperator(t *testing.T) {
 		"missing repo":       {func(v url.Values) { v.Del("repo") }, good},
 		"duplicate repo":     {func(v url.Values) { v.Add("repo", "haynes-ops") }, good},
 		"prompt control":     {func(v url.Values) { v.Set("prompt", "a\x1b[2Jb") }, good},
-		"prompt too large":   {func(v url.Values) { v.Set("prompt", strings.Repeat("p", 64<<10+1)) }, good},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, h, transport, v := launchFixture(t)
@@ -151,9 +150,9 @@ func TestLaunchRefusesWrongMethodPathPrincipalAndSession(t *testing.T) {
 		}
 	}
 	// A principal other than the scope's is refused.
-	other := *h
-	other.scope = &launchScope{Principal: portal.Principal{Issuer: h.scope.Principal.Issuer, Subject: "someone-else"}, Repos: launchRepos}
-	if w := launchPost(f, &other, v, "https://portal.example"); w.Code != http.StatusForbidden {
+	other := &launchHandler{engine: h.engine, authorizer: h.authorizer, transport: h.transport, now: h.now,
+		scope: &launchScope{Principal: portal.Principal{Issuer: h.scope.Principal.Issuer, Subject: "someone-else"}, Repos: launchRepos}}
+	if w := launchPost(f, other, v, "https://portal.example"); w.Code != http.StatusForbidden {
 		t.Fatalf("other principal answered %d", w.Code)
 	}
 	// No portal session at all.
@@ -204,6 +203,7 @@ func TestLaunchOutcomesRenderFixedWordingAndNeverThePromptOrOperatorText(t *test
 		"limit":       {launchResult{Outcome: launchLimit}, "Too many launches are running"},
 		"unavailable": {launchResult{Outcome: launchUnavailable}, "Launching is unavailable"},
 		"unknown":     {launchResult{Outcome: launchUnknown}, "Outcome Unknown"},
+		"conflict":    {launchResult{Outcome: launchConflict}, "This form already started a session"},
 		"invalid": {launchResult{Outcome: launchInvalid, Fields: []apiv1.FieldError{
 			{Field: "effort", Message: "model claude-sonnet-5-5 takes low, medium, high, xhigh, max"},
 			{Field: "prompt", Message: "echo SYNTHETIC PROMPT back"},
@@ -222,7 +222,7 @@ func TestLaunchOutcomesRenderFixedWordingAndNeverThePromptOrOperatorText(t *test
 			if name == "invalid" && (!strings.Contains(body, "takes low, medium") || strings.Contains(body, "echo ") || strings.Contains(body, "mmmmmmmmmm")) {
 				t.Fatalf("field errors wrong: %s", body)
 			}
-			if name == "unknown" && (!strings.Contains(body, "cannot start a second session while the first is unfinished") || !strings.Contains(body, "a freshly loaded form can")) {
+			if name == "unknown" && (!strings.Contains(body, "Sending this same form again returns the same session while it is unfinished") || !strings.Contains(body, "a freshly loaded form starts a new one")) {
 				t.Fatalf("unknown wording lost its retry warning: %s", body)
 			}
 			if transport.count() != 1 {
@@ -350,5 +350,134 @@ func TestServeProductAddsTheLaunchFormOnlyForTheScopePrincipalOnSessions(t *test
 	}
 	if idOf(a) == idOf(b) || !launchRequestID.MatchString(idOf(a)) {
 		t.Fatalf("request IDs %q %q", idOf(a), idOf(b))
+	}
+}
+
+func TestLaunchPromptOverTheByteLimitIsAFieldErrorNotADenial(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"ascii over":      strings.Repeat("p", 64<<10+1),
+		"multibyte over":  strings.Repeat("é", 40000), // 80,000 bytes in 40,000 characters
+		"three-byte over": strings.Repeat("€", 30000), // 90,000 bytes; browsers allow 65,536 units
+		"maximum browser": strings.Repeat("€", 65536), // 196,608 bytes, the most maxlength allows
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, h, transport, v := launchFixture(t)
+			v.Set("prompt", prompt)
+			w := launchPost(f, h, v, "https://portal.example")
+			body := w.Body.String()
+			if w.Code != http.StatusOK || transport.count() != 0 || !strings.Contains(body, "The launch was not valid") || !strings.Contains(body, "is longer than 64 KiB") || strings.Contains(body, prompt[:64]) {
+				t.Fatalf("status %d, %d calls: %.200s", w.Code, transport.count(), body)
+			}
+		})
+	}
+	// Exactly the limit, counted in bytes, is accepted.
+	f, h, transport, v := launchFixture(t)
+	v.Set("prompt", strings.Repeat("p", 64<<10))
+	if w := launchPost(f, h, v, "https://portal.example"); w.Code != http.StatusSeeOther || transport.count() != 1 {
+		t.Fatalf("a prompt of exactly 64 KiB answered %d", w.Code)
+	}
+}
+
+func TestLaunchConflictAndMissingRouteOutcomes(t *testing.T) {
+	f, h, transport, v := launchFixture(t)
+	transport.result = launchResult{Outcome: launchConflict}
+	w := launchPost(f, h, v, "https://portal.example")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "This request already started a session with different details. Nothing new was started.") {
+		t.Fatalf("conflict page: %d", w.Code)
+	}
+}
+
+// Revocation, and removal from the allowed group, stop a launch before it
+// reaches the operator, exactly as for Send; so does a revocation that lands
+// between the first check and the dispatch (the fresh re-check).
+func TestLaunchSecurityRefusalsBeforeTransport(t *testing.T) {
+	for _, mode := range []string{"revoked", "removed-group", "revoke-before-send"} {
+		t.Run(mode, func(t *testing.T) {
+			f, h, transport, v := launchFixture(t)
+			switch mode {
+			case "revoked":
+				key, _ := requestHandle(f.request("GET", portalLaunchesPath, ""), sessionCookie)
+				_ = f.store.RevokeSession(context.Background(), key)
+			case "removed-group":
+				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
+					return userInfoResponse(strings.Replace(currentAllow, `"portal_is_admin":true`, `"portal_is_admin":false`, 1)), nil
+				})
+			case "revoke-before-send":
+				calls := 0
+				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
+					calls++
+					if calls == 2 {
+						key, _ := requestHandle(f.request("GET", portalLaunchesPath, ""), sessionCookie)
+						_ = f.store.RevokeSession(context.Background(), key)
+					}
+					return userInfoResponse(currentAllow), nil
+				})
+			}
+			w := launchPost(f, h, v, "https://portal.example")
+			if w.Code != http.StatusForbidden || transport.count() != 0 || strings.Contains(w.Body.String(), "SYNTHETIC PROMPT") {
+				t.Fatalf("status %d with %d operator calls", w.Code, transport.count())
+			}
+		})
+	}
+}
+
+// blockingLaunch holds the first call until released and records the most
+// calls that were ever in flight together.
+type blockingLaunch struct {
+	mu      sync.Mutex
+	active  int
+	maxSeen int
+	calls   int
+	first   chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingLaunch) launch(_ context.Context, r apiv1.PortalLaunchRequest) launchResult {
+	b.mu.Lock()
+	b.active++
+	b.calls++
+	n := b.calls
+	if b.active > b.maxSeen {
+		b.maxSeen = b.active
+	}
+	b.mu.Unlock()
+	if n == 1 {
+		close(b.first)
+		<-b.release
+	}
+	b.mu.Lock()
+	b.active--
+	b.mu.Unlock()
+	return launchResult{Outcome: launchCreated, Receipt: apiv1.PortalLaunchReceipt{RequestID: r.RequestID, SessionName: "dev-env-1027-120000", SessionUID: "uid-new-session", Phase: "Pending", ObservedAt: time.Date(2026, 10, 23, 16, 0, 0, 0, time.UTC)}}
+}
+
+func TestLaunchDispatchIsSerialised(t *testing.T) {
+	f, h, _, v := launchFixture(t)
+	b := &blockingLaunch{first: make(chan struct{}), release: make(chan struct{})}
+	h.transport = b
+	codes := make(chan int, 2)
+	post := func() { codes <- launchPost(f, h, v, "https://portal.example").Code }
+	go post()
+	<-b.first
+	go post() // the same form, sent again while the first call is in flight
+	// Give the second request time to reach the handler; it must wait for the first.
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		b.mu.Lock()
+		calls := b.calls
+		b.mu.Unlock()
+		if calls > 1 {
+			t.Fatal("the second call reached the operator while the first was in flight")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(b.release)
+	for i := 0; i < 2; i++ {
+		if code := <-codes; code != http.StatusSeeOther {
+			t.Fatalf("answered %d", code)
+		}
+	}
+	if b.maxSeen != 1 || b.calls != 2 {
+		t.Fatalf("max in flight %d over %d calls", b.maxSeen, b.calls)
 	}
 }

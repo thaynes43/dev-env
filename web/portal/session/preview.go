@@ -104,7 +104,7 @@ func RenderSessionsLaunchFixture(source io.Reader) ([]byte, error) {
 // launch route can answer with a page.
 func RenderLaunchResultFixtures() (map[string][]byte, error) {
 	out := map[string][]byte{}
-	for _, outcome := range []string{"limit", "unavailable", "invalid", "unknown"} {
+	for _, outcome := range []string{"limit", "unavailable", "invalid", "conflict", "unknown"} {
 		r := portal.ProductLaunchResult{Outcome: outcome, Back: SessionsPath + "#launch", Preview: true}
 		if outcome == "invalid" {
 			r.Fields = []portal.ProductField{{Label: "model", Value: "Fixture field message."}}

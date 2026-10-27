@@ -401,7 +401,7 @@ func TestLaunchFormRendersOnlyWhenValidOnSessionsAndEscapes(t *testing.T) {
 
 func TestRenderLaunchResultIsFixedWordingEscapedAndFormless(t *testing.T) {
 	for outcome, want := range map[string]string{
-		"limit": "Too many launches are running", "unavailable": "Launching is unavailable", "invalid": "The launch was not valid",
+		"limit": "Too many launches are running", "unavailable": "Launching is unavailable", "invalid": "The launch was not valid", "conflict": "This form already started a session",
 		"unknown": "Outcome Unknown", "something else": "Outcome Unknown", "": "Outcome Unknown",
 	} {
 		body, err := RenderLaunchResult(ProductLaunchResult{Outcome: outcome, Back: productSessionsHref + "#launch"})

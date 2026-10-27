@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -48,6 +49,12 @@ type launchHandler struct {
 	authorizer portal.Authorizer
 	transport  launchTransport
 	now        func() time.Time
+	// dispatch serialises the fresh re-check and the operator call. The portal
+	// runs one replica, so two concurrent sends of one form reach the operator
+	// one after the other, and the operator's per-parent idempotency returns the
+	// same session to the second instead of racing the first. It is held for the
+	// operator call (up to the client's timeout); one launching person at a time.
+	dispatch sync.Mutex
 }
 
 // NewLaunchForms constructs an explicitly configured launch route. Production
@@ -105,6 +112,8 @@ func (h *launchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.result(w, launchResult{Outcome: launchInvalid, Fields: problems}, req.Prompt)
 		return
 	}
+	h.dispatch.Lock()
+	defer h.dispatch.Unlock()
 	// Fresh authorization right before dispatch: a revoked or replaced session
 	// sends nothing.
 	fresh, freshKey, freshRecord, err := authorizedAction(h.engine, h.authorizer, h.scope.Principal, r)
@@ -140,9 +149,12 @@ func (h *launchHandler) parse(w http.ResponseWriter, r *http.Request, record Rec
 	if err != nil || media != "application/x-www-form-urlencoded" {
 		return req, nil, portal.ErrDenied
 	}
-	// Each prompt byte can expand to three bytes in a URL-encoded form; 4096
-	// further bytes cover the other fields.
-	r.Body = http.MaxBytesReader(w, r.Body, 3*protocol.MaxPromptBytes+4096)
+	// The textarea allows 65536 UTF-16 units, up to three UTF-8 bytes each, and
+	// each byte can be three bytes in a URL-encoded form (%XX). That is the most a
+	// browser that respects maxlength can send, so a prompt over the byte limit
+	// reaches the check below and gets a field error, not a denial. 4096 further
+	// bytes cover the other fields.
+	r.Body = http.MaxBytesReader(w, r.Body, 9*3*protocol.MaxPromptBytes+4096)
 	if r.ParseForm() != nil {
 		return req, nil, portal.ErrDenied
 	}
@@ -168,11 +180,14 @@ func (h *launchHandler) parse(w http.ResponseWriter, r *http.Request, record Rec
 	if !launchRequestID.MatchString(req.RequestID) || !slices.Contains(h.scope.Repos, req.Repo) ||
 		!slices.Contains([]string{"task", "local", "remote"}, req.Mode) || !slices.Contains(apiv1.PortalLaunchModels(), req.Model) ||
 		(req.Effort != "" && !slices.Contains(apiv1.PortalLaunchEfforts(), req.Effort)) || (req.Size != "" && req.Size != "S" && req.Size != "M") ||
-		len(req.Prompt) > protocol.MaxPromptBytes || invalidMessageControl(req.Prompt) {
+		(len(req.Prompt) <= protocol.MaxPromptBytes && invalidMessageControl(req.Prompt)) {
 		return req, nil, portal.ErrDenied
 	}
 	var problems []apiv1.FieldError
 	switch {
+	case len(req.Prompt) > protocol.MaxPromptBytes:
+		// UTF-8 bytes, as the operator counts them. The prompt is never echoed.
+		problems = append(problems, apiv1.FieldError{Field: "prompt", Message: "is longer than 64 KiB"})
 	case req.Mode == "task" && strings.TrimSpace(req.Prompt) == "":
 		problems = append(problems, apiv1.FieldError{Field: "prompt", Message: "A headless task needs a prompt."})
 	case req.Mode != "task" && req.Prompt != "":
@@ -183,12 +198,12 @@ func (h *launchHandler) parse(w http.ResponseWriter, r *http.Request, record Rec
 
 // result renders the page for a launch that did not become a redirect. The
 // operator's field errors appear by field name and message, short ones only. The
-// operator never echoes a prompt; a message that contains the prompt is dropped
-// anyway, so the page cannot show it.
+// operator never echoes a prompt; a message that contains a prompt of 16 bytes or
+// more is dropped anyway, so the page cannot show it.
 func (h *launchHandler) result(w http.ResponseWriter, r launchResult, prompt string) {
 	page := portal.ProductLaunchResult{Outcome: string(r.Outcome), Back: SessionsPath + "#launch"}
 	for _, f := range r.Fields {
-		if len(f.Field) <= 64 && len(f.Message) <= 200 && (prompt == "" || !strings.Contains(f.Field+f.Message, prompt)) {
+		if len(f.Field) <= 64 && len(f.Message) <= 200 && (len(prompt) < 16 || !strings.Contains(f.Field+f.Message, prompt)) {
 			page.Fields = append(page.Fields, portal.ProductField{Label: f.Field, Value: f.Message})
 		}
 	}
