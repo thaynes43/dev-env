@@ -57,7 +57,7 @@ func actorRef(h Handle, p portal.Principal) string {
 }
 
 func (h *commandHandler) authorized(r *http.Request) (*http.Request, Handle, Record, error) {
-	if h == nil || h.engine == nil || h.authorizer == nil {
+	if h == nil || h.engine == nil || h.authorizer == nil || h.scope == nil {
 		return r, Handle{}, Record{}, portal.ErrUnavailable
 	}
 	r = h.engine.bind(r)
@@ -69,7 +69,7 @@ func (h *commandHandler) authorized(r *http.Request) (*http.Request, Handle, Rec
 	if err != nil {
 		return r, Handle{}, Record{}, err
 	}
-	if h.scope != nil && h.scope.Principal != principal {
+	if h.scope.Principal != principal {
 		return r, Handle{}, Record{}, portal.ErrDenied
 	}
 	if err = h.authorizer.Authorize(r.Context(), principal, portal.Resource{Project: "dev-env", Environment: "internal"}); err != nil {
@@ -80,7 +80,7 @@ func (h *commandHandler) authorized(r *http.Request) (*http.Request, Handle, Rec
 
 func (h *commandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	authHeaders(w)
-	if h == nil || h.engine == nil || h.receipts == nil || h.transport == nil || h.render == nil || h.now == nil || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery {
+	if h == nil || h.scope == nil || h.engine == nil || h.receipts == nil || h.transport == nil || h.render == nil || h.now == nil || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery {
 		authFailure(w, portal.ErrUnavailable)
 		return
 	}
@@ -114,11 +114,14 @@ func (h *commandHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *commandHandler) receipt(ctx context.Context, key Handle, id string) (apiv1.PortalMessageReceipt, error) {
+	if h == nil || h.scope == nil {
+		return apiv1.PortalMessageReceipt{}, portal.ErrDenied
+	}
 	reservation, terminal, err := h.receipts.readCommand(ctx, key, id)
 	if err != nil {
 		return apiv1.PortalMessageReceipt{}, err
 	}
-	if h.scope != nil && h.scope.Targets[reservation.SessionUID] != reservation.SessionName {
+	if h.scope.Targets[reservation.SessionUID] != reservation.SessionName {
 		return apiv1.PortalMessageReceipt{}, portal.ErrDenied
 	}
 	if terminal != nil {
@@ -129,6 +132,9 @@ func (h *commandHandler) receipt(ctx context.Context, key Handle, id string) (ap
 
 func (h *commandHandler) post(w http.ResponseWriter, r *http.Request, key Handle, record Record) (apiv1.PortalMessageReceipt, error) {
 	var empty apiv1.PortalMessageReceipt
+	if h == nil || h.scope == nil {
+		return empty, portal.ErrDenied
+	}
 	if len(r.Header.Values("Origin")) != 1 || r.Header.Get("Origin") != h.engine.config.Origin {
 		return empty, portal.ErrDenied
 	}
@@ -154,7 +160,7 @@ func (h *commandHandler) post(w http.ResponseWriter, r *http.Request, key Handle
 	if !validCommandID(id) || name == "" || len(name) > 253 || uid == "" || len(uid) > 128 || text == "" || len(text) > apiv1.MaxMessageBytes || messageURL.MatchString(text) || invalidMessageControl(text) {
 		return empty, portal.ErrDenied
 	}
-	if h.scope != nil && h.scope.Targets[uid] != name {
+	if h.scope.Targets[uid] != name {
 		return empty, portal.ErrDenied
 	}
 	wanted := commandReservation{RequestID: id, SessionName: name, SessionUID: uid, Digest: sha256.Sum256([]byte(text))}

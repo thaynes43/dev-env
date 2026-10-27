@@ -20,12 +20,15 @@ type commandMemory struct {
 	mu           sync.Mutex
 	reservations map[string]commandReservation
 	terminals    map[string]apiv1.PortalMessageReceipt
+	reads        int
+	reserves     int
 }
 
 func (m *commandMemory) key(h Handle, id string) string { return fmt.Sprintf("%x/%s", h, id) }
 func (m *commandMemory) reserveCommand(_ context.Context, h Handle, w commandReservation) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.reserves++
 	k := m.key(h, w.RequestID)
 	if old, ok := m.reservations[k]; ok {
 		if old.SessionName != w.SessionName || old.SessionUID != w.SessionUID || old.Digest != w.Digest {
@@ -41,6 +44,7 @@ func (m *commandMemory) readCommand(_ context.Context, h Handle, id string) (com
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := m.key(h, id)
+	m.reads++
 	r, ok := m.reservations[k]
 	if !ok {
 		return r, nil, portal.ErrDenied
@@ -87,6 +91,7 @@ func commandFixture(t *testing.T) (*authFixture, *commandHandler, *commandMemory
 	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
 	handler := &commandHandler{engine: f.e, authorizer: authorizer, receipts: store, transport: transport, now: func() time.Time { return f.now }, render: func(r apiv1.PortalMessageReceipt) ([]byte, error) { return []byte(string(r.TransportStatus)), nil }}
 	key, _ := requestHandle(f.request("GET", portalMessagesPath, ""), sessionCookie)
+	handler.scope = &actionScope{Principal: f.store.sessions[key].Principal, Targets: map[string]string{"uid-a": "agent-a"}}
 	values := url.Values{"csrf": {f.store.sessions[key].CSRF}, "requestID": {"request-0000000001"}, "session": {"agent-a"}, "sessionUID": {"uid-a"}, "text": {"SYNTHETIC MESSAGE"}}
 	return f, handler, store, transport, values
 }
@@ -258,5 +263,29 @@ func TestCommandsExplicitProductionScope(t *testing.T) {
 				t.Fatal("unscoped send reserved or executed")
 			}
 		})
+	}
+}
+
+func TestCommandsNilScopeDeniesBeforeAnyWork(t *testing.T) {
+	f, h, store, transport, values := commandFixture(t)
+	key, _ := requestHandle(f.request("GET", portalMessagesPath, ""), sessionCookie)
+	id := values.Get("requestID")
+	store.reservations[store.key(key, id)] = commandReservation{RequestID: id, SessionName: "agent-a", SessionUID: "uid-a"}
+	store.terminals[store.key(key, id)] = apiv1.PortalMessageReceipt{RequestID: id, SessionName: "agent-a", SessionUID: "uid-a", TransportStatus: apiv1.PortalTransportDelivered, Reason: "delivered"}
+	original := h.authorizer
+	calls := 0
+	h.authorizer = authorizeFunc(func(ctx context.Context, p portal.Principal, r portal.Resource) error {
+		calls++
+		return original.Authorize(ctx, p, r)
+	})
+	h.scope = nil
+	post := commandPost(f, h, values, "https://portal.example")
+	get := httptest.NewRecorder()
+	h.ServeHTTP(get, f.request("GET", portalMessagesPath+"/"+id, ""))
+	if post.Code == http.StatusOK || get.Code == http.StatusOK || calls != 0 || len(store.reservations) != 1 || store.reserves != 0 || transport.count() != 0 || store.reads != 0 || strings.Contains(get.Body.String(), "TransportDelivered") {
+		t.Fatal("nil scope performed work or exposed a receipt")
+	}
+	if _, err := h.receipt(context.Background(), key, id); err == nil || store.reads != 0 {
+		t.Fatal("direct nil-scope receipt accessed storage")
 	}
 }
