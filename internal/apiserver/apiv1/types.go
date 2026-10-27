@@ -485,14 +485,34 @@ const PortalLauncherPattern = `^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,252}$`
 // or Unknown) and is absent for an interactive session: a Failed phase only
 // says the pod ended.
 type PortalSessionActivity struct {
-	Mode           string             `json:"mode"`
-	Provider       string             `json:"provider"`
-	AgentState     string             `json:"agentState"`
-	LastActivity   *time.Time         `json:"lastActivity,omitempty"`
-	RequestedModel string             `json:"requestedModel"`
-	LaunchedBy     string             `json:"launchedBy,omitempty"`
-	TaskResult     string             `json:"taskResult,omitempty"`
-	Usage          PortalSessionUsage `json:"usage"`
+	Mode           string               `json:"mode"`
+	Provider       string               `json:"provider"`
+	AgentState     string               `json:"agentState"`
+	LastActivity   *time.Time           `json:"lastActivity,omitempty"`
+	RequestedModel string               `json:"requestedModel"`
+	LaunchedBy     string               `json:"launchedBy,omitempty"`
+	TaskResult     string               `json:"taskResult,omitempty"`
+	RemoteControl  *PortalRemoteControl `json:"remoteControl,omitempty"`
+	Usage          PortalSessionUsage   `json:"usage"`
+}
+
+// PortalRemoteControlURLPattern is the one shape of a Remote Control link the
+// portal carries: https, host claude.ai, path /code/session_<id>, no query,
+// fragment or whitespace.
+const PortalRemoteControlURLPattern = `^https://claude\.ai/code/session_[A-Za-z0-9_-]{8,128}$`
+
+// PortalRemoteControlStatePattern is the shape of a Remote Control state word
+// such as registered, starting or pair-code-issued.
+const PortalRemoteControlStatePattern = `^[a-z][a-z-]{0,31}$`
+
+// PortalRemoteControl is a session's Remote Control entry as the portal may see
+// it: the state word and, only when it has the exact claude.ai shape, the link.
+// It never carries the entry's name or session id. The link is already in the
+// AgentSession status that cluster readers see; using it needs the owner's
+// claude.ai sign-in.
+type PortalRemoteControl struct {
+	State string `json:"state"`
+	URL   string `json:"url,omitempty"`
 }
 
 // PortalSessionUsage is a task session's own initial managed invocation as its

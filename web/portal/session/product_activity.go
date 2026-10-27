@@ -17,8 +17,8 @@ import (
 )
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
-// lastActivity, provider, launchedBy and taskResult are optional (an operator
-// before 2026-10-27 sends none of the last three); a null, an unknown key or a
+// lastActivity, provider, launchedBy, taskResult and remoteControl are optional
+// (an operator before 2026-10-27 sends none of the last four); a null, an unknown key or a
 // word outside its fixed set makes the whole read unavailable. Usage covers
 // task sessions only, so any other mode must carry an Unknown usage scope,
 // which in turn carries no reported value, and no task result.
@@ -28,7 +28,7 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	if err != nil {
 		return a, err
 	}
-	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult") {
+	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl") {
 		return a, portal.ErrUnavailable
 	}
 	a.Provider = protocol.UsageUnknown
@@ -46,6 +46,13 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 		if a.TaskResult, ok = jsonString(raw); !ok || !oneOf(a.TaskResult, "Succeeded", "Failed", "TimedOut", protocol.UsageUnknown) {
 			return a, portal.ErrUnavailable
 		}
+	}
+	if raw, ok := obj["remoteControl"]; ok {
+		rc, err := decodeRemoteControl(raw)
+		if err != nil {
+			return a, err
+		}
+		a.RemoteControl = rc
 	}
 	mode, ok1 := jsonString(obj["mode"])
 	state, ok2 := jsonString(obj["agentState"])
@@ -71,6 +78,30 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	}
 	a.Mode, a.AgentState, a.RequestedModel, a.Usage = mode, state, model, usage
 	return a, nil
+}
+
+// decodeRemoteControl accepts exactly {state, url?}, each re-checked against the
+// operator's patterns. Like the other optional keys, a malformed value makes the
+// whole read unavailable rather than being shown.
+func decodeRemoteControl(raw json.RawMessage) (*apiv1.PortalRemoteControl, error) {
+	obj, err := jsonObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !exactKeys(obj, []string{"state"}, "url") {
+		return nil, portal.ErrUnavailable
+	}
+	state, ok := jsonString(obj["state"])
+	if !ok || !remoteControlState.MatchString(state) {
+		return nil, portal.ErrUnavailable
+	}
+	rc := &apiv1.PortalRemoteControl{State: state}
+	if raw, ok := obj["url"]; ok {
+		if rc.URL, ok = jsonString(raw); !ok || !remoteControlURL.MatchString(rc.URL) {
+			return nil, portal.ErrUnavailable
+		}
+	}
+	return rc, nil
 }
 
 // decodeSessionUsage keeps Unknown distinct from an explicit zero. An Unknown
@@ -223,6 +254,10 @@ var (
 	// launcherName is spec.parent's shape: a session name, a namespace/name or
 	// a ServiceAccount reference, at most 253 characters.
 	launcherName = regexp.MustCompile(apiv1.PortalLauncherPattern)
+	// remoteControlURL and remoteControlState are the operator's patterns for a
+	// session's Remote Control link and state word.
+	remoteControlURL   = regexp.MustCompile(apiv1.PortalRemoteControlURLPattern)
+	remoteControlState = regexp.MustCompile(apiv1.PortalRemoteControlStatePattern)
 	// projectName is spec.repo's shape.
 	projectName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 )

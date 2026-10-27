@@ -312,3 +312,63 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 		}
 	}
 }
+
+// The activity view carries a session's Remote Control state word and, only when
+// it has the exact claude.ai shape, its link. Never the entry's name or id.
+func TestPortalActivityRemoteControl(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	const link = "https://claude.ai/code/session_FIXTURE0000000000"
+	activity := func(rc *v1alpha1.RemoteControlStatus) *apiv1.PortalSessionActivity {
+		s := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeRemote, Agent: v1alpha1.AgentClaude}}
+		s.Status.RemoteControl = rc
+		return portalActivity(s, now)
+	}
+	a := activity(&v1alpha1.RemoteControlStatus{Name: "SECRET-NAME", SessionID: "SECRET-ID", State: "registered", URL: link})
+	if a.RemoteControl == nil || a.RemoteControl.State != "registered" || a.RemoteControl.URL != link {
+		t.Fatalf("registered %+v", a.RemoteControl)
+	}
+	if raw, _ := json.Marshal(a); strings.Contains(string(raw), "SECRET") || !strings.Contains(string(raw), `"remoteControl":{"state":"registered","url":"`+link+`"}`) {
+		t.Fatalf("wire form %s", raw)
+	}
+	for state := range map[string]bool{"pair-code-issued": true, "starting": true} {
+		if a := activity(&v1alpha1.RemoteControlStatus{State: state}); a.RemoteControl == nil || a.RemoteControl.State != state || a.RemoteControl.URL != "" {
+			t.Fatalf("%s %+v", state, a.RemoteControl)
+		}
+	}
+	if raw, _ := json.Marshal(activity(&v1alpha1.RemoteControlStatus{State: "starting"})); strings.Contains(string(raw), `"url"`) {
+		t.Fatalf("empty url serialized: %s", raw)
+	}
+	if a := activity(nil); a.RemoteControl != nil {
+		t.Fatalf("nil status produced %+v", a.RemoteControl)
+	} else if raw, _ := json.Marshal(a); strings.Contains(string(raw), "remoteControl") {
+		t.Fatalf("absent entry serialized: %s", raw)
+	}
+	for name, url := range map[string]string{
+		"other host":       "https://evil.example/code/session_FIXTURE0000000000",
+		"subdomain":        "https://www.claude.ai/code/session_FIXTURE0000000000",
+		"look-alike host":  "https://claude.ai.evil.example/code/session_FIXTURE0000000000",
+		"userinfo":         "https://claude.ai@evil.example/code/session_FIXTURE0000000000",
+		"http":             "http://claude.ai/code/session_FIXTURE0000000000",
+		"other scheme":     "javascript:alert(1)",
+		"other path":       "https://claude.ai/chat/session_FIXTURE0000000000",
+		"extra path":       "https://claude.ai/code/session_FIXTURE0000000000/x",
+		"query":            link + "?a=b",
+		"fragment":         link + "#x",
+		"trailing space":   link + " ",
+		"trailing newline": link + "\n",
+		"leading space":    " " + link,
+		"short id":         "https://claude.ai/code/session_short",
+		"long id":          "https://claude.ai/code/session_" + strings.Repeat("a", 129),
+		"empty id":         "https://claude.ai/code/session_",
+	} {
+		a := activity(&v1alpha1.RemoteControlStatus{State: "registered", URL: url})
+		if a.RemoteControl == nil || a.RemoteControl.State != "registered" || a.RemoteControl.URL != "" {
+			t.Errorf("%s: url kept or entry lost: %+v", name, a.RemoteControl)
+		}
+	}
+	for name, state := range map[string]string{"empty": "", "upper": "Registered", "space": "pair code", "digit": "v2", "markup": "<b>", "long": strings.Repeat("a", 33), "leading dash": "-x"} {
+		if a := activity(&v1alpha1.RemoteControlStatus{State: state, URL: link}); a.RemoteControl != nil {
+			t.Errorf("state %s kept the entry: %+v", name, a.RemoteControl)
+		}
+	}
+}

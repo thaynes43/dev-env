@@ -246,6 +246,26 @@ func portalSummary(s *v1alpha1.AgentSession, now time.Time) apiv1.PortalSessionS
 // portalLauncher is apiv1.PortalLauncherPattern; any other spec.parent is omitted.
 var portalLauncher = regexp.MustCompile(apiv1.PortalLauncherPattern)
 
+var (
+	portalRemoteControlURL   = regexp.MustCompile(apiv1.PortalRemoteControlURLPattern)
+	portalRemoteControlState = regexp.MustCompile(apiv1.PortalRemoteControlStatePattern)
+)
+
+// portalRemoteControl is status.remoteControl reduced to its state word and a
+// link of the exact claude.ai shape. A state outside its shape drops the whole
+// entry; a link outside its shape is dropped alone. The entry's name and
+// session id are never passed.
+func portalRemoteControl(rc *v1alpha1.RemoteControlStatus) *apiv1.PortalRemoteControl {
+	if rc == nil || !portalRemoteControlState.MatchString(rc.State) {
+		return nil
+	}
+	out := &apiv1.PortalRemoteControl{State: rc.State}
+	if portalRemoteControlURL.MatchString(rc.URL) {
+		out.URL = rc.URL
+	}
+	return out
+}
+
 // portalActivity is the DESIGN-029 allowlist for one session. Words outside
 // their fixed sets, an unbounded model id and a future activity time are
 // Unknown. Usage comes only from sessionUsage, the session's own validated
@@ -272,6 +292,7 @@ func portalActivity(s *v1alpha1.AgentSession, now time.Time) *apiv1.PortalSessio
 			}
 		}
 	}
+	a.RemoteControl = portalRemoteControl(s.Status.RemoteControl)
 	if protocol.ValidUsageModelID(s.Spec.Model) {
 		a.RequestedModel = s.Spec.Model
 	}
