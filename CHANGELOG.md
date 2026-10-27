@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.50.0](https://github.com/thaynes43/dev-env/compare/v2.49.0...v2.50.0) (2026-10-27)
+
+
+### Features
+
+* **operator:** default-off portal launch route for constrained sessions ([#580](https://github.com/thaynes43/dev-env/issues/580)) ([f11d29b](https://github.com/thaynes43/dev-env/commit/f11d29b4a0a51f39e4c2a6694b9cc93088a125e1))
+* **portal:** default-off launch form backed by the operator launch route ([#582](https://github.com/thaynes43/dev-env/issues/582)) ([896466b](https://github.com/thaynes43/dev-env/commit/896466b40aa5d6cba482ab037ccee1b7a290ac76))
+
 ## [2.49.0](https://github.com/thaynes43/dev-env/compare/v2.48.0...v2.49.0) (2026-10-27)
 
 
