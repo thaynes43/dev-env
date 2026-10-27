@@ -88,8 +88,10 @@ func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions)
 }
 
-// PilotAgent selects one session for a different agent image than the
-// templates', by exact metadata. Nil is off: every pod uses the templates
+// PilotAgent selects the sessions with one parent and idempotency key for a
+// different agent image than the templates', by exact metadata. The operator
+// does not limit it to one session: that is an operating rule (see
+// docs/portal-session-runtime.md). Nil is off: every pod uses the templates
 // image. Parent and Key are the session's spec.parent and its
 // agent-run --idempotency-key label. Image is digest-pinned (the operator's
 // flags check that).
@@ -126,6 +128,17 @@ func applyPilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgent) {
 			pod.Spec.Containers[i].Image = image
 		}
 	}
+}
+
+// sessionPod is the session's own pod as the reconciler creates it: the managed
+// pod, on the pilot image when the session is the selected one.
+func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
+	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents)
+	if err != nil {
+		return nil, err
+	}
+	applyPilotImage(pod, s, r.PilotAgent)
+	return pod, nil
 }
 
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with

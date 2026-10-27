@@ -13,7 +13,7 @@ import (
 const pilotTestImage = "ghcr.io/thaynes43/dev-env:2.47.0@sha256:0000000000000000000000000000000000000000000000000000000000000009"
 
 func pilotTestAgent() *PilotAgent {
-	return &PilotAgent{Image: pilotTestImage, Parent: "dev-env-agent", Key: "history-pilot-1"}
+	return &PilotAgent{Image: pilotTestImage, Parent: "dev-env-1027-111645", Key: "history-pilot-1"}
 }
 
 // pilotTestSession is a session the pilot selects.
@@ -23,7 +23,7 @@ func pilotTestSession() *v1alpha1.AgentSession {
 	s.Spec.Repo = "dev-env"
 	s.Spec.Mode = v1alpha1.ModeRemote
 	s.Spec.Prompt, s.Spec.Limits = "", nil // a prompt is for task mode only
-	s.Spec.Parent = "dev-env-agent"
+	s.Spec.Parent = "dev-env-1027-111645"
 	s.Labels = map[string]string{v1alpha1.LabelIdempotencyKey: "history-pilot-1"}
 	return s
 }
@@ -151,5 +151,43 @@ func TestPilotAgentPodDrainsOnlyOnATemplatesChange(t *testing.T) {
 	}
 	if !drainEligible(s, pod, "next-revision") {
 		t.Fatal("a pilot pod on an outdated revision was not eligible to drain")
+	}
+}
+
+// The reconciler's own pod builder carries the pilot wiring: the selected
+// session gets the pilot image, any other session the templates image, and a
+// nil PilotAgent changes nothing.
+func TestReconcilerSessionPodUsesThePilotImage(t *testing.T) {
+	tmpl := exampleTemplates(t)
+	r := &Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}
+	selected := pilotTestSession()
+	pod, err := r.sessionPod(selected, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pod.Spec.Containers[0].Image; got != pilotTestImage {
+		t.Fatalf("selected session image %q, want the pilot image", got)
+	}
+	other := pilotTestSession()
+	other.Labels[v1alpha1.LabelIdempotencyKey] = "another-key"
+	pod, err = r.sessionPod(other, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pod.Spec.Containers[0].Image; got != tmpl.Image {
+		t.Fatalf("other session image %q, want the templates image", got)
+	}
+
+	off := &Reconciler{APIURL: "https://api"}
+	got, err := off.sessionPod(selected, tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := buildManagedPod(selected, tmpl, off.APIURL, off.ManagedCodexTasks, off.ManagedChildDecisions, off.ManagedChildDecisionParents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !apiequality.Semantic.DeepEqual(want, got) {
+		t.Fatal("a Reconciler without PilotAgent changed the pod")
 	}
 }

@@ -1104,12 +1104,11 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 	}
-	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents)
+	pod, err := r.sessionPod(s, t)
 	if err != nil {
 		obs.buildErr = err
 		return nil
 	}
-	applyPilotImage(pod, s, r.PilotAgent)
 	if obs.claim.missing {
 		claim, err := buildHomeClaim(s, t)
 		if err != nil {
@@ -1232,7 +1231,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if err := r.create(ctx, "pod", pod); err != nil {
 		return err
 	}
-	log.FromContext(ctx).Info("created the session pod", "pod", pod.Name, "revision", t.Revision())
+	log.FromContext(ctx).Info("created the session pod", "pod", pod.Name, "revision", t.Revision(), "image", pod.Spec.Containers[0].Image)
 	obs.pod = owned[*corev1.Pod]{obj: pod}
 	return nil
 }

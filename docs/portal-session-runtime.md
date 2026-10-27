@@ -242,45 +242,67 @@ versions lacking the conversation control remain unavailable.
 
 History binds only at a session's first launch on agentd 2.47 or later, and
 every pod today runs the one templates image. A templates edit drains every
-idle session. To try a newer agent image on one new session, the operator
-takes two flags. Both are empty by default, and both or neither must be set:
+idle session. To try a newer agent image on a new session without that, the
+operator takes two flags. Both are empty by default, and both or neither must
+be set:
 
-- `--pilot-agent-image` is `ghcr.io/thaynes43/dev-env`, an optional `:X.Y.Z`
-  tag, and a required `@sha256:` digest of 64 lowercase hex digits. It is the
-  same shape the native fixture image uses.
-- `--pilot-agent-session` is `<parent>/<key>`. The parent is a DNS-1123 label.
-  The key is a non-empty label value. There is exactly one `/`.
+- `--pilot-agent-image` is `ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64
+  lowercase hex>`. The 2.x tag and the digest are both required. The operator
+  checks syntax only. The signature is checked by the publish workflow's
+  cosign verify, by review of the HelmRelease line, and by the cluster's image
+  audit.
+- `--pilot-agent-session` is `<parent>/<key>`. The parent is the creating
+  session's name, a DNS-1123 label such as `dev-env-1027-111645`: a session
+  caller's `spec.parent` is its own session name. Human, client, coordinator,
+  portal and standby callers record `<namespace>/<name>` parents, which this
+  flag cannot select. The key is a non-empty label value. There is exactly one
+  `/`.
 
 A set pair with a bad value, or only one flag, fails operator startup.
 
-A session runs on the pilot image only when all of these hold:
+A session runs on the pilot image when all of these hold:
 
 - Its `spec.parent` equals the parent. The API sets that from the caller's
-  authenticated identity.
+  authenticated identity, so only that session can create such a session.
 - Its idempotency-key label equals the key. The caller sets that with
-  `agent-run --idempotency-key`, and the API dedupes it per parent.
+  `agent-run --idempotency-key`.
 - The agent is Claude, the mode is remote or local, and the repo is `dev-env`.
 - It has no workspace, no project canary and no private pilot.
 
-Only the image of that session's own pod changes. The pod keeps everything
-else: the templates revision label, env, args, mounts, profile, Secrets,
-egress and grants. Hold pods and task-budget workers keep the templates
-image. With the flags unset, every pod is built exactly as before.
+The selection is not limited to one session. While the flags stay set, it
+matches every session with that parent and key, for the life of each one. The
+API dedupes a key only against unfinished sessions, so the same parent can
+create a second matching session after the first is suspended or finished. A
+session that already had that parent and key before the flags were set gets
+the pilot image at its next pod. Keeping it to one session is a procedure, not
+something the operator enforces:
+
+- Choose a key that parent has never used.
+- Use it for one session only.
+- Remove or change the flags when the pilot ends.
+
+Only the image of a matching session's own pod changes. The pod keeps
+everything else: the templates revision label, env, args, mounts, profile,
+Secrets, egress and grants. Hold pods and task-budget workers keep the
+templates image. With the flags unset, every pod is built exactly as before.
+The operator log line "created the session pod" names the pod's agent image,
+so a match is visible there.
 
 What this means in use:
 
-- Only a session created after the flags are set gets the image, at its first
-  pod. Existing sessions are never rebound or restarted, and a session that
-  first launched on an older agentd stays without history.
+- History needs the session's first launch to be on the pilot image. Create
+  the session after the flags are set. An existing session is never rebound.
+  A session that first launched on an older agentd stays without history,
+  even if a later pod runs the pilot image.
 - The pod carries the current templates revision. It drains only on a
   templates change, and its next pod is on the pilot image again while the
   flags stay.
-- Removing the flags puts that session's next pod on the templates image. Its
-  history is then Unavailable if the templates image predates 2.47.
+- Removing the flags puts a matching session's next pod on the templates
+  image. Its history is then Unavailable if the templates image predates 2.47.
 
 Trust model: the image is pinned by digest, from the same signed repository
 as the templates image, and the flags are a reviewed HelmRelease line. The
-pilot changes the code version of one session. It does not change that
-session's profile, Secrets, egress or grants. The flags select by metadata
-and are not an authorization to read history; the portal action scope is still
+pilot changes the code version of the matching sessions. It does not change
+their profile, Secrets, egress or grants. The flags select by metadata and are
+not an authorization to read history; the portal action scope is still
 required.
