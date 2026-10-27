@@ -329,3 +329,84 @@ Any other state shows its own word, escaped.
 This is read-only. It adds no portal action and needs no operator flag.
 
 **Deploy the portal before the operator.** The portal rejects activity keys it does not know.
+
+## Default-off portal launch route
+
+The operator can let the portal reader start one constrained agent session on
+behalf of a portal user. It is off unless `--portal-launch-repo=<repo>` is set.
+Three flags configure it:
+
+- `--portal-launch-repo=<repo>`: repeatable (at most 16, no duplicates), each a
+  repository name as the AgentSession schema accepts.
+- `--portal-launch-profile=<name>`: required whenever a repo is set. A DNS-1123
+  label, it is the templates profile every launched session runs on.
+- `--portal-launch-max-unfinished=<n>`: 1 to 8, default 2. The most unfinished
+  portal-launched sessions at once.
+
+Any of them needs `--enable-portal-reader`, and the profile and cap flags need
+at least one repo; a missing or invalid value fails startup. With no repo flag
+the route does not exist: `POST /v1/portal/sessions` answers 404, and the portal
+reader still cannot create through `POST /v1/sessions`.
+
+- **Route.** `POST /v1/portal/sessions`, for the portal reader only. Every other
+  caller, including a human, a client, a session and a coordinator, is refused.
+- **Request.** Strict JSON: unknown keys, duplicate keys, JSON `null` for any key,
+  trailing values and a query string are refused. Fields are `requestID` and
+  `actorRef` (the same opaque-ID rule as Send), `repo` (in the allowlist), `mode`
+  (`task`, `local` or `remote`), `model` (a full id; an alias such as `opus` is
+  refused by the rule agent-run uses), and optional `effort` and `size` (`S` or
+  `M`). A task needs a `prompt`; local and remote take none. The agent is always
+  `claude`.
+- **What it can never set.** Project, base, profile, tools, limits, lifecycle,
+  restore, canary, name and lane are not fields. The profile is the operator's
+  flag.
+- **One create path.** The route builds a fixed `CreateSessionRequest` and runs
+  it through the same create handler as `POST /v1/sessions`, so the model,
+  effort, size, prompt, profile and idempotency rules are the existing ones. It
+  writes no second validator. A prompt that fits the 64 KiB limit but whose
+  session document would exceed agentd's 128 KiB transport (for example 50,000
+  `<` characters) is refused by that existing check with 422.
+- **Parent.** `spec.parent` is `portal/<actorRef>`, which the portal shows as
+  "launched by". The caller is a derived value that exists only inside this
+  route: depth 1, no profile to hand on, and no other route accepts it. A parent
+  equal to another configured caller's identity is refused.
+- **Cap.** Inside the create lock (which is per operator replica, so launches
+  racing on two replicas can exceed the cap by one each), after the
+  idempotent-repeat check, the route counts the unfinished sessions (the predicate the idempotency dedupe uses) whose
+  parent starts with `portal/`. At the cap it answers 429 `limit_exceeded` and
+  creates nothing. The cap is across all portal users, not per user. A repeat of
+  an existing request still returns its session at the cap, and a finished or
+  suspended session no longer counts.
+- **Idempotency.** The key is `portal-` plus 40 hex digits of the request ID's
+  SHA-256. The existing per-parent dedupe applies: a repeat of the same request
+  while the session is unfinished returns the same session (200), the same ID with
+  a different request is a conflict (409), and a new ID starts a new session. Once
+  that session has finished, the same ID starts a new one.
+- **Receipt.** `requestID`, `sessionName`, `sessionUID`, `phase` and `observedAt`.
+  `Pending` is expected. Errors use the existing shapes and never echo the prompt.
+
+### Choosing the profile is Tom's activation decision
+
+What a launched session can reach is exactly what its profile grants. The
+templates' default profile, `full`, is the widest: the GitHub bot token, GCP,
+Cloudflare, Proxmox-reader and Omni keys, the MCP secrets (including the UniFi
+write tools), and the Claude and Codex logins. The route therefore never falls
+back to it: the flag is required. For a task that runs on a portal user's
+prompt, activation should name a narrower profile, such as `dev`, and Tom
+confirms what that profile grants before the flag is set. `dev` still carries
+the GitHub bot token and the UniFi MCP token, and it has no keeper Claude login,
+so a remote launch on `dev` shows Login required until someone runs
+`agent-run login`. The operator refuses `workbench` at startup, and on every request the route
+resolves the profile and refuses one that names any ServiceAccount (the
+workbench's carries exec rights) or that the templates no longer hold. A templates edit to
+that profile changes what portal launches get, from the next pod each one
+starts.
+
+### Activation delta (not applied)
+
+Three operator flags, `--portal-launch-repo`, `--portal-launch-profile` and
+`--portal-launch-max-unfinished`, plus a `launch` scope in the portal's private
+action file (`session-actions.json`), bound to the exact principal and
+repositories like Send. That scope is not implemented in this unit. It, the
+profile choice and every live flag need Tom's confirmation, as does the
+identity step.

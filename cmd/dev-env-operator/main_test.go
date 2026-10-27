@@ -375,3 +375,67 @@ func TestPilotAgentFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestPortalLaunchRepoFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || len(o.portalLaunchRepos) != 0 || o.portalLaunchProfile != "" {
+		t.Fatalf("portal launch must be off by default: %v %v", o.portalLaunchRepos, err)
+	}
+	o, err = parseFlags([]string{"--enable-portal-reader", "--portal-launch-profile=dev", "--portal-launch-repo=dev-env", "--portal-launch-repo=haynes-ops"})
+	if err != nil || len(o.portalLaunchRepos) != 2 || o.portalLaunchProfile != "dev" || o.portalLaunchMaxUnfinished != 2 {
+		t.Fatalf("valid repos refused: %+v %v", o.portalLaunchRepos, err)
+	}
+	var many []string
+	for i := 0; i < 17; i++ {
+		many = append(many, "--portal-launch-repo=repo"+strings.Repeat("x", i))
+	}
+	base := []string{"--enable-portal-reader", "--portal-launch-profile=dev"}
+	with := func(extra ...string) []string { return append(append([]string{}, base...), extra...) }
+	for name, args := range map[string][]string{
+		"without the reader": {"--portal-launch-profile=dev", "--portal-launch-repo=dev-env"},
+		"duplicate":          with("--portal-launch-repo=dev-env", "--portal-launch-repo=dev-env"),
+		"empty":              with("--portal-launch-repo="),
+		"a path":             with("--portal-launch-repo=a/b"),
+		"dot dot":            with("--portal-launch-repo=.."),
+		"dot":                with("--portal-launch-repo=."),
+		"a space":            with("--portal-launch-repo=a b"),
+		"too long":           with("--portal-launch-repo=" + strings.Repeat("r", 101)),
+		"seventeen":          with(many...),
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := parseFlags(with(many[:16]...)); err != nil {
+		t.Errorf("sixteen repos refused: %v", err)
+	}
+}
+
+func TestPortalLaunchProfileAndCapFlags(t *testing.T) {
+	repo := []string{"--enable-portal-reader", "--portal-launch-repo=dev-env"}
+	with := func(extra ...string) []string { return append(append([]string{}, repo...), extra...) }
+	for name, args := range map[string][]string{
+		"no profile":         with(),
+		"empty profile":      with("--portal-launch-profile="),
+		"uppercase profile":  with("--portal-launch-profile=Dev"),
+		"workbench profile":  {"--enable-portal-reader", "--portal-launch-profile=workbench", "--portal-launch-repo=dev-env"},
+		"underscore profile": with("--portal-launch-profile=a_b"),
+		"slash profile":      with("--portal-launch-profile=a/b"),
+		"cap zero":           with("--portal-launch-profile=dev", "--portal-launch-max-unfinished=0"),
+		"cap nine":           with("--portal-launch-profile=dev", "--portal-launch-max-unfinished=9"),
+		"cap negative":       with("--portal-launch-profile=dev", "--portal-launch-max-unfinished=-1"),
+		"cap not a number":   with("--portal-launch-profile=dev", "--portal-launch-max-unfinished=x"),
+		"profile alone":      {"--enable-portal-reader", "--portal-launch-profile=dev"},
+		"cap alone":          {"--enable-portal-reader", "--portal-launch-max-unfinished=3"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	for n, want := range map[string]int{"1": 1, "2": 2, "8": 8} {
+		o, err := parseFlags(with("--portal-launch-profile=dev", "--portal-launch-max-unfinished="+n))
+		if err != nil || o.portalLaunchMaxUnfinished != want {
+			t.Errorf("cap %s: %d %v", n, o.portalLaunchMaxUnfinished, err)
+		}
+	}
+}

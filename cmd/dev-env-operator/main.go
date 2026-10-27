@@ -120,6 +120,9 @@ type options struct {
 	coordinatorEnabled            bool
 	portalReaderEnabled           bool
 	portalMessageTargets          map[string]string
+	portalLaunchRepos             map[string]struct{}
+	portalLaunchProfile           string
+	portalLaunchMaxUnfinished     int
 	portalConversationTargets     map[string]string
 	privatePilot                  *projectcanary.PilotPolicy
 	privateProjectTasks           bool
@@ -174,6 +177,9 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.portalReaderEnabled, "enable-portal-reader", false, "accept the dev-agents/dev-env-v2-portal ServiceAccount for paginated dev-env session summaries only")
 	fs.Func("portal-send-target", "explicit send target name=SessionUID; repeat for each target", func(v string) error { return addPortalTarget(&o.portalMessageTargets, v, false) })
+	fs.Func("portal-launch-repo", "repository the portal may launch a constrained claude session in; repeat for each repository", func(v string) error { return addPortalLaunchRepo(&o.portalLaunchRepos, v) })
+	fs.StringVar(&o.portalLaunchProfile, "portal-launch-profile", "", "templates profile every portal-launched session runs on; required with --portal-launch-repo")
+	fs.IntVar(&o.portalLaunchMaxUnfinished, "portal-launch-max-unfinished", apiv1.DefaultPortalLaunchMaxUnfinished, "most unfinished portal-launched sessions at once (1 to 8); only with --portal-launch-repo")
 	fs.Func("portal-history-target", "explicit history target name=SessionUID; repeat for each target", func(v string) error { return addPortalTarget(&o.portalConversationTargets, v, true) })
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
@@ -227,8 +233,23 @@ func parseFlags(args []string) (options, error) {
 	if o.portalReaderEnabled && o.sessionNamespace != "dev-agents" {
 		return o, errors.New("--enable-portal-reader requires --session-namespace=dev-agents")
 	}
-	if (len(o.portalMessageTargets) > 0 || len(o.portalConversationTargets) > 0) && !o.portalReaderEnabled {
+	if (len(o.portalMessageTargets) > 0 || len(o.portalConversationTargets) > 0 || len(o.portalLaunchRepos) > 0) && !o.portalReaderEnabled {
 		return o, errors.New("portal action targets require --enable-portal-reader")
+	}
+	if len(o.portalLaunchRepos) > 0 {
+		if len(validation.IsDNS1123Label(o.portalLaunchProfile)) != 0 {
+			return o, errors.New("--portal-launch-repo requires --portal-launch-profile, a profile name")
+		}
+		// The workbench profile runs pods as the workbench ServiceAccount, with
+		// exec rights and workbench treatment by this API; a portal launch never gets it.
+		if o.portalLaunchProfile == "workbench" {
+			return o, errors.New("--portal-launch-profile may not be workbench")
+		}
+		if o.portalLaunchMaxUnfinished < 1 || o.portalLaunchMaxUnfinished > apiv1.MaxPortalLaunchMaxUnfinished {
+			return o, errors.New("--portal-launch-max-unfinished must be 1 to 8")
+		}
+	} else if o.portalLaunchProfile != "" || o.portalLaunchMaxUnfinished != apiv1.DefaultPortalLaunchMaxUnfinished {
+		return o, errors.New("--portal-launch-profile and --portal-launch-max-unfinished need --portal-launch-repo")
 	}
 	if o.apiAddr != "0" {
 		if o.apiTLSDir == "" {
@@ -652,6 +673,9 @@ func run(args []string) error {
 		}
 		api := &apiserver.Server{
 			PortalMessageTargets:      o.portalMessageTargets,
+			PortalLaunchRepos:         o.portalLaunchRepos,
+			PortalLaunchProfile:       o.portalLaunchProfile,
+			PortalLaunchMaxUnfinished: o.portalLaunchMaxUnfinished,
 			PortalConversationTargets: o.portalConversationTargets,
 			SessionDirectory:          directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
@@ -777,6 +801,25 @@ func leaderNow(mgr ctrl.Manager, elect bool) func() bool {
 			return false
 		}
 	}
+}
+
+// addPortalLaunchRepo accepts each repository once, up to the bound. The name
+// follows the AgentSession schema's rule for spec.repo.
+func addPortalLaunchRepo(repos *map[string]struct{}, value string) error {
+	if !apiv1.ValidRepoName(value) {
+		return errors.New("invalid portal launch repo")
+	}
+	if _, dup := (*repos)[value]; dup {
+		return errors.New("duplicate portal launch repo")
+	}
+	if len(*repos) >= apiv1.MaxPortalLaunchRepos {
+		return errors.New("too many portal launch repos")
+	}
+	if *repos == nil {
+		*repos = make(map[string]struct{})
+	}
+	(*repos)[value] = struct{}{}
+	return nil
 }
 
 // addPortalTarget accepts each name and UID at most once per action.
