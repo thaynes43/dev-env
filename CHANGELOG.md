@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.47.0](https://github.com/thaynes43/dev-env/compare/v2.46.0...v2.47.0) (2026-10-27)
+
+
+### Features
+
+* **portal:** add default-off session messaging and history ([#574](https://github.com/thaynes43/dev-env/issues/574)) ([0e56c52](https://github.com/thaynes43/dev-env/commit/0e56c52063357aade9d6357a2b61b6b68ae15121))
+
 ## [2.46.0](https://github.com/thaynes43/dev-env/compare/v2.45.0...v2.46.0) (2026-10-27)
 
 
