@@ -9,11 +9,14 @@ import (
 	"html/template"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 //go:embed attention.html
@@ -31,6 +34,9 @@ var viewsStyle string
 //go:embed receipt.html
 var receiptSource string
 
+//go:embed launch_result.html
+var launchResultSource string
+
 var (
 	exactHead     = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	contentPolicy = policy(pageStyle)
@@ -41,9 +47,10 @@ var (
 	// form: forms may post to this origin only. Still no script.
 	ProductSendPolicy = strings.Replace(ProductPolicy, "form-action 'none'", "form-action 'self'", 1)
 	// Only the embedded, repository-owned CSS enters this template source.
-	pageTemplate    = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
-	viewsTemplate   = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
-	receiptTemplate = template.Must(template.New("receipt").Parse(strings.Replace(receiptSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
+	pageTemplate         = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
+	viewsTemplate        = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
+	receiptTemplate      = template.Must(template.New("receipt").Parse(strings.Replace(receiptSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
+	launchResultTemplate = template.Must(template.New("launch-result").Parse(strings.Replace(launchResultSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
 )
 
 func policy(style string) string {
@@ -277,18 +284,78 @@ func validSend(m *ProductMessages) bool {
 		m.Send.Action == ProductSessionMessagesHref && sendCSRF.MatchString(m.Send.CSRF) && sendRequestID.MatchString(m.Send.RequestID)
 }
 
-// ProductPolicyFor is the Content-Security-Policy for page: ProductSendPolicy
-// when it holds a valid send form, ProductPolicy otherwise. The response header
-// and the page's own meta policy both come from it.
-func ProductPolicyFor(page ProductPage) string {
+// ProductLaunch is the Sessions page's launch form: a POST to the portal's
+// same-origin launch route. CSRF is the caller's portal session value and
+// RequestID binds this rendered form to one launch, so a resubmitted form cannot
+// start two sessions. Repos are the repositories the caller's private scope
+// allows; Models and Efforts are what the form offers. A ProductLaunch that
+// fails validLaunch is dropped.
+type ProductLaunch struct {
+	Action, CSRF, RequestID string
+	Repos, Models, Efforts  []string
+}
+
+// ProductSessionLaunchesHref is the portal launch route a form may post to.
+const ProductSessionLaunchesHref = "/portal/projects/dev-env/environments/internal/session-launches"
+
+// validLaunch accepts a form only with the fixed same-origin action, a portal
+// CSRF value and request ID, at least one repository name, and only full
+// Claude model ids and known effort levels.
+func validLaunch(l *ProductLaunch) bool {
+	if l == nil || l.Action != ProductSessionLaunchesHref || !sendCSRF.MatchString(l.CSRF) || !sendRequestID.MatchString(l.RequestID) ||
+		len(l.Repos) == 0 || len(l.Repos) > apiv1.MaxPortalLaunchRepos || len(l.Models) == 0 || len(l.Models) > 8 || len(l.Efforts) > 8 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, r := range l.Repos {
+		if !apiv1.ValidRepoName(r) || seen[r] {
+			return false
+		}
+		seen[r] = true
+	}
+	efforts := apiv1.PortalLaunchEfforts()
+	for _, m := range l.Models {
+		if apiv1.CheckClaudeModel(m) != apiv1.ClaudeModelOK {
+			return false
+		}
+	}
+	for _, e := range l.Efforts {
+		if !slices.Contains(efforts, e) {
+			return false
+		}
+	}
+	return true
+}
+
+// pageLaunch is the page's launch form when it is a valid one on the Sessions
+// page, and nil otherwise.
+func pageLaunch(page ProductPage) *ProductLaunch {
+	if strings.ToLower(page.Title) != "sessions" || !validLaunch(page.Launch) {
+		return nil
+	}
+	return page.Launch
+}
+
+// pageSend reports whether page holds a valid send form.
+func pageSend(page ProductPage) bool {
 	if page.Connected {
 		for _, g := range page.Groups {
 			for _, row := range g.Rows {
 				if productID.MatchString(row.ID) && validSend(row.Messages) {
-					return ProductSendPolicy
+					return true
 				}
 			}
 		}
+	}
+	return false
+}
+
+// ProductPolicyFor is the Content-Security-Policy for page: ProductSendPolicy
+// when it holds a valid send form or a valid launch form, ProductPolicy
+// otherwise. The response header and the page's own meta policy both come from it.
+func ProductPolicyFor(page ProductPage) string {
+	if pageSend(page) || pageLaunch(page) != nil {
+		return ProductSendPolicy
 	}
 	return ProductPolicy
 }
@@ -370,6 +437,9 @@ type ProductPage struct {
 	Usage                               *ProductUsage
 	Rail                                ProductRail
 	Filter                              ProductFilter
+	// Launch is the Sessions page's launch form, set only when the route is
+	// configured for this caller.
+	Launch *ProductLaunch
 }
 
 const (
@@ -492,15 +562,24 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		Groups                                                             []productGroupView
 		Rows                                                               []productRowView
 		Usage                                                              *ProductUsage
+		Launch                                                             *launchView
+		CanLaunch                                                          bool
 	}{Policy: strings.TrimSuffix(ProductPolicyFor(page), "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
 		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage",
 		ListTitle: page.ListTitle}
-	// A page that holds a send form is not read-only, and says so.
-	view.CanSend = ProductPolicyFor(page) == ProductSendPolicy
+	// A page that holds a send or launch form is not read-only, and says so.
+	view.CanSend = pageSend(page)
 	view.Access = "Read-only"
+	if launch := pageLaunch(page); launch != nil {
+		view.CanLaunch, view.Launch = true, newLaunchView(launch)
+		view.Access = "Read and launch"
+	}
 	if view.CanSend {
 		view.Access = "Read and message"
+		if view.CanLaunch {
+			view.Access = "Read, message and launch"
+		}
 	}
 	view.AccessLower = strings.ToLower(view.Access)
 	base := productSessionsHref
@@ -840,6 +919,79 @@ func RenderReceipt(r ProductReceipt) ([]byte, error) {
 	}
 	var body bytes.Buffer
 	if err := receiptTemplate.Execute(&body, view); err != nil {
+		return nil, err
+	}
+	return body.Bytes(), nil
+}
+
+// launchModeOptions are the launch form's modes and their plain names.
+var launchModeOptions = []struct{ Value, Label string }{
+	{"task", "Headless task"},
+	{"remote", "Interactive with Remote Control"},
+	{"local", "Local terminal"},
+}
+
+type launchView struct {
+	Action, CSRF, RequestID string
+	Repos, Models           []string
+	Efforts                 []string
+	Modes                   []struct{ Value, Label string }
+	Sizes                   []string
+}
+
+func newLaunchView(l *ProductLaunch) *launchView {
+	return &launchView{Action: l.Action, CSRF: l.CSRF, RequestID: l.RequestID, Repos: l.Repos, Models: l.Models, Efforts: l.Efforts, Modes: launchModeOptions, Sizes: []string{"S", "M"}}
+}
+
+// ProductLaunchResult is a launch the portal did not turn into a redirect: the
+// operator refused it, was unavailable, or the outcome is not known. Outcome is
+// limit, unavailable, invalid, conflict or unknown; any other value reads unknown.
+type ProductLaunchResult struct {
+	Outcome string
+	Fields  []ProductField
+	Back    string
+	Preview bool
+}
+
+type launchResultState struct{ Status, Headline, Tone, Meaning string }
+
+// launchResultStates is the fixed wording for each outcome. None echoes a
+// prompt or an operator error.
+var launchResultStates = map[string]launchResultState{
+	"limit":       {"Not started", "Too many launches are running", "wait", "The operator allows only a few unfinished portal-launched sessions at once. Nothing was started. Try again when one has finished or been suspended."},
+	"unavailable": {"Not started", "Launching is unavailable", "bad", "The operator did not accept this launch. Nothing was started."},
+	"invalid":     {"Not started", "The launch was not valid", "bad", "One or more fields were not accepted. Nothing was started. Fix them and start the agent again."},
+	"conflict":    {"Not started", "This form already started a session", "wait", "This request already started a session with different details. Nothing new was started. Find that session in the Agents list, or load a fresh form to start another."},
+	"unknown":     {"Unknown", "Outcome Unknown", "wait", "The portal cannot tell whether a session was started. Check the Agents list before starting another. Sending this same form again returns the same session while it is unfinished; a freshly loaded form starts a new one."},
+}
+
+// RenderLaunchResult renders a launch result page. Its policy is ProductPolicy:
+// no script and no form. Every value is escaped text.
+func RenderLaunchResult(r ProductLaunchResult) ([]byte, error) {
+	state, ok := launchResultStates[r.Outcome]
+	if !ok {
+		state = launchResultStates["unknown"]
+	}
+	back := productSessionsHref
+	if r.Back == productSessionsHref+"#launch" {
+		back = r.Back
+	}
+	view := struct {
+		launchResultState
+		Policy, SessionsHref, TasksHref, Back string
+		Fields                                []ProductField
+		Preview                               bool
+	}{launchResultState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, TasksHref: productTasksHref, Back: back, Preview: r.Preview}
+	for i, f := range r.Fields {
+		if i == 8 {
+			break
+		}
+		if validText(f.Label) && validText(f.Value) {
+			view.Fields = append(view.Fields, ProductField{Label: display(f.Label), Value: display(f.Value), Mono: f.Mono})
+		}
+	}
+	var body bytes.Buffer
+	if err := launchResultTemplate.Execute(&body, view); err != nil {
 		return nil, err
 	}
 	return body.Bytes(), nil

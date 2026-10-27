@@ -26,3 +26,22 @@ func TestCheckClaudeModel(t *testing.T) {
 		}
 	}
 }
+
+func TestPortalLaunchModelsAreFullIdsWithEffort(t *testing.T) {
+	models := PortalLaunchModels()
+	if len(models) == 0 {
+		t.Fatal("no models")
+	}
+	for _, m := range models {
+		if CheckClaudeModel(m) != ClaudeModelOK || ClaudeEffortLevels(m) == nil {
+			t.Errorf("%s is not a full id the effort table knows", m)
+		}
+	}
+	models[0] = "changed"
+	if PortalLaunchModels()[0] == "changed" {
+		t.Error("the list aliases its source")
+	}
+	if got := PortalLaunchEfforts(); len(got) == 0 || got[0] != "low" {
+		t.Errorf("efforts %v", got)
+	}
+}

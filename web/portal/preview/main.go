@@ -172,6 +172,7 @@ func writeProduct(dir string) error {
 		{"scripts/trials/portal_product/tasks.json", "tasks.html", session.RenderTasksFixture},
 		{"scripts/trials/portal_product/sessions.json", "sessions-send.html", session.RenderSessionsSendFixture},
 		{"scripts/trials/portal_product/sessions.json", "sessions-history.html", session.RenderSessionsHistoryFixture},
+		{"scripts/trials/portal_product/sessions.json", "sessions-launch.html", session.RenderSessionsLaunchFixture},
 	} {
 		f, err := os.Open(page.fixture)
 		if err != nil {
@@ -192,6 +193,15 @@ func writeProduct(dir string) error {
 	}
 	for status, data := range receipts {
 		if err := os.WriteFile(dir+"/receipt-"+status+".html", data, 0o600); err != nil {
+			return err
+		}
+	}
+	results, err := session.RenderLaunchResultFixtures()
+	if err != nil {
+		return err
+	}
+	for outcome, data := range results {
+		if err := os.WriteFile(dir+"/launch-"+outcome+".html", data, 0o600); err != nil {
 			return err
 		}
 	}

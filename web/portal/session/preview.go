@@ -78,6 +78,46 @@ func (p *previewForms) NewRequestID() (string, error) {
 	return fmt.Sprintf("fixture-request-%04d", p.n), nil
 }
 
+// LaunchRepos gives the fixture caller two fixture repositories.
+func (p *previewForms) LaunchRepos(portal.Principal) []string {
+	return []string{"fixture-repo-one", "fixture-repo-two"}
+}
+
+// RenderSessionsLaunchFixture renders the Sessions fixture as a page whose
+// launch route is configured for the caller: it carries the New agent form with
+// a fixture CSRF value, labelled a fixture preview. It contacts nothing.
+func RenderSessionsLaunchFixture(source io.Reader) ([]byte, error) {
+	f, err := readProductFixture(source)
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := decodeSessionPage(f.Body, f.Now)
+	if err != nil {
+		return nil, err
+	}
+	page := sessionsPage(decoded.Sessions, decoded.Complete, decoded.Freshness, f.Now, portal.ProductFilter{})
+	page = withLaunchForm(page, portal.Principal{}, strings.Repeat("F", 43), &previewForms{})
+	return renderFixture(page, f.Now)
+}
+
+// RenderLaunchResultFixtures renders one fixture result page per outcome the
+// launch route can answer with a page.
+func RenderLaunchResultFixtures() (map[string][]byte, error) {
+	out := map[string][]byte{}
+	for _, outcome := range []string{"limit", "unavailable", "invalid", "conflict", "unknown"} {
+		r := portal.ProductLaunchResult{Outcome: outcome, Back: SessionsPath + "#launch", Preview: true}
+		if outcome == "invalid" {
+			r.Fields = []portal.ProductField{{Label: "model", Value: "Fixture field message."}}
+		}
+		body, err := portal.RenderLaunchResult(r)
+		if err != nil {
+			return nil, err
+		}
+		out[outcome] = body
+	}
+	return out, nil
+}
+
 // RenderSessionsSendFixture renders the Sessions fixture as a page whose send
 // route is configured: reachable sessions get forms with a fixture CSRF value
 // and request IDs. It is labelled a fixture preview and contacts nothing.

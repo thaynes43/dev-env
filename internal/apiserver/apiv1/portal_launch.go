@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -54,4 +55,28 @@ type PortalLaunchReceipt struct {
 	SessionUID  string    `json:"sessionUID"`
 	Phase       string    `json:"phase"`
 	ObservedAt  time.Time `json:"observedAt"`
+}
+
+// portalLaunchModels are the full Claude ids the portal's launch form offers, in
+// order, the first being the default. Each is a full id that CheckClaudeModel
+// accepts and the effort table knows. The operator still validates every launch.
+var portalLaunchModels = []string{"claude-opus-5-5", "claude-sonnet-5-5"}
+
+// PortalLaunchModels returns the model ids the launch form offers.
+func PortalLaunchModels() []string { return slices.Clone(portalLaunchModels) }
+
+// PortalLaunchEfforts returns the effort levels the launch form offers: every
+// level any offered model takes, lowest first. The operator checks the level
+// against the chosen model.
+func PortalLaunchEfforts() []string {
+	var out []string
+	for _, level := range fullEffort {
+		for _, model := range portalLaunchModels {
+			if ClaudeEffortAccepted(model, level) {
+				out = append(out, level)
+				break
+			}
+		}
+	}
+	return out
 }

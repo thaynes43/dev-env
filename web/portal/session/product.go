@@ -843,6 +843,13 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			page = withSendForms(page, record.CSRF, c.Send)
 		}
 	}
+	// A configured launch route adds the New agent form for the one principal its
+	// private scope names; no other caller, and no Tasks page, gets one.
+	if r.URL.Path == SessionsPath && c.Launch != nil {
+		if _, record, currentErr := c.Session.current(r); currentErr == nil && record.Principal == principal {
+			page = withLaunchForm(page, principal, record.CSRF, c.Launch)
+		}
+	}
 	// Leave headroom under the assembly's response bound for the page frame.
 	body, policy, err := portal.RenderProductPolicyWithin(page, maximumResponse*7/8)
 	if err != nil {

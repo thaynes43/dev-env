@@ -194,8 +194,9 @@ func LoadProduction(root string) (Runtime, error) {
 		return Runtime{}, errProductionConfig
 	}
 	var send SendForms
+	var launchForms LaunchForms
 	tokenPath := filepath.Join(root, "secrets/OPERATOR_TOKEN")
-	if actions.Send != nil || actions.History != nil {
+	if actions.Send != nil || actions.History != nil || actions.Launch != nil {
 		if sessions == nil {
 			return Runtime{}, errProductionConfig
 		}
@@ -210,6 +211,13 @@ func LoadProduction(root string) (Runtime, error) {
 			}
 			handler.scope = actions.Send
 		}
+		if actions.Launch != nil {
+			launch, e := NewLaunchForms(engine, authorizer, tokenPath, operatorCA, time.Now, actions.Launch)
+			if e != nil {
+				return Runtime{}, errProductionConfig
+			}
+			launchForms = launch
+		}
 		if actions.History != nil {
 			source, e := NewConversationSource(authorizer, store, actions.History.Principal, actions.History.Targets, tokenPath, operatorCA, time.Now)
 			if e != nil {
@@ -219,7 +227,7 @@ func LoadProduction(root string) (Runtime, error) {
 		}
 	}
 	closeStore = false
-	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Send: send, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
+	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
 }
 
 func productSources(root string, openProjectCA, operatorCA []byte) (*SessionSource, *TaskSource, error) {
@@ -491,7 +499,36 @@ type actionScope struct {
 	Principal portal.Principal
 	Targets   map[string]string
 }
-type productionActionScopes struct{ Send, History *actionScope }
+type productionActionScopes struct {
+	Send, History *actionScope
+	Launch        *launchScope
+}
+
+// parseLaunchScope reads the launch entry: exactly issuer, subject and repos.
+// The issuer is the pinned one, the subject plain identity text, and repos a
+// non-empty, bounded, duplicate-free list of repository names.
+func parseLaunchScope(entry json.RawMessage) (*launchScope, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(entry, &fields) != nil || !exactKeys(fields, []string{"issuer", "subject", "repos"}) {
+		return nil, false
+	}
+	var wire struct {
+		Issuer  string   `json:"issuer"`
+		Subject string   `json:"subject"`
+		Repos   []string `json:"repos"`
+	}
+	if json.Unmarshal(entry, &wire) != nil || wire.Issuer != productionIssuer || !identityText(wire.Subject) || len(wire.Repos) == 0 || len(wire.Repos) > apiv1.MaxPortalLaunchRepos {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	for _, repo := range wire.Repos {
+		if !apiv1.ValidRepoName(repo) || seen[repo] {
+			return nil, false
+		}
+		seen[repo] = true
+	}
+	return &launchScope{Principal: portal.Principal{Issuer: wire.Issuer, Subject: wire.Subject}, Repos: wire.Repos}, true
+}
 
 func loadActionScopes(root string) (productionActionScopes, error) {
 	var result productionActionScopes
@@ -508,10 +545,18 @@ func loadActionScopes(root string) (productionActionScopes, error) {
 		return result, errProductionConfig
 	}
 	var top map[string]json.RawMessage
-	if json.Unmarshal(raw, &top) != nil || !exactKeys(top, nil, "send", "history") || len(top) == 0 {
+	if json.Unmarshal(raw, &top) != nil || !exactKeys(top, nil, "send", "history", "launch") || len(top) == 0 {
 		return result, errProductionConfig
 	}
 	for action, entry := range top {
+		if action == "launch" {
+			scope, ok := parseLaunchScope(entry)
+			if !ok {
+				return result, errProductionConfig
+			}
+			result.Launch = scope
+			continue
+		}
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(entry, &fields) != nil || !exactKeys(fields, []string{"issuer", "subject", "targets"}) {
 			return result, errProductionConfig

@@ -410,3 +410,63 @@ action file (`session-actions.json`), bound to the exact principal and
 repositories like Send. That scope is not implemented in this unit. It, the
 profile choice and every live flag need Tom's confirmation, as does the
 identity step.
+
+## Default-off portal launch form (BFF)
+
+The portal can show a New agent form on the Sessions page and post it to the
+operator's launch route (see "Default-off portal launch route"). It is off unless
+the private action file `config/session-actions.json` has a `launch` entry, and
+the operator has the launch flags. The portal reads the file once at start.
+
+**The `launch` scope.** An optional top-level entry beside `send` and `history`,
+parsed as strictly as they are. It has exactly the keys `issuer`, `subject` and
+`repos`. `issuer` must be the pinned issuer; `subject` is the one principal that
+may launch; `repos` is a non-empty list of at most 16 distinct repository names.
+Any other key, shape or value stops the portal at start. With no `launch` entry
+the route and the form do not exist, and `send` and `history` behave as before.
+
+```json
+{"launch": {"issuer": "<pinned issuer>", "subject": "<principal>", "repos": ["dev-env"]}}
+```
+
+**The route.** `POST /portal/projects/dev-env/environments/internal/session-launches`
+only. It makes the same checks as Send, by the same code: a current portal
+session, the exact Origin, a form content type, the session's CSRF value, a fresh
+authorization for dev-env, and a principal equal to the scope's. It also needs a
+43-character request ID, a repository in the scope, a mode of `task`, `local` or
+`remote`, a model from the offered list of full Claude ids, an effort and size
+from their fixed sets, and no other form key. Anything else is denied and nothing
+goes to the operator. The one exception is the prompt rule: a task without a
+prompt, or a local or remote launch with one, answers with a result page naming
+the field.
+
+**What it sends.** One `PortalLaunchRequest` to the operator, with the actor
+reference Send uses (a keyed hash of the portal session and principal). The
+prompt is not logged, stored or echoed, and no reservation is kept: the request
+ID becomes the operator's idempotency key, so a resubmitted form returns the same
+session while that session is unfinished. Each portal pod runs one dispatch at a time
+(one lock around the fresh authorization check and the operator call), so two
+concurrent sends of one form reach the operator one after the other and the
+operator returns the same session to the second. A prompt over 64 KiB of UTF-8
+bytes gets a result page with a field error, not a denial.
+
+**What the user sees.**
+
+- Created or existing: a 303 to the Sessions page with the new agent selected.
+  That page is the receipt: name, UID, phase (Pending means the pod is starting)
+  and the Remote Control line.
+- Too many portal launches running (429), the operator's refusal or missing route
+  (403, 401, 404), a field it refused (400 or 422), a request ID that already
+  started a session with different details (409) and an unknown outcome each get
+  a result page with fixed wording. Unknown means the request was sent and no usable answer
+  came back, so a session may or may not exist. The page says to check the Agents
+  list; it never retries.
+
+The Sessions page carries the form only for the scope's principal and only when
+the route is configured. The page then has the send policy (`form-action 'self'`),
+still with no script. The Tasks page never has it.
+
+**Activation (not applied).** The operator needs `--portal-launch-repo`,
+`--portal-launch-profile` and `--portal-launch-max-unfinished`; the portal needs
+this `launch` scope in its private file; and Tom confirms the principal, the
+repositories and the profile. This change enables none of them.

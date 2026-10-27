@@ -674,3 +674,18 @@ route](../../../../docs/portal-session-runtime.md#default-off-portal-launch-rout
 This is the operator side only. The portal form and receipt, the private `launch`
 scope, the profile choice and every live flag are separate steps that need Tom's
 confirmation.
+
+### Default-off portal launch form, 2026-10-27
+
+The portal's half of the launch route is in source. `session-actions.json` may
+carry a `launch` entry (`issuer`, `subject`, `repos`), parsed like `send` and
+`history`. With it, the Sessions page shows a New agent form to that one
+principal, and `POST .../session-launches` runs the same session, Origin, CSRF,
+authorization and principal checks as Send before it asks the operator's launch
+route to start a constrained Claude session. Success redirects to the selected
+agent, which is the receipt. Limit, refusal, invalid and unknown outcomes get
+fixed-wording result pages; Unknown never retries. See [default-off portal
+launch form](../../../../docs/portal-session-runtime.md#default-off-portal-launch-form-bff).
+The form's markup and copy are a first pass for the interface review. Nothing is
+activated: the operator flags, this private scope and Tom's confirmation are
+still required.
