@@ -459,3 +459,43 @@ stats. No new credential, adapter or policy.
 - Compatibility: an operator before this change sends none of the new keys and
   only `dev-env`; the portal accepts that. A portal before this change refuses
   the new keys, so the portal image rolls out before the operator image.
+
+### Message box, first increment, 2026-10-27
+
+Tom asked (2026-10-27, relayed by the coordinator) for the message box / agent
+IDE modelled on open-source agent windows. This increment adds it to the
+existing Agents detail, server-rendered like the rest of the portal: no script,
+no form, and the same Content-Security-Policy (`form-action 'none'`).
+
+- **What it shows.** Each session's detail ends with a Messages panel: a
+  history line, a composer (draft box, provider and requested model, a route
+  badge, Send) and two short lines under it: the send gate and the route.
+- **Send is unavailable, and says why.** The portal's operator identity
+  `dev-agents/dev-env-v2-portal` may only `GET /v1/sessions`
+  (`internal/apiserver/server.go`). `POST /v1/sessions/{name}/messages` sends
+  as its operator caller, and no caller class stands for a portal user
+  (issuer plus subject); portal login confers no operator identity (above). The
+  durable inbox serves session and coordinator callers with an accepted project
+  snapshot only. So Send is a disabled button outside any form: nothing is
+  sent, queued or shown as sent.
+- **History is unavailable.** The portal reads no inbox and no session
+  messages, and the session summary carries no message fields.
+- **Route.** From summary fields only, it states what agentd's delivery
+  (D-16, D-65) would do with a message from the existing `agent-run msg` route:
+  a headless task reads none; an agent that is not running, or a session not in
+  phase Running, takes none; a starting agent takes none yet; a running
+  interactive (`remote` or `local`) session that is busy, waiting or idle may
+  take one, and the panel shows the command. agentd decides delivery when a
+  message is sent, so even that state promises nothing. Anything else is
+  Unknown.
+- **Drafts.** Only a session the route may reach gets an enabled draft box.
+  Each session's box is its own element, so a draft survives switching sessions
+  on the page and is lost on reload. A draft is never sent.
+
+**Backend prerequisite for a live send, not built here.** A narrow typed
+portal command: a sender attributed to the portal user, per-project and
+per-session entitlement checked at send time, an idempotency key bound to the
+request, Unknown (never success) on timeout, an audit record, and the CSRF and
+Origin checks above; plus a read of the selected session's message history.
+This is new authority: it needs its own design and Tom's approval, and belongs
+to the backend lane, not this frontend increment.

@@ -200,7 +200,7 @@ func TestProductFailsClosedOnRedirectExpiryAndUntrustedCA(t *testing.T) {
 	handler.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
 	// Stopped sessions never heartbeat: stale freshness is a quiet status
 	// line, not a banner.
-	if !strings.Contains(w.Body.String(), "older") || !strings.Contains(w.Body.String(), `<span role="status">Session freshness is stale.</span>`) || strings.Contains(w.Body.String(), `class="banner"`) {
+	if !strings.Contains(w.Body.String(), ">older<") || !strings.Contains(w.Body.String(), `<span role="status">Session freshness is stale.</span>`) || strings.Contains(w.Body.String(), `class="banner"`) {
 		t.Fatalf("stale session was hidden or bannered: %s", w.Body.String())
 	}
 	if err := os.WriteFile(operatorToken, []byte(fixtureOperatorToken("dev-env-operator", now.Add(-time.Minute))+"\n"), 0o600); err != nil {
@@ -208,7 +208,7 @@ func TestProductFailsClosedOnRedirectExpiryAndUntrustedCA(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
-	if !strings.Contains(w.Body.String(), "Sessions unavailable") || strings.Contains(w.Body.String(), "older") {
+	if !strings.Contains(w.Body.String(), "Sessions unavailable") || strings.Contains(w.Body.String(), ">older<") {
 		t.Fatalf("expired token rendered sessions: %s", w.Body.String())
 	}
 	_, otherCA := mintNamed(t, operatorPortalHost)
@@ -222,7 +222,7 @@ func TestProductFailsClosedOnRedirectExpiryAndUntrustedCA(t *testing.T) {
 	handler = NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: untrusted, Tasks: nil, FreshFor: time.Minute, Now: func() time.Time { return now }})
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
-	if !strings.Contains(w.Body.String(), "Sessions unavailable") || strings.Contains(w.Body.String(), "older") {
+	if !strings.Contains(w.Body.String(), "Sessions unavailable") || strings.Contains(w.Body.String(), ">older<") {
 		t.Fatalf("untrusted CA rendered sessions: %s", w.Body.String())
 	}
 	tasks, err := newTaskSource(opToken, opCA, func() time.Time { return now }, routeDial(map[string]string{openProjectPortalHost: foreignNext}))

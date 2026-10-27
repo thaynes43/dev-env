@@ -106,6 +106,20 @@ type ProductRow struct {
 	Badges                                    []string
 	Sections                                  []ProductSection
 	Context                                   []ProductField
+	Messages                                  *ProductMessages
+}
+
+// ProductMessages is one session's message box. The portal holds no message
+// route, so Send never submits: Gate says why and History says what the
+// portal cannot read. Route is the existing delivery route's state for this
+// session; Command, when set, is that route. Draftable enables the draft box;
+// a draft stays in the page and is never sent.
+type ProductMessages struct {
+	Agent, Placeholder string
+	History, Gate      string
+	Route              ProductStatus
+	RouteNote, Command string
+	Draftable          bool
 }
 
 // ProductGroup is one titled list group. Attention marks the group the rail's
@@ -328,6 +342,11 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					continue
 				}
 				row.Status.Tone = productTone(row.Status.Tone)
+				if row.Messages != nil {
+					m := *row.Messages
+					m.Route.Tone = productTone(m.Route.Tone)
+					row.Messages = &m
+				}
 				g.Rows = append(g.Rows, row)
 				view.Rows = append(view.Rows, productRowView{ProductRow: row, Default: len(view.Rows) == 0})
 			}
