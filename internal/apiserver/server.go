@@ -62,6 +62,8 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	// PortalMessageTargets is an explicit session-name to immutable UID action scope. Nil disables the command endpoint.
+	PortalMessageTargets      map[string]string
 	SessionDirectory          *sessiondirectory.KubeStore
 	SessionDirectoryProjects  []string
 	MetadataDiscoveryProjects []string
@@ -179,6 +181,9 @@ type route struct {
 // Handler returns the API's HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if len(s.PortalMessageTargets) > 0 {
+		mux.Handle(apiv1.PortalSessionMessagesPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalMessage}}))
+	}
 	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())
 	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))
 	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.getDirectory}}))
@@ -312,7 +317,7 @@ func (s *Server) serve(rt route) http.Handler {
 			if err := coordinatorAllowed(c, rt.coordinator); err != nil {
 				return 0, err
 			}
-			if c.kind == kindPortalReader && (r.Method != http.MethodGet || r.URL.Path != apiv1.SessionsPath) {
+			if c.kind == kindPortalReader && !(r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath) && !(len(s.PortalMessageTargets) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalSessionMessagesPath) {
 				return 0, forbidden("the portal reader may only list session summaries")
 			}
 			status, body, err := h(r.Context(), w, r, c)
