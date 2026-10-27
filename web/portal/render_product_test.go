@@ -69,9 +69,10 @@ func TestRenderProductKeepsAnchorsTonesAndCountsSafe(t *testing.T) {
 	if strings.Contains(html, `<span class="attention-count">`) || strings.Contains(html, `<span class="count">`) || !strings.Contains(html, "Fixture preview") || !strings.Contains(html, `<p class="banner" role="status">Sessions read is incomplete.`) {
 		t.Fatalf("incomplete read was counted or preview/banner missing: %s", html)
 	}
-	for _, planned := range []string{`Automations <span class="soon">Planned</span>`, `Watchdog <span class="soon">Planned</span>`, `id="planned"`} {
-		if !strings.Contains(html, planned) {
-			t.Errorf("planned feature %q is not visibly planned", planned)
+	// Unbuilt features and an unconnected allowance source are not shown.
+	for _, stub := range []string{"Automations", "Watchdog", "Planned", `id="planned"`, "Provider allowance", "allowance-bar"} {
+		if strings.Contains(html, stub) {
+			t.Errorf("rendered page shows the stub %q", stub)
 		}
 	}
 }

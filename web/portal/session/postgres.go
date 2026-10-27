@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/url"
 	"os"
@@ -52,8 +53,8 @@ func NewPostgresStore(c PostgresConfig) (*PostgresStore, error) {
 	if c.Host != "postgres16-rw.database.svc.cluster.local" || c.Username != "dev_env_v2_portal_runtime" || c.Password == "" || len(c.Password) > 4096 {
 		return nil, portal.ErrUnavailable
 	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(c.CA) {
+	roots, err := postgresRoots(c.CA)
+	if err != nil {
 		return nil, portal.ErrUnavailable
 	}
 	config, err := postgresPoolConfig(c.Host, c.Username, c.Password, roots)
@@ -70,6 +71,37 @@ func NewPostgresStore(c PostgresConfig) (*PostgresStore, error) {
 	}
 	s.pool = pool
 	return s, nil
+}
+
+// postgresRoots trusts the pinned CNPG CA by its key, not by its dates. CNPG
+// renews its CA every 90 days with the same key and subject, and Go refuses an
+// expired root, so each pinned CA joins the pool with its validity window
+// opened. The chain, hostname, key usage and the server certificate's own
+// dates are still verified, so no re-pin is needed after a renewal.
+func postgresRoots(pemBytes []byte) (*x509.CertPool, error) {
+	roots := x509.NewCertPool()
+	n := 0
+	for rest := pemBytes; ; {
+		var block *pem.Block
+		if block, rest = pem.Decode(rest); block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		ca, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, portal.ErrUnavailable
+		}
+		open := *ca
+		open.NotBefore, open.NotAfter = time.Time{}, time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
+		roots.AddCert(&open)
+		n++
+	}
+	if n == 0 {
+		return nil, portal.ErrUnavailable
+	}
+	return roots, nil
 }
 
 func postgresPoolConfig(host, username, password string, roots *x509.CertPool) (*pgxpool.Config, error) {

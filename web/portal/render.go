@@ -177,7 +177,7 @@ type productRowView struct {
 func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
-		SessionsHref, TasksHref, UsageHref, PlannedHref, AttentionHref     string
+		SessionsHref, TasksHref, UsageHref, AttentionHref                  string
 		ListTitle, ListCount, SessionCount, TaskCount, AttentionCount      string
 		Quiet, Preview, Banner, HasRows                                    bool
 		Groups                                                             []productGroupView
@@ -185,7 +185,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		Usage                                                              *ProductUsage
 	}{Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
-		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage", PlannedHref: "#planned",
+		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage",
 		ListTitle: page.ListTitle}
 	view.Section = "Agents"
 	if view.Current == "tasks" {
