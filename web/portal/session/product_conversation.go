@@ -79,7 +79,13 @@ func withHistory(ctx context.Context, page portal.ProductPage, selected string, 
 		page.Groups[i].Rows = rows
 	}
 	if selected != "" && !found {
-		page.Notice, page.Quiet = "The selected session is not in this list.", false
+		// A warning already on the page (an incomplete read) may be why the
+		// session is missing: keep it ahead of this notice.
+		missing := "The selected session is not in this list."
+		if page.Notice != "" && !page.Quiet {
+			missing = page.Notice + " " + missing
+		}
+		page.Notice, page.Quiet = missing, false
 	}
 	return page
 }

@@ -87,6 +87,11 @@ func TestWithHistorySelectsOneSessionAndStaysHonest(t *testing.T) {
 	if missing.Notice != "The selected session is not in this list." || missing.Quiet {
 		t.Fatalf("missing selection notice %q", missing.Notice)
 	}
+	partial := page
+	partial.Notice, partial.Quiet = "Sessions read is incomplete. This is not the full inventory.", false
+	if got := withHistory(context.Background(), partial, "uid-gone", src, now).Notice; got != "Sessions read is incomplete. This is not the full inventory. The selected session is not in this list." {
+		t.Fatalf("partial read lost its warning: %q", got)
+	}
 }
 
 func TestProductFilterSelectsOneSession(t *testing.T) {
