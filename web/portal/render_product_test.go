@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -156,7 +157,7 @@ func TestSendFormRendersOnlyWhenValid(t *testing.T) {
 func TestReceiptKeepsTransportApartFromReplies(t *testing.T) {
 	at := time.Date(2026, 10, 27, 12, 0, 5, 0, time.UTC)
 	for status, want := range map[string]string{"Delivered": "Delivered to the agent", "Refused": "Not delivered", "Pending": "Not confirmed yet", "Unknown": "Outcome Unknown", "Completed": "Outcome Unknown", "": "Outcome Unknown"} {
-		body, err := RenderReceipt(ProductReceipt{RequestID: "request-0000000001", Session: "agent-a", SessionUID: "uid-a", ResolvedPodUID: "pod-a", TransportStatus: status, ObservedAt: at})
+		body, err := RenderReceipt(ProductReceipt{RequestID: "request-0000000001", Session: "agent-a", SessionUID: "uid-a", ResolvedPodUID: "pod-a", TransportStatus: status, ReasonCode: "refused", ObservedAt: at})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,21 +165,61 @@ func TestReceiptKeepsTransportApartFromReplies(t *testing.T) {
 		if !strings.Contains(html, "<h1>"+strings.ReplaceAll(want, "'", "&#39;")) || strings.Contains(html, "<form") || strings.Contains(html, "<script") || !strings.Contains(html, "form-action &#39;none&#39;") {
 			t.Fatalf("%q receipt: %s", status, html)
 		}
-		if !strings.Contains(html, `href="`+ProductSessionMessagesHref+`/request-0000000001">Check again</a>`) || !strings.Contains(html, "12:00:05 UTC") {
+		if !strings.Contains(html, `href="`+ProductSessionMessagesHref+`/request-0000000001">Check again</a>`) || !strings.Contains(html, "12:00:05 UTC") || !strings.Contains(html, `href="`+productSessionsHref+`?session=uid-a">Back to the session</a>`) || !strings.Contains(html, "The session took no message") {
 			t.Fatalf("%q receipt lacks its link or time", status)
 		}
 	}
-	body, err := RenderReceipt(ProductReceipt{TransportStatus: "Delivered", RequestID: "../../evil", Reason: `<img src=x onerror=steal()>`})
+	body, err := RenderReceipt(ProductReceipt{TransportStatus: "Delivered", RequestID: "../../evil", SessionUID: "../x", ReasonCode: `<img src=x onerror=steal()>`})
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(body)
-	if !strings.Contains(html, "does not mean the agent has read it, answered it or acted on it") || strings.Contains(html, "Check again") || strings.Contains(html, "<img") || !strings.Contains(html, "&lt;img src=x onerror=steal()&gt;") || !strings.Contains(html, "<dt>Observed</dt><dd>Unknown</dd>") {
+	if !strings.Contains(html, "does not mean the agent has read it, answered it or acted on it") || strings.Contains(html, "Check again") || strings.Contains(html, "img") || !strings.Contains(html, "Reason not recorded.") || !strings.Contains(html, "<dt>Observed</dt><dd>Unknown</dd>") || !strings.Contains(html, `href="`+productSessionsHref+`">Back to the session</a>`) {
 		t.Fatalf("delivered receipt: %s", html)
 	}
 	style := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindSubmatch(body)
 	digest := sha256.Sum256(style[1])
 	if !strings.Contains(ProductPolicy, "'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'") {
 		t.Fatal("receipt stylesheet is not the product policy's")
+	}
+}
+
+func TestConversationRendersBoundedEscapedTurns(t *testing.T) {
+	long := strings.Repeat("é", maxTurnBytes) // 2 bytes each: twice the bound
+	turns := []ProductTurn{{Role: "user", At: "1m ago", Text: "line one\nline two <script>x</script>‮"}, {Role: "assistant", Text: long}, {Role: "message", From: "dev-env-1019-205125", Text: "relayed"}, {Role: "tool\" onclick=\"x", Text: "odd role"}}
+	row := sendRow("s1", nil, true)
+	row.Messages.Conversation = &ProductConversation{State: "Complete", Note: "every turn", Turns: turns}
+	row.Messages.HistoryHref = "https://evil.example/"
+	other := sendRow("s2", nil, true)
+	other.Messages.HistoryHref = productSessionsHref + "?session=uid-s2#s2"
+	body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Groups: []ProductGroup{{Title: "x", Rows: []ProductRow{row, other}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	for _, want := range []string{
+		`<span class="badge tone-wait">Truncated</span>`, // the long turn was cut
+		`<li class="turn turn-user"><p class="turn-meta"><strong>User</strong><span>1m ago</span></p><p class="turn-text">line one` + "\n" + `line two &lt;script&gt;x&lt;/script&gt;</p></li>`,
+		`<li class="turn turn-assistant"><p class="turn-meta"><strong>Agent</strong><span>Unknown</span><span>cut to fit</span></p>`,
+		`<strong>Message from dev-env-1019-205125</strong>`,
+		`<li class="turn turn-event"><p class="turn-meta"><strong>Event</strong>`,
+		`<a href="` + productSessionsHref + `?session=uid-s2#s2">Load this session's conversation</a>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("conversation lacks %q", want)
+		}
+	}
+	if strings.Contains(html, "<script>") || strings.Contains(html, "evil.example") || strings.Contains(html, "onclick") || strings.Contains(html, "‮") || strings.Count(html, "é") > maxTurnBytes/2 {
+		t.Fatal("conversation rendered unsafe or unbounded text")
+	}
+	many := make([]ProductTurn, maxTurns+5)
+	for i := range many {
+		many[i] = ProductTurn{Role: "user", Text: "turn-" + strconv.Itoa(i)}
+	}
+	if c := boundConversation(ProductConversation{State: "Complete", Turns: many}); c.State != "Truncated" || len(c.Turns) != maxTurns || c.Turns[0].Text != "turn-5" {
+		t.Fatalf("turn bound kept %d from %q, state %s", len(c.Turns), c.Turns[0].Text, c.State)
+	}
+	if c := boundConversation(ProductConversation{State: "Live", Note: "n", Turns: many}); c.State != "Unavailable" || len(c.Turns) != 0 {
+		t.Fatal("an unknown state kept its turns")
 	}
 }

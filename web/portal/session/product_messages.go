@@ -11,7 +11,7 @@ import (
 // portal user: POST /v1/sessions/{name}/messages sends as its operator caller.
 // So the message box reads and sends nothing, and says so.
 const (
-	messagesHistory = "Message history is unavailable here. The portal cannot read this session's messages or inbox."
+	messagesHistory = "Message history is unavailable here. No supported route reads this session's conversation yet."
 	messagesGate    = "Sending from the portal is unavailable. The portal reads session summaries only, and no operator route accepts a message from a portal user. Nothing is sent or queued."
 )
 

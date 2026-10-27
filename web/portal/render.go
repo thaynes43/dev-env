@@ -129,6 +129,109 @@ type ProductMessages struct {
 	Session, SessionUID string
 	Draftable           bool
 	Send                *ProductSend
+	// HistoryHref selects this session to load its conversation; Conversation
+	// is that conversation, set only on the selected session.
+	HistoryHref  string
+	Conversation *ProductConversation
+}
+
+// ProductTurn is one conversation turn, rendered as escaped plaintext. Role is
+// user, assistant or message (a delivered message from From); any other role
+// renders as an event. At is display text.
+type ProductTurn struct {
+	Role, From, At, Text string
+	Truncated            bool
+}
+
+// Who names a turn's speaker for people.
+func (t ProductTurn) Who() string {
+	switch t.Role {
+	case "user":
+		return "User"
+	case "assistant":
+		return "Agent"
+	case "message":
+		if t.From != "" {
+			return "Message from " + t.From
+		}
+		return "Message"
+	}
+	return "Event"
+}
+
+// RoleClass is the turn's style class, from a fixed set.
+func (t ProductTurn) RoleClass() string {
+	switch t.Role {
+	case "user", "assistant", "message":
+		return "turn-" + t.Role
+	}
+	return "turn-event"
+}
+
+// ProductConversation is the selected session's conversation as its source
+// reported it, oldest turn first. State is Complete, Partial, Truncated or
+// Unavailable, and Note says what it covers. Unavailable has no turns.
+type ProductConversation struct {
+	State, Note string
+	Turns       []ProductTurn
+}
+
+// Tone is the state badge's tone.
+func (c ProductConversation) Tone() string {
+	switch c.State {
+	case "Complete":
+		return "ok"
+	case "Partial", "Truncated":
+		return "wait"
+	}
+	return "muted"
+}
+
+// Rendering bounds for one conversation: the page must stay inside the
+// response bound with the rest of the Sessions list.
+const (
+	maxTurns     = 60
+	maxTurnBytes = 4 << 10
+)
+
+// boundConversation keeps a conversation within the rendering bounds, newest
+// turns first kept, and marks what it cut. An unknown state is Unavailable.
+func boundConversation(c ProductConversation) *ProductConversation {
+	switch c.State {
+	case "Complete", "Partial", "Truncated":
+	default:
+		return &ProductConversation{State: "Unavailable", Note: c.Note}
+	}
+	out := ProductConversation{State: c.State, Note: c.Note}
+	turns := c.Turns
+	if len(turns) > maxTurns {
+		turns = turns[len(turns)-maxTurns:]
+		out.State = "Truncated"
+	}
+	for _, turn := range turns {
+		turn.Text = strings.Map(func(r rune) rune {
+			if r == '\n' || r == '\t' {
+				return r
+			}
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+				return -1
+			}
+			return r
+		}, strings.ToValidUTF8(turn.Text, "\uFFFD"))
+		if len(turn.Text) > maxTurnBytes {
+			cut := maxTurnBytes
+			for cut > 0 && !utf8.RuneStart(turn.Text[cut]) {
+				cut--
+			}
+			turn.Text, turn.Truncated = turn.Text[:cut], true
+		}
+		if turn.Truncated && out.State == "Complete" {
+			out.State = "Truncated"
+		}
+		turn.From, turn.At = display(turn.From), display(turn.At)
+		out.Turns = append(out.Turns, turn)
+	}
+	return &out
 }
 
 // ProductSend makes a Draftable message box a form posting to the portal's
@@ -224,6 +327,9 @@ type ProductUsage struct {
 type ProductFilter struct {
 	Attention bool
 	Project   string
+	// Session selects one session by UID to load its conversation. It does
+	// not narrow the list.
+	Session string
 }
 
 // ProductCount is one rail entry's name and count. Count is empty when the
@@ -406,6 +512,12 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					m.Route.Tone = productTone(m.Route.Tone)
 					if m.Send != nil && !validSend(&m) {
 						m.Send, m.Gate = nil, sendUnavailable
+					}
+					if !strings.HasPrefix(m.HistoryHref, productSessionsHref+"?session=") {
+						m.HistoryHref = ""
+					}
+					if m.Conversation != nil {
+						m.Conversation = boundConversation(*m.Conversation)
 					}
 					row.Messages = &m
 				}
@@ -605,14 +717,24 @@ func freshness(updated, verified, now time.Time, freshFor time.Duration) string 
 // ProductReceipt is one portal send's receipt as the send route recorded it.
 // TransportStatus is Delivered, Refused, Pending or Unknown; any other value
 // renders Unknown. Delivered is agentd's transport acceptance for the agent's
-// terminal: never a reply, a read or a finished task. Reason is the route's
-// static reason text. Preview labels fixture data.
+// terminal: never a reply, a read or a finished task. ReasonCode is the
+// route's fixed code; the page words it, and never shows route text. Preview
+// labels fixture data.
 type ProductReceipt struct {
 	RequestID, Session, SessionUID, ResolvedPodUID string
-	TransportStatus, Reason                        string
+	TransportStatus, ReasonCode                    string
 	ObservedAt                                     time.Time
 	Preview                                        bool
 }
+
+// receiptReasons words the send route's fixed reason codes.
+var receiptReasons = map[string]string{
+	"delivered": "agentd accepted the text.",
+	"refused":   "The session took no message: its agent was not running, it is a headless task, or delivery was refused.",
+	"unknown":   "The delivery call ended without a confirmed outcome.",
+}
+
+var receiptSessionUID = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
 type receiptState struct{ Status, Headline, Tone, Meaning string }
 
@@ -642,15 +764,22 @@ func RenderReceipt(r ProductReceipt) ([]byte, error) {
 	}
 	view := struct {
 		receiptState
-		Policy, SessionsHref, TasksHref, Self, Observed, Reason string
-		Fields                                                  []ProductField
-		Preview                                                 bool
+		Policy, SessionsHref, TasksHref, Self, Back, Observed, Reason string
+		Fields                                                        []ProductField
+		Preview                                                       bool
 	}{receiptState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, TasksHref: productTasksHref, Observed: observed, Preview: r.Preview}
 	if sendRequestID.MatchString(r.RequestID) {
 		view.Self = ProductSessionMessagesHref + "/" + r.RequestID
 	}
-	if r.Reason != "" {
-		view.Reason = value(r.Reason)
+	view.Back = productSessionsHref
+	if receiptSessionUID.MatchString(r.SessionUID) {
+		view.Back += "?session=" + r.SessionUID
+	}
+	if r.ReasonCode != "" {
+		view.Reason = receiptReasons[r.ReasonCode]
+		if view.Reason == "" {
+			view.Reason = "Reason not recorded."
+		}
 	}
 	view.Fields = []ProductField{
 		{Label: "Request ID", Value: value(r.RequestID), Mono: true},

@@ -38,9 +38,10 @@ const (
 // SessionSource reads portal session summaries. The operator token is read on
 // every request so a one-hour projected token can rotate.
 type SessionSource struct {
-	path   string
-	client *http.Client
-	now    func() time.Time
+	path          string
+	client        *http.Client
+	now           func() time.Time
+	conversations ConversationSource
 }
 
 // TaskSource reads project 3's work-package collection. It does not follow an
@@ -101,7 +102,7 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 			break
 		}
 	}
-	return sessionsPage(sessions, complete, freshness, s.now(), filter), nil
+	return withHistory(ctx, sessionsPage(sessions, complete, freshness, s.now(), filter), filter.Session, s.conversations, s.now()), nil
 }
 
 func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
@@ -757,8 +758,9 @@ func shownDate(value string) string {
 }
 
 // productFilter reads a product page's one optional filter: show=attention on
-// either page, or project=<repository> on Sessions. Any other query, a second
-// key or value, or a non-canonical spelling is refused.
+// either page, project=<repository> on Sessions, or session=<uid> on Sessions
+// to select one session's conversation. Any other query, a second key or
+// value, or a non-canonical spelling is refused.
 func productFilter(u *url.URL) (portal.ProductFilter, bool) {
 	if u.RawQuery == "" {
 		return portal.ProductFilter{}, true
@@ -772,6 +774,8 @@ func productFilter(u *url.URL) (portal.ProductFilter, bool) {
 		return portal.ProductFilter{Attention: true}, true
 	case len(q["project"]) == 1 && u.Path == SessionsPath && validProject(q.Get("project")):
 		return portal.ProductFilter{Project: q.Get("project")}, true
+	case len(q["session"]) == 1 && u.Path == SessionsPath && sessionUIDQuery.MatchString(q.Get("session")):
+		return portal.ProductFilter{Session: q.Get("session")}, true
 	}
 	return portal.ProductFilter{}, false
 }

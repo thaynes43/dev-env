@@ -168,6 +168,19 @@ svg.i { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentCo
 .inspector .kv dd.mono { font-size: 10.5px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .messages .history { padding: 11px 13px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 11.5px; }
+.conversation { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.conv-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 13px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.conversation:not(:has(.turns)) .conv-state { border-bottom: 0; }
+.turns { margin: 0; padding: 4px 13px 6px; list-style: none; max-height: 56vh; overflow: auto; }
+.turn { padding: 9px 0; }
+.turn + .turn { border-top: 1px solid var(--line); }
+.turn-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 3px; color: var(--muted); font-size: 10.5px; }
+.turn-meta strong { color: var(--ink); font-weight: 650; }
+.turn-assistant .turn-meta strong { color: var(--accent); }
+.turn-message .turn-meta strong { color: var(--blue); }
+.turn-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.55; }
+.turn-event .turn-text { color: var(--muted); }
+.history a { color: var(--accent); font-weight: 600; }
 .composer { margin-top: 12px; padding: 11px 12px; border: 1px solid var(--control-line); border-radius: 8px; background: var(--surface); }
 .composer:focus-within { border-color: var(--accent); outline: 3px solid var(--focus); outline-offset: 2px; }
 .composer:has(textarea:disabled) { border-color: var(--line); background: var(--bg); }
@@ -281,6 +294,9 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .kv dt, .kv dd { font-size: 12.5px; }
   .note { font-size: 12px; }
   .messages .history, .gate { font-size: 12.5px; }
+  .turns { max-height: none; overflow: visible; }
+  .turn-text { font-size: 13.5px; }
+  .turn-meta, .conv-state { font-size: 11.5px; }
   .composer textarea { font-size: 16px; }
   .composer-bar { font-size: 11.5px; }
   .composer-bar .send { min-height: 44px; }

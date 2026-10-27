@@ -535,3 +535,52 @@ lane. This change is the frontend half; it enables no live authority.
   itself only for a well-formed request ID.
 - **Preview.** `--product` also writes `sessions-send.html` and one receipt
   per status, all labelled fixture data. Their forms post nowhere real.
+
+### Selected-session history, 2026-10-27
+
+Tom (12:43 UTC, relayed): "How would someone know what to send these agents if
+they can't see their message history?" A composer with history unavailable is
+not the finished IDE. This change adds the frontend half of a selected-session
+conversation view; no supported route serves the history yet.
+
+- **Where history is today.** The portal identity may only list summaries.
+  `/v1/sessions/{name}/log` tails agentd's log, which for an interactive
+  session holds only lifecycle lines. `/v1/history` serves archived private
+  Sessions after HOME expiry, as raw provider files. The inbox holds
+  coordination messages. Portal receipts (backend PR #572) keep a digest of the
+  text, never the text. A live session's conversation exists only as its
+  provider transcript in its own pod.
+- **Proposed backend contract** (backend lane; Story 178 journal 1894).
+  `GET /v1/portal/sessions/{sessionUID}/conversation?limit=N&before=CURSOR`,
+  default-off, portal adapter caller only, with the existing userinfo and
+  group checks. It is fenced to the Session UID and its current pod UID, and
+  served in-pod by agentd from the conversation agentd recorded for that
+  Session: no other file, no path from the request. It returns turns (`seq`,
+  `at`, role `user`, `assistant` or `delivered-message`, `from`, capped
+  plaintext, `truncated`) and coverage (`complete`, `partial`, `truncated` or
+  `unavailable`, a reason code, the conversation ID and sequence bounds). Tool
+  use is names and counts only, with no tool output, no thinking, and secrets
+  redacted.
+- **Selection.** `SessionsPath?session=<uid>` selects one session; it does not
+  narrow the list. With a source connected, each session's Messages panel
+  links to its own selected view (`?session=<uid>#sN`), and only the selected
+  session's conversation is read, with a 5-second bound. Without a source, the
+  selected session states the gap and no links render.
+- **Seam.** `SessionSource.UseConversations(ConversationSource)`;
+  `ReadConversation(ctx, name, uid)` returns `Conversation` (state, reason
+  code, turns). A read error, an `unavailable` state or an unknown state shows
+  no turns. Roles outside the three render as events.
+- **Rendering.** Turns are escaped plaintext with line breaks kept, labelled
+  User, Agent or "Message from …", with time and a "cut to fit" mark. At most
+  60 turns (the newest) and 4 KiB per turn are rendered; anything cut marks
+  the conversation Truncated.
+- **Receipts.** The backend's reason is a fixed code (`delivered`, `refused`,
+  `unknown`). `ProductReceipt.ReasonCode` carries it, and the page words it;
+  an unknown code reads "Reason not recorded". "Back to the session" returns
+  to the selected view.
+- **DTO agreement with the backend lane.** Request IDs are 43 base64url
+  characters, within the accepted 16 to 128. One adapter
+  (`web/portal/session/message_contract.go`, the backend's file) maps
+  `TransportDelivered` to Delivered and passes Refused, Pending and Unknown
+  through; anything else is Unknown. `SessionName` maps to `Session`. Pending
+  and Unknown never authorize a blind resend.

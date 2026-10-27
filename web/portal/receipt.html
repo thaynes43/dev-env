@@ -15,7 +15,7 @@
 <p class="receipt-meaning">{{.Meaning}}</p>
 {{if .Reason}}<p class="receipt-reason"><strong>Reason</strong> {{.Reason}}</p>{{end}}
 <dl class="kv">{{range .Fields}}<dt>{{.Label}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl>
-<p class="receipt-actions">{{if .Self}}<a class="btn" href="{{.Self}}">Check again</a>{{end}}<a class="btn" href="{{.SessionsHref}}">Back to Agents</a></p>
+<p class="receipt-actions">{{if .Self}}<a class="btn" href="{{.Self}}">Check again</a>{{end}}<a class="btn" href="{{.Back}}">Back to the session</a></p>
 <p class="note">Message history and the agent's reply are not shown here. This receipt covers this one send.</p>
 </div></main>
 <nav class="mobile-nav" aria-label="Sections"><a href="{{.SessionsHref}}" aria-current="page"><span>Agents</span></a><a href="{{.TasksHref}}"><span>Tasks</span></a></nav>
