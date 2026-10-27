@@ -22,14 +22,17 @@ import (
 )
 
 const (
-	openProjectPortalOrigin       = "https://openproject-web.frontend.svc.cluster.local:8443"
-	openProjectPortalHost         = "openproject-web.frontend.svc.cluster.local"
-	openProjectProjectPath        = "/api/v3/projects/3/work_packages"
-	operatorPortalOrigin          = "https://dev-env-operator.dev-env-system.svc.cluster.local:8443"
-	operatorPortalHost            = "dev-env-operator.dev-env-system.svc.cluster.local"
-	productPageSize               = 50
-	productPageCap                = 4
-	productHALLimit         int64 = 1 << 20
+	openProjectPortalOrigin = "https://openproject-web.frontend.svc.cluster.local:8443"
+	openProjectPortalHost   = "openproject-web.frontend.svc.cluster.local"
+	openProjectProjectPath  = "/api/v3/projects/3/work_packages"
+	operatorPortalOrigin    = "https://dev-env-operator.dev-env-system.svc.cluster.local:8443"
+	operatorPortalHost      = "dev-env-operator.dev-env-system.svc.cluster.local"
+	productPageSize         = 50
+	productPageCap          = 4
+	// sessionPageCap bounds the Sessions read at 500 sessions; the operator
+	// pages every repository's sessions in the namespace.
+	sessionPageCap        = 10
+	productHALLimit int64 = 1 << 20
 )
 
 // SessionSource reads portal session summaries. The operator token is read on
@@ -64,7 +67,7 @@ func newTaskSource(tokenPath string, ca []byte, now func() time.Time, dial func(
 	return &TaskSource{path: tokenPath, client: client, now: now}, nil
 }
 
-func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
+func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
 	page := portal.ProductPage{Title: "Sessions", Connected: true}
 	if s == nil || s.client == nil || s.now == nil {
 		return page, portal.ErrUnavailable
@@ -77,7 +80,7 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 	complete := false
 	freshness := "observed"
 	var sessions []apiv1.PortalSessionSummary
-	for n := 0; n < productPageCap; n++ {
+	for n := 0; n < sessionPageCap; n++ {
 		raw := operatorPortalOrigin + "/v1/sessions?limit=" + strconv.Itoa(productPageSize) + "&view=" + apiv1.PortalViewActivity
 		if cursor != "" {
 			raw += "&cursor=" + url.QueryEscape(cursor)
@@ -98,10 +101,10 @@ func (s *SessionSource) Read(ctx context.Context) (portal.ProductPage, error) {
 			break
 		}
 	}
-	return sessionsPage(sessions, complete, freshness, s.now()), nil
+	return sessionsPage(sessions, complete, freshness, s.now(), filter), nil
 }
 
-func (s *TaskSource) Read(ctx context.Context) (portal.ProductPage, error) {
+func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
 	page := portal.ProductPage{Title: "Tasks", Connected: true}
 	if s == nil || s.client == nil || s.now == nil {
 		return page, portal.ErrUnavailable
@@ -132,7 +135,7 @@ func (s *TaskSource) Read(ctx context.Context) (portal.ProductPage, error) {
 			break
 		}
 	}
-	return tasksPage(all, complete), nil
+	return tasksPage(all, complete, filter), nil
 }
 
 func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, error) {
@@ -222,7 +225,7 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSu
 	if json.Unmarshal(obj["name"], &name) != nil || json.Unmarshal(obj["uid"], &uid) != nil || json.Unmarshal(obj["repo"], &repo) != nil || json.Unmarshal(obj["phase"], &phase) != nil || json.Unmarshal(obj["freshness"], &freshness) != nil {
 		return row, portal.ErrUnavailable
 	}
-	if name == "" || uid == "" || repo != "dev-env" || !sessionPhase(phase) || (freshness != "observed" && freshness != "stale" && freshness != "unknown") {
+	if name == "" || uid == "" || !validProject(repo) || !sessionPhase(phase) || (freshness != "observed" && freshness != "stale" && freshness != "unknown") {
 		return row, portal.ErrUnavailable
 	}
 	observed, err := observationTime(obj["observedAt"], now)
@@ -615,24 +618,32 @@ func taskGroup(status string) int {
 
 // tasksPage groups work packages by status, keeping the collection's order
 // inside each group. Counts appear only for a complete read.
-func tasksPage(rows []portal.ProductRow, complete bool) portal.ProductPage {
-	page := portal.ProductPage{Title: "Tasks", ListTitle: "All tasks", Connected: true, Complete: complete}
-	switch {
-	case !complete:
-		page.Notice, page.ListCount = "Tasks read is incomplete. This is not the full inventory.", "Partial list"
-	case len(rows) == 0:
-		page.Notice = "The completed task read returned no work packages."
-	default:
-		page.Notice, page.Quiet = "Connected project 3 work packages.", true
-		page.ListCount = strconv.Itoa(len(rows)) + " work packages · haynes-engineering"
-	}
-	page.Groups = make([]portal.ProductGroup, len(taskGroups))
-	copy(page.Groups, taskGroups)
+func tasksPage(rows []portal.ProductRow, complete bool, filter portal.ProductFilter) portal.ProductPage {
+	page := portal.ProductPage{Title: "Tasks", ListTitle: "All tasks", Connected: true, Complete: complete, Filter: portal.ProductFilter{Attention: filter.Attention}}
 	ordered := make([][]portal.ProductRow, len(taskGroups))
 	for _, row := range rows {
 		g := taskGroup(row.Status.Text)
 		ordered[g] = append(ordered[g], row)
 	}
+	page.Rail.All, page.Rail.Attention = strconv.Itoa(len(rows)), strconv.Itoa(len(ordered[0]))
+	listed := len(rows)
+	if filter.Attention {
+		page.ListTitle, listed = "Needs attention", len(ordered[0])
+		ordered = append([][]portal.ProductRow{ordered[0]}, make([][]portal.ProductRow, len(taskGroups)-1)...)
+	}
+	switch {
+	case !complete:
+		page.Notice, page.ListCount = "Tasks read is incomplete. This is not the full inventory.", "Partial list"
+	case len(rows) == 0:
+		page.Notice = "The completed task read returned no work packages."
+	case listed == 0:
+		page.Notice = "Nothing needs attention."
+	default:
+		page.Notice, page.Quiet = "Connected project 3 work packages.", true
+		page.ListCount = strconv.Itoa(listed) + " work packages · haynes-engineering"
+	}
+	page.Groups = make([]portal.ProductGroup, len(taskGroups))
+	copy(page.Groups, taskGroups)
 	n := 0
 	for g := range ordered {
 		for _, row := range ordered[g] {
@@ -745,9 +756,30 @@ func shownDate(value string) string {
 	return parsed.UTC().Format("2 Jan 2006, 15:04 UTC")
 }
 
+// productFilter reads a product page's one optional filter: show=attention on
+// either page, or project=<repository> on Sessions. Any other query, a second
+// key or value, or a non-canonical spelling is refused.
+func productFilter(u *url.URL) (portal.ProductFilter, bool) {
+	if u.RawQuery == "" {
+		return portal.ProductFilter{}, true
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil || len(q) != 1 || q.Encode() != u.RawQuery {
+		return portal.ProductFilter{}, false
+	}
+	switch {
+	case len(q["show"]) == 1 && q.Get("show") == "attention":
+		return portal.ProductFilter{Attention: true}, true
+	case len(q["project"]) == 1 && u.Path == SessionsPath && validProject(q.Get("project")):
+		return portal.ProductFilter{Project: q.Get("project")}, true
+	}
+	return portal.ProductFilter{}, false
+}
+
 func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	authHeaders(w)
-	if r.Method != http.MethodGet || r.URL.RawQuery != "" || r.URL.RawPath != "" || c.Session == nil || c.Authorizer == nil || c.Now == nil {
+	filter, ok := productFilter(r.URL)
+	if r.Method != http.MethodGet || !ok || r.URL.RawPath != "" || c.Session == nil || c.Authorizer == nil || c.Now == nil {
 		authFailure(w, portal.ErrUnavailable)
 		return
 	}
@@ -773,12 +805,12 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	case SessionsPath:
 		page = portal.ProductPage{Title: "Sessions", Notice: "Sessions not connected"}
 		if c.Sessions != nil {
-			page, err = c.Sessions.Read(r.Context())
+			page, err = c.Sessions.Read(r.Context(), filter)
 		}
 	case TasksPath:
 		page = portal.ProductPage{Title: "Tasks", Notice: "Tasks not connected"}
 		if c.Tasks != nil {
-			page, err = c.Tasks.Read(r.Context())
+			page, err = c.Tasks.Read(r.Context(), filter)
 		}
 	default:
 		authFailure(w, portal.ErrDenied)
@@ -789,7 +821,7 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		if r.URL.Path == TasksPath {
 			title = "Tasks"
 		}
-		page = portal.ProductPage{Title: title, Notice: title + " unavailable"}
+		page = portal.ProductPage{Title: title, Notice: title + " unavailable", Filter: filter}
 	}
 	if current, currentErr := c.Session.Authenticate(r); currentErr != nil || current != principal {
 		authFailure(w, portal.ErrDenied)
@@ -800,7 +832,8 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		return
 	}
 	page.ObservedAt = c.Now().UTC().Format(time.RFC3339)
-	body, err := portal.RenderProduct(page)
+	// Leave headroom under the assembly's response bound for the page frame.
+	body, err := portal.RenderProductWithin(page, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return

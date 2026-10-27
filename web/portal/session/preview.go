@@ -29,7 +29,7 @@ func RenderSessionsFixture(source io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	page := sessionsPage(decoded.Sessions, decoded.Complete, decoded.Freshness, f.Now)
+	page := sessionsPage(decoded.Sessions, decoded.Complete, decoded.Freshness, f.Now, portal.ProductFilter{})
 	return renderFixture(page, f.Now)
 }
 
@@ -44,7 +44,7 @@ func RenderTasksFixture(source io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return renderFixture(tasksPage(rows, complete), f.Now)
+	return renderFixture(tasksPage(rows, complete, portal.ProductFilter{}), f.Now)
 }
 
 func readProductFixture(source io.Reader) (productFixture, error) {

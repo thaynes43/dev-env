@@ -395,7 +395,7 @@ func TestSessionSourceReadKeepsTheWorstPage(t *testing.T) {
 	}{
 		{name: "unknown then stale", pages: []string{"unknown", "stale"}, notice: "Session freshness is unknown."},
 		{name: "stale then unknown", pages: []string{"stale", "unknown"}, notice: "Session freshness is unknown."},
-		{name: "observed", pages: []string{"observed", "observed"}, notice: "The completed session read returned no dev-env sessions."},
+		{name: "observed", pages: []string{"observed", "observed"}, notice: "The completed session read returned no sessions."},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cert, ca := mintNamed(t, operatorPortalHost)
@@ -419,7 +419,7 @@ func TestSessionSourceReadKeepsTheWorstPage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			page, err := source.Read(context.Background())
+			page, err := source.Read(context.Background(), portal.ProductFilter{})
 			if err != nil || requests != len(test.pages) || page.Notice != test.notice {
 				t.Fatalf("page=%+v requests=%d err=%v", page, requests, err)
 			}
