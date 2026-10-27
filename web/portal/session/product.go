@@ -821,7 +821,7 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		if r.URL.Path == TasksPath {
 			title = "Tasks"
 		}
-		page = portal.ProductPage{Title: title, Notice: title + " unavailable"}
+		page = portal.ProductPage{Title: title, Notice: title + " unavailable", Filter: filter}
 	}
 	if current, currentErr := c.Session.Authenticate(r); currentErr != nil || current != principal {
 		authFailure(w, portal.ErrDenied)
@@ -832,7 +832,8 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		return
 	}
 	page.ObservedAt = c.Now().UTC().Format(time.RFC3339)
-	body, err := portal.RenderProduct(page)
+	// Leave headroom under the assembly's response bound for the page frame.
+	body, err := portal.RenderProductWithin(page, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return

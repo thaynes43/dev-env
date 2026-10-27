@@ -46,13 +46,18 @@ canonical workflow metadata. This package does not infer transitions or replace
 #177. Until that accepted interface is available, production attention uses `UnavailableReader`. The production Sessions and Tasks collections are independent and do not join a session to a work package. Sessions reads the operator portal-reader page `GET /v1/sessions`. The portal ServiceAccount is reserved before any other caller class and is refused while `--enable-portal-reader` is off. Each page lists at most the requested limit from namespace `dev-agents`, keeps every repository's sessions (each summary carries its own `repo`; until 2026-10-27 only `dev-env`), and continues with the opaque snapshot token alone while comparing the returned resourceVersion to the cursor. Freshness uses the operator-accepted `status.agent.lastHeartbeat`: future evidence is unknown, a heartbeat within 15 minutes is observed, and an older heartbeat is stale; a multi-page read retains its worst page freshness. Tasks reads only `GET https://openproject-web.frontend.svc.cluster.local:8443/api/v3/projects/3/work_packages?offset=<page>&pageSize=50&filters=%5B%5D`. Offset is the page number. `filters=[]` is the only filter, so the read is not the upstream default open-status collection. A returned page link is neither checked nor requested; the next request is rebuilt at that fixed origin (OpenProject 17 points its own link at `/api/v3/workspaces/3`). A page may be up to 1 MiB so a full HAL work package, including its description, fits. Since 2026-10-27 a plain-text excerpt of at most 600 runes is rendered; the full description stays in OpenProject. The portal keeps a row only when its project link is `/api/v3/projects/3`. A missing token says that view is not connected. A failed, redirected, or untrusted read says the view is unavailable and does not present an empty inventory. `secrets/OPERATOR_TOKEN` is re-read on each request and must be a current JWT whose only audience is `dev-env-operator`. `secrets/OPENPROJECT_TOKEN` is a separate bearer. Repositories is `customField3` free text; blank text stays Unknown. The deferred attention reader can still parse schema 2 bindings in tests. Those bindings are not a production startup requirement and are not the Tasks inventory. The #177 group reducer remains the offline checker in `scripts/trials/workflow_handoff`. OpenProject collection responses must be `application/hal+json`. Operator responses stay `application/json` and reject unknown fields. The preview command stays on its fixtures.
 
 The portal asks for `GET /v1/sessions?limit=50&view=activity`. `view=activity`
-is opt-in: without it the operator keeps each summary to its original six keys,
-so an earlier portal image keeps working against a newer operator. A newer
+is opt-in: without it the operator keeps each summary to its original six keys.
+A portal image from before 2026-10-27 refuses the activity keys added that day
+and any repository but `dev-env`, so the portal image rolls out before the
+operator image; a newer portal accepts an older operator's output. A newer
 portal against an operator without the view gets a refusal and says Sessions
 unavailable. With the view, each summary adds one `activity` object, DESIGN-029's
-browser allowlist: `mode` (`task`, `local`, `remote`), agentd's `agentState` word,
-`lastActivity` (absent when unknown or in the future), the configured
-`requestedModel`, and `usage`. Any other word or an unbounded model id is
+browser allowlist: `mode` (`task`, `local`, `remote`), `provider` (`claude`,
+`codex`, `opencode`), agentd's `agentState` word, `lastActivity` (absent when
+unknown or in the future), the configured `requestedModel`, `launchedBy`
+(`spec.parent`, omitted when unset or outside `apiv1.PortalLauncherPattern`),
+for a task `taskResult` (`Succeeded`, `Failed`, `TimedOut`, `Unknown`; the
+status message and reason are never sent), and `usage`. Any other word or an unbounded model id is
 `Unknown`. `usage` is the session's own initial managed invocation as its
 provider reported it (DESIGN-018), from the same validated observation
 `agent-run show` reads. Only task sessions carry one, so an interactive or
@@ -60,8 +65,10 @@ remote session's usage is always `Unknown`. Provider-reported served models stay
 separate from the requested model. Each token counter keeps `Unknown` apart from
 an explicit zero. Cache read tokens can overlap input tokens and are never added
 to them. Cost is shown only as the existing CLI-equivalent estimate, never as a
-charge or a subscription quota. Nothing is summed, and the account allowance is
-`Unknown`. The portal accepts a row of exactly the six base keys, or those six
+charge or a subscription quota. The Usage view sums reported values per group
+(by how sessions ran, by provider and requested model, by project); an
+`Unknown` counter or cost is never counted as zero, and the account allowance
+is shown apart as not connected. The portal accepts a row of exactly the six base keys, or those six
 and a valid `activity`; a row without `activity` renders every activity field
 `Unknown`, never zero. It refuses a null or malformed `activity`, an unknown key,
 a null, a word outside its set, an `Unknown` scope that carries a reported value,

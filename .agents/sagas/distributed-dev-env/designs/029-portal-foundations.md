@@ -422,7 +422,12 @@ stats. No new credential, adapter or policy.
   `dev-agents` with its own `repo`; the portal accepts any repository name
   (`^[A-Za-z0-9_.-]{1,100}$`, not `.` or `..`). Projects in the rail are the
   repositories, with counts. The Sessions read follows up to 10 pages (500
-  sessions).
+  sessions). A page lists at most the 150 most urgent and recent; group counts
+  read "listed of total", and the rail, stats and breakdowns cover everything
+  read. The portal also renders every product page within 7/8 of the 1 MiB
+  response bound, keeping fewer rows (least urgent first) when the content is
+  unusually large; the breakdowns keep 19 groups and merge the rest into one
+  Other row.
 - **Filters.** The rail and, on a phone, a chip row filter by query: `?show=attention`
   on Sessions or Tasks, `?project=<repo>` on Sessions. Exactly one canonical key
   is accepted; anything else is refused. Rail counts cover the whole read; the
@@ -434,7 +439,12 @@ stats. No new credential, adapter or policy.
   ended: on 2026-10-27 all 23 Failed-phase sessions had succeeded tasks while 10
   failed tasks sat unflagged. The badge and group now follow the task result.
   A failure is Needs attention for 24 hours, then Stopped; the zero count is
-  not shown.
+  not shown. A task's failure is dated by its last activity. A pod that ended
+  (Failed phase, or agentd failed or interrupted) is dated by the later of its
+  last activity and its last heartbeat: suspended sessions keep heartbeating, so
+  a heartbeat never dates a task's end. A failure with neither time is not
+  recent. The operator omits a `spec.parent` outside
+  `apiv1.PortalLauncherPattern`, so one odd value cannot fail the read.
 - **How sessions run.** Interactive is `remote` or `local` (a person drives
   it); Headless is `task` (often launched by a coordinator, shown as "launched
   by"). Each session and the Usage view show it.

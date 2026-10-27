@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -242,12 +243,18 @@ func portalSummary(s *v1alpha1.AgentSession, now time.Time) apiv1.PortalSessionS
 	return apiv1.PortalSessionSummary{Name: s.Name, UID: string(s.UID), Repo: s.Spec.Repo, Phase: phaseOf(s), ObservedAt: observed, Freshness: freshness}
 }
 
+// portalLauncher is apiv1.PortalLauncherPattern; any other spec.parent is omitted.
+var portalLauncher = regexp.MustCompile(apiv1.PortalLauncherPattern)
+
 // portalActivity is the DESIGN-029 allowlist for one session. Words outside
 // their fixed sets, an unbounded model id and a future activity time are
 // Unknown. Usage comes only from sessionUsage, the session's own validated
 // task observation; it is not summed with anything.
 func portalActivity(s *v1alpha1.AgentSession, now time.Time) *apiv1.PortalSessionActivity {
-	a := &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, Provider: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, LaunchedBy: s.Spec.Parent, Usage: portalUsage(sessionUsage(s))}
+	a := &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, Provider: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: portalUsage(sessionUsage(s))}
+	if portalLauncher.MatchString(s.Spec.Parent) {
+		a.LaunchedBy = s.Spec.Parent
+	}
 	switch s.Spec.Mode {
 	case v1alpha1.ModeTask, v1alpha1.ModeLocal, v1alpha1.ModeRemote:
 		a.Mode = string(s.Spec.Mode)

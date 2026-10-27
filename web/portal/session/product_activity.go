@@ -214,10 +214,15 @@ var sessionGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: 
 // is history: it is listed under Stopped and still shows its failed badge.
 const attentionWindow = 24 * time.Hour
 
+// maxListedSessions bounds the rows one Sessions page renders, so the page
+// stays far under the 1 MiB response bound at the 500-session read cap. Rail
+// counts, Usage stats and breakdowns still cover every filtered session.
+const maxListedSessions = 150
+
 var (
 	// launcherName is spec.parent's shape: a session name, a namespace/name or
 	// a ServiceAccount reference, at most 253 characters.
-	launcherName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,252}$`)
+	launcherName = regexp.MustCompile(apiv1.PortalLauncherPattern)
 	// projectName is spec.repo's shape.
 	projectName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 )
@@ -244,28 +249,36 @@ func sessionDriver(mode string) string {
 // first: a Failed phase only says the pod ended, and agentd's last state
 // outlives the pod. A failure is Needs attention for attentionWindow, then
 // Stopped. A suspended or archived session is Stopped.
+//
+// When a failure happened: a task ends at its last activity. A pod that ended
+// stops heartbeating, so its last heartbeat can be later than its last
+// activity (an idle interactive session whose pod dies). A suspended session
+// can keep heartbeating, so a heartbeat never dates a task's end. A failure
+// with neither time is not recent: it is listed under Stopped, still red.
 func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
 	a := activityOrUnknown(s.Activity)
-	at := s.ObservedAt
+	var taskAt, podAt time.Time
 	if a.LastActivity != nil {
-		at = *a.LastActivity
+		taskAt, podAt = *a.LastActivity, *a.LastActivity
 	}
-	recent := now.Sub(at) <= attentionWindow
-	failed := func() int {
-		if recent {
+	if s.Freshness != "unknown" && s.ObservedAt.After(podAt) {
+		podAt = s.ObservedAt
+	}
+	failed := func(at time.Time) int {
+		if !at.IsZero() && now.Sub(at) <= attentionWindow {
 			return 0
 		}
 		return 2
 	}
 	switch a.TaskResult {
 	case "Failed", "TimedOut":
-		return failed()
+		return failed(taskAt)
 	case "Succeeded":
 		return 2
 	}
 	switch s.Phase {
 	case "Failed":
-		return failed()
+		return failed(podAt)
 	case "Suspended", "Archived":
 		return 2
 	}
@@ -273,7 +286,7 @@ func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
 	case protocol.AgentWaiting:
 		return 0
 	case protocol.AgentFailed, protocol.AgentInterrupted:
-		return failed()
+		return failed(podAt)
 	case protocol.AgentBusy, protocol.AgentPending, protocol.AgentIdle:
 		return 1
 	case protocol.AgentExited:
@@ -353,6 +366,12 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	if complete && len(kept) > 0 {
 		page.ListCount = strconv.Itoa(len(kept)) + " sessions · " + scope
 	}
+	if len(kept) > maxListedSessions {
+		page.ListCount = "Most recent " + strconv.Itoa(maxListedSessions) + " of " + strconv.Itoa(len(kept)) + " sessions · " + scope
+		if !complete {
+			page.ListCount = "Partial list"
+		}
+	}
 	sort.SliceStable(kept, func(i, j int) bool {
 		if kept[i].group != kept[j].group {
 			return kept[i].group < kept[j].group
@@ -365,6 +384,9 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	})
 	page.Groups = make([]portal.ProductGroup, len(sessionGroups))
 	copy(page.Groups, sessionGroups)
+	for _, e := range kept {
+		page.Groups[e.group].Total++
+	}
 	usage := &portal.ProductUsage{
 		Scope: "Initial invocations only", ScopeNote: "Headless task sessions' first invocation is measured. Interactive sessions and later turns are not.",
 		Allowance: []portal.ProductField{
@@ -387,14 +409,18 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	measured, interactive, headless := 0, 0, 0
 	for i, e := range kept {
 		id := "s" + strconv.Itoa(i+1)
-		row := sessionRow(e.s, now)
-		row.ID = id
-		page.Groups[e.group].Rows = append(page.Groups[e.group].Rows, row)
 		usageRow, ok := sessionUsageRow(id, e.s)
 		if ok {
 			measured++
 		}
-		usage.Rows = append(usage.Rows, usageRow)
+		// Only the first maxListedSessions, in group then recency order, get a
+		// row; every session counts in the stats and breakdowns below.
+		if i < maxListedSessions {
+			row := sessionRow(e.s, now)
+			row.ID = id
+			page.Groups[e.group].Rows = append(page.Groups[e.group].Rows, row)
+			usage.Rows = append(usage.Rows, usageRow)
+		}
 		a := activityOrUnknown(e.s.Activity)
 		driver := sessionDriver(a.Mode)
 		switch driver {
@@ -434,6 +460,9 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	if filter.Project == "" {
 		usage.Breakdowns = append(usage.Breakdowns, portal.ProductUsageTable{Title: "By project", Columns: columns("Project"), Rows: totalRows(byProject)})
 	}
+	if len(kept) > maxListedSessions {
+		usage.RowsNote = "The " + strconv.Itoa(maxListedSessions) + " sessions listed on the left. The breakdowns above cover all " + strconv.Itoa(len(kept)) + "."
+	}
 	page.Usage = usage
 	return page
 }
@@ -446,15 +475,16 @@ type usageTotal struct {
 	cost                              *big.Rat
 }
 
-// tokenSum is a sum of reported counters and how many were Unknown.
+// tokenSum is a sum of reported counters and how many were Unknown. It is a
+// big.Int: one counter may be as large as protocol.MaxUsageTokens.
 type tokenSum struct {
-	sum     int64
+	sum     big.Int
 	unknown int
 }
 
 func (t *tokenSum) add(m protocol.TokenObservation) {
 	if m.State == protocol.UsageReported && m.Amount != nil && *m.Amount >= 0 {
-		t.sum += *m.Amount
+		t.sum.Add(&t.sum, big.NewInt(*m.Amount))
 		return
 	}
 	t.unknown++
@@ -495,11 +525,14 @@ func (t *usageTotal) row(name string) portal.ProductUsageRow {
 	cell := func(label, value string, unknown bool) portal.ProductUsageCell {
 		return portal.ProductUsageCell{Label: label, Value: value, Unknown: unknown}
 	}
-	tokens := func(label string, s tokenSum) portal.ProductUsageCell {
-		if t.measured == 0 || s.unknown == t.measured {
+	tokens := func(label string, s *tokenSum) portal.ProductUsageCell {
+		switch {
+		case t.measured == 0:
 			return cell(label, "Not measured", true)
+		case s.unknown == t.measured:
+			return cell(label, "Unknown", true)
 		}
-		v := groupDigits(strconv.FormatInt(s.sum, 10))
+		v := groupDigits(s.sum.String())
 		if s.unknown > 0 {
 			v += " (" + strconv.Itoa(s.unknown) + " Unknown)"
 		}
@@ -507,7 +540,7 @@ func (t *usageTotal) row(name string) portal.ProductUsageRow {
 	}
 	cost := cell("Est. cost", "Unavailable", true)
 	if t.cost != nil {
-		cost = cell("Est. cost", t.cost.FloatString(2)+" USD", false)
+		cost = cell("Est. cost", usdText(t.cost), false)
 		if t.costMissing > 0 {
 			cost.Value += " (" + strconv.Itoa(t.costMissing) + " unavailable)"
 		}
@@ -517,11 +550,41 @@ func (t *usageTotal) row(name string) portal.ProductUsageRow {
 	sub := strconv.Itoa(t.measured) + " of " + strconv.Itoa(t.sessions) + " measured"
 	return portal.ProductUsageRow{Name: shown(name), Sub: sub, Cells: []portal.ProductUsageCell{
 		cell("Sessions", strconv.Itoa(t.sessions), false), cell("Measured", strconv.Itoa(t.measured), t.measured == 0),
-		tokens("Input", t.input), tokens("Output", t.output), tokens("Cache read", t.cacheRead), tokens("Cache create", t.created), cost,
+		tokens("Input", &t.input), tokens("Output", &t.output), tokens("Cache read", &t.cacheRead), tokens("Cache create", &t.created), cost,
 	}}
 }
 
-// totalRows orders groups by session count, then name.
+// usdText is a cost sum to the cent; a positive sum under a cent is "<0.01".
+func usdText(r *big.Rat) string {
+	if r.Sign() > 0 && r.Cmp(big.NewRat(1, 100)) < 0 {
+		return "<0.01 USD"
+	}
+	return r.FloatString(2) + " USD"
+}
+
+// maxBreakdownRows bounds a breakdown table; smaller groups are merged into
+// one "Other" row.
+const maxBreakdownRows = 20
+
+// merge adds o's sessions, counters and costs to t.
+func (t *usageTotal) merge(o *usageTotal) {
+	t.sessions += o.sessions
+	t.measured += o.measured
+	t.costMissing += o.costMissing
+	for _, p := range [][2]*tokenSum{{&t.input, &o.input}, {&t.output, &o.output}, {&t.cacheRead, &o.cacheRead}, {&t.created, &o.created}} {
+		p[0].sum.Add(&p[0].sum, &p[1].sum)
+		p[0].unknown += p[1].unknown
+	}
+	if o.cost != nil {
+		if t.cost == nil {
+			t.cost = new(big.Rat)
+		}
+		t.cost.Add(t.cost, o.cost)
+	}
+}
+
+// totalRows orders groups by session count, then name, and merges any beyond
+// maxBreakdownRows-1 into one "Other" row.
 func totalRows(m map[string]*usageTotal) []portal.ProductUsageRow {
 	names := make([]string, 0, len(m))
 	for name := range m {
@@ -533,9 +596,17 @@ func totalRows(m map[string]*usageTotal) []portal.ProductUsageRow {
 		}
 		return names[i] < names[j]
 	})
-	rows := make([]portal.ProductUsageRow, 0, len(names))
-	for _, name := range names {
+	rows := make([]portal.ProductUsageRow, 0, min(len(names), maxBreakdownRows))
+	other := &usageTotal{}
+	for i, name := range names {
+		if len(names) > maxBreakdownRows && i >= maxBreakdownRows-1 {
+			other.merge(m[name])
+			continue
+		}
 		rows = append(rows, m[name].row(name))
+	}
+	if other.sessions > 0 {
+		rows = append(rows, other.row("Other ("+strconv.Itoa(len(names)-maxBreakdownRows+1)+" groups)"))
 	}
 	return rows
 }

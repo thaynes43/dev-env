@@ -468,6 +468,11 @@ type PortalSessionSummary struct {
 // PortalViewActivity is the one value of the portal reader's view parameter.
 const PortalViewActivity = "activity"
 
+// PortalLauncherPattern is the shape of a launchedBy value: a session name, a
+// namespace/name or a ServiceAccount reference. The operator omits a
+// spec.parent of any other shape, so one odd session cannot fail the read.
+const PortalLauncherPattern = `^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,252}$`
+
 // PortalSessionActivity is DESIGN-029's browser allowlist for one session: its
 // mode, agentd's state word, its last activity, its configured model and its
 // own initial invocation usage. A value the operator does not hold is Unknown,

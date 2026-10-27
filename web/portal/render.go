@@ -110,10 +110,13 @@ type ProductRow struct {
 
 // ProductGroup is one titled list group. Attention marks the group the rail's
 // Needs attention link opens.
+// Total, when larger than len(Rows), is how many the group holds before the
+// list was bounded; the count then reads "listed of total".
 type ProductGroup struct {
 	Title     string
 	Attention bool
 	Rows      []ProductRow
+	Total     int
 }
 
 // ProductUsageCell is one table cell; Unknown dims it.
@@ -146,6 +149,7 @@ type ProductUsage struct {
 	Breakdowns       []ProductUsageTable
 	Columns          []string
 	Rows             []ProductUsageRow
+	RowsNote         string
 	Coverage         []ProductField
 }
 
@@ -205,6 +209,64 @@ type productGroupView struct {
 type productRowView struct {
 	ProductRow
 	Default bool
+}
+
+// RenderProductWithin renders page in at most limit bytes. While it is too
+// large it keeps fewer list rows, dropping from the end of the list (the
+// least urgent group first), together with their usage rows; group counts and
+// the Usage breakdowns still cover everything read.
+func RenderProductWithin(page ProductPage, limit int) ([]byte, error) {
+	body, err := RenderProduct(page)
+	for keep := countRows(page); err == nil && len(body) > limit && keep > 0; {
+		keep = keep * 3 / 4
+		body, err = RenderProduct(keepRows(page, keep))
+	}
+	if err == nil && len(body) > limit {
+		return nil, fmt.Errorf("product page needs %d bytes, over %d", len(body), limit)
+	}
+	return body, err
+}
+
+func countRows(page ProductPage) int {
+	n := 0
+	for _, g := range page.Groups {
+		n += len(g.Rows)
+	}
+	return n
+}
+
+// keepRows returns page with only its first keep list rows, in group order.
+func keepRows(page ProductPage, keep int) ProductPage {
+	total := countRows(page)
+	kept := map[string]bool{}
+	groups := make([]ProductGroup, len(page.Groups))
+	for i, g := range page.Groups {
+		if g.Total < len(g.Rows) {
+			g.Total = len(g.Rows)
+		}
+		n := min(len(g.Rows), keep)
+		g.Rows = append([]ProductRow(nil), g.Rows[:n]...)
+		keep -= n
+		for _, r := range g.Rows {
+			kept[r.ID] = true
+		}
+		groups[i] = g
+	}
+	page.Groups = groups
+	listed := len(kept)
+	page.ListCount = "Showing " + strconv.Itoa(listed) + " of " + strconv.Itoa(total) + " listed · narrow with a filter"
+	if page.Usage != nil {
+		usage := *page.Usage
+		usage.Rows = nil
+		for _, r := range page.Usage.Rows {
+			if kept[r.ID] {
+				usage.Rows = append(usage.Rows, r)
+			}
+		}
+		usage.RowsNote = "Only the sessions listed on the left. The breakdowns above cover all of them."
+		page.Usage = &usage
+	}
+	return page
 }
 
 type railLinkView struct {
@@ -274,6 +336,9 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 			}
 			if page.Complete {
 				g.Count = strconv.Itoa(len(g.Rows))
+				if group.Total > len(g.Rows) {
+					g.Count += " of " + strconv.Itoa(group.Total)
+				}
 			}
 			view.Groups = append(view.Groups, g)
 		}

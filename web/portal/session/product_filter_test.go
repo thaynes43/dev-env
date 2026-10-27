@@ -5,10 +5,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -186,7 +189,7 @@ func TestSessionUsageBreakdowns(t *testing.T) {
 		tables[table.Title] = rows
 	}
 	headless := tables["By how sessions ran"]["Headless"]
-	if headless["Sessions"] != "3" || headless["Measured"] != "3" || headless["Input"] != "3,500" || headless["Cache read"] != "500" || headless["Est. cost"] != "1.00 USD (1 unavailable)" || headless["Cache create"] != "Not measured" {
+	if headless["Sessions"] != "3" || headless["Measured"] != "3" || headless["Input"] != "3,500" || headless["Cache read"] != "500" || headless["Est. cost"] != "1.00 USD (1 unavailable)" || headless["Cache create"] != "Unknown" {
 		t.Fatalf("headless %v", headless)
 	}
 	if interactive := tables["By how sessions ran"]["Interactive"]; interactive["Sessions"] != "1" || interactive["Measured"] != "0" || interactive["Input"] != "Not measured" || interactive["Est. cost"] != "Not measured" {
@@ -224,5 +227,128 @@ func TestTasksAttentionFilter(t *testing.T) {
 	}
 	if none := tasksPage([]portal.ProductRow{row("Accepted")}, true, portal.ProductFilter{Attention: true}); none.Notice != "Nothing needs attention." {
 		t.Fatalf("empty attention notice %q", none.Notice)
+	}
+}
+
+// worstSession is a summary with every rendered string at its bound.
+func worstSession(i int, now time.Time) apiv1.PortalSessionSummary {
+	limit := protocol.MaxUsageTokens
+	at := now.Add(-time.Duration(i) * time.Minute)
+	model := "m" + strings.Repeat("x", protocol.MaxUsageModelID-1)
+	reported := protocol.TokenObservation{State: protocol.UsageReported, Amount: &limit}
+	return apiv1.PortalSessionSummary{
+		Name: strconv.Itoa(i) + "-" + strings.Repeat("n", 240), UID: strings.Repeat("u", 36), Repo: strings.Repeat("r", 100),
+		Phase: "Running", ObservedAt: at, Freshness: "observed",
+		Activity: &apiv1.PortalSessionActivity{Mode: "task", Provider: "claude", AgentState: "busy", LastActivity: &at, RequestedModel: model,
+			LaunchedBy: "l" + strings.Repeat("x", 252), TaskResult: "Unknown",
+			Usage: apiv1.PortalSessionUsage{Scope: protocol.UsageInitial, ResultState: "Final", ServedModels: []string{model, model, model, model},
+				InputTokens: reported, OutputTokens: reported, CacheReadInputTokens: reported, CacheCreationInputTokens: reported,
+				Cost: protocol.CostObservation{State: protocol.UsageReported, Amount: "123456789.123456789", Unit: "USD", Kind: "ProviderCLIEquivalentEstimate"}}},
+	}
+}
+
+// The Sessions read may hold 500 sessions. Even with every string at its
+// limit, the rendered page fits the assembly's response bound: the list is
+// first bounded at maxListedSessions, then trimmed further to the byte budget,
+// while the rail, group counts and breakdowns still count all 500.
+func TestSessionsPageStaysUnderTheResponseBound(t *testing.T) {
+	now := time.Date(2026, 10, 27, 4, 0, 0, 0, time.UTC)
+	var sessions []apiv1.PortalSessionSummary
+	for i := 0; i < sessionPageCap*productPageSize; i++ {
+		sessions = append(sessions, worstSession(i, now))
+	}
+	page := sessionsPage(sessions, true, "observed", now, portal.ProductFilter{})
+	page.ObservedAt = now.Format(time.RFC3339)
+	listed := 0
+	for _, g := range page.Groups {
+		listed += len(g.Rows)
+	}
+	if listed != maxListedSessions || len(page.Usage.Rows) != maxListedSessions || page.Rail.All != "500" || page.Groups[1].Total != 500 ||
+		page.Usage.Stats[0].Value != "500 of 500" || page.ListCount != "Most recent 150 of 500 sessions · all projects" {
+		t.Fatalf("listed=%d usage=%d rail=%s list=%q stats=%+v", listed, len(page.Usage.Rows), page.Rail.All, page.ListCount, page.Usage.Stats)
+	}
+	if headless := page.Usage.Breakdowns[0].Rows[0]; headless.Name != "Headless" || headless.Cells[2].Value != "500,000,000,000,000,000" {
+		t.Fatalf("token sums overflowed or were dropped: %+v", headless.Cells)
+	}
+	if rows := page.Usage.Breakdowns[1].Rows; len(rows) != 1 {
+		t.Fatalf("one requested model is one row: %d", len(rows))
+	}
+	body, err := portal.RenderProductWithin(page, maximumResponse*7/8)
+	if err != nil || len(body) > maximumResponse*7/8 {
+		t.Fatalf("worst-case Sessions page: %d bytes, err %v", len(body), err)
+	}
+	html := string(body)
+	if !strings.Contains(html, "of 500</span>") || !strings.Contains(html, "narrow with a filter") || strings.Count(html, `class="item"`) < 50 || !strings.Contains(html, "500,000,000,000,000,000") {
+		t.Fatalf("the trimmed page lost its totals or most rows: %d items", strings.Count(html, `class="item"`))
+	}
+}
+
+// Tasks hold at most productPageCap pages. With every rendered string at its
+// bound and escaping at its worst, the page is trimmed to fit the bound.
+func TestTasksPageStaysUnderTheResponseBound(t *testing.T) {
+	now := time.Date(2026, 10, 27, 4, 0, 0, 0, time.UTC)
+	worst := strings.Repeat("&", 300)
+	var rows []portal.ProductRow
+	for i := 1; i <= productPageCap*productPageSize; i++ {
+		var e halWorkPackage
+		e.ID, e.Subject, e.CreatedAt, e.UpdatedAt = 100000+i, worst, "2026-10-20T00:00:00Z", "2026-10-26T00:00:00Z"
+		e.CustomField1, e.CustomField2, e.CustomField3 = worst, "agent | worktree "+worst+" | branch b", worst
+		e.Description.Raw = strings.Repeat("&", 5000)
+		e.Links.Project.Href = "/api/v3/projects/3"
+		e.Links.Status.Title, e.Links.Type.Title, e.Links.Parent.Title = "Needs approval", worst, worst
+		e.Links.Assignee.Title, e.Links.Responsible.Title = worst, worst
+		row, err := taskRow(e, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, row)
+	}
+	page := tasksPage(rows, true, portal.ProductFilter{})
+	page.ObservedAt = now.Format(time.RFC3339)
+	body, err := portal.RenderProductWithin(page, maximumResponse*7/8)
+	if err != nil || len(body) > maximumResponse*7/8 || strings.Count(string(body), `class="item"`) < 10 || !strings.Contains(string(body), "of 200</span>") {
+		t.Fatalf("worst-case Tasks page: %d bytes, %d items, err %v", len(body), strings.Count(string(body), `class="item"`), err)
+	}
+}
+
+// Breakdowns keep the largest groups and merge the rest into one Other row.
+func TestUsageBreakdownMergesSmallGroups(t *testing.T) {
+	m := map[string]*usageTotal{}
+	for i := 0; i < 30; i++ {
+		t := totalFor(m, "p"+strconv.Itoa(100+i))
+		for j := 0; j <= i; j++ {
+			t.add(apiv1.PortalSessionUsage{Scope: protocol.UsageUnknown})
+		}
+	}
+	rows := totalRows(m)
+	if len(rows) != maxBreakdownRows || rows[0].Name != "p129" || rows[len(rows)-1].Name != "Other (11 groups)" || rows[len(rows)-1].Cells[0].Value != strconv.Itoa(1+2+3+4+5+6+7+8+9+10+11) {
+		t.Fatalf("rows %d first %s last %+v", len(rows), rows[0].Name, rows[len(rows)-1])
+	}
+}
+
+// A task's failure is dated by its last activity; a pod that ended by the
+// later of its last activity and its last real heartbeat; with neither time it
+// is not recent.
+func TestFailureRecency(t *testing.T) {
+	now := time.Date(2026, 10, 27, 4, 0, 0, 0, time.UTC)
+	old, recent := now.Add(-72*time.Hour), now.Add(-time.Hour)
+	session := func(phase, mode, result, freshness string, last *time.Time, beat time.Time) apiv1.PortalSessionSummary {
+		return apiv1.PortalSessionSummary{Name: "s", Repo: "dev-env", Phase: phase, ObservedAt: beat, Freshness: freshness,
+			Activity: &apiv1.PortalSessionActivity{Mode: mode, Provider: "claude", AgentState: "exited", LastActivity: last, RequestedModel: "claude-opus-5-5", TaskResult: result, Usage: unknownSessionUsage()}}
+	}
+	for name, test := range map[string]struct {
+		s    apiv1.PortalSessionSummary
+		want int
+	}{
+		"task failed an hour ago":                      {session("Suspended", "task", "Failed", "stale", &recent, recent), 0},
+		"task failed days ago, suspended heartbeating": {session("Suspended", "task", "Failed", "observed", &old, now), 2},
+		"task failure with no activity time":           {session("Failed", "task", "TimedOut", "observed", nil, now), 2},
+		"idle interactive pod ended an hour ago":       {session("Failed", "remote", "", "stale", &old, recent), 0},
+		"interactive pod ended days ago":               {session("Failed", "remote", "", "stale", &old, old), 2},
+		"pod failed before any report":                 {session("Failed", "remote", "", "unknown", nil, now), 2},
+	} {
+		if got := sessionGroup(test.s, now); got != test.want {
+			t.Errorf("%s: group %d, want %d", name, got, test.want)
+		}
 	}
 }

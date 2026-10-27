@@ -221,6 +221,7 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 	odd := sess("c-odd", "", "opus with spaces", &v1alpha1.AgentStatus{Status: "Busy"})
 	odd.Spec.Agent = "mystery"
 	bare := sess("d-bare", v1alpha1.ModeLocal, "claude-opus-5-5", nil)
+	bare.Spec.Parent = "not a launcher+" // the CRD bounds length only; this shape is omitted
 	f.srv.Live = &portalLive{pod: pod, rv: "7", sessions: []v1alpha1.AgentSession{task, remote, odd, bare}}
 	id := saIdentity(portalReaderRef)
 	id.PodName, id.PodUID = pod.Name, string(pod.UID)
@@ -292,7 +293,7 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 	}
 	unknown("odd", o.Usage)
 	b := page.Sessions[3].Activity
-	if b.Mode != "local" || b.AgentState != protocol.UsageUnknown || b.LastActivity != nil {
+	if b.Mode != "local" || b.AgentState != protocol.UsageUnknown || b.LastActivity != nil || b.LaunchedBy != "" || strings.Contains(body, "not a launcher") {
 		t.Fatalf("session without agent status %+v", b)
 	}
 	unknown("bare", b.Usage)
