@@ -375,3 +375,36 @@ func TestPilotAgentFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestPortalLaunchRepoFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || len(o.portalLaunchRepos) != 0 {
+		t.Fatalf("portal launch must be off by default: %v %v", o.portalLaunchRepos, err)
+	}
+	o, err = parseFlags([]string{"--enable-portal-reader", "--portal-launch-repo=dev-env", "--portal-launch-repo=haynes-ops"})
+	if err != nil || len(o.portalLaunchRepos) != 2 {
+		t.Fatalf("valid repos refused: %v %v", o.portalLaunchRepos, err)
+	}
+	var many []string
+	for i := 0; i < 17; i++ {
+		many = append(many, "--portal-launch-repo=repo"+strings.Repeat("x", i))
+	}
+	for name, args := range map[string][]string{
+		"without the reader": {"--portal-launch-repo=dev-env"},
+		"duplicate":          {"--enable-portal-reader", "--portal-launch-repo=dev-env", "--portal-launch-repo=dev-env"},
+		"empty":              {"--enable-portal-reader", "--portal-launch-repo="},
+		"a path":             {"--enable-portal-reader", "--portal-launch-repo=a/b"},
+		"dot dot":            {"--enable-portal-reader", "--portal-launch-repo=.."},
+		"dot":                {"--enable-portal-reader", "--portal-launch-repo=."},
+		"a space":            {"--enable-portal-reader", "--portal-launch-repo=a b"},
+		"too long":           {"--enable-portal-reader", "--portal-launch-repo=" + strings.Repeat("r", 101)},
+		"seventeen":          append([]string{"--enable-portal-reader"}, many...),
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := parseFlags(append([]string{"--enable-portal-reader"}, many[:16]...)); err != nil {
+		t.Errorf("sixteen repos refused: %v", err)
+	}
+}

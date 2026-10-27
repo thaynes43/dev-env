@@ -65,7 +65,10 @@ type Server struct {
 	// PortalConversationTargets is an explicit Session UID to name read scope; nil disables it.
 	PortalConversationTargets map[string]string
 	// PortalMessageTargets is an explicit session-name to immutable UID action scope. Nil disables the command endpoint.
-	PortalMessageTargets      map[string]string
+	PortalMessageTargets map[string]string
+	// PortalLaunchRepos is the set of repositories the portal may launch a
+	// constrained session in. Nil or empty disables the launch endpoint.
+	PortalLaunchRepos         map[string]struct{}
 	SessionDirectory          *sessiondirectory.KubeStore
 	SessionDirectoryProjects  []string
 	MetadataDiscoveryProjects []string
@@ -188,6 +191,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if len(s.PortalMessageTargets) > 0 {
 		mux.Handle(apiv1.PortalSessionMessagesPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalMessage}}))
+	}
+	if len(s.PortalLaunchRepos) > 0 {
+		mux.Handle(apiv1.PortalLaunchPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalLaunch}}))
 	}
 	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())
 	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))
@@ -326,6 +332,7 @@ func (s *Server) serve(rt route) http.Handler {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath:
 				case len(s.PortalMessageTargets) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalSessionMessagesPath:
+				case len(s.PortalLaunchRepos) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalLaunchPath:
 				case len(s.PortalConversationTargets) > 0 && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalConversationPrefix+r.PathValue("uid")+"/conversation":
 				default:
 					return 0, forbidden("the portal reader may only list session summaries")

@@ -329,3 +329,44 @@ Any other state shows its own word, escaped.
 This is read-only. It adds no portal action and needs no operator flag.
 
 **Deploy the portal before the operator.** The portal rejects activity keys it does not know.
+
+## Default-off portal launch route
+
+The operator can let the portal reader start one constrained agent session on
+behalf of a portal user. It is off unless `--portal-launch-repo=<repo>` is set.
+The flag is repeatable (at most 16, no duplicates), each value a repository
+name as the AgentSession schema accepts, and any value needs
+`--enable-portal-reader` or startup fails. With no flag the route does not
+exist: `POST /v1/portal/sessions` answers 404, and the portal reader still
+cannot create through `POST /v1/sessions`.
+
+- **Route.** `POST /v1/portal/sessions`, for the portal reader only. Every other
+  caller, including a human, a client, a session and a coordinator, is refused.
+- **Request.** Strict JSON, unknown and duplicate keys refused, no query string:
+  `requestID` and `actorRef` (the same opaque-ID rule as Send), `repo` (in the
+  allowlist), `mode` (`task`, `local` or `remote`), `model`, and optional `effort`
+  and `size` (`S` or `M`). A task needs a `prompt`; local and remote take none.
+  The agent is always `claude`.
+- **What it can never set.** Project, base, profile, tools, limits, lifecycle,
+  restore, canary, name and lane are not fields. The session uses the templates'
+  default profile.
+- **One create path.** The route builds a fixed `CreateSessionRequest` and runs
+  it through the same create handler as `POST /v1/sessions`, so the model,
+  effort, size, prompt and idempotency rules are the existing ones. It writes
+  no second validator.
+- **Parent.** `spec.parent` is `portal/<actorRef>`, which the portal shows as
+  "launched by". The caller is a derived value that exists only inside this
+  route: depth 1, no profile to hand on, and no other route accepts it. A parent
+  equal to another configured caller's identity is refused.
+- **Idempotency.** The key is `portal-` plus 40 hex digits of the request ID's
+  SHA-256. The existing per-parent dedupe applies: a repeat of the same request
+  while the session is unfinished returns the same session (200), the same ID with
+  a different request is a conflict (409), and a new ID starts a new session. Once
+  that session has finished, the same ID starts a new one.
+- **Receipt.** `requestID`, `sessionName`, `sessionUID`, `phase` and `observedAt`.
+  `Pending` is expected. Errors use the existing shapes and never echo the prompt.
+
+Activation also needs a `launch` scope in the portal's private action file
+(`session-actions.json`), bound to the exact principal and repositories like
+Send. That scope is not implemented in this unit and needs Tom's confirmation,
+as do the live flag and the identity step.

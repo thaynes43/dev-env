@@ -32,6 +32,11 @@ const (
 	// kindPortalReader is the default-off portal ServiceAccount. It is not a
 	// human, client, session, or coordinator.
 	kindPortalReader callerKind = "portal-reader"
+	// kindPortalLaunch is never authenticated. portalLaunch derives it, after the
+	// portal reader passes that route's checks, to run the one create path with
+	// the parent "portal/<actorRef>", depth 1 and no profile. It is not a
+	// human, client, session or coordinator, and no route accepts it.
+	kindPortalLaunch callerKind = "portal-launch"
 )
 
 // maxSessionDepth is the deepest a session may sit (DESIGN-001 3.4, "two levels

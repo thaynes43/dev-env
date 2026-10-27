@@ -658,3 +658,16 @@ Tom (19:19:40 UTC, relayed): "I should be able to do agent-run type things from 
 - **The renderer** drops any header link that is not `https://`.
 - **Deploy order:** portal first, then operator, because the portal refuses unknown activity keys.
 - **Out of scope:** launch, suspend, resume, reap and log from the portal. They need a delegated portal caller on the operator's coordinator routes, which is a new action scope that needs its own confirmation.
+
+### Default-off portal launch route, 2026-10-27
+
+The operator now has a default-off `POST /v1/portal/sessions` for the portal
+reader, registered only when `--portal-launch-repo` is set. It maps one request to
+a fixed Claude `CreateSessionRequest` (task, local or remote; `S` or `M`; a task
+prompt only) and runs it through the existing create handler. The parent is
+`portal/<actorRef>`, the profile is the templates' default, and the request ID
+becomes a per-parent idempotency key. See [default-off portal launch
+route](../../../../docs/portal-session-runtime.md#default-off-portal-launch-route).
+This is the operator side only. The portal form and receipt, the private
+`launch` scope and every live flag are separate steps that need Tom's
+confirmation.
