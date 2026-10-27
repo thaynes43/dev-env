@@ -444,7 +444,7 @@ the field.
 reference Send uses (a keyed hash of the portal session and principal). The
 prompt is not logged, stored or echoed, and no reservation is kept: the request
 ID becomes the operator's idempotency key, so a resubmitted form returns the same
-session while that session is unfinished. The portal runs one dispatch at a time
+session while that session is unfinished. Each portal pod runs one dispatch at a time
 (one lock around the fresh authorization check and the operator call), so two
 concurrent sends of one form reach the operator one after the other and the
 operator returns the same session to the second. A prompt over 64 KiB of UTF-8

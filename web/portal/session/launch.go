@@ -154,7 +154,7 @@ func (h *launchHandler) parse(w http.ResponseWriter, r *http.Request, record Rec
 	// browser that respects maxlength can send, so a prompt over the byte limit
 	// reaches the check below and gets a field error, not a denial. 4096 further
 	// bytes cover the other fields.
-	r.Body = http.MaxBytesReader(w, r.Body, 9*3*protocol.MaxPromptBytes+4096)
+	r.Body = http.MaxBytesReader(w, r.Body, 9*protocol.MaxPromptBytes+4096)
 	if r.ParseForm() != nil {
 		return req, nil, portal.ErrDenied
 	}
