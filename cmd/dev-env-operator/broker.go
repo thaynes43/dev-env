@@ -20,6 +20,7 @@ type brokerOptions struct {
 	policyNamespace     string
 	leaderElect         bool
 	enableProxmoxGrants bool
+	enableAttested      bool
 	metricsAddr         string
 	probeAddr           string
 }
@@ -36,6 +37,7 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.StringVar(&o.policyNamespace, "policy-namespace", ownNamespace, "namespace of the GrantPolicies; the broker's leader-election Lease lives there too")
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "elect one leader among the replicas; only the leader reconciles")
 	fs.BoolVar(&o.enableProxmoxGrants, "enable-proxmox-grants", false, "enable keeper-backed Proxmox grants after node trust and acceptance are configured")
+	fs.BoolVar(&o.enableAttested, "enable-attested-grants", false, "approve a request through a GrantPolicy with spec.attested when its requesting session recorded an agent attestation (a claim that the user or a coordinator approved; not verified human identity). Off, attested policies approve nothing")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
 	if err := fs.Parse(args); err != nil {
@@ -70,12 +72,13 @@ func runBroker(args []string) error {
 		return err
 	}
 	mgr, _, err := broker.NewManager(cfg, broker.Options{
-		SessionNamespace:    o.sessionNamespace,
-		PolicyNamespace:     o.policyNamespace,
-		EnableProxmoxGrants: o.enableProxmoxGrants,
-		LeaderElect:         o.leaderElect,
-		MetricsAddr:         o.metricsAddr,
-		ProbeAddr:           o.probeAddr,
+		SessionNamespace:     o.sessionNamespace,
+		PolicyNamespace:      o.policyNamespace,
+		EnableProxmoxGrants:  o.enableProxmoxGrants,
+		EnableAttestedGrants: o.enableAttested,
+		LeaderElect:          o.leaderElect,
+		MetricsAddr:          o.metricsAddr,
+		ProbeAddr:            o.probeAddr,
 		// Pushover plugs in at plan 07 step 6; until then the broker logs
 		// that Tom is wanted.
 		Notifier:  broker.LogNotifier{Log: log.WithName("notify")},

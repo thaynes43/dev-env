@@ -54,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
 const (
@@ -101,6 +102,10 @@ type Broker struct {
 	// EnableProxmoxGrants permits new PVE execution requests. Existing jobs
 	// still clean up when this is disabled.
 	EnableProxmoxGrants bool
+	// EnableAttestedGrants lets a policy with spec.attested approve a request
+	// that carries its session's agent attestation. Off, the broker skips every
+	// attested policy and so never approves through one.
+	EnableAttestedGrants bool
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.
@@ -173,7 +178,7 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 		_, err := b.writeStatus(ctx, &g)
 		return ctrl.Result{}, err
 	case v1alpha1.GrantPending:
-		return b.pending(ctx, &g, now)
+		return b.pending(ctx, &g, sess, now)
 	case v1alpha1.GrantActive:
 		return b.active(ctx, &g, sess, now)
 	}
@@ -182,7 +187,7 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 
 // pending answers a grant that waits: released, timed out, approved by a
 // policy, or still waiting for Tom, who is told once.
-func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (ctrl.Result, error) {
+func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (ctrl.Result, error) {
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released before an answer", now)
 	}
@@ -195,11 +200,15 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, now metav
 	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list the grant policies: %w", err)
 	}
-	if p := Match(g, policies.Items); p != nil {
+	if p, st := b.attestedApproval(ctx, g, sess, policies.Items, now.Time); p != nil {
 		approve(g, PolicyApprover+p.Name, g.Spec.TTL.Duration, now)
+		msg := "approved by a standing policy"
+		if st != nil {
+			msg = grantattest.Message(p.Name, *st)
+		}
 		written, err := b.writeStatus(ctx, g)
 		if written {
-			b.decided(ctx, g, "approved by a standing policy")
+			b.decided(ctx, g, msg)
 		}
 		return ctrl.Result{}, err
 	}

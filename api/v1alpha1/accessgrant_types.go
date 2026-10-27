@@ -446,7 +446,7 @@ type AccessGrantList struct {
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube') == has(self.kube)",message="kube is set for type kube, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
-// +kubebuilder:validation:XValidation:rule="(has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) > 0",message="name the requesters: profiles, repos or both"
+// +kubebuilder:validation:XValidation:rule="has(self.attested) ? ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) == 0 && (has(self.agents) ? size(self.agents) : 0) == 0 && (has(self.attested.profiles) ? size(self.attested.profiles) : 0) + (has(self.attested.repos) ? size(self.attested.repos) : 0) > 0) : ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) > 0)",message="name the requesters: profiles, repos or both; an attested policy names them only under attested and leaves profiles, repos and agents empty, so a broker that predates attestation matches nobody"
 // +kubebuilder:validation:XValidation:rule="duration(self.maxTTL) >= duration('10m') && duration(self.maxTTL) <= duration('8h')",message="maxTTL runs from 10m to 8h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.maxTTL) <= duration('4h')",message="a credential grant lasts at most 4h"
 type GrantPolicySpec struct {
@@ -481,6 +481,17 @@ type GrantPolicySpec struct {
 	// +optional
 	Agents []AgentKind `json:"agents,omitempty"`
 
+	// Attested makes this an attested policy: it approves only a request whose
+	// requesting session also recorded an agent attestation that it obtained the
+	// user's or a coordinator's approval for exactly this grant. The attestation
+	// is the agent's claim under delegated trust. It is not verified human
+	// identity. The requesters are named here and nowhere else: profiles, repos
+	// and agents above stay empty, which every broker that predates attestation
+	// reads as "names no requester" and so matches nobody (fail closed on a
+	// rollback). A broker approves through it only with --enable-attested-grants.
+	// +optional
+	Attested *AttestedRequesters `json:"attested,omitempty"`
+
 	// Type is the grant type it approves.
 	// +required
 	Type GrantType `json:"type"`
@@ -500,6 +511,35 @@ type GrantPolicySpec struct {
 	// MaxTTL is the longest TTL it approves. A longer request goes to Tom.
 	// +required
 	MaxTTL metav1.Duration `json:"maxTTL"`
+}
+
+// AttestedRequesters are the requesters an attested policy matches, with the
+// same meaning as the lists of GrantPolicySpec: the policy names its requesters
+// (profiles, repos or both), a repo list narrows, an empty agents list is any.
+type AttestedRequesters struct {
+	// Profiles are the requester profiles it matches. Profile ops never
+	// matches (D-18).
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:items:XValidation:rule="self != 'ops'",message="no policy matches profile ops (D-18)"
+	// +optional
+	Profiles []string `json:"profiles,omitempty"`
+
+	// Repos are the requester repos it matches.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=100
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_.-]+$`
+	// +optional
+	Repos []string `json:"repos,omitempty"`
+
+	// Agents are the requester agent CLIs it matches; empty means any.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=3
+	// +optional
+	Agents []AgentKind `json:"agents,omitempty"`
 }
 
 // KubePolicy is the catalog roles a policy approves, in the namespaces it names.

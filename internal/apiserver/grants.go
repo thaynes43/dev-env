@@ -20,6 +20,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
 // The grant routes (D-56). A session asks for a grant for its own pod; the
@@ -536,6 +537,10 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 	}
 	if st.ApprovedTTL != nil {
 		v.ApprovedTTL = st.ApprovedTTL.Duration.String()
+	}
+	v.ScopeDigest = grantattest.ScopeDigest(g)
+	if st, err := grantattest.Parse(g.Annotations[grantattest.Annotation]); err == nil {
+		v.Attestation = &apiv1.GrantAttestation{Session: st.Attestor.Session, ApprovedBy: st.Approver.String(), Ref: st.Ref, AttestedAt: st.AttestedAt}
 	}
 	if v.Phase == apiv1.GrantPending && !g.Spec.Release && s.GrantApprovalURL != "" {
 		v.ApprovalURL = strings.TrimRight(s.GrantApprovalURL, "/") + "/" + g.Name

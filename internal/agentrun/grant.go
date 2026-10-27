@@ -46,6 +46,8 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return a.grantRequest(ctx, args[1:])
 	case "release":
 		return a.grantRelease(ctx, args[1:])
+	case "attest":
+		return a.grantAttest(ctx, args[1:])
 	case "use":
 		return a.grantUse(ctx, args[1:])
 	case "help", "-h", "--help":
@@ -313,6 +315,72 @@ func (a *app) grantRelease(ctx context.Context, args []string) error {
 	return a.printGrant(out)
 }
 
+// grantAttest records the calling session's claim that the user or a coordinator
+// approved one grant (agent attestation, not verified human identity). It prints
+// exactly what it attests before it posts, so the claim is in the session's own
+// record. The attestor comes from the pod's token on the server.
+func (a *app) grantAttest(ctx context.Context, args []string) error {
+	cmd := newCommand("grant", outputJSON)
+	var approvedBy, ref string
+	cmd.fs.StringVar(&approvedBy, "approved-by", "", "")
+	cmd.fs.StringVar(&ref, "ref", "", "")
+	pos, err := cmd.parse(a, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 || !validGrantCLIName(pos[0]) || approvedBy == "" || ref == "" {
+		return usageError("grant attest takes one grant-<id> name, --approved-by user|coordinator:<ref> and --ref <nonsecret>; agent-run help grant")
+	}
+	if approvedBy != "user" && !strings.HasPrefix(approvedBy, "coordinator:") {
+		return usageError("--approved-by is user, or coordinator:<ref>")
+	}
+	c, err := a.connect(ctx, cmd.c.conn)
+	if err != nil {
+		return err
+	}
+	var g apiv1.Grant
+	if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(pos[0]), nil, nil, &g); err != nil {
+		return err
+	}
+	if g.ScopeDigest == "" {
+		return fail(ExitFailed, "the API did not return a scope digest for %s; it cannot be attested", pos[0])
+	}
+	a.outf("attesting %s: type %s%s, ttl %s, scope digest %s\nclaim: %s approved this exact grant (ref %s). This is your claim, an agent attestation, not verified human identity.\n",
+		g.Name, g.Type, scopeText(g), g.TTL, g.ScopeDigest, approvedBy, ref)
+	var out apiv1.Grant
+	if _, err := a.call(ctx, c, http.MethodPost, apiv1.GrantAttestationPath(pos[0]), nil,
+		apiv1.AttestGrantRequest{ApprovedBy: approvedBy, Ref: ref, ScopeDigest: g.ScopeDigest}, &out); err != nil {
+		return err
+	}
+	if cmd.c.output == outputJSON {
+		return a.printJSON(out)
+	}
+	a.outf("attested\n")
+	return a.printGrant(out)
+}
+
+func scopeText(g apiv1.Grant) string {
+	var parts []string
+	for _, p := range []struct {
+		k string
+		v []string
+	}{{"credential", []string{g.Credential}}, {"role", []string{g.Role}}, {"namespaces", g.Namespaces}, {"fqdns", g.FQDNs}, {"cidrs", g.CIDRs}} {
+		if v := strings.Join(p.v, ","); v != "" {
+			parts = append(parts, p.k+" "+v)
+		}
+	}
+	for _, e := range g.Endpoints {
+		parts = append(parts, "endpoint "+e.Namespace)
+	}
+	for _, p := range g.Ports {
+		parts = append(parts, fmt.Sprintf("port %d", p.Port))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, "; ") + ")"
+}
+
 func (a *app) grantUse(ctx context.Context, args []string) error {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		return usageError("grant use takes one grant-<id> or %s; agent-run help grant", protocol.DefaultContext)
@@ -387,6 +455,9 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	if out.ApprovalURL != "" {
 		a.outf("approval: %s\n", out.ApprovalURL)
+	}
+	if at := out.Attestation; at != nil {
+		a.outf("attestation: session/%s claims %s approved (ref %s); agent attestation, not verified human identity\n", at.Session, at.ApprovedBy, at.Ref)
 	}
 	return nil
 }

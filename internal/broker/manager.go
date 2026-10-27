@@ -45,6 +45,9 @@ type Options struct {
 	PolicyNamespace string
 	// EnableProxmoxGrants is false until keeper/node trust and acceptance pass.
 	EnableProxmoxGrants bool
+	// EnableAttestedGrants turns on approval through attested GrantPolicies
+	// (agent attestation, not verified human identity). Default off.
+	EnableAttestedGrants bool
 	// LeaderElect elects one leader among the replicas; only it reconciles.
 	LeaderElect bool
 	// LeaseDuration, RenewDeadline and RetryPeriod tune leader election; zero
@@ -130,15 +133,16 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		clk = clock.RealClock{}
 	}
 	b := &Broker{
-		Client:              mgr.GetClient(),
-		APIReader:           mgr.GetAPIReader(),
-		SessionNamespace:    o.SessionNamespace,
-		PolicyNamespace:     o.PolicyNamespace,
-		EnableProxmoxGrants: o.EnableProxmoxGrants,
-		Clock:               clk,
-		Notifier:            o.Notifier,
-		Installer:           o.Installer,
-		Recorder:            mgr.GetEventRecorder(Name),
+		Client:               mgr.GetClient(),
+		APIReader:            mgr.GetAPIReader(),
+		SessionNamespace:     o.SessionNamespace,
+		PolicyNamespace:      o.PolicyNamespace,
+		EnableProxmoxGrants:  o.EnableProxmoxGrants,
+		EnableAttestedGrants: o.EnableAttestedGrants,
+		Clock:                clk,
+		Notifier:             o.Notifier,
+		Installer:            o.Installer,
+		Recorder:             mgr.GetEventRecorder(Name),
 	}
 	b.reconciled = o.reconciled
 	if err := b.SetupWithManager(mgr); err != nil {

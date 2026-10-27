@@ -18,6 +18,16 @@ const ProfileOps = "ops"
 // policy being deleted approves nothing. Match is a pure function: the broker
 // passes it the policies from its cache.
 func Match(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy) *v1alpha1.GrantPolicy {
+	return MatchAttested(g, policies, nil)
+}
+
+// MatchAttested is Match that also considers attested policies (spec.attested).
+// A standing policy approves as always. An attested policy is considered only
+// when attestedOK is non-nil, the request fits it (MatchesAttested), and
+// attestedOK returns true for it (the caller has verified the grant's agent
+// attestation). A nil attestedOK ignores every attested policy: it never
+// approves through one.
+func MatchAttested(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy, attestedOK func(*v1alpha1.GrantPolicy) bool) *v1alpha1.GrantPolicy {
 	sorted := make([]*v1alpha1.GrantPolicy, 0, len(policies))
 	for i := range policies {
 		if policies[i].DeletionTimestamp.IsZero() {
@@ -26,6 +36,12 @@ func Match(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy) *v1alpha1.G
 	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, p := range sorted {
+		if p.Spec.Attested != nil {
+			if attestedOK != nil && MatchesAttested(p, g) && attestedOK(p) {
+				return p
+			}
+			continue
+		}
 		if Matches(p, g) {
 			return p
 		}
@@ -40,6 +56,25 @@ func Match(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy) *v1alpha1.G
 // dev-env-grant-secrets-read, whatever p says: the schema refuses such a policy,
 // and the broker does not trust that it ran (D-27, D-54).
 func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
+	if p.Spec.Attested != nil {
+		return false // an attested policy never approves as a standing one
+	}
+	return matches(p, g, p.Spec.Profiles, p.Spec.Repos, p.Spec.Agents)
+}
+
+// MatchesAttested reports whether attested policy p fits grant g: Matches with
+// the requesters taken from spec.attested. It says nothing about the grant's
+// attestation, which the caller must verify. A policy without spec.attested
+// does not match here.
+func MatchesAttested(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
+	a := p.Spec.Attested
+	if a == nil || len(p.Spec.Profiles) != 0 || len(p.Spec.Repos) != 0 || len(p.Spec.Agents) != 0 {
+		return false // a mixed policy is malformed: approve nothing
+	}
+	return matches(p, g, a.Profiles, a.Repos, a.Agents)
+}
+
+func matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant, profiles, repos []string, agents []v1alpha1.AgentKind) bool {
 	ps, gs := &p.Spec, &g.Spec
 	if gs.Type == v1alpha1.GrantBreakglass || ps.Type == v1alpha1.GrantBreakglass || gs.Type != ps.Type {
 		return false
@@ -50,16 +85,16 @@ func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 	}
 	// A policy names its requesters (the schema asks for profiles, repos or
 	// both); one that names none approves nobody.
-	if len(ps.Profiles) == 0 && len(ps.Repos) == 0 {
+	if len(profiles) == 0 && len(repos) == 0 {
 		return false
 	}
-	if len(ps.Profiles) > 0 && !slices.Contains(ps.Profiles, r.Profile) {
+	if len(profiles) > 0 && !slices.Contains(profiles, r.Profile) {
 		return false
 	}
-	if len(ps.Repos) > 0 && !slices.Contains(ps.Repos, r.Repo) {
+	if len(repos) > 0 && !slices.Contains(repos, r.Repo) {
 		return false
 	}
-	if len(ps.Agents) > 0 && !slices.Contains(ps.Agents, r.Agent) {
+	if len(agents) > 0 && !slices.Contains(agents, r.Agent) {
 		return false
 	}
 	if gs.TTL.Duration <= 0 || gs.TTL.Duration > ps.MaxTTL.Duration {
