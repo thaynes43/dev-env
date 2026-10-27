@@ -186,6 +186,17 @@ func inboxSafeError(status int, err error) error {
 		code = ee.code
 	}
 	switch status {
+	case 0:
+		switch code {
+		case ExitAuth:
+			return fail(code, "inbox connection or token authentication failed; check token access and the API certificate or --ca-file")
+		case ExitRetry:
+			return fail(code, "inbox API connection or token acquisition failed before the inbox request; check connectivity and retry")
+		case ExitUnconfirmed:
+			return fail(code, "inbox read outcome Unknown; no request was repeated; check connectivity before reading again")
+		default:
+			return fail(code, "inbox request failed before a confirmed HTTP response; check connection and authentication")
+		}
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return fail(code, "inbox request was refused (%d); check the project, recipient, key, text and command arguments", status)
 	case http.StatusTooManyRequests:

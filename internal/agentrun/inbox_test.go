@@ -184,3 +184,28 @@ func TestInboxRefusalsAreActionableAndDoNotEchoBodies(t *testing.T) {
 		})
 	}
 }
+
+func TestInboxNoResponseClassification(t *testing.T) {
+	for _, tc := range []struct {
+		code int
+		want string
+	}{
+		{ExitAuth, "--ca-file"}, {ExitRetry, "before the inbox request"},
+		{ExitUnconfirmed, "read outcome Unknown"}, {ExitFailed, "before a confirmed HTTP response"},
+	} {
+		err := inboxSafeError(0, fail(tc.code, "test-token private body"))
+		ee, ok := err.(*exitError)
+		if !ok || ee.code != tc.code || !strings.Contains(ee.msg, tc.want) || strings.Contains(ee.msg, "test-token") || strings.Contains(ee.msg, "HTTP status 0") {
+			t.Fatalf("classification %d: %v", tc.code, err)
+		}
+	}
+}
+
+func TestInboxUntrustedTLSHasActionableError(t *testing.T) {
+	h := newHarness(t)
+	h.vars[envCAFile] = ""
+	h.mustRun(ExitAuth, "inbox", "list", "--project", "p")
+	if len(h.api.requests()) != 0 || !strings.Contains(h.stderr.String(), "--ca-file") || strings.Contains(h.stderr.String(), testToken) {
+		t.Fatalf("TLS response: %s", h.stderr.String())
+	}
+}

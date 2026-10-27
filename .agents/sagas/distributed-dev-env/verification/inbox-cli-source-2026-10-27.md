@@ -24,3 +24,13 @@ bodies, verify no replay, and retain the 503 Unknown behavior. The focused and
 package commands above passed again after this source change under the same
 serial Go environment. This supersedes the earlier source test result for the
 updated head; independent review and hosted CI on that head remain pending.
+
+A second advisory correction distinguishes failure before any confirmed HTTP
+response from HTTP refusal. Static guidance follows the existing client exit
+classification for authentication/TLS, connection or token acquisition, and
+unconfirmed reads, without printing transport error details. An untrusted TLS
+wire test verifies no inbox request and CA guidance; a classification table
+checks all these paths and credential suppression. Mutation Unknown guidance is
+unchanged. Focused inbox tests and the affected package suite passed again under
+the recorded serial environment. Independent review and hosted CI remain
+pending on this updated head.
