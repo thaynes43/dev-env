@@ -264,7 +264,7 @@ func TestSessionsPageStaysUnderTheResponseBound(t *testing.T) {
 		listed += len(g.Rows)
 	}
 	if listed != maxListedSessions || len(page.Usage.Rows) != maxListedSessions || page.Rail.All != "500" || page.Groups[1].Total != 500 ||
-		page.Usage.Stats[0].Value != "500 of 500" || page.ListCount != "Most recent 150 of 500 sessions · all projects" {
+		page.Usage.Stats[0].Value != "500 of 500" || page.ListCount != "Showing 150 of 500 sessions · all projects" {
 		t.Fatalf("listed=%d usage=%d rail=%s list=%q stats=%+v", listed, len(page.Usage.Rows), page.Rail.All, page.ListCount, page.Usage.Stats)
 	}
 	if headless := page.Usage.Breakdowns[0].Rows[0]; headless.Name != "Headless" || headless.Cells[2].Value != "500,000,000,000,000,000" {

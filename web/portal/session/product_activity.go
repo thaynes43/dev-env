@@ -367,7 +367,7 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 		page.ListCount = strconv.Itoa(len(kept)) + " sessions · " + scope
 	}
 	if len(kept) > maxListedSessions {
-		page.ListCount = "Most recent " + strconv.Itoa(maxListedSessions) + " of " + strconv.Itoa(len(kept)) + " sessions · " + scope
+		page.ListCount = "Showing " + strconv.Itoa(maxListedSessions) + " of " + strconv.Itoa(len(kept)) + " sessions · " + scope
 		if !complete {
 			page.ListCount = "Partial list"
 		}
