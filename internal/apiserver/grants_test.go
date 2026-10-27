@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -744,8 +745,8 @@ func TestNewGrantCredentialSourceRefusals(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.newGrant(tc.req, c)
-			refusal, ok := err.(*apiError)
-			if !ok || refusal.status != http.StatusUnprocessableEntity || len(refusal.body.Fields) != 1 || refusal.body.Fields[0].Field != tc.field {
+			var refusal *apiError
+			if !errors.As(err, &refusal) || refusal.status != http.StatusUnprocessableEntity || len(refusal.body.Fields) != 1 || refusal.body.Fields[0].Field != tc.field {
 				t.Fatalf("refusal = %#v, want field %s", err, tc.field)
 			}
 		})
