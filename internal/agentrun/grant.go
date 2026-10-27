@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -38,6 +40,8 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return &exitError{code: ExitUsage}
 	}
 	switch args[0] {
+	case "decision":
+		return a.grantDecision(ctx, args[1:])
 	case "list":
 		return a.grantList(ctx, args[1:])
 	case "show":
@@ -53,7 +57,7 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return nil
 	}
 	_, _ = io.WriteString(a.env.Stderr, commandHelp["grant"])
-	return usageError("unknown grant command %q: it is list, show, request, release or use", args[0])
+	return usageError("unknown grant command %q: it is list, show, request, release, use or decision", args[0])
 }
 
 func (a *app) grantList(ctx context.Context, args []string) error {
@@ -382,6 +386,64 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	a.outf("name: %s\nphase: %s\ntype: %s\nsession: %s\nttl: %s\nexpires: %s\nreason: %s\n",
 		out.Name, out.Phase, out.Type, firstOf(out.Session, "-"), out.TTL, expires, out.Reason)
+	if out.UID != "" {
+		a.outf("grant UID: %s\nsession UID: %s\nscope hash: %s\n", out.UID, out.SessionUID, out.ScopeHash)
+	}
+	if out.Role != "" {
+		a.outf("role: %s\nnamespaces: %s\n", out.Role, strings.Join(out.Namespaces, ", "))
+	}
+	for _, fqdn := range out.FQDNs {
+		a.outf("fqdn: %s\n", fqdn)
+	}
+	for _, cidr := range out.CIDRs {
+		a.outf("cidr: %s\n", cidr)
+	}
+	for _, ep := range out.Endpoints {
+		keys := make([]string, 0, len(ep.MatchLabels))
+		for k := range ep.MatchLabels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		a.outf("endpoint: %s", ep.Namespace)
+		for _, k := range keys {
+			a.outf(" %s=%s", k, ep.MatchLabels[k])
+		}
+		a.outf("\n")
+	}
+	for _, port := range out.Ports {
+		a.outf("port: %d/%s\n", port.Port, firstOf(port.Protocol, "TCP"))
+	}
+	if out.Credential != "" {
+		a.outf("credential: %s (provider authority; inspect before approval)\n", out.Credential)
+	}
+	if source := out.CredentialSource; source != nil {
+		// Apply the source schema bounds before printing untrusted API data.
+		valid := func(value, pattern string, max int) bool {
+			if len(value) == 0 || len(value) > max {
+				return false
+			}
+			matched, _ := regexp.MatchString(pattern, value)
+			return matched
+		}
+		ok := valid(source.Namespace, `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, 63) &&
+			valid(source.Name, `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, 253) &&
+			len(source.Fields) > 0 && len(source.Fields) <= 16
+		if ok {
+			seen := make(map[string]bool, len(source.Fields))
+			for _, field := range source.Fields {
+				if !valid(field, `^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$`, 253) || seen[field] {
+					ok = false
+					break
+				}
+				seen[field] = true
+			}
+		}
+		if ok {
+			a.outf("credential source namespace: %s\ncredential source name: %s\ncredential source fields: %s\n", source.Namespace, source.Name, strings.Join(source.Fields, ", "))
+		} else {
+			a.outf("credential source: invalid reference\n")
+		}
+	}
 	if out.Message != "" {
 		a.outf("message: %s\n", out.Message)
 	}

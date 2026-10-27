@@ -3547,6 +3547,21 @@ built.** `api/v1alpha1/accessgrant_types.go`; an envtest suite proves each rule.
   `GET /v1/grants/{name}` shows one grant. `DELETE /v1/grants/{name}` releases it.
   Every caller the API serves may read: agents can read AccessGrants anyway, and
   `agent-run grant list --all` shows requester, approver and times.
+- **Request summary (2026-10-26, source foundation).** Grant views include the
+  grant UID, requesting session UID and `scopeHash`, SHA-256 of the complete JSON
+  `AccessGrantSpec` including requester, destinations, operations, TTL, reason and
+  release. Release changes the hash. Deterministic encoding is build-specific;
+  changes across versions fail closed. This hash is neither authentication nor
+  approval. No decision adapter is enabled by these fields.
+- **Decision handoff (2026-10-26, proposed source, default off).** Authenticated
+  human callers, configured coordinators and explicitly delegated parent sessions
+  for their direct children can submit
+  an exact bound decision to a protected AccessGrant annotation. The broker
+  validates the request, session and pod again and alone writes status. A policy
+  bearing `dev-env.haynesops.com/decision-approver` bounds a named coordinator or parent session's
+  manual decisions and never auto-approves. The operator/broker-only annotation
+  admission guard is a prerequisite; phone answer attestation, generic credential
+  installation and live acceptance are not yet implemented.
 - **Who may request.** Only a session, because a grant is installed in a session's
   pod. Tom and clients get a 403 that says grants are requested by sessions and
   approved on the broker's page. A session being reaped gets a 409.

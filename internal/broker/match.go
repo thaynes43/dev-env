@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // ProfileOps is the requester profile no policy ever approves (D-18): every
@@ -20,7 +21,8 @@ const ProfileOps = "ops"
 func Match(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy) *v1alpha1.GrantPolicy {
 	sorted := make([]*v1alpha1.GrantPolicy, 0, len(policies))
 	for i := range policies {
-		if policies[i].DeletionTimestamp.IsZero() {
+		_, manual := policies[i].Annotations[grantdecision.ManualApproverAnnotation]
+		if policies[i].DeletionTimestamp.IsZero() && !manual {
 			sorted = append(sorted, &policies[i])
 		}
 	}

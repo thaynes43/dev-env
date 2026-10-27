@@ -74,14 +74,25 @@ type CreateGrantRequest struct {
 	Endpoints []GrantEndpoint `json:"endpoints,omitempty"`
 	// Ports are opened to every destination; at least one.
 	Ports []GrantPort `json:"ports,omitempty"`
-	// Credential is proxmox or hw-ssh.
+	// Credential is a keeper-minted credential such as proxmox.
 	Credential string `json:"credential,omitempty"`
+	// CredentialSource names one existing Secret and the exact fields requested.
+	// It is a reference only; this API never reads its values.
+	CredentialSource *CredentialSource `json:"credentialSource,omitempty"`
 	// TTL is how long the grant lasts once approved, a Go duration such as 45m.
 	// Empty means DefaultGrantTTL, or DefaultBreakglassTTL for break-glass.
 	TTL string `json:"ttl,omitempty"`
 	// Reason is why the session asks, in its own words. Tom reads it on the
 	// approval page, marked as agent-written. Required.
 	Reason string `json:"reason"`
+}
+
+// CredentialSource is the bounded public request summary for an existing
+// credential source. It contains no credential value.
+type CredentialSource struct {
+	Namespace string   `json:"namespace"`
+	Name      string   `json:"name"`
+	Fields    []string `json:"fields"`
 }
 
 // GrantEndpoint is in-cluster pods: every pod of a namespace, or the ones with
@@ -100,7 +111,10 @@ type GrantPort struct {
 // Grant is one grant as the API shows it: GET /v1/grants/{name}, the items of
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
+	SessionUID string `json:"sessionUID,omitempty"`
+	ScopeHash  string `json:"scopeHash,omitempty"`
 
 	// The requester, from the session's token.
 	Session string `json:"session"`
@@ -110,16 +124,17 @@ type Grant struct {
 	Parent  string `json:"parent,omitempty"`
 
 	// The request.
-	Type       string          `json:"type"`
-	Role       string          `json:"role,omitempty"`
-	Namespaces []string        `json:"namespaces,omitempty"`
-	FQDNs      []string        `json:"fqdns,omitempty"`
-	CIDRs      []string        `json:"cidrs,omitempty"`
-	Endpoints  []GrantEndpoint `json:"endpoints,omitempty"`
-	Ports      []GrantPort     `json:"ports,omitempty"`
-	Credential string          `json:"credential,omitempty"`
-	TTL        string          `json:"ttl"`
-	Reason     string          `json:"reason"`
+	Type             string            `json:"type"`
+	Role             string            `json:"role,omitempty"`
+	Namespaces       []string          `json:"namespaces,omitempty"`
+	FQDNs            []string          `json:"fqdns,omitempty"`
+	CIDRs            []string          `json:"cidrs,omitempty"`
+	Endpoints        []GrantEndpoint   `json:"endpoints,omitempty"`
+	Ports            []GrantPort       `json:"ports,omitempty"`
+	Credential       string            `json:"credential,omitempty"`
+	CredentialSource *CredentialSource `json:"credentialSource,omitempty"`
+	TTL              string            `json:"ttl"`
+	Reason           string            `json:"reason"`
 	// Release is set once the session gave the grant back; the broker then
 	// ends it.
 	Release   bool      `json:"release,omitempty"`

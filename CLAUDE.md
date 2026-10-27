@@ -124,6 +124,7 @@ internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into 
                          Proxmox credential grants are separate journaled, Lease-fenced leader runnables. Unit tests use a fake
                          GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
                          the Roles haynes-ops gives it
+internal/grantdecision/  canonical grant scope digest and identity binding for decision handoffs; grants no authority
 internal/broker/         the access broker (D-61): decides AccessGrants (GrantPolicy match, Decide for the approval page,
                          a Notifier), makes kube, break-glass and egress grants (a ServiceAccount and RoleBindings or a
                          ClusterRoleBinding per grant) and revokes them; ExecInstaller installs kube tokens on stdin into the pod's grants tmpfs (D-63), guarded by pod UID; older pods fail/revoke after three attempts. Its envtest

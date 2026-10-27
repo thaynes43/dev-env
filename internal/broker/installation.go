@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // InstallationAnnotation persists only pod UID, compatibility retry count and
@@ -57,6 +59,12 @@ func (b *Broker) recordInstallation(ctx context.Context, g *v1alpha1.AccessGrant
 // actual token expiry. TokenRequest may shorten a requested lifetime, so the
 // broker records the returned expiry and refreshes it before it ends.
 func (b *Broker) install(ctx context.Context, g *v1alpha1.AccessGrant, pod *corev1.Pod, now metav1.Time) (ctrl.Result, bool, error) {
+	if strings.HasPrefix(g.Status.ApprovedBy, "human/") || strings.HasPrefix(g.Status.ApprovedBy, "coordinator/") || strings.HasPrefix(g.Status.ApprovedBy, "session/") {
+		h, ok := grantdecision.ApprovedHandoff(g)
+		if !ok || pod == nil || !h.Binding.Matches(g, pod.UID) {
+			return ctrl.Result{}, false, errors.New("manual grant installation does not match its approved pod")
+		}
+	}
 	expires := g.Status.ExpiresAt.Time
 	s := installedState(g)
 	refreshAt := expires

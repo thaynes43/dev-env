@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // kubeReq is a valid kube grant request.
@@ -670,5 +672,83 @@ func TestGrantName(t *testing.T) {
 	}
 	if len(seen) < 2 {
 		t.Errorf("the random part does not vary: %v", seen)
+	}
+}
+
+func TestGrantViewBindsActualRequest(t *testing.T) {
+	f := newFixture(t)
+	tok := f.sessionPod("scope-test", "full", 0)
+	created := f.request(tok, egressReq(), http.StatusCreated)
+	g := f.grant(created.Name)
+	g.UID = "grant-uid"
+	if err := f.c.Update(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	g = f.grant(created.Name)
+	want, err := grantdecision.ScopeHash(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodGet, apiv1.GrantPath(created.Name), tok, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get grant: %d", w.Code)
+	}
+	got := decode[apiv1.Grant](t, w)
+	if got.UID != string(g.UID) || got.SessionUID != string(g.Spec.Requester.SessionUID) || got.ScopeHash != want {
+		t.Fatalf("grant binding does not reflect the stored request: %+v", got)
+	}
+}
+
+func TestNewGrantCredentialSourceAndView(t *testing.T) {
+	s := &Server{}
+	c := &caller{parent: "session", session: &v1alpha1.AgentSession{}}
+	source := &apiv1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"token", "user"}}
+	req := apiv1.CreateGrantRequest{Type: "credential", CredentialSource: source, Reason: "synthetic request"}
+	g, err := s.newGrant(req, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Spec.Credential == nil || g.Spec.Credential.Source == nil || g.Spec.Credential.Name != "" {
+		t.Fatal("source-only credential missing from spec")
+	}
+	want := &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"token", "user"}}
+	if !reflect.DeepEqual(g.Spec.Credential.Source, want) {
+		t.Fatalf("spec source = %+v", g.Spec.Credential.Source)
+	}
+	source.Fields[0] = "changed"
+	if !reflect.DeepEqual(g.Spec.Credential.Source, want) {
+		t.Fatal("spec aliases request fields")
+	}
+	view := s.grantView(g)
+	if view.CredentialSource == nil || view.CredentialSource.Namespace != "media" || view.CredentialSource.Name != "existing" || !reflect.DeepEqual(view.CredentialSource.Fields, want.Fields) {
+		t.Fatalf("view source = %+v", view.CredentialSource)
+	}
+	view.CredentialSource.Fields[0] = "changed"
+	if !reflect.DeepEqual(g.Spec.Credential.Source, want) {
+		t.Fatal("view aliases spec fields")
+	}
+}
+
+func TestNewGrantCredentialSourceRefusals(t *testing.T) {
+	s := &Server{}
+	c := &caller{parent: "session", session: &v1alpha1.AgentSession{}}
+	source := &apiv1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"token"}}
+	cases := []struct {
+		name  string
+		req   apiv1.CreateGrantRequest
+		field string
+	}{
+		{"both", apiv1.CreateGrantRequest{Type: "credential", Credential: "proxmox", CredentialSource: source, Reason: "synthetic request"}, "credential"},
+		{"neither", apiv1.CreateGrantRequest{Type: "credential", Reason: "synthetic request"}, "credential"},
+		{"wrong type", apiv1.CreateGrantRequest{Type: "kube", Role: v1alpha1.RoleWorkloads, CredentialSource: source, Reason: "synthetic request"}, "credentialSource"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.newGrant(tc.req, c)
+			var refusal *apiError
+			if !errors.As(err, &refusal) || refusal.status != http.StatusUnprocessableEntity || len(refusal.body.Fields) != 1 || refusal.body.Fields[0].Field != tc.field {
+				t.Fatalf("refusal = %#v, want field %s", err, tc.field)
+			}
+		})
 	}
 }

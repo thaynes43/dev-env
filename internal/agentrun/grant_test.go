@@ -248,3 +248,64 @@ func TestGrantUseSelectsThePodContext(t *testing.T) {
 	h.mustRun(ExitFailed, "grant", "use", "grant-abc")
 	contains(t, "stderr", h.stderr.String(), "not installed")
 }
+
+func TestGrantShowSummarizesExactRequest(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","uid":"grant-uid","sessionUID":"session-uid","scopeHash":"hash","phase":"Pending","type":"egress","ttl":"30m","reason":"inspect","fqdns":["example.com"],"cidrs":["192.0.2.1/32"],"endpoints":[{"namespace":"media","matchLabels":{"app":"svc"}}],"ports":[{"port":443,"protocol":"TCP"}]}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "show", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), "grant UID: grant-uid", "session UID: session-uid", "scope hash: hash", "fqdn: example.com", "cidr: 192.0.2.1/32", "endpoint: media app=svc", "port: 443/TCP")
+}
+
+func TestGrantShowCredentialSourceReferences(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"credential","ttl":"30m","reason":"inspect","credentialSource":{"namespace":"synthetic-ns","name":"synthetic-secret","fields":["token","key.id"]}}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "show", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), "credential source namespace: synthetic-ns", "credential source name: synthetic-secret", "credential source fields: token, key.id")
+	h.stdout.Reset()
+	h.mustRun(ExitOK, "grant", "show", "--output", "json", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), `"credentialSource"`, `"synthetic-ns"`, `"key.id"`)
+}
+
+func TestGrantShowRejectsMalformedCredentialSourceReferences(t *testing.T) {
+	for _, source := range []string{
+		`{"namespace":"ns\nforged: yes","name":"secret","fields":["token"]}`,
+		`{"namespace":"ns","name":"secret","fields":["token\nforged: yes"]}`,
+		`{"namespace":"ns","name":"secret","fields":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q"]}`,
+		`{"namespace":"ns","name":"secret","fields":["token","token"]}`,
+		`{"namespace":"ns","name":"` + strings.Repeat("a", 254) + `","fields":["token"]}`,
+	} {
+		h := newHarness(t)
+		serveRaw(h, map[string]func(*http.Request) (int, string){
+			apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+				return http.StatusOK, `{"name":"grant-abc","credentialSource":` + source + `}`
+			},
+		})
+		h.mustRun(ExitOK, "grant", "show", "grant-abc")
+		contains(t, "stdout", h.stdout.String(), "credential source: invalid reference")
+		if strings.Contains(h.stdout.String(), "forged") || len(h.stdout.String()) > 256 {
+			t.Fatalf("unsafe output: %q", h.stdout.String())
+		}
+	}
+}
+
+func TestGrantShowLegacyCredential(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","type":"credential","credential":"proxmox"}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "show", "grant-abc")
+	contains(t, "stdout", h.stdout.String(), "credential: proxmox (provider authority; inspect before approval)")
+	if strings.Contains(h.stdout.String(), "credential source") {
+		t.Fatal("unexpected credential source")
+	}
+}

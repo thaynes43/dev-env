@@ -136,6 +136,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube' || self.type == 'breakglass') == has(self.kube)",message="kube is set for types kube and breakglass, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
+// +kubebuilder:validation:XValidation:rule="!has(self.credential) || (has(self.credential.name) != has(self.credential.source))",message="credential names exactly one keeper credential or existing selected source"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || ((self.type == 'breakglass') == (self.kube.role == 'dev-env-grant-breakglass'))",message="type breakglass and role dev-env-grant-breakglass go together (D-27)"
 // +kubebuilder:validation:XValidation:rule="duration(self.ttl) >= duration('10m') && duration(self.ttl) <= duration('8h')",message="ttl runs from 10m to 8h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.ttl) <= duration('4h')",message="a credential grant lasts at most 4h"
@@ -331,11 +332,37 @@ type GrantPort struct {
 	Protocol GrantProtocol `json:"protocol,omitempty"`
 }
 
-// CredentialGrant names a short-lived credential (Q-07).
+// CredentialGrant names a keeper-minted credential or a deliberately narrow
+// selection from one existing Secret. A source is a reference and field list,
+// never a whole Secret.
 type CredentialGrant struct {
-	// Name is the credential.
-	// +required
-	Name CredentialName `json:"name"`
+	// Name is a keeper-minted credential. It is mutually exclusive with Source.
+	// +optional
+	Name CredentialName `json:"name,omitempty"`
+
+	// Source selects existing Secret data for a manually approved grant.
+	// +optional
+	Source *CredentialSource `json:"source,omitempty"`
+}
+
+// CredentialSource identifies the exact existing Secret fields a grant may
+// receive. Values never appear in AccessGrant, status, events, or logs.
+type CredentialSource struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$`
+	Fields []string `json:"fields"`
 }
 
 // AccessGrantStatus is the broker's record of the grant. Only the broker
