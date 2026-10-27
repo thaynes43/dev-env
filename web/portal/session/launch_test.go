@@ -222,7 +222,7 @@ func TestLaunchOutcomesRenderFixedWordingAndNeverThePromptOrOperatorText(t *test
 			if name == "invalid" && (!strings.Contains(body, "takes low, medium") || strings.Contains(body, "echo ") || strings.Contains(body, "mmmmmmmmmm")) {
 				t.Fatalf("field errors wrong: %s", body)
 			}
-			if name == "unknown" && !strings.Contains(body, "will not start a second session") {
+			if name == "unknown" && (!strings.Contains(body, "cannot start a second session while the first is unfinished") || !strings.Contains(body, "a freshly loaded form can")) {
 				t.Fatalf("unknown wording lost its retry warning: %s", body)
 			}
 			if transport.count() != 1 {

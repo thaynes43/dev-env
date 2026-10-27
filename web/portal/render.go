@@ -958,10 +958,10 @@ type launchResultState struct{ Status, Headline, Tone, Meaning string }
 // launchResultStates is the fixed wording for each outcome. None echoes a
 // prompt or an operator error.
 var launchResultStates = map[string]launchResultState{
-	"limit":       {"Not started", "Too many launches are running", "wait", "The operator allows only a few portal-launched sessions at once. Nothing was started. Try again when one has finished."},
+	"limit":       {"Not started", "Too many launches are running", "wait", "The operator allows only a few unfinished portal-launched sessions at once. Nothing was started. Try again when one has finished or been suspended."},
 	"unavailable": {"Not started", "Launching is unavailable", "bad", "The operator did not accept this launch. Nothing was started."},
 	"invalid":     {"Not started", "The launch was not valid", "bad", "The operator refused one or more fields. Nothing was started. Fix them and launch again."},
-	"unknown":     {"Unknown", "Outcome Unknown", "wait", "The portal cannot tell whether a session was started. Check the Agents list before launching again; submitting the same form again will not start a second session."},
+	"unknown":     {"Unknown", "Outcome Unknown", "wait", "The portal cannot tell whether a session was started. Check the Agents list before launching again. Sending this same form again cannot start a second session while the first is unfinished; a freshly loaded form can."},
 }
 
 // RenderLaunchResult renders a launch result page. Its policy is ProductPolicy:
