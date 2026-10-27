@@ -23,10 +23,10 @@ func TestGrantDecisionRequiresHumanAndExactBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	pod.Labels[v1alpha1.LabelSession] = "session-one"
-	pod.Status.Phase = corev1.PodRunning
 	if err := f.c.Update(context.Background(), &pod); err != nil {
 		t.Fatal(err)
 	}
+	pod.Status.Phase = corev1.PodRunning
 	if err := f.c.Status().Update(context.Background(), &pod); err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +87,10 @@ func TestGrantDecisionCoordinatorIsLimitedToDirectChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	pod.Labels[v1alpha1.LabelSession] = session.Name
-	pod.Status.Phase = corev1.PodRunning
 	if err := f.c.Update(context.Background(), &pod); err != nil {
 		t.Fatal(err)
 	}
+	pod.Status.Phase = corev1.PodRunning
 	if err := f.c.Status().Update(context.Background(), &pod); err != nil {
 		t.Fatal(err)
 	}
@@ -131,10 +131,10 @@ func TestParentSessionRelayRequiresDirectChildAndNeverSelf(t *testing.T) {
 			t.Fatal(err)
 		}
 		pod.Labels[v1alpha1.LabelSession] = name
-		pod.Status.Phase = corev1.PodRunning
 		if err := f.c.Update(context.Background(), &pod); err != nil {
 			t.Fatal(err)
 		}
+		pod.Status.Phase = corev1.PodRunning
 		if err := f.c.Status().Update(context.Background(), &pod); err != nil {
 			t.Fatal(err)
 		}

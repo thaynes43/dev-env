@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -14,12 +16,14 @@ import (
 	"testing"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+
+	"github.com/thaynes43/dev-env/internal/grantdecision"
 )
 
 // TestOnlyStopPrivateExecutorPatchesPods is DESIGN-025 section 11's guard for
 // the stop request. It reads every non-test Go file of the module. Apart from
-// creating a Pod and the guarded deletes (podDeleters), the only Pod write is
-// the one Patch in stopPrivateExecutor. That patch is a JSON patch built by
+// creating a Pod and the guarded deletes (podDeleters), the permitted Pod patches are
+// the stop patch and the strictly pinned manual-grant identity label patch. That patch is a JSON patch built by
 // privateStopPatch, which holds exactly two tests and the one
 // /spec/activeDeadlineSeconds operation. stopPrivateExecutor has one caller,
 // and that caller asks stopIntentConfirmed first. stopPrivateExecutor takes a
@@ -65,13 +69,16 @@ func TestOnlyStopPrivateExecutorPatchesPods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if grantdecision.PodUIDLabel != "dev-env.haynesops.com/grant-pod-uid" {
+		t.Fatal("reserved grant Pod UID label changed")
+	}
 	scan := scanPodWrites(t, files)
 	for _, v := range scan.violations {
 		t.Error(v)
 	}
 	// The scan must see the one allowed patch, the one allowed delete and the
 	// one guarded call, or it proves nothing.
-	wants := []string{"pod Patch in stopPrivateExecutor", "stopPrivateExecutor in requestPrivateExecutorStop", "confirmedStopIntent in stopIntentConfirmed"}
+	wants := []string{"pod Patch in stopPrivateExecutor", "pod Patch in verified labelManualPod", "stopPrivateExecutor in requestPrivateExecutorStop", "confirmedStopIntent in stopIntentConfirmed"}
 	for fn := range podDeleters {
 		wants = append(wants, "pod Delete in "+fn)
 	}
@@ -118,6 +125,100 @@ func TestPodWriteScanCatchesPodWrites(t *testing.T) {
 		}) {
 			t.Errorf("the pod write scan does not catch stopPrivateExecutor or stopIntentConfirmed: %s", want)
 		}
+	}
+}
+
+// The complete function is pinned, including its receiver, preconditions, exact
+// merge-patch shape and target. A change anywhere fails closed and needs review.
+// Parsing and formatting both sides ignores whitespace and comments only.
+const manualPodLabelContract = `func (b *Broker) labelManualPod(ctx context.Context, pod *corev1.Pod) error {
+ if pod == nil || pod.UID == "" || pod.ResourceVersion == "" {
+  return errors.New("manual grant pod identity is unavailable")
+ }
+ if value, exists := pod.Labels[grantdecision.PodUIDLabel]; exists {
+  if value == string(pod.UID) { return nil }
+  return errors.New("manual grant pod UID label conflicts")
+ }
+ patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"uid": string(pod.UID), "resourceVersion": pod.ResourceVersion, "labels": map[string]string{grantdecision.PodUIDLabel: string(pod.UID)}}})
+ if err != nil { return errors.New("could not encode pod identity patch") }
+ return b.Client.Patch(ctx, pod, client.RawPatch(types.MergePatchType, patch))
+}`
+
+func verifiedManualPodLabel(fset *token.FileSet, path string, file *ast.File, decl *ast.FuncDecl) bool {
+	if !strings.HasSuffix(filepath.ToSlash(filepath.Clean(path)), "/broker/manual_pod.go") {
+		return false
+	}
+	imports := map[string]string{"context": "context", "encoding/json": "json", "errors": "errors", "k8s.io/api/core/v1": "corev1", "k8s.io/apimachinery/pkg/types": "types", "sigs.k8s.io/controller-runtime/pkg/client": "client", "github.com/thaynes43/dev-env/internal/grantdecision": "grantdecision"}
+	if len(file.Imports) != len(imports) {
+		return false
+	}
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			return false
+		}
+		name, ok := imports[path]
+		if !ok {
+			return false
+		}
+		actual := filepath.Base(path)
+		if imp.Name != nil {
+			actual = imp.Name.Name
+		}
+		if name != actual {
+			return false
+		}
+	}
+	if decl.Name.Name != "labelManualPod" {
+		return false
+	}
+	expectedSet := token.NewFileSet()
+	expected, err := parser.ParseFile(expectedSet, "contract.go", "package broker\n"+manualPodLabelContract, 0)
+	if err != nil {
+		panic(err)
+	}
+	var got, want bytes.Buffer
+	if format.Node(&got, fset, decl) != nil || format.Node(&want, expectedSet, expected.Decls[0]) != nil {
+		return false
+	}
+	return got.String() == want.String()
+}
+
+func TestManualPodLabelGuardRejectsContractChanges(t *testing.T) {
+	cases := map[string]string{
+		"extra patch field":                     strings.Replace(manualPodLabelContract, `"metadata": map[string]any{`, `"spec": map[string]any{}, "metadata": map[string]any{`, 1),
+		"wrong label":                           strings.ReplaceAll(manualPodLabelContract, "grantdecision.PodUIDLabel", `"other-label"`),
+		"wrong label identity":                  strings.Replace(manualPodLabelContract, `grantdecision.PodUIDLabel: string(pod.UID)`, `grantdecision.PodUIDLabel: "other"`, 1),
+		"missing uid precondition":              strings.Replace(manualPodLabelContract, `"uid": string(pod.UID), `, "", 1),
+		"missing resource version precondition": strings.Replace(manualPodLabelContract, `"resourceVersion": pod.ResourceVersion, `, "", 1),
+		"missing identity guard":                strings.Replace(manualPodLabelContract, `pod.UID == "" || `, "", 1),
+		"wrong patch type":                      strings.Replace(manualPodLabelContract, "types.MergePatchType", "types.JSONPatchType", 1),
+		"conflicting label allowed":             strings.Replace(manualPodLabelContract, `return errors.New("manual grant pod UID label conflicts")`, "return nil", 1),
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "broker")
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "manual_pod.go")
+			imports := `import (
+    "context"
+    "encoding/json"
+    "errors"
+    corev1 "k8s.io/api/core/v1"
+    "k8s.io/apimachinery/pkg/types"
+    "sigs.k8s.io/controller-runtime/pkg/client"
+    "github.com/thaynes43/dev-env/internal/grantdecision"
+   )`
+			if err := os.WriteFile(path, []byte("package broker\n"+imports+"\n"+source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			scan := scanPodWrites(t, []string{path})
+			if len(scan.violations) == 0 || scan.seen["pod Patch in verified labelManualPod"] != 0 {
+				t.Fatalf("changed contract was accepted: %+v", scan)
+			}
+		})
 	}
 }
 
@@ -170,7 +271,7 @@ func scanPodWrites(t *testing.T, files []string) podWriteScan {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
 				if d.Body != nil {
-					scanPodWriteBody(&scan, report, core, d.Name.Name, d.Type, d.Body)
+					scanPodWriteBody(&scan, report, core, d.Name.Name, d.Type, d.Body, verifiedManualPodLabel(fset, f, file, d))
 				}
 			case *ast.GenDecl:
 				for _, spec := range d.Specs {
@@ -178,7 +279,7 @@ func scanPodWrites(t *testing.T, files []string) podWriteScan {
 						for _, v := range vs.Values {
 							ast.Inspect(v, func(n ast.Node) bool {
 								if lit, ok := n.(*ast.FuncLit); ok {
-									scanPodWriteBody(&scan, report, core, vs.Names[0].Name, lit.Type, lit.Body)
+									scanPodWriteBody(&scan, report, core, vs.Names[0].Name, lit.Type, lit.Body, false)
 									return false
 								}
 								return true
@@ -291,7 +392,7 @@ func stringArg(c *ast.CallExpr) string {
 	return s
 }
 
-func scanPodWriteBody(scan *podWriteScan, report func(token.Pos, string, string, ...any), core map[string]bool, fn string, typ *ast.FuncType, body *ast.BlockStmt) {
+func scanPodWriteBody(scan *podWriteScan, report func(token.Pos, string, string, ...any), core map[string]bool, fn string, typ *ast.FuncType, body *ast.BlockStmt, manualLabelVerified bool) {
 	pods := map[string]bool{}
 	if typ != nil && typ.Params != nil {
 		for _, field := range typ.Params.List {
@@ -401,6 +502,8 @@ func scanPodWriteBody(scan *podWriteScan, report func(token.Pos, string, string,
 			return true
 		}
 		switch {
+		case name == "Patch" && !onSub && manualLabelVerified:
+			scan.seen["pod Patch in verified labelManualPod"]++
 		case name == "Patch" && !onSub && fn == "stopPrivateExecutor":
 			podPatches++
 			scan.seen["pod Patch in stopPrivateExecutor"]++
