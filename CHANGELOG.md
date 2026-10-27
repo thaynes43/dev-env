@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.46.0](https://github.com/thaynes43/dev-env/compare/v2.45.0...v2.46.0) (2026-10-27)
+
+
+### Features
+
+* **portal:** authorize by Authentik group membership, not a pinned subject ([#559](https://github.com/thaynes43/dev-env/issues/559)) ([b98247c](https://github.com/thaynes43/dev-env/commit/b98247cd375cb03e95d349523aa8a448c9e1e8c2))
+* **portal:** drop the recovery witness and admission fence ([#560](https://github.com/thaynes43/dev-env/issues/560)) ([4139a72](https://github.com/thaynes43/dev-env/commit/4139a7271b4eafd0b6db391b1a0cc73328524321))
+* **portal:** projects, working filters, task results and usage monitoring ([#568](https://github.com/thaynes43/dev-env/issues/568)) ([0134c30](https://github.com/thaynes43/dev-env/commit/0134c30c0c33e049c90d9eb1b0eb1f91e836d457))
+* **portal:** show session activity and usage in the approved Agents design ([#557](https://github.com/thaynes43/dev-env/issues/557)) ([af402e5](https://github.com/thaynes43/dev-env/commit/af402e533379bddd81e9266ee80ec6c565b81f29))
+
+
+### Bug Fixes
+
+* **portal:** land the bare origin on sign-in and drop the green status color ([#561](https://github.com/thaynes43/dev-env/issues/561)) ([0effa8b](https://github.com/thaynes43/dev-env/commit/0effa8b33b9981735652770737778b36065d9de4))
+* **portal:** load real OpenProject tasks, drop stub chrome, trust the CNPG CA key ([#564](https://github.com/thaynes43/dev-env/issues/564)) ([684d530](https://github.com/thaynes43/dev-env/commit/684d53061429011e3cdbe2f3fc0136c77b4fcc08))
+
 ## [2.45.0](https://github.com/thaynes43/dev-env/compare/v2.44.0...v2.45.0) (2026-10-26)
 
 
