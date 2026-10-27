@@ -562,10 +562,16 @@ conversation view; no supported route serves the history yet.
   use is names and counts only, with no tool output, no thinking, and secrets
   redacted.
 - **Selection.** `SessionsPath?session=<uid>` selects one session; it does not
-  narrow the list. With a source connected, each session's Messages panel
-  links to its own selected view (`?session=<uid>#sN`), and only the selected
-  session's conversation is read, with a 5-second bound. Without a source, the
-  selected session states the gap and no links render.
+  narrow the list. The server opens the selection: its row is the default
+  detail and the list's highlight on a wide screen, and a phone opens that
+  detail instead of the list until the reader follows a link in the page. With
+  a source connected, each session's Messages panel links to its own selected
+  view (`?session=<uid>`, no `#sN`: row IDs are positions, so a fragment could
+  open another session once the list moves), and only the selected session's
+  conversation is read, with a 5-second bound. Without a source, the selected
+  session states the gap and no links render. Past the 150-row listing cap the
+  selected session takes the last listed row's place, so it is listed and read;
+  totals, breakdowns and an incomplete-read warning still cover the whole read.
 - **Seam.** `SessionSource.UseConversations(ConversationSource)`;
   `ReadConversation(ctx, name, uid)` returns `Conversation` (state, reason
   code, turns). A read error, an `unavailable` state or an unknown state shows
@@ -579,7 +585,7 @@ conversation view; no supported route serves the history yet.
 - **Receipts.** The backend's reason is a fixed code (`delivered`, `refused`,
   `unknown`). `ProductReceipt.ReasonCode` carries it, and the page words it;
   an unknown code reads "Reason not recorded". "Back to the session" returns
-  to the selected view.
+  to the selected view (Native review P2 corrections, 2026-10-27).
 - **DTO agreement with the backend lane.** Request IDs are 43 base64url
   characters, within the accepted 16 to 128. One adapter
   (`web/portal/session/message_contract.go`, the backend's file) maps
