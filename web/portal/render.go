@@ -542,6 +542,10 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					continue
 				}
 				row.Status.Tone = productTone(row.Status.Tone)
+				// A header link leaves the portal: https only, or none.
+				if !strings.HasPrefix(row.Link, "https://") {
+					row.Link, row.LinkLabel = "", ""
+				}
 				if row.Messages != nil {
 					m := *row.Messages
 					m.Route.Tone = productTone(m.Route.Tone)

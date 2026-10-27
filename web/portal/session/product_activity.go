@@ -17,8 +17,8 @@ import (
 )
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
-// lastActivity, provider, launchedBy and taskResult are optional (an operator
-// before 2026-10-27 sends none of the last three); a null, an unknown key or a
+// lastActivity, provider, launchedBy, taskResult and remoteControl are optional
+// (an operator before 2026-10-27 sends none of the last four); a null, an unknown key or a
 // word outside its fixed set makes the whole read unavailable. Usage covers
 // task sessions only, so any other mode must carry an Unknown usage scope,
 // which in turn carries no reported value, and no task result.
@@ -28,7 +28,7 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	if err != nil {
 		return a, err
 	}
-	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult") {
+	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl") {
 		return a, portal.ErrUnavailable
 	}
 	a.Provider = protocol.UsageUnknown
@@ -46,6 +46,13 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 		if a.TaskResult, ok = jsonString(raw); !ok || !oneOf(a.TaskResult, "Succeeded", "Failed", "TimedOut", protocol.UsageUnknown) {
 			return a, portal.ErrUnavailable
 		}
+	}
+	if raw, ok := obj["remoteControl"]; ok {
+		rc, err := decodeRemoteControl(raw)
+		if err != nil {
+			return a, err
+		}
+		a.RemoteControl = rc
 	}
 	mode, ok1 := jsonString(obj["mode"])
 	state, ok2 := jsonString(obj["agentState"])
@@ -71,6 +78,67 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	}
 	a.Mode, a.AgentState, a.RequestedModel, a.Usage = mode, state, model, usage
 	return a, nil
+}
+
+// remoteControlView is a session's Remote Control link and the state shown
+// beside it. The link is set only for a registered entry whose URL is the exact
+// claude.ai session shape; it opens the agent's own conversation in Claude,
+// which needs the owner's claude.ai sign-in. A headless task or a local
+// terminal session has no Remote Control entry, and says so.
+func remoteControlView(a *apiv1.PortalSessionActivity) (string, string) {
+	switch {
+	case a.Mode == "task":
+		return "", "None (headless task)"
+	case a.Mode == "local":
+		return "", "None (local terminal)"
+	case a.RemoteControl == nil:
+		return "", "Not reported"
+	}
+	rc := a.RemoteControl
+	switch {
+	case rc.State == "registered" && remoteControlURL.MatchString(rc.URL):
+		return rc.URL, "Registered"
+	case rc.State == "registered":
+		return "", "Registered, no link reported"
+	case rc.State == "pair-code-issued":
+		// agentd only knows a code was issued; Codex cannot see a pairing.
+		return "", "Pairing code issued (pairing not confirmed)"
+	}
+	if text, ok := remoteControlStates[rc.State]; ok {
+		return "", text
+	}
+	return "", shown(rc.State)
+}
+
+// remoteControlStates words the other states agentd reports. Any other state
+// shows its own (escaped) word.
+var remoteControlStates = map[string]string{
+	"starting": "Starting", "login-required": "Login required", "offline": "Offline",
+	"unpaired": "Not paired", "errored": "Error",
+}
+
+// decodeRemoteControl accepts exactly {state, url?}, each re-checked against the
+// operator's patterns. Like the other optional keys, a malformed value makes the
+// whole read unavailable rather than being shown.
+func decodeRemoteControl(raw json.RawMessage) (*apiv1.PortalRemoteControl, error) {
+	obj, err := jsonObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !exactKeys(obj, []string{"state"}, "url") {
+		return nil, portal.ErrUnavailable
+	}
+	state, ok := jsonString(obj["state"])
+	if !ok || !remoteControlState.MatchString(state) {
+		return nil, portal.ErrUnavailable
+	}
+	rc := &apiv1.PortalRemoteControl{State: state}
+	if raw, ok := obj["url"]; ok {
+		if rc.URL, ok = jsonString(raw); !ok || !remoteControlURL.MatchString(rc.URL) {
+			return nil, portal.ErrUnavailable
+		}
+	}
+	return rc, nil
 }
 
 // decodeSessionUsage keeps Unknown distinct from an explicit zero. An Unknown
@@ -223,6 +291,10 @@ var (
 	// launcherName is spec.parent's shape: a session name, a namespace/name or
 	// a ServiceAccount reference, at most 253 characters.
 	launcherName = regexp.MustCompile(apiv1.PortalLauncherPattern)
+	// remoteControlURL and remoteControlState are the operator's patterns for a
+	// session's Remote Control link and state word.
+	remoteControlURL   = regexp.MustCompile(apiv1.PortalRemoteControlURLPattern)
+	remoteControlState = regexp.MustCompile(apiv1.PortalRemoteControlStatePattern)
 	// projectName is spec.repo's shape.
 	projectName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 )
@@ -729,9 +801,14 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	if runs != protocol.UsageUnknown {
 		runs += " (" + a.Mode + ")"
 	}
+	link, rcState := remoteControlView(a)
+	if link != "" {
+		out.Link, out.LinkLabel = link, "Open in Claude"
+	}
 	out.Context = []portal.ProductField{
 		{Label: "Project", Value: shown(row.Repo)},
 		{Label: "How it runs", Value: runs},
+		{Label: "Remote Control", Value: rcState},
 		{Label: "Launched by", Value: shown(a.LaunchedBy), Mono: a.LaunchedBy != ""},
 		{Label: "Provider", Value: shown(a.Provider)},
 		{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},

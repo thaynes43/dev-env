@@ -152,6 +152,60 @@ func TestSessionActivityOptionalKeysFailClosed(t *testing.T) {
 	}
 }
 
+// remoteControl is optional and exact: its state word and link are checked again
+// here, and a bad value makes the whole read unavailable like the other optional keys.
+func TestSessionActivityRemoteControl(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	const link = "https://claude.ai/code/session_FIXTURE0000000000"
+	base := filterRow("rc", "dev-env", "Running", filterActivity("remote", "claude", "", "2026-10-25T11:00:00Z"))
+	with := func(rc string) string {
+		return strings.Replace(base, `"provider":"claude",`, `"provider":"claude","remoteControl":`+rc+`,`, 1)
+	}
+	decode := func(body string) (*apiv1.PortalRemoteControl, error) {
+		page, err := decodeSessionPage([]byte(activityPage(body)), now)
+		if err != nil {
+			return nil, err
+		}
+		return page.Sessions[0].Activity.RemoteControl, nil
+	}
+	if rc, err := decode(base); err != nil || rc != nil {
+		t.Fatalf("absent key: %+v %v", rc, err)
+	}
+	if rc, err := decode(with(`{"state":"registered","url":"` + link + `"}`)); err != nil || rc == nil || rc.State != "registered" || rc.URL != link {
+		t.Fatalf("registered: %+v %v", rc, err)
+	}
+	if rc, err := decode(with(`{"state":"pair-code-issued"}`)); err != nil || rc == nil || rc.State != "pair-code-issued" || rc.URL != "" {
+		t.Fatalf("no url: %+v %v", rc, err)
+	}
+	for name, rc := range map[string]string{
+		"null":           `null`,
+		"string":         `"registered"`,
+		"empty object":   `{}`,
+		"no state":       `{"url":"` + link + `"}`,
+		"state null":     `{"state":null}`,
+		"state number":   `{"state":1}`,
+		"state upper":    `{"state":"Registered"}`,
+		"state markup":   `{"state":"<b>"}`,
+		"state empty":    `{"state":""}`,
+		"state long":     `{"state":"` + strings.Repeat("a", 33) + `"}`,
+		"url null":       `{"state":"registered","url":null}`,
+		"url empty":      `{"state":"registered","url":""}`,
+		"other host":     `{"state":"registered","url":"https://evil.example/code/session_FIXTURE0000000000"}`,
+		"http":           `{"state":"registered","url":"http://claude.ai/code/session_FIXTURE0000000000"}`,
+		"javascript":     `{"state":"registered","url":"javascript:alert(1)"}`,
+		"query":          `{"state":"registered","url":"` + link + `?a=b"}`,
+		"fragment":       `{"state":"registered","url":"` + link + `#x"}`,
+		"whitespace":     `{"state":"registered","url":"` + link + ` "}`,
+		"extra path":     `{"state":"registered","url":"` + link + `/x"}`,
+		"name leaks":     `{"state":"registered","name":"x"}`,
+		"session id key": `{"state":"registered","sessionId":"x"}`,
+	} {
+		if _, err := decode(with(rc)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
 // Usage groups sum reported values only: cache reads stay apart from input, a
 // cost that is not reported is counted as unavailable, and a group with
 // nothing measured says so instead of zero.
