@@ -25,8 +25,8 @@ type commandTransport interface {
 	send(context.Context, apiv1.PortalMessageRequest) (apiv1.PortalMessageReceipt, error)
 }
 
-// commandHandler is deliberately unwired. An authorized composition must supply
-// every dependency, including a renderer, or no command route is available.
+// commandHandler requires explicit composition; production leaves it disabled.
+// Every dependency, including a renderer, is required before it serves a route.
 type commandHandler struct {
 	engine     *Engine
 	authorizer portal.Authorizer

@@ -475,7 +475,7 @@ func (s *PostgresStore) reserveCommand(ctx context.Context, h Handle, wanted com
 			return err
 		}
 		if found {
-			if !(existing.RequestID == wanted.RequestID && existing.SessionName == wanted.SessionName && existing.SessionUID == wanted.SessionUID && existing.Digest == wanted.Digest && existing.ExpiresAt.Equal(expiry)) {
+			if existing.RequestID != wanted.RequestID || existing.SessionName != wanted.SessionName || existing.SessionUID != wanted.SessionUID || existing.Digest != wanted.Digest || !existing.ExpiresAt.Equal(expiry) {
 				return portal.ErrDenied
 			}
 			return nil

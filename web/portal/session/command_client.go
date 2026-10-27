@@ -62,7 +62,7 @@ func (c *commandClient) send(ctx context.Context, request apiv1.PortalMessageReq
 	if response == nil || response.Body == nil {
 		return receipt, portal.ErrUnavailable
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" || response.StatusCode != http.StatusOK {
 		return receipt, portal.ErrUnavailable

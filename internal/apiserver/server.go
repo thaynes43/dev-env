@@ -317,8 +317,13 @@ func (s *Server) serve(rt route) http.Handler {
 			if err := coordinatorAllowed(c, rt.coordinator); err != nil {
 				return 0, err
 			}
-			if c.kind == kindPortalReader && !(r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath) && !(len(s.PortalMessageTargets) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalSessionMessagesPath) {
-				return 0, forbidden("the portal reader may only list session summaries")
+			if c.kind == kindPortalReader {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionsPath:
+				case len(s.PortalMessageTargets) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalSessionMessagesPath:
+				default:
+					return 0, forbidden("the portal reader may only list session summaries")
+				}
 			}
 			status, body, err := h(r.Context(), w, r, c)
 			if err != nil {

@@ -168,6 +168,14 @@ func TestProductionMetadataAllowlistAndAssembly(t *testing.T) {
 	}
 	hits.prompt = false
 	handler := productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: reader, FreshFor: time.Minute, Now: time.Now}), productionHost)
+	disabledSend := portalRequest("POST", portalMessagesPath, rawCookie)
+	disabledSend.Header.Set("Origin", productionOrigin)
+	disabledSend.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	sendResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sendResponse, disabledSend)
+	if sendResponse.Code == http.StatusOK {
+		t.Fatal("production unexpectedly enabled portal send")
+	}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, portalRequest("GET", "/auth/login", ""))
 	if w.Code != http.StatusSeeOther || strings.Contains(w.Header().Get("Location"), "fixture-only-not-a-credential") || !strings.HasPrefix(w.Header().Get("Location"), productionAuthorization) {
