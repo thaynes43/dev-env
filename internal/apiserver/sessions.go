@@ -117,6 +117,18 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		return 0, nil, invalid(fieldError("project", "private project tasks are not enabled"))
 	}
 
+	if c.kind == kindPortalLaunch {
+		// Inside the create lock, after the repeat of a key above, so a repeat
+		// returns its session at the cap and two launches cannot both pass it.
+		n, err := s.unfinishedPortalLaunches(ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		if n >= s.portalLaunchCap() {
+			return 0, nil, tooManyRequests("%d portal launches are still unfinished, the most at a time; one must finish first", n)
+		}
+	}
+
 	if c.kind == kindSession {
 		if c.depth > maxSessionDepth {
 			return 0, nil, forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)

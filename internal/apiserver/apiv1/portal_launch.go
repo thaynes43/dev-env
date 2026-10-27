@@ -12,6 +12,14 @@ const PortalLaunchPath = "/v1/portal/sessions"
 // MaxPortalLaunchRepos bounds the repositories one operator may allow.
 const MaxPortalLaunchRepos = 16
 
+// DefaultPortalLaunchMaxUnfinished and MaxPortalLaunchMaxUnfinished bound how
+// many unfinished sessions the portal launch route may leave running at once,
+// across all portal users. The operator flag takes 1 to the maximum.
+const (
+	DefaultPortalLaunchMaxUnfinished = 2
+	MaxPortalLaunchMaxUnfinished     = 8
+)
+
 var repoName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 
 // ValidRepoName is the AgentSession schema's rule for spec.repo: a name, not a

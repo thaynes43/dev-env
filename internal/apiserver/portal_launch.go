@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -31,7 +33,7 @@ const portalLaunchParentPrefix = "portal/"
 // value that exists only inside this function: it is not an authenticated
 // class, and no other handler ever receives it.
 func (s *Server) portalLaunch(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	if c.kind != kindPortalReader || len(s.PortalLaunchRepos) == 0 {
+	if c.kind != kindPortalReader || len(s.PortalLaunchRepos) == 0 || s.PortalLaunchProfile == "" {
 		return 0, nil, forbidden("portal launch action is unavailable")
 	}
 	var req apiv1.PortalLaunchRequest
@@ -43,6 +45,10 @@ func (s *Server) portalLaunch(ctx context.Context, w http.ResponseWriter, r *htt
 	}
 	if _, ok := s.PortalLaunchRepos[req.Repo]; !ok {
 		return 0, nil, forbidden("portal launch action is unavailable")
+	}
+	// The model is a full id, never an alias: the rule agent-run applies.
+	if apiv1.CheckClaudeModel(req.Model) != apiv1.ClaudeModelOK {
+		return 0, nil, invalid(fieldError("model", "must be a full Claude model id such as claude-opus-5-5, not an alias"))
 	}
 	switch v1alpha1.SessionMode(req.Mode) {
 	case v1alpha1.ModeTask:
@@ -72,13 +78,18 @@ func (s *Server) portalLaunch(ctx context.Context, w http.ResponseWriter, r *htt
 		Effort:         req.Effort,
 		Size:           req.Size,
 		Prompt:         req.Prompt,
+		Profile:        s.PortalLaunchProfile,
 		IdempotencyKey: "portal-" + hex.EncodeToString(hash[:])[:40],
 	}
-	body, err := json.Marshal(create)
-	if err != nil {
+	// HTML escaping would turn each "<", ">" and "&" of a prompt into six bytes
+	// and could push a prompt inside its own limit past the create body cap.
+	var body bytes.Buffer
+	enc := json.NewEncoder(&body)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(create); err != nil {
 		return 0, nil, internal("the operator failed this request; its log has the cause")
 	}
-	inner, err := http.NewRequestWithContext(ctx, http.MethodPost, apiv1.SessionsPath, bytes.NewReader(body))
+	inner, err := http.NewRequestWithContext(ctx, http.MethodPost, apiv1.SessionsPath, &body)
 	if err != nil {
 		return 0, nil, internal("the operator failed this request; its log has the cause")
 	}
@@ -97,6 +108,31 @@ func (s *Server) portalLaunch(ctx context.Context, w http.ResponseWriter, r *htt
 	return status, apiv1.PortalLaunchReceipt{
 		RequestID: req.RequestID, SessionName: sess.Name, SessionUID: sess.UID, Phase: sess.Phase, ObservedAt: s.now().UTC(),
 	}, nil
+}
+
+// portalLaunchCap is the most unfinished portal launches allowed at once.
+func (s *Server) portalLaunchCap() int {
+	if s.PortalLaunchMaxUnfinished > 0 {
+		return s.PortalLaunchMaxUnfinished
+	}
+	return apiv1.DefaultPortalLaunchMaxUnfinished
+}
+
+// unfinishedPortalLaunches counts the sessions whose parent starts with
+// "portal/" that are still at work, by the predicate the idempotency dedupe
+// uses. It reads from the API server so a launch a moment ago counts.
+func (s *Server) unfinishedPortalLaunches(ctx context.Context) (int, error) {
+	var list v1alpha1.AgentSessionList
+	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
+		return 0, fromKubeError(err, "list sessions")
+	}
+	n := 0
+	for i := range list.Items {
+		if strings.HasPrefix(list.Items[i].Spec.Parent, portalLaunchParentPrefix) && unfinished(&list.Items[i]) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // portalLaunchParentTaken reports whether parent equals the identity of another
@@ -165,7 +201,9 @@ func decodePortalLaunch(w http.ResponseWriter, r *http.Request, out *apiv1.Porta
 		default:
 			return badRequest("invalid portal launch request")
 		}
-		if decoder.Decode(target) != nil {
+		// A null leaves a string untouched without an error, so refuse it here.
+		var raw json.RawMessage
+		if decoder.Decode(&raw) != nil || string(raw) == "null" || json.Unmarshal(raw, target) != nil {
 			return badRequest("invalid portal launch request")
 		}
 	}

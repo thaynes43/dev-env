@@ -68,7 +68,13 @@ type Server struct {
 	PortalMessageTargets map[string]string
 	// PortalLaunchRepos is the set of repositories the portal may launch a
 	// constrained session in. Nil or empty disables the launch endpoint.
-	PortalLaunchRepos         map[string]struct{}
+	PortalLaunchRepos map[string]struct{}
+	// PortalLaunchProfile is the templates profile every launched session runs
+	// on. The request cannot choose it. Empty makes the launch route refuse.
+	PortalLaunchProfile string
+	// PortalLaunchMaxUnfinished caps the unfinished sessions whose parent starts
+	// with "portal/". Zero or less means the default.
+	PortalLaunchMaxUnfinished int
 	SessionDirectory          *sessiondirectory.KubeStore
 	SessionDirectoryProjects  []string
 	MetadataDiscoveryProjects []string

@@ -36,6 +36,8 @@ func launchFixture(t *testing.T, repos ...string) *fixture {
 	f.auth["tok-portal"] = id
 	f.srv.Policy.PortalReaderEnabled = true
 	if len(repos) > 0 {
+		f.srv.PortalLaunchProfile = "dev"
+		f.srv.PortalLaunchMaxUnfinished = apiv1.MaxPortalLaunchMaxUnfinished
 		f.srv.PortalLaunchRepos = map[string]struct{}{}
 		for _, r := range repos {
 			f.srv.PortalLaunchRepos[r] = struct{}{}
@@ -126,8 +128,8 @@ func TestPortalLaunchCreatesExactlyTheConstrainedSession(t *testing.T) {
 	}
 	// Nothing else is set: no profile (the templates' default), project, base,
 	// tools, limits, lifecycle, restore, workspace, canary or caller.
-	empty := v1alpha1.AgentSessionSpec{Repo: spec.Repo, Agent: spec.Agent, Mode: spec.Mode, Model: spec.Model, Effort: spec.Effort, Size: spec.Size, Prompt: spec.Prompt, Parent: spec.Parent, OperatingMode: spec.OperatingMode}
-	if spec.Profile != "" || spec.Base != "" || len(spec.Tools) != 0 || spec.Limits != nil || spec.Lifecycle != nil || spec.Restore != "" || spec.Workspace != nil || spec.ProjectCanary != nil || spec.Caller != "" || spec.Lane != "" || spec.CommonRules != nil || spec.PrivatePilot != nil || spec.UsageCaptureParentUID != "" || spec.SessionDirectory != nil || !equalSpec(spec, empty) {
+	empty := v1alpha1.AgentSessionSpec{Repo: spec.Repo, Agent: spec.Agent, Mode: spec.Mode, Model: spec.Model, Effort: spec.Effort, Size: spec.Size, Prompt: spec.Prompt, Parent: spec.Parent, OperatingMode: spec.OperatingMode, Profile: "dev"}
+	if spec.Profile != "dev" || spec.Base != "" || len(spec.Tools) != 0 || spec.Limits != nil || spec.Lifecycle != nil || spec.Restore != "" || spec.Workspace != nil || spec.ProjectCanary != nil || spec.Caller != "" || spec.Lane != "" || spec.CommonRules != nil || spec.PrivatePilot != nil || spec.UsageCaptureParentUID != "" || spec.SessionDirectory != nil || !equalSpec(spec, empty) {
 		t.Fatalf("spec carries more than the launch fields: %+v", spec)
 	}
 	if s.Annotations[v1alpha1.AnnotationProjectSnapshot] != "" || s.Annotations[TaskBudgetUIDAnnotation] != "" {
@@ -214,6 +216,15 @@ func TestPortalLaunchRefusesWhatItMayNotCreate(t *testing.T) {
 		"task blank prompt":    {edit(func(r *apiv1.PortalLaunchRequest) { r.Prompt = " \n\t" }), http.StatusUnprocessableEntity},
 		"local with prompt":    {edit(func(r *apiv1.PortalLaunchRequest) { r.Mode = "local" }), http.StatusUnprocessableEntity},
 		"remote with prompt":   {edit(func(r *apiv1.PortalLaunchRequest) { r.Mode = "remote" }), http.StatusUnprocessableEntity},
+		"model alias opus":     {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "opus" }), http.StatusUnprocessableEntity},
+		"model alias sonnet":   {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "sonnet" }), http.StatusUnprocessableEntity},
+		"model alias fable":    {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "fable" }), http.StatusUnprocessableEntity},
+		"model alias haiku":    {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "Haiku" }), http.StatusUnprocessableEntity},
+		"model alias default":  {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "default" }), http.StatusUnprocessableEntity},
+		"model alias 1m":       {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "opus[1m]" }), http.StatusUnprocessableEntity},
+		"model latest":         {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "claude-opus-latest" }), http.StatusUnprocessableEntity},
+		"model no version":     {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "claude-opus" }), http.StatusUnprocessableEntity},
+		"model with a space":   {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "claude-opus-5-5 x" }), http.StatusUnprocessableEntity},
 		"model empty":          {edit(func(r *apiv1.PortalLaunchRequest) { r.Model = "" }), http.StatusUnprocessableEntity},
 		"model unknown effort": {edit(func(r *apiv1.PortalLaunchRequest) { r.Effort = "turbo" }), http.StatusUnprocessableEntity},
 		"prompt too large":     {edit(func(r *apiv1.PortalLaunchRequest) { r.Prompt = strings.Repeat("p", 64<<10+1) }), http.StatusUnprocessableEntity},
@@ -253,6 +264,14 @@ func TestPortalLaunchDecodeIsStrict(t *testing.T) {
 		"missing model":  `{"requestID":"` + launchRequest + `","actorRef":"` + launchActor + `","repo":"dev-env","mode":"remote"}`,
 		"missing repo":   `{"requestID":"` + launchRequest + `","actorRef":"` + launchActor + `","mode":"remote","model":"claude-opus-5-5"}`,
 		"number as text": `{"requestID":1,"actorRef":"` + launchActor + `","repo":"dev-env","mode":"remote","model":"claude-opus-5-5"}`,
+		"null requestID": `{"requestID":null,"actorRef":"` + launchActor + `","repo":"dev-env","mode":"remote","model":"claude-opus-5-5"}`,
+		"null actorRef":  `{"requestID":"` + launchRequest + `","actorRef":null,"repo":"dev-env","mode":"remote","model":"claude-opus-5-5"}`,
+		"null repo":      `{"requestID":"` + launchRequest + `","actorRef":"` + launchActor + `","repo":null,"mode":"remote","model":"claude-opus-5-5"}`,
+		"null mode":      `{"requestID":"` + launchRequest + `","actorRef":"` + launchActor + `","repo":"dev-env","mode":null,"model":"claude-opus-5-5"}`,
+		"null model":     `{"requestID":"` + launchRequest + `","actorRef":"` + launchActor + `","repo":"dev-env","mode":"remote","model":null}`,
+		"null effort":    `{` + good + `,"effort":null}`,
+		"null size":      `{` + good + `,"size":null}`,
+		"null prompt":    `{` + good + `,"prompt":null}`,
 		"trailing value": `{` + good + `}{}`,
 		"not an object":  `[]`,
 		"empty":          ``,
@@ -311,4 +330,115 @@ func TestPortalLaunchCallerHasNoOtherAuthority(t *testing.T) {
 	if got := len(validation.IsDNS1123Label("portal/" + launchActor)); got == 0 {
 		t.Fatal("the launch parent is a valid session name")
 	}
+}
+
+// HTML characters in a prompt are not escaped into the create body. A prompt of
+// 20,000 "<" is 20 KB in the request and, escaped for agentd's session document
+// (which the existing create path always does), about 120 KB: inside both
+// bounds. A prompt of 50,000 "<" is inside the 64 KiB prompt limit but its
+// session document would exceed agentd's 128 KiB transport, so the existing
+// check refuses it with 422, not with a body-cap 413.
+func TestPortalLaunchPromptWithHTMLCharacters(t *testing.T) {
+	f := launchFixture(t, "dev-env")
+	req := launchTask()
+	req.Prompt = strings.Repeat("<", 20000)
+	w := f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("%d %.200s", w.Code, w.Body.String())
+	}
+	if got := sessionsIn(t, f)[0].Spec.Prompt; got != req.Prompt {
+		t.Fatalf("prompt changed: %d bytes", len(got))
+	}
+	big := launchTask()
+	big.RequestID = "request-0000000002"
+	big.Prompt = strings.Repeat("<", 50000)
+	w = f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", big)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "bounded transport") || len(sessionsIn(t, f)) != 1 {
+		t.Fatalf("%d %.200s", w.Code, w.Body.String())
+	}
+}
+
+// Every launch runs on the profile the operator names. A request cannot choose
+// one, a missing profile turns the route off, and a name the templates lack is
+// refused by the existing profile check.
+func TestPortalLaunchProfileIsPinned(t *testing.T) {
+	f := launchFixture(t, "dev-env")
+	f.srv.PortalLaunchProfile = "ops"
+	if w := f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask()); w.Code != http.StatusCreated || sessionsIn(t, f)[0].Spec.Profile != "ops" {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if w := f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", `{"requestID":"`+launchRequest+`x","actorRef":"`+launchActor+`","repo":"dev-env","mode":"remote","model":"claude-opus-5-5","profile":"full"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("a profile field was accepted: %d", w.Code)
+	}
+
+	f = launchFixture(t, "dev-env")
+	f.srv.PortalLaunchProfile = "no-such-profile"
+	wantError(t, f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask()), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	f.srv.PortalLaunchProfile = ""
+	wantError(t, f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask()), http.StatusForbidden, apiv1.CodeForbidden)
+	if n := len(sessionsIn(t, f)); n != 0 {
+		t.Fatalf("%d sessions created", n)
+	}
+}
+
+// At most the cap of portal launches are unfinished at once, across actors. A
+// repeat of an existing request still returns its session at the cap, and a
+// finished session no longer counts.
+func TestPortalLaunchIsCappedWhileUnfinished(t *testing.T) {
+	f := launchFixture(t, "dev-env")
+	f.srv.PortalLaunchMaxUnfinished = 0 // the default, 2
+	launch := func(id, actor string) *httptest.ResponseRecorder {
+		req := launchTask()
+		req.RequestID, req.ActorRef = id, actor
+		return f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", req)
+	}
+	// The default cap is 2.
+	if w := launch("request-aaaaaaaaaaaa", launchActor); w.Code != http.StatusCreated {
+		t.Fatalf("first %d %s", w.Code, w.Body.String())
+	}
+	second := launch("request-bbbbbbbbbbbb", "actor-000000000002")
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second %d %s", second.Code, second.Body.String())
+	}
+	wantError(t, launch("request-cccccccccccc", "actor-000000000003"), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	if n := len(sessionsIn(t, f)); n != 2 {
+		t.Fatalf("%d sessions: the refused launch created one", n)
+	}
+	// A repeat of an existing request returns its session at the cap.
+	again := launch("request-bbbbbbbbbbbb", "actor-000000000002")
+	if again.Code != http.StatusOK || decode[apiv1.PortalLaunchReceipt](t, again).SessionName != decode[apiv1.PortalLaunchReceipt](t, second).SessionName || len(sessionsIn(t, f)) != 2 {
+		t.Fatalf("repeat at the cap: %d %s", again.Code, again.Body.String())
+	}
+	// Sessions that are not portal launches do not count toward it.
+	other := v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "someone-elses", Namespace: sessionNS}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Parent: humanSA}}
+	if err := f.c.Create(context.Background(), &other); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, launch("request-cccccccccccc", "actor-000000000003"), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	// A finished (here suspended) launch stops counting, so one more fits.
+	var portalNames []string
+	for _, s := range sessionsIn(t, f) {
+		if strings.HasPrefix(s.Spec.Parent, "portal/") {
+			portalNames = append(portalNames, s.Name)
+		}
+	}
+	var done v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: portalNames[0]}, &done); err != nil {
+		t.Fatal(err)
+	}
+	done.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if err := f.c.Update(context.Background(), &done); err != nil {
+		t.Fatal(err)
+	}
+	if w := launch("request-cccccccccccc", "actor-000000000003"); w.Code != http.StatusCreated {
+		t.Fatalf("after one finished: %d %s", w.Code, w.Body.String())
+	}
+	wantError(t, launch("request-dddddddddddd", "actor-000000000004"), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	// The cap is configurable: raised to 3 it admits another, and a cap of 1 refuses at one.
+	f.srv.PortalLaunchMaxUnfinished = 3
+	if w := launch("request-dddddddddddd", "actor-000000000004"); w.Code != http.StatusCreated {
+		t.Fatalf("cap 3: %d %s", w.Code, w.Body.String())
+	}
+	f.srv.PortalLaunchMaxUnfinished = 1
+	wantError(t, launch("request-eeeeeeeeeeee", "actor-000000000005"), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
 }

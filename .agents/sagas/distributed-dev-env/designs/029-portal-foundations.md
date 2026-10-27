@@ -664,10 +664,13 @@ Tom (19:19:40 UTC, relayed): "I should be able to do agent-run type things from 
 The operator now has a default-off `POST /v1/portal/sessions` for the portal
 reader, registered only when `--portal-launch-repo` is set. It maps one request to
 a fixed Claude `CreateSessionRequest` (task, local or remote; `S` or `M`; a task
-prompt only) and runs it through the existing create handler. The parent is
-`portal/<actorRef>`, the profile is the templates' default, and the request ID
-becomes a per-parent idempotency key. See [default-off portal launch
+prompt only; a full model id) and runs it through the existing create handler.
+The parent is `portal/<actorRef>`, and the request ID becomes a per-parent
+idempotency key. Two more flags bound it: `--portal-launch-profile` is required
+and names the one profile every launch runs on (the default `full` is not used),
+and `--portal-launch-max-unfinished` (1 to 8, default 2) caps unfinished portal
+launches, answering 429 at the cap. See [default-off portal launch
 route](../../../../docs/portal-session-runtime.md#default-off-portal-launch-route).
-This is the operator side only. The portal form and receipt, the private
-`launch` scope and every live flag are separate steps that need Tom's
+This is the operator side only. The portal form and receipt, the private `launch`
+scope, the profile choice and every live flag are separate steps that need Tom's
 confirmation.

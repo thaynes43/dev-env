@@ -36,6 +36,11 @@ func forbidden(format string, args ...any) *apiError {
 	return newError(http.StatusForbidden, apiv1.CodeForbidden, format, args...)
 }
 
+// tooManyRequests is a 429 for a limit that has been reached.
+func tooManyRequests(format string, args ...any) *apiError {
+	return newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, format, args...)
+}
+
 func notFound(format string, args ...any) *apiError {
 	return newError(http.StatusNotFound, apiv1.CodeNotFound, format, args...)
 }
