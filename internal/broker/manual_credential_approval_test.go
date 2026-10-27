@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/egress"
 )
 
 // liveShapedAdministrativeBy is the free-form approvedBy string the live
@@ -60,8 +61,11 @@ func pendingCredentialGrant(t *testing.T) *credentialFixture {
 	t.Helper()
 	f := credentialCase(t)
 	f.useLiveShapedPolicy()
-	f.step() // "" -> Pending
-	f.step() // no policy matches: waits for Tom
+	for range 2 { // "" -> Pending, then no policy matches: waits for Tom
+		if _, err := f.step(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if g := f.getGrant(); g.Status.Phase != v1alpha1.GrantPending || g.Status.ApprovedBy != "" || f.creates != 0 {
 		t.Fatalf("setup: %+v creates=%d", g.Status, f.creates)
 	}
@@ -69,10 +73,11 @@ func pendingCredentialGrant(t *testing.T) *credentialFixture {
 }
 
 // TestManualCredentialApprovalIsRefusedToday pins the decision half: Decide
-// refuses every approval of a GrantCredential, whoever signs it. FLIPS: with a
-// future verified-human credential path enabled, an approval carrying that
-// verified decision must be accepted; every case here without it must still be
-// refused, and the whole test must keep passing with the path default-off.
+// refuses every approval of a GrantCredential, whoever signs it. FLIPS: a future
+// verified-human path may approve outside Decide. Whichever path it uses, only a
+// verified human decision may change these outcomes: every case here, which
+// carries only a caller-supplied By string, must stay refused, and the whole
+// test must keep passing with that path default-off.
 func TestManualCredentialApprovalIsRefusedToday(t *testing.T) {
 	for _, by := range []string{"authentik/tom", liveShapedAdministrativeBy, "human/tom", "system:admin"} {
 		t.Run(by, func(t *testing.T) {
@@ -91,10 +96,10 @@ func TestManualCredentialApprovalIsRefusedToday(t *testing.T) {
 	}
 }
 
-// TestManualCredentialDenialAndPolicyApproverStillWorkToday pins what must not
+// TestManualCredentialDenialWorksAndPolicyByIsRefusedToday pins what must not
 // change: Tom may still deny a credential grant, and a "policy/" By is never an
 // acceptable human answer, for approvals or denials.
-func TestManualCredentialDenialAndPolicyApproverStillWorkToday(t *testing.T) {
+func TestManualCredentialDenialWorksAndPolicyByIsRefusedToday(t *testing.T) {
 	f := pendingCredentialGrant(t)
 	for _, d := range []Decision{
 		{Approve: true, By: "policy/pve-full"},
@@ -168,6 +173,9 @@ func TestEnsureCredentialJobRequiresTheNamedPolicyToStillMatchToday(t *testing.T
 		if _, err := f.b.ensureCredentialJob(context.Background(), f.getGrant()); err == nil || !strings.Contains(err.Error(), "approving policy is absent") {
 			t.Fatalf("absent policy: %v", err)
 		}
+		if f.creates != 0 {
+			t.Fatalf("job created: %d", f.creates)
+		}
 	})
 	t.Run("named policy exists but does not match the requester profile", func(t *testing.T) {
 		f := activeWithApprover(t, "policy/pve-full") // pve-full is the workbench-only shape here
@@ -180,8 +188,14 @@ func TestEnsureCredentialJobRequiresTheNamedPolicyToStillMatchToday(t *testing.T
 	})
 	t.Run("a non-policy approver names no policy at all", func(t *testing.T) {
 		f := activeWithApprover(t, liveShapedAdministrativeBy)
-		if _, err := f.b.ensureCredentialJob(context.Background(), f.getGrant()); err == nil || f.creates != 0 {
-			t.Fatalf("ensureCredentialJob accepted a non-policy approver: err=%v creates=%d", err, f.creates)
+		// The whole string is read as a policy name, which does not exist.
+		_, err := f.b.ensureCredentialJob(context.Background(), f.getGrant())
+		var perm permanent
+		if !errors.As(err, &perm) || !strings.Contains(err.Error(), "the credential approving policy is absent") {
+			t.Fatalf("ensureCredentialJob did not refuse a non-policy approver as an absent policy: %v", err)
+		}
+		if f.creates != 0 {
+			t.Fatalf("job created: %d", f.creates)
 		}
 	})
 }
@@ -286,10 +300,16 @@ func TestManualKubeAndEgressApprovalsStillSucceed(t *testing.T) {
 			if g := f.grant(); g.Status.Phase != v1alpha1.GrantActive {
 				t.Fatalf("a %s grant approved by hand did not stay Active: %+v", tc.name, g.Status)
 			}
-			if tc.name == "kube" {
+			switch tc.name {
+			case "kube":
 				var sa corev1.ServiceAccount
 				if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: f.g.Name}, &sa); err != nil {
 					t.Fatalf("the approved kube grant was not made: %v", err)
+				}
+			case "egress":
+				cnp := egress.Object(sessionNS, f.g.Name)
+				if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(cnp), cnp); err != nil {
+					t.Fatalf("the approved egress grant's CiliumNetworkPolicy was not made: %v", err)
 				}
 			}
 		})
