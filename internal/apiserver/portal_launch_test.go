@@ -17,6 +17,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 const (
@@ -360,7 +361,7 @@ func TestPortalLaunchPromptWithHTMLCharacters(t *testing.T) {
 
 // Every launch runs on the profile the operator names. A request cannot choose
 // one, a missing profile turns the route off, and a name the templates lack is
-// refused by the existing profile check.
+// refused before anything is created.
 func TestPortalLaunchProfileIsPinned(t *testing.T) {
 	f := launchFixture(t, "dev-env")
 	f.srv.PortalLaunchProfile = "ops"
@@ -373,7 +374,7 @@ func TestPortalLaunchProfileIsPinned(t *testing.T) {
 
 	f = launchFixture(t, "dev-env")
 	f.srv.PortalLaunchProfile = "no-such-profile"
-	wantError(t, f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask()), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask()), http.StatusForbidden, apiv1.CodeForbidden)
 	f.srv.PortalLaunchProfile = ""
 	wantError(t, f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask()), http.StatusForbidden, apiv1.CodeForbidden)
 	if n := len(sessionsIn(t, f)); n != 0 {
@@ -441,4 +442,24 @@ func TestPortalLaunchIsCappedWhileUnfinished(t *testing.T) {
 	}
 	f.srv.PortalLaunchMaxUnfinished = 1
 	wantError(t, launch("request-eeeeeeeeeeee", "actor-000000000005"), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+}
+
+// The launch profile is resolved on every request: a profile that names any
+// ServiceAccount (such as the workbench's, under another name) or that the
+// templates no longer hold is refused before anything is created.
+func TestPortalLaunchRefusesAProfileWithAServiceAccount(t *testing.T) {
+	f := launchFixture(t, "dev-env")
+	_, dev, err := f.tmpl.Profile("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev.ServiceAccount = templates.WorkbenchServiceAccount
+	f.tmpl.Profiles["portal-tools"] = dev
+	for _, profile := range []string{"portal-tools", "no-such-profile"} {
+		f.srv.PortalLaunchProfile = profile
+		w := f.do(http.MethodPost, apiv1.PortalLaunchPath, "tok-portal", launchTask())
+		if w.Code != http.StatusForbidden || len(sessionsIn(t, f)) != 0 {
+			t.Fatalf("%s: status %d, %d sessions", profile, w.Code, len(sessionsIn(t, f)))
+		}
+	}
 }

@@ -65,6 +65,19 @@ func (s *Server) portalLaunch(ctx context.Context, w http.ResponseWriter, r *htt
 	if req.Size != "" && req.Size != string(v1alpha1.SizeS) && req.Size != string(v1alpha1.SizeM) {
 		return 0, nil, invalid(fieldError("size", "is not S or M"))
 	}
+	// The profile is resolved on every request, so a templates edit cannot
+	// hand a portal launch a ServiceAccount: a profile that names one (the
+	// workbench's, with pods/exec) or that no longer exists is refused.
+	if s.Templates == nil {
+		return 0, nil, forbidden("portal launch action is unavailable")
+	}
+	t, err := s.Templates(ctx)
+	if err != nil {
+		return 0, nil, internal("the templates are not available; its log has the cause")
+	}
+	if _, profile, err := t.Profile(s.PortalLaunchProfile); err != nil || profile.ServiceAccount != "" {
+		return 0, nil, forbidden("portal launch action is unavailable")
+	}
 	parent := portalLaunchParentPrefix + req.ActorRef
 	if s.portalLaunchParentTaken(parent) {
 		return 0, nil, forbidden("portal launch action is unavailable")

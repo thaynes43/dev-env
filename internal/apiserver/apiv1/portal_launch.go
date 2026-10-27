@@ -29,8 +29,8 @@ func ValidRepoName(s string) bool { return repoName.MatchString(s) && s != "." &
 // PortalLaunchRequest is supplied only by the authenticated portal backend.
 // ActorRef is an opaque backend-derived attribution, never a browser identity;
 // it becomes the parent "portal/<actorRef>". The agent is always claude and
-// the session always runs on the templates' default profile, so neither is a
-// field. Prompt is required for a task and absent for local and remote.
+// the session runs on the operator's required --portal-launch-profile, so
+// neither is a field. Prompt is required for a task and absent for local and remote.
 type PortalLaunchRequest struct {
 	RequestID string `json:"requestID"`
 	ActorRef  string `json:"actorRef"`

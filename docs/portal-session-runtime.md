@@ -396,8 +396,9 @@ prompt, activation should name a narrower profile, such as `dev`, and Tom
 confirms what that profile grants before the flag is set. `dev` still carries
 the GitHub bot token and the UniFi MCP token, and it has no keeper Claude login,
 so a remote launch on `dev` shows Login required until someone runs
-`agent-run login`. The operator refuses `workbench`, whose pods run as the
-workbench ServiceAccount with exec rights. A templates edit to
+`agent-run login`. The operator refuses `workbench` at startup, and on every request the route
+resolves the profile and refuses one that names any ServiceAccount (the
+workbench's carries exec rights) or that the templates no longer hold. A templates edit to
 that profile changes what portal launches get, from the next pod each one
 starts.
 
