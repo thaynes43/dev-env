@@ -2,16 +2,20 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -122,6 +126,40 @@ func TestPortalConversationAllowsBoundSyntheticProjection(t *testing.T) {
 			}
 		} else if result.Projection.State != "partial" || len(result.Projection.Turns) != 1 || result.Projection.Turns[0].Text != "synthetic visible" {
 			t.Fatal("bound projection not returned")
+		}
+	}
+}
+
+func TestPortalConversationEncodedBudget(t *testing.T) {
+	owner := true
+	sess := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "agent-a", Namespace: sessionNS, UID: types.UID("uid-a")}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Mode: v1alpha1.ModeRemote}, Status: v1alpha1.AgentSessionStatus{Phase: v1alpha1.PhaseRunning}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "agent-a", Namespace: sessionNS, UID: types.UID("pod-a"), OwnerReferences: []metav1.OwnerReference{{UID: sess.UID, Controller: &owner}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	projection := protocol.PortalConversation{State: "partial", ReasonCode: "coverage_unverified", ConversationID: "12345678-1234-1234-1234-123456789abc", OldestSeq: 1, NewestSeq: 24, ObservedAt: now}
+	for i := 1; i <= 24; i++ {
+		projection.Turns = append(projection.Turns, protocol.PortalConversationTurn{Seq: uint64(i), At: now, Role: "user", Text: strings.Repeat("&", 4096)})
+	}
+	raw, err := json.Marshal(projection)
+	if err != nil || len(raw) <= 256<<10 || !projection.Valid() {
+		t.Fatal("fixture bounds")
+	}
+	for _, tooLarge := range []bool{false, true} {
+		f := newFixture(t, sess.DeepCopy(), pod.DeepCopy())
+		f.srv.PortalConversationTargets = map[string]string{"uid-a": "agent-a"}
+		data := string(raw)
+		if tooLarge {
+			data = strings.Repeat("x", protocol.PortalConversationEncodedLimit+1)
+		}
+		f.srv.Exec = &fakeExec{out: data}
+		r := httptest.NewRequest(http.MethodGet, apiv1.PortalConversationPrefix+"uid-a/conversation", nil)
+		r.SetPathValue("uid", "uid-a")
+		_, body, e := f.srv.portalConversation(context.Background(), httptest.NewRecorder(), r, &caller{kind: kindPortalReader})
+		if e != nil {
+			t.Fatal(e)
+		}
+		got := body.(apiv1.PortalConversationResponse).Projection
+		if (!tooLarge && len(got.Turns) != 24) || (tooLarge && got.State != "unavailable") {
+			t.Fatal(fmt.Sprint("encoded bound failed: ", tooLarge))
 		}
 	}
 }

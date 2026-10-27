@@ -124,7 +124,7 @@ func portalVisibleRecord(provider, conversation string, line []byte) (string, st
 		Message   json.RawMessage `json:"message"`
 		Payload   json.RawMessage `json:"payload"`
 	}
-	if !utf8.Valid(line) || !protocol.StrictPortalJSON(line) || json.Unmarshal(line, &envelope) != nil {
+	if !utf8.Valid(line) || !protocol.StrictPortalJSON(line) || !portalCanonicalFields(line, "type", "timestamp", "uuid", "sessionId", "isSidechain", "isApiErrorMessage", "message", "payload", "version", "cwd") || json.Unmarshal(line, &envelope) != nil {
 		return "", "", "", time.Time{}, false, false
 	}
 	if provider == protocol.AgentClaude {
@@ -141,10 +141,10 @@ func portalVisibleRecord(provider, conversation string, line []byte) (string, st
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
 		}
-		if json.Unmarshal(envelope.Message, &msg) != nil || msg.Role != envelope.Type {
+		if !portalCanonicalFields(envelope.Message, "role", "content") || json.Unmarshal(envelope.Message, &msg) != nil || msg.Role != envelope.Type {
 			return "", "", "", time.Time{}, false, false
 		}
-		text, ok := portalTextBlocks(msg.Content, envelope.Type)
+		text, ok := portalTextBlocks(msg.Content, envelope.Type, provider)
 		if !ok {
 			return "", "", "", time.Time{}, false, false
 		}
@@ -164,18 +164,24 @@ func portalVisibleRecord(provider, conversation string, line []byte) (string, st
 		ID      string          `json:"id"`
 		Type    string          `json:"type"`
 		Role    string          `json:"role"`
+		Channel string          `json:"channel"`
 		Content json.RawMessage `json:"content"`
 	}
-	if json.Unmarshal(envelope.Payload, &item) != nil {
+	if !portalCanonicalFields(envelope.Payload, "id", "type", "role", "channel", "content") || json.Unmarshal(envelope.Payload, &item) != nil {
 		return "", "", "", time.Time{}, false, false
 	}
 	if item.Type != "message" || (item.Role != "user" && item.Role != "assistant") {
 		return "", "", "", time.Time{}, false, true
 	}
+	// Only explicitly final assistant messages are qualified; channel-less user
+	// input is accepted, while unknown channels and missing assistant channels are omitted.
+	if (item.Role == "assistant" && item.Channel != "final") || (item.Role == "user" && item.Channel != "") {
+		return "", "", "", time.Time{}, false, true
+	}
 	if item.ID == "" {
 		return "", "", "", time.Time{}, false, false
 	}
-	text, ok := portalTextBlocks(item.Content, item.Role)
+	text, ok := portalTextBlocks(item.Content, item.Role, provider)
 	if !ok {
 		return "", "", "", time.Time{}, false, false
 	}
@@ -189,21 +195,28 @@ func portalVisibleRecord(provider, conversation string, line []byte) (string, st
 	return item.ID, item.Role, text, at, true, true
 }
 
-func portalTextBlocks(raw json.RawMessage, role string) (string, bool) {
+func portalTextBlocks(raw json.RawMessage, role, provider string) (string, bool) {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
+		if provider != protocol.AgentClaude {
+			return "", false
+		}
 		return portalSafeText(text), true
 	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &blocks) != nil {
+	var entries []json.RawMessage
+	if json.Unmarshal(raw, &entries) != nil {
 		return "", false
 	}
 	var parts []string
-	for _, b := range blocks {
-		if b.Type == "text" || (role == "user" && b.Type == "input_text") || (role == "assistant" && b.Type == "output_text") {
+	for _, entry := range entries {
+		var b struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if !portalCanonicalFields(entry, "type", "text") || json.Unmarshal(entry, &b) != nil {
+			return "", false
+		}
+		if (provider == protocol.AgentClaude && b.Type == "text") || (provider == protocol.AgentCodex && role == "user" && b.Type == "input_text") || (provider == protocol.AgentCodex && role == "assistant" && b.Type == "output_text") {
 			if x := portalSafeText(b.Text); x != "" {
 				parts = append(parts, x)
 			}
@@ -228,6 +241,23 @@ func portalSafeText(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// portalCanonicalFields rejects case-fold aliases of interpreted fields while
+// preserving unrelated provider metadata keys, including case-sensitive maps.
+func portalCanonicalFields(raw []byte, names ...string) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return false
+	}
+	for key := range fields {
+		for _, name := range names {
+			if key != name && strings.EqualFold(key, name) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // projectRegisteredPortalConversationPage checks registration around the supplied reader.
@@ -415,7 +445,7 @@ func portalSourceVersion(provider, conversation, worktree string, raw []byte) bo
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		if len(line) > portalProjectionLineLimit || !protocol.StrictPortalJSON(line) {
+		if len(line) > portalProjectionLineLimit || !protocol.StrictPortalJSON(line) || !portalCanonicalFields(line, "type", "version", "sessionId", "cwd", "payload") {
 			return false
 		}
 		var record struct {
@@ -433,6 +463,10 @@ func portalSourceVersion(provider, conversation, worktree string, raw []byte) bo
 			return false
 		}
 		if provider == protocol.AgentCodex {
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(line, &fields) != nil || !portalCanonicalFields(fields["payload"], "id", "cli_version", "cwd") {
+				return false
+			}
 			return record.Type == "session_meta" && record.Payload.ID == conversation && record.Payload.CLIVersion == managedCodexVersion && record.Payload.CWD == worktree
 		}
 		if provider == protocol.AgentClaude && (record.Type == "user" || record.Type == "assistant") {

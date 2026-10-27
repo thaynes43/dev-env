@@ -80,8 +80,8 @@ func (c *conversationSource) ReadConversation(ctx context.Context, name, uid str
 	if err != nil || media != "application/json" || response.StatusCode != http.StatusOK {
 		return empty, portal.ErrUnavailable
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, 256*1024+1))
-	if err != nil || len(data) > 256*1024 {
+	data, err := io.ReadAll(io.LimitReader(response.Body, protocol.PortalConversationEncodedLimit+1))
+	if err != nil || len(data) > protocol.PortalConversationEncodedLimit {
 		return empty, portal.ErrUnavailable
 	}
 	if !protocol.StrictPortalJSON(data) {

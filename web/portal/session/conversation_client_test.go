@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,12 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
 func TestConversationSourceScopedAuthorization(t *testing.T) {
-	for _, mode := range []string{"valid", "wrong-principal", "wrong-target", "revoked-before", "revoked-after", "duplicate", "case-alias", "other-session"} {
+	for _, mode := range []string{"valid", "wrong-principal", "wrong-target", "revoked-before", "revoked-after", "duplicate", "case-alias", "other-session", "escaped-max", "over-limit"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setupAuth(t)
 			f.login(t)
@@ -47,6 +49,20 @@ func TestConversationSourceScopedAuthorization(t *testing.T) {
 				if mode == "other-session" {
 					body = strings.Replace(body, `"sessionUID":"uid-a"`, `"sessionUID":"other"`, 1)
 				}
+				if mode == "escaped-max" {
+					p := protocol.PortalConversation{State: "partial", ReasonCode: "coverage_unverified", ConversationID: "12345678-1234-1234-1234-123456789abc", OldestSeq: 1, NewestSeq: 24, ObservedAt: f.now}
+					for i := 1; i <= 24; i++ {
+						p.Turns = append(p.Turns, protocol.PortalConversationTurn{Seq: uint64(i), At: f.now, Role: "user", Text: strings.Repeat("&", 4096)})
+					}
+					b, e := json.Marshal(apiv1.PortalConversationResponse{SessionName: "agent-a", SessionUID: "uid-a", PodUID: "pod-a", Projection: p})
+					if e != nil || len(b) <= 256<<10 {
+						t.Error("fixture encoding")
+					}
+					body = string(b)
+				}
+				if mode == "over-limit" {
+					body = strings.Repeat("x", protocol.PortalConversationEncodedLimit+1)
+				}
 				_, _ = fmt.Fprint(w, body)
 			}))
 			client, err := pinnedClient(ca, operatorPortalHost, 5*time.Second, routeDial(map[string]string{operatorPortalHost: server}))
@@ -65,11 +81,16 @@ func TestConversationSourceScopedAuthorization(t *testing.T) {
 				uid = "other"
 			}
 			got, err := source.ReadConversation(r.Context(), "agent-a", uid)
-			if mode == "valid" {
+			switch mode {
+			case "escaped-max":
+				if err != nil || len(got.Turns) != 24 || got.Turns[23].Text != strings.Repeat("&", 4096) {
+					t.Fatal("escaped maximum refused")
+				}
+			case "valid":
 				if err != nil || calls != 1 || len(got.Turns) != 1 || got.Turns[0].Text != "SYNTHETIC-VISIBLE" {
 					t.Fatal("authorized read failed")
 				}
-			} else {
+			default:
 				if err == nil || len(got.Turns) != 0 {
 					t.Fatal("refused or untrusted response leaked content")
 				}

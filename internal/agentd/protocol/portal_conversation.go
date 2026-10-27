@@ -10,6 +10,10 @@ import (
 	"unicode/utf8"
 )
 
+// PortalConversationEncodedLimit covers sixfold JSON text escaping plus
+// bounded turn and response-envelope metadata.
+const PortalConversationEncodedLimit = 6*(96<<10) + (128 << 10)
+
 // PortalConversation is a bounded projection, never a provider transcript.
 // Coverage remains partial unless a caller can prove complete source coverage.
 type PortalConversation struct {

@@ -94,7 +94,7 @@ func TestPortalConversationPureProjectionSafety(t *testing.T) {
 	if !got.Valid() || got.State != "partial" || len(got.Turns) != 2 || got.Turns[0].Role != "user" || got.Turns[1].Role != "assistant" || !strings.Contains(got.Turns[0].Text, "[redacted]") || strings.Contains(fmt.Sprint(got), "SECRET-") {
 		t.Fatal("Claude projection leaked private blocks or lost visible turns")
 	}
-	codex := `{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":"item-1","role":"assistant","content":[{"type":"output_text","text":"visible answer"},{"type":"reasoning_text","text":"SECRET-THINKING"}]}}`
+	codex := `{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":"item-1","role":"assistant","channel":"final","content":[{"type":"output_text","text":"visible answer"},{"type":"reasoning_text","text":"SECRET-THINKING"}]}}`
 	got = projectPortalConversationBefore(protocol.AgentCodex, id, []byte(codex), now, 0)
 	if !got.Valid() || got.State != "partial" || len(got.Turns) != 1 || got.Turns[0].Text != "visible answer" {
 		t.Fatal("Codex projection failed allowlisted synthetic item")
@@ -288,7 +288,10 @@ func TestPortalConversationOwnCodexLocator(t *testing.T) {
 			if mode == "wrong-worktree" {
 				cwd = "/unrelated"
 			}
-			data := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cli_version":%q,"cwd":%q}}`+"\n", thread, version, cwd) + `{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":"item-1","role":"assistant","content":[{"type":"output_text","text":"synthetic codex"}]}}` + "\n"
+			data := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cli_version":%q,"cwd":%q}}`+"\n", thread, version, cwd) + `{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":"item-1","role":"assistant","channel":"final","content":[{"type":"output_text","text":"synthetic codex"}]}}` + "\n"
+			data += `{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":"item-2","role":"assistant","channel":"analysis","content":[{"type":"output_text","text":"PRIVATE-ANALYSIS"}]}}` + "\n"
+			data += `{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":"item-3","role":"assistant","channel":"unknown","content":[{"type":"output_text","text":"PRIVATE-UNKNOWN"}]}}` + "\n"
+			data += `{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":"item-4","role":"assistant","content":[{"type":"output_text","text":"PRIVATE-MISSING"}]}}` + "\n"
 			path := filepath.Join(dir, "rollout-2026-10-27T12-00-00-"+id+".jsonl")
 			if os.WriteFile(path, []byte(data), 0600) != nil {
 				t.Fatal("synthetic rollout")
@@ -345,5 +348,34 @@ func TestPortalConversationCursorBindsSnapshotAndOwner(t *testing.T) {
 	changed := projectRegisteredPortalConversationPage(s, sess, sess.SessionUID, s.PodUID, now, 1, first.NextCursor, read)
 	if changed.State != "unavailable" || len(changed.Turns) != 0 {
 		t.Fatal("stale cursor exposed changed snapshot")
+	}
+}
+
+func TestPortalConversationProviderSecurityAliases(t *testing.T) {
+	id := "12345678-1234-1234-1234-123456789abc"
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	base := `{"type":"user","sessionId":"` + id + `","uuid":"u1","timestamp":"2026-10-27T11:00:00Z","message":{"role":"user","content":[{"type":"text","text":"PRIVATE-SENTINEL"}]}}`
+	for _, fields := range []string{`"isSidechain":true,"IsSidechain":false,`, `"IsSidechain":false,"isSidechain":true,`, `"isApiErrorMessage":true,"IsApiErrorMessage":false,`, `"IsApiErrorMessage":false,"isApiErrorMessage":true,`} {
+		raw := strings.Replace(base, `"type":"user",`, fields+`"type":"user",`, 1)
+		got := projectPortalConversationBefore(protocol.AgentClaude, id, []byte(raw), now, 0)
+		if len(got.Turns) != 0 {
+			t.Fatal("ambiguous exclusion leaked")
+		}
+	}
+	for _, replacement := range []struct{ old, value string }{
+		{`"role":"user"`, `"role":"user","Role":"user"`},
+		{`"content":`, `"Content":`}, {`"type":"text"`, `"type":"text","Type":"text"`},
+		{`"sessionId":`, `"ſessionId":`}, {`"uuid":`, `"UUID":`},
+	} {
+		raw := strings.Replace(base, replacement.old, replacement.value, 1)
+		got := projectPortalConversationBefore(protocol.AgentClaude, id, []byte(raw), now, 0)
+		if len(got.Turns) != 0 {
+			t.Fatal("ambiguous provider field leaked")
+		}
+	}
+	for _, raw := range []string{`{"type":"session_meta","Type":"session_meta","payload":{"id":"` + id + `","cli_version":"` + managedCodexVersion + `","cwd":"/w"}}`, `{"type":"session_meta","payload":{"id":"` + id + `","Id":"` + id + `","cli_version":"` + managedCodexVersion + `","cwd":"/w"}}`} {
+		if portalSourceVersion(protocol.AgentCodex, id, "/w", []byte(raw)) {
+			t.Fatal("ambiguous metadata accepted")
+		}
 	}
 }

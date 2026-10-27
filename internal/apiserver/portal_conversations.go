@@ -116,7 +116,7 @@ type portalConversationBuffer struct {
 }
 
 func (b *portalConversationBuffer) Write(p []byte) (int, error) {
-	if len(p) > 256<<10-b.Len() {
+	if len(p) > protocol.PortalConversationEncodedLimit-b.Len() {
 		b.overflow = true
 		return len(p), nil
 	}
