@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.49.0](https://github.com/thaynes43/dev-env/compare/v2.48.0...v2.49.0) (2026-10-27)
+
+
+### Features
+
+* **portal:** open a selected agent's Remote Control session from the portal ([#578](https://github.com/thaynes43/dev-env/issues/578)) ([bb11f4a](https://github.com/thaynes43/dev-env/commit/bb11f4afb3b8fc8f5b2f4f93ff64f8cc955c6b19))
+
 ## [2.48.0](https://github.com/thaynes43/dev-env/compare/v2.47.0...v2.48.0) (2026-10-27)
 
 
