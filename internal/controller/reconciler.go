@@ -189,8 +189,9 @@ type Reconciler struct {
 	// launch when unavailable; unbound legacy sessions keep their lifecycle.
 	TaskBudgets           *taskbudget.Service
 	TaskBudgetWorkerImage string
-	// PilotAgent runs one exactly selected session's pod on another agent
-	// image (pilotImageFor). Nil is off.
+	// PilotAgent runs the pods of the sessions with one parent and
+	// idempotency key on another agent image (pilotImageFor). Keeping that to
+	// one session is an operating rule, not a limit. Nil is off.
 	PilotAgent *PilotAgent
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
