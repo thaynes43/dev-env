@@ -652,7 +652,7 @@ for one session](../../../../docs/portal-session-runtime.md#pilot-agent-image-fo
 
 Tom (19:19:40 UTC, relayed): "I should be able to do agent-run type things from the front end." The first step needs no new action scope.
 
-- **The operator** adds the selected agent's Remote Control entry to the portal reader's summary. It sends the state word, plus the link only when the link is exactly `https://claude.ai/code/session_<id>`. The same value is already in AgentSession status, which cluster readers can see.
+- **The operator** adds each session's Remote Control entry to the portal reader's summary. It sends the state word, plus the link only when the link is exactly `https://claude.ai/code/session_<id>`. The same value is already in AgentSession status, which cluster readers can see.
 - **The portal** re-checks both values, which reach only an admitted portal user. A registered agent's header gets an **Open in Claude** link. Its context names the honest state, and says when a headless task or a local terminal has no Remote Control.
 - **Assumption, not verified here:** opening the link needs the owner's claude.ai sign-in. It is not a bearer link.
 - **The renderer** drops any header link that is not `https://`.

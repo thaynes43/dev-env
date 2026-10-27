@@ -360,6 +360,7 @@ func TestSessionRemoteControlLinkAndState(t *testing.T) {
 		activityRow("rc-pairing", rc(`{"state":"pair-code-issued"}`)),
 		activityRow("rc-starting", rc(`{"state":"starting"}`)),
 		activityRow("rc-other", rc(`{"state":"unregistered"}`)),
+		activityRow("rc-offline", rc(`{"state":"offline"}`)),
 		activityRow("rc-missing", unknownActivity),
 		activityRow("task-busy", reportedActivity),
 		activityRow("local-waiting", local),
@@ -369,8 +370,8 @@ func TestSessionRemoteControlLinkAndState(t *testing.T) {
 	}
 	page := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{})
 	for name, want := range map[string]string{
-		"rc-registered": "Registered", "rc-nolink": "Registered, no link reported", "rc-pairing": "Waiting for phone pairing",
-		"rc-starting": "Starting", "rc-other": "unregistered", "rc-missing": "Not reported",
+		"rc-registered": "Registered", "rc-nolink": "Registered, no link reported", "rc-pairing": "Pairing code issued (pairing not confirmed)",
+		"rc-starting": "Starting", "rc-other": "unregistered", "rc-offline": "Offline", "rc-missing": "Not reported",
 		"task-busy": "None (headless task)", "local-waiting": "None (local terminal)",
 	} {
 		row := findRow(t, page, name)

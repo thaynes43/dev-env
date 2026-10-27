@@ -101,11 +101,20 @@ func remoteControlView(a *apiv1.PortalSessionActivity) (string, string) {
 	case rc.State == "registered":
 		return "", "Registered, no link reported"
 	case rc.State == "pair-code-issued":
-		return "", "Waiting for phone pairing"
-	case rc.State == "starting":
-		return "", "Starting"
+		// agentd only knows a code was issued; Codex cannot see a pairing.
+		return "", "Pairing code issued (pairing not confirmed)"
+	}
+	if text, ok := remoteControlStates[rc.State]; ok {
+		return "", text
 	}
 	return "", shown(rc.State)
+}
+
+// remoteControlStates words the other states agentd reports. Any other state
+// shows its own (escaped) word.
+var remoteControlStates = map[string]string{
+	"starting": "Starting", "login-required": "Login required", "offline": "Offline",
+	"unpaired": "Not paired", "errored": "Error",
 }
 
 // decodeRemoteControl accepts exactly {state, url?}, each re-checked against the

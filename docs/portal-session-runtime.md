@@ -318,11 +318,13 @@ The name and session id are never sent. The portal re-checks both values, and it
 A registered agent with a link gets an **Open in Claude** link in its header. Every agent gets a **Remote Control** line in its context:
 - Registered;
 - Registered, no link reported;
-- Waiting for phone pairing;
-- Starting;
+- Pairing code issued (pairing not confirmed): Codex cannot see whether a phone paired;
+- Starting, Login required, Offline, Not paired, or Error;
 - Not reported;
 - None (headless task);
 - None (local terminal).
+
+Any other state shows its own word, escaped.
 
 This is read-only. It adds no portal action and needs no operator flag.
 
