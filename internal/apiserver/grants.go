@@ -123,20 +123,21 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
 	notFor := func(kind string, set map[string]bool) {
-		for _, f := range []string{"role", "namespaces", "fqdns", "cidrs", "endpoints", "ports", "credential"} {
+		for _, f := range []string{"role", "namespaces", "fqdns", "cidrs", "endpoints", "ports", "credential", "credentialSource"} {
 			if set[f] {
 				add(f, "not for type %s", kind)
 			}
 		}
 	}
 	set := map[string]bool{
-		"role":       req.Role != "",
-		"namespaces": len(req.Namespaces) > 0,
-		"fqdns":      len(req.FQDNs) > 0,
-		"cidrs":      len(req.CIDRs) > 0,
-		"endpoints":  len(req.Endpoints) > 0,
-		"ports":      len(req.Ports) > 0,
-		"credential": req.Credential != "",
+		"role":             req.Role != "",
+		"namespaces":       len(req.Namespaces) > 0,
+		"fqdns":            len(req.FQDNs) > 0,
+		"cidrs":            len(req.CIDRs) > 0,
+		"endpoints":        len(req.Endpoints) > 0,
+		"ports":            len(req.Ports) > 0,
+		"credential":       req.Credential != "",
+		"credentialSource": req.CredentialSource != nil,
 	}
 	others := func(keep ...string) map[string]bool {
 		out := map[string]bool{}
@@ -204,11 +205,14 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		spec.Egress = e
 		notFor(req.Type, others("fqdns", "cidrs", "endpoints", "ports"))
 	case v1alpha1.GrantCredential:
-		if req.Credential == "" {
-			add("credential", "required for type credential: %s or %s", v1alpha1.CredentialProxmox, v1alpha1.CredentialHWSSH)
+		if (req.Credential == "") == (req.CredentialSource == nil) {
+			add("credential", "name exactly one keeper credential or credentialSource")
 		}
 		spec.Credential = &v1alpha1.CredentialGrant{Name: v1alpha1.CredentialName(req.Credential)}
-		notFor(req.Type, others("credential"))
+		if src := req.CredentialSource; src != nil {
+			spec.Credential.Source = &v1alpha1.CredentialSource{Namespace: src.Namespace, Name: src.Name, Fields: slices.Clone(src.Fields)}
+		}
+		notFor(req.Type, others("credential", "credentialSource"))
 	case "":
 		add("type", "required: kube, egress, credential or breakglass")
 	default:
@@ -537,6 +541,9 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 	}
 	if cg := g.Spec.Credential; cg != nil {
 		v.Credential = string(cg.Name)
+		if src := cg.Source; src != nil {
+			v.CredentialSource = &apiv1.CredentialSource{Namespace: src.Namespace, Name: src.Name, Fields: slices.Clone(src.Fields)}
+		}
 	}
 	if st.ApprovedTTL != nil {
 		v.ApprovedTTL = st.ApprovedTTL.Duration.String()

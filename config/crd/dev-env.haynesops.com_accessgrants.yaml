@@ -73,13 +73,41 @@ spec:
                 description: Credential is the credential of a credential grant.
                 properties:
                   name:
-                    description: Name is the credential.
+                    description: Name is a keeper-minted credential. It is mutually
+                      exclusive with Source.
                     enum:
                     - proxmox
                     - hw-ssh
                     type: string
-                required:
-                - name
+                  source:
+                    description: Source selects existing Secret data for a manually
+                      approved grant.
+                    properties:
+                      fields:
+                        items:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$
+                          type: string
+                        maxItems: 16
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: set
+                      name:
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      namespace:
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - fields
+                    - name
+                    - namespace
+                    type: object
                 type: object
                 x-kubernetes-validations:
                 - message: immutable after create; only release may change
@@ -330,6 +358,9 @@ spec:
               rule: (self.type == 'egress') == has(self.egress)
             - message: credential is set for type credential, and only there
               rule: (self.type == 'credential') == has(self.credential)
+            - message: credential names exactly one keeper credential or existing
+                selected source
+              rule: '!has(self.credential) || (has(self.credential.name) != has(self.credential.source))'
             - message: type breakglass and role dev-env-grant-breakglass go together
                 (D-27)
               rule: '!has(self.kube) || ((self.type == ''breakglass'') == (self.kube.role

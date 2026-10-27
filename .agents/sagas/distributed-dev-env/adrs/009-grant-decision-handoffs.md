@@ -24,9 +24,14 @@ UID label; standing policy behavior remains unchanged. Broker pod patch may only
 set that label to the actual pod UID. No daemon restart is involved.
 
 A phone conversation alone is not authenticated human attestation. Mobile
-provenance, generic selected-field credential execution, old-session cleanup and
-end-to-end acceptance are unresolved. Credential approval remains unavailable
-without a standing policy until separately implemented and reviewed.
+provenance, old-session cleanup and end-to-end acceptance are unresolved. A
+selected existing credential source is an immutable Secret reference plus an
+explicit field allowlist; it is not a whole-application Secret, database,
+cookie or OIDC export. Its intended execution reads only those fields after an
+exact manual decision and installs them in the approved pod's private grant
+file. Removing that file on release or expiry prevents later local use, but
+cannot server-revoke a static source value an already-running process has
+copied.
 
 A session delegate principal binds its session name, session UID and current pod UID.
 The child retains its immutable parent name. Older children do not all record a
