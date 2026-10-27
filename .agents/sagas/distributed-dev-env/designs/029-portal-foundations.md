@@ -1,6 +1,6 @@
 # DESIGN-029: Portal foundations: source inventory, Attention journey and security evidence
 
-**Status: source-only first milestone for [Story 178](https://work.haynesnetwork.com/work_packages/178).**
+**Historical foundation status: source-only first milestone for [Story 178](https://work.haynesnetwork.com/work_packages/178).**
 This is a bounded foundation under Epic 120 / Saga 85, related to 121. It is
 not an accepted portal architecture, an approval surface, a new orchestrator,
 or delivery of the wider console epic. Execution and custody are recorded in
@@ -176,6 +176,8 @@ inventing a name or reusing V1 would not satisfy them. No DNS, ingress,
 Authentik, network, RBAC, deployment or credential configuration was changed.
 
 ## Metadata-only mobile journey
+
+Historical foundation journey; this section does not describe the later scoped send/history capabilities. See [Current combined source contract](#current-combined-source-contract-2026-10-27).
 
 The first screen answers: what needs attention, who owns it, what happens
 next, and how recently was that verified? The existing workflow owner
@@ -462,6 +464,8 @@ stats. No new credential, adapter or policy.
 
 ### Message box, first increment, 2026-10-27
 
+Historical frontend-only increment. For the current combined source, see [Current combined source contract](#current-combined-source-contract-2026-10-27).
+
 Tom asked (2026-10-27, relayed by the coordinator) for the message box / agent
 IDE modelled on open-source agent windows. This increment adds it to the
 existing Agents detail, server-rendered like the rest of the portal: no script,
@@ -502,6 +506,8 @@ to the backend lane, not this frontend increment.
 
 ### Composer seam and receipts, 2026-10-27
 
+Historical frontend-only increment. For the current combined source, see [Current combined source contract](#current-combined-source-contract-2026-10-27).
+
 Tom's direction (11:45 UTC, relayed by the coordinator) put a working composer
 first. The backend lane proposed a v1 send contract: a same-origin
 `POST /portal/projects/dev-env/environments/internal/session-messages` with
@@ -537,6 +543,8 @@ lane. This change is the frontend half; it enables no live authority.
   per status, all labelled fixture data. Their forms post nowhere real.
 
 ### Selected-session history, 2026-10-27
+
+Historical frontend-only increment. For the current combined source, see [Current combined source contract](#current-combined-source-contract-2026-10-27).
 
 Tom (12:43 UTC, relayed): "How would someone know what to send these agents if
 they can't see their message history?" A composer with history unavailable is
@@ -592,3 +600,41 @@ conversation view; no supported route serves the history yet.
   `TransportDelivered` to Delivered and passes Refused, Pending and Unknown
   through; anything else is Unknown. `SessionName` maps to `Session`. Pending
   and Unknown never authorize a blind resend.
+
+### Current combined source contract, 2026-10-27
+
+The combined source now contains the typed send and receipt backend, the
+selected-session conversation projection, BFF adapters and default-off
+production configuration. Earlier statements such as “not built here” and
+“proposed backend contract” describe their dated frontend increments; they
+do not describe the current combined source. Source implementation is not
+installation or live acceptance.
+
+Send and private history remain independently disabled unless explicitly
+configured. The existing private `config/session-actions.json` binds each
+action to an exact issuer, subject and Session name/UID target set. Separate
+operator `--portal-send-target` and `--portal-history-target` flags bind
+their corresponding targets; `--enable-portal-reader` alone grants neither
+action. Current portal authorization and the independent action scope both
+remain required. The publication repair must leave an unscoped
+`NewCommandForms` result inert: no command reservation, dispatch or receipt
+access. This records the accepted source invariant, not a new permission.
+
+Send uses the fixed same-origin form and receipt routes described above.
+Immutable reservation and result records retain the existing database
+privileges. Delivered means transport acceptance, not an agent read, reply
+or completed task; Pending and Unknown do not permit blind resubmission.
+
+History uses the typed projection bound to the registered conversation,
+immutable Session owner and current Pod. Unsupported or unbound targets
+remain Unavailable; there is no raw-log, archive, inbox or arbitrary-file
+fallback. The cursor binds the whole snapshot and its owner: transcript
+appends invalidate it. The current BFF requests only the newest page and
+does not send a before cursor. Stable pagination while a conversation grows
+is not implemented, and this clarification does not change that contract.
+
+See the [default-off production configuration](../../../../docs/portal-session-runtime.md#default-off-portal-action-source-configuration)
+for the implemented configuration and compatibility requirements.
+Publication, compatible installation, exact private principal/target
+configuration, live action authorization and authenticated acceptance are
+separate steps. This documentation change enables none of them.
