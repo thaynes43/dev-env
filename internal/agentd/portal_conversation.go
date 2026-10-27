@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -25,6 +26,14 @@ const portalProjectionLineLimit = 64 << 10
 const portalProjectionTextLimit = 4 << 10
 const portalProjectionTotalLimit = 96 << 10
 const portalProjectionTurnLimit = 60
+
+// portalClaudeVersion is the pinned Claude Code release whose transcript format
+// the portal's history and the conversation usage measurement are qualified for.
+const portalClaudeVersion = "2.1.296"
+
+// errPortalSourceLimit says a provider record was over the read bound. It still
+// is os.ErrPermission to every caller that only tests for an error.
+var errPortalSourceLimit = fmt.Errorf("provider record over the read bound: %w", os.ErrPermission)
 
 var portalKnownSecret = regexp.MustCompile(`(?i)(bearer[[:space:]]+|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)[[:space:]]*[:=][[:space:]]*)("[^"\n]*"|'[^'\n]*'|[^[:space:]"'<>]+)`)
 var portalKeyToken = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{12,}|gh[opurs]_[A-Za-z0-9_]{12,})\b`)
@@ -260,32 +269,49 @@ func portalCanonicalFields(raw []byte, names ...string) bool {
 	return true
 }
 
+// readRegisteredPortalTranscript is the registration and current-pod fence both
+// the portal's history and the conversation usage measurement read through. The
+// current and initial launch registrations must bind the selected Session and
+// the expected pod before the supplied reader runs, and must be unchanged after
+// it; otherwise ok is false and nothing is returned. Scope policy such as the
+// history's project is the caller's to check.
+func readRegisteredPortalTranscript(settings Settings, session protocol.Session, expectedSession, expectedPod string, observed time.Time, read func(Launch, Launch) ([]byte, error)) (raw []byte, current Launch, ok bool) {
+	if expectedSession == "" || expectedPod == "" || session.SessionUID != expectedSession || settings.PodUID != expectedPod || read == nil || observed.IsZero() {
+		return nil, Launch{}, false
+	}
+	current, currentErr := privateCurrentLaunch(settings)
+	if currentErr != nil || !portalLaunchBound(current, session, expectedPod) {
+		return nil, Launch{}, false
+	}
+	var first Launch
+	if readPrivateManagedJSON(settings, launchFile, 512<<10, &first) != nil || first.Session != session.Name || first.SessionUID != expectedSession || first.PodUID == "" || first.Provider != session.Agent || first.ConversationID != current.ConversationID || first.Dir != current.Dir || !nativeThreadID.MatchString(first.ConversationID) {
+		return nil, Launch{}, false
+	}
+	if session.Agent == protocol.AgentCodex && (!first.NativeThreadConfirmed || !current.NativeThreadConfirmed) {
+		return nil, Launch{}, false
+	}
+	raw, err := read(current, first)
+	if err != nil {
+		return nil, Launch{}, false
+	}
+	after, afterErr := privateCurrentLaunch(settings)
+	var afterFirst Launch
+	if afterErr != nil || !reflect.DeepEqual(current, after) || readPrivateManagedJSON(settings, launchFile, 512<<10, &afterFirst) != nil || !reflect.DeepEqual(first, afterFirst) {
+		return nil, Launch{}, false
+	}
+	return raw, current, true
+}
+
 // projectRegisteredPortalConversationPage checks registration around the supplied reader.
 func projectRegisteredPortalConversationPage(settings Settings, session protocol.Session, expectedSession, expectedPod string, observed time.Time, limit int, before string, read func(Launch, Launch) ([]byte, error)) protocol.PortalConversation {
 	unavailable := func() protocol.PortalConversation {
 		return protocol.PortalConversation{State: "unavailable", ReasonCode: "identity_unconfirmed", ObservedAt: observed.UTC()}
 	}
-	if expectedSession == "" || expectedPod == "" || session.Repo != "dev-env" || session.SessionUID != expectedSession || settings.PodUID != expectedPod || read == nil || observed.IsZero() {
+	if session.Repo != "dev-env" {
 		return unavailable()
 	}
-	current, currentErr := privateCurrentLaunch(settings)
-	if currentErr != nil || !portalLaunchBound(current, session, expectedPod) {
-		return unavailable()
-	}
-	var first Launch
-	if readPrivateManagedJSON(settings, launchFile, 512<<10, &first) != nil || first.Session != session.Name || first.SessionUID != expectedSession || first.PodUID == "" || first.Provider != session.Agent || first.ConversationID != current.ConversationID || first.Dir != current.Dir || !nativeThreadID.MatchString(first.ConversationID) {
-		return unavailable()
-	}
-	if session.Agent == protocol.AgentCodex && (!first.NativeThreadConfirmed || !current.NativeThreadConfirmed) {
-		return unavailable()
-	}
-	raw, err := read(current, first)
-	if err != nil {
-		return unavailable()
-	}
-	after, afterErr := privateCurrentLaunch(settings)
-	var afterFirst Launch
-	if afterErr != nil || !reflect.DeepEqual(current, after) || readPrivateManagedJSON(settings, launchFile, 512<<10, &afterFirst) != nil || !reflect.DeepEqual(first, afterFirst) {
+	raw, current, ok := readRegisteredPortalTranscript(settings, session, expectedSession, expectedPod, observed, read)
+	if !ok {
 		return unavailable()
 	}
 	if limit < 1 || limit > 60 {
@@ -404,11 +430,17 @@ func portalReadOwnTranscript(s Settings, first Launch) ([]byte, error) {
 	f := os.NewFile(uintptr(fd), "provider-record")
 	defer func() { _ = f.Close() }()
 	var before, after syscall.Stat_t
-	if syscall.Fstat(fd, &before) != nil || before.Mode&syscall.S_IFMT != syscall.S_IFREG || before.Nlink != 1 || before.Size < 0 || before.Size > portalProjectionInputLimit {
+	if syscall.Fstat(fd, &before) != nil || before.Mode&syscall.S_IFMT != syscall.S_IFREG || before.Nlink != 1 || before.Size < 0 {
 		return nil, os.ErrPermission
 	}
+	if before.Size > portalProjectionInputLimit {
+		return nil, errPortalSourceLimit
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, portalProjectionInputLimit+1))
-	if err != nil || len(raw) > portalProjectionInputLimit || syscall.Fstat(fd, &after) != nil || before.Dev != after.Dev || before.Ino != after.Ino || before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim || before.Nlink != after.Nlink {
+	if err == nil && len(raw) > portalProjectionInputLimit {
+		return nil, errPortalSourceLimit
+	}
+	if err != nil || syscall.Fstat(fd, &after) != nil || before.Dev != after.Dev || before.Ino != after.Ino || before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim || before.Nlink != after.Nlink {
 		return nil, os.ErrPermission
 	}
 	return raw, nil
@@ -470,7 +502,7 @@ func portalSourceVersion(provider, conversation, worktree string, raw []byte) bo
 			return record.Type == "session_meta" && record.Payload.ID == conversation && record.Payload.CLIVersion == managedCodexVersion && record.Payload.CWD == worktree
 		}
 		if provider == protocol.AgentClaude && (record.Type == "user" || record.Type == "assistant") {
-			if record.Version != "2.1.296" || record.SessionID != conversation || record.CWD != worktree {
+			if record.Version != portalClaudeVersion || record.SessionID != conversation || record.CWD != worktree {
 				return false
 			}
 			seenClaude = true
