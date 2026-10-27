@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -404,6 +405,10 @@ func TestPostgresIntegration(t *testing.T) {
 
 	t.Run("physical-failover-needs-no-human-action", func(t *testing.T) { testDisposableFailover(t, a) })
 
+	t.Run("immutable-command-reservations", func(t *testing.T) { testImmutableCommandReservations(t, admin, a, b, record) })
+	t.Run("command-capacity-backpressure", func(t *testing.T) { testCommandCapacityBackpressure(t, admin, a, b, record) })
+	t.Run("command-lost-commit-response", func(t *testing.T) { testCommandLostCommitResponse(t, admin, a, b, record) })
+
 	t.Run("outage-has-no-fallback", func(t *testing.T) {
 		a.Close()
 		if _, err := a.GetSession(ctx, handle("outage")); !errors.Is(err, portal.ErrUnavailable) {
@@ -441,5 +446,190 @@ func requireHostedProof(t *testing.T, missing bool, reason string) {
 func TestHostedProofMissingInputFailsOnlyWhenRequired(t *testing.T) {
 	if hostedProofDisposition(false, true) != "skip" || hostedProofDisposition(true, true) != "fail" || hostedProofDisposition(true, false) != "run" || hostedProofDisposition(false, false) != "run" {
 		t.Fatal("hosted proof missing-input disposition changed")
+	}
+}
+
+// These checks run against the existing restricted runtime role, two pools and
+// the original migration. A missing disposable DB is a skip, not evidence.
+func testImmutableCommandReservations(t *testing.T, admin *pgxpool.Pool, a, b *PostgresStore, record Record) {
+	ctx := context.Background()
+	h := sha256.Sum256([]byte("immutable-command-auth"))
+	if err := a.PutSession(ctx, h, record); err != nil {
+		t.Fatal("auth session insert failed")
+	}
+	defer func() {
+		_, _ = admin.Exec(ctx, "DELETE FROM portal.sessions WHERE handle=$1 OR handle=$2 OR handle=$3", h[:], commandKeyBytes(h, "command-request-001", "reservation"), commandKeyBytes(h, "command-request-001", "terminal"))
+	}()
+	wanted := commandReservation{RequestID: "command-request-001", SessionName: "agent-a", SessionUID: "uid-a", Digest: sha256.Sum256([]byte("synthetic text"))}
+	start := make(chan struct{})
+	type result struct {
+		created bool
+		err     error
+	}
+	results := make(chan result, 2)
+	for _, s := range []*PostgresStore{a, b} {
+		go func(s *PostgresStore) { <-start; c, e := s.reserveCommand(ctx, h, wanted); results <- result{c, e} }(s)
+	}
+	close(start)
+	created := 0
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatal("concurrent reservation failed")
+		}
+		if r.created {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatal("reservation was not unique")
+	}
+	reservation, terminal, err := b.readCommand(ctx, h, wanted.RequestID)
+	if err != nil || terminal != nil || reservation.Digest != wanted.Digest {
+		t.Fatal("pending reservation was not preserved")
+	}
+	conflict := wanted
+	conflict.Digest = sha256.Sum256([]byte("other text"))
+	if _, err = b.reserveCommand(ctx, h, conflict); !errors.Is(err, portal.ErrDenied) {
+		t.Fatal("changed payload accepted")
+	}
+	for _, purpose := range []string{"reservation", "terminal"} {
+		if _, err := a.GetSession(ctx, commandKey(h, wanted.RequestID, purpose)); err == nil {
+			t.Fatal("command key authenticated as session")
+		}
+	}
+	receipt := apiv1.PortalMessageReceipt{RequestID: wanted.RequestID, SessionName: wanted.SessionName, SessionUID: wanted.SessionUID, ResolvedPodUID: "pod-a", ObservedAt: time.Now().UTC().Truncate(time.Microsecond), TransportStatus: apiv1.PortalTransportDelivered, Reason: "delivered"}
+	if err = b.finishCommand(ctx, h, reservation, receipt); err != nil {
+		t.Fatal("terminal insert failed")
+	}
+	_, terminal, err = a.readCommand(ctx, h, wanted.RequestID)
+	if err != nil || terminal == nil || *terminal != receipt {
+		t.Fatal("terminal not shared across replicas")
+	}
+	if _, err = b.GetSession(ctx, commandKey(h, wanted.RequestID, "terminal")); err == nil {
+		t.Fatal("terminal authenticated as session")
+	}
+	if c, err := a.reserveCommand(ctx, h, wanted); err != nil || c {
+		t.Fatal("terminal replay admitted")
+	}
+	if err = b.RevokeSession(ctx, h); err != nil {
+		t.Fatal("revoke failed")
+	}
+	if _, _, err = a.readCommand(ctx, h, wanted.RequestID); !errors.Is(err, portal.ErrDenied) {
+		t.Fatal("revoked session read accepted")
+	}
+	if _, err = a.reserveCommand(ctx, h, wanted); !errors.Is(err, portal.ErrDenied) {
+		t.Fatal("revoked session reservation accepted")
+	}
+	if _, err = b.GetSession(ctx, h); !errors.Is(err, portal.ErrDenied) {
+		t.Fatal("auth row resurrected")
+	}
+}
+
+func commandKeyBytes(h Handle, id, purpose string) []byte {
+	key := commandKey(h, id, purpose)
+	return key[:]
+}
+
+func testCommandCapacityBackpressure(t *testing.T, admin *pgxpool.Pool, a, b *PostgresStore, record Record) {
+	ctx := context.Background()
+	h := sha256.Sum256([]byte("command-capacity-auth"))
+	id := "command-capacity-001"
+	if a.PutSession(ctx, h, record) != nil {
+		t.Fatal("auth insert failed")
+	}
+	defer func() {
+		_, _ = admin.Exec(ctx, "DELETE FROM portal.sessions WHERE handle=$1 OR handle=$2 OR payload=$3", h[:], commandKeyBytes(h, id, "reservation"), make([]byte, 28))
+	}()
+	wanted := commandReservation{RequestID: id, SessionName: "agent-a", SessionUID: "uid-a", Digest: sha256.Sum256([]byte("fixture"))}
+	if created, err := a.reserveCommand(ctx, h, wanted); err != nil || !created {
+		t.Fatal("reservation failed")
+	}
+	reservation, _, err := b.readCommand(ctx, h, id)
+	if err != nil {
+		t.Fatal("read failed")
+	}
+	var count int
+	if admin.QueryRow(ctx, "SELECT count(*) FROM portal.sessions").Scan(&count) != nil || count >= 256 {
+		t.Fatal("fixture capacity unavailable")
+	}
+	_, err = admin.Exec(ctx, `INSERT INTO portal.sessions(handle,generation,version,expires_at,payload)
+ SELECT decode(lpad(to_hex(n),64,'0'),'hex'),$1,1,clock_timestamp()+interval '10 minutes',$2
+ FROM generate_series(1000,1000+$3-1) n`, a.generation, make([]byte, 28), 256-count)
+	if err != nil {
+		t.Fatal("capacity fixture failed")
+	}
+	receipt := apiv1.PortalMessageReceipt{RequestID: id, SessionName: wanted.SessionName, SessionUID: wanted.SessionUID, ObservedAt: time.Now().UTC(), TransportStatus: apiv1.PortalTransportUnknown, Reason: "unknown"}
+	if !errors.Is(a.finishCommand(ctx, h, reservation, receipt), portal.ErrUnavailable) {
+		t.Fatal("terminal bypassed shared cap")
+	}
+	if _, terminal, err := b.readCommand(ctx, h, id); err != nil || terminal != nil {
+		t.Fatal("unrecorded terminal did not remain unknown")
+	}
+	if created, err := b.reserveCommand(ctx, h, wanted); err != nil || created {
+		t.Fatal("saturation allowed replay")
+	}
+	if !errors.Is(a.PutSession(ctx, sha256.Sum256([]byte("login-under-command-pressure")), record), portal.ErrUnavailable) {
+		t.Fatal("login pressure not enforced")
+	}
+}
+
+func testCommandLostCommitResponse(t *testing.T, admin *pgxpool.Pool, a, b *PostgresStore, record Record) {
+	ctx := context.Background()
+	h := sha256.Sum256([]byte("command-commit-loss-auth"))
+	id := "command-commitloss-001"
+	if a.PutSession(ctx, h, record) != nil {
+		t.Fatal("auth fixture failed")
+	}
+	defer func() {
+		_, _ = admin.Exec(ctx, "DELETE FROM portal.sessions WHERE handle=$1 OR handle=$2", h[:], commandKeyBytes(h, id, "reservation"))
+	}()
+	s := fixtureStore(t)
+	pool, result := commitLossPool(t)
+	s.pool = pool
+	wanted := commandReservation{RequestID: id, SessionName: "agent-a", SessionUID: "uid-a", Digest: sha256.Sum256([]byte("fixture"))}
+	if created, err := s.reserveCommand(ctx, h, wanted); created || !errors.Is(err, portal.ErrUnavailable) {
+		t.Fatal("ambiguous commit admitted execution")
+	}
+	if <-result != 1 {
+		t.Fatal("fixture did not suppress commit response")
+	}
+	_, terminal, err := b.readCommand(ctx, h, id)
+	if err != nil || terminal != nil {
+		t.Fatal("committed reservation missing or not unknown")
+	}
+	if created, err := a.reserveCommand(ctx, h, wanted); err != nil || created {
+		t.Fatal("ambiguous commit allowed re-execution")
+	}
+}
+
+func TestCommandReceiptDomainsAndBounds(t *testing.T) {
+	h := sha256.Sum256([]byte("browser session"))
+	reservation := commandKey(h, "request-0000000001", "reservation")
+	if reservation == h || reservation == commandKey(h, "request-0000000001", "terminal") || reservation == commandKey(h, "request-0000000002", "reservation") {
+		t.Fatal("command key domain collision")
+	}
+	for _, id := range []string{"request-0000000001", strings.Repeat("A", 128)} {
+		if !validCommandID(id) {
+			t.Fatal("valid ID rejected")
+		}
+	}
+	for _, id := range []string{"short", strings.Repeat("A", 129), "request-with space"} {
+		if validCommandID(id) {
+			t.Fatal("invalid ID accepted")
+		}
+	}
+	s := fixtureStore(t)
+	expiry := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	data, err := s.encrypt(s.row("portal_command_reservation", reservation, expiry, [32]byte{}), commandReservation{RequestID: "request-0000000001"})
+	if err != nil {
+		t.Fatal("reservation encrypt failed")
+	}
+	var auth sessionPayload
+	if s.decrypt(s.row("session", reservation, expiry, [32]byte{}), data, &auth) == nil {
+		t.Fatal("command ciphertext accepted as authentication")
+	}
+	if !validCommandReason(apiv1.PortalTransportDelivered, "delivered") || validCommandReason(apiv1.PortalTransportDelivered, "SYNTHETIC-SECRET") {
+		t.Fatal("receipt reason is not bounded to static codes")
 	}
 }
