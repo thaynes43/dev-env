@@ -689,3 +689,46 @@ launch form](../../../../docs/portal-session-runtime.md#default-off-portal-launc
 The form's markup and copy are a first pass for the interface review. Nothing is
 activated: the operator flags, this private scope and Tom's confirmation are
 still required.
+
+### Interactive conversation usage, Unit A, 2026-10-27
+
+Interactive (local and remote) sessions have no usage today, because the
+`InitialManagedInvocation` observation covers a headless task's first invocation
+only. Unit A adds an inert measurement in agentd, with no CRD, heartbeat,
+operator or portal wiring. Nothing publishes it.
+
+- **Type.** `protocol.ConversationUsage` is separate from `UsageObservation`: coverage
+  `RegisteredConversation`, counter semantics `ConversationCumulative`, a result of
+  Final, Partial or Unknown with a reason code, per-served-model rows whose four
+  counters are Reported or Unknown, the turns counted and the records skipped. It has
+  no cost, no requested model and no text. Unknown is never zero. Final means every
+  record was read and counted as of the observation time; the conversation may grow.
+- **Fence.** `MeasureConversationUsage` reads through the same registration and
+  current-pod fence as the portal's history (now one helper, `readRegisteredPortalTranscript`)
+  and the same fixed, no-link file lookup and 1 MiB read bound. A launch from before
+  registration, another pod or Session, a moved worktree or a missing file is Unknown with a
+  reason, with no fallback to another file. A record over the read bound is Unknown
+  (`source_limit`); Unit B should decide whether usage needs a larger bound than history.
+- **Interactive only.** A task session is refused by mode before any read. Its figure stays
+  the initial invocation's and is never added to this one.
+- **Claude.** Only compact `"type":"assistant"` lines are decoded, into ids, model and the
+  four usage counters. Claude Code writes one record per content block of a streamed
+  message, each repeating the message id and usage, and an early record can hold a smaller
+  `output_tokens`. A message counts once, each counter at its maximum across its records,
+  then messages are summed per served model. Cache read and creation stay their own
+  counters. API-error and synthetic records are ignored. Anything unreadable, oversize,
+  from another Claude Code version or conversation, or without usable counters is skipped
+  and makes the result Partial.
+- **Codex.** The latest valid `token_count` snapshot's `total_token_usage` is the figure;
+  repeated snapshots are never summed and `last_token_usage` is never read. A counter that
+  goes backwards is a reset: nothing is added across it, the latest run's totals are shown
+  and the result is Partial (`counter_reset`). One served model (from `turn_context`) takes
+  the thread's totals; several have no honest split and are listed with Unknown counters.
+  The repository holds no sample of a real Codex rollout, so this format is read as the
+  pinned CLI is understood to write it and is tested on synthetic fixtures only; a real
+  rollout must be checked before anything is published.
+
+Unit B adds the additive `status.conversationUsage` field (the CRD first, through
+dev-env-crds, because `status.usageObservation` constrains its coverage and semantics to
+the initial invocation's), the agentd heartbeat field, the operator write, the portal
+reader's activity field and the Usage panel.
