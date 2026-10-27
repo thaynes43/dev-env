@@ -114,6 +114,10 @@ type ProductRow struct {
 	Sections                                  []ProductSection
 	Context                                   []ProductField
 	Messages                                  *ProductMessages
+	// Selected marks the one row the request selected by its Session UID
+	// (Sessions ?session=). It is the default detail on every viewport and
+	// is never trimmed. Only the first selected row counts.
+	Selected bool
 }
 
 // ProductMessages is one session's message box. Without Send the box never
@@ -443,7 +447,7 @@ func keepRows(page ProductPage, keep int) ProductPage {
 		}
 		var rows []ProductRow
 		for _, r := range g.Rows {
-			selected := r.Messages != nil && r.Messages.Conversation != nil
+			selected := r.Selected
 			if keep > 0 || selected {
 				rows = append(rows, r)
 				kept[r.ID] = true
@@ -481,8 +485,8 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
 		SessionsHref, TasksHref, UsageHref                                 string
-		ListTitle, ListCount, Access, AccessLower                          string
-		Quiet, Preview, Banner, HasRows, CanSend                           bool
+		ListTitle, ListCount, Access, AccessLower, DefaultID               string
+		Quiet, Preview, Banner, HasRows, CanSend, Selected                 bool
 		All, Attention                                                     railLinkView
 		Projects                                                           []railLinkView
 		Groups                                                             []productGroupView
@@ -552,8 +556,11 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					}
 					row.Messages = &m
 				}
+				if row.Selected && !view.Selected {
+					view.Selected, view.DefaultID = true, row.ID
+				}
 				g.Rows = append(g.Rows, row)
-				view.Rows = append(view.Rows, productRowView{ProductRow: row, Default: len(view.Rows) == 0})
+				view.Rows = append(view.Rows, productRowView{ProductRow: row})
 			}
 			if len(g.Rows) == 0 {
 				continue
@@ -568,6 +575,14 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		}
 	}
 	view.HasRows = len(view.Rows) > 0
+	// The selected row, or else the first, is the detail a URL without a
+	// fragment opens. A selected row opens on a phone too, not only the list.
+	if view.HasRows && view.DefaultID == "" {
+		view.DefaultID = view.Rows[0].ID
+	}
+	for i := range view.Rows {
+		view.Rows[i].Default = view.Rows[i].ID == view.DefaultID
+	}
 	view.Banner = view.HasRows && !view.Quiet && view.Notice != ""
 	var body bytes.Buffer
 	if err := viewsTemplate.Execute(&body, view); err != nil {

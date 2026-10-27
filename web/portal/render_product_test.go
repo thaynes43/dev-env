@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -227,6 +228,7 @@ func TestConversationRendersBoundedEscapedTurns(t *testing.T) {
 func TestTrimmingKeepsTheSelectedSessionAndItsPolicy(t *testing.T) {
 	csrf := strings.Repeat("c", 43)
 	selected := sendRow("s30", nil, true)
+	selected.Selected = true
 	selected.Messages.Conversation = &ProductConversation{State: "Complete", Turns: []ProductTurn{{Role: "assistant", Text: "selected-turn"}}}
 	rows := []ProductRow{}
 	for i := 1; i < 30; i++ {
@@ -260,5 +262,60 @@ func TestTrimmingKeepsTheSelectedSessionAndItsPolicy(t *testing.T) {
 	}
 	if c.State != "Truncated" || total > maxConversationBytes || len(c.Turns) == 0 {
 		t.Fatalf("conversation budget kept %d bytes in %d turns, state %s", total, len(c.Turns), c.State)
+	}
+}
+
+// The selected row is the default detail and the list's highlight wherever it
+// sits, and it marks the shell so a phone opens that detail, not the list.
+// Without a selection, or with one on a row that does not render, the first
+// row is the default and a phone opens the list.
+func TestSelectedRowIsTheDefaultDetailOnEveryViewport(t *testing.T) {
+	page := func(ids []string, selected ...string) ProductPage {
+		var rows []ProductRow
+		for _, id := range ids {
+			r := sendRow(id, nil, true)
+			r.Selected = slices.Contains(selected, id)
+			rows = append(rows, r)
+		}
+		return ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []ProductGroup{{Title: "Idle", Rows: rows[:1]}, {Title: "Later", Rows: rows[1:]}}}
+	}
+	ids := []string{"s1", "s2", "s3"}
+	for _, tc := range []struct {
+		name  string
+		page  ProductPage
+		want  string
+		shell bool
+	}{
+		{"no selection", page(ids), "s1", false},
+		{"third row", page(ids, "s3"), "s3", true},
+		{"first of two", page(ids, "s2", "s3"), "s2", true},
+		{"selected row dropped", page([]string{"s1", "s2", "bad"}, "bad"), "s1", false},
+	} {
+		body, err := RenderProduct(tc.page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		html := string(body)
+		if strings.Count(html, `<section class="detail default"`) != 1 || !strings.Contains(html, `<section class="detail default" id="`+tc.want+`"`) {
+			t.Errorf("%s: default detail is not %s", tc.name, tc.want)
+		}
+		if strings.Count(html, `class="item default"`) != 1 || !strings.Contains(html, `<a class="item default" href="#`+tc.want+`">`) {
+			t.Errorf("%s: list highlight is not %s", tc.name, tc.want)
+		}
+		if strings.Contains(html, `<div class="shell selected">`) != tc.shell {
+			t.Errorf("%s: shell selected %v", tc.name, !tc.shell)
+		}
+	}
+	// The stylesheet opens the default detail on a wide screen, and the
+	// selected one on a phone until the reader follows a link in the page.
+	for _, rule := range []string{
+		".workspace:not(:has(.detail:target)) .detail.default, .detail:target { display: flex; }",
+		".shell.selected:not(:has(:target)) .workspace { display: block; }",
+		".shell.selected:not(:has(:target)) .list { display: none; }",
+		".shell:not(:has(.detail:target)) .item.default {",
+	} {
+		if !strings.Contains(viewsStyle, rule) {
+			t.Errorf("stylesheet lacks %s", rule)
+		}
 	}
 }

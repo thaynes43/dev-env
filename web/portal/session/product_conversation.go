@@ -55,8 +55,10 @@ var conversationNotes = map[string]string{
 const historyGap = "No supported route reads a live session's conversation yet. The portal does not read provider files directly."
 
 // withHistory links each session to its own selected view and, for the one
-// session filter.Session selects, attaches its conversation or the exact
-// reason it is unavailable. Nothing is invented: a failed read shows no turns.
+// session filter.Session selects, marks its row selected and attaches its
+// conversation or the exact reason it is unavailable. Nothing is invented: a
+// failed read shows no turns. The link carries the UID only: row IDs are
+// positions, so a fragment could open another session after the list moves.
 func withHistory(ctx context.Context, page portal.ProductPage, selected string, src ConversationSource, now time.Time) portal.ProductPage {
 	found := false
 	page.Groups = append([]portal.ProductGroup(nil), page.Groups...)
@@ -68,10 +70,11 @@ func withHistory(ctx context.Context, page portal.ProductPage, selected string, 
 			}
 			m := *row.Messages
 			if src != nil {
-				m.HistoryHref = SessionsPath + "?session=" + url.QueryEscape(m.SessionUID) + "#" + row.ID
+				m.HistoryHref = SessionsPath + "?session=" + url.QueryEscape(m.SessionUID)
 			}
-			if selected != "" && m.SessionUID == selected {
+			if selected != "" && m.SessionUID == selected && !found {
 				found = true
+				rows[j].Selected = true
 				m.Conversation = readConversation(ctx, src, m.Session, m.SessionUID, now)
 			}
 			rows[j].Messages = &m
