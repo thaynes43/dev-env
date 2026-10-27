@@ -144,7 +144,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 		}
 	}
 	partial := sessionsPage(decoded.Sessions, false, "observed", now)
-	if partial.Complete || partial.ListCount != "Partial list" || partial.Usage.Stats[0].Value != "1 listed" {
+	if partial.Complete || partial.ListCount != "Partial list" || partial.Usage.Stats[0].Value != "1 listed" || !strings.HasSuffix(partial.Usage.Stats[1].Value, " listed") || !strings.HasSuffix(partial.Usage.Stats[2].Value, " listed") {
 		t.Fatalf("incomplete read was counted: %+v", partial)
 	}
 	disconnected, err := portal.RenderProduct(portal.ProductPage{Title: "Sessions", Notice: "Sessions unavailable", Usage: page.Usage, Groups: page.Groups})

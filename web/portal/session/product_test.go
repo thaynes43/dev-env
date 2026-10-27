@@ -491,7 +491,7 @@ func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
 	var element halWorkPackage
 	raw := `{"id":178,"subject":"Portal","createdAt":"2026-10-20T00:00:00Z","updatedAt":"2026-10-26T23:00:00Z","customField1":null,
 	"customField2":"agent | worktree dev-env-1026-134753 | branch agent/dev-env-1026-134753","customField3":"dev-env; haynes-ops",
-	"description":{"format":"markdown","raw":"## Scope\n- Ship the [portal](https://example.invalid/x) **today**\n\nThen stop."},
+	"description":{"format":"markdown","raw":"## Scope\n- Ship the [portal](https://example.invalid/x) ![diagram](https://example.invalid/d.png) **today** as dev_env_v2_portal_runtime\n\nThen stop."},
 	"_links":{"project":{"href":"/api/v3/projects/3"},"status":{"title":"In progress"},"type":{"title":"Story"},"parent":{"href":"/api/v3/work_packages/85","title":"Distributed dev-env"},"assignee":{"href":null},"responsible":{"href":null}}}`
 	if err := json.Unmarshal([]byte(raw), &element); err != nil {
 		t.Fatal(err)
@@ -503,7 +503,7 @@ func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
 	if row.Kicker != "#178 · Story" || row.Meta != "dev-env-1026-134753" || row.Description != "in Distributed dev-env" || row.Status.Tone != "busy" {
 		t.Fatalf("row %+v", row)
 	}
-	if row.Sections[0].Title != "Summary" || row.Sections[0].Note != "Scope Ship the portal today Then stop." {
+	if row.Sections[0].Title != "Summary" || row.Sections[0].Note != "Scope Ship the portal diagram today as dev_env_v2_portal_runtime Then stop." {
 		t.Fatalf("summary %+v", row.Sections[0])
 	}
 	if fields := rowFields(row); fields["Execution owner"] == "" || fields["Parent"] != "Distributed dev-env" || fields["Type"] != "Story" {
@@ -524,6 +524,7 @@ func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
 		"Cursor Grok | session 1772 | worktree dev-env-grok-101 | PR4264":     "dev-env-grok-101",
 		strings.Repeat("long ", 20):                                           strings.TrimSpace(strings.Repeat("long ", 8)) + "…",
 		" | / | ":                                                             "",
+		"agent | worktree " + strings.Repeat("w", 60) + " | branch b":         strings.Repeat("w", 40) + "…",
 	} {
 		if got := taskOwner(raw); got != want {
 			t.Errorf("taskOwner(%q) = %q, want %q", raw, got, want)

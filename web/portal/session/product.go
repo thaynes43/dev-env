@@ -308,9 +308,6 @@ func decodeTaskPage(body []byte, page int, seen map[int]struct{}, now time.Time)
 		}
 		return rows, total, true, nil
 	}
-	if count != productPageSize {
-		return nil, 0, false, portal.ErrUnavailable
-	}
 	return rows, total, false, nil
 }
 
@@ -550,23 +547,25 @@ func taskOwner(raw string) string {
 	if len(parts) == 0 {
 		return ""
 	}
+	owner := shown(parts[0])
 	for _, part := range parts {
 		if name, ok := strings.CutPrefix(part, "worktree "); ok && strings.TrimSpace(name) != "" {
-			return shown(name)
+			owner = shown(name)
+			break
 		}
 	}
-	first := shown(parts[0])
-	if runes := []rune(first); len(runes) > taskOwnerRunes {
-		first = strings.TrimSpace(string(runes[:taskOwnerRunes])) + "…"
+	if runes := []rune(owner); len(runes) > taskOwnerRunes {
+		owner = strings.TrimSpace(string(runes[:taskOwnerRunes])) + "…"
 	}
-	return first
+	return owner
 }
 
 const taskOwnerRunes = 40
 
 var (
-	markdownLink  = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
-	markdownMarks = regexp.MustCompile("(?m)^\\s*(#{1,6}|[-*>]|[0-9]+\\.)\\s+|[*_`]{1,3}")
+	markdownLink = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
+	// Underscores are kept: snake_case names are common in these descriptions.
+	markdownMarks = regexp.MustCompile("(?m)^\\s*(#{1,6}|[-*>]|[0-9]+\\.)\\s+|[*`]{1,3}")
 )
 
 // taskSummary is a plain-text excerpt of a work package's Markdown

@@ -288,13 +288,16 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 		page.ListCount = strconv.Itoa(len(sessions)) + " sessions · dev-env"
 	}
 	countText := strconv.Itoa(measured) + " of " + strconv.Itoa(len(sessions))
+	runningText, attentionText := strconv.Itoa(running), strconv.Itoa(attention)
 	if !complete {
+		// A partial read is not a count of the inventory.
 		countText = strconv.Itoa(measured) + " listed"
+		runningText, attentionText = runningText+" listed", attentionText+" listed"
 	}
 	usage.Stats = []portal.ProductStat{
 		{Label: "Measured sessions", Value: countText, Note: "Task sessions' first invocation"},
-		{Label: "In progress", Value: strconv.Itoa(running), Note: "Sessions listed in progress"},
-		{Label: "Needs attention", Value: strconv.Itoa(attention), Note: "Failed, waiting or interrupted"},
+		{Label: "In progress", Value: runningText, Note: "Sessions listed in progress"},
+		{Label: "Needs attention", Value: attentionText, Note: "Failed, waiting or interrupted"},
 	}
 	page.Usage = usage
 	return page
