@@ -245,6 +245,11 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		// its native TUI with no prompt, matching Claude's resume contract.
 		argv = []string{s.CodexBin, "resume", first.ConversationID, "--no-daemon"}
 		l.ConversationID, l.TUI, l.Resume, l.NativeThreadConfirmed = first.ConversationID, true, true, true
+		// Preserve the first immutable Session owner and bind this resumed
+		// invocation to its current pod only when the original pod was bound.
+		if first.PodUID != "" && apiv1.ValidContextUID(s.PodUID) {
+			l.PodUID = s.PodUID
+		}
 	} else {
 		l.Prompt, l.Timeout = sess.Prompt, sess.TimeoutDuration()
 	}

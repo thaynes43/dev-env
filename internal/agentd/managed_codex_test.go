@@ -415,3 +415,30 @@ cat >/dev/null
 		}
 	}
 }
+
+func TestCodexHistoryRegistrationPreservesLegacyResume(t *testing.T) {
+	s, sess, ws, now := managedCodexFixture(t)
+	s.PodUID = "fixture-first-pod"
+	first, err := BuildLaunch(s, sess, ws, "first", now)
+	if err != nil {
+		t.Fatal("first launch")
+	}
+	first.ConversationID = "12345678-1234-1234-1234-123456789abc"
+	first.NativeThreadConfirmed = true
+	s.PodUID = "fixture-replacement-pod"
+	resumed, err := BuildResume(s, sess, ws, first, "resume", now)
+	if err != nil || resumed.PodUID != s.PodUID || resumed.SessionUID != sess.SessionUID || resumed.ConversationID != first.ConversationID {
+		t.Fatal("bound resume registration failed")
+	}
+	legacy := first
+	legacy.PodUID = ""
+	resumed, err = BuildResume(s, sess, ws, legacy, "legacy", now)
+	if err != nil || !resumed.Resume || resumed.PodUID != "" {
+		t.Fatal("legacy resume changed or was retrobound")
+	}
+	replaced := sess
+	replaced.SessionUID = "replacement-session-uid"
+	if _, err = BuildResume(s, replaced, ws, first, "replacement", now); err == nil {
+		t.Fatal("Codex replacement acquired old thread")
+	}
+}

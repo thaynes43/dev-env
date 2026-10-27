@@ -194,6 +194,12 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 		BootID:         bootID,
 		CreatedAt:      now.UTC(),
 	}
+	// A first interactive conversation is bound only when both immutable
+	// identities were supplied by the operator and downward API. Legacy
+	// launches lacking either value keep their existing behavior.
+	if (sess.Mode == protocol.ModeLocal || sess.Mode == protocol.ModeRemote) && apiv1.ValidContextUID(sess.SessionUID) && apiv1.ValidContextUID(s.PodUID) {
+		l.Provider, l.SessionUID, l.PodUID = protocol.AgentClaude, sess.SessionUID, s.PodUID
+	}
 	if sess.CaptureOutput {
 		if sess.Validate() != nil || !apiv1.ValidContextUID(s.PodUID) {
 			return Launch{}, errors.New("managed capture requires original task and pod")
@@ -282,7 +288,7 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 	if err != nil {
 		return Launch{}, err
 	}
-	return Launch{
+	resume := Launch{
 		CommonInputs: common, Session: sess.Name,
 		Argv:           argv,
 		Dir:            ws.Worktree,
@@ -295,7 +301,13 @@ func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first
 		CreatedAt:      now.UTC(),
 		TUI:            true,
 		Resume:         true,
-	}, nil
+	}
+	// Do not retrobind legacy or replaced-session launch records. The resume
+	// itself still runs as before; only its optional history binding is absent.
+	if first.Provider == protocol.AgentClaude && first.Session == sess.Name && first.SessionUID == sess.SessionUID && first.PodUID != "" && first.Dir == ws.Worktree && apiv1.ValidContextUID(sess.SessionUID) && apiv1.ValidContextUID(s.PodUID) {
+		resume.Provider, resume.SessionUID, resume.PodUID = protocol.AgentClaude, sess.SessionUID, s.PodUID
+	}
+	return resume, nil
 }
 
 // claudeArgs are the CLI's arguments every launch shares: the model, the
