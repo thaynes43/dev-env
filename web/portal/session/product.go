@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -277,21 +278,11 @@ func decodeTaskPage(body []byte, page int, seen map[int]struct{}, now time.Time)
 	if !ok || len(elements) != count {
 		return nil, 0, false, portal.ErrUnavailable
 	}
-	links, err := jsonObject(obj["_links"])
-	if err != nil {
+	// The collection's own paging links are neither followed nor checked: the
+	// reader builds every page URL itself, and OpenProject 17 points them at
+	// /api/v3/workspaces/3 with extra query keys.
+	if _, err := jsonObject(obj["_links"]); err != nil {
 		return nil, 0, false, err
-	}
-	next := ""
-	if raw, ok := links["nextByOffset"]; ok {
-		link, err := jsonObject(raw)
-		if err != nil {
-			return nil, 0, false, err
-		}
-		if href, ok := link["href"]; ok && string(href) != "null" {
-			if json.Unmarshal(href, &next) != nil {
-				return nil, 0, false, portal.ErrUnavailable
-			}
-		}
 	}
 	rows := make([]portal.ProductRow, 0, len(elements))
 	for _, raw := range elements {
@@ -312,12 +303,12 @@ func decodeTaskPage(body []byte, page int, seen map[int]struct{}, now time.Time)
 	expected := total - (page-1)*productPageSize
 	last := count < productPageSize || page*productPageSize >= total
 	if last {
-		if count != expected || next != "" {
+		if count != expected {
 			return nil, 0, false, portal.ErrUnavailable
 		}
 		return rows, total, true, nil
 	}
-	if count != productPageSize || !taskHint(next, page+1) {
+	if count != productPageSize {
 		return nil, 0, false, portal.ErrUnavailable
 	}
 	return rows, total, false, nil
@@ -432,8 +423,9 @@ type halWorkPackage struct {
 	Subject      string `json:"subject"`
 	CreatedAt    string `json:"createdAt"`
 	UpdatedAt    string `json:"updatedAt"`
-	CustomField1 string `json:"customField1"`
-	CustomField3 string `json:"customField3"`
+	CustomField1 string `json:"customField1"` // Accountable owner
+	CustomField2 string `json:"customField2"` // Execution owner
+	CustomField3 string `json:"customField3"` // Repositories
 	Description  struct {
 		Raw string `json:"raw"`
 	} `json:"description"`
@@ -444,6 +436,12 @@ type halWorkPackage struct {
 		Status struct {
 			Title string `json:"title"`
 		} `json:"status"`
+		Type struct {
+			Title string `json:"title"`
+		} `json:"type"`
+		Parent struct {
+			Title string `json:"title"`
+		} `json:"parent"`
 		Assignee struct {
 			Title string `json:"title"`
 		} `json:"assignee"`
@@ -459,48 +457,129 @@ type halWorkPackage struct {
 	} `json:"_embedded"`
 }
 
+// taskSummaryRunes bounds the description excerpt; the full text stays in
+// OpenProject behind the row's link.
+const taskSummaryRunes = 600
+
 func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	if element.ID < 1 || !projectThree(element) {
 		return portal.ProductRow{}, portal.ErrUnavailable
 	}
 	id := strconv.Itoa(element.ID)
 	status := shown(element.Links.Status.Title)
-	accountable := shown(element.CustomField1)
+	kind := shown(element.Links.Type.Title)
 	repos := shown(element.CustomField3)
+	owner := taskOwner(element.CustomField2)
+	if owner == "" && strings.TrimSpace(element.CustomField1) != "" {
+		owner = shown(element.CustomField1)
+	}
 	updatedAgo, age := "updated Unknown", "Unknown"
 	if updated, err := time.Parse(time.RFC3339, element.UpdatedAt); err == nil {
 		updatedAgo, age = "updated "+portal.Ago(updated, now), compactAgo(&updated, now)
 	}
-	description := repos
-	if repos == "Unknown" {
-		description = "Repositories Unknown"
+	kicker, badges := "#"+id, []string{updatedAgo}
+	if kind != "Unknown" {
+		kicker += " · " + kind
+		badges = []string{kind, updatedAgo}
 	}
-	meta := accountable
-	if accountable == "Unknown" {
-		meta = "Accountable Unknown"
+	description := ""
+	if parent := element.Links.Parent.Title; strings.TrimSpace(parent) != "" {
+		description = "in " + shown(parent)
+	} else if repos != "Unknown" {
+		description = repos
 	}
+	if owner != "" {
+		badges = append(badges, owner)
+	}
+	summary := portal.ProductSection{Title: "Summary", Note: taskSummary(element.Description.Raw)}
+	if summary.Note == "" {
+		summary.Note = "No description."
+	}
+	var people []portal.ProductField
+	for _, f := range []portal.ProductField{
+		{Label: "Execution owner", Value: element.CustomField2},
+		{Label: "Accountable owner", Value: element.CustomField1},
+		{Label: "Assignee", Value: element.Links.Assignee.Title},
+		{Label: "Responsible", Value: element.Links.Responsible.Title},
+	} {
+		if strings.TrimSpace(f.Value) != "" {
+			f.Value = shown(f.Value)
+			people = append(people, f)
+		}
+	}
+	sections := []portal.ProductSection{summary}
+	if len(people) > 0 {
+		sections = append(sections, portal.ProductSection{Title: "Ownership", Fields: people})
+	}
+	sections = append(sections, portal.ProductSection{Title: "Dates", Fields: []portal.ProductField{
+		{Label: "Created", Value: shownDate(element.CreatedAt)},
+		{Label: "Updated", Value: shownDate(element.UpdatedAt)},
+	}})
+	context := []portal.ProductField{
+		{Label: "Work package", Value: "#" + id, Mono: true},
+		{Label: "Type", Value: kind},
+		{Label: "Status", Value: status},
+	}
+	if parent := element.Links.Parent.Title; strings.TrimSpace(parent) != "" {
+		context = append(context, portal.ProductField{Label: "Parent", Value: shown(parent)})
+	}
+	context = append(context, portal.ProductField{Label: "Repositories", Value: repos})
 	return portal.ProductRow{
-		Title: shown(element.Subject), Kicker: "#" + id, Crumb: "#" + id,
+		Title: shown(element.Subject), Kicker: kicker, Crumb: "#" + id,
 		Link: "https://work.haynesnetwork.com/work_packages/" + id, LinkLabel: "Open in OpenProject",
-		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: meta, Age: age,
-		Badges: []string{updatedAgo, description}, ContextTitle: "Work package",
-		Sections: []portal.ProductSection{
-			{Title: "Ownership", Fields: []portal.ProductField{
-				{Label: "Accountable", Value: accountable},
-				{Label: "Assignee", Value: shown(element.Links.Assignee.Title)},
-				{Label: "Responsible", Value: shown(element.Links.Responsible.Title)},
-			}},
-			{Title: "Dates", Fields: []portal.ProductField{
-				{Label: "Created", Value: shownDate(element.CreatedAt)},
-				{Label: "Updated", Value: shownDate(element.UpdatedAt)},
-			}},
-		},
-		Context: []portal.ProductField{
-			{Label: "Work package", Value: "#" + id, Mono: true},
-			{Label: "Status", Value: status},
-			{Label: "Repositories", Value: repos},
-		},
+		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: owner, Age: age,
+		Badges: badges, Sections: sections, ContextTitle: "Work package", Context: context,
 	}, nil
+}
+
+// taskOwner is the list's short owner: the worktree name from opwork's
+// "agent | worktree <name> | branch <branch>", or else the first part of a
+// free-form Execution owner, at most taskOwnerRunes runes. The detail shows
+// the full value.
+func taskOwner(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var parts []string
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == '|' || r == '/' }) {
+		if part = strings.TrimSpace(part); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	for _, part := range parts {
+		if name, ok := strings.CutPrefix(part, "worktree "); ok && strings.TrimSpace(name) != "" {
+			return shown(name)
+		}
+	}
+	first := shown(parts[0])
+	if runes := []rune(first); len(runes) > taskOwnerRunes {
+		first = strings.TrimSpace(string(runes[:taskOwnerRunes])) + "…"
+	}
+	return first
+}
+
+const taskOwnerRunes = 40
+
+var (
+	markdownLink  = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	markdownMarks = regexp.MustCompile("(?m)^\\s*(#{1,6}|[-*>]|[0-9]+\\.)\\s+|[*_`]{1,3}")
+)
+
+// taskSummary is a plain-text excerpt of a work package's Markdown
+// description: link text without its URL, no heading or list marks, one
+// line, at most taskSummaryRunes runes.
+func taskSummary(raw string) string {
+	text := markdownLink.ReplaceAllString(raw, "$1")
+	text = markdownMarks.ReplaceAllString(text, "")
+	text = strings.Join(strings.FieldsFunc(text, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
+	if runes := []rune(text); len(runes) > taskSummaryRunes {
+		text = strings.TrimSpace(string(runes[:taskSummaryRunes])) + "…"
+	}
+	return text
 }
 
 // taskTone colors a work-package status by what it asks of a reader. An
@@ -522,11 +601,11 @@ var taskGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: tru
 
 func taskGroup(status string) int {
 	switch strings.ToLower(status) {
-	case "needs answer", "needs approval", "on hold", "blocked", "feedback":
+	case "needs answer", "needs approval", "on hold", "paused", "blocked", "feedback":
 		return 0
 	case "in progress", "in review", "developed", "tested":
 		return 1
-	case "new", "scheduled", "specified", "planned", "confirmed", "to be scheduled":
+	case "new", "draft", "ungroomed", "scheduled", "specified", "planned", "confirmed", "to be scheduled":
 		return 2
 	case "closed", "done", "accepted", "resolved", "rejected":
 		return 3
@@ -578,61 +657,6 @@ func projectThree(element halWorkPackage) bool {
 
 func taskCollectionURL(page int) string {
 	return openProjectPortalOrigin + openProjectProjectPath + "?offset=" + strconv.Itoa(page) + "&pageSize=" + strconv.Itoa(productPageSize) + "&filters=%5B%5D"
-}
-
-func taskHint(href string, page int) bool {
-	if href == "" || strings.ContainsAny(href, "#@\\") || strings.Contains(href, "..") || strings.Contains(strings.ToLower(href), "%2e") || strings.Contains(href, "%") && strings.Contains(href, "work_packages") && !strings.Contains(href, "filters=%5B%5D") && !strings.Contains(href, "filters=[]") {
-		return false
-	}
-	if strings.Contains(href, "%2f") || strings.Contains(href, "%2F") {
-		return false
-	}
-	var u *url.URL
-	var err error
-	switch {
-	case strings.HasPrefix(href, "/"):
-		u, err = url.ParseRequestURI(href)
-		if err != nil || u.Host != "" || u.Scheme != "" || u.User != nil {
-			return false
-		}
-	case strings.HasPrefix(href, "https://"):
-		u, err = url.ParseRequestURI(href)
-		if err != nil || u.User != nil {
-			return false
-		}
-		if u.Host != openProjectPortalHost+":8443" && u.Host != "work.haynesnetwork.com" {
-			return false
-		}
-	default:
-		return false
-	}
-	if u.Fragment != "" || u.RawPath != "" || u.Path != openProjectProjectPath {
-		return false
-	}
-	return taskQuery(u.RawQuery, page)
-}
-
-func taskQuery(raw string, page int) bool {
-	if raw == "" || strings.Contains(raw, ";") {
-		return false
-	}
-	seen := map[string]string{}
-	for _, pair := range strings.Split(raw, "&") {
-		key, value, ok := strings.Cut(pair, "=")
-		if !ok {
-			return false
-		}
-		if _, dup := seen[key]; dup {
-			return false
-		}
-		uk, errK := url.QueryUnescape(key)
-		uv, errV := url.QueryUnescape(value)
-		if errK != nil || errV != nil || uk != key {
-			return false
-		}
-		seen[key] = uv
-	}
-	return len(seen) == 3 && seen["offset"] == strconv.Itoa(page) && seen["pageSize"] == strconv.Itoa(productPageSize) && seen["filters"] == "[]"
 }
 
 func productGet(ctx context.Context, client *http.Client, rawURL, token string, limit int64, accept string) ([]byte, error) {

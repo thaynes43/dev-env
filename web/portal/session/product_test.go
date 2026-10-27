@@ -130,7 +130,7 @@ func TestSessionsAndTasksAreIndependent(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, f.request(http.MethodGet, TasksPath, ""))
 	body := w.Body.String()
-	if w.Code != http.StatusOK || !strings.Contains(body, "Canonical subject") || !strings.Contains(body, "Closed") || !strings.Contains(body, "Accountable owner") || !strings.Contains(body, "dev-env; haynes-ops") || !strings.Contains(body, "https://work.haynesnetwork.com/work_packages/42") || strings.Contains(body, "SECRET-DESCRIPTION") {
+	if w.Code != http.StatusOK || !strings.Contains(body, "Canonical subject") || !strings.Contains(body, "Closed") || !strings.Contains(body, "Accountable owner") || !strings.Contains(body, "dev-env; haynes-ops") || !strings.Contains(body, "https://work.haynesnetwork.com/work_packages/42") || !strings.Contains(body, `<p class="note">SECRET-DESCRIPTION</p>`) {
 		t.Fatalf("task projection: %s", body)
 	}
 	foreignSrv := serveTLS(t, opCert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,8 +198,10 @@ func TestProductFailsClosedOnRedirectExpiryAndUntrustedCA(t *testing.T) {
 	handler = NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: nil, FreshFor: time.Minute, Now: func() time.Time { return now }})
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
-	if !strings.Contains(w.Body.String(), "older") || !strings.Contains(w.Body.String(), "Session freshness is stale.") {
-		t.Fatalf("stale session was hidden: %s", w.Body.String())
+	// Stopped sessions never heartbeat: stale freshness is a quiet status
+	// line, not a banner.
+	if !strings.Contains(w.Body.String(), "older") || !strings.Contains(w.Body.String(), `<span role="status">Session freshness is stale.</span>`) || strings.Contains(w.Body.String(), `class="banner"`) {
+		t.Fatalf("stale session was hidden or bannered: %s", w.Body.String())
 	}
 	if err := os.WriteFile(operatorToken, []byte(fixtureOperatorToken("dev-env-operator", now.Add(-time.Minute))+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -264,7 +266,9 @@ func TestProjectCollectionPagesAndSessionObjects(t *testing.T) {
 		w.Header().Set("Content-Type", "application/hal+json")
 		switch r.URL.RawQuery {
 		case "offset=1&pageSize=50&filters=%5B%5D":
-			_, _ = w.Write([]byte(page(82, 1, 50, "https://work.haynesnetwork.com/api/v3/projects/3/work_packages?offset=2&pageSize=50&filters=%5B%5D")))
+			// OpenProject 17's own next link: another path and extra keys. The
+			// reader builds page 2's URL itself and ignores this.
+			_, _ = w.Write([]byte(page(82, 1, 50, "/api/v3/workspaces/3/work_packages?filters=%5B%5D&includeSubprojects=false&offset=2&pageSize=50&showHierarchies=true&showSums=false&sortBy=%5B%5B%22id%22%2C%22asc%22%5D%5D")))
 		case "offset=2&pageSize=50&filters=%5B%5D":
 			_, _ = w.Write([]byte(page(82, 2, 32, "")))
 		default:
@@ -309,8 +313,10 @@ func TestProjectCollectionPagesAndSessionObjects(t *testing.T) {
 	handler = NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: nil, Tasks: tasks, FreshFor: time.Minute, Now: func() time.Time { return now }})
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, f.request(http.MethodGet, TasksPath, ""))
-	if !strings.Contains(w.Body.String(), "Package 50") || strings.Contains(w.Body.String(), "SECRET-DESCRIPTION-MARKER") {
-		t.Fatal("full HAL description was rejected or rendered")
+	// Only a bounded excerpt is rendered: the 1,000-character marker never
+	// appears whole, and none of the padding after it does.
+	if !strings.Contains(w.Body.String(), "Package 50") || !strings.Contains(w.Body.String(), "SECRET-DESCRIPTION-MARKER") || strings.Contains(w.Body.String(), marker) || strings.Contains(w.Body.String(), "xxxx") {
+		t.Fatal("full HAL description was rejected or rendered whole")
 	}
 	bad := []string{
 		`{}`,
@@ -475,5 +481,57 @@ func TestEntryRedirects(t *testing.T) {
 	handler.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
 	if w.Code != http.StatusForbidden || w.Header().Get("Location") != "" {
 		t.Fatalf("refused user was redirected: %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// A work package shaped like OpenProject 17's renders its type, Execution
+// owner worktree, parent and a plain-text summary; empty people are omitted.
+func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
+	now := time.Date(2026, 10, 27, 1, 0, 0, 0, time.UTC)
+	var element halWorkPackage
+	raw := `{"id":178,"subject":"Portal","createdAt":"2026-10-20T00:00:00Z","updatedAt":"2026-10-26T23:00:00Z","customField1":null,
+	"customField2":"agent | worktree dev-env-1026-134753 | branch agent/dev-env-1026-134753","customField3":"dev-env; haynes-ops",
+	"description":{"format":"markdown","raw":"## Scope\n- Ship the [portal](https://example.invalid/x) **today**\n\nThen stop."},
+	"_links":{"project":{"href":"/api/v3/projects/3"},"status":{"title":"In progress"},"type":{"title":"Story"},"parent":{"href":"/api/v3/work_packages/85","title":"Distributed dev-env"},"assignee":{"href":null},"responsible":{"href":null}}}`
+	if err := json.Unmarshal([]byte(raw), &element); err != nil {
+		t.Fatal(err)
+	}
+	row, err := taskRow(element, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Kicker != "#178 · Story" || row.Meta != "dev-env-1026-134753" || row.Description != "in Distributed dev-env" || row.Status.Tone != "busy" {
+		t.Fatalf("row %+v", row)
+	}
+	if row.Sections[0].Title != "Summary" || row.Sections[0].Note != "Scope Ship the portal today Then stop." {
+		t.Fatalf("summary %+v", row.Sections[0])
+	}
+	if fields := rowFields(row); fields["Execution owner"] == "" || fields["Parent"] != "Distributed dev-env" || fields["Type"] != "Story" {
+		t.Fatalf("fields %v", fields)
+	} else {
+		for _, absent := range []string{"Accountable owner", "Assignee", "Responsible"} {
+			if _, ok := fields[absent]; ok {
+				t.Errorf("empty %s is shown", absent)
+			}
+		}
+	}
+	if long := taskSummary(strings.Repeat("é", taskSummaryRunes+10)); len([]rune(long)) != taskSummaryRunes+1 || !strings.HasSuffix(long, "…") {
+		t.Fatalf("summary is not bounded by runes: %d", len([]rune(long)))
+	}
+	for raw, want := range map[string]string{
+		"gpt-6.1-sol | dev-env-1019-205125 | haynes-ops-unraid-plan-20261022": "gpt-6.1-sol",
+		"Sol coordinator / dev-env-1019-205125 / thread01a1 / story190":       "Sol coordinator",
+		"Cursor Grok | session 1772 | worktree dev-env-grok-101 | PR4264":     "dev-env-grok-101",
+		strings.Repeat("long ", 20):                                           strings.TrimSpace(strings.Repeat("long ", 8)) + "…",
+		" | / | ":                                                             "",
+	} {
+		if got := taskOwner(raw); got != want {
+			t.Errorf("taskOwner(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	for status, group := range map[string]int{"Draft": 2, "Ungroomed": 2, "Paused": 0, "Needs approval": 0, "In review": 1, "Accepted": 3} {
+		if got := taskGroup(status); got != group {
+			t.Errorf("taskGroup(%q) = %d, want %d", status, got, group)
+		}
 	}
 }

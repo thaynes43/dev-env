@@ -367,3 +367,43 @@ said the green status icons clash with the theme.
   lavender instead of green, in both color schemes. Idle and Starting turn
   muted grey so that Running stays the only accent badge. Waiting (amber),
   Busy (blue) and Failed (red) are unchanged.
+
+### Usable demo pass, 2026-10-27
+
+Tom: "Is the site usable? It looked stubbed out when I logged in." Rendering
+the live session inventory and the live OpenProject collection through the
+portal's own decoders showed why.
+
+- **Tasks could not load.** OpenProject 17's `nextByOffset` link points at
+  `/api/v3/workspaces/3/work_packages` and carries extra keys
+  (`includeSubprojects`, `showHierarchies`, `showSums`, `sortBy`). The reader
+  refused the whole collection because of it. The reader already builds every
+  page URL itself, so it no longer checks or follows the collection's paging
+  links; the page arithmetic (`total`, `count`, `pageSize`, `offset`) is
+  unchanged. A 96-package live collection now decodes in two pages.
+- **Tasks show what each item is.** The list shows the type (Saga, Epic,
+  Story), the parent, and the Execution owner's worktree name. The detail
+  adds a plain-text excerpt of the description, at most 600 characters, with
+  link targets and Markdown marks removed. Empty owners are left out instead of
+  shown as Unknown. Draft and Ungroomed group as Planned, Paused as Needs
+  attention. Ruling reversed under Tom's 2026-10-26 fastest-path direction:
+  the description was excluded before; a bounded excerpt is now shown to the
+  Admins group. The full text stays in OpenProject behind the row's link.
+- **Stubs removed.** The Automations and Watchdog "Planned" entries, the
+  Planned page and the all-Unknown provider allowance bar are gone. A remote
+  or interactive session has no Usage panel instead of a panel of Unknowns.
+  The Usage view's tiles count measured, in-progress and needs-attention
+  sessions; it still adds no token or cost values.
+- **No stale banner.** Suspended sessions never heartbeat, so the page was
+  always "stale". The freshness notice is now a status-bar line; each
+  session's detail still shows its own freshness.
+- **No CA re-pin.** CNPG renews its CA every 90 days with the same key and
+  subject, and Go refuses an expired root. The portal now adds each pinned
+  PostgreSQL CA to its root pool with the validity window opened, so a
+  renewed server certificate keeps verifying. Chain, hostname, key usage and
+  the server certificate's dates are still checked. This removes the
+  2026-11-05 re-pin deadline for `postgres-ca.crt`.
+
+Next build step, not started: the operator's portal view lists only
+`repo: dev-env` sessions and carries no task description or outcome, so a
+session row cannot say what it is working on.

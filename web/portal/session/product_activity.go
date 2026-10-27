@@ -231,7 +231,9 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	case !complete:
 		page.Notice, page.ListCount = "Sessions read is incomplete. This is not the full inventory.", "Partial list"
 	case freshness != "observed":
-		page.Notice = "Session freshness is " + freshness + "."
+		// Stopped sessions never heartbeat, so a stale page is normal. It is
+		// not a banner; each session's detail shows its own freshness.
+		page.Notice, page.Quiet = "Session freshness is "+freshness+".", true
 	case len(sessions) == 0:
 		page.Notice = "The completed session read returned no dev-env sessions."
 	default:
@@ -256,22 +258,26 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 		Columns: []string{"Session", "Input", "Output", "Cache read", "Cache create", "Est. cost"},
 		Coverage: []portal.ProductField{
 			{Label: "Measured", Value: "First managed invocation of task sessions"},
-			{Label: "Interactive and remote sessions", Value: "Unknown"},
-			{Label: "Later turns", Value: "Unknown"},
-			{Label: "Account allowance", Value: "Unknown"},
+			{Label: "Not measured", Value: "Interactive and remote sessions, later turns, account allowance"},
 			{Label: "Served model", Value: "Provider reported, where measured"},
 			{Label: "Cache read tokens", Value: "Separate counter; can overlap input; never added"},
 			{Label: "Cost", Value: "CLI-equivalent list-price estimate; not a charge"},
 			{Label: "Totals", Value: "None computed"},
 		},
 	}
-	measured := 0
+	measured, running, attention := 0, 0, 0
 	for i, s := range ordered {
 		id := "s" + strconv.Itoa(i+1)
 		row := sessionRow(s, now)
 		row.ID = id
 		g := sessionGroup(s.Phase, s.Activity)
 		page.Groups[g].Rows = append(page.Groups[g].Rows, row)
+		switch g {
+		case 0:
+			attention++
+		case 1:
+			running++
+		}
 		usageRow, ok := sessionUsageRow(id, s)
 		if ok {
 			measured++
@@ -287,8 +293,8 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	}
 	usage.Stats = []portal.ProductStat{
 		{Label: "Measured sessions", Value: countText, Note: "Task sessions' first invocation"},
-		{Label: "Account allowance", Value: "Unknown", Note: "No allowance source connected", Tone: "muted"},
-		{Label: "Billed cost", Value: "Unknown", Note: "Estimates are not charges", Tone: "muted"},
+		{Label: "In progress", Value: strconv.Itoa(running), Note: "Sessions listed in progress"},
+		{Label: "Needs attention", Value: strconv.Itoa(attention), Note: "Failed, waiting or interrupted"},
 	}
 	page.Usage = usage
 	return page
@@ -371,21 +377,22 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 			{Label: "Scope", Value: usageScopeText(u)},
 		}
 		usage.Note = "Counters are reported separately; cache reads can overlap input. Nothing is added."
-	} else {
-		out.Meta = "Usage Unknown"
-		usage.Fields = []portal.ProductField{{Label: "Scope", Value: "Unknown"}, {Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown}}
-		usage.Note = "Usage is measured only for a task session's first managed invocation."
 	}
 	lastSeen := activityTime(a.LastActivity)
 	if a.LastActivity != nil {
 		lastSeen = portal.Ago(*a.LastActivity, now) + " · " + a.LastActivity.UTC().Format("2 Jan 2006, 15:04 UTC")
 	}
-	out.Sections = []portal.ProductSection{usage, {Title: "Activity", Fields: []portal.ProductField{
+	out.Sections = []portal.ProductSection{{Title: "Activity", Fields: []portal.ProductField{
 		{Label: "Last reported agent state", Value: shown(a.AgentState)},
 		{Label: "Last activity", Value: lastSeen},
 		{Label: "Phase", Value: shown(row.Phase)},
 		{Label: "Freshness", Value: shown(row.Freshness)},
 	}}}
+	// Only a task session's first invocation is measured. Others get no
+	// Usage panel rather than a panel of Unknowns.
+	if u.Scope == protocol.UsageInitial {
+		out.Sections = append([]portal.ProductSection{usage}, out.Sections...)
+	}
 	out.Context = []portal.ProductField{
 		{Label: "Project", Value: "dev-env"},
 		{Label: "Mode", Value: shown(a.Mode)},

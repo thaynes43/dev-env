@@ -98,17 +98,20 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 	}
 	remote := findRow(t, page, "remote")
 	fields := rowFields(remote)
-	for _, label := range []string{"Last activity", "Scope"} {
-		if fields[label] != "Unknown" {
-			t.Errorf("remote %s = %q, want Unknown", label, fields[label])
-		}
+	if fields["Last activity"] != "Unknown" {
+		t.Errorf("remote Last activity = %q, want Unknown", fields["Last activity"])
 	}
-	for _, label := range []string{"Input", "Output", "Cache read", "Cache create", "Cost estimate"} {
+	for _, label := range []string{"Scope", "Input", "Output", "Cache read", "Cache create", "Cost estimate"} {
 		if _, ok := fields[label]; ok {
 			t.Errorf("remote shows %s although nothing was measured", label)
 		}
 	}
-	if fields["Requested model"] != "claude-opus-5-5" || fields["Mode"] != "remote" || remote.Meta != "Usage Unknown" {
+	for _, section := range remote.Sections {
+		if section.Title == "Usage" {
+			t.Errorf("remote has a Usage panel although nothing was measured: %+v", section)
+		}
+	}
+	if fields["Requested model"] != "claude-opus-5-5" || fields["Mode"] != "remote" || remote.Meta != "" {
 		t.Fatalf("remote %+v", fields)
 	}
 	w := usageRow(t, page, "worker")
@@ -120,7 +123,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 			t.Errorf("remote usage %s = %+v, want Unknown", label, cell)
 		}
 	}
-	if page.Usage.Stats[0].Value != "1 of 2" || page.Usage.Stats[1].Value != "Unknown" || page.Usage.Stats[2].Value != "Unknown" {
+	if page.Usage.Stats[0].Value != "1 of 2" || page.Usage.Stats[1].Label != "In progress" || page.Usage.Stats[2].Label != "Needs attention" {
 		t.Fatalf("usage stats %+v", page.Usage.Stats)
 	}
 	page.ObservedAt = "2026-10-25T12:00:00Z"
@@ -129,7 +132,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(body)
-	for _, want := range []string{"Initial invocations only", "can overlap input; never added", "not a charge", "None computed", `href="#s1"`, `id="usage"`, `id="planned"`, "Automations", "Watchdog", ">Planned<"} {
+	for _, want := range []string{"Initial invocations only", "can overlap input; never added", "not a charge", "None computed", `href="#s1"`, `id="usage"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered page lacks %q", want)
 		}
@@ -303,17 +306,17 @@ func TestSessionLegacyRowRendersUnknownActivity(t *testing.T) {
 	}
 	row := sessionRow(page.Sessions[0], now)
 	got := rowFields(row)
-	for _, label := range []string{"Last reported agent state", "Last activity", "Mode", "Requested model", "Scope"} {
+	for _, label := range []string{"Last reported agent state", "Last activity", "Mode", "Requested model"} {
 		if got[label] != "Unknown" {
 			t.Errorf("legacy %s = %q, want Unknown", label, got[label])
 		}
 	}
-	for _, label := range []string{"Input", "Output", "Cache read", "Cache create", "Cost estimate"} {
+	for _, label := range []string{"Scope", "Input", "Output", "Cache read", "Cache create", "Cost estimate"} {
 		if _, ok := got[label]; ok {
 			t.Errorf("legacy row shows %s", label)
 		}
 	}
-	if got["Phase"] != "Running" || got["Freshness"] != "observed" || got["UID"] != "uid-legacy" || row.Title != "legacy" || row.Meta != "Usage Unknown" || row.Description != "model Unknown · mode Unknown" || row.Age != "Unknown" {
+	if got["Phase"] != "Running" || got["Freshness"] != "observed" || got["UID"] != "uid-legacy" || row.Title != "legacy" || row.Meta != "" || row.Description != "model Unknown · mode Unknown" || row.Age != "Unknown" {
 		t.Fatalf("legacy row %+v", row)
 	}
 }
