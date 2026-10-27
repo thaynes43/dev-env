@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +26,9 @@ type credentialSourceReader interface {
 func readCredentialSource(ctx context.Context, r credentialSourceReader, source *v1alpha1.CredentialSource) (map[string][]byte, error) {
 	if source == nil || source.Namespace == "" || source.Name == "" || len(source.Fields) == 0 {
 		return nil, errors.New("credential source is incomplete")
+	}
+	if slices.Contains(DevEnvNamespaces, source.Namespace) {
+		return nil, errors.New("credential source namespace is reserved")
 	}
 	var secret corev1.Secret
 	if err := r.Get(ctx, client.ObjectKey{Namespace: source.Namespace, Name: source.Name}, &secret); err != nil {

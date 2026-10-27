@@ -484,3 +484,40 @@ func TestGrantPolicyRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestCredentialSourceSchema(t *testing.T) {
+	source := func() *v1alpha1.CredentialSource {
+		return &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"token"}}
+	}
+	cases := []struct {
+		name       string
+		credential *v1alpha1.CredentialGrant
+		valid      bool
+	}{
+		{"legacy name", &v1alpha1.CredentialGrant{Name: v1alpha1.CredentialProxmox}, true},
+		{"source", &v1alpha1.CredentialGrant{Source: source()}, true},
+		{"maximum fields", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p"}}}, true},
+		{"both", &v1alpha1.CredentialGrant{Name: v1alpha1.CredentialProxmox, Source: source()}, false},
+		{"neither", &v1alpha1.CredentialGrant{}, false},
+		{"invalid namespace", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "Bad", Name: "existing", Fields: []string{"token"}}}, false},
+		{"invalid name", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "media", Name: "bad_name", Fields: []string{"token"}}}, false},
+		{"invalid field", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"bad field"}}}, false},
+		{"empty fields", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{}}}, false},
+		{"too many fields", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q"}}}, false},
+		{"duplicate fields", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{"token", "token"}}}, false},
+		{"field too long", &v1alpha1.CredentialGrant{Source: &v1alpha1.CredentialSource{Namespace: "media", Name: "existing", Fields: []string{strings.Repeat("a", 254)}}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := credentialGrant()
+			g.Spec.Credential = tc.credential
+			err := k8s.Create(ctx(t), g)
+			if tc.valid && err != nil {
+				t.Fatalf("valid credential rejected: %v", err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatal("invalid credential accepted")
+			}
+		})
+	}
+}
