@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html/template"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -127,13 +128,43 @@ type ProductUsageRow struct {
 	Cells         []ProductUsageCell
 }
 
-// ProductUsage is the Sessions page's Usage view. It holds no totals.
+// ProductUsageTable is one titled breakdown table. A row with an empty ID is
+// a group, not a session, and is not linked.
+type ProductUsageTable struct {
+	Title, Note string
+	Columns     []string
+	Rows        []ProductUsageRow
+}
+
+// ProductUsage is the Sessions page's Usage view: headline counts, account
+// allowance kept apart from token observations, breakdowns that sum reported
+// values only, the per-session table and what the numbers cover.
 type ProductUsage struct {
 	Stats            []ProductStat
 	Scope, ScopeNote string
+	Allowance        []ProductField
+	Breakdowns       []ProductUsageTable
 	Columns          []string
 	Rows             []ProductUsageRow
 	Coverage         []ProductField
+}
+
+// ProductFilter narrows a product list: to its Needs attention group, or, on
+// Sessions, to one project (a repository). The zero value lists everything.
+type ProductFilter struct {
+	Attention bool
+	Project   string
+}
+
+// ProductCount is one rail entry's name and count. Count is empty when the
+// read was incomplete.
+type ProductCount struct{ Name, Count string }
+
+// ProductRail is the left rail, counted over the whole read before the
+// filter: everything, Needs attention, and on Sessions each project.
+type ProductRail struct {
+	All, Attention string
+	Projects       []ProductCount
 }
 
 // ProductPage is one product view. Groups and Usage render only when
@@ -145,6 +176,8 @@ type ProductPage struct {
 	Connected, Complete, Quiet, Preview bool
 	Groups                              []ProductGroup
 	Usage                               *ProductUsage
+	Rail                                ProductRail
+	Filter                              ProductFilter
 }
 
 const (
@@ -174,12 +207,19 @@ type productRowView struct {
 	Default bool
 }
 
+type railLinkView struct {
+	Name, Href, Count string
+	Current           bool
+}
+
 func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
-		SessionsHref, TasksHref, UsageHref, AttentionHref                  string
-		ListTitle, ListCount, SessionCount, TaskCount, AttentionCount      string
+		SessionsHref, TasksHref, UsageHref                                 string
+		ListTitle, ListCount                                               string
 		Quiet, Preview, Banner, HasRows                                    bool
+		All, Attention                                                     railLinkView
+		Projects                                                           []railLinkView
 		Groups                                                             []productGroupView
 		Rows                                                               []productRowView
 		Usage                                                              *ProductUsage
@@ -187,19 +227,38 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
 		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage",
 		ListTitle: page.ListTitle}
-	view.Section = "Agents"
+	base := productSessionsHref
+	view.Section, view.All.Name = "Agents", "All sessions"
 	if view.Current == "tasks" {
-		view.Section = "Tasks"
+		view.Section, base, view.All.Name = "Tasks", productTasksHref, "All tasks"
 	}
 	if view.ListTitle == "" {
 		view.ListTitle = page.Title
 	}
+	// The rail filters the list by query; its counts cover the whole read.
+	view.All.Href, view.All.Current = base, !page.Filter.Attention && page.Filter.Project == ""
+	view.Attention = railLinkView{Name: "Needs attention", Href: base + "?show=attention", Current: page.Filter.Attention}
 	if page.Connected {
 		view.Quiet, view.ListCount, view.Usage = page.Quiet, page.ListCount, page.Usage
 		if view.Current == "sessions" && page.Usage != nil {
 			view.UsageHref = "#usage"
 		}
-		total := 0
+		if page.Complete {
+			view.All.Count = page.Rail.All
+			// An alert-coloured zero says nothing; the count shows only when something waits.
+			if page.Rail.Attention != "0" {
+				view.Attention.Count = page.Rail.Attention
+			}
+		}
+		if view.Current == "sessions" {
+			for _, p := range page.Rail.Projects {
+				link := railLinkView{Name: p.Name, Href: productSessionsHref + "?project=" + url.QueryEscape(p.Name), Current: page.Filter.Project == p.Name}
+				if page.Complete {
+					link.Count = p.Count
+				}
+				view.Projects = append(view.Projects, link)
+			}
+		}
 		for i, group := range page.Groups {
 			g := productGroupView{ID: "g" + strconv.Itoa(i+1), Title: group.Title}
 			for _, row := range group.Rows {
@@ -216,18 +275,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 			if page.Complete {
 				g.Count = strconv.Itoa(len(g.Rows))
 			}
-			total += len(g.Rows)
-			if group.Attention && page.Complete {
-				view.AttentionHref, view.AttentionCount = "#"+g.ID, g.Count
-			}
 			view.Groups = append(view.Groups, g)
-		}
-		switch {
-		case !page.Complete:
-		case view.Current == "sessions":
-			view.SessionCount = strconv.Itoa(total)
-		default:
-			view.TaskCount = strconv.Itoa(total)
 		}
 	}
 	view.HasRows = len(view.Rows) > 0

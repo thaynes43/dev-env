@@ -73,12 +73,12 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 	if err != nil || len(decoded.Sessions) != 2 {
 		t.Fatalf("page=%+v err=%v", decoded, err)
 	}
-	page := sessionsPage(decoded.Sessions, true, "observed", now)
+	page := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{})
 	worker := findRow(t, page, "worker")
 	for label, want := range map[string]string{
 		"Last reported agent state":        "busy",
 		"Last activity":                    "2m ago · 25 Oct 2026, 11:58 UTC",
-		"Mode":                             "task",
+		"How it runs":                      "Headless (task)",
 		"Requested model":                  "claude-opus-5-5",
 		"Served model (provider reported)": "claude-haiku-4-5, claude-opus-5-5",
 		"Scope":                            "First managed invocation (partial result)",
@@ -111,7 +111,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 			t.Errorf("remote has a Usage panel although nothing was measured: %+v", section)
 		}
 	}
-	if fields["Requested model"] != "claude-opus-5-5" || fields["Mode"] != "remote" || remote.Meta != "" {
+	if fields["Requested model"] != "claude-opus-5-5" || fields["How it runs"] != "Interactive (remote)" || remote.Meta != "" {
 		t.Fatalf("remote %+v", fields)
 	}
 	w := usageRow(t, page, "worker")
@@ -123,7 +123,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 			t.Errorf("remote usage %s = %+v, want Unknown", label, cell)
 		}
 	}
-	if page.Usage.Stats[0].Value != "1 of 2" || page.Usage.Stats[1].Label != "In progress" || page.Usage.Stats[2].Label != "Needs attention" {
+	if page.Usage.Stats[0].Value != "1 of 2" || page.Usage.Stats[1].Label != "Interactive" || page.Usage.Stats[1].Value != "1" || page.Usage.Stats[2].Label != "Headless" || page.Usage.Stats[2].Value != "1" {
 		t.Fatalf("usage stats %+v", page.Usage.Stats)
 	}
 	page.ObservedAt = "2026-10-25T12:00:00Z"
@@ -132,18 +132,18 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(body)
-	for _, want := range []string{"Initial invocations only", "can overlap input; never added", "not a charge", "None computed", `href="#s1"`, `id="usage"`} {
+	for _, want := range []string{"Initial invocations only", "can overlap input; never added", "not a charge", "Unknown is never counted as zero", `href="#s1"`, `id="usage"`, "Account allowance", "Not connected", "By how sessions ran", "By provider and requested model", "By project"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered page lacks %q", want)
 		}
 	}
-	// No total of any counters, sessions or served models appears.
+	// Cache reads are a subset of input and are never added to it.
 	for _, total := range []string{"1,239,567", "1239567", "1,234,567 total", "Total tokens", "Fixture preview"} {
 		if strings.Contains(html, total) {
 			t.Fatalf("rendered %q", total)
 		}
 	}
-	partial := sessionsPage(decoded.Sessions, false, "observed", now)
+	partial := sessionsPage(decoded.Sessions, false, "observed", now, portal.ProductFilter{})
 	if partial.Complete || partial.ListCount != "Partial list" || partial.Usage.Stats[0].Value != "1 listed" || !strings.HasSuffix(partial.Usage.Stats[1].Value, " listed") || !strings.HasSuffix(partial.Usage.Stats[2].Value, " listed") {
 		t.Fatalf("incomplete read was counted: %+v", partial)
 	}
@@ -176,7 +176,7 @@ func TestSessionPhaseOutranksLastAgentState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			page := sessionsPage(decoded.Sessions, true, "observed", now)
+			page := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{})
 			var group string
 			for _, g := range page.Groups {
 				if len(g.Rows) == 1 {
@@ -201,7 +201,7 @@ func TestSessionsPageGroupsByAttention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := sessionsPage(decoded.Sessions, true, "observed", now)
+	page := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{})
 	var got []string
 	for _, g := range page.Groups {
 		for _, row := range g.Rows {
@@ -306,10 +306,13 @@ func TestSessionLegacyRowRendersUnknownActivity(t *testing.T) {
 	}
 	row := sessionRow(page.Sessions[0], now)
 	got := rowFields(row)
-	for _, label := range []string{"Last reported agent state", "Last activity", "Mode", "Requested model"} {
+	for _, label := range []string{"Last reported agent state", "Last activity", "Requested model", "Provider", "Launched by"} {
 		if got[label] != "Unknown" {
 			t.Errorf("legacy %s = %q, want Unknown", label, got[label])
 		}
+	}
+	if got["How it runs"] != "Unknown" {
+		t.Errorf("legacy How it runs = %q", got["How it runs"])
 	}
 	for _, label := range []string{"Scope", "Input", "Output", "Cache read", "Cache create", "Cost estimate"} {
 		if _, ok := got[label]; ok {

@@ -473,11 +473,20 @@ const PortalViewActivity = "activity"
 // own initial invocation usage. A value the operator does not hold is Unknown,
 // never zero. RequestedModel is the configured model, not the served one.
 // LastActivity is absent when it is unknown.
+//
+// Provider is the agent CLI (claude, codex or opencode). LaunchedBy is the
+// session or caller that created it (spec.parent), absent when unset.
+// TaskResult is how a task session's task ended (Succeeded, Failed, TimedOut
+// or Unknown) and is absent for an interactive session: a Failed phase only
+// says the pod ended.
 type PortalSessionActivity struct {
 	Mode           string             `json:"mode"`
+	Provider       string             `json:"provider"`
 	AgentState     string             `json:"agentState"`
 	LastActivity   *time.Time         `json:"lastActivity,omitempty"`
 	RequestedModel string             `json:"requestedModel"`
+	LaunchedBy     string             `json:"launchedBy,omitempty"`
+	TaskResult     string             `json:"taskResult,omitempty"`
 	Usage          PortalSessionUsage `json:"usage"`
 }
 

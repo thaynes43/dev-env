@@ -19,16 +19,14 @@
 {{if .Banner}}<p class="banner" role="status">{{.Notice}}</p>{{end}}
 <div class="shell">
 <nav class="rail" aria-label="Workspace"><div class="workspace-label"><strong>dev-env</strong><span>Internal · read-only</span></div>
-<a class="rail-link" href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>All sessions{{if .SessionCount}}<span class="count">{{.SessionCount}}</span>{{end}}</a>
-{{if .AttentionHref}}<a class="rail-link" href="{{.AttentionHref}}"><svg class="i"><use href="#i-inbox"/></svg>Needs attention<span class="attention-count">{{.AttentionCount}}</span></a>{{end}}
-<a class="rail-link" href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}><svg class="i"><use href="#i-tasks"/></svg>Tasks{{if .TaskCount}}<span class="count">{{.TaskCount}}</span>{{end}}</a>
-<div class="rail-rule"></div>
-<div class="rail-group"><p class="eyebrow">Projects</p><a class="rail-link" href="{{.SessionsHref}}"><span class="project-icon" aria-hidden="true">⌘</span>dev-env{{if .SessionCount}}<span class="count">{{.SessionCount}}</span>{{end}}</a></div>
-<div class="rail-group"><p class="eyebrow">Workspace</p>
-<a class="rail-link" href="{{.UsageHref}}"><svg class="i"><use href="#i-bolt"/></svg>Usage</a></div>
+<a class="rail-link" href="{{.All.Href}}"{{if .All.Current}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>{{.All.Name}}{{if .All.Count}}<span class="count">{{.All.Count}}</span>{{end}}</a>
+<a class="rail-link" href="{{.Attention.Href}}"{{if .Attention.Current}} aria-current="page"{{end}}><svg class="i"><use href="#i-inbox"/></svg>Needs attention{{if .Attention.Count}}<span class="attention-count">{{.Attention.Count}}</span>{{end}}</a>
+{{if .Projects}}<div class="rail-rule"></div>
+<div class="rail-group"><p class="eyebrow">Projects</p>{{range .Projects}}<a class="rail-link" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}><span class="project-icon" aria-hidden="true">⌘</span>{{.Name}}{{if .Count}}<span class="count">{{.Count}}</span>{{end}}</a>{{end}}</div>{{end}}
 <div class="rail-spacer"></div>
 <div class="connection-box">{{if .Preview}}<strong><span class="dot sample"></span>Fixture preview</strong>Synthetic data. No agents or repositories connected.{{else}}<strong><span class="dot"></span>Read-only</strong>Operator summaries and OpenProject tasks.{{end}}</div></nav>
-<section class="list" id="list" aria-labelledby="list-title" tabindex="-1"><div class="list-header"><h1 id="list-title">{{.ListTitle}}</h1>{{if .ListCount}}<p class="list-count">{{.ListCount}}</p>{{end}}</div>
+<section class="list" id="list" aria-labelledby="list-title" tabindex="-1"><div class="list-header"><h1 id="list-title">{{.ListTitle}}</h1>{{if .ListCount}}<p class="list-count">{{.ListCount}}</p>{{end}}
+<nav class="chips" aria-label="Filters"><a href="{{.All.Href}}"{{if .All.Current}} aria-current="page"{{end}}>All</a><a href="{{.Attention.Href}}"{{if .Attention.Current}} aria-current="page"{{end}}>Needs attention{{if .Attention.Count}} {{.Attention.Count}}{{end}}</a>{{range .Projects}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Name}}</a>{{end}}</nav></div>
 <div class="list-scroll">{{if not .HasRows}}<p class="list-empty" role="status">{{.Notice}}</p>{{end}}
 {{range .Groups}}<h2 class="group-label" id="{{.ID}}"><span>{{.Title}}</span><span>{{.Count}}</span></h2>
 <ul>{{range .Rows}}<li><a class="item" href="#{{.ID}}"><span class="item-top"><span class="item-kicker">{{.Kicker}}</span><span class="badge tone-{{.Status.Tone}}">{{.Status.Text}}</span></span><h3>{{.Title}}</h3>{{if .Description}}<span class="item-desc">{{.Description}}</span>{{end}}<span class="item-line"><span>{{.Meta}}</span><span>{{.Age}}</span></span></a></li>{{end}}</ul>{{end}}</div>
@@ -42,9 +40,12 @@
 <aside class="inspector" aria-labelledby="{{.ID}}-context"><h3 id="{{.ID}}-context">{{.ContextTitle}}</h3><dl class="kv">{{range .Context}}<dt>{{.Label}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl></aside></div></section>
 {{end}}{{if not .HasRows}}<section class="detail default" id="empty" aria-labelledby="empty-title" tabindex="-1"><div class="product-head"><p class="eyebrow">dev-env</p><h2 id="empty-title">{{.Title}}</h2><p>{{.Notice}}</p></div></section>
 {{end}}{{with .Usage}}<section class="detail" id="usage" aria-labelledby="usage-title" tabindex="-1"><div class="product-head"><p class="crumb"><a class="back" href="#list"><svg class="i"><use href="#i-back"/></svg>{{$.ListTitle}}</a><span>dev-env</span><span>/</span><span>Usage</span></p>
-<h2 id="usage-title">Usage</h2><p>Recorded task usage is not account consumption.</p></div>
+<h2 id="usage-title">Usage</h2><p>Recorded task usage is not account consumption.{{if $.ListTitle}} Showing: {{$.ListTitle}}.{{end}}</p></div>
 <div class="product-body"><dl class="stats">{{range .Stats}}<div class="stat"><dt>{{.Label}}</dt><dd{{if eq .Tone "muted"}} class="unknown"{{end}}>{{.Value}}</dd><dd class="stat-note">{{.Note}}</dd></div>{{end}}</dl>
 <p class="scope-row"><span class="scope-chip">{{.Scope}}</span><span>{{.ScopeNote}}</span></p>
+{{if .Allowance}}<section class="allowance" aria-labelledby="usage-allowance"><h3 id="usage-allowance">Account allowance</h3><dl class="kv">{{range .Allowance}}<dt>{{.Label}}</dt><dd class="unknown">{{.Value}}</dd>{{end}}</dl><p class="note">Plan limits come from the provider account, never from these token counts.</p></section>{{end}}
+{{range $i, $t := .Breakdowns}}<section class="breakdown" aria-labelledby="usage-b{{$i}}"><h3 id="usage-b{{$i}}">{{$t.Title}}</h3>{{if $t.Note}}<p class="note">{{$t.Note}}</p>{{end}}<div class="table-wrap"><table><thead><tr>{{range $t.Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
+<tbody>{{range $t.Rows}}<tr><td>{{.Name}}<small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>{{end}}
 <div class="usage-grid"><section aria-labelledby="usage-rows"><h3 id="usage-rows">By session</h3><div class="table-wrap"><table><thead><tr>{{range .Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
 <tbody>{{range .Rows}}<tr><td><a href="#{{.ID}}">{{.Name}}</a><small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>
 <aside class="coverage" aria-labelledby="usage-coverage"><p class="eyebrow">Coverage and accounting</p><h3 id="usage-coverage">What these numbers cover</h3><dl class="kv">{{range .Coverage}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></aside></div></div></section>

@@ -45,7 +45,9 @@ func TestRenderProductKeepsAnchorsTonesAndCountsSafe(t *testing.T) {
 			{ID: "s1", Title: "kept-row", Status: ProductStatus{Text: "Waiting", Tone: "wait"}},
 			{ID: `s2" onclick="x`, Title: "dropped-row", Status: ProductStatus{Text: "Busy", Tone: "busy"}},
 			{ID: "s3", Title: "toned-row", Status: ProductStatus{Text: "Odd", Tone: "evil"}},
-		}}}}
+		}}},
+		Rail:   ProductRail{All: "7", Attention: "2", Projects: []ProductCount{{Name: "dev-env", Count: "5"}, {Name: "haynes-ops", Count: "2"}}},
+		Filter: ProductFilter{Project: "haynes-ops"}}
 	body, err := RenderProduct(page)
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +58,21 @@ func TestRenderProductKeepsAnchorsTonesAndCountsSafe(t *testing.T) {
 	}
 	if !strings.Contains(html, `href="#s1"`) || !strings.Contains(html, `id="s1"`) || !strings.Contains(html, `class="detail default" id="s1"`) || !strings.Contains(html, `<span class="attention-count">2</span>`) {
 		t.Fatalf("row anchors or counts missing: %s", html)
+	}
+	// The rail filters by query and counts the whole read; the selected project is current.
+	for _, want := range []string{
+		`href="/portal/projects/dev-env/environments/internal/sessions">`,
+		`href="/portal/projects/dev-env/environments/internal/sessions?show=attention">`,
+		`href="/portal/projects/dev-env/environments/internal/sessions?project=dev-env">`,
+		`href="/portal/projects/dev-env/environments/internal/sessions?project=haynes-ops" aria-current="page">`,
+		`haynes-ops<span class="count">2</span>`, `All sessions<span class="count">7</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rail lacks %s", want)
+		}
+	}
+	if strings.Contains(html, `class="rail-link" href="/portal/projects/dev-env/environments/internal/tasks"`) || strings.Contains(html, `class="rail-link" href="/portal/projects/dev-env/environments/internal/sessions#usage"`) {
+		t.Error("the rail repeats the top navigation")
 	}
 	if strings.Contains(html, "Fixture preview") || !strings.Contains(html, `<span role="status">Connected session summaries.</span>`) || strings.Contains(html, `class="banner"`) {
 		t.Fatalf("notice placement or preview label wrong: %s", html)

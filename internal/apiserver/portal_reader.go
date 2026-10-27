@@ -26,7 +26,6 @@ const (
 	portalReaderNamespace = "dev-agents"
 	portalReaderAccount   = "dev-env-v2-portal"
 	portalReaderRef       = portalReaderNamespace + "/" + portalReaderAccount
-	portalSessionRepo     = "dev-env"
 	portalPageDefault     = 50
 	portalPageMax         = 100
 	portalFreshFor        = 15 * time.Minute
@@ -90,7 +89,9 @@ func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, 
 	page := apiv1.PortalSessionPage{Sessions: []apiv1.PortalSessionSummary{}, Limit: limit, ObservedAt: now.UTC(), Freshness: "observed"}
 	for i := range list.Items {
 		item := &list.Items[i]
-		if item.Namespace != portalReaderNamespace || item.Spec.Repo != portalSessionRepo {
+		// Every repository's sessions are listed; the portal groups them into
+		// projects by repo (Tom, 2026-10-27).
+		if item.Namespace != portalReaderNamespace {
 			continue
 		}
 		summary := portalSummary(item, now)
@@ -238,7 +239,7 @@ func portalSummary(s *v1alpha1.AgentSession, now time.Time) apiv1.PortalSessionS
 			}
 		}
 	}
-	return apiv1.PortalSessionSummary{Name: s.Name, UID: string(s.UID), Repo: portalSessionRepo, Phase: phaseOf(s), ObservedAt: observed, Freshness: freshness}
+	return apiv1.PortalSessionSummary{Name: s.Name, UID: string(s.UID), Repo: s.Spec.Repo, Phase: phaseOf(s), ObservedAt: observed, Freshness: freshness}
 }
 
 // portalActivity is the DESIGN-029 allowlist for one session. Words outside
@@ -246,10 +247,23 @@ func portalSummary(s *v1alpha1.AgentSession, now time.Time) apiv1.PortalSessionS
 // Unknown. Usage comes only from sessionUsage, the session's own validated
 // task observation; it is not summed with anything.
 func portalActivity(s *v1alpha1.AgentSession, now time.Time) *apiv1.PortalSessionActivity {
-	a := &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: portalUsage(sessionUsage(s))}
+	a := &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, Provider: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, LaunchedBy: s.Spec.Parent, Usage: portalUsage(sessionUsage(s))}
 	switch s.Spec.Mode {
 	case v1alpha1.ModeTask, v1alpha1.ModeLocal, v1alpha1.ModeRemote:
 		a.Mode = string(s.Spec.Mode)
+	}
+	switch s.Spec.Agent {
+	case v1alpha1.AgentClaude, v1alpha1.AgentCodex, v1alpha1.AgentOpencode:
+		a.Provider = string(s.Spec.Agent)
+	}
+	if s.Spec.Mode == v1alpha1.ModeTask {
+		a.TaskResult = string(v1alpha1.TaskResultUnknown)
+		if r := s.Status.TaskResult; r != nil {
+			switch r.State {
+			case v1alpha1.TaskResultSucceeded, v1alpha1.TaskResultFailed, v1alpha1.TaskResultTimedOut:
+				a.TaskResult = string(r.State)
+			}
+		}
 	}
 	if protocol.ValidUsageModelID(s.Spec.Model) {
 		a.RequestedModel = s.Spec.Model

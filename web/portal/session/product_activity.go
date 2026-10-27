@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"math/big"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,18 +17,35 @@ import (
 )
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
-// lastActivity is the one optional key; a null, an unknown key or a word outside
-// its fixed set makes the whole read unavailable. Usage covers task sessions
-// only, so any other mode must carry an Unknown usage scope, which in turn
-// carries no reported value.
+// lastActivity, provider, launchedBy and taskResult are optional (an operator
+// before 2026-10-27 sends none of the last three); a null, an unknown key or a
+// word outside its fixed set makes the whole read unavailable. Usage covers
+// task sessions only, so any other mode must carry an Unknown usage scope,
+// which in turn carries no reported value, and no task result.
 func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSessionActivity, error) {
 	var a apiv1.PortalSessionActivity
 	obj, err := jsonObject(raw)
 	if err != nil {
 		return a, err
 	}
-	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity") {
+	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult") {
 		return a, portal.ErrUnavailable
+	}
+	a.Provider = protocol.UsageUnknown
+	if raw, ok := obj["provider"]; ok {
+		if a.Provider, ok = jsonString(raw); !ok || !oneOf(a.Provider, "claude", "codex", "opencode", protocol.UsageUnknown) {
+			return a, portal.ErrUnavailable
+		}
+	}
+	if raw, ok := obj["launchedBy"]; ok {
+		if a.LaunchedBy, ok = jsonString(raw); !ok || !launcherName.MatchString(a.LaunchedBy) {
+			return a, portal.ErrUnavailable
+		}
+	}
+	if raw, ok := obj["taskResult"]; ok {
+		if a.TaskResult, ok = jsonString(raw); !ok || !oneOf(a.TaskResult, "Succeeded", "Failed", "TimedOut", protocol.UsageUnknown) {
+			return a, portal.ErrUnavailable
+		}
 	}
 	mode, ok1 := jsonString(obj["mode"])
 	state, ok2 := jsonString(obj["agentState"])
@@ -47,7 +66,7 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	if err != nil {
 		return a, err
 	}
-	if mode != "task" && usage.Scope != protocol.UsageUnknown {
+	if mode != "task" && (usage.Scope != protocol.UsageUnknown || a.TaskResult != "") {
 		return a, portal.ErrUnavailable
 	}
 	a.Mode, a.AgentState, a.RequestedModel, a.Usage = mode, state, model, usage
@@ -191,29 +210,76 @@ func oneOf(value string, set ...string) bool {
 // sessionGroups are the Sessions list groups, in display order.
 var sessionGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: true}, {Title: "In progress"}, {Title: "Stopped"}, {Title: "State Unknown"}}
 
-// sessionGroup puts a stopped or failed phase first. agentd's last reported
-// state outlives the pod, so after a suspend, an archive or a failure it is
-// history, not what the session is doing now.
-func sessionGroup(phase string, a *apiv1.PortalSessionActivity) int {
-	switch phase {
+// attentionWindow is how long a failure stays in Needs attention. An older one
+// is history: it is listed under Stopped and still shows its failed badge.
+const attentionWindow = 24 * time.Hour
+
+var (
+	// launcherName is spec.parent's shape: a session name, a namespace/name or
+	// a ServiceAccount reference, at most 253 characters.
+	launcherName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,252}$`)
+	// projectName is spec.repo's shape.
+	projectName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
+)
+
+// validProject reports whether name is a repository name the portal shows.
+func validProject(name string) bool {
+	return projectName.MatchString(name) && name != "." && name != ".."
+}
+
+// sessionDriver is how a session runs. Interactive: remote or local, a person
+// drives it. Headless: a task, run unattended, often launched by a
+// coordinator session. Anything else is Unknown.
+func sessionDriver(mode string) string {
+	switch mode {
+	case "remote", "local":
+		return "Interactive"
+	case "task":
+		return "Headless"
+	}
+	return protocol.UsageUnknown
+}
+
+// sessionGroup files a session by what it needs now. A task's own result comes
+// first: a Failed phase only says the pod ended, and agentd's last state
+// outlives the pod. A failure is Needs attention for attentionWindow, then
+// Stopped. A suspended or archived session is Stopped.
+func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
+	a := activityOrUnknown(s.Activity)
+	at := s.ObservedAt
+	if a.LastActivity != nil {
+		at = *a.LastActivity
+	}
+	recent := now.Sub(at) <= attentionWindow
+	failed := func() int {
+		if recent {
+			return 0
+		}
+		return 2
+	}
+	switch a.TaskResult {
+	case "Failed", "TimedOut":
+		return failed()
+	case "Succeeded":
+		return 2
+	}
+	switch s.Phase {
 	case "Failed":
-		return 0
+		return failed()
 	case "Suspended", "Archived":
 		return 2
 	}
-	state := protocol.UsageUnknown
-	if a != nil {
-		state = a.AgentState
-	}
-	switch state {
-	case protocol.AgentWaiting, protocol.AgentFailed, protocol.AgentInterrupted:
+	switch a.AgentState {
+	case protocol.AgentWaiting:
 		return 0
+	case protocol.AgentFailed, protocol.AgentInterrupted:
+		return failed()
 	case protocol.AgentBusy, protocol.AgentPending, protocol.AgentIdle:
 		return 1
 	case protocol.AgentExited:
 		return 2
 	}
-	switch phase {
+	switch s.Phase {
 	case "Running", "Pending", "Idle":
 		return 1
 	case "Draining":
@@ -222,85 +288,256 @@ func sessionGroup(phase string, a *apiv1.PortalSessionActivity) int {
 	return 3
 }
 
-// sessionsPage builds the Sessions page: groups ordered by attention, then
-// most recent activity, and the Usage view. It counts sessions; it never adds
-// token or cost values.
-func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time) portal.ProductPage {
-	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete}
+// sessionsPage builds the Sessions page for one filter. The rail counts cover
+// the whole read; the list and the Usage view cover the filtered sessions.
+// Usage sums reported values per group only: Unknown is never counted as zero
+// and cache reads stay a separate subset of input.
+func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time, filter portal.ProductFilter) portal.ProductPage {
+	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete, Filter: filter}
+	group := make([]int, len(sessions))
+	projects := map[string]int{}
+	attention := 0
+	for i, s := range sessions {
+		group[i] = sessionGroup(s, now)
+		if group[i] == 0 {
+			attention++
+		}
+		projects[s.Repo]++
+	}
+	page.Rail.All, page.Rail.Attention = strconv.Itoa(len(sessions)), strconv.Itoa(attention)
+	for name, n := range projects {
+		page.Rail.Projects = append(page.Rail.Projects, portal.ProductCount{Name: name, Count: strconv.Itoa(n)})
+	}
+	sort.Slice(page.Rail.Projects, func(i, j int) bool {
+		ni, _ := strconv.Atoi(page.Rail.Projects[i].Count)
+		nj, _ := strconv.Atoi(page.Rail.Projects[j].Count)
+		if ni != nj {
+			return ni > nj
+		}
+		return page.Rail.Projects[i].Name < page.Rail.Projects[j].Name
+	})
+	type entry struct {
+		s     apiv1.PortalSessionSummary
+		group int
+	}
+	var kept []entry
+	for i, s := range sessions {
+		if (filter.Attention && group[i] != 0) || (filter.Project != "" && s.Repo != filter.Project) {
+			continue
+		}
+		kept = append(kept, entry{s, group[i]})
+	}
+	scope := "all projects"
+	switch {
+	case filter.Attention:
+		page.ListTitle, scope = "Needs attention", "needs attention"
+	case filter.Project != "":
+		page.ListTitle, scope = filter.Project, filter.Project
+	}
 	switch {
 	case !complete:
 		page.Notice, page.ListCount = "Sessions read is incomplete. This is not the full inventory.", "Partial list"
+	case len(kept) == 0 && filter.Attention:
+		page.Notice = "Nothing needs attention."
+	case len(kept) == 0 && filter.Project != "":
+		page.Notice = "No sessions in " + filter.Project + "."
 	case freshness != "observed":
 		// Stopped sessions never heartbeat, so a stale page is normal. It is
 		// not a banner; each session's detail shows its own freshness.
 		page.Notice, page.Quiet = "Session freshness is "+freshness+".", true
 	case len(sessions) == 0:
-		page.Notice = "The completed session read returned no dev-env sessions."
+		page.Notice = "The completed session read returned no sessions."
 	default:
 		page.Notice, page.Quiet = "Connected session summaries.", true
 	}
-	ordered := append([]apiv1.PortalSessionSummary(nil), sessions...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		gi, gj := sessionGroup(ordered[i].Phase, ordered[i].Activity), sessionGroup(ordered[j].Phase, ordered[j].Activity)
-		if gi != gj {
-			return gi < gj
+	if complete && len(kept) > 0 {
+		page.ListCount = strconv.Itoa(len(kept)) + " sessions · " + scope
+	}
+	sort.SliceStable(kept, func(i, j int) bool {
+		if kept[i].group != kept[j].group {
+			return kept[i].group < kept[j].group
 		}
-		ti, tj := lastActivity(ordered[i]), lastActivity(ordered[j])
+		ti, tj := lastActivity(kept[i].s), lastActivity(kept[j].s)
 		if !ti.Equal(tj) {
 			return ti.After(tj)
 		}
-		return ordered[i].Name < ordered[j].Name
+		return kept[i].s.Name < kept[j].s.Name
 	})
 	page.Groups = make([]portal.ProductGroup, len(sessionGroups))
 	copy(page.Groups, sessionGroups)
 	usage := &portal.ProductUsage{
-		Scope: "Initial invocations only", ScopeNote: "Later turns, interactive and remote sessions, and account usage are not captured.",
+		Scope: "Initial invocations only", ScopeNote: "Headless task sessions' first invocation is measured. Interactive sessions and later turns are not.",
+		Allowance: []portal.ProductField{
+			{Label: "Claude", Value: "Not connected"},
+			{Label: "Codex", Value: "Not connected"},
+		},
 		Columns: []string{"Session", "Input", "Output", "Cache read", "Cache create", "Est. cost"},
 		Coverage: []portal.ProductField{
-			{Label: "Measured", Value: "First managed invocation of task sessions"},
-			{Label: "Not measured", Value: "Interactive and remote sessions, later turns, account allowance"},
+			{Label: "Measured", Value: "First managed invocation of headless task sessions"},
+			{Label: "Not measured", Value: "Interactive sessions, later turns"},
+			{Label: "Account allowance", Value: "Separate; no allowance collector is connected"},
 			{Label: "Served model", Value: "Provider reported, where measured"},
-			{Label: "Cache read tokens", Value: "Separate counter; can overlap input; never added"},
-			{Label: "Cost", Value: "CLI-equivalent list-price estimate; not a charge"},
-			{Label: "Totals", Value: "None computed"},
+			{Label: "Cache read tokens", Value: "A subset that can overlap input; never added to it"},
+			{Label: "Cost", Value: "CLI-equivalent list-price estimate, not a charge; Unavailable where the provider reports none"},
+			{Label: "Totals", Value: "Sums of reported values per group; Unknown is never counted as zero"},
 		},
 	}
-	measured, running, attention := 0, 0, 0
-	for i, s := range ordered {
+	byDriver := map[string]*usageTotal{"Interactive": {}, "Headless": {}, protocol.UsageUnknown: {}}
+	byModel, byProject := map[string]*usageTotal{}, map[string]*usageTotal{}
+	measured, interactive, headless := 0, 0, 0
+	for i, e := range kept {
 		id := "s" + strconv.Itoa(i+1)
-		row := sessionRow(s, now)
+		row := sessionRow(e.s, now)
 		row.ID = id
-		g := sessionGroup(s.Phase, s.Activity)
-		page.Groups[g].Rows = append(page.Groups[g].Rows, row)
-		switch g {
-		case 0:
-			attention++
-		case 1:
-			running++
-		}
-		usageRow, ok := sessionUsageRow(id, s)
+		page.Groups[e.group].Rows = append(page.Groups[e.group].Rows, row)
+		usageRow, ok := sessionUsageRow(id, e.s)
 		if ok {
 			measured++
 		}
 		usage.Rows = append(usage.Rows, usageRow)
+		a := activityOrUnknown(e.s.Activity)
+		driver := sessionDriver(a.Mode)
+		switch driver {
+		case "Interactive":
+			interactive++
+		case "Headless":
+			headless++
+		}
+		modelKey := shown(a.Provider) + " · " + shown(a.RequestedModel)
+		for _, t := range []*usageTotal{byDriver[driver], totalFor(byModel, modelKey), totalFor(byProject, e.s.Repo)} {
+			t.add(a.Usage)
+		}
 	}
-	if complete && len(sessions) > 0 {
-		page.ListCount = strconv.Itoa(len(sessions)) + " sessions · dev-env"
-	}
-	countText := strconv.Itoa(measured) + " of " + strconv.Itoa(len(sessions))
-	runningText, attentionText := strconv.Itoa(running), strconv.Itoa(attention)
+	countText := strconv.Itoa(measured) + " of " + strconv.Itoa(len(kept))
+	interactiveText, headlessText := strconv.Itoa(interactive), strconv.Itoa(headless)
 	if !complete {
 		// A partial read is not a count of the inventory.
 		countText = strconv.Itoa(measured) + " listed"
-		runningText, attentionText = runningText+" listed", attentionText+" listed"
+		interactiveText, headlessText = interactiveText+" listed", headlessText+" listed"
 	}
 	usage.Stats = []portal.ProductStat{
-		{Label: "Measured sessions", Value: countText, Note: "Task sessions' first invocation"},
-		{Label: "In progress", Value: runningText, Note: "Sessions listed in progress"},
-		{Label: "Needs attention", Value: attentionText, Note: "Failed, waiting or interrupted"},
+		{Label: "Measured sessions", Value: countText, Note: "Headless tasks' first invocation"},
+		{Label: "Interactive", Value: interactiveText, Note: "Remote or local; a person drives them. Not measured"},
+		{Label: "Headless", Value: headlessText, Note: "Tasks, often launched by a coordinator"},
+	}
+	columns := func(first string) []string {
+		return []string{first, "Sessions", "Measured", "Input", "Output", "Cache read", "Cache create", "Est. cost"}
+	}
+	driverTable := portal.ProductUsageTable{Title: "By how sessions ran", Note: "Interactive sessions are listed but not measured.", Columns: columns("How it ran")}
+	for _, name := range []string{"Interactive", "Headless", protocol.UsageUnknown} {
+		if t := byDriver[name]; t.sessions > 0 {
+			driverTable.Rows = append(driverTable.Rows, t.row(name))
+		}
+	}
+	usage.Breakdowns = append(usage.Breakdowns, driverTable,
+		portal.ProductUsageTable{Title: "By provider and requested model", Columns: columns("Provider · model"), Rows: totalRows(byModel)})
+	if filter.Project == "" {
+		usage.Breakdowns = append(usage.Breakdowns, portal.ProductUsageTable{Title: "By project", Columns: columns("Project"), Rows: totalRows(byProject)})
 	}
 	page.Usage = usage
 	return page
+}
+
+// usageTotal is one breakdown group: how many sessions, how many measured,
+// and the sums of the values their providers reported.
+type usageTotal struct {
+	sessions, measured, costMissing   int
+	input, output, cacheRead, created tokenSum
+	cost                              *big.Rat
+}
+
+// tokenSum is a sum of reported counters and how many were Unknown.
+type tokenSum struct {
+	sum     int64
+	unknown int
+}
+
+func (t *tokenSum) add(m protocol.TokenObservation) {
+	if m.State == protocol.UsageReported && m.Amount != nil && *m.Amount >= 0 {
+		t.sum += *m.Amount
+		return
+	}
+	t.unknown++
+}
+
+func totalFor(m map[string]*usageTotal, key string) *usageTotal {
+	if m[key] == nil {
+		m[key] = &usageTotal{}
+	}
+	return m[key]
+}
+
+// add counts one session. Only a measured session adds counters or cost; a
+// cost that is not a reported USD estimate is counted as unavailable.
+func (t *usageTotal) add(u apiv1.PortalSessionUsage) {
+	t.sessions++
+	if u.Scope != protocol.UsageInitial {
+		return
+	}
+	t.measured++
+	t.input.add(u.InputTokens)
+	t.output.add(u.OutputTokens)
+	t.cacheRead.add(u.CacheReadInputTokens)
+	t.created.add(u.CacheCreationInputTokens)
+	if amount, ok := new(big.Rat).SetString(u.Cost.Amount); ok && u.Cost.State == protocol.UsageReported && u.Cost.Unit == "USD" && amount.Sign() >= 0 {
+		if t.cost == nil {
+			t.cost = new(big.Rat)
+		}
+		t.cost.Add(t.cost, amount)
+		return
+	}
+	t.costMissing++
+}
+
+// row is the group's table row. A group with nothing measured shows Not
+// measured, not zero.
+func (t *usageTotal) row(name string) portal.ProductUsageRow {
+	cell := func(label, value string, unknown bool) portal.ProductUsageCell {
+		return portal.ProductUsageCell{Label: label, Value: value, Unknown: unknown}
+	}
+	tokens := func(label string, s tokenSum) portal.ProductUsageCell {
+		if t.measured == 0 || s.unknown == t.measured {
+			return cell(label, "Not measured", true)
+		}
+		v := groupDigits(strconv.FormatInt(s.sum, 10))
+		if s.unknown > 0 {
+			v += " (" + strconv.Itoa(s.unknown) + " Unknown)"
+		}
+		return cell(label, v, false)
+	}
+	cost := cell("Est. cost", "Unavailable", true)
+	if t.cost != nil {
+		cost = cell("Est. cost", t.cost.FloatString(2)+" USD", false)
+		if t.costMissing > 0 {
+			cost.Value += " (" + strconv.Itoa(t.costMissing) + " unavailable)"
+		}
+	} else if t.measured == 0 {
+		cost.Value = "Not measured"
+	}
+	sub := strconv.Itoa(t.measured) + " of " + strconv.Itoa(t.sessions) + " measured"
+	return portal.ProductUsageRow{Name: shown(name), Sub: sub, Cells: []portal.ProductUsageCell{
+		cell("Sessions", strconv.Itoa(t.sessions), false), cell("Measured", strconv.Itoa(t.measured), t.measured == 0),
+		tokens("Input", t.input), tokens("Output", t.output), tokens("Cache read", t.cacheRead), tokens("Cache create", t.created), cost,
+	}}
+}
+
+// totalRows orders groups by session count, then name.
+func totalRows(m map[string]*usageTotal) []portal.ProductUsageRow {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if m[names[i]].sessions != m[names[j]].sessions {
+			return m[names[i]].sessions > m[names[j]].sessions
+		}
+		return names[i] < names[j]
+	})
+	rows := make([]portal.ProductUsageRow, 0, len(names))
+	for _, name := range names {
+		rows = append(rows, m[name].row(name))
+	}
+	return rows
 }
 
 func lastActivity(s apiv1.PortalSessionSummary) time.Time {
@@ -341,15 +578,17 @@ func activityOrUnknown(a *apiv1.PortalSessionActivity) *apiv1.PortalSessionActiv
 	return &apiv1.PortalSessionActivity{Mode: protocol.UsageUnknown, AgentState: protocol.UsageUnknown, RequestedModel: protocol.UsageUnknown, Usage: unknownSessionUsage()}
 }
 
-// sessionRow renders one summary as a list item and its detail. Requested and
-// served models stay separate, each counter keeps Unknown apart from zero, and
-// nothing is summed. A row without activity renders every activity field Unknown.
+// sessionRow renders one summary as a list item and its detail: its project,
+// how it runs (interactive or headless), who launched it and a task's own
+// result. Requested and served models stay separate, each counter keeps
+// Unknown apart from zero, and nothing is summed. A row without activity
+// renders every activity field Unknown.
 func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow {
 	a := activityOrUnknown(row.Activity)
 	u := a.Usage
-	mode, model := a.Mode, a.RequestedModel
-	if mode == protocol.UsageUnknown {
-		mode = "mode Unknown"
+	driver, model := sessionDriver(a.Mode), a.RequestedModel
+	if driver == protocol.UsageUnknown {
+		driver = "mode Unknown"
 	}
 	if model == protocol.UsageUnknown {
 		model = "model Unknown"
@@ -359,9 +598,12 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 		active = "active " + portal.Ago(*a.LastActivity, now)
 	}
 	out := portal.ProductRow{
-		Title: shown(row.Name), MonoTitle: true, Kicker: "dev-env", Crumb: shown(row.Name),
-		Status: sessionStatus(row.Phase, a.AgentState), Description: model + " · " + mode,
-		Age: compactAgo(a.LastActivity, now), Badges: []string{mode, model, active}, ContextTitle: "Session context",
+		Title: shown(row.Name), MonoTitle: true, Kicker: shown(row.Repo), Crumb: shown(row.Name),
+		Status: sessionStatus(row.Phase, a), Description: model + " · " + driver,
+		Age: compactAgo(a.LastActivity, now), Badges: []string{driver, model, active}, ContextTitle: "Session context",
+	}
+	if a.LaunchedBy != "" {
+		out.Badges = append(out.Badges, "launched by "+shown(a.LaunchedBy))
 	}
 	if row.Freshness != "observed" {
 		out.Badges = append(out.Badges, "freshness "+shown(row.Freshness))
@@ -385,36 +627,54 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	if a.LastActivity != nil {
 		lastSeen = portal.Ago(*a.LastActivity, now) + " · " + a.LastActivity.UTC().Format("2 Jan 2006, 15:04 UTC")
 	}
-	out.Sections = []portal.ProductSection{{Title: "Activity", Fields: []portal.ProductField{
+	activity := []portal.ProductField{
 		{Label: "Last reported agent state", Value: shown(a.AgentState)},
 		{Label: "Last activity", Value: lastSeen},
 		{Label: "Phase", Value: shown(row.Phase)},
 		{Label: "Freshness", Value: shown(row.Freshness)},
-	}}}
+	}
+	if a.TaskResult != "" {
+		activity = append([]portal.ProductField{{Label: "Task result", Value: shown(a.TaskResult)}}, activity...)
+	}
+	out.Sections = []portal.ProductSection{{Title: "Activity", Fields: activity}}
 	// Only a task session's first invocation is measured. Others get no
 	// Usage panel rather than a panel of Unknowns.
 	if u.Scope == protocol.UsageInitial {
 		out.Sections = append([]portal.ProductSection{usage}, out.Sections...)
 	}
+	runs := sessionDriver(a.Mode)
+	if runs != protocol.UsageUnknown {
+		runs += " (" + a.Mode + ")"
+	}
 	out.Context = []portal.ProductField{
-		{Label: "Project", Value: "dev-env"},
-		{Label: "Mode", Value: shown(a.Mode)},
+		{Label: "Project", Value: shown(row.Repo)},
+		{Label: "How it runs", Value: runs},
+		{Label: "Launched by", Value: shown(a.LaunchedBy), Mono: a.LaunchedBy != ""},
+		{Label: "Provider", Value: shown(a.Provider)},
 		{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},
 		{Label: "UID", Value: shown(row.UID), Mono: true},
 	}
 	return out
 }
 
-// sessionStatus shows a stopped or failed phase first, then agentd's state
-// word, then the phase.
-func sessionStatus(phase, agent string) portal.ProductStatus {
+// sessionStatus shows a task's own result first, then a stopped or failed
+// phase, then agentd's state word, then the phase.
+func sessionStatus(phase string, a *apiv1.PortalSessionActivity) portal.ProductStatus {
+	switch a.TaskResult {
+	case "Succeeded":
+		return portal.ProductStatus{Text: "Succeeded", Tone: "muted"}
+	case "Failed":
+		return portal.ProductStatus{Text: "Task failed", Tone: "bad"}
+	case "TimedOut":
+		return portal.ProductStatus{Text: "Timed out", Tone: "bad"}
+	}
 	switch phase {
 	case "Failed":
 		return portal.ProductStatus{Text: "Failed", Tone: "bad"}
 	case "Suspended", "Archived":
 		return portal.ProductStatus{Text: phase, Tone: "muted"}
 	}
-	switch agent {
+	switch a.AgentState {
 	case protocol.AgentBusy:
 		return portal.ProductStatus{Text: "Busy", Tone: "busy"}
 	case protocol.AgentWaiting:

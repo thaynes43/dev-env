@@ -406,4 +406,46 @@ portal's own decoders showed why.
 
 Next build step, not started: the operator's portal view lists only
 `repo: dev-env` sessions and carries no task description or outcome, so a
-session row cannot say what it is working on.
+session row cannot say what it is working on. (Every repository and the task
+outcome landed the next day; see below. A task description is still not shown.)
+
+### Projects, filters, task results and usage monitoring, 2026-10-27
+
+Tom on the live portal: Tasks and Usage appeared twice (top bar and rail),
+clicking the dev-env project or Needs attention did nothing, and "I thought we
+had basic usage metrics already wired up". At 03:40Z, relayed by the
+coordinator: build out usage monitoring and show which sessions were
+interactive and which were headless or coordinator-driven, also in the usage
+stats. No new credential, adapter or policy.
+
+- **Every repository.** The operator's portal view lists every session in
+  `dev-agents` with its own `repo`; the portal accepts any repository name
+  (`^[A-Za-z0-9_.-]{1,100}$`, not `.` or `..`). Projects in the rail are the
+  repositories, with counts. The Sessions read follows up to 10 pages (500
+  sessions).
+- **Filters.** The rail and, on a phone, a chip row filter by query: `?show=attention`
+  on Sessions or Tasks, `?project=<repo>` on Sessions. Exactly one canonical key
+  is accepted; anything else is refused. Rail counts cover the whole read; the
+  list and the Usage view cover the filtered sessions. The rail no longer
+  repeats Tasks or Usage, which stay in the top bar.
+- **Task results.** The activity view adds `provider` (claude, codex,
+  opencode), `launchedBy` (`spec.parent`) and, for a task, `taskResult`
+  (Succeeded, Failed, TimedOut, Unknown). A Failed phase only says the pod
+  ended: on 2026-10-27 all 23 Failed-phase sessions had succeeded tasks while 10
+  failed tasks sat unflagged. The badge and group now follow the task result.
+  A failure is Needs attention for 24 hours, then Stopped; the zero count is
+  not shown.
+- **How sessions run.** Interactive is `remote` or `local` (a person drives
+  it); Headless is `task` (often launched by a coordinator, shown as "launched
+  by"). Each session and the Usage view show it.
+- **Usage monitoring.** Usage adds an Account allowance block (Claude and Codex
+  "Not connected": no allowance collector is deployed, and plan limits are never
+  inferred from tokens) and three breakdowns: by how sessions ran, by provider
+  and requested model, and by project. Each sums reported values only. Cache
+  reads stay a separate column and are never added to input. A cost that is not
+  a reported USD estimate counts as unavailable, and a group with nothing
+  measured says "Not measured", not zero. This reverses the earlier "no totals"
+  rule under Tom's direction; sums are per group and labelled.
+- Compatibility: an operator before this change sends none of the new keys and
+  only `dev-env`; the portal accepts that. A portal before this change refuses
+  the new keys, so the portal image rolls out before the operator image.

@@ -76,7 +76,8 @@ func TestPortalReaderSessionSummaries(t *testing.T) {
 	}
 	live.changed = false
 	final := decode[apiv1.PortalSessionPage](t, f.do(http.MethodGet, apiv1.SessionsPath+"?limit=2&cursor="+rest.NextCursor, "tok-portal", nil))
-	if !final.Complete || len(final.Sessions) != 1 || final.Sessions[0].Name != "unseen" || final.Sessions[0].Freshness != "unknown" || final.Sessions[0].Phase != "Pending" {
+	// Every repository is listed under its own repo; only the namespace bounds the scan.
+	if !final.Complete || len(final.Sessions) != 2 || final.Sessions[0].Name != "unseen" || final.Sessions[0].Freshness != "unknown" || final.Sessions[0].Phase != "Pending" || final.Sessions[0].Repo != "dev-env" || final.Sessions[1].Name != "zzz-foreign" || final.Sessions[1].Repo != "haynes-ops" {
 		t.Fatalf("final page %+v", final)
 	}
 	for _, path := range []string{
@@ -209,6 +210,7 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 		servedModel("claude-haiku-4-5", 10, "0.05"), servedModel("claude-opus-5-5", 20, "0.7"))
 	u.CacheReadInputTokens = reportedTokens(5000)
 	task = *withObservation(&task, u)
+	task.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded, Reason: "TaskSucceeded", Message: "SECRET-RESULT-MESSAGE"}
 	// A remote session holds its own valid observation, but usage covers task sessions only.
 	remote := sess("b-remote", v1alpha1.ModeRemote, "claude-opus-5-5", &v1alpha1.AgentStatus{Status: "idle", LastActivity: at(now.Add(time.Hour))})
 	ru := providerObservation("uid-b-remote", "pod-b-remote", protocol.AgentClaude, "claude-opus-5-5", 7, 7, "0.01")
@@ -217,6 +219,7 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 	}
 	remote = *withObservation(&remote, ru)
 	odd := sess("c-odd", "", "opus with spaces", &v1alpha1.AgentStatus{Status: "Busy"})
+	odd.Spec.Agent = "mystery"
 	bare := sess("d-bare", v1alpha1.ModeLocal, "claude-opus-5-5", nil)
 	f.srv.Live = &portalLive{pod: pod, rv: "7", sessions: []v1alpha1.AgentSession{task, remote, odd, bare}}
 	id := saIdentity(portalReaderRef)
@@ -241,7 +244,7 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 	w := f.do(http.MethodGet, apiv1.SessionsPath+"?limit=50&view=activity", "tok-portal", nil)
 	body := w.Body.String()
 	page := decode[apiv1.PortalSessionPage](t, w)
-	if !page.Complete || len(page.Sessions) != 4 || strings.Contains(body, "SECRET-PROMPT") || strings.Contains(body, "prompt") || strings.Contains(body, "attemptID") || strings.Contains(body, "pod-a-task") || strings.Contains(body, "billingBasis") {
+	if !page.Complete || len(page.Sessions) != 4 || strings.Contains(body, "SECRET-PROMPT") || strings.Contains(body, "prompt") || strings.Contains(body, "attemptID") || strings.Contains(body, "pod-a-task") || strings.Contains(body, "billingBasis") || strings.Contains(body, "SECRET-RESULT-MESSAGE") {
 		t.Fatalf("activity view leaked or lost rows: %s", body)
 	}
 	for _, s := range page.Sessions {
@@ -250,7 +253,7 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 		}
 	}
 	a := page.Sessions[0].Activity
-	if a.Mode != "task" || a.AgentState != "busy" || a.LastActivity == nil || !a.LastActivity.Equal(now.Add(-time.Minute).UTC()) || a.RequestedModel != "claude-opus-5-5" {
+	if a.Mode != "task" || a.Provider != "claude" || a.AgentState != "busy" || a.LastActivity == nil || !a.LastActivity.Equal(now.Add(-time.Minute).UTC()) || a.RequestedModel != "claude-opus-5-5" || a.LaunchedBy != humanSA || a.TaskResult != "Succeeded" {
 		t.Fatalf("task activity %+v", a)
 	}
 	got := a.Usage
@@ -278,12 +281,13 @@ func TestPortalReaderActivityViewIsOptInAndAllowlisted(t *testing.T) {
 		}
 	}
 	r := page.Sessions[1].Activity
-	if r.Mode != "remote" || r.AgentState != "idle" || r.LastActivity != nil {
+	// An interactive session has no task result; a Failed phase alone is not one.
+	if r.Mode != "remote" || r.Provider != "claude" || r.AgentState != "idle" || r.LastActivity != nil || r.TaskResult != "" {
 		t.Fatalf("remote activity %+v", r)
 	}
 	unknown("remote", r.Usage)
 	o := page.Sessions[2].Activity
-	if o.Mode != protocol.UsageUnknown || o.AgentState != protocol.UsageUnknown || o.RequestedModel != protocol.UsageUnknown || o.LastActivity != nil {
+	if o.Mode != protocol.UsageUnknown || o.Provider != protocol.UsageUnknown || o.AgentState != protocol.UsageUnknown || o.RequestedModel != protocol.UsageUnknown || o.LastActivity != nil || o.TaskResult != "" {
 		t.Fatalf("words outside their sets were passed through: %+v", o)
 	}
 	unknown("odd", o.Usage)
