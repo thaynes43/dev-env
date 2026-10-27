@@ -565,3 +565,84 @@ func TestProductionActionConstructor(t *testing.T) {
 		})
 	}
 }
+
+func TestProductionLaunchActionScope(t *testing.T) {
+	root := t.TempDir()
+	if os.MkdirAll(filepath.Join(root, "config"), 0700) != nil {
+		t.Fatal("fixture")
+	}
+	path := filepath.Join(root, "config", "session-actions.json")
+	launch := fmt.Sprintf(`{"issuer":%q,"subject":"synthetic-subject","repos":["dev-env","haynes-ops"]}`, productionIssuer)
+	send := fmt.Sprintf(`{"issuer":%q,"subject":"synthetic-subject","targets":[{"name":"agent-a","uid":"uid-a"}]}`, productionIssuer)
+	for _, tc := range []struct {
+		name, value               string
+		valid, launch, send, hist bool
+	}{
+		{"launch alone", `{"launch":` + launch + `}`, true, true, false, false},
+		{"launch with send and history", `{"launch":` + launch + `,"send":` + send + `,"history":` + send + `}`, true, true, true, true},
+		{"send alone is unchanged", `{"send":` + send + `}`, true, false, true, false},
+		{"history alone is unchanged", `{"history":` + send + `}`, true, false, false, true},
+		{"duplicate launch", `{"launch":` + launch + `,"launch":` + launch + `}`, false, false, false, false},
+		{"case alias", `{"Launch":` + launch + `}`, false, false, false, false},
+		{"other issuer", strings.Replace(`{"launch":`+launch+`}`, productionIssuer, "https://other.example/", 1), false, false, false, false},
+		{"empty subject", strings.Replace(`{"launch":`+launch+`}`, `"synthetic-subject"`, `""`, 1), false, false, false, false},
+		{"missing subject", `{"launch":{"issuer":"` + productionIssuer + `","repos":["dev-env"]}}`, false, false, false, false},
+		{"missing repos", `{"launch":{"issuer":"` + productionIssuer + `","subject":"s"}}`, false, false, false, false},
+		{"targets instead of repos", `{"launch":{"issuer":"` + productionIssuer + `","subject":"s","targets":[{"name":"a","uid":"b"}]}}`, false, false, false, false},
+		{"extra key", strings.Replace(`{"launch":`+launch+`}`, `"repos"`, `"profile":"full","repos"`, 1), false, false, false, false},
+		{"case alias key", strings.Replace(`{"launch":`+launch+`}`, `"repos"`, `"Repos"`, 1), false, false, false, false},
+		{"empty repos", strings.Replace(`{"launch":`+launch+`}`, `["dev-env","haynes-ops"]`, `[]`, 1), false, false, false, false},
+		{"null repos", strings.Replace(`{"launch":`+launch+`}`, `["dev-env","haynes-ops"]`, `null`, 1), false, false, false, false},
+		{"duplicate repo", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `"dev-env"`, 1), false, false, false, false},
+		{"repo with a slash", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `"a/b"`, 1), false, false, false, false},
+		{"repo dot dot", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `".."`, 1), false, false, false, false},
+		{"repo empty", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `""`, 1), false, false, false, false},
+		{"repo not a string", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `7`, 1), false, false, false, false},
+		{"seventeen repos", `{"launch":{"issuer":"` + productionIssuer + `","subject":"s","repos":["r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12","r13","r14","r15","r16","r17"]}}`, false, false, false, false},
+		{"launch is a list", `{"launch":[]}`, false, false, false, false},
+	} {
+		if os.WriteFile(path, []byte(tc.value), 0600) != nil {
+			t.Fatal("fixture write")
+		}
+		got, err := loadActionScopes(root)
+		if (err == nil) != tc.valid {
+			t.Fatalf("%s: acceptance %v", tc.name, err == nil)
+		}
+		if tc.valid && ((got.Launch != nil) != tc.launch || (got.Send != nil) != tc.send || (got.History != nil) != tc.hist) {
+			t.Fatalf("%s: scopes %+v", tc.name, got)
+		}
+		if tc.valid && tc.launch && (got.Launch.Principal.Issuer != productionIssuer || got.Launch.Principal.Subject != "synthetic-subject" || strings.Join(got.Launch.Repos, ",") != "dev-env,haynes-ops") {
+			t.Fatalf("%s: launch scope %+v", tc.name, got.Launch)
+		}
+	}
+}
+
+func TestProductionLaunchConstructor(t *testing.T) {
+	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGSSLCRL", "PGSSLCRLDIR"} {
+		t.Setenv(name, "")
+	}
+	root := writeRuntimeDir(t, "SECRET-CANARY")
+	config := fmt.Sprintf(`{"launch":{"issuer":%q,"subject":"synthetic-subject","repos":["dev-env"]}}`, productionIssuer)
+	if os.WriteFile(filepath.Join(root, "config/session-actions.json"), []byte(config), 0600) != nil {
+		t.Fatal("scope fixture")
+	}
+	if _, err := LoadProduction(root); err == nil {
+		t.Fatal("a launch scope without an operator credential enabled")
+	}
+	token := fixtureOperatorToken(apiv1.TokenAudience, time.Now().Add(time.Hour))
+	if os.WriteFile(filepath.Join(root, "secrets/OPERATOR_TOKEN"), []byte(token), 0600) != nil {
+		t.Fatal("token fixture")
+	}
+	rt, err := LoadProduction(root)
+	if err != nil {
+		t.Fatal("scoped constructor rejected")
+	}
+	defer rt.Close()
+	for _, method := range []string{"POST", "GET"} {
+		w := httptest.NewRecorder()
+		rt.Handler.ServeHTTP(w, portalRequest(method, portalLaunchesPath, ""))
+		if w.Code == http.StatusOK || w.Code == http.StatusSeeOther {
+			t.Fatalf("unauthenticated %s accepted", method)
+		}
+	}
+}

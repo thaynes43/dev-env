@@ -32,3 +32,25 @@ func TestCommittedProductFixturesRender(t *testing.T) {
 		}
 	}
 }
+
+func TestLaunchFixturesAreLabelledAndContactNothing(t *testing.T) {
+	f, err := os.Open("../../../scripts/trials/portal_product/sessions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := RenderSessionsLaunchFixture(f)
+	_ = f.Close()
+	s := string(body)
+	if err != nil || !strings.Contains(s, "Fixture preview") || !strings.Contains(s, `id="launch"`) || !strings.Contains(s, `<option value="fixture-repo-one">`) || strings.Contains(s, `<option value="dev-env">`) {
+		t.Fatalf("launch fixture: %v", err)
+	}
+	results, err := RenderLaunchResultFixtures()
+	if err != nil || len(results) != 4 {
+		t.Fatalf("results: %v %d", err, len(results))
+	}
+	for outcome, page := range results {
+		if !strings.Contains(string(page), "Fixture preview") || strings.Contains(string(page), "<form") {
+			t.Errorf("%s: not a labelled, formless fixture", outcome)
+		}
+	}
+}

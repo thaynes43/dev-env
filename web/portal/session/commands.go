@@ -57,22 +57,33 @@ func actorRef(h Handle, p portal.Principal) string {
 }
 
 func (h *commandHandler) authorized(r *http.Request) (*http.Request, Handle, Record, error) {
-	if h == nil || h.engine == nil || h.authorizer == nil || h.scope == nil {
+	if h == nil || h.scope == nil {
 		return r, Handle{}, Record{}, portal.ErrUnavailable
 	}
-	r = h.engine.bind(r)
-	key, record, err := h.engine.current(r)
+	return authorizedAction(h.engine, h.authorizer, h.scope.Principal, r)
+}
+
+// authorizedAction is the check every portal action route makes before it acts:
+// a current portal session whose principal is the one the action's private
+// scope names, and a fresh authorization for the dev-env internal resource. Send
+// and launch share it, so neither can drift from the other.
+func authorizedAction(engine *Engine, authorizer portal.Authorizer, want portal.Principal, r *http.Request) (*http.Request, Handle, Record, error) {
+	if engine == nil || authorizer == nil {
+		return r, Handle{}, Record{}, portal.ErrUnavailable
+	}
+	r = engine.bind(r)
+	key, record, err := engine.current(r)
 	if err != nil {
 		return r, Handle{}, Record{}, err
 	}
-	principal, err := h.engine.Authenticate(r)
+	principal, err := engine.Authenticate(r)
 	if err != nil {
 		return r, Handle{}, Record{}, err
 	}
-	if h.scope.Principal != principal {
+	if want != principal {
 		return r, Handle{}, Record{}, portal.ErrDenied
 	}
-	if err = h.authorizer.Authorize(r.Context(), principal, portal.Resource{Project: "dev-env", Environment: "internal"}); err != nil {
+	if err = authorizer.Authorize(r.Context(), principal, portal.Resource{Project: "dev-env", Environment: "internal"}); err != nil {
 		return r, Handle{}, Record{}, err
 	}
 	return r, key, record, nil

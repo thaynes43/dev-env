@@ -3,6 +3,7 @@ package portal
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
@@ -317,5 +318,106 @@ func TestSelectedRowIsTheDefaultDetailOnEveryViewport(t *testing.T) {
 		if !strings.Contains(viewsStyle, rule) {
 			t.Errorf("stylesheet lacks %s", rule)
 		}
+	}
+}
+
+func TestValidLaunchDropsWhatIsNotAFixedWellFormedForm(t *testing.T) {
+	good := func() *ProductLaunch {
+		return &ProductLaunch{Action: ProductSessionLaunchesHref, CSRF: strings.Repeat("c", 43), RequestID: strings.Repeat("r", 43), Repos: []string{"dev-env", "haynes-ops"}, Models: []string{"claude-opus-5-5"}, Efforts: []string{"low", "xhigh"}}
+	}
+	if !validLaunch(good()) {
+		t.Fatal("a good form was refused")
+	}
+	for name, edit := range map[string]func(*ProductLaunch){
+		"other action":      func(l *ProductLaunch) { l.Action = "https://evil.example/x" },
+		"relative action":   func(l *ProductLaunch) { l.Action = ProductSessionMessagesHref },
+		"short csrf":        func(l *ProductLaunch) { l.CSRF = "short" },
+		"markup csrf":       func(l *ProductLaunch) { l.CSRF = strings.Repeat("<", 43) },
+		"short request id":  func(l *ProductLaunch) { l.RequestID = "short" },
+		"no repos":          func(l *ProductLaunch) { l.Repos = nil },
+		"repo with a slash": func(l *ProductLaunch) { l.Repos = []string{"a/b"} },
+		"repo dot dot":      func(l *ProductLaunch) { l.Repos = []string{".."} },
+		"repo markup":       func(l *ProductLaunch) { l.Repos = []string{`"><script>`} },
+		"duplicate repo":    func(l *ProductLaunch) { l.Repos = []string{"dev-env", "dev-env"} },
+		"seventeen repos": func(l *ProductLaunch) {
+			l.Repos = nil
+			for i := 0; i < 17; i++ {
+				l.Repos = append(l.Repos, fmt.Sprintf("repo%d", i))
+			}
+		},
+		"no models":      func(l *ProductLaunch) { l.Models = nil },
+		"alias model":    func(l *ProductLaunch) { l.Models = []string{"opus"} },
+		"latest model":   func(l *ProductLaunch) { l.Models = []string{"claude-opus-latest"} },
+		"a good and bad": func(l *ProductLaunch) { l.Models = []string{"claude-opus-5-5", "sonnet"} },
+		"unknown effort": func(l *ProductLaunch) { l.Efforts = []string{"turbo"} },
+	} {
+		l := good()
+		edit(l)
+		if validLaunch(l) {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if validLaunch(nil) {
+		t.Error("nil accepted")
+	}
+}
+
+func TestLaunchFormRendersOnlyWhenValidOnSessionsAndEscapes(t *testing.T) {
+	launch := &ProductLaunch{Action: ProductSessionLaunchesHref, CSRF: strings.Repeat("c", 43), RequestID: strings.Repeat("r", 43), Repos: []string{"dev-env"}, Models: []string{"claude-opus-5-5"}, Efforts: []string{"high"}}
+	render := func(title string, l *ProductLaunch) (string, string) {
+		body, policy, err := RenderProductPolicyWithin(ProductPage{Title: title, Notice: "n", Launch: l}, 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body), policy
+	}
+	body, policy := render("Sessions", launch)
+	if policy != ProductSendPolicy || !strings.Contains(body, `<form class="launch" method="post" action="`+ProductSessionLaunchesHref+`">`) || !strings.Contains(body, `id="launch"`) || !strings.Contains(body, `href="#launch"`) {
+		t.Fatalf("valid launch form not rendered with the send policy: %q", policy)
+	}
+	for _, name := range []string{`name="csrf"`, `name="requestID"`, `name="repo"`, `name="mode"`, `name="model"`, `name="effort"`, `name="size"`, `name="prompt"`} {
+		if !strings.Contains(body, name) {
+			t.Errorf("form lacks %s", name)
+		}
+	}
+	for _, label := range []string{`for="launch-repo"`, `for="launch-mode"`, `for="launch-model"`, `for="launch-effort"`, `for="launch-size"`, `for="launch-prompt"`} {
+		if !strings.Contains(body, label) {
+			t.Errorf("form lacks label %s", label)
+		}
+	}
+	// Tasks never carries it, and an invalid form is dropped with the read-only policy.
+	if body, policy := render("Tasks", launch); policy != ProductPolicy || strings.Contains(body, "<form") {
+		t.Error("the Tasks page rendered a launch form")
+	}
+	bad := *launch
+	bad.Models = []string{"opus"}
+	if body, policy := render("Sessions", &bad); policy != ProductPolicy || strings.Contains(body, "<form") || strings.Contains(body, `id="launch"`) {
+		t.Error("an invalid launch form was rendered")
+	}
+	if body, policy := render("Sessions", nil); policy != ProductPolicy || strings.Contains(body, `id="launch"`) {
+		t.Error("a page without a launch form changed")
+	}
+}
+
+func TestRenderLaunchResultIsFixedWordingEscapedAndFormless(t *testing.T) {
+	for outcome, want := range map[string]string{
+		"limit": "Too many launches are running", "unavailable": "Launching is unavailable", "invalid": "The launch was not valid",
+		"unknown": "Outcome Unknown", "something else": "Outcome Unknown", "": "Outcome Unknown",
+	} {
+		body, err := RenderLaunchResult(ProductLaunchResult{Outcome: outcome, Back: productSessionsHref + "#launch"})
+		if err != nil || !strings.Contains(string(body), want) || strings.Contains(string(body), "<form") || strings.Contains(string(body), `href="`+productSessionsHref+`#launch"`) == false {
+			t.Fatalf("%q: %v", outcome, err)
+		}
+		if strings.Contains(string(body), "<script") || !strings.Contains(string(body), "form-action &#39;none&#39;") {
+			t.Fatalf("%q: policy or script", outcome)
+		}
+	}
+	body, err := RenderLaunchResult(ProductLaunchResult{Outcome: "invalid", Back: "https://evil.example/", Fields: []ProductField{{Label: "<b>model</b>", Value: `"><img src=x onerror=alert(1)>`}, {Label: "ok", Value: strings.Repeat("x", 600)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if strings.Contains(s, "<img") || strings.Contains(s, "<b>model") || strings.Contains(s, "evil.example") || strings.Contains(s, strings.Repeat("x", 600)) || !strings.Contains(s, "&lt;img") || !strings.Contains(s, `href="`+productSessionsHref+`"`) {
+		t.Fatalf("not escaped or an unsafe back link survived: %s", s)
 	}
 }

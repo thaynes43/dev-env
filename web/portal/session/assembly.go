@@ -17,6 +17,7 @@ type AssemblyConfig struct {
 	Sessions   *SessionSource
 	Tasks      *TaskSource
 	Send       SendForms
+	Launch     LaunchForms
 	FreshFor   time.Duration
 	Now        func() time.Time
 }
@@ -34,6 +35,15 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 		if r.URL.Path == portalMessagesPath || strings.HasPrefix(r.URL.Path, portalMessagesPath+"/") {
 			if send, ok := c.Send.(*commandHandler); ok && send != nil {
 				send.ServeHTTP(w, r)
+			} else {
+				authHeaders(w)
+				authFailure(w, portal.ErrUnavailable)
+			}
+			return
+		}
+		if r.URL.Path == portalLaunchesPath {
+			if launch, ok := c.Launch.(*launchHandler); ok && launch != nil {
+				launch.ServeHTTP(w, r)
 			} else {
 				authHeaders(w)
 				authFailure(w, portal.ErrUnavailable)
