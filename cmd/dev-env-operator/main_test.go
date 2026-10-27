@@ -331,3 +331,41 @@ func TestPortalActionTargetsConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestPilotAgentFlags(t *testing.T) {
+	const digest = "@sha256:0000000000000000000000000000000000000000000000000000000000000009"
+	const image = "ghcr.io/thaynes43/dev-env:2.47.0" + digest
+	o, err := parseFlags(nil)
+	if err != nil || o.pilotAgent != nil {
+		t.Fatalf("pilot agent must be off by default: %v %v", o.pilotAgent, err)
+	}
+	for _, img := range []string{image, "ghcr.io/thaynes43/dev-env" + digest} {
+		o, err = parseFlags([]string{"--pilot-agent-image=" + img, "--pilot-agent-session=dev-env-agent/history-pilot-1"})
+		if err != nil || o.pilotAgent == nil || o.pilotAgent.Image != img || o.pilotAgent.Parent != "dev-env-agent" || o.pilotAgent.Key != "history-pilot-1" {
+			t.Fatalf("valid pair refused or misread for %s: %+v %v", img, o.pilotAgent, err)
+		}
+	}
+	for name, args := range map[string][]string{
+		"image only":          {"--pilot-agent-image=" + image},
+		"session only":        {"--pilot-agent-session=dev-env-agent/k"},
+		"no digest":           {"--pilot-agent-image=ghcr.io/thaynes43/dev-env:2.47.0", "--pilot-agent-session=dev-env-agent/k"},
+		"tag only no digest":  {"--pilot-agent-image=ghcr.io/thaynes43/dev-env", "--pilot-agent-session=dev-env-agent/k"},
+		"other repository":    {"--pilot-agent-image=ghcr.io/thaynes43/other" + digest, "--pilot-agent-session=dev-env-agent/k"},
+		"other registry":      {"--pilot-agent-image=docker.io/thaynes43/dev-env" + digest, "--pilot-agent-session=dev-env-agent/k"},
+		"uppercase digest":    {"--pilot-agent-image=ghcr.io/thaynes43/dev-env@sha256:" + strings.Repeat("A", 64), "--pilot-agent-session=dev-env-agent/k"},
+		"short digest":        {"--pilot-agent-image=ghcr.io/thaynes43/dev-env@sha256:abc", "--pilot-agent-session=dev-env-agent/k"},
+		"session no slash":    {"--pilot-agent-image=" + image, "--pilot-agent-session=dev-env-agent"},
+		"session two slashes": {"--pilot-agent-image=" + image, "--pilot-agent-session=dev-env-agent/a/b"},
+		"bad parent":          {"--pilot-agent-image=" + image, "--pilot-agent-session=Dev_Env/k"},
+		"dotted parent":       {"--pilot-agent-image=" + image, "--pilot-agent-session=dev.env/k"},
+		"empty parent":        {"--pilot-agent-image=" + image, "--pilot-agent-session=/k"},
+		"empty key":           {"--pilot-agent-image=" + image, "--pilot-agent-session=dev-env-agent/"},
+		"bad key":             {"--pilot-agent-image=" + image, "--pilot-agent-session=dev-env-agent/-bad"},
+		"key with space":      {"--pilot-agent-image=" + image, "--pilot-agent-session=dev-env-agent/a b"},
+		"key too long":        {"--pilot-agent-image=" + image, "--pilot-agent-session=dev-env-agent/" + strings.Repeat("k", 64)},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

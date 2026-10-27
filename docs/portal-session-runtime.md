@@ -237,3 +237,50 @@ source interfaces are not an installation or approval: deployment, eligible
 idle agentd rollout, provider format qualification, live private access and
 send proof remain separate prerequisites. Legacy unbound history and agentd
 versions lacking the conversation control remain unavailable.
+
+## Pilot agent image for one session (default off)
+
+History binds only at a session's first launch on agentd 2.47 or later, and
+every pod today runs the one templates image. A templates edit drains every
+idle session. To try a newer agent image on one new session, the operator
+takes two flags. Both are empty by default, and both or neither must be set:
+
+- `--pilot-agent-image` is `ghcr.io/thaynes43/dev-env`, an optional `:X.Y.Z`
+  tag, and a required `@sha256:` digest of 64 lowercase hex digits. It is the
+  same shape the native fixture image uses.
+- `--pilot-agent-session` is `<parent>/<key>`. The parent is a DNS-1123 label.
+  The key is a non-empty label value. There is exactly one `/`.
+
+A set pair with a bad value, or only one flag, fails operator startup.
+
+A session runs on the pilot image only when all of these hold:
+
+- Its `spec.parent` equals the parent. The API sets that from the caller's
+  authenticated identity.
+- Its idempotency-key label equals the key. The caller sets that with
+  `agent-run --idempotency-key`, and the API dedupes it per parent.
+- The agent is Claude, the mode is remote or local, and the repo is `dev-env`.
+- It has no workspace, no project canary and no private pilot.
+
+Only the image of that session's own pod changes. The pod keeps everything
+else: the templates revision label, env, args, mounts, profile, Secrets,
+egress and grants. Hold pods and task-budget workers keep the templates
+image. With the flags unset, every pod is built exactly as before.
+
+What this means in use:
+
+- Only a session created after the flags are set gets the image, at its first
+  pod. Existing sessions are never rebound or restarted, and a session that
+  first launched on an older agentd stays without history.
+- The pod carries the current templates revision. It drains only on a
+  templates change, and its next pod is on the pilot image again while the
+  flags stay.
+- Removing the flags puts that session's next pod on the templates image. Its
+  history is then Unavailable if the templates image predates 2.47.
+
+Trust model: the image is pinned by digest, from the same signed repository
+as the templates image, and the flags are a reviewed HelmRelease line. The
+pilot changes the code version of one session. It does not change that
+session's profile, Secrets, egress or grants. The flags select by metadata
+and are not an authorization to read history; the portal action scope is still
+required.

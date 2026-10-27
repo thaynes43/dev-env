@@ -189,6 +189,9 @@ type Reconciler struct {
 	// launch when unavailable; unbound legacy sessions keep their lifecycle.
 	TaskBudgets           *taskbudget.Service
 	TaskBudgetWorkerImage string
+	// PilotAgent runs one exactly selected session's pod on another agent
+	// image (pilotImageFor). Nil is off.
+	PilotAgent *PilotAgent
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder
@@ -1106,6 +1109,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		obs.buildErr = err
 		return nil
 	}
+	applyPilotImage(pod, s, r.PilotAgent)
 	if obs.claim.missing {
 		claim, err := buildHomeClaim(s, t)
 		if err != nil {
