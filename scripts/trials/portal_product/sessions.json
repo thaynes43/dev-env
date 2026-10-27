@@ -78,7 +78,11 @@
        "kind": "Unknown"
       }
      },
-     "lastActivity": "2026-10-26T14:41:00Z"
+     "lastActivity": "2026-10-26T14:41:00Z",
+     "remoteControl": {
+      "state": "registered",
+      "url": "https://claude.ai/code/session_FIXTURE00000000000000"
+     }
     }
    },
    {

@@ -343,3 +343,64 @@ func TestGroupDigits(t *testing.T) {
 		}
 	}
 }
+
+// A registered Remote Control entry with the exact claude.ai link puts an
+// "Open in Claude" link in the agent's header; every other state shows only
+// its honest context line, and a headless or local session says it has none.
+func TestSessionRemoteControlLinkAndState(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	rc := func(entry string) string {
+		return strings.Replace(unknownActivity, `"mode":"remote"`, `"mode":"remote","remoteControl":`+entry, 1)
+	}
+	link := "https://claude.ai/code/session_ABCdef0123456789"
+	local := strings.Replace(unknownActivity, `"mode":"remote"`, `"mode":"local"`, 1)
+	decoded, err := decodeSessionPage([]byte(activityPage(
+		activityRow("rc-registered", rc(`{"state":"registered","url":"`+link+`"}`)),
+		activityRow("rc-nolink", rc(`{"state":"registered"}`)),
+		activityRow("rc-pairing", rc(`{"state":"pair-code-issued"}`)),
+		activityRow("rc-starting", rc(`{"state":"starting"}`)),
+		activityRow("rc-other", rc(`{"state":"unregistered"}`)),
+		activityRow("rc-missing", unknownActivity),
+		activityRow("task-busy", reportedActivity),
+		activityRow("local-waiting", local),
+	)), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{})
+	for name, want := range map[string]string{
+		"rc-registered": "Registered", "rc-nolink": "Registered, no link reported", "rc-pairing": "Waiting for phone pairing",
+		"rc-starting": "Starting", "rc-other": "unregistered", "rc-missing": "Not reported",
+		"task-busy": "None (headless task)", "local-waiting": "None (local terminal)",
+	} {
+		row := findRow(t, page, name)
+		if got := rowFields(row)["Remote Control"]; got != want {
+			t.Errorf("%s: Remote Control %q, want %q", name, got, want)
+		}
+		wantLink := ""
+		if name == "rc-registered" {
+			wantLink = link
+		}
+		if row.Link != wantLink || (wantLink != "") != (row.LinkLabel == "Open in Claude") {
+			t.Errorf("%s: link %q label %q", name, row.Link, row.LinkLabel)
+		}
+	}
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if strings.Count(html, `>Open in Claude<svg`) != 1 || !strings.Contains(html, `<a class="btn" href="`+link+`" rel="noreferrer">Open in Claude`) {
+		t.Fatal("the registered agent's header lacks its one Open in Claude link")
+	}
+	// The renderer drops any header link that is not https.
+	row := findRow(t, page, "rc-registered")
+	row.Link = "javascript:alert(1)"
+	bad, err := portal.RenderProduct(portal.ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []portal.ProductGroup{{Title: "x", Rows: []portal.ProductRow{row}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(bad), "Open in Claude") || strings.Contains(string(bad), "javascript") {
+		t.Fatal("a non-https header link rendered")
+	}
+}

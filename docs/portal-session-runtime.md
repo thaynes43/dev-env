@@ -306,3 +306,24 @@ pilot changes the code version of the matching sessions. It does not change
 their profile, Secrets, egress or grants. The flags select by metadata and are
 not an authorization to read history; the portal action scope is still
 required.
+
+## Remote Control link in the Sessions view
+
+The portal reader's `view=activity` summary may carry `remoteControl`:
+- `state` is the word from AgentSession `status.remoteControl`, such as `registered`, `starting` or `pair-code-issued`.
+- `url` is present only when it is exactly `https://claude.ai/code/session_<id>`.
+
+The name and session id are never sent. The portal re-checks both values, and it refuses a page with a malformed entry, as it does for its other optional fields.
+
+A registered agent with a link gets an **Open in Claude** link in its header. Every agent gets a **Remote Control** line in its context:
+- Registered;
+- Registered, no link reported;
+- Waiting for phone pairing;
+- Starting;
+- Not reported;
+- None (headless task);
+- None (local terminal).
+
+This is read-only. It adds no portal action and needs no operator flag.
+
+**Deploy the portal before the operator.** The portal rejects activity keys it does not know.

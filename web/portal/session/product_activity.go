@@ -80,6 +80,34 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	return a, nil
 }
 
+// remoteControlView is a session's Remote Control link and the state shown
+// beside it. The link is set only for a registered entry whose URL is the exact
+// claude.ai session shape; it opens the agent's own conversation in Claude,
+// which needs the owner's claude.ai sign-in. A headless task or a local
+// terminal session has no Remote Control entry, and says so.
+func remoteControlView(a *apiv1.PortalSessionActivity) (string, string) {
+	switch {
+	case a.Mode == "task":
+		return "", "None (headless task)"
+	case a.Mode == "local":
+		return "", "None (local terminal)"
+	case a.RemoteControl == nil:
+		return "", "Not reported"
+	}
+	rc := a.RemoteControl
+	switch {
+	case rc.State == "registered" && remoteControlURL.MatchString(rc.URL):
+		return rc.URL, "Registered"
+	case rc.State == "registered":
+		return "", "Registered, no link reported"
+	case rc.State == "pair-code-issued":
+		return "", "Waiting for phone pairing"
+	case rc.State == "starting":
+		return "", "Starting"
+	}
+	return "", shown(rc.State)
+}
+
 // decodeRemoteControl accepts exactly {state, url?}, each re-checked against the
 // operator's patterns. Like the other optional keys, a malformed value makes the
 // whole read unavailable rather than being shown.
@@ -764,9 +792,14 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	if runs != protocol.UsageUnknown {
 		runs += " (" + a.Mode + ")"
 	}
+	link, rcState := remoteControlView(a)
+	if link != "" {
+		out.Link, out.LinkLabel = link, "Open in Claude"
+	}
 	out.Context = []portal.ProductField{
 		{Label: "Project", Value: shown(row.Repo)},
 		{Label: "How it runs", Value: runs},
+		{Label: "Remote Control", Value: rcState},
 		{Label: "Launched by", Value: shown(a.LaunchedBy), Mono: a.LaunchedBy != ""},
 		{Label: "Provider", Value: shown(a.Provider)},
 		{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},
