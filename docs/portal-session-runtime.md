@@ -370,8 +370,9 @@ reader still cannot create through `POST /v1/sessions`.
   "launched by". The caller is a derived value that exists only inside this
   route: depth 1, no profile to hand on, and no other route accepts it. A parent
   equal to another configured caller's identity is refused.
-- **Cap.** Inside the create lock, after the idempotent-repeat check, the route
-  counts the unfinished sessions (the predicate the idempotency dedupe uses) whose
+- **Cap.** Inside the create lock (which is per operator replica, so launches
+  racing on two replicas can exceed the cap by one each), after the
+  idempotent-repeat check, the route counts the unfinished sessions (the predicate the idempotency dedupe uses) whose
   parent starts with `portal/`. At the cap it answers 429 `limit_exceeded` and
   creates nothing. The cap is across all portal users, not per user. A repeat of
   an existing request still returns its session at the cap, and a finished or
@@ -392,7 +393,11 @@ Cloudflare, Proxmox-reader and Omni keys, the MCP secrets (including the UniFi
 write tools), and the Claude and Codex logins. The route therefore never falls
 back to it: the flag is required. For a task that runs on a portal user's
 prompt, activation should name a narrower profile, such as `dev`, and Tom
-confirms what that profile grants before the flag is set. A templates edit to
+confirms what that profile grants before the flag is set. `dev` still carries
+the GitHub bot token and the UniFi MCP token, and it has no keeper Claude login,
+so a remote launch on `dev` shows Login required until someone runs
+`agent-run login`. The operator refuses `workbench`, whose pods run as the
+workbench ServiceAccount with exec rights. A templates edit to
 that profile changes what portal launches get, from the next pod each one
 starts.
 

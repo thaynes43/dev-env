@@ -119,7 +119,9 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 
 	if c.kind == kindPortalLaunch {
 		// Inside the create lock, after the repeat of a key above, so a repeat
-		// returns its session at the cap and two launches cannot both pass it.
+		// returns its session at the cap. The lock is per replica: launches that
+		// race on two replicas can exceed the cap by one each, like the child
+		// limit and the idempotency dedupe.
 		n, err := s.unfinishedPortalLaunches(ctx)
 		if err != nil {
 			return 0, nil, err

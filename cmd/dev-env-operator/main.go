@@ -240,6 +240,11 @@ func parseFlags(args []string) (options, error) {
 		if len(validation.IsDNS1123Label(o.portalLaunchProfile)) != 0 {
 			return o, errors.New("--portal-launch-repo requires --portal-launch-profile, a profile name")
 		}
+		// The workbench profile runs pods as the workbench ServiceAccount, with
+		// exec rights and workbench treatment by this API; a portal launch never gets it.
+		if o.portalLaunchProfile == "workbench" {
+			return o, errors.New("--portal-launch-profile may not be workbench")
+		}
 		if o.portalLaunchMaxUnfinished < 1 || o.portalLaunchMaxUnfinished > apiv1.MaxPortalLaunchMaxUnfinished {
 			return o, errors.New("--portal-launch-max-unfinished must be 1 to 8")
 		}

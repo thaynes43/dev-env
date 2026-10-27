@@ -418,6 +418,7 @@ func TestPortalLaunchProfileAndCapFlags(t *testing.T) {
 		"no profile":         with(),
 		"empty profile":      with("--portal-launch-profile="),
 		"uppercase profile":  with("--portal-launch-profile=Dev"),
+		"workbench profile":  {"--enable-portal-reader", "--portal-launch-profile=workbench", "--portal-launch-repo=dev-env"},
 		"underscore profile": with("--portal-launch-profile=a_b"),
 		"slash profile":      with("--portal-launch-profile=a/b"),
 		"cap zero":           with("--portal-launch-profile=dev", "--portal-launch-max-unfinished=0"),
