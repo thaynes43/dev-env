@@ -307,3 +307,27 @@ func TestPortalReaderFlag(t *testing.T) {
 		t.Fatal("portal account was also accepted as the human caller")
 	}
 }
+
+func TestPortalActionTargetsConfig(t *testing.T) {
+	for _, tc := range []struct {
+		args          []string
+		ok            bool
+		send, history int
+	}{
+		{nil, true, 0, 0}, {[]string{"--enable-portal-reader"}, true, 0, 0},
+		{[]string{"--enable-portal-reader", "--portal-send-target=agent-a=uid-a"}, true, 1, 0},
+		{[]string{"--enable-portal-reader", "--portal-history-target=agent-a=uid-a"}, true, 0, 1},
+		{[]string{"--portal-send-target=agent-a=uid-a"}, false, 0, 0},
+		{[]string{"--enable-portal-reader", "--portal-send-target=bad"}, false, 0, 0},
+		{[]string{"--enable-portal-reader", "--portal-send-target=agent-a=uid-a", "--portal-send-target=agent-a=uid-a"}, false, 0, 0},
+		{[]string{"--enable-portal-reader", "--portal-history-target=agent-a=uid-a", "--portal-history-target=agent-b=uid-a"}, false, 0, 0},
+	} {
+		o, err := parseFlags(tc.args)
+		if (err == nil) != tc.ok {
+			t.Fatalf("scope parse mismatch for %v", tc.args)
+		}
+		if tc.ok && (len(o.portalMessageTargets) != tc.send || len(o.portalConversationTargets) != tc.history) {
+			t.Fatal("scope leaked across actions")
+		}
+	}
+}

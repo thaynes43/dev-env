@@ -490,6 +490,38 @@ func ctlMessageOrLog(ctx context.Context, args []string, stdin io.Reader, stdout
 	return exitOK
 }
 
+// ctlPortalConversation accepts only the current immutable target fence and
+// finite query controls. It exposes no provider path or thread selection.
+func ctlPortalConversation(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	fs := flag.NewFlagSet("ctl portal-conversation", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	sessionUID := fs.String("expected-session-uid", "", "")
+	podUID := fs.String("expected-pod-uid", "", "")
+	limit := fs.Int("limit", 60, "")
+	before := fs.String("before", "", "")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || *sessionUID == "" || *podUID == "" || *limit < 1 || *limit > 60 || len(*before) > 256 {
+		_, _ = fmt.Fprintln(stderr, "agentd: invalid conversation request")
+		return exitUsage
+	}
+	settings, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		return exitFailure
+	}
+	session, err := agentd.LoadSession(getenv)
+	if err != nil {
+		return exitFailure
+	}
+	if settings.PodUID != *podUID || session.SessionUID != *sessionUID {
+		_, _ = fmt.Fprintln(stderr, "agentd: target identity does not match")
+		return exitFailure
+	}
+	result := agentd.PortalConversation(settings, session, *sessionUID, *podUID, *limit, *before, time.Now())
+	if !result.Valid() || json.NewEncoder(stdout).Encode(result) != nil {
+		return exitFailure
+	}
+	return exitOK
+}
+
 // loginCtl is `ctl login url|code|status` (Story110 T03): the coordinator's
 // way to drive a remote session's pod-owned Claude login. url prints the
 // sign-in link to stdout only; code reads the code from stdin. Neither value is
@@ -597,6 +629,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return codexPairCtl(ctx, args[1:], stdout, stderr, getenv)
 		case "deliver", "log":
 			return ctlMessageOrLog(ctx, args, stdin, stdout, stderr, getenv, r)
+		case "portal-conversation":
+			return ctlPortalConversation(args[1:], stdout, stderr, getenv)
 		case "decision-read", "decision-answer":
 			return decisionCtl(ctx, args, stdin, stdout, stderr, getenv)
 		case "context-publish", "context-read", "context-list":

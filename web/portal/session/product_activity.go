@@ -404,6 +404,18 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 			{Label: "Totals", Value: "Sums of reported values per group; Unknown is never counted as zero"},
 		},
 	}
+	// The session the request selects always gets a row. Past the cap it takes
+	// the last listed row's place, so the listing stays maxListedSessions long.
+	selected, drop := -1, -1
+	for i, e := range kept {
+		if filter.Session != "" && e.s.UID == filter.Session {
+			selected = i
+			break
+		}
+	}
+	if selected >= maxListedSessions {
+		drop = maxListedSessions - 1
+	}
 	byDriver := map[string]*usageTotal{"Interactive": {}, "Headless": {}, protocol.UsageUnknown: {}}
 	byModel, byProject := map[string]*usageTotal{}, map[string]*usageTotal{}
 	measured, interactive, headless := 0, 0, 0
@@ -415,7 +427,7 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 		}
 		// Only the first maxListedSessions, in group then recency order, get a
 		// row; every session counts in the stats and breakdowns below.
-		if i < maxListedSessions {
+		if (i < maxListedSessions && i != drop) || i == selected {
 			row := sessionRow(e.s, now)
 			row.ID = id
 			page.Groups[e.group].Rows = append(page.Groups[e.group].Rows, row)
@@ -725,6 +737,7 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 		{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},
 		{Label: "UID", Value: shown(row.UID), Mono: true},
 	}
+	out.Messages = sessionMessages(row, a)
 	return out
 }
 

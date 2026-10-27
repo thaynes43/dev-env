@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -416,3 +417,190 @@ func (c PostgresConfig) GoString() string { return c.String() }
 func (s PostgresStore) GoString() string  { return s.String() }
 func (sessionPayload) String() string     { return "[redacted portal payload]" }
 func (s sessionPayload) GoString() string { return s.String() }
+
+// commandAuth verifies the existing immutable authentication row. It does not
+// lock out logout: a command accepted before revocation may already be in flight.
+func (s *PostgresStore) commandAuth(ctx context.Context, tx pgx.Tx, h Handle) (time.Time, error) {
+	var expiry time.Time
+	var data []byte
+	err := tx.QueryRow(ctx, "SELECT expires_at,payload FROM portal.sessions WHERE handle=$1 AND generation=$2 AND version=1 AND expires_at>GREATEST($3,clock_timestamp())", h[:], s.generation, s.now()).Scan(&expiry, &data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, portal.ErrDenied
+	}
+	if err != nil {
+		return time.Time{}, portal.ErrUnavailable
+	}
+	var p sessionPayload
+	if s.decrypt(s.row("session", h, expiry, [32]byte{}), data, &p) != nil {
+		return time.Time{}, portal.ErrDenied
+	}
+	p.Record.accessToken, p.Record.tokenExpiresAt = p.AccessToken, p.TokenExpiresAt
+	if !validRecord(p.Record, s.now()) || !p.Record.ExpiresAt.Equal(expiry) {
+		return time.Time{}, portal.ErrDenied
+	}
+	return expiry, nil
+}
+
+// commandRow reads only the purpose-bound ciphertext and never treats it as an
+// authentication payload. All command rows retain the original session expiry.
+func (s *PostgresStore) commandRow(ctx context.Context, tx pgx.Tx, h Handle, id, purpose string, out any) (bool, error) {
+	key := commandKey(h, id, purpose)
+	var expiry time.Time
+	var data []byte
+	err := tx.QueryRow(ctx, "SELECT expires_at,payload FROM portal.sessions WHERE handle=$1 AND generation=$2 AND version=1 AND expires_at>GREATEST($3,clock_timestamp())", key[:], s.generation, s.now()).Scan(&expiry, &data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil || s.decrypt(s.row("portal_command_"+purpose, key, expiry, [32]byte{}), data, out) != nil {
+		return false, portal.ErrUnavailable
+	}
+	return true, nil
+}
+
+func (s *PostgresStore) reserveCommand(ctx context.Context, h Handle, wanted commandReservation) (bool, error) {
+	if s == nil || s.now == nil || !validCommandID(wanted.RequestID) || wanted.SessionName == "" || len(wanted.SessionName) > 253 || wanted.SessionUID == "" || len(wanted.SessionUID) > 128 || wanted.Digest == ([32]byte{}) {
+		return false, portal.ErrDenied
+	}
+	created := false
+	err := s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		expiry, err := s.commandAuth(ctx, tx, h)
+		if err != nil {
+			return err
+		}
+		// Admission serializes the duplicate check and insertion across replicas.
+		// Check existing before admission so saturated storage still answers replays.
+		var existing commandReservation
+		found, err := s.commandRow(ctx, tx, h, wanted.RequestID, "reservation", &existing)
+		if err != nil {
+			return err
+		}
+		if found {
+			if existing.RequestID != wanted.RequestID || existing.SessionName != wanted.SessionName || existing.SessionUID != wanted.SessionUID || existing.Digest != wanted.Digest || !existing.ExpiresAt.Equal(expiry) {
+				return portal.ErrDenied
+			}
+			return nil
+		}
+		if err = admitPortalInsert(ctx, tx, "sessions"); err != nil {
+			return err
+		}
+		found, err = s.commandRow(ctx, tx, h, wanted.RequestID, "reservation", &existing)
+		if err != nil {
+			return err
+		}
+		if found {
+			if existing.RequestID != wanted.RequestID || existing.SessionName != wanted.SessionName || existing.SessionUID != wanted.SessionUID || existing.Digest != wanted.Digest || !existing.ExpiresAt.Equal(expiry) {
+				return portal.ErrDenied
+			}
+			return nil
+		}
+		wanted.ExpiresAt = expiry
+		key := commandKey(h, wanted.RequestID, "reservation")
+		data, err := s.encrypt(s.row("portal_command_reservation", key, expiry, [32]byte{}), wanted)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, "INSERT INTO portal.sessions (handle,generation,version,expires_at,payload) SELECT $1,$2,1,$3,$4 WHERE $3>clock_timestamp()", key[:], s.generation, expiry, data)
+		if err != nil {
+			return insertError(err)
+		}
+		// Check clock again: INSERT SELECT can affect zero rows on expiry.
+		found, err = s.commandRow(ctx, tx, h, wanted.RequestID, "reservation", &existing)
+		if err != nil || !found {
+			return portal.ErrDenied
+		}
+		created = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return created, nil
+}
+
+func (s *PostgresStore) readCommand(ctx context.Context, h Handle, id string) (commandReservation, *apiv1.PortalMessageReceipt, error) {
+	var reservation commandReservation
+	var receipt apiv1.PortalMessageReceipt
+	if s == nil || s.now == nil || !validCommandID(id) {
+		return reservation, nil, portal.ErrDenied
+	}
+	terminal := false
+	err := s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		expiry, err := s.commandAuth(ctx, tx, h)
+		if err != nil {
+			return err
+		}
+		found, err := s.commandRow(ctx, tx, h, id, "reservation", &reservation)
+		if err != nil {
+			return err
+		}
+		if !found || reservation.RequestID != id || !reservation.ExpiresAt.Equal(expiry) {
+			return portal.ErrDenied
+		}
+		terminal, err = s.commandRow(ctx, tx, h, id, "terminal", &receipt)
+		return err
+	})
+	if err != nil {
+		return commandReservation{}, nil, err
+	}
+	if !terminal {
+		return reservation, nil, nil
+	}
+	return reservation, &receipt, nil
+}
+
+func (s *PostgresStore) finishCommand(ctx context.Context, h Handle, reservation commandReservation, receipt apiv1.PortalMessageReceipt) error {
+	if s == nil || s.now == nil || !validCommandID(reservation.RequestID) || receipt.RequestID != reservation.RequestID || receipt.SessionName != reservation.SessionName || receipt.SessionUID != reservation.SessionUID || receipt.ObservedAt.IsZero() || (receipt.TransportStatus != apiv1.PortalTransportDelivered && receipt.TransportStatus != apiv1.PortalTransportRefused && receipt.TransportStatus != apiv1.PortalTransportUnknown) || !validCommandReason(receipt.TransportStatus, receipt.Reason) || len(receipt.ResolvedPodUID) > 128 {
+		return portal.ErrDenied
+	}
+	return s.run(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		expiry, err := s.commandAuth(ctx, tx, h)
+		if err != nil {
+			return err
+		}
+		var existing commandReservation
+		found, err := s.commandRow(ctx, tx, h, reservation.RequestID, "reservation", &existing)
+		if err != nil {
+			return err
+		}
+		if !found || !sameCommandReservation(existing, reservation) || !existing.ExpiresAt.Equal(expiry) {
+			return portal.ErrDenied
+		}
+		var previous apiv1.PortalMessageReceipt
+		found, err = s.commandRow(ctx, tx, h, reservation.RequestID, "terminal", &previous)
+		if err != nil {
+			return err
+		}
+		if found {
+			if !sameCommandReceipt(previous, receipt) {
+				return portal.ErrDenied
+			}
+			return nil
+		}
+		if err = admitPortalInsert(ctx, tx, "sessions"); err != nil {
+			return err
+		}
+		found, err = s.commandRow(ctx, tx, h, reservation.RequestID, "terminal", &previous)
+		if err != nil {
+			return err
+		}
+		if found {
+			if !sameCommandReceipt(previous, receipt) {
+				return portal.ErrDenied
+			}
+			return nil
+		}
+		key := commandKey(h, reservation.RequestID, "terminal")
+		data, err := s.encrypt(s.row("portal_command_terminal", key, expiry, [32]byte{}), receipt)
+		if err != nil {
+			return err
+		}
+		result, err := tx.Exec(ctx, "INSERT INTO portal.sessions (handle,generation,version,expires_at,payload) SELECT $1,$2,1,$3,$4 WHERE $3>clock_timestamp()", key[:], s.generation, expiry, data)
+		if err != nil {
+			return insertError(err)
+		}
+		if result.RowsAffected() != 1 {
+			return portal.ErrDenied
+		}
+		return nil
+	})
+}

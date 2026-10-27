@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 var versionLine = regexp.MustCompile(`^agentd \S+ \(commit \S+, go\S+, [a-z0-9]+/[a-z0-9]+\)\n$`)
@@ -251,5 +255,96 @@ func TestCtlCodexPair(t *testing.T) {
 	// A codex remote session with no keeper login has no code to give.
 	if code, out, errOut := runArgs([]string{"ctl", "codex-pair"}, codexTask); code != exitFailure || out != "" || !strings.Contains(errOut, "codex-pair") {
 		t.Errorf("no login: %d %q %q", code, out, errOut)
+	}
+}
+
+func TestPortalConversationCtlIdentityAndUnavailable(t *testing.T) {
+	env := map[string]string{"HOME": t.TempDir(), "DEV_ENV_POD_UID": "fixture-pod", "AGENTD_SESSION": `{"sessionUID":"fixture-session","name":"fixture-agent","repo":"dev-env","agent":"claude","mode":"local","model":"claude-opus-5-5"}`}
+	code, out, _ := runArgs([]string{"ctl", "portal-conversation", "--expected-session-uid", "wrong", "--expected-pod-uid", "fixture-pod"}, env)
+	if code != exitFailure || out != "" {
+		t.Fatal("wrong session returned content")
+	}
+	code, out, _ = runArgs([]string{"ctl", "portal-conversation", "--expected-session-uid", "fixture-session", "--expected-pod-uid", "wrong"}, env)
+	if code != exitFailure || out != "" {
+		t.Fatal("wrong pod returned content")
+	}
+	code, out, _ = runArgs([]string{"ctl", "portal-conversation", "--expected-session-uid", "fixture-session", "--expected-pod-uid", "fixture-pod"}, env)
+	if code != exitOK || !strings.Contains(out, `"state":"unavailable"`) {
+		t.Fatal("unregistered session did not return typed unavailable")
+	}
+}
+
+func TestPortalConversationCtlBoundSyntheticClaude(t *testing.T) {
+	home := t.TempDir()
+	id := "12345678-1234-1234-1234-123456789abc"
+	worktree := filepath.Join(home, "work", "fixture-agent")
+	state := filepath.Join(home, ".agentd")
+	if os.MkdirAll(state, 0700) != nil {
+		t.Fatal("state fixture")
+	}
+	launch := agentd.Launch{Session: "fixture-agent", SessionUID: "fixture-session", PodUID: "fixture-pod", Provider: protocol.AgentClaude, Dir: worktree, ConversationID: id, BootID: "fixture-boot", TUI: true, CreatedAt: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)}
+	raw, err := json.Marshal(launch)
+	if err != nil {
+		t.Fatal("launch fixture")
+	}
+	if os.WriteFile(filepath.Join(state, "launch.json"), raw, 0600) != nil || os.WriteFile(filepath.Join(state, "boot.json"), []byte(`{"bootId":"fixture-boot"}`), 0600) != nil {
+		t.Fatal("state write")
+	}
+	key := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, worktree)
+	dir := filepath.Join(home, ".claude", "projects", key)
+	if os.MkdirAll(dir, 0700) != nil {
+		t.Fatal("synthetic project")
+	}
+	transcript := fmt.Sprintf(`{"type":"user","version":"2.1.296","sessionId":%q,"cwd":%q,"uuid":"u1","timestamp":"2026-10-27T11:00:00Z","message":{"role":"user","content":"synthetic visible"}}`+"\n", id, worktree)
+	for i := 0; i < 11; i++ {
+		transcript += fmt.Sprintf(`{"type":"user","version":"2.1.296","sessionId":%q,"cwd":%q,"uuid":%q,"timestamp":"2026-10-27T11:00:00Z","message":{"role":"user","content":%q}}`+"\n", id, worktree, fmt.Sprintf("u%d", i+2), strings.Repeat("&", 4096))
+	}
+	if os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(transcript), 0600) != nil {
+		t.Fatal("synthetic transcript")
+	}
+	env := map[string]string{"HOME": home, "DEV_ENV_POD_UID": "fixture-pod", "AGENTD_SESSION": `{"sessionUID":"fixture-session","name":"fixture-agent","repo":"dev-env","agent":"claude","mode":"local","model":"claude-opus-5-5"}`}
+	code, out, _ := runArgs([]string{"ctl", "portal-conversation", "--expected-session-uid", "fixture-session", "--expected-pod-uid", "fixture-pod"}, env)
+	var result protocol.PortalConversation
+	if code != exitOK || json.Unmarshal([]byte(out), &result) != nil || result.State != "partial" || len(result.Turns) != 12 || result.Turns[0].Text != "synthetic visible" || len(out) <= 256<<10 || result.Turns[11].Text != strings.Repeat("&", 4096) {
+		t.Fatal("bound CLI did not project its synthetic conversation")
+	}
+}
+
+func TestPortalConversationCtlCodexChannelPrivacy(t *testing.T) {
+	home := t.TempDir()
+	id := "12345678-1234-1234-1234-123456789abc"
+	worktree := filepath.Join(home, "work", "fixture-agent")
+	state := filepath.Join(home, ".agentd")
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	launch := agentd.Launch{Session: "fixture-agent", SessionUID: "fixture-session", PodUID: "fixture-pod", Provider: protocol.AgentCodex, Dir: worktree, ConversationID: id, BootID: "fixture-boot", TUI: true, NativeThreadConfirmed: true, CreatedAt: now, Env: []string{"CODEX_HOME=" + filepath.Join(home, ".codex")}}
+	raw, err := json.Marshal(launch)
+	if err != nil || os.MkdirAll(state, 0700) != nil || os.WriteFile(filepath.Join(state, "launch.json"), raw, 0600) != nil || os.WriteFile(filepath.Join(state, "boot.json"), []byte(`{"bootId":"fixture-boot"}`), 0600) != nil {
+		t.Fatal("state fixture")
+	}
+	dir := filepath.Join(home, ".codex", "sessions", "2026", "10", "27")
+	if os.MkdirAll(dir, 0700) != nil {
+		t.Fatal("directory fixture")
+	}
+	data := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cli_version":"0.160.1","cwd":%q}}`+"\n", id, worktree)
+	for i, channel := range []string{"final", "analysis", "unknown", ""} {
+		field := ""
+		if channel != "" {
+			field = fmt.Sprintf(`,"channel":%q`, channel)
+		}
+		data += fmt.Sprintf(`{"type":"response_item","timestamp":"2026-10-27T11:00:00Z","payload":{"type":"message","id":%q,"role":"assistant"%s,"content":[{"type":"output_text","text":%q}]}}`+"\n", fmt.Sprintf("i%d", i), field, []string{"visible", "PRIVATE-ANALYSIS", "PRIVATE-UNKNOWN", "PRIVATE-MISSING"}[i])
+	}
+	if os.WriteFile(filepath.Join(dir, "rollout-2026-10-27T12-00-00-"+id+".jsonl"), []byte(data), 0600) != nil {
+		t.Fatal("fixture transcript")
+	}
+	env := map[string]string{"HOME": home, "DEV_ENV_POD_UID": "fixture-pod", "AGENTD_SESSION": `{"sessionUID":"fixture-session","name":"fixture-agent","repo":"dev-env","agent":"codex","mode":"local","model":"gpt-6-astra"}`}
+	code, out, _ := runArgs([]string{"ctl", "portal-conversation", "--expected-session-uid", "fixture-session", "--expected-pod-uid", "fixture-pod"}, env)
+	var got protocol.PortalConversation
+	if code != exitOK || json.Unmarshal([]byte(out), &got) != nil || len(got.Turns) != 1 || got.Turns[0].Text != "visible" || strings.Contains(out, "PRIVATE-") {
+		t.Fatal("channel privacy failed")
 	}
 }

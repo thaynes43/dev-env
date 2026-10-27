@@ -20,7 +20,10 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/tokenfile"
 	"github.com/thaynes43/dev-env/web/portal"
 )
@@ -148,6 +151,10 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil || leaf.NotBefore.After(time.Now()) || !leaf.NotAfter.After(time.Now()) || !sanMatch(leaf, productionHost) {
 		return Runtime{}, errProductionConfig
 	}
+	actions, err := loadActionScopes(root)
+	if err != nil {
+		return Runtime{}, errProductionConfig
+	}
 	sessions, tasks, err := productSources(root, openProjectCA, operatorCA)
 	if err != nil {
 		return Runtime{}, errProductionConfig
@@ -186,8 +193,33 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
+	var send SendForms
+	tokenPath := filepath.Join(root, "secrets/OPERATOR_TOKEN")
+	if actions.Send != nil || actions.History != nil {
+		if sessions == nil {
+			return Runtime{}, errProductionConfig
+		}
+		if actions.Send != nil {
+			send, err = NewCommandForms(engine, authorizer, store, tokenPath, operatorCA, time.Now)
+			if err != nil {
+				return Runtime{}, errProductionConfig
+			}
+			handler, ok := send.(*commandHandler)
+			if !ok {
+				return Runtime{}, errProductionConfig
+			}
+			handler.scope = actions.Send
+		}
+		if actions.History != nil {
+			source, e := NewConversationSource(authorizer, store, actions.History.Principal, actions.History.Targets, tokenPath, operatorCA, time.Now)
+			if e != nil {
+				return Runtime{}, errProductionConfig
+			}
+			sessions.UseConversations(source)
+		}
+	}
 	closeStore = false
-	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
+	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Send: send, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
 }
 
 func productSources(root string, openProjectCA, operatorCA []byte) (*SessionSource, *TaskSource, error) {
@@ -452,4 +484,68 @@ func bytesHas(data []byte, needle byte) bool {
 		}
 	}
 	return false
+}
+
+// actionScope binds one action to one issuer/subject and exact target identities.
+type actionScope struct {
+	Principal portal.Principal
+	Targets   map[string]string
+}
+type productionActionScopes struct{ Send, History *actionScope }
+
+func loadActionScopes(root string) (productionActionScopes, error) {
+	var result productionActionScopes
+	path := filepath.Join(root, "config/session-actions.json")
+	present, err := mountedPresent(path)
+	if err != nil {
+		return result, errProductionConfig
+	}
+	if !present {
+		return result, nil
+	}
+	raw, err := readMountedBytes(root, "config/session-actions.json", 8192)
+	if err != nil || !protocol.StrictPortalJSON(raw) {
+		return result, errProductionConfig
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil || !exactKeys(top, nil, "send", "history") || len(top) == 0 {
+		return result, errProductionConfig
+	}
+	for action, entry := range top {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(entry, &fields) != nil || !exactKeys(fields, []string{"issuer", "subject", "targets"}) {
+			return result, errProductionConfig
+		}
+		var wire struct {
+			Issuer  string            `json:"issuer"`
+			Subject string            `json:"subject"`
+			Targets []json.RawMessage `json:"targets"`
+		}
+		if json.Unmarshal(entry, &wire) != nil || wire.Issuer != productionIssuer || !identityText(wire.Subject) || len(wire.Targets) == 0 || len(wire.Targets) > 64 {
+			return result, errProductionConfig
+		}
+		scope := &actionScope{Principal: portal.Principal{Issuer: wire.Issuer, Subject: wire.Subject}, Targets: map[string]string{}}
+		names := map[string]bool{}
+		for _, target := range wire.Targets {
+			var keys map[string]json.RawMessage
+			var pair struct {
+				Name string `json:"name"`
+				UID  string `json:"uid"`
+			}
+			if json.Unmarshal(target, &keys) != nil || !exactKeys(keys, []string{"name", "uid"}) || json.Unmarshal(target, &pair) != nil || len(validation.IsDNS1123Label(pair.Name)) != 0 || !apiv1.ValidContextUID(pair.UID) || names[pair.Name] || scope.Targets[pair.UID] != "" {
+				return result, errProductionConfig
+			}
+			names[pair.Name] = true
+			scope.Targets[pair.UID] = pair.Name
+		}
+		switch action {
+		case "send":
+			result.Send = scope
+		case "history":
+			result.History = scope
+		default:
+			return result, errProductionConfig
+		}
+	}
+	return result, nil
 }

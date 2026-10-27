@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -166,5 +168,61 @@ func TestUnconfiguredAssemblyAndAuthenticationMethods(t *testing.T) {
 	}
 	if _, err := New(Config{}); !errors.Is(err, portal.ErrUnavailable) {
 		t.Fatal("unconfigured session engine accepted")
+	}
+}
+
+func TestAssemblySendRouteAndDefaultOff(t *testing.T) {
+	f, send, _, transport, values := commandFixture(t)
+	send.render = renderCommandReceipt
+	config := AssemblyConfig{Session: f.e, Authorizer: send.authorizer, Reader: portal.UnavailableReader{}, FreshFor: time.Minute, Now: func() time.Time { return f.now }}
+	request := func() *http.Request {
+		r := f.request("POST", portalMessagesPath, values.Encode())
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("Origin", "https://portal.example")
+		return r
+	}
+	w := httptest.NewRecorder()
+	NewAssembly(config).ServeHTTP(w, request())
+	if w.Code == http.StatusOK || transport.count() != 0 {
+		t.Fatal("default-off assembly dispatched a command")
+	}
+	config.Send = send
+	w = httptest.NewRecorder()
+	NewAssembly(config).ServeHTTP(w, request())
+	if w.Code != http.StatusOK || transport.count() != 1 || !strings.Contains(w.Body.String(), "Delivered to the agent") || strings.Contains(w.Body.String(), "SYNTHETIC MESSAGE") {
+		t.Fatal("wired assembly did not render a safe delivery receipt")
+	}
+	w = httptest.NewRecorder()
+	NewAssembly(config).ServeHTTP(w, f.request("GET", portalMessagesPath+"/request-0000000001", ""))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Delivered to the agent") || transport.count() != 1 {
+		t.Fatal("receipt lookup repeated transport or failed")
+	}
+}
+
+func TestCommandFormsRequiresBoundDependencies(t *testing.T) {
+	if forms, err := NewCommandForms(nil, nil, nil, "", nil, nil); err == nil || forms != nil {
+		t.Fatal("incomplete command dependencies accepted")
+	}
+	f := setupAuth(t)
+	store := fixtureStore(t)
+	pool, err := pgxpool.New(context.Background(), "postgres://localhost/dev_env_v2_portal")
+	if err != nil {
+		t.Fatal("fixture pool")
+	}
+	defer pool.Close()
+	store.pool = pool
+	f.e.config.Store = store
+	a := &CurrentAuthorizer{issuer: f.e.config.Verifier.issuer, store: store, client: &http.Client{}, now: func() time.Time { return f.now }}
+	_, ca := mintNamed(t, operatorPortalHost)
+	forms, err := NewCommandForms(f.e, a, store, "synthetic-token-path", ca, func() time.Time { return f.now })
+	if err != nil || forms == nil {
+		t.Fatal("bound source seam rejected")
+	}
+	if _, ok := forms.(*commandHandler); !ok {
+		t.Fatal("forms are not connected to command route")
+	}
+	a.store = fixtureStore(t)
+	if forms, err = NewCommandForms(f.e, a, store, "synthetic-token-path", ca, func() time.Time { return f.now }); err == nil || forms != nil {
+		t.Fatal("mismatched authorization store accepted")
 	}
 }

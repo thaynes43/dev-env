@@ -38,9 +38,10 @@ const (
 // SessionSource reads portal session summaries. The operator token is read on
 // every request so a one-hour projected token can rotate.
 type SessionSource struct {
-	path   string
-	client *http.Client
-	now    func() time.Time
+	path          string
+	client        *http.Client
+	now           func() time.Time
+	conversations ConversationSource
 }
 
 // TaskSource reads project 3's work-package collection. It does not follow an
@@ -101,7 +102,7 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 			break
 		}
 	}
-	return sessionsPage(sessions, complete, freshness, s.now(), filter), nil
+	return withHistory(ctx, sessionsPage(sessions, complete, freshness, s.now(), filter), filter.Session, s.conversations, s.now()), nil
 }
 
 func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
@@ -757,8 +758,9 @@ func shownDate(value string) string {
 }
 
 // productFilter reads a product page's one optional filter: show=attention on
-// either page, or project=<repository> on Sessions. Any other query, a second
-// key or value, or a non-canonical spelling is refused.
+// either page, project=<repository> on Sessions, or session=<uid> on Sessions
+// to select one session's conversation. Any other query, a second key or
+// value, or a non-canonical spelling is refused.
 func productFilter(u *url.URL) (portal.ProductFilter, bool) {
 	if u.RawQuery == "" {
 		return portal.ProductFilter{}, true
@@ -772,6 +774,8 @@ func productFilter(u *url.URL) (portal.ProductFilter, bool) {
 		return portal.ProductFilter{Attention: true}, true
 	case len(q["project"]) == 1 && u.Path == SessionsPath && validProject(q.Get("project")):
 		return portal.ProductFilter{Project: q.Get("project")}, true
+	case len(q["session"]) == 1 && u.Path == SessionsPath && sessionUIDQuery.MatchString(q.Get("session")):
+		return portal.ProductFilter{Session: q.Get("session")}, true
 	}
 	return portal.ProductFilter{}, false
 }
@@ -832,14 +836,23 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		return
 	}
 	page.ObservedAt = c.Now().UTC().Format(time.RFC3339)
+	// A configured send route turns reachable sessions' boxes into forms bound
+	// to this caller's portal session. Without it, Send stays disabled.
+	if r.URL.Path == SessionsPath && c.Send != nil {
+		if _, record, currentErr := c.Session.current(r); currentErr == nil && record.Principal == principal {
+			page = withSendForms(page, record.CSRF, c.Send)
+		}
+	}
 	// Leave headroom under the assembly's response bound for the page frame.
-	body, err := portal.RenderProductWithin(page, maximumResponse*7/8)
+	body, policy, err := portal.RenderProductPolicyWithin(page, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return
 	}
-	// The rendered page allows exactly its embedded stylesheet; refusals keep authHeaders' policy.
-	w.Header().Set("Content-Security-Policy", portal.ProductPolicy)
+	// The rendered page allows exactly its embedded stylesheet, and posts only
+	// to this origin when it holds a send form; the header matches the page's
+	// meta policy. Refusals keep authHeaders' policy.
+	w.Header().Set("Content-Security-Policy", policy)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(body)
 }

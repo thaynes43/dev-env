@@ -1,6 +1,6 @@
 # DESIGN-029: Portal foundations: source inventory, Attention journey and security evidence
 
-**Status: source-only first milestone for [Story 178](https://work.haynesnetwork.com/work_packages/178).**
+**Historical foundation status: source-only first milestone for [Story 178](https://work.haynesnetwork.com/work_packages/178).**
 This is a bounded foundation under Epic 120 / Saga 85, related to 121. It is
 not an accepted portal architecture, an approval surface, a new orchestrator,
 or delivery of the wider console epic. Execution and custody are recorded in
@@ -176,6 +176,8 @@ inventing a name or reusing V1 would not satisfy them. No DNS, ingress,
 Authentik, network, RBAC, deployment or credential configuration was changed.
 
 ## Metadata-only mobile journey
+
+Historical foundation journey; this section does not describe the later scoped send/history capabilities. See [Current combined source contract](#current-combined-source-contract-2026-10-27).
 
 The first screen answers: what needs attention, who owns it, what happens
 next, and how recently was that verified? The existing workflow owner
@@ -459,3 +461,180 @@ stats. No new credential, adapter or policy.
 - Compatibility: an operator before this change sends none of the new keys and
   only `dev-env`; the portal accepts that. A portal before this change refuses
   the new keys, so the portal image rolls out before the operator image.
+
+### Message box, first increment, 2026-10-27
+
+Historical frontend-only increment. For the current combined source, see [Current combined source contract](#current-combined-source-contract-2026-10-27).
+
+Tom asked (2026-10-27, relayed by the coordinator) for the message box / agent
+IDE modelled on open-source agent windows. This increment adds it to the
+existing Agents detail, server-rendered like the rest of the portal: no script,
+no form, and the same Content-Security-Policy (`form-action 'none'`).
+
+- **What it shows.** Each session's detail ends with a Messages panel: a
+  history line, a composer (draft box, provider and requested model, a route
+  badge, Send) and two short lines under it: the send gate and the route.
+- **Send is unavailable, and says why.** The portal's operator identity
+  `dev-agents/dev-env-v2-portal` may only `GET /v1/sessions`
+  (`internal/apiserver/server.go`). `POST /v1/sessions/{name}/messages` sends
+  as its operator caller, and no caller class stands for a portal user
+  (issuer plus subject); portal login confers no operator identity (above). The
+  durable inbox serves session and coordinator callers with an accepted project
+  snapshot only. So Send is a disabled button outside any form: nothing is
+  sent, queued or shown as sent.
+- **History is unavailable.** The portal reads no inbox and no session
+  messages, and the session summary carries no message fields.
+- **Route.** From summary fields only, it states what agentd's delivery
+  (D-16, D-65) would do with a message from the existing `agent-run msg` route:
+  a headless task reads none; an agent that is not running, or a session not in
+  phase Running, takes none; a starting agent takes none yet; a running
+  interactive (`remote` or `local`) session that is busy, waiting or idle may
+  take one, and the panel shows the command. agentd decides delivery when a
+  message is sent, so even that state promises nothing. Anything else is
+  Unknown.
+- **Drafts.** Only a session the route may reach gets an enabled draft box.
+  Each session's box is its own element, so a draft survives switching sessions
+  on the page and is lost on reload. A draft is never sent.
+
+**Backend prerequisite for a live send, not built here.** A narrow typed
+portal command: a sender attributed to the portal user, per-project and
+per-session entitlement checked at send time, an idempotency key bound to the
+request, Unknown (never success) on timeout, an audit record, and the CSRF and
+Origin checks above; plus a read of the selected session's message history.
+This is new authority: it needs its own design and Tom's approval, and belongs
+to the backend lane, not this frontend increment.
+
+### Composer seam and receipts, 2026-10-27
+
+Historical frontend-only increment. For the current combined source, see [Current combined source contract](#current-combined-source-contract-2026-10-27).
+
+Tom's direction (11:45 UTC, relayed by the coordinator) put a working composer
+first. The backend lane proposed a v1 send contract: a same-origin
+`POST /portal/projects/dev-env/environments/internal/session-messages` with
+form fields `csrf`, `requestID`, `session`, `sessionUID` and `text`, and a
+receipt at `GET …/session-messages/{requestID}` whose `transportStatus` is
+Delivered, Refused, Pending or Unknown with a static reason. The route,
+receipt storage, operator call and production wiring belong to the backend
+lane. This change is the frontend half; it enables no live authority.
+
+- **Seam.** `AssemblyConfig.Send` takes a `SendForms`
+  (`web/portal/session/product_send.go`) whose `NewRequestID` returns one fresh
+  ID per rendered draft box, in the route's format. Nil keeps every Send
+  disabled, as before. The CSRF value is the caller's existing portal session
+  value, read again when the page is built.
+- **Forms.** With a send route, each session the route may reach (running
+  interactive, agent busy, waiting or idle) gets a real `<form method="post">`
+  to the fixed action with the hidden fields above, a required `text` box and
+  an enabled Send. Others keep the disabled gate. An ID failure or a repeated
+  ID leaves the whole page without forms. The renderer drops any form whose
+  action, CSRF shape, request ID shape or target is wrong, and says sending is
+  unavailable.
+- **Policy.** A Sessions page that holds a form gets `form-action 'self'`, in
+  the header and the page's meta policy; every other page keeps
+  `form-action 'none'`. No script is added. Its access labels read "Read and
+  message" instead of "Read-only".
+- **Receipts.** `portal.RenderReceipt` renders one receipt with the product
+  stylesheet and policy (no form). Delivered reads as agentd's transport
+  acceptance for the agent's terminal, never a read, reply or finished task.
+  Pending says not to send again; Unknown says to check the session first; any
+  status outside the four renders Unknown. "Check again" links to the receipt
+  itself only for a well-formed request ID.
+- **Preview.** `--product` also writes `sessions-send.html` and one receipt
+  per status, all labelled fixture data. Their forms post nowhere real.
+
+### Selected-session history, 2026-10-27
+
+Historical frontend-only increment. For the current combined source, see [Current combined source contract](#current-combined-source-contract-2026-10-27).
+
+Tom (12:43 UTC, relayed): "How would someone know what to send these agents if
+they can't see their message history?" A composer with history unavailable is
+not the finished IDE. This change adds the frontend half of a selected-session
+conversation view; no supported route serves the history yet.
+
+- **Where history is today.** The portal identity may only list summaries.
+  `/v1/sessions/{name}/log` tails agentd's log, which for an interactive
+  session holds only lifecycle lines. `/v1/history` serves archived private
+  Sessions after HOME expiry, as raw provider files. The inbox holds
+  coordination messages. Portal receipts (backend PR #572) keep a digest of the
+  text, never the text. A live session's conversation exists only as its
+  provider transcript in its own pod.
+- **Proposed backend contract** (backend lane; Story 178 journal 1894).
+  `GET /v1/portal/sessions/{sessionUID}/conversation?limit=N&before=CURSOR`,
+  default-off, portal adapter caller only, with the existing userinfo and
+  group checks. It is fenced to the Session UID and its current pod UID, and
+  served in-pod by agentd from the conversation agentd recorded for that
+  Session: no other file, no path from the request. It returns turns (`seq`,
+  `at`, role `user`, `assistant` or `delivered-message`, `from`, capped
+  plaintext, `truncated`) and coverage (`complete`, `partial`, `truncated` or
+  `unavailable`, a reason code, the conversation ID and sequence bounds). Tool
+  use is names and counts only, with no tool output, no thinking, and secrets
+  redacted.
+- **Selection.** `SessionsPath?session=<uid>` selects one session; it does not
+  narrow the list. The server opens the selection: its row is the default
+  detail and the list's highlight on a wide screen, and a phone opens that
+  detail instead of the list until the reader follows a link in the page. With
+  a source connected, each session's Messages panel links to its own selected
+  view (`?session=<uid>`, no `#sN`: row IDs are positions, so a fragment could
+  open another session once the list moves), and only the selected session's
+  conversation is read, with a 5-second bound. Without a source, the selected
+  session states the gap and no links render. Past the 150-row listing cap the
+  selected session takes the last listed row's place, so it is listed and read;
+  totals, breakdowns and an incomplete-read warning still cover the whole read.
+- **Seam.** `SessionSource.UseConversations(ConversationSource)`;
+  `ReadConversation(ctx, name, uid)` returns `Conversation` (state, reason
+  code, turns). A read error, an `unavailable` state or an unknown state shows
+  no turns. Roles outside the three render as events.
+- **Rendering.** Turns are escaped plaintext with line breaks kept, labelled
+  User, Agent or "Message from …", with time and a "cut to fit" mark. At most
+  60 turns (the newest), 4 KiB per turn and 96 KiB of turn text in total are
+  rendered; anything cut marks the conversation Truncated. When the page is
+  trimmed to fit the response bound, the selected session is never dropped,
+  and the response header policy is taken from the page actually rendered.
+- **Receipts.** The backend's reason is a fixed code (`delivered`, `refused`,
+  `unknown`). `ProductReceipt.ReasonCode` carries it, and the page words it;
+  an unknown code reads "Reason not recorded". "Back to the session" returns
+  to the selected view (Native review P2 corrections, 2026-10-27).
+- **DTO agreement with the backend lane.** Request IDs are 43 base64url
+  characters, within the accepted 16 to 128. One adapter
+  (`web/portal/session/message_contract.go`, the backend's file) maps
+  `TransportDelivered` to Delivered and passes Refused, Pending and Unknown
+  through; anything else is Unknown. `SessionName` maps to `Session`. Pending
+  and Unknown never authorize a blind resend.
+
+### Current combined source contract, 2026-10-27
+
+The combined source now contains the typed send and receipt backend, the
+selected-session conversation projection, BFF adapters and default-off
+production configuration. Earlier statements such as “not built here” and
+“proposed backend contract” describe their dated frontend increments; they
+do not describe the current combined source. Source implementation is not
+installation or live acceptance.
+
+Send and private history remain independently disabled unless explicitly
+configured. The existing private `config/session-actions.json` binds each
+action to an exact issuer, subject and Session name/UID target set. Separate
+operator `--portal-send-target` and `--portal-history-target` flags bind
+their corresponding targets; `--enable-portal-reader` alone grants neither
+action. Current portal authorization and the independent action scope both
+remain required. The publication repair must leave an unscoped
+`NewCommandForms` result inert: no command reservation, dispatch or receipt
+access. This records the accepted source invariant, not a new permission.
+
+Send uses the fixed same-origin form and receipt routes described above.
+Immutable reservation and result records retain the existing database
+privileges. Delivered means transport acceptance, not an agent read, reply
+or completed task; Pending and Unknown do not permit blind resubmission.
+
+History uses the typed projection bound to the registered conversation,
+immutable Session owner and current Pod. Unsupported or unbound targets
+remain Unavailable; there is no raw-log, archive, inbox or arbitrary-file
+fallback. The cursor binds the whole snapshot and its owner: transcript
+appends invalidate it. The current BFF requests only the newest page and
+does not send a before cursor. Stable pagination while a conversation grows
+is not implemented, and this clarification does not change that contract.
+
+See the [default-off production configuration](../../../../docs/portal-session-runtime.md#default-off-portal-action-source-configuration)
+for the implemented configuration and compatibility requirements.
+Publication, compatible installation, exact private principal/target
+configuration, live action authorization and authenticated acceptance are
+separate steps. This documentation change enables none of them.

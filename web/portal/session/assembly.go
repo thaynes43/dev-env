@@ -16,6 +16,7 @@ type AssemblyConfig struct {
 	Reader     portal.MetadataReader
 	Sessions   *SessionSource
 	Tasks      *TaskSource
+	Send       SendForms
 	FreshFor   time.Duration
 	Now        func() time.Time
 }
@@ -30,6 +31,15 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 	}
 	reads := portal.NewHandler(portal.Dependencies{Authenticator: c.Session, Authorizer: c.Authorizer, Reader: c.Reader, FreshFor: c.FreshFor, Now: c.Now})
 	return contained(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == portalMessagesPath || strings.HasPrefix(r.URL.Path, portalMessagesPath+"/") {
+			if send, ok := c.Send.(*commandHandler); ok && send != nil {
+				send.ServeHTTP(w, r)
+			} else {
+				authHeaders(w)
+				authFailure(w, portal.ErrUnavailable)
+			}
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/auth/") {
 			c.Session.ServeHTTP(w, r)
 			return

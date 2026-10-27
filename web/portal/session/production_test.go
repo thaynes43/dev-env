@@ -28,6 +28,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -168,6 +169,14 @@ func TestProductionMetadataAllowlistAndAssembly(t *testing.T) {
 	}
 	hits.prompt = false
 	handler := productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: reader, FreshFor: time.Minute, Now: time.Now}), productionHost)
+	disabledSend := portalRequest("POST", portalMessagesPath, rawCookie)
+	disabledSend.Header.Set("Origin", productionOrigin)
+	disabledSend.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	sendResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sendResponse, disabledSend)
+	if sendResponse.Code == http.StatusOK {
+		t.Fatal("production unexpectedly enabled portal send")
+	}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, portalRequest("GET", "/auth/login", ""))
 	if w.Code != http.StatusSeeOther || strings.Contains(w.Header().Get("Location"), "fixture-only-not-a-credential") || !strings.HasPrefix(w.Header().Get("Location"), productionAuthorization) {
@@ -489,5 +498,70 @@ func routeDial(routes map[string]string) func(context.Context, string, string) (
 		}
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, network, dest)
+	}
+}
+
+func TestProductionActionScopes(t *testing.T) {
+	root := t.TempDir()
+	if got, err := loadActionScopes(root); err != nil || got.Send != nil || got.History != nil {
+		t.Fatal("old config must be off")
+	}
+	if os.MkdirAll(filepath.Join(root, "config"), 0700) != nil {
+		t.Fatal("fixture")
+	}
+	path := filepath.Join(root, "config", "session-actions.json")
+	send := fmt.Sprintf(`{"issuer":%q,"subject":"synthetic-subject","targets":[{"name":"agent-a","uid":"uid-a"}]}`, productionIssuer)
+	for _, tc := range []struct {
+		value         string
+		valid         bool
+		send, history bool
+	}{
+		{`{"send":` + send + `}`, true, true, false}, {`{"history":` + send + `}`, true, false, true}, {`{"send":` + send + `,"history":` + send + `}`, true, true, true},
+		{`{}`, false, false, false}, {`{"other":` + send + `}`, false, false, false}, {`{"send":` + send + `,"send":` + send + `}`, false, false, false},
+		{`{"Send":` + send + `}`, false, false, false}, {strings.Replace(`{"send":`+send+`}`, `"uid":"uid-a"`, `"uid":"uid-a","UID":"uid-b"`, 1), false, false, false},
+		{strings.Replace(`{"send":`+send+`}`, `"uid":"uid-a"`, `"uid":""`, 1), false, false, false},
+		{strings.Replace(`{"send":`+send+`}`, `"name":"agent-a"`, `"name":"INVALID"`, 1), false, false, false},
+		{strings.Replace(`{"send":`+send+`}`, `"subject":"synthetic-subject"`, `"subject":""`, 1), false, false, false},
+		{strings.Replace(`{"send":`+send+`}`, `}]`, `},{"name":"agent-a","uid":"uid-b"}]`, 1), false, false, false},
+	} {
+		if os.WriteFile(path, []byte(tc.value), 0600) != nil {
+			t.Fatal("fixture write")
+		}
+		got, err := loadActionScopes(root)
+		if (err == nil) != tc.valid || (tc.valid && ((got.Send != nil) != tc.send || (got.History != nil) != tc.history)) {
+			t.Fatalf("invalid action config acceptance: %s", tc.value)
+		}
+	}
+}
+
+func TestProductionActionConstructor(t *testing.T) {
+	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGSSLCRL", "PGSSLCRLDIR"} {
+		t.Setenv(name, "")
+	}
+	for _, action := range []string{"send", "history"} {
+		t.Run(action, func(t *testing.T) {
+			root := writeRuntimeDir(t, "SECRET-CANARY")
+			config := fmt.Sprintf(`{%q:{"issuer":%q,"subject":"synthetic-subject","targets":[{"name":"agent-a","uid":"uid-a"}]}}`, action, productionIssuer)
+			if os.WriteFile(filepath.Join(root, "config/session-actions.json"), []byte(config), 0600) != nil {
+				t.Fatal("scope fixture")
+			}
+			if _, err := LoadProduction(root); err == nil {
+				t.Fatal("scope without operator credential enabled")
+			}
+			token := fixtureOperatorToken(apiv1.TokenAudience, time.Now().Add(time.Hour))
+			if os.WriteFile(filepath.Join(root, "secrets/OPERATOR_TOKEN"), []byte(token), 0600) != nil {
+				t.Fatal("token fixture")
+			}
+			rt, err := LoadProduction(root)
+			if err != nil {
+				t.Fatal("scoped constructor rejected")
+			}
+			defer rt.Close()
+			w := httptest.NewRecorder()
+			rt.Handler.ServeHTTP(w, portalRequest("POST", portalMessagesPath, ""))
+			if w.Code == http.StatusOK {
+				t.Fatal("unauthenticated request accepted")
+			}
+		})
 	}
 }

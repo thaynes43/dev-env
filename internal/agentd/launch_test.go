@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -312,5 +313,30 @@ func TestReadRestartDoesNotStop(t *testing.T) {
 	none := ReadRestart(context.Background(), runner, s, "s-1")
 	if !none.Resumable || none.Agent != nil || none.Attached == nil || *none.Attached != 0 {
 		t.Fatalf("no server %+v", none)
+	}
+}
+
+func TestInteractiveHistoryRegistrationMetadataCompatibility(t *testing.T) {
+	s, sess, ws := launchFixture(t)
+	sess.Mode = protocol.ModeLocal
+	sess.Prompt = ""
+	sess.Limits = nil
+	sess.SessionUID = "fixture-session-uid"
+	s.PodUID = "fixture-first-pod"
+	first, err := BuildLaunch(s, sess, ws, "boot-one", time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal("first launch")
+	}
+	raw, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal("serialize new launch")
+	}
+	var decoded Launch
+	if json.Unmarshal(raw, &decoded) != nil || decoded.SessionUID != sess.SessionUID || decoded.PodUID != s.PodUID || decoded.Provider != protocol.AgentClaude {
+		t.Fatal("new registration did not survive readback")
+	}
+	var legacy Launch
+	if json.Unmarshal([]byte(`{"session":"fixture","conversationId":"12345678-1234-1234-1234-123456789abc","bootId":"old","tui":true}`), &legacy) != nil || legacy.SessionUID != "" || legacy.PodUID != "" || legacy.Provider != "" {
+		t.Fatal("old launch metadata no longer decodes as unbound")
 	}
 }
