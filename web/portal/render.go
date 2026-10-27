@@ -189,9 +189,12 @@ func (c ProductConversation) Tone() string {
 
 // Rendering bounds for one conversation: the page must stay inside the
 // response bound with the rest of the Sessions list.
+// maxConversationBytes caps the turn text kept in total; escaping can grow
+// text about fivefold, so even a worst case leaves room for the page frame.
 const (
-	maxTurns     = 60
-	maxTurnBytes = 4 << 10
+	maxTurns             = 60
+	maxTurnBytes         = 4 << 10
+	maxConversationBytes = 96 << 10
 )
 
 // boundConversation keeps a conversation within the rendering bounds, newest
@@ -230,6 +233,15 @@ func boundConversation(c ProductConversation) *ProductConversation {
 		}
 		turn.From, turn.At = display(turn.From), display(turn.At)
 		out.Turns = append(out.Turns, turn)
+	}
+	// Keep the newest turns within the total budget.
+	total := 0
+	for i := len(out.Turns) - 1; i >= 0; i-- {
+		total += len(out.Turns[i].Text) + len(out.Turns[i].From) + len(out.Turns[i].At)
+		if total > maxConversationBytes {
+			out.Turns, out.State = out.Turns[i+1:], "Truncated"
+			break
+		}
 	}
 	return &out
 }
@@ -386,17 +398,30 @@ type productRowView struct {
 // RenderProductWithin renders page in at most limit bytes. While it is too
 // large it keeps fewer list rows, dropping from the end of the list (the
 // least urgent group first), together with their usage rows; group counts and
-// the Usage breakdowns still cover everything read.
+// the Usage breakdowns still cover everything read. The selected session (the
+// row with a conversation) is always kept.
 func RenderProductWithin(page ProductPage, limit int) ([]byte, error) {
-	body, err := RenderProduct(page)
+	body, _, err := RenderProductPolicyWithin(page, limit)
+	return body, err
+}
+
+// RenderProductPolicyWithin is RenderProductWithin that also returns the
+// rendered page's policy, for the response header to match its meta policy.
+func RenderProductPolicyWithin(page ProductPage, limit int) ([]byte, string, error) {
+	rendered := page
+	body, err := RenderProduct(rendered)
 	for keep := countRows(page); err == nil && len(body) > limit && keep > 0; {
 		keep = keep * 3 / 4
-		body, err = RenderProduct(keepRows(page, keep))
+		rendered = keepRows(page, keep)
+		body, err = RenderProduct(rendered)
 	}
 	if err == nil && len(body) > limit {
-		return nil, fmt.Errorf("product page needs %d bytes, over %d", len(body), limit)
+		return nil, "", fmt.Errorf("product page needs %d bytes, over %d", len(body), limit)
 	}
-	return body, err
+	if err != nil {
+		return nil, "", err
+	}
+	return body, ProductPolicyFor(rendered), nil
 }
 
 func countRows(page ProductPage) int {
@@ -416,12 +441,18 @@ func keepRows(page ProductPage, keep int) ProductPage {
 		if g.Total < len(g.Rows) {
 			g.Total = len(g.Rows)
 		}
-		n := min(len(g.Rows), keep)
-		g.Rows = append([]ProductRow(nil), g.Rows[:n]...)
-		keep -= n
+		var rows []ProductRow
 		for _, r := range g.Rows {
-			kept[r.ID] = true
+			selected := r.Messages != nil && r.Messages.Conversation != nil
+			if keep > 0 || selected {
+				rows = append(rows, r)
+				kept[r.ID] = true
+				if !selected {
+					keep--
+				}
+			}
 		}
+		g.Rows = rows
 		groups[i] = g
 	}
 	page.Groups = groups

@@ -186,7 +186,7 @@ func TestReceiptKeepsTransportApartFromReplies(t *testing.T) {
 
 func TestConversationRendersBoundedEscapedTurns(t *testing.T) {
 	long := strings.Repeat("é", maxTurnBytes) // 2 bytes each: twice the bound
-	turns := []ProductTurn{{Role: "user", At: "1m ago", Text: "line one\nline two <script>x</script>‮"}, {Role: "assistant", Text: long}, {Role: "message", From: "dev-env-1019-205125", Text: "relayed"}, {Role: "tool\" onclick=\"x", Text: "odd role"}}
+	turns := []ProductTurn{{Role: "user", At: "1m ago", Text: "line one\nline two <script>x</script>\u202e"}, {Role: "assistant", Text: long}, {Role: "message", From: "dev-env-1019-205125", Text: "relayed"}, {Role: "tool\" onclick=\"x", Text: "odd role"}}
 	row := sendRow("s1", nil, true)
 	row.Messages.Conversation = &ProductConversation{State: "Complete", Note: "every turn", Turns: turns}
 	row.Messages.HistoryHref = "https://evil.example/"
@@ -209,7 +209,7 @@ func TestConversationRendersBoundedEscapedTurns(t *testing.T) {
 			t.Fatalf("conversation lacks %q", want)
 		}
 	}
-	if strings.Contains(html, "<script>") || strings.Contains(html, "evil.example") || strings.Contains(html, "onclick") || strings.Contains(html, "‮") || strings.Count(html, "é") > maxTurnBytes/2 {
+	if strings.Contains(html, "<script>") || strings.Contains(html, "evil.example") || strings.Contains(html, "onclick") || strings.Contains(html, "\u202e") || strings.Count(html, "é") > maxTurnBytes/2 {
 		t.Fatal("conversation rendered unsafe or unbounded text")
 	}
 	many := make([]ProductTurn, maxTurns+5)
@@ -221,5 +221,44 @@ func TestConversationRendersBoundedEscapedTurns(t *testing.T) {
 	}
 	if c := boundConversation(ProductConversation{State: "Live", Note: "n", Turns: many}); c.State != "Unavailable" || len(c.Turns) != 0 {
 		t.Fatal("an unknown state kept its turns")
+	}
+}
+
+func TestTrimmingKeepsTheSelectedSessionAndItsPolicy(t *testing.T) {
+	csrf := strings.Repeat("c", 43)
+	selected := sendRow("s30", nil, true)
+	selected.Messages.Conversation = &ProductConversation{State: "Complete", Turns: []ProductTurn{{Role: "assistant", Text: "selected-turn"}}}
+	rows := []ProductRow{}
+	for i := 1; i < 30; i++ {
+		rows = append(rows, sendRow("s"+strconv.Itoa(i), &ProductSend{Action: ProductSessionMessagesHref, CSRF: csrf, RequestID: "request-00000000" + strconv.Itoa(10+i)}, true))
+	}
+	rows = append(rows, selected)
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []ProductGroup{{Title: "x", Rows: rows}}}
+	alone, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []ProductGroup{{Title: "x", Rows: []ProductRow{selected}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, policy, err := RenderProductPolicyWithin(page, len(alone)+600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if !strings.Contains(html, "selected-turn") || strings.Contains(html, "<form") || policy != ProductPolicy || !strings.Contains(html, "form-action &#39;none&#39;") {
+		t.Fatalf("trimmed page lost the selected session or kept a looser policy %q", policy)
+	}
+	if _, policy, err = RenderProductPolicyWithin(page, 1<<20); err != nil || policy != ProductSendPolicy {
+		t.Fatalf("untrimmed page policy %q, %v", policy, err)
+	}
+	many := make([]ProductTurn, maxTurns)
+	for i := range many {
+		many[i] = ProductTurn{Role: "user", Text: strings.Repeat("<", maxTurnBytes)}
+	}
+	c := boundConversation(ProductConversation{State: "Complete", Turns: many})
+	total := 0
+	for _, turn := range c.Turns {
+		total += len(turn.Text) + len(turn.From) + len(turn.At)
+	}
+	if c.State != "Truncated" || total > maxConversationBytes || len(c.Turns) == 0 {
+		t.Fatalf("conversation budget kept %d bytes in %d turns, state %s", total, len(c.Turns), c.State)
 	}
 }

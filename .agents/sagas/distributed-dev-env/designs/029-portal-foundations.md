@@ -572,8 +572,10 @@ conversation view; no supported route serves the history yet.
   no turns. Roles outside the three render as events.
 - **Rendering.** Turns are escaped plaintext with line breaks kept, labelled
   User, Agent or "Message from …", with time and a "cut to fit" mark. At most
-  60 turns (the newest) and 4 KiB per turn are rendered; anything cut marks
-  the conversation Truncated.
+  60 turns (the newest), 4 KiB per turn and 96 KiB of turn text in total are
+  rendered; anything cut marks the conversation Truncated. When the page is
+  trimmed to fit the response bound, the selected session is never dropped,
+  and the response header policy is taken from the page actually rendered.
 - **Receipts.** The backend's reason is a fixed code (`delivered`, `refused`,
   `unknown`). `ProductReceipt.ReasonCode` carries it, and the page words it;
   an unknown code reads "Reason not recorded". "Back to the session" returns

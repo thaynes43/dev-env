@@ -844,14 +844,15 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		}
 	}
 	// Leave headroom under the assembly's response bound for the page frame.
-	body, err := portal.RenderProductWithin(page, maximumResponse*7/8)
+	body, policy, err := portal.RenderProductPolicyWithin(page, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return
 	}
 	// The rendered page allows exactly its embedded stylesheet, and posts only
-	// to this origin when it holds a send form; refusals keep authHeaders' policy.
-	w.Header().Set("Content-Security-Policy", portal.ProductPolicyFor(page))
+	// to this origin when it holds a send form; the header matches the page's
+	// meta policy. Refusals keep authHeaders' policy.
+	w.Header().Set("Content-Security-Policy", policy)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(body)
 }
