@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -68,5 +70,39 @@ func TestCommandClientFixedDestinationAndStrictReceipt(t *testing.T) {
 				t.Fatal("command retried or redirected")
 			}
 		})
+	}
+}
+
+func TestCommandClientEncodesMaximumHTMLText(t *testing.T) {
+	now := time.Date(2026, 10, 23, 16, 0, 0, 0, time.UTC)
+	token := filepath.Join(t.TempDir(), "token")
+	if os.WriteFile(token, []byte(fixtureOperatorToken(apiv1.TokenAudience, now.Add(time.Hour))), 0600) != nil {
+		t.Fatal("fixture token")
+	}
+	text := strings.Repeat("&", apiv1.MaxMessageBytes-2) + "<>"
+	request := apiv1.PortalMessageRequest{RequestID: "request-0000000001", Project: "dev-env", SessionName: "agent-a", SessionUID: "uid-a", Text: text, ActorRef: "actor-000000000001"}
+	cert, ca := mintNamed(t, operatorPortalHost)
+	calls := 0
+	server := serveTLS(t, cert, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error("request read failed")
+			return
+		}
+		var got apiv1.PortalMessageRequest
+		if len(data) <= 2*apiv1.MaxMessageBytes+2048 || json.Unmarshal(data, &got) != nil || got.Text != text {
+			t.Error("HTML-escaped request did not preserve maximum text")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"requestID":"request-0000000001","sessionName":"agent-a","sessionUID":"uid-a","resolvedPodUID":"pod-a","observedAt":"2026-10-23T16:00:00Z","transportStatus":"TransportDelivered","reason":"delivered"}`)
+	}))
+	client, err := newCommandClient(token, ca, func() time.Time { return now }, routeDial(map[string]string{operatorPortalHost: server}))
+	if err != nil {
+		t.Fatal("client config")
+	}
+	receipt, err := client.send(context.Background(), request)
+	if err != nil || receipt.TransportStatus != apiv1.PortalTransportDelivered || calls != 1 {
+		t.Fatal("maximum encoded request failed")
 	}
 }

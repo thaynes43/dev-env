@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -86,5 +87,37 @@ func TestPortalMessageRejectsDuplicateFields(t *testing.T) {
 	_, _, err := f.srv.portalMessage(context.Background(), httptest.NewRecorder(), r, &caller{kind: kindPortalReader})
 	if err == nil || len(ex.cmds) != 0 {
 		t.Fatal("duplicate key admitted")
+	}
+}
+
+func TestPortalMessageEncodedJSONTextBounds(t *testing.T) {
+	controller := true
+	sess := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "agent-a", Namespace: sessionNS, UID: types.UID("uid-a")}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Mode: v1alpha1.ModeRemote}, Status: v1alpha1.AgentSessionStatus{Phase: v1alpha1.PhaseRunning}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "agent-a", Namespace: sessionNS, UID: types.UID("pod-a"), OwnerReferences: []metav1.OwnerReference{{UID: sess.UID, Controller: &controller}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
+	for _, size := range []int{6000, apiv1.MaxMessageBytes, apiv1.MaxMessageBytes + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			f := newFixture(t, sess.DeepCopy(), pod.DeepCopy())
+			ex := &fakeExec{}
+			f.srv.Exec = ex
+			f.srv.PortalMessageTargets = map[string]string{"agent-a": "uid-a"}
+			text := strings.Repeat("&", size-2) + "<>"
+			payload, err := json.Marshal(apiv1.PortalMessageRequest{RequestID: "request-0000000001", Project: "dev-env", SessionName: "agent-a", SessionUID: "uid-a", Text: text, ActorRef: "actor-000000000001"})
+			if err != nil {
+				t.Fatal("fixture encoding")
+			}
+			if size == 6000 && len(payload) <= 2*apiv1.MaxMessageBytes+2048 {
+				t.Fatal("fixture must cross original JSON cap")
+			}
+			r := httptest.NewRequest(http.MethodPost, apiv1.PortalSessionMessagesPath, bytes.NewReader(payload))
+			r.Header.Set("Content-Type", "application/json")
+			_, _, err = f.srv.portalMessage(context.Background(), httptest.NewRecorder(), r, &caller{kind: kindPortalReader})
+			if size <= apiv1.MaxMessageBytes {
+				if err != nil || len(ex.stdin) != 1 || ex.stdin[0] != text {
+					t.Fatal("valid escaped JSON not delivered unchanged")
+				}
+			} else if err == nil || len(ex.cmds) != 0 {
+				t.Fatal("oversize decoded text reached exec")
+			}
+		})
 	}
 }

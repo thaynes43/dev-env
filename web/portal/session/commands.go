@@ -129,7 +129,9 @@ func (h *commandHandler) post(w http.ResponseWriter, r *http.Request, key Handle
 	if err != nil || media != "application/x-www-form-urlencoded" {
 		return empty, portal.ErrDenied
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2*apiv1.MaxMessageBytes+2048)
+	// Each input byte can expand to three bytes in a URL-encoded form.
+	// 2048 additional bytes cover the five fixed keys and maximum valid metadata.
+	r.Body = http.MaxBytesReader(w, r.Body, 3*apiv1.MaxMessageBytes+2048)
 	if r.ParseForm() != nil || len(r.PostForm) != 5 {
 		return empty, portal.ErrDenied
 	}

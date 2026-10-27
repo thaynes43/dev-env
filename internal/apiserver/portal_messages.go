@@ -94,7 +94,9 @@ func decodePortalMessage(w http.ResponseWriter, r *http.Request, out *apiv1.Port
 	if err != nil || media != "application/json" {
 		return badRequest("invalid portal message request")
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*apiv1.MaxMessageBytes+2048))
+	// JSON may escape each text byte as six bytes (for example, \u0026).
+	// 4096 further bytes cover all bounded metadata and fixed field syntax.
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 6*apiv1.MaxMessageBytes+4096))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {
 		return badRequest("invalid portal message request")

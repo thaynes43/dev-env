@@ -208,3 +208,24 @@ func TestCommandsConcurrentDuplicate(t *testing.T) {
 		t.Fatal("duplicate dispatched more than once")
 	}
 }
+
+func TestCommandsEncodedFormTextBounds(t *testing.T) {
+	for _, size := range []int{6000, apiv1.MaxMessageBytes, apiv1.MaxMessageBytes + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			f, h, _, transport, values := commandFixture(t)
+			text := strings.Repeat("&", size-2) + "<>"
+			values.Set("text", text)
+			if size == 6000 && len(values.Encode()) >= 2*apiv1.MaxMessageBytes+2048 {
+				t.Fatal("fixture should fit the old form cap")
+			}
+			w := commandPost(f, h, values, "https://portal.example")
+			if size <= apiv1.MaxMessageBytes {
+				if w.Code != http.StatusOK || transport.count() != 1 || transport.requests[0].Text != text {
+					t.Fatal("valid encoded text not dispatched unchanged")
+				}
+			} else if w.Code == http.StatusOK || transport.count() != 0 {
+				t.Fatal("oversize decoded text reached transport")
+			}
+		})
+	}
+}
