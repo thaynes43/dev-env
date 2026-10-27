@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.48.0](https://github.com/thaynes43/dev-env/compare/v2.47.0...v2.48.0) (2026-10-27)
+
+
+### Features
+
+* **operator:** pilot agent image for one exactly selected session (default off) ([#576](https://github.com/thaynes43/dev-env/issues/576)) ([8b854b9](https://github.com/thaynes43/dev-env/commit/8b854b94079f585dc349fcaf35d6ca6ffd9e8c6c))
+
 ## [2.47.0](https://github.com/thaynes43/dev-env/compare/v2.46.0...v2.47.0) (2026-10-27)
 
 
