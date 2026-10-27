@@ -638,3 +638,12 @@ for the implemented configuration and compatibility requirements.
 Publication, compatible installation, exact private principal/target
 configuration, live action authorization and authenticated acceptance are
 separate steps. This documentation change enables none of them.
+
+History binds only at a first launch on agentd 2.47 or later. The operator's
+default-off `--pilot-agent-image` (a digest-pinned 2.x tag) and
+`--pilot-agent-session` (`<creating session name>/<idempotency key>`) flags run
+the sessions matching that parent and key on a newer agent image, with no
+templates edit and no restart of any other session. The match is not limited
+to one session: using a fresh key for one session and removing the flags
+afterwards is an operating rule, not an enforced limit. See [pilot agent image
+for one session](../../../../docs/portal-session-runtime.md#pilot-agent-image-for-one-session-default-off).

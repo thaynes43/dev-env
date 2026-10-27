@@ -88,6 +88,59 @@ func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions)
 }
 
+// PilotAgent selects the sessions with one parent and idempotency key for a
+// different agent image than the templates', by exact metadata. The operator
+// does not limit it to one session: that is an operating rule (see
+// docs/portal-session-runtime.md). Nil is off: every pod uses the templates
+// image. Parent and Key are the session's spec.parent and its
+// agent-run --idempotency-key label. Image is digest-pinned (the operator's
+// flags check that).
+type PilotAgent struct {
+	Image, Parent, Key string
+}
+
+// pilotImageFor returns the pilot image when the session is the one selected,
+// and "" otherwise. All of these must hold: the parent and the idempotency key
+// match, the agent is Claude, the mode is remote or local, the repo is dev-env,
+// and the session has no workspace, project canary or private pilot.
+func pilotImageFor(s *v1alpha1.AgentSession, p *PilotAgent) string {
+	if p == nil || p.Image == "" || s == nil || s.Spec.Parent != p.Parent || p.Key == "" ||
+		s.Labels[v1alpha1.LabelIdempotencyKey] != p.Key ||
+		s.Spec.Agent != v1alpha1.AgentClaude ||
+		(s.Spec.Mode != v1alpha1.ModeRemote && s.Spec.Mode != v1alpha1.ModeLocal) ||
+		s.Spec.Repo != "dev-env" ||
+		s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil {
+		return ""
+	}
+	return p.Image
+}
+
+// applyPilotImage swaps the image of a session's own (non-hold) pod when the
+// session is selected. Nothing else changes: the revision label stays the
+// templates' revision, and hold pods and task-budget workers never come here.
+func applyPilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgent) {
+	image := pilotImageFor(s, p)
+	if image == "" || pod == nil || isHoldPod(pod) {
+		return
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == ContainerName {
+			pod.Spec.Containers[i].Image = image
+		}
+	}
+}
+
+// sessionPod is the session's own pod as the reconciler creates it: the managed
+// pod, on the pilot image when the session is the selected one.
+func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
+	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents)
+	if err != nil {
+		return nil, err
+	}
+	applyPilotImage(pod, s, r.PilotAgent)
+	return pod, nil
+}
+
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with
 // `agentd hold` in place of `agentd run`, the S class's requests and limits,
 // and no agent credentials: no static token, and no profile env or envFrom. It

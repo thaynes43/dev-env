@@ -103,6 +103,7 @@ type options struct {
 	taskBudgetsEnabled            bool
 	taskBudgetNamespace           string
 	taskBudgetWorkerImage         string
+	pilotAgent                    *controller.PilotAgent
 	assignedTaskBudgets           map[string]string
 	sessionNamespace              string
 	templatesNamespace            string
@@ -207,6 +208,8 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
 	fs.StringVar(&o.taskBudgetNamespace, "task-budget-namespace", "", "dedicated protected namespace for retained budget ConfigMaps")
 	fs.StringVar(&o.taskBudgetWorkerImage, "task-budget-worker-image", "", "reviewed immutable worker image containing pre-boot budget deadline")
+	pilotImage := fs.String("pilot-agent-image", "", "ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 hex> for the sessions --pilot-agent-session selects; both or neither")
+	pilotSession := fs.String("pilot-agent-session", "", "<creating session name>/<idempotency-key> of the sessions that run --pilot-agent-image; both or neither")
 	assignedBudgets := fs.String("assigned-task-budgets", "", "explicit JSON configured HostID to TaskUID map")
 	hosts := fs.String("coordinator-hosts", "", "explicit JSON host bindings; empty configures none")
 	catalog := fs.String("project-catalog", "", "explicit accepted namespace/name ConfigMap binding")
@@ -402,6 +405,11 @@ func parseFlags(args []string) (options, error) {
 	} else if o.taskBudgetNamespace != "" || o.taskBudgetWorkerImage != "" || len(o.assignedTaskBudgets) > 0 {
 		return o, errors.New("task budget configuration requires explicit enable-task-budgets")
 	}
+	pilotAgent, err := parsePilotAgent(*pilotImage, *pilotSession)
+	if err != nil {
+		return o, err
+	}
+	o.pilotAgent = pilotAgent
 	if o.ownedRootPolicy != "" {
 		if len(validation.IsDNS1123Subdomain(o.ownedRootPolicy)) != 0 || !o.taskBudgetsEnabled || o.nativeFixtureEnabled || !o.coordinatorEnabled || len(o.coordinatorHosts) != 1 || len(o.assignedTaskBudgets) != 1 {
 			return o, errors.New("owned root needs one assigned coordinator, explicit policy and no fixture")
@@ -537,6 +545,7 @@ func run(args []string) error {
 		SessionDirectory: directoryStore,
 		Client:           mgr.GetClient(),
 		TaskBudgets:      budgets, TaskBudgetWorkerImage: o.taskBudgetWorkerImage,
+		PilotAgent:                  o.pilotAgent,
 		Templates:                   templatesKey,
 		APIURL:                      o.apiURL,
 		ManagedCodexTasks:           o.managedCodexTasks,
@@ -793,4 +802,31 @@ func addPortalTarget(targets *map[string]string, value string, byUID bool) error
 		(*targets)[parts[0]] = parts[1]
 	}
 	return nil
+}
+
+// pilotAgentImage is the syntax of the pilot image: the agent repository, a 2.x
+// tag (the line the image audit covers) and a digest. It checks syntax only;
+// the signature is checked elsewhere (the publish workflow's cosign verify,
+// review and the cluster's image audit).
+var pilotAgentImage = regexp.MustCompile(`^ghcr\.io/thaynes43/dev-env:2\.[0-9]+\.[0-9]+@sha256:[a-f0-9]{64}$`)
+
+// parsePilotAgent checks the pilot agent flags. Both empty is off (nil). Only
+// one set, or either invalid, is an error, so a typo cannot start the operator
+// with a half-selected pilot. The image must carry a 2.x tag and a sha256 digest;
+// the session is <parent>/<key>, a DNS-1123 label and a non-empty label value.
+func parsePilotAgent(image, session string) (*controller.PilotAgent, error) {
+	if image == "" && session == "" {
+		return nil, nil
+	}
+	if image == "" || session == "" {
+		return nil, errors.New("--pilot-agent-image and --pilot-agent-session must be set together")
+	}
+	if !pilotAgentImage.MatchString(image) {
+		return nil, errors.New("--pilot-agent-image must be ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 lowercase hex>")
+	}
+	parent, key, ok := strings.Cut(session, "/")
+	if !ok || strings.Contains(key, "/") || len(validation.IsDNS1123Label(parent)) != 0 || key == "" || len(validation.IsValidLabelValue(key)) != 0 {
+		return nil, errors.New("--pilot-agent-session must be <parent>/<key>: a DNS-1123 label parent and a non-empty label-value key")
+	}
+	return &controller.PilotAgent{Image: image, Parent: parent, Key: key}, nil
 }

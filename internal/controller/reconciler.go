@@ -189,6 +189,10 @@ type Reconciler struct {
 	// launch when unavailable; unbound legacy sessions keep their lifecycle.
 	TaskBudgets           *taskbudget.Service
 	TaskBudgetWorkerImage string
+	// PilotAgent runs the pods of the sessions with one parent and
+	// idempotency key on another agent image (pilotImageFor). Keeping that to
+	// one session is an operating rule, not a limit. Nil is off.
+	PilotAgent *PilotAgent
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder
@@ -1101,7 +1105,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 			return nil
 		}
 	}
-	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents)
+	pod, err := r.sessionPod(s, t)
 	if err != nil {
 		obs.buildErr = err
 		return nil
@@ -1228,7 +1232,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if err := r.create(ctx, "pod", pod); err != nil {
 		return err
 	}
-	log.FromContext(ctx).Info("created the session pod", "pod", pod.Name, "revision", t.Revision())
+	log.FromContext(ctx).Info("created the session pod", "pod", pod.Name, "revision", t.Revision(), "image", pod.Spec.Containers[0].Image)
 	obs.pod = owned[*corev1.Pod]{obj: pod}
 	return nil
 }
