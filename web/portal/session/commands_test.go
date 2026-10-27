@@ -229,3 +229,34 @@ func TestCommandsEncodedFormTextBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandsExplicitProductionScope(t *testing.T) {
+	for _, mode := range []string{"principal", "name", "uid", "allowed"} {
+		t.Run(mode, func(t *testing.T) {
+			f, h, store, transport, v := commandFixture(t)
+			key, _ := requestHandle(f.request("GET", portalMessagesPath, ""), sessionCookie)
+			p := f.store.sessions[key].Principal
+			h.scope = &actionScope{Principal: p, Targets: map[string]string{"uid-a": "agent-a"}}
+			switch mode {
+			case "principal":
+				h.scope.Principal.Subject = "wrong"
+			case "name":
+				v.Set("session", "agent-b")
+			case "uid":
+				v.Set("sessionUID", "uid-b")
+			}
+			w := commandPost(f, h, v, "https://portal.example")
+			if mode == "allowed" {
+				if w.Code != 200 || transport.count() != 1 || len(store.reservations) != 1 {
+					t.Fatal("scoped send failed")
+				}
+				commandPost(f, h, v, "https://portal.example")
+				if transport.count() != 1 {
+					t.Fatal("duplicate executed")
+				}
+			} else if w.Code == 200 || transport.count() != 0 || len(store.reservations) != 0 {
+				t.Fatal("unscoped send reserved or executed")
+			}
+		})
+	}
+}

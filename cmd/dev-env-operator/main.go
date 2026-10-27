@@ -118,6 +118,8 @@ type options struct {
 	grantApprovalURL              string
 	coordinatorEnabled            bool
 	portalReaderEnabled           bool
+	portalMessageTargets          map[string]string
+	portalConversationTargets     map[string]string
 	privatePilot                  *projectcanary.PilotPolicy
 	privateProjectTasks           bool
 	managedCodexTasks             bool
@@ -170,6 +172,8 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.standbyEffort, "standby-effort", "xhigh", "effort of the standby remote session; empty leaves the CLI's default")
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
 	fs.BoolVar(&o.portalReaderEnabled, "enable-portal-reader", false, "accept the dev-agents/dev-env-v2-portal ServiceAccount for paginated dev-env session summaries only")
+	fs.Func("portal-send-target", "explicit send target name=SessionUID; repeat for each target", func(v string) error { return addPortalTarget(&o.portalMessageTargets, v, false) })
+	fs.Func("portal-history-target", "explicit history target name=SessionUID; repeat for each target", func(v string) error { return addPortalTarget(&o.portalConversationTargets, v, true) })
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
@@ -219,6 +223,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.portalReaderEnabled && o.sessionNamespace != "dev-agents" {
 		return o, errors.New("--enable-portal-reader requires --session-namespace=dev-agents")
+	}
+	if (len(o.portalMessageTargets) > 0 || len(o.portalConversationTargets) > 0) && !o.portalReaderEnabled {
+		return o, errors.New("portal action targets require --enable-portal-reader")
 	}
 	if o.apiAddr != "0" {
 		if o.apiTLSDir == "" {
@@ -635,7 +642,9 @@ func run(args []string) error {
 			directoryContexts = &contextpublication.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
 		api := &apiserver.Server{
-			SessionDirectory: directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
+			PortalMessageTargets:      o.portalMessageTargets,
+			PortalConversationTargets: o.portalConversationTargets,
+			SessionDirectory:          directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
 			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects,
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
@@ -759,4 +768,29 @@ func leaderNow(mgr ctrl.Manager, elect bool) func() bool {
 			return false
 		}
 	}
+}
+
+// addPortalTarget accepts each name and UID at most once per action.
+func addPortalTarget(targets *map[string]string, value string, byUID bool) error {
+	parts := strings.Split(value, "=")
+	if len(parts) != 2 || len(validation.IsDNS1123Label(parts[0])) != 0 || !apiv1.ValidContextUID(parts[1]) {
+		return errors.New("invalid portal target")
+	}
+	if *targets == nil {
+		*targets = make(map[string]string)
+	}
+	for key, v := range *targets {
+		if (!byUID && (key == parts[0] || v == parts[1])) || (byUID && (key == parts[1] || v == parts[0])) {
+			return errors.New("duplicate portal target")
+		}
+	}
+	if len(*targets) >= 64 {
+		return errors.New("too many portal targets")
+	}
+	if byUID {
+		(*targets)[parts[1]] = parts[0]
+	} else {
+		(*targets)[parts[0]] = parts[1]
+	}
+	return nil
 }

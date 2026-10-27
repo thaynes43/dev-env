@@ -215,3 +215,25 @@ No suite loops, load tests or local container builds. Root journal1091 narrows
 runtime SQL rights to SELECT/INSERT/DELETE; no UPDATE or Touch path exists.
 INSERT collisions cannot replace existing rows. Live role, DB/auth,
 shared Authentik secret-safe logging, proxy/isolation and Gate A remain held.
+
+## Default-off portal action source configuration
+
+Source may optionally read `config/session-actions.json` under the existing
+portal root. Absence leaves send and private history disabled. The object may
+contain `send` and/or `history`; each is independently scoped with exact
+`issuer`, `subject`, and a nonempty `targets` array of `{ "name", "uid" }`.
+The issuer must match the existing pinned issuer. Invalid, duplicate, ambiguous,
+or unknown fields and duplicate target names or UIDs fail closed. This scope
+is additional to current session, UserInfo and group authorization; metadata
+access does not grant either action. The existing operator token and pinned CA
+are reused. Do not populate this file with real identities or targets without
+separate authorization.
+
+Operator source separately accepts repeatable `--portal-send-target=name=uid`
+and `--portal-history-target=name=uid` options. Each action has its own target
+map; neither is enabled by `--enable-portal-reader` alone. Explicit targets
+require that reader flag, and invalid or duplicate entries fail startup. These
+source interfaces are not an installation or approval: deployment, eligible
+idle agentd rollout, provider format qualification, live private access and
+send proof remain separate prerequisites. Legacy unbound history and agentd
+versions lacking the conversation control remain unavailable.

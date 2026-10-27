@@ -28,6 +28,7 @@ type commandTransport interface {
 // commandHandler requires explicit composition; production leaves it disabled.
 // Every dependency, including a renderer, is required before it serves a route.
 type commandHandler struct {
+	scope      *actionScope
 	engine     *Engine
 	authorizer portal.Authorizer
 	receipts   commandReceipts
@@ -67,6 +68,9 @@ func (h *commandHandler) authorized(r *http.Request) (*http.Request, Handle, Rec
 	principal, err := h.engine.Authenticate(r)
 	if err != nil {
 		return r, Handle{}, Record{}, err
+	}
+	if h.scope != nil && h.scope.Principal != principal {
+		return r, Handle{}, Record{}, portal.ErrDenied
 	}
 	if err = h.authorizer.Authorize(r.Context(), principal, portal.Resource{Project: "dev-env", Environment: "internal"}); err != nil {
 		return r, Handle{}, Record{}, err
@@ -114,6 +118,9 @@ func (h *commandHandler) receipt(ctx context.Context, key Handle, id string) (ap
 	if err != nil {
 		return apiv1.PortalMessageReceipt{}, err
 	}
+	if h.scope != nil && h.scope.Targets[reservation.SessionUID] != reservation.SessionName {
+		return apiv1.PortalMessageReceipt{}, portal.ErrDenied
+	}
 	if terminal != nil {
 		return *terminal, nil
 	}
@@ -145,6 +152,9 @@ func (h *commandHandler) post(w http.ResponseWriter, r *http.Request, key Handle
 	}
 	id, name, uid, text := r.PostForm.Get("requestID"), r.PostForm.Get("session"), r.PostForm.Get("sessionUID"), strings.TrimSpace(r.PostForm.Get("text"))
 	if !validCommandID(id) || name == "" || len(name) > 253 || uid == "" || len(uid) > 128 || text == "" || len(text) > apiv1.MaxMessageBytes || messageURL.MatchString(text) || invalidMessageControl(text) {
+		return empty, portal.ErrDenied
+	}
+	if h.scope != nil && h.scope.Targets[uid] != name {
 		return empty, portal.ErrDenied
 	}
 	wanted := commandReservation{RequestID: id, SessionName: name, SessionUID: uid, Digest: sha256.Sum256([]byte(text))}
