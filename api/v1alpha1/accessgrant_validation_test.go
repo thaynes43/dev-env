@@ -404,6 +404,10 @@ func TestGrantPolicyAccepts(t *testing.T) {
 			p.Spec.Repos, p.Spec.Profiles = nil, []string{"full"}
 			p.Spec.Kube = &v1alpha1.KubePolicy{Roles: []string{v1alpha1.RoleNodes}}
 		}},
+		{"attested policy: requesters only under attested", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}}
+		}},
 		{"Proxmox for haynes-ops sessions", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Repos = []string{"haynes-ops"}
 			p.Spec.Type = v1alpha1.GrantCredential
@@ -461,6 +465,17 @@ func TestGrantPolicyRejects(t *testing.T) {
 		}, "may not use the io.kubernetes., io.cilium. or k8s.io/ meta labels"},
 		{"profile ops", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Profiles = []string{"ops"}
+		}, "no policy matches profile ops"},
+		{"attested policy that also sets legacy requesters", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}}
+		}, "attested policy names them only under attested"},
+		{"attested policy naming no requester", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{}
+		}, "name the requesters"},
+		{"attested profile ops", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"ops"}}
 		}, "no policy matches profile ops"},
 		{"no requester", workloadsPolicy, func(p *v1alpha1.GrantPolicy) { p.Spec.Repos = nil }, "name the requesters"},
 		{"a 9h maxTTL", workloadsPolicy, func(p *v1alpha1.GrantPolicy) { p.Spec.MaxTTL = ttl(9 * time.Hour) }, "maxTTL runs from 10m to 8h"},

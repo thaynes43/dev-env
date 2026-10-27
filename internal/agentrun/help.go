@@ -41,6 +41,8 @@ Usage:
   agent-run grant request --type <t> --reason <why> [--no-wait]
                                                   ask for a grant and wait for the answer
   agent-run grant release <grant-id>              ask the broker to end one grant
+  agent-run grant attest <grant-id> --approved-by user|coordinator:<ref> --ref <id>
+                                                  record your claim that you obtained approval
   agent-run grant use <grant-id>|default         select that kube context in this pod
   agent-run budget create <task-uid> --success "RESULT" [flags]
                                                   create the host's assigned finite campaign
@@ -572,6 +574,7 @@ A reap returns at once; agent-run show <name> follows it until the session is go
        agent-run grant show <grant-id> [-o json]
        agent-run grant request --type <type> --reason <why> [--no-wait] [type flags] [-o json]
        agent-run grant release <grant-id> [-o json]
+       agent-run grant attest <grant-id> --approved-by user|coordinator:<ref> --ref <nonsecret> [-o json]
        agent-run grant use <grant-id>|default
 
 Read, request, release and use access grants (DESIGN-001 6.12). This is part
@@ -602,6 +605,16 @@ the grant the session already holds.
   --ttl <duration>   such as 45m; empty uses the API default
 
 grant release names one grant. The grant object stays as the audit record.
+
+grant attest records your claim that you obtained approval for this exact grant.
+First ask your coordinator to approve; where the coordinator cannot approve it,
+ask the user. Attest only an approval you actually received, for the scope and
+TTL the command prints. It is your claim, recorded under your session: an agent
+attestation, not verified human identity. It never replaces a confirmation your
+coordinator must get itself. It helps only where a deployed policy names
+attestation (otherwise the grant waits for Tom); one attestation per grant.
+  --approved-by <who>  user, or coordinator:<ref> (the reference is not verified)
+  --ref <id>           nonsecret message or journal id of the approval
 
 grant use runs agentd ctl grant-use. The name is grant-<id> or default.
 It does not call the API.

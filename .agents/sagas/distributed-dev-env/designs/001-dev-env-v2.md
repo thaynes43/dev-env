@@ -4071,6 +4071,31 @@ other apps. A break-glass approval needs an Authentik login from the last 5 minu
 The page can show a request as a GrantPolicy snippet, so an approval Tom keeps
 giving becomes a standing policy through a haynes-ops PR.
 
+**D-88 (2026-10-27 America/New_York, Tom 23:27:01Z). Agent attestation for grants that a
+policy names.** Tom: "No just accept what the agent says add guidance for the agent to
+seek coordinator or user approval first." This is a deliberate trust model for a home
+lab, not verified human identity, and it changes neither Q-16 nor the R-03 finding that no
+provider receipt of human origin exists. A GrantPolicy with `spec.attested` approves a
+request only when the requesting session also records, through the default-off
+`POST /v1/grants/{name}/attestation` (`agent-run grant attest`), a claim that it obtained
+the user's or a coordinator's approval for exactly that grant. The attestor is taken from
+the token (session, session UID, pod UID), never from the body. The statement binds the
+grant UID, the scope digest (type, credential, role, namespaces, egress destinations and
+ports, TTL, session) and one use per grant, and lives in one grant annotation that only
+the operator writes. The broker (`--enable-attested-grants`, default off) approves with
+`approvedBy policy/<name>` and a message that says "agent attestation, not verified human
+identity", so credential execution, the keeper, TTL, expiry and revoke are unchanged;
+`ensureCredentialJob` re-checks the statement. The pod UID is checked at approval only,
+so a pod roll still reinstalls. A coordinator reference is checked for syntax and is an
+unverified claim. Fail closed on a rollback: an attested policy names its requesters only
+under `spec.attested` and leaves `profiles`, `repos` and `agents` empty, which a broker
+that predates this reads as "names no requester" (`Matches`), so it approves nothing.
+Guidance (help and the MCP tool text): ask the coordinator first, the user where the
+coordinator cannot approve, attest only what was approved, and never use an attestation
+in place of a confirmation the coordinator must itself obtain. Known gap, unchanged and
+left for a follow-up: kube and egress execution never read `approvedBy`, so the decision
+point for them is `pending()` only.
+
 **D-27. Original restricted break-glass replacement (historical).**
 
 **Superseded by Q-16/D-70 wherever it reduces effective parity.** The proposed
@@ -5172,3 +5197,4 @@ blocks only the step it names.
 | D-85 | Owner scope correction: rules/context/coordination shared; repos/worktrees per pod; five outcomes and bounded pilot before full migration. Supersedes mandatory shared Git/RWX and trials; no runtime authority change. | ADR-003, plan 11 |
 | D-86 | `agent-run` exit `6` (unconfirmed), amending D-50's codes 0 to 5: a one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer exits `6` and is not repeated; it exits `5` only when nothing was sent; a 429 to one exits `1` | 3.5 |
 | D-87 | ADR-006 corrects ADR-005 (Q-31) after its review: the operator stops a private executor only for a Reaping Session with no owner hold, after a confirmed stop intent, never at the suspended-archive deadline; the archives are not private against v1's OPERATOR tier, the broker or the keeper, so H7 adds an archive guard; the terminal record sits beside `lastExecutor` (`executorTerminal`, with a once-only `executorMissed`); a fifth guard exception, `expiryHoldRemovalAllowed`; every HOME delete attempt re-verifies; copies of user files and unclassified agentd names are not exported | 4.4, 4.5, 5.1 |
+| D-88 | Tom 2026-10-27 23:27Z: grants may be approved on the requesting agent's attestation that it obtained user or coordinator approval, only through a GrantPolicy that names `spec.attested`, behind two default-off flags; an unverified claim, not human identity; fail closed on a broker rollback | 6.12 |

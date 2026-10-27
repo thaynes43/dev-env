@@ -143,6 +143,13 @@ type Grant struct {
 	// ApprovalURL is the broker's approval page for this grant, while it is
 	// pending. A coordinator shows it to Tom bare (D-26).
 	ApprovalURL string `json:"approvalURL,omitempty"`
+
+	// ScopeDigest identifies the exact scope and TTL, for an attestation to
+	// echo. Attestation is the requesting session's recorded claim that the user
+	// or a coordinator approved this grant: agent attestation, not verified
+	// human identity.
+	ScopeDigest string            `json:"scopeDigest,omitempty"`
+	Attestation *GrantAttestation `json:"attestation,omitempty"`
 }
 
 // GrantList is the body of GET /v1/grants, newest first.

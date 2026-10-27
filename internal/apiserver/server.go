@@ -13,6 +13,7 @@
 //	GET    /v1/grants                      list, with filters
 //	GET    /v1/grants/{name}               one grant
 //	DELETE /v1/grants/{name}               release: set spec.release for the broker
+//	POST   /v1/grants/{name}/attestation  (default off) the requesting session's claim that the user or a coordinator approved the grant; not verified human identity
 //	GET    /v1/history                     archived provider history of one project (DESIGN-025 8)
 //	GET    /v1/history/{session}           one archived history's manifest, in pages
 //	GET    /v1/history/{session}/file      one page of one archived file
@@ -155,6 +156,9 @@ type Server struct {
 	// GrantApprovalURL is the base URL of the broker's approval page; a pending
 	// grant's view links to it plus the grant's name. Empty links nothing.
 	GrantApprovalURL string
+	// GrantAttestation serves POST /v1/grants/{name}/attestation. Default off:
+	// the route is not registered and answers 404.
+	GrantAttestation bool
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -258,6 +262,9 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:    s.getGrant,
 		http.MethodDelete: s.releaseGrant,
 	}}))
+	if s.GrantAttestation {
+		mux.Handle(apiv1.GrantsPath+"/{name}/attestation", s.serve(route{methods: map[string]handler{http.MethodPost: s.attestGrant}}))
+	}
 	mux.Handle(apiv1.ActivitiesPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet:  s.listActivities,
 		http.MethodPost: s.declareActivity,

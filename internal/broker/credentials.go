@@ -141,7 +141,14 @@ func (b *Broker) ensureCredentialJob(ctx context.Context, g *v1alpha1.AccessGran
 			}
 			return nil, fmt.Errorf("read the credential approving policy: %w", err)
 		}
-		if !p.DeletionTimestamp.IsZero() || !Matches(&p, g) {
+		if !p.DeletionTimestamp.IsZero() {
+			return nil, permanent{errors.New("the credential approving policy does not permit this request")}
+		}
+		if p.Spec.Attested != nil {
+			if err := b.attestedPolicyForExecution(ctx, g, &p); err != nil {
+				return nil, permanent{err}
+			}
+		} else if !Matches(&p, g) {
 			return nil, permanent{errors.New("the credential approving policy does not permit this request")}
 		}
 		j = &v1alpha1.CredentialJob{
