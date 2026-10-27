@@ -2,6 +2,7 @@ package agentrun
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -194,8 +195,8 @@ func TestInboxNoResponseClassification(t *testing.T) {
 		{ExitUnconfirmed, "read outcome Unknown"}, {ExitFailed, "before a confirmed HTTP response"},
 	} {
 		err := inboxSafeError(0, fail(tc.code, "test-token private body"))
-		ee, ok := err.(*exitError)
-		if !ok || ee.code != tc.code || !strings.Contains(ee.msg, tc.want) || strings.Contains(ee.msg, "test-token") || strings.Contains(ee.msg, "HTTP status 0") {
+		var ee *exitError
+		if !errors.As(err, &ee) || ee.code != tc.code || !strings.Contains(ee.msg, tc.want) || strings.Contains(ee.msg, "test-token") || strings.Contains(ee.msg, "HTTP status 0") {
 			t.Fatalf("classification %d: %v", tc.code, err)
 		}
 	}
