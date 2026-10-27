@@ -28,15 +28,22 @@ var pageStyle string
 //go:embed views.css
 var viewsStyle string
 
+//go:embed receipt.html
+var receiptSource string
+
 var (
 	exactHead     = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	contentPolicy = policy(pageStyle)
 	// ProductPolicy is the Sessions and Tasks pages' Content-Security-Policy: no
 	// script, no form, no external resource, and only the embedded views stylesheet.
 	ProductPolicy = policy(viewsStyle)
+	// ProductSendPolicy is ProductPolicy for a Sessions page that holds a send
+	// form: forms may post to this origin only. Still no script.
+	ProductSendPolicy = strings.Replace(ProductPolicy, "form-action 'none'", "form-action 'self'", 1)
 	// Only the embedded, repository-owned CSS enters this template source.
-	pageTemplate  = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
-	viewsTemplate = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
+	pageTemplate    = template.Must(template.New("attention").Parse(strings.Replace(pageSource, "/*PORTAL_STYLE*/", pageStyle, 1)))
+	viewsTemplate   = template.Must(template.New("views").Parse(strings.Replace(viewsSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
+	receiptTemplate = template.Must(template.New("receipt").Parse(strings.Replace(receiptSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
 )
 
 func policy(style string) string {
@@ -106,6 +113,180 @@ type ProductRow struct {
 	Badges                                    []string
 	Sections                                  []ProductSection
 	Context                                   []ProductField
+	Messages                                  *ProductMessages
+}
+
+// ProductMessages is one session's message box. Without Send the box never
+// submits: Gate says why and History says what the portal cannot read. Route
+// is the existing delivery route's state for this session; Command, when set,
+// is that route. Draftable enables the draft box. Session and SessionUID name
+// the target as the operator reported it; a send form posts both.
+type ProductMessages struct {
+	Agent, Placeholder  string
+	History, Gate       string
+	Route               ProductStatus
+	RouteNote, Command  string
+	Session, SessionUID string
+	Draftable           bool
+	Send                *ProductSend
+	// HistoryHref selects this session to load its conversation; Conversation
+	// is that conversation, set only on the selected session.
+	HistoryHref  string
+	Conversation *ProductConversation
+}
+
+// ProductTurn is one conversation turn, rendered as escaped plaintext. Role is
+// user, assistant or message (a delivered message from From); any other role
+// renders as an event. At is display text.
+type ProductTurn struct {
+	Role, From, At, Text string
+	Truncated            bool
+}
+
+// Who names a turn's speaker for people.
+func (t ProductTurn) Who() string {
+	switch t.Role {
+	case "user":
+		return "User"
+	case "assistant":
+		return "Agent"
+	case "message":
+		if t.From != "" {
+			return "Message from " + t.From
+		}
+		return "Message"
+	}
+	return "Event"
+}
+
+// RoleClass is the turn's style class, from a fixed set.
+func (t ProductTurn) RoleClass() string {
+	switch t.Role {
+	case "user", "assistant", "message":
+		return "turn-" + t.Role
+	}
+	return "turn-event"
+}
+
+// ProductConversation is the selected session's conversation as its source
+// reported it, oldest turn first. State is Complete, Partial, Truncated or
+// Unavailable, and Note says what it covers. Unavailable has no turns.
+type ProductConversation struct {
+	State, Note string
+	Turns       []ProductTurn
+}
+
+// Tone is the state badge's tone.
+func (c ProductConversation) Tone() string {
+	switch c.State {
+	case "Complete":
+		return "ok"
+	case "Partial", "Truncated":
+		return "wait"
+	}
+	return "muted"
+}
+
+// Rendering bounds for one conversation: the page must stay inside the
+// response bound with the rest of the Sessions list.
+// maxConversationBytes caps the turn text kept in total; escaping can grow
+// text about fivefold, so even a worst case leaves room for the page frame.
+const (
+	maxTurns             = 60
+	maxTurnBytes         = 4 << 10
+	maxConversationBytes = 96 << 10
+)
+
+// boundConversation keeps a conversation within the rendering bounds, newest
+// turns first kept, and marks what it cut. An unknown state is Unavailable.
+func boundConversation(c ProductConversation) *ProductConversation {
+	switch c.State {
+	case "Complete", "Partial", "Truncated":
+	default:
+		return &ProductConversation{State: "Unavailable", Note: c.Note}
+	}
+	out := ProductConversation{State: c.State, Note: c.Note}
+	turns := c.Turns
+	if len(turns) > maxTurns {
+		turns = turns[len(turns)-maxTurns:]
+		out.State = "Truncated"
+	}
+	for _, turn := range turns {
+		turn.Text = strings.Map(func(r rune) rune {
+			if r == '\n' || r == '\t' {
+				return r
+			}
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+				return -1
+			}
+			return r
+		}, strings.ToValidUTF8(turn.Text, "\uFFFD"))
+		if len(turn.Text) > maxTurnBytes {
+			cut := maxTurnBytes
+			for cut > 0 && !utf8.RuneStart(turn.Text[cut]) {
+				cut--
+			}
+			turn.Text, turn.Truncated = turn.Text[:cut], true
+		}
+		if turn.Truncated && out.State == "Complete" {
+			out.State = "Truncated"
+		}
+		turn.From, turn.At = display(turn.From), display(turn.At)
+		out.Turns = append(out.Turns, turn)
+	}
+	// Keep the newest turns within the total budget.
+	total := 0
+	for i := len(out.Turns) - 1; i >= 0; i-- {
+		total += len(out.Turns[i].Text) + len(out.Turns[i].From) + len(out.Turns[i].At)
+		if total > maxConversationBytes {
+			out.Turns, out.State = out.Turns[i+1:], "Truncated"
+			break
+		}
+	}
+	return &out
+}
+
+// ProductSend makes a Draftable message box a form posting to the portal's
+// same-origin send route. CSRF is the caller's portal session value. RequestID
+// binds this rendered draft to one receipt, so a resubmitted form cannot send
+// twice. A ProductSend that fails validSend is not rendered.
+type ProductSend struct {
+	Action, CSRF, RequestID string
+}
+
+// ProductSessionMessagesHref is the portal send route a form may post to, and
+// the prefix of its receipts.
+const ProductSessionMessagesHref = "/portal/projects/dev-env/environments/internal/session-messages"
+
+// sendUnavailable replaces the gate of a box whose form failed validation.
+const sendUnavailable = "Sending from this page is unavailable. Nothing is sent or queued."
+
+var (
+	sendCSRF      = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	sendRequestID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+)
+
+// validSend accepts a form only for a Draftable box with a target, the fixed
+// same-origin action, a portal CSRF value and a request ID.
+func validSend(m *ProductMessages) bool {
+	return m != nil && m.Send != nil && m.Draftable && m.Session != "" && m.SessionUID != "" && validText(m.Session) && validText(m.SessionUID) &&
+		m.Send.Action == ProductSessionMessagesHref && sendCSRF.MatchString(m.Send.CSRF) && sendRequestID.MatchString(m.Send.RequestID)
+}
+
+// ProductPolicyFor is the Content-Security-Policy for page: ProductSendPolicy
+// when it holds a valid send form, ProductPolicy otherwise. The response header
+// and the page's own meta policy both come from it.
+func ProductPolicyFor(page ProductPage) string {
+	if page.Connected {
+		for _, g := range page.Groups {
+			for _, row := range g.Rows {
+				if productID.MatchString(row.ID) && validSend(row.Messages) {
+					return ProductSendPolicy
+				}
+			}
+		}
+	}
+	return ProductPolicy
 }
 
 // ProductGroup is one titled list group. Attention marks the group the rail's
@@ -158,6 +339,9 @@ type ProductUsage struct {
 type ProductFilter struct {
 	Attention bool
 	Project   string
+	// Session selects one session by UID to load its conversation. It does
+	// not narrow the list.
+	Session string
 }
 
 // ProductCount is one rail entry's name and count. Count is empty when the
@@ -214,17 +398,30 @@ type productRowView struct {
 // RenderProductWithin renders page in at most limit bytes. While it is too
 // large it keeps fewer list rows, dropping from the end of the list (the
 // least urgent group first), together with their usage rows; group counts and
-// the Usage breakdowns still cover everything read.
+// the Usage breakdowns still cover everything read. The selected session (the
+// row with a conversation) is always kept.
 func RenderProductWithin(page ProductPage, limit int) ([]byte, error) {
-	body, err := RenderProduct(page)
+	body, _, err := RenderProductPolicyWithin(page, limit)
+	return body, err
+}
+
+// RenderProductPolicyWithin is RenderProductWithin that also returns the
+// rendered page's policy, for the response header to match its meta policy.
+func RenderProductPolicyWithin(page ProductPage, limit int) ([]byte, string, error) {
+	rendered := page
+	body, err := RenderProduct(rendered)
 	for keep := countRows(page); err == nil && len(body) > limit && keep > 0; {
 		keep = keep * 3 / 4
-		body, err = RenderProduct(keepRows(page, keep))
+		rendered = keepRows(page, keep)
+		body, err = RenderProduct(rendered)
 	}
 	if err == nil && len(body) > limit {
-		return nil, fmt.Errorf("product page needs %d bytes, over %d", len(body), limit)
+		return nil, "", fmt.Errorf("product page needs %d bytes, over %d", len(body), limit)
 	}
-	return body, err
+	if err != nil {
+		return nil, "", err
+	}
+	return body, ProductPolicyFor(rendered), nil
 }
 
 func countRows(page ProductPage) int {
@@ -244,12 +441,18 @@ func keepRows(page ProductPage, keep int) ProductPage {
 		if g.Total < len(g.Rows) {
 			g.Total = len(g.Rows)
 		}
-		n := min(len(g.Rows), keep)
-		g.Rows = append([]ProductRow(nil), g.Rows[:n]...)
-		keep -= n
+		var rows []ProductRow
 		for _, r := range g.Rows {
-			kept[r.ID] = true
+			selected := r.Messages != nil && r.Messages.Conversation != nil
+			if keep > 0 || selected {
+				rows = append(rows, r)
+				kept[r.ID] = true
+				if !selected {
+					keep--
+				}
+			}
 		}
+		g.Rows = rows
 		groups[i] = g
 	}
 	page.Groups = groups
@@ -278,17 +481,24 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
 		SessionsHref, TasksHref, UsageHref                                 string
-		ListTitle, ListCount                                               string
-		Quiet, Preview, Banner, HasRows                                    bool
+		ListTitle, ListCount, Access, AccessLower                          string
+		Quiet, Preview, Banner, HasRows, CanSend                           bool
 		All, Attention                                                     railLinkView
 		Projects                                                           []railLinkView
 		Groups                                                             []productGroupView
 		Rows                                                               []productRowView
 		Usage                                                              *ProductUsage
-	}{Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
+	}{Policy: strings.TrimSuffix(ProductPolicyFor(page), "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
 		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage",
 		ListTitle: page.ListTitle}
+	// A page that holds a send form is not read-only, and says so.
+	view.CanSend = ProductPolicyFor(page) == ProductSendPolicy
+	view.Access = "Read-only"
+	if view.CanSend {
+		view.Access = "Read and message"
+	}
+	view.AccessLower = strings.ToLower(view.Access)
 	base := productSessionsHref
 	view.Section, view.All.Name = "Agents", "All sessions"
 	if view.Current == "tasks" {
@@ -328,6 +538,20 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					continue
 				}
 				row.Status.Tone = productTone(row.Status.Tone)
+				if row.Messages != nil {
+					m := *row.Messages
+					m.Route.Tone = productTone(m.Route.Tone)
+					if m.Send != nil && !validSend(&m) {
+						m.Send, m.Gate = nil, sendUnavailable
+					}
+					if !strings.HasPrefix(m.HistoryHref, productSessionsHref+"?session=") {
+						m.HistoryHref = ""
+					}
+					if m.Conversation != nil {
+						m.Conversation = boundConversation(*m.Conversation)
+					}
+					row.Messages = &m
+				}
 				g.Rows = append(g.Rows, row)
 				view.Rows = append(view.Rows, productRowView{ProductRow: row, Default: len(view.Rows) == 0})
 			}
@@ -519,4 +743,85 @@ func freshness(updated, verified, now time.Time, freshFor time.Duration) string 
 		return "Stale evidence"
 	}
 	return "Verified within snapshot window"
+}
+
+// ProductReceipt is one portal send's receipt as the send route recorded it.
+// TransportStatus is Delivered, Refused, Pending or Unknown; any other value
+// renders Unknown. Delivered is agentd's transport acceptance for the agent's
+// terminal: never a reply, a read or a finished task. ReasonCode is the
+// route's fixed code; the page words it, and never shows route text. Preview
+// labels fixture data.
+type ProductReceipt struct {
+	RequestID, Session, SessionUID, ResolvedPodUID string
+	TransportStatus, ReasonCode                    string
+	ObservedAt                                     time.Time
+	Preview                                        bool
+}
+
+// receiptReasons words the send route's fixed reason codes.
+var receiptReasons = map[string]string{
+	"delivered": "agentd accepted the text.",
+	"refused":   "The session took no message: its agent was not running, it is a headless task, or delivery was refused.",
+	"unknown":   "The delivery call ended without a confirmed outcome.",
+}
+
+var receiptSessionUID = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
+type receiptState struct{ Status, Headline, Tone, Meaning string }
+
+var receiptStates = map[string]receiptState{
+	"Delivered": {"Delivered", "Delivered to the agent's terminal", "ok", "agentd accepted this text for the agent's terminal. That is transport acceptance only: it does not mean the agent has read it, answered it or acted on it."},
+	"Refused":   {"Refused", "Not delivered", "bad", "The send route refused this message. Nothing was delivered."},
+	"Pending":   {"Pending", "Not confirmed yet", "wait", "The outcome is not recorded yet. Check this receipt again; do not send the text again."},
+	"Unknown":   {"Unknown", "Outcome Unknown", "wait", "The portal cannot tell whether the agent's terminal received this text. Check the session before sending it again."},
+}
+
+// RenderReceipt renders one receipt page. Its policy is ProductPolicy: no
+// script and no form. Every value is escaped text; a missing one reads Unknown.
+func RenderReceipt(r ProductReceipt) ([]byte, error) {
+	state, ok := receiptStates[r.TransportStatus]
+	if !ok {
+		state = receiptStates["Unknown"]
+	}
+	value := func(s string) string {
+		if !validText(s) {
+			return "Unknown"
+		}
+		return display(s)
+	}
+	observed := "Unknown"
+	if !r.ObservedAt.IsZero() {
+		observed = r.ObservedAt.UTC().Format("2 Jan 2006, 15:04:05 UTC")
+	}
+	view := struct {
+		receiptState
+		Policy, SessionsHref, TasksHref, Self, Back, Observed, Reason string
+		Fields                                                        []ProductField
+		Preview                                                       bool
+	}{receiptState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, TasksHref: productTasksHref, Observed: observed, Preview: r.Preview}
+	if sendRequestID.MatchString(r.RequestID) {
+		view.Self = ProductSessionMessagesHref + "/" + r.RequestID
+	}
+	view.Back = productSessionsHref
+	if receiptSessionUID.MatchString(r.SessionUID) {
+		view.Back += "?session=" + r.SessionUID
+	}
+	if r.ReasonCode != "" {
+		view.Reason = receiptReasons[r.ReasonCode]
+		if view.Reason == "" {
+			view.Reason = "Reason not recorded."
+		}
+	}
+	view.Fields = []ProductField{
+		{Label: "Request ID", Value: value(r.RequestID), Mono: true},
+		{Label: "Session", Value: value(r.Session), Mono: true},
+		{Label: "Session UID", Value: value(r.SessionUID), Mono: true},
+		{Label: "Pod UID at send", Value: value(r.ResolvedPodUID), Mono: true},
+		{Label: "Observed", Value: observed},
+	}
+	var body bytes.Buffer
+	if err := receiptTemplate.Execute(&body, view); err != nil {
+		return nil, err
+	}
+	return body.Bytes(), nil
 }

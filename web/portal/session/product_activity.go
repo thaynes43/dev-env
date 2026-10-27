@@ -725,6 +725,7 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 		{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},
 		{Label: "UID", Value: shown(row.UID), Mono: true},
 	}
+	out.Messages = sessionMessages(row, a)
 	return out
 }
 
