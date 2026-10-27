@@ -149,3 +149,16 @@ native host identity, task-budget linkage and the owner pilot remain unaccepted.
 Keep #175/#91 open. Preserve current Sessions, failed native/roots fixtures and
 ledgers. Q-24's native routing question remains pending; it does not block this
 provider-neutral source contract or authorize a fleet UX choice.
+
+## agent-run source client (2026-10-27, OpenProject #215)
+
+The provider-neutral `agent-run inbox` client exposes explicit send, list, read
+and ack against these existing routes. Send requires a caller-supplied stable
+key and bounded UTF-8 stdin; it does not generate a replacement key or replay a
+mutation. A 503 or lost response is unconfirmed: the caller may explicitly retry
+only the identical intent with the same key, as the server contract permits.
+Reads do not acknowledge. An acknowledgement is an API record, not proof of
+provider consumption. The server remains authoritative for identity and scope;
+a configured coordinator can read its authorized project but cannot publish or
+ack on behalf of a Session. Source tests do not establish installation or live
+usability.

@@ -13,6 +13,7 @@ Usage:
   agent-run [--repo] <repo> --local [flags]       start an interactive session (a TUI)
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
+  agent-run inbox send|list|read|ack               durable inbox
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
@@ -168,6 +169,19 @@ still-live guard/Pod/HOME only after independently proven root and child stops.
 The ORIGINAL deadline/effort/failure/checkpoint accounting and receipts remain.
 It cannot extend an exhausted budget, recover a lost Pod or let a model resume
 itself. A lost mutation acknowledgement is not retried.
+`,
+	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
+       agent-run inbox list --project <project> [--limit N] [--continue <cursor>]
+       agent-run inbox read <message> --project <project> [-o json]
+       agent-run inbox ack <message> --project <project>
+
+Send reads 1..16384 UTF-8 bytes from stdin and requires a stable logical key.
+It sends once. If unconfirmed, explicitly retry only the identical intent with
+the same key; a changed intent conflicts. List prints a bounded metadata page;
+read prints text without acknowledging it. Ack is explicit and proves an API
+read acknowledgement, not provider consumption. The server authorizes all
+operations; a configured coordinator may read authorized project content but
+cannot send or acknowledge for a Session. Send, list and ack print JSON.
 `,
 	"directory": `Usage: agent-run directory list --project <project> --once [flags]
 
