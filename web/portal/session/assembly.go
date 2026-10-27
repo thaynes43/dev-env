@@ -16,6 +16,7 @@ type AssemblyConfig struct {
 	Reader     portal.MetadataReader
 	Sessions   *SessionSource
 	Tasks      *TaskSource
+	Send       SendForms
 	FreshFor   time.Duration
 	Now        func() time.Time
 }

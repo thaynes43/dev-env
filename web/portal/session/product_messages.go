@@ -29,7 +29,7 @@ func sessionMessages(row apiv1.PortalSessionSummary, a *apiv1.PortalSessionActiv
 	if model == protocol.UsageUnknown {
 		model = "model Unknown"
 	}
-	m := &portal.ProductMessages{Agent: provider + " · " + model, History: messagesHistory, Gate: messagesGate}
+	m := &portal.ProductMessages{Agent: provider + " · " + model, History: messagesHistory, Gate: messagesGate, Session: row.Name, SessionUID: row.UID}
 	switch {
 	case a.Mode == "task":
 		m.Route = portal.ProductStatus{Text: "Takes no messages", Tone: "muted"}

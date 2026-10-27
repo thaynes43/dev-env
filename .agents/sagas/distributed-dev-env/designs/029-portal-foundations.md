@@ -499,3 +499,39 @@ request, Unknown (never success) on timeout, an audit record, and the CSRF and
 Origin checks above; plus a read of the selected session's message history.
 This is new authority: it needs its own design and Tom's approval, and belongs
 to the backend lane, not this frontend increment.
+
+### Composer seam and receipts, 2026-10-27
+
+Tom's direction (11:45 UTC, relayed by the coordinator) put a working composer
+first. The backend lane proposed a v1 send contract: a same-origin
+`POST /portal/projects/dev-env/environments/internal/session-messages` with
+form fields `csrf`, `requestID`, `session`, `sessionUID` and `text`, and a
+receipt at `GET …/session-messages/{requestID}` whose `transportStatus` is
+Delivered, Refused, Pending or Unknown with a static reason. The route,
+receipt storage, operator call and production wiring belong to the backend
+lane. This change is the frontend half; it enables no live authority.
+
+- **Seam.** `AssemblyConfig.Send` takes a `SendForms`
+  (`web/portal/session/product_send.go`) whose `NewRequestID` returns one fresh
+  ID per rendered draft box, in the route's format. Nil keeps every Send
+  disabled, as before. The CSRF value is the caller's existing portal session
+  value, read again when the page is built.
+- **Forms.** With a send route, each session the route may reach (running
+  interactive, agent busy, waiting or idle) gets a real `<form method="post">`
+  to the fixed action with the hidden fields above, a required `text` box and
+  an enabled Send. Others keep the disabled gate. An ID failure or a repeated
+  ID leaves the whole page without forms. The renderer drops any form whose
+  action, CSRF shape, request ID shape or target is wrong, and says sending is
+  unavailable.
+- **Policy.** A Sessions page that holds a form gets `form-action 'self'`, in
+  the header and the page's meta policy; every other page keeps
+  `form-action 'none'`. No script is added. Its access labels read "Read and
+  message" instead of "Read-only".
+- **Receipts.** `portal.RenderReceipt` renders one receipt with the product
+  stylesheet and policy (no form). Delivered reads as agentd's transport
+  acceptance for the agent's terminal, never a read, reply or finished task.
+  Pending says not to send again; Unknown says to check the session first; any
+  status outside the four renders Unknown. "Check again" links to the receipt
+  itself only for a well-formed request ID.
+- **Preview.** `--product` also writes `sessions-send.html` and one receipt
+  per status, all labelled fixture data. Their forms post nowhere real.

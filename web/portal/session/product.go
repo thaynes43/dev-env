@@ -832,14 +832,22 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		return
 	}
 	page.ObservedAt = c.Now().UTC().Format(time.RFC3339)
+	// A configured send route turns reachable sessions' boxes into forms bound
+	// to this caller's portal session. Without it, Send stays disabled.
+	if r.URL.Path == SessionsPath && c.Send != nil {
+		if _, record, currentErr := c.Session.current(r); currentErr == nil && record.Principal == principal {
+			page = withSendForms(page, record.CSRF, c.Send)
+		}
+	}
 	// Leave headroom under the assembly's response bound for the page frame.
 	body, err := portal.RenderProductWithin(page, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return
 	}
-	// The rendered page allows exactly its embedded stylesheet; refusals keep authHeaders' policy.
-	w.Header().Set("Content-Security-Policy", portal.ProductPolicy)
+	// The rendered page allows exactly its embedded stylesheet, and posts only
+	// to this origin when it holds a send form; refusals keep authHeaders' policy.
+	w.Header().Set("Content-Security-Policy", portal.ProductPolicyFor(page))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(body)
 }

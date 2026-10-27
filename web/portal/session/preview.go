@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/web/portal"
@@ -65,4 +67,42 @@ func renderFixture(page portal.ProductPage, now time.Time) ([]byte, error) {
 	page.Preview = true
 	page.ObservedAt = now.UTC().Format(time.RFC3339)
 	return portal.RenderProduct(page)
+}
+
+// previewForms numbers fixture request IDs. Its forms post nowhere real.
+type previewForms struct{ n int }
+
+func (p *previewForms) NewRequestID() (string, error) {
+	p.n++
+	return fmt.Sprintf("fixture-request-%04d", p.n), nil
+}
+
+// RenderSessionsSendFixture renders the Sessions fixture as a page whose send
+// route is configured: reachable sessions get forms with a fixture CSRF value
+// and request IDs. It is labelled a fixture preview and contacts nothing.
+func RenderSessionsSendFixture(source io.Reader) ([]byte, error) {
+	f, err := readProductFixture(source)
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := decodeSessionPage(f.Body, f.Now)
+	if err != nil {
+		return nil, err
+	}
+	page := sessionsPage(decoded.Sessions, decoded.Complete, decoded.Freshness, f.Now, portal.ProductFilter{})
+	return renderFixture(withSendForms(page, strings.Repeat("F", 43), &previewForms{}), f.Now)
+}
+
+// RenderReceiptFixtures renders one fixture receipt per transport status.
+func RenderReceiptFixtures(now time.Time) (map[string][]byte, error) {
+	reasons := map[string]string{"Delivered": "", "Refused": "The agent is not running.", "Pending": "", "Unknown": "The delivery call timed out."}
+	out := map[string][]byte{}
+	for status, reason := range reasons {
+		body, err := portal.RenderReceipt(portal.ProductReceipt{RequestID: "fixture-request-0001", Session: "fixture-coordinator", SessionUID: "fixture-uid-coordinator", ResolvedPodUID: "fixture-pod-uid-coordinator", TransportStatus: status, Reason: reason, ObservedAt: now, Preview: true})
+		if err != nil {
+			return nil, err
+		}
+		out[strings.ToLower(status)] = body
+	}
+	return out, nil
 }

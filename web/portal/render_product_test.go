@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // html/template drops CSS comments from template text, so the policy must hash
@@ -91,5 +92,93 @@ func TestRenderProductKeepsAnchorsTonesAndCountsSafe(t *testing.T) {
 		if strings.Contains(html, stub) {
 			t.Errorf("rendered page shows the stub %q", stub)
 		}
+	}
+}
+
+func sendRow(id string, send *ProductSend, draftable bool) ProductRow {
+	return ProductRow{ID: id, Title: "agent-" + id, Status: ProductStatus{Text: "Idle", Tone: "muted"},
+		Messages: &ProductMessages{Agent: "claude · claude-opus-5-5", History: "history", Gate: "send gate", Route: ProductStatus{Text: "CLI route", Tone: "info"},
+			Session: "agent-" + id, SessionUID: "uid-" + id, Draftable: draftable, Send: send}}
+}
+
+func TestSendFormRendersOnlyWhenValid(t *testing.T) {
+	csrf := strings.Repeat("c", 43)
+	good := &ProductSend{Action: ProductSessionMessagesHref, CSRF: csrf, RequestID: "request-0000000001"}
+	page := func(rows ...ProductRow) ProductPage {
+		return ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []ProductGroup{{Title: "In progress", Rows: rows}}}
+	}
+	none := page(sendRow("s1", nil, true), sendRow("s2", good, false),
+		sendRow("s3", &ProductSend{Action: "https://evil.example/send", CSRF: csrf, RequestID: "request-0000000003"}, true),
+		sendRow("s4", &ProductSend{Action: ProductSessionMessagesHref, CSRF: "short", RequestID: "request-0000000004"}, true),
+		sendRow("s5", &ProductSend{Action: ProductSessionMessagesHref, CSRF: csrf, RequestID: "bad id"}, true))
+	if ProductPolicyFor(none) != ProductPolicy {
+		t.Fatal("a page without a valid form allows form posts")
+	}
+	body, err := RenderProduct(none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if strings.Contains(html, "<form") || strings.Contains(html, "evil.example") || strings.Contains(html, `name="text"`) || strings.Contains(html, "form-action 'self'") || strings.Count(html, sendUnavailable) != 4 || !strings.Contains(html, ">Read-only</span>") {
+		t.Fatalf("invalid send forms rendered: %s", html)
+	}
+
+	mixed := page(sendRow("s1", good, true), sendRow("s2", nil, true))
+	if ProductPolicyFor(mixed) != ProductSendPolicy || !strings.Contains(ProductSendPolicy, "form-action 'self'") || strings.Contains(ProductSendPolicy, "form-action 'none'") || strings.Contains(ProductSendPolicy, "script-src") {
+		t.Fatalf("send policy %q", ProductSendPolicy)
+	}
+	body, err = RenderProduct(mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html = string(body)
+	for _, want := range []string{
+		`base-uri &#39;none&#39;; form-action &#39;self&#39;">`,
+		`<form class="composer" method="post" action="` + ProductSessionMessagesHref + `">`,
+		`<input type="hidden" name="csrf" value="` + csrf + `">`,
+		`<input type="hidden" name="requestID" value="request-0000000001">`,
+		`<input type="hidden" name="session" value="agent-s1">`,
+		`<input type="hidden" name="sessionUID" value="uid-s1">`,
+		`<textarea id="s1-draft" name="text" required maxlength="16384" rows="3"`,
+		`<button class="btn primary send" type="submit" aria-describedby="s1-gate">Send</button></div></form>`,
+		`<button class="btn send" type="button" disabled aria-describedby="s2-gate">Send</button></div></div>`,
+		">Read and message</span>", "Internal · read and message",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("send page lacks %q: %s", want, html)
+		}
+	}
+	if strings.Count(html, "<form") != 1 || strings.Count(html, `name="csrf"`) != 1 {
+		t.Fatal("a form rendered without its own valid send")
+	}
+}
+
+func TestReceiptKeepsTransportApartFromReplies(t *testing.T) {
+	at := time.Date(2026, 10, 27, 12, 0, 5, 0, time.UTC)
+	for status, want := range map[string]string{"Delivered": "Delivered to the agent", "Refused": "Not delivered", "Pending": "Not confirmed yet", "Unknown": "Outcome Unknown", "Completed": "Outcome Unknown", "": "Outcome Unknown"} {
+		body, err := RenderReceipt(ProductReceipt{RequestID: "request-0000000001", Session: "agent-a", SessionUID: "uid-a", ResolvedPodUID: "pod-a", TransportStatus: status, ObservedAt: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		html := string(body)
+		if !strings.Contains(html, "<h1>"+strings.ReplaceAll(want, "'", "&#39;")) || strings.Contains(html, "<form") || strings.Contains(html, "<script") || !strings.Contains(html, "form-action &#39;none&#39;") {
+			t.Fatalf("%q receipt: %s", status, html)
+		}
+		if !strings.Contains(html, `href="`+ProductSessionMessagesHref+`/request-0000000001">Check again</a>`) || !strings.Contains(html, "12:00:05 UTC") {
+			t.Fatalf("%q receipt lacks its link or time", status)
+		}
+	}
+	body, err := RenderReceipt(ProductReceipt{TransportStatus: "Delivered", RequestID: "../../evil", Reason: `<img src=x onerror=steal()>`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if !strings.Contains(html, "does not mean the agent has read it, answered it or acted on it") || strings.Contains(html, "Check again") || strings.Contains(html, "<img") || !strings.Contains(html, "&lt;img src=x onerror=steal()&gt;") || !strings.Contains(html, "<dt>Observed</dt><dd>Unknown</dd>") {
+		t.Fatalf("delivered receipt: %s", html)
+	}
+	style := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindSubmatch(body)
+	digest := sha256.Sum256(style[1])
+	if !strings.Contains(ProductPolicy, "'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'") {
+		t.Fatal("receipt stylesheet is not the product policy's")
 	}
 }
