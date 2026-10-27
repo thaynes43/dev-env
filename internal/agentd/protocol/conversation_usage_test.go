@@ -26,7 +26,7 @@ func TestConversationUsageValid(t *testing.T) {
 	if u := UnknownConversationUsage(AgentCodex, ReasonUnbound, time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)); !u.Valid() || u.Models == nil {
 		t.Fatalf("Unknown observation %+v", u)
 	}
-	over := int64(MaxUsageTokens + 1)
+	over := MaxUsageTokens + 1
 	negative := int64(-1)
 	for name, edit := range map[string]func(*ConversationUsage){
 		"version":              func(u *ConversationUsage) { u.Version = 2 },
