@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -414,6 +415,34 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	if out.Credential != "" {
 		a.outf("credential: %s (provider authority; inspect before approval)\n", out.Credential)
+	}
+	if source := out.CredentialSource; source != nil {
+		// Apply the source schema bounds before printing untrusted API data.
+		valid := func(value, pattern string, max int) bool {
+			if len(value) == 0 || len(value) > max {
+				return false
+			}
+			matched, _ := regexp.MatchString(pattern, value)
+			return matched
+		}
+		ok := valid(source.Namespace, `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, 63) &&
+			valid(source.Name, `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, 253) &&
+			len(source.Fields) > 0 && len(source.Fields) <= 16
+		if ok {
+			seen := make(map[string]bool, len(source.Fields))
+			for _, field := range source.Fields {
+				if !valid(field, `^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$`, 253) || seen[field] {
+					ok = false
+					break
+				}
+				seen[field] = true
+			}
+		}
+		if ok {
+			a.outf("credential source namespace: %s\ncredential source name: %s\ncredential source fields: %s\n", source.Namespace, source.Name, strings.Join(source.Fields, ", "))
+		} else {
+			a.outf("credential source: invalid reference\n")
+		}
 	}
 	if out.Message != "" {
 		a.outf("message: %s\n", out.Message)
