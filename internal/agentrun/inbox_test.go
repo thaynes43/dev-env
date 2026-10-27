@@ -156,3 +156,31 @@ func TestInboxDoesNotEchoAPIErrorBody(t *testing.T) {
 		t.Fatal("API body exposed")
 	}
 }
+
+func TestInboxRefusalsAreActionableAndDoNotEchoBodies(t *testing.T) {
+	for _, tc := range []struct {
+		status     int
+		body, want string
+	}{
+		{400, `{"error":{"code":"bad_request","message":"test-token secret text"}}`, "check the project"},
+		{400, `test-token malformed`, "check the project"},
+		{429, `{"error":{"code":"limit_exceeded","message":"test-token secret text"}}`, "limit"},
+		{429, `test-token untyped`, "limit"},
+	} {
+		t.Run(tc.want+tc.body[:1], func(t *testing.T) {
+			h := newHarness(t)
+			h.env.Stdin = strings.NewReader("hello")
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, b []byte) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}
+			h.mustRun(ExitFailed, "inbox", "send", "--project", "p", "--recipient-namespace", "dev-agents", "--recipient-name", "recipient", "--recipient-uid", "uid", "--key", "k")
+			if !strings.Contains(h.stderr.String(), tc.want) || strings.Contains(h.stderr.String(), testToken) || strings.Contains(h.stderr.String(), "secret text") {
+				t.Fatalf("unsafe or unhelpful error: %s", h.stderr.String())
+			}
+			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 {
+				t.Fatal("refused mutation was replayed")
+			}
+		})
+	}
+}

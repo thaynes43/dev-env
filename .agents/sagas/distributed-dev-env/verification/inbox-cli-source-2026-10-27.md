@@ -16,3 +16,11 @@ Go 1.27.2 at `/home/dev/work/orders/dev-env-sol-coordinator-20261022/toolchain/g
 
 Independent review and hosted CI remain pending; no merge is authorized by
 this source work order. Acceptance of #215 remains with its authorized owner.
+
+Advisory review correction: trusted HTTP status now selects actionable, bounded
+input or limit guidance without printing typed or untyped response bodies. The
+synthetic cases cover 400 and 429 with credential-bearing typed and malformed
+bodies, verify no replay, and retain the 503 Unknown behavior. The focused and
+package commands above passed again after this source change under the same
+serial Go environment. This supersedes the earlier source test result for the
+updated head; independent review and hosted CI on that head remain pending.

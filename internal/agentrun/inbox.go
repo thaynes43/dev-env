@@ -115,7 +115,7 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 			return fail(ExitFailed, "inbox intent conflicts with the existing key; no replacement key was generated")
 		}
 		if callErr != nil {
-			return inboxMutationError(callErr)
+			return inboxMutationError(status, callErr)
 		}
 		if (status != http.StatusCreated || result.Outcome != "Created") && (status != http.StatusOK || result.Outcome != "Confirmed") {
 			return fail(ExitUnconfirmed, "inbox send returned an unconfirmed receipt; retry only the identical intent with the same key")
@@ -126,9 +126,9 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 		return a.printJSON(result)
 	case "list":
 		var result apiv1.InboxList
-		_, err = a.callWith(ctx, &one, method, path, q, nil, &result, false)
-		if err != nil {
-			return inboxSafeError(err)
+		status, callErr := a.callWith(ctx, &one, method, path, q, nil, &result, false)
+		if callErr != nil {
+			return inboxSafeError(status, callErr)
 		}
 		if result.Items == nil || len(result.Items) > limit || len(result.Continue) > 4096 {
 			return fail(ExitFailed, "inbox list returned more than the requested limit")
@@ -141,9 +141,9 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 		return a.printJSON(result)
 	case "read":
 		var result apiv1.InboxMessage
-		_, err = a.callWith(ctx, &one, method, path, q, nil, &result, false)
-		if err != nil {
-			return inboxSafeError(err)
+		status, callErr := a.callWith(ctx, &one, method, path, q, nil, &result, false)
+		if callErr != nil {
+			return inboxSafeError(status, callErr)
 		}
 		if result.Project != project || result.Name != pos[0] || result.UID == "" || len(result.Text) == 0 || len(result.Text) > 16<<10 || !utf8.ValidString(result.Text) {
 			return fail(ExitFailed, "inbox read returned an unconfirmed message")
@@ -157,7 +157,7 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 		var result apiv1.InboxAckResult
 		status, callErr := a.callWith(ctx, &one, method, path, q, body, &result, false)
 		if callErr != nil {
-			return inboxMutationError(callErr)
+			return inboxMutationError(status, callErr)
 		}
 		if (status != http.StatusCreated || result.Outcome != "Created") && (status != http.StatusOK || result.Outcome != "Confirmed") {
 			return fail(ExitUnconfirmed, "inbox ack returned an unconfirmed receipt; retry only the same acknowledgement")
@@ -170,19 +170,31 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 }
 
 // Both inbox mutations have server-defined idempotent intent; no automatic retry.
-func inboxMutationError(err error) error {
+func inboxMutationError(status int, err error) error {
 	var ee *exitError
 	if errors.As(err, &ee) && ee.code == ExitUnconfirmed {
 		return fail(ExitUnconfirmed, "inbox outcome Unknown; no request was repeated. Explicitly retry only the identical intent and key (or the same acknowledgement)")
 	}
-	return inboxSafeError(err)
+	return inboxSafeError(status, err)
 }
 
 // Do not echo arbitrary API error bodies, which could contain credentials or text.
-func inboxSafeError(err error) error {
+func inboxSafeError(status int, err error) error {
 	var ee *exitError
+	code := ExitFailed
 	if errors.As(err, &ee) {
-		return fail(ee.code, "inbox request failed (exit %d); check API access and scope", ee.code)
+		code = ee.code
 	}
-	return fail(ExitFailed, "inbox request failed; check API access and scope")
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return fail(code, "inbox request was refused (%d); check the project, recipient, key, text and command arguments", status)
+	case http.StatusTooManyRequests:
+		return fail(code, "inbox request was refused (429); an inbox limit or rate limit may have been reached; review limits before retrying")
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fail(code, "inbox request was refused (%d); check API authentication and project scope", status)
+	case http.StatusNotFound:
+		return fail(code, "inbox record or authorized scope was not found (404)")
+	default:
+		return fail(code, "inbox request failed (HTTP status %d, exit %d)", status, code)
+	}
 }
