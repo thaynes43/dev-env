@@ -97,6 +97,11 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
 	sess.Status.RemoteControl = remoteControlStatus(st.RemoteControl)
+	// The conversation's usage is its own field. An absent or unusable one leaves
+	// the stored value; usageObservation is never touched here.
+	if cu := conversationUsageStatus(st.ConversationUsage, &sess, s.now()); cu != nil {
+		sess.Status.ConversationUsage = cu
+	}
 	if st.Usage != nil && st.UsageObservation == nil && sess.Status.UsageObservation == nil {
 		sess.Status.Usage = usageStatus(*st.Usage)
 	}

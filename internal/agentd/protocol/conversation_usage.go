@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"regexp"
 	"time"
 )
@@ -45,20 +46,23 @@ const (
 	ReasonTooManyModels    = "too_many_models"    // more served models than a bounded list keeps
 	ReasonSourceLimit      = "source_limit"       // the provider record is over the read bound
 	ReasonCountOverflow    = "count_overflow"     // a total passed the counter bound
+	ReasonDeltaMismatch    = "delta_mismatch"     // a rise in the cumulative total did not equal the provider's per-turn figure
 )
 
 var conversationReasons = map[string]bool{
 	ReasonSkippedRecords: true, ReasonCounterReset: true, ReasonModelSplit: true, ReasonMissingCounters: true,
 	ReasonNoUsage: true, ReasonNotInteractive: true, ReasonUnbound: true, ReasonUnsupportedAgent: true,
-	ReasonUnqualified: true, ReasonModelUnknown: true, ReasonTooManyModels: true, ReasonSourceLimit: true, ReasonCountOverflow: true,
+	ReasonUnqualified: true, ReasonModelUnknown: true, ReasonTooManyModels: true, ReasonSourceLimit: true, ReasonCountOverflow: true, ReasonDeltaMismatch: true,
 }
 
 var conversationReasonShape = regexp.MustCompile(`^[a-z][a-z_]{0,31}$`)
 
 // ConversationModelUsage is one served model's counters over the conversation,
 // as the provider reported them. Each counter keeps its own presence: Unknown
-// is not zero. Cache counters are their own counters; for Codex they can
-// overlap input and are never added to it.
+// is not zero. Cache counters are their own counters and are never added to
+// input. For Codex, input_tokens already includes the cached tokens, so its
+// input and cache read overlap; a consumer must not add them, within a provider
+// or across providers.
 type ConversationModelUsage struct {
 	Model                    string           `json:"model"`
 	InputTokens              TokenObservation `json:"inputTokens"`
@@ -89,6 +93,20 @@ type ConversationUsage struct {
 	Turns int64 `json:"turns"`
 	// Skipped counts records that could not be counted.
 	Skipped int64 `json:"skipped"`
+}
+
+// UnmarshalJSON keeps a conversation-usage type error from rejecting the
+// heartbeat that carries it: a malformed object decodes to the zero value, which
+// is not Valid, and the operator ignores it.
+func (u *ConversationUsage) UnmarshalJSON(raw []byte) error {
+	type plain ConversationUsage
+	var decoded plain
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		*u = ConversationUsage{}
+		return nil
+	}
+	*u = ConversationUsage(decoded)
+	return nil
 }
 
 // UnknownConversationUsage is the figure when nothing could be measured.

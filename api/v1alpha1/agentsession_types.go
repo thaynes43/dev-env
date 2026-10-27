@@ -566,6 +566,15 @@ type AgentSessionStatus struct {
 	// +optional
 	UsageConflict *UsageConflictStatus `json:"usageConflict,omitempty"`
 
+	// ConversationUsage is the registered interactive conversation's cumulative
+	// token usage as agentd last measured it (DESIGN-029). It is separate from
+	// usageObservation, which covers a headless task's first invocation, and the
+	// two are never added. It is written only by the session's own heartbeat,
+	// replaced each time agentd reports, and absent for a task session and for an
+	// agentd that does not measure it.
+	// +optional
+	ConversationUsage *ConversationUsageStatus `json:"conversationUsage,omitempty"`
+
 	// CapturedUsage is the parent's append-only ledger of direct children's
 	// accepted initial observations (OpenProject #109). It is absent unless
 	// capture is enabled. It is not a usage total.
@@ -1327,6 +1336,63 @@ type UsageObservationStatus struct {
 	// +kubebuilder:validation:MaxLength=128
 	// +optional
 	WorkerID string `json:"workerID,omitempty"`
+}
+
+// ConversationModelUsageStatus is one served model's cumulative counters over
+// the registered conversation. Each counter keeps its own presence: Unknown is
+// not zero. Cache counters are their own counters and are never added to input;
+// for Codex, input already includes the cached tokens.
+type ConversationModelUsageStatus struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Model                    string                 `json:"model"`
+	InputTokens              TokenObservationStatus `json:"inputTokens"`
+	OutputTokens             TokenObservationStatus `json:"outputTokens"`
+	CacheReadInputTokens     TokenObservationStatus `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens TokenObservationStatus `json:"cacheCreationInputTokens"`
+}
+
+// ConversationUsageStatus is the measured usage of one registered interactive
+// conversation: cumulative as of ObservedAt, per served model, with no cost, no
+// requested model and no text. Final means every record was read and counted at
+// that time (the conversation may still grow); Partial is a lower bound with a
+// reason; Unknown carries no models and is never zero.
+// +kubebuilder:validation:XValidation:rule="self.resultState == 'Unknown' ? (!has(self.models) || size(self.models) == 0) : (has(self.models) && size(self.models) > 0)",message="models are listed exactly when the result is not Unknown"
+// +kubebuilder:validation:XValidation:rule="(self.resultState == 'Final') == !has(self.reasonCode)",message="a reason is given exactly when the result is not Final"
+type ConversationUsageStatus struct {
+	// +kubebuilder:validation:Enum=1
+	Version int32 `json:"version"`
+	// +kubebuilder:validation:Enum=claude;codex
+	// +kubebuilder:validation:MaxLength=64
+	Provider   string      `json:"provider"`
+	ObservedAt metav1.Time `json:"observedAt"`
+	// +kubebuilder:validation:Enum=RegisteredConversation
+	// +kubebuilder:validation:MaxLength=64
+	Coverage string `json:"coverage"`
+	// +kubebuilder:validation:Enum=ConversationCumulative
+	// +kubebuilder:validation:MaxLength=64
+	CounterSemantics string `json:"counterSemantics"`
+	// +kubebuilder:validation:Enum=Final;Partial;Unknown
+	// +kubebuilder:validation:MaxLength=64
+	ResultState string `json:"resultState"`
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^[a-z][a-z_]*$`
+	// +optional
+	ReasonCode string `json:"reasonCode,omitempty"`
+	// Models are the served models, sorted by id.
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=map
+	// +listMapKey=model
+	// +optional
+	Models []ConversationModelUsageStatus `json:"models,omitempty"`
+	// Turns counts the provider calls that were counted.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=1000000000
+	Turns int64 `json:"turns"`
+	// Skipped counts records that could not be counted.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=1000000000
+	Skipped int64 `json:"skipped"`
 }
 
 // Captured usage ledger limits. A larger ledger does not evict a row.
