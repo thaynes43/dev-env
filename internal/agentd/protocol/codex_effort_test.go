@@ -4,20 +4,20 @@ import "testing"
 
 func TestCodexEffortPinnedModelManifest(t *testing.T) {
 	models := map[string]string{
-		"gpt-6-astra": "ultra", "gpt-6.1-sol": "ultra", "gpt-6-sol": "ultra",
+		"gpt-6-astra": "ultra", "gpt-6.1-sol": "ultra", "gpt-6.1-terra": "ultra", "gpt-6-sol": "ultra",
 		"gpt-5.6-sol": "ultra", "gpt-5.6-terra": "ultra",
 		"gpt-6-luna": "max", "gpt-5.6-luna": "max", "gpt-5.5": "xhigh",
 	}
-	levels := []string{"", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode"}
+	levels := []string{"", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode", "none"}
 	for model, highest := range models {
 		for _, effort := range levels {
-			want := effort != "ultracode" && (effort != "ultra" || highest == "ultra") && (effort != "max" || highest != "xhigh")
+			want := effort != "ultracode" && effort != "none" && (effort != "ultra" || highest == "ultra") && (effort != "max" || highest != "xhigh")
 			if got := ValidateCodexEffort(model, effort) == nil; got != want {
 				t.Errorf("pinned manifest %s/%s accepted=%v, want %v", model, effort, got, want)
 			}
 		}
 	}
-	for _, alias := range []string{"sol", "luna", "default", "gpt-6"} {
+	for _, alias := range []string{"sol", "luna", "terra", "gpt-6.1-terra-latest", "default", "gpt-6"} {
 		if ValidateCodexEffort(alias, "") == nil {
 			t.Errorf("model alias %s received default effort authority", alias)
 		}

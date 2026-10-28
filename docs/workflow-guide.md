@@ -772,3 +772,5 @@ endpoint serving fresh authority until service routing withdraws it; connection
 replacement alone cannot repair a fresh dial to an already closed listener.
 The model-free TLS regressions cover these boundaries. Actual endpoint timing
 and survival of an active native process still require rollout evidence.
+
+For CLI version and model admission changes, see the [CLI and model upgrade checklist](cli-model-upgrades.md).
