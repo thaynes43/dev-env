@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.51.0](https://github.com/thaynes43/dev-env/compare/v2.50.0...v2.51.0) (2026-10-28)
+
+
+### Features
+
+* **agentd:** measure registered interactive conversation usage (inert) ([#584](https://github.com/thaynes43/dev-env/issues/584)) ([6b5feab](https://github.com/thaynes43/dev-env/commit/6b5feaba327fc6c772804883022a8db04cb3249f))
+* **broker:** default-off agent attestation for grants a policy names (D-88) ([#586](https://github.com/thaynes43/dev-env/issues/586)) ([b10f70b](https://github.com/thaynes43/dev-env/commit/b10f70ba12c20fcc681baa0c64bf2aad016752de))
+* **usage:** store measured interactive conversation usage (backend, Unit B m1) ([#588](https://github.com/thaynes43/dev-env/issues/588)) ([78a5337](https://github.com/thaynes43/dev-env/commit/78a53375b6115a96e8d448f912ef356e30a5a2f2))
+
+
+### Bug Fixes
+
+* **agentrun:** attest guidance uses --no-wait; CLI test; comment ([#589](https://github.com/thaynes43/dev-env/issues/589)) ([c578c93](https://github.com/thaynes43/dev-env/commit/c578c93fbfbfb45628edf750f9308e2c50808827))
+
 ## [2.50.0](https://github.com/thaynes43/dev-env/compare/v2.49.0...v2.50.0) (2026-10-27)
 
 
