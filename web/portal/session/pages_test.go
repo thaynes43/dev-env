@@ -1,7 +1,9 @@
 package session
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/pages"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -33,6 +36,117 @@ func pagesFixture(t *testing.T) (*authFixture, *pagesSource, *int) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(syntheticAlerts)), Header: make(http.Header)}, nil
 	}), Timeout: 5 * time.Second}
 	return f, source, count
+}
+
+func pagesCheckConfig(t *testing.T, doc string) string {
+	t.Helper()
+	root := t.TempDir()
+	if doc != "" {
+		if err := os.MkdirAll(filepath.Join(root, "config"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "config/pages-alertmanager.json"), []byte(doc), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func TestPagesSourceCheckDisabledAndMalformedDoNotDial(t *testing.T) {
+	for _, doc := range []string{"", "broken", `{"source_url":null}`, `{"source_url":"http://example.invalid"}`, `{"source_url":"` + pagesSourceURL + `","extra":true}`} {
+		root := pagesCheckConfig(t, doc)
+		calls := 0
+		dial := func(context.Context, string, string) (net.Conn, error) {
+			calls++
+			return nil, errors.New("PRIVATE-DIAL")
+		}
+		got := checkPagesSource(context.Background(), root, time.Now, dial)
+		want := "unavailable"
+		if doc == "" {
+			want = "disabled"
+		}
+		if got.Status != want || got.Count != nil || got.ObservedAt != nil || calls != 0 {
+			t.Fatalf("doc=%q result=%+v dials=%d", doc, got, calls)
+		}
+	}
+}
+
+func TestPagesSourceCheckFixedReadAndSanitizedFailures(t *testing.T) {
+	root := pagesCheckConfig(t, `{"source_url":"`+pagesSourceURL+`"}`)
+	at := time.Date(2026, 10, 28, 12, 0, 0, 123, time.UTC)
+	// Environment proxy settings must not redirect this fixed transport.
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		dialErr    error
+		count      int
+	}{
+		{"empty", "[]", 200, nil, 0},
+		{"alerts", syntheticAlerts, 200, nil, 1},
+		{"two alerts", `[{"fingerprint":"f1","labels":{"alertname":"PRIVATE-ONE"},"status":{"state":"active"}},{"fingerprint":"f2","labels":{"alertname":"PRIVATE-TWO"},"status":{"state":"suppressed"}}]`, 200, nil, 2},
+		{"transport", "", 0, errors.New("PRIVATE-TRANSPORT-URL"), -1},
+		{"timeout", "", 0, context.DeadlineExceeded, -1},
+		{"non200", "PRIVATE-BODY", 503, nil, -1},
+		{"redirect", "PRIVATE-BODY", 302, nil, -1},
+		{"oversize", strings.Repeat("x", pages.AlertmanagerMaxBytes+1), 200, nil, -1},
+		{"schema", `[{"fingerprint":null}]`, 200, nil, -1},
+		{"envelope", `{"alerts":[]}`, 200, nil, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan *http.Request, 1)
+			calls := 0
+			dial := func(_ context.Context, network, addr string) (net.Conn, error) {
+				calls++
+				if network != "tcp" || addr != "alertmanager-operated.observability.svc.cluster.local:9093" {
+					t.Errorf("unexpected target %s %s", network, addr)
+				}
+				if tc.dialErr != nil {
+					return nil, tc.dialErr
+				}
+				client, server := net.Pipe()
+				go func() {
+					defer func() { _ = server.Close() }()
+					req, err := http.ReadRequest(bufio.NewReader(server))
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					requests <- req
+					response := &http.Response{StatusCode: tc.status, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{"Location": {"http://example.invalid/PRIVATE"}}, ContentLength: int64(len(tc.body)), Body: io.NopCloser(strings.NewReader(tc.body))}
+					// An over-bound response may be closed before its last byte.
+					_ = response.Write(server)
+				}()
+				return client, nil
+			}
+			got := checkPagesSource(context.Background(), root, func() time.Time { return at }, dial)
+			if calls != 1 {
+				t.Fatalf("unexpected retry/dial count %d", calls)
+			}
+			if tc.dialErr == nil {
+				req := <-requests
+				if req.Method != http.MethodGet || req.URL.RequestURI() != "/api/v2/alerts" || req.Host != "alertmanager-operated.observability.svc.cluster.local:9093" || req.ContentLength != 0 {
+					t.Fatal("unexpected fixed request")
+				}
+				for _, key := range []string{"Authorization", "Cookie", "Proxy-Authorization", "Origin"} {
+					if req.Header.Get(key) != "" {
+						t.Fatalf("unexpected %s", key)
+					}
+				}
+			}
+			if tc.count >= 0 {
+				if got.Status != "available" || got.Count == nil || *got.Count != tc.count || got.ObservedAt == nil || *got.ObservedAt != at.Format(time.RFC3339Nano) {
+					t.Fatalf("successful result %+v", got)
+				}
+			} else if got.Status != "unavailable" || got.Count != nil || got.ObservedAt != nil {
+				t.Fatalf("failed result %+v", got)
+			}
+			raw, err := json.Marshal(got)
+			if err != nil || len(raw) > 160 || strings.Contains(string(raw), "PRIVATE") || strings.Contains(string(raw), "ALERT-CANARY") || strings.Contains(string(raw), "script") || strings.Contains(string(raw), "http") {
+				t.Fatalf("unsafe diagnostic %q", raw)
+			}
+		})
+	}
 }
 func pagesAssembly(f *authFixture, s *pagesSource, author portal.Authorizer) http.Handler {
 	return NewAssembly(AssemblyConfig{Session: f.e, Authorizer: author, Reader: portal.UnavailableReader{}, Pages: s, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
