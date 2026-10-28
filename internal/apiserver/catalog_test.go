@@ -42,7 +42,7 @@ func TestProjectCodexModelEffortAdmission(t *testing.T) {
 		model, effort string
 		accepted      bool
 	}{
-		{"gpt-6.1-sol", "ultra", true}, {"gpt-6-luna", "max", true},
+		{"gpt-6.1-sol", "ultra", true}, {"gpt-6.1-terra", "", true}, {"gpt-6.1-terra", "low", true}, {"gpt-6.1-terra", "medium", true}, {"gpt-6.1-terra", "high", true}, {"gpt-6.1-terra", "xhigh", true}, {"gpt-6.1-terra", "max", true}, {"gpt-6.1-terra", "ultra", true}, {"gpt-6.1-terra", "none", false}, {"gpt-6-luna", "max", true},
 		{"gpt-6-luna", "ultra", false}, {"gpt-5.6-luna", "ultra", false},
 		{"gpt-5.5", "max", false}, {"gpt-5.5", "ultra", false},
 		{"gpt-5.5", "", true},
@@ -85,7 +85,7 @@ func TestPrivateProjectTaskAdmissionDisabledDefault(t *testing.T) {
 				r := coordinatorTask()
 				r.Agent = provider
 				if provider == "codex" {
-					r.Model = "gpt-6.1-sol"
+					r.Model = "gpt-6.1-terra"
 				}
 				e := wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, r), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 				if len(e.Fields) != 1 || e.Fields[0].Field != "project" || !strings.Contains(e.Message, "private project tasks are not enabled") {
@@ -155,7 +155,7 @@ func TestProjectAdmissionIndependentOfSharedWorkspace(t *testing.T) {
 					r := coordinatorTask()
 					r.Agent = provider
 					if provider == "codex" {
-						r.Model = "gpt-6.1-sol"
+						r.Model = "gpt-6.1-terra"
 					}
 					w := f.do(http.MethodPost, apiv1.SessionsPath, token, r)
 					if w.Code != http.StatusCreated {

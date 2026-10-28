@@ -484,3 +484,17 @@ func TestProjectCreateDefaultStillRetries(t *testing.T) {
 		t.Fatalf("default exit%d calls%d sleeps%d", code, calls.Load(), sleeps.Load())
 	}
 }
+
+func TestCreateTerraModelAndEffortPreserved(t *testing.T) {
+	h := newHarness(t)
+	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "--repo", "haynes-ops", "-p", "synthetic", "--agent", "codex", "--model", "gpt-6.1-terra", "--effort", "medium")
+	reqs := h.api.requests()
+	if len(reqs) == 0 {
+		t.Fatal("missing create")
+	}
+	got := decodeCreate(t, reqs[0].body)
+	if got.Agent != "codex" || got.Model != "gpt-6.1-terra" || got.Effort != "medium" {
+		t.Fatal("request changed model or effort")
+	}
+}
