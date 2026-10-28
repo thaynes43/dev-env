@@ -84,7 +84,26 @@ func fakeAllowanceHost(t *testing.T, mode string) *allowanceFixture {
 			case "account/read":
 				result = map[string]any{"account": map[string]any{"email": "SYNTHETIC_PRIVATE", "token": "SYNTHETIC_SECRET"}}
 			case "account/rateLimits/read":
-				result = map[string]any{"rateLimits": map[string]any{"primary": map[string]any{"usedPercent": 0, "windowDurationMins": 60}, "secondary": nil}, "rateLimitsByLimitId": map[string]any{"codex": map[string]any{"primary": map[string]any{"usedPercent": 25}}}}
+				var used any = 0
+				var credits any
+				switch mode {
+				case "number-exponent":
+					used = json.Number("2.5E1")
+					credits = map[string]any{"availableCount": json.Number("1e2")}
+				case "credits-empty":
+					credits = map[string]any{}
+				case "credits-null-count":
+					credits = map[string]any{"availableCount": nil}
+				case "credits-zero":
+					credits = map[string]any{"availableCount": 0}
+				case "numbers-canonical":
+					used = json.Number("0.125")
+					credits = map[string]any{"availableCount": json.Number("12.50")}
+				}
+				result = map[string]any{"rateLimits": map[string]any{"primary": map[string]any{"usedPercent": used, "windowDurationMins": 60}, "secondary": nil}, "rateLimitsByLimitId": map[string]any{"codex": map[string]any{"primary": map[string]any{"usedPercent": 25}}}}
+				if mode == "credits-null-object" || (mode != "credits-missing" && credits != nil) {
+					result.(map[string]any)["rateLimitResetCredits"] = credits
+				}
 			default:
 				return
 			}
@@ -212,5 +231,66 @@ func TestCodexAllowanceCaptureInvalidBeforeRPC(t *testing.T) {
 	}
 	if len(f.recorded()) != 0 {
 		t.Fatal("invalid capture performed RPC")
+	}
+}
+
+func TestCodexAllowanceRPCNumericContract(t *testing.T) {
+	for _, tc := range []struct {
+		mode                             string
+		wantUsed, wantCount, wantDetails string
+	}{{"number-exponent", "", "", "unknown"}, {"credits-empty", "0", "", "unknown"}, {"credits-missing", "0", "", "unknown"}, {"credits-null-count", "0", "", "unknown"}, {"credits-null-object", "0", "", "unknown"}, {"credits-zero", "0", "0", "not_requested"}, {"numbers-canonical", "0.125", "12.50", "not_requested"}} {
+		t.Run(tc.mode, func(t *testing.T) {
+			f := fakeAllowanceHost(t, tc.mode)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			read, err := ReadCodexNativeAllowance(ctx, f.settings, os.Getpid(), time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC), captureContext())
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(read)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := providerallowance.DecodeReadResponse(data, providerallowance.FixtureParseLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			obs := decoded.Items[0].Observation
+			assessment := providerallowance.ValidateObservation(obs, providerallowance.TrustedContext{}, nil)
+			if !assessment.ShapeOK {
+				t.Fatalf("invalid shape: %+v", assessment.Issues)
+			}
+			m := obs.Measures[2]
+			if tc.wantUsed == "" {
+				if m.Value.State != providerallowance.ValueUnknown || m.Value.Decimal != nil {
+					t.Fatal("noncanonical used must be Unknown")
+				}
+			} else if m.Value.Decimal == nil || *m.Value.Decimal != tc.wantUsed {
+				t.Fatal("canonical used lost")
+			}
+			count, details := "", ""
+			for _, field := range obs.DirectFields {
+				if field.Field == "resetCredits.availableCount" && field.LexicalValue != nil {
+					count = *field.LexicalValue
+				}
+				if field.Field == "resetCredits.detailsState" && field.LexicalValue != nil {
+					details = *field.LexicalValue
+				}
+			}
+			if count != tc.wantCount || details != tc.wantDetails {
+				t.Fatalf("reset count=%q details=%q", count, details)
+			}
+		})
+	}
+}
+func TestCodexAllowanceConstructedNoncanonicalNumber(t *testing.T) {
+	// 01 is not legal JSON; this is a constructed json.Number, not a wire case.
+	n := json.Number("01")
+	if json.Valid([]byte(`{"value":01}`)) {
+		t.Fatal("01 must be invalid JSON wire")
+	}
+	m := codexMeasure("synthetic", &codexWindow{Used: &n})
+	if m.Value.State != providerallowance.ValueUnknown || m.Value.Decimal != nil {
+		t.Fatal("noncanonical number accepted")
 	}
 }

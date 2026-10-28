@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,6 +84,10 @@ func ReadCodexNativeAllowance(ctx context.Context, s Settings, expectedPID int, 
 	return codexAllowanceRead(account.Account != nil && string(account.Account) != "null", limits, fetchedAt.UTC(), capture, fields[0])
 }
 
+// Match the existing provider-allowance canonical decimal contract without
+// converting through floating point or inventing precision.
+var codexCanonicalDecimal = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
+
 type codexRateLimits struct {
 	RateLimits          *codexLimit           `json:"rateLimits"`
 	RateLimitsByLimitID map[string]codexLimit `json:"rateLimitsByLimitId"`
@@ -107,11 +112,12 @@ func codexAllowanceRead(accountPresent bool, limits codexRateLimits, fetchedAt t
 		return providerallowance.ReadResponse{}, fmt.Errorf("native allowance fetch time is required")
 	}
 	obs := providerallowance.Observation{Schema: providerallowance.SchemaObservation, ObservationID: capture.ObservationID, ProducerRef: capture.ProducerRef, ProducerIncarnation: capture.ProducerIncarnation, Sequence: capture.Sequence, Provider: "openai", Source: providerallowance.Source{Kind: providerallowance.SourceNativeRPC, Version: "app-server-reported-" + observedVersion, CapabilityRef: "story188:codex-native-field-schema"}, Scope: providerallowance.Scope{Products: []string{"codex"}, BindingState: providerallowance.BindingUnknown}, CapturedAt: fetchedAt.Format(time.RFC3339Nano), Availability: providerallowance.AvailabilityAvailable, Completeness: providerallowance.CompletenessPartial, DirectFields: []providerallowance.DirectField{{Field: "accountScopePresent", OriginalType: providerallowance.TypeBoolean, LexicalValue: boolLex(accountPresent)}}, Measures: []providerallowance.Measure{}, Derivations: []providerallowance.Derivation{}, EvidenceRefs: []string{capture.EvidenceRef}}
-	if limits.ResetCredits == nil {
-		obs.DirectFields = append(obs.DirectFields, providerallowance.DirectField{Field: "resetCredits.detailsState", OriginalType: providerallowance.TypeString, LexicalValue: strPtr("unknown")})
-	} else if limits.ResetCredits.AvailableCount != nil {
-		obs.DirectFields = append(obs.DirectFields, providerallowance.DirectField{Field: "resetCredits.availableCount", OriginalType: providerallowance.TypeDecimal, LexicalValue: strPtr(limits.ResetCredits.AvailableCount.String())}, providerallowance.DirectField{Field: "resetCredits.detailsState", OriginalType: providerallowance.TypeString, LexicalValue: strPtr("not_requested")})
+	details := "unknown"
+	if limits.ResetCredits != nil && limits.ResetCredits.AvailableCount != nil && codexCanonicalDecimal.MatchString(limits.ResetCredits.AvailableCount.String()) {
+		obs.DirectFields = append(obs.DirectFields, providerallowance.DirectField{Field: "resetCredits.availableCount", OriginalType: providerallowance.TypeDecimal, LexicalValue: strPtr(limits.ResetCredits.AvailableCount.String())})
+		details = "not_requested"
 	}
+	obs.DirectFields = append(obs.DirectFields, providerallowance.DirectField{Field: "resetCredits.detailsState", OriginalType: providerallowance.TypeString, LexicalValue: strPtr(details)})
 	keys := make([]string, 0, len(limits.RateLimitsByLimitID))
 	for k := range limits.RateLimitsByLimitID {
 		keys = append(keys, k)
@@ -123,7 +129,15 @@ func codexAllowanceRead(accountPresent bool, limits codexRateLimits, fetchedAt t
 	if limits.RateLimits != nil {
 		obs.Measures = appendCodexMeasures(obs.Measures, "legacy", *limits.RateLimits)
 	}
-	return providerallowance.ReadResponse{Schema: providerallowance.SchemaRead, SnapshotRevision: capture.SnapshotRevision, ServedAt: fetchedAt.Format(time.RFC3339Nano), Items: []providerallowance.ReadItem{{Observation: obs, ReceivedAt: fetchedAt.Format(time.RFC3339Nano), Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationPartial, ValidationRefs: []string{}}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingUnknown}, Freshness: providerallowance.Freshness{State: providerallowance.FreshUnknown, AsOf: fetchedAt.Format(time.RFC3339Nano), Basis: providerallowance.BasisCapture, Reason: "Native account/rate read has no provider observation timestamp; fetch is not provider freshness"}, CurrentMeasures: []providerallowance.CurrentMeasure{}}}, SourceStatuses: []providerallowance.SourceStatus{}}, nil
+	read := providerallowance.ReadResponse{Schema: providerallowance.SchemaRead, SnapshotRevision: capture.SnapshotRevision, ServedAt: fetchedAt.Format(time.RFC3339Nano), Items: []providerallowance.ReadItem{{Observation: obs, ReceivedAt: fetchedAt.Format(time.RFC3339Nano), Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationPartial, ValidationRefs: []string{}}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingUnknown}, Freshness: providerallowance.Freshness{State: providerallowance.FreshUnknown, AsOf: fetchedAt.Format(time.RFC3339Nano), Basis: providerallowance.BasisCapture, Reason: "Native account/rate read has no provider observation timestamp; fetch is not provider freshness"}, CurrentMeasures: []providerallowance.CurrentMeasure{}}}, SourceStatuses: []providerallowance.SourceStatus{}}
+	encoded, err := json.Marshal(read)
+	if err != nil {
+		return providerallowance.ReadResponse{}, errCodexHostUnknown
+	}
+	if _, err := providerallowance.DecodeReadResponse(encoded, providerallowance.FixtureParseLimits); err != nil || !providerallowance.ValidateObservation(obs, providerallowance.TrustedContext{}, nil).ShapeOK {
+		return providerallowance.ReadResponse{}, errCodexHostUnknown
+	}
+	return read, nil
 }
 func appendCodexMeasures(out []providerallowance.Measure, prefix string, l codexLimit) []providerallowance.Measure {
 	for _, p := range []struct {
@@ -143,7 +157,7 @@ func codexMeasure(id string, w *codexWindow) providerallowance.Measure {
 	if w == nil {
 		return m
 	}
-	if w.Used != nil {
+	if w.Used != nil && codexCanonicalDecimal.MatchString(w.Used.String()) {
 		m.Value = providerallowance.MeasureValue{State: providerallowance.ValueKnown, Decimal: strPtr(w.Used.String())}
 	}
 	if w.Duration != nil {
