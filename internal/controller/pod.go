@@ -131,9 +131,11 @@ func applyPilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgent) {
 }
 
 // applyTaskPilotImage applies only to a newly built pod owned by this exact
-// ordinary Codex task. Budget and protected paths retain their own admission.
+// ordinary Codex task. The ensure path admits retained history before calling
+// sessionPod and binds HOME and executor intent before creation; budget-bound
+// and protected pilot paths retain their existing admission.
 func applyTaskPilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgent) {
-	if pod == nil || s == nil || s.UID == "" || !metav1.IsControlledBy(pod, s) || isHoldPod(pod) || p == nil || p.Image == "" || p.Parent == "" || p.Key == "" || s.Spec.Parent != p.Parent || s.Labels[v1alpha1.LabelIdempotencyKey] != p.Key || s.Spec.Agent != v1alpha1.AgentCodex || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Repo != "dev-env" || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil || privateHistoryProtected(s) || budgetBound(s) {
+	if pod == nil || s == nil || s.UID == "" || !metav1.IsControlledBy(pod, s) || isHoldPod(pod) || p == nil || p.Image == "" || p.Parent == "" || p.Key == "" || s.Spec.Parent != p.Parent || s.Labels[v1alpha1.LabelIdempotencyKey] != p.Key || s.Spec.Agent != v1alpha1.AgentCodex || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Repo != "dev-env" || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil || budgetBound(s) {
 		return
 	}
 	for i := range pod.Spec.Containers {

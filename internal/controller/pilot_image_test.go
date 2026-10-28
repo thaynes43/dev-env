@@ -9,13 +9,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 const pilotTestImage = "ghcr.io/thaynes43/dev-env:2.47.0@sha256:0000000000000000000000000000000000000000000000000000000000000009"
@@ -291,20 +295,19 @@ func TestTaskPilotSelectionAndOwnership(t *testing.T) {
 		t.Fatal("changed more than image")
 	}
 	for name, mutate := range map[string]func(*v1alpha1.AgentSession){
-		"missing parent":    func(x *v1alpha1.AgentSession) { x.Spec.Parent = "" },
-		"wrong parent":      func(x *v1alpha1.AgentSession) { x.Spec.Parent = "other" },
-		"missing key":       func(x *v1alpha1.AgentSession) { delete(x.Labels, v1alpha1.LabelIdempotencyKey) },
-		"wrong key":         func(x *v1alpha1.AgentSession) { x.Labels[v1alpha1.LabelIdempotencyKey] = "other" },
-		"provider":          func(x *v1alpha1.AgentSession) { x.Spec.Agent = v1alpha1.AgentClaude },
-		"mode":              func(x *v1alpha1.AgentSession) { x.Spec.Mode = v1alpha1.ModeRemote },
-		"repo":              func(x *v1alpha1.AgentSession) { x.Spec.Repo = "other" },
-		"workspace":         func(x *v1alpha1.AgentSession) { x.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "x"} },
-		"canary":            func(x *v1alpha1.AgentSession) { x.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{} },
-		"private pilot":     func(x *v1alpha1.AgentSession) { x.Spec.PrivatePilot = &v1alpha1.PrivatePilotBinding{} },
-		"missing UID":       func(x *v1alpha1.AgentSession) { x.UID = "" },
-		"wrong UID":         func(x *v1alpha1.AgentSession) { x.UID = "other-uid" },
-		"protected history": func(x *v1alpha1.AgentSession) { x.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{} },
-		"budget":            func(x *v1alpha1.AgentSession) { x.Annotations[taskbudget.UIDAnnotation] = "budget" },
+		"missing parent": func(x *v1alpha1.AgentSession) { x.Spec.Parent = "" },
+		"wrong parent":   func(x *v1alpha1.AgentSession) { x.Spec.Parent = "other" },
+		"missing key":    func(x *v1alpha1.AgentSession) { delete(x.Labels, v1alpha1.LabelIdempotencyKey) },
+		"wrong key":      func(x *v1alpha1.AgentSession) { x.Labels[v1alpha1.LabelIdempotencyKey] = "other" },
+		"provider":       func(x *v1alpha1.AgentSession) { x.Spec.Agent = v1alpha1.AgentClaude },
+		"mode":           func(x *v1alpha1.AgentSession) { x.Spec.Mode = v1alpha1.ModeRemote },
+		"repo":           func(x *v1alpha1.AgentSession) { x.Spec.Repo = "other" },
+		"workspace":      func(x *v1alpha1.AgentSession) { x.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "x"} },
+		"canary":         func(x *v1alpha1.AgentSession) { x.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{} },
+		"private pilot":  func(x *v1alpha1.AgentSession) { x.Spec.PrivatePilot = &v1alpha1.PrivatePilotBinding{} },
+		"missing UID":    func(x *v1alpha1.AgentSession) { x.UID = "" },
+		"wrong UID":      func(x *v1alpha1.AgentSession) { x.UID = "other-uid" },
+		"budget":         func(x *v1alpha1.AgentSession) { x.Annotations[taskbudget.UIDAnnotation] = "budget" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			x := s.DeepCopy()
@@ -378,5 +381,171 @@ func TestTaskPilotCannotBypassConstructedBudgetImageCheck(t *testing.T) {
 	var pod corev1.Pod
 	if err := c.Get(ctx, client.ObjectKeyFromObject(f.s), &pod); !apierrors.IsNotFound(err) {
 		t.Fatal("mismatched worker pod not confirmed absent", err)
+	}
+}
+
+func TestTaskPilotReconcileRetainedFirstExecutor(t *testing.T) {
+	s := taskSession()
+	s.Generation = 1
+	s.Spec.Repo = "dev-env"
+	s.Spec.Base = "main"
+	s.Spec.Agent = v1alpha1.AgentCodex
+	s.Spec.Model = "gpt-6.1-terra"
+	s.Spec.Parent = "dev-env-1027-111645"
+	s.Labels = map[string]string{v1alpha1.LabelIdempotencyKey: "history-pilot-1"}
+	catalog, err := projectcatalog.Parse([]byte(`{"version":1,"repositories":{"dev-env":{"github":"thaynes43/dev-env"}},"projects":{"sample":{"repositories":[{"name":"dev-env"}],"rules":"fixture"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.Snapshot("sample", "dev-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Annotations = map[string]string{v1alpha1.AnnotationProjectSnapshot: string(raw)}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: templatesKey.Name, Namespace: templatesKey.Namespace}, Data: map[string]string{templates.Key: exampleDoc}}
+	base := privateHistoryClient(s, cm)
+	creates := 0
+	c := interceptor.NewClient(base, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+		switch obj := o.(type) {
+		case *corev1.PersistentVolumeClaim:
+			obj.UID = "original-home"
+		case *corev1.Pod:
+			var current v1alpha1.AgentSession
+			if err := c.Get(ctx, client.ObjectKeyFromObject(s), &current); err != nil {
+				t.Fatal(err)
+			}
+			h := current.Status.PrivateHistory
+			if h == nil || h.HomeUID != "original-home" || !h.ExecutorAttempted || h.ExecutorIntent == "" || obj.Annotations[privateHistoryHomeAnnotation] != "original-home" || obj.Annotations[privateHistoryExecutorAnnotation] != h.ExecutorIntent {
+				t.Fatal("missing retained admission or executor intent")
+			}
+			creates++
+			obj.UID = "original-executor"
+		}
+		return c.Create(ctx, o, opts...)
+	}})
+	r := &Reconciler{Client: c, APIReader: base, Templates: templatesKey, PrivateHistoryRetention: true, ManagedCodexTasks: true, TaskPilotAgent: pilotTestAgent()}
+	for range 3 {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var pod corev1.Pod
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(s), &pod); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 1 || pod.Spec.Containers[0].Image != pilotTestImage {
+		t.Fatalf("retained first executor did not select pilot: creates=%d image=%s", creates, pod.Spec.Containers[0].Image)
+	}
+	original := pod.DeepCopy()
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(s), &pod); err != nil || !apiequality.Semantic.DeepEqual(original, &pod) {
+		t.Fatal("existing executor changed", err)
+	}
+	if err := base.Delete(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var retained v1alpha1.AgentSession
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(s), &retained); err != nil {
+		t.Fatal(err)
+	}
+	h := retained.Status.PrivateHistory
+	if creates != 1 || h == nil || h.HomeUID != "original-home" || !h.ExecutorAttempted || h.ExecutorIntent == "" || h.LastExecutor == nil || h.LastExecutor.PodUID != "original-executor" || h.StopState != "Unknown" {
+		t.Fatal("retained executor was replaced or history lost")
+	}
+	var home corev1.PersistentVolumeClaim
+	if err := base.Get(context.Background(), client.ObjectKey{Namespace: s.Namespace, Name: HomeClaimName(s.Name)}, &home); err != nil || home.UID != "original-home" || !containsFinalizer(home.Finalizers, Finalizer) {
+		t.Fatal("HOME protection changed", err)
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(s), &pod); !apierrors.IsNotFound(err) {
+		t.Fatal("replacement executor exists", err)
+	}
+}
+
+func TestTaskPilotRetainedHistoryRefusesReplacement(t *testing.T) {
+	for _, scenario := range []string{"unknown", "previous attempt", "foreign home", "existing executor", "foreign pod"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, home := privateHistoryFixture()
+			s.Spec.Agent = v1alpha1.AgentCodex
+			s.Spec.Model = "gpt-6.1-terra"
+			s.Spec.Mode = v1alpha1.ModeTask
+			s.Spec.Repo = "dev-env"
+			s.Spec.Base = "main"
+			s.Spec.Parent = "dev-env-1027-111645"
+			s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+			s.Labels = map[string]string{v1alpha1.LabelIdempotencyKey: "history-pilot-1"}
+			s.Status.SuspendedAt = nil
+			s.Status.Rescue = nil
+			h := s.Status.PrivateHistory
+			h.Provider = "codex"
+			h.ExecutorAttempted = true
+			h.ExecutorIntent = "original-intent"
+			if scenario == "unknown" {
+				h.Admission = "Unknown"
+				h.LastExecutor = nil
+				h.ExecutorAttempted = false
+				h.ExecutorIntent = ""
+			}
+			if scenario == "foreign home" {
+				home.OwnerReferences[0].UID = "foreign-home-owner"
+				h.LastExecutor = nil
+				h.ExecutorAttempted = false
+				h.ExecutorIntent = ""
+			}
+			var pod *corev1.Pod
+			if scenario == "existing executor" || scenario == "foreign pod" {
+				pod = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace, UID: "original-executor", OwnerReferences: []metav1.OwnerReference{ownerRef(s)}, Annotations: map[string]string{privateHistoryExecutorAnnotation: h.ExecutorIntent, privateHistoryHomeAnnotation: h.HomeUID}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: ContainerName, Image: "original-image"}}}}
+				if scenario == "foreign pod" {
+					pod.OwnerReferences[0].UID = "foreign"
+				}
+			}
+			cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: templatesKey.Name, Namespace: templatesKey.Namespace}, Data: map[string]string{templates.Key: exampleDoc}}
+			objs := []client.Object{s, home, cm}
+			if pod != nil {
+				objs = append(objs, pod)
+			}
+			base := privateHistoryClient(objs...)
+			creates := 0
+			c := interceptor.NewClient(base, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+				if _, ok := o.(*corev1.Pod); ok {
+					creates++
+				}
+				return c.Create(ctx, o, opts...)
+			}})
+			r := &Reconciler{Client: c, APIReader: base, Templates: templatesKey, PrivateHistoryRetention: true, ManagedCodexTasks: true, TaskPilotAgent: pilotTestAgent()}
+			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(s)}); err != nil {
+				t.Fatal(err)
+			}
+			var got v1alpha1.AgentSession
+			if err := base.Get(context.Background(), client.ObjectKeyFromObject(s), &got); err != nil {
+				t.Fatal(err)
+			}
+			if creates != 0 || got.Status.PrivateHistory == nil || got.Status.PrivateHistory.HomeUID != h.HomeUID || got.Status.PrivateHistory.ExecutorIntent != h.ExecutorIntent || got.Status.PrivateHistory.ExecutorAttempted != h.ExecutorAttempted || !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.LastExecutor, h.LastExecutor) || !apiequality.Semantic.DeepEqual(got.Finalizers, s.Finalizers) {
+				t.Fatal("retained intent changed or executor rearmed")
+			}
+			var actualHome corev1.PersistentVolumeClaim
+			if err := base.Get(context.Background(), client.ObjectKeyFromObject(home), &actualHome); err != nil || actualHome.UID != home.UID || !apiequality.Semantic.DeepEqual(actualHome.Finalizers, home.Finalizers) {
+				t.Fatal("HOME changed", err)
+			}
+			var actualPod corev1.Pod
+			err := base.Get(context.Background(), client.ObjectKeyFromObject(s), &actualPod)
+			if pod == nil {
+				if !apierrors.IsNotFound(err) {
+					t.Fatal("unexpected pod", err)
+				}
+			} else if err != nil || actualPod.UID != pod.UID || actualPod.Spec.Containers[0].Image != "original-image" {
+				t.Fatal("existing pod changed", err)
+			}
+		})
 	}
 }
