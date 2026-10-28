@@ -334,7 +334,9 @@ takes no messages; it reports through its log and its PR. Any session or person
 may message any session. agent-run sends a message once and never retries it, so
 it is never delivered twice. A lost answer or a 5xx exits 6 (unconfirmed): the
 message may have arrived, so do not send it again before checking. It exits 5
-only when nothing was sent (the API could not be reached at all).
+only when nothing was sent (the API could not be reached at all). A Codex session in
+remote mode is reached from the Codex app or its remote-control pairing, not by msg; a
+newer pod's refusal says so.
 `,
 	"rescue": `Usage: agent-run rescue list [--session <name>] [-o json]
        agent-run rescue restore <session>/<stamp> (--local | -p "<task>") [--repo <name>] [flags]
@@ -587,7 +589,10 @@ grant list prints name, phase, type, session, TTL and expiry, newest first.
   --phase <phase>    Pending, Active, Denied, Expired, Released or Failed
   --mine             only the calling session's grants
 
-grant show prints one grant. The name is grant-<id>. It does not print a token.
+grant show prints one grant. The name is grant-<id>. It does not print a token. For an
+Active credential, kube or break-glass grant it also prints installed: <time> (the last
+confirmed install), or installed: pending until the install is confirmed. An Active grant
+is not usable in the pod before that; a script can read installedAt from -o json.
 
 grant request asks for one grant for the calling session. It prints the
 approval page, then reads the grant every 5s until the phase leaves Pending

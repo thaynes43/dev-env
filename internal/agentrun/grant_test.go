@@ -407,6 +407,8 @@ func TestGrantShowSaysWhetherTheInstallIsConfirmed(t *testing.T) {
 		{"credential, confirmed", `{"name":"grant-abc","phase":"Active","type":"credential","credential":"hw-ssh","ttl":"1h0m0s","reason":"r","installedPodUID":"p","installedAt":"2026-10-28T02:14:22Z"}`, "installed: 2026-10-28T02:14:22Z"},
 		{"kube, not yet confirmed", `{"name":"grant-abc","phase":"Active","type":"kube","role":"dev-env-grant-nodes","ttl":"1h0m0s","reason":"r"}`, "installed: pending (the install is not confirmed yet)"},
 		{"kube, confirmed", `{"name":"grant-abc","phase":"Active","type":"kube","role":"dev-env-grant-nodes","ttl":"1h0m0s","reason":"r","installedAt":"2026-10-28T02:14:22Z"}`, "installed: 2026-10-28T02:14:22Z"},
+		{"break-glass, not yet confirmed", `{"name":"grant-abc","phase":"Active","type":"breakglass","role":"dev-env-grant-breakglass","ttl":"1h0m0s","reason":"r"}`, "installed: pending (the install is not confirmed yet)"},
+		{"break-glass, confirmed", `{"name":"grant-abc","phase":"Active","type":"breakglass","role":"dev-env-grant-breakglass","ttl":"1h0m0s","reason":"r","installedAt":"2026-10-28T02:14:22Z"}`, "installed: 2026-10-28T02:14:22Z"},
 		{"egress has no install", `{"name":"grant-abc","phase":"Active","type":"egress","ttl":"1h0m0s","reason":"r"}`, ""},
 		{"pending grant", `{"name":"grant-abc","phase":"Pending","type":"credential","credential":"proxmox","ttl":"1h0m0s","reason":"r"}`, ""},
 		{"released grant", `{"name":"grant-abc","phase":"Released","type":"credential","credential":"proxmox","ttl":"1h0m0s","reason":"r","installedAt":"2026-10-28T02:14:22Z"}`, ""},
