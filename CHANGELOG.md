@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.59.0](https://github.com/thaynes43/dev-env/compare/v2.58.1...v2.59.0) (2026-10-28)
+
+
+### Features
+
+* allow Codex remote pilot image selection ([#620](https://github.com/thaynes43/dev-env/issues/620)) ([d18eb37](https://github.com/thaynes43/dev-env/commit/d18eb37fccef0429594565df246c71fdf7b668e1))
+
+## [2.58.1](https://github.com/thaynes43/dev-env/compare/v2.58.0...v2.58.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* show unknown for absent alert timestamps ([#618](https://github.com/thaynes43/dev-env/issues/618)) ([9103e2c](https://github.com/thaynes43/dev-env/commit/9103e2c02593300686624310480a4f8b694e91c0))
+
 ## [2.58.0](https://github.com/thaynes43/dev-env/compare/v2.57.0...v2.58.0) (2026-10-28)
 
 
