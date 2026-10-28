@@ -80,3 +80,22 @@ func TestPrivateCodexHostRejectsContradictoryConfigurationBeforeAuthority(t *tes
 		})
 	}
 }
+
+func TestAllowanceReadPreservesHostGuard(t *testing.T) {
+	for _, key := range []string{"AGENTD_SESSION", "AGENTD_SESSION_FILE"} {
+		var out, errOut bytes.Buffer
+		getenv := func(k string) string {
+			if k == key {
+				return "fixture"
+			}
+			return ""
+		}
+		if run(context.Background(), []string{"codex-host", "--enabled", "allowance-read"}, nil, &out, &errOut, getenv, agentd.ExecRunner{}) != exitUsage {
+			t.Fatal("session accepted", key)
+		}
+	}
+	code, out, _ := runArgs([]string{"codex-host", "allowance-read"}, nil)
+	if code != exitOK || out != "{\"code\":\"Disabled\",\"idle\":false}\n" {
+		t.Fatal("disabled allowance read")
+	}
+}
