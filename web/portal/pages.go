@@ -36,15 +36,16 @@ func (b *boundedPagesBuffer) Write(p []byte) (int, error) {
 }
 
 // RenderPages returns the entire escaped view or an error, never a partial page.
-func RenderPages(snapshot pages.AlertmanagerSnapshot, limit int) ([]byte, error) {
+func RenderPages(snapshot pages.AlertmanagerSnapshot, disabled bool, limit int) ([]byte, error) {
 	if limit <= 0 {
 		return nil, errors.New("pages render unavailable")
 	}
 	b := &boundedPagesBuffer{limit: limit}
 	err := pagesTemplate.Execute(b, struct {
 		Snapshot       pages.AlertmanagerSnapshot
+		Disabled       bool
 		Banner, Policy string
-	}{snapshot, pages.AlertmanagerBanner, strings.TrimSuffix(PagesPolicy, "; frame-ancestors 'none'")})
+	}{snapshot, disabled, pages.AlertmanagerBanner, strings.TrimSuffix(PagesPolicy, "; frame-ancestors 'none'")})
 	if err != nil {
 		return nil, err
 	}

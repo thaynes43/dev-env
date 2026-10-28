@@ -14,7 +14,7 @@ func TestPagesRenderEscapingAndPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := RenderPages(snapshot, 1<<20)
+	body, err := RenderPages(snapshot, false, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestPagesRenderEscapingAndPolicy(t *testing.T) {
 	if !strings.Contains(PagesPolicy, base64.StdEncoding.EncodeToString(sum[:])) {
 		t.Fatal("CSP mismatch")
 	}
-	if _, err := RenderPages(snapshot, 100); err == nil {
+	if _, err := RenderPages(snapshot, false, 100); err == nil {
 		t.Fatal("render limit ignored")
 	}
 }

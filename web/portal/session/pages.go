@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -18,51 +19,39 @@ import (
 const pagesPath = "/portal/projects/dev-env/environments/internal/pages"
 const pagesSourceURL = "http://alertmanager-operated.observability.svc.cluster.local:9093/api/v2/alerts"
 
-type pagesScope struct{ Principal portal.Principal }
 type pagesSource struct {
-	scope  *pagesScope
 	client *http.Client
 	now    func() time.Time
 }
 
-func loadPagesScope(root string) (*pagesScope, error) {
+func loadPagesEnabled(root string) (bool, error) {
 	present, err := mountedPresent(filepath.Join(root, "config/pages-alertmanager.json"))
 	if err != nil {
-		return nil, errProductionConfig
+		return false, errProductionConfig
 	}
 	if !present {
-		return nil, nil
+		return false, nil
 	}
 	raw, err := readMountedBytes(root, "config/pages-alertmanager.json", 8192)
 	if err != nil || !protocol.StrictPortalJSON(raw) {
-		return nil, errProductionConfig
+		return false, errProductionConfig
 	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || !exactKeys(fields, []string{"issuer", "subject", "source_url"}) {
-		return nil, errProductionConfig
+	if json.Unmarshal(raw, &fields) != nil || !exactKeys(fields, []string{"source_url"}) {
+		return false, errProductionConfig
 	}
-	for _, k := range []string{"issuer", "subject", "source_url"} {
-		if bytes.Equal(bytes.TrimSpace(fields[k]), []byte("null")) {
-			return nil, errProductionConfig
-		}
+	url, ok := jsonString(fields["source_url"])
+	if !ok || url != pagesSourceURL {
+		return false, errProductionConfig
 	}
-	var wire struct {
-		Issuer    string `json:"issuer"`
-		Subject   string `json:"subject"`
-		SourceURL string `json:"source_url"`
-	}
-	if json.Unmarshal(raw, &wire) != nil || wire.Issuer != productionIssuer || !identityText(wire.Subject) || wire.SourceURL != pagesSourceURL {
-		return nil, errProductionConfig
-	}
-	return &pagesScope{Principal: portal.Principal{Issuer: wire.Issuer, Subject: wire.Subject}}, nil
+	return true, nil
 }
-
-func newPagesSource(scope *pagesScope, now func() time.Time, dial func(context.Context, string, string) (net.Conn, error)) *pagesSource {
-	if scope == nil || now == nil {
+func newPagesSource(enabled bool, now func() time.Time, dial func(context.Context, string, string) (net.Conn, error)) *pagesSource {
+	if !enabled || now == nil {
 		return nil
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: dial, DisableKeepAlives: true}
-	return &pagesSource{scope: scope, now: now, client: &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &pagesSource{now: now, client: &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 func (s *pagesSource) read(ctx context.Context) (pages.AlertmanagerSnapshot, error) {
 	unavailable := pages.UnavailableAlertmanager()
@@ -101,6 +90,11 @@ func servePages(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		return
 	}
 	principal, err := c.Session.Authenticate(r)
+	if errors.Is(err, portal.ErrDenied) {
+		w.Header().Set("Location", "/auth/login")
+		w.WriteHeader(http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		authFailure(w, err)
 		return
@@ -112,12 +106,12 @@ func servePages(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	}
 	snapshot := pages.UnavailableAlertmanager()
 	snapshot.Coverage = "Current alerts only; notification and delivery history, triage disposition and recurrence are Unknown."
-	if c.Pages != nil && c.Pages.scope != nil && c.Pages.scope.Principal == principal {
+	if c.Pages != nil {
 		if got, e := c.Pages.read(r.Context()); e == nil {
 			snapshot = got
 		}
 	}
-	body, err := portal.RenderPages(snapshot, maximumResponse*7/8)
+	body, err := portal.RenderPages(snapshot, c.Pages == nil, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return
