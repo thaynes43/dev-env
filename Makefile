@@ -82,7 +82,7 @@ check-layout: ## Fail if a Go package under api/, cmd/, internal/ or scripts/ ha
 	@layout="$$(awk '/^## Layout/ {in_section = 1} in_section && /^```/ {fence++; if (fence == 2) exit; next} fence == 1' CLAUDE.md)"; \
 	missing=0; \
 	for dir in $$(find api cmd internal scripts -name '*.go' -not -path '*/testdata/*' -exec dirname {} \; | sort -u); do \
-		if ! printf '%s\n' "$$layout" | grep -q "^$$dir/ "; then \
+		if ! grep -q "^$$dir/ " <<<"$$layout"; then \
 			echo "CLAUDE.md Layout has no line for $$dir/"; missing=1; \
 		fi; \
 	done; \
@@ -112,7 +112,7 @@ ENVTEST_WRITABLE = chmod -R u+w $(ENVTEST_DIR)
 
 .PHONY: build
 build: $(addprefix $(BIN_DIR)/,$(BINARIES)) ## Build every shared binary into bin/ and check that agent-run is static and small.
-	@$(GO) version -m $(BIN_DIR)/agent-run | grep -q 'CGO_ENABLED=0' \
+	@grep -q 'CGO_ENABLED=0' <<<"$$($(GO) version -m $(BIN_DIR)/agent-run)" \
 		|| { echo "bin/agent-run was not built with CGO_ENABLED=0 (D-06)"; exit 1; }
 	@if $(GO) version -m $(BIN_DIR)/agent-run | grep -E '^\s+dep\s+(k8s\.io|sigs\.k8s\.io)/'; then \
 		echo "bin/agent-run links the Kubernetes libraries above; it imports only the standard library, apiv1 and agentd's protocol (D-06, D-50)"; exit 1; fi
