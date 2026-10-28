@@ -453,3 +453,26 @@ func TestPortalConversationUsageFlag(t *testing.T) {
 		t.Fatal("the flag without the portal reader was accepted")
 	}
 }
+
+func TestTaskPilotAgentTupleIsIndependent(t *testing.T) {
+	image := "ghcr.io/thaynes43/dev-env:2.62.1@sha256:" + strings.Repeat("a", 64)
+	o, err := parseFlags([]string{"--task-pilot-agent-image=" + image, "--task-pilot-agent-session=dev-env-1027-111645/task-pilot", "--pilot-agent-image=" + image, "--pilot-agent-session=dev-env-1027-111645/legacy"})
+	if err != nil {
+		t.Fatal("valid independent Codex task pilot tuple rejected", err)
+	}
+	if o.taskPilotAgent == nil || o.taskPilotAgent.Key != "task-pilot" || o.pilotAgent == nil || o.pilotAgent.Key != "legacy" {
+		t.Fatal("pilot tuples not independent")
+	}
+	for _, args := range [][]string{{}, {"--task-pilot-agent-image=" + image}, {"--task-pilot-agent-session=dev-env-1027-111645/task-pilot"}, {"--task-pilot-agent-image=bad", "--task-pilot-agent-session=dev-env-1027-111645/task-pilot"}, {"--task-pilot-agent-image=" + image, "--task-pilot-agent-session=bad"}} {
+		got, err := parseFlags(args)
+		if len(args) == 0 {
+			if err != nil || got.taskPilotAgent != nil {
+				t.Fatal("default not off")
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "--task-pilot-agent-") {
+			t.Fatal("invalid task pilot accepted or misreported", err)
+		}
+	}
+}

@@ -130,6 +130,19 @@ func applyPilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgent) {
 	}
 }
 
+// applyTaskPilotImage applies only to a newly built pod owned by this exact
+// ordinary Codex task. Budget and protected paths retain their own admission.
+func applyTaskPilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgent) {
+	if pod == nil || s == nil || s.UID == "" || !metav1.IsControlledBy(pod, s) || isHoldPod(pod) || p == nil || p.Image == "" || p.Parent == "" || p.Key == "" || s.Spec.Parent != p.Parent || s.Labels[v1alpha1.LabelIdempotencyKey] != p.Key || s.Spec.Agent != v1alpha1.AgentCodex || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Repo != "dev-env" || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil || privateHistoryProtected(s) || budgetBound(s) {
+		return
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == ContainerName {
+			pod.Spec.Containers[i].Image = p.Image
+		}
+	}
+}
+
 // sessionPod is the session's own pod as the reconciler creates it: the managed
 // pod, on the pilot image when the session is the selected one.
 func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
@@ -138,6 +151,7 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 		return nil, err
 	}
 	applyPilotImage(pod, s, r.PilotAgent)
+	applyTaskPilotImage(pod, s, r.TaskPilotAgent)
 	return pod, nil
 }
 
