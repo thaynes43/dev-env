@@ -93,16 +93,16 @@ estimate, not a charge.
 
 ## Codex native on-demand input (C3 source qualification)
 
-The source contains an unwired helper for one metadata-only read on an already
+The source exposes an explicitly enabled `agentd codex-host allowance-read` for one metadata-only read on an already
 qualified same-UID managed-host socket. It initializes the connection, calls
 `account/read` with `refreshToken: false`, then `account/rateLimits/read` with
 `excludeResetCreditDetails: true` and `supportsLunaReserve: false`. It does not
 start a host, read authentication files, call a provider HTTP endpoint, or
 perform a thread, turn, login, refresh, reset, redemption or model operation.
-There is no production call site or collector; `usage-export --allowance-read`
+This command is a source callsite, not an accepted live collector; `usage-export --allowance-read`
 continues to consume caller-supplied JSON and does not invoke this helper.
 
-The caller supplies bounded capture identifiers and an evidence reference;
+The command supplies per-invocation capture identifiers and an evidence reference;
 these are assertions, not trusted provenance or account binding. The source
 version records the app server's reported version after matching the pinned
 protocol version, not independently verified CLI identity. Its new label is

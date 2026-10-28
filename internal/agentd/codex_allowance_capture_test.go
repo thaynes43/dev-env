@@ -42,6 +42,7 @@ func captureFixture(t *testing.T) (Settings, CodexHostOptions, allowanceCaptureD
 			return providerallowance.ReadResponse{}, nil
 		},
 		nonce: func() (string, error) { return "test-invocation", nil }, now: func() time.Time { return time.Date(2026, 10, 28, 1, 0, 0, 0, time.UTC) }, preparationAbsent: func(Settings) bool { return true },
+		validateConfig: func(context.Context, Settings, CodexHostOptions, codexHostLifecycle) error { return nil },
 	}
 	return s, CodexHostOptions{Enabled: true}, d, calls
 }
@@ -188,5 +189,77 @@ func TestAllowanceCaptureSyntheticNativeSequence(t *testing.T) {
 	}
 	if calls[2].Params["refreshToken"] != false || calls[3].Params["excludeResetCreditDetails"] != true || calls[3].Params["supportsLunaReserve"] != false {
 		t.Fatal("unexpected RPC parameters")
+	}
+}
+
+func TestAllowanceCapturePrivateCurrentBinding(t *testing.T) {
+	for _, mode := range []string{"stable", "catalog uid", "catalog rv", "catalog data", "guard", "config", "drift after read"} {
+		t.Run(mode, func(t *testing.T) {
+			_, s, o, _ := privateHostFixture(t)
+			host, _ := privateHostStartDeps(t, s, o)
+			if err := startCodexHost(context.Background(), s, o, host); err != nil {
+				t.Fatal("synthetic host preparation", err)
+			}
+			d := realAllowanceCaptureDeps()
+			d.host = host
+			if mode == "stable" {
+				saved, e := hostLifecycle(s)
+				if e != nil {
+					t.Fatal("lifecycle", e)
+				}
+				if e = validateAllowanceHostConfig(context.Background(), s, o, saved); e != nil {
+					t.Fatal("config", e)
+				}
+				if !d.preparationAbsent(s) {
+					t.Fatal("preparation")
+				}
+				if e := host.preflight(s); e != nil {
+					t.Fatal("preflight", e)
+				}
+				if _, e := codexHostManagedBin(s); e != nil {
+					t.Fatal("managed bin", e)
+				}
+				p, e := host.process(s)
+				if e != nil || !sameHostProcess(saved.Process, p) || saved.Phase != "Confirmed" || saved.PodUID != s.PodUID {
+					t.Fatalf("ownership phase=%s workspace=%q same=%v err=%v", saved.Phase, s.WorkspaceID, sameHostProcess(saved.Process, p), e)
+				}
+			}
+			reads := 0
+			d.read = func(context.Context, Settings, int, time.Time, CodexAllowanceCapture) (providerallowance.ReadResponse, error) {
+				reads++
+				if mode == "drift after read" {
+					writeHostFixture(t, o.InstructionsFile, "changed synthetic guard")
+				}
+				return providerallowance.ReadResponse{}, nil
+			}
+			switch mode {
+			case "catalog uid", "catalog rv", "catalog data":
+				original := o.AcceptedCatalog.Read
+				o.AcceptedCatalog.Read = func(ctx context.Context) (ProjectCatalogResource, error) {
+					v, e := original(ctx)
+					switch mode {
+					case "catalog uid":
+						v.UID = "different-uid"
+					case "catalog rv":
+						v.ResourceVersion = "different-rv"
+					case "catalog data":
+						v.Data = []byte(strings.Replace(string(v.Data), "Exact rules.", "Changed rules.", 1))
+					}
+					return v, e
+				}
+			case "guard":
+				writeHostFixture(t, o.InstructionsFile, "changed synthetic guard")
+			case "config":
+				writeHostFixture(t, filepath.Join(s.CodexHome, "config.toml"), "model_provider = 'foreign'\n")
+			}
+			_, err := captureCodexNativeAllowance(context.Background(), s, o, d)
+			if mode == "stable" {
+				if err != nil || reads != 1 {
+					t.Fatal("stable binding refused", err, reads)
+				}
+			} else if err == nil || (mode == "drift after read" && reads != 1) || (mode != "drift after read" && reads != 0) {
+				t.Fatal("binding drift accepted", mode, err, reads)
+			}
+		})
 	}
 }

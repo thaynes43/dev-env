@@ -19,10 +19,11 @@ type allowanceCaptureDeps struct {
 	nonce             func() (string, error)
 	now               func() time.Time
 	preparationAbsent func(Settings) bool
+	validateConfig    func(context.Context, Settings, CodexHostOptions, codexHostLifecycle) error
 }
 
 func realAllowanceCaptureDeps() allowanceCaptureDeps {
-	return allowanceCaptureDeps{host: realCodexHostDeps(), lifecycle: hostLifecycle, read: ReadCodexNativeAllowance, now: time.Now,
+	return allowanceCaptureDeps{host: realCodexHostDeps(), lifecycle: hostLifecycle, read: ReadCodexNativeAllowance, now: time.Now, validateConfig: validateAllowanceHostConfig,
 		nonce: func() (string, error) {
 			var b [16]byte
 			if _, err := rand.Read(b[:]); err != nil {
@@ -37,6 +38,17 @@ func realAllowanceCaptureDeps() allowanceCaptureDeps {
 	}
 }
 
+func validateAllowanceHostConfig(ctx context.Context, s Settings, o CodexHostOptions, saved codexHostLifecycle) error {
+	if s.PrivateCodexHost {
+		input, err := capturePrivateCodexHostInput(ctx, s, o)
+		if err != nil || saved.Private == nil || input.binding != *saved.Private {
+			return errCodexHostUnknown
+		}
+		o.privateInput = input
+	}
+	return codexHostConfigContext(ctx, s, o, false)
+}
+
 // CaptureCodexNativeAllowance performs one explicitly enabled read from the
 // already confirmed current host. It never starts or adopts a host.
 func CaptureCodexNativeAllowance(ctx context.Context, s Settings, o CodexHostOptions) (providerallowance.ReadResponse, error) {
@@ -47,7 +59,7 @@ func captureCodexNativeAllowance(ctx context.Context, s Settings, o CodexHostOpt
 	unavailable := func() (providerallowance.ReadResponse, error) {
 		return providerallowance.ReadResponse{}, errCodexHostUnknown
 	}
-	if !o.Enabled || ctx.Err() != nil || s.PodUID == "" || s.WorkspaceID == "" || d.host.preflight(s) != nil {
+	if !o.Enabled || ctx.Err() != nil || s.PodUID == "" || (!s.PrivateCodexHost && s.WorkspaceID == "") || d.host.preflight(s) != nil {
 		return unavailable()
 	}
 	first, err := d.host.process(s)
@@ -56,6 +68,9 @@ func captureCodexNativeAllowance(ctx context.Context, s Settings, o CodexHostOpt
 	}
 	saved, err := d.lifecycle(s)
 	if err != nil || saved.Phase != "Confirmed" || saved.PodUID != s.PodUID || saved.WorkspaceID != s.WorkspaceID || !sameHostProcess(saved.Process, first) || (s.PrivateCodexHost && !d.preparationAbsent(s)) {
+		return unavailable()
+	}
+	if d.validateConfig(ctx, s, o, saved) != nil {
 		return unavailable()
 	}
 	if hostVersion(ctx, s, d.host, s.CodexBin) != nil {
@@ -93,6 +108,17 @@ func captureCodexNativeAllowance(ctx context.Context, s Settings, o CodexHostOpt
 	}
 	after, err := d.lifecycle(s)
 	if err != nil || !reflect.DeepEqual(saved, after) || !sameHostProcess(after.Process, final) || (s.PrivateCodexHost && !d.preparationAbsent(s)) {
+		return unavailable()
+	}
+	if d.validateConfig(ctx, s, o, after) != nil {
+		return unavailable()
+	}
+	last, err := d.host.process(s)
+	if err != nil || !sameHostProcess(first, last) {
+		return unavailable()
+	}
+	lastLifecycle, err := d.lifecycle(s)
+	if err != nil || !reflect.DeepEqual(saved, lastLifecycle) || (s.PrivateCodexHost && !d.preparationAbsent(s)) {
 		return unavailable()
 	}
 	return result, nil
