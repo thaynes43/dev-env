@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.52.0](https://github.com/thaynes43/dev-env/compare/v2.51.0...v2.52.0) (2026-10-28)
+
+
+### Features
+
+* **keeper:** default-off hw-ssh credential grants lease the shared key (D-89) ([#590](https://github.com/thaynes43/dev-env/issues/590)) ([1fded9a](https://github.com/thaynes43/dev-env/commit/1fded9aaa171c2323515ed0bf8f82b634ba1a916))
+* **portal:** show measured conversation usage (Unit B m2, default off) ([#591](https://github.com/thaynes43/dev-env/issues/591)) ([80b060b](https://github.com/thaynes43/dev-env/commit/80b060b00b049c2ab984d573fe845315a2151e78))
+
 ## [2.51.0](https://github.com/thaynes43/dev-env/compare/v2.50.0...v2.51.0) (2026-10-28)
 
 
