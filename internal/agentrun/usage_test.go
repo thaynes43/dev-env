@@ -181,3 +181,24 @@ func TestUsageCacheAndRefusals(t *testing.T) {
 		t.Fatal("write failure accepted")
 	}
 }
+
+func TestUsageClaudeStatusline(t *testing.T) {
+	var out, stderr bytes.Buffer
+	env := Env{Stdout: &out, Stderr: &stderr, Stdin: strings.NewReader(`{"private":"SECRET-CANARY","rate_limits":{"five_hour":{"used_percentage":0,"resets_at":1800000000}}}`), Now: func() time.Time { return time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC) }}
+	if Run(context.Background(), []string{"usage", "-o", "json", "--claude-statusline"}, env) != 0 {
+		t.Fatal(stderr.String())
+	}
+	doc, err := providerallowance.DecodeReadResponse(out.Bytes(), providerallowance.FixtureParseLimits)
+	if err != nil || len(doc.Items) != 1 || len(doc.SourceStatuses) != 3 || doc.Items[0].Observation.Provider != "anthropic" || doc.Items[0].Freshness.State != providerallowance.FreshUnknown || strings.Contains(out.String(), "SECRET-CANARY") {
+		t.Fatal("invalid callback read", err)
+	}
+	env.Stdin = failReader{}
+	out.Reset()
+	stderr.Reset()
+	if Run(context.Background(), []string{"usage", "-o", "json", "--claude-statusline", "--from-file", "-"}, env) == 0 {
+		t.Fatal("conflicting sources accepted")
+	}
+	if out.Len() != 0 || !strings.Contains(stderr.String(), "usage: expected -o json [--from-file FILE|- | --claude-statusline]") {
+		t.Fatal("inaccurate conflict guidance")
+	}
+}

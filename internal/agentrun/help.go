@@ -531,10 +531,12 @@ separate capability: ordinary show output still omits the ledger. Text and
 --once are refused before a request. A missing, older, disabled, malformed, or
 oversized view is unavailable, not zero usage and not a partial receipt list.
 `,
-	"usage": `Usage: agent-run usage -o json [--from-file FILE|-]
+	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline]
 
 Without a file, reports local unconfigured acquisition preflight refusals; no
-provider is contacted. --from-file reads an untrusted bounded cached read, with
+provider is contacted. --claude-statusline explicitly reads a bounded native
+callback from stdin; its provider freshness and account binding are Unknown.
+--from-file reads an untrusted bounded cached read, with
 original observation and served times preserved. It does not configure live
 acquisition or establish provider coverage, account binding or freshness.
 `,

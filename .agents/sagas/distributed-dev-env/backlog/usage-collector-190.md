@@ -5,6 +5,10 @@ provider adapter, command, API, portal, scheduler, registry, schema platform, or
 deployment. It does not accept Epic187, Story188, native188, Cursor, Grok, or
 mandatory full-V1 coverage.
 
+## Claude passive callback bridge (2026-10-28)
+
+[OpenProject #191](https://work.haynesnetwork.com/work_packages/191), a component of collector Story190 and Epic187, adds explicit bounded statusline stdin to the unified usage command, retaining historical optional windows with Unknown freshness and account binding. It discards private metadata and installs no producer hook. Supported ingress, installed artifact and live acceptance remain separately authorized dependencies; no subscription coverage is claimed. See [DESIGN-030](../designs/030-provider-allowance-contract.md).
+
 ## Included
 
 - a bounded pure Go report over existing validated allowance read snapshots and
