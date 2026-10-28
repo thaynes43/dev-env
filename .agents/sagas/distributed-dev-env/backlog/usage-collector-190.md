@@ -84,3 +84,7 @@ collector, runtime installation or accepted live capture. The existing
 `usage-export` still consumes supplied JSON. Account binding and provider
 freshness remain Unknown; runtime use requires a separately qualified host and
 callable artifact. See [the callsite context](../../../context/usage190-native-capture-callsite-20261028.md).
+
+## Unified offline CLI seam (2026-10-28)
+
+`agent-run usage -o json` reports local unconfigured acquisition preflight refusals without contacting providers. `--from-file` explicitly reads bounded untrusted cached read.v1 and preserves original timestamps; it does not provide a collector, trusted binding or live three-provider coverage. Cursor/Grok supported quota source and approved scope, Claude passive ingress, and separately held Codex capture remain dependencies. Synthetic tests and exact-head review/CI establish source only.

@@ -22,6 +22,7 @@ Usage:
                                                   read one retained fixed publication
   agent-run show <name> [--captured-usage -o json]
                                               show one session; --captured-usage adds direct-child receipts
+  agent-run usage -o json [--from-file FILE|-]  offline allowance read
   agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>]
                                               export selected usage evidence privately
   agent-run log <name> [--tail N]                 print the end of a session's log
@@ -529,6 +530,13 @@ sends Dev-Env-Attribution: provider-v1 on that read. The capture view is a
 separate capability: ordinary show output still omits the ledger. Text and
 --once are refused before a request. A missing, older, disabled, malformed, or
 oversized view is unavailable, not zero usage and not a partial receipt list.
+`,
+	"usage": `Usage: agent-run usage -o json [--from-file FILE|-]
+
+Without a file, reports local unconfigured acquisition preflight refusals; no
+provider is contacted. --from-file reads an untrusted bounded cached read, with
+original observation and served times preserved. It does not configure live
+acquisition or establish provider coverage, account binding or freshness.
 `,
 	"usage-export": `Usage: agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>] [flags]
 

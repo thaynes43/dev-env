@@ -327,7 +327,8 @@ type LastGood struct {
 	ReceivedAt         string  `json:"receivedAt"`
 }
 
-// LastAttempt is a later collection attempt. It does not replace LastGood.
+// LastAttempt is a collection attempt or an actual local acquisition preflight
+// refusal before any provider request. It does not replace LastGood.
 type LastAttempt struct {
 	AttemptedAt string        `json:"attemptedAt"`
 	CompletedAt *string       `json:"completedAt"`
