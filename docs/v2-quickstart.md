@@ -204,6 +204,14 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
   description, in haynes-ops `kubernetes/main/apps/dev-env-system/grant-policies/`.
 - The `hw-ssh` key is mounted only in workbench sessions. The same rules as v1
   apply: read first, declare disruptive work, never reboot a node.
+- A `full`-profile haynes-ops session (and its haynes-ops children) can instead lease the same
+  shared key for up to an hour: `agent-run grant request --type credential --credential hw-ssh
+  --ttl 1h --no-wait`, an egress grant for `haynesintelligence.haynesnetwork` port 22, and
+  `agent-run grant attest` for each after your coordinator (or the user) approves (D-88, D-89).
+  The lease appears about 5 to 13 seconds after the grant shows Active: wait for the key file
+  (`$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/key`), not only the phase. It is the one shared
+  root-level key: anything in the pod can copy it while installed, and removing it at expiry or
+  release does not revoke a copy.
 - `hw-ssh` has no `gasha01` entry, in v1 or v2: nobody has confirmed which user
   may log in there. Once that is known, `hw-ssh --raw <user>@gasha01.haynesnetwork`
   works under the grant above.

@@ -4096,11 +4096,44 @@ in place of a confirmation the coordinator must itself obtain. Known gap, unchan
 left for a follow-up: kube and egress execution never read `approvedBy`, so the decision
 point for them is `pending()` only.
 
-**D-89 (Proposed 2026-10-28 America/New_York; pending Tom's action-time approval). hw-ssh
-credential grants lease the existing static shared key, not an SSH certificate.** Status:
-PROPOSED. It departs from Tom's Q-07 answer (credential grants with a CA certificate for
-hw-ssh), and no ruling covers the change; nothing here is enabled by merging it, and every
-flag below defaults off. Q-07 and plan 07 described hw-ssh as a short-lived certificate from
+**D-89 (Accepted 2026-10-28 America/New_York, Tom 01:37:41Z). hw-ssh credential grants lease
+the existing static shared key, not an SSH certificate.** (Numbering note: README row 70 and
+ADR-007 also cite "D-89" for Q-35, v1 preserved during archive migration. This entry is "D-89
+(hw-ssh)"; renumbering would touch code comments and CRD descriptions, so it is left for a
+separate decision.)
+
+Ruling. Tom, 2026-10-28T01:37:41Z (Sentinel_fd1573472fec819197c80e8b20ab7143), was asked, with
+the limits disclosed as "a shared root-level key across machines" and "removing the lease does
+not revoke a copy", whether to enable: the keeper's `get` on the one hw-ssh Secret; full-profile
+haynes-ops sessions requesting the credential for up to one hour under the agent-attested model
+(D-88); the first pilot, the UPS session to HaynesIntelligence on SSH port 22; and, with that,
+future requests from that haynes-ops session class, not just this one session. His answer:
+"Approved." This departs from his Q-07 answer (credential grants with a CA certificate for
+hw-ssh): the lease is accepted for hw-ssh now, and the CA certificate path stays the stronger
+follow-up. The two policies below are therefore STANDING: they are removed only by Tom's
+decision, not after the pilot, and eligibility is still the whole class, not one session.
+
+Installed. dev-env v2.52.0, operator image
+`sha-fd89b72@sha256:053d1905ecc6fb18c9a00189c50f1961949389264eaddd29b4e20c743eb8f5b3`;
+haynes-ops #4363 (CRDs), #4364 (pins), #4366 (RBAC and flags), #4379 (policies). Pilot PASSED on
+2026-10-28: the grants `grant-1028-021357-eb4a` (egress) and `grant-1028-021357-3f93` (hw-ssh)
+were requested at 02:13:57Z, attested (HTTP 201) and Active at 02:14:12Z by the two attested
+policies (expiry 03:14:12Z); the lease was installed in the session's pod at 02:14:22Z with
+modes 0700/0600; `hw-ssh haynesintelligence 'hostname; id'` printed HaynesIntelligence and
+`uid=1000(dev-env)`, rc 0; the session released both grants at 02:14:32 to 02:14:38Z; the
+`CredentialJob` went to Revoked with no failure code and its finalizer lifted, no
+CiliumNetworkPolicy remained, the lease directory was empty, and the helper then printed "no key
+at".
+
+Pilot findings (guidance). (a) The lease appears about 5 to 13 seconds AFTER the grant shows
+Active, because the keeper installs on its next poll: wait for the key file, not only the
+phase (`ls "$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/key"`, or retry `hw-ssh` until it stops
+printing "no key at"). (b) A 2.45 session has no `grant attest`; it uses the supported route
+directly with its own projected token. Write the `curl -K <(printf 'header = "Authorization:
+Bearer %s"\n' "$(cat "$AGENTD_API_TOKEN_FILE")")` argument inline in each call: a process
+substitution stored in a bash array is closed before curl runs.
+
+The original proposal follows. Q-07 and plan 07 described hw-ssh as a short-lived certificate from
 the keeper's CA. That is not built and the hosts trust no CA. This decision delivers the
 EXISTING static ed25519 key (Secret `dev-agents/dev-env-hw-ssh-secret`, field
 `HW_SSH_PRIVATE_KEY_B64`) as a leased projection into the requesting pod, on the existing
@@ -4136,7 +4169,7 @@ is not counted as removed; the job stays `CleanupPending` with its finalizer, fa
 `RemovalRefused`, a log line, and the retry backoff.
 
 Mechanism. The keeper reads the Secret at install time (a new `get` on that one resourceName
-in `dev-agents`, proposed for action-time approval), checks it is a bounded, unencrypted OpenSSH
+in `dev-agents`, approved by Tom and installed with haynes-ops #4366), checks it is a bounded, unencrypted OpenSSH
 ed25519 key before any exec, and execs a fixed `sh` script into the pod. The key goes on stdin,
 only metadata in argv. The lease is `$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/` (tmpfs): `key`
 0600 and `manifest.json` 0600 (grant UID, pod UID, expiry, fingerprint; written last as the
@@ -4178,16 +4211,18 @@ does not call ssh (a session that already has `~/.ssh/dev-env-hw` keeps using th
 The new helper finds a live lease itself, prefers it over `~/.ssh/dev-env-hw`, and deletes an
 expired one.
 
-Eligibility is by policy, not by session. The pilot below is procedural: "the UPS session only"
-is NOT enforced. While the policy exists, ANY `full`-profile session in repo haynes-ops, and
-its children (children inherit the profile), can attest and obtain the key. The policy is
-therefore applied for the pilot hour and deleted afterwards. No session selector is added.
+Eligibility is by policy, not by session. While the policies exist, ANY `full`-profile session in
+repo haynes-ops, and its haynes-ops children (children inherit the profile), can attest and
+obtain the key; "the UPS session only" was procedural for the first pilot and was never
+enforced. No session selector is added. The policies are standing and are removed only by Tom's
+decision; deleting a policy stops new approvals but does not end Active grants (release those).
 
-Pilot proposal (documentation only, nothing applied). The UPS session only (by procedure, see
-above), to `haynesintelligence.haynesnetwork` TCP 22, for one hour, with the existing
-`dev-env` login and sudo authority and the wider shared-key authority above disclosed to Tom.
-Destination egress stays a separate scoped policy and grant. Old Failed or Released grants stay
-as they are. The proposed policy, for Tom's action-time approval, deleted after the hour:
+First pilot (as approved). The UPS session, to `haynesintelligence.haynesnetwork` TCP 22, for
+one hour, with the existing `dev-env` login and sudo authority and the wider shared-key
+authority above disclosed to Tom. Destination egress is a separate scoped policy and grant
+(`egress-haynesintelligence-ssh-attested`: that host and port 22 only; any other host would need
+its own approved policy). Old Failed or Released grants stay as they are. The credential policy
+as deployed (haynes-ops #4379):
 
 ```yaml
 apiVersion: dev-env.haynesops.com/v1alpha1
@@ -4195,12 +4230,13 @@ kind: GrantPolicy
 metadata: {name: credential-hw-ssh-attested, namespace: dev-env-system}
 spec:
   description: >-
-    PILOT, delete after one hour. Agent-attested lease of the ONE shared hw-ssh key (dev-env on
-    five PVE hosts, qm is root-equivalent; root on HaynesTower and PiKVM). While this policy
-    exists ANY full-profile haynes-ops session and its children can obtain the key: "UPS
-    session only" is procedural, not enforced. Anything in the pod can copy the key; removal
-    is neither containment nor revocation; no cryptographic expiry. The agent's claim of
-    approval, not verified human identity (D-88, D-89).
+    Standing scope Tom approved on 2026-10-28T01:37:41Z: every full-profile haynes-ops session
+    and their haynes-ops children may request an agent-attested lease of the ONE shared hw-ssh
+    key, up to 1h per grant (dev-env on five PVE hosts, qm is root-equivalent; root on
+    HaynesTower and PiKVM). Anything in the pod can copy the key; removal is neither
+    containment nor revocation; no cryptographic expiry. Eligibility is that whole class, not
+    one session. The agent's claim of approval, not verified human identity (D-88, D-89).
+    Removal of this policy is Tom's decision only.
   attested: {profiles: [full], repos: [haynes-ops]}
   type: credential
   credential: {names: [hw-ssh]}
@@ -5311,4 +5347,4 @@ blocks only the step it names.
 | D-86 | `agent-run` exit `6` (unconfirmed), amending D-50's codes 0 to 5: a one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer exits `6` and is not repeated; it exits `5` only when nothing was sent; a 429 to one exits `1` | 3.5 |
 | D-87 | ADR-006 corrects ADR-005 (Q-31) after its review: the operator stops a private executor only for a Reaping Session with no owner hold, after a confirmed stop intent, never at the suspended-archive deadline; the archives are not private against v1's OPERATOR tier, the broker or the keeper, so H7 adds an archive guard; the terminal record sits beside `lastExecutor` (`executorTerminal`, with a once-only `executorMissed`); a fifth guard exception, `expiryHoldRemovalAllowed`; every HOME delete attempt re-verifies; copies of user files and unclassified agentd names are not exported | 4.4, 4.5, 5.1 |
 | D-88 | Tom 2026-10-27 23:27Z: grants may be approved on the requesting agent's attestation that it obtained user or coordinator approval, only through a GrantPolicy that names `spec.attested`, behind two default-off flags; an unverified claim, not human identity; fail closed on a broker rollback | 6.12 |
-| D-89 | PROPOSED 2026-10-28, pending Tom's approval (departs from Q-07's CA certificate): hw-ssh credential grants lease the existing static shared key into the pod, default off, keeper exec of a fixed script into a tmpfs lease dir; Revoked means only "lease removed from the pod"; not revocable, not contained; no entry in the shared proxmox journal; CA certificates are the follow-up | 6.12 |
+| D-89 | ACCEPTED 2026-10-28 (Tom 01:37:41Z, "Approved."; departs from Q-07's CA certificate; installed in v2.52.0, pilot passed; also cited in README for Q-35): hw-ssh credential grants lease the existing static shared key into the pod, default off, keeper exec of a fixed script into a tmpfs lease dir; Revoked means only "lease removed from the pod"; not revocable, not contained; no entry in the shared proxmox journal; CA certificates are the follow-up | 6.12 |
