@@ -378,61 +378,11 @@ func PortalConversation(settings Settings, session protocol.Session, expectedSes
 // portalReadOwnTranscript selects only a fixed provider-owned location derived
 // from the immutable first launch. Directory descriptors never follow links.
 func portalReadOwnTranscript(s Settings, first Launch) ([]byte, error) {
-	if !nativeThreadID.MatchString(first.ConversationID) || first.CreatedAt.IsZero() || first.Dir == "" || !filepath.IsAbs(first.Dir) {
-		return nil, os.ErrPermission
-	}
-	var directory, file string
-	switch first.Provider {
-	case protocol.AgentClaude:
-		if s.ClaudeConfigDir != filepath.Join(s.Home, ".claude") {
-			return nil, os.ErrPermission
-		}
-		directory = filepath.Join(s.ClaudeConfigDir, "projects", claudeProjectKey(first.Dir))
-		file = first.ConversationID + ".jsonl"
-	case protocol.AgentCodex:
-		if codexHomeOf(first) != filepath.Join(s.Home, ".codex") {
-			return nil, os.ErrPermission
-		}
-		directory = filepath.Join(s.Home, ".codex", "sessions", first.CreatedAt.UTC().Format("2006/01/02"))
-	default:
-		return nil, os.ErrPermission
-	}
-	dir, err := portalOpenDirectory(directory)
+	f, before, err := portalOpenOwnTranscript(s, first)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = dir.Close() }()
-	if first.Provider == protocol.AgentCodex {
-		entries, readErr := dir.ReadDir(1025)
-		if readErr != nil && readErr != io.EOF {
-			return nil, os.ErrPermission
-		}
-		if len(entries) > 1024 {
-			return nil, os.ErrPermission
-		}
-		suffix := "-" + first.ConversationID + ".jsonl"
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), "rollout-") && strings.HasSuffix(entry.Name(), suffix) {
-				if file != "" {
-					return nil, os.ErrPermission
-				}
-				file = entry.Name()
-			}
-		}
-		if file == "" {
-			return nil, os.ErrNotExist
-		}
-	}
-	fd, err := syscall.Openat(int(dir.Fd()), file, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	f := os.NewFile(uintptr(fd), "provider-record")
 	defer func() { _ = f.Close() }()
-	var before, after syscall.Stat_t
-	if syscall.Fstat(fd, &before) != nil || before.Mode&syscall.S_IFMT != syscall.S_IFREG || before.Nlink != 1 || before.Size < 0 {
-		return nil, os.ErrPermission
-	}
 	if before.Size > portalProjectionInputLimit {
 		return nil, errPortalSourceLimit
 	}
@@ -440,10 +390,80 @@ func portalReadOwnTranscript(s Settings, first Launch) ([]byte, error) {
 	if err == nil && len(raw) > portalProjectionInputLimit {
 		return nil, errPortalSourceLimit
 	}
-	if err != nil || syscall.Fstat(fd, &after) != nil || before.Dev != after.Dev || before.Ino != after.Ino || before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim || before.Nlink != after.Nlink {
+	if err != nil || !portalSameFile(f, before) {
 		return nil, os.ErrPermission
 	}
 	return raw, nil
+}
+
+// portalSameFile reports whether the open file still is the one first stat'ed:
+// the same inode, size, times and link count, so it did not change under a read.
+func portalSameFile(f *os.File, before syscall.Stat_t) bool {
+	var after syscall.Stat_t
+	return syscall.Fstat(int(f.Fd()), &after) == nil && before.Dev == after.Dev && before.Ino == after.Ino && before.Size == after.Size && before.Mtim == after.Mtim && before.Ctim == after.Ctim && before.Nlink == after.Nlink
+}
+
+// portalOpenOwnTranscript opens the fixed provider-owned file for read, with no
+// link followed, and checks it is one regular, singly linked file. The caller
+// closes it, enforces its own size bound against the returned stat, and checks
+// portalSameFile after reading.
+func portalOpenOwnTranscript(s Settings, first Launch) (*os.File, syscall.Stat_t, error) {
+	var before syscall.Stat_t
+	if !nativeThreadID.MatchString(first.ConversationID) || first.CreatedAt.IsZero() || first.Dir == "" || !filepath.IsAbs(first.Dir) {
+		return nil, before, os.ErrPermission
+	}
+	var directory, file string
+	switch first.Provider {
+	case protocol.AgentClaude:
+		if s.ClaudeConfigDir != filepath.Join(s.Home, ".claude") {
+			return nil, before, os.ErrPermission
+		}
+		directory = filepath.Join(s.ClaudeConfigDir, "projects", claudeProjectKey(first.Dir))
+		file = first.ConversationID + ".jsonl"
+	case protocol.AgentCodex:
+		if codexHomeOf(first) != filepath.Join(s.Home, ".codex") {
+			return nil, before, os.ErrPermission
+		}
+		directory = filepath.Join(s.Home, ".codex", "sessions", first.CreatedAt.UTC().Format("2006/01/02"))
+	default:
+		return nil, before, os.ErrPermission
+	}
+	dir, err := portalOpenDirectory(directory)
+	if err != nil {
+		return nil, before, err
+	}
+	defer func() { _ = dir.Close() }()
+	if first.Provider == protocol.AgentCodex {
+		entries, readErr := dir.ReadDir(1025)
+		if readErr != nil && readErr != io.EOF {
+			return nil, before, os.ErrPermission
+		}
+		if len(entries) > 1024 {
+			return nil, before, os.ErrPermission
+		}
+		suffix := "-" + first.ConversationID + ".jsonl"
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "rollout-") && strings.HasSuffix(entry.Name(), suffix) {
+				if file != "" {
+					return nil, before, os.ErrPermission
+				}
+				file = entry.Name()
+			}
+		}
+		if file == "" {
+			return nil, before, os.ErrNotExist
+		}
+	}
+	fd, err := syscall.Openat(int(dir.Fd()), file, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, before, err
+	}
+	f := os.NewFile(uintptr(fd), "provider-record")
+	if syscall.Fstat(fd, &before) != nil || before.Mode&syscall.S_IFMT != syscall.S_IFREG || before.Nlink != 1 || before.Size < 0 {
+		_ = f.Close()
+		return nil, before, os.ErrPermission
+	}
+	return f, before, nil
 }
 
 func portalOpenDirectory(path string) (*os.File, error) {

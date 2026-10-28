@@ -732,3 +732,56 @@ Unit B adds the additive `status.conversationUsage` field (the CRD first, throug
 dev-env-crds, because `status.usageObservation` constrains its coverage and semantics to
 the initial invocation's), the agentd heartbeat field, the operator write, the portal
 reader's activity field and the Usage panel.
+
+### Interactive conversation usage, Unit B milestone 1 (backend), 2026-10-28
+
+Unit A's measurement now runs and is stored. The portal does not show it yet.
+
+- **Compatibility, checked in code.**
+  - *agentd and the operator.* The operator decodes the heartbeat body without
+    refusing unknown fields (`decodeJSON(..., strict=false)` in `heartbeat.go`), so a
+    newer agentd's `conversationUsage` is ignored by an older operator, and an older
+    agentd's heartbeat has no field, so a newer operator leaves the stored status as it
+    is. Neither direction breaks. A type error inside a known field would reject a
+    whole heartbeat, so `ConversationUsage` decodes a bad object to a value that is not
+    Valid and the operator ignores it, as it does for `usageObservation`.
+  - *Operator and portal.* The portal's activity decoder is strict (`exactKeys` in
+    `product_activity.go`), so a new activity key needs the portal first. The operator's
+    reader sends nothing new in this milestone, so the order matters only for
+    milestone 2.
+  - *CRD.* `status.conversationUsage` is additive and optional. A stale CRD prunes an
+    unknown status field silently (haynes-ops #3502), so the CRD goes first.
+- **Rollout order.** CRD (dev-env-crds), then the operator, then the portal (milestone
+  2). Measurement needs agentd from this release, so only a new session on a newer agent
+  image reports it (the `--pilot-agent-image` mechanism); old pods never gain it, and
+  report nothing, which reads as absent. No template edit and no session restart.
+- **Status field.** `status.conversationUsage` mirrors `protocol.ConversationUsage`:
+  fixed coverage and semantics words, Final, Partial or Unknown, a reason, up to 8 served
+  models with Reported or Unknown counters, turns and skipped. `status.usageObservation`
+  and its enums are unchanged, and the two figures are never added.
+- **agentd.** An interactive (local or remote) session measures its registered
+  conversation in the background every five minutes, and the newest figure rides each
+  heartbeat; Unknown is never sent. The scan streams the provider's record line by line
+  up to 64 MiB, as of its size when opened, keeping only numbers, so a long transcript no
+  longer reads as Unknown. A half-written last line waits for the next scan. The history
+  path keeps its 1 MiB bound.
+- **Codex guard.** When a snapshot carries a per-turn figure (`last_token_usage`), each
+  rise in the cumulative total must equal it, or the result is Partial
+  (`delta_mismatch`). After a counter reset the figure and Turns are the latest run's.
+  Codex input already includes the cached tokens, so input and cache read overlap and a
+  consumer must not add them.
+- **Operator.** The heartbeat handler validates the figure, then writes it for the
+  reporting session only: interactive, the session's own provider, not Unknown, and not
+  older than the one stored. An absent field leaves the stored value; the stored figure
+  keeps its observation time, so a reader can see its age.
+- **A stored figure can go stale, on purpose.** If a later measurement is Unknown (the
+  record moved, the pod was replaced by an older agent), agentd stops sending and the
+  operator keeps the last figure rather than clear it. Its `observedAt` is the age, and
+  the milestone 2 portal view marks an old figure as stale. Clearing would turn a
+  once-measured session back into "no figure" with no sign it was ever measured.
+- **One oversize Claude record makes the result Partial.** A single assistant record
+  over 64 KiB cannot be read and is counted as skipped, so the figure is a marked lower
+  bound. That is the conservative choice; it can be relaxed once real records are known.
+- **What is still an assumption.** That Claude Code repeats usage per content block and
+  its output counter only grows (seen on 2.1.296), and the Codex `token_count` shape, are
+  encoded in synthetic fixtures. No published schema for either has been checked in.

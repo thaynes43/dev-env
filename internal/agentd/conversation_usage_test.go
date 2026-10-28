@@ -1,11 +1,15 @@
 package agentd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -204,8 +208,8 @@ func TestConversationUsageCodexRepeatedCumulativeSnapshotsAreNotSummed(t *testin
 
 func TestConversationUsageCodexCounterResetIsPartialAndNeverAddedAcross(t *testing.T) {
 	u := codexConversationUsage(usageFixture(t, "codex_reset.jsonl", usageConversation), usageNow)
-	// 1000,2500 then 300 (a reset) then 400. The figure is the latest run alone.
-	if !u.Valid() || u.ResultState != protocol.ConversationPartial || u.ReasonCode != protocol.ReasonCounterReset || u.Turns != 4 {
+	// 1000,2500 then 300 (a reset) then 400. The figure and Turns are the latest run's.
+	if !u.Valid() || u.ResultState != protocol.ConversationPartial || u.ReasonCode != protocol.ReasonCounterReset || u.Turns != 2 {
 		t.Fatalf("%+v", u)
 	}
 	wantRow(t, u.Models[0], "gpt-6-astra", 400, 15, n64(60), nil)
@@ -374,8 +378,8 @@ func TestConversationUsageFenceRefusesWhatIsNotBound(t *testing.T) {
 					t.Fatal("link")
 				}
 			case "over the read bound":
-				big := append(usageFixture(t, "claude_main.jsonl", l.ConversationID), []byte(strings.Repeat("\n", portalProjectionInputLimit))...)
-				if os.WriteFile(path, big, 0600) != nil {
+				// A sparse file one byte over the usage scan bound is never read.
+				if os.Truncate(path, conversationUsageScanLimit+1) != nil {
 					t.Fatal("big fixture")
 				}
 				want = protocol.ReasonSourceLimit
@@ -408,5 +412,188 @@ func TestConversationUsageTaskSessionsAreExcluded(t *testing.T) {
 	sess.Mode, sess.Agent = protocol.ModeLocal, "opencode"
 	if u := MeasureConversationUsage(s, sess, sess.SessionUID, s.PodUID, usageNow); u.ResultState != protocol.ConversationUnknown || u.Valid() {
 		t.Fatalf("%+v", u)
+	}
+}
+
+func TestConversationUsageCodexPerTurnFigureGuardsEachRise(t *testing.T) {
+	for _, tc := range []struct {
+		fixture string
+		state   string
+		reason  string
+		input   int64
+	}{
+		{"codex_delta_ok.jsonl", protocol.ConversationFinal, "", 3000},
+		{"codex_no_delta.jsonl", protocol.ConversationFinal, "", 2500},
+		{"codex_delta_mismatch.jsonl", protocol.ConversationPartial, protocol.ReasonDeltaMismatch, 2500},
+		{"codex_delta_cache_mismatch.jsonl", protocol.ConversationPartial, protocol.ReasonDeltaMismatch, 2000},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			u := codexConversationUsage(usageFixture(t, tc.fixture, usageConversation), usageNow)
+			if !u.Valid() || u.ResultState != tc.state || u.ReasonCode != tc.reason || amount(t, u.Models[0].InputTokens) != tc.input {
+				t.Fatalf("%+v", u)
+			}
+		})
+	}
+	// A repeat is not a rise, and the guard does not apply to a snapshot after a reset.
+	if u := codexConversationUsage(usageFixture(t, "codex_reset.jsonl", usageConversation), usageNow); u.ReasonCode != protocol.ReasonCounterReset {
+		t.Fatalf("reset reason %q", u.ReasonCode)
+	}
+}
+
+func TestConversationUsageStreamingScannerBoundsAndLiveFiles(t *testing.T) {
+	collect := func(raw string) (lines []int, oversize, marked []bool) {
+		err := scanTranscriptLines(strings.NewReader(raw), claudeAssistantMarker, func(line []byte, o, m bool) {
+			lines, oversize, marked = append(lines, len(line)), append(oversize, o), append(marked, m)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	// A final line with no newline is still being written and is not passed.
+	if lines, _, _ := collect("one\ntwo\npartial"); len(lines) != 2 {
+		t.Fatalf("lines %v", lines)
+	}
+	if lines, _, _ := collect("one\n\ntwo\n"); len(lines) != 3 {
+		t.Fatalf("empty lines are passed too: %v", lines)
+	}
+	marker := string(claudeAssistantMarker)
+	// An oversize line is passed once, as its first chunk, with the marker found past it.
+	pad := strings.Repeat("x", portalProjectionLineLimit+10)
+	if lines, over, marked := collect(pad + marker + "\nafter\n"); len(lines) != 2 || !over[0] || !marked[0] || over[1] || marked[1] || lines[0] > portalProjectionLineLimit+2 {
+		t.Fatalf("oversize with a late marker: %v %v %v", lines, over, marked)
+	}
+	// A marker split across the chunk boundary is still found; a line with none is not marked.
+	bufSize := portalProjectionLineLimit + 2
+	straddle := strings.Repeat("y", bufSize-5) + marker + "\n"
+	if _, over, marked := collect(straddle); len(over) != 1 || !over[0] || !marked[0] {
+		t.Fatalf("straddling marker: %v %v", over, marked)
+	}
+	if _, over, marked := collect(strings.Repeat("z", 3*bufSize) + "\n"); len(over) != 1 || !over[0] || marked[0] {
+		t.Fatalf("unmarked oversize: %v %v", over, marked)
+	}
+	// An oversize final line without a newline is not passed either.
+	if lines, _, _ := collect("ok\n" + pad); len(lines) != 1 {
+		t.Fatalf("lines %v", lines)
+	}
+}
+
+// A live transcript grows between measurements and while one runs. The scan is
+// as of the size at open, a half-written last line waits, and a larger record
+// than the history's bound is read.
+func TestConversationUsageRegisteredClaudeLargeAndGrowingRecord(t *testing.T) {
+	s, sess, l, path := registeredUsageFixture(t, protocol.AgentClaude, protocol.ModeRemote)
+	line := func(id string, in, out int) string {
+		return fmt.Sprintf(`{"cwd":%q,"sessionId":%q,"version":"2.1.296","message":{"id":%q,"model":"claude-opus-5-5","usage":{"input_tokens":%d,"output_tokens":%d,"cache_read_input_tokens":3}},"type":"assistant"}`+"\n", l.Dir, l.ConversationID, id, in, out)
+	}
+	filler := fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":"%s"}}`+"\n", l.ConversationID, strings.Repeat("f", 40<<10))
+	var b strings.Builder
+	for i := 0; i < 100; i++ { // about 4 MiB of lines the scan only skips over
+		b.WriteString(filler)
+		if i%10 == 0 {
+			b.WriteString(line(fmt.Sprintf("msg_%d", i), 10, 5))
+		}
+	}
+	if b.Len() <= portalProjectionInputLimit {
+		t.Fatal("the fixture is not larger than the history bound")
+	}
+	if os.WriteFile(path, []byte(b.String()), 0600) != nil {
+		t.Fatal("transcript fixture")
+	}
+	u := MeasureConversationUsage(s, sess, sess.SessionUID, s.PodUID, usageNow)
+	if !u.Valid() || u.ResultState != protocol.ConversationFinal || u.Turns != 10 {
+		t.Fatalf("large record: %+v", u)
+	}
+	wantRow(t, u.Models[0], "claude-opus-5-5", 100, 50, n64(30), nil)
+	// The record grows: new complete lines count next time; a half-written one waits.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString(line("msg_new", 7, 2) + `{"cwd":"/w","sessionId":"` + l.ConversationID + `","message":{"id":"msg_torn","mod`); err != nil {
+		t.Fatal(err)
+	}
+	u = MeasureConversationUsage(s, sess, sess.SessionUID, s.PodUID, usageNow)
+	if !u.Valid() || u.ResultState != protocol.ConversationFinal || u.Turns != 11 || u.Skipped != 0 {
+		t.Fatalf("grown record: %+v", u)
+	}
+	wantRow(t, u.Models[0], "claude-opus-5-5", 107, 52, n64(33), nil)
+	assertNoText(t, u)
+}
+
+func TestConversationUsageDaemonMeasuresInTheBackgroundOnAnInterval(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	var mu sync.Mutex
+	figure := protocol.ConversationUsage{}
+	d := &Daemon{S: testSettings(t, t.TempDir()), R: &fakeRunner{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Session: cloneSession("u-1"), Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return now }}
+	d.Session.Mode, d.Session.Prompt, d.Session.Limits, d.Session.SessionUID = protocol.ModeRemote, "", nil, "uid-1"
+	d.S.PodUID = "pod-1"
+	d.measure = func(_ Settings, sess protocol.Session, uid, pod string, at time.Time) protocol.ConversationUsage {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if uid != "uid-1" || pod != "pod-1" || sess.Name != d.Session.Name {
+			t.Errorf("measured %q %q", uid, pod)
+		}
+		return figure
+	}
+	var sent []*protocol.ConversationUsage
+	d.Send = func(_ context.Context, st protocol.Status) error {
+		sent = append(sent, st.ConversationUsage)
+		return nil
+	}
+	wait := func() {
+		for i := 0; i < 200; i++ {
+			d.usage.mu.Lock()
+			running := d.usage.running
+			d.usage.mu.Unlock()
+			if !running {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal("measurement did not finish")
+	}
+	unknown := protocol.UnknownConversationUsage(protocol.AgentClaude, protocol.ReasonUnbound, now)
+	figure = unknown
+	d.beat(context.Background()) // starts the first measurement; nothing yet to send
+	wait()
+	d.beat(context.Background()) // Unknown is never published
+	if calls != 1 || sent[0] != nil || sent[1] != nil {
+		t.Fatalf("calls %d sent %v", calls, sent)
+	}
+	one := int64(1)
+	valid := protocol.ConversationUsage{Version: 1, Provider: protocol.AgentClaude, ObservedAt: now, Coverage: protocol.ConversationCoverage, CounterSemantics: protocol.ConversationCumulative, ResultState: protocol.ConversationFinal, Turns: 1,
+		Models: []protocol.ConversationModelUsage{{Model: "claude-opus-5-5", InputTokens: protocol.TokenObservation{State: protocol.UsageReported, Amount: &one}, OutputTokens: protocol.TokenObservation{State: protocol.UsageReported, Amount: &one}, CacheReadInputTokens: protocol.TokenObservation{State: protocol.UsageUnknown}, CacheCreationInputTokens: protocol.TokenObservation{State: protocol.UsageUnknown}}}}
+	mu.Lock()
+	figure, now = valid, now.Add(conversationUsageEvery)
+	mu.Unlock()
+	d.beat(context.Background()) // a new interval: measures again, in the background
+	wait()
+	for i := 0; i < 3; i++ { // the figure rides every heartbeat, with no new measurement
+		d.beat(context.Background())
+	}
+	if calls != 2 || sent[len(sent)-1] == nil || sent[len(sent)-1].Turns != 1 || sent[len(sent)-2] == nil {
+		t.Fatalf("calls %d sent %v", calls, sent)
+	}
+	// A figure that is not Valid is never published.
+	mu.Lock()
+	figure, now = protocol.ConversationUsage{Provider: "claude"}, now.Add(conversationUsageEvery)
+	mu.Unlock()
+	d.beat(context.Background())
+	wait()
+	d.beat(context.Background())
+	if sent[len(sent)-1] != nil {
+		t.Fatalf("an invalid figure was sent: %+v", sent[len(sent)-1])
+	}
+	// A task session never measures.
+	task := &Daemon{S: d.S, R: &fakeRunner{}, Log: d.Log, Session: cloneSession("t-1"), measure: func(Settings, protocol.Session, string, string, time.Time) protocol.ConversationUsage {
+		t.Error("a task session was measured")
+		return protocol.ConversationUsage{}
+	}}
+	if task.conversationUsage() != nil {
+		t.Fatal("a task session has a figure")
 	}
 }

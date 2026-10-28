@@ -90,3 +90,33 @@ func TestConversationUsageValid(t *testing.T) {
 		t.Errorf("zero and Unknown are not distinct on the wire: %s", raw)
 	}
 }
+
+func TestConversationUsageRoundTripAndTolerantDecode(t *testing.T) {
+	want := convValid()
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ConversationUsage
+	if json.Unmarshal(raw, &got) != nil || !got.Valid() || got.Turns != want.Turns || len(got.Models) != 2 || *got.Models[1].InputTokens.Amount != 100 {
+		t.Fatalf("round trip: %+v", got)
+	}
+	// Inside a Status, a bad object does not fail the surrounding heartbeat; it
+	// decodes to a value that is not Valid. An absent field stays nil.
+	for _, bad := range []string{`"x"`, `[]`, `{"turns":"many"}`, `{"models":3}`, `{"observedAt":"yesterday"}`} {
+		var st Status
+		if err := json.Unmarshal([]byte(`{"session":"s","conversationUsage":`+bad+`}`), &st); err != nil || st.Session != "s" || st.ConversationUsage == nil || st.ConversationUsage.Valid() {
+			t.Errorf("%s: %v %+v", bad, err, st.ConversationUsage)
+		}
+	}
+	var old Status
+	if err := json.Unmarshal([]byte(`{"session":"s","agent":{"state":"busy"}}`), &old); err != nil || old.ConversationUsage != nil {
+		t.Fatalf("an old status: %v %+v", err, old.ConversationUsage)
+	}
+	// The new reason codes are valid words.
+	p := convValid()
+	p.ResultState, p.ReasonCode = ConversationPartial, ReasonDeltaMismatch
+	if !p.Valid() {
+		t.Error("delta_mismatch was refused")
+	}
+}

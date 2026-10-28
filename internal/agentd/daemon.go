@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -60,6 +61,64 @@ type Daemon struct {
 	claudeSyncErr error
 	// crm supervises a Codex remote session's phone daemon (Story110 T17).
 	crm *codexRemote
+
+	// measure is the conversation usage measurement; nil means
+	// MeasureConversationUsage. It is a test seam.
+	measure func(Settings, protocol.Session, string, string, time.Time) protocol.ConversationUsage
+	usage   conversationUsageCache
+}
+
+// conversationUsageEvery is how often an interactive session's conversation
+// usage is measured: slower than the heartbeat, because a measurement scans the
+// provider's record. The newest figure rides every heartbeat between them.
+const conversationUsageEvery = 5 * time.Minute
+
+// conversationUsageCache holds the newest published figure. A measurement runs
+// in the background so a large record never delays a heartbeat, and one at a
+// time.
+type conversationUsageCache struct {
+	mu      sync.Mutex
+	figure  *protocol.ConversationUsage
+	started time.Time
+	running bool
+}
+
+// conversationUsage returns the newest measured figure of an interactive
+// session, or nil: for a task session, before the first measurement finishes,
+// and whenever the newest measurement was Unknown or not valid. It starts a new
+// measurement in the background when the last one is older than
+// conversationUsageEvery.
+func (d *Daemon) conversationUsage() *protocol.ConversationUsage {
+	if d.Session.Mode != protocol.ModeLocal && d.Session.Mode != protocol.ModeRemote {
+		return nil
+	}
+	now := d.now()
+	d.usage.mu.Lock()
+	defer d.usage.mu.Unlock()
+	if !d.usage.running && (d.usage.started.IsZero() || now.Sub(d.usage.started) >= conversationUsageEvery) {
+		d.usage.running, d.usage.started = true, now
+		measure := d.measure
+		if measure == nil {
+			measure = MeasureConversationUsage
+		}
+		session, settings := d.Session, d.S
+		go func() {
+			u := measure(settings, session, session.SessionUID, settings.PodUID, now)
+			d.usage.mu.Lock()
+			defer d.usage.mu.Unlock()
+			d.usage.running = false
+			if u.Valid() && u.ResultState != protocol.ConversationUnknown {
+				d.usage.figure = &u
+			} else {
+				d.usage.figure = nil
+			}
+		}()
+	}
+	if d.usage.figure == nil {
+		return nil
+	}
+	figure := *d.usage.figure
+	return &figure
 }
 
 // logCopyEvery is how often the session's log is copied to the shared volume,
@@ -562,6 +621,7 @@ func (d *Daemon) beat(ctx context.Context) {
 		return
 	}
 	st := CollectStatus(ctx, d.R, d.S, d.Session, d.now())
+	st.ConversationUsage = d.conversationUsage()
 	d.sendHeartbeat(ctx, st)
 }
 

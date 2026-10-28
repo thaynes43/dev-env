@@ -1,0 +1,4 @@
+{"timestamp":"2026-10-27T11:00:00.000Z","type":"session_meta","payload":{"id":"CONVERSATION_ID","cli_version":"0.160.1","cwd":"/work/fixture"}}
+{"timestamp":"2026-10-27T11:00:00.000Z","type":"turn_context","payload":{"model":"gpt-6-astra","cwd":"/work/fixture"}}
+{"timestamp":"2026-10-27T11:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"output_tokens":50,"total_tokens":1050,"cached_input_tokens":200},"model_context_window":200000}}}
+{"timestamp":"2026-10-27T11:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2500,"output_tokens":120,"total_tokens":2620,"cached_input_tokens":900},"model_context_window":200000}}}

@@ -99,7 +99,12 @@ type Status struct {
 	Agent            AgentState        `json:"agent"`
 	Usage            *Usage            `json:"usage,omitempty"`
 	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
-	Decision         *DecisionOutcome  `json:"decision,omitempty"`
+	// ConversationUsage is the registered interactive conversation's cumulative
+	// usage (DESIGN-029). It is absent for a task session, for an agentd that does
+	// not measure it, and whenever the measurement is Unknown. An operator that
+	// does not know the field ignores it.
+	ConversationUsage *ConversationUsage `json:"conversationUsage,omitempty"`
+	Decision          *DecisionOutcome   `json:"decision,omitempty"`
 	// RemoteControl is set for a remote session only.
 	RemoteControl *RemoteControl `json:"remoteControl,omitempty"`
 	// ProjectBootstrap is the boot's private catalog bootstrap, when it ran:
