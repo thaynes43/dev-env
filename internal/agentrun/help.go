@@ -658,7 +658,7 @@ Nothing is sent either way.
 
 The numeric limits are proposed source-contract defaults, not production SLOs.
 `,
-	"pages": `KEEPER PAGES ONLY - not all Pushover history. Recorded or sent (accepted by
+	"pages": `The default source is KEEPER PAGES ONLY - not all Pushover history. Recorded or sent (accepted by
 Pushover) does not mean delivered or read.
 
 Usage: agent-run pages list [--sender S] [--state recorded|sent|failed|ambiguous] [--since 36h|7d|RFC3339] [--limit N] [-o json]
@@ -680,7 +680,7 @@ the page, and that is not proof the phone received it. failed: a definite 4xx, o
 no request made. ambiguous: a timeout, transport error, 5xx or unconfirmed 2xx;
 the page may have reached Tom.
 
-Every answer starts with that line and prints its coverage; an error answer
+Every keeper answer starts with the keeper banner and prints its coverage; an error answer
 prints them on stderr. Only the keeper records, and only since the first keeper
 image with this code. Alertmanager, Gatus, upgrade-gate, alert-responder,
 dev-env-ops, the v1 pod, haynesnetwork, scribe-notes, Home Assistant and keeper
@@ -689,6 +689,16 @@ here is Unknown, not "no page". list exits 0 whatever it finds; show exits 4
 when the key has no record. The record keeps the newest 100 pages (256 KiB). A
 damaged record is reset by the keeper and the coverage says how many records
 were lost.
+
+Alertmanager snapshot source (explicit):
+  agent-run pages list --source alertmanager [--search TEXT] [--status active|suppressed|unprocessed] [--from-file FILE|-] [-o json|html]
+  agent-run pages show FINGERPRINT --source alertmanager [--from-file FILE|-] [-o json|html]
+
+Reads a caller-supplied Alertmanager API v2 alert array or snapshot envelope
+from a file or stdin. This is a current snapshot, not notification or delivery
+history. Source and observation time are caller assertions; disposition and
+recurrence are Unknown. Unreadable or invalid input is Unavailable. It makes no
+network requests. See docs/alertmanager-pages-poc.md for limits and details.
 `,
 	"fleet": `Usage: agent-run fleet [--resources] [-o json]
 

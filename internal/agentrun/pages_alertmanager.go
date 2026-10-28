@@ -11,6 +11,17 @@ import (
 	"github.com/thaynes43/dev-env/internal/pages"
 )
 
+const alertmanagerPagesHelp = `Pages · Alertmanager — current snapshot, not notification or delivery history
+
+Usage: agent-run pages list --source alertmanager [--search TEXT] [--status active|suppressed|unprocessed] [--from-file FILE|-] [-o json|html]
+       agent-run pages show FINGERPRINT --source alertmanager [--from-file FILE|-] [-o json|html]
+
+Reads a caller-supplied Alertmanager API v2 alert array or snapshot envelope
+from a file or stdin. Source and observation time are caller assertions;
+disposition and recurrence are Unknown. Invalid input is Unavailable. No
+network requests are made. See docs/alertmanager-pages-poc.md for details.
+`
+
 func isAlertmanagerSource(args []string) bool {
 	for i := 1; i < len(args); i++ {
 		token := args[i]
@@ -63,6 +74,10 @@ func (a *app) pagesAlertmanager(ctx context.Context, args []string) error {
 	var pos []string
 	for rest := args[1:]; len(rest) > 0; {
 		if err := fs.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				_, _ = io.WriteString(a.env.Stdout, alertmanagerPagesHelp)
+				return &exitError{code: ExitOK}
+			}
 			return usageError("pages alertmanager: %v", err)
 		}
 		left := fs.Args()

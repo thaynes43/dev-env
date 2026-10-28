@@ -59,3 +59,13 @@ func TestAlertmanagerDispatchRespectsKeeperValuesAndSeparator(t *testing.T) {
 	h.mustRun(ExitNotFound, "pages", "show", "--", "--source=alertmanager")
 	contains(t, "keeper", h.stdout.String(), "KEEPER PAGES ONLY")
 }
+
+func TestAlertmanagerHelp(t *testing.T) {
+	h := newHarness(t)
+	for _, args := range [][]string{{"pages", "list", "--source", "alertmanager", "-h"}, {"pages", "show", "--source=alertmanager", "--help"}} {
+		h.mustRun(ExitOK, args...)
+		contains(t, "Alertmanager help", h.stdout.String(), "--source alertmanager", "--from-file", "--search", "-o json|html", "not notification or delivery history")
+	}
+	h.mustRun(ExitOK, "help", "pages")
+	contains(t, "pages help", h.stdout.String(), "default source", "KEEPER PAGES ONLY", "Alertmanager snapshot source", "--source alertmanager")
+}
