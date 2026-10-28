@@ -90,3 +90,23 @@ report. It covers task sessions' initial managed invocations only; interactive
 and remote sessions, later turns and account allowance stay `Unknown`. It emits
 no totals, does not add cache read tokens to input tokens, and labels cost as an
 estimate, not a charge.
+
+## Codex native on-demand input (C3 source qualification)
+
+The source contains an unwired helper for one metadata-only read on an already
+qualified same-UID managed-host socket. It initializes the connection, calls
+`account/read` with `refreshToken: false`, then `account/rateLimits/read` with
+`excludeResetCreditDetails: true` and `supportsLunaReserve: false`. It does not
+start a host, read authentication files, call a provider HTTP endpoint, or
+perform a thread, turn, login, refresh, reset, redemption or model operation.
+There is no production call site or collector; `usage-export --allowance-read`
+continues to consume caller-supplied JSON and does not invoke this helper.
+
+The caller supplies bounded capture identifiers and an evidence reference;
+these are assertions, not trusted provenance or account binding. The source
+version records the app server's reported version after matching the pinned
+protocol version, not independently verified CLI identity. Its new label is
+not automatically actionable in the existing registry. Provider-observed time,
+freshness and account binding remain Unknown. Legacy and keyed bucket views
+remain separate; this helper does not infer account allowance, reset, cost,
+task attribution or permission. Synthetic tests do not establish a live read.
