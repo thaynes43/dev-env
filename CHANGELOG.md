@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.61.0](https://github.com/thaynes43/dev-env/compare/v2.60.0...v2.61.0) (2026-10-28)
+
+
+### Features
+
+* add owned allowance diagnostic source ([#623](https://github.com/thaynes43/dev-env/issues/623)) ([2a5d9c1](https://github.com/thaynes43/dev-env/commit/2a5d9c1ef18f9902d5ecdb1bff95ceb9a9bd7247))
+* add unified offline usage read ([#625](https://github.com/thaynes43/dev-env/issues/625)) ([5b0ea82](https://github.com/thaynes43/dev-env/commit/5b0ea820c3b91c1fa96102a406929dd0ae827739))
+
 ## [2.60.0](https://github.com/thaynes43/dev-env/compare/v2.59.0...v2.60.0) (2026-10-28)
 
 
