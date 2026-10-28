@@ -45,3 +45,23 @@ func TestExistingNavigationLinksToPages(t *testing.T) {
 		t.Fatal("top and mobile Pages navigation missing")
 	}
 }
+
+func TestPagesTimestampPresence(t *testing.T) {
+	snapshot, err := pages.ParseAlertmanager([]byte(`[{"fingerprint":"missing","labels":{"alertname":"Missing"},"status":{"state":"active"}},{"fingerprint":"present","labels":{"alertname":"Present"},"status":{"state":"active"},"startsAt":"2026-10-28T12:00:00Z","endsAt":"2026-10-28T13:00:00Z","updatedAt":"2026-10-28T12:01:00Z"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := RenderPages(snapshot, false, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		`<dt>Starts at</dt><dd>Unknown</dd><dt>Ends at</dt><dd>Unknown</dd><dt>Updated at</dt><dd>Unknown</dd>`,
+		`<dt>Starts at</dt><dd>2026-10-28T12:00:00Z</dd><dt>Ends at</dt><dd>2026-10-28T13:00:00Z</dd><dt>Updated at</dt><dd>2026-10-28T12:01:00Z</dd>`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("timestamp rendering missing %s", want)
+		}
+	}
+}
