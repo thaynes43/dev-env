@@ -1,10 +1,13 @@
 package agentd
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -185,5 +188,169 @@ func TestCodexAccessDisabledLeavesAuthUntouched(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if string(after) != "synthetic-existing-provider-state" {
 		t.Fatal("disabled mode modified auth")
+	}
+}
+
+// The child process uses synthetic fixtures and the same fence as its parent.
+func TestCodexAccessProcessFixture(t *testing.T) {
+	home := os.Getenv("CODEX_TEST_FENCE_HOME")
+	if home == "" {
+		return
+	}
+	s := Settings{Home: home, StateDir: filepath.Join(home, ".agentd"), CodexHome: filepath.Join(home, "observer"), CodexAccessFile: filepath.Join(home, "projection.json")}
+	if os.Getenv("CODEX_TEST_LOCK_EXIT") == "1" {
+		f, err := lockCodexAccess(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f // deliberately left open until this subprocess exits
+		return
+	}
+	if os.Getenv("CODEX_TEST_CONTENDED") == "1" {
+		fd, err := syscall.Open(s.statePath("codex-access-generation.lock"), syscall.O_RDWR|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		_ = syscall.Close(fd)
+		if err != syscall.EWOULDBLOCK {
+			t.Fatal("expected actual contention", err)
+		}
+		fmt.Println("contended")
+	}
+	err := SyncCodexAccess(s, time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC))
+	if (err != nil) != (os.Getenv("CODEX_TEST_EXPECT_REFUSAL") == "1") {
+		t.Fatal("unexpected synthetic child outcome")
+	}
+}
+
+func TestCodexAccessCrossProcessFence(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	s := Settings{Home: home, StateDir: filepath.Join(home, ".agentd"), CodexHome: filepath.Join(home, "native"), CodexAccessFile: filepath.Join(home, "projection.json")}
+	writeProjection := func(g uint64) {
+		t.Helper()
+		raw, err := codexauth.Encode(syntheticAgentCodexAccess(t, now, g), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, s.CodexAccessFile, string(raw))
+	}
+	runChild := func(refuse bool) {
+		t.Helper()
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCodexAccessProcessFixture$")
+		want := "0"
+		if refuse {
+			want = "1"
+		}
+		cmd.Env = append(os.Environ(), "CODEX_TEST_FENCE_HOME="+home, "CODEX_TEST_EXPECT_REFUSAL="+want)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("synthetic child: %v %s", err, out)
+		}
+	}
+	writeProjection(1)
+	if err := SyncCodexAccess(s, now); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockCodexAccess(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeProjection(2)
+	priorFence, err := os.ReadFile(s.statePath("codex-access-generation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runChild(true) // bounded timeout: writer must not overwrite while held
+	afterTimeout, err := os.ReadFile(s.statePath("codex-access-generation.json"))
+	if err != nil || string(afterTimeout) != string(priorFence) {
+		t.Fatal("timeout rewrote fence")
+	}
+	if _, err := os.Stat(filepath.Join(home, "observer", "auth.json")); !os.IsNotExist(err) {
+		t.Fatal("timeout wrote observer auth")
+	}
+	waiting := exec.Command(os.Args[0], "-test.run=^TestCodexAccessProcessFixture$")
+	waiting.Env = append(os.Environ(), "CODEX_TEST_FENCE_HOME="+home, "CODEX_TEST_CONTENDED=1")
+	stdout, err := waiting.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waiting.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil || strings.TrimSpace(line) != "contended" {
+		t.Fatal("child did not observe contention", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waiting.Wait(); err != nil {
+		t.Fatal("waiting writer failed after release", err)
+	}
+	runChild(false)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCodexAccessProcessFixture$")
+	cmd.Env = append(os.Environ(), "CODEX_TEST_FENCE_HOME="+home, "CODEX_TEST_LOCK_EXIT=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("lock child: %v %s", err, out)
+	}
+	lock, err = lockCodexAccess(s)
+	if err != nil {
+		t.Fatal("lock not released after process exit")
+	}
+	_ = lock.Close()
+	before, err := os.ReadFile(s.statePath("codex-access-generation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeProjection(1)
+	if err := SyncCodexAccess(s, now); err == nil {
+		t.Fatal("older generation accepted")
+	}
+	after, err := os.ReadFile(s.statePath("codex-access-generation.json"))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("fence rolled back")
+	}
+}
+
+func TestCodexAccessLockRefusesUnsafeFile(t *testing.T) {
+	for _, kind := range []string{"symlink", "directory", "mode", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			home := t.TempDir()
+			s := Settings{Home: home, StateDir: filepath.Join(home, ".agentd")}
+			if err := os.Mkdir(s.StateDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := s.statePath("codex-access-generation.lock")
+			switch kind {
+			case "symlink":
+				if err := os.Symlink(filepath.Join(home, "target"), path); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "mode":
+				if err := os.WriteFile(path, nil, 0644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				other := filepath.Join(home, "other")
+				if err := os.WriteFile(other, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(other, path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if f, err := lockCodexAccess(s); err == nil {
+				_ = f.Close()
+				t.Fatal("unsafe lock accepted")
+			}
+		})
 	}
 }

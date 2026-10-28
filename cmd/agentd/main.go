@@ -69,6 +69,7 @@ Commands:
   ask-decision             Save one bounded question from JSON stdin for the
                            configured direct parent. Print its durable record.
                            The parent must present it through its question tool.
+  codex-owned-allowance --enabled  Run a separately authorized local allowance diagnostic.
   codex-host --enabled --catalog-file FILE --instructions-file FILE <operation>
                            Supervise a retained Codex computer, separate from a
                            managed task. Operations: run, status, pair, stop.
@@ -234,6 +235,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		defer signal.Stop(sigs)
 		return agentd.RunAgent(args[2], stdout, sigs, stopGrace)
+	case "codex-owned-allowance":
+		return codexOwnedAllowance(ctx, args[1:], stdout, stderr, getenv)
+	case "owned-allowance-helper":
+		return codexOwnedAllowanceHelper(stderr)
 	case "owned-codex-host":
 		return ownedCodexHost(ctx, args[1:], stderr, getenv)
 	case "owned-codex-host-probe":
