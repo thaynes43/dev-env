@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,8 @@ type memPages struct {
 	// fastLoad exempts loads.
 	delay    time.Duration
 	fastLoad bool
+	// loadCalls and saveCalls count every call, also those that time out.
+	loadCalls, saveCalls atomic.Int32
 }
 
 func (m *memPages) wait(ctx context.Context) error {
@@ -50,6 +53,7 @@ func (m *memPages) wait(ctx context.Context) error {
 }
 
 func (m *memPages) LoadPages(ctx context.Context) (*pages.Document, error) {
+	m.loadCalls.Add(1)
 	if !m.fastLoad {
 		if err := m.wait(ctx); err != nil {
 			return nil, err
@@ -76,6 +80,7 @@ func (m *memPages) LoadPages(ctx context.Context) (*pages.Document, error) {
 }
 
 func (m *memPages) SavePages(ctx context.Context, d *pages.Document) error {
+	m.saveCalls.Add(1)
 	if err := m.wait(ctx); err != nil {
 		return err
 	}
@@ -537,13 +542,26 @@ func TestSlowPageStoreIsCappedAndNeverBlocksTheSend(t *testing.T) {
 	if got := mp.stored(t); len(got.Records) != 0 {
 		t.Fatalf("a record was stored by a store that never answered: %+v", got.Records)
 	}
+	// The back-off: one failed load in the pass, none for the second page, and
+	// none on the next pass inside the minute.
+	if n := mp.loadCalls.Load(); n != 1 {
+		t.Fatalf("%d load calls in one pass after a failure, want 1", n)
+	}
+	f.clk.Step(30 * time.Second)
+	f.tick()
+	if n := mp.loadCalls.Load(); n != 1 {
+		t.Fatalf("%d load calls inside the minute, want 1", n)
+	}
+	f.clk.Step(2 * time.Minute) // past the pause: the store is tried again
+	f.hub.Report(ProviderClaude, LoginReady, time.Time{})
+	mp.delay = 0
+	f.tick()
+	if n := mp.loadCalls.Load(); n != 2 {
+		t.Fatalf("%d load calls after the pause, want 2", n)
+	}
 	// The store recovers. The two pages sent meanwhile are Unknown (their record
 	// could not be loaded, and nothing is invented afterwards); the next page is
 	// recorded normally.
-	mp.delay = 0
-	f.clk.Step(2 * time.Minute)
-	f.hub.Report(ProviderClaude, LoginReady, time.Time{})
-	f.tick()
 	d := mp.stored(t)
 	if r := only(t, d); r.Sender != "dev-env-keeper" || !strings.HasPrefix(r.Key, "resolved:claude:") || r.State != pages.StateSent {
 		t.Fatalf("after recovery: %+v", r)
@@ -620,5 +638,41 @@ func TestOtherSchemaVersionIsLeftAloneAndPagesStillSend(t *testing.T) {
 	}
 	if f.fake.count() != 1 {
 		t.Fatal("the page was not sent")
+	}
+}
+
+// The real store's version guard: a pages.json of another schema version is
+// not damage, is never overwritten, and the page still goes out. A rolled-back
+// keeper must not reset a newer keeper's record.
+func TestRealStoreLeavesAnotherSchemaVersionAloneAndThePageSends(t *testing.T) {
+	name := types.NamespacedName{Namespace: "system", Name: DefaultNoticeStateConfigMap}
+	const newer = `{"version":9,"records":[{"key":"future","shape":"unknown"}]}`
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: name.Namespace, Name: name.Name}, Data: map[string]string{pages.ConfigMapKey: newer}}
+	c := claudeClient(t, cm)
+	s := &ConfigMapNoticeStore{Client: c, Name: name}
+	if _, err := s.LoadPages(context.Background()); !errors.Is(err, errPagesVersion) || errors.Is(err, errPagesCorrupt) {
+		t.Fatalf("a record of another version loaded as %v; it must be errPagesVersion and not damage", err)
+	}
+
+	f := newNoticeFix(t, pagesStart)
+	f.alt = s
+	f.n = f.newNotifier()
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f.tick()
+	f.hub.Report(ProviderClaude, LoginReady, time.Time{})
+	f.clk.Step(time.Minute)
+	f.tick()
+	if f.fake.count() != 2 {
+		t.Fatalf("%d pages sent, want 2: the record's version must not stop a page", f.fake.count())
+	}
+	var got corev1.ConfigMap
+	if err := c.Get(context.Background(), name, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Data[pages.ConfigMapKey] != newer {
+		t.Fatalf("pages.json was overwritten:\n%s", got.Data[pages.ConfigMapKey])
+	}
+	if got.Data[noticeStateKey] == "" {
+		t.Fatal("the notice state was not stored: the version guard must not affect it")
 	}
 }
