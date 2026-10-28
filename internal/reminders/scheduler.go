@@ -81,6 +81,11 @@ type Scheduler struct {
 const (
 	calendarBackoff = 5 * time.Minute
 	maxAttemptLog   = 20
+	// maxCalendarEntries is the CRD's bound on status.calendar. The status is
+	// pruned to it on every pass, so a write can never be refused for size.
+	maxCalendarEntries = 8
+	// supersededReason marks a retry an edit made pointless: it was never sent.
+	supersededReason = "superseded by an edit"
 )
 
 // NeedLeaderElection makes the scheduler run in the leader only.
@@ -173,6 +178,13 @@ func (s *Scheduler) tickOne(ctx context.Context, r *v1alpha1.Reminder) {
 		// plan could not schedule it.
 		s.write(ctx, r)
 		return
+	}
+	if r.Status.PlanHash != PlanHash(r.Spec) && s.supersedeRetries(r, now) {
+		// An edit moved the schedule while the old occurrence was backing off
+		// from a failure that never reached the provider. Nothing was sent, so
+		// it is dropped rather than sent late; fire then closes the occurrence
+		// and finish plans the new schedule.
+		changed = true
 	}
 	if s.syncCalendar(ctx, r, now) {
 		changed = true
@@ -324,7 +336,48 @@ func (s *Scheduler) syncCalendar(ctx context.Context, r *v1alpha1.Reminder, now 
 			changed = true
 		}
 	}
+	if s.pruneCalendar(r, want) {
+		changed = true
+	}
 	return changed
+}
+
+// pruneCalendar bounds status.calendar on every pass, whatever the adapter's
+// state, so the CRD's maxItems can never refuse a status write. Entries of
+// targets the spec no longer names are dropped unless their calendar entry is
+// still standing ("synced": its delete failed, or there is no adapter to make
+// it). If those alone exceed the bound, the oldest are dropped anyway and the
+// calendar entry they named is orphaned; that is logged.
+func (s *Scheduler) pruneCalendar(r *v1alpha1.Reminder, want map[string]bool) bool {
+	before := len(r.Status.Calendar)
+	kept := make([]v1alpha1.ReminderCalendarSync, 0, before)
+	for _, e := range r.Status.Calendar {
+		if want[e.Target] || e.State == v1alpha1.CalendarSynced {
+			kept = append(kept, e)
+		}
+	}
+	for len(kept) > maxCalendarEntries {
+		oldest := -1
+		for i, e := range kept {
+			if !want[e.Target] && (oldest < 0 || e.UpdatedAt.Before(&kept[oldest].UpdatedAt)) {
+				oldest = i
+			}
+		}
+		if oldest < 0 {
+			break
+		}
+		s.Log.Info("calendar status over its bound: dropping the oldest stale entry; its calendar entry may be orphaned",
+			"reminder", r.Name, "target", kept[oldest].Target, "eventID", kept[oldest].EventID)
+		kept = append(kept[:oldest], kept[oldest+1:]...)
+	}
+	if len(kept) == before {
+		return false
+	}
+	if len(kept) == 0 {
+		kept = nil
+	}
+	r.Status.Calendar = kept
+	return true
 }
 
 // cancel turns the owner's cancel into the cancelled state and removes the
@@ -369,6 +422,23 @@ func addAttempt(r *v1alpha1.Reminder, now time.Time, occ int32, target, outcome,
 	if over := len(r.Status.Attempts) - maxAttemptLog; over > 0 {
 		r.Status.Attempts = slices.Clone(r.Status.Attempts[over:])
 	}
+}
+
+// supersedeRetries drops the retries of the current occurrence. A claimed,
+// sent or ambiguous delivery is left alone: those resolve for themselves and are
+// never sent again.
+func (s *Scheduler) supersedeRetries(r *v1alpha1.Reminder, now time.Time) bool {
+	changed := false
+	for i := range r.Status.Deliveries {
+		d := &r.Status.Deliveries[i]
+		if d.State != v1alpha1.DeliveryRetry {
+			continue
+		}
+		d.State, d.NotBefore, d.Reason, d.UpdatedAt = v1alpha1.DeliverySkipped, nil, supersededReason, metav1.NewTime(now.UTC())
+		addAttempt(r, now, d.Occurrence, d.Target, "skipped", supersededReason)
+		changed = true
+	}
+	return changed
 }
 
 // fire delivers the due occurrence.
@@ -493,42 +563,80 @@ func occurrenceDone(r *v1alpha1.Reminder, occ int32) bool {
 	return true
 }
 
-// finish closes the occurrence: the next one is scheduled from the current
-// spec, or the reminder reaches its final state.
+// finish closes the occurrence. The next one is planned from the CURRENT spec:
+//
+//   - if the schedule fields are the ones the closed occurrence was planned from,
+//     the series simply advances;
+//   - if an edit changed them while the occurrence was claimed, backing off or
+//     sent, the closed occurrence resolved only for itself (it is never sent
+//     again), and the new schedule is planned from scratch. An edit therefore
+//     always yields the new schedule, and a one-shot is not closed by an
+//     occurrence of a schedule that no longer exists.
 func (s *Scheduler) finish(ctx context.Context, r *v1alpha1.Reminder, now time.Time, forced string) {
 	occ := r.Status.Occurrence
 	outcome := "sent"
 	switch forced {
 	case "":
 		for _, d := range r.Status.Deliveries {
-			if d.Occurrence == occ && (d.State == v1alpha1.DeliveryFailed || d.State == v1alpha1.DeliveryAmbiguous) {
+			if d.Occurrence != occ {
+				continue
+			}
+			switch {
+			case d.State == v1alpha1.DeliveryFailed || d.State == v1alpha1.DeliveryAmbiguous:
 				outcome = "failed"
+			case d.Reason == supersededReason && outcome == "sent":
+				outcome = "superseded"
 			}
 		}
 	default:
 		outcome = forced
 	}
 	due := r.Status.NextDue.Time
+	curPlan := PlanHash(r.Spec)
+	replanned := r.Status.PlanHash != curPlan
 	var next Occurrence
 	var more bool
-	if sch, err := ScheduleOf(r.Spec); err == nil && sch.Recurring() {
-		next, more = sch.Next(due.Add(time.Minute))
+	if sch, err := ScheduleOf(r.Spec); err == nil {
+		switch {
+		case !replanned && sch.Recurring():
+			next, more = sch.Next(due.Add(time.Minute))
+		case replanned && sch.Recurring():
+			next, more = sch.Next(laterOf(due.Add(time.Minute), now.Add(-s.grace())))
+		case replanned:
+			// The new schedule is a one-shot: its occurrence fires however late,
+			// unless it is the instant that was just closed.
+			next, more = sch.Next(time.Time{})
+			if more && next.At.Equal(due) {
+				more = false
+			}
+		}
 	}
-	r.Status.PlanHash = PlanHash(r.Spec)
+	r.Status.PlanHash = curPlan
+	suffix := ""
+	if replanned {
+		suffix = "; rescheduled by an edit"
+	}
 	if more {
 		r.Status.State = v1alpha1.ReminderPending
 		r.Status.NextDue = &metav1.Time{Time: next.At.UTC()}
 		r.Status.Occurrence = int32(next.N)
 		r.Status.Deliveries = nil
-		r.Status.Message = fmt.Sprintf("occurrence %d: %s", occ, outcome)
+		r.Status.Message = fmt.Sprintf("occurrence %d: %s%s", occ, outcome, suffix)
 	} else {
 		r.Status.NextDue = nil
-		if outcome == "sent" {
+		if outcome == "sent" || outcome == "superseded" {
 			r.Status.State = v1alpha1.ReminderSent
 		} else {
 			r.Status.State = v1alpha1.ReminderFailed
 		}
-		r.Status.Message = fmt.Sprintf("occurrence %d: %s", occ, outcome)
+		r.Status.Message = fmt.Sprintf("occurrence %d: %s%s", occ, outcome, suffix)
 	}
 	s.write(ctx, r)
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/reminders"
 )
@@ -29,10 +30,30 @@ type RemindersOptions struct {
 	MissGrace time.Duration
 }
 
+// Pushover's limits are 250 characters for a title and 1024 for a message. They
+// are applied here as bytes, which is never over the limit for any reading of
+// "character". The API refuses a body over 1024 bytes, so a clamp is a defence for
+// an object made by other means, not the normal path.
 const (
 	pushoverTitleMax   = 250
 	pushoverMessageMax = 1024
+	// clampMarker shows that text was cut.
+	clampMarker = "…"
 )
+
+// clampUTF8 returns s unchanged when it fits in max bytes. Otherwise it cuts s on
+// a rune boundary and ends it with a marker, so the result is valid UTF-8 and
+// within max bytes. A Pushover 4xx on a split character would fail the delivery.
+func clampUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max - len(clampMarker)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + clampMarker
+}
 
 // ReminderSender adapts the PushoverSender to the scheduler's Sender, and tells
 // the scheduler how far a failed request got:
@@ -48,13 +69,7 @@ type ReminderSender struct {
 
 // Send implements reminders.Sender. Priority 0 (normal): a reminder is not a page.
 func (s ReminderSender) Send(ctx context.Context, m reminders.Message) error {
-	title, body := m.Title, m.Body
-	if len(title) > pushoverTitleMax {
-		title = title[:pushoverTitleMax]
-	}
-	if len(body) > pushoverMessageMax {
-		body = body[:pushoverMessageMax]
-	}
+	title, body := clampUTF8(m.Title, pushoverTitleMax), clampUTF8(m.Body, pushoverMessageMax)
 	err := s.Pushover.Send(ctx, Notice{Title: title, Message: body, Priority: 0})
 	if err == nil {
 		return nil

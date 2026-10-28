@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -148,5 +149,52 @@ func TestSchedulerDeliversThroughThePushoverSenderOnce(t *testing.T) {
 	var got v1alpha1.Reminder
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "dev-env-system", Name: "rem-a"}, &got); err != nil || got.Status.State != v1alpha1.ReminderSent {
 		t.Errorf("state %+v %v", got.Status, err)
+	}
+}
+
+func TestClampUTF8CutsOnARuneBoundaryWithAMarker(t *testing.T) {
+	for name, c := range map[string]struct {
+		in      string
+		max     int
+		changed bool
+	}{
+		"fits exactly":             {strings.Repeat("x", 1024), 1024, false},
+		"ascii over":               {strings.Repeat("x", 1025), 1024, true},
+		"a 2-byte rune at the cut": {strings.Repeat("x", 1020) + "éééé", 1024, true},
+		"a 3-byte rune at the cut": {strings.Repeat("x", 1021) + "日日", 1024, true},
+		"a 4-byte rune at the cut": {strings.Repeat("x", 1019) + "😀😀", 1024, true},
+		"all multi-byte":           {strings.Repeat("日", 400), 1024, true},
+		"title boundary":           {strings.Repeat("x", 247) + "日日", 250, true},
+		"title that fits":          {strings.Repeat("x", 247) + "日", 250, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := clampUTF8(c.in, c.max)
+			if !utf8.ValidString(got) || len(got) > c.max {
+				t.Fatalf("invalid or too long: valid=%v len=%d", utf8.ValidString(got), len(got))
+			}
+			if c.changed != (got != c.in) || (c.changed && !strings.HasSuffix(got, clampMarker)) {
+				t.Errorf("changed=%v marker=%v", got != c.in, strings.HasSuffix(got, clampMarker))
+			}
+		})
+	}
+}
+
+// The text that reaches Pushover is valid UTF-8 and within its limits, so a
+// split character cannot turn into a 4xx and a failed delivery.
+func TestReminderSenderSendsValidUTF8AtTheBoundary(t *testing.T) {
+	p, _, form := reminderPushover(t, 200)
+	body := strings.Repeat("x", 1022) + "日日"
+	title := strings.Repeat("y", 248) + "日日"
+	if err := (ReminderSender{Pushover: p}).Send(context.Background(), reminders.Message{Title: title, Body: body}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []struct {
+		name string
+		max  int
+	}{{"title", pushoverTitleMax}, {"message", pushoverMessageMax}} {
+		v := (*form).Get(f.name)
+		if !utf8.ValidString(v) || len(v) > f.max || !strings.HasSuffix(v, clampMarker) {
+			t.Errorf("%s: valid=%v len=%d suffix=%v", f.name, utf8.ValidString(v), len(v), strings.HasSuffix(v, clampMarker))
+		}
 	}
 }

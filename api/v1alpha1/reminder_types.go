@@ -114,8 +114,9 @@ type ReminderSpec struct {
 	// +kubebuilder:validation:MaxLength=120
 	Title string `json:"title"`
 
-	// Body is the notification and calendar description.
-	// +kubebuilder:validation:MaxLength=2000
+	// Body is the notification and calendar description. It is the Pushover
+	// message, so it is held to Pushover's 1024 limit (the API counts bytes).
+	// +kubebuilder:validation:MaxLength=1024
 	// +optional
 	Body string `json:"body,omitempty"`
 

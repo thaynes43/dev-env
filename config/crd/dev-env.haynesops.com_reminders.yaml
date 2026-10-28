@@ -55,8 +55,10 @@ spec:
             description: ReminderSpec is what the owner asked for.
             properties:
               body:
-                description: Body is the notification and calendar description.
-                maxLength: 2000
+                description: |-
+                  Body is the notification and calendar description. It is the Pushover
+                  message, so it is held to Pushover's 1024 limit (the API counts bytes).
+                maxLength: 1024
                 type: string
               cancelled:
                 description: |-

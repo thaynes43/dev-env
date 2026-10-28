@@ -38,6 +38,11 @@ func TestReminderAccepts(t *testing.T) {
 	if err := k8s.Create(ctx(t), weekly); err != nil {
 		t.Fatalf("a weekly recurrence: %v", err)
 	}
+	full := reminder()
+	full.Spec.Body = strings.Repeat("x", 1024)
+	if err := k8s.Create(ctx(t), full); err != nil {
+		t.Fatalf("a body of Pushover's 1024: %v", err)
+	}
 	until := metav1.NewTime(time.Now().Add(90 * 24 * time.Hour))
 	monthly := reminder()
 	monthly.Spec.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderMonthly, ByMonthDay: 31, Until: &until}
@@ -54,7 +59,7 @@ func TestReminderRefuses(t *testing.T) {
 	}{
 		"no title":          {func(r *v1alpha1.Reminder) { r.Spec.Title = "" }, "spec.title"},
 		"a long title":      {func(r *v1alpha1.Reminder) { r.Spec.Title = long(121) }, "spec.title"},
-		"a long body":       {func(r *v1alpha1.Reminder) { r.Spec.Body = long(2001) }, "spec.body"},
+		"a long body":       {func(r *v1alpha1.Reminder) { r.Spec.Body = long(1025) }, "spec.body"},
 		"no owner":          {func(r *v1alpha1.Reminder) { r.Spec.Owner = "" }, "spec.owner"},
 		"a long owner":      {func(r *v1alpha1.Reminder) { r.Spec.Owner = long(257) }, "spec.owner"},
 		"a due with a zone": {func(r *v1alpha1.Reminder) { r.Spec.Due = "2026-11-02T09:00Z" }, "spec.due"},

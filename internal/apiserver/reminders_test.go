@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -141,8 +142,10 @@ func TestCreateReminderValidatesAndAllowlistsTargets(t *testing.T) {
 			r.Due = "2020-01-01T09:00"
 			r.Recurrence = &apiv1.ReminderRecurrence{Freq: "daily", Count: 3}
 		}), "recurrence"},
-		"a very long key":   {good(func(r *apiv1.CreateReminderRequest) { r.Key = string(make([]byte, 129)) }), "key"},
-		"duplicate targets": {good(func(r *apiv1.CreateReminderRequest) { r.Targets = []string{"pushover:default", "pushover:default"} }), "targets"},
+		"a body over Pushover's limit":     {good(func(r *apiv1.CreateReminderRequest) { r.Body = strings.Repeat("x", 1025) }), "body"},
+		"a multi-byte body over the limit": {good(func(r *apiv1.CreateReminderRequest) { r.Body = strings.Repeat("日", 342) }), "body"},
+		"a very long key":                  {good(func(r *apiv1.CreateReminderRequest) { r.Key = string(make([]byte, 129)) }), "key"},
+		"duplicate targets":                {good(func(r *apiv1.CreateReminderRequest) { r.Targets = []string{"pushover:default", "pushover:default"} }), "targets"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := wantError(t, f.do(http.MethodPost, apiv1.RemindersPath, tok, c.req), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
@@ -154,6 +157,12 @@ func TestCreateReminderValidatesAndAllowlistsTargets(t *testing.T) {
 				t.Errorf("fields %+v lack %q", e.Fields, c.field)
 			}
 		})
+	}
+	// A body of exactly Pushover's 1024 bytes, multi-byte at the end, is accepted.
+	edge := newReminder()
+	edge.Body = strings.Repeat("x", 1021) + "日"
+	if rem := f.createReminder(tok, edge); len(rem.Body) != 1024 {
+		t.Errorf("body of %d bytes", len(rem.Body))
 	}
 	// The listed calendar reference and a recurrence are accepted.
 	ok := good(func(r *apiv1.CreateReminderRequest) {

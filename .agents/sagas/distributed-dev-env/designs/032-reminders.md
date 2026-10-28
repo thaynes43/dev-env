@@ -75,14 +75,15 @@ Each one needs its own action-specific approval from Tom. None is part of this c
 subresource. Bounds on every string, list and number are in the schema and tested in
 `api/v1alpha1/reminder_validation_test.go`.
 
-- `spec`: `title` (1 to 120), `body` (up to 2000), `owner` (from the token, immutable),
+- `spec`: `title` (1 to 120), `body` (up to 1024 bytes, Pushover's message limit), `owner` (from the token, immutable),
   `due` (local `YYYY-MM-DDTHH:MM`) with `timeZone` (IANA), optional `recurrence`
   (`freq` daily, weekly or monthly; `byDay` or `byMonthDay`; `until` or `count`),
   `targets` by reference, `cancelled`.
 - `status`: `state` (pending, sent, failed, cancelled), `nextDue`, `occurrence` (the
   1-based index in the series), `planHash`, `deliveries` (one per Pushover target for
   the current occurrence: claimed, retry, sent, failed, ambiguous, skipped, with
-  attempts and a reason), `calendar` (the sync state per calendar target), a bounded
+  attempts and a reason), `calendar` (the sync state per calendar target, pruned to the CRD's 8 on every pass
+  whatever the adapter's state), a bounded
   attempt log (20) and a message.
 - Targets are references from a fixed allowlist: `pushover:default`, and
   `calendar:<ref>` for the references the operator was given. An address, a URL or a
@@ -132,6 +133,18 @@ Every write carries the resourceVersion it read.
   object after the scheduler read it, the claim conflicts, nothing is sent, and the next
   pass reads the new state: a cancel wins and nothing fires; an edit replans from the new
   schedule.
+- **An edit always yields the new schedule.** The status keeps the hash of the schedule
+  fields (`planHash`) its `nextDue` was planned from. An occurrence that is already
+  claimed, backing off or finished when the edit lands resolves **only for itself**:
+  - a claim never resolved becomes `ambiguous`, a request that was made keeps its
+    result, and a sent or ambiguous delivery is never sent again;
+  - a retry waiting out its backoff is dropped as `skipped` ("superseded by an edit"),
+    because nothing was sent and the old time is no longer wanted;
+  - when the occurrence closes, the next one is planned from the **current** spec, not
+    from the closed occurrence's schedule, so a one-shot is not closed by an occurrence
+    of a schedule that no longer exists. A new one-shot fires however late; a new series
+    starts at the first occurrence after the closed one (within the miss grace).
+  The tests cover an edit during the claim, during the backoff and after the send.
 - If the claim wins, the cancel or edit then retries against the new state. A cancel
   that arrives while a delivery is claimed succeeds but says that a request in flight
   cannot be recalled (`warning`). A cancel of a one-shot that has already been sent is a
@@ -164,6 +177,10 @@ The operator serves `/v1/reminders` behind the default-off flag `--enable-remind
 | `GET /v1/reminders/{name}` | the owner, a human or a coordinator; anyone else gets 404 |
 | `PATCH /v1/reminders/{name}` | the owner, a human or a coordinator |
 | `POST /v1/reminders/{name}/cancel` | the owner, a human or a coordinator; idempotent |
+
+The body is held to Pushover's 1024-byte message limit by the CRD and the API, so the
+keeper never has to cut it; if it must (an object made by other means), it cuts on a
+rune boundary and ends with "…", for the body (1024 bytes) and the title (250).
 
 A caller may hold 100 live reminders. A finished one does not count; finished
 reminders are not yet garbage collected (a follow-up).

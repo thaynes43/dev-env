@@ -543,3 +543,197 @@ func TestStartStopsWithItsContextAndNeedsTheLeader(t *testing.T) {
 		t.Fatal("Start did not stop")
 	}
 }
+
+// An edit during a claim: the old occurrence resolves only for itself (a crash
+// leaves it ambiguous, never resent) and the new due time still fires, once.
+func TestEditDuringTheClaimStillYieldsTheNewSchedule(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-a", nil)
+	e.tick()
+	e.advance(time.Hour) // 13:00, due
+	r := e.get("rem-a")
+	r.Status.Deliveries = []v1alpha1.ReminderDelivery{{Target: "pushover:default", Occurrence: 1, State: v1alpha1.DeliveryClaimed, Attempts: 1, UpdatedAt: metav1.NewTime(e.now)}}
+	if err := e.c.Status().Update(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Due = "2026-10-28T16:00" })
+	e.tick() // the stale claim becomes ambiguous; the reminder is replanned, not closed
+	r = e.wantState("rem-a", v1alpha1.ReminderPending)
+	if r.Status.NextDue == nil || !r.Status.NextDue.Time.Equal(utc("2026-10-28T16:00:00Z")) || len(r.Status.Deliveries) != 0 {
+		t.Fatalf("not replanned: %+v", r.Status)
+	}
+	e.wantSends(0)
+	e.advance(3 * time.Hour)
+	e.tick()
+	e.tick()
+	e.wantSends(1)
+	e.wantState("rem-a", v1alpha1.ReminderSent)
+}
+
+// The same edit lands while the request is in flight: its result is kept, the
+// old time is never sent again, and the new time fires.
+func TestEditWhileTheRequestIsInFlightKeepsTheResultAndPlansTheNewDue(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-a", nil)
+	e.tick()
+	e.advance(time.Hour)
+	e.snd.during = func() {
+		e.snd.during = nil
+		e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Due = "2026-10-28T16:00" })
+	}
+	e.tick()
+	e.wantSends(1)
+	r := e.wantState("rem-a", v1alpha1.ReminderPending)
+	if !r.Status.NextDue.Time.Equal(utc("2026-10-28T16:00:00Z")) {
+		t.Fatalf("next due %v; status %+v", r.Status.NextDue, r.Status)
+	}
+	e.tick()
+	e.wantSends(1)
+	e.advance(3 * time.Hour)
+	e.tick()
+	e.wantSends(2)
+	e.wantState("rem-a", v1alpha1.ReminderSent)
+}
+
+// An edit during the retry backoff drops the retry (nothing was sent) and the
+// new time fires once.
+func TestEditDuringBackoffDropsTheRetryAndFiresTheNewDue(t *testing.T) {
+	e := newEnv(t)
+	e.snd.errs = []error{ErrNotSent}
+	e.create("rem-a", nil)
+	e.tick()
+	e.advance(time.Hour)
+	e.tick() // attempt 1: not sent, backing off
+	e.wantSends(1)
+	e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Due = "2026-10-28T16:00" })
+	e.tick()
+	r := e.wantState("rem-a", v1alpha1.ReminderPending)
+	if !r.Status.NextDue.Time.Equal(utc("2026-10-28T16:00:00Z")) {
+		t.Fatalf("next due %v", r.Status.NextDue)
+	}
+	e.advance(10 * time.Minute) // past the old backoff
+	e.tick()
+	e.wantSends(1) // the old retry is not sent late
+	var superseded bool
+	for _, a := range r.Status.Attempts {
+		superseded = superseded || a.Detail == supersededReason
+	}
+	if !superseded {
+		t.Errorf("no record of the dropped retry: %+v", r.Status.Attempts)
+	}
+	e.advance(3 * time.Hour)
+	e.tick()
+	e.wantSends(2)
+	e.wantState("rem-a", v1alpha1.ReminderSent)
+}
+
+// An edit after the send but before the occurrence closed (the close write
+// failed): the sent delivery is not sent again, and the new schedule is planned.
+func TestEditAfterTheSendDoesNotResendAndPlansTheNewSchedule(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-a", func(s *v1alpha1.ReminderSpec) { s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: "daily"} })
+	e.tick()
+	e.advance(time.Hour)
+	r := e.get("rem-a")
+	r.Status.Deliveries = []v1alpha1.ReminderDelivery{{Target: "pushover:default", Occurrence: 1, State: v1alpha1.DeliverySent, Attempts: 1, UpdatedAt: metav1.NewTime(e.now)}}
+	if err := e.c.Status().Update(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	e.mutate("rem-a", func(r *v1alpha1.Reminder) {
+		r.Spec.Recurrence = &v1alpha1.ReminderRecurrence{Freq: "weekly", ByDay: []string{"FR"}}
+		r.Spec.Due = "2026-10-30T09:00"
+	})
+	e.tick()
+	e.wantSends(0)
+	r = e.wantState("rem-a", v1alpha1.ReminderPending)
+	if !r.Status.NextDue.Time.Equal(utc("2026-10-30T09:00:00Z")) {
+		t.Fatalf("next due %v", r.Status.NextDue)
+	}
+	e.advance(48 * time.Hour)
+	e.tick()
+	e.wantSends(1)
+}
+
+// A one-shot edited to the same instant in another zone is not sent twice.
+func TestEditToTheSameInstantIsNotASecondSend(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-a", nil)
+	e.tick()
+	e.advance(time.Hour)
+	e.snd.during = func() {
+		e.snd.during = nil
+		// 13:00 UTC is 09:00 in New York (EDT).
+		e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Due = "2026-10-28T09:00"; r.Spec.TimeZone = "America/New_York" })
+	}
+	e.tick()
+	e.tick()
+	e.wantSends(1)
+	e.wantState("rem-a", v1alpha1.ReminderSent)
+}
+
+func TestCalendarStatusStaysWithinItsBoundWhateverTheAdapter(t *testing.T) {
+	check := func(t *testing.T, e *env) {
+		t.Helper()
+		if n := len(e.get("rem-a").Status.Calendar); n > maxCalendarEntries {
+			t.Fatalf("%d calendar entries, the CRD allows %d", n, maxCalendarEntries)
+		}
+	}
+	retarget := func(e *env, ref string) {
+		e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Targets = []string{"pushover:default", "calendar:" + ref} })
+		e.tick()
+	}
+	t.Run("an adapter that deletes", func(t *testing.T) {
+		e := newEnv(t)
+		e.create("rem-a", func(s *v1alpha1.ReminderSpec) { s.Targets = []string{"calendar:c0"} })
+		e.tick()
+		for i := 1; i <= 14; i++ {
+			retarget(e, fmt.Sprintf("c%d", i))
+			check(t, e)
+		}
+		if e.cal.Count() != 1 || len(e.get("rem-a").Status.Calendar) != 1 {
+			t.Errorf("%d entries standing, %d in the status", e.cal.Count(), len(e.get("rem-a").Status.Calendar))
+		}
+	})
+	t.Run("an adapter whose deletes fail", func(t *testing.T) {
+		e := newEnv(t)
+		e.create("rem-a", func(s *v1alpha1.ReminderSpec) { s.Targets = []string{"calendar:c0"} })
+		e.tick()
+		e.cal.FailDelete = true
+		for i := 1; i <= 14; i++ {
+			e.advance(time.Minute)
+			retarget(e, fmt.Sprintf("c%d", i))
+			check(t, e)
+		}
+		if got := len(e.get("rem-a").Status.Calendar); got != maxCalendarEntries {
+			t.Errorf("%d entries, want the bound %d", got, maxCalendarEntries)
+		}
+	})
+	t.Run("no adapter at all", func(t *testing.T) {
+		e := newEnv(t)
+		e.s.Calendar = nil
+		e.create("rem-a", func(s *v1alpha1.ReminderSpec) { s.Targets = []string{"calendar:c0"} })
+		e.tick()
+		r := e.get("rem-a")
+		for i := 0; i < 12; i++ { // stale entries that still read as synced
+			r.Status.Calendar = append(r.Status.Calendar, v1alpha1.ReminderCalendarSync{Target: fmt.Sprintf("calendar:old%d", i),
+				State: v1alpha1.CalendarSynced, UpdatedAt: metav1.NewTime(e.now.Add(time.Duration(i) * time.Minute))})
+		}
+		if err := e.c.Status().Update(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+		e.tick()
+		check(t, e)
+		got := e.get("rem-a").Status.Calendar
+		if len(got) != maxCalendarEntries {
+			t.Fatalf("%d entries", len(got))
+		}
+		if syncEntry(e.get("rem-a"), "calendar:c0") == nil {
+			t.Error("the wanted target was pruned")
+		}
+		for _, c := range got {
+			if c.Target == "calendar:old0" {
+				t.Error("the oldest stale entry survived")
+			}
+		}
+	})
+}

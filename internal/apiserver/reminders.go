@@ -33,6 +33,8 @@ type ReminderConfig struct {
 
 const (
 	maxReminderBody = 32 << 10
+	// maxReminderBodyBytes is Pushover's message limit.
+	maxReminderBodyBytes = 1024
 	// A caller may hold this many live reminders; a finished one does not count.
 	maxLiveRemindersPerOwner = 100
 	// pastGrace is how far back a due time may be and still be accepted: a
@@ -97,8 +99,10 @@ func (s *Server) validateReminder(spec *v1alpha1.ReminderSpec, now time.Time, re
 	case len(spec.Title) > 120:
 		add("title", "%d bytes, more than 120", len(spec.Title))
 	}
-	if len(spec.Body) > 2000 {
-		add("body", "%d bytes, more than 2000", len(spec.Body))
+	// The body is the Pushover message, which takes 1024 bytes at most; the
+	// keeper would otherwise have to cut it.
+	if len(spec.Body) > maxReminderBodyBytes {
+		add("body", "%d bytes, more than %d (Pushover's message limit)", len(spec.Body), maxReminderBodyBytes)
 	}
 	if len(spec.Targets) == 0 {
 		spec.Targets = []string{v1alpha1.ReminderDefaultPushover}
