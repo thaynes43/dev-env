@@ -236,3 +236,34 @@ func TestTailLogLongLines(t *testing.T) {
 		t.Errorf("%d lines; the long one %d bytes", len(lines), len(lines[1]))
 	}
 }
+
+// A Codex remote session has no pane in this pod: the refusal says where it is reached,
+// and keeps the same sentinel (so the status stays 409) and the original reason. Other
+// sessions keep their text.
+func TestDeliverRefusalNamesTheCodexAppForARemoteCodexSession(t *testing.T) {
+	remote := protocol.Session{Name: "s-1", Agent: protocol.AgentCodex, Mode: protocol.ModeRemote}
+	empty := testSettings(t, t.TempDir())
+	_, f, _ := deliverRig(t, true)
+	err := Deliver(context.Background(), f, empty, remote, "session/x", "hi") // no launch this boot
+	if !errors.Is(err, ErrNotAddressable) {
+		t.Fatalf("not the sentinel: %v", err)
+	}
+	for _, want := range []string{"Codex remote session", "Codex app or its remote-control pairing", "not by agent-run msg", "the agent has not started in this pod"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message lacks %q: %v", want, err)
+		}
+	}
+	// The same pod state for a Claude session keeps the original text exactly.
+	err = Deliver(context.Background(), f, empty, protocol.Session{Name: "s-1", Agent: protocol.AgentClaude, Mode: protocol.ModeRemote}, "session/x", "hi")
+	if !errors.Is(err, ErrNotAddressable) || err.Error() != "not addressable: the agent has not started in this pod" {
+		t.Errorf("a Claude session's text changed: %v", err)
+	}
+	err = Deliver(context.Background(), f, empty, protocol.Session{Name: "s-1", Agent: protocol.AgentCodex, Mode: protocol.ModeTask}, "session/x", "hi")
+	if !errors.Is(err, ErrNotAddressable) || err.Error() != "not addressable: the agent has not started in this pod" {
+		t.Errorf("a Codex task's text changed: %v", err)
+	}
+	// Nothing was run.
+	if len(f.lines()) != 0 {
+		t.Errorf("ran %q", f.lines())
+	}
+}

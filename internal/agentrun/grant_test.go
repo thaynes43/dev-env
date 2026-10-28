@@ -395,3 +395,51 @@ func TestGrantAttestEmptyCoordinatorRefIsRefusedByTheServer(t *testing.T) {
 		t.Fatalf("requests %+v", reqs)
 	}
 }
+
+// Active comes before the install. grant show says whether the install is confirmed
+// (installedAt), only for grants that are installed in the pod and only while Active.
+func TestGrantShowSaysWhetherTheInstallIsConfirmed(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       string // "" means no installed line at all
+	}{
+		{"credential, not yet confirmed", `{"name":"grant-abc","phase":"Active","type":"credential","credential":"proxmox","ttl":"1h0m0s","reason":"r"}`, "installed: pending (the install is not confirmed yet)"},
+		{"credential, confirmed", `{"name":"grant-abc","phase":"Active","type":"credential","credential":"hw-ssh","ttl":"1h0m0s","reason":"r","installedPodUID":"p","installedAt":"2026-10-28T02:14:22Z"}`, "installed: 2026-10-28T02:14:22Z"},
+		{"kube, not yet confirmed", `{"name":"grant-abc","phase":"Active","type":"kube","role":"dev-env-grant-nodes","ttl":"1h0m0s","reason":"r"}`, "installed: pending (the install is not confirmed yet)"},
+		{"kube, confirmed", `{"name":"grant-abc","phase":"Active","type":"kube","role":"dev-env-grant-nodes","ttl":"1h0m0s","reason":"r","installedAt":"2026-10-28T02:14:22Z"}`, "installed: 2026-10-28T02:14:22Z"},
+		{"egress has no install", `{"name":"grant-abc","phase":"Active","type":"egress","ttl":"1h0m0s","reason":"r"}`, ""},
+		{"pending grant", `{"name":"grant-abc","phase":"Pending","type":"credential","credential":"proxmox","ttl":"1h0m0s","reason":"r"}`, ""},
+		{"released grant", `{"name":"grant-abc","phase":"Released","type":"credential","credential":"proxmox","ttl":"1h0m0s","reason":"r","installedAt":"2026-10-28T02:14:22Z"}`, ""},
+		{"failed grant", `{"name":"grant-abc","phase":"Failed","type":"credential","credential":"proxmox","ttl":"1h0m0s","reason":"r"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			serveRaw(h, map[string]func(*http.Request) (int, string){
+				apiv1.GrantPath("grant-abc"): func(*http.Request) (int, string) { return http.StatusOK, tc.body },
+			})
+			h.mustRun(ExitOK, "grant", "show", "grant-abc")
+			out := h.stdout.String()
+			if tc.want == "" {
+				if strings.Contains(out, "installed:") {
+					t.Fatalf("an installed line for a grant with no install to confirm:\n%s", out)
+				}
+				return
+			}
+			contains(t, "stdout", out, tc.want)
+			if strings.Count(out, "installed:") != 1 {
+				t.Fatalf("installed lines:\n%s", out)
+			}
+		})
+	}
+	// The JSON output is the wire view, unchanged.
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(*http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","phase":"Active","type":"credential","credential":"proxmox","ttl":"1h0m0s","reason":"r"}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "show", "grant-abc", "-o", "json")
+	if strings.Contains(h.stdout.String(), "installed:") {
+		t.Fatalf("json output carries the text line:\n%s", h.stdout.String())
+	}
+}

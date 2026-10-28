@@ -106,6 +106,16 @@ func TestGrantAttestationRefusals(t *testing.T) {
 	for _, b := range []apiv1.AttestGrantRequest{{ApprovedBy: "tom", Ref: "r", ScopeDigest: g.ScopeDigest}, {ApprovedBy: "user", Ref: "has space", ScopeDigest: g.ScopeDigest}, {ApprovedBy: "coordinator:", Ref: "r", ScopeDigest: g.ScopeDigest}} {
 		wantError(t, f.do(http.MethodPost, path, tok, b), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
 	}
+	// The reference: 1 to 128 of letters, digits and . _ : / # - ; the 422 says so.
+	for name, ref := range map[string]string{"129 characters": strings.Repeat("a", 129), "empty": "", "question mark": "a?b", "equals": "a=b", "at sign": "a@b", "percent": "a%20b", "quote": `a"b`, "newline": "a\nb", "non-ASCII": "caf\u00e9"} {
+		e := wantError(t, f.do(http.MethodPost, path, tok, apiv1.AttestGrantRequest{ApprovedBy: "user", Ref: ref, ScopeDigest: g.ScopeDigest}), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+		if len(e.Fields) != 1 || e.Fields[0].Field != "ref" || !strings.Contains(e.Fields[0].Message, "128") || !strings.Contains(e.Fields[0].Message, "letters, digits") {
+			t.Errorf("%s: the 422 does not state the charset: %+v", name, e)
+		}
+	}
+	if _, ok := f.grant(g.Name).Annotations[grantattest.Annotation]; ok {
+		t.Fatal("a refused reference was recorded")
+	}
 	if _, ok := f.grant(g.Name).Annotations[grantattest.Annotation]; ok {
 		t.Fatal("a refused attestation was written")
 	}

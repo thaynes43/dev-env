@@ -472,6 +472,15 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	if out.ApprovalURL != "" {
 		a.outf("approval: %s\n", out.ApprovalURL)
 	}
+	// Active comes before the install: a credential or kube grant is usable in the pod
+	// only once the install is confirmed (installedAt). Pending means not confirmed yet.
+	if out.Phase == apiv1.GrantActive && (out.Type == apiv1.GrantTypeCredential || out.Type == apiv1.GrantTypeKube || out.Type == apiv1.GrantTypeBreakglass) {
+		if out.InstalledAt != nil && !out.InstalledAt.IsZero() {
+			a.outf("installed: %s\n", out.InstalledAt.UTC().Format(timeRFC3339))
+		} else {
+			a.outf("installed: pending (the install is not confirmed yet)\n")
+		}
+	}
 	if out.Credential == apiv1.CredentialHWSSH {
 		a.outf("%s\n", hwsshNotice)
 	}
