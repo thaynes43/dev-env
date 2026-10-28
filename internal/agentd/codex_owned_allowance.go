@@ -82,6 +82,14 @@ func ownedAllowanceWriteAuth(dir string, native []byte) error {
 	return nil
 }
 
+func ownedAllowanceRuntimeDirectory(info os.FileInfo, uid uint32) bool {
+	if info == nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Uid == uid
+}
+
 // OwnedAllowanceContext carries caller-supplied provenance, not authentication.
 type OwnedAllowanceContext struct {
 	Session protocol.Session
@@ -152,11 +160,7 @@ func captureOwnedAllowance(ctx context.Context, s Settings, session protocol.Ses
 		return err == nil && os.SameFile(binary, current)
 	}
 	base, err := os.Lstat(s.RuntimeDir)
-	if err != nil || !base.IsDir() || base.Mode().Perm() != 0700 || noSymlinkComponents(s.RuntimeDir) != nil {
-		return unavailable()
-	}
-	baseStat, ok := base.Sys().(*syscall.Stat_t)
-	if !ok || baseStat.Uid != uint32(os.Geteuid()) {
+	if err != nil || !ownedAllowanceRuntimeDirectory(base, uint32(os.Geteuid())) || noSymlinkComponents(s.RuntimeDir) != nil {
 		return unavailable()
 	}
 	home := filepath.Join(s.RuntimeDir, "codex-owned-allowance-observer")

@@ -28,3 +28,15 @@ func TestOwnedAllowanceHelperRefusesMissingControl(t *testing.T) {
 		t.Fatal("helper accepted missing authenticated control")
 	}
 }
+
+func TestOwnedAllowanceClaimedLabelsWithoutFixedContextRefused(t *testing.T) {
+	env := map[string]string{
+		"HOME":            t.TempDir(),
+		"DEV_ENV_POD_UID": "caller-claimed-pod",
+		"AGENTD_SESSION":  `{"name":"fixture","sessionUID":"caller-claimed-session","repo":"dev-env","agent":"codex","mode":"remote","model":"gpt-6-astra"}`,
+	}
+	var out, errOut bytes.Buffer
+	if codexOwnedAllowance(context.Background(), []string{"--enabled"}, &out, &errOut, func(k string) string { return env[k] }) != exitFailure || out.Len() != 0 {
+		t.Fatal("caller labels bypassed the fixed context")
+	}
+}

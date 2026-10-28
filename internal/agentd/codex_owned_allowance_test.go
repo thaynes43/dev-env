@@ -81,6 +81,17 @@ func TestOwnedAllowanceReadOnlyProjectionFence(t *testing.T) {
 	}
 }
 
+func TestOwnedAllowanceRuntimeDirectoryOwnership(t *testing.T) {
+	info, err := os.Lstat(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := uint32(os.Geteuid())
+	if !ownedAllowanceRuntimeDirectory(info, uid) || ownedAllowanceRuntimeDirectory(info, uid+1) {
+		t.Fatal("runtime directory ownership was not enforced")
+	}
+}
+
 type ownedFixtureOwner struct {
 	listener net.Listener
 	stopErr  error
