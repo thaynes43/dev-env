@@ -198,4 +198,7 @@ func TestUsageClaudeStatusline(t *testing.T) {
 	if Run(context.Background(), []string{"usage", "-o", "json", "--claude-statusline", "--from-file", "-"}, env) == 0 {
 		t.Fatal("conflicting sources accepted")
 	}
+	if out.Len() != 0 || !strings.Contains(stderr.String(), "usage: expected -o json [--from-file FILE|- | --claude-statusline]") {
+		t.Fatal("inaccurate conflict guidance")
+	}
 }

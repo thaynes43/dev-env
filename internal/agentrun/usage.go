@@ -36,7 +36,7 @@ func (a *app) usage(ctx context.Context, args []string) error {
 		}
 	})
 	if output != "json" || fs.NArg() != 0 || (fromSpecified && from == "") || (fromSpecified && claude) {
-		return usageError("usage: expected -o json [--from-file FILE|-]")
+		return usageError("usage: expected -o json [--from-file FILE|- | --claude-statusline]")
 	}
 	if ctx.Err() != nil {
 		return &exitError{code: ExitFailed, msg: "usage unavailable"}
