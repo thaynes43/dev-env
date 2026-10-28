@@ -47,7 +47,7 @@ func (a *app) usage(ctx context.Context, args []string) error {
 		}
 		at := now().UTC().Format(time.RFC3339Nano)
 		read = providerallowance.ReadResponse{Schema: providerallowance.SchemaRead, SnapshotRevision: "local-preflight", ServedAt: at, Items: []providerallowance.ReadItem{}, SourceStatuses: []providerallowance.SourceStatus{}}
-		for _, v := range []struct{ provider, code string }{{"cursor", "local_unconfigured_cursor_no_provider_request"}, {"claude", "local_unconfigured_claude_no_provider_request"}, {"openai", "local_unconfigured_codex_no_provider_request"}} {
+		for _, v := range []struct{ provider, code string }{{"cursor", "local_unconfigured_cursor_no_provider_request"}, {"anthropic", "local_unconfigured_claude_no_provider_request"}, {"openai", "local_unconfigured_codex_no_provider_request"}} {
 			code := v.code
 			read.SourceStatuses = append(read.SourceStatuses, providerallowance.SourceStatus{Provider: v.provider, ProducerRef: "agent-run-local-preflight", Availability: providerallowance.AvailabilityUnconfigured, LastAttempt: providerallowance.LastAttempt{AttemptedAt: at, CompletedAt: &at, Result: providerallowance.AttemptUnavailable, Code: &code}, Freshness: providerallowance.Freshness{State: providerallowance.FreshUnknown, AsOf: at, Basis: providerallowance.BasisNone, Reason: "local configuration check; no provider request"}, Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationUnverified, ValidationRefs: []string{}}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingUnknown}})
 		}

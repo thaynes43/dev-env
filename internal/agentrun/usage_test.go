@@ -89,9 +89,20 @@ func TestUsageLocalPreflight(t *testing.T) {
 	if err != nil || len(read.Items) != 0 || len(read.SourceStatuses) != 3 || read.ServedAt != at.Format(time.RFC3339) {
 		t.Fatal("invalid local read", err)
 	}
+	providers := map[string]bool{"cursor": false, "anthropic": false, "openai": false}
 	for _, s := range read.SourceStatuses {
+		seen, ok := providers[s.Provider]
+		if !ok || seen {
+			t.Fatal("unexpected or duplicate provider", s.Provider)
+		}
+		providers[s.Provider] = true
 		if s.Availability != providerallowance.AvailabilityUnconfigured || s.LastGood != nil || s.LastAttempt.Result != providerallowance.AttemptUnavailable || s.LastAttempt.AttemptedAt != read.ServedAt || s.Freshness.State != providerallowance.FreshUnknown || s.Binding.State != providerallowance.BindingUnknown || s.LastAttempt.Code == nil || !strings.Contains(*s.LastAttempt.Code, "no_provider_request") {
 			t.Fatal("invalid preflight", s)
+		}
+	}
+	for provider, seen := range providers {
+		if !seen {
+			t.Fatal("missing provider", provider)
 		}
 	}
 }
