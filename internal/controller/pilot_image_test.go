@@ -148,21 +148,41 @@ func TestPilotAgentSelectionIsExact(t *testing.T) {
 	}
 }
 
-// The pilot pod carries the current templates revision, so a templates edit is
-// the only thing that drains it.
-func TestPilotAgentPodDrainsOnlyOnATemplatesChange(t *testing.T) {
+// Pilot image selection does not make remote sessions eligible for automatic
+// drain. An idle local pilot may still drain when its template revision changes.
+func TestPilotAgentPodDrainRespectsRemoteMode(t *testing.T) {
 	tmpl := exampleTemplates(t)
-	s := pilotTestSession()
-	s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
-	s.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentIdle}
-	pod := buildPilotPod(t, s, pilotTestAgent())
-	pod.Status.Phase = corev1.PodRunning
-	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
-	if drainEligible(s, pod, tmpl.Revision()) {
-		t.Fatal("a pilot pod on the current revision was eligible to drain")
-	}
-	if !drainEligible(s, pod, "next-revision") {
-		t.Fatal("a pilot pod on an outdated revision was not eligible to drain")
+	for _, tc := range []struct {
+		name     string
+		agent    v1alpha1.AgentKind
+		mode     v1alpha1.SessionMode
+		outdated bool
+	}{
+		{"claude remote", v1alpha1.AgentClaude, v1alpha1.ModeRemote, false},
+		{"codex remote", v1alpha1.AgentCodex, v1alpha1.ModeRemote, false},
+		{"claude local", v1alpha1.AgentClaude, v1alpha1.ModeLocal, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := pilotTestSession()
+			s.Spec.Agent, s.Spec.Mode = tc.agent, tc.mode
+			if tc.agent == v1alpha1.AgentCodex {
+				s.Spec.Model = "gpt-6-astra"
+			}
+			s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+			s.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentIdle}
+			pod := buildPilotPod(t, s, pilotTestAgent())
+			if pod.Spec.Containers[0].Image != pilotTestImage {
+				t.Fatal("pilot image not selected")
+			}
+			pod.Status.Phase = corev1.PodRunning
+			pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+			if drainEligible(s, pod, tmpl.Revision()) {
+				t.Fatal("current pilot revision was eligible")
+			}
+			if got := drainEligible(s, pod, "next-revision"); got != tc.outdated {
+				t.Fatalf("outdated eligible %v, want %v", got, tc.outdated)
+			}
+		})
 	}
 }
 
