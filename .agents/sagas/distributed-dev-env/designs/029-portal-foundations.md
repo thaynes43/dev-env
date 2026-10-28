@@ -785,3 +785,43 @@ Unit A's measurement now runs and is stored. The portal does not show it yet.
 - **What is still an assumption.** That Claude Code repeats usage per content block and
   its output counter only grows (seen on 2.1.296), and the Codex `token_count` shape, are
   encoded in synthetic fixtures. No published schema for either has been checked in.
+
+### Interactive conversation usage, Unit B milestone 2 (reader and view model), 2026-10-28
+
+The portal reader can now carry each interactive session's measured conversation
+usage, and the portal maps it to a view model. The final template and copy are a
+separate step; the text here is a placeholder rendered by the existing panels and
+tables.
+
+- **Rollout choice: a default-off operator flag.** The portal's activity decoder is
+  strict (`exactKeys` in `product_activity.go`; `TestActivityDecoderIsStrictAboutKeysItDoesNotKnow`
+  pins it), so a portal from before this change reads a view with an unknown
+  `conversationUsage` key as unavailable, for the whole Sessions page. The operator
+  therefore sends the key only with `--portal-conversation-usage` (requires
+  `--enable-portal-reader`), and the flag is turned on after the new portal is rolled.
+  The new portal treats the key as optional, so it reads a view from an operator that
+  does not send it, and one that does. The order is: CRD (already), operator
+  (flag off), portal, then the flag.
+- **Operator allowlist.** The key carries `resultState` (Final or Partial), `reasonCode`
+  (Partial only), per-served-model counters (Reported or Unknown), `turns`, `skipped`
+  and `observedAt`, and nothing else: no coverage or semantics words, no provider (the
+  activity already has it), no path, id, record text, requested model or cost. It is
+  sent only for an interactive session whose stored figure is valid for the session's own
+  provider and is not Unknown; a task session, an invalid figure and an Unknown one send
+  no key. A time ahead of the operator's clock is sent as now.
+- **Portal decoder.** Exactly those keys, re-checked with the same `Valid()` the agentd
+  measurement and the operator's heartbeat use, for an interactive session of Claude or
+  Codex. Anything else makes the read unavailable, like the other optional activity keys.
+  A time a little ahead of the portal's clock is clamped to now.
+- **View model.** Measured conversation usage is its own panel on the session ("Conversation
+  usage": result with the reason, when it was measured, freshness, provider calls counted,
+  records skipped, and each served model's counters on a line) and its own table in the
+  Usage view, grouped by provider and served model. Providers never share a row, so Codex's
+  input (which includes cached tokens) is never added to Claude's, and nothing is added to
+  a task's initial invocation. An Unknown or absent counter is never shown as zero; a
+  Reported zero is.
+- **Stale.** A figure older than 15 minutes (three of agentd's five-minute measurements)
+  is marked stale, by the portal's clock at read time. The figure is not hidden.
+- **Still not shown:** a cost, a charge, an allowance or a quota. The Usage view's task-only
+  wording (scope, coverage and the interactive "not measured" notes) changes only when a
+  figure is present, and is placeholder text for the interface review.

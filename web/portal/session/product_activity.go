@@ -17,8 +17,9 @@ import (
 )
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
-// lastActivity, provider, launchedBy, taskResult and remoteControl are optional
-// (an operator before 2026-10-27 sends none of the last four); a null, an unknown key or a
+// lastActivity, provider, launchedBy, taskResult, remoteControl and
+// conversationUsage are optional (an operator before 2026-10-27 sends none of the
+// last four, and one without --portal-conversation-usage sends no conversationUsage); a null, an unknown key or a
 // word outside its fixed set makes the whole read unavailable. Usage covers
 // task sessions only, so any other mode must carry an Unknown usage scope,
 // which in turn carries no reported value, and no task result.
@@ -28,7 +29,7 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	if err != nil {
 		return a, err
 	}
-	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl") {
+	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl", "conversationUsage") {
 		return a, portal.ErrUnavailable
 	}
 	a.Provider = protocol.UsageUnknown
@@ -55,6 +56,16 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 		a.RemoteControl = rc
 	}
 	mode, ok1 := jsonString(obj["mode"])
+	if raw, ok := obj["conversationUsage"]; ok {
+		// Optional, so a portal rolled before the operator that sends it still reads
+		// the view; but when it is there it must be exact, and it belongs to an
+		// interactive session of a provider it measures.
+		cu, err := decodeConversationUsage(raw, a.Provider, mode, now)
+		if err != nil {
+			return a, err
+		}
+		a.ConversationUsage = cu
+	}
 	state, ok2 := jsonString(obj["agentState"])
 	model, ok3 := jsonString(obj["requestedModel"])
 	if !ok1 || !ok2 || !ok3 || !oneOf(mode, "task", "local", "remote", protocol.UsageUnknown) ||
@@ -488,6 +499,7 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	if selected >= maxListedSessions {
 		drop = maxListedSessions - 1
 	}
+	byConversation := map[string]*conversationTotal{}
 	byDriver := map[string]*usageTotal{"Interactive": {}, "Headless": {}, protocol.UsageUnknown: {}}
 	byModel, byProject := map[string]*usageTotal{}, map[string]*usageTotal{}
 	measured, interactive, headless := 0, 0, 0
@@ -512,6 +524,16 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 			interactive++
 		case "Headless":
 			headless++
+		}
+		if c := a.ConversationUsage; c != nil {
+			stale := conversationStale(c, now)
+			for _, m := range c.Models {
+				key := shown(a.Provider) + " · " + shown(m.Model)
+				if byConversation[key] == nil {
+					byConversation[key] = &conversationTotal{}
+				}
+				byConversation[key].add(m, c.ResultState == protocol.ConversationPartial, stale)
+			}
 		}
 		modelKey := shown(a.Provider) + " · " + shown(a.RequestedModel)
 		for _, t := range []*usageTotal{byDriver[driver], totalFor(byModel, modelKey), totalFor(byProject, e.s.Repo)} {
@@ -541,6 +563,32 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	}
 	usage.Breakdowns = append(usage.Breakdowns, driverTable,
 		portal.ProductUsageTable{Title: "By provider and requested model", Columns: columns("Provider · model"), Rows: totalRows(byModel)})
+	if len(byConversation) > 0 {
+		// Measured conversations are their own table, grouped by provider and the
+		// served model so Codex's input (which includes cached tokens) is never
+		// added to Claude's, and never added to a task's initial invocation.
+		usage.Scope = "Initial invocations, and registered conversations apart"
+		// The notes written for a view without conversation usage no longer hold.
+		usage.Stats[1].Note = "Remote or local; a person drives them. Measured where the agent reports"
+		usage.Breakdowns[0].Note = "Interactive sessions are listed; their conversation usage is in its own table."
+		for i := range usage.Coverage {
+			if usage.Coverage[i].Label == "Not measured" {
+				usage.Coverage[i].Value = "Later turns of headless tasks, and interactive sessions that have not reported"
+			}
+		}
+		usage.Coverage = append(usage.Coverage, portal.ProductField{Label: "Registered conversations", Value: "Interactive sessions on a newer agent, cumulative as of when last measured; a figure older than " + strconv.Itoa(int(conversationUsageStaleAfter/time.Minute)) + " minutes is marked stale. Not added to the initial invocations above"})
+		table := portal.ProductUsageTable{Title: "Conversation usage by provider and served model", Note: "Measured from each interactive session's registered conversation. Sums of reported values per group; Unknown is never counted as zero.",
+			Columns: []string{"Provider · model", "Sessions", "Input", "Output", "Cache read", "Cache create", "Stale", "Partial"}}
+		names := make([]string, 0, len(byConversation))
+		for name := range byConversation {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			table.Rows = append(table.Rows, byConversation[name].row(name))
+		}
+		usage.Breakdowns = append(usage.Breakdowns, table)
+	}
 	if filter.Project == "" {
 		usage.Breakdowns = append(usage.Breakdowns, portal.ProductUsageTable{Title: "By project", Columns: columns("Project"), Rows: totalRows(byProject)})
 	}
@@ -796,6 +844,21 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	// Usage panel rather than a panel of Unknowns.
 	if u.Scope == protocol.UsageInitial {
 		out.Sections = append([]portal.ProductSection{usage}, out.Sections...)
+	}
+	// An interactive session's measured conversation usage is its own panel,
+	// apart from a task's initial invocation, which it never shares a session with.
+	if section, ok := conversationUsageSection(a, now); ok {
+		out.Sections = append([]portal.ProductSection{section}, out.Sections...)
+		c := a.ConversationUsage
+		switch {
+		case len(c.Models) == 1:
+			out.Meta = "In " + compactTokens(c.Models[0].InputTokens) + " · Out " + compactTokens(c.Models[0].OutputTokens) + " (conversation)"
+		default:
+			out.Meta = strconv.Itoa(len(c.Models)) + " models measured (conversation)"
+		}
+		if conversationStale(c, now) {
+			out.Meta += " · stale"
+		}
 	}
 	runs := sessionDriver(a.Mode)
 	if runs != protocol.UsageUnknown {

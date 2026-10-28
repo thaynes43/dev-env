@@ -98,6 +98,9 @@ func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, 
 		summary := portalSummary(item, now)
 		if activity {
 			summary.Activity = portalActivity(item, now)
+			if s.PortalConversationUsage {
+				summary.Activity.ConversationUsage = portalConversationUsage(item, now)
+			}
 		}
 		if freshnessRank(summary.Freshness) > freshnessRank(page.Freshness) {
 			page.Freshness = summary.Freshness
@@ -307,6 +310,49 @@ func portalActivity(s *v1alpha1.AgentSession, now time.Time) *apiv1.PortalSessio
 		}
 	}
 	return a
+}
+
+// portalConversationUsage is status.conversationUsage reduced to DESIGN-029's
+// allowlist, or nil. nil means no key is sent, which the portal reads as not
+// measured: it is also what an Unknown, an invalid or a task session's figure
+// becomes, never a zero. The stored status is checked again here, as a heartbeat
+// checked it, because the portal trusts what the reader sends.
+func portalConversationUsage(s *v1alpha1.AgentSession, now time.Time) *apiv1.PortalConversationUsage {
+	st := s.Status.ConversationUsage
+	if st == nil || (s.Spec.Mode != v1alpha1.ModeLocal && s.Spec.Mode != v1alpha1.ModeRemote) || st.Provider != string(s.Spec.Agent) {
+		return nil
+	}
+	in := protocol.ConversationUsage{Version: st.Version, Provider: st.Provider, ObservedAt: st.ObservedAt.UTC(), Coverage: st.Coverage,
+		CounterSemantics: st.CounterSemantics, ResultState: st.ResultState, ReasonCode: st.ReasonCode, Turns: st.Turns, Skipped: st.Skipped}
+	for _, m := range st.Models {
+		in.Models = append(in.Models, protocol.ConversationModelUsage{Model: m.Model,
+			InputTokens: statusTokens(m.InputTokens), OutputTokens: statusTokens(m.OutputTokens),
+			CacheReadInputTokens: statusTokens(m.CacheReadInputTokens), CacheCreationInputTokens: statusTokens(m.CacheCreationInputTokens)})
+	}
+	if in.ResultState == protocol.ConversationUnknown || !in.Valid() {
+		return nil
+	}
+	observed := in.ObservedAt
+	if observed.After(now) {
+		observed = now.UTC()
+	}
+	out := &apiv1.PortalConversationUsage{ResultState: in.ResultState, ReasonCode: in.ReasonCode, Turns: in.Turns, Skipped: in.Skipped,
+		ObservedAt: observed, Models: make([]apiv1.PortalConversationModelUsage, 0, len(in.Models))}
+	for _, m := range in.Models {
+		out.Models = append(out.Models, apiv1.PortalConversationModelUsage{Model: m.Model,
+			InputTokens: portalTokens(m.InputTokens), OutputTokens: portalTokens(m.OutputTokens),
+			CacheReadInputTokens: portalTokens(m.CacheReadInputTokens), CacheCreationInputTokens: portalTokens(m.CacheCreationInputTokens)})
+	}
+	return out
+}
+
+func statusTokens(m v1alpha1.TokenObservationStatus) protocol.TokenObservation {
+	t := protocol.TokenObservation{State: m.State}
+	if m.Amount != nil {
+		amount := *m.Amount
+		t.Amount = &amount
+	}
+	return t
 }
 
 func portalUsage(u *protocol.UsageObservation) apiv1.PortalSessionUsage {

@@ -439,3 +439,17 @@ func TestPortalLaunchProfileAndCapFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestPortalConversationUsageFlag(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.portalConversationUsage {
+		t.Fatalf("conversation usage must be off by default: %v %v", o.portalConversationUsage, err)
+	}
+	o, err = parseFlags([]string{"--enable-portal-reader", "--portal-conversation-usage"})
+	if err != nil || !o.portalConversationUsage {
+		t.Fatalf("the flag with the reader was refused: %v %v", o.portalConversationUsage, err)
+	}
+	if _, err = parseFlags([]string{"--portal-conversation-usage"}); err == nil {
+		t.Fatal("the flag without the portal reader was accepted")
+	}
+}

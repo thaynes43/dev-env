@@ -120,6 +120,7 @@ type options struct {
 	grantAttestation              bool
 	coordinatorEnabled            bool
 	portalReaderEnabled           bool
+	portalConversationUsage       bool
 	portalMessageTargets          map[string]string
 	portalLaunchRepos             map[string]struct{}
 	portalLaunchProfile           string
@@ -177,6 +178,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.standbyProfile, "standby-profile", "full", "profile of the standby remote session; empty is the templates' default")
 	fs.StringVar(&o.standbyEffort, "standby-effort", "xhigh", "effort of the standby remote session; empty leaves the CLI's default")
 	fs.BoolVar(&o.coordinatorEnabled, "enable-coordinator-callers", false, "enable configured live-bound scoped coordinator callers")
+	fs.BoolVar(&o.portalConversationUsage, "portal-conversation-usage", false, "add each interactive session's measured conversation usage to the portal reader's activity view; enable only after the portal that reads it is rolled")
 	fs.BoolVar(&o.portalReaderEnabled, "enable-portal-reader", false, "accept the dev-agents/dev-env-v2-portal ServiceAccount for paginated dev-env session summaries only")
 	fs.Func("portal-send-target", "explicit send target name=SessionUID; repeat for each target", func(v string) error { return addPortalTarget(&o.portalMessageTargets, v, false) })
 	fs.Func("portal-launch-repo", "repository the portal may launch a constrained claude session in; repeat for each repository", func(v string) error { return addPortalLaunchRepo(&o.portalLaunchRepos, v) })
@@ -234,6 +236,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.portalReaderEnabled && o.sessionNamespace != "dev-agents" {
 		return o, errors.New("--enable-portal-reader requires --session-namespace=dev-agents")
+	}
+	if o.portalConversationUsage && !o.portalReaderEnabled {
+		return o, errors.New("--portal-conversation-usage requires --enable-portal-reader")
 	}
 	if (len(o.portalMessageTargets) > 0 || len(o.portalConversationTargets) > 0 || len(o.portalLaunchRepos) > 0) && !o.portalReaderEnabled {
 		return o, errors.New("portal action targets require --enable-portal-reader")
@@ -676,6 +681,7 @@ func run(args []string) error {
 		api := &apiserver.Server{
 			PortalMessageTargets:      o.portalMessageTargets,
 			PortalLaunchRepos:         o.portalLaunchRepos,
+			PortalConversationUsage:   o.portalConversationUsage,
 			PortalLaunchProfile:       o.portalLaunchProfile,
 			PortalLaunchMaxUnfinished: o.portalLaunchMaxUnfinished,
 			PortalConversationTargets: o.portalConversationTargets,

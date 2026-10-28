@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -370,5 +371,140 @@ func TestPortalActivityRemoteControl(t *testing.T) {
 		if a := activity(&v1alpha1.RemoteControlStatus{State: state, URL: link}); a.RemoteControl != nil {
 			t.Errorf("state %s kept the entry: %+v", name, a.RemoteControl)
 		}
+	}
+}
+
+func convStatus(provider string, at time.Time) *v1alpha1.ConversationUsageStatus {
+	n, zero := int64(1234), int64(0)
+	unknown := v1alpha1.TokenObservationStatus{State: "Unknown"}
+	return &v1alpha1.ConversationUsageStatus{Version: 1, Provider: provider, ObservedAt: metav1.NewTime(at), Coverage: "RegisteredConversation", CounterSemantics: "ConversationCumulative", ResultState: "Final", Turns: 7,
+		Models: []v1alpha1.ConversationModelUsageStatus{{Model: "claude-opus-5-5", InputTokens: v1alpha1.TokenObservationStatus{State: "Reported", Amount: &n}, OutputTokens: v1alpha1.TokenObservationStatus{State: "Reported", Amount: &zero}, CacheReadInputTokens: unknown, CacheCreationInputTokens: unknown}}}
+}
+
+// The conversation key is behind --portal-conversation-usage: an older portal
+// refuses an unknown activity key, so the default view is byte-for-byte what it
+// was. With the flag, only the DESIGN-029 allowlist is sent, only for a session
+// that is interactive and whose figure is valid, and never as a zero.
+func TestPortalReaderConversationUsageIsDefaultOffAndAllowlisted(t *testing.T) {
+	f := newFixture(t)
+	now := f.now
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "portal-pod", Namespace: sessionNS, UID: types.UID("pod-uid")}, Spec: corev1.PodSpec{ServiceAccountName: "dev-env-v2-portal", Containers: []corev1.Container{{Name: "portal", Image: "x"}}}}
+	sess := func(name string, mode v1alpha1.SessionMode, agent v1alpha1.AgentKind, cu *v1alpha1.ConversationUsageStatus) v1alpha1.AgentSession {
+		return v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: types.UID("uid-" + name)}, Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Agent: agent, Mode: mode, Model: "claude-opus-5-5", Parent: humanSA}, Status: v1alpha1.AgentSessionStatus{Phase: v1alpha1.PhaseRunning, ConversationUsage: cu}}
+	}
+	partial := convStatus("claude", now.Add(-time.Minute))
+	partial.ResultState, partial.ReasonCode, partial.Skipped = "Partial", "skipped_records", 2
+	badReason := convStatus("claude", now)
+	badReason.ResultState = "Partial" // a Partial with no reason is not valid
+	future := convStatus("claude", now.Add(time.Hour))
+	unknownResult := convStatus("claude", now)
+	unknownResult.ResultState, unknownResult.ReasonCode, unknownResult.Models = "Unknown", "no_usage", nil
+	f.srv.Live = &portalLive{pod: pod, rv: "7", sessions: []v1alpha1.AgentSession{
+		sess("a-remote", v1alpha1.ModeRemote, "claude", convStatus("claude", now.Add(-5*time.Minute))),
+		sess("b-partial", v1alpha1.ModeLocal, "claude", partial),
+		sess("c-task", v1alpha1.ModeTask, "claude", convStatus("claude", now)),
+		sess("d-wrong-provider", v1alpha1.ModeRemote, "codex", convStatus("claude", now)),
+		sess("e-none", v1alpha1.ModeRemote, "claude", nil),
+		sess("f-invalid", v1alpha1.ModeRemote, "claude", badReason),
+		sess("g-future", v1alpha1.ModeRemote, "claude", future),
+		sess("h-unknown", v1alpha1.ModeRemote, "claude", unknownResult),
+	}}
+	id := saIdentity(portalReaderRef)
+	id.PodName, id.PodUID = pod.Name, string(pod.UID)
+	f.auth["tok-portal"] = id
+	f.srv.Policy.PortalReaderEnabled = true
+
+	raw := func() (map[string]map[string]json.RawMessage, string) {
+		w := f.do(http.MethodGet, apiv1.SessionsPath+"?limit=50&view=activity", "tok-portal", nil)
+		if w.Code != http.StatusOK {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		var page struct {
+			Sessions []struct {
+				Name     string                     `json:"name"`
+				Activity map[string]json.RawMessage `json:"activity"`
+			} `json:"sessions"`
+		}
+		if json.Unmarshal(w.Body.Bytes(), &page) != nil {
+			t.Fatal(w.Body.String())
+		}
+		out := map[string]map[string]json.RawMessage{}
+		for _, s := range page.Sessions {
+			out[s.Name] = s.Activity
+		}
+		return out, w.Body.String()
+	}
+	// Default off: no session carries the key.
+	off, body := raw()
+	for name, a := range off {
+		if _, has := a["conversationUsage"]; has {
+			t.Fatalf("%s carries the key with the flag off", name)
+		}
+	}
+	if strings.Contains(body, "conversationUsage") {
+		t.Fatal("the default view mentions the key")
+	}
+
+	f.srv.PortalConversationUsage = true
+	on, body := raw()
+	for _, name := range []string{"c-task", "d-wrong-provider", "e-none", "f-invalid", "h-unknown"} {
+		if _, has := on[name]["conversationUsage"]; has {
+			t.Errorf("%s carries a figure it should not", name)
+		}
+	}
+	// Exactly the allowlist, at the top and in each model row; the fixed words,
+	// version, provider, coverage and semantics are not sent.
+	keys := func(r json.RawMessage) []string {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(r, &m) != nil {
+			t.Fatal(string(r))
+		}
+		var out []string
+		for k := range m {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	}
+	if got := strings.Join(keys(on["a-remote"]["conversationUsage"]), ","); got != "models,observedAt,resultState,skipped,turns" {
+		t.Fatalf("Final keys %s", got)
+	}
+	if got := strings.Join(keys(on["b-partial"]["conversationUsage"]), ","); got != "models,observedAt,reasonCode,resultState,skipped,turns" {
+		t.Fatalf("Partial keys %s", got)
+	}
+	var cu apiv1.PortalConversationUsage
+	if json.Unmarshal(on["a-remote"]["conversationUsage"], &cu) != nil || cu.ResultState != "Final" || cu.Turns != 7 || len(cu.Models) != 1 || !cu.ObservedAt.Equal(now.Add(-5*time.Minute)) {
+		t.Fatalf("%+v", cu)
+	}
+	var models []json.RawMessage
+	var wrapper struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	_ = json.Unmarshal(on["a-remote"]["conversationUsage"], &wrapper)
+	models = wrapper.Models
+	if got := strings.Join(keys(models[0]), ","); got != "cacheCreationInputTokens,cacheReadInputTokens,inputTokens,model,outputTokens" {
+		t.Fatalf("model keys %s", got)
+	}
+	m := cu.Models[0]
+	if m.InputTokens.State != "Reported" || *m.InputTokens.Amount != 1234 || m.OutputTokens.State != "Reported" || *m.OutputTokens.Amount != 0 || m.CacheReadInputTokens.State != "Unknown" || m.CacheReadInputTokens.Amount != nil {
+		t.Fatalf("Reported zero or Unknown lost: %+v", m)
+	}
+	var p apiv1.PortalConversationUsage
+	if json.Unmarshal(on["b-partial"]["conversationUsage"], &p) != nil || p.ResultState != "Partial" || p.ReasonCode != "skipped_records" || p.Skipped != 2 {
+		t.Fatalf("%+v", p)
+	}
+	// A time ahead of the operator's clock is clamped to now.
+	var fut apiv1.PortalConversationUsage
+	if json.Unmarshal(on["g-future"]["conversationUsage"], &fut) != nil || !fut.ObservedAt.Equal(now) {
+		t.Fatalf("%+v", fut)
+	}
+	for _, leak := range []string{"RegisteredConversation", "ConversationCumulative", `"provider":"claude","observedAt"`, "version"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("the view leaked %q", leak)
+		}
+	}
+	// The headless usage is its own key and is not touched.
+	if _, has := on["a-remote"]["usage"]; !has {
+		t.Fatal("the task usage key is gone")
 	}
 }
