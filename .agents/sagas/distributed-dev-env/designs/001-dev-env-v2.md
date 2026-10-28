@@ -4097,21 +4097,33 @@ left for a follow-up: kube and egress execution never read `approvedBy`, so the 
 point for them is `pending()` only.
 
 **D-89 (Accepted 2026-10-28 America/New_York, Tom 01:37:41Z). hw-ssh credential grants lease
-the existing static shared key, not an SSH certificate.** (Numbering note: README row 70 and
-ADR-007 also cite "D-89" for Q-35, v1 preserved during archive migration. This entry is "D-89
-(hw-ssh)"; renumbering would touch code comments and CRD descriptions, so it is left for a
-separate decision.)
+the existing static shared key, not an SSH certificate.** (Numbering note. "D-89" was first used for Q-35, "preserve v1 during archive migration",
+recorded 2026-10-13; the hw-ssh entry reused the number later. The Q-35 citers are: README rows 70
+(line 418) and the link at line 447; ADR-007 (header); backlog 11 (about line 308); design 024
+(about line 296); design 025 (lines 2194 and 2231, where "D-89's trusted-v1 boundary" means
+Q-35, NOT hw-ssh); `.agents/HANDOFF.md` (the Q-35 row, about line 3296); and
+`.agents/CLAUDE-RESUME-2026-10-13.md` (about line 160). This entry is "D-89 (hw-ssh)". The
+hw-ssh entry has the later claim to a new number; renumbering it is a FOLLOW-UP, not done
+here: it touches this entry, its index row, plan 07, the quickstart, and the "D-89" comments in
+the code and CRD descriptions that cite it (`api/v1alpha1`, `internal/keeper`,
+`internal/broker`, `internal/agentrun`, `internal/apiserver`, `cmd/`, `images/agent/tools`,
+`config/crd`).)
 
-Ruling. Tom, 2026-10-28T01:37:41Z (Sentinel_fd1573472fec819197c80e8b20ab7143), was asked, with
-the limits disclosed as "a shared root-level key across machines" and "removing the lease does
-not revoke a copy", whether to enable: the keeper's `get` on the one hw-ssh Secret; full-profile
-haynes-ops sessions requesting the credential for up to one hour under the agent-attested model
-(D-88); the first pilot, the UPS session to HaynesIntelligence on SSH port 22; and, with that,
-future requests from that haynes-ops session class, not just this one session. His answer:
-"Approved." This departs from his Q-07 answer (credential grants with a CA certificate for
-hw-ssh): the lease is accepted for hw-ssh now, and the CA certificate path stays the stronger
-follow-up. The two policies below are therefore STANDING: they are removed only by Tom's
-decision, not after the pilot, and eligibility is still the whole class, not one session.
+Ruling. Tom was asked, as relayed, at 2026-10-28T01:27:48Z
+(Sentinel_7cdc8415acf48191808faa381f648607): "SSH delivery passed independent review and all
+tests. To enable it after the signed release, approve this production scope: The keeper may read
+only the existing hardware SSH Secret. Full-profile haynes-ops sessions may request that
+credential for up to one hour using the agent-reported approval model you requested. First
+pilot: your UPS session to HaynesIntelligence on SSH port 22, without restarting the session.
+This enables future requests from that haynes-ops session class, not just this one session. The
+shared key has root-level access to multiple machines; removing its temporary lease does not
+revoke a copy taken from it. Approve enabling that scope?" His answer, at 2026-10-28T01:37:41Z
+(Sentinel_fd1573472fec819197c80e8b20ab7143): "Approved." This departs from his Q-07 answer
+(credential grants with a CA certificate for hw-ssh): the lease is accepted for hw-ssh now, and
+the CA certificate path stays the stronger follow-up. The two policies below are therefore
+STANDING: they are removed only by Tom's decision, not after the pilot, and eligibility is still
+the whole class, not one session. The ruling does not cover the Proxmox attested policies or
+Plex exec (the scope recorded in OpenProject #219, entry 1990).
 
 Installed. dev-env v2.52.0, operator image
 `sha-fd89b72@sha256:053d1905ecc6fb18c9a00189c50f1961949389264eaddd29b4e20c743eb8f5b3`;
@@ -4125,8 +4137,8 @@ modes 0700/0600; `hw-ssh haynesintelligence 'hostname; id'` printed HaynesIntell
 CiliumNetworkPolicy remained, the lease directory was empty, and the helper then printed "no key
 at".
 
-Pilot findings (guidance). (a) The lease appears about 5 to 13 seconds AFTER the grant shows
-Active, because the keeper installs on its next poll: wait for the key file, not only the
+Pilot findings (guidance). (a) The lease appears up to about 15 s AFTER the grant shows
+Active (the keeper polls every 15 s; 10 s was observed in the pilot): wait for the key file, not only the
 phase (`ls "$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/key"`, or retry `hw-ssh` until it stops
 printing "no key at"). (b) A 2.45 session has no `grant attest`; it uses the supported route
 directly with its own projected token. Write the `curl -K <(printf 'header = "Authorization:
@@ -4222,7 +4234,7 @@ one hour, with the existing `dev-env` login and sudo authority and the wider sha
 authority above disclosed to Tom. Destination egress is a separate scoped policy and grant
 (`egress-haynesintelligence-ssh-attested`: that host and port 22 only; any other host would need
 its own approved policy). Old Failed or Released grants stay as they are. The credential policy
-as deployed (haynes-ops #4379):
+as deployed (haynes-ops #4379; the description is the live text word for word):
 
 ```yaml
 apiVersion: dev-env.haynesops.com/v1alpha1
@@ -4230,13 +4242,17 @@ kind: GrantPolicy
 metadata: {name: credential-hw-ssh-attested, namespace: dev-env-system}
 spec:
   description: >-
-    Standing scope Tom approved on 2026-10-28T01:37:41Z: every full-profile haynes-ops session
-    and their haynes-ops children may request an agent-attested lease of the ONE shared hw-ssh
-    key, up to 1h per grant (dev-env on five PVE hosts, qm is root-equivalent; root on
-    HaynesTower and PiKVM). Anything in the pod can copy the key; removal is neither
-    containment nor revocation; no cryptographic expiry. Eligibility is that whole class, not
-    one session. The agent's claim of approval, not verified human identity (D-88, D-89).
-    Removal of this policy is Tom's decision only.
+    Standing scope Tom approved on 2026-10-28T01:37:41Z: every full-profile haynes-ops session and
+    their haynes-ops children may request an agent-attested lease of the ONE shared hw-ssh key, up
+    to 1h per grant. The key is user dev-env on the five PVE hosts (sudo allowlist; qm is
+    root-equivalent), root on HaynesTower and PiKVM, and the other documented hardware. Anything
+    in the pod can COPY the key while it is installed; removing it at expiry, release or session
+    end is NOT revocation and not containment, and the key has no cryptographic expiry (revoking
+    means rotating it on every host). Eligibility is that whole class, NOT one session. Approval
+    is the requesting agent's own claim that the user or a coordinator approved (D-88), not
+    verified human identity. Removal of this policy is Tom's decision only; deleting it stops new
+    approvals but does not end Active grants (release those). Request with --type credential
+    --credential hw-ssh --ttl 1h, then attest.
   attested: {profiles: [full], repos: [haynes-ops]}
   type: credential
   credential: {names: [hw-ssh]}

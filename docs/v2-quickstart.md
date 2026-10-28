@@ -205,10 +205,19 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
 - The `hw-ssh` key is mounted only in workbench sessions. The same rules as v1
   apply: read first, declare disruptive work, never reboot a node.
 - A `full`-profile haynes-ops session (and its haynes-ops children) can instead lease the same
-  shared key for up to an hour: `agent-run grant request --type credential --credential hw-ssh
-  --ttl 1h --no-wait`, an egress grant for `haynesintelligence.haynesnetwork` port 22, and
-  `agent-run grant attest` for each after your coordinator (or the user) approves (D-88, D-89).
-  The lease appears about 5 to 13 seconds after the grant shows Active: wait for the key file
+  shared key for up to an hour (D-88, D-89). Ask for both grants without waiting, then attest
+  each after your coordinator (or the user) approves:
+
+  ```bash
+  agent-run grant request --type credential --credential hw-ssh --ttl 1h --no-wait \
+    --reason "why you need the shared hw-ssh key"
+  agent-run grant request --type egress --fqdn haynesintelligence.haynesnetwork --port 22 \
+    --ttl 1h --no-wait --reason "ssh to haynesintelligence for the hw-ssh lease"
+  agent-run grant attest <grant> --approved-by user --ref <message-id>   # once per grant
+  ```
+
+  The lease appears up to about 15 s after the grant shows Active (the keeper polls every
+  15 s; 10 s was observed in the pilot): wait for the key file
   (`$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/key`), not only the phase. It is the one shared
   root-level key: anything in the pod can copy it while installed, and removing it at expiry or
   release does not revoke a copy.
