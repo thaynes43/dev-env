@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.55.0](https://github.com/thaynes43/dev-env/compare/v2.54.0...v2.55.0) (2026-10-28)
+
+
+### Features
+
+* **portal:** add default-off fresh Alertmanager Pages and synthetic previews ([c3f71b1](https://github.com/thaynes43/dev-env/commit/c3f71b147d623983a5e4faa16e22be063e85de71))
+
 ## [2.54.0](https://github.com/thaynes43/dev-env/compare/v2.53.0...v2.54.0) (2026-10-28)
 
 
