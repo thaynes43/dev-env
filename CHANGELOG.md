@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.53.0](https://github.com/thaynes43/dev-env/compare/v2.52.0...v2.53.0) (2026-10-28)
+
+
+### Features
+
+* **pages:** record keeper pages before sending; agent-run pages list|show (keeper pages only) ([#599](https://github.com/thaynes43/dev-env/issues/599)) ([f09ad15](https://github.com/thaynes43/dev-env/commit/f09ad150981b9315c8b09347421da832ba56db8f))
+* **reminders:** provider-neutral reminders, default off (Pushover via keeper; calendar adapter fake only) ([#600](https://github.com/thaynes43/dev-env/issues/600)) ([3edf79e](https://github.com/thaynes43/dev-env/commit/3edf79efa14760b92291a4bebf042632d1ba3270))
+
+
+### Bug Fixes
+
+* **rescue:** name an interrupted bootstrap instead of NotProven ([#598](https://github.com/thaynes43/dev-env/issues/598)) ([cdb6979](https://github.com/thaynes43/dev-env/commit/cdb6979884e4d9b1a59b4f0af0a6b373e435c035))
+
 ## [2.52.0](https://github.com/thaynes43/dev-env/compare/v2.51.0...v2.52.0) (2026-10-28)
 
 
