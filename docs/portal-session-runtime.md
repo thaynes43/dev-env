@@ -111,9 +111,7 @@ validate postgres16 CA **and** hostname
 and fallback plaintext are prohibited. CA reference postgres16-ca and server
 certificate postgres16-server are references, not permission to read keys.
 
-## Current authorization and deployment holds
-
-### Local Pages source check
+## Local Pages source check
 
 `dev-env-portal pages-source-check` is a local process diagnostic. It reads only
 the existing `/etc/dev-env-portal/config/pages-alertmanager.json` configuration
@@ -136,6 +134,8 @@ permission. Running it against an installed portal still requires separately
 authorized process/exec access; a successful check proves neither browser OIDC
 authorization nor human UI acceptance. Existing Pages route authorization is
 unchanged.
+
+## Current authorization and deployment holds
 
 Require the pinned issuer, a live UserInfo response for the session's own
 subject with portal_is_active=true and portal_is_admin=true, plus the fixed
