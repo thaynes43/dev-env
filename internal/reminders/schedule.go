@@ -117,7 +117,7 @@ func ScheduleOf(spec v1alpha1.ReminderSpec) (*Schedule, error) {
 		return nil, errors.New("until and count are exclusive")
 	}
 	if rec.Until != nil {
-		u := rec.Until.Time.UTC()
+		u := rec.Until.UTC()
 		s.until = &u
 	}
 	if rec.Count < 0 || rec.Count > 1000 {
