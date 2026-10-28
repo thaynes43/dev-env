@@ -105,15 +105,28 @@ func conversationStale(c *apiv1.PortalConversationUsage, now time.Time) bool {
 	return now.Sub(c.ObservedAt) > conversationUsageStaleAfter
 }
 
-// conversationReasons words the reason codes a Partial result can carry, as
-// one plain sentence each. Any other code shows as itself, escaped by the
-// template.
+// conversationReasons words, as one plain sentence each, every reason code the
+// protocol's Valid() accepts on a Partial result. agentd sends five of them as
+// Partial today (skipped records, missing counters, a model split, a counter
+// reset, a delta mismatch); the others it sends only as Unknown, which the
+// operator never forwards, but a Partial carrying one would still pass the
+// decoder, so each is worded for a figure that is missing a part. A code this
+// map lacks shows as itself, escaped by the template.
 var conversationReasons = map[string]string{
-	protocol.ReasonSkippedRecords:  "Some records could not be read and are not counted.",
-	protocol.ReasonCounterReset:    "The provider's counters restarted, so only the latest run is counted.",
-	protocol.ReasonModelSplit:      "Several models share one provider total, so each model's counts are Unknown.",
-	protocol.ReasonMissingCounters: "Some records lacked a counter that others carried.",
-	protocol.ReasonDeltaMismatch:   "A rise in the provider's running total did not match its per-call figure.",
+	protocol.ReasonSkippedRecords:   "Some records could not be read or counted.",
+	protocol.ReasonCounterReset:     "The provider's counters restarted, so only the latest run is counted.",
+	protocol.ReasonModelSplit:       "Several models share one provider total, so each model's counts are Unknown.",
+	protocol.ReasonMissingCounters:  "Some records lacked a counter that others carried.",
+	protocol.ReasonDeltaMismatch:    "A rise in the provider's running total did not match its per-call figure.",
+	protocol.ReasonNoUsage:          "Part of the provider's record held no usage figures.",
+	protocol.ReasonNotInteractive:   "The agent marked this a headless task, whose usage is its initial invocation, not a conversation.",
+	protocol.ReasonUnbound:          "Part of the provider's record could not be tied to this session's registered conversation.",
+	protocol.ReasonUnsupportedAgent: "Part of the provider's record came from an agent this measurement does not support.",
+	protocol.ReasonUnqualified:      "Some records are not in the format of the provider CLI this agent pins.",
+	protocol.ReasonModelUnknown:     "Some usage could not be tied to a served model.",
+	protocol.ReasonTooManyModels:    "More models served this conversation than one figure lists, so some are left out.",
+	protocol.ReasonSourceLimit:      "The provider's record is larger than this measurement reads, so the rest is not counted.",
+	protocol.ReasonCountOverflow:    "A running total passed the largest count a figure holds.",
 }
 
 // staleMinutes is the stale threshold in whole minutes, for the page's text.
@@ -124,19 +137,36 @@ var staleMinutes = strconv.Itoa(int(conversationUsageStaleAfter / time.Minute))
 // line names its reason and says the counts are a lower bound; a Stale line says
 // the figure may be behind. Neither hides the figure.
 func conversationStates(c *apiv1.PortalConversationUsage, now time.Time) []portal.ProductState {
-	result := portal.ProductState{Status: portal.ProductStatus{Text: "Final", Tone: "muted"}, Text: "Every record was counted, up to the measured time."}
+	result := portal.ProductState{Status: portal.ProductStatus{Text: "Final", Tone: "muted"}, Text: "Every complete usage record was counted, as of the measured time."}
 	if c.ResultState == protocol.ConversationPartial {
 		reason := conversationReasons[c.ReasonCode]
 		if reason == "" {
 			reason = "Reason: " + shown(c.ReasonCode) + "."
 		}
-		result = portal.ProductState{Status: portal.ProductStatus{Text: "Partial", Tone: "wait"}, Text: reason + " The counts shown are a lower bound."}
+		// A lower bound needs a count: with every counter Unknown (a model split
+		// has none) there is nothing to bound.
+		if conversationReported(c) {
+			reason += " The counts shown are a lower bound."
+		}
+		result = portal.ProductState{Status: portal.ProductStatus{Text: "Partial", Tone: "wait"}, Text: reason}
 	}
 	fresh := portal.ProductState{Status: portal.ProductStatus{Text: "Current", Tone: "muted"}, Text: "Measured within the last " + staleMinutes + " minutes."}
 	if conversationStale(c, now) {
 		fresh = portal.ProductState{Status: portal.ProductStatus{Text: "Stale", Tone: "wait"}, Text: "Older than " + staleMinutes + " minutes, so it may be behind the conversation."}
 	}
 	return []portal.ProductState{result, fresh}
+}
+
+// conversationReported reports whether any model has any Reported counter.
+func conversationReported(c *apiv1.PortalConversationUsage) bool {
+	for _, m := range c.Models {
+		for _, t := range []protocol.TokenObservation{m.InputTokens, m.OutputTokens, m.CacheReadInputTokens, m.CacheCreationInputTokens} {
+			if t.State == protocol.UsageReported && t.Valid() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // conversationUsageSection is a session's measured conversation usage as a
@@ -267,7 +297,7 @@ func conversationView(usage *portal.ProductUsage, totals map[string]*conversatio
 		{Label: "Not measured", Value: "Later turns of headless tasks, and interactive sessions that report no conversation figure, such as those on an older agent"},
 		{Label: "Account allowance", Value: "Separate; no allowance collector is connected"},
 		{Label: "Served model", Value: "Provider reported, where measured"},
-		{Label: "Cache read tokens", Value: "A subset that can overlap input; never added to it. Codex input already includes them"},
+		{Label: "Cache read tokens", Value: cacheReadCoverage},
 		{Label: "Cost", Value: "Initial invocations: CLI-equivalent list-price estimate, not a charge; Unavailable where the provider reports none. Conversations: no price is shown"},
 		{Label: "Totals", Value: "Sums of reported values per group; Unknown is never counted as zero. Claude and Codex are never added together"},
 	}

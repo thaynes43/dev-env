@@ -63,8 +63,8 @@ provider reported it (DESIGN-018), from the same validated observation
 `agent-run show` reads. Only task sessions carry one, so an interactive or
 remote session's usage is always `Unknown`. Provider-reported served models stay
 separate from the requested model. Each token counter keeps `Unknown` apart from
-an explicit zero. Cache read tokens can overlap input tokens and are never added
-to them. Cost is shown only as the existing CLI-equivalent estimate, never as a
+an explicit zero. Claude reports cache read tokens apart from input; Codex input
+already includes them. Cache reads are never added to input. Cost is shown only as the existing CLI-equivalent estimate, never as a
 charge or a subscription quota. The Usage view sums reported values per group
 (by how sessions ran, by provider and requested model, by project); an
 `Unknown` counter or cost is never counted as zero, and the account allowance

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -165,7 +166,7 @@ func TestConversationUsageSectionKeepsUnknownApartFromZeroAndCarriesTheReason(t 
 		convRow("codex", "local", "codex", convFigure("gpt-6-astra", 10, "2026-10-25T11:55:00Z")))
 	page := sessionsPage(d.Sessions, true, "observed", convNow, portal.ProductFilter{})
 	f := convSection(t, page, "final")
-	if f.states["Final"] != "Every record was counted, up to the measured time." || f.tones["Final"] != "muted" ||
+	if f.states["Final"] != "Every complete usage record was counted, as of the measured time." || f.tones["Final"] != "muted" ||
 		f.states["Current"] != "Measured within the last 15 minutes." || f.tones["Current"] != "muted" || len(f.states) != 2 {
 		t.Fatalf("%v %v", f.states, f.tones)
 	}
@@ -187,18 +188,18 @@ func TestConversationUsageSectionKeepsUnknownApartFromZeroAndCarriesTheReason(t 
 		t.Fatalf("%q", c.note)
 	}
 	p := convSection(t, page, "partial")
-	if p.states["Partial"] != "Some records could not be read and are not counted. The counts shown are a lower bound." || p.tones["Partial"] != "wait" || p.states["Final"] != "" {
+	if p.states["Partial"] != "Some records could not be read or counted. The counts shown are a lower bound." || p.tones["Partial"] != "wait" || p.states["Final"] != "" {
 		t.Fatalf("%v", p.states)
 	}
-	// A reason this portal has no wording for shows as itself.
-	if o := convSection(t, page, "odd"); o.states["Partial"] != "Reason: count_overflow. The counts shown are a lower bound." {
+	// A code agentd sends only as Unknown still has its own sentence on a Partial.
+	if o := convSection(t, page, "odd"); o.states["Partial"] != "A running total passed the largest count a figure holds. The counts shown are a lower bound." {
 		t.Fatalf("%v", o.states)
 	}
-	// Every worded reason is one plain sentence, and every Partial says lower bound.
-	for code, words := range conversationReasons {
-		if !strings.HasSuffix(words, ".") || strings.Contains(words, code) || strings.Contains(words, "_") {
-			t.Errorf("%s: %q", code, words)
-		}
+	// A code with no wording (the decoder admits none today) shows as itself.
+	fallback := *d.Sessions[0].Activity.ConversationUsage
+	fallback.ResultState, fallback.ReasonCode = protocol.ConversationPartial, "later_code"
+	if got := conversationStates(&fallback, convNow)[0].Text; got != "Reason: later_code. The counts shown are a lower bound." {
+		t.Fatalf("%q", got)
 	}
 	// A session with no key has no panel at all: absent is not a zero.
 	if n := convSection(t, page, "none"); n.found || findRow(t, page, "none").Meta != "" {
@@ -352,7 +353,7 @@ func TestConversationUsageRendersEscapedInTheTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(body)
-	for _, want := range []string{"<h3>Conversation usage</h3>", `<ul class="panel-states"><li><span class="badge tone-wait">Partial</span><span>Some records could not be read and are not counted. The counts shown are a lower bound.</span></li>`,
+	for _, want := range []string{"<h3>Conversation usage</h3>", `<ul class="panel-states"><li><span class="badge tone-wait">Partial</span><span>Some records could not be read or counted. The counts shown are a lower bound.</span></li>`,
 		`<span class="badge tone-muted">Current</span>`, `<caption class="sr-only">Token counts by served model</caption>`, `<td>claude-opus-5-5</td><td data-label="Input">1,234</td>`,
 		`<td data-label="Cache create" class="unknown">Unknown</td>`, "Conversation usage by provider and served model", "claude · claude-opus-5-5",
 		`<h3 id="usage-rows">Initial invocations by session</h3>`, "Recorded token usage is not account consumption."} {
@@ -387,5 +388,57 @@ func TestConversationUsageRendersEscapedInTheTemplate(t *testing.T) {
 	// The renderer copied what it sanitized: the page model is unchanged.
 	if row.Sections[0].States[0].Status.Tone != `wait" onclick="x` {
 		t.Fatal("the renderer changed the caller's page")
+	}
+}
+
+// Every reason code the protocol's Valid() accepts on a Partial result has a
+// plain sentence. The candidates are every Reason constant in the protocol's
+// conversation-usage source, so a code added there without wording here fails.
+func TestEveryPartialReasonValidAcceptsHasWording(t *testing.T) {
+	src, err := os.ReadFile("../../../internal/agentd/protocol/conversation_usage.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes := regexp.MustCompile(`(?m)^\s*Reason[A-Za-z]+\s*=\s*"([a-z_]+)"`).FindAllSubmatch(src, -1)
+	accepted := 0
+	for _, m := range codes {
+		code := string(m[1])
+		partial := protocol.ConversationUsage{Version: protocol.ConversationUsageVersion, Provider: protocol.AgentClaude, ObservedAt: convNow,
+			Coverage: protocol.ConversationCoverage, CounterSemantics: protocol.ConversationCumulative, ResultState: protocol.ConversationPartial, ReasonCode: code,
+			Models: []protocol.ConversationModelUsage{{Model: "claude-opus-5-5", InputTokens: protocol.TokenObservation{State: protocol.UsageUnknown},
+				OutputTokens: protocol.TokenObservation{State: protocol.UsageUnknown}, CacheReadInputTokens: protocol.TokenObservation{State: protocol.UsageUnknown},
+				CacheCreationInputTokens: protocol.TokenObservation{State: protocol.UsageUnknown}}}}
+		if !partial.Valid() {
+			continue
+		}
+		accepted++
+		words := conversationReasons[code]
+		if words == "" || !strings.HasSuffix(words, ".") || strings.Contains(words, "_") || strings.Contains(words, "lower bound") || words[0] < 'A' || words[0] > 'Z' {
+			t.Errorf("%s: %q", code, words)
+		}
+	}
+	// All fourteen codes are accepted on a Partial today; fewer means the pattern
+	// above stopped finding them.
+	if accepted != 14 || len(conversationReasons) != accepted {
+		t.Fatalf("accepted %d codes, worded %d", accepted, len(conversationReasons))
+	}
+}
+
+// A Partial says its counts are a lower bound only when it shows a count: a
+// model split, whose counters are all Unknown, does not.
+func TestPartialLowerBoundOnlyWithAReportedCount(t *testing.T) {
+	unknown := `{"state":"Unknown"}`
+	split := `{"resultState":"Partial","reasonCode":"model_split_unknown","models":[` +
+		`{"model":"gpt-6-astra","inputTokens":` + unknown + `,"outputTokens":` + unknown + `,"cacheReadInputTokens":` + unknown + `,"cacheCreationInputTokens":` + unknown + `},` +
+		`{"model":"gpt-6-luna","inputTokens":` + unknown + `,"outputTokens":` + unknown + `,"cacheReadInputTokens":` + unknown + `,"cacheCreationInputTokens":` + unknown + `}],` +
+		`"turns":4,"skipped":0,"observedAt":"2026-10-25T11:55:00Z"}`
+	d := convDecode(t, convRow("split", "remote", "codex", split),
+		convRow("reset", "remote", "codex", convPartial(convFigure("gpt-6-astra", 10, "2026-10-25T11:55:00Z"), "counter_reset")))
+	page := sessionsPage(d.Sessions, true, "observed", convNow, portal.ProductFilter{})
+	if got := convSection(t, page, "split").states["Partial"]; got != "Several models share one provider total, so each model's counts are Unknown." {
+		t.Fatalf("%q", got)
+	}
+	if got := convSection(t, page, "reset").states["Partial"]; got != "The provider's counters restarted, so only the latest run is counted. The counts shown are a lower bound." {
+		t.Fatalf("%q", got)
 	}
 }

@@ -828,9 +828,10 @@ and copy are below, under "Interface".
   key-value list, table, note) and tokens; there is still no script and no inline style.
   The generic panel gained two optional parts: state lines (a badge and one sentence)
   and a table, in the order states, tiles, table, fields, note.
-  - *Panel.* Two state lines: Final ("Every record was counted, up to the measured
-    time.") or Partial (amber; the reason in one plain sentence, then "The counts shown
-    are a lower bound."), and Current ("Measured within the last 15 minutes.") or Stale
+  - *Panel.* Two state lines: Final ("Every complete usage record was counted, as of
+    the measured time.") or Partial (amber; the reason in one plain sentence, then "The
+    counts shown are a lower bound." when any counter is Reported; a model split, whose
+    counters are all Unknown, has no bound to state), and Current ("Measured within the last 15 minutes.") or Stale
     (amber; "Older than 15 minutes, so it may be behind the conversation."). A stale
     figure is still shown. Then one table row per served model (Input, Output, Cache
     read, Cache create; Unknown dimmed, a Reported zero as 0), when it was measured,
@@ -849,5 +850,20 @@ and copy are below, under "Interface".
     Without a figure, the page reads as before.
   - *Fixture.* The committed Sessions fixture has a Final and current Claude session
     with two served models, a Partial Claude session, and a stale Codex session.
+  - *Reasons.* Every reason code `Valid()` accepts on a Partial has its own sentence,
+    and a test reads the protocol's Reason constants so a new code cannot go unworded.
+    agentd sends only five as Partial (skipped records, missing counters, a model
+    split, a counter reset, a delta mismatch); the other nine it sends as Unknown,
+    which the operator never forwards, and each is worded for a figure missing a
+    part. A code with no wording still shows as itself.
+  - *Final is not every line.* Final counts every complete usage record. Lines that
+    are not usage records, API-error and synthetic records, a half-written last line
+    and lines appended after the scan opened the file are not counted.
+  - *Assumption, not checked against a live transcript:* the registered conversation's
+    transcript may not include a Claude subagent's transcript when Claude Code keeps it
+    in a separate file, so a Final figure may leave out subagent usage.
+  - *Cache reads.* Claude reports cache reads apart from input; Codex input already
+    includes them. The coverage panel and the task Usage panel's note now say so per
+    provider, replacing "a subset that can overlap input".
   - *No version number.* The copy says "an older agent". Measurement reaches a session
     only on an agent image from the first release after 2.50.0.

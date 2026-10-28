@@ -387,7 +387,7 @@ func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
 // sessionsPage builds the Sessions page for one filter. The rail counts cover
 // the whole read; the list and the Usage view cover the filtered sessions.
 // Usage sums reported values per group only: Unknown is never counted as zero
-// and cache reads stay a separate subset of input.
+// and cache reads are never added to input.
 func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time, filter portal.ProductFilter) portal.ProductPage {
 	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete, Filter: filter}
 	group := make([]int, len(sessions))
@@ -482,7 +482,7 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 			{Label: "Not measured", Value: "Interactive sessions, later turns"},
 			{Label: "Account allowance", Value: "Separate; no allowance collector is connected"},
 			{Label: "Served model", Value: "Provider reported, where measured"},
-			{Label: "Cache read tokens", Value: "A subset that can overlap input; never added to it"},
+			{Label: "Cache read tokens", Value: cacheReadCoverage},
 			{Label: "Cost", Value: "CLI-equivalent list-price estimate, not a charge; Unavailable where the provider reports none"},
 			{Label: "Totals", Value: "Sums of reported values per group; Unknown is never counted as zero"},
 		},
@@ -586,6 +586,10 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	page.Usage = usage
 	return page
 }
+
+// cacheReadCoverage says how each provider counts cache reads against input:
+// Claude reports them apart from input, and Codex input already includes them.
+const cacheReadCoverage = "Claude reports them apart from input; Codex input already includes them. Never added to input"
 
 // usageTotal is one breakdown group: how many sessions, how many measured,
 // and the sums of the values their providers reported.
@@ -812,7 +816,13 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 			{Label: "Cost estimate", Value: costText(u.Cost)},
 			{Label: "Scope", Value: usageScopeText(u)},
 		}
-		usage.Note = "Counters are reported separately; cache reads can overlap input. Nothing is added."
+		usage.Note = "Counters are reported separately. Nothing is added."
+		switch a.Provider {
+		case protocol.AgentClaude:
+			usage.Note = "Counters are reported separately; Claude reports cache reads apart from input. Nothing is added."
+		case protocol.AgentCodex:
+			usage.Note = "Counters are reported separately; Codex input already includes cache reads. Nothing is added."
+		}
 	}
 	lastSeen := activityTime(a.LastActivity)
 	if a.LastActivity != nil {
