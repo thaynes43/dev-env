@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.57.0](https://github.com/thaynes43/dev-env/compare/v2.56.0...v2.57.0) (2026-10-28)
+
+
+### Features
+
+* **watchdog:** plan bounded offline owner escalation ([#612](https://github.com/thaynes43/dev-env/issues/612)) ([7c63c87](https://github.com/thaynes43/dev-env/commit/7c63c875d6db7433bfd99ed2432f2aca2f56117c))
+
 ## [2.56.0](https://github.com/thaynes43/dev-env/compare/v2.55.0...v2.56.0) (2026-10-28)
 
 
