@@ -159,8 +159,31 @@ func lockCodexAccess(s Settings) (*os.File, error) {
 		return refuse()
 	}
 	stat, ok := opened.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 || syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	if !ok || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 {
 		return refuse()
+	}
+	deadline := time.Now().Add(time.Second)
+	first := true
+	for {
+		if !first && !time.Now().Before(deadline) {
+			return refuse()
+		}
+		first = false
+		err = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return refuse()
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return refuse()
+		}
+		if remaining > 10*time.Millisecond {
+			remaining = 10 * time.Millisecond
+		}
+		time.Sleep(remaining)
 	}
 	current, err := os.Lstat(path)
 	if err != nil || !os.SameFile(opened, current) {

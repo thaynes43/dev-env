@@ -235,6 +235,9 @@ func captureOwnedAllowance(ctx context.Context, s Settings, session protocol.Ses
 	capture := CodexAllowanceCapture{ObservationID: "capture-" + id, ProducerRef: "agentd-owned-observer", ProducerIncarnation: "capture-" + id, Sequence: 1, EvidenceRef: "capture-" + id, SnapshotRevision: "capture-" + id}
 	target := s
 	target.CodexHome = providerHome
+	if ctx.Err() != nil {
+		return unavailable()
+	}
 	result, err := d.read(ctx, target, owner.PID(), d.now().UTC(), capture)
 	if err != nil || !owner.Alive() || !binaryUnchanged() || !current() || !ownedAllowanceStillCurrent(s, d.now(), fence) {
 		return unavailable()
@@ -248,7 +251,7 @@ func captureOwnedAllowance(ctx context.Context, s Settings, session protocol.Ses
 		_ = cleanup()
 		return unavailable()
 	}
-	if !cleanup() {
+	if !cleanup() || ctx.Err() != nil {
 		return unavailable()
 	}
 	return result, nil

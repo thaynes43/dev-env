@@ -1,8 +1,10 @@
 package agentd
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -204,6 +206,18 @@ func TestCodexAccessProcessFixture(t *testing.T) {
 		_ = f // deliberately left open until this subprocess exits
 		return
 	}
+	if os.Getenv("CODEX_TEST_CONTENDED") == "1" {
+		fd, err := syscall.Open(s.statePath("codex-access-generation.lock"), syscall.O_RDWR|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		_ = syscall.Close(fd)
+		if err != syscall.EWOULDBLOCK {
+			t.Fatal("expected actual contention", err)
+		}
+		fmt.Println("contended")
+	}
 	err := SyncCodexAccess(s, time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC))
 	if (err != nil) != (os.Getenv("CODEX_TEST_EXPECT_REFUSAL") == "1") {
 		t.Fatal("unexpected synthetic child outcome")
@@ -243,9 +257,36 @@ func TestCodexAccessCrossProcessFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeProjection(2)
-	runChild(true)
+	priorFence, err := os.ReadFile(s.statePath("codex-access-generation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runChild(true) // bounded timeout: writer must not overwrite while held
+	afterTimeout, err := os.ReadFile(s.statePath("codex-access-generation.json"))
+	if err != nil || string(afterTimeout) != string(priorFence) {
+		t.Fatal("timeout rewrote fence")
+	}
+	if _, err := os.Stat(filepath.Join(home, "observer", "auth.json")); !os.IsNotExist(err) {
+		t.Fatal("timeout wrote observer auth")
+	}
+	waiting := exec.Command(os.Args[0], "-test.run=^TestCodexAccessProcessFixture$")
+	waiting.Env = append(os.Environ(), "CODEX_TEST_FENCE_HOME="+home, "CODEX_TEST_CONTENDED=1")
+	stdout, err := waiting.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waiting.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil || strings.TrimSpace(line) != "contended" {
+		t.Fatal("child did not observe contention", err)
+	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if err := waiting.Wait(); err != nil {
+		t.Fatal("waiting writer failed after release", err)
 	}
 	runChild(false)
 	cmd := exec.Command(os.Args[0], "-test.run=^TestCodexAccessProcessFixture$")

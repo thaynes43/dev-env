@@ -84,3 +84,9 @@ collector, runtime installation or accepted live capture. The existing
 `usage-export` still consumes supplied JSON. Account binding and provider
 freshness remain Unknown; runtime use requires a separately qualified host and
 callable artifact. See [the callsite context](../../../context/usage190-native-capture-callsite-20261028.md).
+
+## Owned observer source (2026-10-28)
+
+The proposed explicitly enabled direct-child allowance diagnostic is a source-only, account-level observation, not a collector, Session/account binding, runtime approval or adoption of an existing daemon. It requires separate exact execution authorization and a qualified artifact; provider freshness and account binding remain Unknown. Synthetic tests and independent exact-head review plus CI qualify source only. Upgraded writers use a bounded cooperative generation lock; older daemons do not participate, and the observer reads but never advances the shared fence. See [owned observer context](../../../context/usage190-owned-allowance-20261028.md).
+
+On uncertain start or stop, the execution owner stops without retry, records the run and lifecycle evidence, and retains the private tmpfs observer directory until a separately authorized existing-host procedure proves the known helper and native tree stopped. A missing PID alone is not proof. Only then may the exact owned directory be cleaned with no-follow and owner checks, leaving ordinary HOME, the shared fence and other processes alone. If proof is unavailable, retain it and report blocked custody. Future live approval must cover this bounded recovery or require a separate exact approval; this source grants neither.

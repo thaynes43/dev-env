@@ -96,12 +96,16 @@ type ownedFixtureOwner struct {
 	listener net.Listener
 	stopErr  error
 	live     bool
+	onStop   func()
 }
 
 func (o *ownedFixtureOwner) PID() int    { return os.Getpid() }
 func (o *ownedFixtureOwner) Alive() bool { return o.live }
 func (o *ownedFixtureOwner) Stop() error {
 	o.live = false
+	if o.onStop != nil {
+		o.onStop()
+	}
 	if o.listener != nil {
 		_ = o.listener.Close()
 	}
@@ -109,7 +113,7 @@ func (o *ownedFixtureOwner) Stop() error {
 }
 
 func TestOwnedAllowanceSyntheticBindingAndCleanup(t *testing.T) {
-	for _, mode := range []string{"success", "missing projection", "wrong session", "version", "binary change", "preexisting", "runtime symlink", "expired", "session drift", "fence drift", "stop uncertain"} {
+	for _, mode := range []string{"success", "missing projection", "wrong session", "version", "binary change", "preexisting", "runtime symlink", "expired", "session drift", "fence drift", "stop uncertain", "cancel before RPC", "cancel after RPC", "cancel during stop"} {
 		t.Run(mode, func(t *testing.T) {
 			home, err := os.MkdirTemp("/tmp", "oa-")
 			if err != nil {
@@ -127,7 +131,9 @@ func TestOwnedAllowanceSyntheticBindingAndCleanup(t *testing.T) {
 				t.Fatal(err)
 			}
 			session := protocol.Session{Name: "fixture", SessionUID: "session-1", Agent: protocol.AgentCodex, Mode: protocol.ModeRemote}
-			calls := 0
+			calls, reads := 0, 0
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			current := OwnedAllowanceContext{Session: session, PodUID: s.PodUID}
 			deps := ownedAllowanceDeps{binary: func() (os.FileInfo, error) { return os.Stat(s.CodexAccessFile) }, now: func() time.Time { return now }, nonce: func() (string, error) { return "fixture", nil }, version: func(context.Context, Settings) error { return nil }}
 			deps.start = func(_ context.Context, observer string) (ownedAllowanceOwner, error) {
@@ -138,12 +144,22 @@ func TestOwnedAllowanceSyntheticBindingAndCleanup(t *testing.T) {
 					return nil, e
 				}
 				owner := &ownedFixtureOwner{listener: ln, live: true}
+				if mode == "cancel before RPC" {
+					cancel()
+				}
+				if mode == "cancel during stop" {
+					owner.onStop = cancel
+				}
 				if mode == "stop uncertain" {
 					owner.stopErr = errors.New("secret synthetic stop error")
 				}
 				return owner, nil
 			}
 			deps.read = func(context.Context, Settings, int, time.Time, CodexAllowanceCapture) (providerallowance.ReadResponse, error) {
+				reads++
+				if mode == "cancel after RPC" {
+					cancel()
+				}
 				if mode == "session drift" {
 					current.PodUID = "replacement"
 				}
@@ -181,12 +197,20 @@ func TestOwnedAllowanceSyntheticBindingAndCleanup(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			_, err = captureOwnedAllowance(context.Background(), s, session, func() (OwnedAllowanceContext, error) { return current, nil }, deps)
+			_, err = captureOwnedAllowance(ctx, s, session, func() (OwnedAllowanceContext, error) { return current, nil }, deps)
 			if (err == nil) != (mode == "success") {
 				t.Fatal("unexpected outcome", mode, err)
 			}
 			if (mode == "missing projection" || mode == "wrong session" || mode == "version" || mode == "binary change" || mode == "preexisting" || mode == "runtime symlink" || mode == "expired") && calls != 0 {
 				t.Fatal("invalid request launched")
+			}
+			if strings.HasPrefix(mode, "cancel ") {
+				if mode == "cancel before RPC" && reads != 0 {
+					t.Fatal("RPC after cancellation")
+				}
+				if _, err := os.Stat(filepath.Join(home, "codex-owned-allowance-observer")); !os.IsNotExist(err) {
+					t.Fatal("cancelled capture did not clean up")
+				}
 			}
 			if mode == "stop uncertain" {
 				if _, err := os.Stat(filepath.Join(home, "codex-owned-allowance-observer")); err != nil {
