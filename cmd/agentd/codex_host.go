@@ -68,6 +68,12 @@ func codexHost(ctx context.Context, args []string, stdout, stderr io.Writer, get
 		if err != nil {
 			return exitFailure
 		}
+	case "allowance-read":
+		var result any
+		result, err = agentd.CaptureCodexNativeAllowance(ctx, settings, options)
+		if err == nil && json.NewEncoder(stdout).Encode(result) != nil {
+			return exitFailure
+		}
 	case "run":
 		err = agentd.RunCodexHost(ctx, settings, options, encode)
 	case "pair":

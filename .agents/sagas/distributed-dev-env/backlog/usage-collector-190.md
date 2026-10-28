@@ -74,3 +74,13 @@ Source only; no deployment, activation, credential, grant, DB or network change.
   and a Planned view for Automations and Watchdog. It includes the narrow
   product-page CSP header that allows only the embedded stylesheet. See
   [portal read boundary](../../../../docs/portal-read-boundary.md).
+
+## C3: guarded on-demand source callsite (2026-10-28)
+
+The explicitly enabled `agentd codex-host allowance-read` source calls the
+native allowance reader only after current host ownership and configuration
+checks, and rechecks them before releasing a sanitized result. It is not a
+collector, runtime installation or accepted live capture. The existing
+`usage-export` still consumes supplied JSON. Account binding and provider
+freshness remain Unknown; runtime use requires a separately qualified host and
+callable artifact. See [the callsite context](../../../context/usage190-native-capture-callsite-20261028.md).
