@@ -261,7 +261,7 @@ func accessTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        "request_access",
-			"description": "Ask for an access grant. Tom still approves it unless a deployed policy accepts an agent attestation: then, after you obtain your coordinator's approval (the user's, where the coordinator cannot approve), run `agent-run grant attest`. That is your claim, not verified human identity. The reply includes the approval page. This does not install a grant.",
+			"description": "Ask for an access grant. Tom still approves it unless a deployed policy accepts an agent attestation: then, after you obtain your coordinator's approval (the user's, where the coordinator cannot approve), run `agent-run grant attest` (this tool returns at once; the CLI `grant request` blocks up to 30 minutes unless given --no-wait), then poll grant_status. That is your claim, not verified human identity. The reply includes the approval page. This does not install a grant.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

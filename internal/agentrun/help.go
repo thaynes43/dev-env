@@ -607,12 +607,15 @@ the grant the session already holds.
 grant release names one grant. The grant object stays as the audit record.
 
 grant attest records your claim that you obtained approval for this exact grant.
-First ask your coordinator to approve; where the coordinator cannot approve it,
-ask the user. Attest only an approval you actually received, for the scope and
-TTL the command prints. It is your claim, recorded under your session: an agent
-attestation, not verified human identity. It never replaces a confirmation your
-coordinator must get itself. It helps only where a deployed policy names
-attestation (otherwise the grant waits for Tom); one attestation per grant.
+Order: request with grant request ... --no-wait (without it that command waits
+up to 30m on your own pending grant and you cannot attest meanwhile), then
+attest, then follow the grant with grant show. First ask your coordinator to
+approve; where the coordinator cannot approve it, ask the user. Attest only an
+approval you actually received, for the scope and TTL the command prints. It is
+your claim, recorded under your session: an agent attestation, not verified
+human identity. It never replaces a confirmation your coordinator must get
+itself. It helps only where a deployed policy names attestation (otherwise the
+grant waits for Tom); one attestation per grant.
   --approved-by <who>  user, or coordinator:<ref> (the reference is not verified)
   --ref <id>           nonsecret message or journal id of the approval
 
