@@ -148,7 +148,7 @@ internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 in
 internal/tokenfile/      bounded reads of rotating projected bearer-token files
 internal/projectcatalog/ parses and validates the GitOps project catalog and its per-task snapshot; no filesystem or network authority
 internal/projectsync/    agentd's bounded, model-free GitOps project management (`agentd project-sync|project-refresh`): actor, API, receipt
-internal/pages/          bounded retained record of the Pushover pages dev-env's keeper sends (DESIGN-031): states recorded/sent/failed/ambiguous, idempotent keys, redaction, coverage text; standard library only, no I/O
+internal/pages/          bounded keeper Pushover page records, Alertmanager snapshots and Gatus current-check snapshots (DESIGN-031); redaction and coverage text; standard library only, no I/O
 internal/providerallowance/  typed providerallowance.v1 observation and providerallowance.read.v1 cached-read contract: strict decode, caller-supplied trust, and derivation checks; no collector, adapter, storage, or network
 internal/usageconsolidation/  bounded pure report projector over caller-authorized allowance reads and initial-invocation observations; no aggregation, collector, provider, clock, authorization, or I/O
 internal/projectcanary/  validates the two finite operator-owned project rule canaries and binds a session to one
