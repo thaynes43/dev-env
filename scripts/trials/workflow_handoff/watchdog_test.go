@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWatchdogFixtureMatrix(t *testing.T) {
@@ -494,6 +495,91 @@ func setReviewIdentity(doc map[string]any, field, value string) {
 		if item["kind"] == "review-observation" {
 			item[field] = value
 		}
+	}
+}
+
+func TestWatchdogReceiptNotAfterObservation(t *testing.T) {
+	base := time.Date(2026, 10, 28, 18, 0, 0, 0, time.UTC)
+	if !recordedAfterObservation(base.Add(time.Nanosecond), base) {
+		t.Fatal("one nanosecond future was kept")
+	}
+	if recordedAfterObservation(base, base) || recordedAfterObservation(base.Add(-time.Nanosecond), base) {
+		t.Fatal("equal or earlier instant was future")
+	}
+
+	generated := planFile(t, "watchdog-missed-start.json", 0)
+	if len(generated.NextReceipts) != 1 || generated.NextReceipts[0].RecordedAt != "2026-10-28T18:00:00Z" || !boundReceipt(generated.NextReceipts[0], "start_ack", "ob-start", "codex-native", "owner_wake") {
+		t.Fatalf("generated receipt %#v", generated.NextReceipts)
+	}
+	overdue := planFile(t, "watchdog-accepted.json", 0)
+	if len(overdue.Intents) != 1 || overdue.Intents[0].Stage != "user_escalation" || overdue.OverallDone || len(overdue.NextReceipts) != 1 {
+		t.Fatalf("past accepted escalation %#v", overdue.Intents)
+	}
+
+	for _, at := range []string{"2026-10-28T18:00:01Z", "2026-10-28T14:00:01-04:00"} {
+		doc := cloneDoc(loadDoc(t, "watchdog-missed-start.json"))
+		doc["obligations"].([]any)[0].(map[string]any)["ownerEscalationDueAt"] = "2026-10-28T17:30:00Z"
+		rc := receiptAny(generated.NextReceipts)[0].(map[string]any)
+		rc["state"] = "accepted"
+		rc["evidence"] = "transport-accepted"
+		rc["recordedAt"] = at
+		doc["receipts"] = []any{rc}
+		refused, code := planWatchdog(mustMarshal(t, doc))
+		if code != 2 || len(refused.Intents) != 0 || len(refused.NextReceipts) != 0 || refused.OverallDone || !has(refused.Reasons, "receipt recordedAt is after observedAt") {
+			t.Fatalf("future accepted %s exit %d %#v", at, code, refused)
+		}
+	}
+
+	escalation := cloneDoc(loadDoc(t, "watchdog-accepted.json"))
+	esc := receiptAny(overdue.NextReceipts)[0].(map[string]any)
+	esc["recordedAt"] = "2026-10-28T14:00:01-04:00"
+	escalation["receipts"] = append(escalation["receipts"].([]any), esc)
+	if refused, code := planWatchdog(mustMarshal(t, escalation)); code != 2 || len(refused.Intents) != 0 || len(refused.NextReceipts) != 0 || refused.OverallDone {
+		t.Fatalf("future escalation %d %#v", code, refused)
+	}
+
+	equal := cloneDoc(loadDoc(t, "watchdog-missed-start.json"))
+	same := receiptAny(generated.NextReceipts)[0].(map[string]any)
+	same["recordedAt"] = "2026-10-28T14:00:00-04:00"
+	equal["receipts"] = []any{same}
+	replay := planDoc(t, equal, 0)
+	if len(replay.Intents) != 0 || len(replay.NextReceipts) != 0 || len(replay.Receipts) != 1 || replay.Receipts[0].RecordedAt != "2026-10-28T18:00:00Z" || replay.OverallDone {
+		t.Fatalf("equal offset replay %#v %#v", replay.Intents, replay.Receipts)
+	}
+
+	for _, state := range []string{"planned", "accepted", "acknowledged", "rejected", "ambiguous", "resolved"} {
+		for _, stage := range []string{"owner_wake", "user_escalation"} {
+			doc := cloneDoc(loadDoc(t, "watchdog-missed-start.json"))
+			rc := receiptAny(generated.NextReceipts)[0].(map[string]any)
+			rc["stage"] = stage
+			rc["state"] = state
+			rc["recordedAt"] = "2026-10-28T18:00:01Z"
+			if stage == "owner_wake" && state == "acknowledged" {
+				rc["owner"] = "coordinator-sol"
+			}
+			doc["receipts"] = []any{rc}
+			refused, code := planWatchdog(mustMarshal(t, doc))
+			if code != 2 || len(refused.Intents) != 0 || len(refused.NextReceipts) != 0 || refused.OverallDone {
+				t.Fatalf("future %s %s exit %d %#v", stage, state, code, refused)
+			}
+		}
+	}
+
+	later := cloneDoc(loadDoc(t, "watchdog-missed-start.json"))
+	ob := later["obligations"].([]any)[0].(map[string]any)
+	ob["dueAt"] = "2026-10-28T19:00:00Z"
+	ob["ownerEscalationDueAt"] = "2026-10-28T20:00:00Z"
+	if plan := planDoc(t, later, 0); len(plan.Intents) != 0 || plan.Status != "current" || plan.OverallDone {
+		t.Fatalf("future deadlines %#v %s", plan.Intents, plan.Status)
+	}
+	waiting := cloneDoc(loadDoc(t, "watchdog-missed-start.json"))
+	wait := waiting["obligations"].([]any)[0].(map[string]any)
+	wait["waitUntil"] = "2026-10-28T19:00:00Z"
+	wait["waitReason"] = "maintenance window"
+	waiting["receipts"] = receiptAny(generated.NextReceipts)
+	held := planDoc(t, waiting, 0)
+	if held.Status != "waiting" || len(held.Intents) != 0 || len(held.Receipts) != 1 || held.OverallDone {
+		t.Fatalf("future wait %#v %s", held.Intents, held.Status)
 	}
 }
 

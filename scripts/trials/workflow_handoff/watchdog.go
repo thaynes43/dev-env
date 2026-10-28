@@ -303,7 +303,7 @@ func parseWatchdog(data []byte) (watchdogInput, error) {
 	if err != nil {
 		return watchdogInput{}, err
 	}
-	receipts, err := parseReceipts(doc.Receipts, ids)
+	receipts, err := parseReceipts(doc.Receipts, ids, observed)
 	if err != nil {
 		return watchdogInput{}, err
 	}
@@ -371,7 +371,7 @@ func validateObligation(in obligationIn) (parsedObligation, error) {
 	}, nil
 }
 
-func parseReceipts(raw []json.RawMessage, ids map[string]string) ([]parsedReceipt, error) {
+func parseReceipts(raw []json.RawMessage, ids map[string]string, observed time.Time) ([]parsedReceipt, error) {
 	out := make([]parsedReceipt, 0, len(raw))
 	for _, item := range raw {
 		var in receiptIn
@@ -393,6 +393,9 @@ func parseReceipts(raw []json.RawMessage, ids map[string]string) ([]parsedReceip
 		at, err := parseInstant("recordedAt", in.RecordedAt)
 		if err != nil {
 			return nil, err
+		}
+		if recordedAfterObservation(at, observed) {
+			return nil, errors.New("receipt recordedAt is after observedAt")
 		}
 		out = append(out, parsedReceipt{
 			obligation:  in.Obligation,
@@ -443,6 +446,10 @@ func decodeStrict(raw json.RawMessage, dest any) error {
 		return err
 	}
 	return requireEOF(dec)
+}
+
+func recordedAfterObservation(recorded, observed time.Time) bool {
+	return recorded.After(observed)
 }
 
 func parseInstant(field, value string) (time.Time, error) {
