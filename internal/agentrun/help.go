@@ -51,6 +51,7 @@ Usage:
   agent-run breakglass --reason <why>             ask for break-glass; Tom still approves it
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run maintenance check --input <file>      offline correlation check; a candidate is not alert deferral
+  agent-run pages list|show [--from-file F|-]     look up KEEPER pages only (not all Pushover); offline
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
   agent-run login <name> [url|code|status]        set up an --interactive session's Claude login (Tom only)
@@ -65,7 +66,7 @@ Usage:
 agent-run run ... is the same as agent-run ... -p, as in v1. prune and sweep are
 gone, because the operator reaps sessions itself.
 
-Every command but version, help, and maintenance takes these flags:
+Every command but version, help, maintenance, and pages takes these flags:
   -o, --output json       print the API's answer as JSON (list and run also take -o name)
   --api-url <url>         the API's https:// address (or DEV_ENV_API_URL)
   --token-file <path>     a file holding a token for the audience dev-env-operator
@@ -656,6 +657,38 @@ Nothing is sent either way.
 
 The numeric limits are proposed source-contract defaults, not production SLOs.
 `,
+	"pages": `KEEPER PAGES ONLY - not all Pushover history. Recorded or sent (accepted by
+Pushover) does not mean delivered or read.
+
+Usage: agent-run pages list [--sender S] [--state recorded|sent|failed|ambiguous] [--since 36h|7d|RFC3339] [--limit N] [-o json]
+       agent-run pages show <key> [-o json]
+       both take --from-file <file|-> (default -, stdin)
+
+Looks up the Pushover pages that dev-env's own keeper sent to Tom. Feed it the
+keeper's notice ConfigMap, which is readable to any session:
+
+  kubectl -n dev-env-system get cm dev-env-keeper-notices -o json | agent-run pages list
+
+It does not contact the API or send anything. Each page shows its time in UTC
+and America/New_York, sender and source, title and body, key and correlation,
+link, attempts and Pushover's request id.
+
+States are exact. recorded: written before the send, outcome not stored (a crash
+or a send in flight). sent: Pushover answered HTTP 200 with status 1; it queued
+the page, and that is not proof the phone received it. failed: a definite 4xx, or
+no request made. ambiguous: a timeout, transport error, 5xx or unconfirmed 2xx;
+the page may have reached Tom.
+
+Every answer starts with that line and prints its coverage; an error answer
+prints them on stderr. Only the keeper records, and only since the first keeper
+image with this code. Alertmanager, Gatus, upgrade-gate, alert-responder,
+dev-env-ops, the v1 pod, haynesnetwork, scribe-notes, Home Assistant and keeper
+notify-test are not covered, and older pages are Unknown. A page that is not
+here is Unknown, not "no page". list exits 0 whatever it finds; show exits 4
+when the key has no record. The record keeps the newest 100 pages (256 KiB). A
+damaged record is reset by the keeper and the coverage says how many records
+were lost.
+`,
 	"fleet": `Usage: agent-run fleet [--resources] [-o json]
 
 Shows the fleet: the current template revision, how many sessions are in each
@@ -678,6 +711,6 @@ Prints the version, the commit, the Go version and the platform.
 	"help": `Usage: agent-run help [<command>]
 
 Prints help for agent-run, or for one command: run, list, show, log, msg, reap,
-suspend, resume, rescue, declare-activity, maintenance, attach, detach, fleet, version.
+suspend, resume, rescue, declare-activity, maintenance, pages, attach, detach, fleet, version.
 `,
 }
