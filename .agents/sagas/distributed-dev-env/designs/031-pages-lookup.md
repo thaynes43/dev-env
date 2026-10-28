@@ -243,3 +243,12 @@ remains not covered by the keeper record. There is no Gatus client, collector,
 portal route or parent-visible connector in this source slice, and no runtime
 installation or acceptance is claimed. The synthetic test contract and further
 limits are recorded in [the source context](../../../context/gatus-status-adapter-20261028.md).
+
+## 12. Read-only Pages MCP source contract (2026-10-28)
+
+A separate, default-disabled stdio mode proposes exactly two current-snapshot
+tools: list and exact-key get. It uses fixed source operations, bounded
+normalization and content revisions; it does not record notification history,
+register a parent connector, or grant access. The current parent cannot consume
+arbitrary local stdio. Remote transport, authentication, source access and live
+acceptance require separate decisions. See [the source contract](../../../../docs/pages-mcp-readonly.md).
