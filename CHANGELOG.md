@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.54.0](https://github.com/thaynes43/dev-env/compare/v2.53.0...v2.54.0) (2026-10-28)
+
+
+### Features
+
+* **pages:** add Alertmanager snapshot lookup and HTML PoC ([#605](https://github.com/thaynes43/dev-env/issues/605)) ([f16d86b](https://github.com/thaynes43/dev-env/commit/f16d86befaa5e40e89ee9418cd2f2c05ecec785e))
+
 ## [2.53.0](https://github.com/thaynes43/dev-env/compare/v2.52.0...v2.53.0) (2026-10-28)
 
 
