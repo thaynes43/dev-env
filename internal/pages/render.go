@@ -49,8 +49,11 @@ func Coverage(d *Document) []string {
 		}
 		lines = append(lines, fmt.Sprintf("Older records were dropped by the bounds (%d dropped); the oldest kept is %s. Pages before that are Unknown here.", d.DroppedCount, old))
 	}
+	if d != nil && d.ResetAt != nil {
+		lines = append(lines, fmt.Sprintf("The record was damaged and reset at %s; %d earlier records were lost (best-effort count). Pages before that are Unknown.", FormatTime(*d.ResetAt), d.LostRecords))
+	}
 	lines = append(lines,
-		"States: recorded = written before the send, outcome not stored; sent = Pushover accepted it (HTTP 200, status 1), not proof the phone received it; failed = Pushover refused it (4xx); ambiguous = timeout, transport error or 5xx, it may have reached Tom.")
+		"States: recorded = written before the send, outcome not stored; sent = Pushover accepted it (HTTP 200, status 1), not proof the phone received it; failed = a definite 4xx, or no request made; ambiguous = timeout, transport error, 5xx or unconfirmed 2xx, it may have reached Tom.")
 	return lines
 }
 

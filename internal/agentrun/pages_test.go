@@ -187,3 +187,67 @@ func TestPagesNeverShowsACredentialInTheStoredRecord(t *testing.T) {
 		}
 	}
 }
+
+// The limit hint shows whenever more records match than are shown, also after
+// the bounds have dropped older ones.
+func TestPagesLimitHintShowsWheneverThereAreMore(t *testing.T) {
+	h := newHarness(t)
+	d := samplePages(t)
+	d.DroppedCount = 5 // older records were dropped; the hint must still show
+	in := pagesConfigMap(t, d)
+	h.env.Stdin = strings.NewReader(in)
+	h.mustRun(ExitOK, "pages", "list", "--limit", "2")
+	contains(t, "hint", h.stdout.String(), "(showing the newest 2 of 3 matching; --limit raises it)", "5 dropped")
+	h.env.Stdin = strings.NewReader(in)
+	h.mustRun(ExitOK, "pages", "list", "--limit", "3")
+	if strings.Contains(h.stdout.String(), "--limit raises it") {
+		t.Errorf("hint shown with nothing more:\n%s", h.stdout.String())
+	}
+	h.env.Stdin = strings.NewReader(in)
+	h.mustRun(ExitOK, "pages", "list", "--limit", "1", "--state", "sent")
+	if strings.Contains(h.stdout.String(), "--limit raises it") {
+		t.Errorf("hint counts records the filter excluded:\n%s", h.stdout.String())
+	}
+}
+
+// An error answer carries the banner and the coverage too.
+func TestPagesErrorsPrintTheBannerAndCoverage(t *testing.T) {
+	h := newHarness(t)
+	for name, run := range map[string]func(){
+		"usage":    func() { h.mustRun(ExitUsage, "pages", "list", "--state", "delivered") },
+		"bad verb": func() { h.mustRun(ExitUsage, "pages", "delete") },
+		"unreadable": func() {
+			h.env.Stdin = strings.NewReader(`{"kind":"ConfigMap","data":{"pages.json":"{broken"}}`)
+			h.mustRun(ExitUsage, "pages", "list")
+		},
+		"not json": func() { h.env.Stdin = strings.NewReader(`nope`); h.mustRun(ExitUsage, "pages", "list") },
+	} {
+		run()
+		contains(t, name, h.stderr.String(), "KEEPER PAGES ONLY - not all Pushover history.", "NOT covered", "Unknown, not \"no page\"")
+		if !strings.HasPrefix(h.stderr.String(), "KEEPER PAGES ONLY") {
+			t.Errorf("%s: the banner is not first on stderr:\n%s", name, h.stderr.String())
+		}
+	}
+	// A damaged record still reads as Unknown, never as an empty history.
+	h.env.Stdin = strings.NewReader(`{"kind":"ConfigMap","data":{"pages.json":"{broken"}}`)
+	h.mustRun(ExitUsage, "pages", "list")
+	contains(t, "unreadable", h.stderr.String(), "treat every page as Unknown")
+	if h.stdout.Len() != 0 {
+		t.Errorf("an error answer wrote to stdout: %q", h.stdout.String())
+	}
+}
+
+func TestPagesShowsAResetInTheCoverage(t *testing.T) {
+	h := newHarness(t)
+	d := pages.NewReset([]byte(`{"version":1,"records":[{"key":"a"},{"key":"b"}]}`), time.Date(2026, 10, 28, 4, 0, 0, 0, time.UTC))
+	_, _ = d.Begin(pages.Page{Key: "k1", Sender: "dev-env-keeper", Title: "t", Body: "b"}, time.Date(2026, 10, 28, 4, 1, 0, 0, time.UTC))
+	h.env.Stdin = strings.NewReader(pagesConfigMap(t, d))
+	h.mustRun(ExitOK, "pages", "list")
+	contains(t, "reset", h.stdout.String(), "damaged and reset at 2026-10-28 04:00:00 UTC", "2 earlier records were lost")
+}
+
+func TestPagesHelpListsNotifyTest(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun(ExitOK, "help", "pages")
+	contains(t, "help", h.stdout.String(), "keeper\nnotify-test", "an error answer")
+}

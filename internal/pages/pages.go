@@ -16,6 +16,7 @@
 package pages
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,6 +87,9 @@ var (
 
 	// ErrInvalid is wrapped by every validation failure.
 	ErrInvalid = errors.New("pages: invalid")
+	// ErrVersion is a document of another schema version. It is not damage: a
+	// newer or older keeper may own it, so nothing resets it.
+	ErrVersion = fmt.Errorf("%w: schema version", ErrInvalid)
 )
 
 // Record is one page. There is no field that could carry a credential: the
@@ -132,6 +136,11 @@ type Document struct {
 	RecordingSince *time.Time `json:"recordingSince,omitempty"`
 	// DroppedCount is how many records the bounds have removed, ever.
 	DroppedCount int `json:"droppedCount,omitempty"`
+	// LostRecords counts records lost when a damaged document was reset (a
+	// best-effort count of what was in it); ResetAt is when. Both survive later
+	// resets and are shown in the coverage.
+	LostRecords int        `json:"lostRecords,omitempty"`
+	ResetAt     *time.Time `json:"resetAt,omitempty"`
 	// OldestRetainedAt is the RecordedAt of the oldest record kept.
 	OldestRetainedAt *time.Time `json:"oldestRetainedAt,omitempty"`
 	Records          []Record   `json:"records"`
@@ -288,6 +297,31 @@ func (d *Document) Marshal() ([]byte, error) {
 	return json.Marshal(d)
 }
 
+// NewReset returns an empty Document that records the loss of a damaged one.
+// raw is the damaged value, used only for a best-effort count of what was lost
+// (and the losses of earlier resets, if it still says so). It is never kept.
+func NewReset(raw []byte, now time.Time) *Document {
+	d := New()
+	var lenient struct {
+		LostRecords int               `json:"lostRecords"`
+		Records     []json.RawMessage `json:"records"`
+	}
+	lost := 0
+	if json.Unmarshal(raw, &lenient) == nil {
+		lost = len(lenient.Records)
+		if lenient.LostRecords > 0 && lenient.LostRecords < 1<<20 {
+			lost += lenient.LostRecords
+		}
+	} else {
+		lost = bytes.Count(raw, []byte(`"key"`))
+	}
+	d.LostRecords = lost
+	t := now.UTC()
+	d.ResetAt = &t
+	d.RecordingSince = &t
+	return d
+}
+
 // Parse decodes and validates a Document. A reader treats an error as
 // "Unknown", never as an empty history.
 func Parse(raw []byte) (*Document, error) {
@@ -299,7 +333,7 @@ func Parse(raw []byte) (*Document, error) {
 		return nil, fmt.Errorf("%w: not JSON", ErrInvalid)
 	}
 	if d.Version != SchemaVersion {
-		return nil, fmt.Errorf("%w: version %d", ErrInvalid, d.Version)
+		return nil, fmt.Errorf("%w: %d", ErrVersion, d.Version)
 	}
 	if len(d.Records) > MaxRecords {
 		return nil, fmt.Errorf("%w: too many records", ErrInvalid)

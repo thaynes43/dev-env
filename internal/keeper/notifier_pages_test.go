@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -30,9 +31,30 @@ type memPages struct {
 	failSave bool
 	loads    int
 	saves    int
+	// delay makes every store call take this long, or until its context ends;
+	// fastLoad exempts loads.
+	delay    time.Duration
+	fastLoad bool
 }
 
-func (m *memPages) LoadPages(context.Context) (*pages.Document, error) {
+func (m *memPages) wait(ctx context.Context) error {
+	if m.delay == 0 {
+		return nil
+	}
+	select {
+	case <-time.After(m.delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *memPages) LoadPages(ctx context.Context) (*pages.Document, error) {
+	if !m.fastLoad {
+		if err := m.wait(ctx); err != nil {
+			return nil, err
+		}
+	}
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	m.loads++
@@ -42,10 +64,21 @@ func (m *memPages) LoadPages(context.Context) (*pages.Document, error) {
 	if m.raw == nil {
 		return pages.New(), nil
 	}
-	return pages.Parse(m.raw)
+	// The same classes as ConfigMapNoticeStore.LoadPages.
+	d, err := pages.Parse(m.raw)
+	switch {
+	case errors.Is(err, pages.ErrVersion):
+		return nil, errPagesVersion
+	case err != nil:
+		return nil, &pagesDamagedError{raw: append([]byte(nil), m.raw...)}
+	}
+	return d, nil
 }
 
-func (m *memPages) SavePages(_ context.Context, d *pages.Document) error {
+func (m *memPages) SavePages(ctx context.Context, d *pages.Document) error {
+	if err := m.wait(ctx); err != nil {
+		return err
+	}
 	m.pmu.Lock()
 	defer m.pmu.Unlock()
 	if m.failSave {
@@ -267,35 +300,98 @@ func TestUnusablePageRecordDoesNotChangeSending(t *testing.T) {
 	}
 }
 
-// Today's behaviour is the baseline: with or without the record, the same
-// requests go out with the same fields.
-func TestSendsAreIdenticalWithAndWithoutTheRecord(t *testing.T) {
-	var forms [2][]string
-	for i, withPages := range []bool{false, true} {
-		var f *noticeFix
-		if withPages {
-			f, _ = newPagesFix(t, pagesStart)
-		} else {
-			f = newNoticeFix(t, pagesStart)
-		}
-		f.fake.okBody = acceptedBody
-		f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
-		f.tick()
-		f.hub.Report(ProviderClaude, LoginReady, time.Time{})
-		f.tick()
-		f.hub.Report(ProviderClaude, LoginReady, pagesStart.Add(5*24*time.Hour))
-		f.tick()
-		f.fake.mu.Lock()
-		for _, r := range f.fake.reqs {
-			f2 := r.form
-			f2.Del("token")
-			f2.Del("user")
-			forms[i] = append(forms[i], f2.Encode())
-		}
-		f.fake.mu.Unlock()
+// recordSender wraps the real sender and keeps every Notice it was handed.
+type recordSender struct {
+	inner   *PushoverSender
+	mu      sync.Mutex
+	notices []Notice
+}
+
+func (r *recordSender) Send(ctx context.Context, n Notice) error {
+	_, err := r.SendReceipt(ctx, n)
+	return err
+}
+func (r *recordSender) SendReceipt(ctx context.Context, n Notice) (Receipt, error) {
+	r.mu.Lock()
+	r.notices = append(r.notices, n)
+	r.mu.Unlock()
+	return r.inner.SendReceipt(ctx, n)
+}
+
+// The exact set of form fields Pushover is sent. A field that carries the page
+// key, the correlation or the source would add to it.
+var wantFormFields = []string{"message", "priority", "title", "token", "url", "url_title", "user"}
+
+func formFields(f map[string][]string) []string {
+	var out []string
+	for k := range f {
+		out = append(out, k)
 	}
-	if len(forms[0]) < 3 || strings.Join(forms[0], "\n") != strings.Join(forms[1], "\n") {
-		t.Fatalf("requests differ:\n%v\n%v", forms[0], forms[1])
+	sort.Strings(out)
+	return out
+}
+
+// Today's behaviour is the baseline: the notifier sends exactly the fields it
+// sent before the record existed, with and without the record, and the same as
+// a request built from the same notice with the page fields cleared. A leak of
+// the page key, correlation or source into the form fails here.
+func TestSendsAreExactlyTheBaselineFormWithAndWithoutTheRecord(t *testing.T) {
+	for _, withPages := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no record", true: "record"}[withPages], func(t *testing.T) {
+			var f *noticeFix
+			if withPages {
+				f, _ = newPagesFix(t, pagesStart)
+			} else {
+				f = newNoticeFix(t, pagesStart)
+			}
+			f.fake.okBody = acceptedBody
+			rec := &recordSender{inner: f.n.Sender.(*PushoverSender)}
+			f.n.Sender = rec
+			f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+			f.tick()
+			f.hub.Report(ProviderClaude, LoginReady, pagesStart.Add(5*24*time.Hour))
+			f.tick()
+			if len(rec.notices) != 3 {
+				t.Fatalf("%d notices", len(rec.notices))
+			}
+			// The same notices with the page fields cleared, sent to a clean fake.
+			clean := newPushoverFake(t)
+			cs := &PushoverSender{URL: clean.srv.URL, TokenFile: filepath.Join(f.dir, "token"), UserFile: filepath.Join(f.dir, "user")}
+			for _, n := range rec.notices {
+				if n.PageKey == "" || n.Correlation == "" || n.Source == "" {
+					t.Fatalf("the notifier did not set its page fields: %+v", n)
+				}
+				n.PageKey, n.Correlation, n.Source = "", "", ""
+				if err := cs.Send(context.Background(), n); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.fake.mu.Lock()
+			defer f.fake.mu.Unlock()
+			clean.mu.Lock()
+			defer clean.mu.Unlock()
+			if len(f.fake.reqs) != 3 || len(clean.reqs) != 3 {
+				t.Fatalf("requests %d and %d", len(f.fake.reqs), len(clean.reqs))
+			}
+			for i, got := range f.fake.reqs {
+				if fields := formFields(got.form); strings.Join(fields, ",") != strings.Join(wantFormFields, ",") {
+					t.Errorf("request %d has fields %v, want exactly %v", i, fields, wantFormFields)
+				}
+				if got.form.Encode() != clean.reqs[i].form.Encode() {
+					t.Errorf("request %d differs from the same notice with its page fields cleared:\n%v\n%v", i, got.form, clean.reqs[i].form)
+				}
+				for k, v := range got.form {
+					if k == "token" || k == "user" {
+						continue
+					}
+					for _, leak := range []string{"critical:", "resolved:", "warning:", "notices/", "claude-"} {
+						if strings.Contains(strings.Join(v, ""), leak) {
+							t.Errorf("request %d field %s holds %q", i, k, leak)
+						}
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -415,5 +511,114 @@ func TestConfigMapPagesRoundTripLeavesTheNoticeStateAlone(t *testing.T) {
 	}
 	if err := missing.SavePages(ctx, d); err == nil {
 		t.Fatal("created a ConfigMap")
+	}
+}
+
+// A slow record store degrades to "send now": the extra latency before a send is
+// capped by pagesBeforeSendBudget, and a second send in the pass does not wait again.
+func TestSlowPageStoreIsCappedAndNeverBlocksTheSend(t *testing.T) {
+	old := pagesBeforeSendBudget
+	pagesBeforeSendBudget = 150 * time.Millisecond
+	t.Cleanup(func() { pagesBeforeSendBudget = old })
+	f, mp := newPagesFix(t, pagesStart)
+	mp.delay = 10 * time.Second // each store call would take 10 s
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f.hub.Report(ProviderCodex, LoginNeedsLogin, time.Time{})
+	start := time.Now()
+	f.tick()
+	elapsed := time.Since(start)
+	if f.fake.count() != 2 {
+		t.Fatalf("%d sends: a slow record store blocked a page", f.fake.count())
+	}
+	// One budget for the first page; the second does not wait again.
+	if elapsed > 900*time.Millisecond {
+		t.Fatalf("the pass took %v with a store that takes 10 s per call; the cap is 150 ms", elapsed)
+	}
+	if got := mp.stored(t); len(got.Records) != 0 {
+		t.Fatalf("a record was stored by a store that never answered: %+v", got.Records)
+	}
+	// The store recovers. The two pages sent meanwhile are Unknown (their record
+	// could not be loaded, and nothing is invented afterwards); the next page is
+	// recorded normally.
+	mp.delay = 0
+	f.clk.Step(2 * time.Minute)
+	f.hub.Report(ProviderClaude, LoginReady, time.Time{})
+	f.tick()
+	d := mp.stored(t)
+	if r := only(t, d); r.Sender != "dev-env-keeper" || !strings.HasPrefix(r.Key, "resolved:claude:") || r.State != pages.StateSent {
+		t.Fatalf("after recovery: %+v", r)
+	}
+	if f.fake.count() != 3 {
+		t.Fatalf("%d sends", f.fake.count())
+	}
+}
+
+// With the record loaded and only the writes slow, the write-ahead is capped,
+// the page is sent, and the record kept in memory is stored on a later pass.
+func TestSlowPageWritesAreCappedAndCatchUp(t *testing.T) {
+	old := pagesBeforeSendBudget
+	pagesBeforeSendBudget = 150 * time.Millisecond
+	t.Cleanup(func() { pagesBeforeSendBudget = old })
+	f, mp := newPagesFix(t, pagesStart)
+	mp.delay, mp.fastLoad = 10*time.Second, true
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	start := time.Now()
+	f.tick()
+	if elapsed := time.Since(start); elapsed > 900*time.Millisecond {
+		t.Fatalf("the pass took %v", elapsed)
+	}
+	if f.fake.count() != 1 || len(mp.stored(t).Records) != 0 {
+		t.Fatalf("sends %d stored %d", f.fake.count(), len(mp.stored(t).Records))
+	}
+	mp.delay = 0
+	f.clk.Step(2 * time.Minute)
+	f.tick()
+	if r := only(t, mp.stored(t)); r.State != pages.StateSent || r.Attempts != 1 {
+		t.Fatalf("%+v", r)
+	}
+	if f.fake.count() != 1 {
+		t.Fatal("a page was repeated")
+	}
+}
+
+// A damaged pages.json must not stop recording for good: it is reset, the loss
+// is counted, and the reset is marked in the record.
+func TestDamagedPageRecordIsResetAndCounted(t *testing.T) {
+	f, mp := newPagesFix(t, pagesStart)
+	mp.raw = []byte(`{"version":1,"records":[{"key":"a","state":"bogus","recordedAt":"2026-10-01T00:00:00Z"},{"key":"b"}]}`)
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f.tick()
+	d := mp.stored(t)
+	if d.LostRecords != 2 || d.ResetAt == nil || !d.ResetAt.Equal(pagesStart) {
+		t.Fatalf("lost %d resetAt %v", d.LostRecords, d.ResetAt)
+	}
+	if r := only(t, d); r.State != pages.StateSent {
+		t.Fatalf("%+v", r)
+	}
+	if !strings.Contains(strings.Join(pages.Coverage(d), "\n"), "damaged and reset") {
+		t.Error("the coverage does not say the record was reset")
+	}
+	// Unparseable bytes are counted by their keys; a later reset keeps the earlier loss.
+	mp.raw = []byte(`{"version":1,"lostRecords":3 "key" "key" "key"`)
+	f2, mp2 := newPagesFix(t, pagesStart)
+	mp2.raw = mp.raw
+	f2.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f2.tick()
+	if d := mp2.stored(t); d.LostRecords != 3 || d.ResetAt == nil || len(d.Records) != 1 {
+		t.Fatalf("lost %d", d.LostRecords)
+	}
+}
+
+// A record of another schema version is not damage and is never overwritten.
+func TestOtherSchemaVersionIsLeftAloneAndPagesStillSend(t *testing.T) {
+	f, mp := newPagesFix(t, pagesStart)
+	mp.raw = []byte(`{"version":9,"records":[]}`)
+	f.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	f.tick()
+	if string(mp.raw) != `{"version":9,"records":[]}` {
+		t.Fatalf("the record was overwritten: %s", mp.raw)
+	}
+	if f.fake.count() != 1 {
+		t.Fatal("the page was not sent")
 	}
 }

@@ -759,8 +759,11 @@ first keeper image that has this code. Alertmanager, Gatus, upgrade-gate,
 alert-responder, dev-env-ops, the v1 pod, haynesnetwork, scribe-notes and Home
 Assistant are not covered, and older pages are Unknown. A page that is not in
 the record is Unknown, never "no page". The record keeps the newest 100 pages
-(256 KiB) and says how many it dropped. A link or text that could carry a
-credential is stored as `REDACTED`. Design: DESIGN-031.
+(256 KiB) and says how many it dropped. If the stored record is damaged the
+keeper resets it and the coverage says when and how many records were lost. A
+link or text that could carry a credential is stored as `REDACTED` (a heuristic;
+see DESIGN-031 for its limits). Recording never blocks a send: a slow ConfigMap
+adds at most about a second before the request. Design: DESIGN-031.
 
 ## 7. Where notes live
 

@@ -679,12 +679,15 @@ the page, and that is not proof the phone received it. failed: a definite 4xx, o
 no request made. ambiguous: a timeout, transport error, 5xx or unconfirmed 2xx;
 the page may have reached Tom.
 
-Every answer starts with that line and prints its coverage. Only the keeper records, and only since the
-first keeper image with this code. Alertmanager, Gatus, upgrade-gate,
-alert-responder, dev-env-ops, the v1 pod, haynesnetwork, scribe-notes and Home
-Assistant are not covered, and older pages are Unknown. A page that is not
+Every answer starts with that line and prints its coverage; an error answer
+prints them on stderr. Only the keeper records, and only since the first keeper
+image with this code. Alertmanager, Gatus, upgrade-gate, alert-responder,
+dev-env-ops, the v1 pod, haynesnetwork, scribe-notes, Home Assistant and keeper
+notify-test are not covered, and older pages are Unknown. A page that is not
 here is Unknown, not "no page". list exits 0 whatever it finds; show exits 4
-when the key has no record. The record keeps the newest 100 pages (256 KiB).
+when the key has no record. The record keeps the newest 100 pages (256 KiB). A
+damaged record is reset by the keeper and the coverage says how many records
+were lost.
 `,
 	"fleet": `Usage: agent-run fleet [--resources] [-o json]
 

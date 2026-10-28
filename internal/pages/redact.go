@@ -17,6 +17,10 @@ var (
 	urlInText = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s<>"')\]]+`)
 	// pairInText finds name=value where the name is a credential name.
 	pairInText = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*(?:token|key|secret|auth|sig|password)[a-z0-9_.-]*)=[^\s&<>"')]+`)
+	// jsonPairInText finds "name":"value" where the name is a credential name.
+	jsonPairInText = regexp.MustCompile(`(?i)"([a-z0-9_.-]*(?:token|key|secret|auth|sig|password)[a-z0-9_.-]*)"\s*:\s*"[^"]*"`)
+	// colonPairInText finds name: value where the name is a credential name.
+	colonPairInText = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*(?:token|key|secret|auth|sig|password)[a-z0-9_.-]*)\s*:\s*[^\s,;"'<>]+`)
 	// bearerInText finds an Authorization-style value.
 	bearerInText = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}`)
 )
@@ -57,7 +61,11 @@ func RedactURL(raw string) string {
 }
 
 // RedactText replaces, inside free text, every unsafe link, every
-// credential-named name=value pair, and every bearer or basic value.
+// credential-named name=value, name: value and JSON "name":"value" pair, and
+// every bearer or basic value. It is a heuristic with limits (DESIGN-031): a
+// bare token with no name, a value with spaces after "name:", a non-string JSON
+// value, and a name that does not contain token, key, secret, auth, sig or
+// password are not caught. The keeper's fixed texts hold none of these.
 func RedactText(s string) string {
 	s = urlInText.ReplaceAllStringFunc(s, func(m string) string {
 		// Trailing punctuation belongs to the sentence, not the link.
@@ -68,7 +76,9 @@ func RedactText(s string) string {
 		}
 		return m
 	})
-	s = pairInText.ReplaceAllString(s, "${1}="+Redacted)
 	s = bearerInText.ReplaceAllString(s, "${1} "+Redacted)
+	s = jsonPairInText.ReplaceAllString(s, `"${1}":"`+Redacted+`"`)
+	s = pairInText.ReplaceAllString(s, "${1}="+Redacted)
+	s = colonPairInText.ReplaceAllString(s, "${1}: "+Redacted)
 	return s
 }

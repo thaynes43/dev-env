@@ -116,9 +116,9 @@ internal/standby/       the leader-only standby runnable (Story110 T25, plan 03)
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
                          HistoryReader, the history archive's reads for the API (DESIGN-025 8)
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, maintenance check; finds the API and a token in a session
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, maintenance check, pages list|show (offline, DESIGN-031); finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
-                         agentd's protocol, and the standard-library helpers maintenancecontract, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
+                         agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
                          behind a Lease. Only that non-rotating token is a Keeper Job; the rotating Codex login and the
                          Proxmox credential grants are separate journaled, Lease-fenced leader runnables. Unit tests use a fake
@@ -147,7 +147,7 @@ internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 in
 internal/tokenfile/      bounded reads of rotating projected bearer-token files
 internal/projectcatalog/ parses and validates the GitOps project catalog and its per-task snapshot; no filesystem or network authority
 internal/projectsync/    agentd's bounded, model-free GitOps project management (`agentd project-sync|project-refresh`): actor, API, receipt
-internal/pages/            bounded retained record of the Pushover pages dev-env's keeper sends (DESIGN-031): states recorded/sent/failed/ambiguous, idempotent keys, redaction, coverage text; standard library only, no I/O
+internal/pages/          bounded retained record of the Pushover pages dev-env's keeper sends (DESIGN-031): states recorded/sent/failed/ambiguous, idempotent keys, redaction, coverage text; standard library only, no I/O
 internal/providerallowance/  typed providerallowance.v1 observation and providerallowance.read.v1 cached-read contract: strict decode, caller-supplied trust, and derivation checks; no collector, adapter, storage, or network
 internal/usageconsolidation/  bounded pure report projector over caller-authorized allowance reads and initial-invocation observations; no aggregation, collector, provider, clock, authorization, or I/O
 internal/projectcanary/  validates the two finite operator-owned project rule canaries and binds a session to one

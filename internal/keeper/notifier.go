@@ -86,7 +86,21 @@ var (
 	errNoticeStateForbidden = errors.New("the keeper may not use the notice ConfigMap")
 	errNoticeStateCorrupt   = errors.New("the notice state in the ConfigMap cannot be read")
 	errPagesCorrupt         = errors.New("the pages record in the ConfigMap cannot be read")
+	errPagesVersion         = errors.New("the pages record in the ConfigMap is of another schema version")
 )
+
+// The page record never blocks a send, and it bounds how long it can hold one up.
+// Before a send, loading and writing the record share one budget: a slow API
+// server costs at most this much extra latency, and then the page is sent with
+// the record kept in memory (stored on a later pass) or not recorded at all. After
+// the send the outcome gets its own budget. A failed attempt pauses further
+// stores for pagesRetryAfter, so a stuck store costs a send nothing.
+var (
+	pagesBeforeSendBudget = time.Second
+	pagesAfterSendBudget  = 2 * time.Second
+)
+
+const pagesRetryAfter = time.Minute
 
 // Notice is one Pushover message. PageKey, Correlation and Source are not sent:
 // they name the record of the page (internal/pages, DESIGN-031).
@@ -280,8 +294,16 @@ type PageStore interface {
 	SavePages(ctx context.Context, d *pages.Document) error
 }
 
-// LoadPages reads pages.json. An absent key is an empty record, not an error;
-// a damaged one is an error, so a reader never mistakes it for "no pages".
+// pagesDamagedError carries a damaged pages.json for the reset's count. It
+// stays in memory and is never logged or stored.
+type pagesDamagedError struct{ raw []byte }
+
+func (*pagesDamagedError) Error() string { return errPagesCorrupt.Error() }
+func (*pagesDamagedError) Unwrap() error { return errPagesCorrupt }
+
+// LoadPages reads pages.json. An absent key is an empty record, not an error.
+// A damaged key is a *pagesDamagedError (the notifier resets it and counts the
+// loss); a key of another schema version is errPagesVersion and is left alone.
 func (c *ConfigMapNoticeStore) LoadPages(ctx context.Context) (*pages.Document, error) {
 	ctx, cancel := context.WithTimeout(ctx, noticeStoreTimeout)
 	defer cancel()
@@ -294,8 +316,11 @@ func (c *ConfigMapNoticeStore) LoadPages(ctx context.Context) (*pages.Document, 
 		return pages.New(), nil
 	}
 	d, err := pages.Parse([]byte(raw))
-	if err != nil {
-		return nil, errPagesCorrupt
+	switch {
+	case errors.Is(err, pages.ErrVersion):
+		return nil, errPagesVersion
+	case err != nil:
+		return nil, &pagesDamagedError{raw: []byte(raw)}
 	}
 	return d, nil
 }
@@ -482,6 +507,7 @@ type Notifier struct {
 	pagesDoc     *pages.Document // loaded on the first send; nil until then
 	pagesDirty   bool            // a change not yet stored
 	pagesLogged  string          // last pages problem logged
+	pagesRetryAt time.Time       // no store call before this time (one just failed)
 	mu           sync.Mutex
 	state        *NoticeState // authoritative after the first load
 	dirty        bool         // a change not yet stored
@@ -663,8 +689,8 @@ func (n *Notifier) recovered() {
 // stores it again, and nothing is sent twice meanwhile because the in-memory
 // state already records what was sent.
 func (n *Notifier) persist(ctx context.Context) {
-	if n.pagesDirty && n.pagesDoc != nil && n.Pages != nil {
-		n.storePages(ctx)
+	if now := n.Clock.Now(); n.pagesDirty && n.pagesDoc != nil && n.Pages != nil && !now.Before(n.pagesRetryAt) {
+		n.storePages(ctx, now)
 	}
 	if !n.dirty {
 		return
@@ -693,9 +719,11 @@ func (n *Notifier) persist(ctx context.Context) {
 // and transport errors retry after the backoff.
 //
 // The page is recorded before the request is made and its outcome after
-// (DESIGN-031). Recording never gates the send: an unusable record store means
-// the page is sent and simply not recorded. Which notices are sent, and when,
-// is exactly what it was before the record existed.
+// (DESIGN-031). Recording never blocks a send: a slow or unusable record store
+// adds at most pagesBeforeSendBudget (1 s) of latency before the request, and
+// the page is then sent with the record kept in memory or not recorded at all.
+// Which notices are sent, and when, is exactly what it was before the record
+// existed.
 func (n *Notifier) send(ctx context.Context, key string, sig int64, notice Notice, now time.Time) bool {
 	if n.isBlocked(key, sig) || now.Before(n.backoffUntil) {
 		return false
@@ -745,14 +773,31 @@ func (n *Notifier) pagesProblem(reason string) {
 
 // beginPage writes the record of the page, and stores it, before the send. It
 // reports whether the page is being recorded, which it is not for a notice with
-// no key, a notifier with no page store, or a record that cannot be read.
+// no key, a notifier with no page store, or a record that cannot be read. The
+// store calls here share pagesBeforeSendBudget, and a failure pauses them for
+// pagesRetryAfter (a record already loaded is still kept in memory).
 func (n *Notifier) beginPage(ctx context.Context, notice Notice, now time.Time) bool {
 	if n.Pages == nil || notice.PageKey == "" {
 		return false
 	}
+	storeOK := !now.Before(n.pagesRetryAt)
+	bctx, cancel := context.WithTimeout(ctx, pagesBeforeSendBudget)
+	defer cancel()
 	if n.pagesDoc == nil {
-		d, err := n.Pages.LoadPages(ctx)
-		if err != nil {
+		if !storeOK {
+			return false
+		}
+		d, err := n.Pages.LoadPages(bctx)
+		var damaged *pagesDamagedError
+		switch {
+		case errors.As(err, &damaged):
+			// A damaged record would stop recording for good. Start again, and
+			// say so in the record itself.
+			d = pages.NewReset(damaged.raw, now)
+			n.pagesProblem(fmt.Sprintf("the stored record was damaged; reset, about %d records lost", d.LostRecords))
+			n.pagesDirty = true
+		case err != nil:
+			n.pagesRetryAt = now.Add(pagesRetryAfter)
 			n.pagesProblem("not recorded: " + err.Error() + "; the page is sent anyway and is Unknown in lookups")
 			return false
 		}
@@ -766,7 +811,10 @@ func (n *Notifier) beginPage(ctx context.Context, notice Notice, now time.Time) 
 		n.pagesProblem("not recorded: " + err.Error())
 		return false
 	}
-	n.storePages(ctx)
+	n.pagesDirty = true
+	if storeOK {
+		n.storePages(bctx, now)
+	}
 	return true
 }
 
@@ -791,15 +839,22 @@ func (n *Notifier) finishPage(ctx context.Context, notice Notice, err error, rc 
 	default:
 		o, status = pages.OutcomeAmbiguous, 0
 	}
-	n.pagesDoc.Finish(notice.PageKey, o, status, request, n.Clock.Now())
-	n.storePages(ctx)
+	now := n.Clock.Now()
+	n.pagesDoc.Finish(notice.PageKey, o, status, request, now)
+	if now.Before(n.pagesRetryAt) {
+		return // the store failed a moment ago; the next pass stores it
+	}
+	actx, cancel := context.WithTimeout(ctx, pagesAfterSendBudget)
+	defer cancel()
+	n.storePages(actx, now)
 }
 
-// storePages stores the record, or leaves it pending for the next pass.
-func (n *Notifier) storePages(ctx context.Context) {
+// storePages stores the record, or leaves it pending for a later pass.
+func (n *Notifier) storePages(ctx context.Context, now time.Time) {
 	n.pagesDirty = true
 	if err := n.Pages.SavePages(ctx, n.pagesDoc); err != nil {
-		n.pagesProblem("not stored yet: " + err.Error() + "; it is retried on the next pass")
+		n.pagesRetryAt = now.Add(pagesRetryAfter)
+		n.pagesProblem("not stored yet: " + err.Error() + "; it is retried later")
 		return
 	}
 	n.pagesDirty, n.pagesLogged = false, ""

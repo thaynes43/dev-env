@@ -2,6 +2,7 @@ package pages
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -359,5 +360,80 @@ func TestParseRedactsWhatWasStored(t *testing.T) {
 	}
 	if r.URL != Redacted {
 		t.Errorf("url %q", r.URL)
+	}
+}
+
+func TestRedactTextCatchesColonAndJSONPairs(t *testing.T) {
+	for _, c := range []struct{ in, leak string }{
+		{"Authorization: Bearer abcdefgh12345678", "abcdefgh12345678"},
+		{"api_key: ABCD1234", "ABCD1234"},
+		{"client-secret:   S3CR3TVAL", "S3CR3TVAL"},
+		{`{"token":"JSONTOKEN","ok":"fine"}`, "JSONTOKEN"},
+		{`{"Password" : "JSONPW"}`, "JSONPW"},
+		{`{"access_token":"AT123","x":1}`, "AT123"},
+		{"x-auth-token = ABC and password=PW1", "PW1"},
+	} {
+		got := RedactText(c.in)
+		if strings.Contains(got, c.leak) || !strings.Contains(got, Redacted) {
+			t.Errorf("RedactText(%q) = %q", c.in, got)
+		}
+	}
+	// Ordinary prose and the keeper's own fixed texts are left alone.
+	for _, keep := range []string{
+		"Keeper needs login (claude)",
+		"Claude sign-in is needed. Until it is renewed the phone sessions cannot start. Renew from the standby session: agent-run keeper-login claude url (quickstart section 6).",
+		"Claude sign-in was renewed; the keeper holds a working login again.",
+		"Claude login lapses in 3 days (2026-11-16 17:51 UTC) \u2014 renew from the standby: agent-run keeper-login claude url (quickstart section 6).",
+		"Open the dev-env standby", "https://claude.ai/code", "Opened: 12:30 UTC; design review: tomorrow",
+	} {
+		if got := RedactText(keep); got != keep {
+			t.Errorf("RedactText changed %q to %q", keep, got)
+		}
+	}
+}
+
+// The limits of the heuristic, written down so they are not mistaken for coverage.
+func TestRedactTextKnownLimits(t *testing.T) {
+	for _, miss := range []string{"ghp_abcdefghijklmnopqrstuvwxyz0123456789", "value is hunter2 now", `{"count":12345}`} {
+		if RedactText(miss) != miss {
+			t.Errorf("the documented limit changed for %q", miss)
+		}
+	}
+}
+
+func TestNewResetCountsWhatWasLost(t *testing.T) {
+	now := time.Date(2026, 10, 28, 4, 0, 0, 0, time.UTC)
+	d := NewReset([]byte(`{"version":1,"lostRecords":4,"records":[{"key":"a"},{"key":"b"}]}`), now)
+	if d.LostRecords != 6 || d.ResetAt == nil || !d.ResetAt.Equal(now) || d.RecordingSince == nil || len(d.Records) != 0 {
+		t.Fatalf("%+v", d)
+	}
+	if d := NewReset([]byte(`not json "key" "key"`), now); d.LostRecords != 2 {
+		t.Fatalf("%d", d.LostRecords)
+	}
+	if d := NewReset(nil, now); d.LostRecords != 0 || d.ResetAt == nil {
+		t.Fatalf("%+v", d)
+	}
+	raw, _ := d.Marshal()
+	back, err := Parse(raw)
+	if err != nil || back.ResetAt == nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	text := strings.Join(Coverage(back), "\n")
+	for _, w := range []string{"damaged and reset at 2026-10-28 04:00:00 UTC", "Pages before that are Unknown"} {
+		if !strings.Contains(text, w) {
+			t.Errorf("coverage lacks %q", w)
+		}
+	}
+	if _, err := Parse([]byte(`{"version":2,"records":[]}`)); !errors.Is(err, ErrVersion) {
+		t.Fatalf("version: %v", err)
+	}
+}
+
+func TestCoverageStatesMatchTheHelp(t *testing.T) {
+	text := strings.Join(Coverage(nil), "\n")
+	for _, w := range []string{"a definite 4xx, or no request made", "unconfirmed 2xx", "keeper notify-test"} {
+		if !strings.Contains(text, w) {
+			t.Errorf("coverage lacks %q", w)
+		}
 	}
 }

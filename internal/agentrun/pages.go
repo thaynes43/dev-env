@@ -27,6 +27,19 @@ const pagesDefaultLimit = 20
 //
 //	kubectl -n dev-env-system get cm dev-env-keeper-notices -o json | agent-run pages list
 func (a *app) pages(ctx context.Context, args []string) error {
+	err := a.pagesRun(ctx, args)
+	var ee *exitError
+	if errors.As(err, &ee) && (ee.code == ExitUsage || ee.code == ExitFailed) {
+		// An error answer carries the banner and the coverage too, so a failed
+		// lookup is never read as "no page".
+		for _, line := range pages.Coverage(nil) {
+			_, _ = fmt.Fprintln(a.env.Stderr, line)
+		}
+	}
+	return err
+}
+
+func (a *app) pagesRun(ctx context.Context, args []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -238,8 +251,16 @@ func coverageOf(d *pages.Document) coverageJSON {
 
 func (a *app) pagesList(d *pages.Document, unknown string, f pages.Filter, asJSON bool) error {
 	var recs []pages.Record
+	total := 0
 	if d != nil {
+		limit := f.Limit
+		f.Limit = 0
 		recs = d.Select(f)
+		total = len(recs)
+		if limit > 0 && len(recs) > limit {
+			recs = recs[:limit]
+		}
+		f.Limit = limit
 	}
 	if asJSON {
 		return a.printJSON(pagesListJSON{Coverage: coverageOf(d), Unknown: unknown, Records: toPageJSON(recs)})
@@ -258,8 +279,8 @@ func (a *app) pagesList(d *pages.Document, unknown string, f pages.Filter, asJSO
 		for _, r := range recs {
 			_, _ = fmt.Fprintf(w, "%s\n    key %s\n", r.Summary(), r.Key)
 		}
-		if d.DroppedCount == 0 && len(recs) == f.Limit {
-			_, _ = fmt.Fprintf(w, "(showing the newest %d; --limit raises it)\n", f.Limit)
+		if total > len(recs) {
+			_, _ = fmt.Fprintf(w, "(showing the newest %d of %d matching; --limit raises it)\n", len(recs), total)
 		}
 	}
 	return nil

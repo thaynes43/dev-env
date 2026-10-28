@@ -87,7 +87,8 @@ No operator route and no RBAC request in this MVP.
 build that sent it), `title`, `body`, `truncated`, `priority`, `url`, `urlTitle`,
 `recordedAt` and `lastAttemptAt` (UTC; shown in UTC and America/New_York),
 `state`, `attempts`, `sentCount`, `ambiguousCount`, `requestId`, `httpStatus`.
-Document fields: `recordingSince`, `droppedCount`, `oldestRetainedAt`.
+Document fields: `recordingSince`, `droppedCount`, `oldestRetainedAt`, and after a
+reset `lostRecords` and `resetAt` (below).
 
 Keys: `critical:<provider>:<incident opened>`, `resolved:<provider>:<incident opened>`,
 `warning:<provider>:<local day>:lapse-<lapse date>`. The correlation is the
@@ -110,11 +111,16 @@ toward Pushover are exactly what they were; the record adds no send.
 
 ### Flow
 
-1. `Begin`: add the record (or an attempt), and store it. A failure to store never
-   stops the send; the page is then Unknown in lookups.
-2. Send, with the same fields as before. On a 2xx the answer body is read up to
+1. `Begin`: add the record (or an attempt), and store it. Loading and writing share
+   a 1 second budget. A slow or failing store never blocks the send: it adds at most
+   about 1 second of latency before the request, then the page is sent. If the record
+   was loaded, it stays in memory and is stored on a later pass; if it could not be
+   loaded, that page is Unknown in lookups. After a failed store call the keeper makes
+   no further store call for a minute, so a stuck store delays no later send.
+2. Send, with exactly the form fields it had before the record existed (a test
+   fails on any extra field). On a 2xx the answer body is read up to
    4 KiB for `status` and `request` only. The error body of a refusal is still not read.
-3. `Finish`: store the outcome. If that save fails the stored record stays
+3. `Finish`: store the outcome, with its own budget of 2 seconds. If that save fails the stored record stays
    `recorded` (what a crash leaves) and the next pass stores it.
 
 ### Bounds, privacy and redaction
@@ -127,9 +133,22 @@ toward Pushover are exactly what they were; the record adds no send.
   headers and response bodies are never stored. The request id must look like an id.
 - A link with `user:pass@`, a non-https scheme, or a query or fragment key
   matching token, key, secret, auth, sig or password is stored as `REDACTED`.
-  Free text is scanned the same way: unsafe links, `name=value` pairs with such
-  a name, and bearer or basic values become `REDACTED`. The guard runs again when
-  a record is read, so a record edited by hand is also shown redacted.
+  Free text is scanned the same way: unsafe links, `name=value`, `name: value`
+  and JSON `"name":"value"` pairs with such a name, and bearer or basic values
+  become `REDACTED`. The guard runs again when a record is read, so a record
+  edited by hand is also shown redacted.
+- The text guard is a heuristic. It does not catch a bare token with no name
+  (`ghp_...`), a value with spaces after `name:`, a non-string JSON value, a
+  secret in a name that lacks token, key, secret, auth, sig and password, or an
+  encoded blob. It also over-redacts: a name such as `design:` or `monkey:` matches
+  `sig` or `key`. The keeper's texts are fixed and hold none of these; a sender added later
+  must not rely on the guard to make a free-form body safe.
+- A damaged `pages.json` would stop recording for good, so the keeper resets it: it
+  starts an empty record, sets `resetAt`, and adds a best-effort count of the records
+  it held (and any earlier `lostRecords`) to `lostRecords`. The coverage then says
+  "damaged and reset at ..., N earlier records lost". A document of another schema
+  version is not damage and is left alone: nothing is recorded and the page is sent.
+  A reader that cannot parse the record reports Unknown, not an empty history.
 
 ### Lookup and coverage
 
@@ -137,9 +156,11 @@ toward Pushover are exactly what they were; the record adds no send.
 and `pages show <key>`. Every answer starts with the banner "KEEPER PAGES ONLY -
 not all Pushover history" and prints the coverage: keeper pages only, since the
 first keeper image with this code (the record's `recordingSince` once it exists),
-every sender in section 3 marked NOT covered, older pages Unknown, and a page
+every sender in section 3 marked NOT covered (the CLI list includes keeper notify-test), older pages Unknown, and a page
 missing from the record Unknown, not "no page". Damaged input is an error, never
-an empty history. `list` exits 0; `show` exits 4 for a key with no record.
+an empty history. An error answer prints the banner and the coverage on stderr too.
+`list` exits 0 and shows "newest N of M matching" whenever more records match than
+`--limit`; `show` exits 4 for a key with no record.
 
 ### Not built, preserved
 
