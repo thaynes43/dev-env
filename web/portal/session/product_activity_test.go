@@ -86,7 +86,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 		"Output":                           "0",
 		"Cache read":                       "5,000",
 		"Cache create":                     "Unknown",
-		"Cost estimate":                    "0.75 USD (CLI-equivalent estimate, not a charge)",
+		"Cost estimate":                    "0.75 USD (CLI-equivalent list-price estimate, not a charge)",
 		"UID":                              "uid-worker",
 	} {
 		if got := rowFields(worker)[label]; got != want {

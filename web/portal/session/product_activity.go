@@ -502,7 +502,7 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	byConversation := map[string]*conversationTotal{}
 	byDriver := map[string]*usageTotal{"Interactive": {}, "Headless": {}, protocol.UsageUnknown: {}}
 	byModel, byProject := map[string]*usageTotal{}, map[string]*usageTotal{}
-	measured, interactive, headless := 0, 0, 0
+	measured, interactive, headless, conversations := 0, 0, 0, 0
 	for i, e := range kept {
 		id := "s" + strconv.Itoa(i+1)
 		usageRow, ok := sessionUsageRow(id, e.s)
@@ -526,6 +526,7 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 			headless++
 		}
 		if c := a.ConversationUsage; c != nil {
+			conversations++
 			stale := conversationStale(c, now)
 			for _, m := range c.Models {
 				key := shown(a.Provider) + " · " + shown(m.Model)
@@ -555,42 +556,29 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	columns := func(first string) []string {
 		return []string{first, "Sessions", "Measured", "Input", "Output", "Cache read", "Cache create", "Est. cost"}
 	}
-	driverTable := portal.ProductUsageTable{Title: "By how sessions ran", Note: "Interactive sessions are listed but not measured.", Columns: columns("How it ran")}
+	// Without a conversation figure the page covers initial invocations only,
+	// and says so once in its scope. With one, every initial-invocation table
+	// names its scope, and the conversation table comes first, apart from them.
+	hasConversation := len(byConversation) > 0
+	title := func(short, scoped string) string {
+		if hasConversation {
+			return scoped
+		}
+		return short
+	}
+	driverTable := portal.ProductUsageTable{Title: title("By how sessions ran", "Initial invocations by how sessions ran"), Note: "Interactive sessions are listed but not measured.", Columns: columns("How it ran")}
 	for _, name := range []string{"Interactive", "Headless", protocol.UsageUnknown} {
 		if t := byDriver[name]; t.sessions > 0 {
 			driverTable.Rows = append(driverTable.Rows, t.row(name))
 		}
 	}
 	usage.Breakdowns = append(usage.Breakdowns, driverTable,
-		portal.ProductUsageTable{Title: "By provider and requested model", Columns: columns("Provider · model"), Rows: totalRows(byModel)})
-	if len(byConversation) > 0 {
-		// Measured conversations are their own table, grouped by provider and the
-		// served model so Codex's input (which includes cached tokens) is never
-		// added to Claude's, and never added to a task's initial invocation.
-		usage.Scope = "Initial invocations, and registered conversations apart"
-		// The notes written for a view without conversation usage no longer hold.
-		usage.Stats[1].Note = "Remote or local; a person drives them. Measured where the agent reports"
-		usage.Breakdowns[0].Note = "Interactive sessions are listed; their conversation usage is in its own table."
-		for i := range usage.Coverage {
-			if usage.Coverage[i].Label == "Not measured" {
-				usage.Coverage[i].Value = "Later turns of headless tasks, and interactive sessions that have not reported"
-			}
-		}
-		usage.Coverage = append(usage.Coverage, portal.ProductField{Label: "Registered conversations", Value: "Interactive sessions on a newer agent, cumulative as of when last measured; a figure older than " + strconv.Itoa(int(conversationUsageStaleAfter/time.Minute)) + " minutes is marked stale. Not added to the initial invocations above"})
-		table := portal.ProductUsageTable{Title: "Conversation usage by provider and served model", Note: "Measured from each interactive session's registered conversation. Sums of reported values per group; Unknown is never counted as zero.",
-			Columns: []string{"Provider · model", "Sessions", "Input", "Output", "Cache read", "Cache create", "Stale", "Partial"}}
-		names := make([]string, 0, len(byConversation))
-		for name := range byConversation {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			table.Rows = append(table.Rows, byConversation[name].row(name))
-		}
-		usage.Breakdowns = append(usage.Breakdowns, table)
-	}
+		portal.ProductUsageTable{Title: title("By provider and requested model", "Initial invocations by provider and requested model"), Columns: columns("Provider · model"), Rows: totalRows(byModel)})
 	if filter.Project == "" {
-		usage.Breakdowns = append(usage.Breakdowns, portal.ProductUsageTable{Title: "By project", Columns: columns("Project"), Rows: totalRows(byProject)})
+		usage.Breakdowns = append(usage.Breakdowns, portal.ProductUsageTable{Title: title("By project", "Initial invocations by project"), Columns: columns("Project"), Rows: totalRows(byProject)})
+	}
+	if hasConversation {
+		conversationView(usage, byConversation, conversations, complete)
 	}
 	if len(kept) > maxListedSessions {
 		usage.RowsNote = "The " + strconv.Itoa(maxListedSessions) + " sessions listed on the left. The breakdowns above cover all " + strconv.Itoa(len(kept)) + "."
@@ -849,16 +837,7 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	// apart from a task's initial invocation, which it never shares a session with.
 	if section, ok := conversationUsageSection(a, now); ok {
 		out.Sections = append([]portal.ProductSection{section}, out.Sections...)
-		c := a.ConversationUsage
-		switch {
-		case len(c.Models) == 1:
-			out.Meta = "In " + compactTokens(c.Models[0].InputTokens) + " · Out " + compactTokens(c.Models[0].OutputTokens) + " (conversation)"
-		default:
-			out.Meta = strconv.Itoa(len(c.Models)) + " models measured (conversation)"
-		}
-		if conversationStale(c, now) {
-			out.Meta += " · stale"
-		}
+		out.Meta = conversationMeta(a.ConversationUsage, now)
 	}
 	runs := sessionDriver(a.Mode)
 	if runs != protocol.UsageUnknown {
@@ -988,7 +967,7 @@ func costText(c protocol.CostObservation) string {
 	if c.State != protocol.UsageReported || !c.Valid() {
 		return "Unknown"
 	}
-	return c.Amount + " USD (CLI-equivalent estimate, not a charge)"
+	return c.Amount + " USD (CLI-equivalent list-price estimate, not a charge)"
 }
 
 // groupDigits writes a non-negative decimal integer with thousands separators.

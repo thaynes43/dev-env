@@ -54,3 +54,29 @@ func TestLaunchFixturesAreLabelledAndContactNothing(t *testing.T) {
 		}
 	}
 }
+
+// The committed Sessions fixture shows each conversation-usage state the page
+// can take: Final and current, Partial with its reason, and stale, for Claude and
+// Codex, with the conversation table first in the Usage view.
+func TestCommittedSessionsFixtureShowsConversationUsage(t *testing.T) {
+	f, err := os.Open("../../../scripts/trials/portal_product/sessions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := RenderSessionsFixture(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	for _, want := range []string{
+		`<span class="badge tone-muted">Final</span>`, `<span class="badge tone-wait">Partial</span><span>Some records could not be read and are not counted. The counts shown are a lower bound.</span>`,
+		`<span class="badge tone-wait">Stale</span><span>Older than 15 minutes, so it may be behind the conversation.</span>`, `<span class="badge tone-muted">Current</span>`,
+		"Codex input already includes cache reads, so the two are never added.", `<td data-label="Cache read">0</td>`, `<td data-label="Cache create" class="unknown">Unknown</td>`,
+		`<h3 id="usage-b0">Conversation usage by provider and served model</h3>`, "codex · gpt-6-astra", "Conversation: In 1.3M · Out 41.2k · stale",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the fixture page lacks %q", want)
+		}
+	}
+}

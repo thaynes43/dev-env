@@ -1,6 +1,7 @@
 package session
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,15 +50,38 @@ func convDecode(t *testing.T, rows ...string) apiv1.PortalSessionPage {
 	return d
 }
 
-func convSection(t *testing.T, page portal.ProductPage, name string) map[string]string {
+// convPanel is one session's Conversation usage panel, collected for checks:
+// its state lines by badge word, the badge tones, its fields by label, each
+// served model's cells by label, and its note. found is false without a panel.
+type convPanel struct {
+	found         bool
+	states, tones map[string]string
+	fields        map[string]string
+	models        map[string]map[string]portal.ProductUsageCell
+	note          string
+}
+
+func convSection(t *testing.T, page portal.ProductPage, name string) convPanel {
 	t.Helper()
-	out := map[string]string{}
+	out := convPanel{states: map[string]string{}, tones: map[string]string{}, fields: map[string]string{}, models: map[string]map[string]portal.ProductUsageCell{}}
 	for _, s := range findRow(t, page, name).Sections {
-		if s.Title == "Conversation usage" {
-			for _, f := range s.Fields {
-				out[f.Label] = f.Value
+		if s.Title != "Conversation usage" {
+			continue
+		}
+		out.found, out.note = true, s.Note
+		for _, st := range s.States {
+			out.states[st.Status.Text], out.tones[st.Status.Text] = st.Text, st.Status.Tone
+		}
+		for _, f := range s.Fields {
+			out.fields[f.Label] = f.Value
+		}
+		if s.Table != nil {
+			for _, r := range s.Table.Rows {
+				out.models[r.Name] = map[string]portal.ProductUsageCell{}
+				for _, c := range r.Cells {
+					out.models[r.Name][c.Label] = c
+				}
 			}
-			out["note"] = s.Note
 		}
 	}
 	return out
@@ -137,30 +161,54 @@ func TestConversationUsageDecodeRefusesAnythingOutsideTheAllowlist(t *testing.T)
 func TestConversationUsageSectionKeepsUnknownApartFromZeroAndCarriesTheReason(t *testing.T) {
 	final := convFigure("claude-opus-5-5", 10, "2026-10-25T11:55:00Z")
 	d := convDecode(t, convRow("final", "remote", "claude", final), convRow("partial", "local", "claude", convPartial(final, "skipped_records")),
-		convRow("odd", "remote", "claude", convPartial(final, "count_overflow")), convRow("none", "remote", "claude", ""))
+		convRow("odd", "remote", "claude", convPartial(final, "count_overflow")), convRow("none", "remote", "claude", ""),
+		convRow("codex", "local", "codex", convFigure("gpt-6-astra", 10, "2026-10-25T11:55:00Z")))
 	page := sessionsPage(d.Sessions, true, "observed", convNow, portal.ProductFilter{})
 	f := convSection(t, page, "final")
-	if f["Result"] != "Final" || f["Freshness"] != "Current" || f["Provider calls counted"] != "3" || f["Records skipped"] != "0" {
-		t.Fatalf("%v", f)
+	if f.states["Final"] != "Every record was counted, up to the measured time." || f.tones["Final"] != "muted" ||
+		f.states["Current"] != "Measured within the last 15 minutes." || f.tones["Current"] != "muted" || len(f.states) != 2 {
+		t.Fatalf("%v %v", f.states, f.tones)
+	}
+	if f.fields["Measured"] != "5m ago · 25 Oct 2026, 11:55 UTC" || f.fields["Provider calls counted"] != "3" || f.fields["Records skipped"] != "0" {
+		t.Fatalf("%v", f.fields)
 	}
 	// An explicit zero reads 0 and an unmeasured counter reads Unknown, never 0.
-	line := f["claude-opus-5-5"]
-	if !strings.Contains(line, "Input 10 ") || !strings.Contains(line, "Output 0 ") || !strings.Contains(line, "Cache read 50 ") || !strings.HasSuffix(line, "Cache create Unknown") {
-		t.Fatalf("%q", line)
+	m := f.models["claude-opus-5-5"]
+	if len(f.models) != 1 || m["Input"].Value != "10" || m["Input"].Unknown || m["Output"].Value != "0" || m["Output"].Unknown ||
+		m["Cache read"].Value != "50" || m["Cache create"].Value != "Unknown" || !m["Cache create"].Unknown {
+		t.Fatalf("%v", f.models)
 	}
-	if !strings.Contains(f["note"], "Not a cost, a charge or an allowance") || strings.Contains(f["note"], "USD") {
-		t.Fatalf("%q", f["note"])
+	// Token counts only: no price, no allowance, and the counters stand alone.
+	if !strings.HasPrefix(f.note, "Provider-reported token counts for this session's registered conversation") || !strings.Contains(f.note, "none is added to another") ||
+		!strings.Contains(f.note, "Not a cost or a charge.") || strings.Contains(f.note, "USD") || strings.Contains(f.note, "allowance") || strings.Contains(f.note, "Codex") {
+		t.Fatalf("%q", f.note)
 	}
-	if p := convSection(t, page, "partial"); p["Result"] != "Partial: some records could not be read" {
-		t.Fatalf("%v", p)
+	if c := convSection(t, page, "codex"); !strings.Contains(c.note, "Codex input already includes cache reads, so the two are never added.") || strings.Contains(c.note, "none is added") {
+		t.Fatalf("%q", c.note)
+	}
+	p := convSection(t, page, "partial")
+	if p.states["Partial"] != "Some records could not be read and are not counted. The counts shown are a lower bound." || p.tones["Partial"] != "wait" || p.states["Final"] != "" {
+		t.Fatalf("%v", p.states)
 	}
 	// A reason this portal has no wording for shows as itself.
-	if o := convSection(t, page, "odd"); o["Result"] != "Partial: count_overflow" {
-		t.Fatalf("%v", o)
+	if o := convSection(t, page, "odd"); o.states["Partial"] != "Reason: count_overflow. The counts shown are a lower bound." {
+		t.Fatalf("%v", o.states)
+	}
+	// Every worded reason is one plain sentence, and every Partial says lower bound.
+	for code, words := range conversationReasons {
+		if !strings.HasSuffix(words, ".") || strings.Contains(words, code) || strings.Contains(words, "_") {
+			t.Errorf("%s: %q", code, words)
+		}
 	}
 	// A session with no key has no panel at all: absent is not a zero.
-	if n := convSection(t, page, "none"); len(n) != 0 {
-		t.Fatalf("%v", n)
+	if n := convSection(t, page, "none"); n.found || findRow(t, page, "none").Meta != "" {
+		t.Fatalf("%+v", n)
+	}
+	if got := findRow(t, page, "final").Meta; got != "Conversation: In 10 · Out 0" {
+		t.Fatalf("%q", got)
+	}
+	if got := findRow(t, page, "partial").Meta; got != "Conversation: In 10 · Out 0 · partial" {
+		t.Fatalf("%q", got)
 	}
 }
 
@@ -171,23 +219,33 @@ func TestConversationUsageIsMarkedStaleAfterFifteenMinutes(t *testing.T) {
 		convRow("edge", "remote", "claude", convFigure("claude-opus-5-5", 10, at(conversationUsageStaleAfter))),
 		convRow("old", "remote", "claude", convFigure("claude-opus-5-5", 10, at(conversationUsageStaleAfter+time.Second))),
 		convRow("ancient", "remote", "claude", convFigure("claude-opus-5-5", 10, at(26*time.Hour))))
-	if conversationUsageStaleAfter != 15*time.Minute {
+	if conversationUsageStaleAfter != 15*time.Minute || staleMinutes != "15" {
 		t.Fatalf("the threshold is %s", conversationUsageStaleAfter)
 	}
 	page := sessionsPage(d.Sessions, true, "observed", convNow, portal.ProductFilter{})
 	for name, stale := range map[string]bool{"fresh": false, "edge": false, "old": true, "ancient": true} {
 		f := convSection(t, page, name)
-		if got := strings.HasPrefix(f["Freshness"], "Stale"); got != stale {
-			t.Errorf("%s: freshness %q", name, f["Freshness"])
+		if _, got := f.states["Stale"]; got != stale {
+			t.Errorf("%s: states %v", name, f.states)
 		}
-		if got := strings.HasSuffix(findRow(t, page, name).Meta, "stale"); got != stale {
+		if stale && (f.states["Stale"] != "Older than 15 minutes, so it may be behind the conversation." || f.tones["Stale"] != "wait" || f.states["Current"] != "") {
+			t.Errorf("%s: %v %v", name, f.states, f.tones)
+		}
+		// A stale figure is still shown, with the time it was measured.
+		if f.models["claude-opus-5-5"]["Input"].Value != "10" || !strings.HasSuffix(f.fields["Measured"], " UTC") {
+			t.Errorf("%s: figure hidden: %+v", name, f)
+		}
+		if got := strings.HasSuffix(findRow(t, page, name).Meta, " · stale"); got != stale {
 			t.Errorf("%s: meta %q", name, findRow(t, page, name).Meta)
 		}
 	}
+	if got := convSection(t, page, "ancient").fields["Measured"]; got != "26h ago · 24 Oct 2026, 10:00 UTC" {
+		t.Fatalf("%q", got)
+	}
 	// The same figure read later is stale: the clock decides, not the figure.
 	later := sessionsPage(d.Sessions, true, "observed", convNow.Add(20*time.Minute), portal.ProductFilter{})
-	if got := convSection(t, later, "fresh")["Freshness"]; !strings.HasPrefix(got, "Stale") {
-		t.Fatalf("%q", got)
+	if _, ok := convSection(t, later, "fresh").states["Stale"]; !ok {
+		t.Fatal("not stale 20 minutes later")
 	}
 }
 
@@ -202,18 +260,23 @@ func TestConversationUsageUsageTableIsPerProviderAndModelAndApart(t *testing.T) 
 		convRow("codex-a", "remote", "codex", codex(2500)),
 		convRow("claude-none", "remote", "claude", ""))
 	page := sessionsPage(d.Sessions, true, "observed", convNow, portal.ProductFilter{})
-	var table *portal.ProductUsageTable
-	for i := range page.Usage.Breakdowns {
-		if page.Usage.Breakdowns[i].Title == "Conversation usage by provider and served model" {
-			table = &page.Usage.Breakdowns[i]
-		}
+	u := page.Usage
+	// The conversation table comes first, apart from the initial-invocation
+	// tables, which each name their scope.
+	table := u.Breakdowns[0]
+	if table.Title != "Conversation usage by provider and served model" || strings.Join(table.Columns, "|") != "Provider · model|Sessions|Input|Output|Cache read|Cache create|Partial|Stale" {
+		t.Fatalf("%+v", table)
 	}
-	if table == nil {
-		t.Fatal("no conversation table")
+	var titles []string
+	for _, b := range u.Breakdowns[1:] {
+		titles = append(titles, b.Title)
 	}
-	cells := map[string]map[string]string{}
+	if strings.Join(titles, "|") != "Initial invocations by how sessions ran|Initial invocations by provider and requested model|Initial invocations by project" || u.RowsTitle != "Initial invocations by session" {
+		t.Fatalf("%v %q", titles, u.RowsTitle)
+	}
+	cells, subs := map[string]map[string]string{}, map[string]string{}
 	for _, r := range table.Rows {
-		cells[r.Name] = map[string]string{}
+		cells[r.Name], subs[r.Name] = map[string]string{}, r.Sub
 		for _, c := range r.Cells {
 			cells[r.Name][c.Label] = c.Value
 		}
@@ -228,33 +291,59 @@ func TestConversationUsageUsageTableIsPerProviderAndModelAndApart(t *testing.T) 
 	if opus["Sessions"] != "2" || opus["Input"] != "300" || opus["Output"] != "0" || opus["Cache read"] != "100" || opus["Cache create"] != "Unknown" || opus["Stale"] != "1" || opus["Partial"] != "1" {
 		t.Fatalf("%v", opus)
 	}
+	if subs["claude · claude-opus-5-5"] != "Lower bound · May be behind" || subs["codex · gpt-6-astra"] != "" {
+		t.Fatalf("%v", subs)
+	}
 	if c := cells["codex · gpt-6-astra"]; c["Sessions"] != "1" || c["Input"] != "2,500" || c["Cache read"] != "900" {
 		t.Fatalf("%v", c)
 	}
 	if c := cells["claude · claude-haiku-4-5"]; c["Input"] != "7" {
 		t.Fatalf("%v", c)
 	}
+	// No price on a conversation figure, and no allowance implied.
+	if strings.Contains(strings.Join(table.Columns, " "), "cost") || !strings.Contains(table.Note, "Codex input already includes cache reads") || strings.Contains(table.Note, "USD") {
+		t.Fatalf("%+v", table)
+	}
+	if u.Allowance[0].Value != "Not connected" || u.Allowance[1].Value != "Not connected" {
+		t.Fatalf("%+v", u.Allowance)
+	}
+	coverage := map[string]string{}
+	for _, f := range u.Coverage {
+		coverage[f.Label] = f.Value
+	}
+	if !strings.HasSuffix(coverage["Cost"], "Conversations: no price is shown") || !strings.Contains(coverage["Cost"], "CLI-equivalent list-price estimate, not a charge") ||
+		!strings.Contains(coverage["Conversations"], "Older than 15 minutes is marked stale and may be behind") || !strings.Contains(coverage["Totals"], "Claude and Codex are never added together") ||
+		!strings.Contains(coverage["Not measured"], "interactive sessions that report no conversation figure") {
+		t.Fatalf("%v", coverage)
+	}
+	if u.Scope != "Initial invocations and conversations" || !strings.HasSuffix(u.Stats[1].Note, ". 4 with conversation usage") || u.Stats[0].Note != "Headless tasks' first invocation only" {
+		t.Fatalf("%q %+v", u.Scope, u.Stats)
+	}
 	// The headless table and stats do not count them.
-	for _, st := range page.Usage.Stats {
+	for _, st := range u.Stats {
 		if st.Label == "Measured sessions" && !strings.HasPrefix(st.Value, "0 of") {
 			t.Fatalf("a conversation figure was counted as an initial invocation: %+v", st)
 		}
 	}
+	if partial := sessionsPage(d.Sessions, false, "observed", convNow, portal.ProductFilter{}); !strings.HasSuffix(partial.Usage.Stats[1].Note, ". 4 listed with conversation usage") {
+		t.Fatalf("%q", partial.Usage.Stats[1].Note)
+	}
 	// With none reporting, there is no table and the original wording stands.
 	none := sessionsPage(convDecode(t, convRow("a", "remote", "claude", "")).Sessions, true, "observed", convNow, portal.ProductFilter{})
 	for _, b := range none.Usage.Breakdowns {
-		if strings.HasPrefix(b.Title, "Conversation usage") {
-			t.Fatal("a conversation table without a figure")
+		if strings.HasPrefix(b.Title, "Conversation usage") || strings.HasPrefix(b.Title, "Initial invocations") {
+			t.Fatalf("conversation wording without a figure: %q", b.Title)
 		}
 	}
-	if none.Usage.Scope != "Initial invocations only" {
-		t.Fatalf("%q", none.Usage.Scope)
+	if none.Usage.Scope != "Initial invocations only" || none.Usage.RowsTitle != "" || none.Usage.Breakdowns[0].Title != "By how sessions ran" ||
+		none.Usage.Stats[1].Note != "Remote or local; a person drives them. Not measured" {
+		t.Fatalf("%+v", none.Usage)
 	}
 }
 
-// The existing template renders the panel and the table as they are; their text
-// is a placeholder for the interface review. Everything is escaped.
-func TestConversationUsageRendersEscapedInTheExistingTemplate(t *testing.T) {
+// The panel and the table render through the shared components, escaped, with
+// the badge tones held to the fixed set and no inline style or script.
+func TestConversationUsageRendersEscapedInTheTemplate(t *testing.T) {
 	figure := convPartial(convFigure("claude-opus-5-5", 1234, "2026-10-25T11:55:00Z"), "skipped_records")
 	d := convDecode(t, convRow("rendered", "remote", "claude", figure))
 	page := sessionsPage(d.Sessions, true, "observed", convNow, portal.ProductFilter{})
@@ -263,16 +352,40 @@ func TestConversationUsageRendersEscapedInTheExistingTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(body)
-	for _, want := range []string{"Conversation usage", "Input 1,234", "Cache create Unknown", "Partial: some records could not be read", "Conversation usage by provider and served model", "claude · claude-opus-5-5"} {
+	for _, want := range []string{"<h3>Conversation usage</h3>", `<ul class="panel-states"><li><span class="badge tone-wait">Partial</span><span>Some records could not be read and are not counted. The counts shown are a lower bound.</span></li>`,
+		`<span class="badge tone-muted">Current</span>`, `<caption class="sr-only">Token counts by served model</caption>`, `<td>claude-opus-5-5</td><td data-label="Input">1,234</td>`,
+		`<td data-label="Cache create" class="unknown">Unknown</td>`, "Conversation usage by provider and served model", "claude · claude-opus-5-5",
+		`<h3 id="usage-rows">Initial invocations by session</h3>`, "Recorded token usage is not account consumption."} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the page lacks %q", want)
 		}
 	}
-	// A reason with markup cannot reach the page: the decoder refuses it, and the
-	// view escapes whatever it shows.
-	page.Groups[0].Rows = nil
-	page.Usage.Breakdowns[len(page.Usage.Breakdowns)-1].Rows = []portal.ProductUsageRow{{Name: `<img src=x onerror=alert(1)>`}}
-	if body, err = portal.RenderProduct(page); err != nil || strings.Contains(string(body), "<img") {
+	if strings.Contains(s, "<script") || regexp.MustCompile(`\sstyle="`).MatchString(s) || regexp.MustCompile(`\son[a-z]+=`).MatchString(s) {
+		t.Fatal("inline script, style or handler")
+	}
+	// Whatever reaches the panel and the table is escaped, and a tone outside
+	// the set renders muted.
+	var row *portal.ProductRow
+	for g := range page.Groups {
+		for r := range page.Groups[g].Rows {
+			if page.Groups[g].Rows[r].Title == "rendered" {
+				row = &page.Groups[g].Rows[r]
+			}
+		}
+	}
+	if row == nil || row.Sections[0].Title != "Conversation usage" {
+		t.Fatalf("%+v", row)
+	}
+	row.Sections[0].States[0].Status.Tone = `wait" onclick="x`
+	row.Sections[0].States[0].Text = `<img src=x onerror=alert(1)>`
+	row.Sections[0].Table.Rows[0].Name = `<script>x</script>`
+	page.Usage.Breakdowns[0].Rows = []portal.ProductUsageRow{{Name: `<img src=x onerror=alert(1)>`}}
+	if body, err = portal.RenderProduct(page); err != nil || strings.Contains(string(body), "<img") || strings.Contains(string(body), "<script>x") ||
+		strings.Contains(string(body), "onclick") || !strings.Contains(string(body), `<span class="badge tone-muted">Partial</span>`) {
 		t.Fatalf("not escaped: %v", err)
+	}
+	// The renderer copied what it sanitized: the page model is unchanged.
+	if row.Sections[0].States[0].Status.Tone != `wait" onclick="x` {
+		t.Fatal("the renderer changed the caller's page")
 	}
 }

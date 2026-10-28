@@ -118,6 +118,14 @@ script. They keep the two existing routes; nothing new is fetched or routed.
   cache read, cache create and the CLI-equivalent estimate, and a coverage
   panel. A session without measured usage shows `Unknown` in every cell. No
   totals are computed.
+- **Conversation usage.** An interactive session whose agent reports its
+  registered conversation (behind the operator's default-off
+  `--portal-conversation-usage`) gets a Conversation usage panel: Final or
+  Partial with its reason and "a lower bound", Current or Stale (older than 15
+  minutes, still shown), one row per served model, and no price. The Usage view
+  then lists a table by provider and served model first, apart from the
+  initial-invocation tables, and never adds Claude and Codex together. DESIGN-029
+  "Interactive conversation usage, Unit B milestone 2" has the wording.
 - **Planned view (`#planned`).** Automations (reminders, scheduled runs and
   media workflows) and Watchdog are listed as Planned. No scheduler, monitor or
   backend exists for them.
@@ -179,7 +187,9 @@ GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
   go run -p 1 ./web/portal/preview --product "$(mktemp -d)"
 ```
 
-That writes `sessions.html` and `tasks.html`, labelled as fixture previews. The command reuses
+That writes `sessions.html` and `tasks.html`, labelled as fixture previews.
+The Sessions fixture includes Final, Partial and stale conversation-usage
+figures. The command reuses
 `scripts/trials/portal_attention/fixtures.json` and its fixed observation time;
 it does not connect to OpenProject, Authentik, a provider or the operator. The
 preview's issuer and subject are invented `.example` fixture values. The

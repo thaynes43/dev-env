@@ -789,9 +789,8 @@ Unit A's measurement now runs and is stored. The portal does not show it yet.
 ### Interactive conversation usage, Unit B milestone 2 (reader and view model), 2026-10-28
 
 The portal reader can now carry each interactive session's measured conversation
-usage, and the portal maps it to a view model. The final template and copy are a
-separate step; the text here is a placeholder rendered by the existing panels and
-tables.
+usage, and the portal maps it to a view model and renders it. The template, layout
+and copy are below, under "Interface".
 
 - **Rollout choice: a default-off operator flag.** The portal's activity decoder is
   strict (`exactKeys` in `product_activity.go`; `TestActivityDecoderIsStrictAboutKeysItDoesNotKnow`
@@ -824,4 +823,31 @@ tables.
   is marked stale, by the portal's clock at read time. The figure is not hidden.
 - **Still not shown:** a cost, a charge, an allowance or a quota. The Usage view's task-only
   wording (scope, coverage and the interactive "not measured" notes) changes only when a
-  figure is present, and is placeholder text for the interface review.
+  figure is present.
+- **Interface, 2026-10-28.** The panel and table use the existing components (badge,
+  key-value list, table, note) and tokens; there is still no script and no inline style.
+  The generic panel gained two optional parts: state lines (a badge and one sentence)
+  and a table, in the order states, tiles, table, fields, note.
+  - *Panel.* Two state lines: Final ("Every record was counted, up to the measured
+    time.") or Partial (amber; the reason in one plain sentence, then "The counts shown
+    are a lower bound."), and Current ("Measured within the last 15 minutes.") or Stale
+    (amber; "Older than 15 minutes, so it may be behind the conversation."). A stale
+    figure is still shown. Then one table row per served model (Input, Output, Cache
+    read, Cache create; Unknown dimmed, a Reported zero as 0), when it was measured,
+    provider calls counted, records skipped, and a note: provider-reported token counts
+    for the registered conversation, cumulative to the measured time, not a cost or a
+    charge. For Codex the note says its input already includes cache reads. No price is
+    shown. The list item reads "Conversation: In … · Out …" (or "Conversation: N
+    models"), then "partial" and "stale" when they apply.
+  - *Usage view.* With a figure present, the conversation table comes first, before the
+    initial-invocation tables, whose titles then name their scope ("Initial invocations
+    by …", and "Initial invocations by session"). Its rows add Partial and Stale counts,
+    and a row's line says "Lower bound" or "May be behind". The scope chip reads
+    "Initial invocations and conversations", the Interactive stat counts the sessions
+    with conversation usage, and the coverage panel gains a Conversations line and says
+    that conversations carry no price. The account allowance stays "Not connected".
+    Without a figure, the page reads as before.
+  - *Fixture.* The committed Sessions fixture has a Final and current Claude session
+    with two served models, a Partial Claude session, and a stale Codex session.
+  - *No version number.* The copy says "an older agent". Measurement reaches a session
+    only on an agent image from the first release after 2.50.0.
