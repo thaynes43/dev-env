@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.62.1](https://github.com/thaynes43/dev-env/compare/v2.62.0...v2.62.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* preserve remote sessions during automatic upgrades ([#630](https://github.com/thaynes43/dev-env/issues/630)) ([ee958cb](https://github.com/thaynes43/dev-env/commit/ee958cb230be033f7d34b4f309e35fd8bf488937))
+
 ## [2.62.0](https://github.com/thaynes43/dev-env/compare/v2.61.0...v2.62.0) (2026-10-28)
 
 
