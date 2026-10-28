@@ -108,3 +108,16 @@ func TestGatusEndpointPermutationInvariant(t *testing.T) {
 		t.Fatal("endpoint order affected snapshot")
 	}
 }
+
+func TestGatusZeroTimeLatestIsOrderIndependent(t *testing.T) {
+	a := `[{"key":"x","results":[{"timestamp":"0001-01-01T00:00:00Z","success":true},{"timestamp":"0000-01-01T00:00:00Z","success":false}]}]`
+	b := `[{"key":"x","results":[{"timestamp":"0000-01-01T00:00:00Z","success":false},{"timestamp":"0001-01-01T00:00:00Z","success":true}]}]`
+	first, err := ParseGatus([]byte(a), gatusAt, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ParseGatus([]byte(b), gatusAt, "fixture")
+	if err != nil || !reflect.DeepEqual(first, second) || first.Endpoints[0].Latest.Timestamp != "0001-01-01T00:00:00Z" || first.Endpoints[0].Latest.Success == nil || !*first.Endpoints[0].Latest.Success {
+		t.Fatal("latest zero-time result changed with order", err)
+	}
+}

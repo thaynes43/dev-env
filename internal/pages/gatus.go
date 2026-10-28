@@ -99,6 +99,7 @@ func ParseGatus(raw []byte, observed time.Time, source string) (GatusSnapshot, e
 				return fail()
 			}
 			var latest time.Time
+			seenLatest := false
 			byTime := map[time.Time]map[string]any{}
 			for _, r := range results {
 				result, ok := r.(map[string]any)
@@ -136,7 +137,8 @@ func ParseGatus(raw []byte, observed time.Time, source string) (GatusSnapshot, e
 					return fail()
 				}
 				byTime[when] = comparable
-				if latest.IsZero() || when.After(latest) {
+				if !seenLatest || when.After(latest) {
+					seenLatest = true
 					latest = when
 					endpoint.Latest = GatusCheck{Timestamp: when.Format(time.RFC3339Nano), Success: &success, Status: status, DurationNanos: duration}
 				}
