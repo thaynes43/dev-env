@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,6 +22,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/thaynes43/dev-env/internal/pages"
+	"github.com/thaynes43/dev-env/internal/version"
 )
 
 // The keeper's notices (plan 13, story 13.1). The keeper sends straight to the
@@ -81,18 +85,38 @@ var (
 	errNoticeStateMissing   = errors.New("the notice ConfigMap does not exist")
 	errNoticeStateForbidden = errors.New("the keeper may not use the notice ConfigMap")
 	errNoticeStateCorrupt   = errors.New("the notice state in the ConfigMap cannot be read")
+	errPagesCorrupt         = errors.New("the pages record in the ConfigMap cannot be read")
 )
 
-// Notice is one Pushover message.
+// Notice is one Pushover message. PageKey, Correlation and Source are not sent:
+// they name the record of the page (internal/pages, DESIGN-031).
 type Notice struct {
 	Title, Message string
 	Priority       int
 	URL, URLTitle  string
+
+	PageKey, Correlation, Source string
 }
 
 // NoticeSender sends one notice. Errors never carry the request or the credentials.
 type NoticeSender interface {
 	Send(ctx context.Context, n Notice) error
+}
+
+// Receipt is what Pushover answered to an accepted request. Request is its
+// `request` id. Confirmed is true only for HTTP 200 with status 1.
+type Receipt struct {
+	Status    int
+	Request   string
+	Confirmed bool
+}
+
+// ReceiptSender is a NoticeSender that also reports the receipt, so the page
+// record can say `sent` only for a confirmed acceptance. A sender that is not
+// one is recorded as sent when it returns no error.
+type ReceiptSender interface {
+	NoticeSender
+	SendReceipt(ctx context.Context, n Notice) (Receipt, error)
 }
 
 // PushoverSender posts to Pushover, reading the credential files on each send.
@@ -125,10 +149,18 @@ func readPushoverCredentials(tokenFile, userFile string) (token, user string, ok
 	return token, user, token != "" && user != ""
 }
 
+// Send implements NoticeSender.
 func (p *PushoverSender) Send(ctx context.Context, n Notice) error {
+	_, err := p.SendReceipt(ctx, n)
+	return err
+}
+
+// SendReceipt posts the notice and, on a 2xx, reads at most 4 KiB of the answer
+// for its status and request id. The error body of a refusal is still not read.
+func (p *PushoverSender) SendReceipt(ctx context.Context, n Notice) (Receipt, error) {
 	token, user, ok := readPushoverCredentials(p.TokenFile, p.UserFile)
 	if !ok {
-		return errPushoverCredentials
+		return Receipt{}, errPushoverCredentials
 	}
 	form := url.Values{
 		"token": {token}, "user": {user}, "title": {n.Title}, "message": {n.Message},
@@ -153,21 +185,43 @@ func (p *PushoverSender) Send(ctx context.Context, n Notice) error {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(form.Encode()))
 	if err != nil {
-		return errPushoverSend
+		return Receipt{}, errPushoverSend
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := noRedirect.Do(req)
 	if err != nil {
 		// A transport error names the URL, which holds no secret, but nothing
 		// else about the request; a fixed text keeps it that way.
-		return errPushoverSend
+		return Receipt{}, errPushoverSend
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		// Pushover's error body can repeat the request fields; it is not read.
-		return &SendError{Status: resp.StatusCode}
+		return Receipt{}, &SendError{Status: resp.StatusCode}
 	}
-	return nil
+	return readReceipt(resp), nil
+}
+
+// readReceipt decodes the accepted answer: {"status":1,"request":"..."}. A body
+// that does not say so is not Confirmed, and the page is recorded `ambiguous`.
+func readReceipt(resp *http.Response) Receipt {
+	rc := Receipt{Status: resp.StatusCode}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if err != nil {
+		return rc
+	}
+	var a struct {
+		Status  int    `json:"status"`
+		Request string `json:"request"`
+	}
+	if json.Unmarshal(raw, &a) != nil {
+		return rc
+	}
+	rc.Confirmed = resp.StatusCode == http.StatusOK && a.Status == 1
+	if rc.Confirmed {
+		rc.Request = a.Request
+	}
+	return rc
 }
 
 // SendError is a non-2xx answer from Pushover. It carries the status only.
@@ -216,6 +270,56 @@ type NoticeStore interface {
 type ConfigMapNoticeStore struct {
 	Client client.Client
 	Name   types.NamespacedName
+}
+
+// PageStore keeps the retained record of pages (DESIGN-031) beside the notice
+// state, under its own key of the same ConfigMap: the keeper's Role already
+// allows exactly that, and a write of one key leaves the other as it was.
+type PageStore interface {
+	LoadPages(ctx context.Context) (*pages.Document, error)
+	SavePages(ctx context.Context, d *pages.Document) error
+}
+
+// LoadPages reads pages.json. An absent key is an empty record, not an error;
+// a damaged one is an error, so a reader never mistakes it for "no pages".
+func (c *ConfigMapNoticeStore) LoadPages(ctx context.Context) (*pages.Document, error) {
+	ctx, cancel := context.WithTimeout(ctx, noticeStoreTimeout)
+	defer cancel()
+	var cm corev1.ConfigMap
+	if err := c.Client.Get(ctx, c.Name, &cm); err != nil {
+		return nil, storeError(err)
+	}
+	raw := cm.Data[pages.ConfigMapKey]
+	if raw == "" {
+		return pages.New(), nil
+	}
+	d, err := pages.Parse([]byte(raw))
+	if err != nil {
+		return nil, errPagesCorrupt
+	}
+	return d, nil
+}
+
+// SavePages replaces pages.json only, with the same Get-then-Update as Save.
+func (c *ConfigMapNoticeStore) SavePages(ctx context.Context, d *pages.Document) error {
+	ctx, cancel := context.WithTimeout(ctx, noticeStoreTimeout)
+	defer cancel()
+	raw, err := d.Marshal()
+	if err != nil {
+		return errNoticeState
+	}
+	var cm corev1.ConfigMap
+	if err := c.Client.Get(ctx, c.Name, &cm); err != nil {
+		return storeError(err)
+	}
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data[pages.ConfigMapKey] = string(raw)
+	if err := c.Client.Update(ctx, &cm); err != nil {
+		return storeError(err)
+	}
+	return nil
 }
 
 func marshalState(s NoticeState) ([]byte, error) { return json.Marshal(s) }
@@ -369,7 +473,15 @@ type Notifier struct {
 	Zone        *time.Location
 	WindowStart time.Duration // since local midnight
 	WindowEnd   time.Duration
+	// Pages records each page before it is sent (DESIGN-031); nil records nothing.
+	// NewNotifier takes it from the store when the store keeps pages.
+	Pages PageStore
+	// Provenance names this build in each record.
+	Provenance string
 
+	pagesDoc     *pages.Document // loaded on the first send; nil until then
+	pagesDirty   bool            // a change not yet stored
+	pagesLogged  string          // last pages problem logged
 	mu           sync.Mutex
 	state        *NoticeState // authoritative after the first load
 	dirty        bool         // a change not yet stored
@@ -395,10 +507,16 @@ func NewNotifier(o NoticeOptions, hub *LoginHub, store NoticeStore, sender Notic
 	if clk == nil {
 		clk = clock.RealClock{}
 	}
-	return &Notifier{
+	n := &Notifier{
 		Hub: hub, Store: store, Sender: sender, Clock: clk, Log: log, Zone: zone, WindowStart: start, WindowEnd: end,
 		Enabled: func() bool { return PushoverCredentialsPresent(o.TokenFile, o.UserFile) },
-	}, nil
+	}
+	if ps, ok := store.(PageStore); ok {
+		n.Pages = ps
+	}
+	vi := version.Get()
+	n.Provenance = "dev-env-keeper " + vi.Version + " (" + vi.Commit + ")"
+	return n, nil
 }
 
 func (*Notifier) NeedLeaderElection() bool { return true }
@@ -545,6 +663,9 @@ func (n *Notifier) recovered() {
 // stores it again, and nothing is sent twice meanwhile because the in-memory
 // state already records what was sent.
 func (n *Notifier) persist(ctx context.Context) {
+	if n.pagesDirty && n.pagesDoc != nil && n.Pages != nil {
+		n.storePages(ctx)
+	}
 	if !n.dirty {
 		return
 	}
@@ -570,12 +691,22 @@ func (n *Notifier) persist(ctx context.Context) {
 // than 429 refuses the request itself, so that kind is not sent again until the
 // keeper restarts or sig moves on (a new incident, a later lapse date); 429, 5xx
 // and transport errors retry after the backoff.
+//
+// The page is recorded before the request is made and its outcome after
+// (DESIGN-031). Recording never gates the send: an unusable record store means
+// the page is sent and simply not recorded. Which notices are sent, and when,
+// is exactly what it was before the record existed.
 func (n *Notifier) send(ctx context.Context, key string, sig int64, notice Notice, now time.Time) bool {
 	if n.isBlocked(key, sig) || now.Before(n.backoffUntil) {
 		return false
 	}
 	notice.URL, notice.URLTitle = NoticeLinkURL, NoticeLinkTitle
-	if err := n.Sender.Send(ctx, notice); err != nil {
+	recording := n.beginPage(ctx, notice, now)
+	rc, haveReceipt, err := n.dispatch(ctx, notice)
+	if recording {
+		n.finishPage(ctx, notice, err, rc, haveReceipt)
+	}
+	if err != nil {
 		n.backoffUntil = now.Add(noticeBackoff)
 		var se *SendError
 		if errors.As(err, &se) && se.Permanent() {
@@ -593,6 +724,85 @@ func (n *Notifier) send(ctx context.Context, key string, sig int64, notice Notic
 		return false
 	}
 	return true
+}
+
+// dispatch sends through the sender, taking the receipt when the sender has one.
+func (n *Notifier) dispatch(ctx context.Context, notice Notice) (Receipt, bool, error) {
+	if rs, ok := n.Sender.(ReceiptSender); ok {
+		rc, err := rs.SendReceipt(ctx, notice)
+		return rc, true, err
+	}
+	return Receipt{}, false, n.Sender.Send(ctx, notice)
+}
+
+// pagesProblem logs a record-store problem once per distinct reason.
+func (n *Notifier) pagesProblem(reason string) {
+	if n.pagesLogged != reason {
+		n.Log.Info("page record: " + reason)
+		n.pagesLogged = reason
+	}
+}
+
+// beginPage writes the record of the page, and stores it, before the send. It
+// reports whether the page is being recorded, which it is not for a notice with
+// no key, a notifier with no page store, or a record that cannot be read.
+func (n *Notifier) beginPage(ctx context.Context, notice Notice, now time.Time) bool {
+	if n.Pages == nil || notice.PageKey == "" {
+		return false
+	}
+	if n.pagesDoc == nil {
+		d, err := n.Pages.LoadPages(ctx)
+		if err != nil {
+			n.pagesProblem("not recorded: " + err.Error() + "; the page is sent anyway and is Unknown in lookups")
+			return false
+		}
+		n.pagesDoc = d
+	}
+	if _, err := n.pagesDoc.Begin(pages.Page{
+		Key: notice.PageKey, Correlation: notice.Correlation, Sender: "dev-env-keeper", Source: notice.Source,
+		Provenance: n.Provenance, Title: notice.Title, Body: notice.Message, Priority: notice.Priority,
+		URL: notice.URL, URLTitle: notice.URLTitle,
+	}, now); err != nil {
+		n.pagesProblem("not recorded: " + err.Error())
+		return false
+	}
+	n.storePages(ctx)
+	return true
+}
+
+// finishPage records the attempt's outcome. The classes are the honest ones: a
+// confirmed 200 is sent; a 4xx, or no request at all, is failed; a timeout, a
+// transport error, a 5xx or an unconfirmed 2xx may have reached Tom: ambiguous.
+func (n *Notifier) finishPage(ctx context.Context, notice Notice, err error, rc Receipt, haveReceipt bool) {
+	var o pages.Outcome
+	status, request := rc.Status, ""
+	var se *SendError
+	switch {
+	case err == nil && (!haveReceipt || rc.Confirmed):
+		o, request = pages.OutcomeSent, rc.Request
+	case err == nil:
+		o = pages.OutcomeAmbiguous
+	case errors.Is(err, errPushoverCredentials):
+		o, status = pages.OutcomeFailed, 0
+	case errors.As(err, &se) && se.Status >= 400 && se.Status < 500:
+		o, status = pages.OutcomeFailed, se.Status
+	case errors.As(err, &se):
+		o, status = pages.OutcomeAmbiguous, se.Status
+	default:
+		o, status = pages.OutcomeAmbiguous, 0
+	}
+	n.pagesDoc.Finish(notice.PageKey, o, status, request, n.Clock.Now())
+	n.storePages(ctx)
+}
+
+// storePages stores the record, or leaves it pending for the next pass.
+func (n *Notifier) storePages(ctx context.Context) {
+	n.pagesDirty = true
+	if err := n.Pages.SavePages(ctx, n.pagesDoc); err != nil {
+		n.pagesProblem("not stored yet: " + err.Error() + "; it is retried on the next pass")
+		return
+	}
+	n.pagesDirty, n.pagesLogged = false, ""
 }
 
 // isBlocked: a refused notice stays blocked for the same sig; a warning also for
@@ -638,6 +848,7 @@ func (n *Notifier) incidents(ctx context.Context, provider string, obs LoginStat
 			return
 		}
 		if n.send(ctx, "critical:"+provider, inc.Opened, Notice{
+			PageKey: "critical:" + provider + ":" + strconv.FormatInt(inc.Opened, 10), Correlation: inc.ID, Source: "notices/critical",
 			Title:    "Keeper needs login (" + provider + ")",
 			Message:  capitalize(provider) + " sign-in is needed. Until it is renewed the phone sessions cannot start. Renew from the standby session: agent-run keeper-login " + provider + " url (quickstart section 6).",
 			Priority: 1,
@@ -657,6 +868,7 @@ func (n *Notifier) incidents(ctx context.Context, provider string, obs LoginStat
 			return
 		}
 		if n.send(ctx, "resolved:"+provider, inc.Opened, Notice{
+			PageKey: "resolved:" + provider + ":" + strconv.FormatInt(inc.Opened, 10), Correlation: inc.ID, Source: "notices/resolved",
 			Title:    "Keeper login restored (" + provider + ")",
 			Message:  capitalize(provider) + " sign-in was renewed; the keeper holds a working login again.",
 			Priority: 0,
@@ -701,7 +913,9 @@ func (n *Notifier) warning(ctx context.Context, provider string, obs LoginStatus
 	default:
 		when = fmt.Sprintf("in %d days", days)
 	}
+	lapseDay := obs.LapsesAt.UTC().Format("2006-01-02")
 	if n.send(ctx, "warning:"+provider, obs.LapsesAt.Unix(), Notice{
+		PageKey: "warning:" + provider + ":" + day + ":lapse-" + lapseDay, Correlation: provider + "-lapse-" + lapseDay, Source: "notices/warning",
 		Title:    capitalize(provider) + " login lapses " + when,
 		Message:  capitalize(provider) + " login lapses " + when + " (" + obs.LapsesAt.UTC().Format("2006-01-02 15:04 UTC") + ") — renew from the standby: agent-run keeper-login " + provider + " url (quickstart section 6).",
 		Priority: 0,

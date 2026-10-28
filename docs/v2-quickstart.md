@@ -731,6 +731,37 @@ exec right that v1 and the workbench hold.)
 It prints `sent`, or an error that names no credential. The keeper image is
 distroless, so there is no shell: that one binary is all it runs.
 
+### Look up the pages the keeper sent
+
+**This lists keeper pages only. It is not all Pushover history.** The keeper
+writes each page it sends into its notice ConfigMap before it sends, then the
+outcome. `agent-run pages` reads that record. It is offline: it calls no API and
+sends nothing. Any session can read the ConfigMap.
+
+```bash
+kubectl -n dev-env-system get cm dev-env-keeper-notices -o json | agent-run pages list
+kubectl -n dev-env-system get cm dev-env-keeper-notices -o json | agent-run pages list --state ambiguous --since 7d
+kubectl -n dev-env-system get cm dev-env-keeper-notices -o json | agent-run pages show 'critical:claude:1790000000'
+```
+
+Each page shows its time in UTC and in New York, sender and source, title and
+body, key and correlation, link, the number of attempts and Pushover's request
+id. `-o json` prints the same. `--from-file` takes a saved copy.
+
+States: *recorded* is written before the send and the outcome was not stored (a
+crash, or a send in flight). *sent* means Pushover answered HTTP 200 with
+status 1: it queued the page, which is not proof the phone received it.
+*failed* is a definite 4xx, or no request made. *ambiguous* is a timeout, a
+transport error, a 5xx or an unconfirmed 2xx: the page may have reached Tom.
+
+Coverage is printed on every answer. Only the keeper records, and only from the
+first keeper image that has this code. Alertmanager, Gatus, upgrade-gate,
+alert-responder, dev-env-ops, the v1 pod, haynesnetwork, scribe-notes and Home
+Assistant are not covered, and older pages are Unknown. A page that is not in
+the record is Unknown, never "no page". The record keeps the newest 100 pages
+(256 KiB) and says how many it dropped. A link or text that could carry a
+credential is stored as `REDACTED`. Design: DESIGN-031.
+
 ## 7. Where notes live
 
 - `~/.shared` is one folder that every v2 session mounts:

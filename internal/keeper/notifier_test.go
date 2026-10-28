@@ -43,6 +43,8 @@ type pushoverFake struct {
 	// body repeats the request body, as a careless API might.
 	status int
 	echo   bool
+	// okBody is written with a 200, as Pushover's {"status":1,"request":"..."}.
+	okBody string
 }
 
 type recordedPush struct {
@@ -59,7 +61,7 @@ func newPushoverFake(t *testing.T) *pushoverFake {
 		form, _ := url.ParseQuery(string(body))
 		f.mu.Lock()
 		f.reqs = append(f.reqs, recordedPush{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Clone(), form})
-		status, echo := f.status, f.echo
+		status, echo, okBody := f.status, f.echo, f.okBody
 		f.mu.Unlock()
 		if status == 0 {
 			status = 200
@@ -67,6 +69,8 @@ func newPushoverFake(t *testing.T) *pushoverFake {
 		w.WriteHeader(status)
 		if echo {
 			_, _ = w.Write(body)
+		} else if status == 200 && okBody != "" {
+			_, _ = w.Write([]byte(okBody))
 		}
 	}))
 	t.Cleanup(f.srv.Close)
