@@ -107,6 +107,9 @@ func Rescue(ctx context.Context, r Runner, s Settings, session string, now time.
 		}
 		rep.Repos = append(rep.Repos, rr)
 	}
+	if len(repos) == 0 {
+		rep.NoClone = noCloneProof(s)
+	}
 	writeBundles(ctx, r, s, &rep, now)
 	rep.FinishedAt = time.Now().UTC()
 	return rep, nil

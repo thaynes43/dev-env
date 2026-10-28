@@ -340,9 +340,13 @@ at 07:46:59Z and 2.38.3 at 08:23:49Z. Both are Running on 2.38.3. T08
 - Suspended private tasks keep their pods running (ADR-006, plan 11 F3; NB-06
   D3). Five were running at 03:45Z.
 - `dev-env-1020-002245` (a reaped Codex host probe that never cloned) retries a
-  rescue every 15 minutes and fails `NotProven`. It needs a dev-env fix that
-  accepts a provably clone-less volume, or a reviewed cleanup. Recorded as a
-  story, not started, because it changes the volume-delete guard.
+  rescue every 15 minutes and fails `NotProven`. Source now reports the truthful
+  reason `BootstrapInterrupted` (branch `agent/rescue-interrupted-bootstrap`, OpenProject
+  #222) when agentd proves an interrupted bootstrap; the result stays Failed, so archive
+  stays blocked, and the incident keeps `NotProven` until the agent image or templates
+  carry the new agentd (a separate approval). Whether a clone-less volume with that
+  proof may count as rescued, which changes the volume-delete guard, and whether to
+  back off its retries, are open questions for Tom (DESIGN-001, rescue).
 - The session directory is off (`--enable-session-directory=false`).
 - `dev-env-agent-guard` has the same Kyverno `verify-images` annotation gap that
   #4129 fixed in the workbench guard.
