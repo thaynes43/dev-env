@@ -27,7 +27,7 @@ func conversationUsageStatus(in *protocol.ConversationUsage, sess *v1alpha1.Agen
 		observed = now.UTC()
 	}
 	observed = observed.Truncate(time.Second)
-	if old := sess.Status.ConversationUsage; old != nil && old.ObservedAt.Time.After(observed) {
+	if old := sess.Status.ConversationUsage; old != nil && old.ObservedAt.After(observed) {
 		return nil
 	}
 	out := &v1alpha1.ConversationUsageStatus{

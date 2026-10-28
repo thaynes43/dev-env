@@ -774,6 +774,14 @@ Unit A's measurement now runs and is stored. The portal does not show it yet.
   reporting session only: interactive, the session's own provider, not Unknown, and not
   older than the one stored. An absent field leaves the stored value; the stored figure
   keeps its observation time, so a reader can see its age.
+- **A stored figure can go stale, on purpose.** If a later measurement is Unknown (the
+  record moved, the pod was replaced by an older agent), agentd stops sending and the
+  operator keeps the last figure rather than clear it. Its `observedAt` is the age, and
+  the milestone 2 portal view marks an old figure as stale. Clearing would turn a
+  once-measured session back into "no figure" with no sign it was ever measured.
+- **One oversize Claude record makes the result Partial.** A single assistant record
+  over 64 KiB cannot be read and is counted as skipped, so the figure is a marked lower
+  bound. That is the conservative choice; it can be relaxed once real records are known.
 - **What is still an assumption.** That Claude Code repeats usage per content block and
   its output counter only grows (seen on 2.1.296), and the Codex `token_count` shape, are
   encoded in synthetic fixtures. No published schema for either has been checked in.
