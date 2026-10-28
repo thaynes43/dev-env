@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.58.0](https://github.com/thaynes43/dev-env/compare/v2.57.0...v2.58.0) (2026-10-28)
+
+
+### Features
+
+* add guarded native allowance capture ([#616](https://github.com/thaynes43/dev-env/issues/616)) ([f595315](https://github.com/thaynes43/dev-env/commit/f5953151e3fc51d8c81dc61de9d09d9141e5c9fb))
+* add read-only Pages MCP source ([#614](https://github.com/thaynes43/dev-env/issues/614)) ([e28366d](https://github.com/thaynes43/dev-env/commit/e28366d3efc108379beeecda039dc94eeaf33616))
+
 ## [2.57.0](https://github.com/thaynes43/dev-env/compare/v2.56.0...v2.57.0) (2026-10-28)
 
 
