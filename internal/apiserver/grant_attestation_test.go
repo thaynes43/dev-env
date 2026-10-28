@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -119,4 +120,24 @@ func TestGrantAttestationRefusals(t *testing.T) {
 	f.now = f.now.Add(-grantattest.PendingWindow)
 	f.setGrantStatus(late.Name, v1alpha1.GrantDenied, nil)
 	wantError(t, f.do(http.MethodPost, apiv1.GrantAttestationPath(late.Name), tok, body(late)), http.StatusConflict, apiv1.CodeConflict)
+}
+
+// hw-ssh (D-89) rides the existing credential request and attestation routes; the
+// wire view gains nothing for it (the notice lives in agent-run).
+func TestHWSSHCredentialGrantUsesTheExistingRoutes(t *testing.T) {
+	f := newFixture(t)
+	f.srv.GrantAttestation = true
+	f.h = f.srv.Handler()
+	tok := f.sessionPod("haynes-ops-1006-100000", "full", 0)
+	g := f.request(tok, apiv1.CreateGrantRequest{Type: "credential", Credential: "hw-ssh", Reason: "look at a node", TTL: "1h"}, http.StatusCreated)
+	if g.Credential != "hw-ssh" || g.ScopeDigest == "" {
+		t.Fatalf("view %+v", g)
+	}
+	withUID(f, g.Name)
+	if w := f.do(http.MethodPost, apiv1.GrantAttestationPath(g.Name), tok, body(g)); w.Code != http.StatusCreated {
+		t.Fatalf("attest: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(strings.ToLower(f.do(http.MethodGet, apiv1.GrantPath(g.Name), tok, nil).Body.String()), "notice") {
+		t.Fatal("the wire view carries a notice")
+	}
 }

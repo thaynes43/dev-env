@@ -49,7 +49,7 @@ func checkCredentialSpec(s v1alpha1.CredentialJobSpec) error {
 			return errors.New("invalid credential object reference")
 		}
 	}
-	if !strings.HasPrefix(s.Grant.Name, "grant-") || s.Credential != v1alpha1.CredentialProxmox || s.ExpiresAt.IsZero() {
+	if !strings.HasPrefix(s.Grant.Name, "grant-") || (s.Credential != v1alpha1.CredentialProxmox && s.Credential != v1alpha1.CredentialHWSSH) || s.ExpiresAt.IsZero() {
 		return errors.New("invalid credential request")
 	}
 	return nil
@@ -134,7 +134,8 @@ var errCredentialIncompatible = errors.New("session pod does not support credent
 // leader context as the GitHub keeper. Polling avoids a Secret informer/list
 // permission and recovers journal orphans even if their CR was forcibly removed.
 type credentialWorker struct {
-	Enabled                     bool
+	Enabled                     bool // new PVE (proxmox) executions
+	HWSSHEnabled                bool // new hw-ssh lease installs (D-89); cleanup always runs
 	Client                      client.Client
 	Namespace, SessionNamespace string
 	Journal                     *credentialJournal
@@ -146,6 +147,19 @@ type credentialWorker struct {
 }
 
 func (*credentialWorker) NeedLeaderElection() bool { return true }
+
+// enabledFor reports whether new executions of a job's credential are on.
+func (w *credentialWorker) enabledFor(s v1alpha1.CredentialJobSpec) bool {
+	if s.Credential == v1alpha1.CredentialHWSSH {
+		return w.HWSSHEnabled
+	}
+	return w.Enabled
+}
+
+// providerIDOf is the nonsecret provider identity of an entry's credential.
+func providerIDOf(s v1alpha1.CredentialJobSpec) string {
+	return v1alpha1.CredentialProviderID(s.Credential, s.Grant.UID)
+}
 func (w *credentialWorker) Start(ctx context.Context) error {
 	for {
 		if ctx.Err() != nil {
@@ -193,6 +207,14 @@ func (w *credentialWorker) tick(ctx context.Context) error {
 		}
 		gone, eerr := w.cleanupProvider(ctx, e)
 		if eerr == nil && gone {
+			if e.Spec.Credential == v1alpha1.CredentialHWSSH {
+				// A lease has no provider side to wait for; clear it from the pod too.
+				if pod, perr := w.targetPod(ctx, e.Spec.Session); perr == nil && pod != nil && w.guard(ctx) == nil {
+					opctx, cancel := w.operationContext(ctx)
+					_ = w.Installer.Remove(opctx, pod, e)
+					cancel()
+				}
+			}
 			if err = w.Journal.update(ctx, types.UID(uid), nil); err != nil {
 				return err
 			}
@@ -235,7 +257,7 @@ func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.Credenti
 				return err
 			}
 			exists = true
-		} else if !w.Enabled {
+		} else if !w.enabledFor(job.Spec) {
 			return w.noMint(ctx, job, v1alpha1.CredentialBackendUnavailable)
 		}
 	}
@@ -246,11 +268,20 @@ func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.Credenti
 	if exists && e.Stage == journalRevoked {
 		return w.revoked(ctx, job, e)
 	}
-	if !w.Enabled || job.Spec.Release || !job.DeletionTimestamp.IsZero() || !active || entryExpired(e, w.Clock.Now()) || (exists && (e.Stage == journalCleanup || e.Failure != "")) {
+	if !w.enabledFor(job.Spec) || job.Spec.Release || !job.DeletionTimestamp.IsZero() || !active || entryExpired(e, w.Clock.Now()) || (exists && (e.Stage == journalCleanup || e.Failure != "")) {
 		if !exists {
 			return w.noMint(ctx, job, "")
 		}
 		return w.cleanup(ctx, job, e)
+	}
+	// The static hw-ssh key has no provider side: nothing is minted, so there is no
+	// uncertain create. The lease is installed from the key Secret at install time.
+	if e.Stage == journalIntent && e.Spec.Credential == v1alpha1.CredentialHWSSH && pod != nil {
+		e.TokenID = providerIDOf(e.Spec)
+		e.Stage = journalMinted
+		if err = w.Journal.update(ctx, job.UID, &e); err != nil {
+			return err
+		}
 	}
 	if e.Stage == journalIntent {
 		if exists && e.Uncertain {
@@ -277,7 +308,7 @@ func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.Credenti
 		// private entry is later lost, the surviving receipt forbids reminting.
 		if job.Status.ProviderID == "" {
 			job.Status.Phase = v1alpha1.CredentialPending
-			job.Status.ProviderID = providerID(e.Spec.Grant.UID)
+			job.Status.ProviderID = providerIDOf(e.Spec)
 			if w.Client.Status().Update(ctx, job) != nil {
 				// The marker may have committed, but SSH has not been called.
 				// A durable reset permits retry; failed persistence or a crash
@@ -392,7 +423,7 @@ func (w *credentialWorker) cleanup(ctx context.Context, job *v1alpha1.Credential
 	if job.Status.Phase != v1alpha1.CredentialCleanupPending || job.Status.FailureCode != e.Failure {
 		job.Status.Phase = v1alpha1.CredentialCleanupPending
 		job.Status.FailureCode = e.Failure
-		job.Status.ProviderID = providerID(e.Spec.Grant.UID)
+		job.Status.ProviderID = providerIDOf(e.Spec)
 		if w.Client.Status().Update(ctx, job) != nil {
 			return errors.New("could not persist credential cleanup receipt")
 		}
@@ -418,7 +449,9 @@ func (w *credentialWorker) cleanup(ctx context.Context, job *v1alpha1.Credential
 	return w.revoked(ctx, job, e)
 }
 func (w *credentialWorker) cleanupProvider(ctx context.Context, e credentialEntry) (bool, error) {
-	if e.Stage == journalRevoked {
+	if e.Stage == journalRevoked || e.Spec.Credential == v1alpha1.CredentialHWSSH {
+		// An hw-ssh lease has nothing to revoke at the hosts: the shared key stays
+		// valid there. Removal from the pod is the only cleanup (D-89).
 		return true, nil
 	}
 	if err := w.guard(ctx); err != nil {
@@ -437,7 +470,7 @@ func (w *credentialWorker) cleanupProvider(ctx context.Context, e credentialEntr
 func (w *credentialWorker) revoked(ctx context.Context, job *v1alpha1.CredentialJob, e credentialEntry) error {
 	job.Status.Phase = v1alpha1.CredentialRevoked
 	job.Status.FailureCode = e.Failure
-	job.Status.ProviderID = providerID(e.Spec.Grant.UID)
+	job.Status.ProviderID = providerIDOf(e.Spec)
 	job.Status.RevokedAt = &metav1.Time{Time: w.Clock.Now().UTC().Truncate(time.Second)}
 	if w.Client.Status().Update(ctx, job) != nil {
 		return errors.New("could not persist credential revocation receipt")
@@ -470,7 +503,7 @@ func (w *credentialWorker) activeTarget(ctx context.Context, job *v1alpha1.Crede
 	if err != nil {
 		return false, nil, errors.New("could not verify the live credential grant")
 	}
-	if grant.UID != job.Spec.Grant.UID || grant.Status.Phase != v1alpha1.GrantActive || grant.Status.ExpiresAt == nil || !grant.Status.ExpiresAt.Equal(&job.Spec.ExpiresAt) || grant.Spec.Type != v1alpha1.GrantCredential || grant.Spec.Credential == nil || grant.Spec.Credential.Name != v1alpha1.CredentialProxmox || grant.Spec.Requester.Session != job.Spec.Session.Name || grant.Spec.Requester.SessionUID != job.Spec.Session.UID || grant.Spec.Release || !grant.DeletionTimestamp.IsZero() {
+	if grant.UID != job.Spec.Grant.UID || grant.Status.Phase != v1alpha1.GrantActive || grant.Status.ExpiresAt == nil || !grant.Status.ExpiresAt.Equal(&job.Spec.ExpiresAt) || grant.Spec.Type != v1alpha1.GrantCredential || grant.Spec.Credential == nil || grant.Spec.Credential.Name != job.Spec.Credential || grant.Spec.Requester.Session != job.Spec.Session.Name || grant.Spec.Requester.SessionUID != job.Spec.Session.UID || grant.Spec.Release || !grant.DeletionTimestamp.IsZero() {
 		return false, nil, nil
 	}
 	var session v1alpha1.AgentSession

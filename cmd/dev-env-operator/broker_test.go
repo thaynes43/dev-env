@@ -15,6 +15,9 @@ func TestParseBrokerFlags(t *testing.T) {
 	if o, err := parseBrokerFlags([]string{"--enable-proxmox-grants"}); err != nil || !o.enableProxmoxGrants {
 		t.Fatalf("explicit Proxmox enable: %+v %v", o, err)
 	}
+	if o, err := parseBrokerFlags([]string{"--enable-hw-ssh-grants"}); err != nil || !o.enableHWSSHGrants || o.enableProxmoxGrants {
+		t.Fatalf("explicit hw-ssh enable must not enable proxmox: %+v %v", o, err)
+	}
 	t.Setenv("POD_NAMESPACE", "")
 	if o, err := parseBrokerFlags([]string{"--leader-elect=false", "--session-namespace=agents"}); err != nil || o.leaderElect || o.sessionNamespace != "agents" || o.policyNamespace != "dev-env-system" {
 		t.Errorf("%+v %v", o, err)

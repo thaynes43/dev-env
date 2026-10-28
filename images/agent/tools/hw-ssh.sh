@@ -16,18 +16,61 @@
 #        hw-ssh pve-all <command...>        # same command on all five PVE nodes
 #        hw-ssh --raw <user@fqdn> [cmd...]  # anything else the CNP allows on :22
 #
+# Key (first match wins):
+#   1. HW_SSH_KEY, if set.
+#   2. A leased key: an approved hw-ssh credential grant (D-89) has the keeper install
+#      the key at $XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/key, with a manifest.json.
+#      An expired lease is deleted and ignored. This is the ONE shared key for every
+#      host above, not a per-grant credential: removing the lease at expiry, release or
+#      session end is neither containment (anything in the pod can copy the key while it
+#      is installed) nor revocation (no cryptographic expiry; revoking means rotating the
+#      key on every host, out of band).
+#   3. ~/.ssh/dev-env-hw, where dev-init puts the key in a profile that carries it.
+#
 # Rules (runbook .agents/runbooks/proxmox-access.md): read-first; `declare-activity`
 # before anything disruptive; no node reboots or Unraid array stop/start from here; no
 # PiKVM ATX power/reset, Wake-on-LAN or console keystrokes without Tom's go-ahead.
 set -uo pipefail
 
-KEY="${HW_SSH_KEY:-$HOME/.ssh/dev-env-hw}"
+KEY="${HW_SSH_KEY:-}"
+LEASES="${HW_SSH_LEASE_DIR:-${XDG_RUNTIME_DIR:-/dev/shm/run-$(id -u)}/dev-env-hwssh}"
 KNOWN="$HOME/.ssh/known_hosts_hw"
 DOMAIN=haynesnetwork
 PVE_NODES=(haynesintelligence twin-top twin-bottom pve04 pve-filet02)
 
 die() { printf 'hw-ssh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '/^# usage:/,/^#$/{/^#$/d;s/^# \{0,1\}//;p;}' "$0"; exit "${1:-0}"; }
+
+# leased_key prints the key path of the live lease that expires last, deleting expired
+# leases it finds. Nothing is printed when there is none.
+leased_key() {
+  local d m exp now best="" best_at=0 at
+  now=$(date -u +%s)
+  for d in "$LEASES"/grant-*; do
+    m="$d/manifest.json"
+    [[ -d "$d" && ! -L "$d" && -f "$m" && -f "$d/key" && ! -L "$d/key" ]] || continue
+    exp=$(sed -n 's/.*"expires":"\([^"]*\)".*/\1/p' "$m")
+    at=$(date -u -d "$exp" +%s 2>/dev/null) || continue
+    if (( at > now )); then
+      (( at > best_at )) && { best="$d/key"; best_at=$at; }
+    else
+      rm -f "$d/key" "$d/manifest.json" 2>/dev/null; rmdir "$d" 2>/dev/null || true
+    fi
+  done
+  [[ -z "$best" ]] || { printf '%s %s\n' "$best" "$best_at"; }
+}
+
+resolve_key() {
+  [[ -z "$KEY" ]] || return 0
+  local lease
+  if lease=$(leased_key) && [[ -n "$lease" ]]; then
+    KEY="${lease% *}"
+    printf 'hw-ssh: using the leased shared key (until %s). It is not revocable and not contained: it stays valid on every host after the lease is removed.\n' \
+      "$(date -u -d "@${lease##* }" +%Y-%m-%dT%H:%M:%SZ)" >&2
+  else
+    KEY="$HOME/.ssh/dev-env-hw"
+  fi
+}
 
 target() {  # host alias → user@fqdn
   case "$1" in
@@ -40,7 +83,8 @@ target() {  # host alias → user@fqdn
 
 run() {  # user@fqdn [cmd...]
   local dest="$1"; shift
-  [[ -r "$KEY" ]] || die "no key at $KEY — HW_SSH_PRIVATE_KEY_B64 not in the pod env yet? (1Password dev-env field + pod bounce; see runbook)"
+  resolve_key
+  [[ -r "$KEY" ]] || die "no key at $KEY — no live hw-ssh lease (ask for an hw-ssh credential grant) and HW_SSH_PRIVATE_KEY_B64 not in the pod env (1Password dev-env field + pod bounce; see runbook)"
   exec_or_run ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode="$([[ $# -eq 0 ]] && echo no || echo yes)" \
     -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$KNOWN" -o ConnectTimeout=10 \
     -o LogLevel=ERROR "$dest" "$@"

@@ -39,7 +39,7 @@ Usage:
                                                   list access grants, newest first
   agent-run grant show <grant-id>                 show one access grant
   agent-run grant request --type <t> --reason <why> [--no-wait]
-                                                  ask for a grant and wait for the answer
+                                                  ask for a grant; waits up to 30m unless --no-wait
   agent-run grant release <grant-id>              ask the broker to end one grant
   agent-run grant attest <grant-id> --approved-by user|coordinator:<ref> --ref <id>
                                                   record your claim that you obtained approval
@@ -601,7 +601,10 @@ the grant the session already holds.
   --cidr <cidr>      repeatable egress destination
   --endpoint <ns>    NAMESPACE or NAMESPACE:key=value,key=value
   --port <port>      443, 53/udp; repeatable
-  --credential <id>  proxmox or hw-ssh
+  --credential <id>  proxmox or hw-ssh. hw-ssh leases the ONE shared SSH key into
+                     this pod's tmpfs: anything in the pod can copy it while it is
+                     installed; removal at expiry, release or session end is neither
+                     containment nor revocation, and the key stays valid on every host
   --ttl <duration>   such as 45m; empty uses the API default
 
 grant release names one grant. The grant object stays as the audit record.

@@ -39,9 +39,12 @@ type Options struct {
 	GHTokenSecret types.NamespacedName
 	// GitHubApp mints the gh token.
 	GitHubApp *GitHubApp
-	// ProxmoxGrants is disabled by default and never enables general hw-ssh.
+	// ProxmoxGrants is disabled by default; it does not enable the hw-ssh lease.
 	ProxmoxGrants ProxmoxGrantOptions
-	CodexAuth     CodexOptions
+	// HWSSHGrants leases the static hw-ssh key into a session pod (D-89); off by
+	// default. Removing a lease is not revocation of the key.
+	HWSSHGrants HWSSHGrantOptions
+	CodexAuth   CodexOptions
 	// ClaudeAuth keeps the shared Claude login fresh; off by default.
 	ClaudeAuth ClaudeOptions
 	// Notices configures the login gauges' notifier (plan 13, story 13.1).
@@ -260,7 +263,12 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		if clk == nil {
 			clk = clock.RealClock{}
 		}
-		worker := &credentialWorker{Enabled: g.Enabled, Client: c, Namespace: o.Namespace, SessionNamespace: g.SessionNamespace, Journal: &credentialJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: g.JournalSecret}}, Provider: &proxmoxProvider{SSH: native}, Installer: installer, Fence: fence, Clock: clk, Log: o.Log.WithName("proxmox-grants")}
+		hw := o.HWSSHGrants
+		if hw.KeySecret == "" {
+			hw.KeySecret = DefaultHWSSHKeySecret
+		}
+		routed := routedInstaller{proxmox: installer, hwssh: &hwsshInstaller{exec: installer, reader: c, keySecret: types.NamespacedName{Namespace: g.SessionNamespace, Name: hw.KeySecret}}}
+		worker := &credentialWorker{Enabled: g.Enabled, HWSSHEnabled: hw.Enabled, Client: c, Namespace: o.Namespace, SessionNamespace: g.SessionNamespace, Journal: &credentialJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: g.JournalSecret}}, Provider: &proxmoxProvider{SSH: native}, Installer: routed, Fence: fence, Clock: clk, Log: o.Log.WithName("proxmox-grants")}
 		if err := mgr.Add(worker); err != nil {
 			return err
 		}

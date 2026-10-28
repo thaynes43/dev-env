@@ -95,11 +95,11 @@ func (b *Broker) credentialJob(ctx context.Context, g *v1alpha1.AccessGrant) (*v
 
 func (b *Broker) ownCredentialJob(g *v1alpha1.AccessGrant, j *v1alpha1.CredentialJob) bool {
 	return g.UID != "" && g.Spec.Requester.SessionUID != "" && g.Status.ExpiresAt != nil &&
-		g.Spec.Credential != nil && g.Spec.Credential.Name == v1alpha1.CredentialProxmox &&
+		g.Spec.Credential != nil && (g.Spec.Credential.Name == v1alpha1.CredentialProxmox || g.Spec.Credential.Name == v1alpha1.CredentialHWSSH) &&
 		j.Namespace == b.PolicyNamespace && j.Name == v1alpha1.CredentialJobName(g.UID) && j.UID != "" &&
 		j.Spec.Grant == (v1alpha1.CredentialObjectReference{Namespace: g.Namespace, Name: g.Name, UID: g.UID}) &&
 		j.Spec.Session == (v1alpha1.CredentialObjectReference{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: g.Spec.Requester.SessionUID}) &&
-		j.Spec.Credential == v1alpha1.CredentialProxmox && j.Spec.ExpiresAt.Equal(g.Status.ExpiresAt) &&
+		j.Spec.Credential == g.Spec.Credential.Name && j.Spec.ExpiresAt.Equal(g.Status.ExpiresAt) &&
 		j.Labels[v1alpha1.LabelGrant] == g.Name && j.Labels[v1alpha1.LabelSession] == g.Spec.Requester.Session &&
 		j.Labels[v1alpha1.LabelManagedBy] == ManagedBy
 }
@@ -128,7 +128,10 @@ func (b *Broker) ensureCredentialJob(ctx context.Context, g *v1alpha1.AccessGran
 		return nil, err
 	}
 	if j == nil {
-		if !b.EnableProxmoxGrants {
+		if g.Spec.Credential == nil || (g.Spec.Credential.Name == v1alpha1.CredentialHWSSH && !b.EnableHWSSHGrants) {
+			return nil, permanent{errors.New("new hw-ssh credential execution is disabled")}
+		}
+		if g.Spec.Credential.Name == v1alpha1.CredentialProxmox && !b.EnableProxmoxGrants {
 			return nil, permanent{errors.New("new Proxmox credential execution is disabled")}
 		}
 		// A job is execution, never authority. Confirm the exact approved policy
@@ -156,7 +159,7 @@ func (b *Broker) ensureCredentialJob(ctx context.Context, g *v1alpha1.AccessGran
 			Spec: v1alpha1.CredentialJobSpec{
 				Grant:      v1alpha1.CredentialObjectReference{Namespace: g.Namespace, Name: g.Name, UID: g.UID},
 				Session:    v1alpha1.CredentialObjectReference{Namespace: b.SessionNamespace, Name: g.Spec.Requester.Session, UID: g.Spec.Requester.SessionUID},
-				Credential: v1alpha1.CredentialProxmox, ExpiresAt: *g.Status.ExpiresAt,
+				Credential: g.Spec.Credential.Name, ExpiresAt: *g.Status.ExpiresAt,
 			},
 		}
 		if err := b.Client.Create(ctx, j); err != nil {
@@ -204,7 +207,7 @@ func (b *Broker) activeCredential(ctx context.Context, g *v1alpha1.AccessGrant, 
 	installed := j.Status.Phase == v1alpha1.CredentialInstalled && j.Status.FailureCode == "" &&
 		pod != nil && j.Status.InstalledPodUID == string(pod.UID) && j.Status.InstalledAt != nil &&
 		!j.Status.InstalledAt.Before(g.Status.ApprovedAt) && !j.Status.InstalledAt.After(b.Clock.Now()) &&
-		j.Status.InstalledAt.Before(g.Status.ExpiresAt) && j.Status.ProviderID == "dev-env@pve!grant-"+string(g.UID)
+		j.Status.InstalledAt.Before(g.Status.ExpiresAt) && j.Status.ProviderID == v1alpha1.CredentialProviderID(g.Spec.Credential.Name, g.UID)
 	if installed {
 		if g.Status.InstalledPodUID != j.Status.InstalledPodUID || !g.Status.InstalledAt.Equal(j.Status.InstalledAt) {
 			g.Status.InstalledPodUID, g.Status.InstalledAt = j.Status.InstalledPodUID, j.Status.InstalledAt.DeepCopy()

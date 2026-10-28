@@ -111,6 +111,10 @@ func validEntry(e credentialEntry) bool {
 	default:
 		return false
 	}
+	if e.Stage == journalMinted && e.Spec.Credential == v1alpha1.CredentialHWSSH {
+		// A lease keeps no secret in the journal: the key is read at install time.
+		return e.TokenID == providerIDOf(e.Spec) && e.TokenSecret.Empty()
+	}
 	if e.Stage == journalMinted && (e.TokenID != providerID(e.Spec.Grant.UID) || e.TokenSecret.Empty()) {
 		return false
 	}

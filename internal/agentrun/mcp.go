@@ -186,7 +186,8 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 		if _, err := a.call(ctx, c, http.MethodPost, apiv1.GrantsPath, nil, req, &out); err != nil {
 			return "", err
 		}
-		return mcpJSON(out)
+		text, err := mcpJSON(out)
+		return noticeFor(text, out), err
 	case "grant_status":
 		if args.Name != "" {
 			if err := protocol.ValidGrantName(args.Name); err != nil {
@@ -196,7 +197,8 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 			if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(args.Name), nil, nil, &out); err != nil {
 				return "", err
 			}
-			return mcpJSON(out)
+			text, err := mcpJSON(out)
+			return noticeFor(text, out), err
 		}
 		if args.Phase != "" && !grantPhaseKnown(args.Phase) {
 			return "", usageError("phase is one of %s, not %q", strings.Join(grantPhases, ", "), args.Phase)
@@ -215,7 +217,8 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 		if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantsPath, q, nil, &out); err != nil {
 			return "", err
 		}
-		return mcpJSON(out)
+		text, err := mcpJSON(out)
+		return noticeFor(text, out.Items...), err
 	case "release_access":
 		if err := protocol.ValidGrantName(args.Name); err != nil {
 			return "", err
@@ -224,7 +227,8 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 		if _, err := a.call(ctx, c, http.MethodDelete, apiv1.GrantPath(args.Name), nil, nil, &out); err != nil {
 			return "", err
 		}
-		return mcpJSON(out)
+		text, err := mcpJSON(out)
+		return noticeFor(text, out), err
 	default:
 		return "", usageError("unknown tool %q", name)
 	}
@@ -261,7 +265,7 @@ func accessTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        "request_access",
-			"description": "Ask for an access grant. Tom still approves it unless a deployed policy accepts an agent attestation: then, after you obtain your coordinator's approval (the user's, where the coordinator cannot approve), run `agent-run grant attest` (this tool returns at once; the CLI `grant request` blocks up to 30 minutes unless given --no-wait), then poll grant_status. That is your claim, not verified human identity. The reply includes the approval page. This does not install a grant.",
+			"description": "Ask for an access grant. Tom still approves it unless a deployed policy accepts an agent attestation: then, after you obtain your coordinator's approval (the user's, where the coordinator cannot approve), run `agent-run grant attest` (this tool returns at once; the CLI `grant request` blocks up to 30 minutes unless given --no-wait), then poll grant_status. That is your claim, not verified human identity. credential hw-ssh leases the one shared SSH key: anything in the pod can copy it while installed, and removing it later is neither containment nor revocation (the reply says so). The reply includes the approval page. This does not install a grant.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

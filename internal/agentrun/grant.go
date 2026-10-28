@@ -443,6 +443,22 @@ func (a *app) grantShow(ctx context.Context, args []string) error {
 	return a.printGrant(out)
 }
 
+// hwsshNotice is printed for every hw-ssh credential grant (D-89). The wire view
+// carries no notice; agent-run keys it on the grant's credential.
+const hwsshNotice = "hw-ssh notice: this leases the ONE shared ed25519 key to this pod: user dev-env on all five PVE hosts (sudo allowlist; qm is root-equivalent), root on HaynesTower and PiKVM, and the other documented hardware. " +
+	"Anything in the pod can COPY the key while it is installed. Removing it at expiry, release or session end is not containment and not revocation: the key has no cryptographic expiry and stays valid on every host. " +
+	"Real revocation means rotating the key on every host, out of band. Network limits do not reduce its authority."
+
+// noticeFor appends the hw-ssh notice to the text of a grant or a grant list.
+func noticeFor(text string, grants ...apiv1.Grant) string {
+	for _, g := range grants {
+		if g.Credential == apiv1.CredentialHWSSH {
+			return text + "\n\n" + hwsshNotice
+		}
+	}
+	return text
+}
+
 func (a *app) printGrant(out apiv1.Grant) error {
 	expires := "-"
 	if out.ExpiresAt != nil && !out.ExpiresAt.IsZero() {
@@ -455,6 +471,9 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	if out.ApprovalURL != "" {
 		a.outf("approval: %s\n", out.ApprovalURL)
+	}
+	if out.Credential == apiv1.CredentialHWSSH {
+		a.outf("%s\n", hwsshNotice)
 	}
 	if at := out.Attestation; at != nil {
 		a.outf("attestation: session/%s claims %s approved (ref %s); agent attestation, not verified human identity\n", at.Session, at.ApprovedBy, at.Ref)

@@ -4090,11 +4090,74 @@ so a pod roll still reinstalls. A coordinator reference is checked for syntax an
 unverified claim. Fail closed on a rollback: an attested policy names its requesters only
 under `spec.attested` and leaves `profiles`, `repos` and `agents` empty, which a broker
 that predates this reads as "names no requester" (`Matches`), so it approves nothing.
-Guidance (help and the MCP tool text): ask the coordinator first, the user where the
+Order for an agent: `grant request ... --no-wait` (or MCP `request_access`, which returns at once, because the plain command waits up to 30 minutes on the session's own pending grant), then `grant attest`, then follow it with `grant show`. Guidance (help and the MCP tool text): ask the coordinator first, the user where the
 coordinator cannot approve, attest only what was approved, and never use an attestation
 in place of a confirmation the coordinator must itself obtain. Known gap, unchanged and
 left for a follow-up: kube and egress execution never read `approvedBy`, so the decision
 point for them is `pending()` only.
+
+**D-89 (2026-10-28 America/New_York). hw-ssh credential grants lease the existing static shared
+key, not an SSH certificate.** Q-07 and plan 07 described hw-ssh as a short-lived certificate
+from the keeper's CA. That is not built and the hosts trust no CA. This decision delivers the
+EXISTING static ed25519 key (Secret `dev-agents/dev-env-hw-ssh-secret`, field
+`HW_SSH_PRIVATE_KEY_B64`) as a leased projection into the requesting pod, default off, on the
+existing credential grant path (request, standing or attested approval, `CredentialJob`, keeper,
+cleanup). A CA certificate path is the stronger follow-up; it needs host changes (trust the CA,
+principals, expiry) and is out of scope.
+
+What a lease is not. Removing the projection at expiry, release or session end is neither
+containment nor revocation. Anything in the pod can copy the key while it is installed. The key
+has no cryptographic expiry and stays valid on every host. Real revocation means rotating the
+key on every host, out of band. The authority is the one shared key's: user `dev-env` on all
+five PVE hosts (sudo allowlist; `qm` is root-equivalent), root on HaynesTower and PiKVM, and
+the other documented hardware. Network limits do not reduce it. `agent-run` prints this for
+every hw-ssh grant and the MCP text carries it; the wire view is unchanged.
+
+Mechanism. The keeper reads the Secret at install time (a new `get` on that one resourceName
+in `dev-agents`, proposed for action-time approval), checks it is a bounded, unencrypted OpenSSH
+ed25519 key before any exec, and execs a fixed `sh` script into the pod. The key goes on stdin,
+only metadata in argv. The lease is `$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/` (tmpfs): `key`
+0600 and `manifest.json` 0600 (grant UID, pod UID, expiry, fingerprint; written last as the
+commit marker), directory 0700. Two fences guard the exec: the keeper re-reads the pod from the
+API right before it and checks its UID, and the script checks `$DEV_ENV_POD_UID`. Cleanup is the
+same script's `remove`, fenced by pod and grant UID; there is nothing to revoke at a provider.
+The key is not in the journal, a `CredentialJob` status, an Event or a log (a test scans for
+it). The broker and keeper each take `--enable-hw-ssh-grants` (default off); the proxmox flags
+do not enable it and it does not enable proxmox. The `CredentialJob` CRD accepts `hw-ssh`; its
+receipt names a lease (`hw-ssh-lease-<grantUID>`). Attestation (D-88) works for it through a
+policy whose `credential.names` is `[hw-ssh]`.
+
+Why not agentd's credential store. `internal/agentd/credentials.go` accepts only proxmox, and a
+2.45 agentd's `Use()` returns on the first entry it cannot read, so an hw-ssh entry in its
+grants root would break `credential-use proxmox` in every older pod. The lease directory is
+one agentd never reads, so the install works in an unchanged 2.45 session (agentd, Claude and
+the pod untouched): there the existing 2.45 `hw-ssh` helper is given the leased key with
+`HW_SSH_KEY=$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/key`. The new helper finds a live lease
+itself, prefers it over `~/.ssh/dev-env-hw`, and deletes an expired one.
+
+Pilot proposal (documentation only, nothing applied). The UPS session only, to
+`haynesintelligence.haynesnetwork` TCP 22, for one hour, with the existing `dev-env` login and
+sudo authority and the wider shared-key authority above disclosed to Tom. Destination egress
+stays a separate scoped policy and grant. Old Failed or Released grants stay as they are. The
+proposed policy, for Tom's action-time approval:
+
+```yaml
+apiVersion: dev-env.haynesops.com/v1alpha1
+kind: GrantPolicy
+metadata: {name: credential-hw-ssh-attested, namespace: dev-env-system}
+spec:
+  description: >-
+    Agent-attested lease of the ONE shared hw-ssh key (dev-env on five PVE hosts, qm is
+    root-equivalent; root on HaynesTower and PiKVM). Anything in the pod can copy it while
+    installed; removal is neither containment nor revocation; the key has no cryptographic
+    expiry. The agent's claim of approval, not verified human identity (D-88, D-89).
+  attested: {profiles: [full], repos: [haynes-ops]}
+  type: credential
+  credential: {names: [hw-ssh]}
+  maxTTL: 1h
+```
+
+Known gaps, unchanged: kube and egress execution still never read `approvedBy` (D-88).
 
 **D-27. Original restricted break-glass replacement (historical).**
 
@@ -5198,3 +5261,4 @@ blocks only the step it names.
 | D-86 | `agent-run` exit `6` (unconfirmed), amending D-50's codes 0 to 5: a one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer exits `6` and is not repeated; it exits `5` only when nothing was sent; a 429 to one exits `1` | 3.5 |
 | D-87 | ADR-006 corrects ADR-005 (Q-31) after its review: the operator stops a private executor only for a Reaping Session with no owner hold, after a confirmed stop intent, never at the suspended-archive deadline; the archives are not private against v1's OPERATOR tier, the broker or the keeper, so H7 adds an archive guard; the terminal record sits beside `lastExecutor` (`executorTerminal`, with a once-only `executorMissed`); a fifth guard exception, `expiryHoldRemovalAllowed`; every HOME delete attempt re-verifies; copies of user files and unclassified agentd names are not exported | 4.4, 4.5, 5.1 |
 | D-88 | Tom 2026-10-27 23:27Z: grants may be approved on the requesting agent's attestation that it obtained user or coordinator approval, only through a GrantPolicy that names `spec.attested`, behind two default-off flags; an unverified claim, not human identity; fail closed on a broker rollback | 6.12 |
+| D-89 | hw-ssh credential grants lease the existing static shared key into the pod (default off, keeper exec of a fixed script into a tmpfs lease dir); not a CA certificate, not revocable, not contained; works in unchanged 2.45 pods via `HW_SSH_KEY`; CA certificates are the follow-up | 6.12 |

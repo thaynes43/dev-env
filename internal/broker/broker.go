@@ -102,6 +102,10 @@ type Broker struct {
 	// EnableProxmoxGrants permits new PVE execution requests. Existing jobs
 	// still clean up when this is disabled.
 	EnableProxmoxGrants bool
+	// EnableHWSSHGrants permits new hw-ssh credential requests (D-89): the static
+	// shared key is leased into the pod. Existing jobs still clean up when this is
+	// disabled. Removing the lease is not revocation of the key.
+	EnableHWSSHGrants bool
 	// EnableAttestedGrants lets a policy with spec.attested approve a request
 	// that carries its session's agent attestation. Off, the broker skips every
 	// attested policy and so never approves through one.
@@ -155,7 +159,7 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if g.Status.Phase.Ended() {
 		return b.retain(ctx, &g, now)
 	}
-	if err := checkCapabilities(&g, b.EnableProxmoxGrants || g.Status.Phase == v1alpha1.GrantActive, b.SessionNamespace, b.PolicyNamespace); err != nil {
+	if err := checkCapabilities(&g, b.EnableProxmoxGrants || g.Status.Phase == v1alpha1.GrantActive, b.EnableHWSSHGrants || g.Status.Phase == v1alpha1.GrantActive, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return b.end(ctx, &g, v1alpha1.GrantDenied, DeniedByBroker, err.Error(), now)
 	}
 	sess, err := b.requestingSession(ctx, &g)

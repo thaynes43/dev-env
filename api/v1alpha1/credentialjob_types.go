@@ -8,6 +8,17 @@ import (
 // CredentialCleanupFinalizer holds a job until provider cleanup has completed.
 const CredentialCleanupFinalizer = LabelPrefix + "credential-cleanup"
 
+// CredentialProviderID is the nonsecret provider identity a credential's receipt
+// names: the PVE token id for proxmox, and for hw-ssh a lease name (the shared
+// key has no per-grant identity at the hosts). The broker and the keeper must
+// agree on it.
+func CredentialProviderID(c CredentialName, grant types.UID) string {
+	if c == CredentialHWSSH {
+		return "hw-ssh-lease-" + string(grant)
+	}
+	return "dev-env@pve!grant-" + string(grant)
+}
+
 // CredentialJobName binds the private execution request to an immutable grant UID.
 func CredentialJobName(uid types.UID) string { return "credential-" + string(uid) }
 
@@ -29,14 +40,15 @@ type CredentialObjectReference struct {
 
 // CredentialJobSpec is written by the broker, after approval. Keeper rechecks
 // the live grant before acting; a job is never itself an approval.
-// +kubebuilder:validation:XValidation:rule="self.credential == 'proxmox'",message="only proxmox credential execution is implemented"
 // +kubebuilder:validation:XValidation:rule="self.grant == oldSelf.grant && self.session == oldSelf.session && self.credential == oldSelf.credential && self.expiresAt == oldSelf.expiresAt",message="credential request is immutable; only release may change"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.release) && oldSelf.release) || (has(self.release) && self.release)",message="release cannot be taken back"
 type CredentialJobSpec struct {
 	Grant   CredentialObjectReference `json:"grant"`
 	Session CredentialObjectReference `json:"session"`
-	// General hw-ssh grants await the connection and revocation contract.
-	// +kubebuilder:validation:Enum=proxmox
+	// proxmox is a PVE API token the keeper mints and revokes. hw-ssh is the
+	// static shared SSH key leased into the pod's tmpfs: the keeper mints and
+	// revokes nothing at the hosts (D-89). Removing the lease is not revocation.
+	// +kubebuilder:validation:Enum=proxmox;hw-ssh
 	Credential CredentialName `json:"credential"`
 	ExpiresAt  metav1.Time    `json:"expiresAt"`
 	// +optional

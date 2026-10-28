@@ -116,8 +116,13 @@ const (
 	// CredentialProxmox is a Proxmox API token for dev-env@pve that expires
 	// with the grant, minted by the keeper over SSH with its own CA (Q-15).
 	CredentialProxmox CredentialName = "proxmox"
-	// CredentialHWSSH is an SSH certificate from the keeper's CA for hw-ssh,
-	// valid for the grant's TTL.
+	// CredentialHWSSH leases the existing static shared ed25519 hw-ssh key into
+	// the session pod's tmpfs for the grant's TTL (D-89). It is not an SSH
+	// certificate: the hosts trust no CA. Removing the lease at expiry, release
+	// or session end is not revocation and not containment: anything in the pod
+	// can copy the key while it is installed, and the key has no cryptographic
+	// expiry. Real revocation means rotating the key on every host. A CA
+	// certificate path is the stronger follow-up and needs host changes.
 	CredentialHWSSH CredentialName = "hw-ssh"
 )
 
