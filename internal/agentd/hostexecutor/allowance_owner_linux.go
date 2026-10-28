@@ -183,7 +183,7 @@ func AllowanceHelper() error {
 		return errNativeReady
 	}
 	defer func() { _ = conn.Close() }()
-	if conn.SetDeadline(time.Now().Add(15*time.Second)) != nil {
+	if conn.SetDeadline(time.Now().Add(5*time.Second)) != nil {
 		return errNativeReady
 	}
 	var req allowanceOwnerMessage
@@ -233,10 +233,20 @@ func serveAllowanceChild(conn net.Conn, cmd *exec.Cmd, expectedBinary string) er
 		_ = cleanup()
 		return errNativeReady
 	}
+	// Give the owned operation its own bounded lifetime after the handshake.
+	// These are safety bounds, not measured production service objectives.
+	if conn.SetDeadline(time.Now().Add(20*time.Second)) != nil {
+		_ = cleanup()
+		return errNativeReady
+	}
 	var stop allowanceOwnerMessage
 	err = json.NewDecoder(conn).Decode(&stop)
 	cleanupErr := cleanup()
 	if err != nil || stop.Kind != "stop" || cleanupErr != nil {
+		return errNativeReady
+	}
+	// Cleanup must not spend the acknowledgement's write budget.
+	if conn.SetWriteDeadline(time.Now().Add(5*time.Second)) != nil {
 		return errNativeReady
 	}
 	return json.NewEncoder(conn).Encode(allowanceOwnerMessage{Kind: "stopped"})

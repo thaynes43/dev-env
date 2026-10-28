@@ -3,6 +3,7 @@
 package hostexecutor
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
@@ -22,6 +23,34 @@ func TestAllowanceSyntheticNative(t *testing.T) {
 		os.Exit(0)
 	}
 }
+
+type allowanceDeadlineFixture struct {
+	net.Conn
+	operation, ack bool
+	timeout        bool
+}
+
+func (c *allowanceDeadlineFixture) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if bytes.Contains(p, []byte(`"kind":"started"`)) {
+		// Simulate a fully consumed handshake clock immediately after its reply.
+		_ = c.Conn.SetDeadline(time.Now().Add(-time.Second))
+	}
+	return n, err
+}
+func (c *allowanceDeadlineFixture) SetDeadline(deadline time.Time) error {
+	c.operation = true
+	if c.timeout {
+		return c.Conn.SetDeadline(time.Now().Add(-time.Second))
+	}
+	return c.Conn.SetDeadline(deadline)
+}
+func (c *allowanceDeadlineFixture) SetWriteDeadline(deadline time.Time) error {
+	c.ack = true
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(-time.Second))
+	return c.Conn.SetWriteDeadline(deadline)
+}
+
 func TestAllowanceSyntheticHelper(t *testing.T) {
 	if os.Getenv("OWNED_FIXTURE_HELPER") != "1" {
 		return
@@ -41,8 +70,11 @@ func TestAllowanceSyntheticHelper(t *testing.T) {
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAllowanceSyntheticNative$")
 	cmd.Env = append(os.Environ(), "OWNED_FIXTURE_NATIVE=live")
-	if err := serveAllowanceChild(conn, cmd, os.Args[0]); err != nil {
-		t.Fatal("synthetic owned child", err)
+	wrapped := &allowanceDeadlineFixture{Conn: conn, timeout: os.Getenv("OWNED_FIXTURE_TIMEOUT") == "1"}
+	err = serveAllowanceChild(wrapped, cmd, os.Args[0])
+	failure := os.Getenv("OWNED_FIXTURE_FAIL") == "1"
+	if (err != nil) != failure || !wrapped.operation || (!failure && !wrapped.ack) {
+		t.Fatal("synthetic phase deadlines", err, wrapped.operation, wrapped.ack)
 	}
 }
 func TestAllowanceDirectChildHeldUntilStop(t *testing.T) {
@@ -123,5 +155,53 @@ func TestAllowanceZombieIsNotLive(t *testing.T) {
 	}
 	if err := child.Wait(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAllowanceTimeoutAndDisconnectReapChild(t *testing.T) {
+	for _, mode := range []string{"timeout", "disconnect"} {
+		t.Run(mode, func(t *testing.T) {
+			pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, c := os.NewFile(uintptr(pair[0]), "parent"), os.NewFile(uintptr(pair[1]), "helper")
+			conn, err := net.FileConn(p)
+			_ = p.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			helper := exec.Command(os.Args[0], "-test.run=^TestAllowanceSyntheticHelper$")
+			helper.Env = append(os.Environ(), "OWNED_FIXTURE_HELPER=1", "OWNED_FIXTURE_FAIL=1")
+			if mode == "timeout" {
+				helper.Env = append(helper.Env, "OWNED_FIXTURE_TIMEOUT=1")
+			}
+			helper.ExtraFiles = []*os.File{c}
+			if err := helper.Start(); err != nil {
+				t.Fatal(err)
+			}
+			_ = c.Close()
+			defer func() {
+				_ = conn.Close()
+				if helper.ProcessState == nil {
+					_ = helper.Process.Kill()
+					_ = helper.Wait()
+				}
+			}()
+			_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+			var started allowanceOwnerMessage
+			if json.NewDecoder(conn).Decode(&started) != nil || started.Kind != "started" {
+				t.Fatal("missing start")
+			}
+			if mode == "disconnect" {
+				_ = conn.Close()
+			}
+			if err := helper.Wait(); err != nil {
+				t.Fatal("cleanup fixture", err)
+			}
+			if rootLive(started.Root) {
+				t.Fatal("child survived cleanup")
+			}
+		})
 	}
 }
