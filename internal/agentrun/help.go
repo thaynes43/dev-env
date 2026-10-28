@@ -52,6 +52,7 @@ Usage:
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
   agent-run maintenance check --input <file>      offline correlation check; a candidate is not alert deferral
   agent-run pages list|show [--from-file F|-]     look up KEEPER pages only (not all Pushover); offline
+  agent-run remind create|list|show|edit|cancel   durable reminders: Pushover when due (needs the reminders API)
   agent-run attach <name>                         attach to a session's TUI (Tom only)
   agent-run detach <name>                         detach every client from it (Tom only)
   agent-run login <name> [url|code|status]        set up an --interactive session's Claude login (Tom only)

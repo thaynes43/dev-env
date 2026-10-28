@@ -23,6 +23,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/reminders"
 )
 
 // LeaderElectionID is the keeper's Lease, in its own namespace. The keeper runs
@@ -53,6 +54,8 @@ type Options struct {
 	// it and Run does not start the notifier, so the validation error cannot
 	// stop the credential keeper.
 	Notices NoticeOptions
+	// Reminders configures the reminder scheduler (DESIGN-032); off by default.
+	Reminders RemindersOptions
 	// Interval is the longest wait between two refreshes; DefaultInterval when
 	// zero.
 	Interval time.Duration
@@ -198,6 +201,31 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		}
 		if err := mgr.Add(nf); err != nil {
 			return err
+		}
+	}
+	if o.Reminders.Enabled {
+		if !o.LeaderElect {
+			return errors.New("reminders require keeper leader election")
+		}
+		notices := o.Notices.withDefaults()
+		if !PushoverCredentialsPresent(notices.TokenFile, notices.UserFile) {
+			// Like the notifier: no credential, no scheduler, and the credential
+			// keeper still starts.
+			o.Log.Info("reminders disabled: no Pushover credentials")
+		} else {
+			ns := o.Reminders.Namespace
+			if ns == "" {
+				ns = o.Namespace
+			}
+			if err := mgr.Add(&reminders.Scheduler{
+				Client: c, Reader: c, Namespace: ns,
+				Sender:    ReminderSender{Pushover: &PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile}},
+				Every:     o.Reminders.Every,
+				MissGrace: o.Reminders.MissGrace,
+				Log:       o.Log.WithName("reminders"),
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	if o.CodexAuth.Enabled {

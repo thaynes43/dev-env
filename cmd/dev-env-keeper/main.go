@@ -125,6 +125,7 @@ type options struct {
 	codexAuth       keeper.CodexOptions
 	claudeAuth      keeper.ClaudeOptions
 	notices         keeper.NoticeOptions
+	reminders       keeper.RemindersOptions
 }
 
 func defaultPermissions() string {
@@ -177,6 +178,10 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.notices.Zone, "notice-timezone", keeper.DefaultNoticeZone, "time zone of the daytime window and the calendar day of the warning")
 	fs.StringVar(&o.notices.WindowStart, "notice-window-start", keeper.DefaultNoticeWindowStart, "the warning is sent from this local time (HH:MM)")
 	fs.StringVar(&o.notices.WindowEnd, "notice-window-end", keeper.DefaultNoticeWindowEnd, "the warning is not sent from this local time (HH:MM)")
+	fs.BoolVar(&o.reminders.Enabled, "enable-reminders", false, "run the reminder scheduler (DESIGN-032): delivers due Reminder objects by Pushover with the credential files above; needs leader election and a reviewed Role on the reminders")
+	fs.StringVar(&o.reminders.Namespace, "reminder-namespace", "", "namespace of the Reminder objects; the keeper's own namespace when empty")
+	fs.DurationVar(&o.reminders.Every, "reminder-poll", 30*time.Second, "how often the scheduler looks for due reminders")
+	fs.DurationVar(&o.reminders.MissGrace, "reminder-miss-grace", 6*time.Hour, "how late a recurring occurrence may still fire; older ones are recorded as missed")
 	fs.StringVar(&o.notices.StateConfigMap, "notice-state-configmap", keeper.DefaultNoticeStateConfigMap, "ConfigMap in the keeper's namespace that keeps the notice deduplication state")
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -249,6 +254,7 @@ func run(args []string) error {
 		CodexAuth:     o.codexAuth,
 		ClaudeAuth:    o.claudeAuth,
 		Notices:       o.notices,
+		Reminders:     o.reminders,
 		Interval:      o.interval,
 		LeaderElect:   o.leaderElect,
 		MetricsAddr:   o.metricsAddr,

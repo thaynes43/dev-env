@@ -101,6 +101,8 @@ type options struct {
 	nativeFixtureEnabled          bool
 	nativeFixtureImage            string
 	taskBudgetsEnabled            bool
+	remindersAPI                  bool
+	reminderCalendarRefs          []string
 	taskBudgetNamespace           string
 	taskBudgetWorkerImage         string
 	pilotAgent                    *controller.PilotAgent
@@ -202,6 +204,8 @@ func parseFlags(args []string) (options, error) {
 	pilot := fs.String("private-project-pilot", "", "sealed absolute-window two-session dev-env Codex integration policy; global private admission remains off")
 	canaries := fs.String("private-project-canaries", "", "strict operator-owned JSON records for at most two fixed private managed canaries")
 	fs.BoolVar(&o.managedChildDecisions, "enable-managed-child-decisions", false, "enable private recorded child decisions and same-writer native continuation")
+	fs.BoolVar(&o.remindersAPI, "enable-reminders-api", false, "serve /v1/reminders (DESIGN-032); needs the Reminder CRD installed and a reviewed Role on it")
+	reminderRefs := fs.String("reminder-calendar-refs", "", "comma-separated calendar references reminders may name, such as haynesnetwork; empty accepts no calendar target")
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
 	fs.BoolVar(&o.taskClaimsEnabled, "enable-task-claims", false, "enable immutable explicit TaskClaim ownership in the separate coordination API group")
 	claimProjects := fs.String("task-claims-read-projects", "", "explicit comma-separated projects for bounded TaskClaim metadata discovery")
@@ -432,6 +436,9 @@ func parseFlags(args []string) (options, error) {
 		}
 	} else if o.taskBudgetNamespace != "" || o.taskBudgetWorkerImage != "" || len(o.assignedTaskBudgets) > 0 {
 		return o, errors.New("task budget configuration requires explicit enable-task-budgets")
+	}
+	if o.reminderCalendarRefs, err = parseReminderCalendarRefs(o.remindersAPI, *reminderRefs); err != nil {
+		return o, err
 	}
 	pilotAgent, err := parsePilotAgent(*pilotImage, *pilotSession)
 	if err != nil {
@@ -707,6 +714,7 @@ func run(args []string) error {
 				ActivityNamespace: o.templatesNamespace,
 			},
 			PrivatePilot: o.privatePilot,
+			Reminders:    reminderConfig(o),
 			Projects:     o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
