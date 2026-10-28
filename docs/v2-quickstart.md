@@ -213,7 +213,10 @@ agent-run grant request --type egress --reason "hw-ssh" --ttl 8h --port 22 \
     --reason "why you need the shared hw-ssh key"
   agent-run grant request --type egress --fqdn haynesintelligence.haynesnetwork --port 22 \
     --ttl 1h --no-wait --reason "ssh to haynesintelligence for the hw-ssh lease"
-  agent-run grant attest <grant> --approved-by user --ref <message-id>   # once per grant
+  # once per grant. Seek your coordinator's approval first and attest it:
+  agent-run grant attest <grant> --approved-by coordinator:<session-name> --ref <id>
+  # only where the coordinator cannot approve and the user did:
+  agent-run grant attest <grant> --approved-by user --ref <id>
   ```
 
   The lease appears up to about 15 s after the grant shows Active (the keeper polls every

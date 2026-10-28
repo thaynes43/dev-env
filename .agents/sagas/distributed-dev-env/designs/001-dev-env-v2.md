@@ -4071,7 +4071,7 @@ other apps. A break-glass approval needs an Authentik login from the last 5 minu
 The page can show a request as a GrantPolicy snippet, so an approval Tom keeps
 giving becomes a standing policy through a haynes-ops PR.
 
-**D-88 (2026-10-27 America/New_York, Tom 23:27:01Z). Agent attestation for grants that a
+**D-88 (2026-10-27 America/New_York, Tom 23:27:01Z; "D-88 (attestation)", see the numbering notes in D-89). Agent attestation for grants that a
 policy names.** Tom: "No just accept what the agent says add guidance for the agent to
 seek coordinator or user approval first." This is a deliberate trust model for a home
 lab, not verified human identity, and it changes neither Q-16 nor the R-03 finding that no
@@ -4097,17 +4097,22 @@ left for a follow-up: kube and egress execution never read `approvedBy`, so the 
 point for them is `pending()` only.
 
 **D-89 (Accepted 2026-10-28 America/New_York, Tom 01:37:41Z). hw-ssh credential grants lease
-the existing static shared key, not an SSH certificate.** (Numbering note. "D-89" was first used for Q-35, "preserve v1 during archive migration",
-recorded 2026-10-13; the hw-ssh entry reused the number later. The Q-35 citers are: README rows 70
-(line 418) and the link at line 447; ADR-007 (header); backlog 11 (about line 308); design 024
-(about line 296); design 025 (lines 2194 and 2231, where "D-89's trusted-v1 boundary" means
+the existing static shared key, not an SSH certificate.** (Numbering notes. Both numbers of the two entries are reused. "D-88" was first used on
+2026-10-12 for "closed-set reason codes for private catalog bootstrap": README row 67 and the
+link at about line 445 ("D-88 links its DESIGN-006 section"), and `.agents/HANDOFF.md` (about line
+1298, PR #239). The grant-attestation entry above is the one that reused "D-88" (2026-10-27),
+so it is "D-88 (attestation)". "D-89" was first used for Q-35, "preserve v1 during archive
+migration", recorded 2026-10-13; the hw-ssh entry reused it later. The Q-35 citers are: README
+rows 70 (line 418) and the link at line 447; ADR-007 (header); backlog 11 (about line 308); design
+024 (about line 296); design 025 (lines 2194 and 2231, where "D-89's trusted-v1 boundary" means
 Q-35, NOT hw-ssh); `.agents/HANDOFF.md` (the Q-35 row, about line 3296); and
-`.agents/CLAUDE-RESUME-2026-10-13.md` (about line 160). This entry is "D-89 (hw-ssh)". The
-hw-ssh entry has the later claim to a new number; renumbering it is a FOLLOW-UP, not done
-here: it touches this entry, its index row, plan 07, the quickstart, and the "D-89" comments in
-the code and CRD descriptions that cite it (`api/v1alpha1`, `internal/keeper`,
-`internal/broker`, `internal/agentrun`, `internal/apiserver`, `cmd/`, `images/agent/tools`,
-`config/crd`).)
+`.agents/CLAUDE-RESUME-2026-10-13.md` (about line 160). This entry is "D-89 (hw-ssh)". Both
+newer entries have the later claim to a new number; renumbering them is a FOLLOW-UP, not done
+here. It touches these two entries, their index rows, plan 07, the quickstart, CLAUDE.md, the
+CHANGELOG mention, and the "D-88" and "D-89" comments in the code and CRD descriptions that cite
+them (`api/v1alpha1`, `internal/keeper`, `internal/broker`, `internal/grantattest`,
+`internal/agentrun`, `internal/apiserver`, `cmd/`, `images/agent/tools`, `config/crd`). The saga
+README decision log records both under rows 89 and 90.)
 
 Ruling. Tom was asked, as relayed, at 2026-10-28T01:27:48Z
 (Sentinel_7cdc8415acf48191808faa381f648607): "SSH delivery passed independent review and all
