@@ -30,6 +30,9 @@ func TestDecisionActualHeadlessToOwnedTTYJourney(t *testing.T) {
 		if code := RunAgent(os.Getenv("DECISION_JOURNEY_LAUNCH"), os.Stdout, make(chan os.Signal), 20*time.Millisecond); code != 0 {
 			t.Fatal("synthetic continuation refused", code)
 		}
+		if err := os.WriteFile(os.Getenv("DECISION_JOURNEY_DONE"), nil, 0o600); err != nil {
+			t.Fatal("cannot mark continuation complete", err)
+		}
 		return
 	case "native-tty":
 		terminal, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), unix.TCGETS)
@@ -124,7 +127,7 @@ while [ ! -f "$DECISION_JOURNEY_RELEASE" ] && [ "$i" -lt 100 ]; do sleep 0.05; i
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
 `)
 	env := map[string]string{"HOME": s.Home, "AGENTD_WORKSPACE_ID": s.WorkspaceID, protocol.PodUIDEnv: s.PodUID, "AGENTD_ENABLE_CODEX_TASKS": "true", "AGENTD_ENABLE_CHILD_DECISIONS": "true", "AGENTD_REMOTE_BASE": s.RemoteBase,
-		"AGENTD_CODEX_ACCESS_FILE": s.CodexAccessFile, "DECISION_JOURNEY_RECEIPT": receipt, "DECISION_JOURNEY_SPAWNS": spawns, "DECISION_JOURNEY_PROMPTS": prompts, "DECISION_JOURNEY_RELEASE": release, "DECISION_JOURNEY_THREAD": receipt + ".thread", "DECISION_JOURNEY_TESTBIN": testbin, "GOMAXPROCS": "1", "PATH": "/usr/bin:/bin"}
+		"AGENTD_CODEX_ACCESS_FILE": s.CodexAccessFile, "DECISION_JOURNEY_RECEIPT": receipt, "DECISION_JOURNEY_SPAWNS": spawns, "DECISION_JOURNEY_PROMPTS": prompts, "DECISION_JOURNEY_RELEASE": release, "DECISION_JOURNEY_THREAD": receipt + ".thread", "DECISION_JOURNEY_DONE": receipt + ".done", "DECISION_JOURNEY_TESTBIN": testbin, "GOMAXPROCS": "1", "PATH": "/usr/bin:/bin"}
 	data, _ := json.Marshal(sess)
 	env[protocol.SessionEnv] = string(data)
 	env[protocol.SessionFileEnv] = ""
@@ -143,14 +146,20 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 	}
 	path := writeLaunch(t, s, first)
 	done := make(chan int, 1)
+	finished := make(chan struct{})
 	signals := make(chan os.Signal, 1)
-	go func() { done <- RunAgent(path, &syncBuffer{}, signals, 20*time.Millisecond) }()
+	go func() { defer close(finished); done <- RunAgent(path, &syncBuffer{}, signals, 20*time.Millisecond) }()
 	t.Cleanup(func() {
 		select {
 		case signals <- os.Interrupt:
 		default:
 		}
 		_ = os.WriteFile(release, nil, 0o600)
+		select {
+		case <-finished:
+		case <-time.After(8 * time.Second):
+			t.Error("initial fixture did not finish cleanup")
+		}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -211,6 +220,8 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
 		t.Fatal("recorded answer did not resume exact owned native thread", err)
 	}
 	waitFixtureFile(t, ctx, receipt)
+	// The native receipt precedes RunAgent recording its exit in .agentd.
+	waitFixtureFile(t, ctx, receipt+".done")
 	received, err := os.ReadFile(receipt)
 	if err != nil || !strings.HasPrefix(string(received), "\x1b[200~") || !strings.HasSuffix(string(received), "\x1b[201~\r") || strings.Count(string(received), "\r") != 1 || !strings.Contains(string(received), answer.Text) {
 		t.Fatal("actual terminal did not receive exact framed answer and one Enter")
