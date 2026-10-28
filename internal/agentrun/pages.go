@@ -27,6 +27,9 @@ const pagesDefaultLimit = 20
 //
 //	kubectl -n dev-env-system get cm dev-env-keeper-notices -o json | agent-run pages list
 func (a *app) pages(ctx context.Context, args []string) error {
+	if isAlertmanagerSource(args) {
+		return a.pagesAlertmanager(ctx, args)
+	}
 	err := a.pagesRun(ctx, args)
 	var ee *exitError
 	if errors.As(err, &ee) && (ee.code == ExitUsage || ee.code == ExitFailed) {
