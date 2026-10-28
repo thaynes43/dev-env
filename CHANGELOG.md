@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.56.0](https://github.com/thaynes43/dev-env/compare/v2.55.0...v2.56.0) (2026-10-28)
+
+
+### Features
+
+* **pages:** add bounded Gatus current-check snapshot parser ([#610](https://github.com/thaynes43/dev-env/issues/610)) ([7dcc453](https://github.com/thaynes43/dev-env/commit/7dcc453e11447c7687b181943a8f36e91a8e8b09))
+* **usage:** qualify native Codex allowance reader ([#611](https://github.com/thaynes43/dev-env/issues/611)) ([c750aa8](https://github.com/thaynes43/dev-env/commit/c750aa86c10193de9c7cfa872b83a09046c3397e))
+
 ## [2.55.0](https://github.com/thaynes43/dev-env/compare/v2.54.0...v2.55.0) (2026-10-28)
 
 
