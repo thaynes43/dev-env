@@ -219,3 +219,7 @@ DST, coverage text); keeper tests (write-ahead order, outcome classes, retry
 without a duplicate, an unusable record changes no send, requests identical with
 and without the record); CLI tests (Unknown, banner, coverage, filters, JSON).
 Installed and accepted states are not claimed: they wait for the keeper release.
+
+## 9. Alertmanager snapshot PoC (2026-10-28)
+
+A separate, explicit `--source alertmanager` path accepts a caller-supplied current API v2 snapshot for offline `pages list` and `pages show`, with text, JSON, and local HTML output. It does not alter the keeper source or its coverage. The snapshot is not notification or delivery history, and cannot establish disposition or recurrence; those remain Unknown. Observation time and source are caller assertions, not verified provenance. Input failure is Unavailable, not an empty successful observation. Bounds, filtering, link handling and usage are documented in [the PoC guide](../../../../docs/alertmanager-pages-poc.md). This is source and offline test evidence only, not deployed or accepted portal integration.
