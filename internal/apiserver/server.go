@@ -70,6 +70,11 @@ type Server struct {
 	// PortalLaunchRepos is the set of repositories the portal may launch a
 	// constrained session in. Nil or empty disables the launch endpoint.
 	PortalLaunchRepos map[string]struct{}
+	// PortalConversationUsage adds each interactive session's measured
+	// conversation usage to the portal reader's activity view. Default off: an
+	// older portal's strict decoder refuses the extra key, so the operator sends
+	// it only after the portal that reads it is rolled.
+	PortalConversationUsage bool
 	// PortalLaunchProfile is the templates profile every launched session runs
 	// on. The request cannot choose it. Empty makes the launch route refuse.
 	PortalLaunchProfile string

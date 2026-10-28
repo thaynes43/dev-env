@@ -493,7 +493,13 @@ type PortalSessionActivity struct {
 	LaunchedBy     string               `json:"launchedBy,omitempty"`
 	TaskResult     string               `json:"taskResult,omitempty"`
 	RemoteControl  *PortalRemoteControl `json:"remoteControl,omitempty"`
-	Usage          PortalSessionUsage   `json:"usage"`
+	// ConversationUsage is the registered interactive conversation's measured
+	// usage. It is sent only when the operator is started with
+	// --portal-conversation-usage, because an older portal refuses an unknown
+	// activity key. It is separate from Usage, the headless task's first
+	// invocation, and the two are never added.
+	ConversationUsage *PortalConversationUsage `json:"conversationUsage,omitempty"`
+	Usage             PortalSessionUsage       `json:"usage"`
 }
 
 // PortalRemoteControlURLPattern is the one shape of a Remote Control link the
@@ -504,6 +510,31 @@ const PortalRemoteControlURLPattern = `^https://claude\.ai/code/session_[A-Za-z0
 // PortalRemoteControlStatePattern is the shape of a Remote Control state word
 // such as registered, starting or pair-code-issued.
 const PortalRemoteControlStatePattern = `^[a-z][a-z-]{0,31}$`
+
+// PortalConversationUsage is DESIGN-029's allowlist of a session's measured
+// conversation usage: the result word and reason, the per-served-model counters,
+// the counts and when it was observed. It carries no path, no id, no record text,
+// no requested model and no cost. Unknown is not sent: the key is absent. Each
+// counter keeps Reported apart from Unknown, and for Codex input already
+// includes the cached tokens.
+type PortalConversationUsage struct {
+	// ResultState is Final or Partial. Partial always has a ReasonCode.
+	ResultState string                         `json:"resultState"`
+	ReasonCode  string                         `json:"reasonCode,omitempty"`
+	Models      []PortalConversationModelUsage `json:"models"`
+	Turns       int64                          `json:"turns"`
+	Skipped     int64                          `json:"skipped"`
+	ObservedAt  time.Time                      `json:"observedAt"`
+}
+
+// PortalConversationModelUsage is one served model's counters.
+type PortalConversationModelUsage struct {
+	Model                    string                    `json:"model"`
+	InputTokens              protocol.TokenObservation `json:"inputTokens"`
+	OutputTokens             protocol.TokenObservation `json:"outputTokens"`
+	CacheReadInputTokens     protocol.TokenObservation `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens protocol.TokenObservation `json:"cacheCreationInputTokens"`
+}
 
 // PortalRemoteControl is a session's Remote Control entry as the portal may see
 // it: the state word and, only when it has the exact claude.ai shape, the link.

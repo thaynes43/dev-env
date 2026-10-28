@@ -86,7 +86,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 		"Output":                           "0",
 		"Cache read":                       "5,000",
 		"Cache create":                     "Unknown",
-		"Cost estimate":                    "0.75 USD (CLI-equivalent estimate, not a charge)",
+		"Cost estimate":                    "0.75 USD (CLI-equivalent list-price estimate, not a charge)",
 		"UID":                              "uid-worker",
 	} {
 		if got := rowFields(worker)[label]; got != want {
@@ -132,7 +132,7 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(body)
-	for _, want := range []string{"Initial invocations only", "can overlap input; never added", "not a charge", "Unknown is never counted as zero", `href="#s1"`, `id="usage"`, "Account allowance", "Not connected", "By how sessions ran", "By provider and requested model", "By project"} {
+	for _, want := range []string{"Initial invocations only", "Claude reports them apart from input; Codex input already includes them. Never added to input", "not a charge", "Unknown is never counted as zero", `href="#s1"`, `id="usage"`, "Account allowance", "Not connected", "By how sessions ran", "By provider and requested model", "By project"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered page lacks %q", want)
 		}
@@ -403,5 +403,35 @@ func TestSessionRemoteControlLinkAndState(t *testing.T) {
 	}
 	if strings.Contains(string(bad), "Open in Claude") || strings.Contains(string(bad), "javascript") {
 		t.Fatal("a non-https header link rendered")
+	}
+}
+
+// The task Usage panel says how the session's own provider counts cache reads:
+// Claude apart from input, Codex inside it, and nothing when the provider is
+// not reported.
+func TestTaskUsageNoteNamesHowTheProviderCountsCacheReads(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	withProvider := func(p string) string {
+		return strings.Replace(reportedActivity, `"mode":"task",`, `"mode":"task","provider":"`+p+`",`, 1)
+	}
+	decoded, err := decodeSessionPage([]byte(activityPage(activityRow("claude", withProvider("claude")), activityRow("codex", withProvider("codex")), activityRow("none", reportedActivity))), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{})
+	for name, want := range map[string]string{
+		"claude": "Counters are reported separately; Claude reports cache reads apart from input. Nothing is added.",
+		"codex":  "Counters are reported separately; Codex input already includes cache reads. Nothing is added.",
+		"none":   "Counters are reported separately. Nothing is added.",
+	} {
+		var note string
+		for _, s := range findRow(t, page, name).Sections {
+			if s.Title == "Usage" {
+				note = s.Note
+			}
+		}
+		if note != want {
+			t.Errorf("%s: %q", name, note)
+		}
 	}
 }

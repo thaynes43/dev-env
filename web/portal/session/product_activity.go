@@ -17,8 +17,9 @@ import (
 )
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
-// lastActivity, provider, launchedBy, taskResult and remoteControl are optional
-// (an operator before 2026-10-27 sends none of the last four); a null, an unknown key or a
+// lastActivity, provider, launchedBy, taskResult, remoteControl and
+// conversationUsage are optional (an operator before 2026-10-27 sends none of the
+// last four, and one without --portal-conversation-usage sends no conversationUsage); a null, an unknown key or a
 // word outside its fixed set makes the whole read unavailable. Usage covers
 // task sessions only, so any other mode must carry an Unknown usage scope,
 // which in turn carries no reported value, and no task result.
@@ -28,7 +29,7 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	if err != nil {
 		return a, err
 	}
-	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl") {
+	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl", "conversationUsage") {
 		return a, portal.ErrUnavailable
 	}
 	a.Provider = protocol.UsageUnknown
@@ -55,6 +56,16 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 		a.RemoteControl = rc
 	}
 	mode, ok1 := jsonString(obj["mode"])
+	if raw, ok := obj["conversationUsage"]; ok {
+		// Optional, so a portal rolled before the operator that sends it still reads
+		// the view; but when it is there it must be exact, and it belongs to an
+		// interactive session of a provider it measures.
+		cu, err := decodeConversationUsage(raw, a.Provider, mode, now)
+		if err != nil {
+			return a, err
+		}
+		a.ConversationUsage = cu
+	}
 	state, ok2 := jsonString(obj["agentState"])
 	model, ok3 := jsonString(obj["requestedModel"])
 	if !ok1 || !ok2 || !ok3 || !oneOf(mode, "task", "local", "remote", protocol.UsageUnknown) ||
@@ -376,7 +387,7 @@ func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
 // sessionsPage builds the Sessions page for one filter. The rail counts cover
 // the whole read; the list and the Usage view cover the filtered sessions.
 // Usage sums reported values per group only: Unknown is never counted as zero
-// and cache reads stay a separate subset of input.
+// and cache reads are never added to input.
 func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time, filter portal.ProductFilter) portal.ProductPage {
 	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete, Filter: filter}
 	group := make([]int, len(sessions))
@@ -471,7 +482,7 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 			{Label: "Not measured", Value: "Interactive sessions, later turns"},
 			{Label: "Account allowance", Value: "Separate; no allowance collector is connected"},
 			{Label: "Served model", Value: "Provider reported, where measured"},
-			{Label: "Cache read tokens", Value: "A subset that can overlap input; never added to it"},
+			{Label: "Cache read tokens", Value: cacheReadCoverage},
 			{Label: "Cost", Value: "CLI-equivalent list-price estimate, not a charge; Unavailable where the provider reports none"},
 			{Label: "Totals", Value: "Sums of reported values per group; Unknown is never counted as zero"},
 		},
@@ -488,9 +499,10 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	if selected >= maxListedSessions {
 		drop = maxListedSessions - 1
 	}
+	byConversation := map[string]*conversationTotal{}
 	byDriver := map[string]*usageTotal{"Interactive": {}, "Headless": {}, protocol.UsageUnknown: {}}
 	byModel, byProject := map[string]*usageTotal{}, map[string]*usageTotal{}
-	measured, interactive, headless := 0, 0, 0
+	measured, interactive, headless, conversations := 0, 0, 0, 0
 	for i, e := range kept {
 		id := "s" + strconv.Itoa(i+1)
 		usageRow, ok := sessionUsageRow(id, e.s)
@@ -513,6 +525,17 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 		case "Headless":
 			headless++
 		}
+		if c := a.ConversationUsage; c != nil {
+			conversations++
+			stale := conversationStale(c, now)
+			for _, m := range c.Models {
+				key := shown(a.Provider) + " · " + shown(m.Model)
+				if byConversation[key] == nil {
+					byConversation[key] = &conversationTotal{}
+				}
+				byConversation[key].add(m, c.ResultState == protocol.ConversationPartial, stale)
+			}
+		}
 		modelKey := shown(a.Provider) + " · " + shown(a.RequestedModel)
 		for _, t := range []*usageTotal{byDriver[driver], totalFor(byModel, modelKey), totalFor(byProject, e.s.Repo)} {
 			t.add(a.Usage)
@@ -533,16 +556,29 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	columns := func(first string) []string {
 		return []string{first, "Sessions", "Measured", "Input", "Output", "Cache read", "Cache create", "Est. cost"}
 	}
-	driverTable := portal.ProductUsageTable{Title: "By how sessions ran", Note: "Interactive sessions are listed but not measured.", Columns: columns("How it ran")}
+	// Without a conversation figure the page covers initial invocations only,
+	// and says so once in its scope. With one, every initial-invocation table
+	// names its scope, and the conversation table comes first, apart from them.
+	hasConversation := len(byConversation) > 0
+	title := func(short, scoped string) string {
+		if hasConversation {
+			return scoped
+		}
+		return short
+	}
+	driverTable := portal.ProductUsageTable{Title: title("By how sessions ran", "Initial invocations by how sessions ran"), Note: "Interactive sessions are listed but not measured.", Columns: columns("How it ran")}
 	for _, name := range []string{"Interactive", "Headless", protocol.UsageUnknown} {
 		if t := byDriver[name]; t.sessions > 0 {
 			driverTable.Rows = append(driverTable.Rows, t.row(name))
 		}
 	}
 	usage.Breakdowns = append(usage.Breakdowns, driverTable,
-		portal.ProductUsageTable{Title: "By provider and requested model", Columns: columns("Provider · model"), Rows: totalRows(byModel)})
+		portal.ProductUsageTable{Title: title("By provider and requested model", "Initial invocations by provider and requested model"), Columns: columns("Provider · model"), Rows: totalRows(byModel)})
 	if filter.Project == "" {
-		usage.Breakdowns = append(usage.Breakdowns, portal.ProductUsageTable{Title: "By project", Columns: columns("Project"), Rows: totalRows(byProject)})
+		usage.Breakdowns = append(usage.Breakdowns, portal.ProductUsageTable{Title: title("By project", "Initial invocations by project"), Columns: columns("Project"), Rows: totalRows(byProject)})
+	}
+	if hasConversation {
+		conversationView(usage, byConversation, conversations, complete)
 	}
 	if len(kept) > maxListedSessions {
 		usage.RowsNote = "The " + strconv.Itoa(maxListedSessions) + " sessions listed on the left. The breakdowns above cover all " + strconv.Itoa(len(kept)) + "."
@@ -550,6 +586,10 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	page.Usage = usage
 	return page
 }
+
+// cacheReadCoverage says how each provider counts cache reads against input:
+// Claude reports them apart from input, and Codex input already includes them.
+const cacheReadCoverage = "Claude reports them apart from input; Codex input already includes them. Never added to input"
 
 // usageTotal is one breakdown group: how many sessions, how many measured,
 // and the sums of the values their providers reported.
@@ -776,7 +816,13 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 			{Label: "Cost estimate", Value: costText(u.Cost)},
 			{Label: "Scope", Value: usageScopeText(u)},
 		}
-		usage.Note = "Counters are reported separately; cache reads can overlap input. Nothing is added."
+		usage.Note = "Counters are reported separately. Nothing is added."
+		switch a.Provider {
+		case protocol.AgentClaude:
+			usage.Note = "Counters are reported separately; Claude reports cache reads apart from input. Nothing is added."
+		case protocol.AgentCodex:
+			usage.Note = "Counters are reported separately; Codex input already includes cache reads. Nothing is added."
+		}
 	}
 	lastSeen := activityTime(a.LastActivity)
 	if a.LastActivity != nil {
@@ -796,6 +842,12 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	// Usage panel rather than a panel of Unknowns.
 	if u.Scope == protocol.UsageInitial {
 		out.Sections = append([]portal.ProductSection{usage}, out.Sections...)
+	}
+	// An interactive session's measured conversation usage is its own panel,
+	// apart from a task's initial invocation, which it never shares a session with.
+	if section, ok := conversationUsageSection(a, now); ok {
+		out.Sections = append([]portal.ProductSection{section}, out.Sections...)
+		out.Meta = conversationMeta(a.ConversationUsage, now)
 	}
 	runs := sessionDriver(a.Mode)
 	if runs != protocol.UsageUnknown {
@@ -925,7 +977,7 @@ func costText(c protocol.CostObservation) string {
 	if c.State != protocol.UsageReported || !c.Valid() {
 		return "Unknown"
 	}
-	return c.Amount + " USD (CLI-equivalent estimate, not a charge)"
+	return c.Amount + " USD (CLI-equivalent list-price estimate, not a charge)"
 }
 
 // groupDigits writes a non-negative decimal integer with thousands separators.

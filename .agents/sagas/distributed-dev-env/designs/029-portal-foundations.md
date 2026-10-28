@@ -785,3 +785,85 @@ Unit A's measurement now runs and is stored. The portal does not show it yet.
 - **What is still an assumption.** That Claude Code repeats usage per content block and
   its output counter only grows (seen on 2.1.296), and the Codex `token_count` shape, are
   encoded in synthetic fixtures. No published schema for either has been checked in.
+
+### Interactive conversation usage, Unit B milestone 2 (reader and view model), 2026-10-28
+
+The portal reader can now carry each interactive session's measured conversation
+usage, and the portal maps it to a view model and renders it. The template, layout
+and copy are below, under "Interface".
+
+- **Rollout choice: a default-off operator flag.** The portal's activity decoder is
+  strict (`exactKeys` in `product_activity.go`; `TestActivityDecoderIsStrictAboutKeysItDoesNotKnow`
+  pins it), so a portal from before this change reads a view with an unknown
+  `conversationUsage` key as unavailable, for the whole Sessions page. The operator
+  therefore sends the key only with `--portal-conversation-usage` (requires
+  `--enable-portal-reader`), and the flag is turned on after the new portal is rolled.
+  The new portal treats the key as optional, so it reads a view from an operator that
+  does not send it, and one that does. The order is: CRD (already), operator
+  (flag off), portal, then the flag.
+- **Operator allowlist.** The key carries `resultState` (Final or Partial), `reasonCode`
+  (Partial only), per-served-model counters (Reported or Unknown), `turns`, `skipped`
+  and `observedAt`, and nothing else: no coverage or semantics words, no provider (the
+  activity already has it), no path, id, record text, requested model or cost. It is
+  sent only for an interactive session whose stored figure is valid for the session's own
+  provider and is not Unknown; a task session, an invalid figure and an Unknown one send
+  no key. A time ahead of the operator's clock is sent as now.
+- **Portal decoder.** Exactly those keys, re-checked with the same `Valid()` the agentd
+  measurement and the operator's heartbeat use, for an interactive session of Claude or
+  Codex. Anything else makes the read unavailable, like the other optional activity keys.
+  A time a little ahead of the portal's clock is clamped to now.
+- **View model.** Measured conversation usage is its own panel on the session ("Conversation
+  usage": result with the reason, when it was measured, freshness, provider calls counted,
+  records skipped, and each served model's counters on a line) and its own table in the
+  Usage view, grouped by provider and served model. Providers never share a row, so Codex's
+  input (which includes cached tokens) is never added to Claude's, and nothing is added to
+  a task's initial invocation. An Unknown or absent counter is never shown as zero; a
+  Reported zero is.
+- **Stale.** A figure older than 15 minutes (three of agentd's five-minute measurements)
+  is marked stale, by the portal's clock at read time. The figure is not hidden.
+- **Still not shown:** a cost, a charge, an allowance or a quota. The Usage view's task-only
+  wording (scope, coverage and the interactive "not measured" notes) changes only when a
+  figure is present.
+- **Interface, 2026-10-28.** The panel and table use the existing components (badge,
+  key-value list, table, note) and tokens; there is still no script and no inline style.
+  The generic panel gained two optional parts: state lines (a badge and one sentence)
+  and a table, in the order states, tiles, table, fields, note.
+  - *Panel.* Two state lines: Final ("Every complete usage record was counted, as of
+    the measured time.") or Partial (amber; the reason in one plain sentence, then "The
+    counts shown are a lower bound." when any counter is Reported; a model split, whose
+    counters are all Unknown, has no bound to state), and Current ("Measured within the last 15 minutes.") or Stale
+    (amber; "Older than 15 minutes, so it may be behind the conversation."). A stale
+    figure is still shown. Then one table row per served model (Input, Output, Cache
+    read, Cache create; Unknown dimmed, a Reported zero as 0), when it was measured,
+    provider calls counted, records skipped, and a note: provider-reported token counts
+    for the registered conversation, cumulative to the measured time, not a cost or a
+    charge. For Codex the note says its input already includes cache reads. No price is
+    shown. The list item reads "Conversation: In … · Out …" (or "Conversation: N
+    models"), then "partial" and "stale" when they apply.
+  - *Usage view.* With a figure present, the conversation table comes first, before the
+    initial-invocation tables, whose titles then name their scope ("Initial invocations
+    by …", and "Initial invocations by session"). Its rows add Partial and Stale counts,
+    and a row's line says "Lower bound" or "May be behind". The scope chip reads
+    "Initial invocations and conversations", the Interactive stat counts the sessions
+    with conversation usage, and the coverage panel gains a Conversations line and says
+    that conversations carry no price. The account allowance stays "Not connected".
+    Without a figure, the page reads as before.
+  - *Fixture.* The committed Sessions fixture has a Final and current Claude session
+    with two served models, a Partial Claude session, and a stale Codex session.
+  - *Reasons.* Every reason code `Valid()` accepts on a Partial has its own sentence,
+    and a test reads the protocol's Reason constants so a new code cannot go unworded.
+    agentd sends only five as Partial (skipped records, missing counters, a model
+    split, a counter reset, a delta mismatch); the other nine it sends as Unknown,
+    which the operator never forwards, and each is worded for a figure missing a
+    part. A code with no wording still shows as itself.
+  - *Final is not every line.* Final counts every complete usage record. Lines that
+    are not usage records, API-error and synthetic records, a half-written last line
+    and lines appended after the scan opened the file are not counted.
+  - *Assumption, not checked against a live transcript:* the registered conversation's
+    transcript may not include a Claude subagent's transcript when Claude Code keeps it
+    in a separate file, so a Final figure may leave out subagent usage.
+  - *Cache reads.* Claude reports cache reads apart from input; Codex input already
+    includes them. The coverage panel and the task Usage panel's note now say so per
+    provider, replacing "a subset that can overlap input".
+  - *No version number.* The copy says "an older agent". Measurement reaches a session
+    only on an agent image from the first release after 2.50.0.

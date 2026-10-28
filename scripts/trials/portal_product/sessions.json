@@ -55,6 +55,7 @@
     "freshness": "observed",
     "activity": {
      "mode": "remote",
+     "provider": "claude",
      "agentState": "idle",
      "requestedModel": "claude-opus-5-5",
      "usage": {
@@ -82,6 +83,51 @@
      "remoteControl": {
       "state": "registered",
       "url": "https://claude.ai/code/session_FIXTURE00000000000000"
+     },
+     "conversationUsage": {
+      "resultState": "Final",
+      "models": [
+       {
+        "model": "claude-haiku-4-5",
+        "inputTokens": {
+         "state": "Reported",
+         "amount": 3112
+        },
+        "outputTokens": {
+         "state": "Reported",
+         "amount": 1048
+        },
+        "cacheReadInputTokens": {
+         "state": "Reported",
+         "amount": 0
+        },
+        "cacheCreationInputTokens": {
+         "state": "Unknown"
+        }
+       },
+       {
+        "model": "claude-opus-5-5",
+        "inputTokens": {
+         "state": "Reported",
+         "amount": 18420
+        },
+        "outputTokens": {
+         "state": "Reported",
+         "amount": 52310
+        },
+        "cacheReadInputTokens": {
+         "state": "Reported",
+         "amount": 4812600
+        },
+        "cacheCreationInputTokens": {
+         "state": "Reported",
+         "amount": 391220
+        }
+       }
+      ],
+      "turns": 214,
+      "skipped": 0,
+      "observedAt": "2026-10-26T14:56:00Z"
      }
     }
    },
@@ -137,6 +183,7 @@
     "freshness": "observed",
     "activity": {
      "mode": "local",
+     "provider": "claude",
      "agentState": "waiting",
      "requestedModel": "claude-opus-5-5",
      "usage": {
@@ -160,7 +207,35 @@
        "kind": "Unknown"
       }
      },
-     "lastActivity": "2026-10-26T14:57:00Z"
+     "lastActivity": "2026-10-26T14:57:00Z",
+     "conversationUsage": {
+      "resultState": "Partial",
+      "reasonCode": "skipped_records",
+      "models": [
+       {
+        "model": "claude-opus-5-5",
+        "inputTokens": {
+         "state": "Reported",
+         "amount": 6230
+        },
+        "outputTokens": {
+         "state": "Reported",
+         "amount": 14870
+        },
+        "cacheReadInputTokens": {
+         "state": "Reported",
+         "amount": 1204300
+        },
+        "cacheCreationInputTokens": {
+         "state": "Reported",
+         "amount": 88410
+        }
+       }
+      ],
+      "turns": 37,
+      "skipped": 2,
+      "observedAt": "2026-10-26T14:52:00Z"
+     }
     }
    },
    {
@@ -200,6 +275,68 @@
       }
      },
      "lastActivity": "2026-10-26T14:29:00Z"
+    }
+   },
+   {
+    "name": "fixture-codex-pair",
+    "uid": "fixture-uid-codex-pair",
+    "repo": "dev-env",
+    "phase": "Suspended",
+    "observedAt": "2026-10-26T12:45:00Z",
+    "freshness": "observed",
+    "activity": {
+     "mode": "local",
+     "provider": "codex",
+     "agentState": "exited",
+     "requestedModel": "gpt-6-astra",
+     "usage": {
+      "scope": "Unknown",
+      "resultState": "Unknown",
+      "servedModels": [],
+      "inputTokens": {
+       "state": "Unknown"
+      },
+      "outputTokens": {
+       "state": "Unknown"
+      },
+      "cacheReadInputTokens": {
+       "state": "Unknown"
+      },
+      "cacheCreationInputTokens": {
+       "state": "Unknown"
+      },
+      "cost": {
+       "state": "Unknown",
+       "kind": "Unknown"
+      }
+     },
+     "lastActivity": "2026-10-26T12:40:00Z",
+     "conversationUsage": {
+      "resultState": "Final",
+      "models": [
+       {
+        "model": "gpt-6-astra",
+        "inputTokens": {
+         "state": "Reported",
+         "amount": 1284500
+        },
+        "outputTokens": {
+         "state": "Reported",
+         "amount": 41200
+        },
+        "cacheReadInputTokens": {
+         "state": "Reported",
+         "amount": 1102000
+        },
+        "cacheCreationInputTokens": {
+         "state": "Unknown"
+        }
+       }
+      ],
+      "turns": 58,
+      "skipped": 0,
+      "observedAt": "2026-10-26T12:41:00Z"
+     }
     }
    },
    {

@@ -160,6 +160,11 @@ svg.i { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentCo
 .kv dt { color: var(--muted); padding-right: 12px; }
 .kv dd { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .note { margin-top: 10px; color: var(--muted); font-size: 10.5px; }
+.panel-states { display: grid; gap: 6px; margin-bottom: 12px; }
+.panel-states li { display: grid; grid-template-columns: 5rem minmax(0, 1fr); align-items: baseline; gap: 8px; color: var(--muted); font-size: 11px; }
+.panel-states .badge { justify-self: start; }
+.panel-table { margin-bottom: 12px; }
+.panel-table td:first-child { font-family: var(--mono); overflow-wrap: anywhere; }
 .inspector { min-width: 0; padding: 22px 20px; border-left: 1px solid var(--line); background: var(--bg); }
 .inspector h3 { margin-bottom: 12px; font-size: 11px; font-weight: 650; }
 .inspector .kv { grid-template-columns: minmax(0, 1fr); border: 0; }
@@ -305,6 +310,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .kv { grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); }
   .kv dt, .kv dd { font-size: 12.5px; }
   .note { font-size: 12px; }
+  .panel-states li { font-size: 12px; }
   .messages .history, .gate { font-size: 12.5px; }
   .turns { max-height: none; overflow: visible; }
   .turn-text { font-size: 13.5px; }

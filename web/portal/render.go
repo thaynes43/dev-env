@@ -102,11 +102,21 @@ type ProductStatus struct{ Text, Tone string }
 // ProductStat is one usage headline figure. A muted tone marks Unknown.
 type ProductStat struct{ Label, Value, Note, Tone string }
 
-// ProductSection is one panel of a row's detail: optional tiles, key-value
-// rows and one short note.
+// ProductState is one badge with a plain sentence beside it: how complete or
+// how fresh a panel's figures are.
+type ProductState struct {
+	Status ProductStatus
+	Text   string
+}
+
+// ProductSection is one panel of a row's detail: optional state lines, tiles,
+// a table, key-value rows and one short note, in that order. A table's Title is
+// its accessible caption; its rows are never linked.
 type ProductSection struct {
 	Title           string
+	States          []ProductState
 	Metrics, Fields []ProductField
+	Table           *ProductUsageTable
 	Note            string
 }
 
@@ -393,7 +403,8 @@ type ProductUsageTable struct {
 
 // ProductUsage is the Sessions page's Usage view: headline counts, account
 // allowance kept apart from token observations, breakdowns that sum reported
-// values only, the per-session table and what the numbers cover.
+// values only, the per-session table and what the numbers cover. RowsTitle
+// names the per-session table; empty reads "By session".
 type ProductUsage struct {
 	Stats            []ProductStat
 	Scope, ScopeNote string
@@ -401,6 +412,7 @@ type ProductUsage struct {
 	Breakdowns       []ProductUsageTable
 	Columns          []string
 	Rows             []ProductUsageRow
+	RowsTitle        string
 	RowsNote         string
 	Coverage         []ProductField
 }
@@ -457,6 +469,27 @@ func productTone(tone string) string {
 		return tone
 	}
 	return "muted"
+}
+
+// sectionTones returns sections with every state badge's tone in the fixed
+// set. It copies what it changes, so the caller's page is left as it was.
+func sectionTones(sections []ProductSection) []ProductSection {
+	if sections == nil {
+		return nil
+	}
+	out := make([]ProductSection, len(sections))
+	for i, s := range sections {
+		if len(s.States) > 0 {
+			states := make([]ProductState, len(s.States))
+			for j, st := range s.States {
+				st.Status.Tone = productTone(st.Status.Tone)
+				states[j] = st
+			}
+			s.States = states
+		}
+		out[i] = s
+	}
+	return out
 }
 
 type productGroupView struct {
@@ -621,6 +654,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					continue
 				}
 				row.Status.Tone = productTone(row.Status.Tone)
+				row.Sections = sectionTones(row.Sections)
 				// A header link leaves the portal: https only, or none.
 				if !strings.HasPrefix(row.Link, "https://") {
 					row.Link, row.LinkLabel = "", ""

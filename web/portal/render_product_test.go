@@ -421,3 +421,26 @@ func TestRenderLaunchResultIsFixedWordingEscapedAndFormless(t *testing.T) {
 		t.Fatalf("not escaped or an unsafe back link survived: %s", s)
 	}
 }
+
+// A panel's state lines and table render through the shared components: tones
+// held to the fixed set, text escaped, a table caption for its name, Unknown
+// cells dimmed, and the caller's page left as it was.
+func TestPanelStatesAndTableRenderEscaped(t *testing.T) {
+	section := ProductSection{Title: "Panel", States: []ProductState{{Status: ProductStatus{Text: "Stale", Tone: "wait"}, Text: "Older."}, {Status: ProductStatus{Text: "<b>x</b>", Tone: `ok" onclick="x`}, Text: "<i>y</i>"}},
+		Table: &ProductUsageTable{Title: "Rows <caption>", Columns: []string{"Name", "Count"}, Rows: []ProductUsageRow{{Name: "<script>z</script>", Cells: []ProductUsageCell{{Label: "Count", Value: "Unknown", Unknown: true}}}}}}
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []ProductGroup{{Title: "In progress", Rows: []ProductRow{{ID: "s1", Title: "one", Sections: []ProductSection{section}}}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	for _, want := range []string{`<ul class="panel-states"><li><span class="badge tone-wait">Stale</span><span>Older.</span></li><li><span class="badge tone-muted">&lt;b&gt;x&lt;/b&gt;</span><span>&lt;i&gt;y&lt;/i&gt;</span></li></ul>`,
+		`<div class="table-wrap panel-table"><table><caption class="sr-only">Rows &lt;caption&gt;</caption>`, `<td>&lt;script&gt;z&lt;/script&gt;</td><td data-label="Count" class="unknown">Unknown</td>`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rendered page lacks %q", want)
+		}
+	}
+	if strings.Contains(html, "onclick") || strings.Contains(html, "<script>") || page.Groups[0].Rows[0].Sections[0].States[1].Status.Tone != `ok" onclick="x` {
+		t.Fatal("not escaped, or the caller's page changed")
+	}
+}
