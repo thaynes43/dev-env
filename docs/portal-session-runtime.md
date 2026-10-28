@@ -266,7 +266,7 @@ A session runs on the pilot image when all of these hold:
   authenticated identity, so only that session can create such a session.
 - Its idempotency-key label equals the key. The caller sets that with
   `agent-run --idempotency-key`.
-- The agent is Claude, the mode is remote or local, and the repo is `dev-env`.
+- The agent is Claude in remote or local mode, or Codex in remote mode; the repo is `dev-env`. Codex local and task sessions are excluded.
 - It has no workspace, no project canary and no private pilot.
 
 The selection is not limited to one session. While the flags stay set, it
@@ -278,8 +278,8 @@ the pilot image at its next pod. Keeping it to one session is a procedure, not
 something the operator enforces:
 
 - Choose a key that parent has never used.
-- Use it for one session only.
-- Remove or change the flags when the pilot ends.
+- Use it for one session only; the key is a procedural one-use choice, not a lifetime enforcement mechanism.
+- Remove or change the flags when the pilot ends through the separately approved operator configuration procedure.
 
 Only the image of a matching session's own pod changes. The pod keeps
 everything else: the templates revision label, env, args, mounts, profile,
@@ -304,8 +304,9 @@ Trust model: the image is pinned by digest, from the same signed repository
 as the templates image, and the flags are a reviewed HelmRelease line. The
 pilot changes the code version of the matching sessions. It does not change
 their profile, Secrets, egress or grants. The flags select by metadata and are
-not an authorization to read history; the portal action scope is still
-required.
+not an authorization to read history or account allowance, or evidence of native
+process ownership; the applicable action scope is still required. Interactive
+sessions do not acquire an automatic TTL from this selector.
 
 ## Remote Control link in the Sessions view
 
