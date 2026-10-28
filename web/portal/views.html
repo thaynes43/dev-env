@@ -14,7 +14,7 @@
 <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5H5V6h5"/></symbol>
 </svg>
 <header class="topbar"><a class="brand" href="{{.SessionsHref}}"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>
-<nav class="top-nav" aria-label="Product sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}>Tasks</a><a href="{{.UsageHref}}">Usage</a></nav>
+<nav class="top-nav" aria-label="Product sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}>Tasks</a><a href="{{.UsageHref}}">Usage</a><a href="/portal/projects/dev-env/environments/internal/pages">Pages</a></nav>
 {{if .Preview}}<span class="demo-label">Fixture preview · sample data</span>{{end}}<span class="read-only"><span class="dot{{if .Preview}} sample{{end}}"></span>{{.Access}}</span></header>
 {{if .Banner}}<p class="banner" role="status">{{.Notice}}</p>{{end}}
 <div class="shell{{if .Selected}} selected{{end}}">
@@ -57,5 +57,5 @@
 {{end}}
 </main></div>
 <footer class="statusbar">{{if .Quiet}}<span role="status">{{.Notice}}</span>{{else}}<span>{{.Access}} portal</span>{{end}}<span class="right">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></span></footer>
-<nav class="mobile-nav" aria-label="Sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}><svg class="i"><use href="#i-tasks"/></svg>Tasks</a><a href="{{.UsageHref}}"><svg class="i"><use href="#i-bolt"/></svg>Usage</a></nav>
+<nav class="mobile-nav" aria-label="Sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}><svg class="i"><use href="#i-tasks"/></svg>Tasks</a><a href="{{.UsageHref}}"><svg class="i"><use href="#i-bolt"/></svg>Usage</a><a href="/portal/projects/dev-env/environments/internal/pages"><svg class="i"><use href="#i-inbox"/></svg>Pages</a></nav>
 </body></html>

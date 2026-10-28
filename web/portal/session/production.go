@@ -151,6 +151,10 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil || leaf.NotBefore.After(time.Now()) || !leaf.NotAfter.After(time.Now()) || !sanMatch(leaf, productionHost) {
 		return Runtime{}, errProductionConfig
 	}
+	pageScope, err := loadPagesScope(root)
+	if err != nil {
+		return Runtime{}, errProductionConfig
+	}
 	actions, err := loadActionScopes(root)
 	if err != nil {
 		return Runtime{}, errProductionConfig
@@ -227,7 +231,7 @@ func LoadProduction(root string) (Runtime, error) {
 		}
 	}
 	closeStore = false
-	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
+	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Pages: newPagesSource(pageScope, time.Now, nil), Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
 }
 
 func productSources(root string, openProjectCA, operatorCA []byte) (*SessionSource, *TaskSource, error) {

@@ -16,6 +16,7 @@ type AssemblyConfig struct {
 	Reader     portal.MetadataReader
 	Sessions   *SessionSource
 	Tasks      *TaskSource
+	Pages      *pagesSource
 	Send       SendForms
 	Launch     LaunchForms
 	FreshFor   time.Duration
@@ -59,6 +60,15 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 			authHeaders(w)
 			w.Header().Set("Location", SessionsPath)
 			w.WriteHeader(http.StatusSeeOther)
+			return
+		}
+		if r.URL.Path == pagesPath {
+			servePages(w, c.Session.bind(r), c)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, pagesPath+"/") {
+			authHeaders(w)
+			authFailure(w, portal.ErrUnavailable)
 			return
 		}
 		if r.URL.Path == SessionsPath || r.URL.Path == TasksPath {
