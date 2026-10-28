@@ -248,3 +248,112 @@ func TestGrantUseSelectsThePodContext(t *testing.T) {
 	h.mustRun(ExitFailed, "grant", "use", "grant-abc")
 	contains(t, "stderr", h.stderr.String(), "not installed")
 }
+
+// grant attest (D-88): the claim is the session's own; the CLI shows what it
+// attests before it posts and sends only the claim and the digest it showed.
+func attestRoutes(t *testing.T, h *harness, postStatus int, postBody string, seen *string) {
+	t.Helper()
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Method != http.MethodGet {
+				t.Errorf("method %s on the grant", r.Method)
+			}
+			return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","role":"dev-env-grant-workloads","namespaces":["frontend","database"],"ttl":"1h0m0s","reason":"patch","scopeDigest":"DIGEST0123456789012345678901234567890123456"}`
+		},
+		apiv1.GrantAttestationPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Method != http.MethodPost {
+				t.Errorf("method %s on the attestation", r.Method)
+			}
+			if seen != nil {
+				*seen = h.stdout.String() // what was already printed when the POST arrived
+			}
+			return postStatus, postBody
+		},
+	})
+}
+
+func TestGrantAttestUsageErrorsSendNothing(t *testing.T) {
+	h := newHarness(t)
+	attestRoutes(t, h, http.StatusCreated, `{}`, nil)
+	for _, args := range [][]string{
+		{"grant", "attest"},
+		{"grant", "attest", "grant-abc", "--ref", "m1"},                                         // no --approved-by
+		{"grant", "attest", "grant-abc", "--approved-by", "user"},                               // no --ref
+		{"grant", "attest", "grant-abc", "--approved-by", "tom", "--ref", "m1"},                 // not user or coordinator:
+		{"grant", "attest", "grant-abc", "--approved-by", "user", "--ref", "m1", "extra"},       // extra argument
+		{"grant", "attest", "not-a-grant", "--approved-by", "user", "--ref", "m1"},              // bad name
+		{"grant", "attest", "grant-abc", "--approved-by", "coordinator", "--ref", "m1"},         // coordinator needs a reference
+		{"grant", "attest", "grant-abc", "--approved-by", "user", "--ref", "m1", "--nope", "x"}, // unknown flag
+	} {
+		h.mustRun(ExitUsage, args...)
+	}
+	if n := len(h.api.requests()); n != 0 {
+		t.Fatalf("a refused command reached the API %d times", n)
+	}
+}
+
+func TestGrantAttestShowsTheScopeThenPostsTheClaim(t *testing.T) {
+	h := newHarness(t)
+	var shown string
+	attestRoutes(t, h, http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"kube","session":"task-1","ttl":"1h0m0s","reason":"patch","attestation":{"session":"task-1","approvedBy":"coordinator:meatball","ref":"msg-7","attestedAt":"2026-10-28T01:00:00Z"}}`, &shown)
+	h.mustRun(ExitOK, "grant", "attest", "grant-abc", "--approved-by", "coordinator:meatball", "--ref", "msg-7")
+	// Before the POST the command printed what it attests, with the digest and the wording.
+	contains(t, "printed before posting", shown, "attesting grant-abc", "type kube", "role dev-env-grant-workloads", "namespaces frontend,database", "ttl 1h0m0s",
+		"scope digest DIGEST0123456789012345678901234567890123456", "coordinator:meatball approved this exact grant", "not verified human identity")
+	contains(t, "stdout", h.stdout.String(), "attested", "name: grant-abc", "attestation: session/task-1 claims coordinator:meatball approved (ref msg-7)", "not verified human identity")
+	reqs := h.api.requests()
+	if len(reqs) != 2 || reqs[0].method != http.MethodGet || reqs[1].method != http.MethodPost || reqs[1].path != apiv1.GrantAttestationPath("grant-abc") {
+		t.Fatalf("requests %+v", reqs)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(reqs[1].body, &body); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"approvedBy": "coordinator:meatball", "ref": "msg-7", "scopeDigest": "DIGEST0123456789012345678901234567890123456"}
+	if len(body) != len(want) || body["approvedBy"] != want["approvedBy"] || body["ref"] != want["ref"] || body["scopeDigest"] != want["scopeDigest"] {
+		t.Fatalf("body %v, want exactly %v (no attestor or actor fields)", body, want)
+	}
+}
+
+func TestGrantAttestMapsTheRoutesAnswers(t *testing.T) {
+	errBody := func(code, msg string) string {
+		b, _ := json.Marshal(apiv1.ErrorResponse{Error: apiv1.Error{Code: code, Message: msg}})
+		return string(b)
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		exit   int
+		out    string
+	}{
+		{"200 identical retry", http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"1h0m0s","reason":"patch","attestation":{"session":"task-1","approvedBy":"user","ref":"m1"}}`, ExitOK, "attested"},
+		{"400 bad request", http.StatusBadRequest, errBody(apiv1.CodeBadRequest, "unknown field"), ExitFailed, "unknown field"},
+		{"403 not your grant", http.StatusForbidden, errBody(apiv1.CodeForbidden, "grant grant-abc belongs to another requesting session"), ExitAuth, "another requesting session"},
+		{"409 one per grant", http.StatusConflict, errBody(apiv1.CodeConflict, "grant grant-abc already carries an attestation; there is one per grant"), ExitFailed, "already carries an attestation"},
+		{"404 route off", http.StatusNotFound, errBody(apiv1.CodeNotFound, "no such route"), ExitNotFound, "no such route"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			attestRoutes(t, h, tc.status, tc.body, nil)
+			h.mustRun(tc.exit, "grant", "attest", "grant-abc", "--approved-by", "user", "--ref", "m1")
+			if tc.exit == ExitOK {
+				contains(t, "stdout", h.stdout.String(), tc.out)
+			} else {
+				contains(t, "stderr", h.stderr.String(), tc.out)
+			}
+		})
+	}
+	// An API that returns no digest cannot be attested, and nothing is posted.
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-abc"): func(*http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"1h0m0s","reason":"patch"}`
+		},
+	})
+	h.mustRun(ExitFailed, "grant", "attest", "grant-abc", "--approved-by", "user", "--ref", "m1")
+	contains(t, "stderr", h.stderr.String(), "scope digest")
+	if len(h.api.requests()) != 1 {
+		t.Fatalf("requests %+v", h.api.requests())
+	}
+}

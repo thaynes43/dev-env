@@ -6,7 +6,8 @@ package broker
 // the requesting session has recorded, through the operator's API, a statement
 // that it obtained the user's or a coordinator's approval for exactly this grant.
 // The statement is the agent's claim under delegated trust. It is NOT verified
-// human identity, and nothing here or in any message built from it says so.
+// human identity, and nothing here or in any message built from it claims that
+// it is.
 //
 // Everything is default off: without --enable-attested-grants the broker never
 // approves through an attested policy (it skips it), and standing policies are
