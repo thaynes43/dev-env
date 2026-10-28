@@ -314,7 +314,7 @@ func (e *hwsshExec) StreamWithContext(_ context.Context, o remotecommand.StreamO
 		e.failRemoves--
 		return errors.New("remove failed: transport broke")
 	}
-	if e.exit != 0 && len(e.cur) > 4 && e.cur[4] == "install" {
+	if e.exit != 0 && len(e.cur) > 4 && (e.cur[4] == "install" || e.cur[4] == "remove") {
 		return utilexec.CodeExitError{Err: errors.New("exit"), Code: e.exit}
 	}
 	return e.err

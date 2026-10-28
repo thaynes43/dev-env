@@ -328,20 +328,46 @@ func (w *credentialWorker) leaseCleanup(ctx context.Context, job *v1alpha1.Crede
 		}
 	}
 	done, err := w.removeLease(ctx, job)
+	if errors.Is(err, errRemovalRefused) {
+		// Unexpected: a pod that took the lease now refuses to remove it. Do not claim
+		// it was removed. Say so on the job, keep the finalizer and retry with backoff.
+		if job.Status.FailureCode != v1alpha1.CredentialRemovalRefused {
+			job.Status.FailureCode = v1alpha1.CredentialRemovalRefused
+			if w.Client.Status().Update(ctx, job) != nil {
+				return errors.New("could not persist credential cleanup receipt")
+			}
+		}
+		w.Log.Info("lease removal was refused by a pod that holds a lease; the job stays CleanupPending", "job", job.Name)
+		return err
+	}
 	if err != nil {
 		return err
 	}
 	if !done {
 		return errors.New("lease removal is pending and will retry")
 	}
+	if failure == v1alpha1.CredentialRemovalRefused {
+		failure = "" // the removal finally succeeded
+	}
 	return w.leaseRevoked(ctx, job, failure)
 }
 
+// errRemovalRefused: a pod that holds a lease answered the removal as incompatible.
+var errRemovalRefused = errors.New("lease removal was refused by a pod that holds a lease")
+
 // removeLease reports whether the lease is gone from every pod it could be in. It
-// asks the API about the session's pod and counts the removal complete only when
-// the exec succeeds, or the pod is gone (not found, another session's, or in a
-// terminal phase). It always targets the live pod, never the UID recorded at the
-// last receipt: after a lost receipt the lease may be in a replacement pod.
+// asks the API about the session's pod and counts the removal complete only when the
+// exec succeeds, or no lease can be in the pod: it is gone (not found, another
+// session's, a hold pod, or terminal), it never ran (phase Pending: a pod phase
+// never moves back to Pending, and the install requires Running), or the script
+// refused the removal as incompatible (exit 2 or 3) for a pod this job never
+// installed into. That last case is sound because the script's checks before any
+// write, the pod-UID environment and the argument shapes, are the same for install
+// and remove, and the pod's environment cannot change: a removal refused that way
+// means the install would have been refused first and wrote nothing. It always
+// targets the live pod, never the UID recorded at the last receipt: after a lost
+// receipt the lease may be in a replacement pod. An incompatible answer from a pod
+// the job HAS installed into is unexpected; it is not counted as removed.
 func (w *credentialWorker) removeLease(ctx context.Context, job *v1alpha1.CredentialJob) (bool, error) {
 	ref := job.Spec.Session
 	var pod corev1.Pod
@@ -359,6 +385,10 @@ func (w *credentialWorker) removeLease(ctx context.Context, job *v1alpha1.Creden
 		w.leaseOK(job.UID)
 		return true, nil
 	}
+	if pod.Status.Phase == corev1.PodPending {
+		w.leaseOK(job.UID)
+		return true, nil // never Running, so never leased
+	}
 	if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning || pod.UID == "" || w.leaseWait(job.UID) {
 		return false, nil
 	}
@@ -369,6 +399,14 @@ func (w *credentialWorker) removeLease(ctx context.Context, job *v1alpha1.Creden
 	err = w.Installer.Remove(opctx, &pod, credentialEntry{JobUID: job.UID, Spec: job.Spec})
 	cancel()
 	if err != nil {
+		if errors.Is(err, errCredentialIncompatible) {
+			if job.Status.InstalledPodUID != string(pod.UID) {
+				w.leaseOK(job.UID)
+				return true, nil
+			}
+			w.leaseFailed(job.UID)
+			return false, errRemovalRefused
+		}
 		w.leaseFailed(job.UID)
 		return false, nil
 	}

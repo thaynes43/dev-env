@@ -4121,9 +4121,19 @@ broker's cleanup-receipt annotation that copies them mean ONLY that the lease wa
 the pod, or the pod is gone. They never mean the key was revoked. That is true because the
 keeper keeps the job `CleanupPending`, with its cleanup finalizer, and retries the removal with
 backoff, and writes `Revoked` or lifts the finalizer only after a removal succeeds or the pod
-is gone (not found, another session's, or terminal). A pod that is Running is always
-targeted live, never by the UID in the last receipt: after a lost receipt the lease may be in
-a replacement pod.
+is gone or can hold no lease: not found, another session's, a hold pod, in a terminal phase,
+or in phase Pending (a pod phase never moves back to Pending, and the install needs Running, so
+it never ran). A pod that is Running is always targeted live, never by the UID in the last
+receipt: after a lost receipt the lease may be in a replacement pod. A removal the script
+refuses as incompatible (exit 2 or 3) counts as complete only for a pod this job never
+installed into (`status.installedPodUID` differs), because the script's checks before any write,
+the pod-UID environment variable and the argument shapes, are the same for install and
+remove and a pod's environment cannot change: a removal refused that way means the install
+would have been refused first and wrote nothing (a test runs the real script both ways).
+An install refused as incompatible therefore ends the job once, with failure code
+`IncompatiblePod`. An incompatible answer from a pod the job did install into is unexpected: it
+is not counted as removed; the job stays `CleanupPending` with its finalizer, failure code
+`RemovalRefused`, a log line, and the retry backoff.
 
 Mechanism. The keeper reads the Secret at install time (a new `get` on that one resourceName
 in `dev-agents`, proposed for action-time approval), checks it is a bounded, unencrypted OpenSSH
@@ -4143,7 +4153,9 @@ idempotent install and remove. A crash between the install and the status write 
 receipt; the next reconcile, on release, expiry or session end, still removes the lease from
 the live pod whatever the recorded phase (a test does exactly this). If the job object is
 force-removed with its finalizer stripped, nothing remains to retry the removal; the lease is
-then bounded by the pod's tmpfs and by the helper deleting an expired lease when it next runs.
+then bounded only by the pod's tmpfs (the pod's life), plus the new helper deleting an expired
+lease when it next runs. A 2.45 pod that uses `HW_SSH_KEY` never checks expiry, so there the pod
+is the only bound.
 
 Flags and rollback. The broker and keeper each take `--enable-hw-ssh-grants` (default off); the
 proxmox flags do not enable it and it does not enable proxmox. Rolling back: turn both

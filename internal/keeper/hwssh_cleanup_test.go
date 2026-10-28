@@ -6,6 +6,7 @@ package keeper
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -250,17 +251,131 @@ func TestHWSSHCrashBetweenInstallAndStatusStillEndsInRemoval(t *testing.T) {
 	}
 }
 
-// An incompatible pod (exit 2 or 3 from the installer) ends the job with a failure
-// code, after the removal.
-func TestHWSSHIncompatiblePodEndsWithAFailureCode(t *testing.T) {
+// An install refused as incompatible (exit 2 or 3) wrote nothing, so the removal's own
+// incompatible answer counts as complete: one install, one removal, no repeats.
+func TestHWSSHIncompatibleInstallEndsOnceWithAFailureCode(t *testing.T) {
+	for _, exit := range []int{2, 3} {
+		h := newHWSSHHarness(t)
+		h.exec.exit = exit
+		if err := h.reconcile(t); err != nil {
+			t.Fatalf("exit %d: %v", exit, err)
+		}
+		st, job := h.status(t), h.live(t)
+		if st.Phase != v1alpha1.CredentialRevoked || st.FailureCode != v1alpha1.CredentialIncompatiblePod || controllerutil.ContainsFinalizer(&job, v1alpha1.CredentialCleanupFinalizer) {
+			t.Fatalf("exit %d: status %+v finalizers %v", exit, st, job.Finalizers)
+		}
+		if len(h.exec.commands) != 2 || h.exec.commands[0][4] != "install" || h.exec.commands[1][4] != "remove" {
+			t.Fatalf("exit %d: execs %v", exit, h.exec.commands)
+		}
+		h.clock.Step(time.Hour)
+		for range 3 {
+			if err := h.reconcile(t); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(h.exec.commands) != 2 {
+			t.Fatalf("exit %d: the finished job exec'd again: %d", exit, len(h.exec.commands))
+		}
+	}
+}
+
+// A lease WAS installed in this pod, and the removal now answers incompatible: that is
+// unexpected, so it is not counted as removed. The job stays CleanupPending, keeps its
+// finalizer, says why, and retries with backoff; a later success ends it.
+func TestHWSSHIncompatibleRemovalAfterAnInstallIsNotCountedAsRemoved(t *testing.T) {
 	h := newHWSSHHarness(t)
-	h.exec.exit = 3
 	if err := h.reconcile(t); err != nil {
 		t.Fatal(err)
 	}
-	st := h.status(t)
-	if st.Phase != v1alpha1.CredentialRevoked || st.FailureCode != v1alpha1.CredentialIncompatiblePod {
-		t.Fatalf("status %+v", st)
+	if st := h.status(t); st.Phase != v1alpha1.CredentialInstalled || st.InstalledPodUID != string(testPodUID) {
+		t.Fatalf("setup: %+v", st)
+	}
+	h.release(t)
+	h.exec.exit = 3
+	if err := h.reconcile(t); !errors.Is(err, errRemovalRefused) {
+		t.Fatalf("error %v", err)
+	}
+	st, job := h.status(t), h.live(t)
+	if st.Phase != v1alpha1.CredentialCleanupPending || st.FailureCode != v1alpha1.CredentialRemovalRefused || st.RevokedAt != nil || !controllerutil.ContainsFinalizer(&job, v1alpha1.CredentialCleanupFinalizer) {
+		t.Fatalf("status %+v finalizers %v", st, job.Finalizers)
+	}
+	if !strings.Contains(h.logs.String(), "refused by a pod that holds a lease") {
+		t.Fatal("the refusal was not logged")
+	}
+	removes := len(h.removeCommands())
+	if err := h.reconcile(t); err == nil || len(h.removeCommands()) != removes {
+		t.Fatalf("retried inside the backoff: %v", err)
+	}
+	h.clock.Step(10 * time.Minute)
+	if err := h.reconcile(t); !errors.Is(err, errRemovalRefused) || len(h.removeCommands()) != removes+1 {
+		t.Fatalf("no retry after the backoff: %v removes %d", err, len(h.removeCommands()))
+	}
+	h.exec.exit = 0
+	h.clock.Step(10 * time.Minute)
+	if err := h.reconcile(t); err != nil {
+		t.Fatal(err)
+	}
+	st = h.status(t)
+	if st.Phase != v1alpha1.CredentialRevoked || st.FailureCode != "" {
+		t.Fatalf("after the removal succeeded: %+v", st)
+	}
+}
+
+// A pod that never ran cannot hold a lease: its removal needs no exec.
+func TestHWSSHRemovalOfAPodThatNeverRanIsComplete(t *testing.T) {
+	h := newHWSSHHarness(t)
+	var pod corev1.Pod
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: "dev-agents", Name: "session-example"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.Phase = corev1.PodPending
+	if err := h.c.Status().Update(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	h.release(t)
+	if err := h.reconcile(t); err != nil || h.status(t).Phase != v1alpha1.CredentialRevoked || len(h.exec.commands) != 0 {
+		t.Fatalf("err %v status %+v execs %d", err, h.status(t), len(h.exec.commands))
+	}
+}
+
+// The state rule's evidence, with the real script: every input that makes a removal
+// refuse as incompatible (exit 2 or 3) makes the install refuse the same way first
+// and write nothing, because the checks before any action are shared. So a removal
+// refused that way proves this job never leased this pod.
+func TestHWSSHRemovalRefusalImpliesTheInstallWroteNothing(t *testing.T) {
+	key, fp := syntheticKey(t, "")
+	const guid, puid = "10000000-0000-4000-8000-000000000001", "40000000-0000-4000-8000-000000000001"
+	exp := "2026-10-28T01:00:00Z"
+	for name, c := range map[string]struct {
+		podEnv string
+		grant  string
+		guid   string
+		puid   string
+		want   int
+	}{
+		"pod UID variable unset":      {"", "grant-1028-000000-abcd", guid, puid, 3},
+		"grant name not a grant":      {puid, "not-a-grant", guid, puid, 2},
+		"upper case in an identifier": {puid, "grant-1028-000000-ABCD", guid, puid, 2},
+		"unsafe grant UID":            {puid, "grant-1028-000000-abcd", "x;y", puid, 2},
+		"unsafe pod UID":              {"p$d", "grant-1028-000000-abcd", guid, "p$d", 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			xdg := t.TempDir()
+			rm := runScript(t, xdg, c.podEnv, nil, "remove", c.grant, c.guid, c.puid)
+			in := runScript(t, xdg, c.podEnv, key, "install", c.grant, c.guid, c.puid, exp, fp)
+			if rm != c.want || in != c.want {
+				t.Fatalf("remove exit %d, install exit %d, want %d for both", rm, in, c.want)
+			}
+			if entries, _ := os.ReadDir(xdg); len(entries) != 0 {
+				t.Fatalf("a refused install wrote %v", entries)
+			}
+		})
+	}
+	// A pod-UID mismatch is not an incompatibility (exit 1: retry), for both actions.
+	xdg := t.TempDir()
+	if rm, in := runScript(t, xdg, "40000000-0000-4000-8000-000000000999", nil, "remove", "grant-1028-000000-abcd", guid, puid),
+		runScript(t, xdg, "40000000-0000-4000-8000-000000000999", key, "install", "grant-1028-000000-abcd", guid, puid, exp, fp); rm != 1 || in != 1 {
+		t.Fatalf("pod mismatch: remove %d install %d", rm, in)
 	}
 }
 

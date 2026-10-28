@@ -72,7 +72,9 @@ const (
 )
 
 // CredentialFailureCode deliberately carries no raw provider or exec error.
-// +kubebuilder:validation:Enum=InvalidRequest;BackendUnavailable;MintFailed;AmbiguousMint;IncompatiblePod
+// RemovalRefused (hw-ssh only) means a pod that holds a lease refused its removal; the
+// job stays CleanupPending and the keeper retries.
+// +kubebuilder:validation:Enum=InvalidRequest;BackendUnavailable;MintFailed;AmbiguousMint;IncompatiblePod;RemovalRefused
 type CredentialFailureCode string
 
 const (
@@ -81,6 +83,7 @@ const (
 	CredentialMintFailed         CredentialFailureCode = "MintFailed"
 	CredentialAmbiguousMint      CredentialFailureCode = "AmbiguousMint"
 	CredentialIncompatiblePod    CredentialFailureCode = "IncompatiblePod"
+	CredentialRemovalRefused     CredentialFailureCode = "RemovalRefused"
 )
 
 // CredentialJobStatus is exclusively keeper-owned. Material lives only in its
