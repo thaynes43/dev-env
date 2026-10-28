@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,7 +38,8 @@ func hwsshRun(t *testing.T, leases string, env map[string]string, args ...string
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err = cmd.Run()
 	code = 0
-	if ee, ok := err.(*exec.ExitError); ok {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
 		code = ee.ExitCode()
 	} else if err != nil {
 		t.Fatal(err)

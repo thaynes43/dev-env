@@ -33,7 +33,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	utilexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -43,15 +45,21 @@ const hwsshSecretName = "dev-env-hw-ssh-secret"
 // syntheticKey returns an OpenSSH ed25519 private key file and its fingerprint.
 func syntheticKey(t *testing.T, passphrase string) (file []byte, fingerprint string) {
 	t.Helper()
+	return syntheticKeyComment(t, passphrase, "synthetic")
+}
+
+// syntheticKeyComment is a valid-shaped key with a chosen comment, to size it.
+func syntheticKeyComment(t *testing.T, passphrase, comment string) (file []byte, fingerprint string) {
+	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var block *pem.Block
 	if passphrase == "" {
-		block, err = ssh.MarshalPrivateKey(priv, "synthetic")
+		block, err = ssh.MarshalPrivateKey(priv, comment)
 	} else {
-		block, err = ssh.MarshalPrivateKeyWithPassphrase(priv, "synthetic", []byte(passphrase))
+		block, err = ssh.MarshalPrivateKeyWithPassphrase(priv, comment, []byte(passphrase))
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +69,80 @@ func syntheticKey(t *testing.T, passphrase string) (file []byte, fingerprint str
 		t.Fatal(err)
 	}
 	return pem.EncodeToMemory(block), ssh.FingerprintSHA256(sp)
+}
+
+// Each size bound bites on a key that is otherwise valid.
+func TestHWSSHKeyBoundsBiteOnValidShapedKeys(t *testing.T) {
+	enc := func(b []byte) []byte { return []byte(base64.StdEncoding.EncodeToString(b)) }
+	roomy, _ := syntheticKeyComment(t, "", strings.Repeat("c", 2000)) // about 2.5 KiB decoded
+	if _, err := parseHWSSHKey(enc(roomy)); err != nil {
+		t.Fatalf("a key inside the bounds was refused: %v", err)
+	}
+	big, _ := syntheticKeyComment(t, "", strings.Repeat("c", 5000)) // decoded over 4 KiB, encoded under 16 KiB
+	if len(big) <= hwsshMaxKey || len(enc(big)) > hwsshMaxEncoded {
+		t.Fatalf("fixture sizes: %d decoded, %d encoded", len(big), len(enc(big)))
+	}
+	if _, err := parseHWSSHKey(enc(big)); err == nil || !strings.Contains(err.Error(), "not bounded base64") {
+		t.Fatalf("the decoded-size bound did not bite: %v", err)
+	}
+	huge, _ := syntheticKeyComment(t, "", strings.Repeat("c", 14000)) // encoded over 16 KiB
+	if len(enc(huge)) <= hwsshMaxEncoded {
+		t.Fatalf("fixture sizes: %d encoded", len(enc(huge)))
+	}
+	if _, err := parseHWSSHKey(enc(huge)); err == nil || !strings.Contains(err.Error(), "missing or oversized") {
+		t.Fatalf("the encoded-size bound did not bite: %v", err)
+	}
+}
+
+// The installer never follows a symlinked lease root or directory.
+func TestHWSSHScriptRefusesSymlinkedLeasePaths(t *testing.T) {
+	key, fp := syntheticKey(t, "")
+	const grant, guid, puid = "grant-1028-000000-abcd", "10000000-0000-4000-8000-000000000001", "40000000-0000-4000-8000-000000000001"
+	exp := "2026-10-28T01:00:00Z"
+	install := func(xdg string) int { return runScript(t, xdg, puid, key, "install", grant, guid, puid, exp, fp) }
+	remove := func(xdg string) int { return runScript(t, xdg, puid, nil, "remove", grant, guid, puid) }
+	empty := func(t *testing.T, dir string) {
+		t.Helper()
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Fatalf("%s was written through a symlink: %v", dir, entries)
+		}
+	}
+
+	t.Run("symlinked root", func(t *testing.T) {
+		xdg, target := t.TempDir(), t.TempDir()
+		if err := os.Symlink(target, filepath.Join(xdg, "dev-env-hwssh")); err != nil {
+			t.Fatal(err)
+		}
+		if code := install(xdg); code != 1 {
+			t.Fatalf("install exit %d", code)
+		}
+		empty(t, target)
+		if code := remove(xdg); code != 0 {
+			t.Fatalf("remove exit %d", code)
+		}
+		empty(t, target)
+	})
+	t.Run("symlinked grant directory", func(t *testing.T) {
+		xdg, target := t.TempDir(), t.TempDir()
+		root := filepath.Join(xdg, "dev-env-hwssh")
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, grant)); err != nil {
+			t.Fatal(err)
+		}
+		if code := install(xdg); code != 1 {
+			t.Fatalf("install exit %d", code)
+		}
+		empty(t, target)
+		if code := remove(xdg); code != 0 {
+			t.Fatalf("remove exit %d", code)
+		}
+		empty(t, target) // the symlink is unlinked, its target is not touched
+		if _, err := os.Lstat(filepath.Join(root, grant)); err == nil {
+			t.Fatal("the symlink was left in place")
+		}
+	})
 }
 
 func TestHWSSHKeyIsBoundedAndValidatedBeforeAnyExec(t *testing.T) {
@@ -208,10 +290,13 @@ func TestHWSSHScriptLeasesToPrivateTmpfsFiles(t *testing.T) {
 }
 
 type hwsshExec struct {
-	mu       sync.Mutex
-	commands [][]string
-	stdins   [][]byte
-	err      error
+	mu          sync.Mutex
+	commands    [][]string
+	stdins      [][]byte
+	err         error
+	cur         []string // the command being streamed
+	failRemoves int      // this many remove commands fail before one succeeds
+	exit        int      // when set, a failed command exits with this code
 }
 
 func (e *hwsshExec) Stream(o remotecommand.StreamOptions) error {
@@ -225,6 +310,13 @@ func (e *hwsshExec) StreamWithContext(_ context.Context, o remotecommand.StreamO
 		in, _ = io.ReadAll(o.Stdin)
 	}
 	e.stdins = append(e.stdins, in)
+	if len(e.cur) > 4 && e.cur[4] == "remove" && e.failRemoves > 0 {
+		e.failRemoves--
+		return errors.New("remove failed: transport broke")
+	}
+	if e.exit != 0 && len(e.cur) > 4 && e.cur[4] == "install" {
+		return utilexec.CodeExitError{Err: errors.New("exit"), Code: e.exit}
+	}
 	return e.err
 }
 
@@ -272,6 +364,7 @@ func newHWSSHHarness(t *testing.T) *hwsshHarness {
 	ex.executor = func(_ *rest.Config, u *url.URL) (remotecommand.Executor, error) {
 		h.execURL = append(h.execURL, u)
 		h.exec.commands = append(h.exec.commands, u.Query()["command"])
+		h.exec.cur = u.Query()["command"]
 		return h.exec, nil
 	}
 	hw := &hwsshInstaller{exec: ex, reader: f.c, keySecret: types.NamespacedName{Namespace: "dev-agents", Name: hwsshSecretName}}
@@ -311,9 +404,8 @@ func TestHWSSHJobReachesInstallationWithoutAProviderMint(t *testing.T) {
 	if tty := h.execURL[0].Query().Get("tty"); tty == "true" {
 		t.Fatal("a terminal was requested")
 	}
-	e, ok := h.entry(t)
-	if !ok || e.Stage != journalMinted || !e.TokenSecret.Empty() || e.TokenID != "hw-ssh-lease-"+string(testGrantUID) {
-		t.Fatalf("journal entry %+v", e)
+	if _, ok := h.entry(t); ok {
+		t.Fatal("an hw-ssh lease wrote an entry in the shared proxmox journal")
 	}
 }
 
@@ -392,16 +484,44 @@ func TestHWSSHInstallRefusesABadKeyBeforeTheExec(t *testing.T) {
 	}
 }
 
-// Default off: with the flag off an hw-ssh job is refused and nothing is read or run.
-func TestHWSSHJobIsRefusedWhenTheFlagIsOff(t *testing.T) {
+// Default off: with the hw-ssh flag off a new job is refused and nothing is installed or
+// read, even with the PVE backend on. The only exec is the idempotent removal that
+// settles a crash between an install and its status write.
+func TestHWSSHJobIsRefusedWhenOnlyTheProxmoxFlagIsOn(t *testing.T) {
 	h := newHWSSHHarness(t)
-	h.w.HWSSHEnabled = false
+	h.w.HWSSHEnabled, h.w.Enabled = false, true
 	if err := h.reconcile(t); err != nil {
 		t.Fatal(err)
 	}
 	st := h.status(t)
-	if st.Phase != v1alpha1.CredentialRevoked || st.FailureCode != v1alpha1.CredentialBackendUnavailable || len(h.exec.commands) != 0 {
-		t.Fatalf("flag off: %+v execs %d", st, len(h.exec.commands))
+	if st.Phase != v1alpha1.CredentialRevoked || st.FailureCode != v1alpha1.CredentialBackendUnavailable {
+		t.Fatalf("flag off: %+v", st)
+	}
+	for _, c := range h.exec.commands {
+		if c[4] != "remove" {
+			t.Fatalf("a flag-off job ran %q", c[4])
+		}
+	}
+	for _, in := range h.exec.stdins {
+		if len(in) != 0 {
+			t.Fatal("key bytes went to a pod with the flag off")
+		}
+	}
+	if h.provider.creates != 0 || h.installer.installs != 0 {
+		t.Fatal("the PVE path ran for an hw-ssh job")
+	}
+}
+
+// Proxmox on, hw-ssh off: a proxmox job is unaffected.
+func TestProxmoxJobIsUnaffectedWhenHWSSHIsOff(t *testing.T) {
+	f := newCredentialFixture(t)
+	f.w.Installer = routedInstaller{proxmox: f.installer, hwssh: &hwsshInstaller{}}
+	f.w.Enabled, f.w.HWSSHEnabled = true, false
+	if err := f.reconcile(t); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.status(t); st.Phase != v1alpha1.CredentialInstalled || f.provider.creates != 1 || f.installer.installs != 1 {
+		t.Fatalf("proxmox with hw-ssh off: %+v creates %d", st, f.provider.creates)
 	}
 }
 
@@ -455,7 +575,14 @@ func TestHWSSHCleanupOnReleaseExpiryAndSessionEnd(t *testing.T) {
 				t.Fatalf("removes %d, PVE deletes %d creates %d", removes(h), h.provider.deletes, h.provider.creates)
 			}
 			if _, ok := h.entry(t); ok {
-				t.Fatal("journal entry remained")
+				t.Fatal("an hw-ssh job has a journal entry")
+			}
+			var done v1alpha1.CredentialJob
+			if err := h.c.Get(context.Background(), client.ObjectKeyFromObject(h.job), &done); err != nil {
+				t.Fatal(err)
+			}
+			if controllerutil.ContainsFinalizer(&done, v1alpha1.CredentialCleanupFinalizer) {
+				t.Fatal("the finalizer was kept after a successful removal")
 			}
 		})
 	}

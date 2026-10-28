@@ -104,7 +104,7 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 		}
 	}
 	if s.Type == v1alpha1.GrantCredential {
-		if n := s.Credential.Name; !(n == v1alpha1.CredentialProxmox && proxmox) && !(n == v1alpha1.CredentialHWSSH && hwssh) {
+		if n := s.Credential.Name; (n != v1alpha1.CredentialProxmox || !proxmox) && (n != v1alpha1.CredentialHWSSH || !hwssh) {
 			return fmt.Errorf("credential %q is unavailable: %w", s.Credential.Name, errNotBuilt)
 		}
 		if s.Requester.SessionUID == "" {

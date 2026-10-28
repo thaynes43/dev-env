@@ -55,7 +55,12 @@ type CredentialJobSpec struct {
 	Release bool `json:"release,omitempty"`
 }
 
-// CredentialJobPhase describes execution, never the grant's approval.
+// CredentialJobPhase describes execution, never the grant's approval. For an hw-ssh
+// job, Revoked and status.revokedAt (and the broker's cleanup-receipt annotation
+// that copies them) mean ONLY that the lease was removed from the pod, or the pod
+// is gone. They never mean the shared key was revoked: it stays valid on every
+// host (D-89). This is true only because the keeper keeps the job CleanupPending,
+// with its finalizer, until a removal succeeds.
 // +kubebuilder:validation:Enum=Pending;Installed;CleanupPending;Revoked
 type CredentialJobPhase string
 
@@ -93,6 +98,8 @@ type CredentialJobStatus struct {
 	InstalledPodUID string `json:"installedPodUID,omitempty"`
 	// +optional
 	InstalledAt *metav1.Time `json:"installedAt,omitempty"`
+	// RevokedAt is when cleanup finished. For hw-ssh it means only that the lease
+	// was removed from the pod, or the pod is gone; never that the key was revoked.
 	// +optional
 	RevokedAt *metav1.Time `json:"revokedAt,omitempty"`
 }

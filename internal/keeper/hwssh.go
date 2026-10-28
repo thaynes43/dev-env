@@ -27,9 +27,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -108,7 +110,9 @@ func parseHWSSHKey(encoded []byte) (hwsshKey, error) {
 //	sh -c <script> dev-env-hwssh install <grant> <grantUID> <podUID> <expiresRFC3339> <fingerprint>
 //	sh -c <script> dev-env-hwssh remove  <grant> <grantUID> <podUID>
 //
-// ($0 is the label dev-env-hwssh; the parameters are $1 and up.) The manifest is
+// ($0 is the label dev-env-hwssh; the parameters are $1 and up.) A symlinked lease
+// root or directory is refused on install (exit 1) and ignored or unlinked on
+// remove, never followed. The manifest is
 // written last and is the commit marker: a lease without one is not valid and the
 // next install or remove clears it.
 const hwsshScript = `set -eu
@@ -121,6 +125,14 @@ case $name in grant-*) ;; *) exit 2 ;; esac
 case $name$guid$puid in *[!a-z0-9-]*) exit 2 ;; esac
 base=${XDG_RUNTIME_DIR:-/dev/shm/run-$(id -u)}/dev-env-hwssh
 dir=$base/$name
+if [ -L "$base" ]; then
+  [ "$act" = remove ] && exit 0
+  exit 1
+fi
+if [ -L "$dir" ]; then
+  [ "$act" = remove ] && { rm -f "$dir"; exit 0; }
+  exit 1
+fi
 mine() { [ -f "$dir/manifest.json" ] && grep -q "\"grantUID\":\"$guid\"" "$dir/manifest.json" && grep -q "\"podUID\":\"$puid\"" "$dir/manifest.json"; }
 wipe() { rm -f "$dir/key" "$dir"/.key.* "$dir/manifest.json" "$dir"/.manifest.* && rmdir "$dir"; }
 case $act in
@@ -197,6 +209,194 @@ func (i *hwsshInstaller) Remove(ctx context.Context, pod *corev1.Pod, e credenti
 		return err
 	}
 	return i.exec.run(ctx, pod, []string{"sh", "-c", hwsshScript, "dev-env-hwssh", "remove", e.Spec.Grant.Name, string(e.Spec.Grant.UID), string(pod.UID)}, nil)
+}
+
+// leaseRetry is the in-memory backoff of one failed lease install or removal. It
+// only delays; the job's status and finalizer are the durable state.
+type leaseRetry struct {
+	failures int
+	next     time.Time
+}
+
+func (w *credentialWorker) leaseWait(uid types.UID) bool {
+	r, ok := w.leases[uid]
+	return ok && w.Clock.Now().Before(r.next)
+}
+
+func (w *credentialWorker) leaseFailed(uid types.UID) {
+	if w.leases == nil {
+		w.leases = map[types.UID]leaseRetry{}
+	}
+	r := w.leases[uid]
+	r.failures++
+	d := credentialPoll << min(r.failures, 5) // 30s, 1m, 2m, 4m, 8m, then 8m
+	r.next = w.Clock.Now().Add(min(d, 8*time.Minute))
+	w.leases[uid] = r
+}
+
+func (w *credentialWorker) leaseOK(uid types.UID) { delete(w.leases, uid) }
+
+// reconcileLease runs one hw-ssh job. It keeps no journal entry: the key is read
+// from its Secret at install time, nothing exists at a provider, and the install
+// and remove are idempotent, so the job's status and its cleanup finalizer carry
+// crash recovery. A crash between the install and the status write is cleaned up
+// by the next reconcile, which removes the lease from the live pod on release,
+// expiry or session end whatever the recorded phase. The finalizer is lifted, and
+// the phase becomes Revoked, only after the lease is removed or its pod is gone.
+func (w *credentialWorker) reconcileLease(ctx context.Context, job *v1alpha1.CredentialJob) error {
+	if job.Status.Phase == v1alpha1.CredentialRevoked {
+		return w.finishLease(ctx, job)
+	}
+	if !controllerutil.ContainsFinalizer(job, v1alpha1.CredentialCleanupFinalizer) {
+		original := job.DeepCopy()
+		controllerutil.AddFinalizer(job, v1alpha1.CredentialCleanupFinalizer)
+		if w.Client.Patch(ctx, job, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})) != nil {
+			return errors.New("could not add credential cleanup finalizer")
+		}
+	}
+	if checkCredentialSpec(job.Spec) != nil || job.Name != v1alpha1.CredentialJobName(job.Spec.Grant.UID) || job.Spec.Grant.Namespace != w.SessionNamespace || job.Spec.Session.Namespace != w.SessionNamespace {
+		return w.leaseRevoked(ctx, job, v1alpha1.CredentialInvalidRequest)
+	}
+	active, pod, err := w.activeTarget(ctx, job)
+	if err != nil {
+		return err
+	}
+	ended := !w.HWSSHEnabled || job.Spec.Release || !job.DeletionTimestamp.IsZero() || !active || !w.Clock.Now().Before(job.Spec.ExpiresAt.Time)
+	if ended || job.Status.Phase == v1alpha1.CredentialCleanupPending {
+		return w.leaseCleanup(ctx, job, !w.HWSSHEnabled && job.Status.Phase == "")
+	}
+	if pod == nil {
+		return w.pending(ctx, job)
+	}
+	if job.Status.Phase == v1alpha1.CredentialInstalled && job.Status.InstalledPodUID == string(pod.UID) {
+		return nil
+	}
+	if w.leaseWait(job.UID) {
+		return nil
+	}
+	// Recheck right before the exec: release or a replacement may have raced.
+	var fresh v1alpha1.CredentialJob
+	if w.Client.Get(ctx, client.ObjectKeyFromObject(job), &fresh) != nil || fresh.UID != job.UID {
+		return errors.New("credential job changed before installation")
+	}
+	if fresh.Spec.Release || !fresh.DeletionTimestamp.IsZero() {
+		return w.leaseCleanup(ctx, &fresh, false)
+	}
+	job = &fresh
+	if err = w.guard(ctx); err != nil {
+		return err
+	}
+	opctx, cancel := w.operationContext(ctx)
+	err = w.Installer.Install(opctx, pod, credentialEntry{JobUID: job.UID, Spec: job.Spec})
+	cancel()
+	if err != nil {
+		if errors.Is(err, errCredentialIncompatible) {
+			// Exit 2 or 3 is deterministic: this pod cannot take a lease.
+			job.Status.FailureCode = v1alpha1.CredentialIncompatiblePod
+			return w.leaseCleanup(ctx, job, false)
+		}
+		w.leaseFailed(job.UID)
+		return errors.New("credential installation will retry")
+	}
+	w.leaseOK(job.UID)
+	job.Status.Phase = v1alpha1.CredentialInstalled
+	job.Status.FailureCode = ""
+	job.Status.ProviderID = providerIDOf(job.Spec)
+	job.Status.InstalledPodUID = string(pod.UID)
+	job.Status.InstalledAt = &metav1.Time{Time: w.Clock.Now().UTC().Truncate(time.Second)}
+	if w.Client.Status().Update(ctx, job) != nil {
+		return errors.New("could not persist credential installation receipt")
+	}
+	return nil
+}
+
+// leaseCleanup removes the lease and only then ends the job. A failed removal keeps
+// the phase CleanupPending and the finalizer, and is retried with backoff. For
+// hw-ssh, Revoked means only that the lease was removed from the pod (or the pod is
+// gone); it is not revocation of the key (D-89).
+func (w *credentialWorker) leaseCleanup(ctx context.Context, job *v1alpha1.CredentialJob, neverRan bool) error {
+	failure := job.Status.FailureCode
+	if neverRan {
+		failure = v1alpha1.CredentialBackendUnavailable
+	}
+	if job.Status.Phase != v1alpha1.CredentialCleanupPending || job.Status.FailureCode != failure {
+		job.Status.Phase = v1alpha1.CredentialCleanupPending
+		job.Status.FailureCode = failure
+		job.Status.ProviderID = providerIDOf(job.Spec)
+		if w.Client.Status().Update(ctx, job) != nil {
+			return errors.New("could not persist credential cleanup receipt")
+		}
+	}
+	done, err := w.removeLease(ctx, job)
+	if err != nil {
+		return err
+	}
+	if !done {
+		return errors.New("lease removal is pending and will retry")
+	}
+	return w.leaseRevoked(ctx, job, failure)
+}
+
+// removeLease reports whether the lease is gone from every pod it could be in. It
+// asks the API about the session's pod and counts the removal complete only when
+// the exec succeeds, or the pod is gone (not found, another session's, or in a
+// terminal phase). It always targets the live pod, never the UID recorded at the
+// last receipt: after a lost receipt the lease may be in a replacement pod.
+func (w *credentialWorker) removeLease(ctx context.Context, job *v1alpha1.CredentialJob) (bool, error) {
+	ref := job.Spec.Session
+	var pod corev1.Pod
+	err := w.Client.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &pod)
+	if apierrors.IsNotFound(err) {
+		w.leaseOK(job.UID)
+		return true, nil
+	}
+	if err != nil {
+		return false, errors.New("could not read credential target pod")
+	}
+	owner := metav1.GetControllerOf(&pod)
+	if owner == nil || owner.UID != ref.UID || pod.Labels[v1alpha1.LabelSession] != ref.Name || pod.Labels[v1alpha1.LabelHold] == "true" ||
+		pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		w.leaseOK(job.UID)
+		return true, nil
+	}
+	if !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning || pod.UID == "" || w.leaseWait(job.UID) {
+		return false, nil
+	}
+	if err := w.guard(ctx); err != nil {
+		return false, err
+	}
+	opctx, cancel := w.operationContext(ctx)
+	err = w.Installer.Remove(opctx, &pod, credentialEntry{JobUID: job.UID, Spec: job.Spec})
+	cancel()
+	if err != nil {
+		w.leaseFailed(job.UID)
+		return false, nil
+	}
+	w.leaseOK(job.UID)
+	return true, nil
+}
+
+func (w *credentialWorker) leaseRevoked(ctx context.Context, job *v1alpha1.CredentialJob, failure v1alpha1.CredentialFailureCode) error {
+	job.Status.Phase = v1alpha1.CredentialRevoked
+	job.Status.FailureCode = failure
+	job.Status.ProviderID = providerIDOf(job.Spec)
+	job.Status.RevokedAt = &metav1.Time{Time: w.Clock.Now().UTC().Truncate(time.Second)}
+	if w.Client.Status().Update(ctx, job) != nil {
+		return errors.New("could not persist credential revocation receipt")
+	}
+	return w.finishLease(ctx, job)
+}
+
+func (w *credentialWorker) finishLease(ctx context.Context, job *v1alpha1.CredentialJob) error {
+	if !controllerutil.ContainsFinalizer(job, v1alpha1.CredentialCleanupFinalizer) {
+		return nil
+	}
+	original := job.DeepCopy()
+	controllerutil.RemoveFinalizer(job, v1alpha1.CredentialCleanupFinalizer)
+	if w.Client.Patch(ctx, job, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})) != nil {
+		return errors.New("could not lift credential cleanup finalizer")
+	}
+	return nil
 }
 
 // routedInstaller sends a job to the installer of its credential.

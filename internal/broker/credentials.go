@@ -128,7 +128,10 @@ func (b *Broker) ensureCredentialJob(ctx context.Context, g *v1alpha1.AccessGran
 		return nil, err
 	}
 	if j == nil {
-		if g.Spec.Credential == nil || (g.Spec.Credential.Name == v1alpha1.CredentialHWSSH && !b.EnableHWSSHGrants) {
+		if g.Spec.Credential == nil {
+			return nil, permanent{errors.New("the credential grant names no credential")}
+		}
+		if g.Spec.Credential.Name == v1alpha1.CredentialHWSSH && !b.EnableHWSSHGrants {
 			return nil, permanent{errors.New("new hw-ssh credential execution is disabled")}
 		}
 		if g.Spec.Credential.Name == v1alpha1.CredentialProxmox && !b.EnableProxmoxGrants {

@@ -103,17 +103,15 @@ func (j *credentialJournal) load(ctx context.Context) (*corev1.Secret, map[strin
 }
 
 func validEntry(e credentialEntry) bool {
-	if !validUID(string(e.JobUID)) || checkCredentialSpec(e.Spec) != nil || e.InstallFailures < 0 {
+	// The journal is the proxmox provider's alone. An hw-ssh lease never has an
+	// entry here, so a keeper that predates hw-ssh still loads every entry (D-89).
+	if !validUID(string(e.JobUID)) || e.Spec.Credential != v1alpha1.CredentialProxmox || checkCredentialSpec(e.Spec) != nil || e.InstallFailures < 0 {
 		return false
 	}
 	switch e.Stage {
 	case journalIntent, journalMinted, journalCleanup, journalRevoked:
 	default:
 		return false
-	}
-	if e.Stage == journalMinted && e.Spec.Credential == v1alpha1.CredentialHWSSH {
-		// A lease keeps no secret in the journal: the key is read at install time.
-		return e.TokenID == providerIDOf(e.Spec) && e.TokenSecret.Empty()
 	}
 	if e.Stage == journalMinted && (e.TokenID != providerID(e.Spec.Grant.UID) || e.TokenSecret.Empty()) {
 		return false

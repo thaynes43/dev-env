@@ -197,3 +197,16 @@ func TestHWSSHReleaseAndExpiryRevokeTheJob(t *testing.T) {
 		})
 	}
 }
+
+// A credential grant that names no credential fails with its own message, not the
+// hw-ssh one.
+func TestEnsureCredentialJobNamesAMissingCredential(t *testing.T) {
+	f := hwsshCase(t)
+	f.stepN(2)
+	g := f.getGrant()
+	g.Spec.Credential = nil
+	_, err := f.b.ensureCredentialJob(context.Background(), g)
+	if err == nil || err.Error() != "the credential grant names no credential" {
+		t.Fatalf("error %v", err)
+	}
+}
