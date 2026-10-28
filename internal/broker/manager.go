@@ -45,6 +45,8 @@ type Options struct {
 	PolicyNamespace string
 	// EnableProxmoxGrants is false until keeper/node trust and acceptance pass.
 	EnableProxmoxGrants bool
+	// EnableHWSSHGrants is false until the keeper leases the hw-ssh key (D-89).
+	EnableHWSSHGrants bool
 	// EnableAttestedGrants turns on approval through attested GrantPolicies
 	// (agent attestation, not verified human identity). Default off.
 	EnableAttestedGrants bool
@@ -138,6 +140,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		SessionNamespace:     o.SessionNamespace,
 		PolicyNamespace:      o.PolicyNamespace,
 		EnableProxmoxGrants:  o.EnableProxmoxGrants,
+		EnableHWSSHGrants:    o.EnableHWSSHGrants,
 		EnableAttestedGrants: o.EnableAttestedGrants,
 		Clock:                clk,
 		Notifier:             o.Notifier,

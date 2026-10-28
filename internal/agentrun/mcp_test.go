@@ -143,3 +143,22 @@ func decodeMCPFrames(t *testing.T, raw string) []string {
 		out = append(out, string(body))
 	}
 }
+
+func TestAccessMCPHWSSHCarriesTheNotice(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(*http.Request) (int, string) {
+			return http.StatusCreated, `{"name":"grant-1017-160000-ab12","phase":"Pending","type":"credential","credential":"hw-ssh","session":"task-1","ttl":"1h0m0s","reason":"look at a node"}`
+		},
+	})
+	h.env.Stdin = strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"request_access","arguments":{"type":"credential","credential":"hw-ssh","reason":"look at a node"}}}`,
+		"",
+	}, "\n"))
+	h.mustRun(ExitOK, "mcp")
+	msgs := decodeMCPFrames(t, h.stdout.String())
+	if len(msgs) != 2 || !strings.Contains(msgs[1], "hw-ssh notice") || !strings.Contains(msgs[1], "not containment and not revocation") {
+		t.Fatalf("call %v", msgs)
+	}
+}

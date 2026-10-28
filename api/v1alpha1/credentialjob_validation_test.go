@@ -43,13 +43,22 @@ func TestCredentialJobRequestImmutableReleaseMonotonic(t *testing.T) {
 	job.Spec.Release = false
 	wantInvalid(t, k8s.Update(ctx(t), job), "release")
 }
+
+// hw-ssh (D-89) is a credential the keeper leases; the schema accepts it.
+func TestCredentialJobAcceptsHWSSH(t *testing.T) {
+	job := credentialJob()
+	job.Spec.Credential = v1alpha1.CredentialHWSSH
+	if err := k8s.Create(ctx(t), job); err != nil {
+		t.Fatalf("hw-ssh job refused: %v", err)
+	}
+}
 func TestCredentialJobSchemaAndStatus(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		change func(*v1alpha1.CredentialJob)
 	}{
 		{"unsafe UID", func(j *v1alpha1.CredentialJob) { j.Spec.Grant.UID = "uid; shell" }},
-		{"hardware not built", func(j *v1alpha1.CredentialJob) { j.Spec.Credential = v1alpha1.CredentialHWSSH }},
+		{"a credential no worker implements", func(j *v1alpha1.CredentialJob) { j.Spec.Credential = "omni" }},
 		{"missing UID", func(j *v1alpha1.CredentialJob) { j.Spec.Session.UID = "" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {

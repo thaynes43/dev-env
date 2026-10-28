@@ -4090,11 +4090,124 @@ so a pod roll still reinstalls. A coordinator reference is checked for syntax an
 unverified claim. Fail closed on a rollback: an attested policy names its requesters only
 under `spec.attested` and leaves `profiles`, `repos` and `agents` empty, which a broker
 that predates this reads as "names no requester" (`Matches`), so it approves nothing.
-Guidance (help and the MCP tool text): ask the coordinator first, the user where the
+Order for an agent: `grant request ... --no-wait` (or MCP `request_access`, which returns at once, because the plain command waits up to 30 minutes on the session's own pending grant), then `grant attest`, then follow it with `grant show`. Guidance (help and the MCP tool text): ask the coordinator first, the user where the
 coordinator cannot approve, attest only what was approved, and never use an attestation
 in place of a confirmation the coordinator must itself obtain. Known gap, unchanged and
 left for a follow-up: kube and egress execution never read `approvedBy`, so the decision
 point for them is `pending()` only.
+
+**D-89 (Proposed 2026-10-28 America/New_York; pending Tom's action-time approval). hw-ssh
+credential grants lease the existing static shared key, not an SSH certificate.** Status:
+PROPOSED. It departs from Tom's Q-07 answer (credential grants with a CA certificate for
+hw-ssh), and no ruling covers the change; nothing here is enabled by merging it, and every
+flag below defaults off. Q-07 and plan 07 described hw-ssh as a short-lived certificate from
+the keeper's CA. That is not built and the hosts trust no CA. This decision delivers the
+EXISTING static ed25519 key (Secret `dev-agents/dev-env-hw-ssh-secret`, field
+`HW_SSH_PRIVATE_KEY_B64`) as a leased projection into the requesting pod, on the existing
+credential grant path (request, standing or attested approval, `CredentialJob`, keeper,
+cleanup). A CA certificate path is the stronger follow-up; it needs host changes (trust the CA,
+principals, expiry) and is out of scope.
+
+What a lease is not. Removing the projection at expiry, release or session end is neither
+containment nor revocation. Anything in the pod can copy the key while it is installed. The key
+has no cryptographic expiry and stays valid on every host. Real revocation means rotating the
+key on every host, out of band. The authority is the one shared key's: user `dev-env` on all
+five PVE hosts (sudo allowlist; `qm` is root-equivalent), root on HaynesTower and PiKVM, and
+the other documented hardware. Network limits do not reduce it. `agent-run` prints this for
+every hw-ssh grant and the MCP text carries it; the wire view is unchanged.
+
+What "Revoked" means for hw-ssh. The `CredentialJob` phase `Revoked`, `status.revokedAt` and the
+broker's cleanup-receipt annotation that copies them mean ONLY that the lease was removed from
+the pod, or the pod is gone. They never mean the key was revoked. That is true because the
+keeper keeps the job `CleanupPending`, with its cleanup finalizer, and retries the removal with
+backoff, and writes `Revoked` or lifts the finalizer only after a removal succeeds or the pod
+is gone or can hold no lease: not found, another session's, a hold pod, in a terminal phase,
+or in phase Pending (a pod phase never moves back to Pending, and the install needs Running, so
+it never ran). A pod that is Running is always targeted live, never by the UID in the last
+receipt: after a lost receipt the lease may be in a replacement pod. A removal the script
+refuses as incompatible (exit 2 or 3) counts as complete only for a pod this job never
+installed into (`status.installedPodUID` differs), because the script's checks before any write,
+the pod-UID environment variable and the argument shapes, are the same for install and
+remove and a pod's environment cannot change: a removal refused that way means the install
+would have been refused first and wrote nothing (a test runs the real script both ways).
+An install refused as incompatible therefore ends the job once, with failure code
+`IncompatiblePod`. An incompatible answer from a pod the job did install into is unexpected: it
+is not counted as removed; the job stays `CleanupPending` with its finalizer, failure code
+`RemovalRefused`, a log line, and the retry backoff.
+
+Mechanism. The keeper reads the Secret at install time (a new `get` on that one resourceName
+in `dev-agents`, proposed for action-time approval), checks it is a bounded, unencrypted OpenSSH
+ed25519 key before any exec, and execs a fixed `sh` script into the pod. The key goes on stdin,
+only metadata in argv. The lease is `$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/` (tmpfs): `key`
+0600 and `manifest.json` 0600 (grant UID, pod UID, expiry, fingerprint; written last as the
+commit marker), directory 0700; a symlinked root or directory is refused. Two fences guard the
+exec: the keeper re-reads the pod from the API right before it and checks its UID, and the
+script checks `$DEV_ENV_POD_UID`. The key is not in a `CredentialJob` status, an Event or a log
+(a test scans for it). There is no provider side: nothing is minted or revoked at the hosts.
+
+Crash recovery without a journal. An hw-ssh lease writes NO entry in the shared proxmox
+credential journal: the journal's validator and its whole-journal load accept only proxmox, so
+a rollback to a keeper that predates hw-ssh would fail to load the journal for every job if it
+held one. The job's status and its cleanup finalizer carry recovery instead, with an
+idempotent install and remove. A crash between the install and the status write leaves no
+receipt; the next reconcile, on release, expiry or session end, still removes the lease from
+the live pod whatever the recorded phase (a test does exactly this). If the job object is
+force-removed with its finalizer stripped, nothing remains to retry the removal; the lease is
+then bounded only by the pod's tmpfs (the pod's life), plus the new helper deleting an expired
+lease when it next runs. A 2.45 pod that uses `HW_SSH_KEY` never checks expiry, so there the pod
+is the only bound.
+
+Flags and rollback. The broker and keeper each take `--enable-hw-ssh-grants` (default off); the
+proxmox flags do not enable it and it does not enable proxmox. Rolling back: turn both
+hw-ssh flags off and let the jobs drain (with the flag off the keeper removes existing leases
+and ends the jobs; the broker creates no new hw-ssh jobs) before downgrading either image. A
+keeper image that predates hw-ssh cannot process an hw-ssh `CredentialJob` (it would end it as
+an invalid request without touching the pod), so a lease could be left installed until its
+expiry check. The `CredentialJob` CRD accepts `hw-ssh`; its receipt names a lease
+(`hw-ssh-lease-<grantUID>`). Attestation (D-88) works for it through a policy whose
+`credential.names` is `[hw-ssh]`.
+
+Why not agentd's credential store. `internal/agentd/credentials.go` accepts only proxmox, and a
+2.45 agentd's `Use()` returns on the first entry it cannot read, so an hw-ssh entry in its
+grants root would break `credential-use proxmox` in every older pod. The lease directory is
+one agentd never reads, so the install works in an unchanged 2.45 session (agentd, Claude and
+the pod untouched): there the existing 2.45 `hw-ssh` helper is given the leased key with
+`HW_SSH_KEY=$XDG_RUNTIME_DIR/dev-env-hwssh/<grant>/key`. A test runs the unmodified 2.45.0
+helper against a lease: it uses the override; after the lease is removed it finds no key and
+does not call ssh (a session that already has `~/.ssh/dev-env-hw` keeps using that, as before).
+The new helper finds a live lease itself, prefers it over `~/.ssh/dev-env-hw`, and deletes an
+expired one.
+
+Eligibility is by policy, not by session. The pilot below is procedural: "the UPS session only"
+is NOT enforced. While the policy exists, ANY `full`-profile session in repo haynes-ops, and
+its children (children inherit the profile), can attest and obtain the key. The policy is
+therefore applied for the pilot hour and deleted afterwards. No session selector is added.
+
+Pilot proposal (documentation only, nothing applied). The UPS session only (by procedure, see
+above), to `haynesintelligence.haynesnetwork` TCP 22, for one hour, with the existing
+`dev-env` login and sudo authority and the wider shared-key authority above disclosed to Tom.
+Destination egress stays a separate scoped policy and grant. Old Failed or Released grants stay
+as they are. The proposed policy, for Tom's action-time approval, deleted after the hour:
+
+```yaml
+apiVersion: dev-env.haynesops.com/v1alpha1
+kind: GrantPolicy
+metadata: {name: credential-hw-ssh-attested, namespace: dev-env-system}
+spec:
+  description: >-
+    PILOT, delete after one hour. Agent-attested lease of the ONE shared hw-ssh key (dev-env on
+    five PVE hosts, qm is root-equivalent; root on HaynesTower and PiKVM). While this policy
+    exists ANY full-profile haynes-ops session and its children can obtain the key: "UPS
+    session only" is procedural, not enforced. Anything in the pod can copy the key; removal
+    is neither containment nor revocation; no cryptographic expiry. The agent's claim of
+    approval, not verified human identity (D-88, D-89).
+  attested: {profiles: [full], repos: [haynes-ops]}
+  type: credential
+  credential: {names: [hw-ssh]}
+  maxTTL: 1h
+```
+
+Known gaps, unchanged: kube and egress execution still never read `approvedBy` (D-88).
 
 **D-27. Original restricted break-glass replacement (historical).**
 
@@ -5198,3 +5311,4 @@ blocks only the step it names.
 | D-86 | `agent-run` exit `6` (unconfirmed), amending D-50's codes 0 to 5: a one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer exits `6` and is not repeated; it exits `5` only when nothing was sent; a 429 to one exits `1` | 3.5 |
 | D-87 | ADR-006 corrects ADR-005 (Q-31) after its review: the operator stops a private executor only for a Reaping Session with no owner hold, after a confirmed stop intent, never at the suspended-archive deadline; the archives are not private against v1's OPERATOR tier, the broker or the keeper, so H7 adds an archive guard; the terminal record sits beside `lastExecutor` (`executorTerminal`, with a once-only `executorMissed`); a fifth guard exception, `expiryHoldRemovalAllowed`; every HOME delete attempt re-verifies; copies of user files and unclassified agentd names are not exported | 4.4, 4.5, 5.1 |
 | D-88 | Tom 2026-10-27 23:27Z: grants may be approved on the requesting agent's attestation that it obtained user or coordinator approval, only through a GrantPolicy that names `spec.attested`, behind two default-off flags; an unverified claim, not human identity; fail closed on a broker rollback | 6.12 |
+| D-89 | PROPOSED 2026-10-28, pending Tom's approval (departs from Q-07's CA certificate): hw-ssh credential grants lease the existing static shared key into the pod, default off, keeper exec of a fixed script into a tmpfs lease dir; Revoked means only "lease removed from the pod"; not revocable, not contained; no entry in the shared proxmox journal; CA certificates are the follow-up | 6.12 |

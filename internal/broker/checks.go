@@ -39,10 +39,10 @@ var errNotBuilt = errors.New("not built yet")
 // three dev-env ones (the broker's own, when they are named otherwise). It
 // returns why a grant fails, or nil.
 func check(g *v1alpha1.AccessGrant, reserved ...string) error {
-	return checkCapabilities(g, false, reserved...)
+	return checkCapabilities(g, false, false, reserved...)
 }
 
-func checkCapabilities(g *v1alpha1.AccessGrant, proxmox bool, reserved ...string) error {
+func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ...string) error {
 	if len(g.Name) > validation.DNS1123LabelMaxLength || !strings.HasPrefix(g.Name, "grant-") || len(validation.IsDNS1123Label(g.Name)) > 0 {
 		return fmt.Errorf("the name %q is not grant-<id>, a DNS label (D-54)", g.Name)
 	}
@@ -104,7 +104,7 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox bool, reserved ...string
 		}
 	}
 	if s.Type == v1alpha1.GrantCredential {
-		if s.Credential.Name != v1alpha1.CredentialProxmox || !proxmox {
+		if n := s.Credential.Name; (n != v1alpha1.CredentialProxmox || !proxmox) && (n != v1alpha1.CredentialHWSSH || !hwssh) {
 			return fmt.Errorf("credential %q is unavailable: %w", s.Credential.Name, errNotBuilt)
 		}
 		if s.Requester.SessionUID == "" {

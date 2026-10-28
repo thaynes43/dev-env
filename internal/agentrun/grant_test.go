@@ -357,3 +357,41 @@ func TestGrantAttestMapsTheRoutesAnswers(t *testing.T) {
 		t.Fatalf("requests %+v", h.api.requests())
 	}
 }
+
+// hw-ssh (D-89): the notice is keyed on the grant's credential, in the printout
+// and in the MCP text; other grants carry none; the wire view is unchanged.
+func TestHWSSHNoticeIsPrintedOnlyForTheHWSSHCredential(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantPath("grant-ssh"): func(*http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-ssh","phase":"Active","type":"credential","credential":"hw-ssh","session":"task-1","ttl":"1h0m0s","reason":"reboot a node"}`
+		},
+		apiv1.GrantPath("grant-pve"): func(*http.Request) (int, string) {
+			return http.StatusOK, `{"name":"grant-pve","phase":"Active","type":"credential","credential":"proxmox","session":"task-1","ttl":"1h0m0s","reason":"api"}`
+		},
+	})
+	h.mustRun(ExitOK, "grant", "show", "grant-ssh")
+	contains(t, "stdout", h.stdout.String(), "hw-ssh notice", "ONE shared ed25519 key", "COPY the key", "not containment and not revocation", "no cryptographic expiry", "rotating the key on every host", "qm is root-equivalent")
+	h.mustRun(ExitOK, "grant", "show", "grant-pve")
+	if strings.Contains(h.stdout.String(), "hw-ssh notice") {
+		t.Fatal("a proxmox grant carries the hw-ssh notice")
+	}
+	if got := noticeFor("[]"); got != "[]" {
+		t.Fatalf("empty list: %q", got)
+	}
+}
+
+// An empty coordinator reference passes the CLI's light check and the server
+// refuses it with 422; the CLI reports that plainly and exits 1.
+func TestGrantAttestEmptyCoordinatorRefIsRefusedByTheServer(t *testing.T) {
+	h := newHarness(t)
+	b, _ := json.Marshal(apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeInvalid, Message: "invalid request", Fields: []apiv1.FieldError{{Field: "approvedBy", Message: "approvedBy is user, or coordinator:<ref> with a reference of letters, digits, '.', '_' or '-'"}}}})
+	attestRoutes(t, h, http.StatusUnprocessableEntity, string(b), nil)
+	h.mustRun(ExitFailed, "grant", "attest", "grant-abc", "--approved-by", "coordinator:", "--ref", "m1")
+	contains(t, "stderr", h.stderr.String(), "approvedBy")
+	reqs := h.api.requests()
+	var body map[string]string
+	if len(reqs) != 2 || json.Unmarshal(reqs[1].body, &body) != nil || body["approvedBy"] != "coordinator:" {
+		t.Fatalf("requests %+v", reqs)
+	}
+}

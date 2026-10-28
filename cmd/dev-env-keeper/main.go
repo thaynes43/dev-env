@@ -121,6 +121,7 @@ type options struct {
 	metricsAddr     string
 	probeAddr       string
 	proxmoxGrants   keeper.ProxmoxGrantOptions
+	hwsshGrants     keeper.HWSSHGrantOptions
 	codexAuth       keeper.CodexOptions
 	claudeAuth      keeper.ClaudeOptions
 	notices         keeper.NoticeOptions
@@ -155,6 +156,8 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
 	fs.BoolVar(&o.proxmoxGrants.Enabled, "enable-proxmox-grants", false, "enable keeper PVE credential jobs; requires CA, pinned host trust and leader election")
+	fs.BoolVar(&o.hwsshGrants.Enabled, "enable-hw-ssh-grants", false, "lease the static shared hw-ssh key into a session pod for an approved hw-ssh credential grant (D-89); needs get on the named key Secret. Removing the lease is not revocation: the key stays valid on every host")
+	fs.StringVar(&o.hwsshGrants.KeySecret, "hw-ssh-key-secret", keeper.DefaultHWSSHKeySecret, "Secret in the session namespace holding the static key as base64 under HW_SSH_PRIVATE_KEY_B64")
 	fs.BoolVar(&o.codexAuth.Enabled, "enable-codex-auth", false, "enable the dedicated keeper-only Codex auth worker; requires reviewed named-secret RBAC and isolated login helper")
 	fs.StringVar(&o.codexAuth.JournalSecret, "codex-auth-journal-secret", keeper.DefaultCodexJournalSecret, "keeper-only private Codex auth journal Secret")
 	fs.StringVar(&o.codexAuth.LiveSecret, "codex-live-secret", keeper.DefaultCodexLiveSecret, "access-only Codex projection Secret in secret-namespace")
@@ -192,6 +195,9 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.proxmoxGrants.Enabled && (!o.leaderElect || o.proxmoxGrants.SessionNamespace == "" || o.proxmoxGrants.JournalSecret == "" || o.proxmoxGrants.CADir == "" || o.proxmoxGrants.TargetsFile == "" || o.proxmoxGrants.KnownHostsFile == "") {
 		return o, errors.New("proxmox grants require leader election and nonempty credential configuration paths")
+	}
+	if o.hwsshGrants.Enabled && (!o.leaderElect || o.hwsshGrants.KeySecret == "") {
+		return o, errors.New("hw-ssh grants require leader election and a named key Secret")
 	}
 	if o.codexAuth.Enabled && (!o.leaderElect || o.codexAuth.JournalSecret == "" || o.codexAuth.LiveSecret == "" || !filepath.IsAbs(o.codexAuth.LoginDir) || o.namespace == o.secretNamespace) {
 		return o, errors.New("codex auth requires leader election, separate private/public namespaces and nonempty named configuration")
@@ -239,6 +245,7 @@ func run(args []string) error {
 			UserAgent:   binaryName + "/" + info.Version,
 		},
 		ProxmoxGrants: o.proxmoxGrants,
+		HWSSHGrants:   o.hwsshGrants,
 		CodexAuth:     o.codexAuth,
 		ClaudeAuth:    o.claudeAuth,
 		Notices:       o.notices,

@@ -49,7 +49,7 @@ func checkCredentialSpec(s v1alpha1.CredentialJobSpec) error {
 			return errors.New("invalid credential object reference")
 		}
 	}
-	if !strings.HasPrefix(s.Grant.Name, "grant-") || s.Credential != v1alpha1.CredentialProxmox || s.ExpiresAt.IsZero() {
+	if !strings.HasPrefix(s.Grant.Name, "grant-") || (s.Credential != v1alpha1.CredentialProxmox && s.Credential != v1alpha1.CredentialHWSSH) || s.ExpiresAt.IsZero() {
 		return errors.New("invalid credential request")
 	}
 	return nil
@@ -134,7 +134,9 @@ var errCredentialIncompatible = errors.New("session pod does not support credent
 // leader context as the GitHub keeper. Polling avoids a Secret informer/list
 // permission and recovers journal orphans even if their CR was forcibly removed.
 type credentialWorker struct {
-	Enabled                     bool
+	Enabled                     bool                     // new PVE (proxmox) executions
+	HWSSHEnabled                bool                     // new hw-ssh lease installs (D-89); cleanup always runs
+	leases                      map[types.UID]leaseRetry // hw-ssh backoff; memory only
 	Client                      client.Client
 	Namespace, SessionNamespace string
 	Journal                     *credentialJournal
@@ -146,6 +148,11 @@ type credentialWorker struct {
 }
 
 func (*credentialWorker) NeedLeaderElection() bool { return true }
+
+// providerIDOf is the nonsecret provider identity of a job's credential.
+func providerIDOf(s v1alpha1.CredentialJobSpec) string {
+	return v1alpha1.CredentialProviderID(s.Credential, s.Grant.UID)
+}
 func (w *credentialWorker) Start(ctx context.Context) error {
 	for {
 		if ctx.Err() != nil {
@@ -202,6 +209,11 @@ func (w *credentialWorker) tick(ctx context.Context) error {
 }
 
 func (w *credentialWorker) reconcile(ctx context.Context, job *v1alpha1.CredentialJob) error {
+	if job.Spec.Credential == v1alpha1.CredentialHWSSH {
+		// An hw-ssh lease has no provider side and writes nothing to the shared
+		// journal (hwssh.go): the job's status and finalizer carry crash recovery.
+		return w.reconcileLease(ctx, job)
+	}
 	if job.Status.Phase == v1alpha1.CredentialRevoked {
 		return w.finish(ctx, job)
 	}
@@ -470,7 +482,7 @@ func (w *credentialWorker) activeTarget(ctx context.Context, job *v1alpha1.Crede
 	if err != nil {
 		return false, nil, errors.New("could not verify the live credential grant")
 	}
-	if grant.UID != job.Spec.Grant.UID || grant.Status.Phase != v1alpha1.GrantActive || grant.Status.ExpiresAt == nil || !grant.Status.ExpiresAt.Equal(&job.Spec.ExpiresAt) || grant.Spec.Type != v1alpha1.GrantCredential || grant.Spec.Credential == nil || grant.Spec.Credential.Name != v1alpha1.CredentialProxmox || grant.Spec.Requester.Session != job.Spec.Session.Name || grant.Spec.Requester.SessionUID != job.Spec.Session.UID || grant.Spec.Release || !grant.DeletionTimestamp.IsZero() {
+	if grant.UID != job.Spec.Grant.UID || grant.Status.Phase != v1alpha1.GrantActive || grant.Status.ExpiresAt == nil || !grant.Status.ExpiresAt.Equal(&job.Spec.ExpiresAt) || grant.Spec.Type != v1alpha1.GrantCredential || grant.Spec.Credential == nil || grant.Spec.Credential.Name != job.Spec.Credential || grant.Spec.Requester.Session != job.Spec.Session.Name || grant.Spec.Requester.SessionUID != job.Spec.Session.UID || grant.Spec.Release || !grant.DeletionTimestamp.IsZero() {
 		return false, nil, nil
 	}
 	var session v1alpha1.AgentSession

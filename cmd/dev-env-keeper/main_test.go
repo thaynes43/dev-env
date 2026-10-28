@@ -63,3 +63,19 @@ func TestProxmoxGrantsRequireExplicitEnableAndLeader(t *testing.T) {
 		t.Fatal("explicit feature flag was not accepted")
 	}
 }
+
+// hw-ssh leases (D-89) are off by default and need leader election and a named Secret.
+func TestHWSSHGrantsAreOffByDefaultAndFenced(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.hwsshGrants.Enabled || o.hwsshGrants.KeySecret != keeper.DefaultHWSSHKeySecret {
+		t.Fatalf("defaults: %+v %v", o.hwsshGrants, err)
+	}
+	for _, args := range [][]string{{"--enable-hw-ssh-grants", "--leader-elect=false"}, {"--enable-hw-ssh-grants", "--hw-ssh-key-secret="}} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatalf("%v accepted", args)
+		}
+	}
+	if o, err := parseFlags([]string{"--enable-hw-ssh-grants"}); err != nil || !o.hwsshGrants.Enabled {
+		t.Fatalf("explicit enable refused: %v", err)
+	}
+}
