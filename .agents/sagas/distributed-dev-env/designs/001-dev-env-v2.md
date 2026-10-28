@@ -4099,11 +4099,12 @@ point for them is `pending()` only.
 **D-89 (Accepted 2026-10-28 America/New_York, Tom 01:37:41Z). hw-ssh credential grants lease
 the existing static shared key, not an SSH certificate.** (Numbering notes. Both numbers of the two entries are reused. "D-88" was first used on
 2026-10-12 for "closed-set reason codes for private catalog bootstrap": README row 67 and the
-link at about line 445 ("D-88 links its DESIGN-006 section"), and `.agents/HANDOFF.md` (about line
-1298, PR #239). The grant-attestation entry above is the one that reused "D-88" (2026-10-27),
+link in the paragraph below the decision-log table ("D-88 links its DESIGN-006 section in row
+67"), and `.agents/HANDOFF.md` (about line 1298, PR #239). The grant-attestation entry above is the one that reused "D-88" (2026-10-27),
 so it is "D-88 (attestation)". "D-89" was first used for Q-35, "preserve v1 during archive
 migration", recorded 2026-10-13; the hw-ssh entry reused it later. The Q-35 citers are: README
-rows 70 (line 418) and the link at line 447; ADR-007 (header); backlog 11 (about line 308); design
+row 70 and the link in the paragraph below the decision-log table ("Q-35/D-89 links ADR-007");
+ADR-007 (header); backlog 11 (about line 308); design
 024 (about line 296); design 025 (lines 2194 and 2231, where "D-89's trusted-v1 boundary" means
 Q-35, NOT hw-ssh); `.agents/HANDOFF.md` (the Q-35 row, about line 3296); and
 `.agents/CLAUDE-RESUME-2026-10-13.md` (about line 160). This entry is "D-89 (hw-ssh)". Both
