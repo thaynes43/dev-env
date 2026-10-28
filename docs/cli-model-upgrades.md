@@ -2,6 +2,8 @@
 
 Model catalog, requested model, configured model, and served model are different evidence. The existing Codex 0.160.1 native discovery lists `gpt-6.1-terra` with low as native default and low, medium, high, xhigh, max and ultra as supported efforts. A coordinator moving a bounded task from Sol 6.1 to Terra 6.1 can explicitly request `--model gpt-6.1-terra --effort medium`; do not infer a served model from the request or discovery. Empty effort leaves the native default intact. This source admission does not prove account entitlement or a successful model turn.
 
+For each future model promotion, compare the official exact model ID and release guidance with the installed Codex native catalog: record its CLI version, catalog fetch time, supported efforts and default. Do not substitute API-surface defaults for native evidence. Compare those facts with the common `ValidateCodexModel` and `ValidateCodexEffort` checks and the API, agentd and CLI regression tests before promotion; update the existing checks and tests only when needed, and select an explicit supported effort. Discovery or a request does not prove the model served. A real pilot also requires separately authorized, non-disruptive capacity and the corrected operator and agentd images.
+
 For future CLI currency work:
 
 1. Check image source pins and installed artifacts separately. At this source revision the agent image pins Codex standalone 0.160.1 and Claude Code 2.1.296; codex-login separately fixes Codex 0.160.1. An image tag alone does not prove the version installed in an existing session.
