@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -82,13 +83,53 @@ func TestOwnedAllowanceReadOnlyProjectionFence(t *testing.T) {
 }
 
 func TestOwnedAllowanceRuntimeDirectoryOwnership(t *testing.T) {
-	info, err := os.Lstat(t.TempDir())
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	uid := uint32(os.Geteuid())
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.IsDir() || info.Mode().Perm() != 0700 || stat.Uid != uid {
+		t.Fatal("invalid owned directory fixture")
+	}
 	if !ownedAllowanceRuntimeDirectory(info, uid) || ownedAllowanceRuntimeDirectory(info, uid+1) {
 		t.Fatal("runtime directory ownership was not enforced")
+	}
+	if err := os.Chmod(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Lstat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownedAllowanceRuntimeDirectory(info, uid) {
+		t.Fatal("unsafe directory mode accepted")
+	}
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Lstat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownedAllowanceRuntimeDirectory(info, uid) {
+		t.Fatal("regular file accepted")
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownedAllowanceRuntimeDirectory(info, uid) {
+		t.Fatal("symlink accepted")
 	}
 }
 
