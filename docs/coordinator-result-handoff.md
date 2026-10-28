@@ -2,6 +2,8 @@
 
 This procedure is how a coordinator keeps custody of a dev-env result when the implementer exits. It is source guidance plus an offline checker. It does not dispatch work, subscribe to reviews, transfer a TaskClaim, merge a pull request, or prove that a live relay is connected.
 
+The checker's `--watchdog` mode, described in [the workflow handoff README](../scripts/trials/workflow_handoff/README.md), is finite output-only planning for one pull-request-bound owner wake or user escalation. It does not dispatch work, run a scheduler, send a notification, or grant authority.
+
 Story [#177](https://work.haynesnetwork.com/work_packages/177) is this finite exercise. Broader [#117](https://work.haynesnetwork.com/work_packages/117) and [#101](https://work.haynesnetwork.com/work_packages/101) acceptance is unchanged. The recorded PR520 delay was coordinator pickup latency, not a task-result engine defect.
 
 ## Use the records that already exist
