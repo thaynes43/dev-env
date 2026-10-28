@@ -66,3 +66,28 @@ func TestAlertmanagerRejectsAmbiguousJSONAndPreservesGraphLink(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestAlertmanagerStructuralAliasesAndNulls(t *testing.T) {
+	for _, input := range []string{
+		strings.Replace(sampleAlert, `"status"`, `"ſtatus"`, 1),
+		strings.Replace(sampleAlert, `"status":{`, `"ſtatus":{"state":"suppressed"},"status":{`, 1),
+		strings.Replace(sampleAlert, `"state"`, `"ſtate"`, 1),
+		strings.Replace(sampleAlert, `"state":"active"`, `"state":"active","ſtate":"suppressed"`, 1),
+		strings.Replace(sampleAlert, `"startsAt":"2026-10-28T00:00:00Z"`, `"startsAt":null`, 1),
+		strings.Replace(sampleAlert, `"generatorURL":"javascript:alert(1)"`, `"generatorURL":null`, 1),
+		strings.Replace(sampleAlert, `"alertname":"<script>x</script>"`, `"alertname":null`, 1),
+		strings.Replace(sampleAlert, `"summary":"hello"`, `"summary":null`, 1),
+		strings.Replace(sampleAlert, `"annotations":{"summary":"hello","runbook_url":"https://example.org/run?token=secret"}`, `"annotations":null`, 1),
+		strings.Replace(sampleAlert, `"labels":{"alertname":"<script>x</script>"}`, `"labels":null`, 1),
+		strings.Replace(sampleAlert, `"status":{"state":"active"}`, `"status":null`, 1),
+	} {
+		if s, err := ParseAlertmanager([]byte(input)); err == nil || s.Availability != "Unavailable" {
+			t.Fatalf("accepted %s", input)
+		}
+	}
+	input := `[{"fingerprint":"f","labels":{"Name":"one","name":"two"},"status":{"state":"active"},"annotations":{"summary":"ok"}}]`
+	s, err := ParseAlertmanager([]byte(input))
+	if err != nil || s.Alerts[0].Labels["Name"] != "one" || s.Alerts[0].Labels["name"] != "two" {
+		t.Fatal(s, err)
+	}
+}

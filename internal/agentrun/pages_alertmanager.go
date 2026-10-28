@@ -12,9 +12,33 @@ import (
 )
 
 func isAlertmanagerSource(args []string) bool {
-	for i, s := range args {
-		if s == "--source=alertmanager" || s == "-source=alertmanager" || ((s == "--source" || s == "-source") && i+1 < len(args) && args[i+1] == "alertmanager") {
-			return true
+	for i := 1; i < len(args); i++ {
+		token := args[i]
+		if token == "--" {
+			break
+		}
+		if !strings.HasPrefix(token, "-") || token == "-" {
+			continue
+		}
+		name, value, hasValue := strings.Cut(strings.TrimLeft(token, "-"), "=")
+		if name == "source" {
+			if hasValue {
+				if value == "alertmanager" {
+					return true
+				}
+			} else if i+1 < len(args) {
+				i++
+				if args[i] == "alertmanager" {
+					return true
+				}
+			}
+			continue
+		}
+		switch name {
+		case "from-file", "o", "output", "sender", "state", "since", "limit", "search", "status":
+			if !hasValue && i+1 < len(args) {
+				i++
+			}
 		}
 	}
 	return false

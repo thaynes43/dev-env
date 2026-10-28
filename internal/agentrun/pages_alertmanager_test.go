@@ -31,3 +31,31 @@ func TestAlertmanagerCLI(t *testing.T) {
 	h.mustRun(ExitFailed, "pages", "list", "--source", "alertmanager", "-o", "json")
 	contains(t, "failure", h.stdout.String(), "Unavailable")
 }
+
+func TestAlertmanagerSelectionTerminalSafety(t *testing.T) {
+	h := newHarness(t)
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"pages", "list", "--source", "alertmanager", "--search", "\x1b[2J"}, ExitOK},
+		{[]string{"pages", "show", "\x1b]0;bad\x07", "--source", "alertmanager"}, ExitNotFound},
+	} {
+		h.env.Stdin = strings.NewReader(`[]`)
+		h.mustRun(tc.code, tc.args...)
+		if strings.ContainsAny(h.stdout.String(), "\x1b\x07") {
+			t.Fatalf("terminal control in output %q", h.stdout.String())
+		}
+		contains(t, "coverage", h.stdout.String(), "Available", "Current Alertmanager snapshot")
+	}
+}
+func TestAlertmanagerDispatchRespectsKeeperValuesAndSeparator(t *testing.T) {
+	h := newHarness(t)
+	h.write("--source=alertmanager", pagesConfigMap(t, samplePages(t)))
+	t.Chdir(h.dir)
+	h.mustRun(ExitOK, "pages", "list", "--from-file", "--source=alertmanager")
+	contains(t, "keeper", h.stdout.String(), "KEEPER PAGES ONLY")
+	h.env.Stdin = strings.NewReader(pagesConfigMap(t, samplePages(t)))
+	h.mustRun(ExitNotFound, "pages", "show", "--", "--source=alertmanager")
+	contains(t, "keeper", h.stdout.String(), "KEEPER PAGES ONLY")
+}

@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -92,6 +93,9 @@ func ParseAlertmanager(raw []byte) (AlertmanagerSnapshot, error) {
 	result := AlertmanagerSnapshot{Coverage: alertCoverage, Availability: "Available", ObservedAt: observed, Source: source, Alerts: make([]AlertmanagerAlert, 0, len(entries))}
 	seen := map[string]bool{}
 	for _, entry := range entries {
+		if !validAlertTypes(entry) {
+			return fail()
+		}
 		b, err := json.Marshal(entry)
 		if err != nil {
 			return fail()
@@ -157,12 +161,15 @@ func decodeAlertValue(d *json.Decoder, parent string, depth int) (any, error) {
 			if _, exists := obj[k]; exists {
 				return nil, errors.New("duplicate member")
 			}
-			low := strings.ToLower(k)
-			if parent != "labels" && parent != "annotations" && criticalAlertField(low) {
-				if folded[low] || k != canonicalAlertField(low) {
-					return nil, errors.New("ambiguous member")
+			if parent != "labels" && parent != "annotations" {
+				for _, canonical := range structuralAlertFields {
+					if strings.EqualFold(k, canonical) {
+						if folded[canonical] || k != canonical {
+							return nil, errors.New("ambiguous member")
+						}
+						folded[canonical] = true
+					}
 				}
-				folded[low] = true
 			}
 			v, e := decodeAlertValue(d, k, depth+1)
 			if e != nil {
@@ -195,27 +202,59 @@ func decodeAlertValue(d *json.Decoder, parent string, depth int) (any, error) {
 	}
 	return nil, errors.New("invalid delimiter")
 }
-func canonicalAlertField(s string) string {
-	switch s {
-	case "observedat":
-		return "observedAt"
-	case "startsat":
-		return "startsAt"
-	case "endsat":
-		return "endsAt"
-	case "updatedat":
-		return "updatedAt"
-	case "generatorurl":
-		return "generatorURL"
+
+var structuralAlertFields = []string{"alerts", "observedAt", "source", "fingerprint", "labels", "annotations", "status", "state", "startsAt", "endsAt", "updatedAt", "generatorURL"}
+
+// Present recognized fields must have their documented types; omission remains optional.
+func validAlertTypes(entry any) bool {
+	obj, ok := entry.(map[string]any)
+	if !ok {
+		return false
 	}
-	return s
+	for _, key := range []string{"fingerprint", "startsAt", "endsAt", "updatedAt", "generatorURL"} {
+		if v, present := obj[key]; present {
+			if _, ok := v.(string); !ok {
+				return false
+			}
+		}
+	}
+	for _, key := range []string{"labels", "annotations"} {
+		if v, present := obj[key]; present {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return false
+			}
+			for _, value := range m {
+				if _, ok := value.(string); !ok {
+					return false
+				}
+			}
+		}
+	}
+	if v, present := obj["status"]; present {
+		status, ok := v.(map[string]any)
+		if !ok {
+			return false
+		}
+		if state, present := status["state"]; present {
+			if _, ok := state.(string); !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
-func criticalAlertField(s string) bool {
-	switch s {
-	case "alerts", "observedat", "source", "fingerprint", "labels", "annotations", "status", "state", "startsat", "endsat", "updatedat", "generatorurl":
-		return true
+
+func terminalAlertText(s string) string {
+	var out strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			out.WriteString(strconv.QuoteRuneToASCII(r)[1 : len(strconv.QuoteRuneToASCII(r))-1])
+		} else {
+			out.WriteRune(r)
+		}
 	}
-	return false
+	return out.String()
 }
 
 func boundedAlertValue(v any, depth int) bool {
@@ -288,10 +327,10 @@ func RenderAlertmanagerHTML(w io.Writer, s AlertmanagerSnapshot) error {
 	}{AlertmanagerBanner, s})
 }
 func RenderAlertmanagerText(w io.Writer, s AlertmanagerSnapshot) error {
-	if _, err := fmt.Fprintf(w, "Pages · Alertmanager\n%s\n%s\nAvailability: %s\nObserved at: %s\nSource: %s\n", AlertmanagerBanner, s.Coverage, s.Availability, s.ObservedAt, s.Source); err != nil {
+	if _, err := fmt.Fprintf(w, "Pages · Alertmanager\n%s\n%s\nAvailability: %s\nObserved at: %s\nSource: %s\n", AlertmanagerBanner, s.Coverage, terminalAlertText(s.Availability), terminalAlertText(s.ObservedAt), terminalAlertText(s.Source)); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(w, "Selection: "+s.Selection)
+	_, _ = fmt.Fprintln(w, "Selection: "+terminalAlertText(s.Selection))
 	if len(s.Alerts) == 0 && s.Availability == "Available" {
 		_, _ = fmt.Fprintln(w, "No alerts in this result.")
 	}
