@@ -101,13 +101,13 @@ type PilotAgent struct {
 
 // pilotImageFor returns the pilot image when the session is the one selected,
 // and "" otherwise. All of these must hold: the parent and the idempotency key
-// match, the agent is Claude, the mode is remote or local, the repo is dev-env,
+// match, the agent is Claude remote/local or Codex remote, the repo is dev-env,
 // and the session has no workspace, project canary or private pilot.
 func pilotImageFor(s *v1alpha1.AgentSession, p *PilotAgent) string {
 	if p == nil || p.Image == "" || s == nil || s.Spec.Parent != p.Parent || p.Key == "" ||
 		s.Labels[v1alpha1.LabelIdempotencyKey] != p.Key ||
-		s.Spec.Agent != v1alpha1.AgentClaude ||
-		(s.Spec.Mode != v1alpha1.ModeRemote && s.Spec.Mode != v1alpha1.ModeLocal) ||
+		(s.Spec.Agent != v1alpha1.AgentClaude || (s.Spec.Mode != v1alpha1.ModeRemote && s.Spec.Mode != v1alpha1.ModeLocal)) &&
+			(s.Spec.Agent != v1alpha1.AgentCodex || s.Spec.Mode != v1alpha1.ModeRemote) ||
 		s.Spec.Repo != "dev-env" ||
 		s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil {
 		return ""

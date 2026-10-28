@@ -89,12 +89,18 @@ func TestPilotAgentChangesOnlyTheImage(t *testing.T) {
 func TestPilotAgentSelectionIsExact(t *testing.T) {
 	tmpl := exampleTemplates(t)
 	for name, mutate := range map[string]func(*v1alpha1.AgentSession){
-		"other parent":   func(s *v1alpha1.AgentSession) { s.Spec.Parent = "other-agent" },
-		"no parent":      func(s *v1alpha1.AgentSession) { s.Spec.Parent = "" },
-		"other key":      func(s *v1alpha1.AgentSession) { s.Labels[v1alpha1.LabelIdempotencyKey] = "history-pilot-2" },
-		"missing key":    func(s *v1alpha1.AgentSession) { delete(s.Labels, v1alpha1.LabelIdempotencyKey) },
-		"no labels":      func(s *v1alpha1.AgentSession) { s.Labels = nil },
-		"codex":          func(s *v1alpha1.AgentSession) { s.Spec.Agent, s.Spec.Model = v1alpha1.AgentCodex, "gpt-6-astra" },
+		"other parent": func(s *v1alpha1.AgentSession) { s.Spec.Parent = "other-agent" },
+		"no parent":    func(s *v1alpha1.AgentSession) { s.Spec.Parent = "" },
+		"other key":    func(s *v1alpha1.AgentSession) { s.Labels[v1alpha1.LabelIdempotencyKey] = "history-pilot-2" },
+		"missing key":  func(s *v1alpha1.AgentSession) { delete(s.Labels, v1alpha1.LabelIdempotencyKey) },
+		"no labels":    func(s *v1alpha1.AgentSession) { s.Labels = nil },
+		"codex local": func(s *v1alpha1.AgentSession) {
+			s.Spec.Agent, s.Spec.Mode, s.Spec.Model = v1alpha1.AgentCodex, v1alpha1.ModeLocal, "gpt-6-astra"
+		},
+		"codex task": func(s *v1alpha1.AgentSession) {
+			s.Spec.Agent, s.Spec.Mode, s.Spec.Model, s.Spec.Prompt = v1alpha1.AgentCodex, v1alpha1.ModeTask, "gpt-6-astra", "fixture"
+		},
+		"unknown agent":  func(s *v1alpha1.AgentSession) { s.Spec.Agent = "unknown" },
 		"task mode":      func(s *v1alpha1.AgentSession) { s.Spec.Mode, s.Spec.Prompt = v1alpha1.ModeTask, "fix the docs" },
 		"other repo":     func(s *v1alpha1.AgentSession) { s.Spec.Repo = "haynes-ops" },
 		"workspace":      func(s *v1alpha1.AgentSession) { s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "w"} },
@@ -106,6 +112,12 @@ func TestPilotAgentSelectionIsExact(t *testing.T) {
 			mutate(s)
 			if got := pilotImageFor(s, pilotTestAgent()); got != "" {
 				t.Fatalf("pilotImageFor %q, want empty", got)
+			}
+			if s.Spec.Agent == "unknown" {
+				if _, err := buildManagedPod(s, tmpl, "https://api", false, false, nil); err == nil {
+					t.Fatal("unknown agent was accepted by pod builder")
+				}
+				return
 			}
 			if s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil {
 				return // these specs need their own opt-ins to build a pod
@@ -189,5 +201,27 @@ func TestReconcilerSessionPodUsesThePilotImage(t *testing.T) {
 	}
 	if !apiequality.Semantic.DeepEqual(want, got) {
 		t.Fatal("a Reconciler without PilotAgent changed the pod")
+	}
+}
+
+func TestPilotAgentCodexRemoteChangesOnlyImage(t *testing.T) {
+	s := pilotTestSession()
+	s.Spec.Agent, s.Spec.Model = v1alpha1.AgentCodex, "gpt-6-astra"
+	if got := pilotImageFor(s, pilotTestAgent()); got != pilotTestImage {
+		t.Fatalf("Codex remote selector returned %q", got)
+	}
+	plain := buildPilotPod(t, s, nil)
+	selected := buildPilotPod(t, s, pilotTestAgent())
+	if len(selected.Spec.Containers) != 1 || selected.Spec.Containers[0].Image != pilotTestImage {
+		t.Fatal("Codex remote pod lacks pilot image")
+	}
+	selected.Spec.Containers[0].Image = plain.Spec.Containers[0].Image
+	if !apiequality.Semantic.DeepEqual(plain, selected) {
+		t.Fatal("Codex remote pod changed beyond image")
+	}
+	r := &Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}
+	pod, err := r.sessionPod(s, exampleTemplates(t))
+	if err != nil || pod.Spec.Containers[0].Image != pilotTestImage {
+		t.Fatalf("reconciler did not select Codex remote: %v", err)
 	}
 }
