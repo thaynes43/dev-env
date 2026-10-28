@@ -227,3 +227,19 @@ A separate, explicit `--source alertmanager` path accepts a caller-supplied curr
 ## 10. Default-off authenticated current snapshot route
 
 The source-only portal extension adds an authenticated current Alertmanager Pages view. The existing current group/session authorization gates the fixed source GET. The separately held decision to enable this source for the authorized group covers access to alert content; no pinned-subject policy is added. Session and metadata authorization are checked again before release. The client has no proxy, redirects or credentials, reads one fresh bounded current snapshot, and never falls back to a cached snapshot. Empty and Unavailable are distinct; notification/delivery history, disposition and recurrence remain Unknown. The private configuration contract and source limits are documented in the [PoC guide](../../../../docs/alertmanager-pages-poc.md). The earlier source proposal for a pinned issuer/subject Pages scope is superseded by this group-based contract (2026-10-28). A separate runtime network gate, data access decision and installation remain unapproved; this source change does not claim a working live portal route.
+
+## 11. Gatus current-check snapshot parser (2026-10-28)
+
+A source-only, unwired `internal/pages` parser accepts a caller-supplied Gatus
+endpoint status array, observation time and source reference. It keeps the
+latest current check by timestamp for each stable key, preserving Unknown versus
+explicit false and zero; malformed, conflicting or over-limit input is
+Unavailable. Its defaults bound input to 2 MiB, 1,000 endpoints, 4,000 total
+results and nesting depth 16; these are parser limits, not production SLOs.
+
+The snapshot does not establish notification or delivery history, retention
+completeness, incident duration or recurrence. Gatus notification history
+remains not covered by the keeper record. There is no Gatus client, collector,
+portal route or parent-visible connector in this source slice, and no runtime
+installation or acceptance is claimed. The synthetic test contract and further
+limits are recorded in [the source context](../../../context/gatus-status-adapter-20261028.md).
