@@ -24,6 +24,38 @@ type pagesSource struct {
 	now    func() time.Time
 }
 
+// PagesSourceCheck contains no alert content or upstream diagnostics. Nil count
+// and observation mean Unknown, rather than an observed empty snapshot.
+type PagesSourceCheck struct {
+	Status     string  `json:"status"`
+	Count      *int    `json:"count"`
+	ObservedAt *string `json:"observedAt"`
+}
+
+// CheckPagesSource checks only the fixed mounted Pages source. It does not load
+// the production server, database or browser authentication configuration.
+func CheckPagesSource(ctx context.Context) PagesSourceCheck {
+	return checkPagesSource(ctx, ProductionRoot, time.Now, nil)
+}
+
+func checkPagesSource(ctx context.Context, root string, now func() time.Time, dial func(context.Context, string, string) (net.Conn, error)) PagesSourceCheck {
+	result := PagesSourceCheck{Status: "unavailable"}
+	enabled, err := loadPagesEnabled(root)
+	if err != nil {
+		return result
+	}
+	if !enabled {
+		result.Status = "disabled"
+		return result
+	}
+	snapshot, err := newPagesSource(true, now, dial).read(ctx)
+	if err != nil {
+		return result
+	}
+	count := len(snapshot.Alerts)
+	return PagesSourceCheck{Status: "available", Count: &count, ObservedAt: &snapshot.ObservedAt}
+}
+
 func loadPagesEnabled(root string) (bool, error) {
 	present, err := mountedPresent(filepath.Join(root, "config/pages-alertmanager.json"))
 	if err != nil {

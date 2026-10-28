@@ -113,6 +113,30 @@ certificate postgres16-server are references, not permission to read keys.
 
 ## Current authorization and deployment holds
 
+### Local Pages source check
+
+`dev-env-portal pages-source-check` is a local process diagnostic. It reads only
+the existing `/etc/dev-env-portal/config/pages-alertmanager.json` configuration
+and, when enabled and valid, performs the same fixed Alertmanager snapshot GET
+as the Pages adapter. It accepts no arguments, flags or source overrides. It
+does not start the web server, initialize OIDC or connect to the database.
+
+Output is one bounded JSON object with `status`, `count` and `observedAt`.
+`status` is `available`, `disabled` or `unavailable`. Only `available` includes
+a numeric count (including a real zero) and the successful read's observation
+time. Other states use JSON null for both fields, meaning Unknown. Disabled or
+malformed configuration makes no source request. Source failures have no stale
+fallback. Alert content, source URLs and upstream error details are never output.
+Exit 0 means available; exit 1 means disabled or unavailable; exit 2 means invalid
+command usage. Usage errors print only `portal usage unavailable` to stderr.
+
+The command retains the existing fixed URL, five-second timeout, response bound,
+no-proxy/no-redirect policy and no retry. It adds no HTTP endpoint or access
+permission. Running it against an installed portal still requires separately
+authorized process/exec access; a successful check proves neither browser OIDC
+authorization nor human UI acceptance. Existing Pages route authorization is
+unchanged.
+
 Require the pinned issuer, a live UserInfo response for the session's own
 subject with portal_is_active=true and portal_is_admin=true, plus the fixed
 local metadata allowlist. Access is by group membership, not by a pinned

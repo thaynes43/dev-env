@@ -5,7 +5,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,18 +21,31 @@ func main() {
 }
 
 func run(args []string) int {
+	return runCommand(args, os.Stdout, os.Stderr, session.CheckPagesSource, session.ServeProduction)
+}
+
+func runCommand(args []string, stdout, stderr io.Writer, check func(context.Context) session.PagesSourceCheck, serve func(context.Context, string) error) int {
 	if len(args) == 1 && args[0] == "version" {
-		fmt.Println(version.Get().String("dev-env-portal"))
+		if _, err := fmt.Fprintln(stdout, version.Get().String("dev-env-portal")); err != nil {
+			return 1
+		}
 		return 0
 	}
-	if len(args) != 0 {
-		fmt.Fprintln(os.Stderr, "portal usage unavailable")
+	if len(args) != 0 && (len(args) != 1 || args[0] != "pages-source-check") {
+		_, _ = fmt.Fprintln(stderr, "portal usage unavailable")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := session.ServeProduction(ctx, session.ProductionRoot); err != nil {
-		fmt.Fprintln(os.Stderr, "portal runtime unavailable")
+	if len(args) == 1 {
+		result := check(ctx)
+		if json.NewEncoder(stdout).Encode(result) != nil || result.Status != "available" {
+			return 1
+		}
+		return 0
+	}
+	if err := serve(ctx, session.ProductionRoot); err != nil {
+		_, _ = fmt.Fprintln(stderr, "portal runtime unavailable")
 		return 1
 	}
 	return 0
