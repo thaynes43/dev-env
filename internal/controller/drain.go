@@ -56,11 +56,12 @@ func sessionIdle(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
 // drainEligible is the only time the operator marks a session Draining
 // (DESIGN-001 5.2): it still wants its pod, the pod's template revision is
 // not the current one, the session is idle, and it is not summoned, shared,
-// private-history protected, or a canary original. A busy session stays Running.
+// private-history protected, a canary original, or a user remote session.
+// A busy or remote session stays Running during automatic revision updates.
 func drainEligible(s *v1alpha1.AgentSession, pod *corev1.Pod, currentRevision string) bool {
 	if s == nil || pod == nil || currentRevision == "" || !s.DeletionTimestamp.IsZero() ||
 		s.Spec.OperatingMode != v1alpha1.OperatingModeRunning || s.Spec.Workspace != nil ||
-		privateHistoryProtected(s) || summonedSession(s) {
+		privateHistoryProtected(s) || summonedSession(s) || s.Spec.Mode == v1alpha1.ModeRemote {
 		return false
 	}
 	rev := pod.Labels[v1alpha1.LabelRevision]
@@ -270,7 +271,7 @@ func (r *Reconciler) recordRestart(ctx context.Context, s *v1alpha1.AgentSession
 		}
 		if fresh.UID != s.UID || fresh.Generation != rec.Generation || !fresh.DeletionTimestamp.IsZero() ||
 			fresh.Spec.OperatingMode != v1alpha1.OperatingModeRunning || fresh.Spec.Workspace != nil ||
-			privateHistoryProtected(&fresh) || summonedSession(&fresh) {
+			privateHistoryProtected(&fresh) || summonedSession(&fresh) || fresh.Spec.Mode == v1alpha1.ModeRemote {
 			return false, nil
 		}
 		fresh.Status.Restart = rec

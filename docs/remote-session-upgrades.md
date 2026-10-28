@@ -1,0 +1,5 @@
+# Remote session upgrades
+
+An automatic image, CLI or template revision change does not drain an existing user remote-control session merely because it is idle, waiting or disconnected. The controller retains the current pod and volume rather than stopping the remote agent for that update. Busy and attached protections continue to apply to other eligible sessions. Explicit owner-requested suspend, deletion and recovery use their existing paths; this update does not replace them.
+
+If an earlier drain already recorded that the agent was stopped, the controller finishes the existing recovery path rather than leaving a stopped agent stranded. Before an automatic drain records a new stop, it rechecks the current Session and refuses remote mode. A future handoff to a newer image needs an explicitly authorized plan and independently verified continuity, including pairing and durable history; source tests alone do not prove live continuity. Publishing source does not itself install a new image or authorize a restart.

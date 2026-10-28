@@ -886,10 +886,8 @@ func TestDrainIdleMoment(t *testing.T) {
 	}
 }
 
-// Remote sessions drain like any idle interactive session. A Claude remote
-// session is eligible when idle. A Codex remote host reports busy for as long
-// as its daemon is live (agentd never sees a phone turn it could wait for), so
-// it is never eligible and takes a manual suspend and resume to upgrade.
+// Automatic revision changes do not drain user remote sessions, including idle
+// and waiting sessions. Explicit lifecycle operations remain separate.
 func TestDrainRemoteSessions(t *testing.T) {
 	tmpl := currentTemplates(t)
 	pod := readyDrainPod("s", "old-revision")
@@ -899,8 +897,8 @@ func TestDrainRemoteSessions(t *testing.T) {
 		state string
 		want  bool
 	}{
-		{"claude remote idle", "claude", protocol.AgentIdle, true},
-		{"claude remote waiting", "claude", protocol.AgentWaiting, true},
+		{"claude remote idle", "claude", protocol.AgentIdle, false},
+		{"claude remote waiting", "claude", protocol.AgentWaiting, false},
 		{"claude remote busy", "claude", protocol.AgentBusy, false},
 		{"codex remote host, live daemon", "codex", protocol.AgentBusy, false},
 		{"codex remote host, daemon down", "codex", protocol.AgentInterrupted, false},
@@ -941,4 +939,92 @@ func containsFinalizer(in []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestAutomaticDrainPreservesUserRemote(t *testing.T) {
+	for _, phase := range []v1alpha1.SessionPhase{v1alpha1.PhaseRunning, v1alpha1.PhaseDraining} {
+		t.Run(string(phase), func(t *testing.T) {
+			tmpl := currentTemplates(t)
+			s := drainFixture("remote-safe")
+			s.Spec.Mode = v1alpha1.ModeRemote
+			s.Spec.Agent = v1alpha1.AgentClaude
+			s.Status.Phase = phase
+			pod := readyDrainPod(s.Name, "old-revision")
+			pod.Spec.Containers[0].Image = "old-image"
+			c, stored, storedPod := drainClient(t, s, pod)
+			rt := &fakeRestarter{fn: func(*corev1.Pod) (protocol.RestartReport, error) {
+				t.Fatal("unexpected restart read")
+				return protocol.RestartReport{}, nil
+			}}
+			r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+			obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+			_, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got corev1.Pod
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &got); err != nil || got.UID != pod.UID || got.Spec.Containers[0].Image != "old-image" || !got.DeletionTimestamp.IsZero() {
+				t.Fatal("remote pod changed", err)
+			}
+			var pvc corev1.PersistentVolumeClaim
+			if err := c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: HomeClaimName(s.Name)}, &pvc); err != nil || pvc.UID != "vol-1" || !pvc.DeletionTimestamp.IsZero() {
+				t.Fatal("remote volume changed", err)
+			}
+			if rt.readCount(pod.Name) != 0 || rt.stopCount(pod.Name) != 0 {
+				t.Fatal("remote restart called")
+			}
+		})
+	}
+}
+func TestDrainRevalidatesRemoteBeforeStop(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("race-remote")
+	s.Spec.Mode = v1alpha1.ModeLocal
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	reads := 0
+	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+		reads++
+		if reads == 2 {
+			var fresh v1alpha1.AgentSession
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), &fresh); err != nil {
+				t.Fatal(err)
+			}
+			fresh.Spec.Mode = v1alpha1.ModeRemote
+			if err := c.Update(context.Background(), &fresh); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+	}}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	_, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil || reads != 2 || rt.stopCount(pod.Name) != 0 {
+		t.Fatal("remote race did not refuse stop", err, reads)
+	}
+	var got corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &got); err != nil || got.UID != pod.UID {
+		t.Fatal("remote race removed pod", err)
+	}
+}
+func TestAlreadyStoppedRemoteDrainCompletesRecovery(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("remote-stopped")
+	s.Spec.Mode = v1alpha1.ModeRemote
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	s.Status.Restart = &v1alpha1.RestartStatus{ConversationID: "conv-1", PodUID: string(pod.UID), Generation: s.Generation, Stopped: true}
+	c, stored, storedPod := drainClient(t, s, pod)
+	rt := &fakeRestarter{}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	_, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+	if err != nil || rt.stopCount(pod.Name) != 0 {
+		t.Fatal("recovery failed", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatal("stopped pod not recovered", err)
+	}
 }
