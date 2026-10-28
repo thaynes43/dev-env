@@ -1,0 +1,62 @@
+{
+  "schema": "dev-env.workflow-watchdog-plan/v1",
+  "observedAt": "2026-10-28T18:00:00Z",
+  "handoff": {
+    "schema": "dev-env.workflow-handoff/v1",
+    "story": "211",
+    "relatedStories": [
+      "177",
+      "206"
+    ],
+    "repository": "github.com/thaynes43/dev-env",
+    "pullRequest": 211,
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "coordinator": "codex-native",
+    "reviewBinding": {
+      "task": "watchdog-211",
+      "uid": "uid-watchdog-211"
+    },
+    "modelProvenance": {
+      "serving": "Unknown",
+      "cost": "Unknown",
+      "configuredUI": "simulation"
+    },
+    "events": [
+      {
+        "kind": "review-observation",
+        "identity": "obs-approved",
+        "sourceTime": "2026-10-23T15:00:00Z",
+        "task": "watchdog-211",
+        "uid": "uid-watchdog-211",
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source": "native-review-log",
+        "phase": "terminal",
+        "verdict": "approved"
+      }
+    ]
+  },
+  "obligations": [
+    {
+      "id": "ob-start",
+      "kind": "start_ack",
+      "owner": "codex-native",
+      "dueAt": "2026-10-28T17:00:00Z"
+    }
+  ],
+  "receipts": [
+    {
+      "obligation": "ob-start",
+      "owner": "codex-native",
+      "stage": "owner_wake",
+      "state": "delivered",
+      "evidence": "transport-accepted",
+      "recordedAt": "2026-10-28T17:40:00Z",
+      "repository": "github.com/thaynes43/dev-env",
+      "pullRequest": 211,
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "task": "watchdog-211",
+      "uid": "uid-watchdog-211",
+      "kind": "start_ack"
+    }
+  ]
+}
