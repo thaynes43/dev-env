@@ -173,6 +173,7 @@ var agentdLayout = []historyRule{
 	{"rescue.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"project-bootstrap.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-supervisor.lock", protocol.HistoryClassNotHistory, kindAny},
+	{"codex-access-generation.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"native-invocation.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"workspace-supervisor.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"child-decision.lock", protocol.HistoryClassNotHistory, kindAny},

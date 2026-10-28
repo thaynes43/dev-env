@@ -67,6 +67,22 @@ func SyncCodexAccess(s Settings, now time.Time) error {
 	if err != nil || !a.ExpiresAt.After(now.Add(5*time.Minute)) {
 		return ErrCodexAccess
 	}
+	lock, err := lockCodexAccess(s)
+	if err != nil {
+		return ErrCodexAccess
+	}
+	defer func() { _ = lock.Close() }()
+	// The projection can rotate while we wait for the lock. Read it again
+	// within the transaction; the first validation merely avoids creating a
+	// lock file for an already invalid input.
+	raw, err = readCodexAccessFile(s.CodexAccessFile)
+	if err != nil {
+		return ErrCodexAccess
+	}
+	a, err = codexauth.Decode(raw, now)
+	if err != nil || !a.ExpiresAt.After(now.Add(5*time.Minute)) {
+		return ErrCodexAccess
+	}
 	canonical, err := codexauth.Encode(a, now)
 	if err != nil {
 		return ErrCodexAccess
@@ -112,6 +128,45 @@ func SyncCodexAccess(s Settings, now time.Time) error {
 		return ErrCodexAccess
 	}
 	return nil
+}
+
+// lockCodexAccess serializes every writer of the shared generation fence.
+// The file is never unlinked: all processes must lock the same inode.
+func lockCodexAccess(s Settings) (*os.File, error) {
+	if err := noSymlinkComponents(s.StateDir); err != nil && !os.IsNotExist(err) {
+		return nil, ErrCodexAccess
+	}
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		return nil, ErrCodexAccess
+	}
+	dir, err := os.Lstat(s.StateDir)
+	if err != nil || !dir.IsDir() || dir.Mode().Perm()&0o077 != 0 {
+		return nil, ErrCodexAccess
+	}
+	dirStat, ok := dir.Sys().(*syscall.Stat_t)
+	if !ok || dirStat.Uid != uint32(os.Geteuid()) {
+		return nil, ErrCodexAccess
+	}
+	path := s.statePath("codex-access-generation.lock")
+	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, ErrCodexAccess
+	}
+	f := os.NewFile(uintptr(fd), "codex-access-lock")
+	refuse := func() (*os.File, error) { _ = f.Close(); return nil, ErrCodexAccess }
+	opened, err := f.Stat()
+	if err != nil || !opened.Mode().IsRegular() || opened.Mode().Perm() != 0o600 {
+		return refuse()
+	}
+	stat, ok := opened.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 || syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+		return refuse()
+	}
+	current, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, current) {
+		return refuse()
+	}
+	return f, nil
 }
 
 // Check the private destination before any render, launch or periodic sync can

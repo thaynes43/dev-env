@@ -1,0 +1,7 @@
+# Directly owned allowance observer source (2026-10-28)
+
+This proposed diagnostic is separate from the guarded Codex host and budget-owned executor. It is explicitly enabled and source-only; enabling it does not grant account access. A future authenticated observation requires a separate specific approval and a qualified artifact. No remote daemon, enrollment, model, thread, login or retained native HOME is adopted.
+
+The observer uses a fresh private tmpfs runtime destination and the existing managed access-only projection. It reads and requires an exact match against the existing shared generation fence without modifying it; a missing or mismatched projection refuses the diagnostic. The new lock serializes only upgraded writers, so an older running daemon does not participate. The foreground process must be the directly owned child, remain unreaped during the four allowed native allowance messages, and be fully stopped and reaped before output. A failed or uncertain ownership, binding, read or cleanup yields no result. Provider freshness and account binding remain Unknown.
+
+Session and Pod values supplied to a local invocation are provenance claims, not authentication or account attribution. An explicitly approved actor, Pod and command are required for future execution; this source does not grant that authority. The generation lock is cooperative: a running older daemon does not honor it. The observer therefore only reads the shared projection fence.
