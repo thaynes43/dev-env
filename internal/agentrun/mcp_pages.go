@@ -271,6 +271,9 @@ func safePagesText(s string) string {
 		return r
 	}, s)
 }
+
+const pagesMCPKeyLimit = 512
+
 func validPagesArg(s string, max int) bool {
 	return len(s) > 0 && len(s) <= max && safePagesText(s) == s
 }
@@ -324,7 +327,7 @@ func (s *pagesMCPSession) call(raw json.RawMessage) map[string]any {
 	}
 	if name == "pages_get" {
 		key, ok = pagesMCPString(args["key"])
-		if !ok || !validPagesArg(key, 512) {
+		if !ok || !validPagesArg(key, pagesMCPKeyLimit) {
 			return mcpToolError("Invalid request")
 		}
 		if raw, exists := args["expectedRevision"]; exists {
@@ -405,7 +408,7 @@ func normalizePagesMCP(source string, raw []byte, at time.Time) ([]pagesMCPItem,
 				}
 				labels[k] = safePagesText(v)
 			}
-			if safePagesText(a.Fingerprint) != a.Fingerprint {
+			if !validPagesArg(a.Fingerprint, pagesMCPKeyLimit) {
 				return nil, "", errors.New("unsafe alert key")
 			}
 			out = append(out, pagesMCPItem{Kind: "current_alert", Key: a.Fingerprint, Name: safePagesText(a.Name), Status: a.Status, StartsAt: a.StartsAt, EndsAt: a.EndsAt, UpdatedAt: a.UpdatedAt, Summary: safePagesText(a.Summary), Description: safePagesText(a.Description), Labels: labels})
@@ -417,7 +420,7 @@ func normalizePagesMCP(source string, raw []byte, at time.Time) ([]pagesMCPItem,
 		}
 		coverage = snap.Coverage
 		for _, g := range snap.Endpoints {
-			if safePagesText(g.Key) != g.Key {
+			if !validPagesArg(g.Key, pagesMCPKeyLimit) {
 				return nil, "", errors.New("unsafe endpoint key")
 			}
 			out = append(out, pagesMCPItem{Kind: "current_endpoint_check", Key: g.Key, Name: safePagesText(g.Name), Group: safePagesText(g.Group), Timestamp: g.Latest.Timestamp, Success: g.Latest.Success, HTTPStatus: g.Latest.Status, DurationNanos: g.Latest.DurationNanos})
@@ -477,6 +480,41 @@ func pagesRPCResult(raw []byte, id string) (json.RawMessage, bool) {
 	rpc, ok := pagesMCPString(obj["jsonrpc"])
 	return obj["result"], ok && rpc == "2.0"
 }
+func validPagesMCPInitialize(obj map[string]json.RawMessage) bool {
+	version, ok := pagesMCPString(obj["protocolVersion"])
+	if !ok || version != "2024-11-05" || len(obj["capabilities"]) > 16384 {
+		return false
+	}
+	var capabilities map[string]json.RawMessage
+	if json.Unmarshal(obj["capabilities"], &capabilities) != nil || capabilities == nil {
+		return false
+	}
+	for _, raw := range capabilities {
+		var capability map[string]json.RawMessage
+		if json.Unmarshal(raw, &capability) != nil || capability == nil {
+			return false
+		}
+	}
+	info, ok := pagesMCPObject(obj["serverInfo"], []string{"name", "version"}, []string{"title"})
+	if !ok || len(obj["serverInfo"]) > 4096 {
+		return false
+	}
+	for _, key := range []string{"name", "version", "title"} {
+		if raw, exists := info[key]; exists {
+			value, ok := pagesMCPString(raw)
+			if !ok || len(value) == 0 || len(value) > 256 {
+				return false
+			}
+		}
+	}
+	if raw, exists := obj["instructions"]; exists {
+		value, ok := pagesMCPString(raw)
+		if !ok || len(value) > 16384 {
+			return false
+		}
+	}
+	return true
+}
 func (b *fixedPagesBackend) Fetch(ctx context.Context, source string) ([]byte, error) {
 	if source == "gatus" {
 		raw, _, err := b.request(ctx, http.MethodGet, pagesGatusURL, nil, "")
@@ -494,7 +532,8 @@ func (b *fixedPagesBackend) Fetch(ctx context.Context, source string) ([]byte, e
 	if !ok {
 		return nil, errors.New("unavailable")
 	}
-	if _, ok := pagesMCPObject(result, []string{"protocolVersion", "capabilities", "serverInfo"}, []string{"instructions"}); !ok {
+	initialized, ok := pagesMCPObject(result, []string{"protocolVersion", "capabilities", "serverInfo"}, []string{"instructions"})
+	if !ok || !validPagesMCPInitialize(initialized) {
 		return nil, errors.New("unavailable")
 	}
 	notification := []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)

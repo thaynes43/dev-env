@@ -218,7 +218,7 @@ func TestPagesMCPBackendDenialRedirectAndEnvelopes(t *testing.T) {
 			var body string
 			switch calls {
 			case 1:
-				body = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{}}}`
+				body = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"synthetic","version":"1"}}}`
 			case 2:
 				body = ""
 			default:
@@ -249,5 +249,52 @@ func TestPagesMCPStrictBoundsAndRedaction(t *testing.T) {
 		if strings.Contains(text, bad) {
 			t.Fatalf("leak: %s", bad)
 		}
+	}
+}
+
+func TestPagesMCPInvalidInitializationStopsBeforeRead(t *testing.T) {
+	for _, result := range []string{
+		`{"protocolVersion":null,"capabilities":null,"serverInfo":null}`,
+		`{"protocolVersion":"unsupported","capabilities":{},"serverInfo":{"name":"s","version":"1"}}`,
+		`{"protocolVersion":"2024-11-05","capabilities":[],"serverInfo":{"name":"s","version":"1"}}`,
+		`{"protocolVersion":"2024-11-05","capabilities":{"tools":null},"serverInfo":{"name":"s","version":"1"}}`,
+		`{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":null,"version":"1"}}`,
+		`{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"s"}}`,
+		`{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"s","version":"1"},"instructions":null}`,
+	} {
+		calls := 0
+		b := newFixedPagesBackend()
+		b.client.Transport = pagesRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":` + result + `}`)), Header: make(http.Header)}, nil
+		})
+		if _, err := b.Fetch(context.Background(), "alertmanager"); err == nil || calls != 1 {
+			t.Fatal("invalid initialization continued", result, calls)
+		}
+	}
+}
+func TestPagesMCPKeyBoundary(t *testing.T) {
+	f := &fakePagesBackend{}
+	s := &pagesMCPSession{ctx: context.Background(), config: pagesMCPConfig{Gatus: true}, backend: f, now: time.Now}
+	key := strings.Repeat("a", pagesMCPKeyLimit)
+	f.raw = []byte(`[{"key":"` + key + `","name":"fixture","results":[]}]`)
+	if r := callPages(s, "pages_list", `{"source":"gatus"}`); r["isError"] == true {
+		t.Fatal("bounded list rejected")
+	}
+	if r := callPages(s, "pages_get", `{"source":"gatus","key":"`+key+`"}`); r["isError"] == true {
+		t.Fatal("listed key rejected")
+	}
+	key += "a"
+	f.raw = []byte(`[{"key":"` + key + `","name":"fixture","results":[]}]`)
+	if r := callPages(s, "pages_list", `{"source":"gatus"}`); r["isError"] != true || !strings.Contains(responseText(t, r), "Unavailable") {
+		t.Fatal("overlong source key accepted")
+	}
+	calls := f.calls
+	if r := callPages(s, "pages_get", `{"source":"gatus","key":"`+key+`"}`); r["isError"] != true || f.calls != calls {
+		t.Fatal("overlong lookup fetched")
+	}
+	alert := `[{"fingerprint":"` + key + `","labels":{"alertname":"example"},"status":{"state":"active"}}]`
+	if _, _, err := normalizePagesMCP("alertmanager", []byte(alert), time.Now()); err == nil {
+		t.Fatal("overlong alert fingerprint accepted")
 	}
 }
