@@ -1,0 +1,77 @@
+{
+  "schema": "dev-env.workflow-watchdog-plan/v1",
+  "observedAt": "2026-10-28T18:00:00Z",
+  "handoff": {
+    "schema": "dev-env.workflow-handoff/v1",
+    "story": "211",
+    "relatedStories": [
+      "177",
+      "206"
+    ],
+    "repository": "github.com/thaynes43/dev-env",
+    "pullRequest": 211,
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "coordinator": "codex-native",
+    "reviewBinding": {
+      "task": "watchdog-211",
+      "uid": "uid-watchdog-211"
+    },
+    "modelProvenance": {
+      "serving": "Unknown",
+      "cost": "Unknown",
+      "configuredUI": "simulation"
+    },
+    "events": [
+      {
+        "kind": "worker-pass",
+        "identity": "pass-1",
+        "sourceTime": "2026-10-23T13:00:00Z",
+        "executor": "executor-a",
+        "deadline": "2026-10-23T14:42:01Z",
+        "budget": "original",
+        "authorized": true,
+        "authorizationRef": "external-dispatch-pass-1",
+        "preserves": [],
+        "writesAllowed": false
+      },
+      {
+        "kind": "executor-state",
+        "identity": "ex-run",
+        "sourceTime": "2026-10-23T13:01:00Z",
+        "executor": "executor-a",
+        "state": "running"
+      },
+      {
+        "kind": "successor-assignment",
+        "identity": "as-1",
+        "sourceTime": "2026-10-23T13:20:00Z",
+        "assignmentKey": "story-211-executor",
+        "predecessor": "executor-a",
+        "successor": "executor-b",
+        "authorized": true,
+        "authorizationRef": "external-assignment-1",
+        "supportedContinuation": true
+      },
+      {
+        "kind": "review-observation",
+        "identity": "obs-approved",
+        "sourceTime": "2026-10-23T15:00:00Z",
+        "task": "watchdog-211",
+        "uid": "uid-watchdog-211",
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source": "native-review-log",
+        "phase": "terminal",
+        "verdict": "approved"
+      }
+    ]
+  },
+  "obligations": [
+    {
+      "id": "ob-start",
+      "kind": "start_ack",
+      "owner": "codex-native",
+      "dueAt": "2026-10-28T17:00:00Z"
+    }
+  ],
+  "receipts": []
+}
