@@ -5,6 +5,10 @@ provider adapter, command, API, portal, scheduler, registry, schema platform, or
 deployment. It does not accept Epic187, Story188, native188, Cursor, Grok, or
 mandatory full-V1 coverage.
 
+## Claude passive callback bridge (2026-10-28)
+
+Story191 source adds explicit bounded statusline stdin to the unified usage command, retaining historical optional windows with Unknown freshness and account binding. It discards private metadata and installs no producer hook. Supported ingress, installed artifact and live acceptance remain separately authorized dependencies; no subscription coverage is claimed. See DESIGN030.
+
 ## Included
 
 - a bounded pure Go report over existing validated allowance read snapshots and
@@ -74,10 +78,6 @@ Source only; no deployment, activation, credential, grant, DB or network change.
   and a Planned view for Automations and Watchdog. It includes the narrow
   product-page CSP header that allows only the embedded stylesheet. See
   [portal read boundary](../../../../docs/portal-read-boundary.md).
-
-## Claude passive callback bridge (2026-10-28)
-
-Story191 source adds explicit bounded statusline stdin to the unified usage command, retaining historical optional windows with Unknown freshness and account binding. It discards private metadata and installs no producer hook. Supported ingress, installed artifact and live acceptance remain separately authorized dependencies; no subscription coverage is claimed. See DESIGN030.
 
 ## C3: guarded on-demand source callsite (2026-10-28)
 
