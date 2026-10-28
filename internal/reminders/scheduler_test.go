@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -349,7 +350,8 @@ func TestUnconfiguredPushoverIsAnHonestSkip(t *testing.T) {
 	e.tick()
 	e.advance(time.Hour)
 	e.tick()
-	r := e.wantState("rem-a", v1alpha1.ReminderSent)
+	// Nothing was delivered, so the reminder is not "sent".
+	r := e.wantState("rem-a", v1alpha1.ReminderSkipped)
 	if d := r.Status.Deliveries[0]; d.State != v1alpha1.DeliverySkipped || d.Reason != "pushover: unconfigured" {
 		t.Errorf("delivery %+v", d)
 	}
@@ -734,6 +736,118 @@ func TestCalendarStatusStaysWithinItsBoundWhateverTheAdapter(t *testing.T) {
 			if c.Target == "calendar:old0" {
 				t.Error("the oldest stale entry survived")
 			}
+		}
+	})
+}
+
+// A one-shot ends "sent" only if a delivery was actually sent. A calendar-only
+// reminder, written directly as an object, has no Pushover delivery at all.
+func TestCalendarOnlyOneShotIsNeverSent(t *testing.T) {
+	for name, withAdapter := range map[string]bool{"with an adapter": true, "without one": false} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			if !withAdapter {
+				e.s.Calendar = nil
+			}
+			e.create("rem-cal", func(s *v1alpha1.ReminderSpec) { s.Targets = []string{"calendar:haynesnetwork"} })
+			e.tick()
+			e.advance(time.Hour)
+			e.tick()
+			e.tick()
+			e.wantSends(0)
+			r := e.wantState("rem-cal", v1alpha1.ReminderSkipped)
+			if r.Status.State == v1alpha1.ReminderSent || !strings.Contains(r.Status.Message, "nothing was delivered") {
+				t.Errorf("status %+v", r.Status)
+			}
+		})
+	}
+}
+
+func TestCalendarOnlyRecurringSkipsEachOccurrenceAndContinues(t *testing.T) {
+	e := newEnv(t)
+	e.create("rem-cal", func(s *v1alpha1.ReminderSpec) {
+		s.Targets = []string{"calendar:haynesnetwork"}
+		s.Recurrence = &v1alpha1.ReminderRecurrence{Freq: "daily"}
+	})
+	e.tick()
+	e.advance(time.Hour)
+	e.tick()
+	r := e.wantState("rem-cal", v1alpha1.ReminderPending)
+	if r.Status.Occurrence != 2 {
+		t.Errorf("the series did not continue: %+v", r.Status)
+	}
+	e.wantSends(0)
+}
+
+// An edit that removes pushover:default while the delivery is backing off: the
+// retry is dropped, nothing was sent, and the reminder is not "sent".
+func TestRemovingPushoverDuringARetryDoesNotEndSent(t *testing.T) {
+	e := newEnv(t)
+	e.snd.errs = []error{ErrNotSent}
+	e.create("rem-a", nil)
+	e.tick()
+	e.advance(time.Hour)
+	e.tick() // attempt 1 is not sent; backing off
+	e.wantSends(1)
+	e.wantState("rem-a", v1alpha1.ReminderPending)
+	e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Targets = []string{"calendar:haynesnetwork"} })
+	e.tick()
+	r := e.wantState("rem-a", v1alpha1.ReminderSkipped)
+	if d := r.Status.Deliveries[0]; d.State != v1alpha1.DeliverySkipped || d.Reason != supersededReason {
+		t.Errorf("delivery %+v", d)
+	}
+	e.advance(time.Hour)
+	e.tick()
+	e.wantSends(1)
+}
+
+// An edit that lands while the occurrence already shows an ambiguous delivery
+// must never send it again, whether or not the schedule changed.
+func TestEditWhileAmbiguousNeverResends(t *testing.T) {
+	ambiguous := func(e *env) {
+		r := e.get("rem-a")
+		r.Status.Deliveries = []v1alpha1.ReminderDelivery{{Target: "pushover:default", Occurrence: 1, State: v1alpha1.DeliveryAmbiguous, Attempts: 1,
+			Reason: "the request may have reached the provider", UpdatedAt: metav1.NewTime(e.now)}}
+		if err := e.c.Status().Update(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("a schedule edit", func(t *testing.T) {
+		e := newEnv(t)
+		e.create("rem-a", nil)
+		e.tick()
+		e.advance(time.Hour)
+		ambiguous(e)
+		e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Due = "2026-10-28T16:00" })
+		for range 3 {
+			e.tick()
+			e.advance(time.Minute)
+		}
+		e.wantSends(0) // the ambiguous occurrence is not sent again
+		r := e.wantState("rem-a", v1alpha1.ReminderPending)
+		if !r.Status.NextDue.Time.Equal(utc("2026-10-28T16:00:00Z")) {
+			t.Fatalf("next due %v", r.Status.NextDue)
+		}
+		e.advance(3 * time.Hour)
+		e.tick()
+		e.wantSends(1) // only the new time sends
+		e.wantState("rem-a", v1alpha1.ReminderSent)
+	})
+	t.Run("a text edit", func(t *testing.T) {
+		e := newEnv(t)
+		e.create("rem-a", nil)
+		e.tick()
+		e.advance(time.Hour)
+		ambiguous(e)
+		e.mutate("rem-a", func(r *v1alpha1.Reminder) { r.Spec.Title = "edited" })
+		for range 3 {
+			e.tick()
+			e.advance(time.Hour)
+		}
+		e.wantSends(0)
+		r := e.wantState("rem-a", v1alpha1.ReminderFailed)
+		if r.Status.Deliveries[0].State != v1alpha1.DeliveryAmbiguous {
+			t.Errorf("delivery %+v", r.Status.Deliveries[0])
 		}
 	})
 }

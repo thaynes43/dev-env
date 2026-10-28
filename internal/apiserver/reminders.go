@@ -36,6 +36,9 @@ const (
 	// maxReminderBodyBytes is Pushover's message limit.
 	maxReminderBodyBytes = 1024
 	// A caller may hold this many live reminders; a finished one does not count.
+	// The check lists and then creates, so concurrent creates by one owner can
+	// pass it together and exceed the cap by at most the number in flight. It is
+	// a guard against runaway creation, not a quota (DESIGN-032).
 	maxLiveRemindersPerOwner = 100
 	// pastGrace is how far back a due time may be and still be accepted: a
 	// "5pm" typed at 5:00:20 is fine, a date last week is a typo.
@@ -55,8 +58,15 @@ func (s *Server) registerReminders(mux *http.ServeMux) {
 		http.MethodPost: s.cancelReminder}}))
 }
 
-// reminderOwner is the owner a reminder records: the caller as its token says.
-func reminderOwner(c *caller) string { return c.String() }
+// reminderOwner is the owner a reminder records: the caller as its token says. A
+// session is keyed by its UID as well as its name, so a later session that reuses
+// the name inherits no reminders.
+func reminderOwner(c *caller) string {
+	if c.kind == kindSession && c.session != nil && c.session.UID != "" {
+		return "session/" + c.parent + "/" + string(c.session.UID)
+	}
+	return c.String()
+}
 
 // canManage: the owner, a human or a coordinator.
 func canManage(c *caller, r *v1alpha1.Reminder) bool {
@@ -173,6 +183,17 @@ func (s *Server) createReminder(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	rem := &v1alpha1.Reminder{ObjectMeta: metav1.ObjectMeta{Namespace: s.Reminders.Namespace, Name: name}, Spec: spec}
 	if err := s.Client.Create(ctx, rem); err != nil {
+		if apierrors.IsAlreadyExists(err) && req.Key != "" {
+			// A concurrent create with the same key won the race: that is the
+			// reminder this request asked for, not a conflict.
+			var existing v1alpha1.Reminder
+			if gerr := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Reminders.Namespace, Name: name}, &existing); gerr == nil {
+				if existing.Spec.Owner != owner || !reflect.DeepEqual(existing.Spec, spec) {
+					return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "key %q already names a different reminder of yours", req.Key)
+				}
+				return http.StatusOK, reminderView(&existing), nil
+			}
+		}
 		return 0, nil, fromKubeError(err, "reminder")
 	}
 	s.Log.Info("reminder created", "reminder", name, "owner", owner, "targets", strings.Join(spec.Targets, ","))
@@ -180,7 +201,7 @@ func (s *Server) createReminder(ctx context.Context, w http.ResponseWriter, r *h
 }
 
 func finalReminder(state string) bool {
-	return state == v1alpha1.ReminderSent || state == v1alpha1.ReminderFailed || state == v1alpha1.ReminderCancelled
+	return state == v1alpha1.ReminderSent || state == v1alpha1.ReminderFailed || state == v1alpha1.ReminderSkipped || state == v1alpha1.ReminderCancelled
 }
 
 // listReminders serves GET /v1/reminders: the caller's own. all=true lists

@@ -76,8 +76,10 @@ spec:
                 type: string
               owner:
                 description: |-
-                  Owner is the caller that created it, from its token: session/<name>,
-                  client/<namespace>/<name>, human/<namespace>/<name>. It never changes.
+                  Owner is the caller that created it, from its token:
+                  session/<name>/<uid> (the session's UID, so a later session that reuses
+                  the name inherits nothing), client/<namespace>/<name> or
+                  human/<namespace>/<name>. It never changes.
                 maxLength: 256
                 minLength: 1
                 type: string
@@ -326,12 +328,13 @@ spec:
                 maxLength: 64
                 type: string
               state:
-                description: State is pending, sent, failed or cancelled. Absent means
-                  pending.
+                description: State is pending, sent, failed, skipped or cancelled.
+                  Absent means pending.
                 enum:
                 - pending
                 - sent
                 - failed
+                - skipped
                 - cancelled
                 type: string
             type: object

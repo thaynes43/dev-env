@@ -75,11 +75,11 @@ Each one needs its own action-specific approval from Tom. None is part of this c
 subresource. Bounds on every string, list and number are in the schema and tested in
 `api/v1alpha1/reminder_validation_test.go`.
 
-- `spec`: `title` (1 to 120), `body` (up to 1024 bytes, Pushover's message limit), `owner` (from the token, immutable),
+- `spec`: `title` (1 to 120), `body` (up to 1024 bytes, Pushover's message limit), `owner` (from the token, immutable; for a session `session/<name>/<uid>`, so a later session that reuses the name inherits no reminders),
   `due` (local `YYYY-MM-DDTHH:MM`) with `timeZone` (IANA), optional `recurrence`
   (`freq` daily, weekly or monthly; `byDay` or `byMonthDay`; `until` or `count`),
   `targets` by reference, `cancelled`.
-- `status`: `state` (pending, sent, failed, cancelled), `nextDue`, `occurrence` (the
+- `status`: `state` (pending, sent, failed, skipped, cancelled), `nextDue`, `occurrence` (the
   1-based index in the series), `planHash`, `deliveries` (one per Pushover target for
   the current occurrence: claimed, retry, sent, failed, ambiguous, skipped, with
   attempts and a reason), `calendar` (the sync state per calendar target, pruned to the CRD's 8 on every pass
@@ -124,6 +124,16 @@ subresource. Bounds on every string, list and number are in the schema and teste
 - The tests cover America/New_York 2026 (March 8 gap, November 1 fold), a daily series
   across both, month-end clamping including a leap year, weekly `byDay`, `until` and
   `count`.
+
+### What "sent" means
+
+A reminder is `sent` ONLY if at least one delivery was actually sent. It is `failed`
+if a delivery failed, was left ambiguous or was claimed and never resolved. Otherwise
+it ends `skipped`: nothing was deliverable or configured (a calendar-only reminder, an
+unconfigured Pushover, a target an edit removed), and the message says nothing was
+delivered. For a series, `skipped` and `failed` describe the occurrence and the series
+continues. An edit that removes a Pushover target while its delivery is backing off
+drops the retry as "superseded by an edit" and the reminder ends `skipped`.
 
 ### Edit and cancel against the due time
 
@@ -182,7 +192,11 @@ The body is held to Pushover's 1024-byte message limit by the CRD and the API, s
 keeper never has to cut it; if it must (an object made by other means), it cuts on a
 rune boundary and ends with "…", for the body (1024 bytes) and the title (250).
 
-A caller may hold 100 live reminders. A finished one does not count; finished
+A caller may hold 100 live reminders. The cap is checked by listing and then creating,
+so concurrent creates by one owner can pass it together and exceed it by the number in
+flight; it guards against runaway creation and is not a quota (a known, accepted
+limit). Two concurrent creates with the same `key` return the one reminder (200), not a
+409; the same key with different content is a 409. A finished one does not count; finished
 reminders are not yet garbage collected (a follow-up).
 
 `agent-run remind create|list|show|edit|cancel`, standard library only, with `-o json`.

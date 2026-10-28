@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -74,10 +75,11 @@ func TestCreateReminderTakesTheOwnerFromTheToken(t *testing.T) {
 	f := reminderFixture(t, interceptor.Funcs{})
 	tok := f.sessionPod("haynes-ops-1028-010000", "full", 0)
 	rem := f.createReminder(tok, newReminder())
-	if rem.Owner != "session/haynes-ops-1028-010000" || rem.State != "pending" || len(rem.Targets) != 1 || rem.Targets[0] != "pushover:default" || rem.Title != "Renew the VPN" {
+	owner := "session/haynes-ops-1028-010000/" + string(f.session("haynes-ops-1028-010000").UID)
+	if rem.Owner != owner || rem.State != "pending" || len(rem.Targets) != 1 || rem.Targets[0] != "pushover:default" || rem.Title != "Renew the VPN" {
 		t.Errorf("reminder %+v", rem)
 	}
-	if got := f.reminder(rem.Name).Spec.Owner; got != "session/haynes-ops-1028-010000" {
+	if got := f.reminder(rem.Name).Spec.Owner; got != owner {
 		t.Errorf("stored owner %q", got)
 	}
 	// An owner in the body is not a field: the request is strict.
@@ -182,7 +184,7 @@ func TestCreateReminderCapsLiveRemindersPerOwner(t *testing.T) {
 	tok := f.sessionPod("s-one", "full", 0)
 	for i := range maxLiveRemindersPerOwner {
 		r := &v1alpha1.Reminder{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-env-system", Name: fmt.Sprintf("rem-fill-%d", i)},
-			Spec: v1alpha1.ReminderSpec{Title: "x", Owner: "session/s-one", Due: "2026-10-30T09:00", TimeZone: "UTC", Targets: []string{"pushover:default"}}}
+			Spec: v1alpha1.ReminderSpec{Title: "x", Owner: "session/s-one/" + string(f.session("s-one").UID), Due: "2026-10-30T09:00", TimeZone: "UTC", Targets: []string{"pushover:default"}}}
 		if i == 0 {
 			r.Status.State = v1alpha1.ReminderSent // a finished one does not count
 		}
@@ -250,7 +252,7 @@ func TestEditReminder(t *testing.T) {
 	if w.Code != http.StatusOK || decode[apiv1.Reminder](t, w).Title != title {
 		t.Fatalf("edit: %d %s", w.Code, w.Body.String())
 	}
-	if f.reminder(a.Name).Spec.Owner != "session/s-one" {
+	if f.reminder(a.Name).Spec.Owner != "session/s-one/"+string(f.session("s-one").UID) {
 		t.Error("an edit changed the owner")
 	}
 	wantError(t, f.do(http.MethodPatch, apiv1.ReminderPath(a.Name), two, apiv1.EditReminderRequest{Title: &title}), http.StatusNotFound, apiv1.CodeNotFound)
@@ -338,6 +340,11 @@ func TestCancelReminder(t *testing.T) {
 	f.setReminderStatus(b.Name, v1alpha1.ReminderStatus{State: v1alpha1.ReminderSent})
 	wantError(t, f.do(http.MethodPost, apiv1.ReminderCancelPath(b.Name), one, nil), http.StatusConflict, apiv1.CodeConflict)
 
+	// A reminder that ended skipped is final too.
+	d := f.createReminder(one, newReminder())
+	f.setReminderStatus(d.Name, v1alpha1.ReminderStatus{State: v1alpha1.ReminderSkipped})
+	wantError(t, f.do(http.MethodPost, apiv1.ReminderCancelPath(d.Name), one, nil), http.StatusConflict, apiv1.CodeConflict)
+
 	// Cancel racing a delivery in flight says so.
 	c := f.createReminder(one, newReminder())
 	f.setReminderStatus(c.Name, v1alpha1.ReminderStatus{State: v1alpha1.ReminderPending, Deliveries: []v1alpha1.ReminderDelivery{
@@ -345,5 +352,72 @@ func TestCancelReminder(t *testing.T) {
 	got := decode[apiv1.Reminder](t, f.do(http.MethodPost, apiv1.ReminderCancelPath(c.Name), one, nil))
 	if got.Warning == "" {
 		t.Errorf("no warning for an in-flight delivery: %+v", got)
+	}
+}
+
+// Two creates with one key race: the loser's create finds the winner's reminder
+// and returns it, as a retry would, instead of a 409.
+func TestConcurrentCreatesWithOneKeyReturnTheExistingReminder(t *testing.T) {
+	var winner func(obj client.Object)
+	f := reminderFixture(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if r, ok := obj.(*v1alpha1.Reminder); ok && winner != nil {
+			w := r.DeepCopy()
+			winner(w)
+			winner = nil
+			if err := c.Create(ctx, w); err != nil { // the other request got there first
+				return err
+			}
+			return apierrors.NewAlreadyExists(schema.GroupResource{Group: "dev-env.haynesops.com", Resource: "reminders"}, r.Name)
+		}
+		return c.Create(ctx, obj, opts...)
+	}})
+	tok := f.sessionPod("s-one", "full", 0)
+	req := newReminder()
+	req.Key = "vpn"
+
+	winner = func(obj client.Object) {} // the same content: a retry's twin
+	w := f.do(http.MethodPost, apiv1.RemindersPath, tok, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the losing twin: %d %s", w.Code, w.Body.String())
+	}
+	var list v1alpha1.ReminderList
+	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 1 || list.Items[0].Name != decode[apiv1.Reminder](t, w).Name {
+		t.Fatalf("%d reminders (%v)", len(list.Items), err)
+	}
+
+	// The winner made something else under the same key: that is a real conflict.
+	req2 := newReminder()
+	req2.Key = "other"
+	winner = func(obj client.Object) { obj.(*v1alpha1.Reminder).Spec.Title = "not what was asked" }
+	wantError(t, f.do(http.MethodPost, apiv1.RemindersPath, tok, req2), http.StatusConflict, apiv1.CodeConflict)
+}
+
+// A later session that reuses a session's name inherits none of its reminders.
+func TestASessionThatReusesANameInheritsNoReminders(t *testing.T) {
+	f := reminderFixture(t, interceptor.Funcs{})
+	old := f.sessionPod("s-one", "full", 0)
+	a := f.createReminder(old, newReminder())
+
+	ctx := context.Background()
+	s := f.session("s-one")
+	s.Finalizers = nil
+	if err := f.c.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Delete(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "s-one", Namespace: sessionNS}}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := f.sessionPod("s-one", "full", 0) // same name, new UID
+
+	if l := decode[apiv1.ReminderList](t, f.do(http.MethodGet, apiv1.RemindersPath, fresh, nil)); len(l.Reminders) != 0 {
+		t.Errorf("the new session lists the old one's reminders: %+v", l)
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.ReminderPath(a.Name), fresh, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodPost, apiv1.ReminderCancelPath(a.Name), fresh, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	if w := f.do(http.MethodGet, apiv1.ReminderPath(a.Name), tokHuman, nil); w.Code != http.StatusOK {
+		t.Errorf("a human no longer sees it: %d", w.Code)
 	}
 }

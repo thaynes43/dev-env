@@ -36,9 +36,14 @@ const (
 
 // Reminder states.
 const (
-	ReminderPending   = "pending"
-	ReminderSent      = "sent"
-	ReminderFailed    = "failed"
+	ReminderPending = "pending"
+	// ReminderSent means at least one delivery was actually sent.
+	ReminderSent   = "sent"
+	ReminderFailed = "failed"
+	// ReminderSkipped means the reminder ended with nothing delivered and
+	// nothing failed: no deliverable or configured target (a calendar-only
+	// reminder, an unconfigured Pushover, a target an edit removed).
+	ReminderSkipped   = "skipped"
 	ReminderCancelled = "cancelled"
 )
 
@@ -120,8 +125,10 @@ type ReminderSpec struct {
 	// +optional
 	Body string `json:"body,omitempty"`
 
-	// Owner is the caller that created it, from its token: session/<name>,
-	// client/<namespace>/<name>, human/<namespace>/<name>. It never changes.
+	// Owner is the caller that created it, from its token:
+	// session/<name>/<uid> (the session's UID, so a later session that reuses
+	// the name inherits nothing), client/<namespace>/<name> or
+	// human/<namespace>/<name>. It never changes.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="the owner of a reminder never changes"
@@ -222,8 +229,8 @@ type ReminderAttempt struct {
 
 // ReminderStatus is what the scheduler did.
 type ReminderStatus struct {
-	// State is pending, sent, failed or cancelled. Absent means pending.
-	// +kubebuilder:validation:Enum=pending;sent;failed;cancelled
+	// State is pending, sent, failed, skipped or cancelled. Absent means pending.
+	// +kubebuilder:validation:Enum=pending;sent;failed;skipped;cancelled
 	// +optional
 	State string `json:"state,omitempty"`
 

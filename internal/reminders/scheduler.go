@@ -157,7 +157,7 @@ func (s *Scheduler) Tick(ctx context.Context) {
 }
 
 func finalState(state string) bool {
-	return state == v1alpha1.ReminderSent || state == v1alpha1.ReminderFailed || state == v1alpha1.ReminderCancelled
+	return state == v1alpha1.ReminderSent || state == v1alpha1.ReminderFailed || state == v1alpha1.ReminderSkipped || state == v1alpha1.ReminderCancelled
 }
 
 func (s *Scheduler) tickOne(ctx context.Context, r *v1alpha1.Reminder) {
@@ -179,11 +179,11 @@ func (s *Scheduler) tickOne(ctx context.Context, r *v1alpha1.Reminder) {
 		s.write(ctx, r)
 		return
 	}
-	if r.Status.PlanHash != PlanHash(r.Spec) && s.supersedeRetries(r, now) {
-		// An edit moved the schedule while the old occurrence was backing off
-		// from a failure that never reached the provider. Nothing was sent, so
-		// it is dropped rather than sent late; fire then closes the occurrence
-		// and finish plans the new schedule.
+	if s.supersedeRetries(r, now) {
+		// An edit moved the schedule, or removed the target, while the old
+		// occurrence was backing off from a failure that never reached the
+		// provider. Nothing was sent, so the retry is dropped rather than sent
+		// late; fire then closes the occurrence and finish plans what is next.
 		changed = true
 	}
 	if s.syncCalendar(ctx, r, now) {
@@ -424,14 +424,16 @@ func addAttempt(r *v1alpha1.Reminder, now time.Time, occ int32, target, outcome,
 	}
 }
 
-// supersedeRetries drops the retries of the current occurrence. A claimed,
-// sent or ambiguous delivery is left alone: those resolve for themselves and are
-// never sent again.
+// supersedeRetries drops the retries of the current occurrence that an edit made
+// pointless: the schedule changed, or the target is no longer in the spec. A
+// claimed, sent or ambiguous delivery is left alone: those resolve for themselves
+// and are never sent again.
 func (s *Scheduler) supersedeRetries(r *v1alpha1.Reminder, now time.Time) bool {
+	replanned := r.Status.PlanHash != PlanHash(r.Spec)
 	changed := false
 	for i := range r.Status.Deliveries {
 		d := &r.Status.Deliveries[i]
-		if d.State != v1alpha1.DeliveryRetry {
+		if d.State != v1alpha1.DeliveryRetry || (!replanned && slices.Contains(r.Spec.Targets, d.Target)) {
 			continue
 		}
 		d.State, d.NotBefore, d.Reason, d.UpdatedAt = v1alpha1.DeliverySkipped, nil, supersededReason, metav1.NewTime(now.UTC())
@@ -574,22 +576,9 @@ func occurrenceDone(r *v1alpha1.Reminder, occ int32) bool {
 //     occurrence of a schedule that no longer exists.
 func (s *Scheduler) finish(ctx context.Context, r *v1alpha1.Reminder, now time.Time, forced string) {
 	occ := r.Status.Occurrence
-	outcome := "sent"
-	switch forced {
-	case "":
-		for _, d := range r.Status.Deliveries {
-			if d.Occurrence != occ {
-				continue
-			}
-			switch {
-			case d.State == v1alpha1.DeliveryFailed || d.State == v1alpha1.DeliveryAmbiguous:
-				outcome = "failed"
-			case d.Reason == supersededReason && outcome == "sent":
-				outcome = "superseded"
-			}
-		}
-	default:
-		outcome = forced
+	outcome := forced
+	if outcome == "" {
+		outcome = occurrenceOutcome(r, occ)
 	}
 	due := r.Status.NextDue.Time
 	curPlan := PlanHash(r.Spec)
@@ -612,6 +601,10 @@ func (s *Scheduler) finish(ctx context.Context, r *v1alpha1.Reminder, now time.T
 		}
 	}
 	r.Status.PlanHash = curPlan
+	raw := outcome
+	if outcome == "skipped" || outcome == "superseded" {
+		outcome += " (nothing was delivered)"
+	}
 	suffix := ""
 	if replanned {
 		suffix = "; rescheduled by an edit"
@@ -624,14 +617,49 @@ func (s *Scheduler) finish(ctx context.Context, r *v1alpha1.Reminder, now time.T
 		r.Status.Message = fmt.Sprintf("occurrence %d: %s%s", occ, outcome, suffix)
 	} else {
 		r.Status.NextDue = nil
-		if outcome == "sent" || outcome == "superseded" {
+		switch raw {
+		case "sent":
 			r.Status.State = v1alpha1.ReminderSent
-		} else {
+		case "skipped", "superseded":
+			r.Status.State = v1alpha1.ReminderSkipped
+		default:
 			r.Status.State = v1alpha1.ReminderFailed
 		}
 		r.Status.Message = fmt.Sprintf("occurrence %d: %s%s", occ, outcome, suffix)
 	}
 	s.write(ctx, r)
+}
+
+// occurrenceOutcome says how an occurrence ended. It is "sent" ONLY if at least
+// one delivery was actually sent. Otherwise it is "failed" when a delivery
+// failed, was left ambiguous or was claimed and never resolved, "superseded" when
+// an edit dropped a pending retry, and "skipped" when nothing was deliverable or
+// configured (a calendar-only reminder, an unconfigured Pushover, a removed
+// target). A skip is never reported as a send.
+func occurrenceOutcome(r *v1alpha1.Reminder, occ int32) string {
+	var sent, failed, superseded bool
+	for _, d := range r.Status.Deliveries {
+		if d.Occurrence != occ {
+			continue
+		}
+		switch {
+		case d.State == v1alpha1.DeliverySent:
+			sent = true
+		case d.State == v1alpha1.DeliveryFailed || d.State == v1alpha1.DeliveryAmbiguous || d.State == v1alpha1.DeliveryClaimed || d.State == v1alpha1.DeliveryRetry:
+			failed = true
+		case d.Reason == supersededReason:
+			superseded = true
+		}
+	}
+	switch {
+	case failed:
+		return "failed"
+	case sent:
+		return "sent"
+	case superseded:
+		return "superseded"
+	}
+	return "skipped"
 }
 
 func laterOf(a, b time.Time) time.Time {

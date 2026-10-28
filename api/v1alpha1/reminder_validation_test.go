@@ -133,6 +133,10 @@ func TestReminderStatusBounds(t *testing.T) {
 	if err := k8s.Status().Update(ctx(t), r); err != nil {
 		t.Fatalf("a status: %v", err)
 	}
+	r.Status.State = v1alpha1.ReminderSkipped
+	if err := k8s.Status().Update(ctx(t), r); err != nil {
+		t.Fatalf("the skipped state: %v", err)
+	}
 	r.Status.State = "mostly-sent"
 	wantInvalid(t, k8s.Status().Update(ctx(t), r), "status.state")
 	r.Status.State = v1alpha1.ReminderPending
