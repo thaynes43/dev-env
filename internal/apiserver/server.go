@@ -78,6 +78,8 @@ type Server struct {
 	// PortalLaunchProfile is the templates profile every launched session runs
 	// on. The request cannot choose it. Empty makes the launch route refuse.
 	PortalLaunchProfile string
+	// Reminders turns on /v1/reminders (DESIGN-032); nil leaves the routes off.
+	Reminders *ReminderConfig
 	// PortalLaunchMaxUnfinished caps the unfinished sessions whose parent starts
 	// with "portal/". Zero or less means the default.
 	PortalLaunchMaxUnfinished int
@@ -210,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 	if len(s.PortalLaunchRepos) > 0 {
 		mux.Handle(apiv1.PortalLaunchPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalLaunch}}))
 	}
+	s.registerReminders(mux)
 	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())
 	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))
 	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.getDirectory}}))
