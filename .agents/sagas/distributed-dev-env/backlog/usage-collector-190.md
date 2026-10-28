@@ -75,6 +75,10 @@ Source only; no deployment, activation, credential, grant, DB or network change.
   product-page CSP header that allows only the embedded stylesheet. See
   [portal read boundary](../../../../docs/portal-read-boundary.md).
 
+## Claude passive callback bridge (2026-10-28)
+
+Story191 source adds explicit bounded statusline stdin to the unified usage command, retaining historical optional windows with Unknown freshness and account binding. It discards private metadata and installs no producer hook. Supported ingress, installed artifact and live acceptance remain separately authorized dependencies; no subscription coverage is claimed. See DESIGN030.
+
 ## C3: guarded on-demand source callsite (2026-10-28)
 
 The explicitly enabled `agentd codex-host allowance-read` source calls the

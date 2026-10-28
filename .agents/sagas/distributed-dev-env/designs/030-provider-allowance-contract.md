@@ -134,3 +134,7 @@ first-version release.
 ### Local unified usage read seam (2026-10-28)
 
 `agent-run usage -o json` performs an actual local acquisition preflight and reports three unconfigured source refusals. The attempt timestamps identify that local check, not a provider request or observation; last good, account binding and freshness remain Unknown. `--from-file FILE` (or explicit `-` for stdin) reads an untrusted bounded canonical cached read and preserves its original times and fields. It grants no trust or live acquisition. Cursor/Grok needs a supported subscription quota source and approved scope; Claude needs a passive producer ingress; Codex capture remains separately held. This source seam does not establish three-provider coverage.
+
+### Claude passive callback source (2026-10-28)
+
+`agent-run usage -o json --claude-statusline` explicitly reads one bounded documented statusline callback from stdin. Only optional five-hour and seven-day used percentages and Unix-second reset instants are projected. Missing or null fields are Unknown, historical zero remains zero, and a passed reset does not establish replenishment. Callback capture time is local, not a provider observation; freshness, current amounts and account binding remain Unknown. Unrelated fields, including paths and cost, are discarded. The source version is Unknown and current model is not served-model telemetry. This input bridge installs no hook and does not establish live provider coverage; an authorized producer ingress remains a separate dependency.
