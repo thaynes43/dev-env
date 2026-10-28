@@ -119,10 +119,18 @@ func main() {
 	output := flag.String("output", "", "output HTML file; run from repository root")
 	scenarios := flag.String("scenarios", "", "directory for offline presentation evidence pages")
 	product := flag.String("product", "", "directory for the Sessions and Tasks fixture previews; run from repository root")
+	pages := flag.String("pages", "", "new directory for offline synthetic Pages fixture previews")
 	flag.Parse()
-	if *output == "" && *scenarios == "" && *product == "" {
-		fmt.Fprintln(os.Stderr, "--output, --scenarios or --product is required")
+	if *output == "" && *scenarios == "" && *product == "" && *pages == "" {
+		fmt.Fprintln(os.Stderr, "--output, --scenarios, --product or --pages is required")
 		os.Exit(1)
+	}
+	if *pages != "" {
+		if err := writePages(*pages); err != nil {
+			fmt.Fprintln(os.Stderr, "Synthetic Pages previews unavailable.")
+			os.Exit(1)
+		}
+		fmt.Println("Wrote offline synthetic Pages fixture previews.")
 	}
 	if *product != "" {
 		if err := writeProduct(*product); err != nil {
