@@ -1620,7 +1620,8 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   session, one that does not say the agent stopped or says it still runs, one that
   lacks the session's own clone (`NotProven`: agentd finds clones by looking, so an
   empty or missing `~/repos`, or a clone that failed at boot, would otherwise read
-  as clean), and one where any clone could not fetch origin. That last check is stricter than D-43,
+  as clean; `BootstrapInterrupted` instead when agentd's `noClone` proof shows an
+  interrupted bootstrap, see below), and one where any clone could not fetch origin. That last check is stricter than D-43,
   which keeps the list after a failed fetch: with stale remote refs, a local branch
   whose commits only a since-deleted origin branch held is on no list and in no
   bundle. The condition `RescueFailed` is D-10's `rescueFailed` mark: True with the
@@ -1666,7 +1667,8 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   never ran still needs a rescue.
 - **What waits, and for whom.** A reaped session whose volume has no valid rescue
   stays, with `RemovalBlocked` saying why: its newest rescue failed (a session
-  whose clone failed at boot is `NotProven`), was superseded, or never ran because
+  whose clone failed at boot is `NotProven`, or `BootstrapInterrupted` when agentd
+  proves the bootstrap was interrupted; both stay blocked), was superseded, or never ran because
   its last pod was gone, ended or never started.
   Plan 02 adds a rescue pod for that (it mounts the volume, runs agentd without the
   agent, and lets the operator rescue it or retry a failed rescue), the archive timer
@@ -1722,8 +1724,37 @@ operator runs the usual exec rescue.**
   agentd's boot writes `~/.agentd` before anything else, so no agent ever ran there.
   Anything more on the volume (one file, agentd's state, a `lost+found` that holds a
   file or cannot be read, a shared directory that is not a mount) is not empty, and
-  a missing clone is still `NotProven` (D-51). A report that claims an empty volume
-  and also lists a clone, a bundle or a failure is `Failed` (`ReportMismatch`).
+  a missing clone is still `NotProven` (D-51), except as described next. A report
+  that claims an empty volume and also lists a clone, a bundle or a failure is
+  `Failed` (`ReportMismatch`).
+- **An interrupted bootstrap.** A volume with agentd's state but no clone of the
+  session's repository used to read `NotProven` forever. When no clone is found, agentd
+  now adds `noClone` to its report: counts of the entries in `~/repos` (clone staging
+  and hidden entries included) and `~/work`, and the codes of its own bootstrap record
+  (`~/.agentd/project-bootstrap.json`: the bootstrap state and reason, and the state,
+  step and reason of the declared repository). No path, history or detail leaves the
+  pod. The operator accepts it only when it is for this session's repository, both
+  counts are zero, the record is Partial or Failed and does not call the repository
+  Ready (a repository the record does not list needs a catalog reason), the agent was
+  stopped, and the report has no clone, bundle, failure or empty-volume claim. Then the
+  reason is `BootstrapInterrupted` and the message says the declared clone was never
+  made, that there is no Git work to rescue in the rescue's scope (`~/repos`), and that
+  HOME is preserved. Anything else, an older agentd, or a missing field keeps
+  `NotProven`. **The result is still `Failed`:** the volume is not counted as rescued,
+  archive stays blocked, nothing is deleted, the `RescueFailed` condition, the
+  `DevEnvRescueFailed` alert and the 15-minute retry are unchanged. Reach: it applies
+  only where the rescue runs a new agentd; the hold and rescue pods use the templates
+  image (2.45 at this writing), so an existing incident keeps reporting `NotProven`
+  until the agent image or the templates move, which is a separate approval. The
+  operator decodes the report leniently, so it may ship before or after the agent
+  image; the verdict changes only when both are new. **Open questions for Tom (not
+  asked):** (1) may a volume that carries a valid `noClone` proof count as rescued, and
+  so become archivable or deletable? That changes the volume-delete guard and is a
+  safety decision; this change does not make it. (2) Should a permanent
+  `BootstrapInterrupted` result back off its retries instead of trying every 15
+  minutes? Follow-up in haynes-ops: the reason list in `operator/app/prometheusrule.yaml`
+  (the `DevEnvRescueFailed` annotation) names the reasons and should gain
+  `BootstrapInterrupted`.
 - **When a hold pod goes otherwise.** It runs no agent, so the guard
   (`holdRemovalAllowed`, through `podRemovalAllowed` and `deletePod`) lets it go
   whenever nothing needs it: the session wants its own pod again (a resume, once

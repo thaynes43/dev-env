@@ -31,6 +31,9 @@ type RescueReport struct {
 	// point, so there is no clone and nothing to save. Such a report has no
 	// repos, and the rescue wrote nothing, not even agentd's state directory.
 	VolumeEmpty bool `json:"volumeEmpty,omitempty"`
+	// NoClone is set only when no clone was found and the volume shows an
+	// interrupted bootstrap (see NoCloneProof). The operator decodes it leniently.
+	NoClone *NoCloneProof `json:"noClone,omitempty"`
 	// Agent is what `--stop-agent` did to the agent CLI before the rescue
 	// began. It is nil without the flag.
 	Agent *AgentStop `json:"agent,omitempty"`

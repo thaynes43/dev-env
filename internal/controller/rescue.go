@@ -347,8 +347,13 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		// The session's own clone must be on the report: agentd finds clones
 		// by looking, so a missing ~/repos, a clone that failed, or a .git
 		// that is not a directory would otherwise read as nothing to save.
-		setReason("NotProven")
-		add("the session's clone ~/repos/%s is not in the report, so nothing proves the volume holds no work", s.Spec.Repo)
+		if msg, ok := interruptedBootstrap(s, rep); ok {
+			setReason("BootstrapInterrupted")
+			add("%s", msg)
+		} else {
+			setReason("NotProven")
+			add("the session's clone ~/repos/%s is not in the report, so nothing proves the volume holds no work", s.Spec.Repo)
+		}
 	}
 	for _, repo := range rep.Repos {
 		if repo.Error != "" {
