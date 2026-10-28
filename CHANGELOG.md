@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.60.0](https://github.com/thaynes43/dev-env/compare/v2.59.0...v2.60.0) (2026-10-28)
+
+
+### Features
+
+* add fixed portal Pages source check ([#622](https://github.com/thaynes43/dev-env/issues/622)) ([4b7bb7c](https://github.com/thaynes43/dev-env/commit/4b7bb7c520e2c53106640dcb665fe06d90e29e6b))
+
 ## [2.59.0](https://github.com/thaynes43/dev-env/compare/v2.58.1...v2.59.0) (2026-10-28)
 
 
