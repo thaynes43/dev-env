@@ -2066,7 +2066,7 @@ fails retries the delete while that proof matches this pod, including after
 the agent has exited. The 72h session
 message and the Pushover line are deferred: they are not sent. D-50 egress stays.
 
-**Remote sessions, 2026-10-19 (story 110 T19).** A remote Claude session drains
+**Remote sessions, 2026-10-19 (story 110 T19; historical, superseded for automatic remote drain by the 2026-10-28 source ruling below).** A remote Claude session drains
 like any idle interactive one. Its pod, even one a later boot started through the
 resume path, keeps `launch.json` (the first launch) beside `resume.json`, and the
 read takes the conversation from `launch.json`. For Claude that id is chosen at
@@ -2084,12 +2084,14 @@ installed AgentSession CRD is older than `config/crd/` and the API server prunes
 proof: sync the CRD copy in haynes-ops first (it was missing `status.restart` and
 `status.agent.attached` on 2026-10-19).
 
+**Remote upgrade source ruling, 2026-10-28.** An automatic CLI, image or template revision alone does not stop user remote-control sessions for being idle, waiting or disconnected. A pending drain without a recorded stop is cancelled; a matching already-stopped proof continues the existing recovery path. Explicit owner-authorized checkpoint and suspend/resume remain the existing manual adoption mechanism; this ruling adds no command or grant. Actual history and Remote Control pairing retention require separate acceptance and are not proven by this source change.
+
 ### 5.3 What this changes for Renovate
 
 v1's image bumps are manual-only because a roll kills every session
 (`.renovate/autoMerge.json5`, 2026-07-20). With drain-on-idle, the v2 image (tag line
 `2.x`) can auto-merge like any other own image once phase 4 ships. The Dockerfile
-tool group keeps its single grouped PR.
+tool group keeps its single grouped PR. User remote-control sessions are excluded from automatic revision drain under the 2026-10-28 source ruling.
 
 ## 6. Shared state, item by item
 

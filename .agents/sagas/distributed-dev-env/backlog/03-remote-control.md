@@ -328,6 +328,7 @@ post-ready does. DESIGN-001 3.8, 6.2, 6.7; R-02.
   (archive=200)` in its debug log); it is not SIGKILLed at the end of the grace
   period. A reaped one leaves the
   phone's active list (or, if S-15 failed, is archived from the console).
+  **2026-10-28 source clarification:** This phone-entry and history criterion applies to an explicit owner-authorized handoff or recovery, not an automatic image-only drain. Actual continuity remains to be verified; the criterion is unchanged.
 - No pod other than the credential owner holds a refresh token (checked by listing
   the credentials files' keys, never their values).
 - A Remote Control session older than 13 hours still takes a message from the phone.
