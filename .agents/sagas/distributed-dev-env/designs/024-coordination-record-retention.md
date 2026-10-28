@@ -264,7 +264,7 @@ H9), the gap remains in practice.*
 
 **Who can read it.** Exec into the shelf reads every project's archived messages
 and contexts. RBAC does not keep agents out. The `dev-env-agent` ClusterRole
-grants `pods/exec` cluster-wide, so `kubectl auth can-i create pods/exec -n
+grants `pods/exec` cluster-wide, so `kubectl auth can-i create pods --subresource=exec -n
 dev-agents` answers yes for it. Admission does: the ValidatingAdmissionPolicy
 `dev-env-identity-guard` refuses every exec in the three dev-env namespaces to
 every `dev-agents` identity except `dev-env-workbench`. That covers the baseline
@@ -1073,7 +1073,7 @@ concurrent four-get-plus-prune run is in section 5. Nothing was installed.
 `kubectl auth can-i` shows delete for `dev-env-operator` on the four kinds in
 `dev-env-system` and not for a session ServiceAccount; from a session pod, an
 exec into the shelf is refused by `dev-env-identity-guard` although `kubectl auth
-can-i create pods/exec -n dev-agents` answers yes; the retention metrics appear
+can-i create pods --subresource=exec -n dev-agents` answers yes; the retention metrics appear
 and a pass completes; a live GET is unchanged and `?archived=only` answers an
 empty page. An end-to-end release needs a genuinely absent owner. With the
 installed private-history flag that first comes after follow-up F1, so the
