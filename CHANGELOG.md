@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.62.0](https://github.com/thaynes43/dev-env/compare/v2.61.0...v2.62.0) (2026-10-28)
+
+
+### Features
+
+* accept passive Claude statusline usage ([#627](https://github.com/thaynes43/dev-env/issues/627)) ([10fef90](https://github.com/thaynes43/dev-env/commit/10fef90dda9a8db8b2017e2c7507d348784e4609))
+* admit GPT-6.1 Terra managed tasks ([#628](https://github.com/thaynes43/dev-env/issues/628)) ([ffe96c0](https://github.com/thaynes43/dev-env/commit/ffe96c064de379ef738e4b1b99c5dcf8d1df1eb4))
+
 ## [2.61.0](https://github.com/thaynes43/dev-env/compare/v2.60.0...v2.61.0) (2026-10-28)
 
 
