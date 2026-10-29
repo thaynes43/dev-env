@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
+	"github.com/thaynes43/dev-env/web/portal/session"
 )
 
 func writeProductStates(dir string) error {
@@ -43,6 +49,7 @@ func writeProductStates(dir string) error {
 		{"sessions-contract-refused", "response_contract", false, 2, 1, 0},
 		{"sessions-clock-ahead", "clock_ahead", false, 2, 0, 0},
 		{"sessions-cancelled", "cancelled", false, 2, -1, 0},
+		{"sessions-read-not-started", "read_not_started", false, 0, -1, 0},
 	} {
 		failure := &portal.ProductReadFailure{ReasonCode: fixture.reason, Page: fixture.page, RowIndex: fixture.row, HTTPStatus: fixture.status, TimedOut: fixture.timedOut, ObservedAt: "2026-10-29T14:00:00Z"}
 		if fixture.reason != "not_connected" {
@@ -84,6 +91,52 @@ func writeProductStates(dir string) error {
 			return err
 		}
 		if err = os.WriteFile(filepath.Join(dir, "sessions-"+state+".html"), body, 0600); err != nil {
+			return err
+		}
+	}
+	return writeAttentionStates(dir)
+}
+
+// writeAttentionStates exercises the same strict decoder and attention builder
+// as the live read. Each file has exactly one synthetic session and cause.
+func writeAttentionStates(dir string) error {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	at := now.Add(-time.Hour)
+	for _, f := range []struct{ name, mode, phase, state, result, rcState, url string }{
+		{"waiting-linked", "remote", "Running", protocol.AgentWaiting, "", "registered", "https://claude.ai/code/session_fixture-247"},
+		{"waiting-no-link", "remote", "Running", protocol.AgentWaiting, "", "registered", ""},
+		{"waiting-not-reported", "remote", "Running", protocol.AgentWaiting, "", "", ""},
+		{"waiting-state-not-reported", "remote", "Running", protocol.AgentWaiting, "", "not-reported", ""},
+		{"waiting-unknown-state", "remote", "Running", protocol.AgentWaiting, "", "future-state", ""},
+		{"waiting-login-required", "remote", "Running", protocol.AgentWaiting, "", "login-required", ""},
+		{"waiting-unpaired", "remote", "Running", protocol.AgentWaiting, "", "unpaired", ""},
+		{"waiting-offline", "remote", "Running", protocol.AgentWaiting, "", "offline", ""},
+		{"waiting-pairing", "remote", "Running", protocol.AgentWaiting, "", "pair-code-issued", ""},
+		{"waiting-errored", "remote", "Running", protocol.AgentWaiting, "", "errored", ""},
+		{"waiting-starting", "remote", "Running", protocol.AgentWaiting, "", "starting", ""},
+		{"waiting-local", "local", "Running", protocol.AgentWaiting, "", "", ""},
+		{"task-failed", "task", "Failed", protocol.AgentExited, "Failed", "", ""},
+		{"task-timed-out", "task", "Failed", protocol.AgentExited, "TimedOut", "", ""},
+		{"pod-failed", "remote", "Failed", protocol.AgentIdle, "", "", ""},
+		{"agent-failed", "remote", "Running", protocol.AgentFailed, "", "", ""},
+		{"agent-interrupted", "remote", "Running", protocol.AgentInterrupted, "", "", ""},
+	} {
+		unknown := protocol.TokenObservation{State: protocol.UsageUnknown}
+		a := &apiv1.PortalSessionActivity{Mode: f.mode, Provider: "claude", AgentState: f.state, TaskResult: f.result, RequestedModel: "claude-opus-5-5", LastActivity: &at,
+			Usage: apiv1.PortalSessionUsage{Scope: protocol.UsageUnknown, ResultState: protocol.UsageUnknown, ServedModels: []string{}, InputTokens: unknown, OutputTokens: unknown, CacheReadInputTokens: unknown, CacheCreationInputTokens: unknown, Cost: protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown}}}
+		if f.rcState != "" {
+			a.RemoteControl = &apiv1.PortalRemoteControl{State: f.rcState, URL: f.url}
+		}
+		page := apiv1.PortalSessionPage{Limit: 50, Complete: true, Freshness: "observed", ObservedAt: now, Sessions: []apiv1.PortalSessionSummary{{Name: "synthetic-attention", UID: "uid-synthetic-attention", Repo: "dev-env", Phase: f.phase, Freshness: "observed", ObservedAt: at, Activity: a}}}
+		source, err := json.Marshal(map[string]any{"version": 1, "now": now, "body": page})
+		if err != nil {
+			return err
+		}
+		body, err := session.RenderSessionsFixture(bytes.NewReader(source))
+		if err != nil {
+			return err
+		}
+		if err = os.WriteFile(filepath.Join(dir, "attention-"+f.name+".html"), body, 0600); err != nil {
 			return err
 		}
 	}

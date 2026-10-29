@@ -244,18 +244,36 @@ shared Authentik secret-safe logging, proxy/isolation and Gate A remain held.
 
 Source may optionally read `config/session-actions.json` under the existing
 portal root. Absence leaves send and private history disabled. The object may
-contain `send` and/or `history`; each is independently scoped with exact
-`issuer`, `subject`, and a nonempty `targets` array of `{ "name", "uid" }`.
-The issuer must match the existing pinned issuer. Invalid, duplicate, ambiguous,
-or unknown fields and duplicate target names or UIDs fail closed. This scope
-is additional to current session, UserInfo and group authorization; metadata
-access does not grant either action. The existing operator token and pinned CA
-are reused. Do not populate this file with real identities or targets without
-separate authorization.
+contain `send` and/or `history`; each names only resources: exactly one key,
+`targets`, a nonempty array (at most 64) of `{ "name", "uid" }`. The file
+names no person: there is no `issuer` or `subject`. Any principal that the
+existing group authorizer admits (a current portal session and live UserInfo
+with `portal_is_active` and `portal_is_admin` both true) may use a configured
+action, and each request is checked for its own authenticated principal. The
+issuer stays pinned by the session verifier, not by this file. Invalid,
+duplicate, ambiguous or unknown fields, a bad target, and duplicate target
+names or UIDs fail closed. This scope is additional to current session,
+UserInfo and group authorization; metadata access does not grant either
+action. The existing operator token and pinned CA are reused. Do not populate
+this file with real targets without separate authorization. See DESIGN-029
+"Group-based action scopes, 2026-10-29".
+
+**Old-format or malformed files stop the portal at startup.** A file that
+carries `issuer` or `subject` (the former per-person format), or is otherwise
+malformed, is refused as a whole at load: no action scope is returned and
+`LoadProduction` fails, so the portal process exits. There is no compatibility
+fallback. In a rollout the new pod crash-loops and never becomes ready;
+`maxUnavailable: 0` keeps the old pod serving. The portal reads the action file
+only at startup. A broken file followed by an unrelated restart, such as a
+node drain or eviction, takes the portal down until the file is fixed.
+Change the file only together with, or after, the portal image that accepts
+it: an older image refuses the targets-only format the same way.
 
 Operator source separately accepts repeatable `--portal-send-target=name=uid`
-and `--portal-history-target=name=uid` options. Each action has its own target
-map; neither is enabled by `--enable-portal-reader` alone. Explicit targets
+and `--portal-history-target=name=uid` options. These flags stay the
+per-target-session allowlist (the agent sessions that may be messaged or whose
+history may be read): the portal file grants no operator target outside them.
+Each action has its own target map; neither is enabled by `--enable-portal-reader` alone. Explicit targets
 require that reader flag, and invalid or duplicate entries fail startup. These
 source interfaces are not an installation or approval: deployment, eligible
 idle agentd rollout, provider format qualification, live private access and
@@ -351,6 +369,23 @@ A registered agent with a link gets an **Open in Claude** link in its header. Ev
 
 Any other state shows its own word, escaped.
 
+A session in Needs attention now starts with its reason and next step. Waiting
+reads “Waiting for your input” and its list subtitle is “Waiting for you”. A
+registered remote session's primary **Answer in Claude** link is exactly its
+existing header URL; the header link is hidden while that primary link is shown.
+Registered sessions without that URL point to the session's Claude app or
+workbench. Other remote states name the reported state and point to the
+workbench terminal, as do local waiting sessions. Recent task failure/timeout
+shows the task end time (UTC and age); pod failure and agent failure/interruption
+label the observation “Last reported”. Plain `agent-run show <name>` is always
+offered for failures. Running sessions also offer `agent-run log <name>`;
+otherwise the panel points to `logs/<name>.log` on the shared volume, matching
+the API's saved-log guidance. Task results keep precedence, and failures age out
+after 24 hours. Attention reasons have no trailing period.
+The portal cannot infer the question. The generic conversation gap appears
+only without a history link or loaded conversation; loaded conversations keep
+their specific unavailable reason. This enables no send or history access.
+
 This is read-only. It adds no portal action and needs no operator flag.
 
 **Deploy the portal before the operator.** The portal rejects activity keys it does not know.
@@ -431,10 +466,9 @@ starts.
 
 Three operator flags, `--portal-launch-repo`, `--portal-launch-profile` and
 `--portal-launch-max-unfinished`, plus a `launch` scope in the portal's private
-action file (`session-actions.json`), bound to the exact principal and
-repositories like Send. That scope is not implemented in this unit. It, the
-profile choice and every live flag need Tom's confirmation, as does the
-identity step.
+action file (`session-actions.json`), bound to repositories only (see
+"Default-off portal launch form (BFF)"). Any principal the group check admits
+may launch. The profile choice and every live flag need Tom's confirmation.
 
 ## Default-off portal launch form (BFF)
 
@@ -444,20 +478,25 @@ the private action file `config/session-actions.json` has a `launch` entry, and
 the operator has the launch flags. The portal reads the file once at start.
 
 **The `launch` scope.** An optional top-level entry beside `send` and `history`,
-parsed as strictly as they are. It has exactly the keys `issuer`, `subject` and
-`repos`. `issuer` must be the pinned issuer; `subject` is the one principal that
-may launch; `repos` is a non-empty list of at most 16 distinct repository names.
-Any other key, shape or value stops the portal at start. With no `launch` entry
-the route and the form do not exist, and `send` and `history` behave as before.
+parsed as strictly as they are. It has exactly one key, `repos`: a non-empty
+list of at most 16 distinct repository names. There is no `issuer` or `subject`;
+any principal the group check admits may launch. Any other key, shape or value,
+including the former `issuer` and `subject` keys, makes the portal process exit
+at startup. In a rollout the new pod crash-loops and never becomes ready;
+`maxUnavailable: 0` keeps the old pod serving. The startup-only read also means
+a broken file followed by a node drain, eviction or other unrelated restart
+takes the portal down until the file is fixed. Change the file only together
+with, or after, the portal image that accepts it. With no `launch` entry the
+route and the form do not exist, and `send` and `history` behave as before.
 
 ```json
-{"launch": {"issuer": "<pinned issuer>", "subject": "<principal>", "repos": ["dev-env"]}}
+{"launch": {"repos": ["dev-env"]}}
 ```
 
 **The route.** `POST /portal/projects/dev-env/environments/internal/session-launches`
 only. It makes the same checks as Send, by the same code: a current portal
 session, the exact Origin, a form content type, the session's CSRF value, a fresh
-authorization for dev-env, and a principal equal to the scope's. It also needs a
+authorization for dev-env for the request's own principal. It also needs a
 43-character request ID, a repository in the scope, a mode of `task`, `local` or
 `remote`, a model from the offered list of full Claude ids, an effort and size
 from their fixed sets, and no other form key. Anything else is denied and nothing
@@ -487,14 +526,14 @@ bytes gets a result page with a field error, not a denial.
   came back, so a session may or may not exist. The page says to check the Agents
   list; it never retries.
 
-The Sessions page carries the form only for the scope's principal and only when
-the route is configured. The page then has the send policy (`form-action 'self'`),
+The Sessions page carries the form for any principal the group check admits,
+and only when the route is configured. The page then has the send policy (`form-action 'self'`),
 still with no script. The Tasks page never has it.
 
 **Activation (not applied).** The operator needs `--portal-launch-repo`,
 `--portal-launch-profile` and `--portal-launch-max-unfinished`; the portal needs
-this `launch` scope in its private file; and Tom confirms the principal, the
-repositories and the profile. This change enables none of them.
+this `launch` scope in its private file, after the portal image is updated; and
+Tom confirms the repositories and the profile. This change enables none of them.
 
 ## Separate Codex task pilot image (source only)
 
@@ -514,9 +553,12 @@ Sessions reads must finish by request start plus 12 seconds, including time
 already spent on initial authentication and authorization. The same deadline
 covers credentials, up to ten operator pages, projection and selected history;
 each operator HTTP request still has its five-second timeout. This leaves
-headroom within the 20-second write timeout for final authentication and
-authorization checks and rendering. A read stopped at the ten-page cap is a
-successful but incomplete read (`complete=false`); it updates the last-success
+headroom within the 20-second write timeout. Final authentication,
+authorization and form checks share a deadline of request start plus 19 seconds
+(or the request's earlier deadline), leaving time for rendering. If initial
+checks exhaust the read budget, the source read is skipped: `read_not_started`
+is distinct from an operator timeout, and no credential or operator read runs.
+A read stopped at the ten-page cap is a successful but incomplete read (`complete=false`); it updates the last-success
 time and emits no failure event. Failures show a fixed reason (not connected,
 credential unavailable, operator unreachable/timed out, HTTP refusal, contract
 refusal, clock ahead or cancelled), the observation time, Retry at the same canonical
@@ -526,7 +568,8 @@ has no row. No partial or cached session data is shown after a failed read.
 
 One structured `portal_session_read_failed` line records each failed read:
 `reason_code`, `page` (0 outside an inventory-page read), `row_index` (-1 without a row),
-`http_status` (0 without a response), `timed_out`, `elapsed_ms` and phase
+`http_status` (0 without a response), `timed_out`, `elapsed_ms` (including initial
+checks), `pre_read_ms` (time before the source read) and phase
 measurements `credential_ms`, `fetch_ms`, `decode_ms`, `projection_ms`, `history_ms`. It includes
 no upstream errors, values, headers or credentials. `not_connected` and
 `cancelled` log at Info; other failures log at Warn. A deadline reached between

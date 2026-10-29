@@ -333,6 +333,49 @@ Ruling (Tom, 2026-10-26, #178 journal 1786): "No we should manage users by group
 - Session binding, revocation, CSRF and the resource allowlist are unchanged.
 - In haynes-ops, the Authentik application's user-specific binding goes away in a later reviewed step. The Admins group binding stays.
 
+### Group-based action scopes, 2026-10-29
+
+Tom's 2026-10-26 ruling, "No we should manage users by group not by ID,"
+also governs send, history and launch. On 2026-10-29 he selected "Same group
+as portal login" for send and history; launch follows the same rule. This
+supersedes the subject-bound action configuration in the dated October 27
+source contracts below (OpenProject #248, related #244 and #239, Epic #120).
+
+The private `config/session-actions.json` names only resources:
+
+```json
+{
+  "send": {"targets": [{"name": "agent-example", "uid": "uid-example"}]},
+  "history": {"targets": [{"name": "agent-example", "uid": "uid-example"}]},
+  "launch": {"repos": ["dev-env"]}
+}
+```
+
+Each action is optional and stays off when absent. Only these exact keys
+are accepted. Target name/UID validation, duplicate rejection, the limit of
+64 targets per action, the launch repository limits and the file size bound
+remain in force. A file carrying `issuer` or `subject`, including the old
+per-person format, is refused as a whole at load: no action scope is returned
+and startup fails closed. There is no compatibility fallback.
+
+Each request uses its own authenticated portal-session principal. The issuer
+remains pinned by the existing session verifier and current authorizer; it
+is not supplied by the action file. Live UserInfo must identify that same
+subject and have `portal_is_active` and `portal_is_admin` both true. Two
+different admitted principals may use the same configured resources. Send
+and launch retain their initial authorization and fresh check immediately
+before dispatch; history retains its checks before fetch and before releasing
+the response. Request-private session references, token digests, expiry and
+revocation checks, CSRF, attribution, receipt privacy and replay protections
+are unchanged. Configured send and launch forms are available to any admitted
+principal; an unconfigured action shows no form.
+
+The operator's `--portal-send-target` and `--portal-history-target` flags
+remain the independent per-session name/UID allowlists. The portal's resource
+configuration grants no operator target outside those flags. Operator launch
+policy and repository checks also remain unchanged. Source tests and a PR do
+not establish deployment or authenticated runtime acceptance.
+
 ### Recovery witness dropped, 2026-10-26
 
 Ruling (Tom, 2026-10-26, #178): drop the admission witness and recovery fence.

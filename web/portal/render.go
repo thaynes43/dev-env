@@ -128,6 +128,13 @@ type ProductSection struct {
 	Note            string
 }
 
+// ProductAttention explains an existing Needs attention state. Commands are
+// displayed as text only; Link is the registered Remote Control header URL.
+type ProductAttention struct {
+	Reason, When, NextAction, Link string
+	Commands                       []string
+}
+
 // ProductRow is one list item and its detail. ID is the in-page anchor, s or t
 // followed by digits; a row with any other ID is not rendered.
 type ProductRow struct {
@@ -139,6 +146,7 @@ type ProductRow struct {
 	Sections                                  []ProductSection
 	Context                                   []ProductField
 	Messages                                  *ProductMessages
+	Attention                                 *ProductAttention
 	// Selected marks the one row the request selected by its Session UID
 	// (Sessions ?session=). It is the default detail on every viewport and
 	// is never trimmed. Only the first selected row counts.
@@ -404,7 +412,7 @@ type ProductUsageRow struct {
 
 // SessionHref selects the session by its stable UID, regardless of list order.
 func (r ProductUsageRow) SessionHref() string {
-	if r.SessionUID == "" {
+	if !productSessionUID.MatchString(r.SessionUID) {
 		return ""
 	}
 	return productSessionsHref + "?session=" + url.QueryEscape(r.SessionUID)
@@ -459,7 +467,7 @@ type ProductRail struct {
 
 // ProductReadFailure is a failed Sessions read. ReasonCode is one of
 // not_connected, credential_unavailable, operator_unreachable, operator_refused,
-// response_contract, clock_ahead or cancelled. Only fixed wording is rendered.
+// response_contract, clock_ahead, read_not_started or cancelled. Only fixed wording is rendered.
 // Page is one-based (0 outside an inventory-page read); RowIndex is zero-based (-1 for no row).
 // Times describe reads in this process, not cached session data.
 type ProductReadFailure struct {
@@ -483,6 +491,8 @@ func productReadFailure(f *ProductReadFailure, filter ProductFilter) *productRea
 		v.Reason = "The Sessions source is not connected."
 	case "credential_unavailable":
 		v.Reason = "The operator credential is unavailable."
+	case "read_not_started":
+		v.Reason = "The Sessions read could not start within its time budget. Try again."
 	case "operator_unreachable":
 		v.Reason = "The operator could not be reached."
 		if f.TimedOut {
@@ -553,8 +563,10 @@ const (
 )
 
 var (
-	productTones = map[string]bool{"ok": true, "busy": true, "wait": true, "bad": true, "info": true, "muted": true}
-	productID    = regexp.MustCompile(`^[st][0-9]{1,4}$`)
+	productTones            = map[string]bool{"ok": true, "busy": true, "wait": true, "bad": true, "info": true, "muted": true}
+	productRemoteControlURL = regexp.MustCompile(apiv1.PortalRemoteControlURLPattern)
+	productSessionUID       = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+	productID               = regexp.MustCompile(`^[st][0-9]{1,4}$`)
 )
 
 func productTone(tone string) string {
@@ -763,6 +775,17 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 				if !strings.HasPrefix(row.Link, "https://") {
 					row.Link, row.LinkLabel = "", ""
 				}
+				if row.Attention != nil {
+					attention := *row.Attention
+					// The primary action must be the same registered Claude link as the header.
+					if attention.Link != row.Link || !productRemoteControlURL.MatchString(attention.Link) {
+						attention.Link = ""
+					}
+					row.Attention = &attention
+					if attention.Link != "" {
+						row.Link, row.LinkLabel = "", ""
+					}
+				}
 				if row.Messages != nil {
 					m := *row.Messages
 					m.Route.Tone = productTone(m.Route.Tone)
@@ -771,6 +794,9 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					}
 					if !strings.HasPrefix(m.HistoryHref, productSessionsHref+"?session=") {
 						m.HistoryHref = ""
+					}
+					if row.Attention != nil && m.HistoryHref == "" && m.Conversation == nil {
+						m.History = "The portal cannot show this session's conversation."
 					}
 					if m.Conversation != nil {
 						m.Conversation = boundConversation(*m.Conversation)

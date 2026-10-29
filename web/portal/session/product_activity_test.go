@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -447,5 +449,182 @@ func TestTaskUsageNoteNamesHowTheProviderCountsCacheReads(t *testing.T) {
 		if note != want {
 			t.Errorf("%s: %q", name, note)
 		}
+	}
+}
+
+func TestSessionAttentionReasonsAndActions(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	recent, older := now.Add(-time.Hour), now.Add(-2*time.Hour)
+	link := "https://claude.ai/code/session_fixture-247"
+	for _, tc := range []struct {
+		name, mode, phase, state, result, rcState, url, reason, next, when string
+		commands                                                           bool
+	}{
+		{"waiting linked", "remote", "Running", protocol.AgentWaiting, "", "registered", link, "Waiting for your input", "", "", false},
+		{"waiting no URL", "remote", "Running", protocol.AgentWaiting, "", "registered", "", "Waiting for your input", "Remote Control link not reported: answer from the session's Claude app or the workbench.", "", false},
+		{"waiting no registration", "remote", "Running", protocol.AgentWaiting, "", "", "", "Waiting for your input", "Remote Control state was not reported: answer from the session's terminal on the workbench.", "", false},
+		{"waiting pairing", "remote", "Running", protocol.AgentWaiting, "", "pair-code-issued", link, "Waiting for your input", "A pairing code was issued but pairing is not confirmed: answer from the session's terminal on the workbench.", "", false},
+		{"waiting invalid URL", "remote", "Running", protocol.AgentWaiting, "", "registered", "https://evil.example/", "Waiting for your input", "Remote Control link not reported: answer from the session's Claude app or the workbench.", "", false},
+		{"waiting local", "local", "Running", protocol.AgentWaiting, "", "registered", link, "Waiting for your input", "Answer in the session's terminal on the workbench.", "", false},
+		{"waiting unknown mode", "Unknown", "Running", protocol.AgentWaiting, "", "", "", "Waiting for your input", "Check the session from the workbench.", "", false},
+		{"waiting unknown mode registered", "Unknown", "Running", protocol.AgentWaiting, "", "registered", link, "Waiting for your input", "", "", false},
+		{"waiting headless", "task", "Running", protocol.AgentWaiting, "Unknown", "", "", "Waiting for your input", "Check the session from the workbench.", "", false},
+		{"task failed", "task", "Failed", protocol.AgentWaiting, "Failed", "", "", "Task failed", "Inspect the session from a session or the workbench; its log is kept on the shared volume at logs/fixture-agent.log.", "2h ago · 29 Oct 2026, 12:00 UTC", true},
+		{"task timed out", "task", "Suspended", protocol.AgentExited, "TimedOut", "", "", "Task timed out", "Inspect the session from a session or the workbench; its log is kept on the shared volume at logs/fixture-agent.log.", "2h ago · 29 Oct 2026, 12:00 UTC", true},
+		{"pod failed", "remote", "Failed", protocol.AgentWaiting, "", "registered", link, "Session pod failed", "Inspect the session from a session or the workbench; its log is kept on the shared volume at logs/fixture-agent.log.", "Last reported 1h ago · 29 Oct 2026, 13:00 UTC", true},
+		{"agent failed", "remote", "Running", protocol.AgentFailed, "", "", "", "Agent stopped unexpectedly", "Inspect the session and its log from a session or the workbench.", "Last reported 1h ago · 29 Oct 2026, 13:00 UTC", true},
+		{"agent interrupted", "remote", "Running", protocol.AgentInterrupted, "", "", "", "Agent stopped unexpectedly", "Inspect the session and its log from a session or the workbench.", "Last reported 1h ago · 29 Oct 2026, 13:00 UTC", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &apiv1.PortalSessionActivity{Mode: tc.mode, AgentState: tc.state, TaskResult: tc.result, LastActivity: &older, RequestedModel: "claude-opus-5-5", Usage: unknownSessionUsage()}
+			if tc.rcState != "" {
+				a.RemoteControl = &apiv1.PortalRemoteControl{State: tc.rcState, URL: tc.url}
+			}
+			s := apiv1.PortalSessionSummary{Name: "fixture-agent", UID: "uid-fixture", Repo: "dev-env", Phase: tc.phase, Freshness: "stale", ObservedAt: recent, Activity: a}
+			row := sessionRow(s, now)
+			panel := row.Attention
+			if panel == nil {
+				t.Fatal("missing attention panel")
+			}
+			if panel.Reason != tc.reason || panel.NextAction != tc.next || panel.When != tc.when {
+				t.Fatalf("panel = %+v", panel)
+			}
+			if tc.name == "waiting linked" || tc.name == "waiting unknown mode registered" {
+				if panel.Link != link || panel.Link != row.Link || row.LinkLabel != "Open in Claude" {
+					t.Fatal("Answer link differs from existing registered URL")
+				}
+			} else if panel.Link != "" {
+				t.Fatal("invented Answer link")
+			}
+			if tc.commands {
+				want := "agent-run show fixture-agent"
+				if tc.phase == "Running" {
+					want += "|agent-run log fixture-agent"
+				}
+				if strings.Join(panel.Commands, "|") != want {
+					t.Fatalf("commands = %v, want %s", panel.Commands, want)
+				}
+			}
+			if strings.HasSuffix(panel.Reason, ".") {
+				t.Fatal("attention reason has a trailing period")
+			}
+			if row.Status.Text == "Waiting" && row.Description != "Waiting for you" {
+				t.Fatal("waiting row lacks subtitle")
+			}
+			row.ID = "s1"
+			body, err := portal.RenderProduct(portal.ProductPage{Title: "Sessions", Connected: true, Groups: []portal.ProductGroup{{Title: "Needs attention", Rows: []portal.ProductRow{row}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(body)
+			if strings.Count(text, "The portal cannot show this session&#39;s conversation.") != 1 || strings.Contains(text, "Message history is unavailable") || strings.Contains(text, "<form") {
+				t.Fatal("conversation gap is repeated, missing or adds authority")
+			}
+			if strings.Index(text, `class="attention-panel"`) > strings.Index(text, `class="work-area"`) || strings.Count(text, "<h1") != 1 {
+				t.Fatal("attention is not at top, or extra h1")
+			}
+			if (tc.name == "waiting linked" || tc.name == "waiting unknown mode registered") && !strings.Contains(text, `class="btn primary" href="`+link+`" rel="noreferrer">Answer in Claude`) {
+				t.Fatal("missing primary Answer link")
+			}
+		})
+	}
+}
+
+func TestSessionAttentionHonorsGroupAndTimePrecedence(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	recent, old := now.Add(-time.Hour), now.Add(-25*time.Hour)
+	for _, tc := range []struct {
+		name, phase, state, result, freshness string
+		last                                  *time.Time
+		beat                                  time.Time
+		attention                             bool
+		when                                  string
+	}{
+		{"busy", "Running", protocol.AgentBusy, "", "observed", &recent, recent, false, ""},
+		{"success despite failed pod", "Failed", protocol.AgentFailed, "Succeeded", "observed", &recent, recent, false, ""},
+		{"suspended waiting", "Suspended", protocol.AgentWaiting, "", "observed", &recent, recent, false, ""},
+		{"archived waiting", "Archived", protocol.AgentWaiting, "", "observed", &recent, recent, false, ""},
+		{"old task recent heartbeat", "Failed", protocol.AgentFailed, "Failed", "observed", &old, recent, false, ""},
+		{"old pod", "Failed", protocol.AgentFailed, "", "stale", &old, old, false, ""},
+		{"undated failure", "Failed", protocol.AgentFailed, "", "unknown", nil, recent, false, ""},
+		{"unknown heartbeat uses activity", "Failed", protocol.AgentFailed, "", "unknown", &recent, now, true, "Last reported 1h ago · 29 Oct 2026, 13:00 UTC"},
+		{"later activity than heartbeat", "Failed", protocol.AgentFailed, "", "stale", &recent, old, true, "Last reported 1h ago · 29 Oct 2026, 13:00 UTC"},
+		{"waiting without time", "Running", protocol.AgentWaiting, "", "unknown", nil, time.Time{}, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := apiv1.PortalSessionSummary{Name: "fixture", Repo: "dev-env", Phase: tc.phase, Freshness: tc.freshness, ObservedAt: tc.beat, Activity: &apiv1.PortalSessionActivity{Mode: "remote", AgentState: tc.state, TaskResult: tc.result, LastActivity: tc.last, Usage: unknownSessionUsage()}}
+			row := sessionRow(s, now)
+			if (row.Attention != nil) != tc.attention || (row.Attention != nil && row.Attention.When != tc.when) {
+				t.Fatalf("panel = %+v", row.Attention)
+			}
+		})
+	}
+	if got := attentionTime(time.Time{}, now); got != "Unknown" {
+		t.Fatalf("absent time = %s", got)
+	}
+}
+
+func TestWaitingAttentionNamesUnregisteredRemoteState(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ state, words string }{
+		{"login-required", "Remote Control needs a login"}, {"unpaired", "Remote Control is not paired"},
+		{"offline", "Remote Control is offline"}, {"pair-code-issued", "A pairing code was issued but pairing is not confirmed"},
+		{"errored", "Remote Control reported an error"}, {"starting", "Remote Control is starting"},
+		{"not-reported", "Remote Control state was not reported"}, {"future-state", "Remote Control state future-state"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			a := &apiv1.PortalSessionActivity{Mode: "remote", AgentState: protocol.AgentWaiting,
+				RemoteControl: &apiv1.PortalRemoteControl{State: tc.state, URL: "https://claude.ai/code/session_fixture-247"}}
+			row := sessionRow(apiv1.PortalSessionSummary{Name: "fixture", Phase: "Running", Activity: a}, now)
+			want := tc.words + ": answer from the session's terminal on the workbench."
+			if row.Attention == nil || row.Attention.NextAction != want || row.Attention.Link != "" || row.Link != "" {
+				t.Fatalf("unregistered state offered the wrong action: %+v", row.Attention)
+			}
+		})
+	}
+}
+
+func TestAttentionLabelsHeartbeatTimeAsLastReported(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ phase, state, reason string }{
+		{"Failed", protocol.AgentIdle, "Session pod failed"},
+		{"Running", protocol.AgentFailed, "Agent stopped unexpectedly"},
+		{"Running", protocol.AgentInterrupted, "Agent stopped unexpectedly"},
+	} {
+		t.Run(tc.phase+"/"+tc.state, func(t *testing.T) {
+			s := apiv1.PortalSessionSummary{Name: "fixture", Phase: tc.phase, Freshness: "observed", ObservedAt: now,
+				Activity: &apiv1.PortalSessionActivity{Mode: "remote", AgentState: tc.state}}
+			panel := sessionAttention(s, now, "")
+			if panel == nil || panel.Reason != tc.reason || panel.When != "Last reported just now · 29 Oct 2026, 14:00 UTC" {
+				t.Fatalf("heartbeat was presented as a failure time: %+v", panel)
+			}
+		})
+	}
+}
+
+func TestAttentionLogGuidanceFollowsSessionPhase(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	ended := now.Add(-5 * time.Minute)
+	for _, phase := range []string{"Running", "Failed", "Suspended", "Archived", "Pending", "Draining", "Idle", ""} {
+		t.Run(phase, func(t *testing.T) {
+			s := apiv1.PortalSessionSummary{Name: "fixture-task", Phase: phase, Freshness: "observed", ObservedAt: now,
+				Activity: &apiv1.PortalSessionActivity{Mode: "task", AgentState: protocol.AgentExited, TaskResult: "Failed", LastActivity: &ended}}
+			panel := sessionAttention(s, now, "")
+			if panel == nil || panel.When != "5m ago · 29 Oct 2026, 13:55 UTC" {
+				t.Fatalf("task end time changed: %+v", panel)
+			}
+			want := "agent-run show fixture-task"
+			if phase == "Running" {
+				want += "|agent-run log fixture-task"
+				if strings.Contains(panel.NextAction, "shared volume") {
+					t.Fatal("running session lost its live-log guidance")
+				}
+			} else if !strings.Contains(panel.NextAction, "its log is kept on the shared volume at logs/fixture-task.log") {
+				t.Fatal("non-running session lacks the API's saved-log guidance")
+			}
+			if strings.Join(panel.Commands, "|") != want {
+				t.Fatalf("commands %v, want %s", panel.Commands, want)
+			}
+		})
 	}
 }

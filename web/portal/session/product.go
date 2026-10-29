@@ -144,53 +144,77 @@ func sessionGet(ctx context.Context, client *http.Client, rawURL, token string) 
 	return body, nil
 }
 
-func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (page portal.ProductPage, err error) {
-	started := time.Now()
+type sessionReadStats struct {
+	started                                                 time.Time
+	preRead, credential, fetch, decode, projection, history time.Duration
+	page                                                    int
+}
+
+// finishRead keeps skipped and attempted reads under the same safe diagnostics
+// contract, including this process's last successful read.
+func (s *SessionSource) finishRead(ctx context.Context, filter portal.ProductFilter, page portal.ProductPage, err error, stats sessionReadStats) (portal.ProductPage, error) {
+	observed := time.Now().UTC()
+	logger := slog.Default()
+	lastSuccess := time.Time{}
+	if s != nil {
+		if s.now != nil {
+			observed = s.now().UTC()
+		}
+		if s.logger != nil {
+			logger = s.logger
+		}
+		s.lastSuccessMu.Lock()
+		if err == nil && observed.After(s.lastSuccess) {
+			s.lastSuccess = observed
+		}
+		lastSuccess = s.lastSuccess
+		s.lastSuccessMu.Unlock()
+	}
+	if err == nil {
+		return page, nil
+	}
+	failure := sessionFailure(err)
+	failure.Page = stats.page
+	failure.ObservedAt = observed.Format(time.RFC3339Nano)
+	if !lastSuccess.IsZero() {
+		failure.LastSuccessAt = lastSuccess.Format(time.RFC3339Nano)
+	}
+	err = failure
+	notice := "Sessions unavailable"
+	if failure.ReasonCode == "not_connected" {
+		notice = "Sessions not connected"
+	}
+	page = portal.ProductPage{Title: "Sessions", Notice: notice, Filter: filter, ReadFailure: &failure.ProductReadFailure}
+	level := slog.LevelWarn
+	if failure.ReasonCode == "not_connected" || failure.ReasonCode == "cancelled" {
+		level = slog.LevelInfo
+	}
+	logger.LogAttrs(ctx, level, "portal_session_read_failed",
+		slog.String("reason_code", failure.ReasonCode), slog.Int("page", failure.Page), slog.Int("row_index", failure.RowIndex), slog.Int("http_status", failure.HTTPStatus), slog.Bool("timed_out", failure.TimedOut), slog.Int64("elapsed_ms", time.Since(stats.started).Milliseconds()),
+		slog.Int64("pre_read_ms", stats.preRead.Milliseconds()), slog.Int64("credential_ms", stats.credential.Milliseconds()), slog.Int64("fetch_ms", stats.fetch.Milliseconds()), slog.Int64("decode_ms", stats.decode.Milliseconds()), slog.Int64("projection_ms", stats.projection.Milliseconds()), slog.Int64("history_ms", stats.history.Milliseconds()))
+	return page, err
+}
+
+// skippedRead records an exhausted pre-read budget without reading credentials
+// or contacting the operator. Cancellation remains distinct from budget expiry.
+func (s *SessionSource) skippedRead(ctx context.Context, filter portal.ProductFilter, started time.Time) (portal.ProductPage, error) {
+	failure := readFailure("read_not_started")
+	if errors.Is(ctx.Err(), context.Canceled) {
+		failure = readFailure("cancelled")
+	}
+	return s.finishRead(ctx, filter, portal.ProductPage{}, failure, sessionReadStats{started: started, preRead: time.Since(started)})
+}
+
+func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
+	return s.read(ctx, filter, time.Now())
+}
+
+func (s *SessionSource) read(ctx context.Context, filter portal.ProductFilter, requestStarted time.Time) (page portal.ProductPage, err error) {
+	stats := sessionReadStats{started: requestStarted, preRead: time.Since(requestStarted)}
 	ctx, cancel := context.WithTimeout(ctx, sessionReadTimeout)
 	defer cancel()
-	pageNo := 0
-	var credentialTime, fetchTime, decodeTime, projectionTime, historyTime time.Duration
-	defer func() {
-		observed := time.Now().UTC()
-		logger := slog.Default()
-		lastSuccess := time.Time{}
-		if s != nil {
-			if s.now != nil {
-				observed = s.now().UTC()
-			}
-			if s.logger != nil {
-				logger = s.logger
-			}
-			s.lastSuccessMu.Lock()
-			if err == nil && observed.After(s.lastSuccess) {
-				s.lastSuccess = observed
-			}
-			lastSuccess = s.lastSuccess
-			s.lastSuccessMu.Unlock()
-		}
-		if err == nil {
-			return
-		}
-		failure := sessionFailure(err)
-		failure.Page = pageNo
-		failure.ObservedAt = observed.Format(time.RFC3339Nano)
-		if !lastSuccess.IsZero() {
-			failure.LastSuccessAt = lastSuccess.Format(time.RFC3339Nano)
-		}
-		err = failure
-		notice := "Sessions unavailable"
-		if failure.ReasonCode == "not_connected" {
-			notice = "Sessions not connected"
-		}
-		page = portal.ProductPage{Title: "Sessions", Notice: notice, Filter: filter, ReadFailure: &failure.ProductReadFailure}
-		level := slog.LevelWarn
-		if failure.ReasonCode == "not_connected" || failure.ReasonCode == "cancelled" {
-			level = slog.LevelInfo
-		}
-		logger.LogAttrs(ctx, level, "portal_session_read_failed",
-			slog.String("reason_code", failure.ReasonCode), slog.Int("page", failure.Page), slog.Int("row_index", failure.RowIndex), slog.Int("http_status", failure.HTTPStatus), slog.Bool("timed_out", failure.TimedOut), slog.Int64("elapsed_ms", time.Since(started).Milliseconds()),
-			slog.Int64("credential_ms", credentialTime.Milliseconds()), slog.Int64("fetch_ms", fetchTime.Milliseconds()), slog.Int64("decode_ms", decodeTime.Milliseconds()), slog.Int64("projection_ms", projectionTime.Milliseconds()), slog.Int64("history_ms", historyTime.Milliseconds()))
-	}()
+	defer func() { page, err = s.finishRead(ctx, filter, page, err, stats) }()
+
 	if ctx.Err() != nil {
 		return page, sessionTransportFailure(ctx, ctx.Err())
 	}
@@ -199,14 +223,14 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 	}
 	step := time.Now()
 	token, err := operatorCredential(s.path, s.now())
-	credentialTime = time.Since(step)
+	stats.credential = time.Since(step)
 	if err != nil {
 		return page, readFailure("credential_unavailable")
 	}
 	cursor, complete, freshness := "", false, "observed"
 	var sessions []apiv1.PortalSessionSummary
 	for n := 0; n < sessionPageCap; n++ {
-		pageNo = 0
+		stats.page = 0
 		if ctx.Err() != nil {
 			return page, sessionTransportFailure(ctx, ctx.Err())
 		}
@@ -214,16 +238,16 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 		if cursor != "" {
 			raw += "&cursor=" + url.QueryEscape(cursor)
 		}
-		pageNo = n + 1
+		stats.page = n + 1
 		step = time.Now()
 		body, getErr := sessionGet(ctx, s.client, raw, token)
-		fetchTime += time.Since(step)
+		stats.fetch += time.Since(step)
 		if getErr != nil {
 			return page, getErr
 		}
 		step = time.Now()
 		decoded, decodeErr := decodeSessionPage(body, s.now())
-		decodeTime += time.Since(step)
+		stats.decode += time.Since(step)
 		if decodeErr != nil {
 			return page, decodeErr
 		}
@@ -235,13 +259,13 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 		}
 	}
 	// There is no inventory page in flight during projection or history.
-	pageNo = 0
+	stats.page = 0
 	step = time.Now()
 	page = sessionsPage(sessions, complete, freshness, s.now(), filter)
-	projectionTime = time.Since(step)
+	stats.projection = time.Since(step)
 	step = time.Now()
 	page = withHistory(ctx, page, filter.Session, s.conversations, s.now())
-	historyTime = time.Since(step)
+	stats.history = time.Since(step)
 	if ctx.Err() != nil {
 		return page, sessionTransportFailure(ctx, ctx.Err())
 	}
@@ -975,7 +999,11 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	case SessionsPath:
 		// Leave room within the 20s write timeout for final auth checks and rendering.
 		readCtx, cancel := context.WithDeadline(r.Context(), started.Add(sessionReadTimeout))
-		page, err = c.Sessions.Read(readCtx, filter)
+		if readCtx.Err() != nil {
+			page, err = c.Sessions.skippedRead(readCtx, filter, started)
+		} else {
+			page, err = c.Sessions.read(readCtx, filter, started)
+		}
 		cancel()
 		if page.ReadFailure != nil && c.Sessions == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
@@ -992,6 +1020,11 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	if err != nil && r.URL.Path == TasksPath {
 		page = portal.ProductPage{Title: "Tasks", Notice: "Tasks unavailable", Filter: filter}
 	}
+	// Final session, authorization and form-scope checks share one deadline,
+	// inherited from the request, leaving headroom for rendering and writing.
+	checkCtx, checkCancel := context.WithDeadline(r.Context(), started.Add(19*time.Second))
+	defer checkCancel()
+	r = r.WithContext(checkCtx)
 	if current, currentErr := c.Session.Authenticate(r); currentErr != nil || current != principal {
 		authFailure(w, portal.ErrDenied)
 		return
@@ -1008,8 +1041,8 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			page = withSendForms(page, record.CSRF, c.Send)
 		}
 	}
-	// A configured launch route adds the New agent form for the one principal its
-	// private scope names; no other caller, and no Tasks page, gets one.
+	// A configured launch route adds the New agent form for any principal the
+	// group check admits; an unconfigured launch route, and the Tasks page, get none.
 	if r.URL.Path == SessionsPath && filter.View != "usage" && c.Launch != nil {
 		if _, record, currentErr := c.Session.current(r); currentErr == nil && record.Principal == principal {
 			page = withLaunchForm(page, principal, record.CSRF, c.Launch)
