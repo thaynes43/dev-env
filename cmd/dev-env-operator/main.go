@@ -44,6 +44,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
@@ -121,6 +122,7 @@ type options struct {
 	clientSAs                     []string
 	grantApprovalURL              string
 	grantAttestation              bool
+	asksEnabled                   bool
 	coordinatorEnabled            bool
 	portalReaderEnabled           bool
 	portalConversationUsage       bool
@@ -174,6 +176,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.grantAttestation, "enable-grant-attestation", false, "serve POST /v1/grants/{name}/attestation, where a grant's requesting session records its claim that the user or a coordinator approved it (agent attestation, not verified human identity); off, the route does not exist")
+	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.childUsageCapture, "enable-child-usage-capture", false, "copy an accepted direct child's initial usage observation onto its parent Session; default off (OpenProject #109)")
 	fs.StringVar(&o.standbyRepo, "standby-repo", "haynes-ops", "repository of the standby remote session")
@@ -482,6 +485,12 @@ func parseFlags(args []string) (options, error) {
 	if o.standbyEnabled && o.apiAddr == "0" {
 		return o, errors.New("--enable-standby-session requires the API (--api-bind-address): the standby is created through its creation path")
 	}
+	if o.asksEnabled && o.apiAddr == "0" {
+		return o, errors.New("--enable-asks requires the API (--api-bind-address)")
+	}
+	if o.asksEnabled && o.sessionNamespace != asks.Namespace {
+		return o, errors.New("--enable-asks requires --session-namespace=dev-agents")
+	}
 	if o.privatePilot != nil && (!o.directoryEnabled || !slices.Contains(o.directoryProjects, projectcanary.PilotProject)) {
 		return o, errors.New("sealed pilot requires the dev-env session directory")
 	}
@@ -688,6 +697,13 @@ func run(args []string) error {
 		if len(recordKinds) > 0 {
 			ctrlmetrics.Registry.MustRegister(&taskclaim.RecordCollector{Reader: mgr.GetAPIReader(), Namespace: o.templatesNamespace, Kinds: recordKinds})
 		}
+		var askStore *asks.KubeStore
+		if o.asksEnabled {
+			askStore = &asks.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.sessionNamespace, Log: ctrl.Log.WithName("asks")}
+			if err := asks.RegisterMetrics(ctrlmetrics.Registry); err != nil {
+				return err
+			}
+		}
 		var directories *sessiondirectory.KubeStore
 		var directoryContexts *contextpublication.KubeStore
 		if o.directoryEnabled {
@@ -740,6 +756,7 @@ func run(args []string) error {
 			Log:                      ctrl.Log.WithName("api"),
 			GrantApprovalURL:         o.grantApprovalURL,
 			GrantAttestation:         o.grantAttestation,
+			Asks:                     askStore,
 		}
 		// The standby session is default off. It is made through the API's own
 		// creation path and found again by its label (Story110 T25, plan 03).

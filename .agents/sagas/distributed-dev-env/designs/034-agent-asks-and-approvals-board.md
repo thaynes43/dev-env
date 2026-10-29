@@ -232,7 +232,8 @@ Use the protected coordination CRDs so an Ask remains readable when the
 portal database is unavailable. Portal PostgreSQL retains its browser
 session and private receipt role. Sessions and the portal get no direct
 CRD rights; add narrow operator create/get/list and status-write rights
-through GitOps.
+through GitOps. The operator needs get, list, create and patch on asks,
+and update on asks/status.
 
 Put `self == oldSelf` on the `AskSpec` type and make `spec` required, as
 `InboxMessageSpec` and `TaskClaimSpec` do. Put the set-once rule on the

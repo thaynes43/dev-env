@@ -288,6 +288,23 @@ func TestStandbyFlag(t *testing.T) {
 	}
 }
 
+func TestAsksFlagDefaultOff(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.asksEnabled {
+		t.Fatalf("--enable-asks must be off by default: %v %v", o.asksEnabled, err)
+	}
+	o, err = parseFlags([]string{"--enable-asks"})
+	if err != nil || !o.asksEnabled {
+		t.Fatalf("--enable-asks: %v %v", o.asksEnabled, err)
+	}
+	if _, err = parseFlags([]string{"--enable-asks", "--api-bind-address=0"}); err == nil {
+		t.Fatal("--enable-asks without the API was accepted")
+	}
+	if _, err = parseFlags([]string{"--enable-asks", "--session-namespace=other"}); err == nil {
+		t.Fatal("--enable-asks outside dev-agents was accepted")
+	}
+}
+
 func TestPortalReaderFlag(t *testing.T) {
 	o, err := parseFlags(nil)
 	if err != nil || o.portalReaderEnabled {
