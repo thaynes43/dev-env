@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
@@ -17,7 +18,13 @@ import (
 // Creation never waits for an answer; GetAsk observes one later.
 func (a *app) CreateAsk(ctx context.Context, c *conn, req apiv1.AskCreateRequest) (apiv1.Ask, error) {
 	var out apiv1.Ask
-	if err := req.ValidateAt(a.env.Now()); err != nil {
+	req.Question = apiv1.NormalizeAskText(req.Question)
+	// Copy the slice so normalizing intent does not mutate the caller's options.
+	req.Options = append([]apiv1.AskOption(nil), req.Options...)
+	for i := range req.Options {
+		req.Options[i].Description = apiv1.NormalizeAskText(req.Options[i].Description)
+	}
+	if err := req.ValidateAt(a.env.Now().Truncate(time.Second)); err != nil {
 		return out, usageError("invalid ask: %v", err)
 	}
 	err := a.callAsks(ctx, c, http.MethodPost, apiv1.AsksPath, nil, req, &out, true)
@@ -37,19 +44,19 @@ func (a *app) GetAsk(ctx context.Context, c *conn, id string) (apiv1.Ask, error)
 	return out, err
 }
 
-// ListMyAsks reads exactly one page. A zero limit selects the server default.
+// ListMyAsks reads exactly one page. A zero limit selects AskListDefaultLimit.
 // The cursor is opaque and is encoded as a query value, never as a path.
 func (a *app) ListMyAsks(ctx context.Context, c *conn, limit int, cursor string) (apiv1.AskList, error) {
 	var out apiv1.AskList
-	if limit < 0 || limit > 100 {
-		return out, usageError("asks limit must be between 1 and 100, or omitted")
+	if limit < 0 || limit > apiv1.AskListMaxLimit {
+		return out, usageError("asks limit must be between 1 and %d, or omitted", apiv1.AskListMaxLimit)
 	}
-	q := url.Values{"mine": {"true"}}
-	if limit > 0 {
-		q.Set("limit", strconv.Itoa(limit))
+	if limit == 0 {
+		limit = apiv1.AskListDefaultLimit
 	}
+	q := url.Values{apiv1.AskQueryMine: {"true"}, apiv1.AskQueryLimit: {strconv.Itoa(limit)}}
 	if cursor != "" {
-		q.Set("cursor", cursor)
+		q.Set(apiv1.AskQueryCursor, cursor)
 	}
 	err := a.callAsks(ctx, c, http.MethodGet, apiv1.AsksPath, q, nil, &out, true)
 	return out, err
@@ -88,6 +95,15 @@ func (a *app) callAsks(ctx context.Context, c *conn, method, path string, query 
 			}
 			return fail(code, "asks are not enabled on this operator, or this session cannot access the requested ask: %v", err)
 		}
+		if status == http.StatusConflict {
+			if method == http.MethodPost && path == apiv1.AsksPath {
+				return fail(ExitFailed, "ask requestId conflicts with a different intent; reuse a requestId only for an identical retry: %v", err)
+			}
+			return fail(ExitFailed, "%s; it may already be answered or withdrawn: %v", apiv1.ErrAskNotOpen, err)
+		}
+		if status == http.StatusGone {
+			return fail(ExitFailed, "%s; its lifetime or approval scope has ended: %v", apiv1.ErrAskExpired, err)
+		}
 		return err
 	}
 	trimmed := bytes.TrimSpace(raw)
@@ -97,15 +113,21 @@ func (a *app) callAsks(ctx context.Context, c *conn, method, path string, query 
 		switch result := out.(type) {
 		case *apiv1.Ask:
 			err = apiv1.ValidateAsk(*result)
-		case *apiv1.AskList:
-			if len(result.Asks) > 100 {
-				err = errors.New("the ask page exceeds 100 records")
+			if err == nil {
+				*result = sessionAskView(*result)
 			}
-			for _, ask := range result.Asks {
+		case *apiv1.AskList:
+			if len(result.Asks) > apiv1.AskListMaxLimit {
+				err = errors.New("the ask page exceeds the maximum record count")
+			}
+			for i, ask := range result.Asks {
 				if err != nil {
 					break
 				}
 				err = apiv1.ValidateAsk(ask)
+				if err == nil {
+					result.Asks[i] = sessionAskView(ask)
+				}
 			}
 		}
 	}
@@ -116,4 +138,15 @@ func (a *app) callAsks(ctx context.Context, c *conn, method, path string, query 
 		return fail(ExitFailed, "the API answered %s %s with invalid Ask JSON: %v", method, path, err)
 	}
 	return nil
+}
+
+// Session responses carry displayName only. Apply the projection defensively
+// even if an operator accidentally returns the full audit actor.
+func sessionAskView(ask apiv1.Ask) apiv1.Ask {
+	if ask.Answer != nil {
+		answer := *ask.Answer
+		answer.AnsweredBy = answer.AnsweredBy.SessionView()
+		ask.Answer = &answer
+	}
+	return ask
 }

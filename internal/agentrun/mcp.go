@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -330,10 +331,11 @@ func isAskTool(name string) bool {
 // Ask arguments describe intent only. Server-owned identity, answers and
 // delivery fields are deliberately absent and unknown fields are refused.
 func decodeAskArguments(raw json.RawMessage, out any) error {
-	if len(bytes.TrimSpace(raw)) == 0 {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		raw = json.RawMessage(`{}`)
 	}
-	if bytes.TrimSpace(raw)[0] != '{' {
+	if raw[0] != '{' {
 		return usageError("ask tool arguments must be a JSON object")
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -365,7 +367,9 @@ func (a *app) dispatchAskTool(ctx context.Context, c *conn, name string, raw jso
 			return "", err
 		}
 		if name == "ask_status" {
-			out, err = a.GetAsk(ctx, c, args.ID)
+			var ask apiv1.Ask
+			ask, err = a.GetAsk(ctx, c, args.ID)
+			out = computedAskStatus(ask, a.env.Now())
 		} else {
 			out, err = a.WithdrawAsk(ctx, c, args.ID)
 		}
@@ -377,14 +381,25 @@ func (a *app) dispatchAskTool(ctx context.Context, c *conn, name string, raw jso
 		if err := decodeAskArguments(raw, &args); err != nil {
 			return "", err
 		}
-		limit := 0
+		limit := apiv1.AskListDefaultLimit
 		if args.Limit != nil {
-			if *args.Limit < 1 {
-				return "", usageError("asks limit must be between 1 and 100")
+			if *args.Limit < 1 || *args.Limit > apiv1.AskListMaxLimit {
+				return "", usageError("asks limit must be between 1 and %d", apiv1.AskListMaxLimit)
 			}
 			limit = *args.Limit
 		}
-		out, err = a.ListMyAsks(ctx, c, limit, args.Cursor)
+		var page apiv1.AskList
+		page, err = a.ListMyAsks(ctx, c, limit, args.Cursor)
+		now := a.env.Now()
+		asks := make([]askStatusView, 0, len(page.Asks))
+		for _, ask := range page.Asks {
+			asks = append(asks, computedAskStatus(ask, now))
+		}
+		out = struct {
+			Asks       []askStatusView `json:"asks"`
+			NextCursor string          `json:"nextCursor,omitempty"`
+			Complete   bool            `json:"complete"`
+		}{asks, page.NextCursor, page.Complete}
 	default:
 		return "", usageError("unknown tool %q", name)
 	}
@@ -392,6 +407,26 @@ func (a *app) dispatchAskTool(ctx context.Context, c *conn, name string, raw jso
 		return "", err
 	}
 	return mcpJSON(out)
+}
+
+// State reflects expiry at read time. Approval validity is separate computed
+// metadata, never presented as an operator-stored field or new authority.
+type askStatusView struct {
+	apiv1.Ask
+	Computed *askComputedStatus `json:"computed,omitempty"`
+}
+
+type askComputedStatus struct {
+	ApprovalValid bool `json:"approvalValid"`
+}
+
+func computedAskStatus(ask apiv1.Ask, now time.Time) askStatusView {
+	out := askStatusView{Ask: sessionAskView(ask)}
+	out.State = ask.EffectiveState(now)
+	if ask.Type == apiv1.AskTypeApproval {
+		out.Computed = &askComputedStatus{ApprovalValid: ask.ApprovalValid(now)}
+	}
+	return out
 }
 
 func askStringSchema(min, max int) map[string]any {
@@ -402,13 +437,13 @@ func askTools() []map[string]any {
 	id := map[string]any{"type": "string", "pattern": "^ask-[a-f0-9]{16}$"}
 	expires := map[string]any{
 		"type": "string", "format": "date-time",
-		"description": "RFC 3339 instant in the future, at most 7 days ahead.",
+		"description": "RFC 3339 instant from 1 minute to 24 hours after creation. The ask must expire no later than this scope.",
 	}
 	optionID := map[string]any{"type": "string", "pattern": "^[a-z0-9-]{1,24}$"}
 	return []map[string]any{
 		{
 			"name":        "ask",
-			"description": "Create an info or approval ask for the authenticated portal user. Returns the Ask JSON and id immediately, without waiting for an answer. Keep working, then read ask_status; answers also reach your durable inbox. Reuse the same requestId only for retries of the identical intent. An approval applies only to its recorded scope and expiry. Requires --enable-asks on the operator.",
+			"description": "Create an info or approval ask for the authenticated portal user. Returns the Ask JSON and id immediately, without waiting for an answer. Keep working, then read ask_status or list_my_asks for the answer. Reuse the same requestId only for retries of the identical intent. An approval applies only to its recorded scope and expiry. Requires --enable-asks on the operator.",
 			"inputSchema": map[string]any{
 				"type": "object", "additionalProperties": false,
 				"required": []string{"requestId", "type", "question"},
@@ -445,7 +480,7 @@ func askTools() []map[string]any {
 							"action": askStringSchema(1, apiv1.AskScopeFieldMaxRunes), "target": askStringSchema(1, apiv1.AskScopeFieldMaxRunes), "expiresAt": expires,
 						},
 					},
-					"expiresIn": map[string]any{"type": "string", "description": "Positive Go duration, at most 168h (7 days), such as 24h or 90m. Omitted or empty defaults to 24h. Validated before sending."},
+					"expiresIn": map[string]any{"type": "string", "description": "Go duration in whole seconds, from 1m to 168h, for example 24h or 90m; 7d is not accepted. Omitted or empty defaults to 24h, capped by scope.expiresAt for approvals. An explicit duration must not outlive the approval scope. Validated before sending."},
 				},
 				"allOf": []map[string]any{{
 					"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": "approval"}}},
@@ -453,6 +488,7 @@ func askTools() []map[string]any {
 					"else": map[string]any{"not": map[string]any{"required": []string{"scope"}}},
 				}},
 				"anyOf": []map[string]any{
+					{"required": []string{"type"}, "properties": map[string]any{"type": map[string]any{"const": "approval"}}},
 					{"required": []string{"options"}, "properties": map[string]any{"options": map[string]any{"minItems": 1}}},
 					{"required": []string{"allowFreeText"}, "properties": map[string]any{"allowFreeText": map[string]any{"const": true}}},
 				},
@@ -460,7 +496,7 @@ func askTools() []map[string]any {
 		},
 		{
 			"name":        "ask_status",
-			"description": "Read your own Ask JSON by id, including state and any answer. Returns immediately; does not wait or answer an ask.",
+			"description": "Read your own Ask JSON by id, including effective state at read time and any answer (answeredBy contains displayName only). Approval records include computed.approvalValid, computed locally from the answer and scope expiry. Returns immediately; does not wait or answer an ask.",
 			"inputSchema": map[string]any{
 				"type": "object", "additionalProperties": false,
 				"properties": map[string]any{"id": id}, "required": []string{"id"},
@@ -468,11 +504,11 @@ func askTools() []map[string]any {
 		},
 		{
 			"name":        "list_my_asks",
-			"description": "Read one page of your own asks, newest first. Returns Ask JSON records with the cursor for the next page, if any. Does not wait for answers.",
+			"description": "Read one page of your own asks, newest first. Records show effective state at read time, answers with displayName only, and for approvals computed.approvalValid (computed locally). Includes the cursor for the next page, if any. Does not wait for answers.",
 			"inputSchema": map[string]any{
 				"type": "object", "additionalProperties": false,
 				"properties": map[string]any{
-					"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+					"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": apiv1.AskListMaxLimit, "default": apiv1.AskListDefaultLimit},
 					"cursor": map[string]any{"type": "string"},
 				},
 			},

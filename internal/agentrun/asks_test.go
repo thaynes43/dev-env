@@ -26,10 +26,9 @@ func askFixture(state apiv1.AskState) apiv1.Ask {
 	if state == apiv1.AskStateAnswered {
 		ask.Answer = &apiv1.AskAnswer{
 			OptionID: "east", Text: "Use east",
-			AnsweredBy: apiv1.AskActor{Issuer: "https://id.example", Subject: "user-1", DisplayName: "Tom"},
+			AnsweredBy: apiv1.AskActor{DisplayName: "Tom"},
 			AnsweredAt: testNow.Add(time.Minute),
 		}
-		ask.Delivery = &apiv1.AskDelivery{InboxMessage: "inbox-1", DeliveredAt: testNow.Add(time.Minute + time.Second)}
 	}
 	return ask
 }
@@ -74,9 +73,9 @@ func assertAskError(t *testing.T, err error, code int, detail string) {
 func TestAsksClientCreateReplayStatusListWithdraw(t *testing.T) {
 	h := newHarness(t)
 	a, c := askClient(t, h)
-	req := askRequest(t, `{"requestId":"approve-257","type":"approval","question":"Apply the change?","options":[{"id":"yes","label":"Apply"},{"id":"no","label":"Keep"}],"recommended":"yes","context":{"workPackage":257,"links":["https://example.com/change"]},"scope":{"action":"Apply change","target":"test fixture","expiresAt":"2026-10-07T20:00:00Z"},"expiresIn":"24h"}`)
+	req := askRequest(t, `{"requestId":"approve-257","type":"approval","question":"Apply the change?","options":[{"id":"yes","label":"Apply"},{"id":"no","label":"Keep"}],"recommended":"yes","context":{"workPackage":257,"links":["https://example.com/change"]},"scope":{"action":"Apply change","target":"test fixture","expiresAt":"2026-10-07T20:00:00Z"},"expiresIn":"23h"}`)
 	var record apiv1.Ask
-	if err := json.Unmarshal([]byte(`{"id":"`+testAskID+`","type":"approval","question":"Apply the change?","state":"open","createdAt":"2026-10-06T21:00:00Z","expiresAt":"2026-10-07T21:00:00Z","context":{"sessionName":"session-1","sessionUID":"uid-1"},"scope":{"action":"Apply change","target":"test fixture","expiresAt":"2026-10-07T20:00:00Z"}}`), &record); err != nil {
+	if err := json.Unmarshal([]byte(`{"id":"`+testAskID+`","type":"approval","question":"Apply the change?","state":"open","createdAt":"2026-10-06T21:00:00Z","expiresAt":"2026-10-07T20:00:00Z","context":{"sessionName":"session-1","sessionUID":"uid-1"},"scope":{"action":"Apply change","target":"test fixture","expiresAt":"2026-10-07T20:00:00Z"}}`), &record); err != nil {
 		t.Fatal(err)
 	}
 	record.Options = req.Options
@@ -102,7 +101,8 @@ func TestAsksClientCreateReplayStatusListWithdraw(t *testing.T) {
 			gets++
 			if gets > 1 {
 				record.State = apiv1.AskStateAnswered
-				record.Answer = &apiv1.AskAnswer{OptionID: "yes", Approved: true, AnsweredBy: apiv1.AskActor{Issuer: "https://id.example", Subject: "user-1"}, AnsweredAt: testNow.Add(time.Minute)}
+				approved := true
+				record.Answer = &apiv1.AskAnswer{OptionID: "yes", Approved: &approved, AnsweredBy: apiv1.AskActor{DisplayName: "Tom"}, AnsweredAt: testNow.Add(time.Minute)}
 			}
 			writeTestJSON(w, http.StatusOK, record)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/asks":
@@ -274,7 +274,7 @@ func TestAsksClientEmptyListAndRotatingTokens(t *testing.T) {
 	a, c := askClient(t, h)
 	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		if r.URL.Path == "/v1/asks" {
-			if r.URL.RawQuery != "mine=true" {
+			if r.URL.RawQuery != "limit=20&mine=true" {
 				t.Errorf("default list query %s", r.URL.RawQuery)
 			}
 			writeTestJSON(w, http.StatusOK, apiv1.AskList{Asks: []apiv1.Ask{}, Complete: true})
@@ -385,5 +385,133 @@ func TestAsksClientRejectsOversizeResponse(t *testing.T) {
 	assertAskError(t, err, ExitFailed, "byte limit")
 	if len(h.api.requests()) != 1 {
 		t.Fatal("oversized response was retried")
+	}
+}
+
+func TestAsksClientCreateLifetimeBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name, ttl string
+		scopeTTL  time.Duration
+		valid     bool
+	}{
+		{"default info", "", 0, true},
+		{"minimum", "1m", 0, true},
+		{"maximum", "168h", 0, true},
+		{"days unsupported", "7d", 0, false},
+		{"fractional second", "1m0.5s", 0, false},
+		{"below minimum", "59s", 0, false},
+		{"above maximum", "168h1s", 0, false},
+		{"approval minimum default", "", time.Minute, true},
+		{"approval maximum", "24h", 24 * time.Hour, true},
+		{"approval cap", "", 24*time.Hour + time.Second, false},
+		{"approval short scope", "", 59 * time.Second, false},
+		{"ask outlives scope", "2h", time.Hour, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			// The server and client validate against the same whole-second clock.
+			h.now = testNow.Add(500 * time.Millisecond)
+			a, c := askClient(t, h)
+			req := apiv1.AskCreateRequest{
+				RequestID: "lifetime-257", Type: apiv1.AskTypeInfo,
+				Question: "Continue?", AllowFreeText: true, ExpiresIn: tc.ttl,
+			}
+			if tc.scopeTTL != 0 {
+				req.Type = apiv1.AskTypeApproval
+				req.AllowFreeText = false // Approve/deny needs neither options nor text.
+				req.Scope = &apiv1.AskScope{Action: "Apply", Target: "Fixture", ExpiresAt: testNow.Add(tc.scopeTTL)}
+			}
+			h.api.handle = func(w http.ResponseWriter, _ *http.Request, body []byte) {
+				var sent apiv1.AskCreateRequest
+				if err := json.Unmarshal(body, &sent); err != nil {
+					t.Fatal(err)
+				}
+				if err := sent.ValidateAt(testNow); err != nil {
+					t.Errorf("sent invalid intent: %v", err)
+				}
+				writeTestJSON(w, http.StatusCreated, askFixture(apiv1.AskStateOpen))
+			}
+			_, err := a.CreateAsk(context.Background(), c, req)
+			if tc.valid {
+				if err != nil || len(h.api.requests()) != 1 {
+					t.Fatalf("valid lifetime: %v, requests=%d", err, len(h.api.requests()))
+				}
+			} else {
+				assertAskError(t, err, ExitUsage, "invalid ask")
+				if len(h.api.requests()) != 0 {
+					t.Fatal("invalid lifetime reached API")
+				}
+			}
+		})
+	}
+}
+
+func TestAsksClientNormalizesMultilineIntent(t *testing.T) {
+	h := newHarness(t)
+	a, c := askClient(t, h)
+	req := apiv1.AskCreateRequest{
+		RequestID: "normalize-257", Type: apiv1.AskTypeInfo, Question: "First\r\n\tSecond\rThird ☀️",
+		Options: []apiv1.AskOption{{ID: "yes", Label: "Yes", Description: "First\r\n\tSecond\rThird"}},
+	}
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, body []byte) {
+		var sent apiv1.AskCreateRequest
+		if err := json.Unmarshal(body, &sent); err != nil {
+			t.Fatal(err)
+		}
+		if sent.Question != "First\n\tSecond\nThird ☀️" || sent.Options[0].Description != "First\n\tSecond\nThird" {
+			t.Errorf("multiline intent was not normalized: %q, %q", sent.Question, sent.Options[0].Description)
+		}
+		writeTestJSON(w, http.StatusCreated, askFixture(apiv1.AskStateOpen))
+	}
+	if _, err := a.CreateAsk(context.Background(), c, req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Options[0].Description != "First\r\n\tSecond\rThird" {
+		t.Fatal("normalization mutated caller's options")
+	}
+}
+
+func TestAsksClientSessionActorProjection(t *testing.T) {
+	for _, actor := range []apiv1.AskActor{
+		{DisplayName: "Tom"},
+		{Issuer: "https://identity.example/audit", Subject: "audit-subject", DisplayName: "Tom"},
+		{Issuer: "https://identity.example/audit", Subject: "audit-subject"},
+	} {
+		h := newHarness(t)
+		a, c := askClient(t, h)
+		record := askFixture(apiv1.AskStateAnswered)
+		record.Answer.AnsweredBy = actor
+		h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			if r.URL.Path == apiv1.AsksPath && r.Method == http.MethodGet {
+				writeTestJSON(w, http.StatusOK, apiv1.AskList{Asks: []apiv1.Ask{record}, Complete: true})
+				return
+			}
+			writeTestJSON(w, http.StatusOK, record)
+		}
+		got, err := a.GetAsk(context.Background(), c, testAskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err := a.ListMyAsks(context.Background(), c, 0, "")
+		if err != nil || len(page.Asks) != 1 {
+			t.Fatalf("list failed: %v", err)
+		}
+		retry, err := a.CreateAsk(context.Background(), c, apiv1.AskCreateRequest{
+			RequestID: "answered-retry-257", Type: apiv1.AskTypeInfo, Question: record.Question, AllowFreeText: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ask := range []apiv1.Ask{got, page.Asks[0], retry} {
+			if ask.Answer == nil || ask.Answer.AnsweredBy != actor.SessionView() {
+				t.Fatal("session response did not project answerer displayName")
+			}
+			raw := askJSON(t, ask)
+			for _, forbidden := range []string{"issuer", "subject", "https://identity.example/audit", "audit-subject"} {
+				if strings.Contains(raw, forbidden) {
+					t.Fatal("session JSON leaked audit identity")
+				}
+			}
+		}
 	}
 }

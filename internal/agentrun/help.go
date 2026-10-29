@@ -659,13 +659,19 @@ The asks tools need an operator running with --enable-asks:
 
 ask takes a stable requestId for retries of the same intent, type (info or
 approval), question, optional options, recommended, allowFreeText, context and
-expiresIn (a positive duration up to 168h; defaults to 24h). Approval asks
-require scope with action, target and expiresAt (RFC 3339, up to 7 days ahead).
+expiresIn (a Go duration in whole seconds, from 1m to 168h, for example "24h"
+or "90m"; "7d" is not accepted). Approval asks require scope with action,
+target and expiresAt (RFC 3339, 1 minute to 24 hours after creation). With
+expiresIn omitted or empty, the ask defaults to 24h, capped by the scope's
+expiry for approvals. An explicit expiresIn must not outlive that scope.
 The operator fills the session identity. Reuse the requestId only for the
 same ask. Creation returns without waiting for an answer; keep working and
 check ask_status later. Only the authenticated portal can answer an ask.
-Answers also arrive through the durable inbox. An approval applies only to
-its recorded scope and expiry.
+Read answers with ask_status or list_my_asks (default limit 20, maximum 100).
+Their state reflects expiry at read time. Approval records also include
+computed.approvalValid, computed locally from the answer and scope expiry.
+Answerer identity contains displayName only. An approval applies only to its
+recorded scope and expiry.
 
 agentd registers this command as the dev-env MCP server when it renders the
 session, unless mcp.json already names a dev-env server.

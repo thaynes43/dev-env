@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
@@ -220,6 +221,15 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 	if props["requestId"].(map[string]any)["pattern"] != "^[A-Za-z0-9-]{8,64}$" || props["expiresAt"] != nil || !strings.Contains(props["expiresIn"].(map[string]any)["description"].(string), "168h") {
 		t.Errorf("create idempotency/expiry schema: %v", props)
 	}
+	for _, phrase := range []string{"whole seconds", "1m", "24h", "90m", "7d is not accepted", "scope.expiresAt"} {
+		if !strings.Contains(props["expiresIn"].(map[string]any)["description"].(string), phrase) {
+			t.Errorf("expiresIn help missing %q", phrase)
+		}
+	}
+	approvalAlternative := schemas["ask"]["anyOf"].([]any)[0].(map[string]any)
+	if approvalAlternative["properties"].(map[string]any)["type"].(map[string]any)["const"] != "approval" {
+		t.Fatal("approval schema must allow approve/deny without options or free text")
+	}
 	options := props["options"].(map[string]any)
 	if options["maxItems"] != float64(6) {
 		t.Errorf("options: %v", options)
@@ -250,12 +260,15 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 		t.Errorf("approval scope requirement: %v", schemas["ask"])
 	}
 	for _, expiry := range []map[string]any{scopeProps["expiresAt"].(map[string]any)} {
-		if expiry["format"] != "date-time" || !strings.Contains(expiry["description"].(string), "7 days") {
+		if expiry["format"] != "date-time" || !strings.Contains(expiry["description"].(string), "24 hours") {
 			t.Errorf("expiry bounds: %v", expiry)
 		}
 	}
 	listProps := schemas["list_my_asks"]["properties"].(map[string]any)
 	assertBounds("list limit", listProps["limit"].(map[string]any), "minimum", 1, "maximum", 100)
+	if listProps["limit"].(map[string]any)["default"] != float64(apiv1.AskListDefaultLimit) {
+		t.Fatal("list schema must advertise the shared default limit")
+	}
 	for _, name := range []string{"ask_status", "withdraw"} {
 		if !reflect.DeepEqual(schemas[name]["required"], []any{"id"}) {
 			t.Errorf("%s required id: %v", name, schemas[name])
@@ -389,6 +402,14 @@ func TestAsksMCPInvalidInputsDoNotReachAPI(t *testing.T) {
 		{"ask", createArgs(map[string]any{"type": "approval", "scope": map[string]any{"action": strings.Repeat("界", 201), "target": "fixture", "expiresAt": "2026-10-07T21:00:00Z"}})},
 		{"ask", createArgs(map[string]any{"type": "approval", "scope": map[string]any{"action": "Apply", "target": strings.Repeat("界", 201), "expiresAt": "2026-10-07T21:00:00Z"}})},
 		{"ask", createArgs(map[string]any{"expiresIn": "169h"})},
+		{"ask", createArgs(map[string]any{"expiresIn": "7d"})},
+		{"ask", createArgs(map[string]any{"expiresIn": "1m0.5s"})},
+		{"ask", createArgs(map[string]any{"expiresIn": "59s"})},
+		{"ask", createArgs(map[string]any{"question": "\u115f"})},
+		{"ask", createArgs(map[string]any{"question": "\u2800"})},
+		{"ask", createArgs(map[string]any{"question": "text\u034f"})},
+		{"ask", createArgs(map[string]any{"question": "text\U000e0100"})},
+		{"ask", createArgs(map[string]any{"options": []map[string]string{{"id": "a", "label": "Has\ttab"}}})},
 		{"ask", createArgs(map[string]any{"answer": map[string]any{"approved": true}})},
 		{"ask_status", `{}`},
 		{"ask_status", `{"id":"../portal/asks/answer"}`},
@@ -419,9 +440,11 @@ func TestAsksMCPReturnsOperatorErrors(t *testing.T) {
 		status     int
 	}{
 		{"ask", `{"requestId":"disabled-257","type":"info","question":"Which region?","allowFreeText":true}`, 404},
+		{"ask", `{"requestId":"conflict-257","type":"info","question":"Which region?","allowFreeText":true}`, 409},
 		{"ask_status", `{"id":"ask-0123456789abcdef"}`, 403},
 		{"list_my_asks", `{}`, 404},
 		{"withdraw", `{"id":"ask-0123456789abcdef"}`, 409},
+		{"withdraw", `{"id":"ask-0123456789abcdef"}`, 410},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			h := newHarness(t)
@@ -434,9 +457,160 @@ func TestAsksMCPReturnsOperatorErrors(t *testing.T) {
 			if tc.status == 403 || tc.status == 404 {
 				contains(t, "tool error", h.stdout.String(), "asks are not enabled on this operator")
 			}
+			if tc.status == 409 {
+				if tc.tool == "ask" {
+					contains(t, "tool error", h.stdout.String(), "requestId conflicts with a different intent")
+				} else {
+					contains(t, "tool error", h.stdout.String(), "ask is not open")
+				}
+			}
+			if tc.status == 410 {
+				contains(t, "tool error", h.stdout.String(), "ask has expired")
+			}
 			if len(h.api.requests()) != 1 {
 				t.Fatalf("tool made unexpected requests: %v", h.api.requests())
 			}
 		})
+	}
+}
+
+func TestAsksMCPReadTimeStateAndApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		approval      bool
+		answered      bool
+		approved      bool
+		afterCreation time.Duration
+		wantState     string
+		wantValid     bool
+	}{
+		{"info at expiry", false, false, false, 24 * time.Hour, "expired", false},
+		{"info before expiry", false, false, false, 24*time.Hour - time.Second, "open", false},
+		{"approval at expiry", true, false, false, 24 * time.Hour, "expired", false},
+		{"pending approval", true, false, false, time.Minute, "open", false},
+		{"granted approval", true, true, true, 2 * time.Minute, "answered", true},
+		{"denied approval", true, true, false, 2 * time.Minute, "answered", false},
+		{"lapsed approval", true, true, true, 24 * time.Hour, "answered", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.now = testNow.Add(tc.afterCreation)
+			record := askFixture(apiv1.AskStateOpen)
+			if tc.approval {
+				record.Type = apiv1.AskTypeApproval
+				record.Scope = &apiv1.AskScope{Action: "Apply", Target: "Fixture", ExpiresAt: record.ExpiresAt}
+				record.Options = nil
+				record.Recommended = ""
+				record.AllowFreeText = false
+			}
+			if tc.answered {
+				record.State = apiv1.AskStateAnswered
+				record.Answer = &apiv1.AskAnswer{
+					Approved: &tc.approved, Text: "Approval note\nSecond line", AnsweredAt: testNow.Add(time.Minute),
+					AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/private", Subject: "private-subject", DisplayName: "Tom"},
+				}
+			}
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Path == apiv1.AsksPath {
+					if r.URL.Query().Get(apiv1.AskQueryMine) != "true" || r.URL.Query().Get(apiv1.AskQueryLimit) != "20" {
+						t.Errorf("wrong default list query: %s", r.URL.RawQuery)
+					}
+					writeTestJSON(w, http.StatusOK, apiv1.AskList{Asks: []apiv1.Ask{record}, NextCursor: "next/+page"})
+					return
+				}
+				if r.URL.Path != apiv1.AskPath(testAskID) {
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+				writeTestJSON(w, http.StatusOK, record)
+			}
+			h.env.Stdin = strings.NewReader(
+				`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_status","arguments":{"id":"` + testAskID + `"}}}` + "\n" +
+					`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_my_asks","arguments":{}}}` + "\n")
+			h.mustRun(ExitOK, "mcp")
+			frames := decodeMCPFrames(t, h.stdout.String())
+			if len(frames) != 2 || len(h.api.requests()) != 2 || len(h.sleeps) != 0 {
+				t.Fatal("reads must make exactly one immediate API call each")
+			}
+			for i, frame := range frames {
+				var reply struct {
+					Result struct {
+						IsError bool                    `json:"isError"`
+						Content []struct{ Text string } `json:"content"`
+					}
+				}
+				if err := json.Unmarshal([]byte(frame), &reply); err != nil || reply.Result.IsError || len(reply.Result.Content) != 1 {
+					t.Fatal("invalid MCP read result")
+				}
+				text := reply.Result.Content[0].Text
+				for _, forbidden := range []string{"issuer", "subject", "https://identity.example/private", "private-subject", "delivery"} {
+					if strings.Contains(text, forbidden) {
+						t.Fatal("session output leaked audit identity or included inbox delivery")
+					}
+				}
+				var ask map[string]any
+				if i == 0 {
+					if err := json.Unmarshal([]byte(text), &ask); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					var page struct {
+						Asks       []map[string]any `json:"asks"`
+						NextCursor string           `json:"nextCursor"`
+						Complete   bool             `json:"complete"`
+					}
+					if err := json.Unmarshal([]byte(text), &page); err != nil || len(page.Asks) != 1 || page.NextCursor != "next/+page" || page.Complete {
+						t.Fatal("list pagination changed")
+					}
+					ask = page.Asks[0]
+				}
+				if ask["state"] != tc.wantState {
+					t.Errorf("state=%v, want %s", ask["state"], tc.wantState)
+				}
+				if tc.approval {
+					computed, ok := ask["computed"].(map[string]any)
+					if !ok || computed["approvalValid"] != tc.wantValid || ask["approvalValid"] != nil {
+						t.Errorf("approval validity must be labelled computed: %v", ask)
+					}
+				} else if ask["computed"] != nil {
+					t.Fatal("info ask must not claim approval validity")
+				}
+			}
+		})
+	}
+}
+
+func TestAsksMCPOptionalListArguments(t *testing.T) {
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.URL.Path != apiv1.AsksPath || r.URL.Query().Get(apiv1.AskQueryLimit) != "20" {
+			t.Errorf("unexpected list request: %s", r.URL)
+		}
+		writeTestJSON(w, http.StatusOK, apiv1.AskList{Complete: true})
+	}
+	h.env.Stdin = strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_my_asks"}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_my_asks","arguments":null}}` + "\n")
+	h.mustRun(ExitOK, "mcp")
+	frames := decodeMCPFrames(t, h.stdout.String())
+	if len(frames) != 2 || len(h.api.requests()) != 2 {
+		t.Fatal("omitted and null list arguments must each read a page")
+	}
+	for _, frame := range frames {
+		var reply struct {
+			Result struct {
+				IsError bool                    `json:"isError"`
+				Content []struct{ Text string } `json:"content"`
+			}
+		}
+		if err := json.Unmarshal([]byte(frame), &reply); err != nil || reply.Result.IsError || len(reply.Result.Content) != 1 {
+			t.Fatalf("expected successful empty list: %s", frame)
+		}
+		var page struct {
+			Asks     json.RawMessage `json:"asks"`
+			Complete bool            `json:"complete"`
+		}
+		if err := json.Unmarshal([]byte(reply.Result.Content[0].Text), &page); err != nil || string(page.Asks) != "[]" || !page.Complete {
+			t.Fatal("expected complete empty array page")
+		}
 	}
 }
