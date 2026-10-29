@@ -237,6 +237,10 @@ type Size struct {
 	Requests corev1.ResourceList `json:"requests"`
 	Limits   corev1.ResourceList `json:"limits"`
 
+	// TmpSizeLimit caps the disk-backed /tmp EmptyDir (DESIGN-035). Nil keeps
+	// the legacy 8Gi pod and revision bytes; explicit values must be 1Gi–64Gi.
+	TmpSizeLimit *resource.Quantity `json:"tmpSizeLimit,omitempty"`
+
 	// StorageClassName overrides Home.StorageClassName for this class. It is
 	// how size L moves to ceph-block if spike S-8 says so (DESIGN-001 6.6).
 	StorageClassName string `json:"storageClassName,omitempty"`
@@ -507,6 +511,9 @@ func (t *Templates) Validate() error {
 
 func validateSize(class string, s Size) []error {
 	var errs []error
+	if q := s.TmpSizeLimit; q != nil && (q.Cmp(resource.MustParse("1Gi")) < 0 || q.Cmp(resource.MustParse("64Gi")) > 0) {
+		errs = append(errs, fmt.Errorf("sizes.%s.tmpSizeLimit must be between 1Gi and 64Gi inclusive", class))
+	}
 	for _, part := range []struct {
 		name string
 		list corev1.ResourceList

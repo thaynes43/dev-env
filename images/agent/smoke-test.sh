@@ -45,6 +45,7 @@ echo "::group::toolchain as the runtime user"
 run --entrypoint /bin/bash "${image}" -euc '
   test "$(id -u)" = 1000
   test "$HOME" = /home/dev
+  test "$GOTMPDIR" = /home/dev/.cache/go-tmp
   # agentd creates ~/.codex at boot; codex warns when CODEX_HOME is missing.
   mkdir -p "$CODEX_HOME"
   # PID 1 is only tini under the real ENTRYPOINT; here we check the binary and the

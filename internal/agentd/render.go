@@ -47,7 +47,7 @@ func skipStep(name, why string) Step { return Step{Name: name, State: StepSkip, 
 // Render is boot step 1 (DESIGN-001 3.6), a port of v1's dev-init.sh: it links
 // and renders the GitOps config into the session's home. Every step is
 // idempotent, so a resume on the same volume runs it again. It never touches
-// provider history or caches. Codex auth changes only when its keeper access
+// provider history or existing cache contents. Codex auth changes only when its keeper access
 // projection is explicitly configured (D-78).
 //
 // Dropped from dev-init, because the agent image bakes them in (plan 01): the
@@ -58,6 +58,7 @@ func Render(ctx context.Context, r Runner, s Settings, sess protocol.Session) []
 	cfg := s.ConfigDir
 	steps := []Step{
 		renderRuntimeDir(s),
+		renderGoTmpDir(s),
 		renderClaudeMD(s, cfg),
 		renderSubagents(s, cfg),
 	}
@@ -78,6 +79,16 @@ func Render(ctx context.Context, r Runner, s Settings, sess protocol.Session) []
 		renderClaudeState(s, sess),
 	)
 	return steps
+}
+
+// HOME is a volume, so a directory baked into the image would be hidden at
+// runtime. Create Go's work directory after that volume is mounted.
+func renderGoTmpDir(s Settings) Step {
+	dir := s.Getenv("GOTMPDIR")
+	if dir == "" {
+		dir = filepath.Join(s.Home, ".cache", "go-tmp")
+	}
+	return newStep("go-tmp-dir", nil, os.MkdirAll(dir, 0o755))
 }
 
 // renderRuntimeDir makes $XDG_RUNTIME_DIR with mode 0700. Claude refuses a

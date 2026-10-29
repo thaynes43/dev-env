@@ -85,6 +85,9 @@ func TestRenderFullPod(t *testing.T) {
 	if fi, err := os.Stat(s.RuntimeDir); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("runtime dir: %v %v", fi, err)
 	}
+	if fi, err := os.Stat(filepath.Join(s.Home, ".cache", "go-tmp")); err != nil || !fi.IsDir() {
+		t.Errorf("Go work directory on mounted HOME: %v %v", fi, err)
+	}
 	// CLAUDE.md is a link into the config.
 	if target, _ := os.Readlink(filepath.Join(s.ClaudeConfigDir, "CLAUDE.md")); target != filepath.Join(s.ConfigDir, "claude", "CLAUDE.md") {
 		t.Errorf("CLAUDE.md -> %q", target)
@@ -180,6 +183,36 @@ func TestRenderFullPod(t *testing.T) {
 	projects := readJSONMap(t, s.ClaudeState)[keyProjects].(map[string]any)
 	if _, ok := projects[s.WorktreePath(sess.Name)]; !ok {
 		t.Errorf("worktree not trusted: %v", projects)
+	}
+}
+
+func TestRenderGoTmpDir(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "override"}[override], func(t *testing.T) {
+			s := testSettings(t, t.TempDir())
+			dir := filepath.Join(s.Home, ".cache", "go-tmp")
+			if override {
+				dir = filepath.Join(s.Home, "custom-go-work")
+				s.Getenv = envOf(map[string]string{"GOTMPDIR": dir})
+			}
+			if st := renderGoTmpDir(s); st.State != StepOK {
+				t.Fatalf("first render: %+v", st)
+			}
+			retained := filepath.Join(dir, "retained-work")
+			writeFile(t, retained, "keep this")
+			if st := renderGoTmpDir(s); st.State != StepOK {
+				t.Fatalf("repeat render: %+v", st)
+			}
+			if b, err := os.ReadFile(retained); err != nil || string(b) != "keep this" {
+				t.Fatalf("existing work changed: %q, %v", b, err)
+			}
+		})
+	}
+	// A failed mkdir is visible in boot status, with no fallback to /tmp.
+	s := testSettings(t, t.TempDir())
+	writeFile(t, filepath.Join(s.Home, ".cache"), "not a directory")
+	if st := renderGoTmpDir(s); st.State != StepFail {
+		t.Fatalf("mkdir failure: %+v", st)
 	}
 }
 

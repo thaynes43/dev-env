@@ -475,6 +475,7 @@ ENV HOME=/home/dev \
     CODEX_HOME=/home/dev/.codex \
     CODEX_VERSION=${CODEX_VERSION} \
     PLAYWRIGHT_BROWSERS_PATH=/home/dev/.cache/ms-playwright \
+    GOTMPDIR=/home/dev/.cache/go-tmp \
     PATH=/home/dev/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # Provenance. `source` also links the GHCR package to this repo. Declared last so a
