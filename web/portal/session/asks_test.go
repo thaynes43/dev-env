@@ -511,6 +511,11 @@ func TestAsksAnswerFormsAndDecline(t *testing.T) {
 	if w := askPost(f, c, v); w.Code != http.StatusSeeOther || len(o.answers) != 1 || o.answers[0].Approved == nil || *o.answers[0].Approved {
 		t.Fatal("decline failed")
 	}
+	w = httptest.NewRecorder()
+	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Declined</strong>") || strings.Contains(w.Body.String(), "<strong>Approved</strong>") {
+		t.Fatal("explicit false decision displayed as approval")
+	}
 }
 
 func TestAsksOpenQuestionsSurviveBusyAnsweredHistory(t *testing.T) {
