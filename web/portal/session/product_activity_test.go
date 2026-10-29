@@ -462,8 +462,8 @@ func TestSessionAttentionReasonsAndActions(t *testing.T) {
 	}{
 		{"waiting linked", "remote", "Running", protocol.AgentWaiting, "", "registered", link, "Waiting for your input", "", "", false},
 		{"waiting no URL", "remote", "Running", protocol.AgentWaiting, "", "registered", "", "Waiting for your input", "Remote Control link not reported: answer from the session's Claude app or the workbench.", "", false},
-		{"waiting no registration", "remote", "Running", protocol.AgentWaiting, "", "", "", "Waiting for your input", "Remote Control is not reported: answer from the session's terminal on the workbench.", "", false},
-		{"waiting pairing", "remote", "Running", protocol.AgentWaiting, "", "pair-code-issued", link, "Waiting for your input", "Remote Control is pairing code issued (pairing not confirmed): answer from the session's terminal on the workbench.", "", false},
+		{"waiting no registration", "remote", "Running", protocol.AgentWaiting, "", "", "", "Waiting for your input", "Remote Control state was not reported: answer from the session's terminal on the workbench.", "", false},
+		{"waiting pairing", "remote", "Running", protocol.AgentWaiting, "", "pair-code-issued", link, "Waiting for your input", "A pairing code was issued but pairing is not confirmed: answer from the session's terminal on the workbench.", "", false},
 		{"waiting invalid URL", "remote", "Running", protocol.AgentWaiting, "", "registered", "https://evil.example/", "Waiting for your input", "Remote Control link not reported: answer from the session's Claude app or the workbench.", "", false},
 		{"waiting local", "local", "Running", protocol.AgentWaiting, "", "registered", link, "Waiting for your input", "Answer in the session's terminal on the workbench.", "", false},
 		{"waiting unknown mode", "Unknown", "Running", protocol.AgentWaiting, "", "", "", "Waiting for your input", "Check the session from the workbench.", "", false},
@@ -567,15 +567,16 @@ func TestSessionAttentionHonorsGroupAndTimePrecedence(t *testing.T) {
 func TestWaitingAttentionNamesUnregisteredRemoteState(t *testing.T) {
 	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
 	for _, tc := range []struct{ state, words string }{
-		{"login-required", "login required"}, {"unpaired", "not paired"},
-		{"offline", "offline"}, {"pair-code-issued", "pairing code issued (pairing not confirmed)"},
-		{"errored", "error"}, {"starting", "starting"},
+		{"login-required", "Remote Control needs a login"}, {"unpaired", "Remote Control is not paired"},
+		{"offline", "Remote Control is offline"}, {"pair-code-issued", "A pairing code was issued but pairing is not confirmed"},
+		{"errored", "Remote Control reported an error"}, {"starting", "Remote Control is starting"},
+		{"not-reported", "Remote Control state was not reported"}, {"future-state", "Remote Control state future-state"},
 	} {
 		t.Run(tc.state, func(t *testing.T) {
 			a := &apiv1.PortalSessionActivity{Mode: "remote", AgentState: protocol.AgentWaiting,
 				RemoteControl: &apiv1.PortalRemoteControl{State: tc.state, URL: "https://claude.ai/code/session_fixture-247"}}
 			row := sessionRow(apiv1.PortalSessionSummary{Name: "fixture", Phase: "Running", Activity: a}, now)
-			want := "Remote Control is " + tc.words + ": answer from the session's terminal on the workbench."
+			want := tc.words + ": answer from the session's terminal on the workbench."
 			if row.Attention == nil || row.Attention.NextAction != want || row.Attention.Link != "" || row.Link != "" {
 				t.Fatalf("unregistered state offered the wrong action: %+v", row.Attention)
 			}
