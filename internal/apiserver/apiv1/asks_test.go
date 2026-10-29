@@ -119,6 +119,10 @@ func TestAskCreateRequestValidate(t *testing.T) {
 		{"expiresIn seconds number refused", func(r *AskCreateRequest) { r.ExpiresIn = "3600" }, false},
 		{"expiresIn 1m accepted", func(r *AskCreateRequest) { r.ExpiresIn = "1m" }, true},
 		{"expiresIn 59s refused", func(r *AskCreateRequest) { r.ExpiresIn = "59s" }, false},
+		{"expiresIn half second over a minute refused", func(r *AskCreateRequest) { r.ExpiresIn = "1m0.5s" }, false},
+		{"expiresIn millisecond refused", func(r *AskCreateRequest) { r.ExpiresIn = "24h0.001s" }, false},
+		{"expiresIn 61s accepted", func(r *AskCreateRequest) { r.ExpiresIn = "61s" }, true},
+		{"expiresIn whole seconds written as decimal accepted", func(r *AskCreateRequest) { r.ExpiresIn = "90.0s" }, true},
 		{"requestId short refused", func(r *AskCreateRequest) { r.RequestID = "abc" }, false},
 		{"requestId underscore refused", func(r *AskCreateRequest) { r.RequestID = "abcd_1234" }, false},
 		{"unknown type refused", func(r *AskCreateRequest) { r.Type = "poll" }, false},
@@ -282,7 +286,7 @@ func TestAskCreateRequestTTL(t *testing.T) {
 			t.Errorf("TTL(%q) = %v, %v", in, got, err)
 		}
 	}
-	for _, in := range []string{"8d", "169h", "59s", "0s", "-1m"} {
+	for _, in := range []string{"8d", "169h", "59s", "0s", "-1m", "1m0.5s", "2h0.000000001s", "167h59m59.9s"} {
 		if _, err := (AskCreateRequest{ExpiresIn: in}).TTL(); !errors.Is(err, ErrAskInvalid) {
 			t.Errorf("TTL(%q) = %v, want ErrAskInvalid", in, err)
 		}
@@ -434,7 +438,12 @@ func TestValidateAsk(t *testing.T) {
 		{"answer full view accepted", func(a *Ask) { *a = askAnswered(*a) }, true},
 		{"answer without issuer accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = "" }, true},
 		{"answer without subject accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Subject = "" }, true},
-		{"answer without displayName refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = "" }, false},
+		{"answer issuer and subject without displayName accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = "" }, true},
+		{"answer issuer only refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy = AskActor{Issuer: "https://idp.example"} }, false},
+		{"answer subject only refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy = AskActor{Subject: "u-1"} }, false},
+		{"answer displayName only accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy = AskActor{DisplayName: "Tom"} }, true},
+		{"answer blank displayName with issuer and subject refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = "\u2800" }, false},
+		{"answer displayName with invisible refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = "T\u3164om" }, false},
 		{"answer with empty actor refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy = AskActor{} }, false},
 		{"answer blank displayName refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = " \u200b" }, false},
 		{"answer present blank issuer refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = " " }, false},
@@ -449,6 +458,14 @@ func TestValidateAsk(t *testing.T) {
 		}, false},
 		{"delivery without time refused", func(a *Ask) { *a = askAnswered(*a); a.Delivery = &AskDelivery{InboxMessage: "m"} }, false},
 		{"delivery on open ask refused", func(a *Ask) { a.Delivery = &AskDelivery{InboxMessage: "m", DeliveredAt: askNow} }, false},
+		{"delivery on withdrawn ask refused", func(a *Ask) {
+			a.State = AskStateWithdrawn
+			a.Delivery = &AskDelivery{InboxMessage: "m", DeliveredAt: askNow}
+		}, false},
+		{"delivery on expired ask refused", func(a *Ask) {
+			a.State = AskStateExpired
+			a.Delivery = &AskDelivery{InboxMessage: "m", DeliveredAt: askNow}
+		}, false},
 		{"withdrawn with answer refused", func(a *Ask) { *a = askAnswered(*a); a.State = AskStateWithdrawn }, false},
 		{"expired with answer refused", func(a *Ask) { *a = askAnswered(*a); a.State = AskStateExpired }, false},
 		{"answeredAt at createdAt accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredAt = a.CreatedAt }, true},
@@ -655,7 +672,7 @@ func TestAskAnswerRequestValidateForAt(t *testing.T) {
 			}
 			// 400, 409 and 410 stay apart.
 			for _, other := range []error{ErrAskInvalid, ErrAskNotOpen, ErrAskExpired} {
-				if other != tc.want && errors.Is(err, other) {
+				if !errors.Is(tc.want, other) && errors.Is(err, other) {
 					t.Fatalf("%v also wraps %v", err, other)
 				}
 			}
@@ -884,6 +901,29 @@ func TestAskRedaction(t *testing.T) {
 			}
 		}
 	}
+	// An answer with text: neither the text nor the actor prints; only
+	// whether text is set and its length do.
+	withText := AskAnswer{OptionID: "yes", Text: "secret-note\nsecond line", AnsweredBy: req.Actor, AnsweredAt: askNow}
+	ptr := &withText
+	for _, f := range []string{"%v", "%+v", "%#v", "%s"} {
+		for name, v := range map[string]any{"answer": withText, "answer pointer": ptr, "ask": Ask{Answer: ptr}} {
+			out := fmt.Sprintf(f, v)
+			for _, secret := range []string{"secret-note", "second line", "secret-issuer", "secret-subject", "secret-name"} {
+				if strings.Contains(out, secret) {
+					t.Errorf("%s with text formatted with %s leaks %q: %s", name, f, secret, out)
+				}
+			}
+		}
+	}
+	if got := withText.String(); !strings.Contains(got, "text set=true") || !strings.Contains(got, "23 characters") {
+		t.Errorf("AskAnswer.String = %q, want set and length", got)
+	}
+	if got := (AskAnswer{OptionID: "yes"}).String(); !strings.Contains(got, "text set=false") || !strings.Contains(got, "0 characters") {
+		t.Errorf("AskAnswer.String without text = %q", got)
+	}
+	if withText.GoString() != withText.String() {
+		t.Error("GoString differs from String")
+	}
 	b, err := json.Marshal(req)
 	if err != nil || !strings.Contains(string(b), "secret-subject") || !strings.Contains(string(b), "secret-note") {
 		t.Errorf("redaction must not touch JSON: %s, %v", b, err)
@@ -1053,5 +1093,131 @@ func TestAskActorJSONOmitsEmptyIdentity(t *testing.T) {
 	b, err = json.Marshal(askActor())
 	if err != nil || !strings.Contains(string(b), `"issuer"`) || !strings.Contains(string(b), `"subject"`) {
 		t.Errorf("full view JSON must carry all three: %s, %v", b, err)
+	}
+}
+
+// TestAskInvisibleCharacters covers characters that render as nothing but are
+// not format characters.
+func TestAskInvisibleCharacters(t *testing.T) {
+	// Refused in every field, multi-line or not.
+	refusedEverywhere := map[string]rune{
+		"Hangul choseong filler U+115F":  0x115F,
+		"Hangul jungseong filler U+1160": 0x1160,
+		"Hangul filler U+3164":           0x3164,
+		"halfwidth Hangul filler U+FFA0": 0xFFA0,
+		"combining grapheme joiner":      0x034F,
+		"variation selector U+E0100":     0xE0100,
+		"variation selector U+E01EF":     0xE01EF,
+	}
+	for name, r := range refusedEverywhere {
+		for field, set := range askTextSetters() {
+			if err := set("a" + string(r) + "b"); !errors.Is(err, ErrAskInvalid) {
+				t.Errorf("%s inside text in %s: want refused, got %v", name, field, err)
+			}
+			if err := set(string(r)); !errors.Is(err, ErrAskInvalid) {
+				t.Errorf("%s alone in %s: want refused, got %v", name, field, err)
+			}
+		}
+	}
+	// The supplement range is U+E0100 to U+E01EF exactly.
+	if askInvisible(0xE00FF) || askInvisible(0xE01F0) || !askInvisible(0xE0100) || !askInvisible(0xE01EF) {
+		t.Error("askInvisible range edges are wrong")
+	}
+
+	// Variation selectors U+FE00 to U+FE0F: multi-line fields only.
+	for _, r := range []rune{0xFE00, 0xFE0E, 0xFE0F} {
+		heart := "\u2764" + string(r) + " ok"
+		for field, set := range askTextSetters() {
+			err := set(heart)
+			if strings.HasPrefix(field, "multi:") {
+				if err != nil {
+					t.Errorf("U+%X in %s: want accepted, got %v", r, field, err)
+				}
+			} else if !errors.Is(err, ErrAskInvalid) {
+				t.Errorf("U+%X in %s: want refused, got %v", r, field, err)
+			}
+		}
+	}
+	// U+FE10 is a vertical form, not a variation selector.
+	if askVariationSelector(0xFE10) || askVariationSelector(0xFDFF) {
+		t.Error("variation selector range is too wide")
+	}
+
+	// The braille blank is allowed inside text in every field.
+	for field, set := range askTextSetters() {
+		if err := set("a\u2800b"); err != nil {
+			t.Errorf("U+2800 inside text in %s: want accepted, got %v", field, err)
+		}
+	}
+}
+
+// TestAskBlankRequiredFields: a required field made only of whitespace, format
+// characters, allowed invisibles or the braille blank is blank.
+func TestAskBlankRequiredFields(t *testing.T) {
+	blanks := map[string]string{
+		"braille blank":                "\u2800",
+		"several braille blanks":       "\u2800\u2800\u2800",
+		"braille and space":            " \u2800 ",
+		"variation selector":           "\ufe0f",
+		"selector and braille":         "\ufe0f\u2800",
+		"zwj":                          "\u200d",
+		"zwj and selector":             "\u200d\ufe0f",
+		"zero width space":             "\u200b",
+		"whitespace":                   " \t\n",
+		"mixed whitespace and braille": "\n\u2800\t\ufe0f \u200d",
+	}
+	required := map[string]func(string) error{
+		"question":     func(s string) error { return askText("question", s, 1, AskQuestionMaxRunes, true) },
+		"option label": func(s string) error { return askText("options.label", s, 1, AskOptionLabelMaxRunes, false) },
+		"scope action": func(s string) error { return askText("scope.action", s, 1, AskScopeFieldMaxRunes, false) },
+		"actor issuer": func(s string) error {
+			return AskAnswerRequest{OptionID: "yes", Actor: AskActor{Issuer: s, Subject: "u"}}.Validate()
+		},
+		"actor subject": func(s string) error {
+			return AskAnswerRequest{OptionID: "yes", Actor: AskActor{Issuer: "i", Subject: s}}.Validate()
+		},
+		"question (full)": func(s string) error {
+			r := askInfoRequest()
+			r.Question = s
+			return r.ValidateAt(askNow)
+		},
+	}
+	for fname, check := range required {
+		for bname, b := range blanks {
+			if err := check(b); !errors.Is(err, ErrAskInvalid) {
+				t.Errorf("%s made only of %s: want refused, got %v", fname, bname, err)
+			}
+		}
+		// One visible character makes it non-blank again.
+		if err := check("\u2800x\u2800"); err != nil {
+			t.Errorf("%s with a visible character: want accepted, got %v", fname, err)
+		}
+	}
+	// A recorded actor's present displayName is checked for blankness too.
+	a := askAnswered(askRecord())
+	a.Answer.AnsweredBy = AskActor{DisplayName: "\u2800"}
+	if err := ValidateAsk(a); !errors.Is(err, ErrAskInvalid) {
+		t.Errorf("braille-only displayName: want refused, got %v", err)
+	}
+	// Optional fields may be empty but a braille-only value is still allowed
+	// by the character rule (it is not required, so not blank-checked).
+	r := askInfoRequest()
+	r.Options[0].Description = "\u2800"
+	if err := r.ValidateAt(askNow); err != nil {
+		t.Errorf("braille-only optional description: want accepted, got %v", err)
+	}
+
+	// Answer text with no option needs visible text.
+	free := askRecord()
+	free.AllowFreeText = true
+	for bname, b := range blanks {
+		req := AskAnswerRequest{Text: b, Actor: askActor()}
+		if err := req.ValidateForAt(free, askNow.Add(time.Minute)); !errors.Is(err, ErrAskInvalid) {
+			t.Errorf("answer text of %s without an option: want refused, got %v", bname, err)
+		}
+	}
+	ok := AskAnswerRequest{Text: "\u2800ok", Actor: askActor()}
+	if err := ok.ValidateForAt(free, askNow.Add(time.Minute)); err != nil {
+		t.Errorf("answer text with visible character: want accepted, got %v", err)
 	}
 }

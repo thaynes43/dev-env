@@ -17,6 +17,12 @@ package apiv1
 // with AskAnswerRequest.ValidateForAt at their own clock reading, and readers
 // use Ask.EffectiveState and Ask.ApprovalValid rather than the stored state
 // alone.
+//
+// Whole seconds: an ask's times are whole seconds. A server truncates its
+// clock reading to whole seconds (now.Truncate(time.Second)) before it calls
+// ExpiresAtFrom and ValidateAt, and uses the same value as createdAt, so the
+// stored expiresAt and the validated scope window agree. TTL refuses an
+// expiresIn with a sub-second part for the same reason.
 
 import (
 	"encoding/json"
@@ -223,10 +229,12 @@ type AskContext struct {
 // There are three views of it (contract v1.1 A2). The operator stores all
 // three fields. The session-facing /v1/asks routes return DisplayName only
 // (see SessionView), so Issuer and Subject are omitted there. The portal
-// routes return all three. ValidateAsk therefore requires DisplayName on an
-// answered ask and treats Issuer and Subject as optional, validating each
-// when present. AskAnswerRequest.Actor (portal to operator) still requires
-// Issuer and Subject; DisplayName stays optional there.
+// routes return the full view, and the portal may not know a display name, so
+// that view can lack DisplayName. ValidateAsk therefore accepts the actor of
+// an answered ask when it has a non-blank DisplayName, or both Issuer and
+// Subject; it refuses an actor with none of the three, and validates each
+// field that is present. AskAnswerRequest.Actor (portal to operator) still
+// requires Issuer and Subject; DisplayName stays optional there.
 type AskActor struct {
 	Issuer      string `json:"issuer,omitempty"`
 	Subject     string `json:"subject,omitempty"`
@@ -266,6 +274,14 @@ type AskAnswer struct {
 	AnsweredBy AskActor  `json:"answeredBy"`
 	AnsweredAt time.Time `json:"answeredAt"`
 }
+
+// String and GoString redact an answer formatted by accident (%v, %+v, %#v,
+// a log line): the text is the human's words and the actor identifies them.
+// They show only whether text is set and its length in characters.
+func (a AskAnswer) String() string {
+	return fmt.Sprintf("[redacted ask answer: text set=%t, %d characters]", a.Text != "", utf8.RuneCountInString(a.Text))
+}
+func (a AskAnswer) GoString() string { return a.String() }
 
 // AskDelivery records the inbox message that carried the answer back. It is
 // always empty in v1: the agent reads the answer from the Ask itself
@@ -373,7 +389,8 @@ func (l AskList) MarshalJSON() ([]byte, error) {
 }
 
 // TTL returns the requested lifetime: AskDefaultTTL for an empty ExpiresIn,
-// otherwise the parsed duration, which must be AskMinTTL to AskMaxTTL.
+// otherwise the parsed duration, which must be a whole number of seconds
+// (no sub-second part: "1m0.5s" is refused) and AskMinTTL to AskMaxTTL.
 func (r AskCreateRequest) TTL() (time.Duration, error) {
 	if r.ExpiresIn == "" {
 		return AskDefaultTTL, nil
@@ -381,6 +398,9 @@ func (r AskCreateRequest) TTL() (time.Duration, error) {
 	d, err := time.ParseDuration(r.ExpiresIn)
 	if err != nil {
 		return 0, askInvalid("expiresIn", "not a Go duration such as 24h")
+	}
+	if d%time.Second != 0 {
+		return 0, askInvalid("expiresIn", "must be a whole number of seconds")
 	}
 	if d < AskMinTTL || d > AskMaxTTL {
 		return 0, askInvalid("expiresIn", "must be 1m to 168h")
@@ -392,7 +412,8 @@ func (r AskCreateRequest) TTL() (time.Duration, error) {
 // createdAt: createdAt plus TTL. An approval with no ExpiresIn ends at its
 // scope.expiresAt when that is sooner, because an approval ask may not
 // outlive its scope (contract v1.1 A8); an explicit ExpiresIn that does is
-// refused by ValidateAt. Call it after ValidateAt, with the same time.
+// refused by ValidateAt. Call it after ValidateAt, with the same time. A
+// server truncates createdAt to whole seconds first (see the package note).
 func (r AskCreateRequest) ExpiresAtFrom(createdAt time.Time) (time.Time, error) {
 	d, err := r.TTL()
 	if err != nil {
@@ -410,7 +431,8 @@ func (r AskCreateRequest) Validate() error { return r.ValidateAt(time.Now()) }
 
 // ValidateAt checks the request as if it arrived at now. For an approval, the
 // scope's expiry must be 1m to 24h after now, and the ask (ExpiresAtFrom) may
-// not outlive it.
+// not outlive it. A server passes now truncated to whole seconds, the same
+// value it stores as createdAt.
 func (r AskCreateRequest) ValidateAt(now time.Time) error {
 	if !askRequestIDPattern.MatchString(r.RequestID) {
 		return askInvalid("requestId", "must match ^[A-Za-z0-9-]{8,64}$")
@@ -483,10 +505,10 @@ func ValidateAsk(a Ask) error {
 		return err
 	}
 	if a.Context.SessionName == "" || len(a.Context.SessionName) > AskSessionNameMaxLen || !askPlain(a.Context.SessionName) {
-		return askInvalid("context.sessionName", "required, at most 253 bytes, no control or format characters")
+		return askInvalid("context.sessionName", "required, at most 253 bytes, no control, format or invisible characters")
 	}
 	if a.Context.SessionUID == "" || len(a.Context.SessionUID) > AskSessionUIDMaxLen || !askPlain(a.Context.SessionUID) {
-		return askInvalid("context.sessionUID", "required, at most 128 bytes, no control or format characters")
+		return askInvalid("context.sessionUID", "required, at most 128 bytes, no control, format or invisible characters")
 	}
 	if a.CreatedAt.IsZero() {
 		return askInvalid("createdAt", "required")
@@ -528,11 +550,11 @@ func ValidateAsk(a Ask) error {
 		return askInvalid("state", "must be open, answered, withdrawn or expired")
 	}
 	if a.Delivery != nil {
-		if a.State == AskStateOpen {
-			return askInvalid("delivery", "an open ask has nothing delivered")
+		if a.State != AskStateAnswered {
+			return askInvalid("delivery", "only an answered ask has a delivery")
 		}
 		if a.Delivery.InboxMessage == "" || len(a.Delivery.InboxMessage) > AskInboxMessageMaxLen || !askPlain(a.Delivery.InboxMessage) {
-			return askInvalid("delivery.inboxMessage", "required, at most 253 bytes, no control or format characters")
+			return askInvalid("delivery.inboxMessage", "required, at most 253 bytes, no control, format or invisible characters")
 		}
 		if a.Delivery.DeliveredAt.IsZero() {
 			return askInvalid("delivery.deliveredAt", "required")
@@ -638,9 +660,10 @@ func validateAskLink(l string) error {
 
 // validateAskAnswerShape checks an answer's option, text and actor. With
 // recorded false (the portal's request) issuer and subject are required and
-// displayName is optional. With recorded true (a stored or session-view
-// answer) displayName is required and issuer and subject are optional, each
-// validated when present, because the session view omits them.
+// displayName is optional. With recorded true (a stored or viewed answer) the
+// actor needs a displayName, or both issuer and subject, because the session
+// view omits issuer and subject and the portal may lack a display name; each
+// field that is present is validated either way.
 func validateAskAnswerShape(optionID, text string, actor AskActor, recorded bool) error {
 	if optionID != "" && !askOptionIDPattern.MatchString(optionID) {
 		return askInvalid("optionId", "must be empty or match ^[a-z0-9-]{1,24}$")
@@ -662,7 +685,13 @@ func validateAskAnswerShape(optionID, text string, actor AskActor, recorded bool
 	if err := askText("actor.subject", actor.Subject, minFor(!recorded, actor.Subject), AskActorSubjectMaxRunes, false); err != nil {
 		return err
 	}
-	return askText("actor.displayName", actor.DisplayName, minFor(recorded, actor.DisplayName), AskActorDisplayNameMaxRunes, false)
+	if err := askText("actor.displayName", actor.DisplayName, minFor(false, actor.DisplayName), AskActorDisplayNameMaxRunes, false); err != nil {
+		return err
+	}
+	if recorded && actor.DisplayName == "" && (actor.Issuer == "" || actor.Subject == "") {
+		return askInvalid("actor", "needs a displayName, or an issuer and a subject")
+	}
+	return nil
 }
 
 func validateAskAnswerAgainst(a Ask, optionID, text string, approved *bool) error {
@@ -702,15 +731,36 @@ func validateAskAnswerAgainst(a Ask, optionID, text string, approved *bool) erro
 
 // askZWJ is U+200D ZERO WIDTH JOINER, which joins emoji sequences. It is the
 // one format character allowed, and only in multi-line fields.
-const askZWJ = '‍'
+const askZWJ = '\u200d'
+
+// askBrailleBlank (U+2800) is allowed everywhere but counts as blank.
+const askBrailleBlank = '\u2800'
+
+// askVariationSelector reports U+FE00 to U+FE0F, which select an emoji or
+// text presentation. They are allowed only in multi-line fields.
+func askVariationSelector(r rune) bool { return r >= 0xFE00 && r <= 0xFE0F }
+
+// askInvisible reports a character with no visible glyph that is refused in
+// every field: the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0), the
+// combining grapheme joiner (U+034F) and the variation selectors supplement
+// (U+E0100 to U+E01EF). They are not format characters (category Cf), but
+// they let text look blank or hide in other text.
+func askInvisible(r rune) bool {
+	switch r {
+	case 0x115F, 0x1160, 0x3164, 0xFFA0, 0x034F:
+		return true
+	}
+	return r >= 0xE0100 && r <= 0xE01EF
+}
 
 // askText checks one text field: valid UTF-8, at most max runes, not blank
-// when min is positive (blank: only whitespace and format characters), at
-// least min runes, and no control, separator or format character. A
-// multi-line field (question, option description, answer text) also allows
-// LF, tab and the zero-width joiner. Format characters (zero-width spaces,
-// bidi marks, overrides and isolates, the BOM, soft hyphen, tags) let text
-// hide or mimic other text on the approval page.
+// when min is positive (blank: only whitespace, format characters and
+// invisible characters), at least min runes, and no control, separator,
+// format or invisible character. A multi-line field (question, option
+// description, answer text) also allows LF, tab, the zero-width joiner and
+// the variation selectors U+FE00 to U+FE0F. Format characters (zero-width
+// spaces, bidi marks, overrides and isolates, the BOM, soft hyphen, tags)
+// let text hide or mimic other text on the approval page.
 func askText(field, s string, min, max int, multiLine bool) error {
 	if !utf8.ValidString(s) {
 		return askInvalid(field, "must be valid UTF-8")
@@ -726,21 +776,23 @@ func askText(field, s string, min, max int, multiLine bool) error {
 		return askInvalid(field, fmt.Sprintf("must be %d to %d characters", min, max))
 	}
 	for _, r := range s {
-		if multiLine && (r == '\n' || r == '\t' || r == askZWJ) {
+		if multiLine && (r == '\n' || r == '\t' || r == askZWJ || askVariationSelector(r)) {
 			continue
 		}
 		if askForbiddenRune(r) {
-			return askInvalid(field, "contains a control or format character")
+			return askInvalid(field, "contains a control, format or invisible character")
 		}
 	}
 	return nil
 }
 
-// askBlank reports whether s holds nothing but whitespace and format
-// characters, which a required field counts as empty.
+// askBlank reports whether s holds nothing visible: only whitespace, format
+// characters, the zero-width joiner, variation selectors, invisible
+// characters and the braille blank. A required field counts it as empty.
 func askBlank(s string) bool {
 	for _, r := range s {
-		if !unicode.IsSpace(r) && !askFormatRune(r) {
+		if !unicode.IsSpace(r) && !askFormatRune(r) && !askVariationSelector(r) &&
+			!askInvisible(r) && r != askBrailleBlank {
 			return false
 		}
 	}
@@ -760,7 +812,8 @@ func askPlain(s string) bool {
 }
 
 func askForbiddenRune(r rune) bool {
-	return unicode.IsControl(r) || r == 0x2028 || r == 0x2029 || askFormatRune(r)
+	return unicode.IsControl(r) || r == 0x2028 || r == 0x2029 || askFormatRune(r) ||
+		askInvisible(r) || askVariationSelector(r)
 }
 
 // askFormatRune reports a Unicode format character (category Cf: U+00AD,
