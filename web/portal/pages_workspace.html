@@ -42,15 +42,15 @@
 <dl class="kv">
 <dt>Fingerprint</dt><dd class="mono">{{.Fingerprint}}</dd>
 <dt>Status</dt><dd>{{.Status}}</dd>
-<dt>Starts at</dt><dd>{{pagesTime .StartsAt}}</dd>
-<dt>Ends at</dt><dd>{{pagesTime .EndsAt}}</dd>
-<dt>Updated at</dt><dd>{{pagesTime .UpdatedAt}}</dd>
+<dt>Starts at</dt><dd>{{template "pages-time" .StartsAt}}</dd>
+<dt>Ends at</dt><dd>{{template "pages-time" .EndsAt}}</dd>
+<dt>Updated at</dt><dd>{{template "pages-time" .UpdatedAt}}</dd>
 <dt>Disposition</dt><dd>{{.Disposition}}</dd>
 <dt>Recurrence</dt><dd>{{.Recurrence}}</dd>
 </dl>
-<p class="turn-text">{{.Summary}}</p>
-<p class="turn-text">{{.Description}}</p>
-{{if .Labels}}<table class="pages-labels"><caption>Labels</caption><thead><tr><th scope="col">Label</th><th scope="col">Value</th></tr></thead><tbody>{{range .Labels}}<tr><th scope="row">{{.Key}}</th><td>{{.Value}}</td></tr>{{end}}</tbody></table>{{else}}<p>No labels in this alert.</p>{{end}}
+{{if .Summary}}<p class="turn-text">{{.Summary}}</p>{{else}}<p class="turn-text pages-empty-value">No summary</p>{{end}}
+{{if .Description}}<p class="turn-text">{{.Description}}</p>{{else}}<p class="turn-text pages-empty-value">No description</p>{{end}}
+{{if .Labels}}<table class="pages-labels"><caption>Labels</caption><thead><tr><th scope="col">Label</th><th scope="col">Value</th></tr></thead><tbody>{{range .Labels}}<tr><th scope="row">{{.Key}}</th>{{if .Value}}<td>{{.Value}}</td>{{else}}<td class="pages-empty-value">Empty (value)</td>{{end}}</tr>{{end}}</tbody></table>{{else}}<p>No labels in this alert.</p>{{end}}
 {{if .GeneratorURL}}<a href="{{.GeneratorURL}}" rel="noreferrer">Generator</a>{{end}}
 {{if .RunbookURL}}<a href="{{.RunbookURL}}" rel="noreferrer">Runbook</a>{{end}}
 <fieldset disabled aria-describedby="pages-not-connected">
@@ -103,3 +103,5 @@
 </fieldset>
 </section>
 {{end}}
+
+{{define "pages-time"}}{{if eq (pagesTime .) "Unknown"}}Unknown{{else}}<time datetime="{{.}}">{{pagesTime .}}</time>{{end}}{{end}}

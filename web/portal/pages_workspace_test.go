@@ -229,6 +229,171 @@ func TestPagesControlsBelongToEachAlert(t *testing.T) {
 	}
 }
 
+// TestPagesLabelTablePhoneStyle pins the phone layout of the per-alert label
+// table. Below 700px views.css makes tables blocks; without these rules the
+// caption and the row headers stay table boxes sized to one character.
+func TestPagesLabelTablePhoneStyle(t *testing.T) {
+	const start = "@media (max-width:700px){"
+	from := strings.Index(pagesStyle, start)
+	if from < 0 {
+		t.Fatal("pages style has no 700px block")
+	}
+	block := pagesStyle[from+len(start):]
+	end := strings.Index(block, "\n}\n")
+	if end < 0 {
+		t.Fatal("700px block is not closed")
+	}
+	rules := pagesTestRules(block[:end])
+	for selector, wants := range map[string][]string{
+		// The column header row is clipped, not removed: screen readers keep it.
+		".pages-content .pages-labels thead": {"position:absolute", "width:1px", "height:1px", "margin:-1px", "overflow:hidden", "clip:rect(0 0 0 0)", "clip-path:inset(50%)", "white-space:nowrap"},
+		// A block caption takes the full width, so "Labels" stays on one line.
+		".pages-content .pages-labels caption":    {"display:block", "width:auto", "overflow-wrap:normal", "word-break:normal"},
+		".pages-content .pages-labels":            {"display:block"},
+		".pages-content .pages-labels tbody":      {"display:block"},
+		".pages-content .pages-labels tr":         {"display:block"},
+		".pages-content .pages-labels th":         {"display:block", "text-align:left"},
+		".pages-content .pages-labels td":         {"display:block", "text-align:left"},
+		".pages-content .pages-labels td::before": {"content:none"},
+	} {
+		got, ok := rules[selector]
+		if !ok {
+			t.Fatalf("700px block has no rule for %s", selector)
+		}
+		for _, want := range wants {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s lacks %s: %s", selector, want, got)
+			}
+		}
+	}
+	for _, hidden := range []string{"display:none", "visibility:hidden"} {
+		if strings.Contains(rules[".pages-content .pages-labels thead"], hidden) {
+			t.Fatalf("label header row is removed from the accessibility tree with %s", hidden)
+		}
+	}
+
+	view := PagesWorkspace{
+		Condition: "available", Availability: "Available", ObservedAt: "Unknown", Source: "Unknown",
+		Groups: []PagesGroup{{ID: "pages-group-1", Default: true, AlertNameDisplay: "DiskFull", Alerts: []PagesAlert{{
+			Fingerprint: "aabbccdd11223344", NameDisplay: "DiskFull", NameKnown: true,
+			Labels: []PagesPair{{Key: "alertname", Value: "DiskFull"}, {Key: "team", Value: ""}},
+		}}}},
+		Controls: DisconnectedPagesControls(nil),
+	}
+	body, err := RenderPages(view, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := pagesTestNodes(doc, func(n *html.Node) bool { return n.Data == "table" && pagesTestAttr(n, "class") == "pages-labels" })
+	if len(tables) != 1 {
+		t.Fatalf("label tables: %d", len(tables))
+	}
+	captions := pagesTestNodes(tables[0], func(n *html.Node) bool { return n.Data == "caption" })
+	if len(captions) != 1 || pagesTestText(captions[0]) != "Labels" {
+		t.Fatal("label table caption is not Labels")
+	}
+	var columns []string
+	for _, th := range pagesTestNodes(tables[0], func(n *html.Node) bool { return n.Data == "th" && pagesTestAttr(n, "scope") == "col" }) {
+		columns = append(columns, pagesTestText(th))
+	}
+	if strings.Join(columns, ",") != "Label,Value" {
+		t.Fatalf("label column headers: %v", columns)
+	}
+	rows := pagesTestNodes(tables[0], func(n *html.Node) bool { return n.Data == "th" && pagesTestAttr(n, "scope") == "row" })
+	if len(rows) != 2 || pagesTestText(rows[0]) != "alertname" || pagesTestText(rows[1]) != "team" {
+		t.Fatal("label row headers changed")
+	}
+	if !strings.Contains(string(body), `<th scope="row">team</th><td class="pages-empty-value">Empty (value)</td>`) {
+		t.Fatal("empty label value has no muted Empty (value) cue")
+	}
+}
+
+func TestPagesAlertTimesAndEmptyCues(t *testing.T) {
+	view := PagesWorkspace{
+		Condition: "available", Availability: "Available", ObservedAt: "Unknown", Source: "Unknown",
+		Groups: []PagesGroup{{ID: "pages-group-1", Default: true, AlertNameDisplay: "DiskFull", Alerts: []PagesAlert{
+			{
+				Fingerprint: "timed", NameDisplay: "DiskFull", NameKnown: true,
+				StartsAt: "2026-10-28T15:00:00Z", EndsAt: "Unknown", UpdatedAt: "2026-10-28T16:30:00Z",
+				Summary: "present summary", Description: "present description",
+			},
+			{
+				Fingerprint: "untimed", NameDisplay: "DiskFull", NameKnown: true,
+				StartsAt: "Unknown", EndsAt: "not-a-time", UpdatedAt: "",
+			},
+		}}},
+		Controls: DisconnectedPagesControls(nil),
+	}
+	body, err := RenderPages(view, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alerts := pagesTestNodes(doc, func(n *html.Node) bool { return pagesTestAttr(n, "data-fingerprint") != "" })
+	if len(alerts) != 2 {
+		t.Fatalf("alert articles: %d", len(alerts))
+	}
+	type stamp struct{ datetime, text string }
+	times := func(article *html.Node) []stamp {
+		var out []stamp
+		for _, node := range pagesTestNodes(article, func(n *html.Node) bool { return n.Data == "time" }) {
+			out = append(out, stamp{pagesTestAttr(node, "datetime"), pagesTestText(node)})
+		}
+		return out
+	}
+	got := times(alerts[0])
+	want := []stamp{{"2026-10-28T15:00:00Z", "28 Oct 2026, 15:00 UTC"}, {"2026-10-28T16:30:00Z", "28 Oct 2026, 16:30 UTC"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("per-alert time elements: %v", got)
+	}
+	text := string(body)
+	for _, wantText := range []string{
+		`<dt>Starts at</dt><dd><time datetime="2026-10-28T15:00:00Z">28 Oct 2026, 15:00 UTC</time></dd>`,
+		`<dt>Ends at</dt><dd>Unknown</dd>`,
+		`<dt>Updated at</dt><dd><time datetime="2026-10-28T16:30:00Z">28 Oct 2026, 16:30 UTC</time></dd>`,
+		`<p class="turn-text">present summary</p>`,
+		`<p class="turn-text">present description</p>`,
+		`<p class="turn-text pages-empty-value">No summary</p>`,
+		`<p class="turn-text pages-empty-value">No description</p>`,
+	} {
+		if !strings.Contains(text, wantText) {
+			t.Fatalf("missing %s", wantText)
+		}
+	}
+	if untimed := times(alerts[1]); len(untimed) != 0 {
+		t.Fatalf("unknown alert times rendered time elements: %v", untimed)
+	}
+	if strings.Contains(text, "not-a-time") || strings.Count(pagesTestText(alerts[1]), "Unknown") < 3 {
+		t.Fatal("unknown alert times are not plain Unknown")
+	}
+	if strings.Contains(pagesTestText(alerts[0]), "No summary") || strings.Contains(pagesTestText(alerts[0]), "No description") {
+		t.Fatal("present summary or description shows an empty cue")
+	}
+}
+
+// pagesTestRules maps each selector in a flat CSS block to its declarations.
+func pagesTestRules(block string) map[string]string {
+	rules := map[string]string{}
+	for _, rule := range strings.Split(block, "}") {
+		selectors, declarations, ok := strings.Cut(rule, "{")
+		if !ok {
+			continue
+		}
+		for _, selector := range strings.Split(selectors, ",") {
+			selector = strings.TrimSpace(selector)
+			rules[selector] += declarations + ";"
+		}
+	}
+	return rules
+}
+
 func pagesTestAttr(n *html.Node, key string) string {
 	for _, attr := range n.Attr {
 		if attr.Key == key {

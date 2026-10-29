@@ -63,6 +63,14 @@ const pagesStyle = `
 .pages-content .pages-group{padding:15px 13px;border-radius:10px}
 .pages-content .pages-group h3{font-size:14px}
 .pages-content select{min-height:44px;font-size:16px}
+.pages-content .pages-labels,.pages-content .pages-labels caption,.pages-content .pages-labels tbody,.pages-content .pages-labels tr,.pages-content .pages-labels th,.pages-content .pages-labels td{display:block;width:auto}
+.pages-content .pages-labels caption{margin:0;padding:0 0 6px;border-bottom:1px solid var(--line);font-size:13px;overflow-wrap:normal;word-break:normal}
+.pages-content .pages-labels thead{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+.pages-content .pages-labels tr{padding:9px 0;border-bottom:1px solid var(--line)}
+.pages-content .pages-labels th,.pages-content .pages-labels td{padding:0;border:0;text-align:left;justify-content:flex-start}
+.pages-content .pages-labels tbody th{font:500 11px/1.4 var(--mono);color:var(--muted)}
+.pages-content .pages-labels td{margin-top:2px;font-size:13px;line-height:1.45}
+.pages-content .pages-labels td::before{content:none}
 }
 @media (max-width:390px){
 .pages-content{padding:16px 12px}

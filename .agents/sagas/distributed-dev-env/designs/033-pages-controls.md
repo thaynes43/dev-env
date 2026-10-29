@@ -306,7 +306,10 @@ line "Current snapshot only". Known instants display as `28 Oct 2026, 11:00 UTC`
 in the list and detail; machine-readable time attributes retain RFC3339.
 Unknown times stay the word Unknown. Missing labels show the muted text
 `Unknown (absent)` and known empty labels show `Empty (value)`, distinct from
-literal `Unknown` and `Empty` label values.
+literal `Unknown` and `Empty` label values. An empty label value in an alert's
+label table shows the same muted `Empty (value)`. An empty summary or
+description shows muted `No summary` or `No description`, because the snapshot
+does not separate an absent annotation from an empty one.
 
 Detail: the selected group's alerts. Selection is a same-document fragment.
 When `Snapshot.Selection` equals a fingerprint, that group is the selected
@@ -341,8 +344,11 @@ zero current alerts." An aggregate refusal says "Current snapshot is
 invalid." Unknown is not shown as 0.
 
 The workspace reuses the shared charcoal and lilac tokens. `pagesStyle`
-adds the list, detail, and configuration layout for 1280, 390, and 320
-widths, with wrapping text and no horizontal scroll. There is no script and
+adds the list, detail, and configuration layout with breakpoints at 700,
+390, and 320 px wide, with wrapping text and no horizontal scroll. At 700 px
+and below, each label row reads as its name over its value, the `Labels`
+caption stays on one line, and the column header row is clipped but kept for
+screen readers. There is no script and
 no form.
 
 Preview fixtures are synthetic parses of current Alertmanager JSON: grouped
