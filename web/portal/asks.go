@@ -32,9 +32,9 @@ const asksStyle = `
 .ask-scope{border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;padding:16px;margin:18px 0;background:var(--bg)}
 .ask-scope .eyebrow{margin-bottom:12px}
 .ask-options{display:grid;gap:12px;margin:18px 0}
-.ask-options .badge{margin-left:6px}
+.ask-options .badge{margin-left:6px}.ask-options p{white-space:pre-wrap}
 .ask-answer,.ask-record{border-top:1px solid var(--line);padding-top:18px;margin-top:18px}
-.ask-answer{display:grid;gap:16px}.ask-answer .btn{justify-self:start}
+.ask-answer{display:grid;gap:16px}.ask-answer .btn{justify-self:start}.ask-decisions{display:flex;flex-wrap:wrap;gap:12px}.ask-error{color:var(--red);white-space:pre-wrap}
 .ask-answer fieldset{min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:6px}
 .ask-answer>fieldset[disabled]{border:0;padding:0;display:grid;gap:16px}
 .ask-answer legend{padding:0 6px;font-weight:600}
@@ -59,20 +59,44 @@ func init() {
 }
 
 // AsksPage carries only an authorized read and the current request's form
-// credentials. Preview disables every answer control.
+// credentials. Complete describes only open-ask coverage; HistoryNotice
+// describes the independent history page. Preview disables every answer control.
 type AsksPage struct {
-	Asks                                           []apiv1.Ask
-	Connected, Complete, CanAnswer, Preview, Retry bool
-	Notice, CSRF                                   string
-	Now                                            time.Time
+	Asks                                                           []apiv1.Ask
+	Connected, Complete, CanAnswer, Preview, Retry                 bool
+	Notice, CSRF, PortalHost, SelectedID, OlderHref, HistoryNotice string
+	AnswerErrorID, AnswerError, AnswerText, AnswerOption           string
+	Now                                                            time.Time
 }
 
+type askLink struct{ URL, Host, Href string }
+
 type askCard struct {
-	Ask                                                                        apiv1.Ask
-	State, SessionHref, WorkHref, AnswerHref, CSRF, RequestID                  string
-	CreatedAt, CreatedLabel, ExpiresAt, ExpiresLabel                           string
-	ScopeExpiresAt, ScopeExpiresLabel, AnsweredAt, AnsweredLabel, AnswerOption string
-	Approval, Approved, ApprovalExpired, CanAnswer, Preview                    bool
+	Ask                                                                                  apiv1.Ask
+	State, SessionHref, WorkHref, AnswerHref, CSRF, RequestID                            string
+	CreatedAt, CreatedLabel, ExpiresAt, ExpiresLabel                                     string
+	ScopeExpiresAt, ScopeExpiresLabel, AnsweredAt, AnsweredLabel, AnswerOption, Answerer string
+	AnswerError, AnswerText, SelectedOption                                              string
+	Links                                                                                []askLink
+	Approval, Approved, ApprovalValid, CanAnswer, Preview                                bool
+}
+
+func askContextLink(raw, portalHost string) askLink {
+	link := askLink{URL: raw}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return link
+	}
+	link.Host = u.Host
+	// Host (including any port) must exactly equal an allowlisted host.
+	// No suffix matching, credentials, explicit port, or alternate scheme.
+	if u.Scheme != "https" || u.User != nil || u.Opaque != "" || u.Host == "" || strings.Contains(u.Host, ":") {
+		return link
+	}
+	if u.Host == "claude.ai" || u.Host == "github.com" || u.Host == "work.haynesnetwork.com" || (portalHost != "" && u.Host == portalHost) {
+		link.Href = raw
+	}
+	return link
 }
 
 // RenderAsks returns one complete escaped page and its exact CSP. Shared nav
@@ -84,28 +108,36 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 	view := struct {
 		AsksPage
 		Policy       string
+		Selected     *askCard
 		Open, Closed []askCard
-	}{AsksPage: page, Policy: asksPolicy}
+		OpenCount    int
+	}{AsksPage: page, Policy: strings.TrimSuffix(asksPolicy, "; frame-ancestors 'none'")}
 	if page.Connected {
 		asks := append([]apiv1.Ask(nil), page.Asks...)
-		sort.SliceStable(asks, func(i, j int) bool { return asks[i].CreatedAt.After(asks[j].CreatedAt) })
+		sort.SliceStable(asks, func(i, j int) bool {
+			if asks[i].CreatedAt.Equal(asks[j].CreatedAt) {
+				return asks[i].ID < asks[j].ID
+			}
+			return asks[i].CreatedAt.After(asks[j].CreatedAt)
+		})
 		for _, ask := range asks {
 			if apiv1.ValidateAsk(ask) != nil {
 				return nil, "", ErrUnavailable
 			}
-			card := askCard{Ask: ask, State: string(ask.State), SessionHref: productSessionsHref + "?session=" + url.QueryEscape(ask.Context.SessionUID), AnswerHref: "/portal/projects/dev-env/environments/internal/asks/answer", CSRF: page.CSRF, Approval: ask.Type == apiv1.AskTypeApproval, Preview: page.Preview}
+			card := askCard{Ask: ask, State: string(ask.EffectiveState(page.Now)), SessionHref: productSessionsHref + "?session=" + url.QueryEscape(ask.Context.SessionUID), AnswerHref: "/portal/projects/dev-env/environments/internal/asks/answer", CSRF: page.CSRF, Approval: ask.Type == apiv1.AskTypeApproval, Preview: page.Preview}
 			card.CreatedAt, card.CreatedLabel = askTime(ask.CreatedAt)
 			card.ExpiresAt, card.ExpiresLabel = askTime(ask.ExpiresAt)
 			if ask.Context.WorkPackage > 0 {
 				card.WorkHref = "https://work.haynesnetwork.com/work_packages/" + strconv.Itoa(ask.Context.WorkPackage)
 			}
-			scopeExpired := false
 			if ask.Scope != nil {
 				card.ScopeExpiresAt, card.ScopeExpiresLabel = askTime(ask.Scope.ExpiresAt)
-				scopeExpired = !page.Now.Before(ask.Scope.ExpiresAt)
 			}
-			if card.State == string(apiv1.AskStateOpen) && (!page.Now.Before(ask.ExpiresAt) || scopeExpired) {
-				card.State = "expired"
+			for _, link := range ask.Context.Links {
+				card.Links = append(card.Links, askContextLink(link, page.PortalHost))
+			}
+			if ask.ID == page.AnswerErrorID {
+				card.AnswerError, card.AnswerText, card.SelectedOption = page.AnswerError, page.AnswerText, page.AnswerOption
 			}
 			open := card.State == string(apiv1.AskStateOpen)
 			card.CanAnswer = open && (page.Preview || (page.CanAnswer && page.CSRF != ""))
@@ -118,7 +150,11 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 			}
 			if ask.Answer != nil {
 				card.Approved = ask.Answer.Approved != nil && *ask.Answer.Approved
-				card.ApprovalExpired = card.Approved && scopeExpired
+				card.ApprovalValid = ask.ApprovalValid(page.Now)
+				card.Answerer = ask.Answer.AnsweredBy.DisplayName
+				if card.Answerer == "" {
+					card.Answerer = ask.Answer.AnsweredBy.Subject
+				}
 				card.AnsweredAt, card.AnsweredLabel = askTime(ask.Answer.AnsweredAt)
 				for _, option := range ask.Options {
 					if option.ID == ask.Answer.OptionID {
@@ -127,6 +163,11 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 				}
 			}
 			if open {
+				view.OpenCount++
+			}
+			if ask.ID == page.SelectedID {
+				view.Selected = &card
+			} else if open {
 				view.Open = append(view.Open, card)
 			} else {
 				view.Closed = append(view.Closed, card)
@@ -135,7 +176,17 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 	}
 	buffer := &boundedPagesBuffer{limit: limit}
 	if err := asksTemplate.Execute(buffer, view); err != nil {
-		return nil, "", ErrUnavailable
+		// Try again without history before refusing the page. Open asks and
+		// an explicitly selected ask keep priority over historical cards.
+		if len(view.Closed) == 0 {
+			return nil, "", ErrUnavailable
+		}
+		view.Closed = nil
+		view.HistoryNotice = "Older history was omitted to fit this page."
+		buffer = &boundedPagesBuffer{limit: limit}
+		if err := asksTemplate.Execute(buffer, view); err != nil {
+			return nil, "", ErrUnavailable
+		}
 	}
 	return buffer.Bytes(), asksPolicy, nil
 }

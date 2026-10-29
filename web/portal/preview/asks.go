@@ -13,12 +13,13 @@ import (
 // These records are fixed synthetic presentation data. No session, token,
 // network reader or server participates in their rendering.
 func asksPreviewRecords(now time.Time) []apiv1.Ask {
-	info := apiv1.Ask{ID: "ask-0000000000000001", Type: apiv1.AskTypeInfo, Question: "Which fixture should the agent use for the next check?", Options: []apiv1.AskOption{{ID: "small", Label: "Small fixture", Description: "A bounded check with synthetic data."}, {ID: "full", Label: "Full fixture", Description: "A larger synthetic sample for the same check."}}, Recommended: "small", AllowFreeText: true, Context: apiv1.AskContext{SessionName: "synthetic-codex-agent", SessionUID: "00000000-1111-2222-3333-444444444444", WorkPackage: 258, Links: []string{"https://example.com/synthetic/context"}}, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(23 * time.Hour), State: apiv1.AskStateOpen}
+	info := apiv1.Ask{ID: "ask-0000000000000001", Type: apiv1.AskTypeInfo, Question: "Which fixture should the agent use for the next check?", Options: []apiv1.AskOption{{ID: "small", Label: "Small fixture", Description: "A bounded check with synthetic data.\nRuns entirely offline."}, {ID: "full", Label: "Full fixture", Description: "A larger synthetic sample for the same check."}}, Recommended: "small", AllowFreeText: true, Context: apiv1.AskContext{SessionName: "synthetic-codex-agent", SessionUID: "00000000-1111-2222-3333-444444444444", WorkPackage: 258, Links: []string{"https://github.com/thaynes43/dev-env", "https://example.com/synthetic/context", "https://github.com.evil.example/fixture"}}, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(23 * time.Hour), State: apiv1.AskStateOpen}
 	approval := info
 	approval.ID = "ask-0000000000000002"
 	approval.Type = apiv1.AskTypeApproval
 	approval.Question = "Approve running the synthetic preview check?"
 	approval.Context.SessionName = "synthetic-claude-agent"
+	approval.ExpiresAt = now.Add(2 * time.Hour)
 	approval.Scope = &apiv1.AskScope{Action: "Run one synthetic preview check", Target: "Offline fixture only", ExpiresAt: now.Add(2 * time.Hour)}
 	answered := approval
 	answered.ID = "ask-0000000000000003"
@@ -43,11 +44,14 @@ func writeAsks(dir string) error {
 		{"asks-empty.html", portal.AsksPage{Connected: true, Complete: true}},
 		{"asks-disconnected.html", portal.AsksPage{Notice: "Asks are not connected"}},
 		{"asks-unavailable.html", portal.AsksPage{Notice: "Asks are unavailable. Open asks could not be read.", Retry: true}},
+		{"asks-history-page.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, HistoryNotice: "Only one page of history is shown. Older history may be cut off.", OlderHref: "/portal/projects/dev-env/environments/internal/asks?cursor=synthetic-older"}},
+		{"asks-selected.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000003"}},
+		{"asks-validation.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, SelectedID: "ask-0000000000000001", AnswerErrorID: "ask-0000000000000001", AnswerError: "Write an answer or choose an option."}},
 		{"asks-partial.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Notice: "This is a partial read. More asks may need attention."}},
 	}
 	outputs := make([][]byte, len(fixtures))
 	for i, f := range fixtures {
-		f.page.Preview, f.page.Now = true, now
+		f.page.Preview, f.page.Now, f.page.PortalHost = true, now, "portal.example"
 		body, _, err := portal.RenderAsks(f.page, 896<<10)
 		if err != nil {
 			return err

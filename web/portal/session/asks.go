@@ -22,8 +22,10 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
+// AsksPath implements Epic #254 contracts 2579 (v1.1) and 2595 (v1.2).
+// Design and operator routes are separate lanes; this opt-in board issues no
+// grants and performs no action described by an approval.
 const AsksPath = "/portal/projects/dev-env/environments/internal/asks"
-const asksPageSize = 20
 
 var errAsksNotConnected = errors.New("asks not connected")
 
@@ -72,61 +74,68 @@ func NewAsksSource(tokenPath string, ca []byte, now func() time.Time) (*AsksSour
 	return &AsksSource{path: source.path, client: source.client, now: source.now}, nil
 }
 
-func (s *AsksSource) read(ctx context.Context) ([]apiv1.Ask, bool, error) {
-	if s == nil || s.client == nil || s.now == nil {
-		return nil, false, portal.ErrUnavailable
-	}
-	token, err := operatorCredential(s.path, s.now())
+// Open coverage is independent of the single page of history. A failed or
+// truncated history never suppresses the open asks or their coverage.
+type asksRead struct {
+	Asks                                              []apiv1.Ask
+	OpenComplete, HistoryComplete, HistoryUnavailable bool
+	NextCursor                                        string
+}
+
+func (s *AsksSource) read(ctx context.Context, historyCursor string) (asksRead, error) {
+	var result asksRead
+	token, err := s.credential()
 	if err != nil {
-		return nil, false, portal.ErrUnavailable
+		return result, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionReadTimeout)
 	defer cancel()
-	// Read open asks independently so a busy answered history cannot hide
-	// an older question. Both collections share the same bounded read budget.
-	open, openComplete, err := s.readState(ctx, "open", token)
+	result.Asks, result.OpenComplete, err = s.readOpen(ctx, token)
 	if err != nil {
-		return nil, false, err
+		return asksRead{}, err
 	}
-	all, allComplete, err := s.readState(ctx, "all", token)
+	page, err := s.readPage(ctx, apiv1.AskStateFilterAll, historyCursor, token)
 	if err != nil {
-		return nil, false, err
+		result.HistoryUnavailable = true
+		return result, nil
 	}
+	result.HistoryComplete, result.NextCursor = page.Complete, page.NextCursor
 	positions := map[string]int{}
-	asks := append([]apiv1.Ask(nil), open...)
-	for i, ask := range asks {
+	for i, ask := range result.Asks {
 		positions[ask.ID] = i
 	}
-	for _, ask := range all {
+	for _, ask := range page.Asks {
 		if i, found := positions[ask.ID]; found {
-			asks[i] = ask
+			result.Asks[i] = ask
 		} else {
-			positions[ask.ID] = len(asks)
-			asks = append(asks, ask)
+			result.Asks = append(result.Asks, ask)
 		}
 	}
-	return asks, openComplete && allComplete, nil
+	return result, nil
 }
 
-func (s *AsksSource) readState(ctx context.Context, state, token string) ([]apiv1.Ask, bool, error) {
+func (s *AsksSource) credential() (string, error) {
+	if s == nil || s.client == nil || s.now == nil {
+		return "", portal.ErrUnavailable
+	}
+	token, err := operatorCredential(s.path, s.now())
+	if err != nil {
+		return "", portal.ErrUnavailable
+	}
+	return token, nil
+}
+
+func (s *AsksSource) readOpen(ctx context.Context, token string) ([]apiv1.Ask, bool, error) {
 	var asks []apiv1.Ask
 	seen, cursors := map[string]bool{}, map[string]bool{}
 	cursor := ""
 	for n := 0; n < productPageCap; n++ {
-		query := url.Values{"state": {state}, "limit": {strconv.Itoa(asksPageSize)}}
-		if cursor != "" {
-			query.Set("cursor", cursor)
-		}
-		body, err := s.get(ctx, query, token)
-		if err != nil {
-			return nil, false, err
-		}
-		page, err := decodeAsksPage(body)
+		page, err := s.readPage(ctx, apiv1.AskStateFilterOpen, cursor, token)
 		if err != nil {
 			return nil, false, err
 		}
 		for _, ask := range page.Asks {
-			if seen[ask.ID] || (state == "open" && ask.State != apiv1.AskStateOpen) {
+			if seen[ask.ID] || ask.State != apiv1.AskStateOpen {
 				return nil, false, portal.ErrUnavailable
 			}
 			seen[ask.ID] = true
@@ -143,8 +152,41 @@ func (s *AsksSource) readState(ctx context.Context, state, token string) ([]apiv
 	return asks, false, nil
 }
 
-func (s *AsksSource) get(ctx context.Context, query url.Values, token string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, operatorPortalOrigin+apiv1.PortalAsksPath+"?"+query.Encode(), nil)
+func (s *AsksSource) readPage(ctx context.Context, state, cursor, token string) (apiv1.AskList, error) {
+	query := url.Values{apiv1.AskQueryState: {state}, apiv1.AskQueryLimit: {strconv.Itoa(apiv1.AskListDefaultLimit)}}
+	if cursor != "" {
+		query.Set(apiv1.AskQueryCursor, cursor)
+	}
+	raw, err := s.get(ctx, apiv1.PortalAsksPath+"?"+query.Encode(), token)
+	if err != nil {
+		return apiv1.AskList{}, err
+	}
+	return decodeAsksPage(raw)
+}
+
+func (s *AsksSource) readAsk(ctx context.Context, id string) (apiv1.Ask, error) {
+	if !apiv1.ValidAskID(id) {
+		return apiv1.Ask{}, portal.ErrDenied
+	}
+	token, err := s.credential()
+	if err != nil {
+		return apiv1.Ask{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, sessionReadTimeout)
+	defer cancel()
+	raw, err := s.get(ctx, apiv1.PortalAskPath(id), token)
+	if err != nil {
+		return apiv1.Ask{}, err
+	}
+	ask, err := decodeAsk(raw)
+	if err != nil || ask.ID != id {
+		return apiv1.Ask{}, portal.ErrUnavailable
+	}
+	return ask, nil
+}
+
+func (s *AsksSource) get(ctx context.Context, path, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, operatorPortalOrigin+path, nil)
 	if err != nil {
 		return nil, portal.ErrUnavailable
 	}
@@ -155,7 +197,7 @@ func (s *AsksSource) get(ctx context.Context, query url.Values, token string) ([
 		return nil, portal.ErrUnavailable
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode == http.StatusNotFound {
+	if response.StatusCode == http.StatusNotFound && strings.HasPrefix(path, apiv1.PortalAsksPath+"?") {
 		return nil, errAsksNotConnected
 	}
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -169,6 +211,19 @@ func (s *AsksSource) get(ctx context.Context, query url.Values, token string) ([
 	return raw, nil
 }
 
+func decodeAsk(raw []byte) (apiv1.Ask, error) {
+	var ask apiv1.Ask
+	if !utf8.Valid(raw) || !protocol.StrictPortalJSON(raw) || !strictAskJSON(raw) {
+		return ask, portal.ErrUnavailable
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&ask) != nil || decoder.Decode(new(any)) != io.EOF || apiv1.ValidateAsk(ask) != nil {
+		return apiv1.Ask{}, portal.ErrUnavailable
+	}
+	return ask, nil
+}
+
 func decodeAsksPage(body []byte) (apiv1.AskList, error) {
 	var page apiv1.AskList
 	if !utf8.Valid(body) || !protocol.StrictPortalJSON(body) {
@@ -180,7 +235,7 @@ func decodeAsksPage(body []byte) (apiv1.AskList, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&page) != nil || decoder.Decode(new(any)) != io.EOF || len(page.Asks) > asksPageSize || page.Asks == nil || (page.Complete && page.NextCursor != "") || (!page.Complete && (page.NextCursor == "" || len(page.NextCursor) > 1024)) {
+	if decoder.Decode(&page) != nil || decoder.Decode(new(any)) != io.EOF || len(page.Asks) > apiv1.AskListDefaultLimit || page.Asks == nil || (page.Complete && page.NextCursor != "") || (!page.Complete && (page.NextCursor == "" || len(page.NextCursor) > 1024)) {
 		return apiv1.AskList{}, portal.ErrUnavailable
 	}
 	rows, ok := jsonArray(fields["asks"])
@@ -192,10 +247,12 @@ func decodeAsksPage(body []byte) (apiv1.AskList, error) {
 			return apiv1.AskList{}, portal.ErrUnavailable
 		}
 	}
+	seen := map[string]bool{}
 	for _, ask := range page.Asks {
-		if err := apiv1.ValidateAsk(ask); err != nil {
+		if err := apiv1.ValidateAsk(ask); err != nil || seen[ask.ID] {
 			return apiv1.AskList{}, portal.ErrUnavailable
 		}
+		seen[ask.ID] = true
 	}
 	return page, nil
 }
@@ -225,37 +282,79 @@ func (s *AsksSource) answer(ctx context.Context, id string, request apiv1.AskAns
 		return portal.ErrUnavailable
 	}
 	defer func() { _ = response.Body.Close() }()
+	switch response.StatusCode {
+	case http.StatusBadRequest:
+		return apiv1.ErrAskInvalid
+	case http.StatusConflict:
+		return apiv1.ErrAskNotOpen
+	case http.StatusGone:
+		return apiv1.ErrAskExpired
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return portal.ErrDenied
+	}
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || media != mediaJSON || response.StatusCode != http.StatusOK {
 		return portal.ErrUnavailable
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
-	if err != nil || len(raw) > 64<<10 || !utf8.Valid(raw) || !protocol.StrictPortalJSON(raw) {
+	if err != nil || len(raw) > 64<<10 {
 		return portal.ErrUnavailable
 	}
-	var ask apiv1.Ask
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if !strictAskJSON(raw) || decoder.Decode(&ask) != nil || decoder.Decode(new(any)) != io.EOF || apiv1.ValidateAsk(ask) != nil || ask.ID != id || ask.State != apiv1.AskStateAnswered || ask.Answer == nil || ask.Answer.OptionID != request.OptionID || ask.Answer.Text != request.Text || !sameAskApproval(ask.Answer.Approved, request.Approved) || ask.Answer.AnsweredBy != request.Actor {
+	ask, err := decodeAsk(raw)
+	if err != nil || ask.ID != id || ask.State != apiv1.AskStateAnswered || !sameAskAnswer(ask.Answer, request) {
 		return portal.ErrUnavailable
 	}
 	return nil
 }
 
+// Only these finite, validated GET queries reach the operator. POSTs carry
+// their target in the CSRF-protected form and never accept a query.
+func asksQuery(r *http.Request) (id, cursor string, ok bool) {
+	if r.URL.ForceQuery {
+		return "", "", false
+	}
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return "", "", false
+	}
+	if r.Method == http.MethodPost {
+		return "", "", r.URL.RawQuery == ""
+	}
+	for key, values := range q {
+		if len(values) != 1 {
+			return "", "", false
+		}
+		switch key {
+		case "ask":
+			if !apiv1.ValidAskID(values[0]) {
+				return "", "", false
+			}
+			id = values[0]
+		case apiv1.AskQueryCursor:
+			if values[0] == "" || len(values[0]) > 1024 || !utf8.ValidString(values[0]) || strings.ContainsAny(values[0], "\r\n\x00") {
+				return "", "", false
+			}
+			cursor = values[0]
+		default:
+			return "", "", false
+		}
+	}
+	return id, cursor, true
+}
+
 func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	authHeaders(w)
-	// Leave a second under the server's write deadline for the bounded render.
 	ctx, cancel := context.WithTimeout(r.Context(), 19*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
-	if r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery || c.Now == nil || (r.Method != http.MethodGet && r.Method != http.MethodPost) || (r.Method == http.MethodGet && r.URL.Path != AsksPath) || (r.Method == http.MethodPost && r.URL.Path != AsksPath+"/answer") {
+	selectedID, cursor, queryOK := asksQuery(r)
+	if r.URL.RawPath != "" || !queryOK || c.Now == nil || (r.Method != http.MethodGet && r.Method != http.MethodPost) || (r.Method == http.MethodGet && r.URL.Path != AsksPath) || (r.Method == http.MethodPost && r.URL.Path != AsksPath+"/answer") {
 		authFailure(w, portal.ErrDenied)
 		return
 	}
 	r, key, record, err := authorizedAction(c.Session, c.Authorizer, r)
 	if err != nil {
 		if r.Method == http.MethodGet && errors.Is(err, portal.ErrDenied) {
-			// Only missing authentication starts sign-in; denied group members stay denied.
 			if _, authErr := c.Session.Authenticate(r); errors.Is(authErr, portal.ErrDenied) {
 				w.Header().Set("Location", "/auth/login")
 				w.WriteHeader(http.StatusSeeOther)
@@ -265,7 +364,8 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		authFailure(w, err)
 		return
 	}
-	page := portal.AsksPage{Notice: "Asks are not connected"}
+	page := portal.AsksPage{Notice: "Asks are not connected", SelectedID: selectedID}
+	status := http.StatusOK
 	if r.Method == http.MethodPost {
 		if c.Asks == nil {
 			authFailure(w, portal.ErrUnavailable)
@@ -275,44 +375,87 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			authFailure(w, err)
 			return
 		}
-	}
-	var asks []apiv1.Ask
-	if c.Asks != nil {
-		var complete bool
-		asks, complete, err = c.Asks.read(r.Context())
-		if err != nil {
-			page.Notice, page.Retry = "Asks are unavailable. Open asks could not be read.", true
-			if errors.Is(err, errAsksNotConnected) {
-				page.Notice, page.Retry = "Asks are not connected", false
-			}
-		} else {
-			page.Connected, page.Complete = true, complete
-			page.Notice = ""
-			if !complete {
-				page.Notice = "This is a partial read. More asks may need attention."
-			}
-		}
-	}
-	if r.Method == http.MethodPost {
-		if c.Asks == nil || err != nil {
-			authFailure(w, portal.ErrUnavailable)
+		id := r.PostForm.Get("askID")
+		if !apiv1.ValidAskID(id) {
+			authFailure(w, portal.ErrDenied)
 			return
 		}
-		err = postAskAnswer(w, r, c, key, record, asks)
+		ask, err := c.Asks.readAsk(r.Context(), id)
 		if err != nil {
 			authFailure(w, err)
 			return
 		}
-		w.Header().Set("Location", AsksPath)
-		w.WriteHeader(http.StatusSeeOther)
-		return
+		err = postAskAnswer(r, c, key, record, ask)
+		if err == nil {
+			w.Header().Set("Location", AsksPath+"?ask="+id)
+			w.WriteHeader(http.StatusSeeOther)
+			return
+		}
+		status, page.Notice = askAnswerNotice(err)
+		if status == 0 {
+			authFailure(w, err)
+			return
+		}
+		page.Connected, page.SelectedID, page.Asks = true, id, []apiv1.Ask{ask}
+		page.AnswerErrorID, page.AnswerError = id, page.Notice
+		page.AnswerText, page.AnswerOption = apiv1.NormalizeAskText(r.PostForm.Get("text")), r.PostForm.Get("optionId")
+		page.Notice = ""
+	} else if c.Asks != nil {
+		result, readErr := c.Asks.read(r.Context(), cursor)
+		if readErr != nil {
+			page.Notice, page.Retry = "Asks are unavailable. Open asks could not be read.", true
+			if errors.Is(readErr, errAsksNotConnected) {
+				page.Notice, page.Retry = "Asks are not connected", false
+			}
+		} else {
+			page.Asks, page.Connected, page.Complete = result.Asks, true, result.OpenComplete
+			page.Notice = ""
+			if !result.OpenComplete {
+				page.Notice = "This is a partial read. More asks may need attention."
+			}
+			if result.HistoryUnavailable {
+				page.HistoryNotice = "Older history is unavailable. Open asks are shown separately."
+			} else if !result.HistoryComplete || cursor != "" {
+				page.HistoryNotice = "Only one page of history is shown. Older history may be cut off."
+			}
+			if result.NextCursor != "" {
+				page.OlderHref = AsksPath + "?" + url.Values{apiv1.AskQueryCursor: {result.NextCursor}}.Encode()
+			}
+		}
+		if selectedID != "" {
+			ask, detailErr := c.Asks.readAsk(r.Context(), selectedID)
+			if detailErr != nil {
+				page.Notice, page.Retry = "The selected ask is unavailable. Refresh to try again.", true
+			} else {
+				found := false
+				for i := range page.Asks {
+					if page.Asks[i].ID == selectedID {
+						page.Asks[i], found = ask, true
+					}
+				}
+				if !found {
+					page.Asks = append(page.Asks, ask)
+				}
+				page.Connected = true
+			}
+		}
 	}
+	renderAsks(w, r, c, key, record, page, status)
+}
+
+func renderAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key Handle, record Record, page portal.AsksPage, status int) {
 	_, freshKey, fresh, err := authorizedAction(c.Session, c.Authorizer, r)
 	if err != nil || !sameAskSession(key, record, freshKey, fresh) {
 		authFailure(w, portal.ErrDenied)
 		return
 	}
-	page.Asks, page.Now, page.CSRF = asks, c.Now(), record.CSRF
+	page.Now, page.CSRF = c.Now(), record.CSRF
+	origin, err := url.Parse(c.Session.config.Origin)
+	if err != nil {
+		authFailure(w, portal.ErrUnavailable)
+		return
+	}
+	page.PortalHost = origin.Hostname()
 	_, page.CanAnswer = c.Session.config.Store.(commandReceipts)
 	body, policy, err := portal.RenderAsks(page, maximumResponse*7/8)
 	if err != nil {
@@ -321,39 +464,63 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	}
 	w.Header().Set("Content-Security-Policy", policy)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+var (
+	errAskEmptyAnswer    = errors.New("empty ask answer")
+	errAskConfirm        = errors.New("ask confirmation required")
+	errAskDecision       = errors.New("ask decision required")
+	errAskReadOnlyOption = errors.New("approval option is read only")
+)
+
+func askAnswerNotice(err error) (int, string) {
+	switch {
+	case errors.Is(err, apiv1.ErrAskNotOpen):
+		return http.StatusConflict, "This ask is already answered or withdrawn."
+	case errors.Is(err, apiv1.ErrAskExpired):
+		return http.StatusGone, "This ask has expired."
+	case errors.Is(err, errAskEmptyAnswer):
+		return http.StatusBadRequest, "Write an answer or choose an option."
+	case errors.Is(err, errAskConfirm):
+		return http.StatusBadRequest, "Confirm this decision for the scope and expiry shown."
+	case errors.Is(err, errAskDecision):
+		return http.StatusBadRequest, "Choose Approve or Deny."
+	case errors.Is(err, errAskReadOnlyOption):
+		return http.StatusBadRequest, "Approval options are read-only context. Use Approve or Deny."
+	case errors.Is(err, apiv1.ErrAskInvalid):
+		return http.StatusBadRequest, "Check your answer and choose a listed option."
+	default:
+		return 0, ""
+	}
 }
 
 func sameAskSession(key Handle, record Record, freshKey Handle, fresh Record) bool {
 	return freshKey == key && fresh.Principal == record.Principal && sha256.Sum256([]byte(fresh.accessToken)) == sha256.Sum256([]byte(record.accessToken)) && subtle.ConstantTimeCompare([]byte(fresh.CSRF), []byte(record.CSRF)) == 1
 }
 
-func postAskAnswer(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key Handle, record Record, asks []apiv1.Ask) error {
+func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record, ask apiv1.Ask) error {
 	store, ok := c.Session.config.Store.(commandReceipts)
 	if !ok {
 		return portal.ErrDenied
 	}
-	id, requestID := r.PostForm.Get("askID"), r.PostForm.Get("requestID")
+	requestID := r.PostForm.Get("requestID")
 	if !launchRequestID.MatchString(requestID) {
 		return portal.ErrDenied
 	}
-	var selected *apiv1.Ask
-	for i := range asks {
-		if asks[i].ID == id {
-			selected = &asks[i]
-			break
-		}
-	}
-	if selected == nil {
-		return portal.ErrDenied
-	}
-	ask := *selected
 	wantKeys := 5
-	request := apiv1.AskAnswerRequest{OptionID: r.PostForm.Get("optionId"), Text: strings.TrimSpace(strings.ReplaceAll(r.PostForm.Get("text"), "\r\n", "\n")), Actor: apiv1.AskActor{Issuer: record.Principal.Issuer, Subject: record.Principal.Subject}}
+	request := apiv1.AskAnswerRequest{OptionID: r.PostForm.Get("optionId"), Text: apiv1.NormalizeAskText(r.PostForm.Get("text")), Actor: apiv1.AskActor{Issuer: record.Principal.Issuer, Subject: record.Principal.Subject}}
 	if ask.Type == apiv1.AskTypeApproval {
 		wantKeys = 7
-		if len(r.PostForm["decision"]) != 1 || len(r.PostForm["confirm"]) != 1 || r.PostForm.Get("confirm") != "yes" || (r.PostForm.Get("decision") != "approve" && r.PostForm.Get("decision") != "decline") {
-			return portal.ErrDenied
+		if r.PostForm.Get("decision") != "approve" && r.PostForm.Get("decision") != "deny" {
+			return errAskDecision
+		}
+		if r.PostForm.Get("confirm") != "yes" {
+			return errAskConfirm
+		}
+		if request.OptionID != "" {
+			return errAskReadOnlyOption
 		}
 		approved := r.PostForm.Get("decision") == "approve"
 		request.Approved = &approved
@@ -361,13 +528,17 @@ func postAskAnswer(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key
 	if len(r.PostForm) != wantKeys {
 		return portal.ErrDenied
 	}
-	validationAsk := ask
-	validationAsk.State = apiv1.AskStateOpen
-	if request.ValidateFor(validationAsk) != nil {
-		return portal.ErrDenied
+	validationErr := request.ValidateForAt(ask, c.Now())
+	// An identical recorded answer is a successful retry; it changes no record.
+	alreadyAnswered := errors.Is(validationErr, apiv1.ErrAskNotOpen) && sameAskAnswer(ask.Answer, request)
+	if validationErr != nil && !alreadyAnswered {
+		if errors.Is(validationErr, apiv1.ErrAskInvalid) && ask.Type == apiv1.AskTypeInfo && request.OptionID == "" && strings.TrimSpace(request.Text) == "" {
+			return errAskEmptyAnswer
+		}
+		return validationErr
 	}
-	// Bind replay protection to the immutable scope and answer. Namespacing
-	// prevents collision with a send form's request ID in the shared reservation store.
+	// Bind replay protection to immutable scope, answer, issuer and subject.
+	// Display names are presentation and never decide attribution or retries.
 	encoded, err := json.Marshal(struct {
 		ID     string
 		Scope  *apiv1.AskScope
@@ -389,13 +560,17 @@ func postAskAnswer(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key
 	if err != nil || !sameAskSession(key, record, freshKey, freshRecord) {
 		return portal.ErrDenied
 	}
-	if !created {
+	if !created || validationErr != nil {
 		return nil
 	}
-	if ask.State != apiv1.AskStateOpen || !c.Now().Before(ask.ExpiresAt) || (ask.Scope != nil && !c.Now().Before(ask.Scope.ExpiresAt)) || request.ValidateFor(ask) != nil {
-		return portal.ErrDenied
+	if err := request.ValidateForAt(ask, c.Now()); err != nil {
+		return err
 	}
-	return c.Asks.answer(freshRequest.Context(), id, request)
+	return c.Asks.answer(freshRequest.Context(), ask.ID, request)
+}
+
+func sameAskAnswer(answer *apiv1.AskAnswer, request apiv1.AskAnswerRequest) bool {
+	return answer != nil && answer.OptionID == request.OptionID && answer.Text == request.Text && sameAskApproval(answer.Approved, request.Approved) && answer.AnsweredBy.Issuer == request.Actor.Issuer && answer.AnsweredBy.Subject == request.Actor.Subject
 }
 
 func parseAskForm(w http.ResponseWriter, r *http.Request, engine *Engine, record Record) error {
@@ -477,7 +652,7 @@ func strictAskJSON(raw []byte) bool {
 		if !ok {
 			return false
 		}
-		if _, ok := askObject(row["answeredBy"], []string{"issuer", "subject"}, "displayName"); !ok {
+		if _, ok := askObject(row["answeredBy"], nil, "issuer", "subject", "displayName"); !ok {
 			return false
 		}
 	}
