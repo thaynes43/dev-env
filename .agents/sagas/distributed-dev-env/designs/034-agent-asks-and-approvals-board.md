@@ -30,7 +30,7 @@ It describes required behavior, not installed or accepted functionality.
 | `POST /v1/asks/{id}/withdraw`; no portal withdraw | 2539; 2579 A3/A9 | A/C; §3 |
 | `GET /v1/portal/asks?state=open\|all`, `GET /v1/portal/asks/{id}` | 2539; 2579 A3 (detail, any state) | A/D; §3 |
 | `POST /v1/portal/asks/{id}/answer`; answer-time expiry and retry codes | 2539; 2556; 2579 A8/A9/A13 | 0/A/D; §3 |
-| Limits 16 open/requester, 512 total/requester, 4096/namespace; count then create, 80% warning | 2579 A10 (`taskclaim.CheckRoom` pattern) | A; §2 |
+| Limits 16 open/requester, 512 total/requester, 4096/namespace; count then create, 80% warning | 2579 A10 (uncached list count; `CheckRoom` is metadata-only) | A; §2 |
 | Newest first `(createdAt desc, id)`; operator sort/cursor, page limit ≤100 | 2539; 2579 A11 | A/C/D; §3 |
 | `ask` returns Ask JSON, no revision, optional configured portal link; computed validity | 2579 A4/A5 | C/D; §6/§7 |
 | `ask_status`, `list_my_asks`, `withdraw`; no session answer tool | 2539; 2579 A1 | C; §6 |
@@ -571,7 +571,7 @@ independent review, UI QA and integration.
 | Story | Dependency | Outcome and evidence |
 |---|---|---|
 | Lane 0 — shared wire types (merged #656) | 2539, 2556, 2579, 2595 | Routes, bounds and validators match v1.2, including removal of portal withdraw, 24h approval cap and `ValidateForAt`. Source merged. |
-| [#256 — lane A backend](https://work.haynesnetwork.com/work_packages/256) | Amended lane 0 | CRD/CEL/store/API behind flag. Prove idempotency/status codes, ownership, session redaction, portal detail, answer-time checks/CAS, CheckRoom limits and sorted paging. No InboxMessage create/edit; delivery empty. Generated schema/layout/focused tests pass. |
+| [#256 — lane A backend](https://work.haynesnetwork.com/work_packages/256) | Amended lane 0 | CRD/CEL/store/API behind flag. Prove idempotency/status codes, ownership, session redaction, portal detail, answer-time checks/CAS, uncached-list room limits (16 open, 512 total, 4096 namespace; `429`/`503`; identical retry resolved first) and sorted paging. No InboxMessage create/edit; delivery empty. Generated schema/layout/focused tests pass. |
 | [#257 — lane C MCP](https://work.haynesnetwork.com/work_packages/257) | Lane 0; A for integration | Four immediate tools and TLS/refusal/retry fixtures; Ask JSON, no revision, link only if configured. Session actor projection accepted; validity labelled computed. No Kubernetes imports. |
 | [#258 — lane D portal](https://work.haynesnetwork.com/work_packages/258) | Lane 0; A for integration | Detail route, same-origin answer, CSRF/session/current-group checks, A7 links, primary Approve/Deny plus notes/secondary-option safeguards, escaping/replay/stale-session tests. Lead QA at 320/390/1280, light/dark. Initial count is board-local. |
 | [#259 — lane B keeper/expiry](https://work.haynesnetwork.com/work_packages/259) | A merged; D link; Q-255-02 before live | Narrow keeper get/list Role and bounded pushes. The leader-only expiry sweeper runs in the operator, which alone writes Ask status. Fake clock/sender checks rate limits, restart dedupe, ambiguity and chosen quiet-hours policy. Default off; login notices unchanged. |
