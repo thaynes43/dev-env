@@ -1,5 +1,16 @@
 # HANDOFF: start here
 
+## RC launch design — 2026-10-29 (#267)
+
+[DESIGN-038](sagas/distributed-dev-env/designs/038-remote-control-launch.md)
+proposes the bounded Claude/Codex `agent-run rc` contract, phase evidence,
+timings, errors and build stories under Epic #91. This is documentation only;
+Codex remote project inventory and the supported fresh-thread adapter remain
+blocked. Q-267-01/02 are pending recommendations for the lead, not delivered
+questions or permission changes. The #267 author stops with one ready PR and
+checks started; the lead owns review and merge. Source, installation and usable
+acceptance remain separate.
+
 ## Current state — 2026-10-22 UTC (v2 release 2.39.1; documentation reconciliation)
 
 This block supersedes the installed-version and open-item summaries in the
