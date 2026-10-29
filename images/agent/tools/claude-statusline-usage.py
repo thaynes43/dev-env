@@ -537,10 +537,12 @@ def forward_display(argv, stream):
         return data, overflow, 127
     kept = bytearray()
     overflow = False
+    complete = False
     try:
         while True:
             chunk = stream.read(65536)
             if not chunk:
+                complete = True
                 break
             if not overflow:
                 if len(kept) + len(chunk) > MAX_BYTES:
@@ -548,23 +550,20 @@ def forward_display(argv, stream):
                     kept.clear()
                 else:
                     kept.extend(chunk)
-            try:
-                write_all(proc.stdin, chunk)
-            except OSError:
-                break
-        try:
-            proc.stdin.close()
-        except OSError:
-            pass
+            write_all(proc.stdin, chunk)
     except OSError:
-        try:
-            proc.kill()
-        except OSError:
-            pass
+        # The display closed early, or the source read failed. The unread
+        # remainder is not a confirmed document, so the retained prefix is not
+        # captured. Do not keep reading and do not kill the display.
+        complete = False
+    try:
+        proc.stdin.close()
+    except OSError:
+        pass
     code = proc.wait()
-    if overflow:
-        return b"", True, code
-    return bytes(kept), False, code
+    if complete and not overflow:
+        return bytes(kept), False, code
+    return b"", True, code
 
 
 def parse_args(argv):

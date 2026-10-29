@@ -602,7 +602,7 @@ func TestClaudeStatuslineDisplay(t *testing.T) {
 		t.Fatal("display lost stdin on refusal")
 	}
 	failing := filepath.Join(home, "fail.sh")
-	if err = os.WriteFile(failing, []byte("#!/bin/sh\nprintf 'DISPLAY-KEEP\\n'\nexit 3\n"), 0o700); err != nil {
+	if err = os.WriteFile(failing, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'DISPLAY-KEEP\\n'\nexit 3\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	res = runHelper(t, home, file, positiveBody(), []string{failing}, nil)
@@ -677,6 +677,108 @@ func TestClaudeStatuslineNonASCIIDigits(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeStatuslineIncompleteDisplay(t *testing.T) {
+	home, _, file := privatePaths(t)
+	prior := writePrior(t, file)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "invoked")
+	stub := filepath.Join(dir, "consumer-stub")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf x >> '"+marker+"'\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "claude-statusline-usage.py")
+	if err := os.WriteFile(script, bytes.ReplaceAll(mustRead(t, filepath.Join(toolsDir(t), "claude-statusline-usage.py")), []byte(consumerLiteral), []byte(stub)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(dir, "drive.py")
+	if err := os.WriteFile(driver, []byte(incompleteDriver), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"early", "readerr"} {
+		reads := filepath.Join(dir, mode+"-reads")
+		if err := os.Remove(reads); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("python3", driver, script, file, mode, reads)
+		cmd.Dir = home
+		cmd.Env = []string{"HOME=" + home, "TMPDIR=" + home, "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C", "PYTHONNOUSERSITE=1", "PYTHONDONTWRITEBYTECODE=1"}
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			t.Fatalf("%s: %v %q", mode, err, stderr.String())
+		}
+		if stderr.String() != captureMsg {
+			t.Fatalf("%s diagnostic %q", mode, stderr.String())
+		}
+		assertSame(t, file, prior)
+		if _, err = os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatalf("%s consumer invoked", mode)
+		}
+		gotReads := strings.TrimSpace(string(mustRead(t, reads)))
+		switch mode {
+		case "early":
+			if stdout.String() != "DISPLAY-EARLY\n" || gotReads != "1" {
+				t.Fatalf("early display %q reads %s", stdout.String(), gotReads)
+			}
+		case "readerr":
+			if stdout.String() != "DISPLAY-BYTES 34\n" || gotReads != "2" {
+				t.Fatalf("read error display %q reads %s", stdout.String(), gotReads)
+			}
+		}
+	}
+}
+
+const incompleteDriver = `
+import importlib.util
+import fcntl
+import sys
+
+script, output, mode, reads_path = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("statusline_helper", script)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+class Chunks:
+    def __init__(self, parts, fail_read):
+        self.parts = list(parts)
+        self.fail_read = fail_read
+        self.reads = 0
+        self.buffer = self
+    def read(self, n):
+        self.reads += 1
+        if self.fail_read and self.reads > 1:
+            raise OSError(5, "injected read")
+        if not self.parts:
+            return b""
+        return self.parts.pop(0)
+
+if mode == "early":
+    real_popen = mod.subprocess.Popen
+    def popen(args, stdin=None, **kwargs):
+        proc = real_popen(args, stdin=stdin, **kwargs)
+        if proc.stdin is not None:
+            fcntl.fcntl(proc.stdin.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+        return proc
+    mod.subprocess.Popen = popen
+    prefix = b"{}" + b" " * (65536 - 2)
+    stream = Chunks([prefix, b"MALFORMED", b"Z" * (mod.MAX_BYTES + 1)], False)
+    display = [sys.executable, "-c", "import os,sys; os.close(0); sys.stdout.write('DISPLAY-EARLY\\n'); sys.stdout.flush(); raise SystemExit(0)"]
+elif mode == "readerr":
+    prefix = b"{}" + b" " * 32
+    stream = Chunks([prefix], True)
+    display = [sys.executable, "-c", "import sys; data=sys.stdin.buffer.read(); sys.stdout.write('DISPLAY-BYTES %d\\n' % len(data)); raise SystemExit(0)"]
+else:
+    raise SystemExit(2)
+
+mod.sys.stdin = stream
+code = mod.main(["claude-statusline-usage", "--output", output, "--display", "--", *display])
+with open(reads_path, "w", encoding="ascii") as handle:
+    handle.write("%d\n" % stream.reads)
+raise SystemExit(code)
+`
 
 func TestClaudeStatuslineCaptureOverflowStops(t *testing.T) {
 	home, _, file := privatePaths(t)
