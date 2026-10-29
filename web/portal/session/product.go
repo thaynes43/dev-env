@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -31,8 +33,9 @@ const (
 	productPageCap          = 4
 	// sessionPageCap bounds the Sessions read at 500 sessions; the operator
 	// pages every repository's sessions in the namespace.
-	sessionPageCap        = 10
-	productHALLimit int64 = 1 << 20
+	sessionReadTimeout       = 15 * time.Second
+	sessionPageCap           = 10
+	productHALLimit    int64 = 1 << 20
 )
 
 // SessionSource reads portal session summaries. The operator token is read on
@@ -42,6 +45,9 @@ type SessionSource struct {
 	client        *http.Client
 	now           func() time.Time
 	conversations ConversationSource
+	lastSuccessMu sync.Mutex
+	lastSuccess   time.Time
+	logger        *slog.Logger
 }
 
 // TaskSource reads project 3's work-package collection. It does not follow an
@@ -68,41 +74,170 @@ func newTaskSource(tokenPath string, ca []byte, now func() time.Time, dial func(
 	return &TaskSource{path: tokenPath, client: client, now: now}, nil
 }
 
-func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
-	page := portal.ProductPage{Title: "Sessions", Connected: true, Filter: filter}
-	if s == nil || s.client == nil || s.now == nil {
-		return page, portal.ErrUnavailable
+// sessionReadError carries only fixed codes and integer positions, never source
+// errors, response values, URLs, credentials or headers. RowIndex is zero-based;
+// -1 means the failure belongs to the page envelope or transport.
+type sessionReadError struct{ portal.ProductReadFailure }
+
+func (e *sessionReadError) Error() string { return e.ReasonCode }
+func (e *sessionReadError) Unwrap() error { return portal.ErrUnavailable }
+
+func readFailure(code string) *sessionReadError {
+	return &sessionReadError{portal.ProductReadFailure{ReasonCode: code, RowIndex: -1}}
+}
+
+func sessionFailure(err error) *sessionReadError {
+	var failure *sessionReadError
+	if errors.As(err, &failure) {
+		copy := *failure
+		return &copy
 	}
-	token, err := operatorCredential(s.path, s.now())
+	return readFailure("response_contract")
+}
+
+func sessionTransportFailure(ctx context.Context, err error) *sessionReadError {
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		return readFailure("cancelled")
+	}
+	failure := readFailure("operator_unreachable")
+	var netErr net.Error
+	failure.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
+	return failure
+}
+
+// sessionGet preserves the failure category; the independent Tasks reader keeps
+// productGet's existing contract. Both use the same pinned, non-redirecting client.
+func sessionGet(ctx context.Context, client *http.Client, rawURL, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return page, portal.ErrUnavailable
+		return nil, readFailure("response_contract")
 	}
-	cursor := ""
-	complete := false
-	freshness := "observed"
+	req.Header.Set("Accept", mediaJSON)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, sessionTransportFailure(ctx, err)
+	}
+	if response == nil {
+		return nil, readFailure("operator_unreachable")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		failure := readFailure("operator_refused")
+		failure.HTTPStatus = response.StatusCode
+		return nil, failure
+	}
+	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || media != mediaJSON {
+		return nil, readFailure("response_contract")
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, (256<<10)+1))
+	if err != nil {
+		return nil, sessionTransportFailure(ctx, err)
+	}
+	if len(body) > 256<<10 {
+		return nil, readFailure("response_contract")
+	}
+	return body, nil
+}
+
+func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (page portal.ProductPage, err error) {
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, sessionReadTimeout)
+	defer cancel()
+	pageNo := 0
+	var credentialTime, fetchTime, decodeTime, projectionTime, historyTime time.Duration
+	defer func() {
+		observed := time.Now().UTC()
+		logger := slog.Default()
+		lastSuccess := time.Time{}
+		if s != nil {
+			if s.now != nil {
+				observed = s.now().UTC()
+			}
+			if s.logger != nil {
+				logger = s.logger
+			}
+			s.lastSuccessMu.Lock()
+			if err == nil && observed.After(s.lastSuccess) {
+				s.lastSuccess = observed
+			}
+			lastSuccess = s.lastSuccess
+			s.lastSuccessMu.Unlock()
+		}
+		if err == nil {
+			return
+		}
+		failure := sessionFailure(err)
+		failure.Page = pageNo
+		failure.ObservedAt = observed.Format(time.RFC3339Nano)
+		if !lastSuccess.IsZero() {
+			failure.LastSuccessAt = lastSuccess.Format(time.RFC3339Nano)
+		}
+		err = failure
+		notice := "Sessions unavailable"
+		if failure.ReasonCode == "not_connected" {
+			notice = "Sessions not connected"
+		}
+		page = portal.ProductPage{Title: "Sessions", Notice: notice, Filter: filter, ReadFailure: &failure.ProductReadFailure}
+		logger.LogAttrs(ctx, slog.LevelWarn, "portal_session_read_failed",
+			slog.String("reason_code", failure.ReasonCode), slog.Int("page", failure.Page), slog.Int("row_index", failure.RowIndex), slog.Int("http_status", failure.HTTPStatus), slog.Bool("timed_out", failure.TimedOut), slog.Int64("elapsed_ms", time.Since(started).Milliseconds()),
+			slog.Int64("credential_ms", credentialTime.Milliseconds()), slog.Int64("fetch_ms", fetchTime.Milliseconds()), slog.Int64("decode_ms", decodeTime.Milliseconds()), slog.Int64("projection_ms", projectionTime.Milliseconds()), slog.Int64("history_ms", historyTime.Milliseconds()))
+	}()
+	if ctx.Err() != nil {
+		return page, sessionTransportFailure(ctx, ctx.Err())
+	}
+	if s == nil || s.client == nil || s.now == nil {
+		return page, readFailure("not_connected")
+	}
+	step := time.Now()
+	token, err := operatorCredential(s.path, s.now())
+	credentialTime = time.Since(step)
+	if err != nil {
+		return page, readFailure("credential_unavailable")
+	}
+	cursor, complete, freshness := "", false, "observed"
 	var sessions []apiv1.PortalSessionSummary
 	for n := 0; n < sessionPageCap; n++ {
+		pageNo = n + 1
+		if ctx.Err() != nil {
+			return page, sessionTransportFailure(ctx, ctx.Err())
+		}
 		raw := operatorPortalOrigin + "/v1/sessions?limit=" + strconv.Itoa(productPageSize) + "&view=" + apiv1.PortalViewActivity
 		if cursor != "" {
 			raw += "&cursor=" + url.QueryEscape(cursor)
 		}
-		body, err := productGet(ctx, s.client, raw, token, 256<<10, mediaJSON)
-		if err != nil {
-			return page, err
+		step = time.Now()
+		body, getErr := sessionGet(ctx, s.client, raw, token)
+		fetchTime += time.Since(step)
+		if getErr != nil {
+			return page, getErr
 		}
-		decoded, err := decodeSessionPage(body, s.now())
-		if err != nil {
-			return page, err
+		step = time.Now()
+		decoded, decodeErr := decodeSessionPage(body, s.now())
+		decodeTime += time.Since(step)
+		if decodeErr != nil {
+			return page, decodeErr
 		}
 		freshness = worstFreshness(freshness, decoded.Freshness)
 		sessions = append(sessions, decoded.Sessions...)
-		complete = decoded.Complete
-		cursor = decoded.NextCursor
+		complete, cursor = decoded.Complete, decoded.NextCursor
 		if complete {
 			break
 		}
 	}
-	return withHistory(ctx, sessionsPage(sessions, complete, freshness, s.now(), filter), filter.Session, s.conversations, s.now()), nil
+	// There is no inventory page in flight during projection or history.
+	pageNo = 0
+	step = time.Now()
+	page = sessionsPage(sessions, complete, freshness, s.now(), filter)
+	projectionTime = time.Since(step)
+	step = time.Now()
+	page = withHistory(ctx, page, filter.Session, s.conversations, s.now())
+	historyTime = time.Since(step)
+	if ctx.Err() != nil {
+		return page, sessionTransportFailure(ctx, ctx.Err())
+	}
+	return page, nil
 }
 
 func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
@@ -139,8 +274,12 @@ func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (por
 	return tasksPage(all, complete, filter), nil
 }
 
-func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, error) {
-	var page apiv1.PortalSessionPage
+func decodeSessionPage(body []byte, now time.Time) (page apiv1.PortalSessionPage, err error) {
+	defer func() {
+		if err != nil {
+			err = sessionFailure(err)
+		}
+	}()
 	obj, err := jsonObject(body)
 	if err != nil {
 		return page, err
@@ -178,16 +317,22 @@ func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, err
 	}
 	names, uids := map[string]struct{}{}, map[string]struct{}{}
 	page.Sessions = make([]apiv1.PortalSessionSummary, 0, len(rows))
-	for _, raw := range rows {
+	for i, raw := range rows {
 		row, err := decodeSessionRow(raw, now)
 		if err != nil {
-			return apiv1.PortalSessionPage{}, err
+			failure := sessionFailure(err)
+			failure.RowIndex = i
+			return apiv1.PortalSessionPage{}, failure
 		}
 		if _, dup := names[row.Name]; dup {
-			return page, portal.ErrUnavailable
+			failure := readFailure("response_contract")
+			failure.RowIndex = i
+			return page, failure
 		}
 		if _, dup := uids[row.UID]; dup {
-			return page, portal.ErrUnavailable
+			failure := readFailure("response_contract")
+			failure.RowIndex = i
+			return page, failure
 		}
 		names[row.Name] = struct{}{}
 		uids[row.UID] = struct{}{}
@@ -211,8 +356,12 @@ func decodeSessionPage(body []byte, now time.Time) (apiv1.PortalSessionPage, err
 	return page, nil
 }
 
-func decodeSessionRow(raw json.RawMessage, now time.Time) (apiv1.PortalSessionSummary, error) {
-	var row apiv1.PortalSessionSummary
+func decodeSessionRow(raw json.RawMessage, now time.Time) (row apiv1.PortalSessionSummary, err error) {
+	defer func() {
+		if err != nil {
+			err = sessionFailure(err)
+		}
+	}()
 	obj, err := jsonObject(raw)
 	if err != nil {
 		return row, err
@@ -413,8 +562,14 @@ func observationTime(raw json.RawMessage, now time.Time) (time.Time, error) {
 		return time.Time{}, portal.ErrUnavailable
 	}
 	parsed, err := time.Parse(time.RFC3339, text)
-	if err != nil || parsed.After(now) {
+	if err != nil {
 		return time.Time{}, portal.ErrUnavailable
+	}
+	if parsed.After(now.Add(2 * time.Second)) {
+		return time.Time{}, readFailure("clock_ahead")
+	}
+	if parsed.After(now) {
+		parsed = now
 	}
 	return parsed.UTC(), nil
 }
@@ -809,9 +964,9 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	var page portal.ProductPage
 	switch r.URL.Path {
 	case SessionsPath:
-		page = portal.ProductPage{Title: "Sessions", Notice: "Sessions not connected", Filter: filter}
-		if c.Sessions != nil {
-			page, err = c.Sessions.Read(r.Context(), filter)
+		page, err = c.Sessions.Read(r.Context(), filter)
+		if page.ReadFailure != nil && c.Sessions == nil {
+			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
 	case TasksPath:
 		page = portal.ProductPage{Title: "Tasks", Notice: "Tasks not connected"}
@@ -822,12 +977,8 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		authFailure(w, portal.ErrDenied)
 		return
 	}
-	if err != nil {
-		title := "Sessions"
-		if r.URL.Path == TasksPath {
-			title = "Tasks"
-		}
-		page = portal.ProductPage{Title: title, Notice: title + " unavailable", Filter: filter}
+	if err != nil && r.URL.Path == TasksPath {
+		page = portal.ProductPage{Title: "Tasks", Notice: "Tasks unavailable", Filter: filter}
 	}
 	if current, currentErr := c.Session.Authenticate(r); currentErr != nil || current != principal {
 		authFailure(w, portal.ErrDenied)

@@ -1,10 +1,14 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -535,4 +539,337 @@ func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
 			t.Errorf("taskGroup(%q) = %d, want %d", status, got, group)
 		}
 	}
+}
+
+func TestSessionReadFailureReasons(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	token := filepath.Join(t.TempDir(), "operator")
+	if err := os.WriteFile(token, []byte(fixtureOperatorToken("dev-env-operator", now.Add(time.Hour))), 0600); err != nil {
+		t.Fatal(err)
+	}
+	good := activityPage()
+	badRow := activityRow("canary", unknownActivity)
+	badRow = strings.Replace(badRow, `"name":"canary"`, `"name":"canary","prompt":"SECRET-RESPONSE"`, 1)
+	for _, tc := range []struct {
+		name, reason, body, media string
+		status                    int
+		transportErr              error
+		missing, disconnected     bool
+	}{
+		{name: "not connected", reason: "not_connected", disconnected: true},
+		{name: "credential", reason: "credential_unavailable", missing: true},
+		{name: "unreachable", reason: "operator_unreachable", transportErr: fmt.Errorf("SECRET-TRANSPORT")},
+		{name: "timeout", reason: "operator_unreachable", transportErr: context.DeadlineExceeded},
+		{name: "cancelled", reason: "cancelled", transportErr: context.Canceled},
+		{name: "refused", reason: "operator_refused", status: 403, body: "SECRET-ERROR"},
+		{name: "redirect", reason: "operator_refused", status: 302, body: "SECRET-REDIRECT"},
+		{name: "media", reason: "response_contract", status: 200, media: "text/plain", body: good},
+		{name: "oversize", reason: "response_contract", status: 200, body: strings.Repeat("x", 256<<10+1)},
+		{name: "envelope", reason: "response_contract", status: 200, body: `{"secret":"SECRET-ENVELOPE"}`},
+		{name: "row", reason: "response_contract", status: 200, body: activityPage(badRow)},
+		{name: "clock ahead", reason: "clock_ahead", status: 200, body: strings.ReplaceAll(good, "2026-10-25T11:59:00Z", now.Add(3*time.Second).Format(time.RFC3339Nano))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			s := &SessionSource{path: token, now: func() time.Time { return now }, client: &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > 15*time.Second {
+					t.Error("whole-read deadline missing")
+				}
+				if tc.transportErr != nil {
+					return nil, tc.transportErr
+				}
+				media := tc.media
+				if media == "" {
+					media = "application/json"
+				}
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {media}}, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			})}}
+			if tc.missing {
+				s.path += "-missing"
+			}
+			if tc.disconnected {
+				s = nil
+			}
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previousLogger) })
+			page, err := s.Read(t.Context(), portal.ProductFilter{Attention: true})
+			if err == nil || !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("reason = %v, want %s", err, tc.reason)
+			}
+			var failure *sessionReadError
+			if !errors.As(err, &failure) || !errors.Is(err, portal.ErrUnavailable) || failure.ReasonCode != tc.reason {
+				t.Fatalf("untyped failure: %v", err)
+			}
+			wantPage, wantRow := 1, -1
+			if tc.missing || tc.disconnected {
+				wantPage = 0
+			}
+			if tc.name == "row" {
+				wantRow = 0
+			}
+			if failure.Page != wantPage || failure.RowIndex != wantRow || failure.TimedOut != (tc.name == "timeout") {
+				t.Fatalf("failure metadata: %+v", failure)
+			}
+			var line map[string]any
+			if strings.Count(strings.TrimSpace(logs.String()), "\n") != 0 || json.Unmarshal(logs.Bytes(), &line) != nil {
+				t.Fatalf("expected one structured failure log: %s", logs.String())
+			}
+			if line["reason_code"] != tc.reason || line["page"] != float64(wantPage) || line["row_index"] != float64(wantRow) {
+				t.Fatalf("failure log metadata: %v", line)
+			}
+			for _, key := range []string{"elapsed_ms", "credential_ms", "fetch_ms", "decode_ms", "projection_ms", "history_ms"} {
+				if n, ok := line[key].(float64); !ok || n < 0 {
+					t.Errorf("missing or invalid log duration %s", key)
+				}
+			}
+			page.ObservedAt = now.Format(time.RFC3339)
+			body, renderErr := portal.RenderProduct(page)
+			if renderErr != nil {
+				t.Fatal(renderErr)
+			}
+			text := string(body)
+			for _, want := range []string{`href="` + SessionsPath + `?show=attention">Retry</a>`, "Observed:", "Last successful read in this process:", "Unknown"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing failure UI %s", want)
+				}
+			}
+			words := map[string]string{"not_connected": "not connected", "credential_unavailable": "credential is unavailable", "operator_unreachable": "could not be reached", "operator_refused": "HTTP " + strconv.Itoa(tc.status), "response_contract": "refused by the Sessions contract", "clock_ahead": "ahead of the portal clock", "cancelled": "was cancelled"}
+			want := words[tc.reason]
+			if tc.name == "timeout" {
+				want = "timed out"
+			}
+			if !strings.Contains(text, want) {
+				t.Errorf("reason not rendered: %s", want)
+			}
+			if strings.Contains(text, "SECRET-") || strings.Contains(logs.String(), "SECRET-") || strings.Contains(text, fixtureOperatorToken("dev-env-operator", now.Add(time.Hour))) || strings.Contains(logs.String(), fixtureOperatorToken("dev-env-operator", now.Add(time.Hour))) {
+				t.Fatal("source value or credential escaped into diagnostics")
+			}
+			if len(page.Groups) != 0 || page.Usage != nil || page.Complete {
+				t.Fatal("failed read returned session data")
+			}
+			if (tc.missing || tc.disconnected) && calls != 0 {
+				t.Fatal("unavailable credential/source made a request")
+			}
+		})
+	}
+}
+
+func TestSessionObservationClockTolerance(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	for _, delta := range []time.Duration{time.Millisecond, 2 * time.Second, 2*time.Second + time.Nanosecond} {
+		raw, _ := json.Marshal(now.Add(delta).Format(time.RFC3339Nano))
+		got, err := observationTime(raw, now)
+		if delta <= 2*time.Second {
+			if err != nil || !got.Equal(now) {
+				t.Errorf("skew %s not clamped: %v %v", delta, got, err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "clock_ahead") {
+			t.Errorf("large skew accepted: %v", err)
+		}
+	}
+}
+
+func sessionReadFixture(t *testing.T, now func() time.Time, transport tripFunc) *SessionSource {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "operator")
+	if err := os.WriteFile(path, []byte(fixtureOperatorToken("dev-env-operator", now().Add(time.Hour))), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return &SessionSource{path: path, now: now, client: &http.Client{Transport: transport}}
+}
+
+func TestSessionReadLatePageFailureHasPositionAndLastSuccess(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	reading := 0
+	var logs bytes.Buffer
+	good := activityRow("SECRET-CACHED-SESSION", unknownActivity)
+	bad := strings.Replace(activityRow("bad", unknownActivity), `"phase":"Running"`, `"phase":"SECRET-BAD-PHASE"`, 1)
+	s := sessionReadFixture(t, func() time.Time { return now }, func(r *http.Request) (*http.Response, error) {
+		body := activityPage(good)
+		if reading > 0 {
+			if r.URL.Query().Get("cursor") == "" {
+				body = strings.Replace(body, `"complete":true`, `"complete":false,"nextCursor":"next"`, 1)
+			} else {
+				body = activityPage(activityRow("second-page", unknownActivity), bad)
+			}
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	if _, err := s.Read(t.Context(), portal.ProductFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	if logs.Len() != 0 {
+		t.Fatal("successful read logged a failure")
+	}
+	reading++
+	now = now.Add(time.Minute)
+	page, err := s.Read(t.Context(), portal.ProductFilter{Project: "dev-env"})
+	var failure *sessionReadError
+	if !errors.As(err, &failure) || failure.Page != 2 || failure.RowIndex != 1 {
+		t.Fatalf("position not preserved: %v", err)
+	}
+	if page.ReadFailure.LastSuccessAt != "2026-10-29T14:00:00Z" || page.ReadFailure.ObservedAt != "2026-10-29T14:01:00Z" {
+		t.Fatalf("read times missing: %+v", page.ReadFailure)
+	}
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Page 2, row index 1", `datetime="2026-10-29T14:00:00Z"`, `datetime="2026-10-29T14:01:00Z"`, `href="` + SessionsPath + `?project=dev-env">Retry</a>`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("failure lacks %s", want)
+		}
+	}
+	if strings.Contains(string(body), "SECRET-") || strings.Contains(logs.String(), "SECRET-") || len(page.Groups) > 0 || page.Usage != nil {
+		t.Fatal("failed read exposed cached or partial session data")
+	}
+	t.Logf("late contract failure: %s", strings.TrimSpace(logs.String()))
+}
+
+func TestSessionReadUsesOneTotalDeadlineAcrossPages(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	var firstDeadline time.Time
+	calls := 0
+	s := sessionReadFixture(t, func() time.Time { return now }, func(r *http.Request) (*http.Response, error) {
+		calls++
+		deadline, ok := r.Context().Deadline()
+		if !ok || time.Until(deadline) > sessionReadTimeout {
+			t.Fatal("deadline missing or too long")
+		}
+		if calls == 1 {
+			firstDeadline = deadline
+		} else if !deadline.Equal(firstDeadline) {
+			t.Error("deadline renewed for a later page")
+		}
+		if calls == 3 {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		body := strings.Replace(activityPage(), `"complete":true`, `"complete":false,"nextCursor":"next"`, 1)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	var logs bytes.Buffer
+	s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	page, err := s.Read(ctx, portal.ProductFilter{})
+	var failure *sessionReadError
+	if !errors.As(err, &failure) || failure.ReasonCode != "operator_unreachable" || !failure.TimedOut || failure.Page != 3 || len(page.Groups) != 0 {
+		t.Fatalf("total timeout not classified: %v", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("read failed to honor the total deadline")
+	}
+	t.Logf("total timeout: %s", strings.TrimSpace(logs.String()))
+}
+
+func TestSessionReadClockAheadRetainsRowIndex(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	for _, location := range []string{"row", "last activity"} {
+		row := activityRow("clock-test", unknownActivity)
+		if location == "row" {
+			row = strings.Replace(row, "2026-10-25T11:59:00Z", now.Add(3*time.Second).Format(time.RFC3339), 1)
+		} else {
+			row = strings.Replace(row, `"agentState":"idle"`, `"agentState":"idle","lastActivity":"`+now.Add(3*time.Second).Format(time.RFC3339)+`"`, 1)
+		}
+		_, err := decodeSessionPage([]byte(activityPage(row)), now)
+		var failure *sessionReadError
+		if !errors.As(err, &failure) || failure.ReasonCode != "clock_ahead" || failure.RowIndex != 0 {
+			t.Errorf("%s: %v", location, err)
+		}
+	}
+}
+
+func TestServeSessionFailureDetailsAndRetry(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	s := sessionReadFixture(t, func() time.Time { return f.now }, func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 403, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader("SECRET-REFUSAL"))}, nil
+	})
+	var logs bytes.Buffer
+	s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: s, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+	for _, query := range []string{"?show=attention", "?project=haynes-ops", "?session=uid-a", "?view=usage"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, f.request(http.MethodGet, SessionsPath+query, ""))
+		body := w.Body.String()
+		for _, want := range []string{"Sessions unavailable", "The operator refused the read (HTTP 403).", "Page 1.", `href="` + SessionsPath + query + `">Retry</a>`, `datetime="` + f.now.Format(time.RFC3339) + `"`} {
+			if w.Code != 200 || !strings.Contains(body, want) {
+				t.Errorf("%s lost %s (HTTP %d)", query, want, w.Code)
+			}
+		}
+		if query == "?view=usage" && (strings.Contains(body, `class="rail"`) || strings.Contains(body, `class="list"`) || strings.Count(body, `?view=usage" aria-current="page"`) != 2) {
+			t.Error("failed Usage read lost view state")
+		}
+		if strings.Contains(body, "SECRET-") {
+			t.Fatal("upstream error leaked")
+		}
+	}
+}
+
+type failedSessionBody struct{ err error }
+
+func (b failedSessionBody) Read([]byte) (int, error) { return 0, b.err }
+func (failedSessionBody) Close() error               { return nil }
+
+func TestSessionReadBodyFailuresAndParentCancellation(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, io.ErrUnexpectedEOF} {
+		s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: failedSessionBody{cause}}, nil
+		})
+		var logs bytes.Buffer
+		s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+		_, err := s.Read(t.Context(), portal.ProductFilter{})
+		var failure *sessionReadError
+		want := "operator_unreachable"
+		if errors.Is(cause, context.Canceled) {
+			want = "cancelled"
+		}
+		if !errors.As(err, &failure) || failure.ReasonCode != want || failure.TimedOut != errors.Is(cause, context.DeadlineExceeded) {
+			t.Errorf("body failure %v: %v", cause, err)
+		}
+	}
+	calls := 0
+	s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) { calls++; return nil, fmt.Errorf("unexpected call") })
+	var logs bytes.Buffer
+	s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := s.Read(ctx, portal.ProductFilter{})
+	var failure *sessionReadError
+	if !errors.As(err, &failure) || failure.ReasonCode != "cancelled" || failure.Page != 0 || calls != 0 {
+		t.Fatalf("cancelled parent was read: %v, calls %d", err, calls)
+	}
+}
+
+type deadlineConversations struct{}
+
+func (deadlineConversations) ReadConversation(ctx context.Context, _, _ string) (Conversation, error) {
+	<-ctx.Done()
+	return Conversation{}, ctx.Err()
+}
+
+func TestSessionReadHistoryDeadlineDoesNotBlameAnInventoryPage(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(activityPage(activityRow("selected", unknownActivity))))}, nil
+	})
+	s.UseConversations(deadlineConversations{})
+	var logs bytes.Buffer
+	s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	page, err := s.Read(ctx, portal.ProductFilter{Session: "uid-selected"})
+	var failure *sessionReadError
+	if !errors.As(err, &failure) || failure.Page != 0 || !failure.TimedOut || failure.ReasonCode != "operator_unreachable" || len(page.Groups) != 0 {
+		t.Fatalf("history timeout was attributed to a successful inventory page: %+v", failure)
+	}
+	t.Logf("history timeout: %s", strings.TrimSpace(logs.String()))
 }

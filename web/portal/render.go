@@ -347,7 +347,7 @@ func validLaunch(l *ProductLaunch) bool {
 // pageLaunch is the page's launch form when it is a valid one on the Sessions
 // page, and nil otherwise.
 func pageLaunch(page ProductPage) *ProductLaunch {
-	if page.Filter.View == "usage" || strings.ToLower(page.Title) != "sessions" || !validLaunch(page.Launch) {
+	if page.ReadFailure != nil || page.Filter.View == "usage" || strings.ToLower(page.Title) != "sessions" || !validLaunch(page.Launch) {
 		return nil
 	}
 	return page.Launch
@@ -355,7 +355,7 @@ func pageLaunch(page ProductPage) *ProductLaunch {
 
 // pageSend reports whether page holds a valid send form.
 func pageSend(page ProductPage) bool {
-	if page.Connected && page.Filter.View != "usage" {
+	if page.Connected && page.ReadFailure == nil && page.Filter.View != "usage" {
 		for _, g := range page.Groups {
 			for _, row := range g.Rows {
 				if productID.MatchString(row.ID) && validSend(row.Messages) {
@@ -447,6 +447,79 @@ type ProductRail struct {
 	Projects       []ProductCount
 }
 
+// ProductReadFailure is a failed Sessions read. ReasonCode is one of
+// not_connected, credential_unavailable, operator_unreachable, operator_refused,
+// response_contract, clock_ahead or cancelled. Only fixed wording is rendered.
+// Page is one-based (0 outside an inventory-page read); RowIndex is zero-based (-1 for no row).
+// Times describe reads in this process, not cached session data.
+type ProductReadFailure struct {
+	ReasonCode                 string
+	Page, RowIndex, HTTPStatus int
+	TimedOut                   bool
+	ObservedAt, LastSuccessAt  string
+}
+
+type productReadFailureView struct {
+	Reason, RetryHref, ObservedAt, ObservedLabel, LastSuccessAt, LastSuccessLabel string
+}
+
+func productReadFailure(f *ProductReadFailure, filter ProductFilter) *productReadFailureView {
+	if f == nil {
+		return nil
+	}
+	v := &productReadFailureView{ObservedAt: f.ObservedAt, LastSuccessAt: f.LastSuccessAt, RetryHref: productSessionsHref}
+	switch f.ReasonCode {
+	case "not_connected":
+		v.Reason = "The Sessions source is not connected."
+	case "credential_unavailable":
+		v.Reason = "The operator credential is unavailable."
+	case "operator_unreachable":
+		v.Reason = "The operator could not be reached."
+		if f.TimedOut {
+			v.Reason = "The operator read timed out. Try again."
+		}
+	case "operator_refused":
+		v.Reason = "The operator refused the read."
+		if f.HTTPStatus >= 100 && f.HTTPStatus <= 599 {
+			v.Reason = fmt.Sprintf("The operator refused the read (HTTP %d).", f.HTTPStatus)
+		}
+	case "response_contract":
+		v.Reason = "The operator response was refused by the Sessions contract."
+	case "clock_ahead":
+		v.Reason = "An operator timestamp is more than 2 seconds ahead of the portal clock."
+	case "cancelled":
+		v.Reason = "The Sessions read was cancelled."
+	default:
+		v.Reason = "The read failed; its reason is Unknown."
+	}
+	if f.Page > 0 && f.Page <= 10 {
+		v.Reason += fmt.Sprintf(" Page %d", f.Page)
+		if f.RowIndex >= 0 && f.RowIndex < 50 {
+			v.Reason += fmt.Sprintf(", row index %d (counting from 0)", f.RowIndex)
+		}
+		v.Reason += "."
+	}
+	if filter.View == "usage" {
+		v.RetryHref += "?view=usage"
+	} else if filter.Attention {
+		v.RetryHref += "?show=attention"
+	} else if filter.Project != "" {
+		v.RetryHref += "?project=" + url.QueryEscape(filter.Project)
+	} else if filter.Session != "" {
+		v.RetryHref += "?session=" + url.QueryEscape(filter.Session)
+	}
+	label := func(raw string) (string, string) {
+		at, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return "", "Unknown"
+		}
+		return at.UTC().Format(time.RFC3339Nano), at.UTC().Format("2 Jan 2006, 15:04:05 UTC")
+	}
+	v.ObservedAt, v.ObservedLabel = label(f.ObservedAt)
+	v.LastSuccessAt, v.LastSuccessLabel = label(f.LastSuccessAt)
+	return v
+}
+
 // ProductPage is one product view. Groups and Usage render only when
 // Connected, and counts only when Complete: an incomplete read has no count.
 // Quiet marks an ordinary notice; Preview labels fixture data.
@@ -460,7 +533,8 @@ type ProductPage struct {
 	Filter                              ProductFilter
 	// Launch is the Sessions page's launch form, set only when the route is
 	// configured for this caller.
-	Launch *ProductLaunch
+	Launch      *ProductLaunch
+	ReadFailure *ProductReadFailure
 }
 
 const (
@@ -594,6 +668,9 @@ type railLinkView struct {
 }
 
 func RenderProduct(page ProductPage) ([]byte, error) {
+	if page.ReadFailure != nil {
+		page.Connected, page.Complete, page.Launch = false, false, nil
+	}
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
 		SessionsHref, TasksHref, UsageHref                                 string
@@ -605,11 +682,13 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		Rows                                                               []productRowView
 		Usage                                                              *ProductUsage
 		Launch                                                             *launchView
+		ReadFailure                                                        *productReadFailureView
 		CanLaunch                                                          bool
 	}{Policy: strings.TrimSuffix(ProductPolicyFor(page), "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
 		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "?view=usage",
 		ListTitle: page.ListTitle}
+	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter)
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"
 	if view.UsageView {
 		view.Title, view.Current = "Usage", "usage"
@@ -641,6 +720,11 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	view.Attention = railLinkView{Name: "Needs attention", Href: base + "?show=attention", Current: page.Filter.Attention}
 	if page.Connected {
 		view.Quiet, view.ListCount, view.Usage = page.Quiet, page.ListCount, page.Usage
+		if view.UsageView && view.Usage != nil {
+			usage := *view.Usage
+			usage.RowsNote = strings.ReplaceAll(usage.RowsNote, "listed on the left", "shown below")
+			view.Usage = &usage
+		}
 		if page.Complete {
 			view.All.Count = page.Rail.All
 			// An alert-coloured zero says nothing; the count shows only when something waits.

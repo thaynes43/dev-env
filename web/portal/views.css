@@ -362,3 +362,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 
 .shell.usage-view { grid-template-columns: minmax(0, 1fr); }
 .shell.usage-view .workspace { display: block; }
+
+.read-failure { overflow-wrap: anywhere; }
+.read-failure p { margin: 12px 0; }
+.read-failure time { color: var(--ink); }

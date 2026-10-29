@@ -508,3 +508,21 @@ Usage has a canonical view URL, `sessions?view=usage`, with its own active top
 and mobile navigation item. It shows usage without the session rail or list;
 refresh and browser history preserve that view. Pages shares the product
 navigation. Other query combinations remain refused.
+
+Sessions reads use a single 15-second deadline across credentials, up to ten
+operator pages and selected history; each operator HTTP request still has its
+five-second timeout. Failures show a fixed reason (not connected, credential
+unavailable, operator unreachable/timed out, HTTP refusal, contract refusal,
+clock ahead or cancelled), the observation time, Retry at the same canonical
+URL, and the last successful read time if this process has one. Contract
+positions use one-based pages and zero-based row indices; a page-level failure
+has no row. No partial or cached session data is shown after a failed read.
+
+One structured `portal_session_read_failed` line records each failed read:
+`reason_code`, `page` (0 outside an inventory-page read), `row_index` (-1 without a row),
+`http_status` (0 without a response), `timed_out`, `elapsed_ms` and phase
+measurements `credential_ms`, `fetch_ms`, `decode_ms`, `projection_ms`, `history_ms`. It includes
+no upstream errors, values, headers or credentials. Page, session and last-activity
+observation timestamps up to two seconds ahead are clamped to the portal's now;
+anything further ahead is refused. Empty, stale and unavailable retain their
+separate meanings; a pending HTTP read shows no invented empty result or zero.

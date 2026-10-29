@@ -467,7 +467,22 @@ func TestUsageIsAnIndependentProductView(t *testing.T) {
 			t.Errorf("Usage lacks %s", want)
 		}
 	}
-	if strings.Count(html, `?view=usage" aria-current="page"`) != 2 || strings.Contains(html, `class="rail"`) || strings.Contains(html, `class="list"`) || strings.Contains(html, `id="s1"`) || strings.Contains(html, `id="empty"`) {
+	if strings.Count(html, `?view=usage" aria-current="page"`) != 2 || strings.Contains(html, `class="rail"`) || strings.Contains(html, `class="list"`) || strings.Contains(html, `id="s1"`) || strings.Contains(html, `id="empty"`) || strings.Contains(html, "listed on the left") {
 		t.Fatal("Usage includes session browser or wrong active navigation")
+	}
+}
+
+func TestReadFailureHidesDataAndKeepsSafeDiagnostics(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []ProductGroup{{Title: "current", Rows: []ProductRow{{ID: "s1", Title: "SECRET-CACHED-ROW"}}}}, Usage: &ProductUsage{Scope: "SECRET-CACHED-USAGE"}, ReadFailure: &ProductReadFailure{ReasonCode: `<script>SECRET-REASON</script>`, ObservedAt: "SECRET-TIME", LastSuccessAt: "SECRET-LAST", Page: 1000, RowIndex: 1000}}
+	body, policy, err := RenderProductPolicyWithin(page, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if strings.Contains(html, "SECRET-") || strings.Contains(html, "Page 1000") || !strings.Contains(html, "reason is Unknown") || policy != ProductPolicy {
+		t.Fatal("failure rendered unsafe diagnostics or cached data")
+	}
+	if !strings.Contains(html, `href="`+productSessionsHref+`">Retry</a>`) || !strings.Contains(html, "Last successful read in this process: Unknown") {
+		t.Fatal("failure lacks safe retry or Unknown last success")
 	}
 }
