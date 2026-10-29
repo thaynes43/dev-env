@@ -1,678 +1,584 @@
 # DESIGN-034: An Asks and approvals board for agents
 
 - **Status:** Proposed; documentation only, 2026-10-29.
-- **Decision:** [ADR-009](../adrs/009-agent-asks-and-approvals-board.md).
+- **Decision:** [ADR-010](../adrs/010-agent-asks-and-approvals-board.md).
 - **Tracking:** [Story #255](https://work.haynesnetwork.com/work_packages/255),
   [Epic #254](https://work.haynesnetwork.com/work_packages/254), Saga #85.
-- **Source read:** `origin/main` at `18b55268ab6ec143abe1802a9020c3e4c284582a`.
-- **Delivery boundary:** one ready design PR; the lead reviews and merges.
-  No code or runtime action here. Pending choices remain for Tom's review.
+- **Source:** PR #658 at `4de52a3427254cc66c33f0ed2139fb9811508c0b`,
+  based on `18b55268ab6ec143abe1802a9020c3e4c284582a`.
+- **Work order:** ASKS255-DESIGN-FIX-20261029-02. One ready superseding
+  PR; the lead reviews and merges. No code or runtime action here.
 
-The lead published the v1 build contract in [Epic #254](https://work.haynesnetwork.com/work_packages/254)
-journal 2539 after this worker's dispatch. It defines the shared wire types
-and existing lanes #256–#259. Sections below preserve that v1 surface and
-name stronger follow-up requirements separately. Epic journal 2555 flags
-the delivery, lifecycle and scope gaps for the lead. This document neither
-authorizes nor pauses another lane. Proposed fields and safeguards require
-wire/store review before implementation; they are not claims about v1 code.
+### v1 build contract
 
-## 1. Result and current seams
+The authority is Epic #254 **journal 2539**, amended by **2556** and
+**2579 (v1.1)**. Journal 2579 controls wherever they differ. The table is
+an index for lanes 0/A (wire/backend), B (keeper), C (MCP), D (portal).
+It describes required behavior, not installed or accepted functionality.
 
-An agent posts a question and gets its ID and link at once. Tom opens the
-Asks board, reads its context and answers. The answer waits in the agent's
-inbox until that original Session reads and acknowledges it. The agent can
-work on independent tasks meanwhile. A dependent action stays held.
+| Field, route or rule | Contract journal in #254 | Lane / section |
+|---|---|---|
+| `id`, `requestId`, `type`, `question`, `options`, `recommended`, `allowFreeText` | 2539; 2579 A6 (lane 0 bounds) | 0/A/C/D; §2 |
+| `context.sessionName/sessionUID`, `workPackage`, `links` | 2539; 2579 A6/A7 (wire URLs vs rendered links) | 0/A/D; §2 |
+| `scope.action/target/expiresAt`, `createdAt`, `expiresAt`, create `expiresIn` | 2539; 2579 A8 (24h approval cap, Ask expiry ≤ scope expiry) | 0/A/C/D; §2/§7 |
+| `state`; immutable spec and set-once `answer` | 2539; 2579 A12 (CEL) | 0/A; §2/§4 |
+| `answer.optionId/text/approved/answeredAt`; notes and explicit `*bool` | 2539; 2556; 2579 A13 | 0/A/C/D; §2 |
+| `answer.answeredBy.issuer/subject/displayName`; session redaction | 2539; 2579 A2/A6 | A/C/D; §3/ADR-010 |
+| `delivery.inboxMessage/deliveredAt` reserved, empty in v1; answer read from Ask | 2579 A1; inbox CRD change is F1 | A/C; §5 |
+| `POST /v1/asks` | 2539; 2579 A9 (201 new, 200 identical, 409 changed) | A/C; §3 |
+| `GET /v1/asks?mine=true`, `GET /v1/asks/{id}` | 2539; 2579 A1/A2/A11 | A/C; §3 |
+| `POST /v1/asks/{id}/withdraw`; no portal withdraw | 2539; 2579 A3/A9 | A/C; §3 |
+| `GET /v1/portal/asks?state=open\|all`, `GET /v1/portal/asks/{id}` | 2539; 2579 A3 (detail, any state) | A/D; §3 |
+| `POST /v1/portal/asks/{id}/answer`; answer-time expiry and retry codes | 2539; 2556; 2579 A8/A9/A13 | 0/A/D; §3 |
+| Limits 16 open/requester, 512 total/requester, 4096/namespace; count then create, 80% warning | 2579 A10 (`taskclaim.CheckRoom` pattern) | A; §2 |
+| Newest first `(createdAt desc, id)`; operator sort/cursor, page limit ≤100 | 2539; 2579 A11 | A/C/D; §3 |
+| `ask` returns Ask JSON, no revision, optional configured portal link; computed validity | 2579 A4/A5 | C/D; §6/§7 |
+| `ask_status`, `list_my_asks`, `withdraw`; no session answer tool | 2539; 2579 A1 | C; §6 |
+| Approve/Deny primary, secondary options cannot contradict decision | 2579 A15 | D; §8 |
+| Default-off flags; keeper pushes/expiry; lane custody and merge order | 2539; no change in 2579 | All; §9/§12 |
+| T4 outside v1; profile allowlist, workbench opt-in, grant exclusions | 2579 A14; Q-255-03 remains pending | Follow-up; §10/§13 |
 
-This is a question thread with one final answer. A follow-up is another Ask
-linked to the first. Ordinary conversation stays in the existing session
-message and history views. The board does not add a second chat transport.
+## 1. Result and existing parts
+
+An agent posts a question and immediately receives the Ask JSON. A client
+with a configured portal origin can also offer a board link. Tom opens the
+board, reads the context and answers. In v1 the answer stays on the Ask;
+the original Session reads it through get or list at a safe checkpoint.
+The agent keeps doing independent work. Work that depends on the answer
+remains held.
+
+An Ask has one final answer. A follow-up is another Ask linked to the
+first. Ordinary conversation stays in the session message/history views.
+The board is for questions and approvals, rather than ongoing conversation.
 
 | Existing source | Contract to preserve or extend |
 |---|---|
-| [DESIGN-029, October 29 group ruling](029-portal-foundations.md#group-based-action-scopes-2026-10-29) | Current UserInfo for the request's principal admits the portal group. Send/history targets remain exact name/UID lists in both BFF and operator. The work order reports Tom's live acceptance; this docs task performs no runtime check. |
-| [`server.go`](../../../../internal/apiserver/server.go) | Dedicated portal conversation and send routes; `/v1/inbox` and `/ack`; task budgets; child decision and own decision-authority routes. Portal reader has a narrow route allowlist. New routes need explicit caller admission. |
-| [`inbox_types.go`](../../../../api/coordination/v1alpha1/inbox_types.go), [DESIGN-014](014-durable-offline-inbox.md) | Immutable messages, original Session senders, recipient UID fences and explicit read ACKs. A portal answer cannot use today's sender schema unchanged. Projectless Sessions also need an explicit operator-origin delivery scope. |
-| [DESIGN-010](010-atomic-task-claims.md), [DESIGN-024](024-coordination-record-retention.md) | Protected coordination group, uncached checks, deterministic identity, bounded records, archive before deletion. A claim or ACK grants no new authority. |
-| [`decisions.go`](../../../../internal/apiserver/decisions.go), [`grant_attestation.go`](../../../../internal/apiserver/grant_attestation.go) | Exact child decision reservation/confirmation is not generic human authority. A grant attestation is explicitly an agent claim; the broker still decides. |
-| [`mcp.go`](../../../../internal/agentrun/mcp.go) | `agent-run mcp` is a stdio server. Its three access tools request, inspect and release grants. It has no Ask or inbox-consumption tool today. |
-| [Portal runtime](../../../../docs/portal-session-runtime.md), [`commands.go`](../../../../web/portal/session/commands.go), [`authorization.go`](../../../../web/portal/session/authorization.go) | Same-origin forms, CSRF, opaque encrypted browser sessions, fresh UserInfo and request-private session binding. Send's opaque `actorRef` is insufficient to name a human approver. |
-| [DESIGN-031](031-pages-lookup.md), [`notifier.go`](../../../../internal/keeper/notifier.go), [`internal/pages`](../../../../internal/pages/pages.go) | Keeper notification sender and bounded page record. Sent means Pushover accepted a push, not phone delivery or human reading. The broadly readable page ConfigMap cannot hold Ask text or approval identity. |
-| [DESIGN-033](033-pages-controls.md) | Desired state and applied state are distinct. A saved answer, a valid approval and a completed action need distinct evidence here too. |
+| [DESIGN-029 group ruling](029-portal-foundations.md#group-based-action-scopes-2026-10-29) | Fresh UserInfo admits the portal group for the request's principal. Send/history currently have exact name/UID targets. Ask audit identity changes the message actor boundary as stated in ADR-010; it does not expand history. |
+| [`server.go`](../../../../internal/apiserver/server.go) | TokenReview caller classes and narrow portal-reader route allowlist. New Ask routes need explicit admission. |
+| [`inbox_types.go`](../../../../api/coordination/v1alpha1/inbox_types.go), [DESIGN-014](014-durable-offline-inbox.md) | Immutable messages require original Session senders and saved-project recipient provenance. F1 must change the CRD before operator-origin delivery. V1 creates no InboxMessage. |
+| [DESIGN-010](010-atomic-task-claims.md), [DESIGN-024](024-coordination-record-retention.md) | Protected coordination group, bounded records, uncached checks and archive before deletion. A claim or ACK grants no authority. |
+| [`decisions.go`](../../../../internal/apiserver/decisions.go), [`grant_attestation.go`](../../../../internal/apiserver/grant_attestation.go) | Managed-child decisions and agent grant claims do not establish portal-principal approval. Existing enforcement remains authoritative. |
+| [`mcp.go`](../../../../internal/agentrun/mcp.go) | Extend the stdio `agent-run mcp` server and preserve its grant tools. No inference call or provider login is needed. |
+| [Portal runtime](../../../../docs/portal-session-runtime.md), [`commands.go`](../../../../web/portal/session/commands.go), [`authorization.go`](../../../../web/portal/session/authorization.go) | Same-origin forms, CSRF, encrypted browser sessions, fresh UserInfo and request-private binding. A message `actorRef` does not name an approver. |
+| [DESIGN-031](031-pages-lookup.md), [`notifier.go`](../../../../internal/keeper/notifier.go) | The keeper sends pushes. Sent means Pushover accepted the request, not phone delivery or reading. Broadly readable page records must not contain Ask prose or identity. |
 
 ## 2. Ask record and bounds
 
-Add a namespaced `Ask` in `coordination.dev-env.haynesops.com`, stored in the
-`dev-agents` namespace, as journal 2539 specifies. The separate API group,
-not a broadly readable ConfigMap, protects its content. No Session owner
-reference: a reap must not erase it.
-The immutable spec is the request. Only the operator writes its bounded
-status through compare-and-swap. Workers receive no direct CRD rights.
-Treat audience and requester provenance not present in the v1 wire type
-as server-held store metadata, not caller-controlled extension fields.
+Add namespaced `Ask` in `coordination.dev-env.haynesops.com/v1alpha1`,
+namespace `dev-agents`. Its immutable spec is the request; the operator
+alone writes status with compare-and-swap (CAS). Sessions use the API,
+not direct Kubernetes access. No Session owner reference may erase the
+Ask on reap. Requester provenance needed by the store is server metadata,
+not a new client-supplied wire field.
 
-| Field | Meaning and proposed bound |
+| Field | v1 meaning and bound |
 |---|---|
-| Version, ID and key | Version 1 contract. ID is server-generated `ask-` plus 16 lowercase hex digits. Creation carries a stable `requestId`, unique per original requester UID. Atomically bind that key to one ID and the full immutable intent; collision must not overwrite an Ask. A new request ID is a new question. |
-| Type | Exactly `info` or `approval`. |
-| Audience | Server-selected portal project/environment, initially `dev-env/internal`. A project link is separate from this answer audience. An agent cannot select a broader audience. |
-| Question | UTF-8 plaintext, 1–1000 runes. |
-| Options | 0–6 choices. Each has a unique ID matching `^[a-z0-9-]{1,24}$`, a label of 1–80 runes and a description of 0–300 runes. `allowFreeText` states whether an info answer may use text. |
-| Recommendation | `recommended` is an existing option ID or empty. The option description gives its reason. Never preselect approval in the form. |
-| Context | Server-filled requester Session name/UID, optional OpenProject `workPackage` ID, and 0–5 HTTPS links of at most 300 characters. Validate links as below. A PR is a validated GitHub link; exact SHA and limits belong in approval scope. Typed references are a possible later schema improvement. |
-| Requester | Namespace, Session name and UID, creating Pod UID, authenticated service actor, provider and creation time derived by the operator. DNS/UID bounds follow the existing Session identity types. Link the work item and claim when available; never acquire ownership by asking. |
-| Scope | Required for approval; absent for info. V1: `action` and `target`, each 1–200 runes, and `expiresAt` in RFC 3339, no more than 7 days ahead. These descriptions must name exact action, target, material limits and one-time scope. They are record-only; section 7 proposes typed enforcement later. |
-| Deadlines | Ask `expiresAt`: default 24 hours, maximum 7 days, strictly future at creation. Approval scope has its own `expiresAt`, strictly future at creation and at answering, within the 7-day ceiling. An answer cannot extend either expiry. |
-| Answer | Set once: `optionId`, text of 0–2000 runes, approval-only `approved`, `answeredBy` (issuer, subject, displayName) and server `answeredAt`. Validate choice/free-text rules and an explicit approval boolean; text cannot imply approval. DisplayName is untrusted presentation; issuer/subject is identity. Never store access tokens or cookies. |
-| Delivery | V1 `delivery.inboxMessage` and `delivery.deliveredAt` identify confirmed inbox storage. They do not prove read/ACK. |
-| Proposed follow-up status/audit | Monotonic revision, answer digest, durable delivery intent/message UID, ACK identity, group-policy evidence, revocation and consumption facts. At most 16 semantic transition entries of at most 1 KiB; saturating retry counters. These additions need shared wire review. |
+| `id`, `requestId` | Server-generated `ask-` plus 16 lowercase hex digits. Create `requestId` matches `^[A-Za-z0-9-]{8,64}$`, keyed per original requester. Identical retry returns the same record; changed body under that key conflicts. |
+| `type` | Exactly `info` or `approval`. |
+| `question` | UTF-8 plain text, 1–1000 runes, not blank. |
+| `options` | 0–6 choices; unique IDs matching `^[a-z0-9-]{1,24}$`, labels 1–80 runes, descriptions 0–300 runes. An info Ask needs at least one option or `allowFreeText: true`. An approval needs no options. |
+| `recommended`, `allowFreeText` | Recommendation is an option ID or empty. Free text controls info answers; it does not restrict approval notes. Never preselect approval. |
+| `context` | Server-filled `sessionName` (≤253 bytes) and `sessionUID` (≤128 bytes); optional positive OpenProject `workPackage` integer and 0–5 HTTPS links of 1–300 bytes each. No caller-supplied requester identity. |
+| `scope` | Required for approval, absent for info. `action` and `target` each 1–200 nonblank runes, plus RFC 3339 `expiresAt`. Describe one exact action and target with material limits. Approval scope expires after creation and no later than `createdAt + 24h` in v1. |
+| `createdAt`, `expiresAt` | Server creation time. Create uses `expiresIn`, a positive Go duration string, default `24h`, maximum `168h` (7 days). An approval Ask's `expiresAt` must be ≤ `scope.expiresAt`; the 24h scope cap therefore also bounds its answer window. An answer never extends either expiry. |
+| `state` | `open`, `answered`, `withdrawn` or `expired` only. |
+| `answer` | Set once: `optionId` (an existing choice or empty), `text` (0–2000 runes), `approved` (required `*bool` for approval, absent for info), `answeredBy` and server `answeredAt`. An explicit false means Deny; omission is not false. |
+| `answer.answeredBy` | Operator audit/portal: issuer 1–300 runes, subject 1–200 runes, displayName 0–120 runes. Session responses return only displayName; issuer and subject are omitted, not empty-string placeholders. No access tokens or cookies. |
+| `delivery` | Reserved shape `{inboxMessage, deliveredAt}`. Empty/omitted in v1. No delivery or ACK fact is inferred from an answer read. |
 
-Require valid UTF-8. Reject NUL, unsafe controls and bidi override controls;
-permit newline and tab in prose. V1 string lengths above count runes;
-also propose byte limits for both input and canonical encoded JSON:
-request at most 32 KiB, spec at most
-24 KiB, full Ask at most 64 KiB, nesting at most 8. Reject duplicate keys,
-case aliases, unknown fields, null in required fields and trailing JSON.
-For identity, cap issuer at 2 KiB, subject at 256 bytes and displayName at
-256 runes. Accept only configured HTTPS origins for OpenProject, GitHub
-and this portal; refuse userinfo, credential-like query parameters and
-unsafe schemes. Never fetch a supplied link. Render validated links as
-escaped anchors and all other prose as text. These are validation
-recommendations for the lane review, not extra v1 wire fields.
-Reject an info Ask with neither options nor free text. Reject an answer
-whose option ID is absent from the Ask, info text when free text is disabled,
-or an approval field on an info answer. Approval requires an explicit
-boolean, not an omitted value decoded as false. Bound a proposed creation
-`requestId` to 16–128 URL-safe ASCII bytes.
-Do not truncate an action, question or answer into a valid record. Schema
-limits and API validation must agree, including multibyte input.
+Lane 0's validation bounds apply. Text must be valid UTF-8. Reject tabs,
+NUL, other unsafe controls, bidi overrides and line/paragraph separators.
+Newline is allowed only in question, option description and answer text.
+Do not silently truncate a question, scope or answer to pass validation.
 
-Proposed admission limits: 16 open Asks per requester, 512 retained Asks per
-requester UID and 4096 retained Asks per audience. The retained requester
-bound is a lifetime bound while that UID exists. Closed records still
-count. Serialize admission across replicas with an audience-scoped CAS
-reservation, not a per-process count. Unknown reservations remain counted
-until reconciled. Existing identical retries and closing, answering,
-revoking, reading or acknowledging records remain available at the cap.
-Return 429 with a fixed reason; never discard an old question to admit one.
-Expose counts and an 80% warning without question text or principal labels.
+The wire accepts **any HTTPS host**: an absolute URL with a host, no
+credentials/userinfo, printable ASCII with no spaces or controls, at most
+300 bytes. Percent-encode or use punycode where needed. Do not fetch it.
+The portal renders anchors only for `claude.ai`, `github.com`, the
+configured OpenProject origin and the configured portal origin. Other
+hosts render as escaped plain text with the host visible. This is a
+rendering allowlist, not a wire rejection rule (A7).
+
+Info answers require an option or text; text requires `allowFreeText`.
+Approval answers require the explicit boolean; option and text are
+optional. **Approval notes are allowed regardless of `allowFreeText`.**
+A selected option must exist; it cannot contradict Approve/Deny in the
+portal (§8). Text or an option label never implies approval.
+
+Admission limits are **16 open per requester, 512 total per requester and
+4096 per namespace**. Closed records still count toward totals. Use
+count-then-create with the existing
+[`taskclaim.CheckRoom`](../../../../internal/taskclaim/store.go) pattern;
+log and emit a metric at 80%. This is not a new cross-replica CAS capacity
+reservation and does not claim atomic quota enforcement. Read, answer and
+withdraw do not require a new slot. Keep old records instead of dropping
+them to admit another Ask. Counts/logs must not contain question or
+principal labels.
 
 ### States
 
-V1 stores `open`, `answered`, `expired` and `withdrawn`. Its delivery field
-and an explicit InboxReadAck can project the six-state lifecycle below.
-Do not add new enum values in one lane alone. `delivered` and
-`acknowledged` are lifecycle evidence, not v1 stored-state spellings.
-
-| State | Exact evidence |
+| Stored state | Evidence |
 |---|---|
-| `open` | Request is stored; no final answer. |
-| `answered` | One human answer is durably confirmed. Crash-safe delivery also requires a durable intent in the store; v1 must not claim that guarantee before reconciliation is implemented. |
-| `delivered` | The exact answer InboxMessage is durably stored and its UID confirmed. This does not mean an agent read it. |
-| `acknowledged` | The original requester explicitly created the matching InboxReadAck. This does not mean it acted or completed work. |
-| `expired` | No answer won before Ask `expiresAt`. |
-| `withdrawn` | The original requester withdrew the open question. |
+| `open` | Request stored, no final answer. |
+| `answered` | The set-once human answer is durably stored. |
+| `withdrawn` | The requester withdrew the open question. |
+| `expired` | The answer window ended before an answer won. |
 
-Normal progression is `open → answered → delivered → acknowledged`.
-Only stored state `open` can become `expired` or `withdrawn`. Answer, withdraw and expiry
-race through the same revision CAS. Check the server clock at that write;
-an Ask past `expiresAt` is already unanswerable before a sweeper marks it.
-No reopening, answer replacement or scope edit. Correct one with a new Ask
-and a context link. An answer retry never advances state by itself.
+Only `open` can transition, to one of the other three states. Answer,
+withdraw and expiry race through CAS. At answer time the Ask must be open
+and `now < expiresAt`; for approval, also `now < scope.expiresAt`. Enforce
+these checks at the write even if the expiry sweeper has not run. Lane 0's
+`ValidateForAt(ask, now)` helper expresses the answer-time checks; handlers
+map expired/conflicting outcomes to the codes in §3.
 
-The completed design adds separate approval validity: `not-approved`,
-`active`, `expired`, `revoked`, or `consumed`. A denied Ask still delivers its answer. An
-acknowledged Ask can have an expired or revoked approval. Passing the answer
-deadline after an accepted answer does not erase it. Passing approval
-expiry makes it unusable even if a status reconciler has not run.
+No reopening, scope edit or answer replacement. Use a new linked Ask for a
+correction. Answer history remains `answered` after its approval expires;
+computed validity is separate. V1 has no delivered/acknowledged stored
+state and no revocation or consumption state.
 
 ## 3. API and caller classes
 
-The v1 routes follow journal 2539 and are behind `--enable-asks`, default
-off. Follow-up routes are labelled below. Retain audience-bound
-TokenReview, TLS, rotating token-file reads and current Session/Pod checks.
-Never expose the operator token to the browser. Disabled routes are absent.
+All operator Ask routes are behind `--enable-asks`, default off. Preserve
+TLS, audience-bound TokenReview, rotating token-file reads and current
+Session/Pod checks. No operator bearer token reaches the browser.
 
-| Caller | Allowed operations |
+| Caller | v1 rights |
 |---|---|
-| Session agent | Create an Ask as itself; list and read its own Asks; withdraw an open Ask; read and ACK its own answer inbox. No supplied requester, answer, human principal or approval. |
-| Portal reader | Read bounded Ask summaries/detail for configured portal audiences. No answer, withdrawal, ACK, approval consumption or general inbox access. |
-| Portal answerer | Operation role on v1's portal-reader BFF caller for final answers, after human group authorization. Revocation is a follow-up. It grants no general coordinator, grant, budget or Session mutation authority. |
+| Session | Create as itself; list/read only its own Asks; withdraw its open Ask. No answer route or supplied human principal. |
+| Portal reader (BFF) | List and read Asks, including detail in any state; answer after authenticating the current human and checking the portal group. No withdrawal, consumption or general inbox access. |
 
-The new answer operation uses the existing portal-reader caller class in
-v1. Explicitly add only the two portal Ask routes to its route allowlist;
-metadata reading alone must not admit generic mutation. Its projected
-identity must be unavailable to agent pods. A later split into a dedicated
-answerer service identity can reduce that trust, but is not a v1 prerequisite.
-The BFF attests the authenticated OIDC principal over its fixed verified
-TLS channel. The operator does not classify that principal as its existing
-Kubernetes Human caller.
+Add only the listed portal routes to the portal-reader allowlist. Its
+identity must remain unavailable to agent pods. The BFF derives the actor
+from its current request-private session and fresh UserInfo, never from
+browser fields or agent headers. The operator trusts that assertion from
+the admitted BFF, not a generic relay or its Kubernetes Human caller.
+A later dedicated answerer service identity or group-policy audit envelope
+needs a separate reviewed change; neither is a v1 wire field.
 
-V1 forwards the BFF-derived actor principal, not a browser field. Its
-source contract trusts the BFF to perform the live group check. Recommend
-a reviewed extension for an internal envelope containing exact issuer/subject,
-group-policy ID and revision, positive current membership, authorization
-time, Ask ID/revision, body digest and request ID. Maximum age: 30 seconds;
-no future authorization time accepted. Bind it to that one authenticated
-portal-reader request. No forwarding endpoint, agent-provided header, plain
-`actorRef`, quoted user message or tracker comment can supply this envelope.
-The answerer service is trusted to attest correctly; compromising it can
-forge an answer. That trust and its network/credential isolation need
-independent review and negative tests before approval activation. Record
-the group-policy revision alongside principal/time before claiming the
-full audit contract; v1's principal-only wire shape does not contain it.
+**Identity boundary (A2):** the operator stores all three `answeredBy`
+fields for audit, and portal routes return them. Every session-facing
+response under `/v1/asks`, including create replay, lists and withdraw,
+omits issuer and subject and exposes only displayName. Clients must accept
+that projection without reconstructing or requiring the raw identity.
+[ADR-010](../adrs/010-agent-asks-and-approvals-board.md) records the change
+from DESIGN-029's HMAC message actor boundary for approvals. Current
+message identity handling remains separate.
 
 | Route | Caller and behavior |
 |---|---|
-| `POST /v1/asks` | Session only. Stable key and immutable request. Confirmed new record: 201; identical retry: 200; changed intent under the same requester/key: 409. |
-| `GET /v1/asks?mine=true&limit=...&cursor=...` | Session only; its own records, newest first. No reader scope over other agents' Asks. |
-| `GET /v1/asks/{id}` | Owner Session only in v1. Includes its stored answer and delivery facts. GET never ACKs. |
-| `POST /v1/asks/{id}/withdraw` | Owner Session, open only. Propose an expected-revision precondition and stable operation key in the shared contract. |
-| `GET /v1/portal/asks?state=open\|all&limit=...&cursor=...` | Portal reader only, scoped to configured audiences. A selected Ask comes from this read; v1 adds no portal detail route. |
-| `POST /v1/portal/asks/{id}/answer` | Portal reader carrying server-derived actor principal. Set-once CAS while open and unexpired. Approval requires explicit `approved: true` or `false`; a choice label or note cannot approve. Recommend expected revision, request/scope digest and stable operation ID for safe form retry. |
-| Follow-up `POST /v1/portal/asks/{id}/revoke` | Fresh human group check, expected revision and stable key. Any admitted answerer may revoke; preserve original answer plus revoker/time/reason. Not in v1. |
-| Follow-up `POST /v1/asks/{id}/consume` | Later typed action adapter only; exact requester UID, scope, executor, target precondition, expiry and one-use CAS. Not enabled for the first board. |
-| Follow-up `GET /v1/asks/{id}/wait?after=REV&timeout=SECONDS` | Own Session; maximum 25 seconds, default 0; one wait per Session, 32 per replica. Timeout returns current state with no side effect. V1 needs no wait route. |
-| Existing `/v1/inbox/{message}` and `/ack` | Original recipient reads the answer and explicitly ACKs it. Extend the narrow origin decoder; preserve current recipient UID and Pod checks. |
+| `POST /v1/asks` | Session. `201` new; `200` identical retry; `409` same requester/requestId with changed body. Returns the Ask, with session identity redaction. |
+| `GET /v1/asks?mine=true&limit=...&cursor=...` | Session, own records only, including stored answers. |
+| `GET /v1/asks/{id}` | Owner Session only; answer read has no ACK or consumption side effect. |
+| `POST /v1/asks/{id}/withdraw` | Owner Session, open only; `409` when not open. No portal withdraw route. |
+| `GET /v1/portal/asks?state=open\|all&limit=...&cursor=...` | Portal reader, bounded list. |
+| `GET /v1/portal/asks/{id}` | Portal reader, any state; supports push links and `?ask=` selection. |
+| `POST /v1/portal/asks/{id}/answer` | Portal reader with BFF-derived actor, set-once CAS. Open/unexpired Ask; approval scope still future. `200` for a confirmed answer, also returning the stored Ask on an identical answer retry by the same issuer and subject; otherwise `409` for answered/withdrawn and `410` for expired. |
 
-List order is newest creation time first, then full ID. V1 caps `limit`
-at 100. Recommend default 20 and a 256 KiB encoded response ceiling, with
-a continuation cursor when the byte cap ends a page early. Portal forms
-need full bounded records; plain list summaries can omit answer prose.
-Propose opaque authenticated cursors bound to caller scope, filters,
-last key and a first-page time cutoff; lifetime 15 minutes, at most 512
-bytes. Newly created Asks wait for refresh. A state-filtered list can change
-between pages; it is not a snapshot or authoritative total. Include
-`observedAt`, coverage and a continuation marker. Invalid/stale cursors
-require a fresh list, not a wider query. Empty, partial and unavailable
-are different results. Return no partial private payload on a failed read.
+Validation errors return **400**, not 422. An identical answer retry
+compares the actor's issuer/subject and answer content; another actor
+cannot obtain a successful retry by choosing the same answer. The stored
+answer and original `answeredAt` remain unchanged. V1 adds no revision or
+stable operation-ID field to answer/withdraw. Expiry checks, CAS and
+confirmed retry semantics must agree; a late expiry sweep cannot permit
+an overdue answer.
 
-For safe retries, extend mutation contracts with a stable operation ID and
-digest before confirming. Creation already has v1's `requestId`.
-Answer/withdraw/revoke retries must match the original actor, operation,
-Ask and material intent; return the prior confirmed result before testing
-the old revision. Another actor with the same answer gets 409, not someone
-else's receipt. At most one semantic answer, withdrawal, revocation and
-consumption exists; no unbounded idempotency-key table per Ask.
+Both lists order **newest first by `(createdAt desc, id)`**. The operator
+selects the bounded set by labels, sorts it, and uses its own opaque
+cursor. Do not rely on Kubernetes list order or use its continuation token
+as the public Ask cursor. Page `limit` is at most 100. Invalid cursors
+must not broaden caller scope. List responses use `asks`, `nextCursor`
+and `complete`. A filtered list may change between pages; do not imply a
+snapshot or turn Unavailable into an empty result.
 
-An unconfirmed write or lost response is 503/Unknown. Read by the original
-ID to reconcile; creation may explicitly retry the identical `requestId`
-and intent when its generated ID is unknown. Only a confirmed identical
-retry can establish success. Never blindly retry a v1 answer POST without
-the operation-identity extension.
-Never invent another key or change scope after a timeout. Stale revision
-is 409, overdue answer is 410, invalid input 400/422 and a hard bound 429.
-Unauthorized private reads use uniform 404 without metadata. Authentication
-failure stays 401. Logs carry IDs, fixed reasons, revisions and outcome;
-question, answer, raw principal and authentication material stay out.
+A lost response is unconfirmed. Reconcile by Ask ID, or retry the identical
+creation key/body if the generated ID is unknown. An answer retry may use
+the same actor and identical answer under A9; it must not replace it or
+infer success from the browser. No new key or altered scope after timeout.
+Log fixed reasons and IDs, not Ask prose, raw principals or auth material.
+
+The portal-group answer rule is the contract; **whether that answer counts
+as Tom's common-rule action-specific approval once remains Q-255-04**.
+Revocation authority (Q-255-01) is deferred until F2. Quiet hours
+(Q-255-02) and wider transcript eligibility (Q-255-03) are also unsettled;
+no route in this section resolves them.
 
 ## 4. Storage and retention
 
-Recommend the coordination CRDs. An Ask belongs to the operator and must
-remain readable when the portal or its database is unavailable. This keeps
-requester identity, inbox and archive custody together. Portal PostgreSQL
-already has narrow browser-session and immutable receipt privileges. It
-does not give the operator a transaction across a SQL answer and a CRD
-InboxMessage. Putting Asks there would still need a durable outbox and
-would add a database client, migration and recovery authority to the operator.
+Use the protected coordination CRDs so an Ask remains readable when the
+portal database is unavailable. Portal PostgreSQL retains its browser
+session and private receipt role. Sessions and the portal get no direct
+CRD rights; add narrow operator create/get/list and status-write rights
+through GitOps.
 
-The proposed completion adds immutable Ask spec plus bounded CAS status,
-not editable free-form comments. One answer write atomically stores its principal, digest and
-outbox intent in that same Ask. Final answer and revocation fields are
-write-once. Delivery and notification attempts retain only fixed counters,
-last time and reason. Intermediate retries do not consume audit slots.
-Status writes use uncached confirmation; no informer cache proves a human
-answer committed. A leader reconciles pending deliveries in bounded pages.
+A CRD CEL transition rule makes spec immutable: `self == oldSelf`.
+The answer is set once: `oldSelf.answer == null || self.answer == oldSelf.answer`.
+Schema optional-field handling must preserve that A12 rule: an absent
+answer may be set, and a present answer cannot change or disappear.
+Prove both rules with real API-server validation, including status writes.
+Use bounded fields and lists so CEL stays within the API server cost
+budget. Status confirmation must use authoritative reads, not an informer
+cache as proof that an answer committed. V1 stores no inbox/outbox intent.
 
-This needs new narrow Ask create/get/list and status-write permissions in
-GitOps. Session callers use the operator API, not Kubernetes CRDs. Portal
-reader and answerer receive no direct CRD access. It adds no worker grant.
+Asks are not automatically covered by DESIGN-024's existing kind registry.
+Keep records until F4 extends archive validation, read fallback, metrics,
+release rules and delete allowlist. Enforce admission bounds meanwhile;
+do not introduce an unreviewed age-based deleter.
 
-Extend DESIGN-024's archive registry, validators, read fallback, metrics,
-release rules and delete allowlist explicitly. Existing retention code
-knows only its existing kinds; it must keep unknown records. Proposed Ask
-release requires all of these:
+The proposed F4 release rule requires the original requester UID proved
+absent, a closed Ask, and no active approval or pending action reservation.
+Once F1 exists, each answer message must be ACKed or its recipient proved
+absent. Archive the complete Ask and linked message/ACK/audit facts before
+deleting any member. Preserve DESIGN-024's 30-day grace, fresh release
+checks, digest verification, UID/resourceVersion delete preconditions and
+indefinite private archive. Unknown proof releases nothing; a shelf outage
+must not erase an Ask. Archived approvals are unusable.
 
-- An uncached read proves the original requester UID absent.
-- The Ask is closed, or first becomes expired/withdrawn. No active approval
-  or pending action reservation remains.
-- Each associated operator-origin inbox message is ACKed or its recipient
-  UID is proved absent. Its complete identity must match this Ask/answer.
+Before future machine consumption, define approval-policy epoch recovery:
+an etcd restore can restore an old approval or consumption fact. A
+GitOps-managed epoch outside that restored ledger must invalidate old
+approvals before action adapters resume. Browser-session recovery policy
+does not waive this requirement. This is follow-up work, not a v1 field.
 
-Treat the operator-origin answer as dependent on its Ask and recipient,
-not a fictitious sender Session. Archive the full Ask revision, answer,
-revocation and consumption evidence, message and ACK before deleting any
-member. Verify their manifest digests and cross-references under the shelf
-lock. Use the same 30-day grace after first proved release, fresh checks,
-UID/resourceVersion delete preconditions, grace reset on restored presence,
-and indefinite private archive as DESIGN-024. Unknown proof releases nothing.
-Live requester means keep its records, even after expiry or ACK. Archived
-read failure is Unavailable; an archived approval is always unusable.
+## 5. Answer retrieval; F1 inbox delivery
 
-Keep the board usable before retention activation by enforcing its bounds.
-No new deleter runs until schema, archive reads and GitOps grants are
-qualified and separately enabled. A shelf outage cannot erase a live Ask.
-Archive custody and long-term growth inherit DESIGN-024's limits; a new
-shorter deletion policy needs a later owner decision.
+**V1 reads the answer from the Ask itself** through get/list and MCP
+`ask_status`/`list_my_asks`. `delivery` remains empty. Lane A must neither
+create nor edit InboxMessage. There is no inbox ACK to wait for, no stored
+read acknowledgement and no automatic wake of a busy model. A suspended
+Session can read its Ask when it returns with the original UID; never
+restart it or deliver an answer to a replacement UID.
 
-An etcd restore may restore an old approval or consumption bit. Before
-re-enabling future action adapters after restore, change a GitOps-managed
-approval-policy epoch held outside that restored ledger. Old approvals are
-invalid under the new epoch. Prove this recovery rule before machine
-consumption ships. Portal PostgreSQL's accepted lost-revocation window for
-browser sessions does not waive this approval requirement.
+F1 is a separate **CRD change**, not unfinished v1 wiring. It needs an
+operator-origin InboxMessage variant and a recipient-only scope for
+Sessions without saved project snapshots. Preserve original Session-origin
+schema and project rules. Bind the new origin to Ask ID/UID, immutable
+answer identity/digest and exact recipient namespace/name/UID. Do not
+invent a Session sender, project snapshot or provider invocation.
 
-## 5. Delivery and acknowledgement
+F1 must qualify compatible readers before emission, explicit recipient
+read/ACK wrappers and archive linkage. The original proposed body
+`{askId, state, answer}` is an F1 candidate, not emitted by v1. Review its
+identity projection and complete encoded size against the inbox bound.
+Copies into ordinary chat are data, not approval authority.
 
-Extend InboxMessage with a discriminated **operator Ask answer** origin.
-It binds Ask ID/UID, immutable answer ID/digest, operator actor, attested
-human principal reference and exact recipient Session namespace/name/UID.
-It claims no sender provider invocation. Original Session-origin messages
-retain their current immutable schema and saved-project rules.
-
-For an ordinary managed Session with no saved catalog snapshot, explicitly
-allow a recipient-only coordination scope for this operator origin, bound
-to the Ask audience and original recipient UID. Do not invent a project
-snapshot or use the broadly readable ConfigMap group. Existing project
-inbox readers/coordinators gain no content right over this new scope.
-Legacy readers that cannot decode it return Unavailable. Deploy compatible
-schema, stores, API/CLI decoders and archive readers before emitting it.
-
-Keep the answer body within the inbox text bound of 16 KiB; propose a
-12 KiB encoded ceiling including the full v1 `answer` object. A later
-version may add Ask/answer IDs, scope digest, validity and a canonical
-status link. Fetch full scope from the Ask. No transcript or raw identity
-token enters a message. A body copied to ordinary chat is data, not
-approval authority.
-
-V1's inbox body is JSON with exactly `askId`, `state` and `answer`. Keep
-that shape for its clients. Put immutable origin/digest/recipient evidence
-in the InboxMessage metadata/spec extension; introduce a versioned body
-only with compatible reader qualification. Derive an internal answer ID
-from the confirmed set-once answer when the wire has none. The bounds
-above apply to the whole body, including its escaped answer and identity.
-
-The durable outbox key is the Ask UID plus answer ID and event kind.
-Create the corresponding message deterministically, then confirm immutable
-intent and UID before marking `delivered`. A crash after message creation
-but before status update must find that same message. Identical storage
-retries are safe; no prompt injection or external action is retried.
-At an inbox cap, retain the answer and pending intent, show “Answer saved;
-delivery pending,” and alert on age. Reserve capacity for one answer and
-one revocation message per admitted Ask in a bounded system-message quota;
-agent messages cannot consume it. Close/read/ACK still work at the cap.
-
-If the original requester is suspended, keep the message for its next
-authenticated read on the same Session UID. If it is absent or replaced,
-retain the answer in the board and report “Requester unavailable.” Never
-deliver to a new UID or restart a Session to deliver. Initial delivery
-checks the requester UID; an already confirmed immutable message remains
-valid history after that UID disappears.
-
-The agent lists, reads, validates Ask/answer IDs, records the answer in its
-own durable handoff, then ACKs the exact message UID. Reading or calling
-`ask_status` never ACKs. Reconcile the matching ACK to `acknowledged`.
-An ACK may arrive before the delivery status update. Reconcile from both
-confirmed message and ACK identities without losing that ACK.
-An ACK proves the recipient's API acknowledgement; it proves neither
-model comprehension nor execution. Revocation gets its own deterministic
-message and ACK fact and does not undo the original answer ACK.
+For crash recovery, atomically retain delivery intent with the Ask,
+create one deterministic message, then confirm its UID and immutable
+content. A crash after creation must find the same message on recovery.
+At a cap, keep “Answer saved; delivery pending” and reconcile later; do
+not erase an answer. Read and matching explicit ACK are separate facts;
+an ACK proves neither model comprehension nor action execution. Any
+future ACK projection needs reviewed schema; do not add a v1 stored state.
+F2 revocation notices would need their own message and ACK facts.
 
 ```mermaid
 sequenceDiagram
     participant A as Agent
     participant O as Operator and Ask store
+    participant K as Keeper
     participant P as Portal BFF
     participant T as Tom
-    participant I as Durable inbox
-    A->>O: ask(key, question, exact scope if approval)
-    O-->>A: Ask ID and link, state open
+    A->>O: ask(requestId, question, scope if approval)
+    O-->>A: Ask JSON, state open
     Note over A: Continue independent work
-    O-->>T: Bounded push with portal link
+    opt Ask pushes enabled after Q-255-02
+        K->>O: Read new Asks with narrow get/list Role
+        K-->>T: Bounded push with portal link
+    end
     T->>P: Open Ask and submit answer
     P->>P: Current session, Origin, CSRF, fresh group check
-    P->>O: Answer, principal assertion, expected revision
-    O->>O: CAS answer and durable delivery intent
-    O-->>P: Answer saved
-    P-->>T: Saved; delivery pending
-    O->>I: Confirm deterministic answer message
-    O->>O: Mark delivered with message UID
-    A->>I: List and read own inbox at a safe checkpoint
-    I-->>A: Answer envelope
-    A->>A: Validate and save local checkpoint
-    A->>I: ACK exact message UID
-    I-->>O: Confirm matching ACK
-    O->>O: Mark acknowledged
+    P->>O: Answer with server-derived principal
+    O->>O: Check answer-time expiry; CAS set-once answer
+    O-->>P: Stored Ask
+    P-->>T: Answer saved
+    A->>O: ask_status or list_my_asks at safe checkpoint
+    O-->>A: Ask with answer; displayName only
+    A->>A: Save answer and next step in handoff
 ```
 
-The notification arrow is optional. Push failure never changes the answer
-path. A human can discover the Ask on the board without a push.
+Push is optional. Failure never changes answer storage or retrieval.
+The keeper reads the Ask CRD directly under its narrow Kubernetes Role;
+the diagram's read is not a new operator-to-keeper API adapter.
 
 ## 6. MCP and harness use
 
-Extend `agent-run mcp`; preserve its existing grant tools. No provider API
-key, inference call or provider-specific login is needed to post an Ask.
-The operator derives Session identity from the existing projected token.
+Extend `agent-run mcp` and preserve existing grant tools. Use the Session's
+projected token; no provider API key or inference call is needed.
 
-| Tool | Contract |
+| Tool | v1 contract |
 |---|---|
-| `ask` | Typed request, caller-stable key, question/options/recommendation/context and approval scope if needed. Returns ID, revision, link and deadlines immediately. No wait parameter or human answer tool. |
-| `ask_status` | Read own Ask by ID, including answer, delivery and approval validity. A follow-up may add bounded `wait_seconds` 0–25 and `after_revision`; v1 returns immediately. No ACK or consumption side effect. |
-| `list_my_asks` | One bounded page of own Asks and a cursor; state/type filters are optional follow-up fields. Includes answered and unacknowledged records. No all-session scan, implicit continuation or automatic ACK. |
-| `withdraw` | Own open Ask; expected revision and stable operation key need the shared-contract extension. Cannot erase an answer or revoke on a human's behalf. |
+| `ask` | Typed create intent and caller-stable `requestId`; returns the Ask JSON immediately. No revision. Include a portal link only when lane C has a configured portal origin; otherwise none. |
+| `ask_status` | Read own Ask, including its stored answer. Immediate return, no ACK or consumption. Any approval validity shown is labelled computed, not a server field. |
+| `list_my_asks` | One page of own Asks, including answered records, with the operator cursor. No all-session scan or automatic continuation. |
+| `withdraw` | Withdraw own open Ask; cannot erase an answer or revoke approval. No revision/operation-ID extension is required in v1. |
 
-Also expose narrow `inbox_list`, `inbox_read` and `inbox_ack` wrappers over
-the existing CLI/API operations for harnesses without a shell. These are
-explicit reads and ACKs, not an `approve` or relayed `answer` tool. The
-work item's earlier `list_answers` name maps to a `list_my_asks` state
-filter; it does not introduce another answer store.
+There is no session answer/approve tool. The earlier story term
+`list_answers` maps to the answered records returned by `list_my_asks`,
+not another store. Optional bounded wait and inbox read/ACK wrappers are
+follow-ups; v1 does not depend on them.
 
-Claude Code, Codex and another MCP-capable harness use the same local
-stdio command through their managed configuration. Instructions tell them
-to check pending answers at turn start, before a held action and before a
-handoff. A submitted Ask must include its ID and next safe step in that
-handoff. A new tool configuration reaches a session at its next supported idle
-configuration reload or normal lifecycle transition. Do not rewrite
-running clients or restart a Session to install it. Codex native question delivery is not a prerequisite for these tools.
+Claude Code, Codex and another compatible MCP harness use the same local
+stdio command in managed configuration. **New MCP tools arrive with the
+next agent image at the Session's idle drain.** They do not arrive through
+a configuration reload. Preserve retained state; do not rewrite running
+clients or force a restart to install them.
 
-Storage alone does not wake a busy model. The first version guarantees
-retrieval on those checkpoints, not immediate unsolicited native turns.
-An automatic wake or injection adapter would need a separate provider
-contract and one-time delivery proof. A wait times out cleanly; it never
-starts an unbounded poll loop. If all remaining work depends on the answer,
-save “Waiting for answer” and stop that bounded work.
+Instructions should have agents check answers at turn start, before a
+held action and before handoff. Record the Ask ID and next safe step in
+that handoff. These are retrieval checkpoints, not an unsolicited native
+turn guarantee. If all remaining work depends on the answer, save
+“Waiting for answer” and stop that bounded work. No unbounded poll loop.
 
-Session-less native hosts or external agents need a separately reviewed
-identity/recipient adapter. Until then they cannot borrow a Session UID,
-copy a pod token or approve through a relay. “Any agent” means any harness
-with a supported authenticated requester and inbox, not anonymous callers.
+External agents and Session-less native hosts need a separately reviewed
+requester identity adapter. They cannot borrow a Session UID or pod token.
+“Any agent” means any harness with a supported authenticated requester.
 
-## 7. Approval authority, expiry and revocation
+## 7. Approval authority, expiry and follow-up revocation
 
-An approval Ask must describe one exact proposed action. V1's `action` and
-`target` prose must state its material limits; neither a wildcard nor
-“approve my plan” is sufficient. If it cannot fit precisely in those
-bounded fields, link the reviewed artifact and keep execution held until
-a typed scope can bind its exact content digest. Before machine
-consumption, add typed action names and a canonical scope schema, never a
-general shell executor. Include exact resource name/UID, environment and operation;
-for a PR, repository/number and head SHA; for a budget, ledger UID and
-numeric currency/token/time/concurrency limits; for access, grant UID,
-role, namespaces, endpoints and TTL. Include target-state preconditions
-and any one-time attempt limit. Missing or unknown limits cannot mean
-unlimited. A changed action or target needs a new Ask.
+V1 records one exact action/target/expiry and has no generic executor.
+Material limits must fit those fields or be clearly bound to the reviewed
+artifact. A wildcard or “approve my plan” cannot define an exact action.
+A changed scope needs a new Ask. Each future machine-consumable action kind
+needs its own typed validator and enforcement adapter: for example PR
+number/head SHA, grant UID/role/TTL, or budget ledger UID and numeric caps.
+Missing limits never mean unlimited.
 
-The initial board records the v1 action/target/expiry description and has
-no generic executor. It is not a complete revocable approvals service
-until the audit and revocation follow-up ships. Add canonical scope
-digests, at most 8 KiB and 16 targets, in the later enforcement contract.
-Each machine-consumable action kind
-needs its own validator and enforcement adapter. An unknown kind stays
-record-only and cannot be consumed. Render the full exact scope before
-the approval button. A shortened label is not the scope reviewed.
+Only a human currently admitted by the portal group may answer. The BFF
+checks `portal_is_active` and `portal_is_admin` for that exact request-private
+session before form rendering and immediately before dispatch. Preserve
+session revocation, expiry, subject and token-digest checks around
+UserInfo. An agent/coordinator cannot approve its own or another Ask;
+a relay may link to the Ask but cannot synthesize the portal principal.
 
-Only a current human principal admitted by the portal group may answer.
-The BFF verifies `portal_is_active` and `portal_is_admin` for that exact
-request-private session before rendering and immediately before committing
-an answer. Preserve session revocation, token digest, expiry and subject
-checks around UserInfo. No per-person allowlist replaces the group.
-Issuer/subject is audit identity, not an authorization pin.
+At answer time the Ask must be open/unexpired and approval scope still in
+the future. **No revocation exists in v1**, so `scope.expiresAt` is capped
+at `createdAt + 24h` and Ask `expiresAt` cannot exceed scope expiry.
+Clients display validity as **computed** from
+`approved && now < scope.expiresAt`; it is not a server field. Deny is an
+answer, not an active approval. An expired approval is unusable even
+though the historical answer remains visible.
 
-The full follow-up audit must store principal, admitted group-policy ID/revision and check time, answer
-time, Ask/requester UID, full canonical scope/digest, chosen validity,
-approval-policy epoch and request ID. V1 supplies only its option, text
-and explicit approval choice from the browser; identity is server-derived.
-Proposed revision/digest/operation fields need shared wire review. Agents and
-coordinators have no answerer credentials or endpoint rights. An agent
-cannot approve its own Ask or another agent's Ask. A trusted coordination
-relay may link the Ask but cannot synthesize its human answer.
+Logout or group removal blocks later portal operations on fresh checks;
+it does not rewrite a historical answer. The record supplies no credential
+or machine action permission. Q-255-04 asks whether Tom recognizes an
+unexpired approval as his action-specific approval once under common
+rules. That decision is pending; do not activate that interpretation from
+this design or spend an approval twice.
 
-Membership is checked at answer and revoke time. A stored approval records
-membership at that time. Later logout or group removal does not rewrite
-that historical fact or automatically revoke its bounded approval. It
-denies later portal operations. Explicit revocation and expiry end unused
-approval; any future requirement for immediate recall on group removal
-needs an IdP-backed revocation adapter and qualification. Do not claim one
-exists. Keep approval TTL short and make that limit visible.
+F2 adds revocation, audit and any required revision/digest/operation fields.
+**Who may revoke is deferred Q-255-01**, not “any member” as an adopted
+rule. A proposed audit binds group-policy/check time, issuer/subject,
+Ask/requester UID, canonical scope/digest, policy epoch and operation.
+Bound it to a small fixed number of audit entries and retry attempts;
+final limits need F2 wire review. No such fields are claimed in v1.
 
-A later consuming adapter must reread current Ask validity and target
-state and CAS-reserve its single use before dispatch. Denial, revocation,
-expiry and reservation race on the same authoritative Ask revision. No
-offline page, inbox copy, stale cache or agent assertion can authorize use.
-An uncertain reservation stays unusable pending reconciliation. Never
-replay a privileged action after Unknown merely because approval exists.
-Record reservation, executor and applied/failed/unknown result separately.
-
-Revocation before reservation prevents use. Reservation is the one-use
-authorization boundary. Revocation after it records cancellation requested;
-the adapter must try to stop a pending dispatch, but cannot promise to win
-that external race. An action may already start or finish. The board shows whether cancellation was
-confirmed, too late or Unknown. It cannot promise to undo an external
-effect, remove a copied credential or refund a spent budget. Revocation
-is durable even if its inbox notice fails. A new approval requires a new
-Ask and does not replenish a consumed attempt.
-
-| Existing approval | Later mapping; existing enforcement remains authoritative |
-|---|---|
-| Access grants and agent attestations | An Ask links the exact AccessGrant UID and current scope digest/TTL. A future broker adapter validates human approval directly. An agent `grant attest` record stays a claim; it cannot be relabelled a portal answer. Grant policy, install, use, expiry and revoke remain broker facts. |
-| Task budget extension | An Ask names the ledger UID, revision and exact added time/tokens/cost/concurrency. A future budget service adapter consumes it once through its existing ledger CAS. A human answer cannot edit a ledger or silently admit more children. |
-| Managed-child decision / decision-authority | Link an Ask to the exact decision ID, task Session/Pod/thread and writer generation. A future adapter must retain existing Reserved/Confirmed authority and budget fences. A portal approval or parent relay alone does not confirm that native decision. |
+Later consuming adapters must reread validity and target preconditions,
+CAS-reserve one use, and record executor/applied/failed/unknown result.
+Unknown cannot trigger action replay. Revocation before reservation must
+prevent use; after reservation it can only request cancellation and report
+confirmed, too late or Unknown. It cannot undo an action already started,
+remove a copied credential or refund a spent budget. Restore/epoch behavior
+must be qualified before these adapters ship. Existing grant broker,
+budget ledger and native-decision enforcement remain authoritative.
 
 ## 8. Portal board and Needs attention
 
-Add **Asks** to the existing shared desktop and mobile shell. Default to
-open Asks. Offer narrow filters for info/approval, requester and closed
-state. Propose `/portal/projects/dev-env/environments/internal/asks` with
-`?ask=<id>` for selection, and same-origin `POST .../asks/{id}/answer`
-for the BFF form. Keep filters and selection in canonical URLs. A card shows question,
-requester, linked work item/PR, recommendation, deadline and age. Unavailable
-counts never render as zero.
+Add **Asks** to the shared mobile/desktop shell. Default to open Asks with
+an all-state view. Use the portal resource route
+`/portal/projects/dev-env/environments/internal/asks?ask=<id>` for selection
+and same-origin `POST .../asks/{id}/answer` for the form. The BFF uses the
+portal detail API to read a selected Ask in any state, including push
+links to an already answered Ask. No portal withdrawal control or route.
 
-Needs attention includes every visible open Ask. Its Session says
-**Waiting for you** with the Ask question and link; retain liveness, task
-outcome and other attention reasons beside it. This is a pending human
-dependency, not proof the whole agent is blocked. Multiple Asks show a
-count and each question. An absent Session's Ask still appears on the board.
-An answered Ask moves to delivery status, not back to “Waiting for you.”
-This cross-page projection is F3. The first #258 increment keeps its count
-on the Asks board only, under lead journal 2553.
+A card shows question, requester, work item/links, recommendation, deadline
+and age. Render URLs under A7, including the plain host for untrusted link
+hosts. Selected detail shows full exact scope before the answer controls.
+Fetch compatible conversation on demand under the current separate
+history authority; missing history cannot prevent reading or denying an
+Ask. T4 is not a prerequisite for the board.
 
-The selected Ask shows its exact scope, validated context links and the
-requester's compatible conversation, through the existing projection.
-Fetch conversation on demand, with separate history authority. Missing
-history cannot prevent reading or denying an Ask. Approval stays explicit
-with full scope visible. Info choices allow a text answer. No answer is
-preselected; approve and deny have equally clear labels. A follow-up uses
-ordinary session messaging or a linked new Ask, not an edit of the answer.
+For approval Asks, **Approve and Deny are the primary controls**. Neither
+is preselected. Options are secondary and cannot contradict the decision:
+for example, an option named `reject` with Approve is refused or warned.
+Approve/Deny alone suffices without any option. Allow an optional note
+even when `allowFreeText` is false. Info answers use the option/free-text
+rules. No choice label or text is treated as an implicit boolean.
 
-The form POSTs only to the same-origin BFF. Use the current encrypted
-session, `__Host-` cookie, exact Origin, strict form keys, bounded body,
-constant-time CSRF comparison and request-private principal reference.
-Reauthenticate and check live UserInfo immediately before dispatch, with
-the same handle, principal and token digest. GET, push links and browser
-prefetch have no answer side effect. An expired session requires login and
-a fresh form; do not queue approval offline.
+Use the encrypted browser session, `__Host-` cookie, exact Origin, bounded
+form keys/body, constant-time CSRF check and request-private principal.
+Fresh UserInfo immediately before dispatch must refer to the same handle,
+principal and token digest. No actor from the browser. GET, push links and
+prefetch cannot answer. Expired login requires a new form; no queued offline
+approval. Bind private form receipts to that browser session under the
+existing receipt pattern. A lost response offers a status read or the
+identical answer retry allowed by A9, not a changed answer.
 
-Bind form receipts to that browser session and request ID in the existing
-private receipt pattern. The common Ask answer is visible to its audience;
-another principal cannot read the first principal's private form receipt.
-A stale revision shows the newer answer. A lost response says “Answer
-unconfirmed” and offers a status read. No automatic resubmit or new request
-ID. Saved, delivery pending, delivered, acknowledged and action result are
-separate lines. Expired, revoked or consumed approval remains prominent.
+Show “Answer saved” in v1. Computed approval expiry is separate from the
+historical answer. Delivery pending/delivered/ACK/revoked/consumed displays
+wait for the relevant follow-ups. A follow-up question is a new linked
+Ask, not an answer edit.
 
-Use a single column at phone width, full-width choices, touch-sized
-controls, keyboard focus and labelled text fields. Retain list position
-on Back. Put approval scope above the submit control, without horizontal
-scroll. Escape prose as text; no active Markdown, remote images, raw tool
-output, thinking or executable attachment. No JavaScript or background
-polling is required for the first version. Refresh shows current facts.
+Needs attention should eventually include each visible open Ask and its
+requester's “Waiting for you” link while preserving other liveness and
+attention reasons. This describes a human dependency, not a claim the
+whole Session is stopped. Cross-page projection is F3. Lane D's first
+increment keeps its count on the Asks board under #258 journal 2553;
+it must not claim the full projection is already usable. An absent
+requester's Ask still appears on the board.
+
+Use a single column at phone width, touch-sized controls, visible keyboard
+focus and labelled fields. Scope must not need horizontal scrolling.
+Escape prose; no active Markdown, remote images, thinking, raw tool output
+or executable attachments. Refresh shows current facts; no background
+polling is required. Unavailable counts never render as zero.
 
 ## 9. Notifications
 
-Recommend the keeper's existing Pushover sender and `internal/pages`
-outcome vocabulary, with a new bounded Ask-notice job. Add an explicit
-operator-to-keeper metadata adapter and its reviewed identity/network
-policy; the keeper has no general Ask text reader today. Do not distribute
-its notification credentials to agents or the portal.
+The keeper sends Pushover notices using the existing sender and
+[DESIGN-031](031-pages-lookup.md) outcome vocabulary. Add a **narrow keeper
+Role to get and list Asks** in `dev-agents`, rather than an
+operator-to-keeper adapter. It grants no answer/status-write right and no
+general inbox access. Notification credentials stay in the keeper.
+Its read authority and network policy need GitOps review; the notice and
+page record still contain no Ask text or approver identity.
 
-Use a fixed title and body such as “An agent needs your answer.” Link to
-the configured HTTPS portal origin and exact Ask route. Include no
-question text, PR title, principal, token or signed approval in the push
-or broadly readable page record. A link always opens authenticated GET.
-Record the correlation as an Ask ID and semantic event.
+Use a fixed title/body such as “An agent needs your answer” and a link to
+the configured HTTPS portal origin and selected Ask. No question text, PR
+title, principal, token or signed approval in the push. The link opens an
+authenticated GET; it never answers or approves. Record Ask ID and event
+kind as correlation. Pushover acceptance is not phone delivery.
 
-Proposed caps: one new-Ask push per Ask, at most one push per requester
-per five minutes and six per recipient per hour. Persist reservation and
-rate state across keeper replicas/restarts. Coalesce excess into one board
-digest within those caps; the durable board retains all questions. No
-urgent flag supplied by an agent can bypass a cap or quiet hours. Record
-suppressed/deferred notification state separately from Ask delivery.
+Proposed caps: one new-Ask push per Ask, at most one per requester per five
+minutes and six per recipient per hour. Persist deduplication/rate state
+across keeper restarts. Coalesce within those caps; never hide the durable
+question. An ambiguous send response is Unknown, not success; do not
+repeat it automatically. A definite pre-send failure may retry once after
+five minutes while open and within caps. Push success does not affect
+Ask storage or answer retrieval. Keeper login notices remain unchanged.
 
-Pushover has no sender idempotency contract in the current design. A lost
-send response is `ambiguous`, not sent or delivered. Do not automatically
-repeat an ambiguous Ask push. A definite pre-send failure may retry once
-after five minutes, within the caps and only while the Ask is open. Record
-before/after the attempt using DESIGN-031's bounded history. Ask, answer
-and inbox delivery do not depend on notification success. Keepers' current
-login notices and their emergency behavior stay unchanged.
+**Q-255-02 is unanswered.** The source premise is **no quiet-hours code
+exists**; this is a new Ask notification policy, not reuse of an installed
+schedule. Propose priority 0, 09:00–21:00 America/New_York, DST-aware
+deferral and no agent bypass. Ask Tom before lane B goes live. Tests and
+default-off source work may proceed; live pushes wait for the answer.
+This section settles neither quiet hours nor Q-255-01/03/04.
 
-Quiet hours remain Q-255-02. Proposed Ask priority is 0 with no emergency
-repeat. Until Tom answers, the notification story stays disabled; the
-board can be built and tested without live pushes.
+## 10. T4: transcripts for compatible Sessions (not v1)
 
-## 10. Chat history T4: eligible Sessions, not per-UID lists
+**T4 is outside v1 and awaits Q-255-03.** Propose default-off
+`eligible-registered` history for the configured `dev-env/internal`
+resource. It removes per-UID history edits only within that resource;
+it adds no cross-project, all-namespace or send scope.
 
-Recommend a default-off history mode named `eligible-registered` for the
-configured portal resource. Initially that resource remains
-`dev-env/internal`; no cross-project or all-namespace expansion follows.
-Every Session in that resource is eligible when all of these hold:
+Eligibility must satisfy all of these:
 
-- It belongs to an operator-managed namespace and the resource's declared
-  repository/project scope, including explicitly covered projectless
-  `dev-env` Sessions.
-- Its original Session UID and current controlled Pod are freshly proved,
-  Running and non-deleting, as the current conversation route requires.
-- Its agentd has a compatible registered-conversation reader, and initial
-  and current registrations agree on the original Session UID, conversation
-  and worktree. The current registration binds the current Pod; the first
-  launch retains its original Pod identity. The supported provider adapter
-  validates its transcript format.
-- The current portal principal passes the same live group check before
-  fetch and before response release. The configured history resource scope
-  admits this Session. Summary visibility alone grants nothing.
+- An **operator-owned profile allowlist: `full`, `dev`**. `workbench` is
+  opt-in, not implicitly included. Exclude Sessions holding credential or
+  break-glass grants, even if their profile would otherwise qualify.
+- Operator-managed namespace and declared repository/project scope,
+  including only explicitly covered projectless dev-env Sessions.
+- Fresh original Session UID and current controlled Pod checks, Running
+  and non-deleting, as the conversation route requires.
+- Compatible agentd registered-conversation reader; original/current
+  registration, conversation and worktree agree, current Pod is bound,
+  and the provider adapter validates the transcript format.
+- Current human passes fresh portal-group checks before fetch and release,
+  and the operator/BFF resource policy agrees.
 
-Select eligibility from operator-owned identity and resource policy, not
-an agent label, a supplied filesystem path or a reusable name. The BFF and
-operator must agree on the mode. Refuse ambiguous combinations with exact
-target lists; preserve the existing exact mode until this one is reviewed
-and activated. Send keeps its separate target list. A new provider becomes
-eligible only after adapter qualification, not merely a provider enum.
+Operator policy selects eligibility, never agent labels, supplied paths
+or a reusable name. Preserve exact targets until this mode is reviewed and
+activated. Missing/legacy/unregistered/replaced/out-of-profile or
+credential-bearing Sessions show Unavailable. Do not scan homes, adopt an
+unregistered file, read raw logs or use archive/inbox as a transcript
+fallback. No restart or rebind to make a Session eligible.
 
-An older/unregistered Session, missing current pod, legacy thread, changed
-worktree or unsupported provider shows a fixed Unavailable reason. Do not
-scan homes, adopt an unregistered file, read raw logs or fall back to archive
-or inbox as transcript history. Suspended and archived transcript access
-needs its own contract; the Ask/answer itself stays readable meanwhile.
-No existing Session is restarted or rebound to make it eligible.
-
-Keep current plaintext roles, redaction, no thinking/tool bodies, 60 turns,
+Keep current plaintext roles/redaction, no thinking/tool bodies, 60 turns,
 4 KiB per turn and 96 KiB total rendered text. Preserve bounded fetches,
-coverage and source times. Current cursors bind the entire transcript
-snapshot and owner; appends invalidate them and the BFF currently fetches
-only the newest page. T4 eligibility does not claim stable growing-history
-pagination. If added later, it needs its own bounded cursor contract.
+coverage and source times. Current cursors bind a complete transcript
+snapshot; appends invalidate them and the BFF fetches the newest page.
+T4 does not establish stable growing-history pagination. Suspended/archive
+history and new provider adapters need separate contracts.
 
-Trade-off: any admitted portal-group member can read any eligible Session
-in this resource, including future compatible Sessions without another
-UID configuration edit. This fits Tom's group direction and removes
-manual target churn, but increases transcript exposure. Redaction cannot
-guarantee removal of secrets or private user text. Group membership,
-resource policy, private responses, no-store caching and content-free
-access audit remain essential. Group removal takes effect on the next
-fresh check; it cannot retract text already shown. Extra projects and
-archive access need separate review. Q-255-03 holds this eligibility change.
+This proposal expands transcript exposure to future qualifying Sessions
+within the allowlist. Redaction cannot guarantee removal of private text
+or credentials. Keep no-store responses and content-free access audit.
+Fresh group removal cannot retract already shown text. Tom must decide
+Q-255-03; this design does not settle that expansion.
 
 ## 11. Migration and outage behavior
 
-After live acceptance, use the board for routine information questions and
-bounded approval requests across compatible harnesses. Update shared
-instructions through their GitOps source. Do not merely remove the current
-phone-question rule before delivery, human identity and real agent ACK
-have been accepted. Do not translate a harness security prompt into a
-board approval or bypass the harness's own enforcement.
+After usable acceptance and Tom's decision on Q-255-04, propose board use
+for routine questions and bounded approvals. Change shared instructions
+through GitOps; do not remove the phone-question rule based on source
+alone. V1 acceptance requires an actual agent reading its stored Ask
+answer, not an inbox ACK. Harness security prompts and action permissions
+remain separate.
 
-When the board is down, first reconcile any uncertain creation or answer
-using its stable key/ID. Preserve that ID in OpenProject and the local
-handoff. Continue independent authorized work. For an urgent question,
-use a supported native phone prompt only when its delivery is verified,
-one question at a time. Record the fallback answer's actual source and
-scope in the canonical work item. Such a record is not a forged portal
-principal answer. Leave the old Ask open for reconciliation or explicitly
-withdraw it once reachable; do not spend the same one-use approval twice.
+During outage, reconcile uncertain creation/answer by its stable key/ID.
+Preserve it in OpenProject and handoff; continue independent authorized
+work. Use a verified supported native phone prompt for urgent questions,
+one at a time. Record actual source/scope; never fabricate a portal
+principal from a fallback answer. Reconcile or withdraw the original
+Ask when reachable, and never spend one approval twice.
 
-Codex currently has no verified native phone fallback. Keep its dependent
-action held and hand the pending question to the lead's verified route.
-No guessed notification channel, credential repair, tracker comment or
-ordinary chat relay substitutes for action-specific human approval.
-Information already authorized in the session remains usable; an outage
-does not reset existing permission or require reapproval of completed work.
+Codex has no verified native phone fallback here. The lead owns delivery
+of pending questions through its verified route. Keep dependent work held;
+do not invent a notification channel, repair credentials or treat a tracker
+comment as action-specific approval. An outage does not reset authority
+already granted in the session.
 
 ## 12. Build stories and acceptance
 
-The canonical queue already contains lanes #256–#259. Reuse those items;
-do not create a competing A1–A11 backlog. Their owners and budgets remain
-as recorded by the lead. Journal 2539 gives merge order: wire types first,
-backend next, then MCP, portal and notifications. Source scaffolding may
-proceed in isolated files under those work orders; runtime acceptance
-waits for the combined result.
+Reuse canonical lanes #256–#259. Journal 2539 gives custody and merge
+order: lane 0, then A, then C/D/B (B after A). Journal 2579 amendments
+must reach the shared wire types before backend integration; old lane
+heads are not evidence that v1.1 is implemented. All features are default
+off. The lead owns independent review, UI QA and integration; this docs
+worker does not change lane assignments or authorization.
 
-The table maps that order and the remaining bounded follow-ups. New rows
-need search-first filing under #254 before pickup, with owner, custody,
-budget and handoff. The lead grooms them after reviewing this design;
-this PR grants no pickup or parallel dispatch. Estimate each new source
-follow-up at two hours with one worker and a 90-minute checkpoint; usage
-cost and quota are unknown. Split at that checkpoint if it will not fit.
-Tests use at most `DEV_ENV_CPU_LIMIT` workers, one suite at a time. No
-burners, stress or wide test loops. Every item reports source/test evidence
-separately from installed and usable/accepted state.
-
-| Story | Dependency | Outcome and acceptance |
+| Story | Dependency | Outcome and evidence |
 |---|---|---|
-| Lane 0 — shared wire types, lead-owned | Journal 2539 | One reviewed route/type/validation contract; v1 bounds, set-once answer shape and source-only state words agree across clients. No runtime route. |
-| [#256 — backend and inbox delivery](https://work.haynesnetwork.com/work_packages/256) | Lane 0 | CRD/store/API behind `--enable-asks`. Prove create/idempotency, list/get/withdraw ownership, portal-only answer CAS, expiry and one attributed inbox message. Explicitly resolve section 5's operator-origin gap; do not borrow an agent sender. Schema, generated code, layout and focused tests pass. |
-| [#257 — MCP client](https://work.haynesnetwork.com/work_packages/257) | Lane 0; #256 for integration | Four nonblocking tools with strict bounded inputs. TLS fixtures cover create/status/list/withdraw and Unknown/refusal; no session answer tool. Agent-run remains free of Kubernetes imports. Optional wait is deferred, not a missing v1 endpoint. |
-| [#258 — portal board](https://work.haynesnetwork.com/work_packages/258) | Lane 0; #256 for integration | Mobile board, answer POST, private session/CSRF/current-group checks, replay/stale-session/escaping tests and exact scope shown. Lead browser QA at 320/390/1280 in dark/light. Journal 2553 limits the first badge to the board; cross-page attention is the follow-up below. |
-| [#259 — notifications and expiry](https://work.haynesnetwork.com/work_packages/259) | #256 merged; #258 link; Q-255-02 before live pushes | Leader-only expiry and bounded linked pushes. Fake clock/sender proves quiet hours, rate limits, restart dedupe and ambiguous outcomes. Default off; no changed keeper login notices. |
-| F1 — durable answer delivery qualification | #256 | If not covered by #256, finish operator-origin inbox and recipient-only scope, deterministic outbox recovery and ACK projection. Crash before/after each store write yields one answer message; cap/suspend/absence/replacement/wrong-ACK tests pass. No provider injection. |
-| F2 — revocable approval audit | #256, #258, F1 | Add reviewed group-policy/answer identity, operation IDs, revision preconditions and revoke route/form. Two admitted subjects, forged actor, swapped sessions, removed group, stale scope, concurrent answer/revoke and lost response fail or reconcile correctly. Revoked remains visible after ACK. No action adapter. |
-| F3 — Needs attention and consumption | #257, #258, F1 | Add cross-page Waiting for you and explicit inbox MCP read/ACK wrappers. Qualified Claude/Codex fixtures post, continue independent work, read/save/ACK once and resume a handoff without reissuing. No automatic wake; unsupported hosts stay explicit. |
-| T4 — resource history eligibility | Q-255-03; existing conversation contract | BFF/operator agree on resource-based mode. Multiple compatible Sessions need no listed UID; legacy/unbound provider, out-of-resource target and replaced Pod are unavailable. Send scope does not expand. Current pagination limits remain visible. |
-| F4 — coordination retention | F1, F2 | Extend DESIGN-024 bundle archives and read fallback. Prove requester-present/Unknown refusal, full message/ACK linkage, 30-day grace and hash mismatch refusal. Archived approvals are unusable; no deletion until separately enabled. |
-| F5 — GitOps installation | Combined lane CI/review, F1–F4, selected T4, signed images and runtime authorization | Separate haynes-ops changes install schema/readers before writers, narrow API/storage rights and isolate the BFF identity. Enable each flag in reviewed order. Record digests, effective identities, rollback floor and observed status. Preserve running Sessions and v1 holds. |
-| F6 — owner acceptance | F5; separately authorized disposable Sessions | Tom reads history and answers on phone; Claude and Codex receive and ACK. Demonstrate deny, expiry, revoke and visible delivery failure. Record built/tested/installed/usable acceptance independently. Estimate one hour, one worker. Only accepted delivery permits instruction migration. |
+| Lane 0 — shared wire types | 2539, 2556, 2579 | Routes/bounds/validators match v1.1, including removal of portal withdraw, 24h approval cap and `ValidateForAt`. Source only. |
+| [#256 — lane A backend](https://work.haynesnetwork.com/work_packages/256) | Amended lane 0 | CRD/CEL/store/API behind flag. Prove idempotency/status codes, ownership, session redaction, portal detail, answer-time checks/CAS, CheckRoom limits and sorted paging. No InboxMessage create/edit; delivery empty. Generated schema/layout/focused tests pass. |
+| [#257 — lane C MCP](https://work.haynesnetwork.com/work_packages/257) | Lane 0; A for integration | Four immediate tools and TLS/refusal/retry fixtures; Ask JSON, no revision, link only if configured. Session actor projection accepted; validity labelled computed. No Kubernetes imports. |
+| [#258 — lane D portal](https://work.haynesnetwork.com/work_packages/258) | Lane 0; A for integration | Detail route, same-origin answer, CSRF/session/current-group checks, A7 links, primary Approve/Deny plus notes/secondary-option safeguards, escaping/replay/stale-session tests. Lead QA at 320/390/1280, light/dark. Initial count is board-local. |
+| [#259 — lane B keeper/expiry](https://work.haynesnetwork.com/work_packages/259) | A merged; D link; Q-255-02 before live | Narrow keeper get/list Role, bounded pushes and leader-only expiry. Fake clock/sender checks rate limits, restart dedupe, ambiguity and chosen quiet-hours policy. Default off; login notices unchanged. |
+| F1 — operator-origin inbox delivery | A | Separate CRD origin and projectless recipient scope, compatible readers, deterministic recovery and explicit message/ACK linkage. Crash/cap/suspend/absence/replacement/wrong-ACK tests. No fabricated Session sender or provider wake. |
+| F2 — revocation and audit | A/D; Q-255-01 when F2 is picked up; F1 for notices | Reviewed revoke authority, route/form, audit and retry fields. Prove forged actor, swapped session, group removal, stale scope, races and lost response handling. Revocation remains visible even when notice delivery fails. No action adapter. |
+| F3 — Needs attention and agent retrieval | C/D; F1 for inbox wrappers only | Cross-page Waiting for you; qualified Claude/Codex post, continue, read/save answer and resume without reissuing. Explicit inbox wrappers only after F1. No automatic wake. |
+| T4 — resource history eligibility | Q-255-03; current history contract | Operator-owned full/dev allowlist; workbench opt-in; credential/break-glass grants excluded. Multiple qualifying Sessions without UID list; incompatible/out-of-scope/replaced Pod unavailable. Send unchanged. Not v1. |
+| F4 — Ask coordination retention | A; F1/F2 linkage when present | Extend DESIGN-024 registry/archive/read fallback. Prove live/Unknown requester refusal, full linkage, grace and digest checks. No deletion until separately qualified/enabled. |
+| F5 — v1 GitOps installation | Combined lane CI/review, signed images, runtime authorization; Q-255-02 for live B | Schema/readers before writers, narrow operator/keeper rights and isolated BFF identity. Record exact images/effective identities/flags/rollback floor. MCP image reaches sessions at idle drain. No dependency on F1/F2/T4 to claim only v1. Preserve running Sessions and holds. |
+| F6 — v1 owner acceptance | F5; separately authorized disposable Sessions | Tom answers on phone; Claude/Codex read the Ask, save answer and continue. Demonstrate Deny, expiry, identity redaction, lost-response reconciliation and push failure. No inbox/ACK/revocation/T4 claim. Record source/tested/installed/usable separately. Q-255-04 precedes common-rule approval migration. |
 
-Each future grant, budget or native-decision action adapter gets a separate
-story after F6. Acceptance must prove typed scope, live target preconditions,
-one-use reservation, Unknown without replay, revocation races, and approval
-epoch invalidation after a restored ledger. Its own action-specific
-approval and activation gates remain. A generic approve-and-run tool is
-outside this design.
+Follow-up labels are design references, not another task queue. Search
+before filing each bounded story under Epic #254; record scope, acceptance,
+prerequisites, owner/custody, budget, stop criteria and handoff before
+pickup. Estimate a source follow-up at two hours/one worker with a
+90-minute checkpoint; actual usage cost/quota is unknown. Split if needed.
+Tests use at most `DEV_ENV_CPU_LIMIT` workers, one suite at a time; no
+CPU burners, stress or wide test loops. Do not start another story at stop.
+
+Each grant, budget or native-decision consuming adapter needs a separate
+story and authorization after its prerequisites. Prove exact typed scope,
+one-use reservation, Unknown without replay, revocation races where
+supported and restore/epoch invalidation. No generic approve-and-run tool.
 
 ## 13. Questions for Tom
 
-These question IDs are local to Story #255. They are proposals, not owner
-rulings or consumed native prompts. The Codex worker has no verified phone
-question path. The lead must deliver one question at a time through its
-verified path, then record the actual answer, source and date here and in
-#255. An unanswered question blocks its dependent build scope; it does not
-block opening this documentation PR. Do not send this list as one prompt.
+These IDs belong to #255. They are **not answered or delivered**. The lead
+must deliver active questions one at a time through its verified phone
+route and record actual answer/source/date here and in #255. This worker's
+Codex phone delivery is unverified. Open questions do not block this docs
+PR; they hold only their dependent behavior. Do not send this table as one
+prompt or reopen a deferred question early.
 
-| ID | Question and recommendation | Alternative and gate |
+| ID / status | Question and recommendation | Alternative / gate |
 |---|---|---|
-| Q-255-01 | May any current portal-group member revoke an unused approval given by another member? **Recommend: any admitted member may revoke**, with its own principal, time and reason recorded. The answer group itself already follows the lead contract. | Only the original approver may revoke. Holds the F2 revocation policy; it does not reopen the group access ruling or pause existing source lanes. |
-| Q-255-02 | Should routine Ask pushes wait outside 09:00–21:00 America/New_York? **Recommend: that daytime window**, priority 0, no agent bypass, DST-aware deferral while the board remains available. | Push at all hours within the same caps. Holds live Ask notifications only; current login notices are unchanged. |
-| Q-255-03 | May the portal show registered history for every compatible Session in `dev-env/internal`, including future Sessions, without listing each UID? **Recommend: resource-based eligibility** under section 10, with the same group and all current registration/Pod fences. | Keep exact history targets for now. Holds T4 enablement, not the Ask board or its context links. |
+| Q-255-01 — **DEFERRED until F2** | May any current portal-group member revoke an unused approval given by another member? Recommend any admitted member, with revoker/time/reason retained. This is a proposal, not current authority. | Original approver only. Ask when F2 begins; no v1 revocation. |
+| Q-255-02 — pending | No quiet-hours code exists. Should new Ask pushes wait outside 09:00–21:00 America/New_York? Recommend daytime only, priority 0, DST-aware deferral and no agent bypass. | All hours within caps. Ask before lane B goes live; source/tests may proceed default off. Login notices unchanged. |
+| Q-255-03 — pending | May the portal expose transcripts for all compatible Sessions in the resource without per-UID entries, with an operator-owned full/dev profile allowlist, workbench opt-in and exclusion of credential/break-glass grant holders? Recommend that bounded eligibility. | Keep exact targets. Holds T4, which is not v1; Ask board/history links use current scope meanwhile. |
+| Q-255-04 — pending | Does an unexpired `approved:true` portal Ask count as Tom's action-specific approval under the common rules, for that exact action, once? **Recommendation: yes.** | Keep requiring the existing supported action-specific approval channel. Holds that interpretation/instruction migration; it grants no credential, removes no hold and authorizes no machine executor. |
 
-The stated limits, storage choice and one-answer thread are design
-recommendations for review, not additional owner-question prompts. If review
-changes them, update the contract and acceptance before building.
+The v1 bounds/routes above come from the lead contract. Future audit,
+retention and action-enforcement details remain proposals for their own
+reviewed stories, not settled owner decisions.
