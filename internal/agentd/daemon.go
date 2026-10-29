@@ -64,8 +64,9 @@ type Daemon struct {
 
 	// measure is the conversation usage measurement; nil means
 	// MeasureConversationUsage. It is a test seam.
-	measure func(Settings, protocol.Session, string, string, time.Time) protocol.ConversationUsage
-	usage   conversationUsageCache
+	measure  func(Settings, protocol.Session, string, string, time.Time) protocol.ConversationUsage
+	usage    conversationUsageCache
+	tmpUsage tmpUsageMonitor
 }
 
 // conversationUsageEvery is how often an interactive session's conversation
@@ -463,6 +464,7 @@ func (d *Daemon) pollRemoteLogin(ctx context.Context) {
 }
 
 func (d *Daemon) supervise(ctx context.Context) error {
+	d.tmpUsage.check(d.now(), d.Log)
 	tick := time.NewTicker(d.Interval)
 	defer tick.Stop()
 	poll := time.NewTicker(d.Poll)
@@ -478,6 +480,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			}
 			return nil
 		case <-tick.C:
+			d.tmpUsage.check(d.now(), d.Log)
 			d.beat(ctx)
 		case <-logs.C:
 			if !d.writerRefused {

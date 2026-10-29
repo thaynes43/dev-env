@@ -85,6 +85,9 @@ func TestRenderFullPod(t *testing.T) {
 	if fi, err := os.Stat(s.RuntimeDir); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("runtime dir: %v %v", fi, err)
 	}
+	if fi, err := os.Stat(filepath.Join(s.Home, ".cache", "go-tmp")); err != nil || !fi.IsDir() {
+		t.Errorf("Go work directory on mounted HOME: %v %v", fi, err)
+	}
 	// CLAUDE.md is a link into the config.
 	if target, _ := os.Readlink(filepath.Join(s.ClaudeConfigDir, "CLAUDE.md")); target != filepath.Join(s.ConfigDir, "claude", "CLAUDE.md") {
 		t.Errorf("CLAUDE.md -> %q", target)
@@ -180,6 +183,97 @@ func TestRenderFullPod(t *testing.T) {
 	projects := readJSONMap(t, s.ClaudeState)[keyProjects].(map[string]any)
 	if _, ok := projects[s.WorktreePath(sess.Name)]; !ok {
 		t.Errorf("worktree not trusted: %v", projects)
+	}
+}
+
+func TestRenderGoTmpDir(t *testing.T) {
+	for _, mode := range []string{"default", "image-default", "override"} {
+		t.Run(mode, func(t *testing.T) {
+			s := testSettings(t, t.TempDir())
+			dir := filepath.Join(s.Home, ".cache", "go-tmp")
+			if mode == "override" {
+				dir = filepath.Join(s.Home, "custom-go-work")
+			}
+			if mode != "default" {
+				s.Getenv = envOf(map[string]string{"GOTMPDIR": dir})
+			}
+			if st := renderGoTmpDir(s); st.State != StepOK {
+				t.Fatalf("first render: %+v", st)
+			}
+			retained := filepath.Join(dir, "retained-work")
+			writeFile(t, retained, "keep this")
+			retainedDir := filepath.Join(dir, "other", "go-build-nested")
+			writeFile(t, retainedDir, "keep this too")
+			staleDir := filepath.Join(dir, "go-build123")
+			staleFile := filepath.Join(dir, "go-build-file")
+			writeFile(t, filepath.Join(staleDir, "work"), "interrupted build")
+			writeFile(t, staleFile, "interrupted build")
+			outside := filepath.Join(t.TempDir(), "outside", "keep")
+			writeFile(t, outside, "outside work")
+			link := filepath.Join(dir, "go-build-link")
+			for _, path := range []string{link, filepath.Join(staleDir, "nested-link")} {
+				if err := os.Symlink(filepath.Dir(outside), path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if st := renderGoTmpDir(s); st.State != StepOK {
+				t.Fatalf("repeat render: %+v", st)
+			}
+			for path, want := range map[string]string{retained: "keep this", retainedDir: "keep this too", outside: "outside work"} {
+				if b, err := os.ReadFile(path); err != nil || string(b) != want {
+					t.Fatalf("retained work %s changed: %q, %v", path, b, err)
+				}
+			}
+			if target, err := os.Readlink(link); err != nil || target != filepath.Dir(outside) {
+				t.Fatalf("symlink changed: target=%q, err=%v", target, err)
+			}
+			for _, path := range []string{staleDir, staleFile} {
+				_, err := os.Stat(path)
+				if mode == "override" {
+					if err != nil {
+						t.Fatalf("override work removed: %v", err)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatalf("stale work %s remains: %v", path, err)
+				}
+			}
+		})
+	}
+	// A failed mkdir is visible in boot status, with no fallback to /tmp.
+	s := testSettings(t, t.TempDir())
+	writeFile(t, filepath.Join(s.Home, ".cache"), "not a directory")
+	if st := renderGoTmpDir(s); st.State != StepFail {
+		t.Fatalf("mkdir failure: %+v", st)
+	}
+}
+
+func TestRenderGoTmpDirSkipsSymlinkedDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, linkSuffix, targetSuffix string
+	}{
+		{"HOME", "", ".cache/go-tmp"},
+		{"cache", ".cache", "go-tmp"},
+		{"go-tmp", ".cache/go-tmp", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testSettings(t, filepath.Join(t.TempDir(), "home"))
+			link := filepath.Join(s.Home, tc.linkSuffix)
+			outside := t.TempDir()
+			retained := filepath.Join(outside, tc.targetSuffix, "go-build123", "work")
+			writeFile(t, retained, "keep this")
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, link); err != nil {
+				t.Fatal(err)
+			}
+			if st := renderGoTmpDir(s); st.State != StepOK {
+				t.Fatalf("render with symlinked default: %+v", st)
+			}
+			if b, err := os.ReadFile(retained); err != nil || string(b) != "keep this" {
+				t.Fatalf("followed symlinked default: %q, %v", b, err)
+			}
+		})
 	}
 }
 
