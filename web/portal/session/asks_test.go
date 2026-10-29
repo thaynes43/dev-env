@@ -371,10 +371,13 @@ func TestAsksStrictListDecoding(t *testing.T) {
 	now := time.Date(2026, 10, 29, 19, 5, 0, 0, time.UTC)
 	raw, _ := json.Marshal(apiv1.AskList{Asks: []apiv1.Ask{syntheticAsk(now)}, Complete: true})
 	good := string(raw)
-	for _, body := range []string{good + `{}`, strings.Replace(good, `"complete":true`, `"complete":true,"complete":false`, 1), strings.Replace(good, `"allowFreeText":true`, `"allowFreeText":null`, 1), strings.Replace(good, `"question":`, `"Question":`, 1), strings.Replace(good, `"question":`, `"extra":0,"question":`, 1), strings.Replace(good, `"sessionName":`, `"SessionName":`, 1), strings.Replace(good, `"complete":true`, `"complete":false`, 1), `{"asks":null,"complete":true}`} {
+	for _, body := range []string{good + `{}`, strings.Replace(good, `"complete":true`, `"complete":true,"complete":false`, 1), strings.Replace(good, `"allowFreeText":true`, `"allowFreeText":null`, 1), strings.Replace(good, `"question":`, `"Question":`, 1), strings.Replace(good, `"question":`, `"extra":0,"question":`, 1), strings.Replace(good, `"sessionName":`, `"SessionName":`, 1), strings.Replace(good, `"complete":true`, `"complete":false,"nextCursor":"`+strings.Repeat("c", 1025)+`"`, 1), `{"asks":null,"complete":true}`} {
 		if _, err := decodeAsksPage([]byte(body)); err == nil {
 			t.Fatalf("malformed page accepted %s", body)
 		}
+	}
+	if _, err := decodeAsksPage([]byte(strings.Replace(good, `"complete":true`, `"complete":false`, 1))); err != nil {
+		t.Fatal("an incomplete page without a cursor (a skipped record) was refused")
 	}
 	if _, err := decodeAsksPage(raw); err != nil {
 		t.Fatal("valid page refused")
@@ -843,6 +846,24 @@ func TestAsksSelectedDetailKeepsListNotice(t *testing.T) {
 				t.Fatal("detail failure notice missing")
 			}
 		})
+	}
+}
+
+func TestAsksIncompletePageWithoutCursorIsPartialRead(t *testing.T) {
+	f, c, _, _ := asksFixture(t)
+	open := syntheticAsk(f.now)
+	raw, err := json.Marshal(apiv1.AskList{Asks: []apiv1.Ask{open}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Asks.client = &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
+		return askResponse(200, string(raw)), nil
+	})}
+	w := httptest.NewRecorder()
+	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
+	body := w.Body.String()
+	if w.Code != http.StatusOK || !strings.Contains(body, "This is a partial read.") || !strings.Contains(body, `id="`+open.ID+`"`) || strings.Contains(body, "Asks are unavailable") || strings.Contains(body, "Older asks") {
+		t.Fatal("an incomplete page without a cursor must render as a partial read")
 	}
 }
 

@@ -144,6 +144,10 @@ func (s *AsksSource) readOpen(ctx context.Context, token string) ([]apiv1.Ask, b
 		if page.Complete {
 			return asks, true, nil
 		}
+		if page.NextCursor == "" {
+			// The operator skipped an unreadable record: a partial page with no continuation.
+			return asks, false, nil
+		}
 		if cursors[page.NextCursor] {
 			return nil, false, portal.ErrUnavailable
 		}
@@ -249,7 +253,7 @@ func decodeAsksPage(body []byte) (apiv1.AskList, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&page) != nil || decoder.Decode(new(any)) != io.EOF || len(page.Asks) > apiv1.AskListDefaultLimit || page.Asks == nil || (page.Complete && page.NextCursor != "") || (!page.Complete && (page.NextCursor == "" || len(page.NextCursor) > 1024)) {
+	if decoder.Decode(&page) != nil || decoder.Decode(new(any)) != io.EOF || len(page.Asks) > apiv1.AskListDefaultLimit || page.Asks == nil || (page.Complete && page.NextCursor != "") || (!page.Complete && len(page.NextCursor) > 1024) {
 		return apiv1.AskList{}, portal.ErrUnavailable
 	}
 	rows, ok := jsonArray(fields["asks"])
