@@ -116,11 +116,12 @@ observation. Unknown meters stay unknown.
 
 ## Schema tests
 
-Schema tests use `github.com/santhosh-tekuri/jsonschema/v5` v5.3.1
-(`go.sum` hash `h1:lZUw3E0/J3roVtGQ+SCrUrg3ON6NgVqpn3+iol9aGu4=`) because it
+Schema tests use `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3
+(`go.sum` hash `h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=`) because it
 implements JSON Schema Draft 2020-12, asserts `date-time` when
-`AssertFormat` is set, embeds its metaschema, and has no module dependencies.
-The test compiler refuses URL and file loads. Non-test code does not import it.
+`AssertFormat` is called, and embeds its metaschema. Its non-test code
+depends on `golang.org/x/text`. The test compiler refuses URL and file loads.
+Non-test code does not import it.
 A schema pass does not prove the trusted-registry checks. Those tests are
 separate. The seventeen transition fixtures remain Packet B1 specifications.
 

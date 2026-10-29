@@ -6,27 +6,28 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
-	"github.com/santhosh-tekuri/jsonschema/v5"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
 
-// schemaEngine is github.com/santhosh-tekuri/jsonschema/v5 v5.3.1.
-// It implements Draft 2020-12, asserts date-time when AssertFormat is set,
+// schemaEngine is github.com/santhosh-tekuri/jsonschema/v6 v6.0.3.
+// It implements Draft 2020-12, asserts date-time when AssertFormat is called,
 // and embeds its metaschema. Tests refuse URL and file loads.
 func compileSchema(t *testing.T, file, id string) *jsonschema.Schema {
 	t.Helper()
 	compiler := jsonschema.NewCompiler()
-	compiler.Draft = jsonschema.Draft2020
-	compiler.AssertFormat = true
-	compiler.LoadURL = func(url string) (io.ReadCloser, error) {
-		return nil, fmt.Errorf("refused load %s", url)
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	compiler.AssertFormat()
+	compiler.UseLoader(refusingLoader{})
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(loadJSON(t, file)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := compiler.AddResource(id, bytes.NewReader(loadJSON(t, file))); err != nil {
+	if err := compiler.AddResource(id, doc); err != nil {
 		t.Fatal(err)
 	}
 	schema, err := compiler.Compile(id)
@@ -34,6 +35,13 @@ func compileSchema(t *testing.T, file, id string) *jsonschema.Schema {
 		t.Fatal(err)
 	}
 	return schema
+}
+
+// refusingLoader rejects every URL and file load. Metaschemas stay embedded.
+type refusingLoader struct{}
+
+func (refusingLoader) Load(url string) (any, error) {
+	return nil, fmt.Errorf("refused load %s", url)
 }
 
 func instance(t *testing.T, raw []byte) any {
