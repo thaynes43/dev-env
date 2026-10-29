@@ -143,11 +143,12 @@ type AskActor struct {
 	DisplayName string `json:"displayName,omitempty"`
 }
 
-// AskAnswer is the retained answer of an answered ask.
+// AskAnswer is the retained answer of an answered ask. Approved is set (true
+// or false) for type approval and nil for type info. Text may span lines.
 type AskAnswer struct {
 	OptionID   string    `json:"optionId"`
 	Text       string    `json:"text,omitempty"`
-	Approved   bool      `json:"approved"`
+	Approved   *bool     `json:"approved,omitempty"`
 	AnsweredBy AskActor  `json:"answeredBy"`
 	AnsweredAt time.Time `json:"answeredAt"`
 }
@@ -192,11 +193,13 @@ type AskCreateRequest struct {
 }
 
 // AskAnswerRequest is the body of POST PortalAskAnswerPath. Actor is set by
-// the portal backend. Approved is only meaningful for type approval.
+// the portal backend. Approved is required for type approval (a pointer, so
+// an unset decision differs from false) and must be nil for type info. Text
+// may span lines (a portal textarea).
 type AskAnswerRequest struct {
 	OptionID string   `json:"optionId"`
 	Text     string   `json:"text,omitempty"`
-	Approved bool     `json:"approved"`
+	Approved *bool    `json:"approved,omitempty"`
 	Actor    AskActor `json:"actor"`
 }
 
@@ -254,8 +257,10 @@ func (r AskAnswerRequest) Validate() error {
 	return validateAskAnswerShape(r.OptionID, r.Text, r.Actor)
 }
 
-// ValidateFor checks the answer against the ask: the ask must be open, the
-// option must exist, text needs allowFreeText, and approved needs an approval.
+// ValidateFor checks the answer against the ask: the ask must be open and any
+// option must exist. For type approval, approved is required and text is an
+// optional note. For type info, approved must be nil, and the answer needs an
+// option or text, with text only when the ask allows free text.
 func (r AskAnswerRequest) ValidateFor(a Ask) error {
 	if err := r.Validate(); err != nil {
 		return err
@@ -372,8 +377,9 @@ func validateAskBody(t AskType, question string, options []AskOption, recommende
 	if recommended != "" && !seen[recommended] {
 		return askInvalid("recommended", "must be empty or an option id")
 	}
-	// An ask nobody can answer would sit open until it expires.
-	if len(options) == 0 && !allowFreeText {
+	// An info ask nobody can answer would sit open until it expires. An
+	// approval is answered by approve or deny alone.
+	if t == AskTypeInfo && len(options) == 0 && !allowFreeText {
 		return askInvalid("options", "need at least one option or allowFreeText")
 	}
 	if workPackage < 0 {
@@ -412,13 +418,9 @@ func validateAskAnswerShape(optionID, text string, actor AskActor) error {
 	if optionID != "" && !askOptionIDPattern.MatchString(optionID) {
 		return askInvalid("optionId", "must be empty or match ^[a-z0-9-]{1,24}$")
 	}
-	// A newline is not allowed in an answer: only question and description
-	// may carry one.
-	if err := askText("text", text, 0, AskAnswerTextMaxRunes, false); err != nil {
+	// Answer text may span lines (the portal textarea); other controls stay out.
+	if err := askText("text", text, 0, AskAnswerTextMaxRunes, true); err != nil {
 		return err
-	}
-	if optionID == "" && text == "" {
-		return askInvalid("optionId", "an answer needs an option or text")
 	}
 	if err := askText("actor.issuer", actor.Issuer, 1, AskActorIssuerMaxRunes, false); err != nil {
 		return err
@@ -429,7 +431,7 @@ func validateAskAnswerShape(optionID, text string, actor AskActor) error {
 	return askText("actor.displayName", actor.DisplayName, 0, AskActorDisplayNameMaxRunes, false)
 }
 
-func validateAskAnswerAgainst(a Ask, optionID, text string, approved bool) error {
+func validateAskAnswerAgainst(a Ask, optionID, text string, approved *bool) error {
 	if optionID != "" {
 		found := false
 		for _, o := range a.Options {
@@ -442,11 +444,24 @@ func validateAskAnswerAgainst(a Ask, optionID, text string, approved bool) error
 			return askInvalid("optionId", "not an option of this ask")
 		}
 	}
-	if text != "" && !a.AllowFreeText {
-		return askInvalid("text", "this ask does not allow free text")
-	}
-	if approved && a.Type != AskTypeApproval {
-		return askInvalid("approved", "only meaningful for type approval")
+	switch a.Type {
+	case AskTypeApproval:
+		// Approve or deny is the answer; text is always allowed as a note.
+		if approved == nil {
+			return askInvalid("approved", "required for type approval")
+		}
+	case AskTypeInfo:
+		if approved != nil {
+			return askInvalid("approved", "only meaningful for type approval")
+		}
+		if optionID == "" && text == "" {
+			return askInvalid("optionId", "an answer needs an option or text")
+		}
+		if text != "" && !a.AllowFreeText {
+			return askInvalid("text", "this ask does not allow free text")
+		}
+	default:
+		return askInvalid("type", "must be info or approval")
 	}
 	return nil
 }

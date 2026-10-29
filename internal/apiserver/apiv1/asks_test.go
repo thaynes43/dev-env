@@ -10,6 +10,8 @@ import (
 
 var askNow = time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 
+func boolp(b bool) *bool { return &b }
+
 func askOpts() []AskOption {
 	return []AskOption{
 		{ID: "yes", Label: "Yes", Description: "Do it.\nNow."},
@@ -108,6 +110,21 @@ func TestAskCreateRequestValidate(t *testing.T) {
 		{"question emoji accepted", func(r *AskCreateRequest) { r.Question = "Ship it? 👍" }, true},
 		{"zero options with free text accepted", func(r *AskCreateRequest) { r.Options, r.Recommended, r.AllowFreeText = nil, "", true }, true},
 		{"zero options without free text refused", func(r *AskCreateRequest) { r.Options, r.Recommended = nil, "" }, false},
+		{"approval with no options and no free text accepted", func(r *AskCreateRequest) {
+			*r = askApprovalRequest()
+			r.Options, r.Recommended, r.AllowFreeText = nil, "", false
+		}, true},
+		{"approval with free text only accepted", func(r *AskCreateRequest) {
+			*r = askApprovalRequest()
+			r.Options, r.Recommended, r.AllowFreeText = nil, "", true
+		}, true},
+		{"approval recommended without options refused", func(r *AskCreateRequest) {
+			*r = askApprovalRequest()
+			r.Options, r.Recommended, r.AllowFreeText = nil, "yes", false
+		}, false},
+		{"info with no options and no free text still refused", func(r *AskCreateRequest) {
+			r.Options, r.Recommended, r.AllowFreeText = nil, "", false
+		}, false},
 		{"six options accepted", func(r *AskCreateRequest) {
 			r.Options = nil
 			for _, id := range []string{"a", "b", "c", "d", "e", "f"} {
@@ -259,7 +276,42 @@ func TestValidateAsk(t *testing.T) {
 		{"answered approval approved accepted", func(a *Ask) {
 			approval(a)
 			*a = askAnswered(*a)
-			a.Answer.Approved = true
+			a.Answer.Approved = boolp(true)
+		}, true},
+		{"answered approval denied accepted", func(a *Ask) {
+			approval(a)
+			*a = askAnswered(*a)
+			a.Answer.Approved = boolp(false)
+		}, true},
+		{"answered approval without approved refused", func(a *Ask) {
+			approval(a)
+			*a = askAnswered(*a)
+		}, false},
+		{"answered approval decision alone accepted", func(a *Ask) {
+			approval(a)
+			a.Options, a.Recommended = nil, ""
+			*a = askAnswered(*a)
+			a.Answer.OptionID, a.Answer.Approved = "", boolp(true)
+		}, true},
+		{"answered approval note without allowFreeText accepted", func(a *Ask) {
+			approval(a)
+			*a = askAnswered(*a)
+			a.Answer.Approved, a.Answer.Text = boolp(false), "too risky\nask me later"
+		}, true},
+		{"answered approval unknown option refused", func(a *Ask) {
+			approval(a)
+			*a = askAnswered(*a)
+			a.Answer.Approved, a.Answer.OptionID = boolp(true), "maybe"
+		}, false},
+		{"approval ask with no options or free text accepted", func(a *Ask) {
+			approval(a)
+			a.Options, a.Recommended = nil, ""
+		}, true},
+		{"info ask with no options or free text refused", func(a *Ask) { a.Options, a.Recommended = nil, "" }, false},
+		{"answer multi-line text accepted", func(a *Ask) {
+			*a = askAnswered(*a)
+			a.AllowFreeText = true
+			a.Answer.Text = "line one\nline two"
 		}, true},
 		{"answered with delivery accepted", func(a *Ask) {
 			*a = askAnswered(*a)
@@ -291,7 +343,8 @@ func TestValidateAsk(t *testing.T) {
 			a.Answer.OptionID, a.Answer.Text = "", "other"
 		}, true},
 		{"answer empty refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.OptionID = "" }, false},
-		{"answer approved on info refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.Approved = true }, false},
+		{"answer approved true on info refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.Approved = boolp(true) }, false},
+		{"answer approved false on info refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.Approved = boolp(false) }, false},
 		{"answer without answeredAt refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredAt = time.Time{} }, false},
 		{"answer without issuer refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = "" }, false},
 		{"answer without subject refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Subject = "" }, false},
@@ -330,14 +383,21 @@ func TestAskAnswerRequestValidate(t *testing.T) {
 		{"option accepted", AskAnswerRequest{OptionID: "yes", Actor: askActor()}, true},
 		{"text accepted", AskAnswerRequest{Text: "other", Actor: askActor()}, true},
 		{"option and text accepted", AskAnswerRequest{OptionID: "yes", Text: "because", Actor: askActor()}, true},
-		{"approved accepted at shape level", AskAnswerRequest{OptionID: "yes", Approved: true, Actor: askActor()}, true},
-		{"neither refused", AskAnswerRequest{Actor: askActor()}, false},
-		{"approved alone refused", AskAnswerRequest{Approved: true, Actor: askActor()}, false},
+		{"approved true accepted at shape level", AskAnswerRequest{OptionID: "yes", Approved: boolp(true), Actor: askActor()}, true},
+		{"approved false accepted at shape level", AskAnswerRequest{Approved: boolp(false), Actor: askActor()}, true},
+		{"nothing set accepted at shape level", AskAnswerRequest{Actor: askActor()}, true},
 		{"bad option id refused", AskAnswerRequest{OptionID: "Yes!", Actor: askActor()}, false},
 		{"text 2000 accepted", AskAnswerRequest{Text: strings.Repeat("é", 2000), Actor: askActor()}, true},
 		{"text 2001 refused", AskAnswerRequest{Text: strings.Repeat("é", 2001), Actor: askActor()}, false},
 		{"text invalid UTF-8 refused", AskAnswerRequest{Text: "\xff", Actor: askActor()}, false},
-		{"text newline refused", AskAnswerRequest{Text: "a\nb", Actor: askActor()}, false},
+		{"text newline accepted", AskAnswerRequest{Text: "a\nb\n\nc", Actor: askActor()}, true},
+		{"text 2000 runes with newlines accepted", AskAnswerRequest{Text: strings.Repeat("é\n", 1000), Actor: askActor()}, true},
+		{"text 2001 runes with newlines refused", AskAnswerRequest{Text: strings.Repeat("é\n", 1000) + "x", Actor: askActor()}, false},
+		{"text tab refused", AskAnswerRequest{Text: "a\tb", Actor: askActor()}, false},
+		{"text CR refused", AskAnswerRequest{Text: "a\r\nb", Actor: askActor()}, false},
+		{"text bidi override refused", AskAnswerRequest{Text: "a\u202eb", Actor: askActor()}, false},
+		{"text line separator refused", AskAnswerRequest{Text: "a\u2028b", Actor: askActor()}, false},
+		{"text paragraph separator refused", AskAnswerRequest{Text: "a\u2029b", Actor: askActor()}, false},
 		{"text control refused", AskAnswerRequest{Text: "a\x07b", Actor: askActor()}, false},
 		{"actor without issuer refused", AskAnswerRequest{OptionID: "yes", Actor: AskActor{Subject: "u"}}, false},
 		{"actor without subject refused", AskAnswerRequest{OptionID: "yes", Actor: AskActor{Issuer: "i"}}, false},
@@ -369,6 +429,8 @@ func TestAskAnswerRequestValidateFor(t *testing.T) {
 	free.Options = nil
 	free.Recommended = ""
 	free.AllowFreeText = true
+	bare := approval // approval with neither options nor free text
+	bare.Options, bare.Recommended, bare.AllowFreeText = nil, "", false
 	closed := askRecord()
 	closed.State = AskStateWithdrawn
 
@@ -384,11 +446,25 @@ func TestAskAnswerRequestValidateFor(t *testing.T) {
 		{"option plus text refused without allowFreeText", info, AskAnswerRequest{OptionID: "yes", Text: "hi", Actor: askActor()}, false},
 		{"text only on free-text ask", free, AskAnswerRequest{Text: "hi", Actor: askActor()}, true},
 		{"option on ask with no options", free, AskAnswerRequest{OptionID: "yes", Actor: askActor()}, false},
-		{"approved on info refused", info, AskAnswerRequest{OptionID: "yes", Approved: true, Actor: askActor()}, false},
-		{"approved on approval accepted", approval, AskAnswerRequest{OptionID: "yes", Approved: true, Actor: askActor()}, true},
-		{"declined approval accepted", approval, AskAnswerRequest{OptionID: "no", Approved: false, Actor: askActor()}, true},
+		{"approved true on info refused", info, AskAnswerRequest{OptionID: "yes", Approved: boolp(true), Actor: askActor()}, false},
+		{"approved false on info refused", info, AskAnswerRequest{OptionID: "yes", Approved: boolp(false), Actor: askActor()}, false},
+		{"approved nil on info accepted", info, AskAnswerRequest{OptionID: "yes", Approved: nil, Actor: askActor()}, true},
+		{"multi-line text on free-text info", free, AskAnswerRequest{Text: "a\nb", Actor: askActor()}, true},
+		{"approved true on approval accepted", approval, AskAnswerRequest{OptionID: "yes", Approved: boolp(true), Actor: askActor()}, true},
+		{"approved false on approval accepted", approval, AskAnswerRequest{OptionID: "no", Approved: boolp(false), Actor: askActor()}, true},
+		{"approved nil on approval refused", approval, AskAnswerRequest{OptionID: "yes", Actor: askActor()}, false},
+		{"approval decision alone accepted", approval, AskAnswerRequest{Approved: boolp(true), Actor: askActor()}, true},
+		{"approval deny alone accepted", approval, AskAnswerRequest{Approved: boolp(false), Actor: askActor()}, true},
+		{"approval unknown option refused", approval, AskAnswerRequest{OptionID: "maybe", Approved: boolp(true), Actor: askActor()}, false},
+		{"approval note without allowFreeText accepted", approval, AskAnswerRequest{Approved: boolp(false), Text: "not now\nlater", Actor: askActor()}, true},
+		{"approval note 2001 runes refused", approval, AskAnswerRequest{Approved: boolp(true), Text: strings.Repeat("a", 2001), Actor: askActor()}, false},
+		{"approval with no options or free text accepted", bare, AskAnswerRequest{Approved: boolp(true), Text: "ok", Actor: askActor()}, true},
+		{"approval with no options: option refused", bare, AskAnswerRequest{OptionID: "yes", Approved: boolp(true), Actor: askActor()}, false},
+		{"approval nil on bare approval refused", bare, AskAnswerRequest{Text: "ok", Actor: askActor()}, false},
 		{"withdrawn ask refused", closed, AskAnswerRequest{OptionID: "yes", Actor: askActor()}, false},
-		{"shape error surfaces", info, AskAnswerRequest{Actor: askActor()}, false},
+		{"shape error surfaces", info, AskAnswerRequest{OptionID: "yes", Actor: AskActor{}}, false},
+		{"info with neither option nor text refused", info, AskAnswerRequest{Actor: askActor()}, false},
+		{"info free-text ask with neither refused", free, AskAnswerRequest{Actor: askActor()}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -416,6 +492,7 @@ func TestAskJSONFieldNames(t *testing.T) {
 	a := askAnswered(askRecord())
 	a.Delivery = &AskDelivery{InboxMessage: "m", DeliveredAt: askNow}
 	a.Type = AskTypeApproval
+	a.Answer.Approved = boolp(false)
 	a.Scope = &AskScope{Action: "merge", Target: "t", ExpiresAt: askNow.Add(time.Hour)}
 	b, err := json.Marshal(a)
 	if err != nil {
@@ -473,8 +550,20 @@ func TestAskJSONFieldNames(t *testing.T) {
 		}
 	}
 	ab, _ := json.Marshal(AskAnswerRequest{OptionID: "yes", Actor: askActor()})
-	if !strings.Contains(string(ab), `"optionId"`) || !strings.Contains(string(ab), `"actor"`) || !strings.Contains(string(ab), `"approved"`) {
-		t.Errorf("answer request json: %s", ab)
+	if !strings.Contains(string(ab), `"optionId"`) || !strings.Contains(string(ab), `"actor"`) || strings.Contains(string(ab), `"approved"`) {
+		t.Errorf("unset approved must be omitted: %s", ab)
+	}
+	ab, _ = json.Marshal(AskAnswerRequest{Approved: boolp(false), Actor: askActor()})
+	if !strings.Contains(string(ab), `"approved":false`) {
+		t.Errorf("explicit false must be sent: %s", ab)
+	}
+	var back2 AskAnswerRequest
+	if err := json.Unmarshal(ab, &back2); err != nil || back2.Approved == nil || *back2.Approved {
+		t.Errorf("approved false round trip: %+v, %v", back2, err)
+	}
+	var fresh AskAnswerRequest
+	if err := json.Unmarshal([]byte(`{"optionId":"yes"}`), &fresh); err != nil || fresh.Approved != nil {
+		t.Errorf("absent approved must decode to nil: %+v, %v", fresh, err)
 	}
 	lb, _ := json.Marshal(AskList{Asks: []Ask{askRecord()}, NextCursor: "c", Complete: false})
 	if !strings.Contains(string(lb), `"asks"`) || !strings.Contains(string(lb), `"nextCursor"`) || !strings.Contains(string(lb), `"complete"`) {
