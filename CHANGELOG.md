@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.64.1](https://github.com/thaynes43/dev-env/compare/v2.64.0...v2.64.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **portal:** shared nav for Usage/Pages and truthful Sessions read failures (v2) ([#644](https://github.com/thaynes43/dev-env/issues/644)) ([cc8555c](https://github.com/thaynes43/dev-env/commit/cc8555c8a5595cc567e406809ef90603298076a1))
+
 ## [2.64.0](https://github.com/thaynes43/dev-env/compare/v2.63.1...v2.64.0) (2026-10-29)
 
 
