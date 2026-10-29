@@ -25,6 +25,7 @@ const asksStyle = `
 .asks-section{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:15px;margin:0 0 14px}
 .ask-card{padding:22px;margin-bottom:16px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .ask-card+.ask-card{margin-top:16px}
+.ask-card>h4{margin:18px 0 4px;font-size:13px}
 .ask-meta{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
 .ask-card .ask-question{font-size:18px;line-height:1.5;white-space:pre-wrap;margin:14px 0 18px}
 .ask-context{margin-bottom:16px}
@@ -46,6 +47,7 @@ const asksStyle = `
 .ask-text textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .ask-record h4{margin:0 0 10px;font-size:13px}.ask-record .kv{margin-top:12px}.ask-record .turn-text{margin:8px 0}
 .asks-notice p+p{margin-top:12px}
+.asks-notice h2+p{margin-top:8px}
 @media(max-width:700px){.asks-content{overflow:visible;padding:20px 16px 96px}.ask-card{padding:16px}.ask-card .ask-question{font-size:17px}.ask-text textarea{font-size:16px}.ask-answer .btn{min-height:44px}.asks-content .kv{grid-template-columns:minmax(0,2fr) minmax(0,3fr)}.asks-content .kv dd{text-align:right;min-width:0}}
 `
 

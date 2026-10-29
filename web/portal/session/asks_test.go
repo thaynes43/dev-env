@@ -527,7 +527,7 @@ func TestAsksAnswerFormsAndDecline(t *testing.T) {
 	o.items[0].Scope = &apiv1.AskScope{Action: "Run one check", Target: "Synthetic fixture", ExpiresAt: f.now.Add(time.Hour)}
 	w := httptest.NewRecorder()
 	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
-	for _, want := range []string{`name="confirm" value="yes" required`, `type="submit" name="decision" value="approve">Approve</button>`, `type="submit" name="decision" value="deny">Deny</button>`, "Run one check", "Synthetic fixture"} {
+	for _, want := range []string{`name="confirm" value="yes" required`, `type="submit" name="decision" value="approve">Approve</button>`, `type="submit" name="decision" value="deny">Deny</button>`, "Run one check", "Synthetic fixture", `<h4 id="ask-0123456789abcdef-options">Options the agent described</h4>`, `aria-labelledby="ask-0123456789abcdef-options"`, "For context. Your decision is Approve or Deny."} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("missing approval form %s", want)
 		}
@@ -540,7 +540,7 @@ func TestAsksAnswerFormsAndDecline(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Denied</strong>") || strings.Contains(w.Body.String(), "<strong>Approved</strong>") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Denied</strong>") || strings.Contains(w.Body.String(), "<strong>Approved</strong>") || strings.Contains(w.Body.String(), "Your decision is Approve or Deny.") {
 		t.Fatal("explicit false decision displayed as approval")
 	}
 }
@@ -576,7 +576,7 @@ func TestAsksAmbiguousAnswerNeverResendsRequestID(t *testing.T) {
 		}
 		return o.trip(r)
 	})}
-	if w := askPost(f, c, v); w.Code != http.StatusServiceUnavailable || posts != 1 || !strings.Contains(w.Body.String(), "did not confirm") {
+	if w := askPost(f, c, v); w.Code != http.StatusServiceUnavailable || posts != 1 || !strings.Contains(w.Body.String(), "did not confirm") || !strings.Contains(w.Body.String(), `href="`+AsksPath+`?ask=`+v.Get("askID")+`">Refresh asks</a>`) {
 		t.Fatal("ambiguous dispatch was claimed successful")
 	}
 	if w := askPost(f, c, v); w.Code != http.StatusConflict || w.Header().Get("Location") != "" || posts != 1 || !strings.Contains(w.Body.String(), "was not recorded") || strings.Contains(w.Body.String(), v.Get("requestID")) || !strings.Contains(w.Body.String(), v.Get("text")) || !strings.Contains(w.Body.String(), `value="small" checked`) {
@@ -595,7 +595,7 @@ func TestAsksReadFailureNotices(t *testing.T) {
 		status     int
 		err        error
 	}{
-		{name: "timeout", err: context.DeadlineExceeded, want: "did not answer within 12 s"},
+		{name: "timeout", err: context.DeadlineExceeded, want: "The operator did not answer in time."},
 		{name: "unreachable", err: errors.New("PRIVATE-TRANSPORT"), want: "could not be reached"},
 		{name: "refused", status: http.StatusBadGateway, want: "refused the Asks read with HTTP 502"},
 		{name: "unauthorized", status: http.StatusUnauthorized, want: "did not authorize"},
@@ -733,7 +733,7 @@ func TestAsksExpiredApprovalIsHistoricalAndRenderingBounded(t *testing.T) {
 	ask.Answer = &apiv1.AskAnswer{OptionID: "small", Approved: &approved, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/", Subject: "fixture-reader"}, AnsweredAt: f.now.Add(-2 * time.Minute)}
 	w := httptest.NewRecorder()
 	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Approved</strong>") || !strings.Contains(w.Body.String(), `Approval expired <time datetime="2026-10-29T19:04:00Z">29 Oct 2026, 19:04 UTC</time>`) || strings.Contains(w.Body.String(), "computed") || strings.Contains(w.Body.String(), "<form") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Approved</strong>") || !strings.Contains(w.Body.String(), `Approval expired <time datetime="2026-10-29T19:04:00Z">29 Oct 2026, 19:04 UTC</time> (computed by the portal)`) || strings.Contains(w.Body.String(), "· computed") || strings.Contains(w.Body.String(), "<form") {
 		t.Fatal("expired approval presented as usable")
 	}
 	page := portal.AsksPage{Asks: o.items, Connected: true, Complete: true, Now: f.now}
@@ -933,7 +933,7 @@ func TestAsksPastExpiryOnGetUsesComputedState(t *testing.T) {
 	w := httptest.NewRecorder()
 	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
 	body := w.Body.String()
-	if w.Code != http.StatusOK || !strings.Contains(body, `tone-muted">Expired</span>`) || strings.Contains(body, "computed") || strings.Contains(body, "<form") || !strings.Contains(body, `aria-label="0 open asks"`) {
+	if w.Code != http.StatusOK || !strings.Contains(body, `tone-muted">Expired</span>`) || strings.Contains(body, "· computed") || strings.Contains(body, "<form") || !strings.Contains(body, `aria-label="0 open asks"`) {
 		t.Fatal("open stored state past expiry still answerable")
 	}
 }
@@ -1045,7 +1045,7 @@ func TestAsksHistoryIsOnePageAndOpenCoverageIsIndependent(t *testing.T) {
 				t.Fatal("history incompleteness suppressed complete open count")
 			}
 			if mode == "unavailable-history" {
-				if !strings.Contains(body, "Older history is unavailable") {
+				if !strings.Contains(body, "Older history is unavailable") || strings.Contains(body, "No closed asks yet.") {
 					t.Fatal("history failure hidden")
 				}
 			} else if !strings.Contains(body, `href="`+AsksPath+`?cursor=next%2B%2F%3D&#43;cursor"`) || !strings.Contains(body, ">Older asks</a>") || !strings.Contains(body, "history may be cut off") {
@@ -1072,7 +1072,7 @@ func TestAsksSizeCapDropsHistoryBeforeOpenAsks(t *testing.T) {
 	}
 	limit := len(baseline) + 300
 	body, _, err := portal.RenderAsks(page, limit)
-	if err != nil || len(body) > limit || !strings.Contains(string(body), `id="`+open.ID+`"`) || !strings.Contains(string(body), `aria-label="1 open asks"`) || !strings.Contains(string(body), "Older history was omitted to fit this page.") || strings.Contains(string(body), `id="ask-aaaaaaaaaaaaaa`) {
+	if err != nil || len(body) > limit || !strings.Contains(string(body), `id="`+open.ID+`"`) || !strings.Contains(string(body), `aria-label="1 open asks"`) || !strings.Contains(string(body), "Older history was omitted to fit this page.") || strings.Contains(string(body), `id="ask-aaaaaaaaaaaaaa`) || strings.Contains(string(body), "No closed asks yet.") {
 		t.Fatal("history exhausted the page before open asks were rendered")
 	}
 }

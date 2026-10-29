@@ -417,6 +417,7 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			return
 		}
 		page.Connected, page.SelectedID, page.Asks = true, id, []apiv1.Ask{ask}
+		page.Retry = errors.Is(err, errAskUnconfirmed)
 		// A lifecycle refusal must not offer the stale, pre-POST open form.
 		page.ReadOnly = errors.Is(err, apiv1.ErrAskNotOpen) || errors.Is(err, apiv1.ErrAskExpired)
 		page.AnswerErrorID, page.AnswerError = id, page.Notice
@@ -475,7 +476,7 @@ func askReadNotice(err error, observed time.Time) string {
 	case failure.ReasonCode == "credential_unavailable":
 		reason = "The operator credential is unavailable."
 	case failure.ReasonCode == "operator_unreachable" && failure.TimedOut:
-		reason = "The operator did not answer within " + strconv.Itoa(int(sessionReadTimeout/time.Second)) + " s."
+		reason = "The operator did not answer in time."
 	case failure.ReasonCode == "operator_unreachable":
 		reason = "The operator could not be reached."
 	case failure.ReasonCode == "operator_refused":

@@ -61,7 +61,7 @@ func writeAsks(dir string) error {
 		{"asks.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true}},
 		{"asks-empty.html", portal.AsksPage{Connected: true, Complete: true}},
 		{"asks-disconnected.html", portal.AsksPage{Notice: "Asks are not connected"}},
-		{"asks-unavailable.html", portal.AsksPage{Notice: "Asks are unavailable. Open asks could not be read. The operator did not answer within 12 s. Checked 29 Oct 2026, 19:05:00 UTC.", Retry: true}},
+		{"asks-unavailable.html", portal.AsksPage{Notice: "Asks are unavailable. Open asks could not be read. The operator did not answer in time. Checked 29 Oct 2026, 19:05:00 UTC.", Retry: true}},
 		{"asks-history-page.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, HistoryNotice: "Only one page of history is shown. Older history may be cut off.", OlderHref: "/portal/projects/dev-env/environments/internal/asks?cursor=synthetic-older"}},
 		{"asks-selected.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000003"}},
 		{"asks-validation.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, SelectedID: "ask-0000000000000001", AnswerErrorID: "ask-0000000000000001", AnswerError: "Write an answer or choose an option."}},
