@@ -58,6 +58,7 @@ Claude Code.
 | `agentd`, `agent-run` | MIT | This repo, plus the Go standard library and runtime (BSD-3-Clause, [go.dev/LICENSE](https://go.dev/LICENSE)). `agentd` links `github.com/pelletier/go-toml/v2` under MIT; `agent-run` links no third-party module. Linked module license texts are retained by the image build. |
 | `pve`, `hw-ssh` | MIT | This repo (copies of the v1 scripts from [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT) |
 | `opwork`, `agent-api.py` | MIT | This repo (copies of `scripts/openproject/` in [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT, the source of truth) |
+| `claude-statusline-usage` | MIT | This repo |
 | `tini` | MIT | [krallin/tini](https://github.com/krallin/tini) |
 | Codex CLI | Apache-2.0 | [openai/codex](https://github.com/openai/codex) |
 | `kubectl` | Apache-2.0 | [kubernetes/kubernetes](https://github.com/kubernetes/kubernetes) |
