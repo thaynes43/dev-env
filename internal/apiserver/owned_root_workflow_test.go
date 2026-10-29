@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -201,7 +202,10 @@ func (f *ownedWorkflow) run(t *testing.T, remote *apiv1.HTTPTaskBudgetGate, b ap
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Error(err)
+			}
 		case <-time.After(6 * time.Second):
 			t.Error("guard cleanup timed out")
 		}

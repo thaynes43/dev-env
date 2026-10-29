@@ -167,6 +167,7 @@ func setup(ctx context.Context) error {
 // operator is one running operator: a manager with the reconciler, as
 // cmd/dev-env-operator builds it, and a record of its writes to pods and volumes.
 type operator struct {
+	t      *testing.T
 	writes *recordingClient
 	cancel context.CancelFunc
 	done   chan error
@@ -195,7 +196,7 @@ func startOperator(t *testing.T, opts ...func(*Reconciler)) *operator {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	op := &operator{writes: rec, cancel: cancel, done: make(chan error, 1)}
+	op := &operator{t: t, writes: rec, cancel: cancel, done: make(chan error, 1)}
 	go func() { op.done <- mgr.Start(ctx) }()
 	t.Cleanup(op.stop)
 	return op
@@ -246,9 +247,13 @@ func (f *fakeRescuer) callsFor(session string) int {
 // operator. Calling it twice is fine.
 func (o *operator) stop() {
 	o.cancel()
-	if o.done != nil {
-		<-o.done
-		o.done = nil
+	if o.done == nil {
+		return
+	}
+	err := <-o.done
+	o.done = nil
+	if err != nil {
+		o.t.Errorf("the operator returned %v after a cancel", err)
 	}
 }
 

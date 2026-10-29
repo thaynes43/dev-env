@@ -200,8 +200,9 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 	if err := live.Update(ctx, &policy); err != nil {
 		t.Fatal(err)
 	}
+	var stopped error
 	select {
-	case <-done:
+	case stopped = <-done:
 	case <-time.After(4 * time.Second):
 		t.Fatal("revocation did not stop original process")
 	}
@@ -211,7 +212,7 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 	}
 	var receipt hostexecutor.Receipt
 	if json.Unmarshal(raw, &receipt) != nil || receipt.State != "Stopped" || !receipt.RootWaitObserved || !receipt.TreeReaped || receipt.Reason != "budget authority unavailable" {
-		t.Fatalf("no independent revocation stop: %s", raw)
+		t.Fatalf("no independent revocation stop: %s (run: %v)", raw, stopped)
 	}
 	t.Logf("revocation through original wait/reap=%v", time.Since(revoked))
 }

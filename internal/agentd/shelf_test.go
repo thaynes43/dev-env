@@ -204,8 +204,8 @@ func TestHoldRescueKeepsItFromThePrune(t *testing.T) {
 		done <- err
 	}()
 	select {
-	case <-done:
-		t.Fatal("a prune ran while the shelf lock was held")
+	case err := <-done:
+		t.Fatalf("a prune ran while the shelf lock was held: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	unlock()
