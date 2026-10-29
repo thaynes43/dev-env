@@ -37,7 +37,8 @@ The source at the baseline explains the behavior:
 | [DESIGN-001 D-16 and D-65](001-dev-env-v2.md#68-messaging-between-agents), [agentd delivery](../../../../internal/agentd/deliver.go), [API routes](../../../../internal/apiserver/podcmd.go), [CLI](../../../../internal/agentrun/podcmds.go) | `msg` delivers once to a running TUI. Its envelope says peer information is not the user's instruction. `Deliver` rejects a non-TUI launch with the headless-task error. The broad legacy message route is unsuitable for privileged work-order changes. |
 | [DESIGN-001 D-58](001-dev-env-v2.md), [launch](../../../../internal/agentd/launch.go), [runner](../../../../internal/agentd/runagent.go) | The initial prompt runs once, on finite stdin. A later boot resumes the conversation in a TUI. Rebooting is not a headless amendment mechanism. |
 | [Managed Codex](../../../../internal/agentd/managed_codex.go), [event parser](../../../../internal/agentd/codex_stream.go) | The pinned first launch uses `codex exec --json`; the parser expects one turn. Observing output does not provide an input channel or an enforceable pause between tool actions. |
-| [Worktree setup](../../../../internal/agentd/clone.go), [task guard](../../../../internal/agentd/launch.go), [repository rules](../../../../CLAUDE.md#how-work-happens-here) | A new worktree gets `agent/<session>`. The guard requires pushing that branch and creating a PR. `--base` changes the starting revision, not branch custody. |
+| [D-83 managed-child decisions](../../../../docs/managed-child-decisions.md), [decision dispatch](../../../../internal/agentd/decision_dispatch.go) | Nearest precedent: a configured-coordinator direct parent records one bounded answer through Session/Pod UID-fenced routes; operator-owned status reserves its digest. The daemon checks live authority, waits for a genuine native exit receipt, then resumes the same thread as an empty-prompt TUI with one paste and no replay. Default-off, managed shared Codex only; human, client, Session and absent parents are excluded, as are private child tasks. This preserves the same admitted writer and grants no cross-session transfer. |
+| [Worktree setup](../../../../internal/agentd/clone.go), [task guard](../../../../internal/agentd/launch.go), [repository rules](../../../../CLAUDE.md#how-work-happens-here), [API validation](../../../../internal/apiserver/validate.go) | A new worktree gets `agent/<session>`. The guard requires pushing that branch and creating a PR. `--base` changes the starting revision of a legacy `--repo` task only. For a declared-project task the API refuses any base but the default branch. Neither changes branch custody. |
 | [Project catalog](../../../../internal/projectcatalog/catalog.go), [accepted snapshot check](../../../../internal/agentd/managed_codex.go) | Project rules require private task worktrees, fresh fetched pins and WIP preservation. The accepted task currently binds its base to the declared default branch; a PR continuation needs a distinct validated source binding. |
 | [TaskClaim store](../../../../internal/taskclaim/store.go), [DESIGN-010](010-atomic-task-claims.md) | Ownership is immutable. A stopped or missing executor does not transfer it. A different owner gets the existing claim; deleting and recreating it would discard custody. |
 | [DESIGN-014](014-durable-offline-inbox.md), [result handoff](../../../../docs/coordinator-result-handoff.md) | Inbox read ACK is not model consumption. The offline handoff checker records observations; it neither transfers a claim nor authorizes a writer. |
@@ -108,6 +109,12 @@ legacy `msg` authorization. Recheck identity, task binding and holds before
 acceptance and before offering the amendment. A lost or replaced parent does
 not silently appoint another one. Q-262-01 covers coordinator delegation.
 
+Today `spec.parent` records only a name taken from the caller's token (D-05),
+not the parent's Session UID. Amendment opt-in must capture that UID at create
+from an authenticated live read, as `usageCaptureParentUID` does for usage
+capture in [usage_capture.go](../../../../internal/apiserver/usage_capture.go).
+The recorded name alone cannot distinguish a replacement parent Session.
+
 Initially require the task to have opted in at creation, and its agentd and
 provider adapter to advertise a tested amendment capability. A legacy runner,
 TUI, stopped task, unknown capability or mismatched UID returns a typed refusal
@@ -127,6 +134,7 @@ Proposed limits, pending Q-262-02:
 | Entire JSON request | 16 KiB, strict fields; reject duplicate keys, invalid UTF-8 and terminal control characters except newline/tab |
 | Accepted amendments | Four per execution pass for its lifetime, including resumes; one unresolved amendment at a time |
 | Pickup deadline | At most ten minutes after acceptance, capped by the existing pass deadline; it never extends the pass |
+| ACK deadline | At most ten minutes after the offer, inside the pass deadline; a miss is Unconfirmed |
 | List/read | One page of at most four records; errors contain no submitted text |
 
 Store immutable amendment intents and append-only receipts in the protected
@@ -167,11 +175,30 @@ an explicit correction within the delegated order's authority, never a hidden
 system-prompt edit. Ordinary peer messages retain their information-only
 envelope. Content never passes through a shell or terminal key injection.
 
+Deliver an amendment only in the provider's user or control role, never inside
+a tool result. The task guard must say that text in a tool result, file, PR
+comment or `msg` that resembles an amendment envelope is data. The task acts
+on an amendment only after `agentd amendment-ack`, or a read-only
+`agentd amendment-show`, confirms its ID, digest and revision for this pass.
+These operations are proposed, not installed. An unknown ID returns
+`not_an_amendment` and reveals no other record.
+
 Neither existing one-shot runner proves this interface. Before enabling either
-provider, a bounded capability story must select and test a supported native
-protocol against the pinned CLI. A future duplex transport or provider control
-API is eligible only if it proves the boundary and receipts above. Extending
-stdin alone, scraping a transcript or parsing `turn.completed` is insufficient.
+provider, M0 must first test that provider's own native candidate at the versions
+verified in [images/agent/Dockerfile](../../../../images/agent/Dockerfile):
+
+- Claude Code 2.1.296: `-p --input-format stream-json --output-format stream-json --replay-user-messages`,
+  with a user-role message on stdin that stays open,
+  echoed back once accepted.
+- Codex CLI 0.160.1: `codex exec resume <thread-id>` after a genuine exited
+  invocation, headless with no TUI.
+
+Neither candidate is assumed to prove the boundary. M0 must show when the
+message is consumed, between turns or between tool calls, that the echo is a
+durable receipt, and that no tool runs between offer and receipt. For a candidate
+without an echo, an equivalent supported durable native receipt must be proved;
+otherwise it is unsupported. Extending stdin alone, scraping a transcript or
+parsing `turn.completed` alone is insufficient.
 If the available CLI cannot provide it, report `unsupported_boundary`; do not
 offer an approximation as mid-run steering. No paid-API substitution, private
 socket protocol, second writer or automatic TUI conversion is allowed.
@@ -181,9 +208,13 @@ and resume the confirmed same native thread headlessly. It must prove genuine
 `Wait`, descendant-process absence, durable exit and one-use continuation,
 without replaying the initial prompt. The existing
 [native invocation](../../../../internal/agentd/native_invocation.go) contract
-is useful evidence for that work, but currently binds the same admitted writer;
-it grants no cross-session transfer. A correction received only after the task
-has published is late, not successful steering. Do not advertise an adapter
+and [D-83 route](../../../../docs/managed-child-decisions.md) are the nearest
+precedents. D-83 resumes into an empty-prompt TUI and pastes once, without
+replaying the original prompt. An amendment adapter that reuses it must resume
+headlessly or justify the conversion against the "no automatic TUI conversion"
+rule; the existing TUI path does not meet that rule. Both contracts bind the
+same admitted writer and grant no cross-session transfer. A correction received
+only after the task has published is late, not successful steering. Do not advertise an adapter
 that can only deliver after task completion as a mid-run capability.
 
 ### 3.4 Acknowledgment and uncertainty
@@ -197,15 +228,25 @@ derives the recipient from its original Session/Pod/invocation binding.
 The coordinator cannot ACK for it. A validated ACK is task-reported
 understanding, not proof the fix is correct; review/tests establish application.
 
+Agentd and the model share the pod's Unix identity and API token. Offer and ACK
+records are therefore pod-attested, not supervisor-attested. The server-held
+publication gate is the enforcement; an offer record cannot enforce the hold.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> Pending: intent confirmed; publication held
-    Pending --> Offered: safe boundary; durable offer reservation
+    [*] --> Pending: intent confirmed, publication held
+    Pending --> Offered: safe boundary, durable offer reservation
     Offered --> Acknowledged: exact task ACK accepts
     Offered --> Refused: exact task ACK refuses
     Pending --> Unpicked: deadline or task exit before offer
     Offered --> Unconfirmed: receipt or ACK is uncertain
+    Offered --> Unconfirmed: no ACK by deadline
+    Unconfirmed --> Acknowledged: exact native receipt reconciles
     Acknowledged --> Applied: result names evidence and head
+    Unpicked --> [*]: lead disposition
+    Refused --> [*]: lead disposition
+    Unconfirmed --> [*]: lead disposition
+    Applied --> [*]
 ```
 
 Publication can reopen after an accepting ACK and a matching audit revision;
@@ -219,7 +260,10 @@ running state and can use an already authorized lifecycle action if necessary.
 
 After a crash between offer reservation and ACK, the state is `Unconfirmed`.
 Reconcile a bounded exact native receipt if the adapter supports it; otherwise
-stop dependent work for lead disposition. Do not replay the prompt or claim
+stop dependent work for lead disposition. The transition to `Acknowledged`
+requires that receipt to include the validated accepting task ACK for the exact
+ID, digest, revision and turn. A provider echo or delivery receipt alone cannot
+take that transition. Do not replay the prompt or claim
 exactly-once model processing. An API inbox ACK, an exec success, an output
 string or successful transport is not this task ACK. Expired/unpicked intents
 stay recorded and must be explicitly dispositioned in any later fix work order;
@@ -259,6 +303,9 @@ the mistaken assumption that the work order changed.
 ## 4. Fix rounds on one PR
 
 ### 4.1 Proposed command and admission
+
+This command is **proposed, not installed**. `--continue-pr`, `--expect-head`
+and `--task-key` do not exist in `agent-run` today.
 
 ```text
 agent-run --project dev-env --agent codex --model gpt-6.1-sol --effort xhigh \
@@ -359,15 +406,24 @@ Execute the transfer serially:
    Before every push, recheck them again and publish only a fast-forward
    from the recorded expected remote head. Update that head by confirmed
    readback. A changed remote head requires explicit reconciliation, never
-   force push or an automatic new PR.
+   force push or an automatic new PR. If the base moved, update the branch by
+   merging the base, never by rebase, so every push stays a fast-forward.
 
 The precise private-session stop attestation and common resume gate are new
-build work. Existing shared-workspace stop/continuation helpers are patterns,
-not permission to restore shared Git or evidence for private-session transfer.
-Future normal task closeout must seal exit and WIP evidence and end its writer
-container before marking it transferable. A historical session that only
-reports CLI exit stays ineligible until a supported closeout proves quiescence.
-No Pod deletion, drain or reaping is implied by this design.
+build work. Before the F1 slices, Q-262-06 must settle the lifecycle state that proves the
+old author exited. The recommended minimum is a `Suspended` Session after a
+verified rescue, with the exact Pod UID confirmed deleted by an uncached read
+and its node `Ready`, plus custody fencing and Q-262-04 ref protection. A phase
+alone is not proof. This is a recommendation, not an accepted admission rule.
+
+Budget-bound and workspace tasks already use `restartPolicy: Never` in
+[pod.go](../../../../internal/controller/pod.go), so a terminated writer
+container is observable there. Other task pods keep agentd running until
+suspend because rescue-by-exec (D-51) needs it; CLI exit alone does not prove
+container exit. A closeout that seals exit/WIP evidence and ends the private
+writer container is its own story. Existing shared-workspace stop/continuation
+helpers are patterns, not permission to restore shared Git or evidence for
+private-session transfer. No Pod deletion, drain or reaping is implied here.
 
 `Transferring` or `Assigned` survives operator failure and holds the branch.
 Reconciliation may finish the same request and same successor; it may not pick
@@ -487,21 +543,24 @@ from this document alone while its relevant decision is pending.
 
 | Candidate | Owned outcome and paths | Prerequisites and observable acceptance |
 | --- | --- | --- |
-| M0: qualify the boundary | One provider's bounded capability report and synthetic adapter fixture; `internal/agentd`, pinned CLI contract docs | Q-262-01/02 scope agreed. Demonstrate a supported pause with no pending tools, visible attributed offer and exact receipt; wrong invocation and uncertain receipt refuse. State Unsupported if the pinned CLI cannot do it. No live inference/credentials by default. |
+| M0: qualify the boundary | One provider's bounded capability report and synthetic adapter fixture; `internal/agentd`, pinned CLI contract docs | Q-262-01/02 scope agreed. First test that provider's pinned native candidate in section 3.3. Show whether consumption is between turns or between tool calls, prove a durable echoed acceptance/native receipt and no tool between offer and receipt. Demonstrate a supported pause with no pending tools and a visible user/control-role offer; wrong invocation and uncertain receipt refuse. Transcript scraping or `turn.completed` alone cannot pass. State Unsupported if the pinned CLI cannot do it. No live inference/credentials by default. |
 | M1: amendment records and API | Protected types/store/API/CLI, `api/coordination`, `internal/apiserver`, `internal/agentrun`, generated schema | Agreed sender/limits/publication policy. Prove spoofed/nonparent send denied, changed UID/intent refused, two-server CAS contention yields one revision, strict UTF-8 byte bounds/counts, lost reply/reconstruction and explicit ACK/read separation. Fake provider must never run during API acceptance. |
 | P0: ref-protection feasibility | Narrow policy/publisher contract and isolated synthetic-repo proof; no production credential change | Q-262-04 decision and any action-specific authority. Prove worker Git and API ref writes/deletes are denied for both opted-in original tasks and prior fix-round writers. Define the bounded artifact protocol and publisher scope. If it cannot be enforced, record Unsupported and stop dependent implementation. |
-| F1: custody and stop gate | BranchCustody types/store, verified private closeout, common launch/resume/budget resolver | P0 contract, Q-262-05 migration scope. Prove immutable original TaskClaim, exact-container stop proof, active old author refusal, stale/partitioned/replacement UID refusal, two-server transfer/resume race, one reserved successor, failure/restart durability, bounded receipts and no TTL release. No provider spawn in store tests. |
-| P1: fenced publisher and audit | Implement the P0 artifact/ref-update protocol, initial task-to-PR registration and audit receipts in the managed publication service/API | P0 contract and F1 resolver. Finite TLS/bare-Git fixtures prove live UID/generation/head checks, fast-forward only, initial branch protection/registration, amendment-versus-completion ordering, old-generation denial, exact audit readback and unresolved remote writes blocking transfer. Test a direct Git/API bypass, not just a cooperative wrapper refusal. |
-| M2: one provider's delivery | Agentd supervisor/adapter/logging/result integration for the qualified provider | M0/M1 and P1 evidence, authenticated control path. Fixtures prove boundary/drain, accepted/refused ACK, deadline, exit race, crash after reservation, no replay and publication barrier. Produce task log and PR-audit projection with private text excluded. A second provider is a separate serial story. |
-| F2: existing-PR task preparation | `internal/agentrun`, session API/protocol, `internal/agentd` clone/launch and publication integration | F1/P1 source evidence. Local bare-Git/TLS fixtures start at an exact PR head on its branch in a fresh private worktree; old worktree unchanged. Reject fork/default/moved/deleted PR, failed fetch, dirty collision and conflicting flags. Prove two fix rounds preserve one PR and current-head review/check gates. |
-| R1: rules and installation | Reviewed common-rule GitOps sources, project/repo instructions, signed binaries/schema/narrow permissions | M2 or F2 tested, F1/P1 installed and P0 ref policy proved for the enabled mode, applicable Qs answered, authorized deployment scope. Render both providers' actual guards; continuation has one branch/PR instruction. Install schema before readers/writers. Verify image/capability versions without restarting busy sessions; preserve existing holds and evidence. Neither mode activates on an unenforced ref. |
+| F1a: custody types and store | BranchCustody types/store in the protected coordination group | P0 contract, Q-262-05 migration scope. Prove CAS contention yields one reserved successor/generation, failure/restart durability, bounded records/receipts and no TTL release. TaskClaim is unchanged. No provider spawn in store tests. |
+| F1b: private closeout stop proof | Private-session closeout that seals exit/WIP evidence and ends its writer container | F1a, Q-262-06 lifecycle decision. Prove exact-container exit, preserved WIP, active old author refusal and stale/partitioned/replacement UID refusal. CLI exit alone cannot pass; test the approved lifecycle proof separately from ordinary agentd-alive task completion. |
+| F1c: common authority resolver | One resolver for launch, resume and budget binding | F1a/F1b evidence. Prove all effective-owner readers use current custody, unchanged TaskClaim ownership cannot admit an old writer, two-server transfer/resume races have one winner and restart cannot revive an old generation. |
+| P1a: ref-update publisher | Implement the P0 artifact/ref-update protocol in the managed publication service/API | P0 contract and F1c resolver. Finite TLS/bare-Git fixtures prove live UID/generation/head checks, fast-forward only, amendment-versus-completion ordering, old-generation denial and unresolved remote writes blocking transfer. Test a direct Git/API bypass, not just a cooperative wrapper refusal. |
+| P1b: registration and audit | Initial task-to-PR registration, bounded audit receipts and readback | P1a evidence. Prove initial branch protection/registration, exact task/ref/PR binding, deterministic audit markers, exact receipt/head readback and ambiguous responses holding readiness without duplicate writes. Private text stays out of public audit. |
+| M2: one provider's delivery | Agentd supervisor/adapter/logging/result integration for the qualified provider | M0/M1 and P1a/P1b evidence, authenticated control path. Fixtures prove boundary/drain, accepted/refused ACK, pickup/ACK deadlines, exit race, crash after reservation, no replay and publication barrier. Produce task log and PR-audit projection with private text excluded. A second provider is a separate serial story. |
+| F2: existing-PR task preparation | `internal/agentrun`, session API/protocol, agentd clone/launch and publication integration; session-branch assumptions in `internal/agentd/clone.go` (~253), `decision_dispatch.go` (~66), `workspace_rescue.go` (~135 and ~185) | F1a/F1b/F1c and P1a/P1b source evidence. Local bare-Git/TLS fixtures start at an exact PR head on its branch in a fresh private worktree; old worktree unchanged. Reject fork/default/moved/deleted PR, failed fetch, dirty collision and conflicting flags. Prove two fix rounds preserve one PR and current-head review/check gates. A D-58 resume and a rescue of the fix-round session keep the PR branch and bundle its unpushed commits. |
+| R1: rules and installation | Reviewed common-rule GitOps sources, project/repo instructions, signed binaries/schema/narrow permissions | M2 or F2 tested, F1a/F1b/F1c and P1a/P1b installed and P0 ref policy proved for the enabled mode, applicable Qs answered, authorized deployment scope. Render both providers' actual guards; continuation has one branch/PR instruction. Install schema before readers/writers. Verify image/capability versions without restarting busy sessions; preserve existing holds and evidence. Neither mode activates on an unenforced ref. |
 | A1: usable acceptance | One finite disposable parent/worker workflow and then one exited-author fix round; verification record | R1 installed plus explicit runtime scope/budget. Lead submits one correction during work, sees native ACK and correct resulting log/PR. Existing PR gets the fix at a new head; old author active and unauthorized writer attempts are refused. Record configured/served model honestly. Source CI alone cannot pass A1. |
 
 Shared work-order fields for these candidates:
 
 - **Ownership/isolation:** one accountable session per story and worktree; one
-  source writer per affected path. Maximum concurrency one initially. M2 and F1
-  both touch supervisor/launch gates and must be serialized, even if their
+  source writer per affected path. Maximum concurrency one initially. M2 and
+  F1b/F1c touch supervisor/launch gates and must be serialized, even if their
   pure-store work can later be isolated.
 - **Proposed budget:** 45 minutes per source/capability slice, checkpoint at
   30; split unfinished outcomes before pickup if they will not fit. Usage/cost
@@ -532,10 +591,11 @@ when its dependent story is ready, and retain the dated answer/provenance.
 
 | ID | Question | Recommendation and tradeoff |
 | --- | --- | --- |
-| Q-262-01 | Should an amendment require the original direct parent, or also a task-scoped verified coordinator? | Permit both, with explicit platform-recorded coordinator scope and a visible delegation/revocation record. This supports a lead handoff without turning project readers or peer text into instruction authority. No parent/coordinator scope may clear an owner hold. |
-| Q-262-02 | Are four 8 KiB corrections, one unresolved at a time, and a ten-minute maximum pickup deadline appropriate? | Start with these bounds and inherited pass limits. Refuse unsupported adapters and hold unpicked work at a real boundary. More corrections or a different outcome should become a new bounded pass, not an unbounded conversation. |
+| Q-262-01 | Should an amendment require the original direct parent, or also a task-scoped verified coordinator? May the owner's own human or client caller amend directly? | Permit a Session parent bound at create and an explicitly scoped configured coordinator, with visible delegation/revocation. For the minimum version, route owner corrections through the coordinator: D-83 excludes human and client parents, so direct owner callers need a separate authority decision. This supports a lead handoff without turning project readers or peer text into instruction authority. No parent/coordinator scope may clear an owner hold. |
+| Q-262-02 | Are four 8 KiB corrections, one unresolved at a time, and ten-minute maximum pickup and ACK deadlines appropriate? | Start with these bounds and inherited pass limits. Refuse unsupported adapters and hold unpicked or unconfirmed work at a real boundary. More corrections or a different outcome should become a new bounded pass, not an unbounded conversation. |
 | Q-262-03 | What amendment content belongs in a public PR? | Require a sender-approved public summary and digest/receipt/disposition; keep the full intent behind task-content authorization. Gate readiness on confirmed audit. Full automatic text publication risks private work-order disclosure. |
 | Q-262-04 | How should amended-task and continued-PR branches enforce publication/custody against workers that currently hold repository-wide push credentials? | Require server-enforced ref protection plus a custody-checked publisher whose bypass credential stays outside workers. Prove raw Git and API denial before enabling either mode. This needs an explicit credential/policy decision and may need ADR-012; a cooperative hook is cheaper but cannot satisfy the strict security contract. |
 | Q-262-05 | Should first release enroll already-open legacy PRs, or only PRs registered by the new publication path? | Start with registered same-repository PRs. Add one audited legacy enrollment story if the immediate repair workload requires it; keep original-writer identification and exact stop proof mandatory. No force takeover. |
+| Q-262-06 | Which lifecycle state proves the previous author exited? | Recommend, for the minimum version, a Suspended session after a verified rescue, with the Pod UID confirmed deleted by an uncached read and its node Ready, plus custody fencing and Q-262-04 ref protection; a closeout that ends the writer container is its own story. |
 
 No answer is inferred from this document's review, CI success or publication.
