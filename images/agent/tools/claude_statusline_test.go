@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,17 +32,61 @@ func toolsDir(t *testing.T) string {
 	return filepath.Dir(file)
 }
 
+const consumerLiteral = "/usr/local/bin/agent-run"
+
 var (
-	pairOnce sync.Once
-	pairDir  string
-	pairErr  error
+	pairOnce      sync.Once
+	helperScript  string
+	builtAgentRun string
+	siblingMarker string
+	pairErr       error
 )
 
-func statuslinePair(t *testing.T) string {
+func withoutEnv(base []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(base))
+	for _, item := range base {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func futureReset() string {
+	return strconv.FormatInt(time.Date(9999, time.January, 1, 0, 0, 0, 0, time.UTC).Unix(), 10)
+}
+
+func statuslinePair(t *testing.T) {
 	t.Helper()
 	pairOnce.Do(func() {
-		pairDir, pairErr = os.MkdirTemp("", "claude-statusline-pair-")
-		if pairErr != nil {
+		goBin, err := exec.LookPath("go")
+		if err != nil {
+			pairErr = err
+			return
+		}
+		pairDir, err := os.MkdirTemp("", "claude-statusline-pair-")
+		if err != nil {
+			pairErr = err
+			return
+		}
+		buildDir := filepath.Join(pairDir, "build")
+		scriptDir := filepath.Join(pairDir, "script")
+		if err = os.MkdirAll(buildDir, 0o700); err != nil {
+			pairErr = err
+			return
+		}
+		if err = os.MkdirAll(scriptDir, 0o700); err != nil {
+			pairErr = err
+			return
+		}
+		builtAgentRun = filepath.Join(buildDir, "agent-run")
+		cmd := exec.Command("nice", "-n", "19", goBin, "build", "-o", builtAgentRun, "./cmd/agent-run")
+		cmd.Dir = filepath.Clean(filepath.Join(toolsDir(t), "..", "..", ".."))
+		cmd.Env = append(withoutEnv(withoutEnv(withoutEnv(os.Environ(), "GOMAXPROCS"), "GOFLAGS"), "CGO_ENABLED"), "GOMAXPROCS=1", "GOFLAGS=-p=1", "CGO_ENABLED=0")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			pairErr = fmt.Errorf("build agent-run: %w %s", err, out)
 			return
 		}
 		src, err := os.ReadFile(filepath.Join(toolsDir(t), "claude-statusline-usage.py"))
@@ -49,35 +94,25 @@ func statuslinePair(t *testing.T) string {
 			pairErr = err
 			return
 		}
-		if err = os.WriteFile(filepath.Join(pairDir, "claude-statusline-usage.py"), src, 0o755); err != nil {
+		if !bytes.Contains(src, []byte(consumerLiteral)) {
+			pairErr = errors.New("consumer literal missing")
+			return
+		}
+		replaced := bytes.ReplaceAll(src, []byte(consumerLiteral), []byte(builtAgentRun))
+		helperScript = filepath.Join(scriptDir, "claude-statusline-usage.py")
+		if err = os.WriteFile(helperScript, replaced, 0o755); err != nil {
 			pairErr = err
 			return
 		}
-		root := filepath.Clean(filepath.Join(toolsDir(t), "..", "..", ".."))
-		bin := filepath.Join(pairDir, "agent-run")
-		cmd := exec.Command("nice", "-n", "19", "/home/dev/work/orders/dev-env-sol-coordinator-20261022/toolchain/go1.27.2-linux-amd64/go/bin/go", "build", "-p", "1", "-o", bin, "./cmd/agent-run")
-		cmd.Dir = root
-		cmd.Env = []string{
-			"PATH=/usr/bin:/bin",
-			"HOME=" + os.Getenv("HOME"),
-			"GOTOOLCHAIN=local",
-			"GOMAXPROCS=1",
-			"CGO_ENABLED=0",
-			"GOCACHE=/home/dev/work/orders/dev-env-sol-coordinator-20261022/toolchain/grok106-cache/gocache",
-			"GOMODCACHE=/home/dev/work/orders/dev-env-sol-coordinator-20261022/toolchain/grok106-cache/gomodcache",
-			"GOFLAGS=-p=1",
-			"GOTELEMETRY=off",
-			"GOPROXY=off",
-		}
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			pairErr = fmt.Errorf("build agent-run: %w %s", err, out)
+		siblingMarker = filepath.Join(pairDir, "sibling-marker")
+		stub := "#!/bin/sh\nprintf sibling >> '" + siblingMarker + "'\nexit 0\n"
+		if err = os.WriteFile(filepath.Join(scriptDir, "agent-run"), []byte(stub), 0o700); err != nil {
+			pairErr = err
 		}
 	})
 	if pairErr != nil {
 		t.Fatal(pairErr)
 	}
-	return pairDir
 }
 
 type helperResult struct {
@@ -88,7 +123,8 @@ type helperResult struct {
 
 func runHelper(t *testing.T, home, output string, payload []byte, display []string, extra []string) helperResult {
 	t.Helper()
-	script := filepath.Join(statuslinePair(t), "claude-statusline-usage.py")
+	statuslinePair(t)
+	script := helperScript
 	args := []string{script, "--output", output}
 	if display != nil {
 		args = append(append(args, "--display"), display...)
@@ -189,7 +225,7 @@ func decodeCache(t *testing.T, file string) providerallowance.ReadResponse {
 }
 
 func positiveBody() []byte {
-	return []byte(`{"cwd":"SECRET-CANARY-CWD","session_id":"SECRET-CANARY-SESSION","transcript_path":"SECRET-CANARY-PATH","model":{"id":"SECRET-CANARY-MODEL"},"cost":{"total_cost_usd":123},"credential":"SECRET-CANARY-CRED","rate_limits":{"five_hour":{"used_percentage":0,"resets_at":1800000000,"extra":"SECRET-CANARY-EXTRA"},"seven_day":{"used_percentage":71.5,"resets_at":1000000000}}}`)
+	return []byte(`{"cwd":"SECRET-CANARY-CWD","session_id":"SECRET-CANARY-SESSION","transcript_path":"SECRET-CANARY-PATH","model":{"id":"SECRET-CANARY-MODEL"},"cost":{"total_cost_usd":123},"credential":"SECRET-CANARY-CRED","rate_limits":{"five_hour":{"used_percentage":0,"resets_at":` + futureReset() + `,"extra":"SECRET-CANARY-EXTRA"},"seven_day":{"used_percentage":71.5,"resets_at":1000000000}}}`)
 }
 
 func assertWindows(t *testing.T, doc providerallowance.ReadResponse, five, seven string, fiveState, sevenState providerallowance.CurrentState) {
@@ -254,7 +290,7 @@ func TestClaudeStatuslinePositiveWindows(t *testing.T) {
 	}
 	doc := decodeCache(t, file)
 	assertWindows(t, doc, "0", "71.5", providerallowance.CurrentUnknown, providerallowance.CurrentExpired)
-	if doc.Items[0].Observation.Measures[0].Window.ResetAt == nil || *doc.Items[0].Observation.Measures[0].Window.ResetAt != time.Unix(1800000000, 0).UTC().Format(time.RFC3339) {
+	if doc.Items[0].Observation.Measures[0].Window.ResetAt == nil || *doc.Items[0].Observation.Measures[0].Window.ResetAt != time.Date(9999, time.January, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339) {
 		t.Fatal("future reset")
 	}
 	if doc.Items[0].Observation.Measures[1].Window.ResetAt == nil || *doc.Items[0].Observation.Measures[1].Window.ResetAt != time.Unix(1000000000, 0).UTC().Format(time.RFC3339) {
@@ -263,6 +299,9 @@ func TestClaudeStatuslinePositiveWindows(t *testing.T) {
 	gotSecret, err := os.ReadFile(secret)
 	if err != nil || string(gotSecret) != "SECRET-CANARY-FILE\n" {
 		t.Fatal("transcript touched")
+	}
+	if raw, err := os.ReadFile(siblingMarker); err == nil && len(raw) != 0 {
+		t.Fatal("unrelated sibling executable ran")
 	}
 	gotSettings, err := os.ReadFile(settings)
 	if err != nil || !bytes.Equal(gotSettings, settingsBody) {
@@ -273,7 +312,7 @@ func TestClaudeStatuslinePositiveWindows(t *testing.T) {
 
 func TestClaudeStatuslineZeroNullMissingAndPassedReset(t *testing.T) {
 	home, _, file := privatePaths(t)
-	body := []byte(`{"rate_limits":{"five_hour":{"used_percentage":0,"resets_at":1800000000},"seven_day":{"used_percentage":null,"resets_at":1000000000}}}`)
+	body := []byte(`{"rate_limits":{"five_hour":{"used_percentage":0,"resets_at":` + futureReset() + `},"seven_day":{"used_percentage":null,"resets_at":1000000000}}}`)
 	if res := runHelper(t, home, file, body, nil, nil); res.code != 0 {
 		t.Fatal(res.code)
 	}
@@ -304,13 +343,14 @@ func TestClaudeStatuslineZeroNullMissingAndPassedReset(t *testing.T) {
 
 func TestClaudeStatuslineCachedReadKeepsTimes(t *testing.T) {
 	home, _, file := privatePaths(t)
-	body := []byte(`{"rate_limits":{"five_hour":{"used_percentage":0,"resets_at":1800000000},"seven_day":{"used_percentage":0,"resets_at":1000000000}}}`)
+	body := []byte(`{"rate_limits":{"five_hour":{"used_percentage":0,"resets_at":` + futureReset() + `},"seven_day":{"used_percentage":0,"resets_at":1000000000}}}`)
 	if res := runHelper(t, home, file, body, nil, nil); res.code != 0 {
 		t.Fatal(res.code)
 	}
 	doc := decodeCache(t, file)
 	assertWindows(t, doc, "0", "0", providerallowance.CurrentUnknown, providerallowance.CurrentExpired)
-	bin := filepath.Join(statuslinePair(t), "agent-run")
+	statuslinePair(t)
+	bin := builtAgentRun
 	read := func() providerallowance.ReadResponse {
 		t.Helper()
 		cmd := exec.Command(bin, "usage", "-o", "json", "--from-file", file)
@@ -345,7 +385,7 @@ func TestClaudeStatuslineCachedReadKeepsTimes(t *testing.T) {
 	if err = os.WriteFile(side, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if res := runHelper(t, home, file, []byte(`{"rate_limits":{"five_hour":{"used_percentage":1,"resets_at":1800000000}}}`), nil, nil); res.code != 0 {
+	if res := runHelper(t, home, file, []byte(`{"rate_limits":{"five_hour":{"used_percentage":1,"resets_at":`+futureReset()+`}}}`), nil, nil); res.code != 0 {
 		t.Fatal("second capture")
 	}
 	kept, err := providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits)
@@ -589,8 +629,8 @@ func TestClaudeStatuslineDisplay(t *testing.T) {
 	}
 	assertNoLeak(t, res.stdout, res.stderr)
 	assertSame(t, file, prior)
-	if sunk, err = os.ReadFile(sink); err != nil || len(sunk) != 0 {
-		t.Fatal("oversize stdin forwarded")
+	if sunk, err = os.ReadFile(sink); err != nil || !bytes.Equal(sunk, over) {
+		t.Fatal("display lost oversized input")
 	}
 	assertNoTemps(t, cache)
 }
@@ -602,6 +642,78 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func TestClaudeStatuslineNonASCIIDigits(t *testing.T) {
+	home, _, file := privatePaths(t)
+	prior := writePrior(t, file)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "invoked")
+	stub := filepath.Join(dir, "consumer-stub")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf x >> '"+marker+"'\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	src := mustRead(t, filepath.Join(toolsDir(t), "claude-statusline-usage.py"))
+	script := filepath.Join(dir, "claude-statusline-usage.py")
+	if err := os.WriteFile(script, bytes.ReplaceAll(src, []byte(consumerLiteral), []byte(stub)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{"{\"ignored\":\u0661}", "{\"nested\":{\"n\":1.\u0662}}", "{\"ignored\":1e\u0662}", "{\"rate_limits\":{\"five_hour\":{\"used_percentage\":\u0661}}}"} {
+		cmd := exec.Command("python3", script, "--output", file)
+		cmd.Dir = home
+		cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "LANG=C", "PYTHONDONTWRITEBYTECODE=1"}
+		cmd.Stdin = strings.NewReader(body)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() == 0 || stdout.Len() != 0 || stderr.String() != captureMsg {
+			t.Fatal("non-ascii digit accepted")
+		}
+		assertSame(t, file, prior)
+		if _, err = os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatal("consumer invoked")
+		}
+	}
+}
+
+func TestClaudeStatuslineCaptureOverflowStops(t *testing.T) {
+	home, _, file := privatePaths(t)
+	prior := writePrior(t, file)
+	statuslinePair(t)
+	cmd := exec.Command("python3", helperScript, "--output", file)
+	cmd.Env = []string{"HOME=" + home, "TMPDIR=" + home, "PATH=/usr/bin:/bin", "LANG=C", "PYTHONDONTWRITEBYTECODE=1"}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdin = reader
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err = reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = writer.Write(bytes.Repeat([]byte("x"), providerallowance.FixtureParseLimits.MaxBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err = <-done:
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() == 0 || stderr.String() != captureMsg {
+			t.Fatal("overflow accepted")
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("capture overflow waited for EOF")
+	}
+	_ = writer.Close()
+	assertSame(t, file, prior)
 }
 
 func TestClaudeStatuslineImageOptIn(t *testing.T) {
@@ -629,8 +741,8 @@ func TestClaudeStatuslineImageOptIn(t *testing.T) {
 
 func TestClaudeStatuslineUsageArgs(t *testing.T) {
 	home, _, _ := privatePaths(t)
-	script := filepath.Join(statuslinePair(t), "claude-statusline-usage.py")
-	cmd := exec.Command("python3", script)
+	statuslinePair(t)
+	cmd := exec.Command("python3", helperScript)
 	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "LANG=C"}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

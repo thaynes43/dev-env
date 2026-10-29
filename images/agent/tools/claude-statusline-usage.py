@@ -119,6 +119,10 @@ class Refuse(Exception):
     pass
 
 
+def ascii_digit(char):
+    return "0" <= char <= "9"
+
+
 def owner_private(mode, required):
     bits = stat.S_IMODE(mode)
     return bits & 0o077 == 0 and bits & required == required
@@ -221,7 +225,7 @@ class Parser:
             return ("literal", self.literal("false"))
         if char == "n":
             return ("literal", self.literal("null"))
-        if char == "-" or char.isdigit():
+        if char == "-" or ascii_digit(char):
             return ("number", self.number())
         raise Refuse
 
@@ -235,26 +239,26 @@ class Parser:
         start = self.i
         if self.peek() == "-":
             self.i += 1
-        if self.i >= self.n or not self.text[self.i].isdigit():
+        if self.i >= self.n or not ascii_digit(self.text[self.i]):
             raise Refuse
         if self.text[self.i] == "0":
             self.i += 1
         else:
-            while self.i < self.n and self.text[self.i].isdigit():
+            while self.i < self.n and ascii_digit(self.text[self.i]):
                 self.i += 1
         if self.i < self.n and self.text[self.i] == ".":
             self.i += 1
-            if self.i >= self.n or not self.text[self.i].isdigit():
+            if self.i >= self.n or not ascii_digit(self.text[self.i]):
                 raise Refuse
-            while self.i < self.n and self.text[self.i].isdigit():
+            while self.i < self.n and ascii_digit(self.text[self.i]):
                 self.i += 1
         if self.i < self.n and self.text[self.i] in "eE":
             self.i += 1
             if self.i < self.n and self.text[self.i] in "+-":
                 self.i += 1
-            if self.i >= self.n or not self.text[self.i].isdigit():
+            if self.i >= self.n or not ascii_digit(self.text[self.i]):
                 raise Refuse
-            while self.i < self.n and self.text[self.i].isdigit():
+            while self.i < self.n and ascii_digit(self.text[self.i]):
                 self.i += 1
         raw = self.text[start:self.i]
         if len(raw.encode("utf-8")) > MAX_STRING:
@@ -415,21 +419,7 @@ def project(root):
 
 
 def consumer_argv():
-    argv = [CONSUMER, "usage", "-o", "json", "--claude-statusline"]
-    invoked = sys.argv[0]
-    if not os.path.isabs(invoked) or os.path.islink(invoked):
-        return argv
-    parent = os.path.dirname(os.path.abspath(invoked))
-    if parent == "/usr/local/bin":
-        return argv
-    sibling = os.path.join(parent, "agent-run")
-    try:
-        info = os.lstat(sibling)
-    except OSError:
-        return argv
-    if stat.S_ISREG(info.st_mode) and os.access(sibling, os.X_OK):
-        return [sibling, "usage", "-o", "json", "--claude-statusline"]
-    return argv
+    return [CONSUMER, "usage", "-o", "json", "--claude-statusline"]
 
 
 def run_consumer(payload):
@@ -522,30 +512,59 @@ def capture(data, output):
     publish(output, run_consumer(filtered))
 
 
-def read_stdin():
-    data = sys.stdin.buffer.read(MAX_BYTES + 1)
+def read_capture_only(stream):
+    # One bounded read. Do not wait for EOF after the limit is known.
+    data = stream.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
-        while sys.stdin.buffer.read(65536):
-            pass
         return b"", True
     return data, False
 
 
-def run_display(argv, payload):
+def write_all(pipe, chunk):
+    view = memoryview(chunk)
+    while view:
+        wrote = pipe.write(view)
+        if wrote <= 0:
+            raise OSError
+        view = view[wrote:]
+
+
+def forward_display(argv, stream):
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE)
     except OSError:
-        return 127
+        data, overflow = read_capture_only(stream)
+        return data, overflow, 127
+    kept = bytearray()
+    overflow = False
     try:
-        if payload:
-            proc.stdin.write(payload)
-        proc.stdin.close()
-    except OSError:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                break
+            if not overflow:
+                if len(kept) + len(chunk) > MAX_BYTES:
+                    overflow = True
+                    kept.clear()
+                else:
+                    kept.extend(chunk)
+            try:
+                write_all(proc.stdin, chunk)
+            except OSError:
+                break
         try:
             proc.stdin.close()
         except OSError:
             pass
-    return proc.wait()
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    code = proc.wait()
+    if overflow:
+        return b"", True, code
+    return bytes(kept), False, code
 
 
 def parse_args(argv):
@@ -570,11 +589,15 @@ def main(argv):
     except Refuse:
         sys.stderr.buffer.write(USAGE)
         return 2
+    stream = sys.stdin.buffer
+    code = None
     try:
-        data, overflow = read_stdin()
+        if display:
+            data, overflow, code = forward_display(display, stream)
+        else:
+            data, overflow = read_capture_only(stream)
     except OSError:
         data, overflow = b"", True
-    code = run_display(display, b"" if overflow else data) if display else None
     ok = False
     if not overflow:
         try:
