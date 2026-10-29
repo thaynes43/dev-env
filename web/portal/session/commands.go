@@ -79,6 +79,11 @@ func authorizedAction(engine *Engine, authorizer portal.Authorizer, r *http.Requ
 	if err != nil {
 		return r, Handle{}, Record{}, err
 	}
+	// The record returned to the caller must belong to the principal that was
+	// authenticated and is about to be authorized, not to a different session.
+	if record.Principal != principal {
+		return r, Handle{}, Record{}, portal.ErrDenied
+	}
 	if err = authorizer.Authorize(r.Context(), principal, portal.Resource{Project: "dev-env", Environment: "internal"}); err != nil {
 		return r, Handle{}, Record{}, err
 	}

@@ -379,3 +379,43 @@ func TestCommandsNilScopeDeniesBeforeAnyWork(t *testing.T) {
 		t.Fatal("direct nil-scope receipt accessed storage")
 	}
 }
+
+// flippingStore returns a different principal on exactly one GetSession call,
+// as if the session record changed between the checks of one request.
+type flippingStore struct {
+	Store
+	calls, flipOn int
+}
+
+func (s *flippingStore) GetSession(ctx context.Context, h Handle) (Record, error) {
+	record, err := s.Store.GetSession(ctx, h)
+	s.calls++
+	if err == nil && s.calls == s.flipOn {
+		record.Principal.Subject = "synthetic-other"
+	}
+	return record, err
+}
+
+func TestAuthorizedActionRefusesMismatchedSessionRecord(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	store := &flippingStore{Store: f.e.config.Store}
+	f.e.config.Store = store
+	request := func() *http.Request { return f.request(http.MethodGet, SessionsPath, "") }
+
+	// Normal path: every read agrees, and the record and handle come back.
+	store.calls, store.flipOn = 0, 0
+	_, key, record, err := authorizedAction(f.e, authorizer, request())
+	if err != nil || record.Principal != f.store.sessions[key].Principal || record.Principal.Subject == "" || record.Principal.Subject == "synthetic-other" {
+		t.Fatalf("matching record refused: %v", err)
+	}
+
+	// authorizedAction reads the record three times: bind, current, Authenticate.
+	// Changing only the second read leaves the bound reference and Authenticate
+	// agreeing with each other, so only the explicit comparison catches it.
+	store.calls, store.flipOn = 0, 2
+	if _, _, _, err = authorizedAction(f.e, authorizer, request()); !errors.Is(err, portal.ErrDenied) {
+		t.Fatalf("mismatched record answered %v, want denied", err)
+	}
+}
