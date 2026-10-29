@@ -445,10 +445,15 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 				page.OlderHref = AsksPath + "?" + url.Values{apiv1.AskQueryCursor: {result.NextCursor}}.Encode()
 			}
 		}
-		if selectedID != "" {
+		if selectedID != "" && !errors.Is(readErr, errAsksNotConnected) {
 			ask, detailErr := c.Asks.readAsk(r.Context(), selectedID)
 			if detailErr != nil {
-				page.Notice, page.Retry = "The selected ask could not be read. "+askReadNotice(detailErr, c.Now()), true
+				// Keep any earlier list notice (unavailable or partial read).
+				detail := "The selected ask could not be read. " + askReadNotice(detailErr, c.Now())
+				if page.Notice != "" {
+					detail = page.Notice + " " + detail
+				}
+				page.Notice, page.Retry = detail, true
 			} else {
 				found := false
 				for i := range page.Asks {
@@ -458,6 +463,10 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 				}
 				if !found {
 					page.Asks = append(page.Asks, ask)
+				}
+				if readErr != nil {
+					// Only the selected ask was read: do not claim the history is empty.
+					page.HistoryNotice = "Other asks could not be read."
 				}
 				page.Connected = true
 			}

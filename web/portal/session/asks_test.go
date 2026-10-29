@@ -817,6 +817,35 @@ func TestAsksSelectedDetailFirstInAnyState(t *testing.T) {
 	}
 }
 
+func TestAsksSelectedDetailKeepsListNotice(t *testing.T) {
+	for _, detailOK := range []bool{true, false} {
+		t.Run(map[bool]string{true: "detail-ok", false: "detail-fails"}[detailOK], func(t *testing.T) {
+			f, c, _, _ := asksFixture(t)
+			selected := syntheticAsk(f.now)
+			selected.ID = "ask-aaaaaaaaaaaaaaaa"
+			c.Asks.client = &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == apiv1.PortalAskPath(selected.ID) && detailOK {
+					raw, _ := json.Marshal(selected)
+					return askResponse(200, string(raw)), nil
+				}
+				return askResponse(503, `{}`), nil
+			})}
+			w := httptest.NewRecorder()
+			NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath+"?ask="+selected.ID, ""))
+			body := w.Body.String()
+			if !strings.Contains(body, "Open asks could not be read.") || strings.Contains(body, "No closed asks yet.") {
+				t.Fatal("list failure notice lost or empty history claimed")
+			}
+			if detailOK && (!strings.Contains(body, `id="`+selected.ID+`"`) || !strings.Contains(body, "Other asks could not be read.")) {
+				t.Fatal("selected ask or partial-history notice missing")
+			}
+			if !detailOK && !strings.Contains(body, "The selected ask could not be read.") {
+				t.Fatal("detail failure notice missing")
+			}
+		})
+	}
+}
+
 func TestAsksSelectionQueryRefusesAmbiguity(t *testing.T) {
 	id := "ask-0123456789abcdef"
 	for _, query := range []string{"ask=", "ask=bad", "ask=" + id + "&ask=" + id, "ask=" + id + "&extra=1", "ask=" + id + ";extra=1", "Ask=" + id, "cursor=", "cursor=one&cursor=two", "ask=%zz"} {
