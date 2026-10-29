@@ -16,7 +16,7 @@
     "generationAttested": false,
     "generationDisabledMessageBytes": 55,
     "generationDisabledMessageSha256": "c143f5a5fd24117a18129ac9dfb4af1227d8b6b97bd0cbb7f87ce976d4ec6fd6",
-    "hostedGo": "1.27.1",
+    "hostedGo": "1.27.3",
     "kyverno": "1.19.1",
     "requiredConditions": [
       "WebhookConfigured",

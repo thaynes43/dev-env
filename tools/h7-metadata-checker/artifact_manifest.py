@@ -13,7 +13,7 @@ checksum = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 manifest = {
     "schemaVersion": 1,
     "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
-    "toolchain": "go1.27.1",
+    "toolchain": "go1.27.3",
     "celProfile": "cel-go0.30.0",
     "originalExpectedBundleSha256": "97beed7e1b37f009ed21f3ceace439b1e8498f0ad7b91b5ac606d787ad8ebed1",
     "sourceFiles": {str(path.relative_to(root)): checksum(path) for path in sorted(source.rglob("*")) if path.is_file()},
