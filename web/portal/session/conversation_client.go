@@ -15,21 +15,20 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
-// conversationSource requires explicitly selected principal and target scope.
-// Existing group membership or metadata read authority does not configure it.
+// conversationSource requires an explicit target scope and checks the request's
+// own portal session against live group membership before and after fetching.
 type conversationSource struct {
 	authorizer *CurrentAuthorizer
-	principal  portal.Principal
 	targets    map[string]string // Session UID -> exact name
 	tokenPath  string
 	client     *http.Client
 	now        func() time.Time
 }
 
-// NewConversationSource configures a private source but is not called by
-// production. No access is enabled without a separate approved composition.
-func NewConversationSource(authorizer *CurrentAuthorizer, store *PostgresStore, principal portal.Principal, targets map[string]string, tokenPath string, ca []byte, now func() time.Time) (ConversationSource, error) {
-	if authorizer == nil || store == nil || store.pool == nil || authorizer.store != store || authorizer.client == nil || authorizer.now == nil || principal.Issuer != authorizer.issuer || !identityText(principal.Subject) || len(targets) == 0 || len(targets) > 256 || tokenPath == "" || now == nil {
+// NewConversationSource configures a private source. Production calls it only
+// when the private action file has a history scope.
+func NewConversationSource(authorizer *CurrentAuthorizer, store *PostgresStore, targets map[string]string, tokenPath string, ca []byte, now func() time.Time) (ConversationSource, error) {
+	if authorizer == nil || store == nil || store.pool == nil || authorizer.store != store || authorizer.client == nil || authorizer.now == nil || len(targets) == 0 || len(targets) > 256 || tokenPath == "" || now == nil {
 		return nil, portal.ErrUnavailable
 	}
 	copied := make(map[string]string, len(targets))
@@ -43,7 +42,7 @@ func NewConversationSource(authorizer *CurrentAuthorizer, store *PostgresStore, 
 	if err != nil {
 		return nil, portal.ErrUnavailable
 	}
-	return &conversationSource{authorizer: authorizer, principal: principal, targets: copied, tokenPath: tokenPath, client: client, now: now}, nil
+	return &conversationSource{authorizer: authorizer, targets: copied, tokenPath: tokenPath, client: client, now: now}, nil
 }
 
 func (c *conversationSource) ReadConversation(ctx context.Context, name, uid string) (Conversation, error) {
@@ -52,11 +51,11 @@ func (c *conversationSource) ReadConversation(ctx context.Context, name, uid str
 		return empty, portal.ErrDenied
 	}
 	ref, ok := ctx.Value(sessionContextKey{}).(sessionReference)
-	if !ok || ref.principal != c.principal {
+	if !ok {
 		return empty, portal.ErrDenied
 	}
 	resource := portal.Resource{Project: "dev-env", Environment: "internal"}
-	if err := c.authorizer.Authorize(ctx, c.principal, resource); err != nil {
+	if err := c.authorizer.Authorize(ctx, ref.principal, resource); err != nil {
 		return empty, normalize(err)
 	}
 	token, err := operatorCredential(c.tokenPath, c.now())
@@ -97,7 +96,7 @@ func (c *conversationSource) ReadConversation(ctx context.Context, name, uid str
 	if decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.SessionName != name || result.SessionUID != uid || len(result.PodUID) > 128 || (result.Projection.State != "unavailable" && result.PodUID == "") || !result.Projection.Valid() {
 		return empty, portal.ErrUnavailable
 	}
-	if err = c.authorizer.Authorize(ctx, c.principal, resource); err != nil {
+	if err = c.authorizer.Authorize(ctx, ref.principal, resource); err != nil {
 		return empty, normalize(err)
 	}
 	out := Conversation{State: result.Projection.State, ReasonCode: result.Projection.ReasonCode}

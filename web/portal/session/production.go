@@ -223,7 +223,7 @@ func LoadProduction(root string) (Runtime, error) {
 			launchForms = launch
 		}
 		if actions.History != nil {
-			source, e := NewConversationSource(authorizer, store, actions.History.Principal, actions.History.Targets, tokenPath, operatorCA, time.Now)
+			source, e := NewConversationSource(authorizer, store, actions.History.Targets, tokenPath, operatorCA, time.Now)
 			if e != nil {
 				return Runtime{}, errProductionConfig
 			}
@@ -498,30 +498,27 @@ func bytesHas(data []byte, needle byte) bool {
 	return false
 }
 
-// actionScope binds one action to one issuer/subject and exact target identities.
+// actionScope binds an action to exact target identities. The current portal
+// session and live group authorizer determine who may use it.
 type actionScope struct {
-	Principal portal.Principal
-	Targets   map[string]string
+	Targets map[string]string
 }
 type productionActionScopes struct {
 	Send, History *actionScope
 	Launch        *launchScope
 }
 
-// parseLaunchScope reads the launch entry: exactly issuer, subject and repos.
-// The issuer is the pinned one, the subject plain identity text, and repos a
-// non-empty, bounded, duplicate-free list of repository names.
+// parseLaunchScope reads exactly a non-empty, bounded, duplicate-free list of
+// repository names. Identity fields from the former per-person format are refused.
 func parseLaunchScope(entry json.RawMessage) (*launchScope, bool) {
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(entry, &fields) != nil || !exactKeys(fields, []string{"issuer", "subject", "repos"}) {
+	if json.Unmarshal(entry, &fields) != nil || !exactKeys(fields, []string{"repos"}) {
 		return nil, false
 	}
 	var wire struct {
-		Issuer  string   `json:"issuer"`
-		Subject string   `json:"subject"`
-		Repos   []string `json:"repos"`
+		Repos []string `json:"repos"`
 	}
-	if json.Unmarshal(entry, &wire) != nil || wire.Issuer != productionIssuer || !identityText(wire.Subject) || len(wire.Repos) == 0 || len(wire.Repos) > apiv1.MaxPortalLaunchRepos {
+	if json.Unmarshal(entry, &wire) != nil || len(wire.Repos) == 0 || len(wire.Repos) > apiv1.MaxPortalLaunchRepos {
 		return nil, false
 	}
 	seen := map[string]bool{}
@@ -531,7 +528,7 @@ func parseLaunchScope(entry json.RawMessage) (*launchScope, bool) {
 		}
 		seen[repo] = true
 	}
-	return &launchScope{Principal: portal.Principal{Issuer: wire.Issuer, Subject: wire.Subject}, Repos: wire.Repos}, true
+	return &launchScope{Repos: wire.Repos}, true
 }
 
 func loadActionScopes(root string) (productionActionScopes, error) {
@@ -539,41 +536,39 @@ func loadActionScopes(root string) (productionActionScopes, error) {
 	path := filepath.Join(root, "config/session-actions.json")
 	present, err := mountedPresent(path)
 	if err != nil {
-		return result, errProductionConfig
+		return productionActionScopes{}, errProductionConfig
 	}
 	if !present {
 		return result, nil
 	}
 	raw, err := readMountedBytes(root, "config/session-actions.json", 8192)
 	if err != nil || !protocol.StrictPortalJSON(raw) {
-		return result, errProductionConfig
+		return productionActionScopes{}, errProductionConfig
 	}
 	var top map[string]json.RawMessage
 	if json.Unmarshal(raw, &top) != nil || !exactKeys(top, nil, "send", "history", "launch") || len(top) == 0 {
-		return result, errProductionConfig
+		return productionActionScopes{}, errProductionConfig
 	}
 	for action, entry := range top {
 		if action == "launch" {
 			scope, ok := parseLaunchScope(entry)
 			if !ok {
-				return result, errProductionConfig
+				return productionActionScopes{}, errProductionConfig
 			}
 			result.Launch = scope
 			continue
 		}
 		var fields map[string]json.RawMessage
-		if json.Unmarshal(entry, &fields) != nil || !exactKeys(fields, []string{"issuer", "subject", "targets"}) {
-			return result, errProductionConfig
+		if json.Unmarshal(entry, &fields) != nil || !exactKeys(fields, []string{"targets"}) {
+			return productionActionScopes{}, errProductionConfig
 		}
 		var wire struct {
-			Issuer  string            `json:"issuer"`
-			Subject string            `json:"subject"`
 			Targets []json.RawMessage `json:"targets"`
 		}
-		if json.Unmarshal(entry, &wire) != nil || wire.Issuer != productionIssuer || !identityText(wire.Subject) || len(wire.Targets) == 0 || len(wire.Targets) > 64 {
-			return result, errProductionConfig
+		if json.Unmarshal(entry, &wire) != nil || len(wire.Targets) == 0 || len(wire.Targets) > 64 {
+			return productionActionScopes{}, errProductionConfig
 		}
-		scope := &actionScope{Principal: portal.Principal{Issuer: wire.Issuer, Subject: wire.Subject}, Targets: map[string]string{}}
+		scope := &actionScope{Targets: map[string]string{}}
 		names := map[string]bool{}
 		for _, target := range wire.Targets {
 			var keys map[string]json.RawMessage
@@ -582,7 +577,7 @@ func loadActionScopes(root string) (productionActionScopes, error) {
 				UID  string `json:"uid"`
 			}
 			if json.Unmarshal(target, &keys) != nil || !exactKeys(keys, []string{"name", "uid"}) || json.Unmarshal(target, &pair) != nil || len(validation.IsDNS1123Label(pair.Name)) != 0 || !apiv1.ValidContextUID(pair.UID) || names[pair.Name] || scope.Targets[pair.UID] != "" {
-				return result, errProductionConfig
+				return productionActionScopes{}, errProductionConfig
 			}
 			names[pair.Name] = true
 			scope.Targets[pair.UID] = pair.Name
@@ -593,7 +588,7 @@ func loadActionScopes(root string) (productionActionScopes, error) {
 		case "history":
 			result.History = scope
 		default:
-			return result, errProductionConfig
+			return productionActionScopes{}, errProductionConfig
 		}
 	}
 	return result, nil

@@ -91,7 +91,7 @@ func commandFixture(t *testing.T) (*authFixture, *commandHandler, *commandMemory
 	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
 	handler := &commandHandler{engine: f.e, authorizer: authorizer, receipts: store, transport: transport, now: func() time.Time { return f.now }, render: func(r apiv1.PortalMessageReceipt) ([]byte, error) { return []byte(string(r.TransportStatus)), nil }}
 	key, _ := requestHandle(f.request("GET", portalMessagesPath, ""), sessionCookie)
-	handler.scope = &actionScope{Principal: f.store.sessions[key].Principal, Targets: map[string]string{"uid-a": "agent-a"}}
+	handler.scope = &actionScope{Targets: map[string]string{"uid-a": "agent-a"}}
 	values := url.Values{"csrf": {f.store.sessions[key].CSRF}, "requestID": {"request-0000000001"}, "session": {"agent-a"}, "sessionUID": {"uid-a"}, "text": {"SYNTHETIC MESSAGE"}}
 	return f, handler, store, transport, values
 }
@@ -104,6 +104,80 @@ func commandPost(f *authFixture, h *commandHandler, v url.Values, origin string)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+// Each synthetic user gets a separately verified login and access token. The
+// UserInfo fixture selects claims by that token, just as the issuer does.
+func actionLogin(t *testing.T, f *authFixture, subject string) Record {
+	t.Helper()
+	f.subject = subject
+	f.login(t)
+	_, record, err := f.e.current(f.request(http.MethodGet, SessionsPath, ""))
+	if err != nil || record.Principal.Subject != subject {
+		t.Fatal("synthetic action login failed")
+	}
+	return record
+}
+
+func actionGroupAuthorizer(f *authFixture, records map[string]Record, checks map[string]int) *CurrentAuthorizer {
+	return currentFixture(f, func(req *http.Request) (*http.Response, error) {
+		for subject, record := range records {
+			if req.Header.Get("Authorization") == "Bearer "+record.accessToken {
+				checks[subject]++
+				return userInfoResponse(fmt.Sprintf(`{"sub":%q,"portal_is_active":true,"portal_is_admin":true}`, subject)), nil
+			}
+		}
+		return userInfoResponse(`{}`), nil
+	})
+}
+
+func TestCommandsAllowTwoGroupMembersWithPrivateReceipts(t *testing.T) {
+	f, h, _, transport, values := commandFixture(t)
+	first := actionLogin(t, f, "synthetic-first")
+	firstCookie := f.session
+	second := actionLogin(t, f, "synthetic-second")
+	secondCookie := f.session
+	checks := map[string]int{}
+	h.authorizer = actionGroupAuthorizer(f, map[string]Record{"synthetic-first": first, "synthetic-second": second}, checks)
+	for _, user := range []struct {
+		cookie *http.Cookie
+		record Record
+	}{{firstCookie, first}, {secondCookie, second}} {
+		f.session = user.cookie
+		values.Set("csrf", user.record.CSRF)
+		if w := commandPost(f, h, values, "https://portal.example"); w.Code != http.StatusOK || w.Body.String() != "TransportDelivered" {
+			t.Fatalf("admitted member send answered %d", w.Code)
+		}
+		if checks[user.record.Principal.Subject] != 2 {
+			t.Fatal("send did not reauthorize the request's own token before dispatch")
+		}
+	}
+	if transport.count() != 2 || transport.requests[0].ActorRef == transport.requests[1].ActorRef {
+		t.Fatal("group members did not get separate attributed sends for the same request ID")
+	}
+	// A receipt created only in the second browser is private to that session.
+	values.Set("requestID", "request-0000000002")
+	if w := commandPost(f, h, values, "https://portal.example"); w.Code != http.StatusOK {
+		t.Fatal("second receipt fixture failed")
+	}
+	f.session = firstCookie
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, f.request(http.MethodGet, portalMessagesPath+"/request-0000000002", ""))
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "TransportDelivered") {
+		t.Fatal("group membership exposed another browser's receipt")
+	}
+}
+
+func TestActionFormsStayOffWithoutConfiguration(t *testing.T) {
+	page := portal.ProductPage{Connected: true, Groups: []portal.ProductGroup{{Rows: []portal.ProductRow{{Messages: &portal.ProductMessages{Draftable: true}}}}}}
+	got := withSendForms(page, strings.Repeat("c", 43), nil)
+	if got.Groups[0].Rows[0].Messages.Send != nil {
+		t.Fatal("unconfigured send displayed a form")
+	}
+	got = withLaunchForm(page, portal.Principal{Issuer: "https://issuer.example/portal/", Subject: "synthetic-first"}, strings.Repeat("c", 43), nil)
+	if got.Launch != nil {
+		t.Fatal("unconfigured launch displayed a form")
+	}
 }
 
 func TestCommandsDeliveryReplayConflictAndUnknown(t *testing.T) {
@@ -141,7 +215,7 @@ func TestCommandsDeliveryReplayConflictAndUnknown(t *testing.T) {
 }
 
 func TestCommandsSecurityRefusalsBeforeTransport(t *testing.T) {
-	for _, mode := range []string{"missing-origin", "wrong-origin", "duplicate-origin", "wrong-csrf", "duplicate-csrf", "extra-field", "control", "url", "revoked", "removed-group", "revoke-before-send"} {
+	for _, mode := range []string{"missing-origin", "wrong-origin", "duplicate-origin", "wrong-csrf", "duplicate-csrf", "extra-field", "control", "url", "revoked", "expired", "missing-group", "removed-group", "revoke-before-send", "group-removed-before-send", "token-replaced-before-send"} {
 		t.Run(mode, func(t *testing.T) {
 			f, h, _, transport, v := commandFixture(t)
 			origin := "https://portal.example"
@@ -163,17 +237,32 @@ func TestCommandsSecurityRefusalsBeforeTransport(t *testing.T) {
 			case "revoked":
 				key, _ := requestHandle(f.request("GET", portalMessagesPath, ""), sessionCookie)
 				_ = f.store.RevokeSession(context.Background(), key)
+			case "expired":
+				f.now = f.now.Add(2 * time.Hour)
+			case "missing-group":
+				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
+					return userInfoResponse(`{"sub":"synthetic-subject"}`), nil
+				})
 			case "removed-group":
 				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
 					return userInfoResponse(strings.Replace(currentAllow, `"portal_is_admin":true`, `"portal_is_admin":false`, 1)), nil
 				})
-			case "revoke-before-send":
+			case "revoke-before-send", "group-removed-before-send", "token-replaced-before-send":
 				calls := 0
 				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
 					calls++
 					if calls == 2 {
 						key, _ := requestHandle(f.request("GET", portalMessagesPath, ""), sessionCookie)
-						_ = f.store.RevokeSession(context.Background(), key)
+						switch mode {
+						case "revoke-before-send":
+							_ = f.store.RevokeSession(context.Background(), key)
+						case "group-removed-before-send":
+							return userInfoResponse(strings.Replace(currentAllow, `"portal_is_admin":true`, `"portal_is_admin":false`, 1)), nil
+						case "token-replaced-before-send":
+							record := f.store.sessions[key]
+							record.accessToken = "synthetic-replaced-token"
+							f.store.sessions[key] = record
+						}
 					}
 					return userInfoResponse(currentAllow), nil
 				})
@@ -236,15 +325,16 @@ func TestCommandsEncodedFormTextBounds(t *testing.T) {
 }
 
 func TestCommandsExplicitProductionScope(t *testing.T) {
-	for _, mode := range []string{"principal", "name", "uid", "allowed"} {
+	for _, mode := range []string{"issuer", "name", "uid", "allowed"} {
 		t.Run(mode, func(t *testing.T) {
 			f, h, store, transport, v := commandFixture(t)
 			key, _ := requestHandle(f.request("GET", portalMessagesPath, ""), sessionCookie)
-			p := f.store.sessions[key].Principal
-			h.scope = &actionScope{Principal: p, Targets: map[string]string{"uid-a": "agent-a"}}
+			h.scope = &actionScope{Targets: map[string]string{"uid-a": "agent-a"}}
 			switch mode {
-			case "principal":
-				h.scope.Principal.Subject = "wrong"
+			case "issuer":
+				record := f.store.sessions[key]
+				record.Principal.Issuer = "https://other.example/"
+				f.store.sessions[key] = record
 			case "name":
 				v.Set("session", "agent-b")
 			case "uid":
