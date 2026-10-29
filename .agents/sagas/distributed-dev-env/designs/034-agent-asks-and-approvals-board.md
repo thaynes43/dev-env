@@ -12,7 +12,7 @@
 ### v1 build contract
 
 The authority is Epic #254 **journal 2539**, amended by **2556** and
-**2579 (v1.1)**. Journal 2579 controls wherever they differ. The table is
+**2579 (v1.1)** and **2595 (v1.2)**. The later journal controls wherever they differ. The table is
 an index for lanes 0/A (wire/backend), B (keeper), C (MCP), D (portal).
 It describes required behavior, not installed or accepted functionality.
 
@@ -79,16 +79,19 @@ not a new client-supplied wire field.
 | `options` | 0–6 choices; unique IDs matching `^[a-z0-9-]{1,24}$`, labels 1–80 runes, descriptions 0–300 runes. An info Ask needs at least one option or `allowFreeText: true`. An approval needs no options. |
 | `recommended`, `allowFreeText` | Recommendation is an option ID or empty. Free text controls info answers; it does not restrict approval notes. Never preselect approval. |
 | `context` | Server-filled `sessionName` (≤253 bytes) and `sessionUID` (≤128 bytes); optional positive OpenProject `workPackage` integer and 0–5 HTTPS links of 1–300 bytes each. No caller-supplied requester identity. |
-| `scope` | Required for approval, absent for info. `action` and `target` each 1–200 nonblank runes, plus RFC 3339 `expiresAt`. Describe one exact action and target with material limits. Approval scope expires after creation and no later than `createdAt + 24h` in v1. |
-| `createdAt`, `expiresAt` | Server creation time. Create uses `expiresIn`, a positive Go duration string, default `24h`, maximum `168h` (7 days). An approval Ask's `expiresAt` must be ≤ `scope.expiresAt`; the 24h scope cap therefore also bounds its answer window. An answer never extends either expiry. |
+| `scope` | Required for approval, absent for info. `action` and `target` each 1–200 nonblank runes, plus RFC 3339 `expiresAt`. Describe one exact action and target with material limits. Approval scope expires 1m to 24h after creation in v1 (`AskScopeMaxTTL`). |
+| `createdAt`, `expiresAt` | Server creation time. Create uses `expiresIn`, a Go duration string in whole seconds, `1m` to `168h` (7 days), default `24h`. An approval Ask's `expiresAt` is ≤ `scope.expiresAt` (A8): when `expiresIn` is omitted, `expiresAt` is the earlier of `createdAt + 24h` and `scope.expiresAt`, so the default never fails; an explicit `expiresIn` that would outlive the scope is refused with `400` (lane 0 `ExpiresAtFrom`, `ValidateAt`). The 24h scope cap therefore also bounds the answer window. An answer never extends either expiry. |
 | `state` | `open`, `answered`, `withdrawn` or `expired` only. |
 | `answer` | Set once: `optionId` (an existing choice or empty), `text` (0–2000 runes), `approved` (required `*bool` for approval, absent for info), `answeredBy` and server `answeredAt`. An explicit false means Deny; omission is not false. |
-| `answer.answeredBy` | Operator audit/portal: issuer 1–300 runes, subject 1–200 runes, displayName 0–120 runes. Session responses return only displayName; issuer and subject are omitted, not empty-string placeholders. No access tokens or cookies. |
+| `answer.answeredBy` | Operator audit/portal: issuer 1–300 runes, subject 1–200 runes, displayName 0–120 runes. The portal's answer request must carry issuer and subject. A stored or returned actor is valid with a nonblank displayName, or with both issuer and subject (v1.2). Session responses return only displayName, `Portal user` when none is known; issuer and subject are omitted, not empty-string placeholders. No access tokens or cookies. |
 | `delivery` | Reserved shape `{inboxMessage, deliveredAt}`. Empty/omitted in v1. No delivery or ACK fact is inferred from an answer read. |
 
-Lane 0's validation bounds apply. Text must be valid UTF-8. Reject tabs,
-NUL, other unsafe controls, bidi overrides and line/paragraph separators.
-Newline is allowed only in question, option description and answer text.
+Lane 0's validation bounds apply. Text must be valid UTF-8. Reject NUL,
+other controls, format and invisible characters (Unicode Cf, U+2060 to
+U+206F, tag characters), bidi overrides and line/paragraph separators.
+Multi-line fields (question, option description, answer text) also allow
+LF, tab, the zero-width joiner and variation selectors (v1.2). Clients
+turn CRLF and lone CR into LF with `NormalizeAskText` before validating.
 Do not silently truncate a question, scope or answer to pass validation.
 
 The wire accepts **any HTTPS host**: an absolute URL with a host, no
@@ -211,7 +214,10 @@ CRD rights; add narrow operator create/get/list and status-write rights
 through GitOps.
 
 A CRD CEL transition rule makes spec immutable: `self == oldSelf`.
-The answer is set once: `oldSelf.answer == null || self.answer == oldSelf.answer`.
+The answer is set once by a rule on `status`, where the answer lives:
+`!has(oldSelf.answer) || (has(self.answer) && self.answer == oldSelf.answer)`.
+In Kubernetes CEL an absent field is not `null`, so the rule tests
+presence with `has()` instead of comparing with `null`.
 Schema optional-field handling must preserve that A12 rule: an absent
 answer may be set, and a present answer cannot change or disappear.
 Prove both rules with real API-server validation, including status writes.
