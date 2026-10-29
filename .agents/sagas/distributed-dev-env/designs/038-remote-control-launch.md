@@ -1,13 +1,17 @@
 # DESIGN-038: Repeatable Remote Control launch
 
-Date: 2026-10-29. **Proposed contract; documentation only.**
+Date: 2026-10-29. **Proposed; stories 2a-2d and 3/3 pending in OpenProject #267 and #268.**
 Work order RCLAUNCH267-DESIGN-20261029-01,
 [OpenProject #267](https://work.haynesnetwork.com/work_packages/267),
 [Epic #91](https://work.haynesnetwork.com/work_packages/91),
 related [#94](https://work.haynesnetwork.com/work_packages/94).
-Source inspected at `a60b031cb6f93f82a35c2cebb1065b1f733942b2`, freshly fetched
-`origin/main`. This document implements, installs and activates nothing. The
-lead reviews and merges the single ready PR; this work stops with checks started.
+Docs fix RCLAUNCH267-DESIGN-FIX-20261029-02 rechecked the source at
+`e984c06d0faafe8cdee53b30a3090be3abbf3899`.
+Original source inspection: `a60b031cb6f93f82a35c2cebb1065b1f733942b2`,
+freshly fetched `origin/main` for the first draft. This document implements, installs and activates nothing. The
+contract remains proposed; stories 2a-2d and 3/3 are pending in
+OpenProject [#267](https://work.haynesnetwork.com/work_packages/267) and
+[#268](https://work.haynesnetwork.com/work_packages/268).
 
 ## Outcome and boundaries
 
@@ -62,13 +66,14 @@ These source references were rechecked for this design:
 
 | Area | Current behavior and limit |
 | --- | --- |
-| [CLI create](../../../../internal/agentrun/create.go) | `--interactive` selects `remote`; rejects `--project`, a prompt/handoff, task limits and `--local` in that combination. Default wait is 30s with 2s polls. It waits for session/pod settlement, not provider RC readiness. A follow error after create can still return success with a warning. |
-| [API admission](../../../../internal/apiserver/validate.go) | `kindCoordinator` is accepted-project/task/dev/S-or-M only. Codex remote creation separately accepts human, trusted client or recognized workbench session, and rejects a project task snapshot. Session children retain their parent's profile; a workbench-created Codex remote host must omit profile and uses the template default. |
-| [Controller](../../../../internal/controller/reconciler.go), [API view](../../../../internal/apiserver/view.go) | `Running` can mean PodReady while agentd is still booting. The view exposes condition words, not their transition times. It exposes conversation ID and last heartbeat but drops protocol `AgentState.StartedAt`; RC view drops `sessionId`. These gaps prevent accurate phase timing today. |
+| [CLI create](../../../../internal/agentrun/create.go) | `--interactive` selects `remote`; the CLI rejects `--project`, a prompt/handoff, task limits and `--local` in that combination. The project refusal is CLI-only for Claude remote. Default wait is 30s with 2s polls. It waits for session/pod settlement, not provider RC readiness. A follow error after create can still return success with a warning. |
+| [API admission](../../../../internal/apiserver/validate.go) | `kindCoordinator` is accepted-project/task/dev/S-or-M only. Other allowed callers can create Claude remote sessions with accepted project snapshots, subject to the existing project feature gate and admission limits; no test currently pins this combination. Codex remote creation separately accepts human, trusted client or recognized workbench session, and rejects a project task snapshot. Session children retain their parent's profile; a workbench-created Codex remote host must omit profile and uses the template default. |
+| [Controller](../../../../internal/controller/reconciler.go), [API view](../../../../internal/apiserver/view.go) | `Running` can mean PodReady while agentd is still booting. The view exposes condition words, not their transition times, plus conversation ID and last heartbeat. Protocol `AgentState.StartedAt` is dropped earlier by [heartbeat storage](../../../../internal/apiserver/heartbeat.go#L143-L151): `v1alpha1.AgentStatus` has no start-time field. The RC view drops `sessionId`. Accurate phase timing needs a CRD change as well as API transport. |
 | [Claude launch](../../../../internal/agentd/launch.go), [daemon](../../../../internal/agentd/daemon.go), [RC collector](../../../../internal/agentd/remote.go) | First launch chooses a fresh UUID with `--session-id` and `--remote-control`; later boots resume the saved conversation. The RC collector verifies live PID/process-start identity against the CLI session record, then reports `registered` and a bridge link. Its decoded record has only bridge ID/process start: this is registration evidence, not current provider connection or account acceptance. |
 | [Claude projection](../../../../internal/agentd/claude_auth.go), [projection type](../../../../internal/claudeauth/access.go) | Merge access-only fields, retain CLI-owned fields, fence generations and refuse refresh material. Missing/invalid/expired access holds start; a pod-owned login with projection mode is `login-conflict`. |
 | [Pod login CLI](../../../../internal/agentrun/login.go), [agentd login](../../../../internal/agentd/remote.go), [ctl entry](../../../../cmd/agentd/main.go) | `login url/code/status` is the legacy pod-owned ceremony. Projection mode refuses url/code. A live agent and login start exclude each other. URL lookup is bounded at 60s; code uses stdin. |
 | [Keeper renewal API](../../../../internal/apiserver/keeper_login.go), [CLI](../../../../internal/agentrun/keeperlogin.go), [helper](../../../../internal/claudelogin/helper.go), [worker](../../../../internal/keeper/claude_worker.go) | Existing workbench-only renewal through the API needs no Mac. Helper stages a new login in memory; keeper adopts and publishes access only. Refresh and adoption serialize under the keeper's ownership/fence. Ceremony lifetime is 15m; URL/code API waits are 45s/40s. RC launch must not invoke this ceremony. |
+| [Portal launch](../../../../internal/apiserver/portal_launch.go#L28-L111) | Existing default-off constrained route creates Claude remote sessions through `createSessionMode`, the shared create path. This is precedent for composing launch tooling without a second create path; its derived caller is not a general RC permission. |
 | [Standby](../../../../internal/standby/standby.go), [creation](../../../../internal/apiserver/standby.go) | One labelled ordinary Claude remote session, default-off runnable, minute cadence, persisted three-creations/30m breaker. Suspended/draining/booting/missing-pod cases count as present; ended-agent replacement has current-pod and 5m grace checks. No claim, project/model reassignment or fresh-conversation operation exists. |
 | [Codex remote supervisor](../../../../internal/agentd/codex_remote.go), [pair CLI](../../../../internal/agentrun/pair.go) | Supervised phone daemon on a retained HOME, keeper access only. Start bound 30s; restart backoff 5s to 5m. Connected states are `unpaired` or `pair-code-issued`, neither authoritative phone-pairing proof. Pair invokes `agentd ctl codex-pair`, six attempts with 3s gaps and up to 30s per native call. |
 | [Native wire contract](../../../../internal/apiserver/apiv1/native_control.go), [handler](../../../../internal/apiserver/native_control.go), [executor](../../../../internal/agentd/hostexecutor/native_control_linux.go), [executor contract](../../../../internal/agentd/hostexecutor/README.md) | `thread/start` exists only inside an immutable task-budget/host/pod/epoch/deadline binding. Native execution is authenticated-human only; coordinator consumption spends an already reserved one-use intent. This adapter pins Luna and deliberately disables remote enrollment. It is not a generic RC grant or the paired remote supervisor's launch route. |
@@ -108,10 +113,16 @@ confirms that its accepted GitOps catalog supplies repository snapshots, not
 this app's remote project inventory ([catalog](../../../../internal/apiserver/catalog.go)).
 Thus the mismatch is a **reported integration defect**, not a locally reproduced
 provider response. Do not invent the missing IDs or treat the ChatGPT list as a
-Codex inventory. Story 3/3 needs a supported, versioned mapping and independent
-source evidence from the actual connector/app-server integration before use.
+Codex inventory. The current Mac connector flow needs a supported, versioned
+mapping before use.
+That defect does not block source work on the existing-host app-server adapter
+described in story 3/3 and #267 journal 2799.
 
 ## Separate phase states and timing
+
+This is the full target evidence model. Story 2a records only observations
+available through existing session views; its exact phase projection is below.
+The durable receipt and source timing fields belong to later stories.
 
 A launch is a finite operation. Its receipt has independent phase records;
 phases can overlap or arrive out of order. Auth may be usable before agent
@@ -158,7 +169,15 @@ the served model. Keep `requestedModel`, provider-reported configured model and
 
 ### Bounds
 
-Proposed defaults, to be tested rather than presented as observed service levels:
+Proposed defaults, to be tested rather than presented as observed service levels.
+Keep the 5m default to bound how long the caller waits. The sole observation took
+5m33s from create to delivered link, without a publication/retrieval breakdown.
+On that evidence a 5m timeout returning `timed_out` with a preserved handle is
+expected if the link has not yet been observed; it does not mean the session
+failed. An explicit longer wait (up to 10m) is available. Story 2a bounds client following and its one message
+attempt only; it adds no server operation or server deadline. The server deadline
+below belongs to the conditional receipt API in story 2c.
+
 `--launch-timeout=5m` fixes the server operation's absolute deadline at acceptance;
 allow an explicit shorter timeout or a maximum 10m. Client `--wait=5m` controls
 only how long to follow that receipt and is capped by its remaining deadline;
@@ -209,16 +228,27 @@ Today's path is `agent-run --repo R --agent claude --interactive --model ID`:
    It preserves
    sender attribution and treats peer text as information, not Tom's identity.
 
-Story 2/3 must join these existing steps and add the missing evidence seams:
-resolve project to an authorized
-repository/root, create a fresh remote session, wait for current-process RC
-registration and a supported connection witness, deliver and observe the handoff
-once in that conversation, and return the
-link with timings. This is a new RC request type; do not silently reinterpret
-the task-only `CreateSessionRequest.project`/`prompt` contract. Reuse accepted
-catalog validation and the private clone/worktree/rules helpers, with a fresh
-fetch/pin before new work. Multi-repository projects require explicit `--repo`
-when ambiguous. Confirm the selected cwd and rules in the receipt.
+Story 2a joins the existing create/read/message routes and returns
+`link_available`, with provider auth and RC readiness still unknown. It needs no
+new create path: the [portal route](../../../../internal/apiserver/portal_launch.go#L28-L111)
+already composes Claude remote creation through the shared handler.
+
+**Ratified snapshot behavior:** the current CLI's `--project --interactive`
+refusal is not an API prohibition for Claude. Outside `kindCoordinator`,
+[validation](../../../../internal/apiserver/validate.go#L103-L118) resolves the
+accepted catalog and [attaches the snapshot](../../../../internal/apiserver/validate.go#L296-L297).
+Only [Codex remote](../../../../internal/apiserver/validate.go#L142-L143)
+explicitly refuses it. [Repository preparation](../../../../internal/agentd/clone.go#L260)
+applies a snapshot without a mode restriction, and the
+[interactive launch](../../../../internal/agentd/launch.go#L218-L232) carries
+project rules. No current test pins the complete Claude remote combination;
+story 2a adds API and launch tests. Preserve the existing project feature gate,
+caller, profile and parent limits. A snapshot narrows repository/root/rules
+scope; it grants no permission. The prompt remains task-only; handoff uses the
+separate one-shot message route. Use accepted catalog/private worktree helpers
+and fresh fetch/pin before new work. Multiple repositories need explicit
+`--repo` when ambiguous. Do not claim stronger cwd/rule evidence than the
+current API supplies.
 
 **Missing Claude evidence:** establish a versioned, supported provider/client
 connection/auth witness bound to this bridge, process and intended account.
@@ -227,10 +257,12 @@ observation timestamp cannot manufacture it. Do not run `claude auth status`,
 start a login or create a probe conversation for this purpose. If the pinned
 provider exposes no such witness within existing access, return
 `provider_readiness_unavailable` with registration/link evidence kept separately;
-`provider_auth_ok` and `rc_ready` remain unknown/blocked. Qualifying this seam is
-a story 2/3 prerequisite; stop/split that source story if it cannot be established.
+`provider_auth_ok` and `rc_ready` remain unknown/blocked. Story 2a reports the
+unknown evidence and can still return a validated link;
+qualifying this seam is required before any later story may report `ready`.
 
-For handoff acknowledgement, add a bounded observer of a native user-input record
+For a later full-readiness result, add a bounded observer of a native
+user-input record
 in the exact new conversation, with one-use handoff ID and canonical text digest.
 Reuse the before/after current/initial-launch and Pod fences from the registered
 transcript reader, without broadening portal read authority or exporting raw
@@ -250,7 +282,7 @@ The skill never opens either ceremony automatically.
 **Standby answer:** reuse it to open its existing conversation when that is what
 the owner wants. It cannot satisfy this fresh-conversation contract today. It
 has no atomic vacant claim or supported conversation switch, and may hold active
-work/history even when idle. Story 2/3 leaves its label, model, project, breaker
+work/history even when idle. Stories 2a-2d leave its label, model, project, breaker
 and process untouched. A warm pool with safe fresh conversations would be
 separate work, not a prerequisite for this launch tool.
 
@@ -299,13 +331,18 @@ ChatGPT projects. Needed evidence is a supported mapping of provider remote
 project ID, project kind, stable host ID, authorized local root/repository and
 catalog identity, with version/freshness and a way to disambiguate names. The
 connector/app-server owner must fix and verify that mapping; adding a local
-name-to-ID guess does not repair inventory. This is a prerequisite to story 3/3,
-not a reason to create test threads or pair another computer.
+name-to-ID guess does not repair inventory. This blocks the current interactive
+Mac connector flow, not the bounded source adapter in story 3/3. It is not a
+reason to create test threads or pair another computer.
 
 **BLOCKED: supported RC thread adapter and link evidence.** Pinned CLI help
 establishes the existence of an existing-daemon proxy, not that current
-`agent-run`/API can use it for arbitrary RC callers. A future source adapter must
-use the pinned generated schema and establish app visibility, project binding,
+`agent-run`/API can use it for arbitrary RC callers. Story 3/3 may build a source
+adapter over codex-cli 0.160.1's official
+app-server proxy against an existing host, with fixtures and tests under the
+existing human/workbench-only guards, without waiting on the Mac's project
+inventory (#267 journal 2799). It must use the pinned generated schema and
+establish app visibility, project binding,
 configured model, history, active-thread preservation and link retrieval.
 Do not start a second app-server or use an exec/proxy path around admission.
 The owned-budget native executor has different authority and deliberately
@@ -320,7 +357,11 @@ still prevents the complete Codex flow.
 
 ## CLI, API and result contract
 
-Proposed commands (not installed commands):
+Story 2a implements only `rc start` and `rc status <session>` over existing
+routes, as specified below. `rc preflight`, launch IDs and the new receipt routes
+are conditional story 2c proposals, not prerequisites for 2a.
+
+Proposed full contract (not installed commands):
 
 ```text
 agent-run rc preflight --project P --agent claude|codex --model <full-id> [-o json]
@@ -337,7 +378,8 @@ selects an already authorized launch; it cannot retrofit a host or elevate a
 session. No model/provider fallback. Use the installed CLI; missing capability
 returns a version/feature error.
 
-Proposed API: `POST /v1/rc/preflight`, `POST /v1/rc/launches`, and
+Conditional story 2c API, only if 2a proves too weak:
+`POST /v1/rc/preflight`, `POST /v1/rc/launches`, and
 `GET /v1/rc/launches/{id}`. Preflight is read-only, resolves the same caller as
 start, and returns exact capability blockers without an auth/pairing action.
 Start performs preflight again, accepts a bounded request, and returns a durable
@@ -347,16 +389,25 @@ exposed. Refusals use the existing API error envelope plus RC phase/reason data.
 
 The request carries project/repository selection, provider, full model/effort,
 optional eligible host, handoff bytes plus digest, bounded deadline and request
-key. The local filename is not a server path. Bound handoff to 8KiB UTF-8,
+key. `rc start` always generates a key when omitted, sends it and prints it;
+the caller can preserve identity after a lost create reply. This follows
+[existing create key generation](../../../../internal/agentrun/create.go#L236-L238).
+The [shared API create handler](../../../../internal/apiserver/sessions.go#L102-L110)
+returns 409 for a changed request under the same key; map it to `request_conflict`.
+A create key does not deduplicate handoff sends.
+The local filename is not a server path. Bound handoff to 8KiB UTF-8,
 nonempty, no terminal controls except newline/tab, checked before upload.
-A caller-scoped key binds the full immutable request digest; a changed payload
-with the same key is a conflict. Establish receipt/session identity before any
+This is deliberately stricter than the [16KiB message limit](../../../../internal/apiserver/apiv1/types.go#L55):
+it leaves room for sender attribution and the handoff wrapper within the existing
+message transport, while bounding private payload memory for launch tooling.
+For story 2c, a caller-scoped key binds the full immutable request digest
+(including handoff digest); a changed payload with the same key is a conflict. Establish receipt/session identity before any
 provider mutation. All access uses the original authenticated caller and target
 scope; a skill, project name or requested profile conveys no authority.
 
-Persist only the Claude launch receipt's IDs, digest, one-use attempt and phase
-metadata/status with the new AgentSession using existing operator session
-storage. Handoff bytes travel in the authenticated bounded request and stdin
+In conditional story 2c, persist only the Claude launch receipt's IDs, digest,
+one-use attempt and phase metadata/status with the new AgentSession using
+existing operator session storage. Handoff bytes travel in the authenticated bounded request and stdin
 delivery transport; they must not enter public metadata, Session spec/status,
 environment variables, logs or telemetry. The source proposal keeps the pending
 8KiB payload in bounded operator memory only for the finite launch interval,
@@ -368,7 +419,7 @@ unconfirmed. Never recover bytes from a transcript to replay them. If durable
 private payload recovery is required instead, stop/split and design its storage
 and access explicitly; do not assume Secret/RBAC authority.
 
-Story 2/3 must pin receipt schema, concurrency/retention limits and this ephemeral
+Story 2c must pin receipt schema, concurrency/retention limits and this ephemeral
 transport, and prove existing storage/write rights suffice. Story 3/3 must pin
 the host-scoped receipt storage for
 multiple Codex launches and prove existing write authority is sufficient; extra
@@ -376,7 +427,11 @@ storage/RBAC rights require a separate proposal before that implementation.
 Status authorizes the original caller/owner and existing permitted readers;
 never expose another caller's handoff or new cross-host metadata by request ID.
 
-Before any thread-create or handoff-send, record its one-use attempt durably.
+The full receipt API must record a one-use attempt durably before any
+thread-create or handoff-send. Story 2a has no durable handoff receipt: it sends
+once in the invocation, never from status or a reused create-key result, and
+reports uncertain delivery without retrying. This limitation is evidence for
+deciding whether story 2c is needed.
 A lost reply or crash after that point is `unconfirmed`; do not replay, assign a
 new key, send the handoff to another conversation or allocate a replacement.
 A repeated start returns the same receipt only. Confirm thread identity first;
@@ -413,37 +468,48 @@ are different (IDs below are placeholders, not observed runtime identities):
 ```
 
 The real response also carries the nine phase records defined above; this
-example omits that array for brevity. `outcome` is `accepted`, `ready`,
+example omits that array for brevity. `outcome` is `accepted`, `link_available`, `ready`,
 `action_required`, `blocked`, `failed`, `timed_out` or `unconfirmed`. A ready
 result requires a new conversation, inventory, provider RC readiness, a link
-and a qualified handoff input record/acknowledgement. Transport submission alone
-does not qualify. Preserve any known link in a partial result,
-even if delivery fails. Unsupported Codex links return `link_unavailable`, never
+and a qualified handoff input record/acknowledgement. A successful 2a launch reports
+`link_available` rather than `ready`: registration/link and transport submission
+do not establish provider auth, a live RC connection or CLI-recorded handoff.
+Transport submission alone does not qualify. Preserve any known link in a
+partial result, even if delivery fails. Unsupported Codex links return `link_unavailable`, never
 a guessed Claude-shaped URL or a fabricated app deep link. The text output puts
 the link or required action first, then handle and elapsed time.
 
-Reuse CLI exits 0 (ready, or a successful status/preflight read), 1 (definite
-failure/blocker), 2 (local usage), 3 (authentication/authorization), 4 (missing
-handle), 5 (accepted still pending, timeout or required owner action), and 6
-(unconfirmed mutation). Exit 5 permits a status read, not mutation replay.
+Keep existing CLI exits 0 (`link_available`, future qualified `ready`, or a
+successful status/preflight read), 1 (definite failure/blocker), 2 (local usage),
+3 (authentication/authorization), 4 (missing handle), 5 (`ExitRetry`: nothing was
+sent), and 6 (unconfirmed mutation). Add **`ExitPending = 7`** for accepted and
+pending, timed out with a preserved handle, or required owner action. Exit 7
+permits a status read, not mutation replay. Never reuse exit 5 for accepted work;
+[the existing exit contract](../../../../internal/agentrun/agentrun.go#L48-L52)
+allows a caller to retry because nothing was sent.
 JSON must be emitted for errors too when `-o json` is selected. Logs omit
 handoff text, credentials, pairing codes and login links. RC links go only to
 authorized output/storage, not public issues or telemetry.
 
-Proposed operator flags, all default **false**: `--enable-rc-launches` for the
-Claude receipt/preflight/launch/status surface and
+Story 2a adds no operator flag; its subcommand is inert until invoked.
+Proposed operator flags for later receipt/adapter stories, all default **false**:
+`--enable-rc-launches` for the Claude receipt/preflight/launch/status surface and
 `--enable-codex-rc-launches` for the supported Codex inventory/thread adapter.
-The latter requires the former and reviewed inventory readiness. Flags do not
-broaden caller classes or enable host creation for a denied caller. Keep the
+A Codex adapter using the story 2c receipt API requires `--enable-rc-launches`
+as well. An existing-host source adapter under existing guards does not require
+story 2c; its selected inventory/root mapping still needs reviewed evidence.
+Flags do not broaden caller classes or enable host creation for a denied caller. Keep the
 existing `--enable-standby-session`, auth flags and native-budget flags separate;
 changing them is not part of this work. Mixed versions return a precise missing
 capability instead of downgrading to pod-only success.
 
 ### Thin skill
 
-A later `rc-launch` skill takes the same project/provider/model/handoff inputs,
+Story 2d delivers a `rc-launch` skill through a haynes-ops session-config PR.
+The skill takes the same project/provider/model/handoff inputs,
 checks the explicit work scope against launch-profile preflight, and invokes
-`agent-run rc start -o json` once. It retains the launch ID, presents the link or
+`agent-run rc start -o json` once. For 2a it retains the session handle and
+idempotency key; a later 2c receipt also has a launch ID. It presents the link or
 action, and uses bounded `rc status` only when needed. It does not inspect provider
 HOMEs, read credentials, compile clients, call native RPCs, select a more powerful
 profile, open login/pairing ceremonies, or retry uncertain work. Its handoff must
@@ -517,7 +583,7 @@ access is not implicit in adopting this document.
 Should the API's configured `kindCoordinator` be allowed a narrowly defined RC
 launch operation for explicit authorized projects and selected suitable hosts,
 including Codex reuse and, separately, new remote-host creation? Recommendation:
-first ship story 2/3 for existing allowed callers; request a separate default-off,
+first ship story 2a for existing allowed callers; request a separate default-off,
 audited policy proposal for this caller class. Specify identities, project/host
 scope, creation limits, profile ceiling, metadata visibility, fresh-thread/input
 rights and refusal cases before approval. Keep current denial until Tom decides.
@@ -538,68 +604,185 @@ owns delivery of questions and creation of the following stories after review.
 
 ## Build stories under Epic #91
 
-These are scope/acceptance proposals linked from canonical #267, not a second
-work queue. Do not start either story under this docs work order. The lead
-searches OpenProject before creating or claiming their canonical records.
+These are scope/acceptance proposals linked from canonical #267 and #268, not
+a second work queue. This docs work order starts no implementation. Story 2a is
+already assigned in [OpenProject #268](https://work.haynesnetwork.com/work_packages/268).
+The lead searches OpenProject before creating or claiming 2b-2d and 3/3.
 
-### 2/3 — Claude RC launch in agent-run/API and the thin skill
+### 2a — Client-only Claude CLI over existing routes (OpenProject #268)
 
-**Outcome:** callers with existing Claude remote-launch rights supply a project,
-full model and handoff, receive a new conversation's link or a bounded concrete
-failure, and need no Mac. Include phase/timing transport, receipt/idempotency,
-private handoff delivery, default-off API surface and the shared skill. Exclude
-standby consumption, coordinator access expansion, Codex thread implementation,
-renewal/pair automation and deployment. Dependency: reviewed DESIGN-038, accepted
-project/root helpers and unchanged current caller policy. Qualify the supported
-Claude connection/auth witness and native input-record shape before implementing
-ready output; otherwise stop/split the blocked seam and retain partial outcomes.
-No owner decision is needed to preserve current denials.
+The following is the exact implementation specification from work order
+RCLAUNCH268-2A-CLAUDE-CLI-20261029-01 in #268. It is the assigned 2a contract;
+the broader receipt/readiness proposals above do not expand it.
 
-**Ownership and budget:** one fresh bounded session/worktree owns CLI, apiv1/API,
-agentd/heartbeat/controller fields, skill packaging and focused tests in dev-env.
-Propose one 75-minute source unit with one serial independent review, concurrency
-at most two; token/cost quota unknown. Checkpoint/split at the bound instead of
-rolling into installation or an auth incident. The lead must ratify scope and
-budget in the new story before pickup.
+```text
+Spec (from the independent review of DESIGN-038; follow it exactly):
+Add internal/agentrun/rc.go with:
+  agent-run rc start --project P [--repo R] --agent claude --model <full id> [--effort e] --handoff FILE [--wait 5m] [--idempotency-key K] -o json
+  agent-run rc status <session> -o json
+- Scope: only the existing routes POST /v1/sessions (mode remote, project, repo, model, effort, and an idempotency key that is ALWAYS sent:
+  generated if not given, and printed), GET /v1/sessions/{name}, and ONE POST /v1/sessions/{name}/messages. No operator, CRD, agentd-runtime or
+  flag change; the subcommand is inert until invoked; --enable-rc-launches stays reserved.
+- Code changes:
+  - lift the CLI's --project refusal for remote mode for `rc start` only (create.go ~108-109);
+  - add ExitPending = 7 in internal/agentrun/agentrun.go: accepted and pending, timed out with a handle, or owner action required. Exit 5 stays
+    "nothing was sent";
+  - register the command and its help;
+  - put the rc-launch.v1 result type in internal/apiserver/apiv1/rclaunch.go (standard library only);
+  - `--agent codex` returns outcome blocked / codex_inventory_unavailable with exit 1 and makes NO network call.
+- Local checks: a full model id via apiv1.CheckClaudeModel; a handoff that is non-empty, valid UTF-8, at most 8192 bytes, with no control characters
+  except newline and tab (the same rule as podcmd stripControl).
+- Phase records, each with state, firstObservedAt (UTC), sinceRequestMs (monotonic), sourceAt: null, evidenceSource and reason:
+  - api_accepted: 201 created, or 200 reused by key;
+  - project_inventory_ok: the response echoes the accepted repo and base; a 422 on the project is project_unavailable;
+  - pod_scheduled and pod_ready: from the view's conditions;
+  - agent_started: agent running with a non-empty conversationId;
+  - provider_auth_ok: always unknown, reason provider_readiness_unavailable;
+  - rc_ready: unknown, plus rcRegistered true when the RC state is registered;
+  - link_available: the URL matches apiv1.PortalRemoteControlURLPattern;
+  - pairing_required: not_applicable;
+  - handoff: transport_submitted on a 202; cli_recorded is always unknown.
+  Top-level fields: pollIntervalMs 2000, polls, totalMs, deadlineMs.
+- Bounds: poll every 2s; 60s to schedule; 120s to PodReady; 90s to agent start; 90s to RC registration; 10s for the link; ONE message attempt. All
+  are capped by --wait.
+- Errors: invalid_input, unauthenticated, launch_forbidden (403, including the coordinator refusal), project_unavailable, request_conflict (409
+  for a reused key with a changed request), scheduling_timeout, pod_ready_timeout, agent_start_timeout, login_conflict and
+  auth_projection_unavailable (from the agent message), rc_registration_timeout, link_unavailable, handoff_rejected (409 not addressable),
+  handoff_unconfirmed (exit 6; never resent), launch_deadline (exit 7), status_unavailable.
+- Output: outcome link_available with exit 0, never "ready". The link comes first. Valid JSON of at most 32 KiB. The handoff text NEVER appears in
+  stdout, stderr or logs.
+- Tests:
+  - internal/agentrun/rc_test.go, with the existing httptest TLS harness and a fake clock, covering: the happy path; PodReady with no agent;
+    registered with no URL; a bad URL pattern; a 403 coordinator; a 422 project; a key replay (200); a changed request under the same key (409); a
+    409 on the message; a lost message reply (assert exactly one POST); the deadline at each phase; --wait 0; JSON size and validity; redaction;
+    Codex refused with zero requests.
+  - API tests pinning that a Claude remote create with a project attaches the snapshot for human and session callers and is refused for the
+    coordinator class.
+  - agentd launch tests pinning that a remote launch carries a fresh --session-id, --remote-control, and the project rules arguments when a
+    snapshot is present.
+- Verify, one suite at a time: `nice -n 19 env GOMAXPROCS=2 go test -p 1 ./internal/agentrun/ -run RC`, then the apiserver and agentd tests you
+  added (-run filters; NOT the full agentd package), then `make check-layout lint`. GOTMPDIR and GOCACHE under HOME.
+NO live launch, RC session, login, pairing or message during development. No secrets, login URLs or codes. Stop when the PR is open and checks have
+started. Record the PR and head on #268. Budget: about 2 hours.
+```
 
-Acceptance separates:
+**Current-view qualification:** the assigned specification above describes
+scheduling through view conditions. Today the controller exposes `PodReady`,
+not a separate `PodScheduled` condition. Story 2a uses only the existing node/
+condition observations, labels the evidence source, and keeps `sourceAt` null;
+it cannot claim a scheduler event timestamp. Story 2b adds source timing fields.
 
-- **Source/tested:** finite fake-clock/API/provider fixtures distinguish every
-  required phase, PodReady with no agent, local credential versus provider auth,
-  stale/current-boot evidence, registration without live-connection evidence,
-  inventory ambiguity, one fresh conversation, transport-only submission and a
-  qualified bound handoff input record. Exercise two callers racing/replaying one key,
-  changed payload conflict, crash/lost-reply consumption, revalidation races,
-  cancellation/deadline and status without mutation. Verify denied callers and
-  all existing profile/child restrictions. Assert standby/peer/history bytes are
-  unchanged. Check valid bounded JSON, redaction, link-first text and errors;
-  raw handoff bytes never persist in Session metadata/spec/status or environment.
-  Pin finite memory/concurrency/receipt limits and process-loss behavior without
-  new storage rights. Missing supported witnesses cannot pass using fake-only
-  assumptions; record their qualification source and version.
-  Tests use inert fakes: no real host/thread/auth/pairing. Run one focused suite
-  at a time under `nice -n 19`, `GOMAXPROCS`/workers no greater than
-  `DEV_ENV_CPU_LIMIT` (cap at two); no burners, stress or repeated load loops.
-  Native independent review and required `CI - Success` are source gates.
-- **Installed:** separately authorized signed CLI/operator/agent publications,
-  compatible schema/status fields and provider skill packaging are pinned through
-  GitOps; flags are explicitly selected and version preflight works. Installation
-  does not mean loaded skill instructions or successful RC launch. Never restart
-  active sessions to adopt a field or verify a skill.
-- **Usable/accepted:** a separately authorized bounded launch from an allowed
-  agent caller creates a genuinely fresh Claude conversation, receives the
-  authorized project/rules/worktree and one CLI-recorded handoff, and returns
-  its valid current RC link with all known phase timings. The owner can open and
-  steer it without Mac control. Demonstrate concrete failure/action output with
-  approved fixtures and unchanged standby/active peers. Record remaining unknown
-  auth/phase/model evidence honestly. No new login or fault injection is implied.
+**Acceptance states:** source means the CLI/result type and API/agentd pin tests
+pass focused checks, native independent review and required `CI - Success`.
+Installed means a separately authorized released agent image carries the new
+`agent-run`. Usable means one separately authorized launch returns a link that
+the owner opens and steers from the phone. `link_available` is the honest 2a
+outcome even then; its unknown provider readiness and input acknowledgement do
+not become `ready` through installation. Preserve PR/head, checks and remaining
+unknowns in #268. Stop at the work order's ready-PR/checks-started boundary.
 
-Artifacts/handoff: one source PR, exact head, test/review evidence, flag/version
-matrix, installation packet and pending usable check linked to the canonical
-story. Stop at its authorized acceptance/budget boundary; delivery needs its own
-scope if not included. A source pass must not close installed/usable criteria.
+### 2b — Server timing fields and CRD copy
 
-### 3/3 — Codex launch after remote inventory is fixed
+**Outcome/scope:** carry protocol start evidence through heartbeat storage and
+expose current-Pod condition transition times with clear source/observation time
+and identity. Include `api/v1alpha1.AgentStatus`, heartbeat conversion, API view
+and wire fields. Exclude receipt orchestration, input observers, launch/pairing,
+auth or caller-policy changes. Dependency: reviewed DESIGN-038 and 2a's recorded
+timing gaps. No measured event may be synthesized from a poll timestamp.
+
+**Ownership/budget proposal:** one fresh session/worktree owns dev-env schema,
+heartbeat/view and focused tests; a serial haynes-ops CRD copy PR follows with
+its own worktree and bounded work order. Propose 75 minutes for source plus one
+serial native review, maximum concurrency two; usage quota unknown. Ratify the
+budget before pickup and checkpoint/split if it will not fit.
+
+- **Source/tested:** fake heartbeat/view and real-schema fixtures prove start
+  time survives storage, missing times remain null, and Pod/boot changes cannot
+  reuse current readiness. Change `api/`, run `make generate`, and commit the
+  generated deepcopy and `config/crd/` files. Native independent review and
+  `CI - Success` gate source acceptance.
+- **Installed:** publish separately authorized signed versions. Open and merge
+  a **haynes-ops CRD copy PR before the operator pin** that needs the new fields;
+  retain the `api/` change and `make generate` evidence in the installation
+  packet. Verify schema compatibility and preserved timing fields without
+  restarting active sessions. A source-only API field is not installed evidence.
+- **Usable/accepted:** a separately authorized observation demonstrates the
+  event/source/observation distinction on one actual launch and reports missing
+  evidence as unknown. It does not establish provider RC readiness.
+
+Artifacts: source PR/head, generated diff, focused checks/review, CRD-copy PR,
+operator pin and separate installed/usable evidence linked in OpenProject.
+Stop at acceptance, a dependency/approval hold or budget boundary.
+
+### 2c — Conditional receipt API behind --enable-rc-launches
+
+**Outcome/scope:** only if 2a's recorded limitations prove too weak, add the
+bounded durable receipt/preflight/launch/status surface described above through
+the shared create path. `--enable-rc-launches` defaults false. Include immutable
+request identity, one-use mutation attempts, deadline/status and private bounded
+handoff transport. Exclude new callers, storage rights, auth/pairing repair,
+standby consumption and generic RPC. Dependencies: assessed 2a evidence, reviewed
+2b timing contract, and a separately scoped story ratified by the lead. It is
+not an automatic continuation after 2a.
+
+**Ownership/budget proposal:** one fresh source session owns apiv1/API and its
+focused fixtures; propose 75 minutes plus one serial native review, concurrency
+two, quota unknown. Split rather than extending into storage or an auth incident.
+
+- **Source/tested:** pin receipt schema, storage/concurrency/retention bounds and
+  process-loss behavior using existing write rights. Fixtures cover equal-key
+  replay, changed-request 409, concurrent callers, lost replies, consume-before-
+  send, no resend after crash, status without mutation, cancellation/deadline,
+  redaction and UID/boot races. Qualify real supported connection and input
+  witnesses before any `ready` output; inert fake evidence cannot qualify them.
+  Without those witnesses preserve `link_available`/unknown outcomes. Native
+  independent review and `CI - Success` gate source acceptance.
+- **Installed:** separately authorize signed publication and GitOps pins, schema
+  copies before dependent operator pins, and explicit default-off flag selection.
+  Do not restart active sessions to adopt fields.
+- **Usable/accepted:** a separately authorized bounded launch proves the assessed
+  2a limitation is addressed, preserves peers/history and returns truthful phase,
+  handoff and link evidence. Full `ready` requires every defined witness.
+
+Artifacts: assessment, canonical story, PR/head, tests/review, flag/version matrix,
+installation packet and separate usable evidence. Stop on acceptance, a missing
+qualified witness, approval/dependency hold or budget limit.
+
+### 2d — Thin skill in haynes-ops session-config
+
+**Outcome/scope:** one haynes-ops session-config PR installs the thin `rc-launch`
+instructions through the supported provider loaders. Use the installed 2a CLI;
+retain its handle/key, link-first `link_available` result, unknown evidence and
+one-shot delivery semantics. Adopt 2c only if separately delivered. Exclude CLI
+compilation, credentials/HOME reads, native RPCs, access expansion and automatic
+login/pairing or uncertain retries. Dependency: reviewed 2a contract and an
+installed compatible CLI; 2c is optional.
+
+**Ownership/budget proposal:** one fresh haynes-ops session/worktree owns only
+the supported session-config skill packaging. Propose 45 minutes plus one serial
+native review, maximum concurrency two, quota unknown; ratify before pickup.
+
+- **Source/tested:** validate skill paths, rendered instructions and finite fake
+  CLI results for link, pending/action, refusal and unconfirmed handoff. Native
+  independent review and required CI gate source acceptance.
+- **Installed:** merge/pin the separately authorized session-config delivery;
+  verify the provider loader receives it at a safe boundary. Config publication
+  alone does not prove instruction loading. Preserve active sessions.
+- **Usable/accepted:** in a separately authorized bounded session, the loaded
+  skill invokes the CLI once, presents the truthful link/action and timings, and
+  preserves the key without retrying an uncertain mutation.
+
+Artifacts: haynes-ops PR/head, render/check/review evidence, loaded instruction
+receipt and pending/actual usable acceptance linked from the canonical story.
+Stop at the authorized acceptance, dependency/approval or budget boundary.
+
+All four source stories use finite inert fixtures: no live host/thread/auth/
+pairing or message during development. Run one focused suite at a time under
+`nice -n 19`, workers/`GOMAXPROCS` no greater than `DEV_ENV_CPU_LIMIT` (cap at two),
+with no burners, stress or repeated load loops. Source, installation and usable
+acceptance are recorded separately; do not start the next story automatically.
+
+### 3/3 — Codex existing-host source adapter and guarded launch
 
 **Outcome:** reuse an authorized healthy paired host, select its real remote
 project/root, create a fresh model-bound thread and deliver the handoff once;
@@ -609,12 +792,23 @@ pinned versioned adapter, host selection, conservative pairing knowledge and
 host-scoped receipt bounds. Exclude automatic re-pair, new credentials, daemon
 restarts, budget-route changes and any unapproved coordinator/socket/exec grant.
 
-**Dependencies, serial:** story 2/3's receipt/CLI/skill contract; supported remote
-project inventory repair with actual connector/schema evidence; existing caller
-permission for every selected operation. Q-267-01 is required only for a proposed
-new coordinator class right, and Q-267-02 only for a proposed new adapter access
-route. Both remain holds for those changes. Inventory is a hard prerequisite
-regardless of caller. Lead records ready prerequisites before assigning work.
+**Dependencies, serial:** use the reviewed 2a CLI/result contract and the
+existing human/workbench-only guards. Under #267 journal 2799, source work may
+build an adapter over codex-cli 0.160.1's official app-server proxy against an
+existing host, with pinned schema fixtures and tests, without waiting on the
+Mac connector's project inventory. Bind the accepted catalog repository/root
+to that host through the versioned native protocol; no guessed ChatGPT IDs.
+The current interactive Mac route still requires its inventory repair. Source
+fixtures do not establish app visibility, a supported link or installed access.
+Use 2b/2c/2d only where their separately reviewed contracts are needed, not as a
+mandatory bundled prerequisite.
+
+Q-267-01 is required only for new coordinator rights; Q-267-02 remains a
+recommendation and hold for any new operator-mediated access. Neither blocks
+source work under existing guards or grants runtime socket/exec/native-call
+rights. The lead records ready prerequisites before assigning work. Runtime
+validation still needs a separate work order and existing permission for each
+operation.
 
 **Ownership and budget:** one new fresh bounded source session/worktree, one
 75-minute proposal with at most one serial native reviewer (concurrency two,
@@ -633,10 +827,10 @@ Acceptance separates:
   default behavior never creates a host. Pin receipt storage/retention limits and
   demonstrate no extra RBAC is assumed. New access remains blocked pending its
   explicit decision. Run finite inert suites serially under the same CPU rule as
-  story 2/3; native independent review and `CI - Success` gate source acceptance.
-- **Installed:** separately authorized versions and fixed inventory integration
-  are published/pinned; default-off Codex flag is selected explicitly only when
-  compatible and permitted. Confirm version/capability reporting without host
+  stories 2a-2d; native independent review and `CI - Success` gate source acceptance.
+- **Installed:** separately authorized versions and the selected adapter/inventory
+  integration are published/pinned; default-off Codex flag is selected explicitly
+  only when compatible and permitted. Confirm version/capability reporting without host
   restart, re-enrollment or pairing. Do not infer all retained hosts upgraded.
 - **Usable/accepted:** under a new explicit runtime work order, an authorized
   agent launches from outside the Mac into one designated healthy paired host.
