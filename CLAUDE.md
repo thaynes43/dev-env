@@ -158,7 +158,7 @@ internal/commonrules/testutil/  synthetic common-source fixtures for tests
 internal/taskclaim/      the TaskClaim store: immutable explicit ownership, Create only, uncached reads; also the bounds
                          that all three coordination stores apply and their record-count metrics (DESIGN-010)
 internal/inbox/          the inbox store: immutable API messages and explicit read acknowledgements, Create only, uncached reads
-internal/asks/           the Ask store: create, list, withdraw and a set-once answer behind --enable-asks; no inbox delivery in v1 (Epic #254)
+internal/asks/           the Ask store: create, list, withdraw and a set-once answer behind --enable-asks; no inbox delivery in v1 (OpenProject Epic #254)
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
 internal/taskbudget/     the task budget ledger: retained, deterministic task admission in ConfigMaps behind CAS (KubeStore)

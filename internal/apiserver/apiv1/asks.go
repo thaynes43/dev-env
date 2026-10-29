@@ -371,7 +371,8 @@ func (AskAnswerRequest) String() string     { return "[redacted ask answer]" }
 func (r AskAnswerRequest) GoString() string { return r.String() }
 
 // AskList is one page of asks, newest first. Complete is false when
-// NextCursor leads to more.
+// NextCursor leads to more, or when the server skipped an unreadable record.
+// An empty NextCursor ends the list.
 type AskList struct {
 	Asks       []Ask  `json:"asks"`
 	NextCursor string `json:"nextCursor,omitempty"`

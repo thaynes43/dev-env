@@ -338,6 +338,19 @@ func TestEnvtestAskStore(t *testing.T) {
 		t.Fatalf("lapsed label %q", lapsedStored.Labels[StateLabel])
 	}
 
+	t.Run("unconfirmed open recount", func(t *testing.T) {
+		unconfirmedReq := Requester{Namespace: Namespace, Name: "ask-sess-k", UID: "uid-ask-k"}
+		unconfirmed := store
+		unconfirmed.Limits = Limits{OpenPerRequester: 1, TotalPerRequester: 8, PerNamespace: 4096}
+		bad := storedAsk(unconfirmedReq, "ask-0123456789aaa004", "request-k1", now, now)
+		if err := c.Create(ctx, bad); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := unconfirmed.Create(ctx, unconfirmedReq, infoCreate("request-k2"), now); !errors.Is(err, ErrUnavailable) {
+			t.Fatal("unconfirmed open count did not refuse the create", err)
+		}
+	})
+
 	nilReq := Requester{Namespace: Namespace, Name: "ask-sess-j", UID: "uid-ask-j"}
 	nilAsk, _, err := store.Create(ctx, nilReq, infoCreate("request-j1"), now)
 	if err != nil {
