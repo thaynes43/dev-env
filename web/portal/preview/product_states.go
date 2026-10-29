@@ -105,6 +105,9 @@ func writeAttentionStates(dir string) error {
 	for _, f := range []struct{ name, mode, phase, state, result, rcState, url string }{
 		{"waiting-linked", "remote", "Running", protocol.AgentWaiting, "", "registered", "https://claude.ai/code/session_fixture-247"},
 		{"waiting-no-link", "remote", "Running", protocol.AgentWaiting, "", "registered", ""},
+		{"waiting-not-reported", "remote", "Running", protocol.AgentWaiting, "", "", ""},
+		{"waiting-state-not-reported", "remote", "Running", protocol.AgentWaiting, "", "not-reported", ""},
+		{"waiting-unknown-state", "remote", "Running", protocol.AgentWaiting, "", "future-state", ""},
 		{"waiting-login-required", "remote", "Running", protocol.AgentWaiting, "", "login-required", ""},
 		{"waiting-unpaired", "remote", "Running", protocol.AgentWaiting, "", "unpaired", ""},
 		{"waiting-offline", "remote", "Running", protocol.AgentWaiting, "", "offline", ""},

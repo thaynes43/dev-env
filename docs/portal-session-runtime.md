@@ -261,15 +261,18 @@ this file with real targets without separate authorization. See DESIGN-029
 **Old-format or malformed files stop the portal at startup.** A file that
 carries `issuer` or `subject` (the former per-person format), or is otherwise
 malformed, is refused as a whole at load: no action scope is returned and
-`LoadProduction` fails, so the portal process does not start. There is no
-compatibility fallback. In a rollout the new pod stays unready, and
-`maxUnavailable: 0` keeps the old pod serving. Update the portal image to this
-version before the file changes to the targets-only format, because an older
-image refuses the new format the same way.
+`LoadProduction` fails, so the portal process exits. There is no compatibility
+fallback. In a rollout the new pod crash-loops and never becomes ready;
+`maxUnavailable: 0` keeps the old pod serving. The portal reads the action file
+only at startup. A broken file followed by an unrelated restart, such as a
+node drain or eviction, takes the portal down until the file is fixed.
+Change the file only together with, or after, the portal image that accepts
+it: an older image refuses the targets-only format the same way.
 
 Operator source separately accepts repeatable `--portal-send-target=name=uid`
 and `--portal-history-target=name=uid` options. These flags stay the
-per-session allowlist: the portal file grants no operator target outside them.
+per-target-session allowlist (the agent sessions that may be messaged or whose
+history may be read): the portal file grants no operator target outside them.
 Each action has its own target map; neither is enabled by `--enable-portal-reader` alone. Explicit targets
 require that reader flag, and invalid or duplicate entries fail startup. These
 source interfaces are not an installation or approval: deployment, eligible
@@ -478,9 +481,12 @@ the operator has the launch flags. The portal reads the file once at start.
 parsed as strictly as they are. It has exactly one key, `repos`: a non-empty
 list of at most 16 distinct repository names. There is no `issuer` or `subject`;
 any principal the group check admits may launch. Any other key, shape or value,
-including the former `issuer` and `subject` keys, stops the portal at start (the
-new pod stays unready and `maxUnavailable: 0` keeps the old pod serving), so
-update the portal image before this file changes. With no `launch` entry the
+including the former `issuer` and `subject` keys, makes the portal process exit
+at startup. In a rollout the new pod crash-loops and never becomes ready;
+`maxUnavailable: 0` keeps the old pod serving. The startup-only read also means
+a broken file followed by a node drain, eviction or other unrelated restart
+takes the portal down until the file is fixed. Change the file only together
+with, or after, the portal image that accepts it. With no `launch` entry the
 route and the form do not exist, and `send` and `history` behave as before.
 
 ```json

@@ -128,6 +128,32 @@ var remoteControlStates = map[string]string{
 	"unpaired": "Not paired", "errored": "Error",
 }
 
+// remoteControlAttentionState gives a complete phrase for the terminal handoff.
+// Unknown state words are escaped by the renderer like other plain text.
+func remoteControlAttentionState(rc *apiv1.PortalRemoteControl) string {
+	if rc == nil {
+		return "Remote Control state was not reported"
+	}
+	switch rc.State {
+	case "starting":
+		return "Remote Control is starting"
+	case "offline":
+		return "Remote Control is offline"
+	case "unpaired":
+		return "Remote Control is not paired"
+	case "login-required":
+		return "Remote Control needs a login"
+	case "errored":
+		return "Remote Control reported an error"
+	case "pair-code-issued":
+		return "A pairing code was issued but pairing is not confirmed"
+	case "not-reported":
+		return "Remote Control state was not reported"
+	default:
+		return "Remote Control state " + shown(rc.State)
+	}
+}
+
 // decodeRemoteControl accepts exactly {state, url?}, each re-checked against the
 // operator's patterns. Like the other optional keys, a malformed value makes the
 // whole read unavailable rather than being shown.
@@ -424,8 +450,7 @@ func sessionAttention(s apiv1.PortalSessionSummary, now time.Time, link string) 
 			if a.RemoteControl != nil && a.RemoteControl.State == "registered" {
 				p.NextAction = "Remote Control link not reported: answer from the session's Claude app or the workbench."
 			} else {
-				_, state := remoteControlView(a)
-				p.NextAction = "Remote Control is " + strings.ToLower(state) + ": answer from the session's terminal on the workbench."
+				p.NextAction = remoteControlAttentionState(a.RemoteControl) + ": answer from the session's terminal on the workbench."
 			}
 		case a.Mode == "local":
 			p.NextAction = "Answer in the session's terminal on the workbench."
