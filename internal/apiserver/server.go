@@ -9,6 +9,13 @@
 //	DELETE /v1/sessions/{name}             reap: rescue, suspend, archive (D-45)
 //	POST   /v1/sessions/{name}/heartbeat   agentd's status (D-41), the session's own pod only
 //	GET    /v1/fleet                       what runs and waits, and on which revision
+//	POST   /v1/asks                        create an ask (session); off unless Asks is set
+//	GET    /v1/asks                        the caller's asks (?mine=true)
+//	GET    /v1/asks/{id}                   the caller's ask
+//	POST   /v1/asks/{id}/withdraw          withdraw an open ask
+//	GET    /v1/portal/asks                 portal list (?state=open|all)
+//	GET    /v1/portal/asks/{id}            portal read, any state
+//	POST   /v1/portal/asks/{id}/answer     portal answer; v1 writes no inbox message
 //	POST   /v1/grants                      request an access grant, sessions only (D-56)
 //	GET    /v1/grants                      list, with filters
 //	GET    /v1/grants/{name}               one grant
@@ -51,6 +58,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
@@ -166,6 +174,9 @@ type Server struct {
 	// GrantAttestation serves POST /v1/grants/{name}/attestation. Default off:
 	// the route is not registered and answers 404.
 	GrantAttestation bool
+	// Asks serves /v1/asks and /v1/portal/asks (Epic #254). Nil leaves both
+	// unregistered. v1 does not write an inbox message when an ask is answered.
+	Asks *asks.KubeStore
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -213,6 +224,7 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle(apiv1.PortalLaunchPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalLaunch}}))
 	}
 	s.registerReminders(mux)
+	s.registerAsks(mux)
 	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())
 	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))
 	mux.Handle(apiv1.SessionDirectoryPath+"/{directory}", s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.getDirectory}}))
@@ -355,6 +367,7 @@ func (s *Server) serve(rt route) http.Handler {
 				case len(s.PortalMessageTargets) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalSessionMessagesPath:
 				case len(s.PortalLaunchRepos) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalLaunchPath:
 				case len(s.PortalConversationTargets) > 0 && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalConversationPrefix+r.PathValue("uid")+"/conversation":
+				case s.portalAskRoute(r):
 				default:
 					return 0, forbidden("the portal reader may only list session summaries")
 				}
