@@ -138,3 +138,15 @@ first-version release.
 ### Claude passive callback source (2026-10-28)
 
 `agent-run usage -o json --claude-statusline` explicitly reads one bounded documented statusline callback from stdin. Only optional five-hour and seven-day used percentages and Unix-second reset instants are projected. Missing or null fields are Unknown, historical zero remains zero, and a passed reset does not establish replenishment. Callback capture time is local, not a provider observation; freshness, current amounts and account binding remain Unknown. Unrelated fields, including paths and cost, are discarded. The source version is Unknown and current model is not served-model telemetry. This input bridge installs no hook and does not establish live provider coverage; an authorized producer ingress remains a separate dependency.
+
+### Opt-in statusline producer bridge (2026-10-29)
+
+`images/agent/tools/claude-statusline-usage.py` is an install-ready opt-in bridge. The agent image copies it to `/usr/local/bin/claude-statusline-usage` and marks it executable. The image, `agentd Render`, settings, environment, and startup do not invoke it.
+
+The helper reads one bounded native callback from stdin. The caller must pass an absolute `--output` path. That parent directory must already exist, be owned by the caller, and grant no group or other access. An existing destination must be a regular file owned by the caller, owner-writable, and closed to group and other access. Symlinks are refused. There is no default path and no raw callback file.
+
+Only `rate_limits.five_hour` and `rate_limits.seven_day`, and only `used_percentage` and `resets_at` inside them, are forwarded. Other fields are discarded. Exact duplicate keys, over-bound documents, and case-folded aliases of those recognized names fail closed with the consumer. The helper does not reimplement percentage, reset, or schema rules. It runs the fixed consumer `agent-run usage -o json --claude-statusline` and, only after success, atomically stores that command's normalized read. Refusal or consumer failure leaves the previous file in place and prints only `claude-statusline-usage: capture unavailable`.
+
+`--display CMD ARG...` execs that argv with the original callback on its stdin and no shell. Display stdout, stderr, and exit status stay in place when capture fails. A source-only example, not applied to a live HOME, is `claude-statusline-usage --output /path/to/private/read.json --display -- /path/to/existing-statusline`.
+
+Callback receipt time is the consumer's local capture time. It is not provider observation time. Freshness, account binding, and current usable amounts stay Unknown. A passed reset is not replenishment. Later reads of the saved file use `agent-run usage -o json --from-file PATH` and keep the original observation, received, and as-of times. Replaying the cache through `--claude-statusline` is not a refresh. The helper does not poll a provider, open a credential, or follow a path named by the callback. It does not establish live coverage.

@@ -98,3 +98,7 @@ callable artifact. See [the callsite context](../../../context/usage190-native-c
 ## Unified offline CLI seam (2026-10-28)
 
 `agent-run usage -o json` reports local unconfigured acquisition preflight refusals without contacting providers. `--from-file` explicitly reads bounded untrusted cached read.v1 and preserves original timestamps; it does not provide a collector, trusted binding or live three-provider coverage. Cursor/Grok supported quota source and approved scope, Claude passive ingress, and separately held Codex capture remain dependencies. Synthetic tests and exact-head review/CI establish source only.
+
+## Opt-in statusline producer (2026-10-29)
+
+Source only. `claude-statusline-usage` is copied into the agent image and left unwired. It requires an explicit private output path, forwards a native callback's documented windows to the existing `agent-run usage -o json --claude-statusline` consumer, and stores that normalized read. An explicit display argv can stay in front of an existing status command without a settings change. Cached reads stay on `--from-file`. No hook, account, quota poll, or live acceptance is included. See [DESIGN-030](../designs/030-provider-allowance-contract.md).

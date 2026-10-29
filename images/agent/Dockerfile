@@ -429,6 +429,10 @@ COPY images/agent/tools/pve.sh /usr/local/bin/pve
 COPY images/agent/tools/hw-ssh.sh /usr/local/bin/hw-ssh
 RUN chmod 0755 /usr/local/bin/pve /usr/local/bin/hw-ssh
 
+# Opt-in Claude statusline usage bridge. The image copies the helper and does not invoke it.
+COPY images/agent/tools/claude-statusline-usage.py /usr/local/bin/claude-statusline-usage
+RUN chmod 0755 /usr/local/bin/claude-statusline-usage
+
 # opwork: the shared OpenProject backlog CLI (Story97). Byte-for-byte copies of haynes-ops
 # scripts/openproject/{opwork,agent-api}.py, which stay the source of truth and carry the
 # tests (scripts/tests/openproject). It uses the existing token consumer through kubectl
