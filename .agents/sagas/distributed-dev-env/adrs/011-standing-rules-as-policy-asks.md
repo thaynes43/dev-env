@@ -26,7 +26,11 @@ policy get/list/watch, with no policy write.
 
 That mechanism does not yet provide the whole requested feature. Policies
 match profiles and repositories, not session groups or projects. The
-current kube catalog cannot express exec into one pod. Policy removal is
+current kube catalog cannot express exec into one pod. The default agent
+identity already holds pods/exec outside the dev-env namespaces and
+privileged pods, so a grant alone would add no permission for exec; today
+the common rules are its only control. Q-261-05 asks how standing rules
+cover that case. Policy removal is
 not an immediate revocation barrier, and active kube and egress grants do
 not recheck the approving policy. DESIGN-036 identifies these source gaps.
 Kube role names also refer to mutable permissions. Kube activation must
@@ -44,7 +48,8 @@ not approve an action performed by that Ask's requester.
 Each rule names who may use it, the action, target, limits, a review or
 expiry date, and a reason. Who must name a profile, trusted session group
 or declared project. Unsupported scopes and rules such as “agents may send
-email” are refused. Nothing compiles to broader authority than Tom saw.
+email” are refused. The default profile alone counts as “any agent” and
+is refused. Nothing compiles to broader authority than Tom saw.
 
 Use an **operator-written GitOps PR** to activate the rule. A narrow writer
 may propose the exact approved policy diff in haynes-ops. It cannot merge
@@ -52,7 +57,13 @@ the PR, apply cluster configuration or write a live `GrantPolicy`. Tom's
 portal consent is recorded once; required source checks and the authorized
 GitOps merge remain delivery steps. If the approved meaning changes, a new
 standing-rule Ask is required. The portal shows approval and installation
-as separate facts.
+as separate facts. The guarantee that no agent can approve or widen its
+own managed rule holds only after SR6's legacy-policy path guard is
+installed and tested. Today an identity allowed to merge in haynes-ops
+can add a legacy policy without portal consent. SR6 must protect
+`grant-policies/` from general agent mergers, or restrict broker approval
+to a GitOps-pinned list of legacy policy names and digests. The PR writer
+needs its own GitHub identity, forbidden from merging by the ruleset.
 
 Do not add broker-owned `GrantPolicy` writes. The current code and deployed
 RBAC do not support that ownership, and Flux would become a competing
@@ -95,4 +106,3 @@ DESIGN-036 records recommendations as Q-261-NN, not owner rulings.
 
 This ADR installs nothing and changes no permission. Source qualification,
 signed publication, GitOps installation and usable acceptance are separate.
-The lead reviews and merges this docs PR; this worker does not merge.

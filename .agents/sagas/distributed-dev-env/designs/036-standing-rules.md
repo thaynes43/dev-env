@@ -15,11 +15,13 @@ it. A rule supplies permission within its scope; each grant still has a
 TTL, and other access controls and explicit holds still apply.
 
 The source of the distinction is **Q-255-04, 2026-10-29, OpenProject #255
-journal 2680**. Tom said: “It's situational, I may be asked to approve
-binding changes that are beyond one request.” He also said: “here I do not
-want to approve agents to always send emails just that I approve the one
-that was drafted.” These excerpts omit the operational examples. Journal
-2680 supersedes journal 2675, which was retracted in 2676.
+journal 2680**. Tom said: “It's situational, I may be asked to approve binding changes that are beyond one request.”
+Also: “I don't want to have to approve the same thing over and over we need a way to manage permissions and rules but also one off approvals will happen”
+and “here I do not want to approve agents to always send emails just that I approve the one that was drafted.”
+Lead reading (journal 2680), not Tom's words: a v1 portal Approve covers
+one exact action, target and content, once, within its expiry, and never
+becomes standing permission. These excerpts omit the operational examples.
+Journal 2680 supersedes journal 2675, which was retracted in 2676.
 
 | Approval kind | What Approve means | What can use it |
 |---|---|---|
@@ -43,6 +45,7 @@ Information answers remain information. No Ask starts a generic executor.
 | [D-88 attestation](../../../../internal/grantattest/attest.go), [API write](../../../../internal/apiserver/grant_attestation.go), [broker checks](../../../../internal/broker/attestation.go) | A Session claims it obtained approval for one grant UID, scope digest and TTL. This is explicitly not verified human identity. Attested policies use nested requesters and empty legacy requester lists so older brokers match nobody. | Never convert attestation into Tom's approval of a rule. Reuse the rollback refusal pattern, not its human-identity claim. |
 | [Egress builder, D-64](../../../../internal/egress/policy.go), [revoke](../../../../internal/broker/kube.go) | A grant creates a scoped CiliumNetworkPolicy. All listed ports apply to all listed destinations. Cleanup checks ownership; kube cleanup deletes bindings and the grant ServiceAccount. | Preview the entire permission. Preserve ownership and UID checks. Removing an allow policy does not override some other allow policy. |
 | [Broker RBAC copy](../../../../internal/broker/testdata/haynes-ops/broker.yaml), [role catalog copy](../../../../internal/broker/testdata/haynes-ops/grant-catalog.yaml) | Policy rights are get/list/watch. Bind rights name a fixed role catalog. The workloads role is broad and does not grant `pods/exec`. | No existing broker policy writer or pod-specific exec role can be reused unchanged. |
+| [Baseline agent RBAC](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/rbac/app/agent.yaml#L80-L85), [profiles](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/templates/app/templates.yaml#L101), [workbench RBAC](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/rbac/app/workbench-operator.yaml#L50-L54) | The default agent identity used by full/dev already has `pods/exec` create outside the dev-env namespaces and privileged pods; full is the default profile. Workbench has cluster-wide exec. | A grant alone adds no exec permission to that baseline. Today the common rules are its only approval control. Q-261-05 asks whether standing rules should cover instruction-level permission or baseline exec should be narrowed for broker enforcement. |
 | [DESIGN-029 groups](029-portal-foundations.md#group-based-action-scopes-2026-10-29), [DESIGN-034 attribution](034-agent-asks-and-approvals-board.md#3-api-and-caller-classes) | Fresh UserInfo checks the same request-private principal and active/admin group claims. Resource scopes remain separate. Asks store the principal for private audit; Session views omit issuer/subject. | Reuse group checks, CSRF and identity projection. Do not add personal-ID allowlists or infer standing-rule administration from portal login. |
 
 The haynes-ops read at the pinned revision confirmed these deployment
@@ -71,7 +74,7 @@ have API access only, with no direct CRD or cluster-configuration writes.
 | Field | Proposed meaning and limit |
 |---|---|
 | Identity | Server rule ID and UID, immutable revision, originating Ask UID, requester Session UID and schema version. Never reuse a revoked rule identity. |
-| `who` | Exactly one primary kind: `profile`, `session_group` or `project`, with one exact operator-resolved reference. Optional extra profile/repository constraints narrow it by intersection. No wildcard, empty selector or “any agent.” At most 8 narrowing values. |
+| `who` | Exactly one primary kind: `profile`, `session_group` or `project`, with one exact operator-resolved reference. Optional extra profile/repository constraints narrow it by intersection. No wildcard, empty selector or “any agent.” At most 8 narrowing values. Refuse the templates' default profile, and any profile most Sessions run on, as the only who. A repository constraint is chosen by whoever starts the Session, so the preview must say: “`Any <profile> agent that starts a session on <repo> can use this rule.`” |
 | `action` | One registered action kind and adapter version. It describes enforceable permission, such as a catalog kube role or scoped egress. Kube consent also binds the resolved role permission digest and immutable catalog revision. Prose cannot define enforcement. |
 | `target` | Typed scope for that adapter: named namespaces and role, or explicit destinations/endpoints and ports. Resource-specific actions bind a trusted resource identity, and its allowed replacement behavior. Never accept a supplied shell command as a policy target. |
 | `limits` | Required maximum grant TTL, at most the existing type cap; propose 1h by default. Required maximum concurrent grants, propose 1, bounded 1–8 per rule. Any other advertised limit must have an enforcement check. Missing limits are not unlimited. |
@@ -100,8 +103,8 @@ in-place expansion or aggregation drift. Consent, installation and grants
 bind that role revision, UID and resolved permission digest. A new permission
 set uses a new catalog revision and new consent. A check at grant admission
 alone does not protect existing bindings. The current mutable role catalog
-does not meet this condition; its schema/bind allowlist changes need a
-separate reviewed capability slice before any kube rule is enabled.
+does not meet this condition. SR-K owns its schema/bind allowlist changes
+and must reach usable acceptance before any kube rule is enabled.
 
 Resolve membership from authenticated Session data and operator-controlled
 configuration. A profile is the effective profile used to build that
@@ -112,9 +115,14 @@ string. Recheck eligibility for each admission, including replacement
 Session UIDs and profile changes. Unavailable membership denies admission.
 
 The first build should support exact profiles, with optional repository
-narrowing. It must reject project/group activation until those resolvers
-are installed and qualified. Do not translate a project into one repository
-and claim they are equivalent.
+narrowing, subject to the default/common-profile refusal above. The
+requester chooses the repository when starting the Session; that value
+does not establish trusted membership. Q-261-06 asks whether a default
+profile plus an exact repository is sufficient, with the plain preview
+wording above and a 1h TTL cap. That recommendation is not a ruling.
+Reject project/group activation until those resolvers are installed and
+qualified. Do not translate a project into one repository and claim they
+are equivalent.
 
 Propose limits of 16 pending rule proposals per requester and 256 retained
 rules in the first installation. Reuse the Ask text/encoding bounds. Page
@@ -130,7 +138,8 @@ deleting records or increasing these bounds.
 Reject “agents may send email”: no bounded who, recipient set, content
 class, rate/size limit or qualified mail adapter exists. Approval of one
 draft's exact content does not repair those omissions. An agent may
-propose a new typed adapter through a separate design story.
+propose a new typed adapter through a separate design story. Sending a
+drafted email is not an existing grant type either.
 
 Likewise, “profile `sandbox-example` may exec into service `sample-app`”
 needs an exact workload target and an exec adapter that enforces it. The
@@ -140,13 +149,19 @@ adapter to the reviewed workload identity and container; document pod-roll
 behavior and the fact that an interactive shell can reach data available
 inside that container. Until then, label this proposal Unsupported and
 disable Approve. No real operational target is reproduced here.
+This is a limit of the broker adapter. The default agent identity already
+holds `pods/exec` outside the dev-env namespaces and privileged pods, so a
+grant alone adds no exec permission; today the common rules are its only
+approval control. Q-261-05 asks how standing rules cover that case.
 
 The initial compiler may support scoped egress and named kube roles only
 after their immutable catalog path qualifies. Every compiled permission
 must fit the approved rule. Keep break-glass,
 Secrets-read, `ops` and the protected namespaces excluded. Defer cluster-wide
-node rules, all credential rules, mail and pod exec to separate bounded
-stories. Do not silently loosen existing schema or admission guards.
+node rules, all credential rules, mail and broker-enforced pod exec to
+separate bounded stories. Kube rules stay off until SR-K is accepted.
+Instruction-level permission remains the open choice in Q-261-05. Do not
+silently loosen existing schema or admission guards.
 
 ## 4. Propose and approve a rule
 
@@ -172,6 +187,11 @@ Merge only the same rule revision and exact permission/limit binding;
 never return a revoked or different-rule grant as usable. Reject a failed
 reference without falling back to another policy or attestation. Legacy
 requests retain their separate existing semantics and overlapping authority.
+
+A `standingRule` policy approves only a grant whose `ruleRef` names its
+rule revision. The legacy loop in `MatchAttested` skips it, as it skips
+attested policies without verification; a grant without `ruleRef` never
+matches one.
 
 The portal shows two clearly distinct approval forms:
 
@@ -247,7 +267,9 @@ selectors inside that variant; keep legacy `profiles`, `repos` and `agents`
 empty, as the attested-policy rollback pattern does. It also references
 rule UID/revision, approved digest and epoch. Schema must forbid combining
 it with `attested` or the legacy requester fields. Updated brokers use the
-new evaluator; older brokers see no named requester and match nobody.
+new evaluator only for the matching `ruleRef`; their legacy `MatchAttested`
+loop skips `standingRule` policies. A grant without `ruleRef` cannot match
+one. Older brokers see no named requester and match nobody.
 Install CRDs before writers so unknown fields cannot be silently pruned.
 Qualify downgrade behavior on real stored objects, not only a helper test.
 
@@ -258,6 +280,15 @@ unconfirmed policy installation refuse admission. Unrelated legacy
 policies keep their existing behavior; this proposal does not migrate or
 broaden them automatically. The portal identifies them as legacy policies,
 not managed standing rules, until a separate reviewed migration.
+
+Legacy policies are also a bypass. On 2026-10-29, haynes-ops main
+[requires a PR but no approving review](https://api.github.com/repos/thaynes43/haynes-ops/rules/branches/main),
+so any identity that may merge there can add a legacy policy without
+portal consent. Before any managed rule is enabled, SR6 must close that
+path: protect `grant-policies/` so the general agent identity cannot merge
+it, or have the broker approve only a GitOps-pinned list of legacy policy
+names and digests. The PR writer needs its own GitHub identity, which the
+ruleset forbids from merging.
 
 ## 6. List, revoke and audit
 
@@ -414,10 +445,10 @@ can undo an action already performed. F2's one-off action-consumption
 adapter is not required to build the rule-specific grant barrier, but the
 shared audit and revoke-authority contract is a prerequisite to enabling it.
 
-DESIGN-034 already calls its Needs attention work **F3**. The work order's
-“F3 standing rules” label is tracking shorthand for #261, not a reassignment
-of that existing lane. The build slices below use SR labels only as design
-references. OpenProject remains the sole work queue.
+DESIGN-034 already calls its Needs attention work **F3**. OpenProject
+#261's “Asks F3” title and source key identify this standing-rule design;
+they do not reassign that existing lane. The build slices below use SR
+labels only as design references. OpenProject remains the sole work queue.
 
 ## 8. Build stories and acceptance
 
@@ -432,12 +463,13 @@ Token/API costs are Unknown. Split a slice that will not fit.
 | Slice | Ready prerequisites / serial order | Source acceptance |
 |---|---|---|
 | SR1 — rule wire/store and shared audit | ADR-011/design reviewed; existing Ask backend; F2 audit/authority contract and Q-255-01/Q-261-01 | Immutable `standing_rule` type/spec/digest; bounded records/events; private actor projection; route caller checks; CAS/identical retry; one-off-to-rule refusal. Real API-server schema tests. No policy writer or active rule. |
+| SR-K — immutable kube role revisions | SR1 | Versioned role permission sets, digest, admission guard against in-place expansion or aggregation, existing bindings covered. Kube rules stay off until accepted. |
 | SR2 — broker admission/revoke protocol | SR1; Q-261-02 and date semantics settled | Durable per-rule CAS barrier, concurrency bound, immutable ruleRef and exact grant provenance; scope merge cannot bypass revoke or limits. No admission after confirmed revoke, issued-grant cleanup and no stale execution/reinstall. Qualify crash/failover/restore/epoch behavior and overlapping policies. Missing evidence fails closed. |
 | SR3 — profile compiler and GitOps PR writer | SR1/SR2 contracts fixed; writer authority, safe publication and Q-261-04 settled | Only qualified kube/egress scopes compile; legacy requester fields empty; nested rule policy schema and old-broker refusal; exact consent/diff check; one PR per intent; no merge/apply rights. Installation read-back and drift refusal. Kube stays unsupported until immutable versioned roles, permission digests and guards qualify for existing bindings too. Separate custody for writer, broker and Flux. |
 | SR4 — portal and agent tools | SR1; SR2/SR3 contracts fixed | Distinct approval copy, exact scope preview, nonblocking proposal/status, active-rule lookup, list/revoke/audit views and truthful pending/Unknown/cleanup states. CSRF/group removal/stale UID/forged actor tests. Mobile/desktop QA. No repeat approval for a matching active rule. |
 | SR5 — trusted project/group resolvers | SR1–SR4; separately reviewed membership sources | Exact stable project/group identity, membership from trusted configuration, intersection semantics, deletion/recreation/changed-profile refusal and isolated scope tests. Reject activation until installed. Not required to accept profile-only SR4. |
-| SR6 — GitOps installation | Required source CI/review, signed images, schema and rollback qualification, owner decisions and runtime authorization | Separate haynes-ops PRs install CRDs/guards and narrow rights before writers; install broker enforcement before any managed policy. Default-off flags enabled only in authorized steps. Writer cannot merge, broker cannot write policy, agents cannot apply cluster configuration. Preserve all running Sessions. |
-| SR7 — usable acceptance | SR6 and separately authorized disposable fixtures | Tom approves a synthetic rule once from the phone; two distinct matching grants succeed without another question; wrong who/target/limits are refused. Revoke while racing a grant; no admission after commit; issued grants show confirmed/Unknown cleanup honestly. Late PR apply, stale cache, restart, response loss and restored records cannot reactivate. Retain exact evidence. |
+| SR6 — GitOps installation | Required source CI/review, signed images, schema and rollback qualification, owner decisions and runtime authorization | Separate haynes-ops PRs install CRDs/guards and narrow rights before writers; install broker enforcement before any managed policy. Legacy-policy path guard installed and tested before enabling any managed rule. Default-off flags enabled only in authorized steps. Writer uses its own GitHub identity and cannot merge under the ruleset, broker cannot write policy, agents cannot apply cluster configuration. Preserve all running Sessions. |
+| SR7 — usable acceptance | SR6 and separately authorized disposable fixtures; SR-K accepted before kube tests | Tests cover egress only unless SR-K is accepted. Tom approves a synthetic rule once from the phone; two distinct matching grants succeed without another question; wrong who/target/limits are refused. Revoke while racing a grant; no admission after commit; issued grants show confirmed/Unknown cleanup honestly. Late PR apply, stale cache, restart, response loss and restored records cannot reactivate. Retain exact evidence. |
 
 SR2 and SR3 need explicit smaller protocol/schema stories if their contracts
 exceed one session. Build them serially where they touch the same schema or
@@ -458,10 +490,6 @@ live mail or valuable Sessions as fixtures.
 | Installed | Reviewed haynes-ops merge, applied schema/guards/RBAC, effective identities/flags, running image digests and refusal checks. No usable claim from a pin alone. |
 | Usable / accepted | SR7's phone approval, repeated matching use, denial, revoke race and issued-grant outcome evidence, accepted by the authorized owner. Record limitations explicitly. |
 
-This docs story ends at one ready PR with CI started. The lead owns its
-independent review, final required CI result and merge. This worker neither
-installs nor accepts the feature and does not start the build slices.
-
 ## 9. Open questions, not rulings
 
 **Q-261-NN records are recommendations only. They have not been delivered.**
@@ -474,7 +502,9 @@ one-off revocation question; the relationship is in §7.
 | Q-261-01 | May the same current portal group approve standing rules, with an explicitly configured rule-admin capability? Recommend yes, using fresh group checks and the exact approved resource scope. | A separately managed policy-admin group. Settle before enabling standing-rule approval. Revoke authority also needs explicit coverage under Q-255-01 or a distinct ruling. |
 | Q-261-02 | Should revoking a rule also release every grant already issued under it? Recommend yes, with cleanup progress and existing-stream/copied-credential limits shown. | Stop new admissions and let existing grants reach TTL. Settle before enabling revoke; no silent default. |
 | Q-261-03 | Should review dates be reminders, with only an explicit expiry ending permission? Recommend yes; default review after 90 days, no repeated per-use question. | Make review due a hard stop. Settle date/copy semantics before enabling any rule; expiry never auto-renews. |
-| Q-261-04 | May a separate authorized delivery merger merge the exact consent-bound GitOps PR after required checks, without another approval prompt? Recommend yes for policy-only diffs, after that service's narrow authority and gates are reviewed. The PR writer remains unable to merge. | Tom merges each policy PR. Gate the writer/merge integration; this design and the portal answer grant no GitHub or cluster write authority. |
+| Q-261-04 | May a separate authorized delivery merger merge the exact consent-bound GitOps PR after required checks, without another approval prompt? Recommend yes for policy-only diffs, after that service's narrow authority and gates are reviewed. The PR writer remains unable to merge. Also, should `grant-policies/` be protected so general agent identities cannot merge there? Recommend yes. | Tom merges each policy PR. Gate the writer/merge integration and SR6's legacy-policy path guard; this design and the portal answer grant no GitHub or cluster write authority. |
+| Q-261-05 | Your exec example is already technically allowed for default agents; only the common rules require approval. Should standing rules also cover instruction-level permissions (recorded, listed, revocable, but enforced by agent instructions only), or should baseline exec be removed so a broker grant enforces it? Recommend an instruction-level kind, clearly labelled, plus a separate story to narrow baseline exec later. | Remove baseline exec before offering broker-enforced exec rules. Settle the permission kind before implementing that example; this recommendation changes no baseline or instruction. |
+| Q-261-06 | Is “any default-profile agent working in repository X” acceptable as who for the first build? Recommend yes only with that exact plain wording in the preview and a 1h TTL cap; refuse the default profile alone. | Require a narrower profile or an accepted trusted group/project resolver. Settle before enabling default-profile/repository rules; requester-chosen repository scope is not trusted membership. |
 
 No question here changes Tom's Q-255-04 ruling or authorizes a runtime
 change. No question is sent from this docs session.
