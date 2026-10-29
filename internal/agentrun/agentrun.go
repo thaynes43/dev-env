@@ -56,6 +56,9 @@ const (
 	// message or create may have taken effect, so it must not be repeated
 	// before its result is observed.
 	ExitUnconfirmed = 6
+	// ExitPending: accepted and pending, timed out with a handle, or owner action required.
+	// It authorizes a status read, never a repeated handoff. ExitRetry means nothing was sent.
+	ExitPending = 7
 )
 
 // Env is what the CLI reads from and writes to outside its arguments. Tests
@@ -202,6 +205,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return nil
 	case "help", "-h", "--help":
 		return a.help(rest)
+	case "rc":
+		return a.rc(ctx, rest)
 	case "run":
 		return a.create(ctx, rest)
 	case "list":
@@ -280,7 +285,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 }
 
 // commands are the words agent-run takes first, built or not yet.
-var commands = []string{"run", "list", "inbox", "directory", "canary", "show", "usage", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "pages-mcp", "breakglass", "declare-activity", "maintenance", "pages", "remind", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
+var commands = []string{"run", "rc", "list", "inbox", "directory", "canary", "show", "usage", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "pages-mcp", "breakglass", "declare-activity", "maintenance", "pages", "remind", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
 
 // nearestCommand is the command within two edits of word, or "".
 func nearestCommand(word string) string {
