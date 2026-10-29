@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.63.1](https://github.com/thaynes43/dev-env/compare/v2.63.0...v2.63.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **api:** cap children per canonical agent ([#634](https://github.com/thaynes43/dev-env/issues/634)) ([57d4ef0](https://github.com/thaynes43/dev-env/commit/57d4ef0c45783b13ac54a597ce729caac2f4d2c7))
+* **deps:** update kubernetes monorepo to v0.37.2 ([#638](https://github.com/thaynes43/dev-env/issues/638)) ([9f46513](https://github.com/thaynes43/dev-env/commit/9f4651350a792ab1ba84809fa8175ce84265f382))
+
 ## [2.63.0](https://github.com/thaynes43/dev-env/compare/v2.62.1...v2.63.0) (2026-10-29)
 
 
