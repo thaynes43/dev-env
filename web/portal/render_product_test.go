@@ -657,3 +657,36 @@ func TestAttentionPreservesUnavailableConversationReason(t *testing.T) {
 		})
 	}
 }
+
+// Tom's live feedback (2026-10-29): the Claude conversation links must open in
+// a new tab and leave the portal in place. Both links point off the portal.
+func TestClaudeConversationLinksOpenInNewTab(t *testing.T) {
+	link := "https://claude.ai/code/session_fixture-247"
+	render := func(row ProductRow) string {
+		t.Helper()
+		body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Groups: []ProductGroup{{Title: "Needs attention", Rows: []ProductRow{row}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	anchor := func(text, label string) string {
+		t.Helper()
+		m := regexp.MustCompile(`<a [^>]*>`+regexp.QuoteMeta(label)+`<svg`).FindAllString(text, -1)
+		if len(m) != 1 {
+			t.Fatalf("want exactly one %q link, got %d", label, len(m))
+		}
+		return m[0]
+	}
+	check := func(a string) {
+		t.Helper()
+		rel := regexp.MustCompile(`rel="([^"]*)"`).FindStringSubmatch(a)
+		if !strings.Contains(a, `href="`+link+`"`) || !strings.Contains(a, ` target="_blank"`) || rel == nil || !slices.Contains(strings.Fields(rel[1]), "noopener") || !slices.Contains(strings.Fields(rel[1]), "noreferrer") {
+			t.Fatalf("link does not open the Claude conversation in a new tab safely: %s", a)
+		}
+	}
+	// Answer in Claude, from a waiting row with an attention link.
+	check(anchor(render(ProductRow{ID: "s1", Title: "waiting", Attention: &ProductAttention{Reason: "Waiting for your input", Link: link}, Link: link, LinkLabel: "Open in Claude"}), "Answer in Claude"))
+	// Header Open in Claude, from a row with no attention link.
+	check(anchor(render(ProductRow{ID: "s2", Title: "running", Link: link, LinkLabel: "Open in Claude"}), "Open in Claude"))
+}

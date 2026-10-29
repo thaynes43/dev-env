@@ -18,6 +18,11 @@ const (
 	timeUnknown             = "Unknown"
 )
 
+// snapshotTimeFloor is the earliest UTC instant a snapshot time renders as
+// known. MuteUntil keeps its own range. An instant before this floor, and a
+// UTC year after 9999, are Unknown. They are not errors.
+var snapshotTimeFloor = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // AlertAggregate is one current snapshot grouped by alert name and severity.
 // It is not notification delivery, history, triage, or recurrence.
 type AlertAggregate struct {
@@ -243,6 +248,14 @@ func optionalInstant(value string) (time.Time, bool, string) {
 	return parsed, ok, ""
 }
 
+// SnapshotTime returns a known snapshot instant in UTC using the same floor
+// and year ceiling as AggregateAlerts. Empty, malformed and sentinel values
+// have no displayable instant. It does not read the wall clock.
+func SnapshotTime(value string) (time.Time, bool) {
+	stamp, known, _ := snapshotInstant(value)
+	return stamp, known
+}
+
 func snapshotInstant(value string) (time.Time, bool, string) {
 	if !utf8.ValidString(value) || !validAlertTime(value) {
 		return time.Time{}, false, "time"
@@ -252,7 +265,7 @@ func snapshotInstant(value string) (time.Time, bool, string) {
 		return time.Time{}, false, "time"
 	}
 	parsed = parsed.UTC().Round(0)
-	if parsed.Before(minPreferenceTime) {
+	if parsed.Before(snapshotTimeFloor) || parsed.Year() > 9999 {
 		return time.Time{}, false, ""
 	}
 	return parsed, true, ""
