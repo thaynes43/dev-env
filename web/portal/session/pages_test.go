@@ -180,7 +180,7 @@ func TestPagesScopeAndRequestBoundary(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	pagesAssembly(f, s, allowPages()).ServeHTTP(w, f.request("GET", pagesPath, ""))
-	if w.Code != 200 || *count != 1 || !strings.Contains(w.Body.String(), "ALERT-CANARY") || strings.Contains(w.Body.String(), "<script>bad</script>") || !strings.Contains(w.Body.String(), "Unknown") || !strings.Contains(w.Body.String(), f.now.Format(time.RFC3339)) {
+	if w.Code != 200 || *count != 1 || !strings.Contains(w.Body.String(), "ALERT-CANARY") || strings.Contains(w.Body.String(), "<script>bad</script>") || !strings.Contains(w.Body.String(), "Unknown") || !strings.Contains(w.Body.String(), `datetime="`+f.now.UTC().Format(time.RFC3339)+`"`) {
 		t.Fatalf("%d %d %s", w.Code, *count, w.Body.String())
 	}
 }
@@ -343,24 +343,49 @@ func TestPagesFixedTransportNoRedirectOrProxy(t *testing.T) {
 	}
 }
 
-func TestPagesOversizedRenderReleasesNothing(t *testing.T) {
-	f, s, _ := pagesFixture(t)
-	var b strings.Builder
-	b.WriteByte('[')
-	for i := 0; i < 130; i++ {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		fmt.Fprintf(&b, `{"fingerprint":"f%d","labels":{"alertname":"BIG-ALERT-CANARY"},"annotations":{"description":"%s"},"status":{"state":"active"}}`, i, strings.Repeat("x", 8000))
-	}
-	b.WriteByte(']')
-	s.client.Transport = tripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(b.String())), Header: make(http.Header)}, nil
-	})
-	w := httptest.NewRecorder()
-	pagesAssembly(f, s, allowPages()).ServeHTTP(w, f.request("GET", pagesPath, ""))
-	if w.Code != 503 || strings.Contains(w.Body.String(), "BIG-ALERT-CANARY") {
-		t.Fatal("oversized render escaped containment")
+func TestPagesOversizedRenderFallbackAndContainment(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		oversizeList bool
+		wantStatus   int
+	}{
+		{"detail omitted", false, http.StatusOK},
+		{"list also oversized", true, http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, _ := pagesFixture(t)
+			var b strings.Builder
+			b.WriteByte('[')
+			for i := 0; i < 130; i++ {
+				if i > 0 {
+					b.WriteByte(',')
+				}
+				name := "Oversized detail"
+				if tc.oversizeList {
+					name = fmt.Sprintf("LIST-ALERT-CANARY-%03d%s", i, strings.Repeat("<", 2000))
+				}
+				fmt.Fprintf(&b, `{"fingerprint":"f%d","labels":{"alertname":"%s"},"annotations":{"description":"BIG-ALERT-CANARY%s"},"status":{"state":"active"}}`, i, name, strings.Repeat("x", 8000))
+			}
+			b.WriteByte(']')
+			if snapshot, err := pages.ParseAlertmanager([]byte(b.String())); err != nil || len(snapshot.Alerts) != 130 {
+				t.Fatalf("oversized-render fixture must be a valid source: %v", err)
+			}
+			s.client.Transport = tripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(b.String())), Header: make(http.Header)}, nil
+			})
+			w := httptest.NewRecorder()
+			pagesAssembly(f, s, allowPages()).ServeHTTP(w, f.request("GET", pagesPath, ""))
+			text := w.Body.String()
+			if w.Code != tc.wantStatus || strings.Contains(text, "BIG-ALERT-CANARY") || strings.Contains(text, "LIST-ALERT-CANARY") || strings.Contains(text, `class="pages-detail`) || strings.Contains(text, "<select") {
+				t.Fatalf("oversized render escaped containment: status %d", w.Code)
+			}
+			if tc.wantStatus == http.StatusOK && (!strings.Contains(text, "Details and configuration omitted") || !strings.Contains(text, "Oversized detail") || !strings.Contains(text, `class="pages-count">130<`)) {
+				t.Fatal("list-only fallback lost its notice or aggregate")
+			}
+			if tc.wantStatus == http.StatusServiceUnavailable && text != "Portal authentication unavailable or denied.\n" {
+				t.Fatal("oversized list released content beyond the unavailable response")
+			}
+		})
 	}
 }
 

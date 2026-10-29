@@ -490,7 +490,8 @@ func TestEntryRedirects(t *testing.T) {
 }
 
 // A work package shaped like OpenProject 17's renders its type, Execution
-// owner worktree, parent and a plain-text summary; empty people are omitted.
+// owner worktree, parent and a plain-text summary. Assignee and responsible
+// stay omitted when empty; both owner fields are always shown.
 func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
 	now := time.Date(2026, 10, 27, 1, 0, 0, 0, time.UTC)
 	var element halWorkPackage
@@ -511,14 +512,24 @@ func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
 	if row.Sections[0].Title != "Summary" || row.Sections[0].Note != "Scope Ship the portal diagram today as dev_env_v2_portal_runtime Then stop." {
 		t.Fatalf("summary %+v", row.Sections[0])
 	}
-	if fields := rowFields(row); fields["Execution owner"] == "" || fields["Parent"] != "Distributed dev-env" || fields["Type"] != "Story" {
+	fields := rowFields(row)
+	if fields["Execution owner"] != "agent | worktree dev-env-1026-134753 | branch agent/dev-env-1026-134753" || fields["Accountable owner"] != "Not recorded" || fields["Parent"] != "Distributed dev-env" || fields["Type"] != "Story" {
 		t.Fatalf("fields %v", fields)
-	} else {
-		for _, absent := range []string{"Accountable owner", "Assignee", "Responsible"} {
-			if _, ok := fields[absent]; ok {
-				t.Errorf("empty %s is shown", absent)
-			}
+	}
+	for _, absent := range []string{"Assignee", "Responsible"} {
+		if _, ok := fields[absent]; ok {
+			t.Errorf("empty %s is shown", absent)
 		}
+	}
+	if _, ok := sectionByTitle(row, "Ownership"); !ok {
+		t.Fatal("ownership section missing")
+	}
+	if section, ok := sectionByTitle(row, "Next action"); ok || section.Note != "" {
+		t.Fatalf("in progress has a next action: %+v", section)
+	}
+	dates, ok := sectionByTitle(row, "Dates")
+	if !ok || dates.Note != "Last updated 2h ago · 26 Oct 2026, 23:00 UTC" {
+		t.Fatalf("updated line %+v", dates)
 	}
 	if long := taskSummary(strings.Repeat("é", taskSummaryRunes+10)); len([]rune(long)) != taskSummaryRunes+1 || !strings.HasSuffix(long, "…") {
 		t.Fatalf("summary is not bounded by runes: %d", len([]rune(long)))
@@ -540,6 +551,259 @@ func TestTaskRowShowsTypeOwnerParentAndSummary(t *testing.T) {
 			t.Errorf("taskGroup(%q) = %d, want %d", status, got, group)
 		}
 	}
+}
+
+func TestTaskNextActionDependsOnlyOnStatus(t *testing.T) {
+	now := time.Date(2026, 10, 29, 18, 0, 0, 0, time.UTC)
+	cases := []struct {
+		status, want string
+		attention    bool
+	}{
+		{"Needs approval", "Waiting for approval", true},
+		{"Needs answer", "Waiting for an answer", true},
+		{"Paused", "Paused: resume needs its owner", true},
+		{"paused", "Paused: resume needs its owner", true},
+		{" On hold ", "On hold", true},
+		{"In progress", "", false},
+		{"Blocked", "", true},
+		{"Feedback", "", true},
+		{"Accepted", "", false},
+		{"New", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.status, func(t *testing.T) {
+			row := mustTaskRow(t, sampleWorkPackage(40, tc.status, "Ada", "Bea", "Real work", "Story"), now)
+			got := nextActionNote(row)
+			if got != tc.want {
+				t.Fatalf("next action %q, want %q", got, tc.want)
+			}
+			if strings.Contains(strings.ToLower(got), "stuck") {
+				t.Fatal("next action uses stuck")
+			}
+			dates, ok := sectionByTitle(row, "Dates")
+			if !ok || dates.Note != "Last updated 13d ago · 16 Oct 2026, 12:00 UTC" {
+				t.Fatalf("updated line %+v", dates)
+			}
+			if attention := row.Attention != nil; attention != tc.attention {
+				t.Fatalf("attention panel %v, want %v", attention, tc.attention)
+			}
+			if _, ok := sectionByTitle(row, "Needs attention"); ok {
+				t.Fatal("needs attention is a section panel as well as the attention panel")
+			}
+			if a := row.Attention; a != nil {
+				if a.Reason != row.Status.Text || a.NextAction != tc.want || a.When != "" || a.Link != "" || len(a.Commands) != 0 {
+					t.Fatalf("attention panel %+v", *a)
+				}
+				if _, ok := sectionByTitle(row, "Next action"); ok {
+					t.Fatal("next action shown twice")
+				}
+			}
+			if row.Link != "https://work.haynesnetwork.com/work_packages/40" || row.LinkLabel != "Open in OpenProject" {
+				t.Fatalf("link %q %q", row.Link, row.LinkLabel)
+			}
+		})
+	}
+	fresh := sampleWorkPackage(40, "Paused", "Ada", "Bea", "Real work", "Story")
+	fresh.UpdatedAt = now.Format(time.RFC3339)
+	freshRow := mustTaskRow(t, fresh, now)
+	if nextActionNote(freshRow) != "Paused: resume needs its owner" {
+		t.Fatalf("a fresh pause changed its action: %q", nextActionNote(freshRow))
+	}
+	if dates, _ := sectionByTitle(freshRow, "Dates"); dates.Note != "Last updated just now · 29 Oct 2026, 18:00 UTC" {
+		t.Fatalf("fresh update line %q", dates.Note)
+	}
+	unknown := sampleWorkPackage(40, "In progress", "Ada", "Bea", "Real work", "Story")
+	unknown.UpdatedAt = "not-a-time"
+	unknownRow := mustTaskRow(t, unknown, now)
+	if unknownRow.Age != "Unknown" {
+		t.Fatalf("age %q", unknownRow.Age)
+	}
+	if dates, _ := sectionByTitle(unknownRow, "Dates"); dates.Note != "Last updated Unknown" || strings.Contains(dates.Note, "0") {
+		t.Fatalf("unknown update line %q", dates.Note)
+	}
+	future := sampleWorkPackage(40, "In progress", "Ada", "Bea", "Real work", "Story")
+	future.UpdatedAt = now.Add(time.Hour).Format(time.RFC3339)
+	futureRow := mustTaskRow(t, future, now)
+	if dates, _ := sectionByTitle(futureRow, "Dates"); dates.Note != "Last updated Unknown · 29 Oct 2026, 19:00 UTC" || strings.Contains(dates.Note, "0d") {
+		t.Fatalf("future update line %q", dates.Note)
+	}
+	page := tasksPage([]portal.ProductRow{freshRow, unknownRow}, true, portal.ProductFilter{})
+	page.ObservedAt = now.Format(time.RFC3339)
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if strings.Contains(strings.ToLower(html), "stuck") || !strings.Contains(html, "Open in OpenProject") || !strings.Contains(html, `href="https://work.haynesnetwork.com/work_packages/40"`) {
+		t.Fatal("rendered detail lost its link or inferred a stall from age")
+	}
+	if !strings.Contains(html, `<p class="eyebrow">Needs attention</p><h3 id="t1-attention">Paused</h3><p>Paused: resume needs its owner</p>`) || !strings.Contains(html, `class="badge tone-wait">Paused</span>`) {
+		t.Fatal("needs attention panel does not read reason, then next action")
+	}
+	if strings.Contains(html, `</span><span>Paused</span>`) || strings.Contains(html, `>Paused</h3><p>Paused</p>`) {
+		t.Fatal("needs attention panel repeats the status")
+	}
+	if strings.Count(html, `class="attention-panel"`) != 1 || strings.Contains(html, `id="t2-attention"`) {
+		t.Fatal("in progress invented an attention reason")
+	}
+}
+
+func TestTaskOwnershipIsAlwaysShown(t *testing.T) {
+	now := time.Date(2026, 10, 29, 18, 0, 0, 0, time.UTC)
+	exec := "agent | worktree wt-1 | branch b"
+	cases := []struct {
+		name, execution, accountable, list, detailExec, detailAcct string
+	}{
+		{"both", exec, "Ada | extra", "wt-1", exec, "Ada | extra"},
+		{"execution only", exec, " ", "wt-1", exec, "Not recorded"},
+		{"accountable only", "", "Ada", "Ada", "Not recorded", "Ada"},
+		{"neither", "  ", "", "Owner not recorded", "Not recorded", "Not recorded"},
+		{"unparsed execution", " | / | ", "Ada", "Ada", "| / |", "Ada"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := mustTaskRow(t, sampleWorkPackage(7, "In progress", tc.execution, tc.accountable, "Real work", "Story"), now)
+			if row.Meta != tc.list {
+				t.Fatalf("list owner %q, want %q", row.Meta, tc.list)
+			}
+			fields := rowFields(row)
+			if fields["Execution owner"] != tc.detailExec || fields["Accountable owner"] != tc.detailAcct {
+				t.Fatalf("owners %#v", fields)
+			}
+			if _, ok := sectionByTitle(row, "Ownership"); !ok {
+				t.Fatal("ownership section missing")
+			}
+			if tc.list == "Owner not recorded" {
+				for _, badge := range row.Badges {
+					if badge == "Owner not recorded" {
+						t.Fatal("the empty-owner sentence was repeated as a badge")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestTaskOwnerTextIsEscaped(t *testing.T) {
+	now := time.Date(2026, 10, 29, 18, 0, 0, 0, time.UTC)
+	hostile := "A\n<script>alert(1)</script>&B"
+	shownHostile := "A<script>alert(1)</script>&B"
+	both := mustTaskRow(t, sampleWorkPackage(8, "Needs approval", hostile, hostile, "Real work", "Story"), now)
+	accountable := mustTaskRow(t, sampleWorkPackage(9, "Paused", "", hostile, "Real work", "Other"), now)
+	fields := rowFields(both)
+	if fields["Execution owner"] != shownHostile || fields["Accountable owner"] != shownHostile || accountable.Meta != shownHostile || rowFields(accountable)["Execution owner"] != "Not recorded" {
+		t.Fatalf("owners list %q detail %#v accountable %q", both.Meta, fields, accountable.Meta)
+	}
+	page := tasksPage([]portal.ProductRow{both, accountable}, true, portal.ProductFilter{})
+	page.ObservedAt = now.Format(time.RFC3339)
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	escaped := "A&lt;script&gt;alert(1)&lt;/script&gt;&amp;B"
+	if strings.Contains(html, "<script") || strings.Contains(html, hostile) || strings.Count(html, escaped) < 3 {
+		t.Fatalf("owner text was not escaped (%d)", strings.Count(html, escaped))
+	}
+}
+
+func TestCommittedTasksFixtureShowsOwnerNextActionAndSyntheticGroup(t *testing.T) {
+	f, err := os.Open("../../../scripts/trials/portal_product/tasks.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := readProductFixture(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _, complete, err := decodeTaskPage(fixture.Body, 1, map[int]struct{}{}, fixture.Now)
+	if err != nil || !complete || len(rows) != 7 {
+		t.Fatalf("rows %d complete %v err %v", len(rows), complete, err)
+	}
+	page := tasksPage(rows, complete, portal.ProductFilter{})
+	if page.Rail.All != "7" || page.Rail.Attention != "1" {
+		t.Fatalf("rail all %s attention %s", page.Rail.All, page.Rail.Attention)
+	}
+	var fixtureTitles, attentionTitles []string
+	for _, group := range page.Groups {
+		for _, row := range group.Rows {
+			switch group.Title {
+			case "Fixtures (synthetic)":
+				fixtureTitles = append(fixtureTitles, row.Title)
+			case "Needs attention":
+				attentionTitles = append(attentionTitles, row.Title)
+			}
+		}
+	}
+	if strings.Join(fixtureTitles, ",") != "OP-ACCEPTANCE sample,OP-ACCEPTANCE import sample,Paused Saga sample" || strings.Join(attentionTitles, ",") != "Fixture: usage collector core" {
+		t.Fatalf("fixtures %v attention %v", fixtureTitles, attentionTitles)
+	}
+	body, err := renderFixture(page, fixture.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	for _, want := range []string{
+		`<span>Fixtures (synthetic)</span>`, `class="badge tone-muted">Fixture</span>`,
+		"Paused: resume needs its owner", "Owner not recorded", "Waiting for approval",
+		`<h3 id="t1-attention">Needs answer</h3><p>Waiting for an answer</p>`,
+		"Last updated", "Open in OpenProject",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("committed tasks fixture lacks %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(html), "stuck") {
+		t.Fatal("fixture preview inferred a stall")
+	}
+}
+
+func sampleWorkPackage(id int, status, execution, accountable, description, subject string) halWorkPackage {
+	var element halWorkPackage
+	element.ID = id
+	element.Subject = subject
+	element.CreatedAt = "2026-10-16T12:00:00Z"
+	element.UpdatedAt = "2026-10-16T12:00:00Z"
+	element.CustomField1 = accountable
+	element.CustomField2 = execution
+	element.CustomField3 = "dev-env"
+	element.Description.Raw = description
+	element.Links.Project.Href = "/api/v3/projects/3"
+	element.Links.Status.Title = status
+	element.Links.Type.Title = "Story"
+	element.Embedded.Project.ID = 3
+	element.Embedded.Project.Identifier = "haynes-engineering"
+	return element
+}
+
+func mustTaskRow(t *testing.T, element halWorkPackage, now time.Time) portal.ProductRow {
+	t.Helper()
+	row, err := taskRow(element, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func sectionByTitle(row portal.ProductRow, title string) (portal.ProductSection, bool) {
+	for _, section := range row.Sections {
+		if section.Title == title {
+			return section, true
+		}
+	}
+	return portal.ProductSection{}, false
+}
+
+func nextActionNote(row portal.ProductRow) string {
+	if row.Attention != nil {
+		return row.Attention.NextAction
+	}
+	if section, ok := sectionByTitle(row, "Next action"); ok {
+		return section.Note
+	}
+	return ""
 }
 
 func TestSessionReadFailureReasons(t *testing.T) {
