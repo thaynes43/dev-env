@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -143,7 +145,7 @@ func servePages(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			snapshot = got
 		}
 	}
-	body, err := portal.RenderPages(snapshot, c.Pages == nil, maximumResponse*7/8)
+	body, err := portal.RenderPages(PagesWorkspace(snapshot, c.Pages == nil), maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return
@@ -160,4 +162,197 @@ func servePages(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	w.Header().Set("Content-Security-Policy", portal.PagesPolicy)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(body)
+}
+
+// PagesWorkspace builds the read-only Pages document from the current snapshot.
+// Group bounds come from AggregateAlerts. Controls stay disconnected. This does not save, mute, or escalate.
+func PagesWorkspace(snapshot pages.AlertmanagerSnapshot, disabled bool) portal.PagesWorkspace {
+	agg, aggErr := pages.AggregateAlerts(snapshot)
+	condition := pagesCondition(agg, aggErr, disabled)
+	groups := []portal.PagesGroup{}
+	if condition == "available" {
+		groups = buildPagesGroups(snapshot, agg.Groups)
+	}
+	return portal.PagesWorkspace{
+		CallerCoverage: snapshot.Coverage,
+		Coverage:       agg.Coverage,
+		Condition:      condition,
+		Availability:   agg.Availability,
+		ObservedAt:     agg.ObservedAt,
+		Source:         agg.Source,
+		Groups:         groups,
+		Controls:       portal.DisconnectedPagesControls(pagesTypeControls(groups)),
+	}
+}
+
+func pagesCondition(agg pages.AlertAggregate, aggErr error, disabled bool) string {
+	switch {
+	case disabled:
+		return "disabled"
+	case aggErr != nil:
+		return "invalid"
+	case agg.Availability == "Available" && len(agg.Groups) == 0:
+		return "empty"
+	case agg.Availability == "Available":
+		return "available"
+	case agg.Availability == "Unavailable":
+		return "unavailable"
+	default:
+		return "invalid"
+	}
+}
+
+func buildPagesGroups(snapshot pages.AlertmanagerSnapshot, groups []pages.AlertGroup) []portal.PagesGroup {
+	out := make([]portal.PagesGroup, 0, len(groups))
+	for i, group := range groups {
+		nameDisplay, nameEmpty := presentLabel(group.AlertName, group.AlertNameKnown)
+		severityDisplay, severityEmpty := presentLabel(group.Severity, group.SeverityKnown)
+		out = append(out, portal.PagesGroup{
+			ID:               fmt.Sprintf("pages-group-%d", i+1),
+			AlertName:        group.AlertName,
+			AlertNameKnown:   group.AlertNameKnown,
+			AlertNameDisplay: nameDisplay,
+			AlertNameEmpty:   nameEmpty,
+			Severity:         group.Severity,
+			SeverityKnown:    group.SeverityKnown,
+			SeverityDisplay:  severityDisplay,
+			SeverityEmpty:    severityEmpty,
+			Count:            group.Count,
+			EarliestStart:    group.EarliestStart,
+			LatestUpdate:     group.LatestUpdate,
+			Alerts:           alertsInGroup(snapshot.Alerts, group),
+		})
+	}
+	markSelectedGroup(out, snapshot.Selection)
+	return out
+}
+
+func markSelectedGroup(groups []portal.PagesGroup, selection string) {
+	if len(groups) == 0 {
+		return
+	}
+	chosen := 0
+	if selection != "" {
+		for i, group := range groups {
+			for _, alert := range group.Alerts {
+				if alert.Fingerprint == selection {
+					chosen = i
+				}
+			}
+		}
+	}
+	groups[chosen].Default = true
+}
+
+func alertsInGroup(alerts []pages.AlertmanagerAlert, group pages.AlertGroup) []portal.PagesAlert {
+	out := []portal.PagesAlert{}
+	for _, alert := range alerts {
+		if !samePagesGroup(alert, group) {
+			continue
+		}
+		name, nameOK := labelState(alert.Labels, "alertname")
+		display, empty := presentLabel(name, nameOK)
+		out = append(out, portal.PagesAlert{
+			Fingerprint:  alert.Fingerprint,
+			Name:         name,
+			NameKnown:    nameOK,
+			NameDisplay:  display,
+			NameEmpty:    empty,
+			Status:       textOrUnknown(alert.Status),
+			StartsAt:     displayInstant(alert.StartsAt),
+			EndsAt:       displayInstant(alert.EndsAt),
+			UpdatedAt:    displayInstant(alert.UpdatedAt),
+			Summary:      alert.Summary,
+			Description:  alert.Description,
+			Disposition:  textOrUnknown(alert.Disposition),
+			Recurrence:   textOrUnknown(alert.Recurrence),
+			Labels:       labelPairs(alert.Labels),
+			GeneratorURL: alert.GeneratorURL,
+			RunbookURL:   alert.RunbookURL,
+		})
+	}
+	return out
+}
+
+func samePagesGroup(alert pages.AlertmanagerAlert, group pages.AlertGroup) bool {
+	name, nameOK := labelState(alert.Labels, "alertname")
+	severity, severityOK := labelState(alert.Labels, "severity")
+	return nameOK == group.AlertNameKnown && severityOK == group.SeverityKnown && name == group.AlertName && severity == group.Severity
+}
+
+func labelState(labels map[string]string, key string) (string, bool) {
+	if labels == nil {
+		return "", false
+	}
+	value, ok := labels[key]
+	if !ok {
+		return "", false
+	}
+	return value, true
+}
+
+func labelPairs(labels map[string]string) []portal.PagesPair {
+	if len(labels) == 0 {
+		return []portal.PagesPair{}
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	pairs := make([]portal.PagesPair, 0, len(keys))
+	for _, key := range keys {
+		pairs = append(pairs, portal.PagesPair{Key: key, Value: labels[key]})
+	}
+	return pairs
+}
+
+func pagesTypeControls(groups []portal.PagesGroup) []portal.PagesTypeControl {
+	out := []portal.PagesTypeControl{}
+	seen := map[string]struct{}{}
+	for _, group := range groups {
+		if !group.AlertNameKnown || !pages.ConfigurableAlertName(group.AlertName) {
+			continue
+		}
+		key := group.AlertName
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, portal.PagesTypeControl{
+			AlertName:      group.AlertName,
+			AlertNameKnown: group.AlertNameKnown,
+			Label:          group.AlertNameDisplay,
+			Desired:        portal.PagesDesiredUnset,
+			Applied:        portal.PagesAppliedState,
+		})
+	}
+	return out
+}
+
+func presentLabel(value string, known bool) (string, bool) {
+	if !known {
+		return "Unknown (absent)", false
+	}
+	if value == "" {
+		return "Empty (value)", true
+	}
+	return value, false
+}
+
+func textOrUnknown(value string) string {
+	if value == "" {
+		return "Unknown"
+	}
+	return value
+}
+
+// displayInstant keeps machine-readable UTC instants for the view. The shared
+// snapshot rule owns the floor and year ceiling; the template formats the text.
+func displayInstant(value string) string {
+	parsed, known := pages.SnapshotTime(value)
+	if !known {
+		return "Unknown"
+	}
+	return parsed.Format(time.RFC3339Nano)
 }
