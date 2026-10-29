@@ -99,7 +99,7 @@ ARG YQ_VERSION=4.54.1
 # renovate: datasource=github-releases depName=go-task/task extractVersion=^v(?<version>.+)$
 ARG TASK_VERSION=3.54.0
 # renovate: datasource=github-releases depName=opentofu/opentofu extractVersion=^v(?<version>.+)$
-ARG OPENTOFU_VERSION=1.13.1
+ARG OPENTOFU_VERSION=1.13.2
 # renovate: datasource=github-releases depName=restic/restic extractVersion=^v(?<version>.+)$
 ARG RESTIC_VERSION=0.19.1
 # talosctl — read-only node triage (dmesg/logs/get) via apid; MUST track the cluster's
