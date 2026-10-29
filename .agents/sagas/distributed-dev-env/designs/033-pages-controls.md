@@ -358,6 +358,14 @@ validation, semantic markup and unchanged shared navigation bytes. Unit tests
 check markup and style contracts; actual widths, keyboard behavior, scrolling
 and absence of horizontal overflow require browser evidence.
 
+The continuation authorized in Coordinator journal 2520 updates only two
+expectations in `session/pages_test.go`. An oversized detail now expects a
+200 list-only response with its notice and aggregate, without the detail
+canary or controls. A valid snapshot whose escaped group list also exceeds
+the bound still expects the existing 503 response with no snapshot content.
+The request-boundary test checks the observation's RFC3339 `datetime`
+attribute while its visible text uses the human UTC format.
+
 ## What this does not do
 
 - It does not edit `render.go`, `views.html`, `views.css`, attention,

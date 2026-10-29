@@ -5,7 +5,7 @@
 <p>{{if .CallerCoverage}}{{.CallerCoverage}}{{else}}{{.Coverage}}{{end}}</p>
 <dl class="kv">
 <dt>Availability</dt><dd>{{.Availability}}</dd>
-<dt>Observed at</dt><dd>{{pagesTime .ObservedAt}}</dd>
+<dt>Observed at</dt><dd>{{if eq (pagesTime .ObservedAt) "Unknown"}}Unknown{{else}}<time datetime="{{.ObservedAt}}">{{pagesTime .ObservedAt}}</time>{{end}}</dd>
 <dt>Source</dt><dd>{{.Source}}</dd>
 </dl>
 {{if eq .Condition "disabled"}}<p>Pages not enabled.</p>{{else if eq .Condition "invalid"}}<p>Current snapshot is invalid.</p>{{else if eq .Condition "unavailable"}}<p>Alertmanager is unavailable.</p>{{else if eq .Condition "empty"}}<p>Observed zero current alerts.</p>{{end}}

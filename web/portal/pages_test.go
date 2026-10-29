@@ -64,7 +64,7 @@ func TestExistingNavigationLinksToPages(t *testing.T) {
 
 func TestPagesTimestampPresence(t *testing.T) {
 	view := PagesWorkspace{
-		Condition: "available", Availability: "Available", ObservedAt: "Unknown", Source: "Unknown",
+		Condition: "available", Availability: "Available", ObservedAt: "2026-10-28T12:02:00Z", Source: "Unknown",
 		Coverage: pages.AggregateCoverage,
 		Groups: []PagesGroup{{
 			ID: "pages-group-1", Default: true,
@@ -84,6 +84,7 @@ func TestPagesTimestampPresence(t *testing.T) {
 	}
 	text := string(body)
 	for _, want := range []string{
+		`<dt>Observed at</dt><dd><time datetime="2026-10-28T12:02:00Z">28 Oct 2026, 12:02 UTC</time></dd>`,
 		`<dt>Starts at</dt><dd>Unknown</dd>`,
 		`<dd>28 Oct 2026, 12:00 UTC</dd>`,
 		`<dd>28 Oct 2026, 13:00 UTC</dd>`,

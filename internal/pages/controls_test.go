@@ -399,8 +399,6 @@ func clip(s string) string {
 
 const maxPrincipalBytes = 512
 
-const ()
-
 func validPrincipal(p Principal) bool {
 	return validIdentity(p.Issuer) && validIdentity(p.Subject)
 }
