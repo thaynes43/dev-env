@@ -174,7 +174,7 @@ type Server struct {
 	// GrantAttestation serves POST /v1/grants/{name}/attestation. Default off:
 	// the route is not registered and answers 404.
 	GrantAttestation bool
-	// Asks serves /v1/asks and /v1/portal/asks (Epic #254). Nil leaves both
+	// Asks serves /v1/asks and /v1/portal/asks (OpenProject Epic #254). Nil leaves both
 	// unregistered. v1 does not write an inbox message when an ask is answered.
 	Asks *asks.KubeStore
 

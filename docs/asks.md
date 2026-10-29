@@ -1,9 +1,13 @@
 # Asks and approvals
 
-Source only. The operator serves asks only with `--enable-asks` (default off).
-Nothing here is installed, and turning the flag on in a cluster still needs the
-Ask CRD and RBAC in haynes-ops. An ask is not an approval until a portal reader
-answers it, and an expired approval is not an approval.
+Source only. Lane A stores and serves asks for
+[DESIGN-034](../.agents/sagas/distributed-dev-env/designs/034-agent-asks-and-approvals-board.md)
+and
+[ADR-010](../.agents/sagas/distributed-dev-env/adrs/010-agent-asks-and-approvals-board.md)
+(OpenProject Epic #254). The operator serves asks only with `--enable-asks`
+(default off). Nothing here is installed, and turning the flag on in a cluster
+still needs the Ask CRD and RBAC in haynes-ops. An ask is not an approval until
+a portal reader answers it, and an expired approval is not an approval.
 
 Asks live in the `dev-agents` namespace as
 `asks.coordination.dev-env.haynesops.com`. The spec is immutable. The status
@@ -35,9 +39,15 @@ approval, whose `scope.expiresAt`) has passed is not listed as open. Pages use
 descending, then `id` descending.
 
 Session responses include `answeredBy.displayName` only (empty becomes
-`Portal user`). Portal responses include issuer, subject and display name.
+`Portal user`). That includes create, an identical create retry, list mine,
+get and withdraw. Portal responses include issuer, subject and display name.
 Whether an approval is still in force (`approved` and now before
 `scope.expiresAt`) is computed by the client. It is not a stored field.
+
+A missing `status.state` reads as open. A list that cannot read one record
+skips that record, logs its id, and marks the page incomplete. It does not
+fail the page. `?mine=true` keeps a record only when `spec.context` names the
+calling session; the requester label is not enough.
 
 ## Time and approval scope
 
@@ -53,26 +63,32 @@ expires at `scope.expiresAt`.
 
 ## Limits
 
-Creates count, then create (the same pattern as coordination record room
-checks). The bounds are 16 stored-open asks per requester, 512 asks per
-requester, and 4096 asks in the namespace. A lapsed ask still counts as open
-until its stored state changes; the expiry sweeper is a later change. At or
-above 80 percent of a bound the operator logs and increments
-`dev_env_asks_near_limit_total`. A retry of the same request id is not a new
-create and is not refused for room.
+An identical `requestId` is resolved before validation and the room check, so
+a retry needs no slot and is not refused because the clock has moved. A new
+create counts, then creates. The bounds are 16 open asks per requester, 512
+asks per requester, and 4096 asks in the namespace. Open asks are counted from
+the state label. When that count is already at the open bound, the operator
+reads that requester's open-labelled asks (at most 512) and counts only those
+whose stored state is open or absent and whose effective state is still open.
+It repairs the other labels. An unconfirmed count is 503. At or above 80
+percent of a bound the operator logs and increments
+`dev_env_asks_near_limit_total`. The expiry sweeper is a later change.
 
 ## Status codes
 
 Validation failures, including a fractional `scope.expiresAt`, are 400.
 The same `requestId` with a different body is 409. Withdraw of an ask that is
 not open is 409. An answer when the ask is answered or withdrawn is 409. The
-same issuer and subject repeating the identical answer is 200. An answer when
-the ask or its approval scope has expired is 410 (`expired`). A count bound is
-429. Another session's ask is 404.
+same issuer and subject repeating the identical answer is 200, including when
+only the display name differs. A different subject is 409. An answer when the
+ask or its approval scope has expired is 410 (`expired`). A count bound is
+429 (`limit_exceeded`). An unconfirmed count is 503. Another session's ask is
+404.
 
 ## Operator RBAC
 
 Before the flag is turned on in a cluster, the operator ServiceAccount needs
-`get`, `list`, `create`, `update` and `patch` on `asks` (the state label is a
-merge patch, so the immutable spec is not rewritten), and `get` and `update`
-on `asks/status`, in `dev-agents`. This repository does not grant that.
+get, list, create and patch on `asks`, and update on `asks/status`, in
+`dev-agents`. Patch updates the state label without rewriting the immutable
+spec. This repository does not grant that. DESIGN-034 section 4 records the
+same rights.

@@ -118,11 +118,22 @@ func (s *Server) listMyAsks(ctx context.Context, _ http.ResponseWriter, r *http.
 		return 0, nil, err
 	}
 	now := s.askNow()
-	items, err := s.Asks.ListByRequester(ctx, reqr)
+	items, incomplete, err := s.Asks.ListByRequester(ctx, reqr)
 	if err != nil {
 		return 0, nil, mapAskError(err)
 	}
-	return askPage(items, asks.PageMine, limit, cursor, now, true)
+	items = asksForRequester(items, reqr)
+	return askPage(items, asks.PageMine, limit, cursor, now, true, incomplete)
+}
+
+func asksForRequester(items []apiv1.Ask, reqr asks.Requester) []apiv1.Ask {
+	out := make([]apiv1.Ask, 0, len(items))
+	for _, item := range items {
+		if item.Context.SessionName == reqr.Name && item.Context.SessionUID == reqr.UID {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func (s *Server) getMyAsk(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
@@ -170,10 +181,13 @@ func (s *Server) ownedAsk(ctx context.Context, id string, reqr asks.Requester) (
 	return ask, nil
 }
 
-func askPage(items []apiv1.Ask, kind string, limit int, cursor string, now time.Time, session bool) (int, any, error) {
+func askPage(items []apiv1.Ask, kind string, limit int, cursor string, now time.Time, session, incomplete bool) (int, any, error) {
 	page, err := asks.Page(items, kind, limit, cursor)
 	if err != nil {
 		return 0, nil, mapAskError(err)
+	}
+	if incomplete {
+		page.Complete = false
 	}
 	page.Asks = presentAsks(page.Asks, now, session)
 	return http.StatusOK, page, nil

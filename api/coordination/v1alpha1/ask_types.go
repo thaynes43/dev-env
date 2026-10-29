@@ -15,13 +15,16 @@ func init() {
 	})
 }
 
-// Ask is one agent question or approval request (Epic #254). The spec is
-// immutable. The status carries the lifecycle, and its answer is set once.
-// v1 stores no inbox delivery: the requester reads the answer from the ask.
+// Ask is one agent question or approval request (OpenProject Epic #254). The
+// spec is immutable. The status carries the lifecycle, and its answer is set
+// once. v1 stores no inbox delivery: the requester reads the answer from the ask.
+// A root rule stops a status write from dropping a stored answer. The status
+// type's own rule does not run once status itself is gone.
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == self.spec.id",message="the ask's name is its id"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.answer) || (has(self.status) && has(self.status.answer))",message="an ask answer cannot be dropped with status"
 type Ask struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -120,10 +123,12 @@ type AskScope struct {
 }
 
 // AskStatus is the lifecycle. An answer is written once and never replaced
-// (contract v1.1 A12). Open can become answered, withdrawn or expired; those
+// (contract v1.2.1). Open can become answered, withdrawn or expired; those
 // three do not change again.
-// An optional answer is absent, not null, so this is has() rather than == null.
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.answer) || self.answer == oldSelf.answer",message="an ask answer is set once"
+// An optional answer is absent, not null. The set-once rule uses has() and
+// requires the new object to still carry the answer, so clearing the field
+// does not skip the comparison.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.answer) || (has(self.answer) && self.answer == oldSelf.answer)",message="an ask answer is set once"
 // +kubebuilder:validation:XValidation:rule="!(oldSelf.state in ['answered', 'withdrawn', 'expired']) || self.state == oldSelf.state",message="an answered, withdrawn or expired ask does not change state"
 // +kubebuilder:validation:XValidation:rule="self.state != 'answered' || has(self.answer)",message="an answered ask has an answer"
 // +kubebuilder:validation:XValidation:rule="self.state == 'answered' || !has(self.answer)",message="only an answered ask has an answer"

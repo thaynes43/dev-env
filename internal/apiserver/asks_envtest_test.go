@@ -115,6 +115,14 @@ func TestEnvtestAskRoutes(t *testing.T) {
 	if strings.Contains(sessionRaw, "https://ask-issuer.example") || strings.Contains(sessionRaw, "portal-subject-256") || strings.Contains(sessionRaw, `"delivery"`) || !strings.Contains(sessionRaw, "Board user") {
 		t.Fatal(sessionRaw)
 	}
+	replayRaw := api.want(http.MethodPost, apiv1.AsksPath, owner, askInfo("request-a1"), http.StatusOK).Body.String()
+	if strings.Contains(replayRaw, "https://ask-issuer.example") || strings.Contains(replayRaw, "portal-subject-256") || strings.Contains(replayRaw, `"delivery"`) || !strings.Contains(replayRaw, "Board user") {
+		t.Fatal(replayRaw)
+	}
+	listRaw := api.want(http.MethodGet, apiv1.AsksPath+"?mine=true&limit=100", owner, nil, http.StatusOK).Body.String()
+	if strings.Contains(listRaw, "https://ask-issuer.example") || strings.Contains(listRaw, "portal-subject-256") || strings.Contains(listRaw, `"delivery"`) || !strings.Contains(listRaw, "Board user") {
+		t.Fatal(listRaw)
+	}
 	portalRaw := api.want(http.MethodGet, apiv1.PortalAskPath(created.ID), portal, nil, http.StatusOK).Body.String()
 	if !strings.Contains(portalRaw, "https://ask-issuer.example") || !strings.Contains(portalRaw, "portal-subject-256") || strings.Contains(portalRaw, `"delivery"`) {
 		t.Fatal(portalRaw)
@@ -122,6 +130,15 @@ func TestEnvtestAskRoutes(t *testing.T) {
 	again := decode[apiv1.Ask](t, api.want(http.MethodPost, apiv1.PortalAskAnswerPath(created.ID), portal, askChoice("a"), http.StatusOK))
 	if again.Answer == nil || !again.Answer.AnsweredAt.Equal(answered.Answer.AnsweredAt) {
 		t.Fatal("identical answer changed the record")
+	}
+	otherActor := askChoice("a")
+	otherActor.Actor.Subject = "other-subject-256"
+	wantError(t, api.do(http.MethodPost, apiv1.PortalAskAnswerPath(created.ID), portal, otherActor), http.StatusConflict, apiv1.CodeConflict)
+	renamed := askChoice("a")
+	renamed.Actor.DisplayName = "Renamed user"
+	keptName := decode[apiv1.Ask](t, api.want(http.MethodPost, apiv1.PortalAskAnswerPath(created.ID), portal, renamed, http.StatusOK))
+	if keptName.Answer == nil || !keptName.Answer.AnsweredAt.Equal(answered.Answer.AnsweredAt) || keptName.Answer.AnsweredBy.DisplayName != "Board user" {
+		t.Fatalf("display name retry %+v", keptName.Answer)
 	}
 	wantError(t, api.do(http.MethodPost, apiv1.PortalAskAnswerPath(created.ID), portal, askChoice("b")), http.StatusConflict, apiv1.CodeConflict)
 	var after coord.InboxMessageList
@@ -132,9 +149,13 @@ func TestEnvtestAskRoutes(t *testing.T) {
 		t.Fatalf("inbox messages %d to %d", len(before.Items), len(after.Items))
 	}
 
-	withdrawn := decode[apiv1.Ask](t, api.want(http.MethodPost, apiv1.AskWithdrawPath(second.ID), owner, nil, http.StatusOK))
-	if withdrawn.State != apiv1.AskStateWithdrawn {
-		t.Fatal(withdrawn.State)
+	withdrawRaw := api.want(http.MethodPost, apiv1.AskWithdrawPath(second.ID), owner, nil, http.StatusOK).Body.String()
+	if strings.Contains(withdrawRaw, "https://ask-issuer.example") || strings.Contains(withdrawRaw, "portal-subject-256") || strings.Contains(withdrawRaw, `"delivery"`) || strings.Contains(withdrawRaw, `"issuer"`) {
+		t.Fatal(withdrawRaw)
+	}
+	var withdrawn apiv1.Ask
+	if err := json.Unmarshal([]byte(withdrawRaw), &withdrawn); err != nil || withdrawn.State != apiv1.AskStateWithdrawn {
+		t.Fatal(err, withdrawRaw)
 	}
 	wantError(t, api.do(http.MethodPost, apiv1.AskWithdrawPath(second.ID), owner, nil), http.StatusConflict, apiv1.CodeConflict)
 	wantError(t, api.do(http.MethodPost, apiv1.PortalAsksPath+"/"+second.ID+"/withdraw", portal, nil), http.StatusNotFound, apiv1.CodeNotFound)
@@ -187,6 +208,69 @@ func TestEnvtestAskRoutes(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("race wins %d bodies %v", wins, bodies)
 	}
+
+	scopeAt := api.now.Add(2 * time.Hour)
+	retryBody := askApproval("request-retry1", scopeAt)
+	retryBody.ExpiresIn = "2h"
+	retryAsk := api.post(owner, retryBody, http.StatusCreated)
+	api.now = api.now.Add(time.Second)
+	if again := api.post(owner, retryBody, http.StatusOK); again.ID != retryAsk.ID {
+		t.Fatalf("retry id %s", again.ID)
+	}
+	api.now = scopeAt.Add(-time.Minute + time.Second)
+	if late := api.post(owner, retryBody, http.StatusOK); late.ID != retryAsk.ID {
+		t.Fatalf("late retry id %s", late.ID)
+	}
+
+	var src coord.Ask
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: retryAsk.ID}, &src); err != nil {
+		t.Fatal(err)
+	}
+	bare := cloneAsk(src, "ask-0123456789aaa001", "request-bare01")
+	if err := k8s.Create(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	forged := cloneAsk(src, "ask-0123456789aaa002", "request-forge01")
+	forged.Spec.Context.SessionName = "other-session"
+	forged.Spec.Context.SessionUID = "other-uid"
+	if err := k8s.Create(ctx, forged); err != nil {
+		t.Fatal(err)
+	}
+	mine := api.list(owner, apiv1.AsksPath+"?mine=true&limit=100")
+	if !askIDs(mine).has(bare.Name) || askIDs(mine).has(forged.Name) {
+		t.Fatalf("mine bare %v forged %v", askIDs(mine).has(bare.Name), askIDs(mine).has(forged.Name))
+	}
+	if got := api.get(portal, apiv1.PortalAskPath(bare.Name)); got.State != apiv1.AskStateOpen {
+		t.Fatalf("absent status state %s", got.State)
+	}
+	if openPage := api.list(portal, apiv1.PortalAsksPath+"?state=open&limit=100"); !askIDs(openPage).has(bare.Name) {
+		t.Fatal("portal open omitted the ask with no status")
+	}
+	if allPage := api.list(portal, apiv1.PortalAsksPath+"?state=all&limit=100"); !askIDs(allPage).has(bare.Name) || !askIDs(allPage).has(forged.Name) {
+		t.Fatal("portal all omitted a readable ask")
+	}
+	unreadable := cloneAsk(src, "ask-0123456789aaa003", "request-badrec1")
+	unreadable.Spec.ExpiresAt = unreadable.Spec.CreatedAt
+	if err := k8s.Create(ctx, unreadable); err != nil {
+		t.Fatal(err)
+	}
+	broken := api.list(owner, apiv1.AsksPath+"?mine=true&limit=100")
+	if broken.Complete || !askIDs(broken).has(bare.Name) || askIDs(broken).has(unreadable.Name) {
+		t.Fatalf("mine complete %v has bare %v has bad %v", broken.Complete, askIDs(broken).has(bare.Name), askIDs(broken).has(unreadable.Name))
+	}
+	if portalBroken := api.list(portal, apiv1.PortalAsksPath+"?state=all&limit=100"); portalBroken.Complete || askIDs(portalBroken).has(unreadable.Name) {
+		t.Fatal("portal all failed closed or kept the unreadable ask")
+	}
+
+	api.srv.Asks.Limits = asks.Limits{OpenPerRequester: 1, TotalPerRequester: 64, PerNamespace: 4096}
+	capTok := api.session("ask-lane-cap")
+	api.post(capTok, askInfo("request-cap1"), http.StatusCreated)
+	wantError(t, api.do(http.MethodPost, apiv1.AsksPath, capTok, askInfo("request-cap2")), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+
+	live := api.srv.Asks.Live
+	api.srv.Asks.Live = askCountFail{Client: k8s}
+	t.Cleanup(func() { api.srv.Asks.Live = live })
+	wantError(t, api.do(http.MethodPost, apiv1.AsksPath, capTok, askInfo("request-cap3")), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
 }
 
 type askAPI struct {
@@ -322,6 +406,29 @@ func askDecision(ok bool) apiv1.AskAnswerRequest {
 
 type askIDSet map[string]bool
 
+func cloneAsk(src coord.Ask, name, requestID string) *coord.Ask {
+	obj := src.DeepCopy()
+	obj.Name = name
+	obj.ResourceVersion = ""
+	obj.UID = ""
+	obj.Generation = 0
+	obj.ManagedFields = nil
+	obj.Status = coord.AskStatus{}
+	obj.Spec.ID = name
+	obj.Spec.RequestID = requestID
+	if obj.Labels == nil {
+		obj.Labels = map[string]string{}
+	}
+	obj.Labels[asks.StateLabel] = string(apiv1.AskStateOpen)
+	return obj
+}
+
+type askCountFail struct{ client.Client }
+
+func (askCountFail) List(context.Context, client.ObjectList, ...client.ListOption) error {
+	return apierrors.NewServiceUnavailable("unconfirmed")
+}
+
 func askIDs(page apiv1.AskList) askIDSet {
 	out := askIDSet{}
 	for _, a := range page.Asks {
@@ -339,15 +446,18 @@ func deleteAskFixtures(k8s client.Client) {
 	if err := k8s.List(ctx, &asks, client.InNamespace(sessionNS)); err == nil {
 		for i := range asks.Items {
 			name := asks.Items[i].Spec.Context.SessionName
-			if name == "ask-lane-owner" || name == "ask-lane-other" {
+			if name == "ask-lane-owner" || name == "ask-lane-other" || name == "ask-lane-cap" || name == "other-session" {
 				_ = k8s.Delete(ctx, &asks.Items[i])
 			}
 		}
 	}
-	for _, name := range []string{"ask-lane-owner", "ask-lane-other", "ask-lane-portal"} {
+	for _, name := range []string{"ask-0123456789aaa001", "ask-0123456789aaa002", "ask-0123456789aaa003"} {
+		_ = k8s.Delete(ctx, &coord.Ask{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS}})
+	}
+	for _, name := range []string{"ask-lane-owner", "ask-lane-other", "ask-lane-cap", "ask-lane-portal"} {
 		_ = k8s.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS}})
 	}
-	for _, name := range []string{"ask-lane-owner", "ask-lane-other"} {
+	for _, name := range []string{"ask-lane-owner", "ask-lane-other", "ask-lane-cap"} {
 		_ = k8s.Delete(ctx, &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS}})
 	}
 }

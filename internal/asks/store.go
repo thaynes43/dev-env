@@ -1,4 +1,4 @@
-// Package asks stores agent asks for the operator API (Epic #254).
+// Package asks stores agent asks for the operator API (OpenProject Epic #254).
 // The routes exist only when the operator is started with --enable-asks.
 // v1 does not deliver an answer through the inbox: the requester reads the ask.
 package asks
@@ -35,6 +35,8 @@ const (
 	DefaultTotalPerRequester int64 = 512
 	// DefaultPerNamespace is the cap on asks in the namespace.
 	DefaultPerNamespace int64 = 4096
+	// openRecountLimit is the most open-labelled asks one create recount reads.
+	openRecountLimit = 512
 )
 
 var (
@@ -78,7 +80,10 @@ func (l Limits) effective() Limits {
 
 // KubeStore reads asks from the API server (Live) and writes them through Client.
 // Counts follow the taskclaim.CheckRoom pattern: an uncached metadata list,
-// then create. Racing creates can pass the same count.
+// then create. When the open-label count is already at its bound, one uncached
+// list of that requester's open-labelled asks (at most openRecountLimit)
+// recounts those that are still effectively open and repairs the other labels.
+// Racing creates can pass the same count.
 type KubeStore struct {
 	Client    client.Client
 	Live      client.Reader
@@ -112,18 +117,36 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 	if err := s.ready(); err != nil {
 		return apiv1.Ask{}, false, err
 	}
-	made, err := prepare(req, in, now)
+	if req.Namespace != Namespace || req.Name == "" || req.UID == "" {
+		return apiv1.Ask{}, false, ErrUnavailable
+	}
+	// Resolve an identical retry before ValidateAt. An approval retried near
+	// scope.expiresAt is still the same request; the clock must not turn it into
+	// a 400.
+	in, err := normalizeCreate(in)
 	if err != nil {
 		return apiv1.Ask{}, false, err
 	}
-	existing, err := s.load(ctx, made.Name)
+	if !apiv1.ValidAskRequestID(in.RequestID) {
+		return apiv1.Ask{}, false, fmt.Errorf("%w: requestId: must match ^[A-Za-z0-9-]{8,64}$", apiv1.ErrAskInvalid)
+	}
+	name := Name(req, in.RequestID)
+	digest, err := requestDigest(in)
+	if err != nil {
+		return apiv1.Ask{}, false, err
+	}
+	existing, err := s.load(ctx, name)
 	if err == nil {
-		return s.finishExisting(ctx, existing, made.Spec.RequestDigest)
+		return s.finishExisting(ctx, existing, req, digest)
 	}
 	if !errors.Is(err, ErrNotFound) {
 		return apiv1.Ask{}, false, err
 	}
-	if err := s.checkRoom(ctx, req); err != nil {
+	made, err := prepare(req, in, now)
+	if err != nil {
+		return apiv1.Ask{}, false, err
+	}
+	if err := s.checkRoom(ctx, req, now); err != nil {
 		return apiv1.Ask{}, false, err
 	}
 	obj := &coord.Ask{
@@ -137,7 +160,7 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 			if rerr != nil {
 				return apiv1.Ask{}, false, rerr
 			}
-			return s.finishExisting(ctx, existing, made.Spec.RequestDigest)
+			return s.finishExisting(ctx, existing, req, digest)
 		}
 		s.logWrite(err, made.Name)
 		return apiv1.Ask{}, false, fmt.Errorf("%w: ask was not stored", ErrUnavailable)
@@ -156,7 +179,10 @@ func (s KubeStore) Create(ctx context.Context, req Requester, in apiv1.AskCreate
 	return wire, true, nil
 }
 
-func (s KubeStore) finishExisting(ctx context.Context, obj *coord.Ask, digest string) (apiv1.Ask, bool, error) {
+func (s KubeStore) finishExisting(ctx context.Context, obj *coord.Ask, req Requester, digest string) (apiv1.Ask, bool, error) {
+	if !owns(obj, req) {
+		return apiv1.Ask{}, false, ErrConflict
+	}
 	if obj.Spec.RequestDigest != digest {
 		return apiv1.Ask{}, false, ErrConflict
 	}
@@ -179,30 +205,44 @@ func (s KubeStore) Get(ctx context.Context, id string) (apiv1.Ask, error) {
 	return toWire(obj)
 }
 
-// ListByRequester returns the requester's asks, unsorted.
-func (s KubeStore) ListByRequester(ctx context.Context, req Requester) ([]apiv1.Ask, error) {
+// ListByRequester returns the requester's asks, unsorted. The requester label
+// selects candidates; each kept item must also name this session in
+// spec.context. The bool is true when one stored record was skipped.
+func (s KubeStore) ListByRequester(ctx context.Context, req Requester) ([]apiv1.Ask, bool, error) {
 	if err := s.ready(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if req.Namespace != Namespace || req.Name == "" || req.UID == "" {
-		return nil, ErrUnavailable
+		return nil, false, ErrUnavailable
 	}
-	return s.list(ctx, client.MatchingLabels{RequesterLabel: requesterValue(req)})
+	items, incomplete, err := s.list(ctx, client.MatchingLabels{RequesterLabel: requesterValue(req)})
+	if err != nil {
+		return nil, false, err
+	}
+	kept := make([]apiv1.Ask, 0, len(items))
+	for _, item := range items {
+		if item.Context.SessionName == req.Name && item.Context.SessionUID == req.UID {
+			kept = append(kept, item)
+		}
+	}
+	return kept, incomplete, nil
 }
 
 // ListOpen returns asks whose stored state label is open. A lapsed ask stays
-// in this set until its label changes. Callers apply EffectiveState.
-func (s KubeStore) ListOpen(ctx context.Context) ([]apiv1.Ask, error) {
+// in this set until a recount or another label write changes it. Callers apply
+// EffectiveState. The bool is true when one stored record was skipped.
+func (s KubeStore) ListOpen(ctx context.Context) ([]apiv1.Ask, bool, error) {
 	if err := s.ready(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return s.list(ctx, client.MatchingLabels{StateLabel: string(apiv1.AskStateOpen)})
 }
 
-// ListNamespace returns every ask in the namespace, unsorted.
-func (s KubeStore) ListNamespace(ctx context.Context) ([]apiv1.Ask, error) {
+// ListNamespace returns every ask in the namespace, unsorted. The bool is true
+// when one stored record was skipped.
+func (s KubeStore) ListNamespace(ctx context.Context) ([]apiv1.Ask, bool, error) {
 	if err := s.ready(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return s.list(ctx, nil)
 }
@@ -324,8 +364,7 @@ func sameAnswer(obj *coord.Ask, in apiv1.AskAnswerRequest) bool {
 	}
 	got := obj.Status.Answer
 	return got.OptionID == in.OptionID && got.Text == in.Text && sameBool(got.Approved, in.Approved) &&
-		got.AnsweredBy.Issuer == in.Actor.Issuer && got.AnsweredBy.Subject == in.Actor.Subject &&
-		got.AnsweredBy.DisplayName == in.Actor.DisplayName
+		got.AnsweredBy.Issuer == in.Actor.Issuer && got.AnsweredBy.Subject == in.Actor.Subject
 }
 
 func sameBool(a, b *bool) bool {
@@ -370,6 +409,9 @@ func (s KubeStore) setStateLabel(ctx context.Context, name, state string) error 
 		if err != nil {
 			return err
 		}
+		if obj.Labels == nil {
+			obj.Labels = map[string]string{}
+		}
 		if obj.Labels[StateLabel] == state {
 			return nil
 		}
@@ -406,8 +448,9 @@ func (s KubeStore) load(ctx context.Context, name string) (*coord.Ask, error) {
 	return &obj, nil
 }
 
-func (s KubeStore) list(ctx context.Context, sel client.ListOption) ([]apiv1.Ask, error) {
+func (s KubeStore) list(ctx context.Context, sel client.ListOption) ([]apiv1.Ask, bool, error) {
 	var out []apiv1.Ask
+	incomplete := false
 	cursor := ""
 	for page := 0; page < 20; page++ {
 		list := &coord.AskList{}
@@ -420,24 +463,27 @@ func (s KubeStore) list(ctx context.Context, sel client.ListOption) ([]apiv1.Ask
 		}
 		if err := s.Live.List(ctx, list, opts...); err != nil {
 			s.log().Error(nil, "ask list failed", "reason", string(apierrors.ReasonForError(err)))
-			return nil, fmt.Errorf("%w: ask list failed", ErrUnavailable)
+			return nil, false, fmt.Errorf("%w: ask list failed", ErrUnavailable)
 		}
 		for i := range list.Items {
 			wire, err := toWire(&list.Items[i])
 			if err != nil {
-				return nil, err
+				s.log().Error(nil, "ask record skipped", "id", list.Items[i].Name, "reason", "unreadable")
+				incomplete = true
+				continue
 			}
 			out = append(out, wire)
 		}
 		cursor = list.Continue
 		if cursor == "" {
-			return out, nil
+			return out, incomplete, nil
 		}
 	}
-	return nil, fmt.Errorf("%w: ask list did not finish", ErrUnavailable)
+	return nil, false, fmt.Errorf("%w: ask list did not finish", ErrUnavailable)
 }
 
-func (s KubeStore) checkRoom(ctx context.Context, req Requester) error {
+func (s KubeStore) checkRoom(ctx context.Context, req Requester, now time.Time) error {
+	now = whole(now)
 	lim := s.Limits.effective()
 	who := requesterValue(req)
 	checks := []struct {
@@ -455,6 +501,18 @@ func (s KubeStore) checkRoom(ctx context.Context, req Requester) error {
 			s.log().Error(nil, "ask count failed", "scope", check.scope, "reason", string(apierrors.ReasonForError(err)))
 			return fmt.Errorf("%w: ask count failed", ErrUnavailable)
 		}
+		if check.scope == LimitOpen && n >= check.max {
+			recounted, unconfirmed, rerr := s.recountOpen(ctx, req, now)
+			if rerr != nil {
+				s.log().Error(nil, "ask count failed", "scope", check.scope, "reason", string(apierrors.ReasonForError(rerr)))
+				return fmt.Errorf("%w: ask count failed", ErrUnavailable)
+			}
+			if unconfirmed && recounted < check.max {
+				s.log().Error(nil, "ask count unconfirmed", "scope", check.scope)
+				return fmt.Errorf("%w: ask count unconfirmed", ErrUnavailable)
+			}
+			n = recounted
+		}
 		if atEighty(n, check.max) {
 			NearLimit.WithLabelValues(check.scope).Inc()
 			s.log().Info("ask count is at or above 80 percent of its bound", "scope", check.scope, "count", n, "limit", check.max)
@@ -464,6 +522,93 @@ func (s KubeStore) checkRoom(ctx context.Context, req Requester) error {
 		}
 	}
 	return nil
+}
+
+// recountOpen reads this requester's open-labelled asks, at most openRecountLimit,
+// and counts those whose stored state is open or absent and whose effective
+// state is still open. Any other label in that set is repaired. unconfirmed is
+// true when a record could not be read or the scan stopped early.
+func (s KubeStore) recountOpen(ctx context.Context, req Requester, now time.Time) (int64, bool, error) {
+	who := requesterValue(req)
+	var n int64
+	seen := 0
+	cursor := ""
+	unconfirmed := false
+	for {
+		if seen >= openRecountLimit {
+			return n, true, nil
+		}
+		room := openRecountLimit - seen
+		limit := int64(room)
+		if limit > 500 {
+			limit = 500
+		}
+		list := &coord.AskList{}
+		opts := []client.ListOption{
+			client.InNamespace(s.Namespace),
+			client.MatchingLabels{RequesterLabel: who, StateLabel: string(apiv1.AskStateOpen)},
+			client.Limit(limit),
+		}
+		if cursor != "" {
+			opts = append(opts, client.Continue(cursor))
+		}
+		if err := s.Live.List(ctx, list, opts...); err != nil {
+			return 0, false, err
+		}
+		for i := range list.Items {
+			if seen >= openRecountLimit {
+				return n, true, nil
+			}
+			seen++
+			item := &list.Items[i]
+			if item.DeletionTimestamp != nil {
+				continue
+			}
+			open, confirmed := countsAsOpenLimit(item, now)
+			if !confirmed {
+				unconfirmed = true
+				continue
+			}
+			if open {
+				n++
+				continue
+			}
+			if label, ok := desiredStateLabel(item, now); ok && label != "" && label != string(apiv1.AskStateOpen) {
+				s.syncLabel(ctx, item.Name, label)
+			}
+		}
+		if list.Continue == "" {
+			return n, unconfirmed, nil
+		}
+		cursor = list.Continue
+	}
+}
+
+func countsAsOpenLimit(obj *coord.Ask, now time.Time) (bool, bool) {
+	stored := obj.Status.State
+	if stored != "" && stored != string(apiv1.AskStateOpen) {
+		return false, true
+	}
+	wire, err := toWire(obj)
+	if err != nil {
+		return false, false
+	}
+	return wire.EffectiveState(now) == apiv1.AskStateOpen, true
+}
+
+func desiredStateLabel(obj *coord.Ask, now time.Time) (string, bool) {
+	switch obj.Status.State {
+	case string(apiv1.AskStateAnswered), string(apiv1.AskStateWithdrawn), string(apiv1.AskStateExpired):
+		return obj.Status.State, true
+	case "", string(apiv1.AskStateOpen):
+		wire, err := toWire(obj)
+		if err != nil {
+			return "", false
+		}
+		return string(wire.EffectiveState(now)), true
+	default:
+		return "", false
+	}
 }
 
 // countAtMost is the CheckRoom read: uncached metadata, label selected, and it
@@ -497,7 +642,7 @@ func toWire(obj *coord.Ask) (apiv1.Ask, error) {
 	spec := obj.Spec
 	state := apiv1.AskState(obj.Status.State)
 	if state == "" {
-		return apiv1.Ask{}, fmt.Errorf("%w: ask status is missing", ErrUnavailable)
+		state = apiv1.AskStateOpen
 	}
 	out := apiv1.Ask{
 		ID: spec.ID, Type: apiv1.AskType(spec.Type), Question: spec.Question,

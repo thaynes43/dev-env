@@ -18,23 +18,24 @@ func (s *Server) listPortalAsks(ctx context.Context, _ http.ResponseWriter, r *h
 	}
 	now := s.askNow()
 	var (
-		items []apiv1.Ask
-		kind  string
+		items      []apiv1.Ask
+		incomplete bool
+		kind       string
 	)
 	if r.URL.Query().Get(apiv1.AskQueryState) == apiv1.AskStateFilterOpen {
-		items, err = s.Asks.ListOpen(ctx)
+		items, incomplete, err = s.Asks.ListOpen(ctx)
 		kind = asks.PageOpen
 		if err == nil {
 			items = filterOpen(items, now)
 		}
 	} else {
-		items, err = s.Asks.ListNamespace(ctx)
+		items, incomplete, err = s.Asks.ListNamespace(ctx)
 		kind = asks.PageAll
 	}
 	if err != nil {
 		return 0, nil, mapAskError(err)
 	}
-	return askPage(items, kind, limit, cursor, now, false)
+	return askPage(items, kind, limit, cursor, now, false, incomplete)
 }
 
 func (s *Server) getPortalAsk(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
