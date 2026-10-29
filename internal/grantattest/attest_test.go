@@ -1,6 +1,7 @@
 package grantattest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -68,5 +69,59 @@ func TestStatementRoundTripAndBounds(t *testing.T) {
 	}
 	if ValidRef("has space") || ValidRef("") || !ValidRef("msg_1:2/3#4") {
 		t.Error("ref shape")
+	}
+}
+
+// ValidRef is ^[A-Za-z0-9_.:/#-]{1,128}$ : the edges and every class around it.
+func TestValidRefCharsetAndLength(t *testing.T) {
+	for name, ref := range map[string]string{
+		"one character":       "a",
+		"exactly 128":         strings.Repeat("a", 128),
+		"128 with every mark": strings.Repeat("Az09_.:/#-", 12) + "Az09_.:",
+		"letters and digits":  "Msg0123456789zZ",
+		"underscore":          "a_b",
+		"dot":                 "a.b",
+		"colon":               "a:b",
+		"slash":               "a/b",
+		"hash":                "a#b",
+		"hyphen":              "a-b",
+		"a path-like id":      "journal/2026-10-28/msg-7#3",
+	} {
+		if len(ref) > 128 {
+			t.Fatalf("%s: fixture is %d long", name, len(ref))
+		}
+		if !ValidRef(ref) {
+			t.Errorf("%s (%q) was refused", name, ref)
+		}
+	}
+	for name, ref := range map[string]string{
+		"empty":            "",
+		"129":              strings.Repeat("a", 129),
+		"space":            "a b",
+		"leading space":    " a",
+		"question mark":    "a?b",
+		"equals":           "a=b",
+		"at sign":          "a@b",
+		"ampersand":        "a&b",
+		"percent":          "a%20b",
+		"double quote":     `a"b`,
+		"single quote":     "a'b",
+		"newline":          "a\nb",
+		"trailing newline": "ab\n",
+		"tab":              "a\tb",
+		"carriage return":  "a\rb",
+		"non-ASCII":        "café",
+		"emoji":            "a\U0001F600",
+		"backslash":        `a\b`,
+		"semicolon":        "a;b",
+		"angle bracket":    "a<b",
+		"backtick":         "a`b",
+		"dollar":           "a$b",
+		"plus":             "a+b",
+		"comma":            "a,b",
+	} {
+		if ValidRef(ref) {
+			t.Errorf("%s (%q) was accepted", name, ref)
+		}
 	}
 }

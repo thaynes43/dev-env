@@ -91,6 +91,16 @@ func currentLaunch(s Settings) (Launch, bool) {
 	return Launch{}, false
 }
 
+// notAddressable is ErrNotAddressable with a reason. A Codex remote session is not a
+// pane in this pod: its conversation is reached from the Codex app or its remote-control
+// pairing, so its reason says that first. The status and the guards are the same.
+func notAddressable(sess protocol.Session, reason string) error {
+	if sess.Agent == protocol.AgentCodex && sess.Mode == protocol.ModeRemote {
+		return fmt.Errorf("%w: a Codex remote session is reached from the Codex app or its remote-control pairing, not by agent-run msg; %s", ErrNotAddressable, reason)
+	}
+	return fmt.Errorf("%w: %s", ErrNotAddressable, reason)
+}
+
 // Deliver is `agentd ctl deliver --from <caller>`, with the text on stdin
 // (D-65). For a Claude TUI it pastes the message into the pane as one
 // bracketed paste and presses Enter, as v1 handed a session its first
@@ -109,14 +119,14 @@ func Deliver(ctx context.Context, r Runner, s Settings, sess protocol.Session, f
 	}
 	l, ok := currentLaunch(s)
 	if !ok {
-		return fmt.Errorf("%w: the agent has not started in this pod", ErrNotAddressable)
+		return notAddressable(sess, "the agent has not started in this pod")
 	}
 	var p agentPid
 	if readJSONFile(s.statePath(pidFile), &p) != nil || !pidAlive(p) {
-		return fmt.Errorf("%w: the agent is not running", ErrNotAddressable)
+		return notAddressable(sess, "the agent is not running")
 	}
 	if !l.TUI {
-		return fmt.Errorf("%w: a headless task (-p) reads no messages; it reports through its log and its PR (D-16)", ErrNotAddressable)
+		return notAddressable(sess, "a headless task (-p) reads no messages; it reports through its log and its PR (D-16)")
 	}
 	msg := messageText(from, text)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
