@@ -943,6 +943,10 @@ func TestServeSessionsReadDeadlineStartsBeforeInitialAuthorization(t *testing.T)
 		if calls != 2 || reads != 1 || w.Code != 200 || !strings.Contains(w.Body.String(), "The operator read timed out.") || time.Since(started) != 17*time.Second {
 			t.Fatalf("auth=%d reads=%d status=%d elapsed=%s", calls, reads, w.Code, time.Since(started))
 		}
+		var line map[string]any
+		if json.Unmarshal(logs.Bytes(), &line) != nil || line["pre_read_ms"] != float64(4000) || line["elapsed_ms"] != float64(12000) {
+			t.Fatalf("read timing excluded initial checks: %s", logs.String())
+		}
 	})
 }
 
@@ -1003,5 +1007,110 @@ func TestServeSessionReadFailureKeepsSeparateLaunchRoute(t *testing.T) {
 	h.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "could not be reached") || !strings.Contains(w.Body.String(), `<form class="launch"`) || w.Header().Get("Content-Security-Policy") != portal.ProductSendPolicy || transport.count() != 0 {
 		t.Fatalf("read failure lost the separate launch form: HTTP %d", w.Code)
+	}
+}
+
+func TestServeSessionsSkipsReadWhenInitialChecksUseBudget(t *testing.T) {
+	for _, delay := range []time.Duration{12 * time.Second, 13 * time.Second} {
+		t.Run(delay.String(), func(t *testing.T) {
+			f := setupAuth(t)
+			f.login(t)
+			synctest.Test(t, func(t *testing.T) {
+				calls, reads, clocks := 0, 0, 0
+				authorizer := authorizeFunc(func(ctx context.Context, _ portal.Principal, _ portal.Resource) error {
+					calls++
+					if calls == 1 {
+						time.Sleep(delay)
+					}
+					return ctx.Err()
+				})
+				s := sessionReadFixture(t, func() time.Time { return f.now }, func(*http.Request) (*http.Response, error) { reads++; return nil, io.ErrUnexpectedEOF })
+				s.now = func() time.Time { clocks++; return f.now }
+				s.lastSuccess = f.now.Add(-time.Minute)
+				var logs bytes.Buffer
+				s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+				w := httptest.NewRecorder()
+				serveProduct(w, f.request(http.MethodGet, SessionsPath, ""), AssemblyConfig{Session: f.e, Authorizer: authorizer, Sessions: s, Now: func() time.Time { return f.now }})
+				if reads != 0 || clocks != 1 || calls != 2 || w.Code != 200 || !strings.Contains(w.Body.String(), "The Sessions read could not start within its time budget. Try again.") || strings.Contains(w.Body.String(), "operator read timed out") {
+					t.Fatalf("reads=%d clocks=%d auth=%d HTTP=%d", reads, clocks, calls, w.Code)
+				}
+				var line map[string]any
+				if json.Unmarshal(logs.Bytes(), &line) != nil || line["reason_code"] != "read_not_started" || line["pre_read_ms"] != float64(delay.Milliseconds()) || line["elapsed_ms"] != float64(delay.Milliseconds()) || line["page"] != float64(0) || line["timed_out"] != false || line["credential_ms"] != float64(0) {
+					t.Fatalf("misleading diagnostics: %s", logs.String())
+				}
+				if !strings.Contains(w.Body.String(), s.lastSuccess.Format("2006-01-02")) {
+					t.Fatal("skipped read lost last successful read")
+				}
+			})
+		})
+	}
+}
+
+type productCheckStore struct {
+	Store
+	get func(context.Context, Handle) (Record, error)
+}
+
+func (s productCheckStore) GetSession(ctx context.Context, h Handle) (Record, error) {
+	return s.get(ctx, h)
+}
+
+func TestServeProductPostReadChecksShareRequestDeadline(t *testing.T) {
+	for _, parentLimit := range []time.Duration{0, 18 * time.Second} {
+		t.Run(parentLimit.String(), func(t *testing.T) {
+			f := setupAuth(t)
+			f.login(t)
+			synctest.Test(t, func(t *testing.T) {
+				started := time.Now()
+				want := started.Add(19 * time.Second)
+				req := f.request(http.MethodGet, SessionsPath, "")
+				if parentLimit > 0 {
+					ctx, cancel := context.WithDeadline(req.Context(), started.Add(parentLimit))
+					defer cancel()
+					req = req.WithContext(ctx)
+					want = started.Add(parentLimit)
+				}
+				post := false
+				checks := 0
+				f.e.config.Store = productCheckStore{Store: f.store, get: func(ctx context.Context, h Handle) (Record, error) {
+					if post {
+						checks++
+						deadline, ok := ctx.Deadline()
+						if !ok || !deadline.Equal(want) {
+							t.Errorf("final session check deadline=%s, want %s", deadline, want)
+						}
+						time.Sleep(4 * time.Second)
+					}
+					return f.store.GetSession(ctx, h)
+				}}
+				calls := 0
+				auth := authorizeFunc(func(ctx context.Context, _ portal.Principal, _ portal.Resource) error {
+					calls++
+					if calls == 1 {
+						return nil
+					}
+					deadline, ok := ctx.Deadline()
+					if !ok || !deadline.Equal(want) {
+						t.Errorf("final authorization deadline=%s, want %s", deadline, want)
+					}
+					select {
+					case <-time.After(5 * time.Second):
+						return nil
+					case <-ctx.Done():
+						return portal.ErrUnavailable
+					}
+				})
+				s := sessionReadFixture(t, func() time.Time { return f.now }, func(*http.Request) (*http.Response, error) {
+					time.Sleep(11 * time.Second)
+					post = true
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(activityPage()))}, nil
+				})
+				w := httptest.NewRecorder()
+				serveProduct(w, req, AssemblyConfig{Session: f.e, Authorizer: auth, Sessions: s, Now: func() time.Time { return f.now }})
+				if checks != 1 || calls != 2 || w.Code == 200 || strings.Contains(w.Body.String(), "Sessions</title>") || !time.Now().Equal(want) {
+					t.Fatalf("checks=%d auth=%d HTTP=%d elapsed=%s", checks, calls, w.Code, time.Since(started))
+				}
+			})
+		})
 	}
 }

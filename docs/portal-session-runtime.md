@@ -351,6 +351,18 @@ A registered agent with a link gets an **Open in Claude** link in its header. Ev
 
 Any other state shows its own word, escaped.
 
+A session in Needs attention now starts with its reason and next step. Waiting
+reads “Waiting for your input.” and its list subtitle is “Waiting for you”. A
+registered remote session's primary **Answer in Claude** link is exactly its
+existing header URL; without that URL the panel directs the owner to the
+session's Claude app or workbench. Local waiting sessions point to their
+workbench terminal. Recent task failure/timeout, pod failure and agent
+failure/interruption show their existing grouping timestamp (UTC and age;
+Unknown when absent) and plain `agent-run show <name>` / `agent-run log <name>`
+commands. Task results keep precedence, and failures age out after 24 hours.
+The portal cannot infer the question. An unavailable conversation is explained
+once in that session's Messages panel. This enables no send or history access.
+
 This is read-only. It adds no portal action and needs no operator flag.
 
 **Deploy the portal before the operator.** The portal rejects activity keys it does not know.
@@ -514,9 +526,12 @@ Sessions reads must finish by request start plus 12 seconds, including time
 already spent on initial authentication and authorization. The same deadline
 covers credentials, up to ten operator pages, projection and selected history;
 each operator HTTP request still has its five-second timeout. This leaves
-headroom within the 20-second write timeout for final authentication and
-authorization checks and rendering. A read stopped at the ten-page cap is a
-successful but incomplete read (`complete=false`); it updates the last-success
+headroom within the 20-second write timeout. Final authentication,
+authorization and form checks share a deadline of request start plus 19 seconds
+(or the request's earlier deadline), leaving time for rendering. If initial
+checks exhaust the read budget, the source read is skipped: `read_not_started`
+is distinct from an operator timeout, and no credential or operator read runs.
+A read stopped at the ten-page cap is a successful but incomplete read (`complete=false`); it updates the last-success
 time and emits no failure event. Failures show a fixed reason (not connected,
 credential unavailable, operator unreachable/timed out, HTTP refusal, contract
 refusal, clock ahead or cancelled), the observation time, Retry at the same canonical
@@ -526,7 +541,8 @@ has no row. No partial or cached session data is shown after a failed read.
 
 One structured `portal_session_read_failed` line records each failed read:
 `reason_code`, `page` (0 outside an inventory-page read), `row_index` (-1 without a row),
-`http_status` (0 without a response), `timed_out`, `elapsed_ms` and phase
+`http_status` (0 without a response), `timed_out`, `elapsed_ms` (including initial
+checks), `pre_read_ms` (time before the source read) and phase
 measurements `credential_ms`, `fetch_ms`, `decode_ms`, `projection_ms`, `history_ms`. It includes
 no upstream errors, values, headers or credentials. `not_connected` and
 `cancelled` log at Info; other failures log at Warn. A deadline reached between

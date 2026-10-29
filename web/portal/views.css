@@ -149,6 +149,11 @@ svg.i { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentCo
 .meta .sep { width: 1px; height: 12px; background: var(--line); }
 .work-area { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 277px; min-height: 0; }
 .panels { min-width: 0; padding: 22px 25px 32px; }
+.attention-panel { margin: 20px 25px 0; padding: 16px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); overflow-wrap: anywhere; }
+.attention-panel h3 { margin: 4px 0 8px; font-size: 16px; line-height: 1.4; }
+.attention-time { margin-bottom: 8px; color: var(--muted); font-size: 11px; }
+.attention-action, .attention-command { margin-top: 10px; }
+.failure-launch { display: none; }
 .panel + .panel { margin-top: 26px; }
 .panel h3 { margin-bottom: 12px; font-size: 12px; font-weight: 650; }
 .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
@@ -305,6 +310,9 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .title-row h2.mono { font-size: 17px; }
   .title-row .btn { margin-bottom: 10px; min-height: 44px; }
   .meta { font-size: 11px; gap: 7px; }
+  .attention-panel { margin: 16px 16px 0; }
+  .attention-action .btn { min-height: 44px; }
+  .failure-launch { display: block; }
   .panels { padding: 18px 16px 24px; }
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kv { grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); }

@@ -12,7 +12,7 @@ func TestProductStatePreviews(t *testing.T) {
 	if err := writeProductStates(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-empty", "sessions-stale", "sessions-current"} {
+	for _, name := range []string{"usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-read-not-started", "sessions-empty", "sessions-stale", "sessions-current"} {
 		body, err := os.ReadFile(filepath.Join(dir, name+".html"))
 		if err != nil {
 			t.Fatal(err)
@@ -45,5 +45,47 @@ func TestProductStatePreviews(t *testing.T) {
 		if strings.Contains(name, "contract-refused") && !strings.Contains(text, "Page 2, row index 1") {
 			t.Error("contract preview lost refusal position")
 		}
+	}
+}
+
+func TestAttentionStatePreviews(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeProductStates(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, reason, action string }{
+		{"waiting-linked", "Waiting for your input.", "Answer in Claude"},
+		{"waiting-no-link", "Waiting for your input.", "Remote Control link not reported"},
+		{"waiting-local", "Waiting for your input.", "Answer in the session&#39;s terminal on the workbench."},
+		{"task-failed", "Task failed", "agent-run log synthetic-attention"},
+		{"task-timed-out", "Task timed out", "agent-run log synthetic-attention"},
+		{"pod-failed", "Session pod failed", "agent-run show synthetic-attention"},
+		{"agent-failed", "Agent stopped unexpectedly", "agent-run show synthetic-attention"},
+		{"agent-interrupted", "Agent stopped unexpectedly", "agent-run show synthetic-attention"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join(dir, "attention-"+tc.name+".html"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := string(body)
+			for _, want := range []string{"Fixture preview", `class="attention-panel"`, tc.reason, tc.action, "The portal cannot show this session&#39;s conversation."} {
+				if !strings.Contains(s, want) {
+					t.Errorf("missing %s", want)
+				}
+			}
+			if strings.Count(s, "<h1") != 1 || strings.Contains(s, "<script") || strings.Contains(s, "<form") {
+				t.Fatal("unsafe preview or duplicate heading")
+			}
+			if strings.HasPrefix(tc.name, "waiting") && !strings.Contains(s, "Waiting for you") {
+				t.Fatal("waiting subtitle missing")
+			}
+			if tc.name == "waiting-linked" && strings.Count(s, `href="https://claude.ai/code/session_fixture-247"`) != 2 {
+				t.Fatal("Answer and Open links differ")
+			}
+			if !strings.HasPrefix(tc.name, "waiting") && !strings.Contains(s, "1h ago · 29 Oct 2026, 13:00 UTC") {
+				t.Fatal("failure time missing")
+			}
+		})
 	}
 }
