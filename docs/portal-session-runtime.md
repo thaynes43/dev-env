@@ -352,16 +352,21 @@ A registered agent with a link gets an **Open in Claude** link in its header. Ev
 Any other state shows its own word, escaped.
 
 A session in Needs attention now starts with its reason and next step. Waiting
-reads “Waiting for your input.” and its list subtitle is “Waiting for you”. A
+reads “Waiting for your input” and its list subtitle is “Waiting for you”. A
 registered remote session's primary **Answer in Claude** link is exactly its
-existing header URL; without that URL the panel directs the owner to the
-session's Claude app or workbench. Local waiting sessions point to their
-workbench terminal. Recent task failure/timeout, pod failure and agent
-failure/interruption show their existing grouping timestamp (UTC and age;
-Unknown when absent) and plain `agent-run show <name>` / `agent-run log <name>`
-commands. Task results keep precedence, and failures age out after 24 hours.
-The portal cannot infer the question. An unavailable conversation is explained
-once in that session's Messages panel. This enables no send or history access.
+existing header URL; the header link is hidden while that primary link is shown.
+Registered sessions without that URL point to the session's Claude app or
+workbench. Other remote states name the reported state and point to the
+workbench terminal, as do local waiting sessions. Recent task failure/timeout
+shows the task end time (UTC and age); pod failure and agent failure/interruption
+label the observation “Last reported”. Plain `agent-run show <name>` is always
+offered for failures. Running sessions also offer `agent-run log <name>`;
+otherwise the panel points to `logs/<name>.log` on the shared volume, matching
+the API's saved-log guidance. Task results keep precedence, and failures age out
+after 24 hours. Attention reasons have no trailing period.
+The portal cannot infer the question. The generic conversation gap appears
+only without a history link or loaded conversation; loaded conversations keep
+their specific unavailable reason. This enables no send or history access.
 
 This is read-only. It adds no portal action and needs no operator flag.
 

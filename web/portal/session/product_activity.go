@@ -414,14 +414,19 @@ func sessionAttention(s apiv1.PortalSessionSummary, now time.Time, link string) 
 	case a.TaskResult == "TimedOut":
 		p.Reason, p.When = "Task timed out", attentionTime(taskAt, now)
 	case s.Phase == "Failed":
-		p.Reason, p.When = "Session pod failed", attentionTime(podAt, now)
+		p.Reason, p.When = "Session pod failed", "Last reported "+attentionTime(podAt, now)
 	case a.AgentState == protocol.AgentWaiting:
-		p.Reason = "Waiting for your input."
+		p.Reason = "Waiting for your input"
 		switch {
 		case link != "":
 			p.Link = link
 		case a.Mode == "remote":
-			p.NextAction = "Remote Control link not reported: answer from the session's Claude app or the workbench."
+			if a.RemoteControl != nil && a.RemoteControl.State == "registered" {
+				p.NextAction = "Remote Control link not reported: answer from the session's Claude app or the workbench."
+			} else {
+				_, state := remoteControlView(a)
+				p.NextAction = "Remote Control is " + strings.ToLower(state) + ": answer from the session's terminal on the workbench."
+			}
 		case a.Mode == "local":
 			p.NextAction = "Answer in the session's terminal on the workbench."
 		default:
@@ -429,10 +434,15 @@ func sessionAttention(s apiv1.PortalSessionSummary, now time.Time, link string) 
 		}
 		return p
 	default:
-		p.Reason, p.When = "Agent stopped unexpectedly", attentionTime(podAt, now)
+		p.Reason, p.When = "Agent stopped unexpectedly", "Last reported "+attentionTime(podAt, now)
 	}
-	p.NextAction = "Inspect the session and its log from a session or the workbench."
-	p.Commands = []string{"agent-run show " + shown(s.Name), "agent-run log " + shown(s.Name)}
+	p.Commands = []string{"agent-run show " + shown(s.Name)}
+	if s.Phase == "Running" {
+		p.NextAction = "Inspect the session and its log from a session or the workbench."
+		p.Commands = append(p.Commands, "agent-run log "+shown(s.Name))
+	} else {
+		p.NextAction = "Inspect the session from a session or the workbench; its log is kept on the shared volume at logs/" + shown(s.Name) + ".log."
+	}
 	return p
 }
 

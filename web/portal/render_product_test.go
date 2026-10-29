@@ -505,9 +505,13 @@ func TestUsageSessionHrefValidatesUID(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			link := regexp.MustCompile(`<a href="([^"]+)">&lt;agent&gt;</a>`).FindSubmatch(body)
+			cell := regexp.MustCompile(`(?s)<tr><td>(.*?)<small>`).FindSubmatch(body)
+			if len(cell) != 2 {
+				t.Fatal("missing Usage session cell")
+			}
+			link := regexp.MustCompile(`<a href="([^"]*)">&lt;agent&gt;</a>`).FindSubmatch(cell[1])
 			if !valid {
-				if row.SessionHref() != "" || len(link) != 0 || !strings.Contains(string(body), "&lt;agent&gt;") {
+				if row.SessionHref() != "" || strings.Contains(string(cell[1]), "<a") || string(cell[1]) != "&lt;agent&gt;" {
 					t.Fatal("invalid UID was linked or name was lost")
 				}
 				return
@@ -578,8 +582,8 @@ func TestAttentionLinksAndConversationGap(t *testing.T) {
 		{"different session", link, "https://claude.ai/code/session_other", "", false, true},
 		{"non-Claude URL", "https://evil.example/", "https://evil.example/", "", false, true},
 		{"unsafe URL", "javascript:alert(1)", "javascript:alert(1)", "", false, true},
-		{"unavailable history", link, link, "Unavailable", true, true},
-		{"unknown history", link, link, "unexpected", true, true},
+		{"unavailable history", link, link, "Unavailable", true, false},
+		{"unknown history", link, link, "unexpected", true, false},
 		{"available history", link, link, "Complete", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -596,6 +600,10 @@ func TestAttentionLinksAndConversationGap(t *testing.T) {
 			if strings.Contains(text, `>Answer in Claude`) != tc.wantLink {
 				t.Fatal("unsafe or mismatched primary link, or valid link removed")
 			}
+			wantHeader := strings.HasPrefix(tc.header, "https://") && !tc.wantLink
+			if strings.Contains(text, `>Open in Claude<svg`) != wantHeader || (tc.wantLink && strings.Count(text, `href="`+link+`"`) != 1) {
+				t.Fatal("header link duplicates Answer or is hidden without a primary link")
+			}
 			if (strings.Count(text, "The portal cannot show this session&#39;s conversation.") == 1) != tc.wantGap {
 				t.Fatal("incorrect conversation availability wording")
 			}
@@ -604,6 +612,47 @@ func TestAttentionLinksAndConversationGap(t *testing.T) {
 			}
 			if row.Attention.Link != tc.answer || row.Messages.History != "old gap" || (tc.state != "" && row.Messages.Conversation.Note != "old reason") {
 				t.Fatal("renderer mutated its input")
+			}
+		})
+	}
+}
+
+func TestAttentionPreservesLoadableHistory(t *testing.T) {
+	href := productSessionsHref + "?session=uid-attention"
+	row := ProductRow{ID: "s1", Title: "attention", Attention: &ProductAttention{Reason: "Waiting for your input"},
+		Messages: &ProductMessages{History: "Load the conversation to read its turns.", HistoryHref: href}}
+	body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Groups: []ProductGroup{{Title: "Needs attention", Rows: []ProductRow{row}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, `href="`+href+`">Load this session's conversation</a>`) || !strings.Contains(text, row.Messages.History) || strings.Contains(text, "The portal cannot show") {
+		t.Fatal("loadable history was replaced with an unavailable message")
+	}
+	if row.Messages.HistoryHref != href || row.Messages.History != "Load the conversation to read its turns." || row.Messages.Conversation != nil {
+		t.Fatal("renderer mutated loadable history")
+	}
+}
+
+func TestAttentionPreservesUnavailableConversationReason(t *testing.T) {
+	for _, note := range []string{
+		"The conversation read failed. No turns are shown rather than a guess.",
+		"The conversation is unavailable (not_running).",
+		"The conversation is unavailable (<reason_code>).",
+	} {
+		t.Run(note, func(t *testing.T) {
+			conversation := &ProductConversation{State: "Unavailable", Note: note, Turns: []ProductTurn{{Role: "user", Text: "UNAVAILABLE-TURN"}}}
+			row := ProductRow{ID: "s1", Title: "attention", Attention: &ProductAttention{Reason: "Waiting for your input"}, Messages: &ProductMessages{Conversation: conversation}}
+			body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Groups: []ProductGroup{{Title: "Needs attention", Rows: []ProductRow{row}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(body)
+			if strings.Count(text, html.EscapeString(note)) != 1 || strings.Contains(text, "The portal cannot show") || strings.Contains(text, "UNAVAILABLE-TURN") {
+				t.Fatal("specific unavailable reason was lost or unavailable turns were shown")
+			}
+			if conversation.Note != note || len(conversation.Turns) != 1 {
+				t.Fatal("renderer mutated unavailable conversation")
 			}
 		})
 	}

@@ -54,11 +54,17 @@ func TestAttentionStatePreviews(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ name, reason, action string }{
-		{"waiting-linked", "Waiting for your input.", "Answer in Claude"},
-		{"waiting-no-link", "Waiting for your input.", "Remote Control link not reported"},
-		{"waiting-local", "Waiting for your input.", "Answer in the session&#39;s terminal on the workbench."},
-		{"task-failed", "Task failed", "agent-run log synthetic-attention"},
-		{"task-timed-out", "Task timed out", "agent-run log synthetic-attention"},
+		{"waiting-linked", "Waiting for your input", "Answer in Claude"},
+		{"waiting-no-link", "Waiting for your input", "Remote Control link not reported"},
+		{"waiting-login-required", "Waiting for your input", "Remote Control is login required: answer from the session&#39;s terminal on the workbench."},
+		{"waiting-unpaired", "Waiting for your input", "Remote Control is not paired: answer from the session&#39;s terminal on the workbench."},
+		{"waiting-offline", "Waiting for your input", "Remote Control is offline: answer from the session&#39;s terminal on the workbench."},
+		{"waiting-pairing", "Waiting for your input", "Remote Control is pairing code issued (pairing not confirmed): answer from the session&#39;s terminal on the workbench."},
+		{"waiting-errored", "Waiting for your input", "Remote Control is error: answer from the session&#39;s terminal on the workbench."},
+		{"waiting-starting", "Waiting for your input", "Remote Control is starting: answer from the session&#39;s terminal on the workbench."},
+		{"waiting-local", "Waiting for your input", "Answer in the session&#39;s terminal on the workbench."},
+		{"task-failed", "Task failed", "its log is kept on the shared volume at logs/synthetic-attention.log"},
+		{"task-timed-out", "Task timed out", "its log is kept on the shared volume at logs/synthetic-attention.log"},
 		{"pod-failed", "Session pod failed", "agent-run show synthetic-attention"},
 		{"agent-failed", "Agent stopped unexpectedly", "agent-run show synthetic-attention"},
 		{"agent-interrupted", "Agent stopped unexpectedly", "agent-run show synthetic-attention"},
@@ -80,8 +86,16 @@ func TestAttentionStatePreviews(t *testing.T) {
 			if strings.HasPrefix(tc.name, "waiting") && !strings.Contains(s, "Waiting for you") {
 				t.Fatal("waiting subtitle missing")
 			}
-			if tc.name == "waiting-linked" && strings.Count(s, `href="https://claude.ai/code/session_fixture-247"`) != 2 {
-				t.Fatal("Answer and Open links differ")
+			if tc.name == "waiting-linked" && (strings.Count(s, `href="https://claude.ai/code/session_fixture-247"`) != 1 || strings.Contains(s, ">Open in Claude<svg")) {
+				t.Fatal("Answer link is missing or the header duplicates it")
+			}
+			lastReported := tc.name == "pod-failed" || tc.name == "agent-failed" || tc.name == "agent-interrupted"
+			if strings.Contains(s, "Last reported 1h ago · 29 Oct 2026, 13:00 UTC") != lastReported {
+				t.Fatal("failure observation lacks its Last reported label, or task end was relabeled")
+			}
+			savedLog := tc.name == "task-failed" || tc.name == "task-timed-out" || tc.name == "pod-failed"
+			if savedLog && strings.Contains(s, "agent-run log synthetic-attention") {
+				t.Fatal("non-running session offers a live log")
 			}
 			if !strings.HasPrefix(tc.name, "waiting") && !strings.Contains(s, "1h ago · 29 Oct 2026, 13:00 UTC") {
 				t.Fatal("failure time missing")

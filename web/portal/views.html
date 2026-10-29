@@ -46,7 +46,7 @@
 {{range $i, $t := .Breakdowns}}<section class="breakdown" aria-labelledby="usage-b{{$i}}"><h3 id="usage-b{{$i}}">{{$t.Title}}</h3>{{if $t.Note}}<p class="note">{{$t.Note}}</p>{{end}}<div class="table-wrap"><table><thead><tr>{{range $t.Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
 <tbody>{{range $t.Rows}}<tr><td>{{.Name}}<small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>{{end}}
 <div class="usage-grid"><section aria-labelledby="usage-rows"><h3 id="usage-rows">{{if .RowsTitle}}{{.RowsTitle}}{{else}}By session{{end}}</h3>{{if .RowsNote}}<p class="note">{{.RowsNote}}</p>{{end}}<div class="table-wrap"><table><thead><tr>{{range .Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
-<tbody>{{range .Rows}}<tr><td>{{if .SessionUID}}<a href="{{.SessionHref}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}<small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>
+<tbody>{{range .Rows}}<tr><td>{{if .SessionHref}}<a href="{{.SessionHref}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}<small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>
 <aside class="coverage" aria-labelledby="usage-coverage"><p class="eyebrow">Coverage and accounting</p><h3 id="usage-coverage">What these numbers cover</h3><dl class="kv">{{range .Coverage}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></aside></div>{{else}}<p class="note">No sessions in this read.</p>{{end}}</div></section>
 {{end}}{{end}}
 </main></div>

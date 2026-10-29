@@ -782,12 +782,12 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 						attention.Link = ""
 					}
 					row.Attention = &attention
+					if attention.Link != "" {
+						row.Link, row.LinkLabel = "", ""
+					}
 				}
 				if row.Messages != nil {
 					m := *row.Messages
-					if row.Attention != nil {
-						m.History = "The portal cannot show this session's conversation."
-					}
 					m.Route.Tone = productTone(m.Route.Tone)
 					if m.Send != nil && !validSend(&m) {
 						m.Send, m.Gate = nil, sendUnavailable
@@ -795,11 +795,11 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					if !strings.HasPrefix(m.HistoryHref, productSessionsHref+"?session=") {
 						m.HistoryHref = ""
 					}
+					if row.Attention != nil && m.HistoryHref == "" && m.Conversation == nil {
+						m.History = "The portal cannot show this session's conversation."
+					}
 					if m.Conversation != nil {
 						m.Conversation = boundConversation(*m.Conversation)
-						if row.Attention != nil && m.Conversation.State == "Unavailable" {
-							m.Conversation.Note = "The portal cannot show this session's conversation."
-						}
 					}
 					row.Messages = &m
 				}

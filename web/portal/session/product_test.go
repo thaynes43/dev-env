@@ -1046,6 +1046,42 @@ func TestServeSessionsSkipsReadWhenInitialChecksUseBudget(t *testing.T) {
 	}
 }
 
+func TestSkippedReadPreservesCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		now, started := time.Now(), time.Now()
+		reads := 0
+		s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+			reads++
+			return nil, io.ErrUnexpectedEOF
+		})
+		s.path = filepath.Join(t.TempDir(), "missing-credential")
+		s.lastSuccess = now.Add(-time.Minute)
+		var logs bytes.Buffer
+		s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		time.Sleep(3 * time.Second)
+		filter := portal.ProductFilter{Attention: true}
+		page, err := s.skippedRead(ctx, filter, started)
+		var failure *sessionReadError
+		if !errors.As(err, &failure) || failure.ReasonCode != "cancelled" || failure.TimedOut || reads != 0 {
+			t.Fatalf("cancelled skipped read became a source read or timeout: err=%v reads=%d", err, reads)
+		}
+		if page.ReadFailure == nil || page.ReadFailure.ReasonCode != "cancelled" || page.Filter != filter || page.Connected || len(page.Groups) != 0 || page.ReadFailure.LastSuccessAt != s.lastSuccess.Format(time.RFC3339Nano) || !s.lastSuccess.Equal(now.Add(-time.Minute)) {
+			t.Fatal("cancelled read lost its failure, filter or previous successful observation")
+		}
+		var line map[string]any
+		if json.Unmarshal(logs.Bytes(), &line) != nil || line["reason_code"] != "cancelled" || line["level"] != "INFO" || line["timed_out"] != false || line["page"] != float64(0) || line["row_index"] != float64(-1) || line["elapsed_ms"] != float64(3000) || line["pre_read_ms"] != float64(3000) {
+			t.Fatalf("misleading cancellation diagnostics: %s", logs.String())
+		}
+		for _, phase := range []string{"credential_ms", "fetch_ms", "decode_ms", "projection_ms", "history_ms"} {
+			if line[phase] != float64(0) {
+				t.Errorf("skipped read recorded %s=%v", phase, line[phase])
+			}
+		}
+	})
+}
+
 type productCheckStore struct {
 	Store
 	get func(context.Context, Handle) (Record, error)

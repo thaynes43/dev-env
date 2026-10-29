@@ -105,6 +105,12 @@ func writeAttentionStates(dir string) error {
 	for _, f := range []struct{ name, mode, phase, state, result, rcState, url string }{
 		{"waiting-linked", "remote", "Running", protocol.AgentWaiting, "", "registered", "https://claude.ai/code/session_fixture-247"},
 		{"waiting-no-link", "remote", "Running", protocol.AgentWaiting, "", "registered", ""},
+		{"waiting-login-required", "remote", "Running", protocol.AgentWaiting, "", "login-required", ""},
+		{"waiting-unpaired", "remote", "Running", protocol.AgentWaiting, "", "unpaired", ""},
+		{"waiting-offline", "remote", "Running", protocol.AgentWaiting, "", "offline", ""},
+		{"waiting-pairing", "remote", "Running", protocol.AgentWaiting, "", "pair-code-issued", ""},
+		{"waiting-errored", "remote", "Running", protocol.AgentWaiting, "", "errored", ""},
+		{"waiting-starting", "remote", "Running", protocol.AgentWaiting, "", "starting", ""},
 		{"waiting-local", "local", "Running", protocol.AgentWaiting, "", "", ""},
 		{"task-failed", "task", "Failed", protocol.AgentExited, "Failed", "", ""},
 		{"task-timed-out", "task", "Failed", protocol.AgentExited, "TimedOut", "", ""},
