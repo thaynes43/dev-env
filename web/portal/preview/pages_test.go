@@ -19,11 +19,11 @@ func TestPagesFixturesAreSyntheticAndDistinguishStates(t *testing.T) {
 		name string
 		want []string
 	}{
-		{"pages-available.html", []string{"Fixture preview · synthetic data", "Synthetic sample alert", "Example alert for a local preview", "Unknown", "Current snapshot only", "2026-10-28T11:00:00Z", "2026-10-28T12:00:00Z"}},
-		{"pages-empty.html", []string{"Fixture preview · synthetic data", "Observed zero current alerts", "No alert types in this current snapshot"}},
+		{"pages-available.html", []string{"Fixture preview · synthetic data", "Synthetic sample alert", "Example alert for a local preview", "Unknown", "Current snapshot only", "28 Oct 2026, 11:00 UTC", "28 Oct 2026, 12:00 UTC"}},
+		{"pages-empty.html", []string{"Fixture preview · synthetic data", "Observed zero current alerts", "No configurable alert types in this current snapshot"}},
 		{"pages-unavailable.html", []string{"Fixture preview · synthetic data", "Alertmanager is unavailable"}},
 		{"pages-disabled.html", []string{"Fixture preview · synthetic data", "Pages not enabled", "Unavailable"}},
-		{"pages-detail.html", []string{"Fixture preview · synthetic data", `id="pages-group-2" class="pages-detail is-default"`, "synthetic-detail-other", "Warning detail summary", "2026-10-28T15:00:00Z", "https://example.test/graph?g0.expr=up", "https://example.test/runbook", "Generator", "Runbook"}},
+		{"pages-detail.html", []string{"Fixture preview · synthetic data", `id="pages-group-2" class="pages-detail is-default"`, "synthetic-detail-other", "Warning detail summary", "28 Oct 2026, 15:00 UTC", "https://example.test/graph?g0.expr=up", "https://example.test/runbook", "Generator", "Runbook"}},
 		{"pages-configuration.html", []string{"Fixture preview · synthetic data", "Not connected: saving and live effect unavailable", "No preference document is loaded. This is not a loaded empty store.", "Unknown / Not connected", "DiskFull", "InodeFull", "Unset", "Desired", "<fieldset disabled"}},
 	}
 	for _, tc := range tests {

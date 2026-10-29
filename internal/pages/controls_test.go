@@ -324,8 +324,8 @@ func TestMemoryStoreAndUnconfigured(t *testing.T) {
 	if !errors.Is(err, ErrNotConfigured) || rev != "" {
 		t.Fatal(rev, err)
 	}
-	if appliedState != "Unknown" || appliedConnection != "Not connected" || strings.Contains(string(mustMarshal(t, first)), "applied") {
-		t.Fatal(appliedState, appliedConnection)
+	if strings.Contains(string(mustMarshal(t, first)), "applied") {
+		t.Fatal("desired preferences contain applied policy")
 	}
 	if _, _, err := store.Load(ctx, alice); err != nil {
 		t.Fatal(err)
@@ -399,10 +399,7 @@ func clip(s string) string {
 
 const maxPrincipalBytes = 512
 
-const (
-	appliedState      = "Unknown"
-	appliedConnection = "Not connected"
-)
+const ()
 
 func validPrincipal(p Principal) bool {
 	return validIdentity(p.Issuer) && validIdentity(p.Subject)

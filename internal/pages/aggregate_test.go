@@ -277,3 +277,24 @@ func groupedAlert(fingerprint, name string, nameOK bool, severity string, severi
 		Recurrence:  "Unknown",
 	}
 }
+
+func TestSnapshotTimeUsesAggregateBounds(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		known bool
+		utc   string
+	}{
+		{"", false, ""},
+		{"Unknown", false, ""},
+		{"invalid", false, ""},
+		{"1970-01-01T00:00:00Z", false, ""},
+		{"1999-12-31T20:00:00-04:00", true, "2000-01-01T00:00:00Z"},
+		{"9999-12-31T23:59:59-01:00", false, ""},
+		{"9999-12-31T22:59:59-01:00", true, "9999-12-31T23:59:59Z"},
+	} {
+		stamp, known := SnapshotTime(tc.value)
+		if known != tc.known || known && stamp.Format(time.RFC3339Nano) != tc.utc {
+			t.Fatalf("SnapshotTime(%q) = %v, %t", tc.value, stamp, known)
+		}
+	}
+}

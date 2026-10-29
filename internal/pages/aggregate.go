@@ -248,6 +248,14 @@ func optionalInstant(value string) (time.Time, bool, string) {
 	return parsed, ok, ""
 }
 
+// SnapshotTime returns a known snapshot instant in UTC using the same floor
+// and year ceiling as AggregateAlerts. Empty, malformed and sentinel values
+// have no displayable instant. It does not read the wall clock.
+func SnapshotTime(value string) (time.Time, bool) {
+	stamp, known, _ := snapshotInstant(value)
+	return stamp, known
+}
+
 func snapshotInstant(value string) (time.Time, bool, string) {
 	if !utf8.ValidString(value) || !validAlertTime(value) {
 		return time.Time{}, false, "time"

@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"golang.org/x/net/html"
 )
 
 const pagesSharedHeader = `<header class="topbar">{{template "product-icons"}}<a class="brand" href="/portal/projects/dev-env/environments/internal/sessions"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>{{template "product-nav" "pages"}}</header>`
@@ -27,7 +29,6 @@ func TestPagesWorkspaceFocusAndWidths(t *testing.T) {
 		"var(--focus)",
 		"overflow-wrap:anywhere",
 		"minmax(0,22rem) minmax(0,1fr)",
-		"min-width:1280px",
 		"max-width:700px",
 		"max-width:390px",
 		"max-width:320px",
@@ -77,9 +78,8 @@ func TestPagesWorkspaceFocusAndWidths(t *testing.T) {
 		"Current snapshot only",
 		`class="pages-count">2<`,
 		`href="https://example.test/graph" rel="noreferrer">Generator</a>`,
-		`tabindex="0"`,
 		`<fieldset disabled>`,
-		`<select id="pages-escalate" disabled`,
+		`<select disabled aria-label="Escalate for DiskFull · selected…rint"`,
 		PagesControlNotice,
 		PagesAppliedState,
 		PagesDesiredUnset,
@@ -93,10 +93,10 @@ func TestPagesWorkspaceFocusAndWidths(t *testing.T) {
 			t.Fatalf("missing %s", want)
 		}
 	}
-	if strings.Contains(text, "<form") || strings.Contains(text, "policy applied") || strings.Contains(text, "Saved preferences are loaded.") || strings.Contains(text, ">Runbook</a>") {
+	if strings.Contains(text, `tabindex="0"`) || strings.Contains(text, "<form") || strings.Contains(text, "policy applied") || strings.Contains(text, "Saved preferences are loaded.") || strings.Contains(text, ">Runbook</a>") {
 		t.Fatal("control or absent link over-claimed")
 	}
-	partial, err := RenderPages(view, len(body)-1)
+	partial, err := RenderPages(view, 100)
 	if err == nil || partial != nil {
 		t.Fatal("short limit returned a partial page")
 	}
@@ -126,7 +126,7 @@ func TestPagesWorkspaceStatesAndLongLabels(t *testing.T) {
 	if strings.Contains(text, "<script>") || strings.Count(text, "&lt;script&gt;") < 40 {
 		t.Fatalf("long label was not escaped, count %d", strings.Count(text, "&lt;script&gt;"))
 	}
-	partial, err := RenderPages(view, len(body)-1)
+	partial, err := RenderPages(view, 100)
 	if err == nil || partial != nil {
 		t.Fatal("long label render was not atomic")
 	}
@@ -157,4 +157,109 @@ func TestPagesWorkspaceStatesAndLongLabels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPagesControlsBelongToEachAlert(t *testing.T) {
+	view := PagesWorkspace{
+		Condition: "available", Availability: "Available", ObservedAt: "Unknown", Source: "Unknown",
+		Groups: []PagesGroup{{ID: "pages-group-1", Default: true, AlertNameDisplay: "DiskFull", Alerts: []PagesAlert{
+			{Fingerprint: "aabbccdd11223344", NameDisplay: "DiskFull", NameKnown: true},
+			{Fingerprint: "eeff001155667788", NameDisplay: "DiskFull", NameKnown: true},
+		}}},
+		Controls: DisconnectedPagesControls(nil),
+	}
+	body, err := RenderPages(view, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alerts := pagesTestNodes(doc, func(n *html.Node) bool { return pagesTestAttr(n, "data-fingerprint") != "" })
+	if len(alerts) != 2 {
+		t.Fatalf("alert articles: %d", len(alerts))
+	}
+	for i, article := range alerts {
+		fingerprint := view.Groups[0].Alerts[i].Fingerprint
+		if pagesTestAttr(article, "data-fingerprint") != fingerprint {
+			t.Fatalf("alert identity: %s", pagesTestAttr(article, "data-fingerprint"))
+		}
+		selects := pagesTestNodes(article, func(n *html.Node) bool { return n.Data == "select" })
+		if len(selects) != 2 {
+			t.Fatalf("%s has %d controls", fingerprint, len(selects))
+		}
+		for j, selectNode := range selects {
+			name := []string{"Escalate", "Mute"}[j] + " for DiskFull · " + shortFingerprint(fingerprint)
+			if pagesTestAttr(selectNode, "aria-label") != name {
+				t.Fatalf("control identity: %s", pagesTestAttr(selectNode, "aria-label"))
+			}
+			disabled := false
+			for _, attr := range selectNode.Attr {
+				if attr.Key == "disabled" {
+					disabled = true
+				}
+			}
+			if !disabled {
+				t.Fatalf("enabled control for %s", fingerprint)
+			}
+			selected := pagesTestNodes(selectNode, func(n *html.Node) bool {
+				for _, attr := range n.Attr {
+					if n.Data == "option" && attr.Key == "selected" {
+						return true
+					}
+				}
+				return false
+			})
+			if len(selected) != 1 || pagesTestAttr(selected[0], "value") != "unset" {
+				t.Fatal("desired control is not Unset")
+			}
+		}
+		if !strings.Contains(pagesTestText(article), "Desired Unset") || !strings.Contains(pagesTestText(article), "Applied "+PagesAppliedState) {
+			t.Fatal("alert control omitted desired or applied state")
+		}
+	}
+	configuration := pagesTestNodes(doc, func(n *html.Node) bool { return pagesTestAttr(n, "id") == "pages-configuration" })
+	if len(configuration) != 1 || strings.Contains(pagesTestText(configuration[0]), "Escalate") || strings.Contains(pagesTestText(configuration[0]), "Mute") {
+		t.Fatal("page-wide escalate/mute control remains")
+	}
+	current := pagesTestNodes(doc, func(n *html.Node) bool { return pagesTestAttr(n, "aria-current") == "location" })
+	if len(current) != 1 || pagesTestAttr(current[0], "href") != "#pages-group-1" {
+		t.Fatal("current-group marker is not in the matching detail")
+	}
+}
+
+func pagesTestAttr(n *html.Node, key string) string {
+	for _, attr := range n.Attr {
+		if attr.Key == key {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func pagesTestNodes(root *html.Node, match func(*html.Node) bool) []*html.Node {
+	var found []*html.Node
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && match(n) {
+			found = append(found, n)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	return found
+}
+
+func pagesTestText(n *html.Node) string {
+	if n.Type == html.TextNode {
+		return n.Data
+	}
+	var text strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		text.WriteString(pagesTestText(c))
+	}
+	return text.String()
 }

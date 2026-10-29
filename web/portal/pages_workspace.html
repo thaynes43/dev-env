@@ -1,47 +1,50 @@
 {{define "pages-workspace"}}
-<div class="pages-workspace">
-<section class="pages-list" id="pages-list" aria-label="Alert groups">
+<div class="pages-workspace{{if .ListOnly}} is-list-only{{end}}">
+<header class="pages-intro">
 <h1>Pages · Alertmanager</h1>
-{{if .CallerCoverage}}<p>{{.CallerCoverage}}</p>{{end}}
-<p>{{.Coverage}}</p>
+<p>{{if .CallerCoverage}}{{.CallerCoverage}}{{else}}{{.Coverage}}{{end}}</p>
 <dl class="kv">
 <dt>Availability</dt><dd>{{.Availability}}</dd>
-<dt>Observed at</dt><dd>{{.ObservedAt}}</dd>
+<dt>Observed at</dt><dd>{{pagesTime .ObservedAt}}</dd>
 <dt>Source</dt><dd>{{.Source}}</dd>
 </dl>
 {{if eq .Condition "disabled"}}<p>Pages not enabled.</p>{{else if eq .Condition "invalid"}}<p>Current snapshot is invalid.</p>{{else if eq .Condition "unavailable"}}<p>Alertmanager is unavailable.</p>{{else if eq .Condition "empty"}}<p>Observed zero current alerts.</p>{{end}}
+{{if .ListOnly}}<p class="pages-notice" role="status">Details and configuration omitted to keep this page within the response limit. All current alert groups are listed below.</p>{{end}}
+</header>
+<section class="pages-list" id="pages-list" aria-label="Alert groups">
 {{range .Groups}}
-<a class="item pages-group{{if .Default}} is-default{{end}}" href="#{{.ID}}"{{if .Default}} aria-current="true"{{end}}>
-<span class="item-top"><span data-known="{{.AlertNameKnown}}" class="pages-name{{if .AlertNameEmpty}} pages-empty-value{{end}}">{{.AlertNameDisplay}}</span><span class="badge{{if .SeverityEmpty}} pages-empty-value{{end}}" data-known="{{.SeverityKnown}}">{{.SeverityDisplay}}</span></span>
+{{if $.ListOnly}}<article class="item pages-group">{{else}}<a class="item pages-group" href="#{{.ID}}">{{end}}
+<span class="item-top"><span class="item-kicker">Current snapshot only</span><span class="badge{{if .SeverityEmpty}} pages-empty-value{{end}}" data-known="{{.SeverityKnown}}">{{.SeverityDisplay}}</span></span>
+<h3 data-known="{{.AlertNameKnown}}" class="pages-name{{if .AlertNameEmpty}} pages-empty-value{{end}}">{{.AlertNameDisplay}}</h3>
 <span class="item-line"><span>Count</span><span class="pages-count">{{.Count}}</span></span>
-<span class="item-line"><span>Earliest start</span><span class="pages-earliest">{{if eq .EarliestStart "Unknown"}}Unknown{{else}}<time datetime="{{.EarliestStart}}">{{.EarliestStart}}</time> UTC{{end}}</span></span>
-<span class="item-line"><span>Latest update</span><span class="pages-latest">{{if eq .LatestUpdate "Unknown"}}Unknown{{else}}<time datetime="{{.LatestUpdate}}">{{.LatestUpdate}}</time> UTC{{end}}</span></span>
-<span class="pages-coverage">Current snapshot only</span>
-</a>
+<span class="item-line"><span>Earliest start</span><span class="pages-earliest">{{if eq .EarliestStart "Unknown"}}Unknown{{else}}<time datetime="{{.EarliestStart}}">{{pagesTime .EarliestStart}}</time>{{end}}</span></span>
+<span class="item-line"><span>Latest update</span><span class="pages-latest">{{if eq .LatestUpdate "Unknown"}}Unknown{{else}}<time datetime="{{.LatestUpdate}}">{{pagesTime .LatestUpdate}}</time>{{end}}</span></span>
+{{if $.ListOnly}}</article>{{else}}</a>{{end}}
 {{end}}
-<a class="item pages-config-link" href="#pages-configuration">Configuration</a>
+{{if not .ListOnly}}<a class="item pages-config-link" href="#pages-configuration">Configuration</a>{{end}}
 </section>
+{{if not .ListOnly}}
 <div class="pages-stage">
 {{range .Groups}}
 <article id="{{.ID}}" class="pages-detail{{if .Default}} is-default{{end}}">
-<p class="pages-back"><a href="#pages-list">Alert groups</a></p>
-<h2 data-known="{{.AlertNameKnown}}"{{if .AlertNameEmpty}} class="pages-empty-value"{{end}}>{{.AlertNameDisplay}}</h2>
+<p class="pages-back"><a href="#pages-list">Alert groups</a><a href="#pages-configuration">Configuration</a></p>
+<h2><a class="pages-current-group{{if .AlertNameEmpty}} pages-empty-value{{end}}" href="#{{.ID}}" aria-current="location" data-known="{{.AlertNameKnown}}">{{.AlertNameDisplay}}</a></h2>
 <dl class="kv">
 <dt>Severity</dt><dd data-known="{{.SeverityKnown}}"{{if .SeverityEmpty}} class="pages-empty-value"{{end}}>{{.SeverityDisplay}}</dd>
 <dt>Count</dt><dd class="pages-count">{{.Count}}</dd>
-<dt>Earliest start</dt><dd class="pages-earliest">{{if eq .EarliestStart "Unknown"}}Unknown{{else}}<time datetime="{{.EarliestStart}}">{{.EarliestStart}}</time> UTC{{end}}</dd>
-<dt>Latest update</dt><dd class="pages-latest">{{if eq .LatestUpdate "Unknown"}}Unknown{{else}}<time datetime="{{.LatestUpdate}}">{{.LatestUpdate}}</time> UTC{{end}}</dd>
+<dt>Earliest start</dt><dd class="pages-earliest">{{if eq .EarliestStart "Unknown"}}Unknown{{else}}<time datetime="{{.EarliestStart}}">{{pagesTime .EarliestStart}}</time>{{end}}</dd>
+<dt>Latest update</dt><dd class="pages-latest">{{if eq .LatestUpdate "Unknown"}}Unknown{{else}}<time datetime="{{.LatestUpdate}}">{{pagesTime .LatestUpdate}}</time>{{end}}</dd>
 <dt>Coverage</dt><dd>Current snapshot only</dd>
 </dl>
 {{range .Alerts}}
-<article class="panel">
+<article class="panel pages-alert" data-fingerprint="{{.Fingerprint}}">
 <h3 data-known="{{.NameKnown}}"{{if .NameEmpty}} class="pages-empty-value"{{end}}>{{.NameDisplay}}</h3>
 <dl class="kv">
 <dt>Fingerprint</dt><dd class="mono">{{.Fingerprint}}</dd>
 <dt>Status</dt><dd>{{.Status}}</dd>
-<dt>Starts at</dt><dd>{{.StartsAt}}</dd>
-<dt>Ends at</dt><dd>{{.EndsAt}}</dd>
-<dt>Updated at</dt><dd>{{.UpdatedAt}}</dd>
+<dt>Starts at</dt><dd>{{pagesTime .StartsAt}}</dd>
+<dt>Ends at</dt><dd>{{pagesTime .EndsAt}}</dd>
+<dt>Updated at</dt><dd>{{pagesTime .UpdatedAt}}</dd>
 <dt>Disposition</dt><dd>{{.Disposition}}</dd>
 <dt>Recurrence</dt><dd>{{.Recurrence}}</dd>
 </dl>
@@ -50,44 +53,37 @@
 {{if .Labels}}<table class="pages-labels"><caption>Labels</caption><thead><tr><th scope="col">Label</th><th scope="col">Value</th></tr></thead><tbody>{{range .Labels}}<tr><th scope="row">{{.Key}}</th><td>{{.Value}}</td></tr>{{end}}</tbody></table>{{else}}<p>No labels in this alert.</p>{{end}}
 {{if .GeneratorURL}}<a href="{{.GeneratorURL}}" rel="noreferrer">Generator</a>{{end}}
 {{if .RunbookURL}}<a href="{{.RunbookURL}}" rel="noreferrer">Runbook</a>{{end}}
+<fieldset disabled aria-describedby="pages-not-connected">
+<legend>Controls for {{.NameDisplay}} · {{shortFingerprint .Fingerprint}}</legend>
+<label>Escalate <select disabled aria-label="Escalate for {{.NameDisplay}} · {{shortFingerprint .Fingerprint}}">
+<option value="unset" selected>Unset</option><option value="on">On</option><option value="off">Off</option>
+</select></label>
+<label>Mute <select disabled aria-label="Mute for {{.NameDisplay}} · {{shortFingerprint .Fingerprint}}">
+<option value="unset" selected>Unset</option><option value="on">On</option><option value="off">Off</option>
+</select></label>
+<p>Desired <strong>Unset</strong></p>
+<p>Applied <strong>{{$.Controls.Applied}}</strong></p>
+</fieldset>
 </article>
 {{end}}
 </article>
 {{end}}
 </div>
 {{template "pages-configuration" .}}
+{{end}}
 </div>
 {{end}}
 
 {{define "pages-configuration"}}
 <section class="pages-config" id="pages-configuration" aria-labelledby="pages-configuration-title">
 <h2 id="pages-configuration-title">Configuration</h2>
-<p id="pages-not-connected" class="pages-notice" tabindex="0">{{.Controls.Notice}}</p>
+<p class="pages-back"><a href="#pages-list">Alert groups</a></p>
+<p id="pages-not-connected" class="pages-notice">{{.Controls.Notice}}</p>
 {{if .Controls.DocumentLoaded}}<p>Saved preferences are loaded.</p>{{else}}<p class="pages-unloaded">No preference document is loaded. This is not a loaded empty store.</p>{{end}}
 <dl class="kv">
 <dt>Store</dt><dd>{{.Controls.Store}}</dd>
 <dt>Applied</dt><dd>{{.Controls.Applied}}</dd>
 </dl>
-<fieldset disabled>
-<legend>Escalate</legend>
-<select id="pages-escalate" disabled aria-describedby="pages-not-connected">
-<option value="unset"{{if eq .Controls.Escalate "Unset"}} selected{{end}}>Unset</option>
-<option value="on"{{if eq .Controls.Escalate "On"}} selected{{end}}>On</option>
-<option value="off"{{if eq .Controls.Escalate "Off"}} selected{{end}}>Off</option>
-</select>
-<p>Desired <strong>{{.Controls.Escalate}}</strong></p>
-<p>Applied <strong>{{.Controls.Applied}}</strong></p>
-</fieldset>
-<fieldset disabled>
-<legend>Mute</legend>
-<select id="pages-mute" disabled aria-describedby="pages-not-connected">
-<option value="unset"{{if eq .Controls.Mute "Unset"}} selected{{end}}>Unset</option>
-<option value="on"{{if eq .Controls.Mute "On"}} selected{{end}}>On</option>
-<option value="off"{{if eq .Controls.Mute "Off"}} selected{{end}}>Off</option>
-</select>
-<p>Desired <strong>{{.Controls.Mute}}</strong></p>
-<p>Applied <strong>{{.Controls.Applied}}</strong></p>
-</fieldset>
 <fieldset disabled>
 <legend>Auto-responder</legend>
 {{range $i, $type := .Controls.Types}}
@@ -102,7 +98,7 @@
 <p>Applied <strong>{{$type.Applied}}</strong></p>
 </div>
 {{else}}
-<p>No alert types in this current snapshot.</p>
+<p>No configurable alert types in this current snapshot.</p>
 {{end}}
 </fieldset>
 </section>

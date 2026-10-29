@@ -85,9 +85,9 @@ func TestPagesTimestampPresence(t *testing.T) {
 	text := string(body)
 	for _, want := range []string{
 		`<dt>Starts at</dt><dd>Unknown</dd>`,
-		`<dd>2026-10-28T12:00:00Z</dd>`,
-		`<dd>2026-10-28T13:00:00Z</dd>`,
-		`<dd>2026-10-28T12:01:00Z</dd>`,
+		`<dd>28 Oct 2026, 12:00 UTC</dd>`,
+		`<dd>28 Oct 2026, 13:00 UTC</dd>`,
+		`<dd>28 Oct 2026, 12:01 UTC</dd>`,
 		`datetime="2026-10-28T12:00:00Z"`,
 	} {
 		if !strings.Contains(text, want) {

@@ -269,7 +269,7 @@ func validatePreferences(prefs Preferences) error {
 	}
 	seenName := map[string]struct{}{}
 	for _, item := range prefs.Types {
-		if !validToken(item.AlertName, MaxAlertNameBytes) {
+		if !ConfigurableAlertName(item.AlertName) {
 			return fmt.Errorf("%w: alertName", ErrInvalid)
 		}
 		if _, ok := seenName[item.AlertName]; ok {
@@ -295,6 +295,12 @@ func canonMute(stamp time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("%w: muteUntil", ErrInvalid)
 	}
 	return stamp, nil
+}
+
+// ConfigurableAlertName reports whether the desired-preference codec can
+// store this exact alert name. Snapshot labels may have a wider vocabulary.
+func ConfigurableAlertName(value string) bool {
+	return validToken(value, MaxAlertNameBytes)
 }
 
 func validToken(value string, max int) bool {

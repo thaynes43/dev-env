@@ -18,7 +18,7 @@ const syntheticDetail = `[{"fingerprint":"synthetic-detail-disk","labels":{"aler
 
 const syntheticConfiguration = `[{"fingerprint":"synthetic-config-a","labels":{"alertname":"DiskFull","severity":"warning"},"annotations":{"summary":"Config type one"},"status":{"state":"active"},"startsAt":"2026-10-28T12:00:00Z","updatedAt":"2026-10-28T12:01:00Z"},{"fingerprint":"synthetic-config-b","labels":{"alertname":"InodeFull","severity":"critical"},"annotations":{"summary":"Config type two"},"status":{"state":"active"},"startsAt":"2026-10-28T12:02:00Z","updatedAt":"2026-10-28T12:03:00Z"}]`
 
-const syntheticPagesCoverage = "Fixture preview · synthetic data. Current alerts only; notification and delivery history, triage disposition and recurrence are Unknown."
+const syntheticPagesCoverage = "Fixture preview · synthetic data: current snapshot only; notification and delivery history, triage disposition and recurrence are Unknown."
 
 func writePages(dir string) error {
 	available, err := pages.ParseAlertmanager([]byte(syntheticPages))

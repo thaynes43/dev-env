@@ -165,11 +165,9 @@ func servePages(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 }
 
 // PagesWorkspace builds the read-only Pages document from the current snapshot.
-// Group bounds come from AggregateAlerts. Controls come from UnconfiguredStore
-// and stay disconnected. This does not save, mute, or escalate.
+// Group bounds come from AggregateAlerts. Controls stay disconnected. This does not save, mute, or escalate.
 func PagesWorkspace(snapshot pages.AlertmanagerSnapshot, disabled bool) portal.PagesWorkspace {
 	agg, aggErr := pages.AggregateAlerts(snapshot)
-	prefs, rev, loadErr := (pages.UnconfiguredStore{}).Load(context.Background(), pages.Principal{})
 	condition := pagesCondition(agg, aggErr, disabled)
 	groups := []portal.PagesGroup{}
 	if condition == "available" {
@@ -183,7 +181,7 @@ func PagesWorkspace(snapshot pages.AlertmanagerSnapshot, disabled bool) portal.P
 		ObservedAt:     agg.ObservedAt,
 		Source:         agg.Source,
 		Groups:         groups,
-		Controls:       unconfiguredControls(prefs, rev, loadErr, pagesTypeControls(groups)),
+		Controls:       portal.DisconnectedPagesControls(pagesTypeControls(groups)),
 	}
 }
 
@@ -202,15 +200,6 @@ func pagesCondition(agg pages.AlertAggregate, aggErr error, disabled bool) strin
 	default:
 		return "invalid"
 	}
-}
-
-func unconfiguredControls(prefs pages.Preferences, rev pages.Revision, err error, types []portal.PagesTypeControl) portal.PagesControls {
-	controls := portal.DisconnectedPagesControls(types)
-	if errors.Is(err, pages.ErrNotConfigured) && rev == "" && prefs.Version == 0 && len(prefs.Alerts) == 0 && len(prefs.Types) == 0 {
-		return controls
-	}
-	controls.DocumentLoaded = false
-	return controls
 }
 
 func buildPagesGroups(snapshot pages.AlertmanagerSnapshot, groups []pages.AlertGroup) []portal.PagesGroup {
@@ -322,7 +311,10 @@ func pagesTypeControls(groups []portal.PagesGroup) []portal.PagesTypeControl {
 	out := []portal.PagesTypeControl{}
 	seen := map[string]struct{}{}
 	for _, group := range groups {
-		key := fmt.Sprintf("%t\x00%s", group.AlertNameKnown, group.AlertName)
+		if !group.AlertNameKnown || !pages.ConfigurableAlertName(group.AlertName) {
+			continue
+		}
+		key := group.AlertName
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -340,10 +332,10 @@ func pagesTypeControls(groups []portal.PagesGroup) []portal.PagesTypeControl {
 
 func presentLabel(value string, known bool) (string, bool) {
 	if !known {
-		return "Unknown", false
+		return "Unknown (absent)", false
 	}
 	if value == "" {
-		return "Empty", true
+		return "Empty (value)", true
 	}
 	return value, false
 }
@@ -355,19 +347,11 @@ func textOrUnknown(value string) string {
 	return value
 }
 
-// displayInstant renders one alert field in UTC. Empty, unparsable, before
-// 2000-01-01T00:00:00Z, and UTC years after 9999 are Unknown. Group bounds
-// come from AggregateAlerts, which owns snapshotTimeFloor.
+// displayInstant keeps machine-readable UTC instants for the view. The shared
+// snapshot rule owns the floor and year ceiling; the template formats the text.
 func displayInstant(value string) string {
-	if value == "" {
-		return "Unknown"
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "Unknown"
-	}
-	parsed = parsed.UTC().Round(0)
-	if parsed.Before(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)) || parsed.Year() > 9999 {
+	parsed, known := pages.SnapshotTime(value)
+	if !known {
 		return "Unknown"
 	}
 	return parsed.Format(time.RFC3339Nano)

@@ -251,8 +251,7 @@ advances once and the stored document is the winner only. `Load` returns a
 copy. A cancelled context refuses the fake without writing. None of this
 survives a process restart, and none of it is evidence of a durable store.
 
-The fake's principal check and the constants `appliedState`,
-`appliedConnection`, and `maxPrincipalBytes` live in `controls_test.go`.
+The fake's principal check and `maxPrincipalBytes` live in `controls_test.go`.
 Production code does not carry those test helpers. The applied facts remain
 the literals `Unknown` and `Not connected`.
 
@@ -288,12 +287,14 @@ Released by Coordinator journal 2409 at 2026-10-29T15:15:05.382Z, from main
 workspace and not a live control.
 
 `session.PagesWorkspace` calls `AggregateAlerts` on the current
-`AlertmanagerSnapshot`, then `UnconfiguredStore.Load`. `RenderPages` renders
-that view. The production store result is `ErrNotConfigured`. The workspace
-does not treat that as a loaded empty document, and it does not render a
-saved preference row. `Save` is not called. There is no POST, CSRF, store
+`AlertmanagerSnapshot`, then builds explicitly disconnected controls.
+`RenderPages` renders that view. No store is loaded with an empty principal.
+The workspace does not claim a loaded empty document or a saved preference row. `Save` is not called. There is no POST, CSRF, store
 wiring, or network write. Authentication, the fixed source URL, the strict
-parser, escaping, CSP, and the whole-page response bound stay as they are.
+parser, escaping, CSP, and the whole-page response bound stay enforced. If details
+exceed the bound, a second atomic render lists all current groups with a notice
+and omits detail and configuration. If that list also exceeds the same bound,
+rendering still fails closed without partial output.
 No new route or query string is added. The live handler still rejects a query.
 
 The page has one `h1`. The shared navigation lines in `pages.html` stay as
@@ -301,8 +302,11 @@ they were at `fc57dd40`. The body is the workspace template.
 
 List: one row per aggregate group. Each row shows the alert name, the
 severity, the count, the earliest start, the latest update, and the coverage
-line "Current snapshot only". Known instants are UTC. Unknown stays the word
-Unknown. A known empty label is Empty, which is not Unknown and not 0.
+line "Current snapshot only". Known instants display as `28 Oct 2026, 11:00 UTC`
+in the list and detail; machine-readable time attributes retain RFC3339.
+Unknown times stay the word Unknown. Missing labels show the muted text
+`Unknown (absent)` and known empty labels show `Empty (value)`, distinct from
+literal `Unknown` and `Empty` label values.
 
 Detail: the selected group's alerts. Selection is a same-document fragment.
 When `Snapshot.Selection` equals a fingerprint, that group is the selected
@@ -314,15 +318,22 @@ has a safe http or https URL. Alert field times use the same UTC floor and
 year ceiling as `snapshotTimeFloor`. The group bounds themselves come from
 `AggregateAlerts`.
 
-Configuration: one Escalate control and one Mute control for the page, plus
-one auto-responder per current alert name. Desired is shown as Unset, On, or
+Each alert detail has its own disabled Escalate and Mute pair, identified by
+alert name and a short fingerprint; the full fingerprint remains in the detail.
+Configuration has one auto-responder per distinct current alert name accepted
+by the preference codec. Absent, empty, overlong, Unicode, quoted, backslashed
+or padded names get no configurable row. Desired is shown as Unset, On, or
 Off. With the unconfigured store the shown desired value is Unset. Applied
 is `Unknown / Not connected`. The controls are disabled. The notice is
 `Not connected: saving and live effect unavailable`. Sort and filter are not
 rendered, because a filter would suggest the group counts had been narrowed.
 `ListPreference` is still not applied. Disabled controls are not in the tab
-order. Group links, the configuration link, and the notice are keyboard
-reachable and use the shared focus ring.
+order. Group and configuration links are keyboard reachable and use the shared focus
+ring. The plain notice paragraph is not a tab stop. Each select has an accessible
+name. The current-group link lives in the displayed detail, so fragment changes
+expose the matching `aria-current="location"` link without stale current claims
+on the list. The single h1 remains above the list/detail on mobile. Configuration
+links target the section in the document scroll area on mobile.
 
 States stay separate. Disabled says "Pages not enabled." Unavailable says
 "Alertmanager is unavailable." An observed empty snapshot says "Observed
@@ -340,8 +351,12 @@ configuration-unconfigured. They are not production screenshots.
 
 Phase B tests cover rendered group count and UTC bounds, selected detail
 identity, escaped long labels and an atomic response bound, the four states
-above plus invalid, disabled controls that cannot submit or claim policy
-applied, keyboard and width rules, and unchanged shared navigation bytes.
+above plus invalid, per-alert disabled controls that cannot submit or claim policy
+applied, codec-compatible type rows, missing versus literal labels, a 1000-alert
+list fallback, atomic failure when even the list exceeds the bound, shared time
+validation, semantic markup and unchanged shared navigation bytes. Unit tests
+check markup and style contracts; actual widths, keyboard behavior, scrolling
+and absence of horizontal overflow require browser evidence.
 
 ## What this does not do
 

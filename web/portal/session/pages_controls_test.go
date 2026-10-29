@@ -1,9 +1,7 @@
 package session
 
 import (
-	"context"
-	"errors"
-	"os"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -33,7 +31,7 @@ func TestPagesWorkspaceRendersAggregateDetailAndControls(t *testing.T) {
 	if view.Condition != "available" || view.CallerCoverage != snapshot.Coverage || view.Coverage != agg.Coverage {
 		t.Fatalf("envelope %+v", view)
 	}
-	if view.Controls.DocumentLoaded || view.Controls.Notice != portal.PagesControlNotice || view.Controls.Applied != portal.PagesAppliedState || view.Controls.Escalate != portal.PagesDesiredUnset || view.Controls.Mute != portal.PagesDesiredUnset || view.Controls.Store != portal.PagesStoreDisconnected {
+	if view.Controls.DocumentLoaded || view.Controls.Notice != portal.PagesControlNotice || view.Controls.Applied != portal.PagesAppliedState || view.Controls.Store != portal.PagesStoreDisconnected {
 		t.Fatalf("controls %+v", view.Controls)
 	}
 	body, err := portal.RenderPages(view, 1<<20)
@@ -71,7 +69,7 @@ func TestPagesWorkspaceRendersAggregateDetailAndControls(t *testing.T) {
 		"Current snapshot only",
 		"&lt;script&gt;db&lt;/script&gt;",
 		`data-known="true">Unknown`,
-		`data-known="false">Unknown`,
+		`data-known="false">Unknown (absent)`,
 		`class="pages-name pages-empty-value"`,
 		"caller coverage stays visible",
 		`<fieldset disabled>`,
@@ -113,10 +111,10 @@ func TestPagesWorkspaceRendersAggregateDetailAndControls(t *testing.T) {
 		}
 		names[item.Label] = true
 	}
-	if !names["DiskFull"] || !names["Empty"] || names["Unknown"] {
+	if !names["DiskFull"] || names["Empty (value)"] || names["Unknown"] {
 		t.Fatalf("types %+v", view.Controls.Types)
 	}
-	partial, err := portal.RenderPages(view, len(body)-1)
+	partial, err := portal.RenderPages(view, 100)
 	if err == nil || partial != nil {
 		t.Fatal("response bound returned a partial page")
 	}
@@ -163,27 +161,6 @@ func TestPagesWorkspaceStatesStayDistinct(t *testing.T) {
 	}
 }
 
-func TestUnconfiguredControlsAreNotALoadedDocument(t *testing.T) {
-	prefs, rev, err := (pages.UnconfiguredStore{}).Load(context.Background(), pages.Principal{})
-	got := unconfiguredControls(prefs, rev, err, nil)
-	if !errors.Is(err, pages.ErrNotConfigured) || rev != "" || prefs.Version != 0 || got.DocumentLoaded || got.Escalate != portal.PagesDesiredUnset || got.Applied != portal.PagesAppliedState {
-		t.Fatalf("unconfigured %+v %q %v", got, rev, err)
-	}
-	saved := pages.Preferences{Version: pages.PreferencesVersion, Alerts: []pages.AlertPreference{{Fingerprint: "f", Escalate: pages.DesiredOn, Mute: pages.DesiredOff}}}
-	got = unconfiguredControls(saved, "rev-opaque", nil, nil)
-	if got.DocumentLoaded || strings.Contains(got.Applied, "rev-opaque") || got.Escalate != portal.PagesDesiredUnset {
-		t.Fatalf("saved document presented: %+v", got)
-	}
-	source, err := os.ReadFile("pages.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(source)
-	if !strings.Contains(text, "AggregateAlerts") || !strings.Contains(text, "UnconfiguredStore") || strings.Contains(text, ".Save(") || strings.Contains(text, "MethodPost") {
-		t.Fatal("session pages gained a write or lost the aggregate")
-	}
-}
-
 func TestDisplayInstantUsesSnapshotFloorAndYearCeiling(t *testing.T) {
 	overflow := "9999-12-31T23:59:59-01:00"
 	if displayInstant(overflow) != "Unknown" {
@@ -197,5 +174,84 @@ func TestDisplayInstantUsesSnapshotFloorAndYearCeiling(t *testing.T) {
 	}
 	if displayInstant("") != "Unknown" || displayInstant("1970-01-01T00:00:00Z") != "Unknown" || displayInstant("1999-12-31T20:00:00-04:00") != "2000-01-01T00:00:00Z" {
 		t.Fatal("floor display drifted")
+	}
+}
+
+func TestPagesWorkspaceMaximumAlertsFallsBackToList(t *testing.T) {
+	var raw strings.Builder
+	raw.WriteByte('[')
+	for i := range 1000 {
+		if i > 0 {
+			raw.WriteByte(',')
+		}
+		fmt.Fprintf(&raw, `{"fingerprint":"alert-%04d","labels":{"alertname":"Alert-%04d","severity":"warning"},"status":{"state":"active"},"startsAt":"2026-10-28T11:00:00Z","updatedAt":"2026-10-28T12:00:00Z","annotations":{"summary":"synthetic detail"}}`, i, i)
+	}
+	raw.WriteByte(']')
+	snapshot, err := pages.ParseAlertmanager([]byte(raw.String()))
+	if err != nil || len(snapshot.Alerts) != 1000 {
+		t.Fatalf("parser maximum: %d alerts, %v", len(snapshot.Alerts), err)
+	}
+	view := PagesWorkspace(snapshot, false)
+	limit := maximumResponse * 7 / 8
+	body, err := portal.RenderPages(view, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if len(body) > limit || strings.Count(text, `class="item pages-group"`) != 1000 || !strings.Contains(text, "Details and configuration omitted") {
+		t.Fatalf("maximum list: %d bytes, %d groups", len(body), strings.Count(text, `class="item pages-group"`))
+	}
+	for _, want := range []string{"Alert-0000", "Alert-0999", "28 Oct 2026, 11:00 UTC", "28 Oct 2026, 12:00 UTC"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("maximum list missing %s", want)
+		}
+	}
+	for _, bad := range []string{`class="pages-detail`, `<select`, `href="#pages-group-`, "synthetic detail"} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("list fallback contains %s", bad)
+		}
+	}
+	if view.ListOnly || len(view.Groups[0].Alerts) != 1 {
+		t.Fatal("fallback mutated caller view")
+	}
+	if partial, err := portal.RenderPages(view, len(body)-1); err == nil || partial != nil {
+		t.Fatal("oversized list returned partial output")
+	}
+	t.Logf("1000 parsed alerts in 1000 groups: list fallback %d / %d bytes", len(body), limit)
+}
+
+func TestPagesTypeControlsMatchCodec(t *testing.T) {
+	names := []string{"DiskFull", "Unknown", "Empty", "", " padded", "padded ", "Unicode-é", `quote"name`, `back\slash`, strings.Repeat("x", pages.MaxAlertNameBytes+1), strings.Repeat("v", pages.MaxAlertNameBytes)}
+	groups := []portal.PagesGroup{{AlertNameDisplay: "Unknown (absent)"}}
+	for _, name := range names {
+		groups = append(groups, portal.PagesGroup{AlertName: name, AlertNameKnown: true, AlertNameDisplay: name})
+	}
+	groups = append(groups, groups[1]) // Another severity must not duplicate a type.
+	got := pagesTypeControls(groups)
+	if len(got) != 4 {
+		t.Fatalf("configurable types: %+v", got)
+	}
+	for _, row := range got {
+		_, err := pages.MarshalPreferences(pages.Preferences{Version: pages.PreferencesVersion, Types: []pages.TypePreference{{AlertName: row.AlertName, AutoResponder: pages.DesiredUnset}}, List: pages.ListPreference{Sort: "alertname", Filter: "all"}})
+		if err != nil {
+			t.Fatalf("UI offered unstoreable type %q: %v", row.AlertName, err)
+		}
+	}
+}
+
+func TestPagesLabelAbsenceDiffersFromLiteralValues(t *testing.T) {
+	for _, known := range []bool{false, true} {
+		for _, value := range []string{"", "Unknown", "Empty"} {
+			display, _ := presentLabel(value, known)
+			if !known && display != "Unknown (absent)" {
+				t.Fatalf("absent label: %q", display)
+			}
+			if known && value != "" && display != value {
+				t.Fatalf("literal label changed: %q => %q", value, display)
+			}
+			if known && value == "" && display != "Empty (value)" {
+				t.Fatalf("empty label: %q", display)
+			}
+		}
 	}
 }
