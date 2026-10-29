@@ -56,7 +56,8 @@ var (
 // Pages uses the product navigation without coupling its body to ProductPage.
 func init() {
 	for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
-		template.Must(pagesTemplate.AddParseTree(name, viewsTemplate.Lookup(name).Tree))
+		// html/template rewrites trees during escaping; each template set owns its copy.
+		template.Must(pagesTemplate.AddParseTree(name, viewsTemplate.Lookup(name).Tree.Copy()))
 	}
 }
 
@@ -347,7 +348,7 @@ func validLaunch(l *ProductLaunch) bool {
 // pageLaunch is the page's launch form when it is a valid one on the Sessions
 // page, and nil otherwise.
 func pageLaunch(page ProductPage) *ProductLaunch {
-	if page.ReadFailure != nil || page.Filter.View == "usage" || strings.ToLower(page.Title) != "sessions" || !validLaunch(page.Launch) {
+	if page.Filter.View == "usage" || strings.ToLower(page.Title) != "sessions" || !validLaunch(page.Launch) {
 		return nil
 	}
 	return page.Launch
@@ -394,14 +395,23 @@ type ProductUsageCell struct {
 	Unknown      bool
 }
 
-// ProductUsageRow is one session's usage row, linked to its detail by ID.
+// ProductUsageRow is one session's usage row, linked by SessionUID. ID is only
+// the position used to keep its list and usage rows within the rendering bound.
 type ProductUsageRow struct {
-	ID, Name, Sub string
-	Cells         []ProductUsageCell
+	ID, SessionUID, Name, Sub string
+	Cells                     []ProductUsageCell
 }
 
-// ProductUsageTable is one titled breakdown table. A row with an empty ID is
-// a group, not a session, and is not linked.
+// SessionHref selects the session by its stable UID, regardless of list order.
+func (r ProductUsageRow) SessionHref() string {
+	if r.SessionUID == "" {
+		return ""
+	}
+	return productSessionsHref + "?session=" + url.QueryEscape(r.SessionUID)
+}
+
+// ProductUsageTable is one titled breakdown table. Group rows have no
+// SessionUID and are not linked.
 type ProductUsageTable struct {
 	Title, Note string
 	Columns     []string
@@ -669,11 +679,11 @@ type railLinkView struct {
 
 func RenderProduct(page ProductPage) ([]byte, error) {
 	if page.ReadFailure != nil {
-		page.Connected, page.Complete, page.Launch = false, false, nil
+		page.Connected, page.Complete = false, false
 	}
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
-		SessionsHref, TasksHref, UsageHref                                 string
+		SessionsHref, TasksHref                                            string
 		ListTitle, ListCount, Access, AccessLower, DefaultID               string
 		Quiet, Preview, Banner, HasRows, CanSend, Selected, UsageView      bool
 		All, Attention                                                     railLinkView
@@ -686,7 +696,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		CanLaunch                                                          bool
 	}{Policy: strings.TrimSuffix(ProductPolicyFor(page), "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
-		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "?view=usage",
+		SessionsHref: productSessionsHref, TasksHref: productTasksHref,
 		ListTitle: page.ListTitle}
 	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter)
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"

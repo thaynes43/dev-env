@@ -79,3 +79,29 @@ func TestPagesHasSharedProductNavigation(t *testing.T) {
 		t.Fatal("Pages navigation does not mark Pages current")
 	}
 }
+
+func TestSessionsAndPagesRenderConcurrently(t *testing.T) {
+	for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
+		if viewsTemplate.Lookup(name).Tree == pagesTemplate.Lookup(name).Tree {
+			t.Fatalf("%s shares a mutable parse tree across template sets", name)
+		}
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := RenderProduct(ProductPage{Title: "Sessions", Notice: "Sessions not connected"})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := RenderPages(pages.AlertmanagerSnapshot{}, false, 1<<20)
+		results <- err
+	}()
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+}

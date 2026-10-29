@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/thaynes43/dev-env/web/portal"
 )
@@ -12,12 +13,21 @@ func writeProductStates(dir string) error {
 		ObservedAt: "2026-10-29T14:00:00Z", Filter: portal.ProductFilter{View: "usage"},
 		Usage: &portal.ProductUsage{Scope: "Synthetic usage preview", ScopeNote: "Fixture data only.",
 			Stats:   []portal.ProductStat{{Label: "Measured", Value: "Unknown", Tone: "muted"}},
-			Columns: []string{"Session", "Input"}, Rows: []portal.ProductUsageRow{{ID: "s1", Name: "synthetic-agent", Cells: []portal.ProductUsageCell{{Label: "Input", Value: "Unknown", Unknown: true}}}}}}
+			Columns: []string{"Session", "Input"}, Rows: []portal.ProductUsageRow{{ID: "s1", SessionUID: "uid-synthetic-agent", Name: "synthetic-agent", Cells: []portal.ProductUsageCell{{Label: "Input", Value: "Unknown", Unknown: true}}}}}}
 	body, err := portal.RenderProduct(page)
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "usage.html"), body, 0600); err != nil {
+		return err
+	}
+	empty := page
+	empty.Usage = &portal.ProductUsage{Stats: []portal.ProductStat{{Label: "Measured", Value: "0 of 0"}, {Label: "Interactive", Value: "0"}, {Label: "Headless", Value: "0"}}}
+	body, err = portal.RenderProduct(empty)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "usage-empty.html"), body, 0600); err != nil {
 		return err
 	}
 	for _, fixture := range []struct {
@@ -41,6 +51,9 @@ func writeProductStates(dir string) error {
 		page := portal.ProductPage{Title: "Sessions", Notice: "Sessions unavailable", Preview: true, ObservedAt: failure.ObservedAt, ReadFailure: failure, Filter: portal.ProductFilter{Attention: true}}
 		if fixture.reason == "not_connected" {
 			page.Notice = "Sessions not connected"
+		}
+		if fixture.timedOut {
+			page.Launch = &portal.ProductLaunch{Action: portal.ProductSessionLaunchesHref, CSRF: strings.Repeat("c", 43), RequestID: strings.Repeat("r", 43), Repos: []string{"fixture-repo-one"}, Models: []string{"claude-opus-5-5"}}
 		}
 		body, err := portal.RenderProduct(page)
 		if err != nil {

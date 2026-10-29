@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/thaynes43/dev-env/web/portal"
@@ -573,7 +574,7 @@ func TestSessionReadFailureReasons(t *testing.T) {
 			calls := 0
 			s := &SessionSource{path: token, now: func() time.Time { return now }, client: &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
 				calls++
-				if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > 15*time.Second {
+				if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > sessionReadTimeout {
 					t.Error("whole-read deadline missing")
 				}
 				if tc.transportErr != nil {
@@ -619,6 +620,13 @@ func TestSessionReadFailureReasons(t *testing.T) {
 			}
 			if line["reason_code"] != tc.reason || line["page"] != float64(wantPage) || line["row_index"] != float64(wantRow) {
 				t.Fatalf("failure log metadata: %v", line)
+			}
+			level := "WARN"
+			if tc.reason == "not_connected" || tc.reason == "cancelled" {
+				level = "INFO"
+			}
+			if line["level"] != level {
+				t.Errorf("log level = %v, want %s", line["level"], level)
 			}
 			for _, key := range []string{"elapsed_ms", "credential_ms", "fetch_ms", "decode_ms", "projection_ms", "history_ms"} {
 				if n, ok := line[key].(float64); !ok || n < 0 {
@@ -872,4 +880,128 @@ func TestSessionReadHistoryDeadlineDoesNotBlameAnInventoryPage(t *testing.T) {
 		t.Fatalf("history timeout was attributed to a successful inventory page: %+v", failure)
 	}
 	t.Logf("history timeout: %s", strings.TrimSpace(logs.String()))
+}
+
+func TestSessionTransportFailurePrefersContextCause(t *testing.T) {
+	expired, expire := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer expire()
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, tc := range []struct {
+		name   string
+		ctx    context.Context
+		err    error
+		reason string
+		timed  bool
+	}{
+		{"our deadline, transport cancelled", expired, context.Canceled, "operator_unreachable", true},
+		{"our cancellation, transport timed out", cancelled, context.DeadlineExceeded, "cancelled", false},
+		{"transport cancellation", t.Context(), context.Canceled, "cancelled", false},
+		{"transport deadline", t.Context(), context.DeadlineExceeded, "operator_unreachable", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := sessionTransportFailure(tc.ctx, tc.err)
+			if failure.ReasonCode != tc.reason || failure.TimedOut != tc.timed {
+				t.Fatalf("failure = %+v, want %s timed_out=%v", failure, tc.reason, tc.timed)
+			}
+		})
+	}
+}
+
+func TestServeSessionsReadDeadlineStartsBeforeInitialAuthorization(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	synctest.Test(t, func(t *testing.T) {
+		started := time.Now()
+		calls, reads := 0, 0
+		authorizer := authorizeFunc(func(ctx context.Context, _ portal.Principal, _ portal.Resource) error {
+			calls++
+			if ctx.Err() != nil {
+				t.Fatal("read deadline cancelled the authorization context")
+			}
+			if calls == 1 {
+				time.Sleep(4 * time.Second)
+			} else {
+				time.Sleep(5 * time.Second)
+			}
+			return nil
+		})
+		s := sessionReadFixture(t, func() time.Time { return f.now }, func(r *http.Request) (*http.Response, error) {
+			reads++
+			deadline, ok := r.Context().Deadline()
+			if !ok || !deadline.Equal(started.Add(12*time.Second)) {
+				t.Errorf("deadline = %s, want request start + 12s", deadline)
+			}
+			<-r.Context().Done()
+			return nil, context.Canceled
+		})
+		var logs bytes.Buffer
+		s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+		h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: s, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
+		if calls != 2 || reads != 1 || w.Code != 200 || !strings.Contains(w.Body.String(), "The operator read timed out.") || time.Since(started) != 17*time.Second {
+			t.Fatalf("auth=%d reads=%d status=%d elapsed=%s", calls, reads, w.Code, time.Since(started))
+		}
+	})
+}
+
+func TestSessionReadDeadlineBetweenPagesReportsNoRequestedPage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+		clocks, reads := 0, 0
+		s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+			reads++
+			body := strings.Replace(activityPage(), `"complete":true`, `"complete":false,"nextCursor":"next"`, 1)
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})
+		s.now = func() time.Time {
+			clocks++
+			if clocks == 2 {
+				// Expire the read after transport completes, before the next page.
+				time.Sleep(13 * time.Second)
+			}
+			return now
+		}
+		var logs bytes.Buffer
+		s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+		page, err := s.Read(t.Context(), portal.ProductFilter{})
+		var failure *sessionReadError
+		if !errors.As(err, &failure) || !failure.TimedOut || failure.Page != 0 || reads != 1 || len(page.Groups) != 0 {
+			t.Fatalf("between-page deadline: failure=%+v reads=%d", failure, reads)
+		}
+		var line map[string]any
+		if json.Unmarshal(logs.Bytes(), &line) != nil || line["page"] != float64(0) {
+			t.Fatalf("log blamed an unrequested page: %s", logs.String())
+		}
+	})
+}
+
+func TestSessionReadPageCapIsSuccessfulAndIncomplete(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	reads := 0
+	s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+		reads++
+		body := strings.Replace(activityPage(activityRow("cap-"+strconv.Itoa(reads), unknownActivity)), `"complete":true`, `"complete":false,"nextCursor":"next"`, 1)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	var logs bytes.Buffer
+	s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	page, err := s.Read(t.Context(), portal.ProductFilter{})
+	if err != nil || !page.Connected || page.Complete || page.ReadFailure != nil || reads != 10 || !s.lastSuccess.Equal(now) || logs.Len() != 0 {
+		t.Fatalf("cap became a failure: err=%v complete=%v reads=%d last=%s logs=%s", err, page.Complete, reads, s.lastSuccess, logs.String())
+	}
+}
+
+func TestServeSessionReadFailureKeepsSeparateLaunchRoute(t *testing.T) {
+	f, launch, transport, _ := launchFixture(t)
+	s := sessionReadFixture(t, func() time.Time { return f.now }, func(*http.Request) (*http.Response, error) {
+		return nil, io.ErrUnexpectedEOF
+	})
+	h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: launch.authorizer, Reader: portal.UnavailableReader{}, Sessions: s, Launch: launch, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "could not be reached") || !strings.Contains(w.Body.String(), `<form class="launch"`) || w.Header().Get("Content-Security-Policy") != portal.ProductSendPolicy || transport.count() != 0 {
+		t.Fatalf("read failure lost the separate launch form: HTTP %d", w.Code)
+	}
 }

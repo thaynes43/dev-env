@@ -33,7 +33,7 @@ const (
 	productPageCap          = 4
 	// sessionPageCap bounds the Sessions read at 500 sessions; the operator
 	// pages every repository's sessions in the namespace.
-	sessionReadTimeout       = 15 * time.Second
+	sessionReadTimeout       = 12 * time.Second
 	sessionPageCap           = 10
 	productHALLimit    int64 = 1 << 20
 )
@@ -96,12 +96,15 @@ func sessionFailure(err error) *sessionReadError {
 }
 
 func sessionTransportFailure(ctx context.Context, err error) *sessionReadError {
-	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) {
 		return readFailure("cancelled")
 	}
 	failure := readFailure("operator_unreachable")
 	var netErr net.Error
-	failure.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
+	failure.TimedOut = errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
 	return failure
 }
 
@@ -180,7 +183,11 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 			notice = "Sessions not connected"
 		}
 		page = portal.ProductPage{Title: "Sessions", Notice: notice, Filter: filter, ReadFailure: &failure.ProductReadFailure}
-		logger.LogAttrs(ctx, slog.LevelWarn, "portal_session_read_failed",
+		level := slog.LevelWarn
+		if failure.ReasonCode == "not_connected" || failure.ReasonCode == "cancelled" {
+			level = slog.LevelInfo
+		}
+		logger.LogAttrs(ctx, level, "portal_session_read_failed",
 			slog.String("reason_code", failure.ReasonCode), slog.Int("page", failure.Page), slog.Int("row_index", failure.RowIndex), slog.Int("http_status", failure.HTTPStatus), slog.Bool("timed_out", failure.TimedOut), slog.Int64("elapsed_ms", time.Since(started).Milliseconds()),
 			slog.Int64("credential_ms", credentialTime.Milliseconds()), slog.Int64("fetch_ms", fetchTime.Milliseconds()), slog.Int64("decode_ms", decodeTime.Milliseconds()), slog.Int64("projection_ms", projectionTime.Milliseconds()), slog.Int64("history_ms", historyTime.Milliseconds()))
 	}()
@@ -199,7 +206,7 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 	cursor, complete, freshness := "", false, "observed"
 	var sessions []apiv1.PortalSessionSummary
 	for n := 0; n < sessionPageCap; n++ {
-		pageNo = n + 1
+		pageNo = 0
 		if ctx.Err() != nil {
 			return page, sessionTransportFailure(ctx, ctx.Err())
 		}
@@ -207,6 +214,7 @@ func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (
 		if cursor != "" {
 			raw += "&cursor=" + url.QueryEscape(cursor)
 		}
+		pageNo = n + 1
 		step = time.Now()
 		body, getErr := sessionGet(ctx, s.client, raw, token)
 		fetchTime += time.Since(step)
@@ -938,6 +946,7 @@ func productFilter(u *url.URL) (portal.ProductFilter, bool) {
 }
 
 func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
+	started := time.Now()
 	authHeaders(w)
 	filter, ok := productFilter(r.URL)
 	if r.Method != http.MethodGet || !ok || r.URL.RawPath != "" || c.Session == nil || c.Authorizer == nil || c.Now == nil {
@@ -964,7 +973,10 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	var page portal.ProductPage
 	switch r.URL.Path {
 	case SessionsPath:
-		page, err = c.Sessions.Read(r.Context(), filter)
+		// Leave room within the 20s write timeout for final auth checks and rendering.
+		readCtx, cancel := context.WithDeadline(r.Context(), started.Add(sessionReadTimeout))
+		page, err = c.Sessions.Read(readCtx, filter)
+		cancel()
 		if page.ReadFailure != nil && c.Sessions == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
