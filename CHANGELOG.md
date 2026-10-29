@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.63.0](https://github.com/thaynes43/dev-env/compare/v2.62.1...v2.63.0) (2026-10-29)
+
+
+### Features
+
+* add isolated Codex task pilot image ([#632](https://github.com/thaynes43/dev-env/issues/632)) ([ffd1ad2](https://github.com/thaynes43/dev-env/commit/ffd1ad24bb2f30c9da1d2af38b1db78a4f0efbc2))
+
 ## [2.62.1](https://github.com/thaynes43/dev-env/compare/v2.62.0...v2.62.1) (2026-10-28)
 
 
