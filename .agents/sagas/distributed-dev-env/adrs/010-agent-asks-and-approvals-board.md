@@ -80,9 +80,9 @@ scope expiry. Clients label `approved && now < scope.expiresAt` as
 revocation and its audit, subject to Q-255-01.
 
 An information answer is never approval. A saved approval grants no
-credential or proof of execution. Q-255-04 remains open: Tom must decide
-whether the exact unexpired portal approval counts as his action-specific
-approval once under the common rules. Existing permissions, explicit
+credential or proof of execution. Q-255-04 is ruled (2026-10-29, DESIGN-034 §13): an
+unexpired portal approval is a one-off for the exact action, target and
+content, used once; standing rules are a separate kind (DESIGN-036). Existing permissions, explicit
 holds and each action's enforcement continue to apply. Grant, budget and
 native-decision adapters need separate reviewed stories.
 
@@ -119,7 +119,7 @@ redaction alone does not make credential-bearing Sessions safe to expose.
 
 This proposal installs nothing, changes no live policy and approves no
 action. The lead owns independent review, one-at-a-time verified question
-delivery and merge. Q-255-01 is deferred until F2; quiet hours (Q-255-02),
-T4 (Q-255-03) and common-rule approval meaning (Q-255-04) are unsettled.
+delivery and merge. Q-255-01 is deferred until F2; quiet hours (Q-255-02)
+and T4 (Q-255-03) are unsettled; Q-255-04 is ruled (DESIGN-034 §13).
 Source tests, signed publication, GitOps installation and Tom's usable
 acceptance remain separate evidence.

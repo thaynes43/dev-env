@@ -220,8 +220,10 @@ the same actor and identical answer under A9; it must not replace it or
 infer success from the browser. No new key or altered scope after timeout.
 Log fixed reasons and IDs, not Ask prose, raw principals or auth material.
 
-The portal-group answer rule is the contract; **whether that answer counts
-as Tom's common-rule action-specific approval once remains Q-255-04**.
+The portal-group answer rule is the contract. Q-255-04 is ruled
+(2026-10-29, §13): an approval is a one-off for the exact action, target
+and content, once. Instruction migration waits for installation and
+usable acceptance.
 Revocation authority (Q-255-01) is deferred until F2. Quiet hours
 (Q-255-02) and wider transcript eligibility (Q-255-03) are also unsettled;
 no route in this section resolves them.
@@ -393,10 +395,10 @@ though the historical answer remains visible.
 
 Logout or group removal blocks later portal operations on fresh checks;
 it does not rewrite a historical answer. The record supplies no credential
-or machine action permission. Q-255-04 asks whether Tom recognizes an
-unexpired approval as his action-specific approval once under common
-rules. That decision is pending; do not activate that interpretation from
-this design or spend an approval twice.
+or machine action permission. Under the Q-255-04 ruling (§13) an
+unexpired approval is a one-off for that exact action, once. Do not
+activate that use before installation and usable acceptance, and never
+spend an approval twice.
 
 F2 adds revocation, audit and any required revision/digest/operation fields.
 **Who may revoke is deferred Q-255-01**, not “any member” as an adopted
@@ -541,7 +543,7 @@ Q-255-03; this design does not settle that expansion.
 
 ## 11. Migration and outage behavior
 
-After usable acceptance and Tom's decision on Q-255-04, propose board use
+After usable acceptance, and under the Q-255-04 ruling (§13), propose board use
 for routine questions and bounded approvals. Change shared instructions
 through GitOps; do not remove the phone-question rule based on source
 alone. V1 acceptance requires an actual agent reading its stored Ask
@@ -599,18 +601,24 @@ supported and restore/epoch invalidation. No generic approve-and-run tool.
 
 ## 13. Questions for Tom
 
-These IDs belong to #255. They are **not answered or delivered**. The lead
-must deliver active questions one at a time through its verified phone
-route and record actual answer/source/date here and in #255. Open questions do not block this docs
-PR; they hold only their dependent behavior. Do not send this table as one
-prompt or reopen a deferred question early.
+These IDs belong to #255. Q-255-04 has the dated ruling below; the other
+questions remain unresolved. The lead must deliver active questions one at
+a time through its verified phone route and record actual answer/source/date
+here and in #255. Open questions do not block this docs PR; they hold only
+their dependent behavior. Do not send this table as one prompt or reopen a
+deferred question early.
 
 | ID / status | Question and recommendation | Alternative / gate |
 |---|---|---|
 | Q-255-01 — **DEFERRED until F2** | May any current portal-group member revoke an unused approval given by another member? Recommend any admitted member, with revoker/time/reason retained. This is a proposal, not current authority. | Original approver only. Ask when F2 begins; no v1 revocation. |
 | Q-255-02 — pending | No quiet-hours code exists. Should new Ask pushes wait outside 09:00–21:00 America/New_York? Recommend daytime only, priority 0, DST-aware deferral and no agent bypass. | All hours within caps. Ask before lane B goes live; source/tests may proceed default off. Login notices unchanged. |
 | Q-255-03 — pending | May the portal expose transcripts for all compatible Sessions in the resource without per-UID entries, with an operator-owned full/dev profile allowlist, workbench opt-in and exclusion of credential/break-glass grant holders? Recommend that bounded eligibility. | Keep exact targets. Holds T4, which is not v1; Ask board/history links use current scope meanwhile. |
-| Q-255-04 — pending | Does an unexpired `approved:true` portal Ask count as Tom's action-specific approval under the common rules, for that exact action, once? **Recommendation: yes.** | Keep requiring the existing supported action-specific approval channel. Holds that interpretation/instruction migration; it grants no credential, removes no hold and authorizes no machine executor. |
+| Q-255-04 — **RULING, 2026-10-29** | Tom, OpenProject #255 journal 2680: “It's situational, I may be asked to approve binding changes that are beyond one request.” Also: “I don't want to have to approve the same thing over and over we need a way to manage permissions and rules but also one off approvals will happen” and “here I do not want to approve agents to always send emails just that I approve the one that was drafted.” Lead reading (journal 2680), not Tom's words: a v1 portal Approve covers one exact action, target and content, once, within its expiry, and never becomes standing permission. | A standing rule is a separate approval kind: approve a scoped policy once, then list, manage and revoke it. See [DESIGN-036](036-standing-rules.md). Journal 2680 supersedes journal 2675, retracted in 2676. This records the distinction; it grants no credential, removes no other hold and creates no executor. |
+
+The quotations are excerpts; operational examples
+are omitted. One-off use and standing-rule management are separate. Source,
+installation, common-rule instruction migration and usable acceptance still
+need their own reviewed delivery; this docs update changes no live rule.
 
 The v1 bounds/routes above come from the lead contract. Future audit,
 retention and action-enforcement details remain proposals for their own
