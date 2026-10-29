@@ -1,8 +1,10 @@
 package session
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +16,51 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
+
+func TestUsageLinksKeepUIDWhenActivityReorders(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	reads := 0
+	s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+		reads++
+		first, second := "2026-10-29T13:59:00Z", "2026-10-29T13:58:00Z"
+		if reads == 2 {
+			first, second = second, first
+		}
+		activity := func(last string) string {
+			return strings.Replace(unknownActivity, `"agentState":"idle"`, `"agentState":"idle","lastActivity":"`+last+`"`, 1)
+		}
+		body := activityPage(activityRow("a", activity(first)), activityRow("b", activity(second)))
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	usage, err := s.Read(t.Context(), portal.ProductFilter{View: "usage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := usage.Usage.Rows[0]
+	if row.Name != "a" || row.ID != "s1" || row.SessionUID != "uid-a" {
+		t.Fatalf("unexpected initial order: %+v", row)
+	}
+	body, err := portal.RenderProduct(usage)
+	if err != nil || !strings.Contains(string(body), `href="`+SessionsPath+`?session=uid-a">a</a>`) {
+		t.Fatalf("Usage did not link to its session UID: %v", err)
+	}
+	link, err := url.Parse(row.SessionHref())
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter, ok := productFilter(link)
+	if !ok || filter.Session != "uid-a" {
+		t.Fatal("Usage href is not a canonical session selection")
+	}
+	selected, err := s.Read(t.Context(), filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := findRow(t, selected, "a")
+	if current.ID != "s2" || !current.Selected || current.Messages.SessionUID != row.SessionUID || findRow(t, selected, "b").Selected {
+		t.Fatalf("activity reordering changed the selected session: %+v", current)
+	}
+}
 
 // filterActivity is a task activity with a provider, launcher and task result,
 // as the 2026-10-27 operator sends it.
@@ -101,7 +148,13 @@ func TestProductFiltersAndProjects(t *testing.T) {
 		!strings.Contains(ops, `?project=haynes-ops" aria-current="page"`) || strings.Contains(ops, "By project") {
 		t.Fatalf("project filter: %s", ops)
 	}
+	usage := get(SessionsPath + "?view=usage")
+	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `<title>Usage · dev-env</title>`) ||
+		!strings.Contains(usage.Body.String(), `?view=usage" aria-current="page"`) || strings.Contains(usage.Body.String(), `class="rail"`) || strings.Contains(usage.Body.String(), `class="list"`) {
+		t.Fatalf("Usage is not its own view: %d", usage.Code)
+	}
 	for _, bad := range []string{
+		SessionsPath + "?view=other", SessionsPath + "?view=usage&view=usage", SessionsPath + "?view=usage&show=attention", TasksPath + "?view=usage",
 		SessionsPath + "?show=all", SessionsPath + "?project=..", SessionsPath + "?project=a%20b", SessionsPath + "?project=",
 		SessionsPath + "?show=attention&show=attention", SessionsPath + "?show=attention&project=dev-env", SessionsPath + "?Show=attention",
 		SessionsPath + "?show=attention&", SessionsPath + "?project=dev%2Denv", TasksPath + "?project=dev-env",
@@ -332,8 +385,13 @@ func TestSessionsPageStaysUnderTheResponseBound(t *testing.T) {
 		t.Fatalf("worst-case Sessions page: %d bytes, err %v", len(body), err)
 	}
 	html := string(body)
-	if !strings.Contains(html, "of 500</span>") || !strings.Contains(html, "narrow with a filter") || strings.Count(html, `class="item"`) < 50 || !strings.Contains(html, "500,000,000,000,000,000") {
-		t.Fatalf("the trimmed page lost its totals or most rows: %d items", strings.Count(html, `class="item"`))
+	if !strings.Contains(html, "of 500</span>") || !strings.Contains(html, "narrow with a filter") || strings.Count(html, `class="item"`) < 50 || strings.Contains(html, `id="usage"`) {
+		t.Fatalf("the trimmed Sessions page lost its counts or most rows: %d items", strings.Count(html, `class="item"`))
+	}
+	page.Filter = portal.ProductFilter{View: "usage"}
+	body, err = portal.RenderProductWithin(page, maximumResponse*7/8)
+	if err != nil || len(body) > maximumResponse*7/8 || !strings.Contains(string(body), "500,000,000,000,000,000") {
+		t.Fatalf("bounded Usage lost its totals: %d bytes, err %v", len(body), err)
 	}
 }
 

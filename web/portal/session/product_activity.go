@@ -747,7 +747,7 @@ func lastActivity(s apiv1.PortalSessionSummary) time.Time {
 func sessionUsageRow(id string, s apiv1.PortalSessionSummary) (portal.ProductUsageRow, bool) {
 	a := activityOrUnknown(s.Activity)
 	u := a.Usage
-	row := portal.ProductUsageRow{ID: id, Name: shown(s.Name), Sub: "requested model Unknown"}
+	row := portal.ProductUsageRow{ID: id, SessionUID: s.UID, Name: shown(s.Name), Sub: "requested model Unknown"}
 	if a.RequestedModel != protocol.UsageUnknown {
 		row.Sub = a.RequestedModel + " requested"
 	}

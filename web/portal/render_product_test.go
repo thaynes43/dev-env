@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"html"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -442,5 +444,113 @@ func TestPanelStatesAndTableRenderEscaped(t *testing.T) {
 	}
 	if strings.Contains(html, "onclick") || strings.Contains(html, "<script>") || page.Groups[0].Rows[0].Sections[0].States[1].Status.Tone != `ok" onclick="x` {
 		t.Fatal("not escaped, or the caller's page changed")
+	}
+}
+
+func TestUsageIsAnIndependentProductView(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true,
+		Groups: []ProductGroup{{Title: "Running", Rows: []ProductRow{{ID: "s1", Title: "agent-one"}}}},
+		Usage:  &ProductUsage{Scope: "Measured usage", Rows: []ProductUsageRow{{ID: "s1", SessionUID: "uid-one", Name: "agent-one"}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `href="`+productSessionsHref+`?view=usage"`) {
+		t.Fatal("Usage navigation has no durable view URL")
+	}
+	if strings.Contains(string(body), `id="usage"`) || strings.Contains(string(body), "Measured usage") {
+		t.Fatal("Sessions carries an embedded Usage section")
+	}
+	page.Filter = ProductFilter{View: "usage"}
+	body, err = RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	for _, want := range []string{`<title>Usage · dev-env</title>`, `class="shell usage-view"`, `class="detail default" id="usage"`, `href="` + productSessionsHref + `?session=uid-one"`, `href="#main">Skip to content`, `<h1 id="usage-title">Usage</h1>`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("Usage lacks %s", want)
+		}
+	}
+	if strings.Count(html, "<h1") != 1 {
+		t.Fatal("Usage must have exactly one h1")
+	}
+	if strings.Count(html, `?view=usage" aria-current="page"`) != 2 || strings.Contains(html, `class="rail"`) || strings.Contains(html, `class="list"`) || strings.Contains(html, `id="s1"`) || strings.Contains(html, `id="empty"`) || strings.Contains(html, "listed on the left") {
+		t.Fatal("Usage includes session browser or wrong active navigation")
+	}
+}
+
+func TestReadFailureHidesDataAndKeepsSafeDiagnostics(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Groups: []ProductGroup{{Title: "current", Rows: []ProductRow{{ID: "s1", Title: "SECRET-CACHED-ROW"}}}}, Usage: &ProductUsage{Scope: "SECRET-CACHED-USAGE"}, ReadFailure: &ProductReadFailure{ReasonCode: `<script>SECRET-REASON</script>`, ObservedAt: "SECRET-TIME", LastSuccessAt: "SECRET-LAST", Page: 1000, RowIndex: 1000}}
+	body, policy, err := RenderProductPolicyWithin(page, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if strings.Contains(html, "SECRET-") || strings.Contains(html, "Page 1000") || !strings.Contains(html, "reason is Unknown") || policy != ProductPolicy {
+		t.Fatal("failure rendered unsafe diagnostics or cached data")
+	}
+	if !strings.Contains(html, `href="`+productSessionsHref+`">Retry</a>`) || !strings.Contains(html, "Last successful read in this process: Unknown") {
+		t.Fatal("failure lacks safe retry or Unknown last success")
+	}
+}
+
+func TestUsageSessionHrefIsCanonicalAndEscaped(t *testing.T) {
+	uid := `uid &"<>#/?session=other`
+	page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Rows: []ProductUsageRow{{ID: "s1", SessionUID: uid, Name: `<agent>`}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := regexp.MustCompile(`<a href="([^"]+)">&lt;agent&gt;</a>`).FindSubmatch(body)
+	if len(link) != 2 {
+		t.Fatal("no escaped session link")
+	}
+	u, err := url.Parse(html.UnescapeString(string(link[1])))
+	if err != nil || u.Path != productSessionsHref || u.Fragment != "" || len(u.Query()) != 1 || u.Query().Get("session") != uid || u.RawQuery != u.Query().Encode() {
+		t.Fatalf("non-canonical or unsafe session href: %s, %v", link[1], err)
+	}
+}
+
+func TestReadFailureRendersOnceAndKeepsLaunchForm(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Notice: "Sessions unavailable",
+		ReadFailure: &ProductReadFailure{ReasonCode: "operator_unreachable", TimedOut: true, RowIndex: -1},
+		Launch:      &ProductLaunch{Action: ProductSessionLaunchesHref, CSRF: strings.Repeat("c", 43), RequestID: strings.Repeat("r", 43), Repos: []string{"dev-env"}, Models: []string{"claude-opus-5-5"}}}
+	body, policy, err := RenderProductPolicyWithin(page, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if policy != ProductSendPolicy || !strings.Contains(s, `form-action &#39;self&#39;`) || strings.Count(s, `<form class="launch"`) != 1 || !strings.Contains(s, `href="#launch">New agent</a>`) {
+		t.Fatal("read failure removed the independent launch form or its CSP")
+	}
+	if strings.Count(s, `class="read-failure"`) != 1 || strings.Count(s, ">Retry</a>") != 1 || !strings.Contains(s, `class="shell read-failed"`) {
+		t.Fatal("failure is duplicated or missing its responsive state")
+	}
+	// The single failure lives in the workspace; keep that pane visible on phones.
+	for _, rule := range []string{"@media (max-width: 700px)", ".shell.read-failed .workspace,", ".shell.read-failed .list,"} {
+		if !strings.Contains(viewsStyle, rule) {
+			t.Errorf("failure lacks responsive rule %s", rule)
+		}
+	}
+	page.Filter = ProductFilter{View: "usage"}
+	body, policy, err = RenderProductPolicyWithin(page, 1<<20)
+	if err != nil || policy != ProductPolicy || strings.Contains(string(body), "<form") || strings.Count(string(body), "<h1") != 1 || !strings.Contains(string(body), `<h1 id="usage-title">Usage</h1>`) || strings.Count(string(body), ">Retry</a>") != 1 {
+		t.Fatal("failed Usage has wrong heading, duplicated failure or a launch form")
+	}
+}
+
+func TestEmptyUsageKeepsZeroStatsAndOnePlainEmptyState(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Stats: []ProductStat{{Label: "Interactive", Value: "0"}, {Label: "Headless", Value: "0"}},
+			Breakdowns: []ProductUsageTable{{Title: "Unused empty table"}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if strings.Count(s, "No sessions in this read.") != 1 || strings.Count(s, "<dd>0</dd>") != 2 || strings.Contains(s, "<table>") || strings.Contains(s, "Unused empty table") || strings.Count(s, "<h1") != 1 {
+		t.Fatal("empty Usage lost its zeros or rendered empty tables")
 	}
 }

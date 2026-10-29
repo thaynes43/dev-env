@@ -65,3 +65,43 @@ func TestPagesTimestampPresence(t *testing.T) {
 		}
 	}
 }
+
+func TestPagesHasSharedProductNavigation(t *testing.T) {
+	body, err := RenderPages(pages.AlertmanagerSnapshot{}, false, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Count(text, `href="`+productSessionsHref+`?view=usage"`) != 2 {
+		t.Fatal("Pages lacks top and mobile Usage navigation")
+	}
+	if strings.Count(text, `href="/portal/projects/dev-env/environments/internal/pages" aria-current="page"`) != 2 {
+		t.Fatal("Pages navigation does not mark Pages current")
+	}
+}
+
+func TestSessionsAndPagesRenderConcurrently(t *testing.T) {
+	for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
+		if viewsTemplate.Lookup(name).Tree == pagesTemplate.Lookup(name).Tree {
+			t.Fatalf("%s shares a mutable parse tree across template sets", name)
+		}
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := RenderProduct(ProductPage{Title: "Sessions", Notice: "Sessions not connected"})
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := RenderPages(pages.AlertmanagerSnapshot{}, false, 1<<20)
+		results <- err
+	}()
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+}

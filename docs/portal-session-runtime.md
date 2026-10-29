@@ -501,3 +501,37 @@ repositories and the profile. This change enables none of them.
 The operator source also supports a separate default-off pair, `--task-pilot-agent-image` and `--task-pilot-agent-session`. Both must be supplied together and use the existing digest-pinned image and exact authenticated parent/idempotency-key syntax. The tuple selects an ordinary Codex task in `dev-env` with matching metadata and an existing Session UID; workspace, project canary, private pilot and budget-bound sessions are excluded. Existing private-history admission, HOME binding and executor reservation remain mandatory when retention is enabled. Selection applies when building the Session's own new pod, checks its owner, and changes only its image. Hold pods and existing pods are not changed; template revision and the established task-budget image checks remain in force. This separate tuple does not alter the existing Claude local/remote or Codex remote pilot tuple.
 
 This is source behavior only: no operator flags or task pilot are activated by it. It adds no project, profile, model, capacity or credential authority. A signed qualified image, separately authorized configuration and capacity, and live acceptance remain prerequisites. The parent/key pair can match more than one successive Session; one-use handling remains an operational responsibility.
+
+## Usage navigation and Sessions read diagnostics (#241)
+
+Usage has a canonical view URL, `sessions?view=usage`, with its own active top
+and mobile navigation item. It shows usage without the session rail or list;
+refresh and browser history preserve that view. Pages shares the product
+navigation. Usage rows select Sessions by stable session UID, so activity-based
+reordering cannot change their target. Other query combinations remain refused.
+
+Sessions reads must finish by request start plus 12 seconds, including time
+already spent on initial authentication and authorization. The same deadline
+covers credentials, up to ten operator pages, projection and selected history;
+each operator HTTP request still has its five-second timeout. This leaves
+headroom within the 20-second write timeout for final authentication and
+authorization checks and rendering. A read stopped at the ten-page cap is a
+successful but incomplete read (`complete=false`); it updates the last-success
+time and emits no failure event. Failures show a fixed reason (not connected,
+credential unavailable, operator unreachable/timed out, HTTP refusal, contract
+refusal, clock ahead or cancelled), the observation time, Retry at the same canonical
+URL, and the last successful read time if this process has one. Contract
+positions use one-based pages and zero-based row indices; a page-level failure
+has no row. No partial or cached session data is shown after a failed read.
+
+One structured `portal_session_read_failed` line records each failed read:
+`reason_code`, `page` (0 outside an inventory-page read), `row_index` (-1 without a row),
+`http_status` (0 without a response), `timed_out`, `elapsed_ms` and phase
+measurements `credential_ms`, `fetch_ms`, `decode_ms`, `projection_ms`, `history_ms`. It includes
+no upstream errors, values, headers or credentials. `not_connected` and
+`cancelled` log at Info; other failures log at Warn. A deadline reached between
+pages reports page 0 because no inventory page was requested. A failed Sessions
+read keeps a separately configured New agent form available. Page, session and
+last-activity observation timestamps up to two seconds ahead are clamped to
+the portal's now; anything further ahead is refused. Empty, stale and unavailable
+retain their separate meanings; a pending HTTP read shows no invented empty result or zero.
