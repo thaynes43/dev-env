@@ -46,7 +46,9 @@ Whether an approval is still in force (`approved` and now before
 
 A missing `status.state` reads as open. A list that cannot read one record
 skips that record, logs its id, and marks the page incomplete. It does not
-fail the page. `?mine=true` keeps a record only when `spec.context` names the
+fail the page. `Complete` is false when `NextCursor` leads to more, or when
+the server skipped an unreadable record. An empty `NextCursor` ends the list.
+`?mine=true` keeps a record only when `spec.context` names the
 calling session; the requester label is not enough.
 
 ## Time and approval scope

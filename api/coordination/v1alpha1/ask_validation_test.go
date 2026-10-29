@@ -167,7 +167,7 @@ func TestAskSchemaAcceptsAndRefusesStatusRules(t *testing.T) {
 	}
 	cleared := kept.DeepCopy()
 	cleared.Status.Answer = nil
-	if err := kube.Status().Update(ctx, cleared); !apierrors.IsInvalid(err) {
+	if err := kube.Status().Update(ctx, cleared); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "an ask answer is set once") {
 		t.Fatal("answer removed", err)
 	}
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(kept), kept); err != nil {
