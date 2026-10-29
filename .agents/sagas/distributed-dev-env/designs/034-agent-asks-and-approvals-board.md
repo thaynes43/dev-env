@@ -598,18 +598,25 @@ supported and restore/epoch invalidation. No generic approve-and-run tool.
 
 ## 13. Questions for Tom
 
-These IDs belong to #255. They are **not answered or delivered**. The lead
-must deliver active questions one at a time through its verified phone
-route and record actual answer/source/date here and in #255. Open questions do not block this docs
-PR; they hold only their dependent behavior. Do not send this table as one
-prompt or reopen a deferred question early.
+These IDs belong to #255. Q-255-04 has the dated ruling below; the other
+questions remain unresolved. The lead must deliver active questions one at
+a time through its verified phone route and record actual answer/source/date
+here and in #255. Open questions do not block this docs PR; they hold only
+their dependent behavior. Do not send this table as one prompt or reopen a
+deferred question early.
 
 | ID / status | Question and recommendation | Alternative / gate |
 |---|---|---|
 | Q-255-01 — **DEFERRED until F2** | May any current portal-group member revoke an unused approval given by another member? Recommend any admitted member, with revoker/time/reason retained. This is a proposal, not current authority. | Original approver only. Ask when F2 begins; no v1 revocation. |
 | Q-255-02 — pending | No quiet-hours code exists. Should new Ask pushes wait outside 09:00–21:00 America/New_York? Recommend daytime only, priority 0, DST-aware deferral and no agent bypass. | All hours within caps. Ask before lane B goes live; source/tests may proceed default off. Login notices unchanged. |
 | Q-255-03 — pending | May the portal expose transcripts for all compatible Sessions in the resource without per-UID entries, with an operator-owned full/dev profile allowlist, workbench opt-in and exclusion of credential/break-glass grant holders? Recommend that bounded eligibility. | Keep exact targets. Holds T4, which is not v1; Ask board/history links use current scope meanwhile. |
-| Q-255-04 — pending | Does an unexpired `approved:true` portal Ask count as Tom's action-specific approval under the common rules, for that exact action, once? **Recommendation: yes.** | Keep requiring the existing supported action-specific approval channel. Holds that interpretation/instruction migration; it grants no credential, removes no hold and authorizes no machine executor. |
+| Q-255-04 — **RULING, 2026-10-29** | Tom, OpenProject #255 journal 2680: “It's situational, I may be asked to approve binding changes that are beyond one request.” Also: “I don't want to have to approve the same thing over and over” and “here I do not want to approve agents to always send emails just that I approve the one that was drafted.” A v1 portal Approve covers one exact action, target and content, once, within expiry. It never becomes standing permission. | A standing rule is a separate approval kind: approve a scoped policy once, then list, manage and revoke it. See [DESIGN-036](036-standing-rules.md). Journal 2680 supersedes journal 2675, retracted in 2676. This records the distinction; it grants no credential, removes no other hold and creates no executor. |
+
+The dated Q-255-04 ruling supersedes this document's earlier references to
+that question as pending. The quotations are excerpts; operational examples
+are omitted. One-off use and standing-rule management are separate. Source,
+installation, common-rule instruction migration and usable acceptance still
+need their own reviewed delivery; this docs update changes no live rule.
 
 The v1 bounds/routes above come from the lead contract. Future audit,
 retention and action-enforcement details remain proposals for their own
