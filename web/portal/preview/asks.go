@@ -1,0 +1,74 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/web/portal"
+)
+
+// These records are fixed synthetic presentation data. No session, token,
+// network reader or server participates in their rendering.
+func asksPreviewRecords(now time.Time) []apiv1.Ask {
+	info := apiv1.Ask{ID: "ask-0000000000000001", Type: apiv1.AskTypeInfo, Question: "Which fixture should the agent use for the next check?", Options: []apiv1.AskOption{{ID: "small", Label: "Small fixture", Description: "A bounded check with synthetic data."}, {ID: "full", Label: "Full fixture", Description: "A larger synthetic sample for the same check."}}, Recommended: "small", AllowFreeText: true, Context: apiv1.AskContext{SessionName: "synthetic-codex-agent", SessionUID: "00000000-1111-2222-3333-444444444444", WorkPackage: 258, Links: []string{"https://example.com/synthetic/context"}}, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(23 * time.Hour), State: apiv1.AskStateOpen}
+	approval := info
+	approval.ID = "ask-0000000000000002"
+	approval.Type = apiv1.AskTypeApproval
+	approval.Question = "Approve running the synthetic preview check?"
+	approval.Context.SessionName = "synthetic-claude-agent"
+	approval.Scope = &apiv1.AskScope{Action: "Run one synthetic preview check", Target: "Offline fixture only", ExpiresAt: now.Add(2 * time.Hour)}
+	answered := approval
+	answered.ID = "ask-0000000000000003"
+	answered.State = apiv1.AskStateAnswered
+	answered.Answer = &apiv1.AskAnswer{OptionID: "small", Text: "Use the bounded synthetic fixture.", Approved: true, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/fixture-only/", Subject: "synthetic-reader", DisplayName: "Fixture reader"}, AnsweredAt: now.Add(-30 * time.Minute)}
+	expired := approval
+	expired.ID = "ask-0000000000000004"
+	expired.State = apiv1.AskStateExpired
+	expired.ExpiresAt = now.Add(-time.Minute)
+	expired.Scope = &apiv1.AskScope{Action: "Run the earlier synthetic check", Target: "Expired fixture", ExpiresAt: now.Add(-time.Minute)}
+	return []apiv1.Ask{answered, info, approval, expired}
+}
+
+func writeAsks(dir string) error {
+	now := time.Date(2026, 10, 29, 19, 5, 0, 0, time.UTC)
+	fixtures := []struct {
+		name string
+		page portal.AsksPage
+	}{
+		{"asks.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true}},
+		{"asks-empty.html", portal.AsksPage{Connected: true, Complete: true}},
+		{"asks-disconnected.html", portal.AsksPage{Notice: "Asks are not connected"}},
+		{"asks-unavailable.html", portal.AsksPage{Notice: "Asks are unavailable. Open asks could not be read.", Retry: true}},
+		{"asks-partial.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Notice: "This is a partial read. More asks may need attention."}},
+	}
+	outputs := make([][]byte, len(fixtures))
+	for i, f := range fixtures {
+		f.page.Preview, f.page.Now = true, now
+		body, _, err := portal.RenderAsks(f.page, 896<<10)
+		if err != nil {
+			return err
+		}
+		outputs[i] = body
+	}
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return fmt.Errorf("create new preview directory: %w", err)
+	}
+	for i, f := range fixtures {
+		file, err := os.OpenFile(filepath.Join(dir, f.name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return err
+		}
+		_, writeErr := file.Write(outputs[i])
+		closeErr := file.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
