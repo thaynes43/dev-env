@@ -213,5 +213,5 @@ func writeProduct(dir string) error {
 			return err
 		}
 	}
-	return nil
+	return writeProductStates(dir)
 }

@@ -4,21 +4,14 @@
 <meta name="color-scheme" content="dark light">
 <meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
 <title>{{.Title}} · dev-env</title><style>/*PORTAL_STYLE*/</style></head>
-<body><a class="skip" href="#list">Skip to content</a>
-<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
-<symbol id="i-agents" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></symbol>
-<symbol id="i-tasks" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17"/></symbol>
-<symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-8h11l2.5 8M4 13v6h16v-6M4 13h5l1 2h4l1-2h5"/></symbol>
-<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></symbol>
-<symbol id="i-back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
-<symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5H5V6h5"/></symbol>
-</svg>
+<body><a class="skip" href="{{if .UsageView}}#main{{else}}#list{{end}}">Skip to content</a>
+{{template "product-icons"}}
 <header class="topbar"><a class="brand" href="{{.SessionsHref}}"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>
-<nav class="top-nav" aria-label="Product sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}>Tasks</a><a href="{{.UsageHref}}">Usage</a><a href="/portal/projects/dev-env/environments/internal/pages">Pages</a></nav>
+{{template "product-nav" .Current}}
 {{if .Preview}}<span class="demo-label">Fixture preview · sample data</span>{{end}}<span class="read-only"><span class="dot{{if .Preview}} sample{{end}}"></span>{{.Access}}</span></header>
 {{if .Banner}}<p class="banner" role="status">{{.Notice}}</p>{{end}}
-<div class="shell{{if .Selected}} selected{{end}}">
-<nav class="rail" aria-label="Workspace"><div class="workspace-label"><strong>dev-env</strong><span>Internal · {{.AccessLower}}</span></div>
+<div class="shell{{if .UsageView}} usage-view{{end}}{{if .Selected}} selected{{end}}">
+{{if not .UsageView}}<nav class="rail" aria-label="Workspace"><div class="workspace-label"><strong>dev-env</strong><span>Internal · {{.AccessLower}}</span></div>
 <a class="rail-link" href="{{.All.Href}}"{{if .All.Current}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>{{.All.Name}}{{if .All.Count}}<span class="count">{{.All.Count}}</span>{{end}}</a>
 <a class="rail-link" href="{{.Attention.Href}}"{{if .Attention.Current}} aria-current="page"{{end}}><svg class="i"><use href="#i-inbox"/></svg>Needs attention{{if .Attention.Count}}<span class="attention-count">{{.Attention.Count}}</span>{{end}}</a>
 {{if .Projects}}<div class="rail-rule"></div>
@@ -31,8 +24,8 @@
 {{range .Groups}}<h2 class="group-label" id="{{.ID}}"><span>{{.Title}}</span><span>{{.Count}}</span></h2>
 <ul>{{range .Rows}}<li><a class="item{{if eq .ID $.DefaultID}} default{{end}}" href="#{{.ID}}"><span class="item-top"><span class="item-kicker">{{.Kicker}}</span><span class="badge tone-{{.Status.Tone}}">{{.Status.Text}}</span></span><h3>{{.Title}}</h3>{{if .Description}}<span class="item-desc">{{.Description}}</span>{{end}}<span class="item-line"><span>{{.Meta}}</span><span>{{.Age}}</span></span></a></li>{{end}}</ul>{{end}}</div>
 <p class="list-foot">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></p></section>
-<main class="workspace" id="main" tabindex="-1">
-{{range .Rows}}{{$id := .ID}}{{$name := .Title}}<section class="detail{{if .Default}} default{{end}}" id="{{.ID}}" aria-labelledby="{{.ID}}-title" tabindex="-1"><div class="detail-head">
+{{end}}<main class="workspace" id="main" tabindex="-1">
+{{if not .UsageView}}{{range .Rows}}{{$id := .ID}}{{$name := .Title}}<section class="detail{{if .Default}} default{{end}}" id="{{.ID}}" aria-labelledby="{{.ID}}-title" tabindex="-1"><div class="detail-head">
 <p class="crumb"><a class="back" href="#list"><svg class="i"><use href="#i-back"/></svg>{{$.ListTitle}}</a><span>dev-env</span><span>/</span><span>{{$.Section}}</span><span>/</span><span class="mono">{{.Crumb}}</span></p>
 <div class="title-row"><h2 id="{{.ID}}-title"{{if .MonoTitle}} class="mono"{{end}}>{{.Title}}</h2>{{if .Link}}<a class="btn" href="{{.Link}}" rel="noreferrer">{{.LinkLabel}}<svg class="i"><use href="#i-external"/></svg></a>{{end}}</div>
 <p class="meta"><span class="badge tone-{{.Status.Tone}}">{{.Status.Text}}</span>{{range .Badges}}<span class="sep"></span><span>{{.}}</span>{{end}}</p></div>
@@ -44,7 +37,7 @@
 <h2 id="launch-title">New agent</h2></div>
 <form class="launch" method="post" action="{{.Action}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="requestID" value="{{.RequestID}}"><p class="launch-intro">Start agent creates one new session through the operator. It starts as Pending while its pod starts, and you land on its page, which shows its phase and Remote Control state.</p><div class="launch-grid"><div class="field"><label for="launch-repo">Repository</label><select id="launch-repo" name="repo" required>{{range .Repos}}<option value="{{.}}">{{.}}</option>{{end}}</select></div><div class="field"><label for="launch-mode">Kind</label><select id="launch-mode" name="mode" required aria-describedby="launch-mode-hint">{{range .Modes}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select><p class="hint" id="launch-mode-hint">Headless task: runs the prompt once and reports. Interactive with Remote Control: opens in Claude once registered; it may show Login required. Local terminal: no Remote Control.</p></div><div class="field"><label for="launch-model">Model</label><select id="launch-model" name="model" required>{{range .Models}}<option value="{{.}}">{{.}}</option>{{end}}</select></div><div class="field"><label for="launch-effort">Effort</label><select id="launch-effort" name="effort"><option value="">Model default</option>{{range .Efforts}}<option value="{{.}}">{{.}}</option>{{end}}</select></div><div class="field"><label for="launch-size">Size</label><select id="launch-size" name="size">{{range .Sizes}}<option value="{{.}}">{{.}}</option>{{end}}</select></div></div><div class="field"><label for="launch-prompt">Task prompt</label><textarea id="launch-prompt" name="prompt" rows="6" maxlength="65536" aria-describedby="launch-prompt-hint"></textarea><p class="hint" id="launch-prompt-hint">Required for a headless task. Leave it empty for an interactive or local session; the operator refuses a prompt there.</p></div><div class="launch-bar"><button class="btn primary" type="submit">Start agent</button><span class="hint">Sending this same form again returns the same session while it is unfinished. A freshly loaded form starts a new one.</span></div></form></section>
 {{end}}{{if not .HasRows}}<section class="detail default" id="empty" aria-labelledby="empty-title" tabindex="-1"><div class="product-head"><p class="eyebrow">dev-env</p><h2 id="empty-title">{{.Title}}</h2><p>{{.Notice}}</p></div></section>
-{{end}}{{with .Usage}}<section class="detail" id="usage" aria-labelledby="usage-title" tabindex="-1"><div class="product-head"><p class="crumb"><a class="back" href="#list"><svg class="i"><use href="#i-back"/></svg>{{$.ListTitle}}</a><span>dev-env</span><span>/</span><span>Usage</span></p>
+{{end}}{{end}}{{if and .UsageView (not .Usage)}}<section class="detail default" id="usage"><div class="product-head"><h1>Usage</h1><p>{{.Notice}}</p></div></section>{{end}}{{with .Usage}}<section class="detail{{if $.UsageView}} default{{end}}" id="usage" aria-labelledby="usage-title" tabindex="-1"><div class="product-head"><p class="crumb"><span>dev-env</span><span>/</span><span>Usage</span></p>
 <h2 id="usage-title">Usage</h2><p>Recorded token usage is not account consumption.{{if $.ListTitle}} Showing: {{$.ListTitle}}.{{end}}</p></div>
 <div class="product-body"><dl class="stats">{{range .Stats}}<div class="stat"><dt>{{.Label}}</dt><dd{{if eq .Tone "muted"}} class="unknown"{{end}}>{{.Value}}</dd><dd class="stat-note">{{.Note}}</dd></div>{{end}}</dl>
 <p class="scope-row"><span class="scope-chip">{{.Scope}}</span><span>{{.ScopeNote}}</span></p>
@@ -52,10 +45,21 @@
 {{range $i, $t := .Breakdowns}}<section class="breakdown" aria-labelledby="usage-b{{$i}}"><h3 id="usage-b{{$i}}">{{$t.Title}}</h3>{{if $t.Note}}<p class="note">{{$t.Note}}</p>{{end}}<div class="table-wrap"><table><thead><tr>{{range $t.Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
 <tbody>{{range $t.Rows}}<tr><td>{{.Name}}<small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>{{end}}
 <div class="usage-grid"><section aria-labelledby="usage-rows"><h3 id="usage-rows">{{if .RowsTitle}}{{.RowsTitle}}{{else}}By session{{end}}</h3>{{if .RowsNote}}<p class="note">{{.RowsNote}}</p>{{end}}<div class="table-wrap"><table><thead><tr>{{range .Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
-<tbody>{{range .Rows}}<tr><td><a href="#{{.ID}}">{{.Name}}</a><small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>
+<tbody>{{range .Rows}}<tr><td><a href="{{$.SessionsHref}}#{{.ID}}">{{.Name}}</a><small>{{.Sub}}</small></td>{{range .Cells}}<td data-label="{{.Label}}"{{if .Unknown}} class="unknown"{{end}}>{{.Value}}</td>{{end}}</tr>{{end}}</tbody></table></div></section>
 <aside class="coverage" aria-labelledby="usage-coverage"><p class="eyebrow">Coverage and accounting</p><h3 id="usage-coverage">What these numbers cover</h3><dl class="kv">{{range .Coverage}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></aside></div></div></section>
 {{end}}
 </main></div>
 <footer class="statusbar">{{if .Quiet}}<span role="status">{{.Notice}}</span>{{else}}<span>{{.Access}} portal</span>{{end}}<span class="right">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></span></footer>
-<nav class="mobile-nav" aria-label="Sections"><a href="{{.SessionsHref}}"{{if eq .Current "sessions"}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>Agents</a><a href="{{.TasksHref}}"{{if eq .Current "tasks"}} aria-current="page"{{end}}><svg class="i"><use href="#i-tasks"/></svg>Tasks</a><a href="{{.UsageHref}}"><svg class="i"><use href="#i-bolt"/></svg>Usage</a><a href="/portal/projects/dev-env/environments/internal/pages"><svg class="i"><use href="#i-inbox"/></svg>Pages</a></nav>
+{{template "product-mobile-nav" .Current}}
 </body></html>
+
+{{define "product-nav"}}<nav class="top-nav" aria-label="Product sections"><a href="/portal/projects/dev-env/environments/internal/sessions"{{if eq . "sessions"}} aria-current="page"{{end}}>Agents</a><a href="/portal/projects/dev-env/environments/internal/tasks"{{if eq . "tasks"}} aria-current="page"{{end}}>Tasks</a><a href="/portal/projects/dev-env/environments/internal/sessions?view=usage"{{if eq . "usage"}} aria-current="page"{{end}}>Usage</a><a href="/portal/projects/dev-env/environments/internal/pages"{{if eq . "pages"}} aria-current="page"{{end}}>Pages</a></nav>{{end}}
+{{define "product-mobile-nav"}}<nav class="mobile-nav" aria-label="Sections"><a href="/portal/projects/dev-env/environments/internal/sessions"{{if eq . "sessions"}} aria-current="page"{{end}}><svg class="i"><use href="#i-agents"/></svg>Agents</a><a href="/portal/projects/dev-env/environments/internal/tasks"{{if eq . "tasks"}} aria-current="page"{{end}}><svg class="i"><use href="#i-tasks"/></svg>Tasks</a><a href="/portal/projects/dev-env/environments/internal/sessions?view=usage"{{if eq . "usage"}} aria-current="page"{{end}}><svg class="i"><use href="#i-bolt"/></svg>Usage</a><a href="/portal/projects/dev-env/environments/internal/pages"{{if eq . "pages"}} aria-current="page"{{end}}><svg class="i"><use href="#i-inbox"/></svg>Pages</a></nav>{{end}}
+{{define "product-icons"}}<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
+<symbol id="i-agents" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></symbol>
+<symbol id="i-tasks" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 6l1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17"/></symbol>
+<symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2.5-8h11l2.5 8M4 13v6h16v-6M4 13h5l1 2h4l1-2h5"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+<symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5H5V6h5"/></symbol>
+</svg>{{end}}

@@ -101,7 +101,13 @@ func TestProductFiltersAndProjects(t *testing.T) {
 		!strings.Contains(ops, `?project=haynes-ops" aria-current="page"`) || strings.Contains(ops, "By project") {
 		t.Fatalf("project filter: %s", ops)
 	}
+	usage := get(SessionsPath + "?view=usage")
+	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `<title>Usage · dev-env</title>`) ||
+		!strings.Contains(usage.Body.String(), `?view=usage" aria-current="page"`) || strings.Contains(usage.Body.String(), `class="rail"`) || strings.Contains(usage.Body.String(), `class="list"`) {
+		t.Fatalf("Usage is not its own view: %d", usage.Code)
+	}
 	for _, bad := range []string{
+		SessionsPath + "?view=other", SessionsPath + "?view=usage&view=usage", SessionsPath + "?view=usage&show=attention", TasksPath + "?view=usage",
 		SessionsPath + "?show=all", SessionsPath + "?project=..", SessionsPath + "?project=a%20b", SessionsPath + "?project=",
 		SessionsPath + "?show=attention&show=attention", SessionsPath + "?show=attention&project=dev-env", SessionsPath + "?Show=attention",
 		SessionsPath + "?show=attention&", SessionsPath + "?project=dev%2Denv", TasksPath + "?project=dev-env",

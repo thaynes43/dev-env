@@ -359,3 +359,6 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .btn:disabled { color: GrayText; border-color: GrayText; }
   .btn.primary { forced-color-adjust: none; background: ButtonText; color: ButtonFace; }
 }
+
+.shell.usage-view { grid-template-columns: minmax(0, 1fr); }
+.shell.usage-view .workspace { display: block; }

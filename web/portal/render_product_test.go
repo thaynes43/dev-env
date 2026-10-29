@@ -444,3 +444,30 @@ func TestPanelStatesAndTableRenderEscaped(t *testing.T) {
 		t.Fatal("not escaped, or the caller's page changed")
 	}
 }
+
+func TestUsageIsAnIndependentProductView(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true,
+		Groups: []ProductGroup{{Title: "Running", Rows: []ProductRow{{ID: "s1", Title: "agent-one"}}}},
+		Usage:  &ProductUsage{Scope: "Measured usage", Rows: []ProductUsageRow{{ID: "s1", Name: "agent-one"}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `href="`+productSessionsHref+`?view=usage"`) {
+		t.Fatal("Usage navigation has no durable view URL")
+	}
+	page.Filter = ProductFilter{View: "usage"}
+	body, err = RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	for _, want := range []string{`<title>Usage · dev-env</title>`, `class="shell usage-view"`, `class="detail default" id="usage"`, `href="` + productSessionsHref + `#s1"`, `href="#main">Skip to content`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("Usage lacks %s", want)
+		}
+	}
+	if strings.Count(html, `?view=usage" aria-current="page"`) != 2 || strings.Contains(html, `class="rail"`) || strings.Contains(html, `class="list"`) || strings.Contains(html, `id="s1"`) || strings.Contains(html, `id="empty"`) {
+		t.Fatal("Usage includes session browser or wrong active navigation")
+	}
+}

@@ -69,7 +69,7 @@ func newTaskSource(tokenPath string, ca []byte, now func() time.Time, dial func(
 }
 
 func (s *SessionSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
-	page := portal.ProductPage{Title: "Sessions", Connected: true}
+	page := portal.ProductPage{Title: "Sessions", Connected: true, Filter: filter}
 	if s == nil || s.client == nil || s.now == nil {
 		return page, portal.ErrUnavailable
 	}
@@ -760,7 +760,7 @@ func shownDate(value string) string {
 // productFilter reads a product page's one optional filter: show=attention on
 // either page, project=<repository> on Sessions, or session=<uid> on Sessions
 // to select one session's conversation. Any other query, a second key or
-// value, or a non-canonical spelling is refused.
+// value, or a non-canonical spelling is refused. view=usage selects Usage on Sessions.
 func productFilter(u *url.URL) (portal.ProductFilter, bool) {
 	if u.RawQuery == "" {
 		return portal.ProductFilter{}, true
@@ -774,6 +774,8 @@ func productFilter(u *url.URL) (portal.ProductFilter, bool) {
 		return portal.ProductFilter{Attention: true}, true
 	case len(q["project"]) == 1 && u.Path == SessionsPath && validProject(q.Get("project")):
 		return portal.ProductFilter{Project: q.Get("project")}, true
+	case len(q["view"]) == 1 && u.Path == SessionsPath && q.Get("view") == "usage":
+		return portal.ProductFilter{View: "usage"}, true
 	case len(q["session"]) == 1 && u.Path == SessionsPath && sessionUIDQuery.MatchString(q.Get("session")):
 		return portal.ProductFilter{Session: q.Get("session")}, true
 	}
@@ -807,7 +809,7 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	var page portal.ProductPage
 	switch r.URL.Path {
 	case SessionsPath:
-		page = portal.ProductPage{Title: "Sessions", Notice: "Sessions not connected"}
+		page = portal.ProductPage{Title: "Sessions", Notice: "Sessions not connected", Filter: filter}
 		if c.Sessions != nil {
 			page, err = c.Sessions.Read(r.Context(), filter)
 		}
@@ -838,14 +840,14 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 	page.ObservedAt = c.Now().UTC().Format(time.RFC3339)
 	// A configured send route turns reachable sessions' boxes into forms bound
 	// to this caller's portal session. Without it, Send stays disabled.
-	if r.URL.Path == SessionsPath && c.Send != nil {
+	if r.URL.Path == SessionsPath && filter.View != "usage" && c.Send != nil {
 		if _, record, currentErr := c.Session.current(r); currentErr == nil && record.Principal == principal {
 			page = withSendForms(page, record.CSRF, c.Send)
 		}
 	}
 	// A configured launch route adds the New agent form for the one principal its
 	// private scope names; no other caller, and no Tasks page, gets one.
-	if r.URL.Path == SessionsPath && c.Launch != nil {
+	if r.URL.Path == SessionsPath && filter.View != "usage" && c.Launch != nil {
 		if _, record, currentErr := c.Session.current(r); currentErr == nil && record.Principal == principal {
 			page = withLaunchForm(page, principal, record.CSRF, c.Launch)
 		}

@@ -65,3 +65,17 @@ func TestPagesTimestampPresence(t *testing.T) {
 		}
 	}
 }
+
+func TestPagesHasSharedProductNavigation(t *testing.T) {
+	body, err := RenderPages(pages.AlertmanagerSnapshot{}, false, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Count(text, `href="`+productSessionsHref+`?view=usage"`) != 2 {
+		t.Fatal("Pages lacks top and mobile Usage navigation")
+	}
+	if strings.Count(text, `href="/portal/projects/dev-env/environments/internal/pages" aria-current="page"`) != 2 {
+		t.Fatal("Pages navigation does not mark Pages current")
+	}
+}

@@ -53,6 +53,13 @@ var (
 	launchResultTemplate = template.Must(template.New("launch-result").Parse(strings.Replace(launchResultSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
 )
 
+// Pages uses the product navigation without coupling its body to ProductPage.
+func init() {
+	for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
+		template.Must(pagesTemplate.AddParseTree(name, viewsTemplate.Lookup(name).Tree))
+	}
+}
+
 func policy(style string) string {
 	digest := sha256.Sum256([]byte(style))
 	return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(digest[:]) + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -340,7 +347,7 @@ func validLaunch(l *ProductLaunch) bool {
 // pageLaunch is the page's launch form when it is a valid one on the Sessions
 // page, and nil otherwise.
 func pageLaunch(page ProductPage) *ProductLaunch {
-	if strings.ToLower(page.Title) != "sessions" || !validLaunch(page.Launch) {
+	if page.Filter.View == "usage" || strings.ToLower(page.Title) != "sessions" || !validLaunch(page.Launch) {
 		return nil
 	}
 	return page.Launch
@@ -348,7 +355,7 @@ func pageLaunch(page ProductPage) *ProductLaunch {
 
 // pageSend reports whether page holds a valid send form.
 func pageSend(page ProductPage) bool {
-	if page.Connected {
+	if page.Connected && page.Filter.View != "usage" {
 		for _, g := range page.Groups {
 			for _, row := range g.Rows {
 				if productID.MatchString(row.ID) && validSend(row.Messages) {
@@ -420,6 +427,8 @@ type ProductUsage struct {
 // ProductFilter narrows a product list: to its Needs attention group, or, on
 // Sessions, to one project (a repository). The zero value lists everything.
 type ProductFilter struct {
+	// View selects the standalone Usage view; empty selects the session browser.
+	View      string
 	Attention bool
 	Project   string
 	// Session selects one session by UID to load its conversation. It does
@@ -589,7 +598,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
 		SessionsHref, TasksHref, UsageHref                                 string
 		ListTitle, ListCount, Access, AccessLower, DefaultID               string
-		Quiet, Preview, Banner, HasRows, CanSend, Selected                 bool
+		Quiet, Preview, Banner, HasRows, CanSend, Selected, UsageView      bool
 		All, Attention                                                     railLinkView
 		Projects                                                           []railLinkView
 		Groups                                                             []productGroupView
@@ -599,8 +608,12 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		CanLaunch                                                          bool
 	}{Policy: strings.TrimSuffix(ProductPolicyFor(page), "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
-		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "#usage",
+		SessionsHref: productSessionsHref, TasksHref: productTasksHref, UsageHref: productSessionsHref + "?view=usage",
 		ListTitle: page.ListTitle}
+	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"
+	if view.UsageView {
+		view.Title, view.Current = "Usage", "usage"
+	}
 	// A page that holds a send or launch form is not read-only, and says so.
 	view.CanSend = pageSend(page)
 	view.Access = "Read-only"
@@ -628,9 +641,6 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	view.Attention = railLinkView{Name: "Needs attention", Href: base + "?show=attention", Current: page.Filter.Attention}
 	if page.Connected {
 		view.Quiet, view.ListCount, view.Usage = page.Quiet, page.ListCount, page.Usage
-		if view.Current == "sessions" && page.Usage != nil {
-			view.UsageHref = "#usage"
-		}
 		if page.Complete {
 			view.All.Count = page.Rail.All
 			// An alert-coloured zero says nothing; the count shows only when something waits.

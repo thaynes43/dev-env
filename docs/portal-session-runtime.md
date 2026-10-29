@@ -501,3 +501,10 @@ repositories and the profile. This change enables none of them.
 The operator source also supports a separate default-off pair, `--task-pilot-agent-image` and `--task-pilot-agent-session`. Both must be supplied together and use the existing digest-pinned image and exact authenticated parent/idempotency-key syntax. The tuple selects an ordinary Codex task in `dev-env` with matching metadata and an existing Session UID; workspace, project canary, private pilot and budget-bound sessions are excluded. Existing private-history admission, HOME binding and executor reservation remain mandatory when retention is enabled. Selection applies when building the Session's own new pod, checks its owner, and changes only its image. Hold pods and existing pods are not changed; template revision and the established task-budget image checks remain in force. This separate tuple does not alter the existing Claude local/remote or Codex remote pilot tuple.
 
 This is source behavior only: no operator flags or task pilot are activated by it. It adds no project, profile, model, capacity or credential authority. A signed qualified image, separately authorized configuration and capacity, and live acceptance remain prerequisites. The parent/key pair can match more than one successive Session; one-use handling remains an operational responsibility.
+
+## Usage navigation and Sessions read diagnostics (#241)
+
+Usage has a canonical view URL, `sessions?view=usage`, with its own active top
+and mobile navigation item. It shows usage without the session rail or list;
+refresh and browser history preserve that view. Pages shares the product
+navigation. Other query combinations remain refused.
