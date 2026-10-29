@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.67.0](https://github.com/thaynes43/dev-env/compare/v2.66.0...v2.67.0) (2026-10-29)
+
+
+### Features
+
+* **agent-run:** nonblocking asks over MCP (lane C, review fixes) ([#666](https://github.com/thaynes43/dev-env/issues/666)) ([55caf71](https://github.com/thaynes43/dev-env/commit/55caf7180a003c2e046c2d04297f5b12fb4043e7))
+* **api:** store agent asks and approvals behind --enable-asks ([#668](https://github.com/thaynes43/dev-env/issues/668)) ([03c8345](https://github.com/thaynes43/dev-env/commit/03c8345e38d0f5dfdf6b02dbe0c23a969617f205))
+* **api:** wire types for agent asks and approvals (Epic [#254](https://github.com/thaynes43/dev-env/issues/254) lane 0) ([#656](https://github.com/thaynes43/dev-env/issues/656)) ([7057c17](https://github.com/thaynes43/dev-env/commit/7057c175a26be645f1fa9d168ec60cdde8fb6429))
+* keep Go temp files off /tmp and size session /tmp per size class (default unchanged) ([#670](https://github.com/thaynes43/dev-env/issues/670)) ([c2afa8c](https://github.com/thaynes43/dev-env/commit/c2afa8ce59cc7841f3d9f6b580d068b8e57037f9))
+* **portal:** Asks board (lane D, review fixes) ([#669](https://github.com/thaynes43/dev-env/issues/669)) ([7a42438](https://github.com/thaynes43/dev-env/commit/7a4243808c1abad95dfe71bd4058e0e68f5918ff))
+
+
+### Bug Fixes
+
+* **agent:** sync opwork from haynes-ops main (complete reaches Accepted) ([#665](https://github.com/thaynes43/dev-env/issues/665)) ([2fa5269](https://github.com/thaynes43/dev-env/commit/2fa5269cd7ccf28314b3005e9ac199accd06bc9e))
+* **asks:** document partial list pages and tighten two Ask tests ([#674](https://github.com/thaynes43/dev-env/issues/674)) ([a60b031](https://github.com/thaynes43/dev-env/commit/a60b031cb6f93f82a35c2cebb1065b1f733942b2))
+* **deps:** update k8s.io/utils digest to ca04ba5 ([#533](https://github.com/thaynes43/dev-env/issues/533)) ([6e2231b](https://github.com/thaynes43/dev-env/commit/6e2231b28253ba399cae01e9c4da8c2c37aa3fdc))
+* **renovate:** preserve pinned git-wait fixture baseline ([#673](https://github.com/thaynes43/dev-env/issues/673)) ([77b75b7](https://github.com/thaynes43/dev-env/commit/77b75b7c639d0197db2e6a878946a0b473d5f391))
+
 ## [2.66.0](https://github.com/thaynes43/dev-env/compare/v2.65.0...v2.66.0) (2026-10-29)
 
 
