@@ -576,11 +576,82 @@ func TestAsksAmbiguousAnswerNeverResendsRequestID(t *testing.T) {
 		}
 		return o.trip(r)
 	})}
-	if w := askPost(f, c, v); w.Code != http.StatusServiceUnavailable || posts != 1 {
+	if w := askPost(f, c, v); w.Code != http.StatusServiceUnavailable || posts != 1 || !strings.Contains(w.Body.String(), "did not confirm") {
 		t.Fatal("ambiguous dispatch was claimed successful")
 	}
-	if w := askPost(f, c, v); w.Code != http.StatusSeeOther || posts != 1 {
-		t.Fatal("ambiguous request was replayed")
+	if w := askPost(f, c, v); w.Code != http.StatusConflict || w.Header().Get("Location") != "" || posts != 1 || !strings.Contains(w.Body.String(), "was not recorded") || strings.Contains(w.Body.String(), v.Get("requestID")) || !strings.Contains(w.Body.String(), v.Get("text")) || !strings.Contains(w.Body.String(), `value="small" checked`) {
+		t.Fatal("unrecorded retry was replayed or reported as success, or lost the fresh form")
+	}
+	o.items[0].State = apiv1.AskStateAnswered
+	o.items[0].Answer = &apiv1.AskAnswer{OptionID: v.Get("optionId"), Text: v.Get("text"), AnsweredBy: apiv1.AskActor{Issuer: f.e.config.Verifier.issuer, Subject: "synthetic-subject"}, AnsweredAt: f.now}
+	if w := askPost(f, c, v); w.Code != http.StatusSeeOther || w.Header().Get("Location") != AsksPath+"?ask="+v.Get("askID") || posts != 1 {
+		t.Fatal("identical recorded answer was not recognized without replay")
+	}
+}
+
+func TestAsksReadFailureNotices(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		status     int
+		err        error
+	}{
+		{name: "timeout", err: context.DeadlineExceeded, want: "did not answer within 12 s"},
+		{name: "unreachable", err: errors.New("PRIVATE-TRANSPORT"), want: "could not be reached"},
+		{name: "refused", status: http.StatusBadGateway, want: "refused the Asks read with HTTP 502"},
+		{name: "unauthorized", status: http.StatusUnauthorized, want: "did not authorize"},
+		{name: "denied", status: http.StatusForbidden, want: "did not authorize"},
+		{name: "unreadable", status: http.StatusOK, want: "unreadable Asks response"},
+		{name: "credential", want: "credential is unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c, _, _ := asksFixture(t)
+			if tc.name == "credential" {
+				c.Asks.path = filepath.Join(t.TempDir(), "absent")
+			}
+			c.Asks.client = &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
+				if tc.err != nil {
+					return nil, tc.err
+				}
+				return askResponse(tc.status, `{"private":"PRIVATE-RESPONSE"}`), nil
+			})}
+			w := httptest.NewRecorder()
+			NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
+			body := w.Body.String()
+			if w.Code != http.StatusOK || !strings.Contains(body, tc.want) || !strings.Contains(body, "29 Oct 2026, 19:05:00 UTC") || !strings.Contains(body, "Refresh asks") || strings.Contains(body, "PRIVATE-") || strings.Contains(body, "No open asks.") {
+				t.Fatalf("read failure missing safe reason/time/retry: %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestAsksAnswerReadFailureDoesNotSend(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(strconv.FormatBool(denied), func(t *testing.T) {
+			f, c, o, v := asksFixture(t)
+			calls := 0
+			c.Asks.client = &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.Method != http.MethodGet {
+					t.Fatal("answer sent after failed read")
+				}
+				if denied {
+					return askResponse(http.StatusForbidden, `{"error":"PRIVATE-DENIED"}`), nil
+				}
+				return nil, errors.New("PRIVATE-READ")
+			})}
+			w := askPost(f, c, v)
+			body := w.Body.String()
+			if calls != 1 || len(o.answers) != 0 || w.Header().Get("Location") != "" || strings.Contains(body, "PRIVATE-") || strings.Contains(body, o.items[0].Question) {
+				t.Fatal("failed read sent an answer or exposed details")
+			}
+			if denied {
+				if w.Code != http.StatusForbidden || strings.Contains(body, `class="topbar"`) {
+					t.Fatal("denied read did not stay generic")
+				}
+			} else if w.Code != http.StatusServiceUnavailable || !strings.Contains(body, "could not be read, so your answer was not sent") || !strings.Contains(body, `href="`+AsksPath+`?ask=`+v.Get("askID")+`">Refresh asks`) || !strings.Contains(body, `class="topbar"`) {
+				t.Fatal("failed read lost its notice or selected retry")
+			}
+		})
 	}
 }
 
@@ -662,7 +733,7 @@ func TestAsksExpiredApprovalIsHistoricalAndRenderingBounded(t *testing.T) {
 	ask.Answer = &apiv1.AskAnswer{OptionID: "small", Approved: &approved, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/", Subject: "fixture-reader"}, AnsweredAt: f.now.Add(-2 * time.Minute)}
 	w := httptest.NewRecorder()
 	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Approval expired</strong>") || !strings.Contains(w.Body.String(), "Recorded decision: Approved") || strings.Contains(w.Body.String(), "<form") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Approved</strong>") || !strings.Contains(w.Body.String(), `Approval expired <time datetime="2026-10-29T19:04:00Z">29 Oct 2026, 19:04 UTC</time>`) || strings.Contains(w.Body.String(), "computed") || strings.Contains(w.Body.String(), "<form") {
 		t.Fatal("expired approval presented as usable")
 	}
 	page := portal.AsksPage{Asks: o.items, Connected: true, Complete: true, Now: f.now}
@@ -833,6 +904,9 @@ func TestAsksLifecycleAndValidationMessagesStayInShell(t *testing.T) {
 			if message == "" && strings.Contains(body, o.items[0].Question) {
 				t.Fatal("auth refusal exposed ask")
 			}
+			if (want == http.StatusConflict || want == http.StatusGone) && strings.Contains(body, "<form") {
+				t.Fatal("lifecycle refusal offered a stale answer form")
+			}
 		})
 	}
 }
@@ -859,7 +933,7 @@ func TestAsksPastExpiryOnGetUsesComputedState(t *testing.T) {
 	w := httptest.NewRecorder()
 	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
 	body := w.Body.String()
-	if w.Code != http.StatusOK || !strings.Contains(body, "expired · computed") || strings.Contains(body, "<form") || !strings.Contains(body, `aria-label="0 open asks"`) {
+	if w.Code != http.StatusOK || !strings.Contains(body, `tone-muted">Expired</span>`) || strings.Contains(body, "computed") || strings.Contains(body, "<form") || !strings.Contains(body, `aria-label="0 open asks"`) {
 		t.Fatal("open stored state past expiry still answerable")
 	}
 }

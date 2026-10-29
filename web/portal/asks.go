@@ -46,7 +46,7 @@ const asksStyle = `
 .ask-text textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .ask-record h4{margin:0 0 10px;font-size:13px}.ask-record .kv{margin-top:12px}.ask-record .turn-text{margin:8px 0}
 .asks-notice p+p{margin-top:12px}
-@media(max-width:700px){.asks-content{overflow:visible;padding:20px 16px 96px}.ask-card{padding:16px}.ask-card .ask-question{font-size:17px}.ask-text textarea{font-size:16px}.ask-answer .btn{min-height:44px}.ask-scope .kv,.ask-context,.ask-record .kv{grid-template-columns:1fr;gap:4px}.ask-scope dd,.ask-context dd,.ask-record dd{margin-bottom:8px}}
+@media(max-width:700px){.asks-content{overflow:visible;padding:20px 16px 96px}.ask-card{padding:16px}.ask-card .ask-question{font-size:17px}.ask-text textarea{font-size:16px}.ask-answer .btn{min-height:44px}.asks-content .kv{grid-template-columns:minmax(0,2fr) minmax(0,3fr)}.asks-content .kv dd{text-align:right;min-width:0}}
 `
 
 var asksPolicy = strings.Replace(policy(viewsStyle+asksStyle), "form-action 'none'", "form-action 'self'", 1)
@@ -62,18 +62,18 @@ func init() {
 // credentials. Complete describes only open-ask coverage; HistoryNotice
 // describes the independent history page. Preview disables every answer control.
 type AsksPage struct {
-	Asks                                                           []apiv1.Ask
-	Connected, Complete, CanAnswer, Preview, Retry                 bool
-	Notice, CSRF, PortalHost, SelectedID, OlderHref, HistoryNotice string
-	AnswerErrorID, AnswerError, AnswerText, AnswerOption           string
-	Now                                                            time.Time
+	Asks                                                                      []apiv1.Ask
+	Connected, Complete, CanAnswer, Preview, Retry, ReadOnly                  bool
+	Notice, CSRF, PortalHost, SelectedID, OlderHref, HistoryNotice, RetryHref string
+	AnswerErrorID, AnswerError, AnswerText, AnswerOption                      string
+	Now                                                                       time.Time
 }
 
 type askLink struct{ URL, Host, Href string }
 
 type askCard struct {
 	Ask                                                                                  apiv1.Ask
-	State, SessionHref, WorkHref, AnswerHref, CSRF, RequestID                            string
+	State, StateLabel, SessionHref, WorkHref, AnswerHref, CSRF, RequestID                string
 	CreatedAt, CreatedLabel, ExpiresAt, ExpiresLabel                                     string
 	ScopeExpiresAt, ScopeExpiresLabel, AnsweredAt, AnsweredLabel, AnswerOption, Answerer string
 	AnswerError, AnswerText, SelectedOption                                              string
@@ -105,6 +105,10 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 	if limit <= 0 || (page.Connected && page.Now.IsZero()) {
 		return nil, "", ErrUnavailable
 	}
+	page.RetryHref = "/portal/projects/dev-env/environments/internal/asks"
+	if page.SelectedID != "" {
+		page.RetryHref += "?" + url.Values{"ask": {page.SelectedID}}.Encode()
+	}
 	view := struct {
 		AsksPage
 		Policy       string
@@ -125,6 +129,7 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 				return nil, "", ErrUnavailable
 			}
 			card := askCard{Ask: ask, State: string(ask.EffectiveState(page.Now)), SessionHref: productSessionsHref + "?session=" + url.QueryEscape(ask.Context.SessionUID), AnswerHref: "/portal/projects/dev-env/environments/internal/asks/answer", CSRF: page.CSRF, Approval: ask.Type == apiv1.AskTypeApproval, Preview: page.Preview}
+			card.StateLabel = map[string]string{"open": "Open", "answered": "Answered", "withdrawn": "Withdrawn", "expired": "Expired"}[card.State]
 			card.CreatedAt, card.CreatedLabel = askTime(ask.CreatedAt)
 			card.ExpiresAt, card.ExpiresLabel = askTime(ask.ExpiresAt)
 			if ask.Context.WorkPackage > 0 {
@@ -140,7 +145,7 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 				card.AnswerError, card.AnswerText, card.SelectedOption = page.AnswerError, page.AnswerText, page.AnswerOption
 			}
 			open := card.State == string(apiv1.AskStateOpen)
-			card.CanAnswer = open && (page.Preview || (page.CanAnswer && page.CSRF != ""))
+			card.CanAnswer = open && !page.ReadOnly && (page.Preview || (page.CanAnswer && page.CSRF != ""))
 			if card.CanAnswer && !page.Preview {
 				var nonce [32]byte
 				if _, err := rand.Read(nonce[:]); err != nil {

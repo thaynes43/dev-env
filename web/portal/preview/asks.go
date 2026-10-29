@@ -25,13 +25,31 @@ func asksPreviewRecords(now time.Time) []apiv1.Ask {
 	answered.ID = "ask-0000000000000003"
 	answered.State = apiv1.AskStateAnswered
 	approved := true
-	answered.Answer = &apiv1.AskAnswer{OptionID: "small", Text: "Use the bounded synthetic fixture.", Approved: &approved, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/fixture-only/", Subject: "synthetic-reader", DisplayName: "Fixture reader"}, AnsweredAt: now.Add(-30 * time.Minute)}
+	answered.Answer = &apiv1.AskAnswer{Text: "Use the bounded synthetic fixture.", Approved: &approved, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/fixture-only/", Subject: "synthetic-reader", DisplayName: "Fixture reader"}, AnsweredAt: now.Add(-30 * time.Minute)}
 	expired := approval
 	expired.ID = "ask-0000000000000004"
 	expired.State = apiv1.AskStateExpired
 	expired.ExpiresAt = now.Add(-time.Minute)
 	expired.Scope = &apiv1.AskScope{Action: "Run the earlier synthetic check", Target: "Expired fixture", ExpiresAt: now.Add(-time.Minute)}
-	return []apiv1.Ask{answered, info, approval, expired}
+	withdrawn := info
+	withdrawn.ID, withdrawn.State = "ask-0000000000000005", apiv1.AskStateWithdrawn
+	withdrawn.Question = "Which retired synthetic fixture should be used?"
+	denied := answered
+	denied.ID, denied.Question = "ask-0000000000000006", "Approve the larger synthetic check?"
+	deniedAnswer := *answered.Answer
+	declined := false
+	deniedAnswer.Approved, deniedAnswer.Text = &declined, "Keep this check bounded."
+	denied.Answer = &deniedAnswer
+	answeredInfo := info
+	answeredInfo.ID, answeredInfo.State = "ask-0000000000000007", apiv1.AskStateAnswered
+	answeredInfo.Answer = &apiv1.AskAnswer{OptionID: "small", Text: "Use the small fixture.", AnsweredBy: answered.Answer.AnsweredBy, AnsweredAt: answered.Answer.AnsweredAt}
+	pastExpiry := info
+	pastExpiry.ID, pastExpiry.Question = "ask-0000000000000008", "Which fixture was needed for the earlier check?"
+	pastExpiry.ExpiresAt = now.Add(-time.Minute) // Stored open; rendered as Expired.
+	expiredApproval := answered
+	expiredApproval.ID, expiredApproval.Question = "ask-0000000000000009", "Approve the earlier synthetic preview check?"
+	expiredApproval.ExpiresAt, expiredApproval.Scope = expired.ExpiresAt, expired.Scope
+	return []apiv1.Ask{answered, info, approval, expired, withdrawn, denied, answeredInfo, pastExpiry, expiredApproval}
 }
 
 func writeAsks(dir string) error {
@@ -43,11 +61,16 @@ func writeAsks(dir string) error {
 		{"asks.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true}},
 		{"asks-empty.html", portal.AsksPage{Connected: true, Complete: true}},
 		{"asks-disconnected.html", portal.AsksPage{Notice: "Asks are not connected"}},
-		{"asks-unavailable.html", portal.AsksPage{Notice: "Asks are unavailable. Open asks could not be read.", Retry: true}},
+		{"asks-unavailable.html", portal.AsksPage{Notice: "Asks are unavailable. Open asks could not be read. The operator did not answer within 12 s. Checked 29 Oct 2026, 19:05:00 UTC.", Retry: true}},
 		{"asks-history-page.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, HistoryNotice: "Only one page of history is shown. Older history may be cut off.", OlderHref: "/portal/projects/dev-env/environments/internal/asks?cursor=synthetic-older"}},
 		{"asks-selected.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000003"}},
 		{"asks-validation.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, SelectedID: "ask-0000000000000001", AnswerErrorID: "ask-0000000000000001", AnswerError: "Write an answer or choose an option."}},
 		{"asks-partial.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Notice: "This is a partial read. More asks may need attention."}},
+		{"asks-withdrawn.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000005"}},
+		{"asks-denied.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000006"}},
+		{"asks-answered-info.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000007"}},
+		{"asks-expired-open.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000008"}},
+		{"asks-approval-expired.html", portal.AsksPage{Asks: asksPreviewRecords(now), Connected: true, Complete: true, SelectedID: "ask-0000000000000009"}},
 	}
 	outputs := make([][]byte, len(fixtures))
 	for i, f := range fixtures {

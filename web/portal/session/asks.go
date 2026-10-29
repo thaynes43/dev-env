@@ -120,7 +120,7 @@ func (s *AsksSource) credential() (string, error) {
 	}
 	token, err := operatorCredential(s.path, s.now())
 	if err != nil {
-		return "", portal.ErrUnavailable
+		return "", readFailure("credential_unavailable")
 	}
 	return token, nil
 }
@@ -188,25 +188,39 @@ func (s *AsksSource) readAsk(ctx context.Context, id string) (apiv1.Ask, error) 
 func (s *AsksSource) get(ctx context.Context, path, token string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, operatorPortalOrigin+path, nil)
 	if err != nil {
-		return nil, portal.ErrUnavailable
+		return nil, readFailure("response_contract")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", mediaJSON)
 	response, err := s.client.Do(req)
-	if err != nil || response == nil || response.Body == nil {
-		return nil, portal.ErrUnavailable
+	if err != nil {
+		return nil, sessionTransportFailure(ctx, err)
+	}
+	if response == nil || response.Body == nil {
+		return nil, readFailure("response_contract")
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNotFound && strings.HasPrefix(path, apiv1.PortalAsksPath+"?") {
 		return nil, errAsksNotConnected
 	}
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		return nil, portal.ErrDenied
+	}
+	if response.StatusCode != http.StatusOK {
+		failure := readFailure("operator_refused")
+		failure.HTTPStatus = response.StatusCode
+		return nil, failure
+	}
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if err != nil || media != mediaJSON || response.StatusCode != http.StatusOK {
-		return nil, portal.ErrUnavailable
+	if err != nil || media != mediaJSON {
+		return nil, readFailure("response_contract")
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, productHALLimit+1))
-	if err != nil || int64(len(raw)) > productHALLimit {
-		return nil, portal.ErrUnavailable
+	if err != nil {
+		return nil, sessionTransportFailure(ctx, err)
+	}
+	if int64(len(raw)) > productHALLimit {
+		return nil, readFailure("response_contract")
 	}
 	return raw, nil
 }
@@ -382,6 +396,12 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		}
 		ask, err := c.Asks.readAsk(r.Context(), id)
 		if err != nil {
+			if errors.Is(err, portal.ErrUnavailable) {
+				page.SelectedID, page.Retry = id, true
+				page.Notice = "This ask could not be read, so your answer was not sent. Refresh to try again."
+				renderAsks(w, r, c, key, record, page, http.StatusServiceUnavailable)
+				return
+			}
 			authFailure(w, err)
 			return
 		}
@@ -397,13 +417,15 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			return
 		}
 		page.Connected, page.SelectedID, page.Asks = true, id, []apiv1.Ask{ask}
+		// A lifecycle refusal must not offer the stale, pre-POST open form.
+		page.ReadOnly = errors.Is(err, apiv1.ErrAskNotOpen) || errors.Is(err, apiv1.ErrAskExpired)
 		page.AnswerErrorID, page.AnswerError = id, page.Notice
 		page.AnswerText, page.AnswerOption = apiv1.NormalizeAskText(r.PostForm.Get("text")), r.PostForm.Get("optionId")
 		page.Notice = ""
 	} else if c.Asks != nil {
 		result, readErr := c.Asks.read(r.Context(), cursor)
 		if readErr != nil {
-			page.Notice, page.Retry = "Asks are unavailable. Open asks could not be read.", true
+			page.Notice, page.Retry = "Asks are unavailable. Open asks could not be read. "+askReadNotice(readErr, c.Now()), true
 			if errors.Is(readErr, errAsksNotConnected) {
 				page.Notice, page.Retry = "Asks are not connected", false
 			}
@@ -425,7 +447,7 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		if selectedID != "" {
 			ask, detailErr := c.Asks.readAsk(r.Context(), selectedID)
 			if detailErr != nil {
-				page.Notice, page.Retry = "The selected ask is unavailable. Refresh to try again.", true
+				page.Notice, page.Retry = "The selected ask could not be read. "+askReadNotice(detailErr, c.Now()), true
 			} else {
 				found := false
 				for i := range page.Asks {
@@ -441,6 +463,27 @@ func serveAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		}
 	}
 	renderAsks(w, r, c, key, record, page, status)
+}
+
+// Use only fixed reason codes and safe HTTP status values, never upstream text.
+func askReadNotice(err error, observed time.Time) string {
+	failure := sessionFailure(err)
+	reason := "The operator returned an unreadable Asks response."
+	switch {
+	case errors.Is(err, portal.ErrDenied):
+		reason = "The operator did not authorize the Asks read."
+	case failure.ReasonCode == "credential_unavailable":
+		reason = "The operator credential is unavailable."
+	case failure.ReasonCode == "operator_unreachable" && failure.TimedOut:
+		reason = "The operator did not answer within " + strconv.Itoa(int(sessionReadTimeout/time.Second)) + " s."
+	case failure.ReasonCode == "operator_unreachable":
+		reason = "The operator could not be reached."
+	case failure.ReasonCode == "operator_refused":
+		reason = "The operator refused the Asks read with HTTP " + strconv.Itoa(failure.HTTPStatus) + "."
+	case failure.ReasonCode == "cancelled":
+		reason = "The Asks read was cancelled."
+	}
+	return reason + " Checked " + observed.UTC().Format("2 Jan 2006, 15:04:05 UTC") + "."
 }
 
 func renderAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key Handle, record Record, page portal.AsksPage, status int) {
@@ -473,10 +516,16 @@ var (
 	errAskConfirm        = errors.New("ask confirmation required")
 	errAskDecision       = errors.New("ask decision required")
 	errAskReadOnlyOption = errors.New("approval option is read only")
+	errAskNotRecorded    = errors.New("earlier ask answer not recorded")
+	errAskUnconfirmed    = errors.New("ask answer unconfirmed")
 )
 
 func askAnswerNotice(err error) (int, string) {
 	switch {
+	case errors.Is(err, errAskNotRecorded):
+		return http.StatusConflict, "Your earlier attempt was not recorded. Check your answer and send it again."
+	case errors.Is(err, errAskUnconfirmed):
+		return http.StatusServiceUnavailable, "The operator did not confirm this answer. Refresh to see whether it was recorded, or send it again."
 	case errors.Is(err, apiv1.ErrAskNotOpen):
 		return http.StatusConflict, "This ask is already answered or withdrawn."
 	case errors.Is(err, apiv1.ErrAskExpired):
@@ -560,13 +609,20 @@ func postAskAnswer(r *http.Request, c AssemblyConfig, key Handle, record Record,
 	if err != nil || !sameAskSession(key, record, freshKey, freshRecord) {
 		return portal.ErrDenied
 	}
-	if !created || validationErr != nil {
+	if alreadyAnswered {
 		return nil
+	}
+	if !created {
+		return errAskNotRecorded // Reused request IDs never send again.
 	}
 	if err := request.ValidateForAt(ask, c.Now()); err != nil {
 		return err
 	}
-	return c.Asks.answer(freshRequest.Context(), ask.ID, request)
+	err = c.Asks.answer(freshRequest.Context(), ask.ID, request)
+	if errors.Is(err, portal.ErrUnavailable) {
+		return errAskUnconfirmed
+	}
+	return err
 }
 
 func sameAskAnswer(answer *apiv1.AskAnswer, request apiv1.AskAnswerRequest) bool {
