@@ -430,8 +430,19 @@ func TestValidateAsk(t *testing.T) {
 		{"answer approved true on info refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.Approved = boolp(true) }, false},
 		{"answer approved false on info refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.Approved = boolp(false) }, false},
 		{"answer without answeredAt refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredAt = time.Time{} }, false},
-		{"answer without issuer refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = "" }, false},
-		{"answer without subject refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Subject = "" }, false},
+		{"answer session view (displayName only) accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy = AskActor{DisplayName: "Tom"} }, true},
+		{"answer full view accepted", func(a *Ask) { *a = askAnswered(*a) }, true},
+		{"answer without issuer accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = "" }, true},
+		{"answer without subject accepted", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Subject = "" }, true},
+		{"answer without displayName refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = "" }, false},
+		{"answer with empty actor refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy = AskActor{} }, false},
+		{"answer blank displayName refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = " \u200b" }, false},
+		{"answer present blank issuer refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = " " }, false},
+		{"answer present control issuer refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = "i\u200d" }, false},
+		{"answer present long issuer refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Issuer = strings.Repeat("a", 301) }, false},
+		{"answer present subject format character refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Subject = "u\u2060" }, false},
+		{"answer present long subject refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.Subject = strings.Repeat("a", 201) }, false},
+		{"answer displayName 121 refused", func(a *Ask) { *a = askAnswered(*a); a.Answer.AnsweredBy.DisplayName = strings.Repeat("a", 121) }, false},
 		{"delivery without message refused", func(a *Ask) {
 			*a = askAnswered(*a)
 			a.Delivery = &AskDelivery{DeliveredAt: askNow.Add(time.Hour)}
@@ -1005,5 +1016,42 @@ func TestAskRFC3339Required(t *testing.T) {
 	"scope":{"action":"a","target":"t","expiresAt":"not a time"}}`
 	if err := json.Unmarshal([]byte(body), &r); err == nil {
 		t.Fatal("non-RFC 3339 time decoded")
+	}
+}
+
+func TestAskActorSessionView(t *testing.T) {
+	full := AskActor{Issuer: "https://idp.example", Subject: "u-1", DisplayName: "Tom"}
+	if got := full.SessionView(); got != (AskActor{DisplayName: "Tom"}) {
+		t.Errorf("SessionView = %+v, want displayName only", got)
+	}
+	if got := (AskActor{Issuer: "i", Subject: "u"}).SessionView(); got != (AskActor{DisplayName: "Portal user"}) {
+		t.Errorf("empty displayName fallback = %+v, want Portal user", got)
+	}
+	if got := (AskActor{}).SessionView(); got.DisplayName != AskActorFallbackDisplayName || got.Issuer != "" || got.Subject != "" {
+		t.Errorf("zero actor view = %+v", got)
+	}
+	a := askAnswered(askRecord())
+	a.Answer.AnsweredBy = a.Answer.AnsweredBy.SessionView()
+	if err := ValidateAsk(a); err != nil {
+		t.Errorf("session view of an answered ask refused: %v", err)
+	}
+	a.Answer.AnsweredBy = AskActor{Issuer: "i", Subject: "u"}.SessionView()
+	if err := ValidateAsk(a); err != nil {
+		t.Errorf("fallback session view refused: %v", err)
+	}
+}
+
+func TestAskActorJSONOmitsEmptyIdentity(t *testing.T) {
+	b, err := json.Marshal(AskActor{DisplayName: "Tom"})
+	if err != nil || string(b) != `{"displayName":"Tom"}` {
+		t.Errorf("session view JSON = %s, %v", b, err)
+	}
+	b, err = json.Marshal(askActor().SessionView())
+	if err != nil || strings.Contains(string(b), "issuer") || strings.Contains(string(b), "subject") {
+		t.Errorf("SessionView JSON carries identity: %s, %v", b, err)
+	}
+	b, err = json.Marshal(askActor())
+	if err != nil || !strings.Contains(string(b), `"issuer"`) || !strings.Contains(string(b), `"subject"`) {
+		t.Errorf("full view JSON must carry all three: %s, %v", b, err)
 	}
 }

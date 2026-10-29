@@ -219,10 +219,33 @@ type AskContext struct {
 
 // AskActor is the human who answered, as the portal backend authenticated
 // them. It is a claim of the portal, not something the browser supplies.
+//
+// There are three views of it (contract v1.1 A2). The operator stores all
+// three fields. The session-facing /v1/asks routes return DisplayName only
+// (see SessionView), so Issuer and Subject are omitted there. The portal
+// routes return all three. ValidateAsk therefore requires DisplayName on an
+// answered ask and treats Issuer and Subject as optional, validating each
+// when present. AskAnswerRequest.Actor (portal to operator) still requires
+// Issuer and Subject; DisplayName stays optional there.
 type AskActor struct {
-	Issuer      string `json:"issuer"`
-	Subject     string `json:"subject"`
+	Issuer      string `json:"issuer,omitempty"`
+	Subject     string `json:"subject,omitempty"`
 	DisplayName string `json:"displayName,omitempty"`
+}
+
+// AskActorFallbackDisplayName is the display name of a session view whose
+// actor has none, so a session never sees a blank answerer.
+const AskActorFallbackDisplayName = "Portal user"
+
+// SessionView returns the actor as a session-facing route shows it: the
+// display name only, with Issuer and Subject empty (and so omitted from JSON).
+// An empty display name becomes AskActorFallbackDisplayName, so the view is
+// never blank and passes ValidateAsk.
+func (a AskActor) SessionView() AskActor {
+	if a.DisplayName == "" {
+		return AskActor{DisplayName: AskActorFallbackDisplayName}
+	}
+	return AskActor{DisplayName: a.DisplayName}
 }
 
 // String and GoString redact an actor formatted by accident (%v, %+v, %#v,
@@ -414,7 +437,7 @@ func (r AskCreateRequest) ValidateAt(now time.Time) error {
 // Validate checks the shape of an answer that is not tied to an ask yet. Use
 // ValidateForAt to check it against the ask it answers.
 func (r AskAnswerRequest) Validate() error {
-	return validateAskAnswerShape(r.OptionID, r.Text, r.Actor)
+	return validateAskAnswerShape(r.OptionID, r.Text, r.Actor, false)
 }
 
 // ValidateFor is ValidateForAt at the local clock. Prefer ValidateForAt with
@@ -488,7 +511,7 @@ func ValidateAsk(a Ask) error {
 		if a.Answer == nil {
 			return askInvalid("answer", "an answered ask must carry its answer")
 		}
-		if err := validateAskAnswerShape(a.Answer.OptionID, a.Answer.Text, a.Answer.AnsweredBy); err != nil {
+		if err := validateAskAnswerShape(a.Answer.OptionID, a.Answer.Text, a.Answer.AnsweredBy, true); err != nil {
 			return err
 		}
 		if err := validateAskAnswerAgainst(a, a.Answer.OptionID, a.Answer.Text, a.Answer.Approved); err != nil {
@@ -613,7 +636,12 @@ func validateAskLink(l string) error {
 	return nil
 }
 
-func validateAskAnswerShape(optionID, text string, actor AskActor) error {
+// validateAskAnswerShape checks an answer's option, text and actor. With
+// recorded false (the portal's request) issuer and subject are required and
+// displayName is optional. With recorded true (a stored or session-view
+// answer) displayName is required and issuer and subject are optional, each
+// validated when present, because the session view omits them.
+func validateAskAnswerShape(optionID, text string, actor AskActor, recorded bool) error {
 	if optionID != "" && !askOptionIDPattern.MatchString(optionID) {
 		return askInvalid("optionId", "must be empty or match ^[a-z0-9-]{1,24}$")
 	}
@@ -621,13 +649,20 @@ func validateAskAnswerShape(optionID, text string, actor AskActor) error {
 	if err := askText("text", text, 0, AskAnswerTextMaxRunes, true); err != nil {
 		return err
 	}
-	if err := askText("actor.issuer", actor.Issuer, 1, AskActorIssuerMaxRunes, false); err != nil {
+	// A present value always gets the blank check (min 1).
+	minFor := func(required bool, v string) int {
+		if required || v != "" {
+			return 1
+		}
+		return 0
+	}
+	if err := askText("actor.issuer", actor.Issuer, minFor(!recorded, actor.Issuer), AskActorIssuerMaxRunes, false); err != nil {
 		return err
 	}
-	if err := askText("actor.subject", actor.Subject, 1, AskActorSubjectMaxRunes, false); err != nil {
+	if err := askText("actor.subject", actor.Subject, minFor(!recorded, actor.Subject), AskActorSubjectMaxRunes, false); err != nil {
 		return err
 	}
-	return askText("actor.displayName", actor.DisplayName, 0, AskActorDisplayNameMaxRunes, false)
+	return askText("actor.displayName", actor.DisplayName, minFor(recorded, actor.DisplayName), AskActorDisplayNameMaxRunes, false)
 }
 
 func validateAskAnswerAgainst(a Ask, optionID, text string, approved *bool) error {
