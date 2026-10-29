@@ -358,7 +358,9 @@ func (a *app) dispatchAskTool(ctx context.Context, c *conn, name string, raw jso
 		if err := decodeAskArguments(raw, &req); err != nil {
 			return "", err
 		}
-		out, err = a.CreateAsk(ctx, c, req)
+		var ask apiv1.Ask
+		ask, err = a.CreateAsk(ctx, c, req)
+		out = computedAskStatus(ask, a.env.Now())
 	case "ask_status", "withdraw":
 		var args struct {
 			ID string `json:"id"`
@@ -371,7 +373,9 @@ func (a *app) dispatchAskTool(ctx context.Context, c *conn, name string, raw jso
 			ask, err = a.GetAsk(ctx, c, args.ID)
 			out = computedAskStatus(ask, a.env.Now())
 		} else {
-			out, err = a.WithdrawAsk(ctx, c, args.ID)
+			var ask apiv1.Ask
+			ask, err = a.WithdrawAsk(ctx, c, args.ID)
+			out = computedAskStatus(ask, a.env.Now())
 		}
 	case "list_my_asks":
 		var args struct {
@@ -429,68 +433,62 @@ func computedAskStatus(ask apiv1.Ask, now time.Time) askStatusView {
 	return out
 }
 
-func askStringSchema(min, max int) map[string]any {
-	return map[string]any{"type": "string", "minLength": min, "maxLength": max}
+func askStringSchema(min, max int, description string) map[string]any {
+	return map[string]any{"type": "string", "minLength": min, "maxLength": max, "description": description}
 }
 
 func askTools() []map[string]any {
-	id := map[string]any{"type": "string", "pattern": "^ask-[a-f0-9]{16}$"}
+	id := map[string]any{"type": "string", "pattern": "^ask-[a-f0-9]{16}$", "description": "The ask id returned by ask or list_my_asks."}
 	expires := map[string]any{
 		"type": "string", "format": "date-time",
 		"description": "RFC 3339 instant from 1 minute to 24 hours after creation. The ask must expire no later than this scope.",
 	}
-	optionID := map[string]any{"type": "string", "pattern": "^[a-z0-9-]{1,24}$"}
+	optionID := map[string]any{"type": "string", "pattern": "^[a-z0-9-]{1,24}$", "description": "A unique id for this option within the ask."}
 	return []map[string]any{
 		{
 			"name":        "ask",
-			"description": "Create an info or approval ask for the authenticated portal user. Returns the Ask JSON and id immediately, without waiting for an answer. Keep working, then read ask_status or list_my_asks for the answer. Reuse the same requestId only for retries of the identical intent. An approval applies only to its recorded scope and expiry. Requires --enable-asks on the operator.",
+			"description": "Create an info or approval ask for a human to answer on the dev-env portal. Returns the Ask JSON and id immediately, without waiting for an answer. Keep working, then read ask_status or list_my_asks for the answer. Reuse the same requestId only for retries of the identical intent. An approval applies only to its recorded scope and expiry. Requires --enable-asks on the operator.",
 			"inputSchema": map[string]any{
 				"type": "object", "additionalProperties": false,
 				"required": []string{"requestId", "type", "question"},
 				"properties": map[string]any{
-					"requestId": map[string]any{"type": "string", "minLength": 8, "maxLength": 64, "pattern": "^[A-Za-z0-9-]{8,64}$", "description": "Stable idempotency key for this caller and ask intent."},
-					"type":      map[string]any{"type": "string", "enum": []string{"info", "approval"}},
-					"question":  askStringSchema(1, apiv1.AskQuestionMaxRunes),
+					"requestId": map[string]any{"type": "string", "minLength": 8, "maxLength": 64, "pattern": "^[A-Za-z0-9-]{8,64}$", "description": "Use a new unique value (for example a UUID) for each new ask; reuse it only to retry the same call."},
+					"type":      map[string]any{"type": "string", "enum": []string{"info", "approval"}, "description": "info requests information; approval requests approval for a scoped action."},
+					"question":  askStringSchema(1, apiv1.AskQuestionMaxRunes, "The question for the human to answer."),
 					"options": map[string]any{
 						"type": "array", "maxItems": apiv1.AskMaxOptions,
+						"description": "Choices the human can select. An info ask needs at least one option or allowFreeText: true.",
 						"items": map[string]any{
 							"type": "object", "additionalProperties": false,
 							"required": []string{"id", "label"},
 							"properties": map[string]any{
-								"id": optionID, "label": askStringSchema(1, apiv1.AskOptionLabelMaxRunes), "description": askStringSchema(0, apiv1.AskOptionDescriptionMaxRunes),
+								"id": optionID, "label": askStringSchema(1, apiv1.AskOptionLabelMaxRunes, "The option text shown to the human."), "description": askStringSchema(0, apiv1.AskOptionDescriptionMaxRunes, "Optional detail about this choice."),
 							},
 						},
 					},
 					"recommended":   map[string]any{"type": "string", "pattern": "^([a-z0-9-]{1,24})?$", "description": "An id from options, or an empty string."},
-					"allowFreeText": map[string]any{"type": "boolean"},
+					"allowFreeText": map[string]any{"type": "boolean", "description": "Allow a written info answer. An info ask needs at least one option or allowFreeText: true."},
 					"context": map[string]any{
 						"type": "object", "additionalProperties": false,
+						"description": "Optional work package and links that help explain the ask.",
 						"properties": map[string]any{
-							"workPackage": map[string]any{"type": "integer", "minimum": 0},
+							"workPackage": map[string]any{"type": "integer", "minimum": 0, "description": "The related OpenProject work package id."},
 							"links": map[string]any{
 								"type": "array", "maxItems": apiv1.AskMaxLinks,
-								"items": map[string]any{"type": "string", "format": "uri", "pattern": "^https://[!-~]+$", "minLength": 1, "maxLength": apiv1.AskLinkMaxLen},
+								"description": "HTTPS links relevant to the ask.",
+								"items":       map[string]any{"type": "string", "format": "uri", "pattern": "^https://[!-~]+$", "minLength": 1, "maxLength": apiv1.AskLinkMaxLen},
 							},
 						},
 					},
 					"scope": map[string]any{
 						"type": "object", "additionalProperties": false,
-						"required": []string{"action", "target", "expiresAt"},
+						"description": "The action and target to approve. Required when type is approval; omit for info.",
+						"required":    []string{"action", "target", "expiresAt"},
 						"properties": map[string]any{
-							"action": askStringSchema(1, apiv1.AskScopeFieldMaxRunes), "target": askStringSchema(1, apiv1.AskScopeFieldMaxRunes), "expiresAt": expires,
+							"action": askStringSchema(1, apiv1.AskScopeFieldMaxRunes, "The action the human is asked to approve."), "target": askStringSchema(1, apiv1.AskScopeFieldMaxRunes, "The resource the approved action applies to."), "expiresAt": expires,
 						},
 					},
 					"expiresIn": map[string]any{"type": "string", "description": "Go duration in whole seconds, from 1m to 168h, for example 24h or 90m; 7d is not accepted. Omitted or empty defaults to 24h, capped by scope.expiresAt for approvals. An explicit duration must not outlive the approval scope. Validated before sending."},
-				},
-				"allOf": []map[string]any{{
-					"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": "approval"}}},
-					"then": map[string]any{"required": []string{"scope"}},
-					"else": map[string]any{"not": map[string]any{"required": []string{"scope"}}},
-				}},
-				"anyOf": []map[string]any{
-					{"required": []string{"type"}, "properties": map[string]any{"type": map[string]any{"const": "approval"}}},
-					{"required": []string{"options"}, "properties": map[string]any{"options": map[string]any{"minItems": 1}}},
-					{"required": []string{"allowFreeText"}, "properties": map[string]any{"allowFreeText": map[string]any{"const": true}}},
 				},
 			},
 		},
@@ -509,7 +507,7 @@ func askTools() []map[string]any {
 				"type": "object", "additionalProperties": false,
 				"properties": map[string]any{
 					"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": apiv1.AskListMaxLimit, "default": apiv1.AskListDefaultLimit},
-					"cursor": map[string]any{"type": "string"},
+					"cursor": map[string]any{"type": "string", "maxLength": 4096, "description": "The nextCursor from the previous page; omit for the first page."},
 				},
 			},
 		},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"reflect"
@@ -254,6 +255,13 @@ func TestAsksClientValidationDoesNotSend(t *testing.T) {
 	a, c := askClient(t, h)
 	_, err := a.CreateAsk(context.Background(), c, apiv1.AskCreateRequest{})
 	assertAskError(t, err, ExitUsage, "invalid ask")
+	_, err = a.CreateAsk(context.Background(), c, apiv1.AskCreateRequest{
+		RequestID: "invalid-257", Type: apiv1.AskTypeInfo, Question: "Which region?",
+	})
+	assertAskError(t, err, ExitUsage, "invalid ask: options:")
+	if strings.Count(err.Error(), "invalid ask:") != 1 {
+		t.Fatalf("validation error repeated its prefix: %v", err)
+	}
 	for _, id := range []string{"", "../portal/asks/answer", "ask-ABCDEF0123456789", "ask-0123456789abcdef/answer"} {
 		_, err := a.GetAsk(context.Background(), c, id)
 		assertAskError(t, err, ExitUsage, "")
@@ -264,8 +272,56 @@ func TestAsksClientValidationDoesNotSend(t *testing.T) {
 		_, err := a.ListMyAsks(context.Background(), c, limit, "")
 		assertAskError(t, err, ExitUsage, "limit")
 	}
+	_, err = a.ListMyAsks(context.Background(), c, 1, strings.Repeat("a", 4097))
+	assertAskError(t, err, ExitUsage, "cursor")
+	_, err = a.ListMyAsks(context.Background(), c, 1, strings.Repeat("界", 1366))
+	assertAskError(t, err, ExitUsage, "cursor")
 	if len(h.api.requests()) != 0 {
 		t.Fatal("invalid ask input reached the API")
+	}
+}
+
+func TestAsksClientListPageBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		limit      int
+		count      int
+		nextCursor string
+		wantError  string
+	}{
+		{name: "requested limit", limit: 1, count: 2, wantError: "requested limit"},
+		{name: "default limit", count: apiv1.AskListDefaultLimit + 1, wantError: "requested limit"},
+		{name: "at requested limit", limit: 2, count: 2},
+		{name: "cursor at byte limit", limit: 1, count: 1, nextCursor: strings.Repeat("a", 4096)},
+		{name: "cursor exceeds byte limit", limit: 1, count: 1, nextCursor: strings.Repeat("a", 4097), wantError: "cursor"},
+		{name: "multibyte cursor at byte limit", limit: 1, count: 1, nextCursor: strings.Repeat("界", 1365) + "a"},
+		{name: "multibyte cursor exceeds byte limit", limit: 1, count: 1, nextCursor: strings.Repeat("界", 1366), wantError: "cursor"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			a, c := askClient(t, h)
+			asks := make([]apiv1.Ask, tc.count)
+			for i := range asks {
+				asks[i] = askFixture(apiv1.AskStateOpen)
+				asks[i].ID = fmt.Sprintf("ask-%016x", i)
+			}
+			cursor := strings.Repeat("a", 4096)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.URL.Query().Get(apiv1.AskQueryCursor) != cursor {
+					t.Error("list changed the cursor at the byte limit")
+				}
+				writeTestJSON(w, http.StatusOK, apiv1.AskList{Asks: asks, NextCursor: tc.nextCursor})
+			}
+			page, err := a.ListMyAsks(context.Background(), c, tc.limit, cursor)
+			if tc.wantError != "" {
+				assertAskError(t, err, ExitFailed, tc.wantError)
+			} else if err != nil || len(page.Asks) != tc.count || page.NextCursor != tc.nextCursor {
+				t.Fatalf("page bounds: count=%d cursor bytes=%d err=%v", len(page.Asks), len(page.NextCursor), err)
+			}
+			if len(h.api.requests()) != 1 || len(h.sleeps) != 0 {
+				t.Fatal("list must make exactly one API request")
+			}
+		})
 	}
 }
 

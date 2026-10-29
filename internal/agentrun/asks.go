@@ -25,7 +25,7 @@ func (a *app) CreateAsk(ctx context.Context, c *conn, req apiv1.AskCreateRequest
 		req.Options[i].Description = apiv1.NormalizeAskText(req.Options[i].Description)
 	}
 	if err := req.ValidateAt(a.env.Now().Truncate(time.Second)); err != nil {
-		return out, usageError("invalid ask: %v", err)
+		return out, usageError("%v", err)
 	}
 	err := a.callAsks(ctx, c, http.MethodPost, apiv1.AsksPath, nil, req, &out, true)
 	return out, err
@@ -53,6 +53,9 @@ func (a *app) ListMyAsks(ctx context.Context, c *conn, limit int, cursor string)
 	}
 	if limit == 0 {
 		limit = apiv1.AskListDefaultLimit
+	}
+	if len(cursor) > 4096 {
+		return out, usageError("asks cursor must not exceed 4096 bytes")
 	}
 	q := url.Values{apiv1.AskQueryMine: {"true"}, apiv1.AskQueryLimit: {strconv.Itoa(limit)}}
 	if cursor != "" {
@@ -117,8 +120,11 @@ func (a *app) callAsks(ctx context.Context, c *conn, method, path string, query 
 				*result = sessionAskView(*result)
 			}
 		case *apiv1.AskList:
-			if len(result.Asks) > apiv1.AskListMaxLimit {
-				err = errors.New("the ask page exceeds the maximum record count")
+			limit, limitErr := strconv.Atoi(query.Get(apiv1.AskQueryLimit))
+			if limitErr != nil || len(result.Asks) > limit {
+				err = errors.New("the ask page exceeds the requested limit")
+			} else if len(result.NextCursor) > 4096 {
+				err = errors.New("the ask page cursor exceeds 4096 bytes")
 			}
 			for i, ask := range result.Asks {
 				if err != nil {

@@ -187,6 +187,14 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 		if _, exists := schemas[tool.Name]; exists {
 			t.Fatalf("duplicate tool %s", tool.Name)
 		}
+		if tool.Schema["type"] != "object" {
+			t.Errorf("%s input schema must have an object root: %v", tool.Name, tool.Schema)
+		}
+		for _, keyword := range []string{"oneOf", "anyOf", "allOf", "not", "if", "then", "else", "enum", "$ref"} {
+			if _, exists := tool.Schema[keyword]; exists {
+				t.Errorf("%s input schema has unsupported top-level %s", tool.Name, keyword)
+			}
+		}
 		schemas[tool.Name] = tool.Schema
 	}
 	for _, name := range []string{"request_access", "grant_status", "release_access", "ask", "ask_status", "list_my_asks", "withdraw"} {
@@ -226,9 +234,18 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 			t.Errorf("expiresIn help missing %q", phrase)
 		}
 	}
-	approvalAlternative := schemas["ask"]["anyOf"].([]any)[0].(map[string]any)
-	if approvalAlternative["properties"].(map[string]any)["type"].(map[string]any)["const"] != "approval" {
-		t.Fatal("approval schema must allow approve/deny without options or free text")
+	for _, name := range []string{"requestId", "type", "question", "options", "allowFreeText", "context", "scope"} {
+		if description, _ := props[name].(map[string]any)["description"].(string); description == "" {
+			t.Errorf("%s needs a description for the caller", name)
+		}
+	}
+	if !strings.Contains(props["requestId"].(map[string]any)["description"].(string), "new unique value") {
+		t.Fatal("requestId must explain when to use a new value")
+	}
+	for _, name := range []string{"options", "allowFreeText"} {
+		if !strings.Contains(props[name].(map[string]any)["description"].(string), "An info ask needs at least one option or allowFreeText: true") {
+			t.Errorf("%s must explain the info answer requirement", name)
+		}
 	}
 	options := props["options"].(map[string]any)
 	if options["maxItems"] != float64(6) {
@@ -256,7 +273,7 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 	scopeProps := scope["properties"].(map[string]any)
 	assertBounds("scope action", scopeProps["action"].(map[string]any), "minLength", 1, "maxLength", 200)
 	assertBounds("scope target", scopeProps["target"].(map[string]any), "minLength", 1, "maxLength", 200)
-	if !reflect.DeepEqual(scope["required"], []any{"action", "target", "expiresAt"}) || schemas["ask"]["allOf"] == nil {
+	if !reflect.DeepEqual(scope["required"], []any{"action", "target", "expiresAt"}) || !strings.Contains(scope["description"].(string), "Required when type is approval; omit for info") {
 		t.Errorf("approval scope requirement: %v", schemas["ask"])
 	}
 	for _, expiry := range []map[string]any{scopeProps["expiresAt"].(map[string]any)} {
@@ -266,6 +283,9 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 	}
 	listProps := schemas["list_my_asks"]["properties"].(map[string]any)
 	assertBounds("list limit", listProps["limit"].(map[string]any), "minimum", 1, "maximum", 100)
+	if listProps["cursor"].(map[string]any)["maxLength"] != float64(4096) {
+		t.Fatal("list schema must bound the cursor to 4096")
+	}
 	if listProps["limit"].(map[string]any)["default"] != float64(apiv1.AskListDefaultLimit) {
 		t.Fatal("list schema must advertise the shared default limit")
 	}
@@ -274,6 +294,9 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 			t.Errorf("%s required id: %v", name, schemas[name])
 		}
 		id := schemas[name]["properties"].(map[string]any)["id"].(map[string]any)
+		if description, _ := id["description"].(string); description == "" {
+			t.Errorf("%s must describe the ask id", name)
+		}
 		pattern := regexp.MustCompile(id["pattern"].(string))
 		if !pattern.MatchString("ask-0123456789abcdef") || pattern.MatchString("ask-ABCDEF0123456789") || pattern.MatchString("../answer") {
 			t.Errorf("%s id pattern: %s", name, pattern)
@@ -387,6 +410,8 @@ func TestAsksMCPInvalidInputsDoNotReachAPI(t *testing.T) {
 		{"ask", `[]`},
 		{"ask", createArgs(map[string]any{"requestId": ""})},
 		{"ask", createArgs(map[string]any{"type": "grant"})},
+		{"ask", createArgs(map[string]any{"allowFreeText": false})},
+		{"ask", createArgs(map[string]any{"scope": map[string]any{"action": "Apply", "target": "fixture", "expiresAt": "2026-10-07T21:00:00Z"}})},
 		{"ask", createArgs(map[string]any{"question": strings.Repeat("界", 1001)})},
 		{"ask", createArgs(map[string]any{"options": []map[string]string{{"id": "A", "label": "Invalid"}}})},
 		{"ask", createArgs(map[string]any{"options": []map[string]string{{"id": "a", "label": strings.Repeat("界", 81)}}})},
@@ -574,6 +599,90 @@ func TestAsksMCPReadTimeStateAndApproval(t *testing.T) {
 				} else if ask["computed"] != nil {
 					t.Fatal("info ask must not claim approval validity")
 				}
+			}
+		})
+	}
+}
+
+func TestAsksMCPMutationResultsUseCurrentState(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool    string
+		approval      bool
+		state         apiv1.AskState
+		afterCreation time.Duration
+		wantState     apiv1.AskState
+		wantValid     bool
+	}{
+		{"expired info replay", "ask", false, apiv1.AskStateOpen, 24 * time.Hour, apiv1.AskStateExpired, false},
+		{"pending approval", "ask", true, apiv1.AskStateOpen, time.Minute, apiv1.AskStateOpen, false},
+		{"granted approval replay", "ask", true, apiv1.AskStateAnswered, 2 * time.Minute, apiv1.AskStateAnswered, true},
+		{"withdrawn info", "withdraw", false, apiv1.AskStateWithdrawn, 24 * time.Hour, apiv1.AskStateWithdrawn, false},
+		{"withdrawn approval", "withdraw", true, apiv1.AskStateWithdrawn, 24 * time.Hour, apiv1.AskStateWithdrawn, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.now = testNow.Add(tc.afterCreation)
+			record := askFixture(tc.state)
+			if tc.approval {
+				record.Type = apiv1.AskTypeApproval
+				record.Scope = &apiv1.AskScope{Action: "Apply", Target: "Fixture", ExpiresAt: record.ExpiresAt}
+				if record.Answer != nil {
+					approved := true
+					record.Answer.Approved = &approved
+				}
+			}
+			var args any = map[string]string{"id": testAskID}
+			path := apiv1.AskWithdrawPath(testAskID)
+			if tc.tool == "ask" {
+				args = apiv1.AskCreateRequest{
+					RequestID: "mutation-257", Type: record.Type, Question: record.Question,
+					Options: record.Options, AllowFreeText: record.AllowFreeText, Scope: record.Scope,
+				}
+				path = apiv1.AsksPath
+			}
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.Method != http.MethodPost || r.URL.Path != path {
+					t.Errorf("unexpected mutation: %s %s", r.Method, r.URL)
+				}
+				// A create replay can return a stale stored state.
+				writeTestJSON(w, http.StatusOK, record)
+			}
+			h.env.Stdin = strings.NewReader(askJSON(t, map[string]any{
+				"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+				"params": map[string]any{"name": tc.tool, "arguments": args},
+			}) + "\n")
+			h.mustRun(ExitOK, "mcp")
+			frames := decodeMCPFrames(t, h.stdout.String())
+			if len(frames) != 1 || len(h.api.requests()) != 1 || len(h.sleeps) != 0 {
+				t.Fatal("mutation must return after one immediate API call")
+			}
+			var reply struct {
+				Result struct {
+					IsError bool                    `json:"isError"`
+					Content []struct{ Text string } `json:"content"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(frames[0]), &reply); err != nil || reply.Result.IsError || len(reply.Result.Content) != 1 {
+				t.Fatalf("invalid MCP mutation result: %s", frames[0])
+			}
+			var got struct {
+				State    apiv1.AskState `json:"state"`
+				Computed *struct {
+					ApprovalValid bool `json:"approvalValid"`
+				} `json:"computed"`
+			}
+			if err := json.Unmarshal([]byte(reply.Result.Content[0].Text), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.State != tc.wantState {
+				t.Errorf("state=%s, want %s", got.State, tc.wantState)
+			}
+			if tc.approval {
+				if got.Computed == nil || got.Computed.ApprovalValid != tc.wantValid {
+					t.Errorf("incorrect computed approval validity: %s", reply.Result.Content[0].Text)
+				}
+			} else if got.Computed != nil {
+				t.Fatal("info ask must not claim approval validity")
 			}
 		})
 	}
