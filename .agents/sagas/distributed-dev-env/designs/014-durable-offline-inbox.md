@@ -162,3 +162,24 @@ provider consumption. The server remains authoritative for identity and scope;
 a configured coordinator can read its authorized project but cannot publish or
 ack on behalf of a Session. Source tests do not establish installation or live
 usability.
+
+## CLI store qualification (2026-10-29)
+
+`internal/apiserver/inbox_cli_integration_test.go` runs the existing `agentrun.Run`
+inbox client over TLS into the existing inbox handlers and the fake Kubernetes
+inbox store. The Sessions carry accepted-catalog synthetic snapshots. One send
+creates one message, and its sender, actor, repository, provider, requested
+model and provenance come from that Session and catalog. The same stable key
+and text confirm that message. A changed intent conflicts once, does not replay,
+and leaves the stored text in place. List returns metadata, read returns the
+stored text, and ack writes one acknowledgement. Read and list do not
+acknowledge, and the acknowledgement is not provider consumption. A second
+synthetic canonical provider uses the same inbox and adds no provider side
+effect. A wrong recipient UID, a replacement Session, a legacy unbound session
+token, a Session without a project snapshot, and a project outside the enabled
+set fail as the existing not-found classification, leave the store unchanged,
+and do not disclose the body or token. Rebuilding the API on the same store
+returns the original message once. TLS non-redirect and token-file rules remain
+the existing client tests. This is source qualification only. It does not
+install the client, publish a live inbox, or close the post-deploy trial in
+Remaining acceptance.
