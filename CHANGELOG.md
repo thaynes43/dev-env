@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.64.0](https://github.com/thaynes43/dev-env/compare/v2.63.1...v2.64.0) (2026-10-29)
+
+
+### Features
+
+* add opt-in Claude statusline usage bridge ([#641](https://github.com/thaynes43/dev-env/issues/641)) ([59aa767](https://github.com/thaynes43/dev-env/commit/59aa76712435dc6c2af1a654f286b0d0efddbe4c))
+
 ## [2.63.1](https://github.com/thaynes43/dev-env/compare/v2.63.0...v2.63.1) (2026-10-29)
 
 
