@@ -193,6 +193,8 @@ type Reconciler struct {
 	// idempotency key on another agent image (pilotImageFor). Keeping that to
 	// one session is an operating rule, not a limit. Nil is off.
 	PilotAgent *PilotAgent
+	// TaskPilotAgent is an independently selected, default-off Codex task image.
+	TaskPilotAgent *PilotAgent
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder

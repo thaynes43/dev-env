@@ -106,6 +106,7 @@ type options struct {
 	taskBudgetNamespace           string
 	taskBudgetWorkerImage         string
 	pilotAgent                    *controller.PilotAgent
+	taskPilotAgent                *controller.PilotAgent
 	assignedTaskBudgets           map[string]string
 	sessionNamespace              string
 	templatesNamespace            string
@@ -224,6 +225,8 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.taskBudgetWorkerImage, "task-budget-worker-image", "", "reviewed immutable worker image containing pre-boot budget deadline")
 	pilotImage := fs.String("pilot-agent-image", "", "ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 hex> for the sessions --pilot-agent-session selects; both or neither")
 	pilotSession := fs.String("pilot-agent-session", "", "<creating session name>/<idempotency-key> of the sessions that run --pilot-agent-image; both or neither")
+	taskPilotImage := fs.String("task-pilot-agent-image", "", "digest-pinned Codex task pilot image; pair with --task-pilot-agent-session")
+	taskPilotSession := fs.String("task-pilot-agent-session", "", "<parent>/<idempotency-key> of Codex task pilot; pair with --task-pilot-agent-image")
 	assignedBudgets := fs.String("assigned-task-budgets", "", "explicit JSON configured HostID to TaskUID map")
 	hosts := fs.String("coordinator-hosts", "", "explicit JSON host bindings; empty configures none")
 	catalog := fs.String("project-catalog", "", "explicit accepted namespace/name ConfigMap binding")
@@ -445,6 +448,11 @@ func parseFlags(args []string) (options, error) {
 		return o, err
 	}
 	o.pilotAgent = pilotAgent
+	taskPilot, err := parsePilotAgent(*taskPilotImage, *taskPilotSession)
+	if err != nil {
+		return o, errors.New(strings.ReplaceAll(err.Error(), "--pilot-agent-", "--task-pilot-agent-"))
+	}
+	o.taskPilotAgent = taskPilot
 	if o.ownedRootPolicy != "" {
 		if len(validation.IsDNS1123Subdomain(o.ownedRootPolicy)) != 0 || !o.taskBudgetsEnabled || o.nativeFixtureEnabled || !o.coordinatorEnabled || len(o.coordinatorHosts) != 1 || len(o.assignedTaskBudgets) != 1 {
 			return o, errors.New("owned root needs one assigned coordinator, explicit policy and no fixture")
@@ -581,6 +589,7 @@ func run(args []string) error {
 		Client:           mgr.GetClient(),
 		TaskBudgets:      budgets, TaskBudgetWorkerImage: o.taskBudgetWorkerImage,
 		PilotAgent:                  o.pilotAgent,
+		TaskPilotAgent:              o.taskPilotAgent,
 		Templates:                   templatesKey,
 		APIURL:                      o.apiURL,
 		ManagedCodexTasks:           o.managedCodexTasks,
