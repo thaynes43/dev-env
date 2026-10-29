@@ -74,6 +74,14 @@
       matchDatasources: ['golang-version'],
       automerge: false,
     },
+    // The git-wait trial uses a fixed baseline; changing it needs fixture review.
+    {
+      description: 'Keep the git-wait fixture BASE_IMAGE deliberately pinned',
+      matchFileNames: ['images/git-wait/Dockerfile'],
+      matchDatasources: ['docker'],
+      matchPackageNames: ['ghcr.io/thaynes43/dev-env'],
+      enabled: false,
+    },
   ],
   customManagers: [
     {
