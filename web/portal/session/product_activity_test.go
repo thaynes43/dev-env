@@ -407,7 +407,7 @@ func TestSessionRemoteControlLinkAndState(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(body)
-	if strings.Count(html, `>Open in Claude<svg`) != 1 || !strings.Contains(html, `<a class="btn" href="`+link+`" rel="noreferrer">Open in Claude`) {
+	if strings.Count(html, `>Open in Claude<svg`) != 1 || !strings.Contains(html, `<a class="btn" href="`+link+`" target="_blank" rel="noopener noreferrer">Open in Claude`) {
 		t.Fatal("the registered agent's header lacks its one Open in Claude link")
 	}
 	// The renderer drops any header link that is not https.
@@ -523,7 +523,7 @@ func TestSessionAttentionReasonsAndActions(t *testing.T) {
 			if strings.Index(text, `class="attention-panel"`) > strings.Index(text, `class="work-area"`) || strings.Count(text, "<h1") != 1 {
 				t.Fatal("attention is not at top, or extra h1")
 			}
-			if (tc.name == "waiting linked" || tc.name == "waiting unknown mode registered") && !strings.Contains(text, `class="btn primary" href="`+link+`" rel="noreferrer">Answer in Claude`) {
+			if (tc.name == "waiting linked" || tc.name == "waiting unknown mode registered") && !strings.Contains(text, `class="btn primary" href="`+link+`" target="_blank" rel="noopener noreferrer">Answer in Claude`) {
 				t.Fatal("missing primary Answer link")
 			}
 		})
