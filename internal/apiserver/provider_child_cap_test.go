@@ -129,7 +129,7 @@ func TestProviderChildCapConcurrentSingleServer(t *testing.T) {
 	}
 	close(start)
 	a, b := <-results, <-results
-	if !((a == http.StatusCreated && b == http.StatusTooManyRequests) || (b == http.StatusCreated && a == http.StatusTooManyRequests)) {
+	if (a != http.StatusCreated || b != http.StatusTooManyRequests) && (b != http.StatusCreated || a != http.StatusTooManyRequests) {
 		t.Fatalf("concurrent codes: %d, %d", a, b)
 	}
 }
