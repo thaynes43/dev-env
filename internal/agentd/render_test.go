@@ -187,12 +187,14 @@ func TestRenderFullPod(t *testing.T) {
 }
 
 func TestRenderGoTmpDir(t *testing.T) {
-	for _, override := range []bool{false, true} {
-		t.Run(map[bool]string{false: "default", true: "override"}[override], func(t *testing.T) {
+	for _, mode := range []string{"default", "image-default", "override"} {
+		t.Run(mode, func(t *testing.T) {
 			s := testSettings(t, t.TempDir())
 			dir := filepath.Join(s.Home, ".cache", "go-tmp")
-			if override {
+			if mode == "override" {
 				dir = filepath.Join(s.Home, "custom-go-work")
+			}
+			if mode != "default" {
 				s.Getenv = envOf(map[string]string{"GOTMPDIR": dir})
 			}
 			if st := renderGoTmpDir(s); st.State != StepOK {
@@ -200,11 +202,40 @@ func TestRenderGoTmpDir(t *testing.T) {
 			}
 			retained := filepath.Join(dir, "retained-work")
 			writeFile(t, retained, "keep this")
+			retainedDir := filepath.Join(dir, "other", "go-build-nested")
+			writeFile(t, retainedDir, "keep this too")
+			staleDir := filepath.Join(dir, "go-build123")
+			staleFile := filepath.Join(dir, "go-build-file")
+			writeFile(t, filepath.Join(staleDir, "work"), "interrupted build")
+			writeFile(t, staleFile, "interrupted build")
+			outside := filepath.Join(t.TempDir(), "outside", "keep")
+			writeFile(t, outside, "outside work")
+			link := filepath.Join(dir, "go-build-link")
+			for _, path := range []string{link, filepath.Join(staleDir, "nested-link")} {
+				if err := os.Symlink(filepath.Dir(outside), path); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if st := renderGoTmpDir(s); st.State != StepOK {
 				t.Fatalf("repeat render: %+v", st)
 			}
-			if b, err := os.ReadFile(retained); err != nil || string(b) != "keep this" {
-				t.Fatalf("existing work changed: %q, %v", b, err)
+			for path, want := range map[string]string{retained: "keep this", retainedDir: "keep this too", outside: "outside work"} {
+				if b, err := os.ReadFile(path); err != nil || string(b) != want {
+					t.Fatalf("retained work %s changed: %q, %v", path, b, err)
+				}
+			}
+			if target, err := os.Readlink(link); err != nil || target != filepath.Dir(outside) {
+				t.Fatalf("symlink changed: target=%q, err=%v", target, err)
+			}
+			for _, path := range []string{staleDir, staleFile} {
+				_, err := os.Stat(path)
+				if mode == "override" {
+					if err != nil {
+						t.Fatalf("override work removed: %v", err)
+					}
+				} else if !os.IsNotExist(err) {
+					t.Fatalf("stale work %s remains: %v", path, err)
+				}
 			}
 		})
 	}
@@ -213,6 +244,36 @@ func TestRenderGoTmpDir(t *testing.T) {
 	writeFile(t, filepath.Join(s.Home, ".cache"), "not a directory")
 	if st := renderGoTmpDir(s); st.State != StepFail {
 		t.Fatalf("mkdir failure: %+v", st)
+	}
+}
+
+func TestRenderGoTmpDirSkipsSymlinkedDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, linkSuffix, targetSuffix string
+	}{
+		{"HOME", "", ".cache/go-tmp"},
+		{"cache", ".cache", "go-tmp"},
+		{"go-tmp", ".cache/go-tmp", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testSettings(t, filepath.Join(t.TempDir(), "home"))
+			link := filepath.Join(s.Home, tc.linkSuffix)
+			outside := t.TempDir()
+			retained := filepath.Join(outside, tc.targetSuffix, "go-build123", "work")
+			writeFile(t, retained, "keep this")
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, link); err != nil {
+				t.Fatal(err)
+			}
+			if st := renderGoTmpDir(s); st.State != StepOK {
+				t.Fatalf("render with symlinked default: %+v", st)
+			}
+			if b, err := os.ReadFile(retained); err != nil || string(b) != "keep this" {
+				t.Fatalf("followed symlinked default: %q, %v", b, err)
+			}
+		})
 	}
 }
 

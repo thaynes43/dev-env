@@ -47,8 +47,9 @@ func skipStep(name, why string) Step { return Step{Name: name, State: StepSkip, 
 // Render is boot step 1 (DESIGN-001 3.6), a port of v1's dev-init.sh: it links
 // and renders the GitOps config into the session's home. Every step is
 // idempotent, so a resume on the same volume runs it again. It never touches
-// provider history or existing cache contents. Codex auth changes only when its keeper access
-// projection is explicitly configured (D-78).
+// provider history or existing caches; it removes stale default Go work
+// directories before any Go process starts. Codex auth changes only when its
+// keeper access projection is explicitly configured (D-78).
 //
 // Dropped from dev-init, because the agent image bakes them in (plan 01): the
 // Codex standalone and kubectl-cnpg downloads, and the agent-run,
@@ -84,11 +85,48 @@ func Render(ctx context.Context, r Runner, s Settings, sess protocol.Session) []
 // HOME is a volume, so a directory baked into the image would be hidden at
 // runtime. Create Go's work directory after that volume is mounted.
 func renderGoTmpDir(s Settings) Step {
+	const name = "go-tmp-dir"
+	defaultDir := filepath.Join(s.Home, ".cache", "go-tmp")
 	dir := s.Getenv("GOTMPDIR")
 	if dir == "" {
-		dir = filepath.Join(s.Home, ".cache", "go-tmp")
+		dir = defaultDir
 	}
-	return newStep("go-tmp-dir", nil, os.MkdirAll(dir, 0o755))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return newStep(name, nil, err)
+	}
+	if dir != defaultDir {
+		return newStep(name, nil, nil)
+	}
+	// A symlinked parent (for example ~/.cache) also redirects the default.
+	// Check every component before opening the cleanup root.
+	for path := dir; ; path = filepath.Dir(path) {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return newStep(name, nil, err)
+		}
+		if path == filepath.Dir(path) {
+			break
+		}
+	}
+	// Boot has the volume's only writer and no running Go process. A Root
+	// confines removal even if a stale work directory contains symlinks.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return newStep(name, nil, err)
+	}
+	defer func() { _ = root.Close() }()
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return newStep(name, nil, err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "go-build") && entry.Type()&os.ModeSymlink == 0 {
+			if err := root.RemoveAll(entry.Name()); err != nil {
+				return newStep(name, nil, err)
+			}
+		}
+	}
+	return newStep(name, nil, nil)
 }
 
 // renderRuntimeDir makes $XDG_RUNTIME_DIR with mode 0700. Claude refuses a

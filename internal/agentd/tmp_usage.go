@@ -34,17 +34,23 @@ func (m *tmpUsageMonitor) check(now time.Time, log *slog.Logger) {
 	if err := statfs("/tmp", &stat); err != nil {
 		return // Unknown is not recovery; preserve warning suppression.
 	}
-	if stat.Bsize <= 0 || stat.Blocks == 0 || stat.Bfree > stat.Blocks || stat.Blocks > math.MaxUint64/uint64(stat.Bsize) {
+	unit := stat.Frsize
+	if unit <= 0 {
+		unit = stat.Bsize
+	}
+	if unit <= 0 || stat.Blocks == 0 || stat.Bfree > stat.Blocks || stat.Bavail > stat.Bfree || stat.Blocks > math.MaxUint64/uint64(unit) {
 		return
 	}
-	capacity := stat.Blocks * uint64(stat.Bsize)
-	used := (stat.Blocks - stat.Bfree) * uint64(stat.Bsize)
-	if float64(used) <= 0.75*float64(capacity) {
+	capacity := stat.Blocks * uint64(unit)
+	used := (stat.Blocks - stat.Bfree) * uint64(unit)
+	available := stat.Bavail * uint64(unit)
+	// Like df, exclude reserved blocks from the percentage's denominator.
+	if float64(used) <= 0.75*float64(used+available) {
 		m.warned = false
 		return
 	}
 	if !m.warned {
-		log.Warn("/tmp backing filesystem usage exceeds 75%", "usedBytes", used, "capacityBytes", capacity)
+		log.Warn("/tmp backing filesystem usage exceeds 75%", "usedBytes", used, "capacityBytes", capacity, "availableBytes", available)
 		m.warned = true
 	}
 }

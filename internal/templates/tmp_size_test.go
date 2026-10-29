@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -52,8 +53,12 @@ func TestTmpSizeLimitRefusesInvalidValues(t *testing.T) {
 			if err == nil {
 				t.Fatalf("accepted invalid tmpSizeLimit %q", value)
 			}
-			if value != "bogus" && !strings.Contains(err.Error(), "sizes.M.tmpSizeLimit") {
-				t.Fatalf("error does not identify size/field: %v", err)
+			if value != "bogus" {
+				q := resource.MustParse(value)
+				want := fmt.Sprintf("sizes.M.tmpSizeLimit: %s is outside 1Gi to 64Gi", q.String())
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error does not identify size, field and rejected value: %v; want %q", err, want)
+				}
 			}
 		})
 	}

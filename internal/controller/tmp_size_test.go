@@ -13,8 +13,9 @@ import (
 )
 
 func TestTmpDefaultPreservesPodBytes(t *testing.T) {
-	// JSON of buildPod(taskSession(), exampleTemplates(t), "") at the pinned
-	// pre-change main 7057c175, including its legacy template revision label.
+	// Pin the whole default pod's JSON bytes on purpose, including its template
+	// revision label. Regenerate deliberately only when pod.go changes for
+	// another reason.
 	const legacySHA256 = "c91e28583563011e5e83da0056e2965be4d79bc44212d4dafd2d494029e75e1c"
 	pod, err := buildPod(taskSession(), exampleTemplates(t), "")
 	if err != nil {

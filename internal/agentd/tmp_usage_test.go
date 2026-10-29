@@ -15,7 +15,7 @@ import (
 func TestTmpUsageWarningThresholdAndCadence(t *testing.T) {
 	var out bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&out, nil))
-	stat := syscall.Statfs_t{Blocks: 100, Bfree: 25, Bsize: 4096}
+	stat := syscall.Statfs_t{Blocks: 100, Bfree: 25, Bavail: 25, Bsize: 4096}
 	var readErr error
 	calls := 0
 	m := tmpUsageMonitor{statfs: func(path string, got *syscall.Statfs_t) error {
@@ -31,14 +31,14 @@ func TestTmpUsageWarningThresholdAndCadence(t *testing.T) {
 	if calls != 1 || out.Len() != 0 {
 		t.Fatalf("exactly 75%%: calls=%d, log=%s", calls, &out)
 	}
-	stat.Bfree = 24
+	stat.Bfree, stat.Bavail = 24, 24
 	m.check(now.Add(tmpUsageEvery-time.Nanosecond), log)
 	if calls != 1 {
 		t.Fatal("sampled sooner than five minutes")
 	}
 	now = now.Add(tmpUsageEvery)
 	m.check(now, log)
-	if calls != 2 || !strings.Contains(out.String(), `"usedBytes":311296`) || !strings.Contains(out.String(), `"capacityBytes":409600`) {
+	if calls != 2 || !strings.Contains(out.String(), `"usedBytes":311296`) || !strings.Contains(out.String(), `"capacityBytes":409600`) || !strings.Contains(out.String(), `"availableBytes":98304`) {
 		t.Fatalf("high usage did not log measured bytes: calls=%d, log=%s", calls, &out)
 	}
 	warnOnce := out.String()
@@ -50,10 +50,10 @@ func TestTmpUsageWarningThresholdAndCadence(t *testing.T) {
 			t.Fatalf("high usage or an error repeated the warning: %s", &out)
 		}
 	}
-	stat.Bfree = 50
+	stat.Bfree, stat.Bavail = 50, 50
 	now = now.Add(tmpUsageEvery)
 	m.check(now, log)
-	stat.Bfree = 0
+	stat.Bfree, stat.Bavail = 0, 0
 	now = now.Add(tmpUsageEvery)
 	m.check(now, log)
 	if got := strings.Count(out.String(), `"level":"WARN"`); got != 2 {
@@ -61,13 +61,43 @@ func TestTmpUsageWarningThresholdAndCadence(t *testing.T) {
 	}
 }
 
+func TestTmpUsageFragmentSizeAndAvailableSpace(t *testing.T) {
+	for _, sizes := range []struct {
+		name         string
+		fragmentSize int64
+		blockSize    int64
+	}{
+		{"fragment size", 512, 4096},
+		{"fragment without block size", 512, 0},
+		{"zero fragment fallback", 0, 512},
+		{"negative fragment fallback", -1, 512},
+	} {
+		t.Run(sizes.name, func(t *testing.T) {
+			var out bytes.Buffer
+			m := tmpUsageMonitor{statfs: func(_ string, got *syscall.Statfs_t) error {
+				// 70 used, 20 available, 10 reserved: df reports >75% used.
+				*got = syscall.Statfs_t{Blocks: 100, Bfree: 30, Bavail: 20, Frsize: sizes.fragmentSize, Bsize: sizes.blockSize}
+				return nil
+			}}
+			m.check(time.Now(), slog.New(slog.NewJSONHandler(&out, nil)))
+			for _, want := range []string{`"usedBytes":35840`, `"capacityBytes":51200`, `"availableBytes":10240`} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %s in log: %s", want, &out)
+				}
+			}
+		})
+	}
+}
+
 func TestTmpUsageUnknownSamples(t *testing.T) {
 	for name, stat := range map[string]syscall.Statfs_t{
-		"zero capacity":       {},
-		"no block size":       {Blocks: 100},
-		"negative block size": {Blocks: 100, Bsize: -1},
-		"free exceeds total":  {Blocks: 100, Bfree: 101, Bsize: 4096},
-		"overflow":            {Blocks: math.MaxUint64, Bsize: 4096},
+		"zero capacity":          {},
+		"no block size":          {Blocks: 100},
+		"negative block size":    {Blocks: 100, Bsize: -1},
+		"free exceeds total":     {Blocks: 100, Bfree: 101, Bsize: 4096},
+		"available exceeds free": {Blocks: 100, Bfree: 25, Bavail: 26, Bsize: 4096},
+		"overflow":               {Blocks: math.MaxUint64, Bsize: 4096},
+		"fragment overflow":      {Blocks: math.MaxUint64, Frsize: 4096, Bsize: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer

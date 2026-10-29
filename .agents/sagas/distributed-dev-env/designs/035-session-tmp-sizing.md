@@ -1,6 +1,7 @@
 # DESIGN-035: Session temporary storage
 
-Date: 2026-10-29. Source-only work order DEVENV251-TMP-SIZING-20261029-01,
+Date: 2026-10-29. Source-only work orders DEVENV251-TMP-SIZING-20261029-01
+and DEVENV251-TMP-SIZING-20261029-02,
 [OpenProject #251](https://work.haynesnetwork.com/work_packages/251), Epic #103.
 Merge and rollout remain held; this PR stops when ready with CI started.
 
@@ -34,12 +35,26 @@ breakdown of which files consumed the 8Gi.
 2. The agent image sets `GOTMPDIR=/home/dev/.cache/go-tmp`. Agentd creates the
    directory during boot rendering after HOME is mounted, before repository
    preparation or agent launch. Rendering honors an explicit GOTMPDIR override
-   and is idempotent. No global TMPDIR change, cache migration or cleanup is
-   included. This moves Go build scratch use to HOME; tests using os.TempDir
-   can still use `/tmp`. HOME capacity still needs monitoring at adoption.
+   and is idempotent. After creating the default directory, boot removes only
+   its `go-build*` entries left by interrupted Go builds/tests. Cleanup skips
+   symlink entries and a GOTMPDIR with any symlinked path component, stays
+   confined to that directory, and never cleans a user-selected override.
+   Nested symlinks are not followed.
+   This is safe only at boot: HOME has one writer and no Go process has started.
+   Persistent HOME avoids `/tmp` eviction but retains scratch after a killed
+   build; boot cleanup bounds accumulation across restarts, not within one long
+   session. Other contents and Go caches are kept. No global TMPDIR change or
+   cache migration is included. Tests using os.TempDir can still use `/tmp`.
+   HOME capacity still needs monitoring at adoption. If an agent clears
+   `~/.cache`, recreate the work directory with `mkdir -p "$GOTMPDIR"` before
+   running Go again; otherwise Go fails until the next boot with
+   `creating work dir: stat /home/dev/.cache/go-tmp: no such file or directory`.
 3. Agentd samples `statfs(/tmp)` at most once every five minutes and logs one
    warning line on crossing above 75%, including used bytes and filesystem
-   capacity. It suppresses repeats while high, and rearms after recovery. A
+   capacity and available bytes. Use the fragment size (falling back to block
+   size) and `Bavail` for available space; the percentage is used divided by
+   used plus available, as in df, so reserved blocks are not available space.
+   It suppresses repeats while high, and rearms after recovery. A
    failed measurement is not a zero-usage observation. No status protocol,
    API or CRD field is added. **This observes backing-filesystem pressure:**
    disk-backed EmptyDir sizeLimit is a kubelet eviction threshold, not a
@@ -57,7 +72,8 @@ haynes-ops edit, dev-env-templates edit or cluster write is authorized here.
 After Tom approves adoption, deliver the operator and signed agent image through
 the normal GitOps path, then explicitly select any per-size limits in templates.
 Template/image changes drain eligible sessions at idle under existing rules;
-never restart busy sessions or delete volumes or temporary contents to adopt it.
+never restart busy sessions or manually delete volumes or temporary contents to
+adopt it.
 Roll back desired image/template values through GitOps under the same hold.
 
 Source/test acceptance is distinct from image build/publication, deployment and
@@ -74,8 +90,10 @@ an EmptyDir sizeLimit alone reserves no node disk.
 - Controller: compare the pre-change pod bytes for omitted values; exercise
   S/M/L/default-M and size-S hold pods with overrides. Existing envtest tests
   cover Outdated marking and safe idle drains; run that suite too.
-- Agentd: fresh HOME, override and repeated directory creation; fake statfs and
-  clock for threshold, rate limiting, warning suppression/recovery and errors.
+- Agentd: fresh HOME, override and repeated directory creation; stale
+  `go-build*` cleanup with unrelated entries and symlink targets preserved;
+  fake statfs and clock for fragment/block sizes, reserved blocks, threshold,
+  rate limiting, warning suppression/recovery and errors.
   No capacity-filling test or load loop.
 - Go 1.27.2; focused templates, controller (including envtest) and agentd suites
   serially under `nice -n 19`, `GOMAXPROCS=2`, `-p 1`, with GOCACHE and GOTMPDIR

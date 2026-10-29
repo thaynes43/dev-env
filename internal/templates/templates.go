@@ -512,7 +512,7 @@ func (t *Templates) Validate() error {
 func validateSize(class string, s Size) []error {
 	var errs []error
 	if q := s.TmpSizeLimit; q != nil && (q.Cmp(resource.MustParse("1Gi")) < 0 || q.Cmp(resource.MustParse("64Gi")) > 0) {
-		errs = append(errs, fmt.Errorf("sizes.%s.tmpSizeLimit must be between 1Gi and 64Gi inclusive", class))
+		errs = append(errs, fmt.Errorf("sizes.%s.tmpSizeLimit: %s is outside 1Gi to 64Gi", class, q.String()))
 	}
 	for _, part := range []struct {
 		name string
