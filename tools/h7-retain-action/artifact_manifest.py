@@ -14,7 +14,7 @@ binary = artifact / "retain-darwin-arm64"
 manifest = {
     "schemaVersion": 1,
     "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
-    "toolchain": "go1.27.1",
+    "toolchain": "go1.27.3",
     "sourceFiles": {str(path.relative_to(root)): checksum(path) for path in sorted(source.rglob("*")) if path.is_file()},
     "workflowSha256": checksum(root / ".github/workflows/h7-retain-action.yml"),
     "binaries": {binary.name: {"sha256": checksum(binary), "bytes": binary.stat().st_size}},

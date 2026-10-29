@@ -74,6 +74,12 @@
       matchDatasources: ['golang-version'],
       automerge: false,
     },
+    {
+      description: "pinned to Kyverno 1.19.1's cel-go; bump together with the Kyverno version and source-provenance.json",
+      matchFileNames: ['tools/h7-metadata-checker/celhelper/go.mod'],
+      matchPackageNames: ['github.com/google/cel-go', 'cel.dev/cel-go'],
+      enabled: false,
+    },
     // The git-wait trial uses a fixed baseline; changing it needs fixture review.
     {
       description: 'Keep the git-wait fixture BASE_IMAGE deliberately pinned',
