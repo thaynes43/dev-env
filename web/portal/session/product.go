@@ -657,10 +657,7 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	status := shown(element.Links.Status.Title)
 	kind := shown(element.Links.Type.Title)
 	repos := shown(element.CustomField3)
-	owner := taskOwner(element.CustomField2)
-	if owner == "" && strings.TrimSpace(element.CustomField1) != "" {
-		owner = shown(element.CustomField1)
-	}
+	listOwner := taskListOwner(element.CustomField2, element.CustomField1)
 	updatedAgo, age := "updated Unknown", "Unknown"
 	if updated, err := time.Parse(time.RFC3339, element.UpdatedAt); err == nil {
 		updatedAgo, age = "updated "+portal.Ago(updated, now), compactAgo(&updated, now)
@@ -676,17 +673,28 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	} else if repos != "Unknown" {
 		description = repos
 	}
-	if owner != "" {
-		badges = append(badges, owner)
+	if listOwner != "Owner not recorded" {
+		badges = append(badges, listOwner)
+	}
+	fixture := taskFixture(element.Description.Raw)
+	if fixture {
+		badges = append([]string{"Fixture"}, badges...)
 	}
 	summary := portal.ProductSection{Title: "Summary", Note: taskSummary(element.Description.Raw)}
 	if summary.Note == "" {
 		summary.Note = "No description."
 	}
-	var people []portal.ProductField
+	if fixture {
+		summary.States = []portal.ProductState{{
+			Status: portal.ProductStatus{Text: "Fixture", Tone: "muted"},
+			Text:   "Synthetic fixture",
+		}}
+	}
+	people := []portal.ProductField{
+		{Label: "Execution owner", Value: recordedOwner(element.CustomField2)},
+		{Label: "Accountable owner", Value: recordedOwner(element.CustomField1)},
+	}
 	for _, f := range []portal.ProductField{
-		{Label: "Execution owner", Value: element.CustomField2},
-		{Label: "Accountable owner", Value: element.CustomField1},
 		{Label: "Assignee", Value: element.Links.Assignee.Title},
 		{Label: "Responsible", Value: element.Links.Responsible.Title},
 	} {
@@ -695,14 +703,25 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 			people = append(people, f)
 		}
 	}
-	sections := []portal.ProductSection{summary}
-	if len(people) > 0 {
-		sections = append(sections, portal.ProductSection{Title: "Ownership", Fields: people})
+	sections := []portal.ProductSection{summary, {Title: "Ownership", Fields: people}}
+	next := taskNextAction(status)
+	if !fixture && taskGroup(status) == 0 {
+		// The status text is the reason, in the span beside the status badge.
+		sections = append(sections, portal.ProductSection{
+			Title: "Needs attention",
+			States: []portal.ProductState{{
+				Status: portal.ProductStatus{Text: status, Tone: taskTone(status)},
+				Text:   status,
+			}},
+			Note: next,
+		})
+	} else if next != "" {
+		sections = append(sections, portal.ProductSection{Title: "Next action", Note: next})
 	}
 	sections = append(sections, portal.ProductSection{Title: "Dates", Fields: []portal.ProductField{
 		{Label: "Created", Value: shownDate(element.CreatedAt)},
 		{Label: "Updated", Value: shownDate(element.UpdatedAt)},
-	}})
+	}, Note: taskUpdatedLine(element.UpdatedAt, now)})
 	context := []portal.ProductField{
 		{Label: "Work package", Value: "#" + id, Mono: true},
 		{Label: "Type", Value: kind},
@@ -715,9 +734,67 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	return portal.ProductRow{
 		Title: shown(element.Subject), Kicker: kicker, Crumb: "#" + id,
 		Link: "https://work.haynesnetwork.com/work_packages/" + id, LinkLabel: "Open in OpenProject",
-		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: owner, Age: age,
+		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: listOwner, Age: age,
 		Badges: badges, Sections: sections, ContextTitle: "Work package", Context: context,
+		Fixture: fixture,
 	}, nil
+}
+
+// taskFixture is the explicit synthetic marker. Only a raw description that
+// starts with "Synthetic fixture" qualifies; the subject is not read.
+func taskFixture(raw string) bool {
+	return strings.HasPrefix(raw, "Synthetic fixture")
+}
+
+// taskNextAction is one line taken only from the status. In progress and
+// every unlisted status have none. Age is not an input.
+func taskNextAction(status string) string {
+	switch strings.ToLower(status) {
+	case "needs approval":
+		return "Waiting for approval"
+	case "needs answer":
+		return "Waiting for an answer"
+	case "paused":
+		return "Paused: resume needs its owner"
+	case "on hold":
+		return "On hold"
+	default:
+		return ""
+	}
+}
+
+// taskUpdatedLine is the detail's update line. An unreadable time stays Unknown.
+func taskUpdatedLine(raw string, now time.Time) string {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return "Last updated Unknown"
+	}
+	return "Last updated " + portal.Ago(parsed, now) + " · " + parsed.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+// recordedOwner shows one owner field, or "Not recorded" when it is empty.
+func recordedOwner(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "Not recorded"
+	}
+	return shown(raw)
+}
+
+// taskListOwner is the list's short owner: today's execution-worktree rule,
+// then the accountable owner, then the execution text when it has no short
+// name. Both empty fields read "Owner not recorded".
+func taskListOwner(execution, accountable string) string {
+	owner := taskOwner(execution)
+	if owner == "" && strings.TrimSpace(accountable) != "" {
+		owner = shown(accountable)
+	}
+	if owner == "" && strings.TrimSpace(execution) != "" {
+		owner = shown(execution)
+	}
+	if owner == "" {
+		return "Owner not recorded"
+	}
+	return owner
 }
 
 // taskOwner is the list's short owner: the worktree name from opwork's
@@ -787,7 +864,7 @@ func taskTone(status string) string {
 	}
 }
 
-var taskGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: true}, {Title: "In progress"}, {Title: "Planned"}, {Title: "Closed"}, {Title: "Other status"}}
+var taskGroups = []portal.ProductGroup{{Title: "Needs attention", Attention: true}, {Title: "In progress"}, {Title: "Planned"}, {Title: "Closed"}, {Title: "Other status"}, {Title: "Fixtures (synthetic)"}}
 
 func taskGroup(status string) int {
 	switch strings.ToLower(status) {
@@ -805,19 +882,30 @@ func taskGroup(status string) int {
 }
 
 // tasksPage groups work packages by status, keeping the collection's order
-// inside each group. Counts appear only for a complete read.
+// inside each group. A synthetic fixture is the last group and is left out of
+// Needs attention. Counts appear only for a complete read.
 func tasksPage(rows []portal.ProductRow, complete bool, filter portal.ProductFilter) portal.ProductPage {
 	page := portal.ProductPage{Title: "Tasks", ListTitle: "All tasks", Connected: true, Complete: complete, Filter: portal.ProductFilter{Attention: filter.Attention}}
 	ordered := make([][]portal.ProductRow, len(taskGroups))
+	attention := 0
 	for _, row := range rows {
+		if row.Fixture {
+			ordered[len(ordered)-1] = append(ordered[len(ordered)-1], row)
+			continue
+		}
 		g := taskGroup(row.Status.Text)
 		ordered[g] = append(ordered[g], row)
+		if g == 0 {
+			attention++
+		}
 	}
-	page.Rail.All, page.Rail.Attention = strconv.Itoa(len(rows)), strconv.Itoa(len(ordered[0]))
+	page.Rail.All, page.Rail.Attention = strconv.Itoa(len(rows)), strconv.Itoa(attention)
 	listed := len(rows)
 	if filter.Attention {
-		page.ListTitle, listed = "Needs attention", len(ordered[0])
-		ordered = append([][]portal.ProductRow{ordered[0]}, make([][]portal.ProductRow, len(taskGroups)-1)...)
+		page.ListTitle, listed = "Needs attention", attention
+		blank := make([][]portal.ProductRow, len(taskGroups))
+		blank[0] = ordered[0]
+		ordered = blank
 	}
 	switch {
 	case !complete:

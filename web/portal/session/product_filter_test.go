@@ -337,6 +337,140 @@ func TestTasksAttentionFilter(t *testing.T) {
 	}
 }
 
+func TestSyntheticFixtureIsGroupedAndKeptOutOfAttention(t *testing.T) {
+	now := time.Date(2026, 10, 29, 18, 0, 0, 0, time.UTC)
+	real := mustTaskRow(t, sampleWorkPackage(41, "Needs approval", "Ada", "", "Real work that mentions Synthetic fixture later", "Needs a decision"), now)
+	lookalike := mustTaskRow(t, sampleWorkPackage(42, "Paused", "", "", "Real work", "Synthetic fixture, never execution approval"), now)
+	marked := mustTaskRow(t, sampleWorkPackage(40, "Paused", "", "", "Synthetic fixture, never execution approval.", "OP-ACCEPTANCE-20261015 Story A"), now)
+	mid := mustTaskRow(t, sampleWorkPackage(43, "On hold", "Ada", "Bea", "Notes. Synthetic fixture inside.", "Held"), now)
+	markdown := mustTaskRow(t, sampleWorkPackage(44, "Needs answer", "", "", "**Synthetic fixture** bold", "Bold"), now)
+	lower := mustTaskRow(t, sampleWorkPackage(45, "Paused", "", "", "synthetic fixture lowercase", "Lower"), now)
+	progress := mustTaskRow(t, sampleWorkPackage(46, "In progress", "Ada", "", "Ship it", "Building"), now)
+	exact := mustTaskRow(t, sampleWorkPackage(47, "In progress", "Ada", "Bea", "Synthetic fixture", "Exact marker"), now)
+	padded := mustTaskRow(t, sampleWorkPackage(48, "Needs approval", "Ada", "", " Synthetic fixture, never", "Padded"), now)
+	named := mustTaskRow(t, sampleWorkPackage(49, "Paused", "Fixture", "", "Real work", "Owner named Fixture"), now)
+	for _, row := range []portal.ProductRow{real, lookalike, mid, markdown, lower, progress, padded, named} {
+		if row.Fixture {
+			t.Fatalf("%s was treated as a fixture", row.Title)
+		}
+	}
+	if !marked.Fixture || !exact.Fixture {
+		t.Fatal("explicit marker was not a fixture")
+	}
+	if marked.Meta != "Owner not recorded" {
+		t.Fatalf("empty fixture owner %q", marked.Meta)
+	}
+	if nextActionNote(marked) != "Paused: resume needs its owner" || nextActionNote(exact) != "" {
+		t.Fatalf("fixture actions %q %q", nextActionNote(marked), nextActionNote(exact))
+	}
+	if _, ok := sectionByTitle(marked, "Needs attention"); ok {
+		t.Fatal("fixture detail is filed under Needs attention")
+	}
+	summary, ok := sectionByTitle(marked, "Summary")
+	if !ok || len(summary.States) != 1 || summary.States[0].Status.Text != "Fixture" || summary.States[0].Text != "Synthetic fixture" {
+		t.Fatalf("fixture badge %+v", summary.States)
+	}
+	hasBadge := false
+	for _, badge := range marked.Badges {
+		if badge == "Fixture" {
+			hasBadge = true
+		}
+	}
+	if !hasBadge {
+		t.Fatal("detail meta lost the Fixture badge")
+	}
+	rows := []portal.ProductRow{real, lookalike, marked, mid, markdown, lower, progress, exact, padded, named}
+	page := tasksPage(rows, true, portal.ProductFilter{})
+	if page.Rail.All != "10" || page.Rail.Attention != "7" {
+		t.Fatalf("rail all %s attention %s", page.Rail.All, page.Rail.Attention)
+	}
+	var groups, attentionTitles, fixtureTitles []string
+	for _, group := range page.Groups {
+		if len(group.Rows) == 0 {
+			continue
+		}
+		groups = append(groups, group.Title)
+		for _, row := range group.Rows {
+			switch group.Title {
+			case "Needs attention":
+				attentionTitles = append(attentionTitles, row.Title)
+			case "Fixtures (synthetic)":
+				fixtureTitles = append(fixtureTitles, row.Title)
+			}
+		}
+	}
+	if strings.Join(groups, ",") != "Needs attention,In progress,Fixtures (synthetic)" {
+		t.Fatalf("groups %s", strings.Join(groups, ","))
+	}
+	if strings.Join(attentionTitles, ",") != "Needs a decision,Synthetic fixture, never execution approval,Held,Bold,Lower,Padded,Owner named Fixture" {
+		t.Fatalf("attention %s", strings.Join(attentionTitles, ","))
+	}
+	if strings.Join(fixtureTitles, ",") != "OP-ACCEPTANCE-20261015 Story A,Exact marker" {
+		t.Fatalf("fixtures %s", strings.Join(fixtureTitles, ","))
+	}
+	page.ObservedAt = now.Format(time.RFC3339)
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	attentionAt := strings.Index(html, `<span>Needs attention</span>`)
+	progressAt := strings.Index(html, `<span>In progress</span>`)
+	fixtureAt := strings.Index(html, `<span>Fixtures (synthetic)</span>`)
+	if attentionAt < 0 || progressAt < attentionAt || fixtureAt < progressAt {
+		t.Fatalf("group order attention %d progress %d fixtures %d", attentionAt, progressAt, fixtureAt)
+	}
+	for _, want := range []string{
+		"OP-ACCEPTANCE-20261015 Story A", `class="badge tone-muted">Fixture</span>`,
+		`class="badge tone-wait">Needs approval</span><span>Needs approval</span>`,
+		`class="badge tone-wait">Paused</span><span>Paused</span>`,
+		"Owner not recorded", `All tasks<span class="count">10</span>`, `attention-count">7`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("all-tasks page lacks %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(html), "stuck") {
+		t.Fatal("fixture grouping inferred a stall")
+	}
+	filtered := tasksPage(rows, true, portal.ProductFilter{Attention: true})
+	filtered.ObservedAt = now.Format(time.RFC3339)
+	attentionBody, err := portal.RenderProduct(filtered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attentionHTML := string(attentionBody)
+	for _, absent := range []string{"OP-ACCEPTANCE-20261015 Story A", "Exact marker", "Building", `<span>Fixtures (synthetic)</span>`, `tone-muted">Fixture`} {
+		if strings.Contains(attentionHTML, absent) {
+			t.Errorf("attention list still shows %q", absent)
+		}
+	}
+	if !strings.Contains(attentionHTML, "Needs a decision") || !strings.Contains(attentionHTML, "Owner named Fixture") || !strings.Contains(attentionHTML, `attention-count">7`) {
+		t.Fatal("attention list dropped a real row or its count")
+	}
+	only := tasksPage([]portal.ProductRow{marked, exact}, true, portal.ProductFilter{Attention: true})
+	if only.Notice != "Nothing needs attention." || only.Rail.Attention != "0" || only.Rail.All != "2" {
+		t.Fatalf("fixtures-only attention %+v", only)
+	}
+	only.ObservedAt = now.Format(time.RFC3339)
+	onlyBody, err := portal.RenderProduct(only)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(onlyBody), `class="attention-count"`) || strings.Contains(string(onlyBody), "OP-ACCEPTANCE-20261015 Story A") || strings.Contains(string(onlyBody), "Exact marker") {
+		t.Fatal("a fixture-only attention view showed a count or a fixture")
+	}
+	visible := tasksPage([]portal.ProductRow{marked, exact}, true, portal.ProductFilter{})
+	visible.ObservedAt = now.Format(time.RFC3339)
+	visibleBody, err := portal.RenderProduct(visible)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(visibleBody), "OP-ACCEPTANCE-20261015 Story A") || !strings.Contains(string(visibleBody), "Exact marker") || !strings.Contains(string(visibleBody), `<span>Fixtures (synthetic)</span>`) {
+		t.Fatal("fixtures were hidden from the full list")
+	}
+}
+
 // worstSession is a summary with every rendered string at its bound.
 func worstSession(i int, now time.Time) apiv1.PortalSessionSummary {
 	limit := protocol.MaxUsageTokens
