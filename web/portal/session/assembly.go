@@ -17,6 +17,7 @@ type AssemblyConfig struct {
 	Sessions   *SessionSource
 	Tasks      *TaskSource
 	Pages      *pagesSource
+	Asks       *AsksSource
 	Send       SendForms
 	Launch     LaunchForms
 	FreshFor   time.Duration
@@ -33,6 +34,10 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 	}
 	reads := portal.NewHandler(portal.Dependencies{Authenticator: c.Session, Authorizer: c.Authorizer, Reader: c.Reader, FreshFor: c.FreshFor, Now: c.Now})
 	return contained(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == AsksPath || strings.HasPrefix(r.URL.Path, AsksPath+"/") {
+			serveAsks(w, c.Session.bind(r), c)
+			return
+		}
 		if r.URL.Path == portalMessagesPath || strings.HasPrefix(r.URL.Path, portalMessagesPath+"/") {
 			if send, ok := c.Send.(*commandHandler); ok && send != nil {
 				send.ServeHTTP(w, r)

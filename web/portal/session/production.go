@@ -163,6 +163,10 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
+	asks, err := optionalAsksSource(root, operatorCA)
+	if err != nil {
+		return Runtime{}, errProductionConfig
+	}
 	store, err := NewPostgresStore(PostgresConfig{Host: productionDBHost, Username: dbUser, Password: password, CA: postgresCA, Key: key, Generation: generation, Now: time.Now, Timeout: 5 * time.Second})
 	if err != nil {
 		return Runtime{}, errProductionConfig
@@ -231,7 +235,7 @@ func LoadProduction(root string) (Runtime, error) {
 		}
 	}
 	closeStore = false
-	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Pages: newPagesSource(pagesEnabled, time.Now, nil), Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
+	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Pages: newPagesSource(pagesEnabled, time.Now, nil), Asks: asks, Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
 }
 
 func productSources(root string, openProjectCA, operatorCA []byte) (*SessionSource, *TaskSource, error) {
