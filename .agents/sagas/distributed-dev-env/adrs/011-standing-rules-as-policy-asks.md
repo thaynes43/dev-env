@@ -27,8 +27,8 @@ policy get/list/watch, with no policy write.
 That mechanism does not yet provide the whole requested feature. Policies
 match profiles and repositories, not session groups or projects. The
 current kube catalog cannot express exec into one pod. The default agent
-identity already holds pods/exec outside the dev-env namespaces and
-privileged pods, so a grant alone would add no permission for exec; today
+identity already holds pods/exec in every namespace except the dev-env
+namespaces, and never into privileged pods, so a grant alone would add no permission for exec; today
 the common rules are its only control. Q-261-05 asks how standing rules
 cover that case. Policy removal is
 not an immediate revocation barrier, and active kube and egress grants do

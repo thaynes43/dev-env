@@ -45,7 +45,7 @@ Information answers remain information. No Ask starts a generic executor.
 | [D-88 attestation](../../../../internal/grantattest/attest.go), [API write](../../../../internal/apiserver/grant_attestation.go), [broker checks](../../../../internal/broker/attestation.go) | A Session claims it obtained approval for one grant UID, scope digest and TTL. This is explicitly not verified human identity. Attested policies use nested requesters and empty legacy requester lists so older brokers match nobody. | Never convert attestation into Tom's approval of a rule. Reuse the rollback refusal pattern, not its human-identity claim. |
 | [Egress builder, D-64](../../../../internal/egress/policy.go), [revoke](../../../../internal/broker/kube.go) | A grant creates a scoped CiliumNetworkPolicy. All listed ports apply to all listed destinations. Cleanup checks ownership; kube cleanup deletes bindings and the grant ServiceAccount. | Preview the entire permission. Preserve ownership and UID checks. Removing an allow policy does not override some other allow policy. |
 | [Broker RBAC copy](../../../../internal/broker/testdata/haynes-ops/broker.yaml), [role catalog copy](../../../../internal/broker/testdata/haynes-ops/grant-catalog.yaml) | Policy rights are get/list/watch. Bind rights name a fixed role catalog. The workloads role is broad and does not grant `pods/exec`. | No existing broker policy writer or pod-specific exec role can be reused unchanged. |
-| [Baseline agent RBAC](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/rbac/app/agent.yaml#L80-L85), [profiles](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/templates/app/templates.yaml#L101), [workbench RBAC](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/rbac/app/workbench-operator.yaml#L50-L54) | The default agent identity used by full/dev already has `pods/exec` create outside the dev-env namespaces and privileged pods; full is the default profile. Workbench has cluster-wide exec. | A grant alone adds no exec permission to that baseline. Today the common rules are its only approval control. Q-261-05 asks whether standing rules should cover instruction-level permission or baseline exec should be narrowed for broker enforcement. |
+| [Baseline agent RBAC](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/rbac/app/agent.yaml#L80-L85), [profiles](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/templates/app/templates.yaml#L101), [workbench RBAC](https://github.com/thaynes43/haynes-ops/blob/854a7b24c9375650fbd3b7d0fc1c70f032116829/kubernetes/main/apps/dev-env-system/rbac/app/workbench-operator.yaml#L50-L54) | The default agent identity used by full/dev already has `pods/exec` create in every namespace except the dev-env namespaces, and never into privileged pods; full is the default profile. Workbench has cluster-wide exec. | A grant alone adds no exec permission to that baseline. Today the common rules are its only approval control. Q-261-05 asks whether standing rules should cover instruction-level permission or baseline exec should be narrowed for broker enforcement. |
 | [DESIGN-029 groups](029-portal-foundations.md#group-based-action-scopes-2026-10-29), [DESIGN-034 attribution](034-agent-asks-and-approvals-board.md#3-api-and-caller-classes) | Fresh UserInfo checks the same request-private principal and active/admin group claims. Resource scopes remain separate. Asks store the principal for private audit; Session views omit issuer/subject. | Reuse group checks, CSRF and identity projection. Do not add personal-ID allowlists or infer standing-rule administration from portal login. |
 
 The haynes-ops read at the pinned revision confirmed these deployment
@@ -150,7 +150,7 @@ behavior and the fact that an interactive shell can reach data available
 inside that container. Until then, label this proposal Unsupported and
 disable Approve. No real operational target is reproduced here.
 This is a limit of the broker adapter. The default agent identity already
-holds `pods/exec` outside the dev-env namespaces and privileged pods, so a
+holds `pods/exec` in every namespace except the dev-env namespaces, and never into privileged pods, so a
 grant alone adds no exec permission; today the common rules are its only
 approval control. Q-261-05 asks how standing rules cover that case.
 
@@ -244,8 +244,8 @@ creates no writer, credential, repository permission or automatic merge.
    responses. Propose only the policy and its rule reference. A base conflict
    requires revalidation of the same meaning; a semantic change needs a new
    Ask. Never regenerate wider scope to make CI pass.
-3. Tom approves the policy change through the portal once. The authorized
-   GitOps merger checks that consent still covers the exact diff and is
+3. Tom's portal consent was given once, before step 1. The authorized
+   GitOps merger checks that this consent still covers the exact diff and is
    neither revoked nor expired, that required CI passed, and that no hold
    applies. The PR records this consent. Review and merge are deployment
    controls, not a second per-grant approval. Who may perform that merge is
