@@ -44,9 +44,9 @@ const (
 // grandchild, which creates no children.
 const maxSessionDepth = 2
 
-// maxRunningChildren is how many unfinished children one session may have at a
+// maxRunningChildrenPerAgent is how many unfinished children one session may have per canonical agent at a
 // time (DESIGN-001 3.4).
-const maxRunningChildren = 4
+const maxRunningChildrenPerAgent = 4
 
 // Policy names the identities the API serves (D-46). Any other caller gets a
 // 403: summoning callers, with their CallerPolicy, arrive in plan 10.

@@ -350,8 +350,18 @@ console) can approve a grant or renew a login; only Tom or the holder of an acti
 break-glass grant can evacuate a node (6.12); only Tom can hold a GPU or enrol a
 satellite (8.2, 8.4); and satellite heartbeats accept only satellite client
 certificates. Destroying unrescued work is not in the API at all: it needs a human with `kubectl` (agents cannot delete PVCs in
-`dev-agents`). Each session may create at most 4 child sessions at a time, two
+`dev-agents`). Each session may create at most 4 unfinished child sessions per canonical agent at a time, two
 levels deep, so a confused agent cannot fork-bomb the fleet.
+
+**2026-10-29 source policy addendum (Tom):** The session caller's limit is four
+unfinished children per canonical AgentKind (`claude`, `codex`, `opencode`),
+per parent, in the configured session namespace. All modes share the bucket.
+An unfinished legacy record with an empty or unknown agent is charged to every
+requested bucket; no provider is inferred. Existing admission restrictions still
+apply. This is a policy bound, not measured usage. Each API replica serializes
+its own creates; two replicas can each observe three and admit another, yielding
+five. A distributed reservation is not implemented. Portal and trusted caller
+limits are unchanged. Source changes do not establish installed behavior.
 
 **D-46 (2026-10-06, plan 01 step 3). The `/v1` API as plan 01 builds it: who may
 call, what a create checks, and how a reap and a heartbeat reach the objects.**
@@ -415,15 +425,15 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
   even when that session reached a limit. A finished session frees its key.
   Unfinished means not reaped, suspended, archived or failed, with its agent not
   `exited`, `failed` or `interrupted`.
-- **Children** (3.4). A session's child: at most 4 unfinished at a time (429); at
+- **Children** (3.4). A session's child: at most 4 unfinished per canonical agent at a time (429); at
   most two levels deep, by the label `dev-env.haynesops.com/depth` (0 for a session
   Tom or a client starts; 403 beyond 2); and on its parent's profile, the profile
   label on the parent's pod. A request for another profile is a 403, and one with
   none gets the parent's: a session cannot widen what it may read or reach by
   starting another. A replica serialises its creates and reads keys and children from
   the API server, not its cache, so these checks see each other's writes. Two
-  replicas can still race inside the same few milliseconds, so the bound can be
-  exceeded by one for that moment; plan 10's summoned sessions carry their own name,
+  replicas can still race between their list and create, so the bound can be
+  exceeded; plan 10's summoned sessions carry their own name,
   and a create of a taken name is atomic.
 - **Reap** (D-45). `DELETE` deletes the `AgentSession` with background propagation
   and a UID precondition: that is the reap, and the rescue finalizer holds the
@@ -1162,7 +1172,7 @@ task's prompt still runs once.**
   has recorded its exit. How the first launch's task ended stays in
   `status.agent.task`. Step 5's idle detection refines `busy` with Claude's own
   status. A resumed task session is therefore unfinished again (D-46): it counts
-  against its parent's four children, and a create that repeats its idempotency key
+  against its parent's four children for that canonical agent, and a create that repeats its idempotency key
   finds it. That is meant: it is a live session again, holding a pod and a
   conversation someone resumed.
 - **No dialog in a cold home.** A TUI started with `--dangerously-skip-permissions`
