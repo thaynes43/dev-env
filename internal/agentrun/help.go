@@ -48,7 +48,7 @@ Usage:
   agent-run budget create <task-uid> --success "RESULT" [flags]
                                                   create the host's assigned finite campaign
   agent-run budget show <task-uid>               inspect retained campaign authority
-  agent-run mcp                                   access tools on stdin for the session
+  agent-run mcp                                   access and asks tools on stdin for the session
   agent-run pages-mcp [--source-config FILE]      read-only current snapshot tools on stdin
   agent-run breakglass --reason <why>             ask for break-glass; Tom still approves it
   declare-activity start "<what>" --scope <a,b>   declare dev work, so it is not taken for a fault
@@ -650,6 +650,22 @@ Serve the dev-env access tools on stdin and stdout (MCP). The tools are
 request_access, grant_status and release_access. They call /v1/grants.
 request_access asks; Tom still approves. release_access asks the broker to
 end one grant. grant_status reads. None of them approve or install a grant.
+
+The asks tools need an operator running with --enable-asks:
+  ask          create an info or approval ask; returns its Ask JSON immediately
+  ask_status   read your ask by id, including its state and any answer
+  list_my_asks read one page of your own asks, newest first (limit, cursor)
+  withdraw     withdraw your own open ask by id
+
+ask takes a stable requestId for retries of the same intent, type (info or
+approval), question, optional options, recommended, allowFreeText, context and
+expiresIn (a positive duration up to 168h; defaults to 24h). Approval asks
+require scope with action, target and expiresAt (RFC 3339, up to 7 days ahead).
+The operator fills the session identity. Reuse the requestId only for the
+same ask. Creation returns without waiting for an answer; keep working and
+check ask_status later. Only the authenticated portal can answer an ask.
+Answers also arrive through the durable inbox. An approval applies only to
+its recorded scope and expiry.
 
 agentd registers this command as the dev-env MCP server when it renders the
 session, unless mcp.json already names a dev-env server.

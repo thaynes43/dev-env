@@ -17,9 +17,9 @@ import (
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
-// mcp is the in-pod dev-env access server (DESIGN-001 6.12, plan 07 step 7).
-// It speaks MCP on stdin and stdout. The three tools call the existing
-// /v1/grants routes. They do not approve a grant or install one.
+// mcp is the in-pod dev-env server (DESIGN-001 6.12, plan 07 step 7).
+// It speaks MCP on stdin and stdout. Access tools call /v1/grants; asks tools
+// call /v1/asks only when invoked. Neither waits for a human response.
 
 const mcpProtocolVersion = "2024-11-05"
 
@@ -108,7 +108,7 @@ func (s *mcpSession) handle(body []byte) ([]byte, error) {
 	case "ping":
 		result = map[string]any{}
 	case "tools/list":
-		result = map[string]any{"tools": accessTools()}
+		result = map[string]any{"tools": append(accessTools(), askTools()...)}
 	case "tools/call":
 		c, err := s.client()
 		if err != nil {
@@ -141,6 +141,16 @@ func (a *app) callAccessTool(ctx context.Context, c *conn, params json.RawMessag
 	}
 	if err := json.Unmarshal(params, &call); err != nil {
 		return mcpToolError("the tool call is not JSON")
+	}
+	if isAskTool(call.Name) {
+		text, err := a.dispatchAskTool(ctx, c, call.Name, call.Arguments)
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		return map[string]any{
+			"content": []map[string]string{{"type": "text", "text": text}},
+			"isError": false,
+		}
 	}
 	var args accessToolArgs
 	if len(call.Arguments) > 0 && string(call.Arguments) != "null" {
@@ -303,6 +313,176 @@ func accessTools() []map[string]any {
 				"type":       "object",
 				"properties": map[string]any{"name": map[string]any{"type": "string"}},
 				"required":   []string{"name"},
+			},
+		},
+	}
+}
+
+func isAskTool(name string) bool {
+	switch name {
+	case "ask", "ask_status", "list_my_asks", "withdraw":
+		return true
+	default:
+		return false
+	}
+}
+
+// Ask arguments describe intent only. Server-owned identity, answers and
+// delivery fields are deliberately absent and unknown fields are refused.
+func decodeAskArguments(raw json.RawMessage, out any) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	if bytes.TrimSpace(raw)[0] != '{' {
+		return usageError("ask tool arguments must be a JSON object")
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return usageError("invalid ask tool arguments: %v", err)
+	}
+	if err := d.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return usageError("ask tool arguments must contain one JSON object")
+	}
+	return nil
+}
+
+func (a *app) dispatchAskTool(ctx context.Context, c *conn, name string, raw json.RawMessage) (string, error) {
+	var out any
+	var err error
+	switch name {
+	case "ask":
+		var req apiv1.AskCreateRequest
+		if err := decodeAskArguments(raw, &req); err != nil {
+			return "", err
+		}
+		out, err = a.CreateAsk(ctx, c, req)
+	case "ask_status", "withdraw":
+		var args struct {
+			ID string `json:"id"`
+		}
+		if err := decodeAskArguments(raw, &args); err != nil {
+			return "", err
+		}
+		if name == "ask_status" {
+			out, err = a.GetAsk(ctx, c, args.ID)
+		} else {
+			out, err = a.WithdrawAsk(ctx, c, args.ID)
+		}
+	case "list_my_asks":
+		var args struct {
+			Limit  *int   `json:"limit"`
+			Cursor string `json:"cursor"`
+		}
+		if err := decodeAskArguments(raw, &args); err != nil {
+			return "", err
+		}
+		limit := 0
+		if args.Limit != nil {
+			if *args.Limit < 1 {
+				return "", usageError("asks limit must be between 1 and 100")
+			}
+			limit = *args.Limit
+		}
+		out, err = a.ListMyAsks(ctx, c, limit, args.Cursor)
+	default:
+		return "", usageError("unknown tool %q", name)
+	}
+	if err != nil {
+		return "", err
+	}
+	return mcpJSON(out)
+}
+
+func askStringSchema(min, max int) map[string]any {
+	return map[string]any{"type": "string", "minLength": min, "maxLength": max}
+}
+
+func askTools() []map[string]any {
+	id := map[string]any{"type": "string", "pattern": "^ask-[a-f0-9]{16}$"}
+	expires := map[string]any{
+		"type": "string", "format": "date-time",
+		"description": "RFC 3339 instant in the future, at most 7 days ahead.",
+	}
+	optionID := map[string]any{"type": "string", "pattern": "^[a-z0-9-]{1,24}$"}
+	return []map[string]any{
+		{
+			"name":        "ask",
+			"description": "Create an info or approval ask for the authenticated portal user. Returns the Ask JSON and id immediately, without waiting for an answer. Keep working, then read ask_status; answers also reach your durable inbox. Reuse the same requestId only for retries of the identical intent. An approval applies only to its recorded scope and expiry. Requires --enable-asks on the operator.",
+			"inputSchema": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"requestId", "type", "question"},
+				"properties": map[string]any{
+					"requestId": map[string]any{"type": "string", "minLength": 8, "maxLength": 64, "pattern": "^[A-Za-z0-9-]{8,64}$", "description": "Stable idempotency key for this caller and ask intent."},
+					"type":      map[string]any{"type": "string", "enum": []string{"info", "approval"}},
+					"question":  askStringSchema(1, apiv1.AskQuestionMaxRunes),
+					"options": map[string]any{
+						"type": "array", "maxItems": apiv1.AskMaxOptions,
+						"items": map[string]any{
+							"type": "object", "additionalProperties": false,
+							"required": []string{"id", "label"},
+							"properties": map[string]any{
+								"id": optionID, "label": askStringSchema(1, apiv1.AskOptionLabelMaxRunes), "description": askStringSchema(0, apiv1.AskOptionDescriptionMaxRunes),
+							},
+						},
+					},
+					"recommended":   map[string]any{"type": "string", "pattern": "^([a-z0-9-]{1,24})?$", "description": "An id from options, or an empty string."},
+					"allowFreeText": map[string]any{"type": "boolean"},
+					"context": map[string]any{
+						"type": "object", "additionalProperties": false,
+						"properties": map[string]any{
+							"workPackage": map[string]any{"type": "integer", "minimum": 0},
+							"links": map[string]any{
+								"type": "array", "maxItems": apiv1.AskMaxLinks,
+								"items": map[string]any{"type": "string", "format": "uri", "pattern": "^https://[!-~]+$", "minLength": 1, "maxLength": apiv1.AskLinkMaxLen},
+							},
+						},
+					},
+					"scope": map[string]any{
+						"type": "object", "additionalProperties": false,
+						"required": []string{"action", "target", "expiresAt"},
+						"properties": map[string]any{
+							"action": askStringSchema(1, apiv1.AskScopeFieldMaxRunes), "target": askStringSchema(1, apiv1.AskScopeFieldMaxRunes), "expiresAt": expires,
+						},
+					},
+					"expiresIn": map[string]any{"type": "string", "description": "Positive Go duration, at most 168h (7 days), such as 24h or 90m. Omitted or empty defaults to 24h. Validated before sending."},
+				},
+				"allOf": []map[string]any{{
+					"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": "approval"}}},
+					"then": map[string]any{"required": []string{"scope"}},
+					"else": map[string]any{"not": map[string]any{"required": []string{"scope"}}},
+				}},
+				"anyOf": []map[string]any{
+					{"required": []string{"options"}, "properties": map[string]any{"options": map[string]any{"minItems": 1}}},
+					{"required": []string{"allowFreeText"}, "properties": map[string]any{"allowFreeText": map[string]any{"const": true}}},
+				},
+			},
+		},
+		{
+			"name":        "ask_status",
+			"description": "Read your own Ask JSON by id, including state and any answer. Returns immediately; does not wait or answer an ask.",
+			"inputSchema": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"properties": map[string]any{"id": id}, "required": []string{"id"},
+			},
+		},
+		{
+			"name":        "list_my_asks",
+			"description": "Read one page of your own asks, newest first. Returns Ask JSON records with the cursor for the next page, if any. Does not wait for answers.",
+			"inputSchema": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"properties": map[string]any{
+					"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+					"cursor": map[string]any{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "withdraw",
+			"description": "Withdraw your own open ask by id. Returns its Ask JSON immediately. This does not answer an ask or grant an approval.",
+			"inputSchema": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"properties": map[string]any{"id": id}, "required": []string{"id"},
 			},
 		},
 	}
