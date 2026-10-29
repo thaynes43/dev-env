@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -170,7 +171,7 @@ func (s *AsksSource) get(ctx context.Context, query url.Values, token string) ([
 
 func decodeAsksPage(body []byte) (apiv1.AskList, error) {
 	var page apiv1.AskList
-	if !protocol.StrictPortalJSON(body) {
+	if !utf8.Valid(body) || !protocol.StrictPortalJSON(body) {
 		return page, portal.ErrUnavailable
 	}
 	fields, ok := askObject(body, []string{"asks", "complete"}, "nextCursor")
@@ -211,7 +212,7 @@ func (s *AsksSource) answer(ctx context.Context, id string, request apiv1.AskAns
 	if err != nil {
 		return portal.ErrUnavailable
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, operatorPortalOrigin+apiv1.PortalAsksPath+"/"+id+"/answer", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, operatorPortalOrigin+apiv1.PortalAskAnswerPath(id), bytes.NewReader(body))
 	if err != nil {
 		return portal.ErrUnavailable
 	}
@@ -229,7 +230,7 @@ func (s *AsksSource) answer(ctx context.Context, id string, request apiv1.AskAns
 		return portal.ErrUnavailable
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
-	if err != nil || len(raw) > 64<<10 || !protocol.StrictPortalJSON(raw) {
+	if err != nil || len(raw) > 64<<10 || !utf8.Valid(raw) || !protocol.StrictPortalJSON(raw) {
 		return portal.ErrUnavailable
 	}
 	var ask apiv1.Ask
@@ -348,7 +349,7 @@ func postAskAnswer(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key
 	}
 	ask := *selected
 	wantKeys := 5
-	request := apiv1.AskAnswerRequest{OptionID: r.PostForm.Get("optionId"), Text: strings.TrimSpace(r.PostForm.Get("text")), Actor: apiv1.AskActor{Issuer: record.Principal.Issuer, Subject: record.Principal.Subject}}
+	request := apiv1.AskAnswerRequest{OptionID: r.PostForm.Get("optionId"), Text: strings.TrimSpace(strings.ReplaceAll(r.PostForm.Get("text"), "\r\n", "\n")), Actor: apiv1.AskActor{Issuer: record.Principal.Issuer, Subject: record.Principal.Subject}}
 	if ask.Type == apiv1.AskTypeApproval {
 		wantKeys = 7
 		if len(r.PostForm["decision"]) != 1 || len(r.PostForm["confirm"]) != 1 || r.PostForm.Get("confirm") != "yes" || (r.PostForm.Get("decision") != "approve" && r.PostForm.Get("decision") != "decline") {

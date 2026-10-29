@@ -23,9 +23,10 @@ const asksStyle = `
 .asks-heading h1{font-size:24px;letter-spacing:-.5px;margin:4px 0}
 .asks-heading>p:last-child,.asks-empty,.ask-options p{color:var(--muted)}
 .asks-section{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:15px;margin:0 0 14px}
-.ask-card{padding:22px;margin-bottom:16px}
+.ask-card{padding:22px;margin-bottom:16px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.ask-card+.ask-card{margin-top:16px}
 .ask-meta{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
-.ask-question{font-size:18px;line-height:1.5;white-space:pre-wrap;margin:14px 0 18px}
+.ask-card .ask-question{font-size:18px;line-height:1.5;white-space:pre-wrap;margin:14px 0 18px}
 .ask-context{margin-bottom:16px}
 .ask-links{display:grid;gap:8px;margin:16px 0}
 .ask-scope{border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;padding:16px;margin:18px 0;background:var(--bg)}
@@ -41,11 +42,11 @@ const asksStyle = `
 .ask-choice input{flex:none;margin:4px 0;accent-color:var(--accent)}
 .ask-choice:focus-within{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
 .ask-text{display:grid;gap:8px;font-weight:600}
-.ask-text input{width:100%;min-height:44px;padding:10px;border:1px solid var(--control-line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit;font-weight:400}
-.ask-text input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.ask-text textarea{width:100%;min-height:90px;resize:vertical;padding:10px;border:1px solid var(--control-line);border-radius:6px;background:var(--surface);color:var(--ink);font:inherit;font-weight:400}
+.ask-text textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .ask-record h4{margin:0 0 10px;font-size:13px}.ask-record .kv{margin-top:12px}.ask-record .turn-text{margin:8px 0}
 .asks-notice p+p{margin-top:12px}
-@media(max-width:700px){.asks-content{overflow:visible;padding:20px 16px 96px}.ask-card{padding:16px}.ask-question{font-size:17px}.ask-text input{font-size:16px}.ask-answer .btn{min-height:44px}.ask-scope .kv,.ask-context,.ask-record .kv{grid-template-columns:1fr;gap:4px}.ask-scope dd,.ask-context dd,.ask-record dd{margin-bottom:8px}}
+@media(max-width:700px){.asks-content{overflow:visible;padding:20px 16px 96px}.ask-card{padding:16px}.ask-card .ask-question{font-size:17px}.ask-text textarea{font-size:16px}.ask-answer .btn{min-height:44px}.ask-scope .kv,.ask-context,.ask-record .kv{grid-template-columns:1fr;gap:4px}.ask-scope dd,.ask-context dd,.ask-record dd{margin-bottom:8px}}
 `
 
 var asksPolicy = strings.Replace(policy(viewsStyle+asksStyle), "form-action 'none'", "form-action 'self'", 1)
