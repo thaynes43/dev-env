@@ -340,13 +340,7 @@ func sessionDriver(mode string) string {
 // with neither time is not recent: it is listed under Stopped, still red.
 func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
 	a := activityOrUnknown(s.Activity)
-	var taskAt, podAt time.Time
-	if a.LastActivity != nil {
-		taskAt, podAt = *a.LastActivity, *a.LastActivity
-	}
-	if s.Freshness != "unknown" && s.ObservedAt.After(podAt) {
-		podAt = s.ObservedAt
-	}
+	taskAt, podAt := sessionFailureTimes(s)
 	failed := func(at time.Time) int {
 		if !at.IsZero() && now.Sub(at) <= attentionWindow {
 			return 0
@@ -382,6 +376,74 @@ func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
 		return 2
 	}
 	return 3
+}
+
+// sessionFailureTimes is shared by grouping and the attention explanation, so
+// a recent heartbeat cannot accidentally date an old task failure as recent.
+func sessionFailureTimes(s apiv1.PortalSessionSummary) (taskAt, podAt time.Time) {
+	a := activityOrUnknown(s.Activity)
+	if a.LastActivity != nil {
+		taskAt, podAt = *a.LastActivity, *a.LastActivity
+	}
+	if s.Freshness != "unknown" && s.ObservedAt.After(podAt) {
+		podAt = s.ObservedAt
+	}
+	return taskAt, podAt
+}
+
+func attentionTime(at, now time.Time) string {
+	if at.IsZero() {
+		return "Unknown"
+	}
+	return portal.Ago(at, now) + " · " + at.UTC().Format("2 Jan 2006, 15:04 UTC")
+}
+
+// sessionAttention explains exactly the cause sessionGroup gives precedence.
+// A waiting summary carries no question text; its action only hands off to the
+// existing provider conversation or terminal. CLI commands are plain text.
+func sessionAttention(s apiv1.PortalSessionSummary, now time.Time, link string) *portal.ProductAttention {
+	if sessionGroup(s, now) != 0 {
+		return nil
+	}
+	a := activityOrUnknown(s.Activity)
+	taskAt, podAt := sessionFailureTimes(s)
+	p := &portal.ProductAttention{}
+	switch {
+	case a.TaskResult == "Failed":
+		p.Reason, p.When = "Task failed", attentionTime(taskAt, now)
+	case a.TaskResult == "TimedOut":
+		p.Reason, p.When = "Task timed out", attentionTime(taskAt, now)
+	case s.Phase == "Failed":
+		p.Reason, p.When = "Session pod failed", "Last reported "+attentionTime(podAt, now)
+	case a.AgentState == protocol.AgentWaiting:
+		p.Reason = "Waiting for your input"
+		switch {
+		case link != "":
+			p.Link = link
+		case a.Mode == "remote":
+			if a.RemoteControl != nil && a.RemoteControl.State == "registered" {
+				p.NextAction = "Remote Control link not reported: answer from the session's Claude app or the workbench."
+			} else {
+				_, state := remoteControlView(a)
+				p.NextAction = "Remote Control is " + strings.ToLower(state) + ": answer from the session's terminal on the workbench."
+			}
+		case a.Mode == "local":
+			p.NextAction = "Answer in the session's terminal on the workbench."
+		default:
+			p.NextAction = "Check the session from the workbench."
+		}
+		return p
+	default:
+		p.Reason, p.When = "Agent stopped unexpectedly", "Last reported "+attentionTime(podAt, now)
+	}
+	p.Commands = []string{"agent-run show " + shown(s.Name)}
+	if s.Phase == "Running" {
+		p.NextAction = "Inspect the session and its log from a session or the workbench."
+		p.Commands = append(p.Commands, "agent-run log "+shown(s.Name))
+	} else {
+		p.NextAction = "Inspect the session from a session or the workbench; its log is kept on the shared volume at logs/" + shown(s.Name) + ".log."
+	}
+	return p
 }
 
 // sessionsPage builds the Sessions page for one filter. The rail counts cover
@@ -865,6 +927,10 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 		{Label: "Provider", Value: shown(a.Provider)},
 		{Label: "Requested model", Value: shown(a.RequestedModel), Mono: a.RequestedModel != protocol.UsageUnknown},
 		{Label: "UID", Value: shown(row.UID), Mono: true},
+	}
+	out.Attention = sessionAttention(row, now, link)
+	if out.Status.Text == "Waiting" {
+		out.Description = "Waiting for you"
 	}
 	out.Messages = sessionMessages(row, a)
 	return out
