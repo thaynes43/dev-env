@@ -503,14 +503,14 @@ func routeDial(routes map[string]string) func(context.Context, string, string) (
 
 func TestProductionActionScopes(t *testing.T) {
 	root := t.TempDir()
-	if got, err := loadActionScopes(root); err != nil || got.Send != nil || got.History != nil {
-		t.Fatal("old config must be off")
+	if got, err := loadActionScopes(root); err != nil || got.Send != nil || got.History != nil || got.Launch != nil {
+		t.Fatal("missing action file must leave all actions off")
 	}
 	if os.MkdirAll(filepath.Join(root, "config"), 0700) != nil {
 		t.Fatal("fixture")
 	}
 	path := filepath.Join(root, "config", "session-actions.json")
-	send := fmt.Sprintf(`{"issuer":%q,"subject":"synthetic-subject","targets":[{"name":"agent-a","uid":"uid-a"}]}`, productionIssuer)
+	send := `{"targets":[{"name":"agent-a","uid":"uid-a"}]}`
 	for _, tc := range []struct {
 		value         string
 		valid         bool
@@ -521,8 +521,10 @@ func TestProductionActionScopes(t *testing.T) {
 		{`{"Send":` + send + `}`, false, false, false}, {strings.Replace(`{"send":`+send+`}`, `"uid":"uid-a"`, `"uid":"uid-a","UID":"uid-b"`, 1), false, false, false},
 		{strings.Replace(`{"send":`+send+`}`, `"uid":"uid-a"`, `"uid":""`, 1), false, false, false},
 		{strings.Replace(`{"send":`+send+`}`, `"name":"agent-a"`, `"name":"INVALID"`, 1), false, false, false},
-		{strings.Replace(`{"send":`+send+`}`, `"subject":"synthetic-subject"`, `"subject":""`, 1), false, false, false},
+		{`{"send":{"subject":"synthetic-subject","targets":[{"name":"agent-a","uid":"uid-a"}]}}`, false, false, false},
+		{`{"send":{"issuer":"` + productionIssuer + `","targets":[{"name":"agent-a","uid":"uid-a"}]}}`, false, false, false},
 		{strings.Replace(`{"send":`+send+`}`, `}]`, `},{"name":"agent-a","uid":"uid-b"}]`, 1), false, false, false},
+		{strings.Replace(`{"send":`+send+`}`, `}]`, `},{"name":"agent-b","uid":"uid-a"}]`, 1), false, false, false},
 	} {
 		if os.WriteFile(path, []byte(tc.value), 0600) != nil {
 			t.Fatal("fixture write")
@@ -534,6 +536,70 @@ func TestProductionActionScopes(t *testing.T) {
 	}
 }
 
+func TestProductionActionScopesRejectLegacyFilesWithAllActionsOff(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"send", "history", "launch"} {
+		for _, legacy := range []string{
+			`"issuer":"` + productionIssuer + `","subject":"synthetic-subject",`,
+			`"issuer":"` + productionIssuer + `",`,
+			`"subject":"synthetic-subject",`,
+		} {
+			fields := map[string]string{
+				"send":    `"targets":[{"name":"agent-a","uid":"uid-a"}]`,
+				"history": `"targets":[{"name":"agent-a","uid":"uid-a"}]`,
+				"launch":  `"repos":["dev-env"]`,
+			}
+			fields[action] = legacy + fields[action]
+			config := fmt.Sprintf(`{"send":{%s},"history":{%s},"launch":{%s}}`, fields["send"], fields["history"], fields["launch"])
+			if err := os.WriteFile(filepath.Join(root, "config/session-actions.json"), []byte(config), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := loadActionScopes(root)
+			if err == nil || got.Send != nil || got.History != nil || got.Launch != nil {
+				t.Fatalf("legacy %s entry did not disable every action", action)
+			}
+		}
+	}
+}
+
+func TestProductionActionScopeBounds(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"send", "history", "launch"} {
+		limit, key := 64, "targets"
+		if action == "launch" {
+			limit, key = apiv1.MaxPortalLaunchRepos, "repos"
+		}
+		for _, count := range []int{0, limit, limit + 1} {
+			var items []string
+			for i := 0; i < count; i++ {
+				item := fmt.Sprintf(`{"name":"a-%d","uid":"u-%d"}`, i, i)
+				if action == "launch" {
+					item = fmt.Sprintf(`"r-%d"`, i)
+				}
+				items = append(items, item)
+			}
+			config := fmt.Sprintf(`{%q:{%q:[%s]}}`, action, key, strings.Join(items, ","))
+			if err := os.WriteFile(filepath.Join(root, "config/session-actions.json"), []byte(config), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := loadActionScopes(root)
+			if count == limit {
+				if err != nil {
+					t.Fatalf("%s maximum scope refused", action)
+				}
+			} else if err == nil || got.Send != nil || got.History != nil || got.Launch != nil {
+				t.Fatalf("%s invalid count %d did not fail closed", action, count)
+			}
+		}
+	}
+}
+
 func TestProductionActionConstructor(t *testing.T) {
 	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGSSLCRL", "PGSSLCRLDIR"} {
 		t.Setenv(name, "")
@@ -541,7 +607,7 @@ func TestProductionActionConstructor(t *testing.T) {
 	for _, action := range []string{"send", "history"} {
 		t.Run(action, func(t *testing.T) {
 			root := writeRuntimeDir(t, "SECRET-CANARY")
-			config := fmt.Sprintf(`{%q:{"issuer":%q,"subject":"synthetic-subject","targets":[{"name":"agent-a","uid":"uid-a"}]}}`, action, productionIssuer)
+			config := fmt.Sprintf(`{%q:{"targets":[{"name":"agent-a","uid":"uid-a"}]}}`, action)
 			if os.WriteFile(filepath.Join(root, "config/session-actions.json"), []byte(config), 0600) != nil {
 				t.Fatal("scope fixture")
 			}
@@ -572,8 +638,8 @@ func TestProductionLaunchActionScope(t *testing.T) {
 		t.Fatal("fixture")
 	}
 	path := filepath.Join(root, "config", "session-actions.json")
-	launch := fmt.Sprintf(`{"issuer":%q,"subject":"synthetic-subject","repos":["dev-env","haynes-ops"]}`, productionIssuer)
-	send := fmt.Sprintf(`{"issuer":%q,"subject":"synthetic-subject","targets":[{"name":"agent-a","uid":"uid-a"}]}`, productionIssuer)
+	launch := `{"repos":["dev-env","haynes-ops"]}`
+	send := `{"targets":[{"name":"agent-a","uid":"uid-a"}]}`
 	for _, tc := range []struct {
 		name, value               string
 		valid, launch, send, hist bool
@@ -584,11 +650,10 @@ func TestProductionLaunchActionScope(t *testing.T) {
 		{"history alone is unchanged", `{"history":` + send + `}`, true, false, false, true},
 		{"duplicate launch", `{"launch":` + launch + `,"launch":` + launch + `}`, false, false, false, false},
 		{"case alias", `{"Launch":` + launch + `}`, false, false, false, false},
-		{"other issuer", strings.Replace(`{"launch":`+launch+`}`, productionIssuer, "https://other.example/", 1), false, false, false, false},
-		{"empty subject", strings.Replace(`{"launch":`+launch+`}`, `"synthetic-subject"`, `""`, 1), false, false, false, false},
-		{"missing subject", `{"launch":{"issuer":"` + productionIssuer + `","repos":["dev-env"]}}`, false, false, false, false},
-		{"missing repos", `{"launch":{"issuer":"` + productionIssuer + `","subject":"s"}}`, false, false, false, false},
-		{"targets instead of repos", `{"launch":{"issuer":"` + productionIssuer + `","subject":"s","targets":[{"name":"a","uid":"b"}]}}`, false, false, false, false},
+		{"issuer key", `{"launch":{"issuer":"` + productionIssuer + `","repos":["dev-env"]}}`, false, false, false, false},
+		{"subject key", `{"launch":{"subject":"synthetic-subject","repos":["dev-env"]}}`, false, false, false, false},
+		{"missing repos", `{"launch":{}}`, false, false, false, false},
+		{"targets instead of repos", `{"launch":{"targets":[{"name":"a","uid":"b"}]}}`, false, false, false, false},
 		{"extra key", strings.Replace(`{"launch":`+launch+`}`, `"repos"`, `"profile":"full","repos"`, 1), false, false, false, false},
 		{"case alias key", strings.Replace(`{"launch":`+launch+`}`, `"repos"`, `"Repos"`, 1), false, false, false, false},
 		{"empty repos", strings.Replace(`{"launch":`+launch+`}`, `["dev-env","haynes-ops"]`, `[]`, 1), false, false, false, false},
@@ -598,7 +663,7 @@ func TestProductionLaunchActionScope(t *testing.T) {
 		{"repo dot dot", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `".."`, 1), false, false, false, false},
 		{"repo empty", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `""`, 1), false, false, false, false},
 		{"repo not a string", strings.Replace(`{"launch":`+launch+`}`, `"haynes-ops"`, `7`, 1), false, false, false, false},
-		{"seventeen repos", `{"launch":{"issuer":"` + productionIssuer + `","subject":"s","repos":["r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12","r13","r14","r15","r16","r17"]}}`, false, false, false, false},
+		{"seventeen repos", `{"launch":{"repos":["r1","r2","r3","r4","r5","r6","r7","r8","r9","r10","r11","r12","r13","r14","r15","r16","r17"]}}`, false, false, false, false},
 		{"launch is a list", `{"launch":[]}`, false, false, false, false},
 	} {
 		if os.WriteFile(path, []byte(tc.value), 0600) != nil {
@@ -611,7 +676,7 @@ func TestProductionLaunchActionScope(t *testing.T) {
 		if tc.valid && ((got.Launch != nil) != tc.launch || (got.Send != nil) != tc.send || (got.History != nil) != tc.hist) {
 			t.Fatalf("%s: scopes %+v", tc.name, got)
 		}
-		if tc.valid && tc.launch && (got.Launch.Principal.Issuer != productionIssuer || got.Launch.Principal.Subject != "synthetic-subject" || strings.Join(got.Launch.Repos, ",") != "dev-env,haynes-ops") {
+		if tc.valid && tc.launch && (strings.Join(got.Launch.Repos, ",") != "dev-env,haynes-ops") {
 			t.Fatalf("%s: launch scope %+v", tc.name, got.Launch)
 		}
 	}
@@ -622,7 +687,7 @@ func TestProductionLaunchConstructor(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	root := writeRuntimeDir(t, "SECRET-CANARY")
-	config := fmt.Sprintf(`{"launch":{"issuer":%q,"subject":"synthetic-subject","repos":["dev-env"]}}`, productionIssuer)
+	config := `{"launch":{"repos":["dev-env"]}}`
 	if os.WriteFile(filepath.Join(root, "config/session-actions.json"), []byte(config), 0600) != nil {
 		t.Fatal("scope fixture")
 	}

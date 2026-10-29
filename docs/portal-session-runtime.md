@@ -244,18 +244,33 @@ shared Authentik secret-safe logging, proxy/isolation and Gate A remain held.
 
 Source may optionally read `config/session-actions.json` under the existing
 portal root. Absence leaves send and private history disabled. The object may
-contain `send` and/or `history`; each is independently scoped with exact
-`issuer`, `subject`, and a nonempty `targets` array of `{ "name", "uid" }`.
-The issuer must match the existing pinned issuer. Invalid, duplicate, ambiguous,
-or unknown fields and duplicate target names or UIDs fail closed. This scope
-is additional to current session, UserInfo and group authorization; metadata
-access does not grant either action. The existing operator token and pinned CA
-are reused. Do not populate this file with real identities or targets without
-separate authorization.
+contain `send` and/or `history`; each names only resources: exactly one key,
+`targets`, a nonempty array (at most 64) of `{ "name", "uid" }`. The file
+names no person: there is no `issuer` or `subject`. Any principal that the
+existing group authorizer admits (a current portal session and live UserInfo
+with `portal_is_active` and `portal_is_admin` both true) may use a configured
+action, and each request is checked for its own authenticated principal. The
+issuer stays pinned by the session verifier, not by this file. Invalid,
+duplicate, ambiguous or unknown fields, a bad target, and duplicate target
+names or UIDs fail closed. This scope is additional to current session,
+UserInfo and group authorization; metadata access does not grant either
+action. The existing operator token and pinned CA are reused. Do not populate
+this file with real targets without separate authorization. See DESIGN-029
+"Group-based action scopes, 2026-10-29".
+
+**Old-format or malformed files stop the portal at startup.** A file that
+carries `issuer` or `subject` (the former per-person format), or is otherwise
+malformed, is refused as a whole at load: no action scope is returned and
+`LoadProduction` fails, so the portal process does not start. There is no
+compatibility fallback. In a rollout the new pod stays unready, and
+`maxUnavailable: 0` keeps the old pod serving. Update the portal image to this
+version before the file changes to the targets-only format, because an older
+image refuses the new format the same way.
 
 Operator source separately accepts repeatable `--portal-send-target=name=uid`
-and `--portal-history-target=name=uid` options. Each action has its own target
-map; neither is enabled by `--enable-portal-reader` alone. Explicit targets
+and `--portal-history-target=name=uid` options. These flags stay the
+per-session allowlist: the portal file grants no operator target outside them.
+Each action has its own target map; neither is enabled by `--enable-portal-reader` alone. Explicit targets
 require that reader flag, and invalid or duplicate entries fail startup. These
 source interfaces are not an installation or approval: deployment, eligible
 idle agentd rollout, provider format qualification, live private access and
@@ -448,10 +463,9 @@ starts.
 
 Three operator flags, `--portal-launch-repo`, `--portal-launch-profile` and
 `--portal-launch-max-unfinished`, plus a `launch` scope in the portal's private
-action file (`session-actions.json`), bound to the exact principal and
-repositories like Send. That scope is not implemented in this unit. It, the
-profile choice and every live flag need Tom's confirmation, as does the
-identity step.
+action file (`session-actions.json`), bound to repositories only (see
+"Default-off portal launch form (BFF)"). Any principal the group check admits
+may launch. The profile choice and every live flag need Tom's confirmation.
 
 ## Default-off portal launch form (BFF)
 
@@ -461,20 +475,22 @@ the private action file `config/session-actions.json` has a `launch` entry, and
 the operator has the launch flags. The portal reads the file once at start.
 
 **The `launch` scope.** An optional top-level entry beside `send` and `history`,
-parsed as strictly as they are. It has exactly the keys `issuer`, `subject` and
-`repos`. `issuer` must be the pinned issuer; `subject` is the one principal that
-may launch; `repos` is a non-empty list of at most 16 distinct repository names.
-Any other key, shape or value stops the portal at start. With no `launch` entry
-the route and the form do not exist, and `send` and `history` behave as before.
+parsed as strictly as they are. It has exactly one key, `repos`: a non-empty
+list of at most 16 distinct repository names. There is no `issuer` or `subject`;
+any principal the group check admits may launch. Any other key, shape or value,
+including the former `issuer` and `subject` keys, stops the portal at start (the
+new pod stays unready and `maxUnavailable: 0` keeps the old pod serving), so
+update the portal image before this file changes. With no `launch` entry the
+route and the form do not exist, and `send` and `history` behave as before.
 
 ```json
-{"launch": {"issuer": "<pinned issuer>", "subject": "<principal>", "repos": ["dev-env"]}}
+{"launch": {"repos": ["dev-env"]}}
 ```
 
 **The route.** `POST /portal/projects/dev-env/environments/internal/session-launches`
 only. It makes the same checks as Send, by the same code: a current portal
 session, the exact Origin, a form content type, the session's CSRF value, a fresh
-authorization for dev-env, and a principal equal to the scope's. It also needs a
+authorization for dev-env for the request's own principal. It also needs a
 43-character request ID, a repository in the scope, a mode of `task`, `local` or
 `remote`, a model from the offered list of full Claude ids, an effort and size
 from their fixed sets, and no other form key. Anything else is denied and nothing
@@ -504,14 +520,14 @@ bytes gets a result page with a field error, not a denial.
   came back, so a session may or may not exist. The page says to check the Agents
   list; it never retries.
 
-The Sessions page carries the form only for the scope's principal and only when
-the route is configured. The page then has the send policy (`form-action 'self'`),
+The Sessions page carries the form for any principal the group check admits,
+and only when the route is configured. The page then has the send policy (`form-action 'self'`),
 still with no script. The Tasks page never has it.
 
 **Activation (not applied).** The operator needs `--portal-launch-repo`,
 `--portal-launch-profile` and `--portal-launch-max-unfinished`; the portal needs
-this `launch` scope in its private file; and Tom confirms the principal, the
-repositories and the profile. This change enables none of them.
+this `launch` scope in its private file, after the portal image is updated; and
+Tom confirms the repositories and the profile. This change enables none of them.
 
 ## Separate Codex task pilot image (source only)
 

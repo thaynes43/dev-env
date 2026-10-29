@@ -25,18 +25,17 @@ const portalLaunchesPath = portal.ProductSessionLaunchesHref
 // LaunchForms connects the Sessions page to the portal launch route. A nil
 // LaunchForms keeps launching off. NewRequestID returns a fresh request ID in
 // the route's format, one per rendered form, so a resubmitted form maps to one
-// launch. LaunchRepos is the repositories the principal's private scope allows,
-// or nil for any other principal.
+// launch. LaunchRepos lists the configured repositories for any admitted caller;
+// the page and action routes perform the live group authorization.
 type LaunchForms interface {
 	NewRequestID() (string, error)
 	LaunchRepos(portal.Principal) []string
 }
 
-// launchScope binds the launch action to one issuer/subject and the repositories
-// it may start sessions in, in the order the private file lists them.
+// launchScope lists the repositories the action may start sessions in, in the
+// order the private file lists them. Live group authorization admits callers.
 type launchScope struct {
-	Principal portal.Principal
-	Repos     []string
+	Repos []string
 }
 
 var launchRequestID = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
@@ -79,10 +78,10 @@ func (*launchHandler) NewRequestID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
-// LaunchRepos returns a copy of the allowed repositories for the scope's own
-// principal, and nil for anyone else.
-func (h *launchHandler) LaunchRepos(p portal.Principal) []string {
-	if h == nil || h.scope == nil || h.scope.Principal != p {
+// LaunchRepos returns a copy of the configured repositories. Its caller must
+// authorize the request's principal before displaying a form.
+func (h *launchHandler) LaunchRepos(portal.Principal) []string {
+	if h == nil || h.scope == nil {
 		return nil
 	}
 	return slices.Clone(h.scope.Repos)
@@ -98,7 +97,7 @@ func (h *launchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		authFailure(w, portal.ErrDenied)
 		return
 	}
-	r, key, record, err := authorizedAction(h.engine, h.authorizer, h.scope.Principal, r)
+	r, key, record, err := authorizedAction(h.engine, h.authorizer, r)
 	if err != nil {
 		authFailure(w, err)
 		return
@@ -116,7 +115,7 @@ func (h *launchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer h.dispatch.Unlock()
 	// Fresh authorization right before dispatch: a revoked or replaced session
 	// sends nothing.
-	fresh, freshKey, freshRecord, err := authorizedAction(h.engine, h.authorizer, h.scope.Principal, r)
+	fresh, freshKey, freshRecord, err := authorizedAction(h.engine, h.authorizer, r)
 	if err != nil || freshKey != key || freshRecord.Principal != record.Principal || sha256.Sum256([]byte(freshRecord.accessToken)) != sha256.Sum256([]byte(record.accessToken)) || subtle.ConstantTimeCompare([]byte(freshRecord.CSRF), []byte(record.CSRF)) != 1 {
 		authFailure(w, portal.ErrDenied)
 		return
@@ -217,8 +216,8 @@ func (h *launchHandler) result(w http.ResponseWriter, r launchResult, prompt str
 	_, _ = w.Write(body)
 }
 
-// withLaunchForm sets the Sessions page's launch form for the caller whose
-// principal the launch scope names. It draws one request ID per rendered form.
+// withLaunchForm sets the Sessions page's launch form for an admitted caller.
+// It draws one request ID per rendered form.
 // Any failure returns page unchanged.
 func withLaunchForm(page portal.ProductPage, principal portal.Principal, csrf string, forms LaunchForms) portal.ProductPage {
 	if forms == nil || csrf == "" {

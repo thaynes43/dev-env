@@ -45,7 +45,7 @@ func launchFixture(t *testing.T) (*authFixture, *launchHandler, *launchTransport
 	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
 	key, _ := requestHandle(f.request("GET", portalLaunchesPath, ""), sessionCookie)
 	record := f.store.sessions[key]
-	handler := &launchHandler{scope: &launchScope{Principal: record.Principal, Repos: launchRepos}, engine: f.e, authorizer: authorizer, transport: transport, now: func() time.Time { return f.now }}
+	handler := &launchHandler{scope: &launchScope{Repos: launchRepos}, engine: f.e, authorizer: authorizer, transport: transport, now: func() time.Time { return f.now }}
 	values := url.Values{"csrf": {record.CSRF}, "requestID": {launchTestID}, "repo": {"dev-env"}, "mode": {"task"}, "model": {"claude-opus-5-5"}, "effort": {"high"}, "size": {"S"}, "prompt": {"SYNTHETIC PROMPT"}}
 	return f, handler, transport, values
 }
@@ -59,6 +59,32 @@ func launchPost(f *authFixture, h http.Handler, v url.Values, origin string) *ht
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
+}
+
+func TestLaunchAllowsTwoGroupMembers(t *testing.T) {
+	f, h, transport, values := launchFixture(t)
+	first := actionLogin(t, f, "synthetic-first")
+	firstCookie := f.session
+	second := actionLogin(t, f, "synthetic-second")
+	secondCookie := f.session
+	checks := map[string]int{}
+	h.authorizer = actionGroupAuthorizer(f, map[string]Record{"synthetic-first": first, "synthetic-second": second}, checks)
+	for _, user := range []struct {
+		cookie *http.Cookie
+		record Record
+	}{{firstCookie, first}, {secondCookie, second}} {
+		f.session = user.cookie
+		values.Set("csrf", user.record.CSRF)
+		if w := launchPost(f, h, values, "https://portal.example"); w.Code != http.StatusSeeOther {
+			t.Fatalf("admitted member launch answered %d", w.Code)
+		}
+		if checks[user.record.Principal.Subject] != 2 {
+			t.Fatal("launch did not reauthorize the request's own token before dispatch")
+		}
+	}
+	if transport.count() != 2 || transport.requests[0].ActorRef == transport.requests[1].ActorRef {
+		t.Fatal("group members did not get separate launch attribution")
+	}
 }
 
 func TestLaunchSuccessRedirectsToTheSelectedAgentAndKeepsSendsActorRef(t *testing.T) {
@@ -129,7 +155,7 @@ func TestLaunchRefusesTamperedFormsBeforeTheOperator(t *testing.T) {
 	}
 }
 
-func TestLaunchRefusesWrongMethodPathPrincipalAndSession(t *testing.T) {
+func TestLaunchRefusesWrongMethodPathAndSession(t *testing.T) {
 	f, h, transport, v := launchFixture(t)
 	for _, method := range []string{"GET", "PUT", "DELETE", "HEAD"} {
 		r := f.request(method, portalLaunchesPath, "")
@@ -148,12 +174,6 @@ func TestLaunchRefusesWrongMethodPathPrincipalAndSession(t *testing.T) {
 		if w.Code == http.StatusSeeOther || w.Code == http.StatusOK {
 			t.Fatalf("%s answered %d", target, w.Code)
 		}
-	}
-	// A principal other than the scope's is refused.
-	other := &launchHandler{engine: h.engine, authorizer: h.authorizer, transport: h.transport, now: h.now,
-		scope: &launchScope{Principal: portal.Principal{Issuer: h.scope.Principal.Issuer, Subject: "someone-else"}, Repos: launchRepos}}
-	if w := launchPost(f, other, v, "https://portal.example"); w.Code != http.StatusForbidden {
-		t.Fatalf("other principal answered %d", w.Code)
 	}
 	// No portal session at all.
 	r := httptest.NewRequest("POST", "https://portal.example"+portalLaunchesPath, strings.NewReader(v.Encode()))
@@ -261,31 +281,34 @@ func TestNewLaunchFormsRequiresBoundDependencies(t *testing.T) {
 	}
 	f := setupAuth(t)
 	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
-	scope := &launchScope{Principal: portal.Principal{Issuer: "https://issuer.example/portal/", Subject: "s"}, Repos: launchRepos}
+	scope := &launchScope{Repos: launchRepos}
 	if forms, err := NewLaunchForms(f.e, authorizer, filepath.Join(t.TempDir(), "token"), nil, time.Now, scope); err == nil || forms != nil {
 		t.Fatal("a launch route without an operator CA was accepted")
 	}
-	if forms, err := NewLaunchForms(f.e, authorizer, "x", nil, time.Now, &launchScope{Principal: scope.Principal}); err == nil || forms != nil {
+	if forms, err := NewLaunchForms(f.e, authorizer, "x", nil, time.Now, &launchScope{}); err == nil || forms != nil {
 		t.Fatal("a scope without repositories was accepted")
 	}
 }
 
-func TestLaunchRepoListIsPrincipalBound(t *testing.T) {
-	_, h, _, _ := launchFixture(t)
-	if got := h.LaunchRepos(h.scope.Principal); strings.Join(got, ",") != "dev-env,haynes-ops" {
-		t.Fatalf("repos %v", got)
-	}
-	if h.LaunchRepos(portal.Principal{Issuer: h.scope.Principal.Issuer, Subject: "other"}) != nil || (*launchHandler)(nil).LaunchRepos(h.scope.Principal) != nil {
-		t.Fatal("a repository list was given to another principal")
-	}
-	got := h.LaunchRepos(h.scope.Principal)
-	got[0] = "changed"
-	if h.scope.Repos[0] != "dev-env" {
-		t.Fatal("the scope's list is aliased")
+func TestLaunchRepoListIsAvailableToGroupMembers(t *testing.T) {
+	f, h, _, _ := launchFixture(t)
+	for _, subject := range []string{"synthetic-first", "synthetic-second"} {
+		p := portal.Principal{Issuer: f.e.config.Verifier.issuer, Subject: subject}
+		if got := h.LaunchRepos(p); strings.Join(got, ",") != "dev-env,haynes-ops" {
+			t.Fatal("repository list was pinned to a subject")
+		}
+		if (*launchHandler)(nil).LaunchRepos(p) != nil || (&launchHandler{}).LaunchRepos(p) != nil {
+			t.Fatal("unconfigured launch returned repositories")
+		}
+		got := h.LaunchRepos(p)
+		got[0] = "changed"
+		if h.scope.Repos[0] != "dev-env" {
+			t.Fatal("the scope's list is aliased")
+		}
 	}
 }
 
-func TestServeProductAddsTheLaunchFormOnlyForTheScopePrincipalOnSessions(t *testing.T) {
+func TestServeProductAddsActionFormsForBothGroupMembersOnSessions(t *testing.T) {
 	f := setupAuth(t)
 	f.login(t)
 	now := f.now
@@ -307,21 +330,20 @@ func TestServeProductAddsTheLaunchFormOnlyForTheScopePrincipalOnSessions(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	own := &launchHandler{scope: &launchScope{Principal: record.Principal, Repos: launchRepos}}
-	elsewhere := &launchHandler{scope: &launchScope{Principal: portal.Principal{Issuer: record.Principal.Issuer, Subject: "someone-else"}, Repos: launchRepos}}
+	own := &launchHandler{scope: &launchScope{Repos: launchRepos}}
 	get := func(launch LaunchForms, send SendForms, path string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Send: send, Launch: launch, FreshFor: time.Minute, Now: func() time.Time { return now }}).ServeHTTP(w, f.request(http.MethodGet, path, ""))
 		return w
 	}
-	// Not configured, or configured for another principal: no form, read-only policy.
-	for name, launch := range map[string]LaunchForms{"off": nil, "other principal": elsewhere} {
+	// Not configured: no form, read-only policy.
+	for name, launch := range map[string]LaunchForms{"off": nil, "missing scope": &launchHandler{}} {
 		w := get(launch, nil, SessionsPath)
 		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `id="launch"`) || strings.Contains(w.Body.String(), "<form") || w.Header().Get("Content-Security-Policy") != portal.ProductPolicy {
 			t.Fatalf("%s: status %d policy %q", name, w.Code, w.Header().Get("Content-Security-Policy"))
 		}
 	}
-	// Configured for this principal: the form, bound to this session's CSRF, and the send policy.
+	// Configured: the form is bound to this session's CSRF, with the send policy.
 	w := get(own, nil, SessionsPath)
 	body := w.Body.String()
 	if w.Code != http.StatusOK || w.Header().Get("Content-Security-Policy") != portal.ProductSendPolicy || !strings.Contains(body, `id="launch"`) ||
@@ -350,6 +372,28 @@ func TestServeProductAddsTheLaunchFormOnlyForTheScopePrincipalOnSessions(t *test
 	}
 	if idOf(a) == idOf(b) || !launchRequestID.MatchString(idOf(a)) {
 		t.Fatalf("request IDs %q %q", idOf(a), idOf(b))
+	}
+	// The same configured handlers show both forms to a second admitted user,
+	// with that user's CSRF. Both checks must use the second user's access token.
+	second := actionLogin(t, f, "synthetic-second")
+	checks := map[string]int{}
+	authorizer = actionGroupAuthorizer(f, map[string]Record{record.Principal.Subject: record, second.Principal.Subject: second}, checks)
+	w = get(own, &countingForms{}, SessionsPath)
+	body = w.Body.String()
+	if w.Code != http.StatusOK || !strings.Contains(body, `action="`+portalLaunchesPath+`"`) || !strings.Contains(body, `action="`+portalMessagesPath+`"`) ||
+		!strings.Contains(body, `name="csrf" value="`+second.CSRF+`"`) || strings.Contains(body, record.CSRF) || checks[second.Principal.Subject] != 2 {
+		t.Fatal("second admitted user did not receive both forms with its private CSRF")
+	}
+	w = get(nil, nil, SessionsPath)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "<form") {
+		t.Fatal("unconfigured actions showed a form to the second user")
+	}
+	authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
+		return userInfoResponse(`{"sub":"synthetic-second"}`), nil
+	})
+	w = get(own, &countingForms{}, SessionsPath)
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "<form") {
+		t.Fatal("signed-in user without group claims received a form")
 	}
 }
 
@@ -391,24 +435,39 @@ func TestLaunchConflictAndMissingRouteOutcomes(t *testing.T) {
 // reaches the operator, exactly as for Send; so does a revocation that lands
 // between the first check and the dispatch (the fresh re-check).
 func TestLaunchSecurityRefusalsBeforeTransport(t *testing.T) {
-	for _, mode := range []string{"revoked", "removed-group", "revoke-before-send"} {
+	for _, mode := range []string{"revoked", "expired", "missing-group", "removed-group", "revoke-before-send", "group-removed-before-send", "token-replaced-before-send"} {
 		t.Run(mode, func(t *testing.T) {
 			f, h, transport, v := launchFixture(t)
 			switch mode {
 			case "revoked":
 				key, _ := requestHandle(f.request("GET", portalLaunchesPath, ""), sessionCookie)
 				_ = f.store.RevokeSession(context.Background(), key)
+			case "expired":
+				f.now = f.now.Add(2 * time.Hour)
+			case "missing-group":
+				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
+					return userInfoResponse(`{"sub":"synthetic-subject"}`), nil
+				})
 			case "removed-group":
 				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
 					return userInfoResponse(strings.Replace(currentAllow, `"portal_is_admin":true`, `"portal_is_admin":false`, 1)), nil
 				})
-			case "revoke-before-send":
+			case "revoke-before-send", "group-removed-before-send", "token-replaced-before-send":
 				calls := 0
 				h.authorizer = currentFixture(f, func(*http.Request) (*http.Response, error) {
 					calls++
 					if calls == 2 {
 						key, _ := requestHandle(f.request("GET", portalLaunchesPath, ""), sessionCookie)
-						_ = f.store.RevokeSession(context.Background(), key)
+						switch mode {
+						case "revoke-before-send":
+							_ = f.store.RevokeSession(context.Background(), key)
+						case "group-removed-before-send":
+							return userInfoResponse(strings.Replace(currentAllow, `"portal_is_admin":true`, `"portal_is_admin":false`, 1)), nil
+						case "token-replaced-before-send":
+							record := f.store.sessions[key]
+							record.accessToken = "synthetic-replaced-token"
+							f.store.sessions[key] = record
+						}
 					}
 					return userInfoResponse(currentAllow), nil
 				})
