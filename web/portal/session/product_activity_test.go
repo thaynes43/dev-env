@@ -126,20 +126,34 @@ func TestSessionActivityRendersSeparateUsageWithoutTotals(t *testing.T) {
 	if page.Usage.Stats[0].Value != "1 of 2" || page.Usage.Stats[1].Label != "Interactive" || page.Usage.Stats[1].Value != "1" || page.Usage.Stats[2].Label != "Headless" || page.Usage.Stats[2].Value != "1" {
 		t.Fatalf("usage stats %+v", page.Usage.Stats)
 	}
+	// Usage is its own view (?view=usage): the Sessions view carries no embedded
+	// Usage section, so the Usage facts are read from the standalone view.
 	page.ObservedAt = "2026-10-25T12:00:00Z"
-	body, err := portal.RenderProduct(page)
+	sessionsBody, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sessionsBody), `id="usage"`) || strings.Contains(string(sessionsBody), "Initial invocations only") {
+		t.Error("the Sessions view embeds the Usage section")
+	}
+	usagePage := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{View: "usage"})
+	usagePage.ObservedAt = "2026-10-25T12:00:00Z"
+	if usagePage.Usage == nil || usagePage.Usage.Stats[0].Value != "1 of 2" {
+		t.Fatalf("usage view model %+v", usagePage.Usage)
+	}
+	body, err := portal.RenderProduct(usagePage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(body)
-	for _, want := range []string{"Initial invocations only", "Claude reports them apart from input; Codex input already includes them. Never added to input", "not a charge", "Unknown is never counted as zero", `href="#s1"`, `id="usage"`, "Account allowance", "Not connected", "By how sessions ran", "By provider and requested model", "By project"} {
+	for _, want := range []string{"Initial invocations only", "Claude reports them apart from input; Codex input already includes them. Never added to input", "not a charge", "Unknown is never counted as zero", `href="` + SessionsPath + `?session=uid-worker"`, `id="usage"`, "Account allowance", "Not connected", "By how sessions ran", "By provider and requested model", "By project"} {
 		if !strings.Contains(html, want) {
-			t.Errorf("rendered page lacks %q", want)
+			t.Errorf("rendered Usage view lacks %q", want)
 		}
 	}
 	// Cache reads are a subset of input and are never added to it.
 	for _, total := range []string{"1,239,567", "1239567", "1,234,567 total", "Total tokens", "Fixture preview"} {
-		if strings.Contains(html, total) {
+		if strings.Contains(html, total) || strings.Contains(string(sessionsBody), total) {
 			t.Fatalf("rendered %q", total)
 		}
 	}

@@ -355,14 +355,31 @@ func TestConversationUsageRendersEscapedInTheTemplate(t *testing.T) {
 	s := string(body)
 	for _, want := range []string{"<h3>Conversation usage</h3>", `<ul class="panel-states"><li><span class="badge tone-wait">Partial</span><span>Some records could not be read or counted. The counts shown are a lower bound.</span></li>`,
 		`<span class="badge tone-muted">Current</span>`, `<caption class="sr-only">Token counts by served model</caption>`, `<td>claude-opus-5-5</td><td data-label="Input">1,234</td>`,
-		`<td data-label="Cache create" class="unknown">Unknown</td>`, "Conversation usage by provider and served model", "claude · claude-opus-5-5",
-		`<h3 id="usage-rows">Initial invocations by session</h3>`, "Recorded token usage is not account consumption."} {
+		`<td data-label="Cache create" class="unknown">Unknown</td>`, "claude · claude-opus-5-5"} {
 		if !strings.Contains(s, want) {
-			t.Errorf("the page lacks %q", want)
+			t.Errorf("the Sessions view lacks %q", want)
 		}
 	}
-	if strings.Contains(s, "<script") || regexp.MustCompile(`\sstyle="`).MatchString(s) || regexp.MustCompile(`\son[a-z]+=`).MatchString(s) {
-		t.Fatal("inline script, style or handler")
+	// The by-provider table and the by-session table are the Usage view's.
+	usage := sessionsPage(d.Sessions, true, "observed", convNow, portal.ProductFilter{View: "usage"})
+	ubody, err := portal.RenderProduct(usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := string(ubody)
+	for _, want := range []string{"Conversation usage by provider and served model", "claude · claude-opus-5-5",
+		`<h3 id="usage-rows">Initial invocations by session</h3>`, "Recorded token usage is not account consumption."} {
+		if !strings.Contains(u, want) {
+			t.Errorf("the Usage view lacks %q", want)
+		}
+		if want != "claude · claude-opus-5-5" && strings.Contains(s, want) {
+			t.Errorf("the Sessions view embeds %q", want)
+		}
+	}
+	for _, rendered := range []string{s, u} {
+		if strings.Contains(rendered, "<script") || regexp.MustCompile(`\sstyle="`).MatchString(rendered) || regexp.MustCompile(`\son[a-z]+=`).MatchString(rendered) {
+			t.Fatal("inline script, style or handler")
+		}
 	}
 	// Whatever reaches the panel and the table is escaped, and a tone outside
 	// the set renders muted.
@@ -380,10 +397,15 @@ func TestConversationUsageRendersEscapedInTheTemplate(t *testing.T) {
 	row.Sections[0].States[0].Status.Tone = `wait" onclick="x`
 	row.Sections[0].States[0].Text = `<img src=x onerror=alert(1)>`
 	row.Sections[0].Table.Rows[0].Name = `<script>x</script>`
-	page.Usage.Breakdowns[0].Rows = []portal.ProductUsageRow{{Name: `<img src=x onerror=alert(1)>`}}
 	if body, err = portal.RenderProduct(page); err != nil || strings.Contains(string(body), "<img") || strings.Contains(string(body), "<script>x") ||
 		strings.Contains(string(body), "onclick") || !strings.Contains(string(body), `<span class="badge tone-muted">Partial</span>`) {
 		t.Fatalf("not escaped: %v", err)
+	}
+	// What reaches the Usage view's tables is escaped too.
+	usage.Usage.Breakdowns[0].Rows = []portal.ProductUsageRow{{Name: `<img src=x onerror=alert(1)>`}}
+	if body, err = portal.RenderProduct(usage); err != nil || strings.Contains(string(body), "<img") || strings.Contains(string(body), "onerror=alert(1)>") ||
+		!strings.Contains(string(body), "&lt;img src=x onerror=alert(1)&gt;") {
+		t.Fatalf("Usage view not escaped: %v", err)
 	}
 	// The renderer copied what it sanitized: the page model is unchanged.
 	if row.Sections[0].States[0].Status.Tone != `wait" onclick="x` {

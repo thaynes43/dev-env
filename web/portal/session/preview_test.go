@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/thaynes43/dev-env/web/portal"
 )
 
 func TestCommittedProductFixturesRender(t *testing.T) {
@@ -64,16 +66,45 @@ func TestCommittedSessionsFixtureShowsConversationUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := RenderSessionsFixture(f)
+	if err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	// Usage is its own view, so the Usage facts are read from a page built the
+	// way ?view=usage builds it, from the same fixture, through the same
+	// decoder and renderer.
+	if _, err = f.Seek(0, 0); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	fixture, err := readProductFixture(f)
 	_ = f.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
+	decoded, err := decodeSessionPage(fixture.Body, fixture.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageBody, err := renderFixture(sessionsPage(decoded.Sessions, decoded.Complete, decoded.Freshness, fixture.Now, portal.ProductFilter{View: "usage"}), fixture.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := string(usageBody)
+	for _, want := range []string{`<h3 id="usage-b0">Conversation usage by provider and served model</h3>`, "codex · gpt-6-astra", `<td data-label="Cache create" class="unknown">Unknown</td>`} {
+		if !strings.Contains(u, want) {
+			t.Errorf("the fixture Usage view lacks %q", want)
+		}
+	}
 	s := string(body)
+	if strings.Contains(s, `id="usage-b0"`) {
+		t.Error("the fixture Sessions view embeds the Usage section")
+	}
 	for _, want := range []string{
 		`<span class="badge tone-muted">Final</span>`, `<span class="badge tone-wait">Partial</span><span>Some records could not be read or counted. The counts shown are a lower bound.</span>`,
 		`<span class="badge tone-wait">Stale</span><span>Older than 15 minutes, so it may be behind the conversation.</span>`, `<span class="badge tone-muted">Current</span>`,
 		"Codex input already includes cache reads, so the two are never added.", `<td data-label="Cache read">0</td>`, `<td data-label="Cache create" class="unknown">Unknown</td>`,
-		`<h3 id="usage-b0">Conversation usage by provider and served model</h3>`, "codex · gpt-6-astra", "Conversation: In 1.3M · Out 41.2k · stale",
+		"codex · gpt-6-astra", "Conversation: In 1.3M · Out 41.2k · stale",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the fixture page lacks %q", want)
