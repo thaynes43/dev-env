@@ -14,7 +14,7 @@ concurrency:
 jobs:
   postgres:
     name: Portal PostgreSQL integration
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     services:
       postgres:
         image: postgres:16@sha256:1beaa3084eee2676f20a9cd9928f0bf2c5bf674f8e49f81017912183d377c61c
