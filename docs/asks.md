@@ -1,11 +1,12 @@
 # Asks and approvals
 
-Source only. Lane A stores and serves asks for
+Source only. Lane A stores and serves asks; lane B adds operator expiry and
+keeper notifications for
 [DESIGN-034](../.agents/sagas/distributed-dev-env/designs/034-agent-asks-and-approvals-board.md)
 and
 [ADR-010](../.agents/sagas/distributed-dev-env/adrs/010-agent-asks-and-approvals-board.md)
 (OpenProject Epic #254). The operator serves asks only with `--enable-asks`
-(default off). Nothing here is installed, and turning the flag on in a cluster
+(default off), including its leader-only expiry sweeper. Nothing here is installed, and turning the flag on in a cluster
 still needs the Ask CRD and RBAC in haynes-ops. An ask is not an approval until
 a portal reader answers it, and an expired approval is not an approval.
 
@@ -74,7 +75,88 @@ reads that requester's open-labelled asks (at most 512) and counts only those
 whose stored state is open or absent and whose effective state is still open.
 It repairs the other labels. An unconfirmed count is 503. At or above 80
 percent of a bound the operator logs and increments
-`dev_env_asks_near_limit_total`. The expiry sweeper is a later change.
+`dev_env_asks_near_limit_total`.
+
+## Expiry sweeper
+
+The operator reuses `--enable-asks` for a leader-only sweeper; enabling asks
+requires leader election. Every minute it scans at most nine pages of 500
+records, without trusting the state label. It applies `EffectiveState` to the
+Ask deadline and, for approval, the scope deadline. An absent state is open.
+An expired open Ask becomes `expired` through a status update carrying its
+resourceVersion. On conflict it rereads, so an answer that already committed
+wins. Answered and withdrawn Asks are untouched, even after approval expiry.
+
+Label repair uses an optimistic CAS patch. A crash after the status write
+leaves a label the next pass can repair. An incorrect label on an open Ask
+is also repaired. With the flag off, no sweeper is registered and no Ask scan
+or write runs. Answer-time expiry checks still apply independently.
+
+## Keeper notifications
+
+The keeper adds `--enable-ask-notifications` (default false). It requires
+leader election, `--ask-notify-portal-origin=https://<portal-host>` and the
+existing Pushover credential files/endpoint flags. It runs independently of
+login notices. **Q-255-02 is unanswered; live Ask pushes remain held.**
+
+Every 30 seconds, the keeper reads a bounded Ask list from the API server and
+rechecks the selected Ask with GET. Only effectively open Asks can notify.
+The title and body are both `An agent needs your answer`, priority 0. The
+link is the configured HTTPS origin plus
+`/portal/projects/dev-env/environments/internal/asks?ask=<id>`. It opens an
+authenticated GET; the push carries no question, PR title, principal, token
+or approval material.
+
+Pending Asks from the same original requester coalesce into one push linking
+the oldest pending Ask. All those IDs are deduplicated together; their durable
+questions remain on the board. Later Asks wait for an eligible slot. Caps are
+one Ask push per requester per five minutes and six Ask pushes per configured
+recipient per rolling hour. Reservations, including failed attempts, consume
+slots conservatively. The keeper has one configured Pushover recipient; its
+Ask ledger applies across credential rotation. Login notices use their own
+existing policy.
+
+A reservation allows at most five seconds for the ConfigMap write. Caps use
+the rounded-up latest permitted dispatch time, so slow storage cannot shorten
+the intervals. A late write, closed window or expired selected Ask prevents
+dispatch after the reservation. Cap intervals include that five-second budget
+and whole-second rounding.
+
+The GitOps-precreated ConfigMap `dev-env-keeper-ask-notifications`, in the
+keeper's namespace, is selected by `--ask-notify-state-configmap`; it must
+differ from the login-notice ConfigMap.
+`state.json` holds only Ask/group IDs, SHA-256 requester UID IDs and UTC
+Unix-second attempt/retry timestamps, plus a schema version. It retains at
+most 4096 Ask IDs and groups, with at most two attempts per group. Entries for
+existing Asks remain deduplicated; an absent Ask's entry can be removed only
+after a complete authoritative scan and the one-hour rate window. Size bounds
+are 896 KiB for state and 960 KiB for state plus page records. Capacity, read,
+corruption and CAS failures stop sending; they never reset dedupe to empty.
+Keep this ConfigMap across upgrades and flag changes.
+
+The same ConfigMap holds `pages.json`, using DESIGN-031's bounded page schema
+(at most 100 records / 256 KiB). Correlation is the representative Ask ID and
+source/event kind is `ask-new`; title, body, URL and human identity are absent.
+State, rate reservation and the `recorded` page commit in one CAS before the
+send. Confirmed Pushover acceptance becomes `sent`; it proves neither phone
+delivery nor reading. A transport timeout, 5xx, unconfirmed 2xx or lost outcome
+is Unknown (`ambiguous`, or `recorded` when no outcome was saved), and is never
+automatically repeated. Missing credential files or dispatch refused before
+the sender call (late reservation/window boundary) mean definitely no request;
+that failure may retry once after at least five minutes, while the selected
+Ask is still open and all caps/windows allow. Other 4xx responses are `failed` without an
+automatic retry. The existing pages lookup is not extended to this separate
+ConfigMap by lane B.
+
+`--ask-notify-quiet-hours` defaults to empty: all hours within caps. When set,
+it names the **allowed delivery window**, for example `09:00-21:00`, with
+`--ask-notify-timezone=America/New_York` (the default timezone). Start is
+inclusive, end exclusive; overnight windows are supported. Outside the window,
+pending Asks wait until its next start, observed on the next 30-second poll.
+IANA timezone rules handle DST. A skipped start waits for the first real
+minute in the window; either occurrence of a repeated minute is eligible,
+with caps still measured in elapsed UTC time. Agents cannot override it.
+This source default does not settle Tom's quiet-hours ruling or permit go-live.
 
 ## Status codes
 
@@ -94,3 +176,11 @@ get, list, create and patch on `asks`, and update on `asks/status`, in
 `dev-agents`. Patch updates the state label without rewriting the immutable
 spec. This repository does not grant that. DESIGN-034 section 4 records the
 same rights.
+
+For the separate haynes-ops installation, give the keeper only `get,list` on
+`coordination.dev-env.haynesops.com/asks` in `dev-agents` (no watch, patch,
+status update or answer rights). Precreate its ConfigMap in the keeper's
+namespace and grant `get,update` on that exact ConfigMap name only; no create,
+delete or list. It needs neither a new credential nor general inbox rights.
+Review its network policy for the API server and Pushover. No haynes-ops,
+runtime or RBAC change is included in lane B.

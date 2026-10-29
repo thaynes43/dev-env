@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -22,7 +23,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/reminders"
 )
 
@@ -56,6 +59,8 @@ type Options struct {
 	Notices NoticeOptions
 	// Reminders configures the reminder scheduler (DESIGN-032); off by default.
 	Reminders RemindersOptions
+	// AskNotifications is source-only/default off (DESIGN-034 lane B).
+	AskNotifications AskNotificationOptions
 	// Interval is the longest wait between two refreshes; DefaultInterval when
 	// zero.
 	Interval time.Duration
@@ -91,6 +96,24 @@ func noticesStart(providerCount int, notices NoticeOptions) bool {
 // Run runs the keeper until ctx ends or this process loses the leader election,
 // which returns an error so the process exits and the kubelet restarts it.
 func Run(ctx context.Context, cfg *rest.Config, o Options) error {
+	if o.AskNotifications.Enabled && !o.LeaderElect {
+		return errors.New("ask notifications require keeper leader election")
+	}
+	if err := o.AskNotifications.Validate(); err != nil {
+		return err
+	}
+	if o.AskNotifications.Enabled && !strings.HasPrefix(o.Notices.withDefaults().URL, "https://") {
+		return errors.New("ask notifications require an HTTPS Pushover endpoint")
+	}
+	if o.AskNotifications.Enabled {
+		name := o.AskNotifications.StateConfigMap
+		if name == "" {
+			name = DefaultAskNotificationConfigMap
+		}
+		if name == o.Notices.withDefaults().StateConfigMap {
+			return errors.New("ask notifications require a ConfigMap separate from login notices")
+		}
+	}
 	if o.Namespace == "" || o.GHTokenSecret.Namespace == "" || o.GHTokenSecret.Name == "" || o.GitHubApp == nil {
 		return errors.New("keeper: the namespace, the gh token Secret and the GitHub App are required")
 	}
@@ -101,7 +124,7 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		return errors.New("codex auth requires separate private/public namespaces and absolute private staging")
 	}
 	scheme := runtime.NewScheme()
-	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme)); err != nil {
+	if err := errors.Join(clientgoscheme.AddToScheme(scheme), v1alpha1.AddToScheme(scheme), coord.AddToScheme(scheme)); err != nil {
 		return err
 	}
 	// An uncached client: the keeper only patches Secrets it is named on, and
@@ -196,6 +219,23 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		nf, err := NewNotifier(notices, hub,
 			&ConfigMapNoticeStore{Client: c, Name: types.NamespacedName{Namespace: o.Namespace, Name: notices.StateConfigMap}},
 			&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile}, clk, o.Log.WithName("notices"))
+		if err != nil {
+			return err
+		}
+		if err := mgr.Add(nf); err != nil {
+			return err
+		}
+	}
+	if o.AskNotifications.Enabled {
+		a := o.AskNotifications
+		if a.StateConfigMap == "" {
+			a.StateConfigMap = DefaultAskNotificationConfigMap
+		}
+		notices := o.Notices.withDefaults()
+		nf, err := newAskNotifier(a,
+			asks.KubeStore{Client: c, Live: c, Namespace: asks.Namespace, Log: o.Log.WithName("ask-reads")},
+			&configMapAskNotificationStore{client: c, name: types.NamespacedName{Namespace: o.Namespace, Name: a.StateConfigMap}},
+			&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile}, o.Clock, o.Log.WithName("ask-notifications"))
 		if err != nil {
 			return err
 		}

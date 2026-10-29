@@ -110,22 +110,23 @@ func notifyTest(args []string, out io.Writer) int {
 }
 
 type options struct {
-	namespace       string
-	secretNamespace string
-	ghTokenSecret   string
-	githubAppDir    string
-	githubAPIURL    string
-	permissions     map[string]string
-	interval        time.Duration
-	leaderElect     bool
-	metricsAddr     string
-	probeAddr       string
-	proxmoxGrants   keeper.ProxmoxGrantOptions
-	hwsshGrants     keeper.HWSSHGrantOptions
-	codexAuth       keeper.CodexOptions
-	claudeAuth      keeper.ClaudeOptions
-	notices         keeper.NoticeOptions
-	reminders       keeper.RemindersOptions
+	namespace        string
+	secretNamespace  string
+	ghTokenSecret    string
+	githubAppDir     string
+	githubAPIURL     string
+	permissions      map[string]string
+	interval         time.Duration
+	leaderElect      bool
+	metricsAddr      string
+	probeAddr        string
+	proxmoxGrants    keeper.ProxmoxGrantOptions
+	hwsshGrants      keeper.HWSSHGrantOptions
+	codexAuth        keeper.CodexOptions
+	claudeAuth       keeper.ClaudeOptions
+	notices          keeper.NoticeOptions
+	reminders        keeper.RemindersOptions
+	askNotifications keeper.AskNotificationOptions
 }
 
 func defaultPermissions() string {
@@ -183,6 +184,11 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.reminders.Every, "reminder-poll", 30*time.Second, "how often the scheduler looks for due reminders")
 	fs.DurationVar(&o.reminders.MissGrace, "reminder-miss-grace", 6*time.Hour, "how late a recurring occurrence may still fire; older ones are recorded as missed")
 	fs.StringVar(&o.notices.StateConfigMap, "notice-state-configmap", keeper.DefaultNoticeStateConfigMap, "ConfigMap in the keeper's namespace that keeps the notice deduplication state")
+	fs.BoolVar(&o.askNotifications.Enabled, "enable-ask-notifications", false, "send coalesced new-Ask pushes; source only, activation awaits Q-255-02 and GitOps RBAC")
+	fs.StringVar(&o.askNotifications.PortalOrigin, "ask-notify-portal-origin", "", "HTTPS portal origin for authenticated Ask board GET links")
+	fs.StringVar(&o.askNotifications.QuietHours, "ask-notify-quiet-hours", "", "optional ALLOWED local delivery window HH:MM-HH:MM; empty permits all hours within caps")
+	fs.StringVar(&o.askNotifications.Timezone, "ask-notify-timezone", keeper.DefaultNoticeZone, "IANA timezone for the Ask delivery window; independent of login notices")
+	fs.StringVar(&o.askNotifications.StateConfigMap, "ask-notify-state-configmap", keeper.DefaultAskNotificationConfigMap, "precreated keeper-owned ConfigMap for Ask dedupe, rate timestamps and content-free page records")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -209,6 +215,15 @@ func parseFlags(args []string) (options, error) {
 	}
 	if o.claudeAuth.Enabled && (!o.leaderElect || o.claudeAuth.JournalSecret == "" || o.claudeAuth.LiveSecret == "" || !filepath.IsAbs(o.claudeAuth.LoginDir) || o.namespace == o.secretNamespace) {
 		return o, errors.New("claude auth requires leader election, separate private/public namespaces, an absolute login directory and nonempty named configuration")
+	}
+	if o.askNotifications.Enabled && !o.leaderElect {
+		return o, errors.New("ask notifications require leader election")
+	}
+	if err := o.askNotifications.Validate(); err != nil {
+		return o, err
+	}
+	if o.askNotifications.Enabled && !strings.HasPrefix(o.notices.URL, "https://") {
+		return o, errors.New("ask notifications require an HTTPS Pushover endpoint")
 	}
 	if err := o.notices.Validate(); err != nil {
 		// Plan 13, story 13.1 follow-up 1: a bad notice flag disables notices
@@ -249,16 +264,17 @@ func run(args []string) error {
 			Permissions: o.permissions,
 			UserAgent:   binaryName + "/" + info.Version,
 		},
-		ProxmoxGrants: o.proxmoxGrants,
-		HWSSHGrants:   o.hwsshGrants,
-		CodexAuth:     o.codexAuth,
-		ClaudeAuth:    o.claudeAuth,
-		Notices:       o.notices,
-		Reminders:     o.reminders,
-		Interval:      o.interval,
-		LeaderElect:   o.leaderElect,
-		MetricsAddr:   o.metricsAddr,
-		ProbeAddr:     o.probeAddr,
-		Log:           log,
+		ProxmoxGrants:    o.proxmoxGrants,
+		HWSSHGrants:      o.hwsshGrants,
+		CodexAuth:        o.codexAuth,
+		ClaudeAuth:       o.claudeAuth,
+		Notices:          o.notices,
+		Reminders:        o.reminders,
+		AskNotifications: o.askNotifications,
+		Interval:         o.interval,
+		LeaderElect:      o.leaderElect,
+		MetricsAddr:      o.metricsAddr,
+		ProbeAddr:        o.probeAddr,
+		Log:              log,
 	})
 }
