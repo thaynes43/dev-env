@@ -81,7 +81,7 @@ FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7
 # block was already written that way, which is why its text survived untouched.
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.37.1
+ARG KUBECTL_VERSION=v1.37.2
 # renovate: datasource=github-releases depName=fluxcd/flux2
 ARG FLUX_VERSION=2.9.6
 # renovate: datasource=github-releases depName=cli/cli
