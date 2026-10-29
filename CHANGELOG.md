@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.66.0](https://github.com/thaynes43/dev-env/compare/v2.65.0...v2.66.0) (2026-10-29)
+
+
+### Features
+
+* **portal:** scannable Pages workspace with disabled per-alert control drafts (Phase B, v2) ([#654](https://github.com/thaynes43/dev-env/issues/654)) ([2f5990b](https://github.com/thaynes43/dev-env/commit/2f5990b10fb311a6bb8cc111d274c77ed2e887d3))
+* **portal:** Tasks show owner, next action and fixture truth ([#657](https://github.com/thaynes43/dev-env/issues/657)) ([7bbbc1a](https://github.com/thaynes43/dev-env/commit/7bbbc1a2ab4491883b1d12ff776b0cb75bb3f628))
+
+
+### Bug Fixes
+
+* **portal:** natural Remote Control wording and precise action-file runbook ([#652](https://github.com/thaynes43/dev-env/issues/652)) ([18b5526](https://github.com/thaynes43/dev-env/commit/18b55268ab6ec143abe1802a9020c3e4c284582a))
+* **portal:** open Claude conversation links in a new tab ([#655](https://github.com/thaynes43/dev-env/issues/655)) ([a05e453](https://github.com/thaynes43/dev-env/commit/a05e45360d821411e9def3237eb55e1b5f2ac1ba))
+
 ## [2.65.0](https://github.com/thaynes43/dev-env/compare/v2.64.1...v2.65.0) (2026-10-29)
 
 
