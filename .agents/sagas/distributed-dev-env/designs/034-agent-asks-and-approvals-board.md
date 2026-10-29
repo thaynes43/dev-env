@@ -9,7 +9,7 @@
 - **Work order:** ASKS255-DESIGN-FIX-20261029-02. One ready superseding
   PR; the lead reviews and merges. No code or runtime action here.
 
-### v1 build contract
+## v1 build contract
 
 The authority is Epic #254 **journal 2539**, amended by **2556** and
 **2579 (v1.1)** and **2595 (v1.2)**. The later journal controls wherever they differ. The table is
@@ -18,12 +18,12 @@ It describes required behavior, not installed or accepted functionality.
 
 | Field, route or rule | Contract journal in #254 | Lane / section |
 |---|---|---|
-| `id`, `requestId`, `type`, `question`, `options`, `recommended`, `allowFreeText` | 2539; 2579 A6 (lane 0 bounds) | 0/A/C/D; §2 |
+| `id`, `requestId`, `type`, `question`, `options`, `recommended`, `allowFreeText` | 2539; 2579 A6; 2595 A6'/A17 (lane 0 bounds) | 0/A/C/D; §2 |
 | `context.sessionName/sessionUID`, `workPackage`, `links` | 2539; 2579 A6/A7 (wire URLs vs rendered links) | 0/A/D; §2 |
-| `scope.action/target/expiresAt`, `createdAt`, `expiresAt`, create `expiresIn` | 2539; 2579 A8 (24h approval cap, Ask expiry ≤ scope expiry) | 0/A/C/D; §2/§7 |
+| `scope.action/target/expiresAt`, `createdAt`, `expiresAt`, create `expiresIn` | 2539; 2579 A8 (24h approval cap, Ask expiry ≤ scope expiry); 2595 A16 (whole-second clock) | 0/A/C/D; §2/§7 |
 | `state`; immutable spec and set-once `answer` | 2539; 2579 A12 (CEL) | 0/A; §2/§4 |
 | `answer.optionId/text/approved/answeredAt`; notes and explicit `*bool` | 2539; 2556; 2579 A13 | 0/A/C/D; §2 |
-| `answer.answeredBy.issuer/subject/displayName`; session redaction | 2539; 2579 A2/A6 | A/C/D; §3/ADR-010 |
+| `answer.answeredBy.issuer/subject/displayName`; session redaction | 2539; 2579 A2/A6; 2595 A2' | A/C/D; §3/ADR-010 |
 | `delivery.inboxMessage/deliveredAt` reserved, empty in v1; answer read from Ask | 2579 A1; inbox CRD change is F1 | A/C; §5 |
 | `POST /v1/asks` | 2539; 2579 A9 (201 new, 200 identical, 409 changed) | A/C; §3 |
 | `GET /v1/asks?mine=true`, `GET /v1/asks/{id}` | 2539; 2579 A1/A2/A11 | A/C; §3 |
@@ -35,7 +35,7 @@ It describes required behavior, not installed or accepted functionality.
 | `ask` returns Ask JSON, no revision, optional configured portal link; computed validity | 2579 A4/A5 | C/D; §6/§7 |
 | `ask_status`, `list_my_asks`, `withdraw`; no session answer tool | 2539; 2579 A1 | C; §6 |
 | Approve/Deny primary, secondary options cannot contradict decision | 2579 A15 | D; §8 |
-| Default-off flags; keeper pushes/expiry; lane custody and merge order | 2539; no change in 2579 | All; §9/§12 |
+| Default-off flags; keeper pushes; operator expiry sweeper; lane custody and merge order | 2539; unchanged by 2579/2595 | All; §9/§12 |
 | T4 outside v1; profile allowlist, workbench opt-in, grant exclusions | 2579 A14; Q-255-03 remains pending | Follow-up; §10/§13 |
 
 ## 1. Result and existing parts
@@ -53,7 +53,7 @@ The board is for questions and approvals, rather than ongoing conversation.
 
 | Existing source | Contract to preserve or extend |
 |---|---|
-| [DESIGN-029 group ruling](029-portal-foundations.md#group-based-action-scopes-2026-10-29) | Fresh UserInfo admits the portal group for the request's principal. Send/history currently have exact name/UID targets. Ask audit identity changes the message actor boundary as stated in ADR-010; it does not expand history. |
+| [DESIGN-029 group ruling](029-portal-foundations.md#group-based-action-scopes-2026-10-29) | Fresh UserInfo admits the portal group for the request's principal. Send/history currently have exact name/UID targets. Ask answers store the portal principal, which changes DESIGN-029's actor boundary for Asks only (ADR-010). Message `actorRef` handling and history scope are unchanged. |
 | [`server.go`](../../../../internal/apiserver/server.go) | TokenReview caller classes and narrow portal-reader route allowlist. New Ask routes need explicit admission. |
 | [`inbox_types.go`](../../../../api/coordination/v1alpha1/inbox_types.go), [DESIGN-014](014-durable-offline-inbox.md) | Immutable messages require original Session senders and saved-project recipient provenance. F1 must change the CRD before operator-origin delivery. V1 creates no InboxMessage. |
 | [DESIGN-010](010-atomic-task-claims.md), [DESIGN-024](024-coordination-record-retention.md) | Protected coordination group, bounded records, uncached checks and archive before deletion. A claim or ACK grants no authority. |
@@ -69,7 +69,9 @@ namespace `dev-agents`. Its immutable spec is the request; the operator
 alone writes status with compare-and-swap (CAS). Sessions use the API,
 not direct Kubernetes access. No Session owner reference may erase the
 Ask on reap. Requester provenance needed by the store is server metadata,
-not a new client-supplied wire field.
+not a new client-supplied wire field. Create drops `status`. Until the
+operator's first CAS status write, readers treat an absent
+`status.state` as `open`.
 
 | Field | v1 meaning and bound |
 |---|---|
@@ -80,18 +82,20 @@ not a new client-supplied wire field.
 | `recommended`, `allowFreeText` | Recommendation is an option ID or empty. Free text controls info answers; it does not restrict approval notes. Never preselect approval. |
 | `context` | Server-filled `sessionName` (≤253 bytes) and `sessionUID` (≤128 bytes); optional positive OpenProject `workPackage` integer and 0–5 HTTPS links of 1–300 bytes each. No caller-supplied requester identity. |
 | `scope` | Required for approval, absent for info. `action` and `target` each 1–200 nonblank runes, plus RFC 3339 `expiresAt`. Describe one exact action and target with material limits. Approval scope expires 1m to 24h after creation in v1 (`AskScopeMaxTTL`). |
-| `createdAt`, `expiresAt` | Server creation time. Create uses `expiresIn`, a Go duration string in whole seconds, `1m` to `168h` (7 days), default `24h`. An approval Ask's `expiresAt` is ≤ `scope.expiresAt` (A8): when `expiresIn` is omitted, `expiresAt` is the earlier of `createdAt + 24h` and `scope.expiresAt`, so the default never fails; an explicit `expiresIn` that would outlive the scope is refused with `400` (lane 0 `ExpiresAtFrom`, `ValidateAt`). The 24h scope cap therefore also bounds the answer window. An answer never extends either expiry. |
+| `createdAt`, `expiresAt` | Server creation time. Create uses `expiresIn`, a Go duration string in whole seconds, `1m` to `168h` (7 days), default `24h`. An approval Ask's `expiresAt` is ≤ `scope.expiresAt` (A8): when `expiresIn` is omitted, `expiresAt` is the earlier of `createdAt + 24h` and `scope.expiresAt`, so the default never fails; an explicit `expiresIn` that would outlive the scope is refused with `400` (lane 0 `ExpiresAtFrom`, `ValidateAt`). The 24h scope cap therefore also bounds the answer window. An answer never extends either expiry. Servers truncate the clock to whole seconds before `ExpiresAtFrom` and `ValidateAt`, and store that value in the spec as `createdAt` (`metav1.Time`), not `metadata.creationTimestamp` (2595 A16). |
 | `state` | `open`, `answered`, `withdrawn` or `expired` only. |
 | `answer` | Set once: `optionId` (an existing choice or empty), `text` (0–2000 runes), `approved` (required `*bool` for approval, absent for info), `answeredBy` and server `answeredAt`. An explicit false means Deny; omission is not false. |
-| `answer.answeredBy` | Operator audit/portal: issuer 1–300 runes, subject 1–200 runes, displayName 0–120 runes. The portal's answer request must carry issuer and subject. A stored or returned actor is valid with a nonblank displayName, or with both issuer and subject (v1.2). Session responses return only displayName, `Portal user` when none is known; issuer and subject are omitted, not empty-string placeholders. No access tokens or cookies. |
+| `answer.answeredBy` | Operator audit/portal: issuer ≤300 runes and subject ≤200 runes, each nonblank when present and both required on the portal answer request; displayName ≤120 runes, nonblank when present. The operator stores issuer and subject, plus displayName when known. A returned actor is valid with a nonblank displayName, or with both issuer and subject (2595 A2'). Session responses return only displayName, `Portal user` when none is known; issuer and subject are omitted, not empty-string placeholders. No access tokens or cookies. |
 | `delivery` | Reserved shape `{inboxMessage, deliveredAt}`. Empty/omitted in v1. No delivery or ACK fact is inferred from an answer read. |
 
 Lane 0's validation bounds apply. Text must be valid UTF-8. Reject NUL,
 other controls, format and invisible characters (Unicode Cf, U+2060 to
 U+206F, tag characters), bidi overrides and line/paragraph separators.
 Multi-line fields (question, option description, answer text) also allow
-LF, tab, the zero-width joiner and variation selectors (v1.2). Clients
-turn CRLF and lone CR into LF with `NormalizeAskText` before validating.
+LF, tab, the zero-width joiner and the variation selectors U+FE00 to
+U+FE0F (2595 A17). Hangul fillers, U+034F and U+E0100 to U+E01EF are
+refused everywhere. U+2800 counts as blank. Clients turn CRLF and lone
+CR into LF with `NormalizeAskText` before validating.
 Do not silently truncate a question, scope or answer to pass validation.
 
 The wire accepts **any HTTPS host**: an absolute URL with a host, no
@@ -109,10 +113,17 @@ A selected option must exist; it cannot contradict Approve/Deny in the
 portal (§8). Text or an option label never implies approval.
 
 Admission limits are **16 open per requester, 512 total per requester and
-4096 per namespace**. Closed records still count toward totals. Use
-count-then-create with the existing
-[`taskclaim.CheckRoom`](../../../../internal/taskclaim/store.go) pattern;
-log and emit a metric at 80%. This is not a new cross-replica CAS capacity
+4096 per namespace**. Closed records still count toward totals. Count
+open Asks from an uncached list of that requester's Asks (at most 512),
+using `EffectiveState`, or from a state label kept in step with status.
+[`taskclaim.CheckRoom`](../../../../internal/taskclaim/store.go) counts
+metadata only and is keyed by project, so it cannot count open Asks.
+Check ownership against `spec.context.sessionUID`, never a label alone.
+Resolve an identical create retry before the room check; it needs no
+slot. Compare the request as sent, including `expiresIn`, not the
+derived times. A full bound returns `429 limit_exceeded`, as task claims
+and inbox do; an unconfirmed count returns `503`. Log and emit a metric
+at 80%. This is not a new cross-replica CAS capacity
 reservation and does not claim atomic quota enforcement. Read, answer and
 withdraw do not require a new slot. Keep old records instead of dropping
 them to admit another Ask. Counts/logs must not contain question or
@@ -132,7 +143,9 @@ withdraw and expiry race through CAS. At answer time the Ask must be open
 and `now < expiresAt`; for approval, also `now < scope.expiresAt`. Enforce
 these checks at the write even if the expiry sweeper has not run. Lane 0's
 `ValidateForAt(ask, now)` helper expresses the answer-time checks; handlers
-map expired/conflicting outcomes to the codes in §3.
+map expired/conflicting outcomes to the codes in §3. Check for an identical
+retry by the same issuer and subject before calling `ValidateForAt`. That
+retry returns `200`; `ValidateForAt` reports every answered Ask as not open.
 
 No reopening, scope edit or answer replacement. Use a new linked Ask for a
 correction. Answer history remains `answered` after its approval expires;
@@ -177,6 +190,14 @@ message identity handling remains separate.
 | `GET /v1/portal/asks/{id}` | Portal reader, any state; supports push links and `?ask=` selection. |
 | `POST /v1/portal/asks/{id}/answer` | Portal reader with BFF-derived actor, set-once CAS. Open/unexpired Ask; approval scope still future. `200` for a confirmed answer, also returning the stored Ask on an identical answer retry by the same issuer and subject; otherwise `409` for answered/withdrawn and `410` for expired. |
 
+Another Session's Ask returns `404`, the same as an unknown ID. A caller
+of the wrong class returns `403`. Withdraw returns `409` when
+`EffectiveState(now)` is not open. Map Ask store errors explicitly; the
+generic Kubernetes error helper turns Invalid into `422`. Session lists
+require `mine=true`. Lists default to 20 records (`AskListDefaultLimit`),
+at most 100, newest first; `state=open` means the effective state at read
+time.
+
 Validation errors return **400**, not 422. An identical answer retry
 compares the actor's issuer/subject and answer content; another actor
 cannot obtain a successful retry by choosing the same answer. The stored
@@ -213,13 +234,18 @@ session and private receipt role. Sessions and the portal get no direct
 CRD rights; add narrow operator create/get/list and status-write rights
 through GitOps.
 
-A CRD CEL transition rule makes spec immutable: `self == oldSelf`.
-The answer is set once by a rule on `status`, where the answer lives:
+Put `self == oldSelf` on the `AskSpec` type and make `spec` required, as
+`InboxMessageSpec` and `TaskClaimSpec` do. Put the set-once rule on the
+`AskStatus` type:
 `!has(oldSelf.answer) || (has(self.answer) && self.answer == oldSelf.answer)`.
-In Kubernetes CEL an absent field is not `null`, so the rule tests
-presence with `has()` instead of comparing with `null`.
-Schema optional-field handling must preserve that A12 rule: an absent
-answer may be set, and a present answer cannot change or disappear.
+A transition rule runs only when the field exists in both objects, so add
+a root rule that stops a status write from dropping `status`, as
+`SessionDirectory` does:
+`!has(oldSelf.status) || !has(oldSelf.status.answer) || (has(self.status) && has(self.status.answer))`.
+In Kubernetes CEL an absent field is not `null`; journal 2579 A12's
+`== null` form fails, so these rules use `has()` (correction posted on
+#254). Together they keep A12: an absent answer may be set, and a present
+answer cannot change or disappear.
 Prove both rules with real API-server validation, including status writes.
 Use bounded fields and lists so CEL stays within the API server cost
 budget. Status confirmation must use authoritative reads, not an informer
@@ -313,7 +339,7 @@ projected token; no provider API key or inference call is needed.
 | Tool | v1 contract |
 |---|---|
 | `ask` | Typed create intent and caller-stable `requestId`; returns the Ask JSON immediately. No revision. Include a portal link only when lane C has a configured portal origin; otherwise none. |
-| `ask_status` | Read own Ask, including its stored answer. Immediate return, no ACK or consumption. Any approval validity shown is labelled computed, not a server field. |
+| `ask_status` | Read own Ask, including its stored answer. Immediate return, no ACK or consumption. Any approval validity shown is labelled computed, not a server field; use lane 0 `EffectiveState` and `ApprovalValid` rather than reimplementing them. |
 | `list_my_asks` | One page of own Asks, including answered records, with the operator cursor. No all-session scan or automatic continuation. |
 | `withdraw` | Withdraw own open Ask; cannot erase an answer or revoke approval. No revision/operation-ID extension is required in v1. |
 
@@ -359,7 +385,8 @@ At answer time the Ask must be open/unexpired and approval scope still in
 the future. **No revocation exists in v1**, so `scope.expiresAt` is capped
 at `createdAt + 24h` and Ask `expiresAt` cannot exceed scope expiry.
 Clients display validity as **computed** from
-`approved && now < scope.expiresAt`; it is not a server field. Deny is an
+`approved && now < scope.expiresAt` (lane 0 `ApprovalValid`); it is not a
+server field. Deny is an
 answer, not an active approval. An expired approval is unusable even
 though the historical answer remains visible.
 
@@ -455,7 +482,8 @@ kind as correlation. Pushover acceptance is not phone delivery.
 
 Proposed caps: one new-Ask push per Ask, at most one per requester per five
 minutes and six per recipient per hour. Persist deduplication/rate state
-across keeper restarts. Coalesce within those caps; never hide the durable
+across keeper restarts, in a keeper-owned ConfigMap that holds no Ask
+text; lane B's PR proposes its shape. Coalesce within those caps; never hide the durable
 question. An ambiguous send response is Unknown, not success; do not
 repeat it automatically. A definite pre-send failure may retry once after
 five minutes while open and within caps. Push success does not affect
@@ -535,19 +563,18 @@ already granted in the session.
 ## 12. Build stories and acceptance
 
 Reuse canonical lanes #256–#259. Journal 2539 gives custody and merge
-order: lane 0, then A, then C/D/B (B after A). Journal 2579 amendments
-must reach the shared wire types before backend integration; old lane
-heads are not evidence that v1.1 is implemented. All features are default
-off. The lead owns independent review, UI QA and integration; this docs
-worker does not change lane assignments or authorization.
+order: lane 0, then A, then C/D/B (B after A). Lane 0 (#656,
+`7057c17`) carries 2579 and 2595; old lane heads are not evidence that
+v1.2 is implemented. All features are default off. The lead owns
+independent review, UI QA and integration.
 
 | Story | Dependency | Outcome and evidence |
 |---|---|---|
-| Lane 0 — shared wire types | 2539, 2556, 2579 | Routes/bounds/validators match v1.1, including removal of portal withdraw, 24h approval cap and `ValidateForAt`. Source only. |
+| Lane 0 — shared wire types (merged #656) | 2539, 2556, 2579, 2595 | Routes, bounds and validators match v1.2, including removal of portal withdraw, 24h approval cap and `ValidateForAt`. Source merged. |
 | [#256 — lane A backend](https://work.haynesnetwork.com/work_packages/256) | Amended lane 0 | CRD/CEL/store/API behind flag. Prove idempotency/status codes, ownership, session redaction, portal detail, answer-time checks/CAS, CheckRoom limits and sorted paging. No InboxMessage create/edit; delivery empty. Generated schema/layout/focused tests pass. |
 | [#257 — lane C MCP](https://work.haynesnetwork.com/work_packages/257) | Lane 0; A for integration | Four immediate tools and TLS/refusal/retry fixtures; Ask JSON, no revision, link only if configured. Session actor projection accepted; validity labelled computed. No Kubernetes imports. |
 | [#258 — lane D portal](https://work.haynesnetwork.com/work_packages/258) | Lane 0; A for integration | Detail route, same-origin answer, CSRF/session/current-group checks, A7 links, primary Approve/Deny plus notes/secondary-option safeguards, escaping/replay/stale-session tests. Lead QA at 320/390/1280, light/dark. Initial count is board-local. |
-| [#259 — lane B keeper/expiry](https://work.haynesnetwork.com/work_packages/259) | A merged; D link; Q-255-02 before live | Narrow keeper get/list Role, bounded pushes and leader-only expiry. Fake clock/sender checks rate limits, restart dedupe, ambiguity and chosen quiet-hours policy. Default off; login notices unchanged. |
+| [#259 — lane B keeper/expiry](https://work.haynesnetwork.com/work_packages/259) | A merged; D link; Q-255-02 before live | Narrow keeper get/list Role and bounded pushes. The leader-only expiry sweeper runs in the operator, which alone writes Ask status. Fake clock/sender checks rate limits, restart dedupe, ambiguity and chosen quiet-hours policy. Default off; login notices unchanged. |
 | F1 — operator-origin inbox delivery | A | Separate CRD origin and projectless recipient scope, compatible readers, deterministic recovery and explicit message/ACK linkage. Crash/cap/suspend/absence/replacement/wrong-ACK tests. No fabricated Session sender or provider wake. |
 | F2 — revocation and audit | A/D; Q-255-01 when F2 is picked up; F1 for notices | Reviewed revoke authority, route/form, audit and retry fields. Prove forged actor, swapped session, group removal, stale scope, races and lost response handling. Revocation remains visible even when notice delivery fails. No action adapter. |
 | F3 — Needs attention and agent retrieval | C/D; F1 for inbox wrappers only | Cross-page Waiting for you; qualified Claude/Codex post, continue, read/save answer and resume without reissuing. Explicit inbox wrappers only after F1. No automatic wake. |
@@ -573,8 +600,7 @@ supported and restore/epoch invalidation. No generic approve-and-run tool.
 
 These IDs belong to #255. They are **not answered or delivered**. The lead
 must deliver active questions one at a time through its verified phone
-route and record actual answer/source/date here and in #255. This worker's
-Codex phone delivery is unverified. Open questions do not block this docs
+route and record actual answer/source/date here and in #255. Open questions do not block this docs
 PR; they hold only their dependent behavior. Do not send this table as one
 prompt or reopen a deferred question early.
 

@@ -35,8 +35,8 @@ attestations and managed-child decisions do not provide portal-principal
 approval either; reusing those labels would hide a trust change.
 
 Epic #254 journal 2539 defines the v1 contract and lane custody. Journal
-2556 amends answer notes and the explicit approval boolean. Journal 2579
-(v1.1) controls wherever it differs. DESIGN-034 maps each part to those
+2556 amends answer notes and the explicit approval boolean. Journals 2579
+(v1.1) and 2595 (v1.2) amend it; the later journal controls. DESIGN-034 maps each part to those
 journals. ADR-010 avoids the ADR-009 introduced by open PRs #563/#565;
 PR #658's earlier Ask ADR-009 is superseded by this proposal.
 
@@ -62,7 +62,7 @@ The BFF derives the principal from its current request-private session and
 fresh group check. The operator accepts that assertion only from its
 admitted portal-reader caller. Sessions and coordinators cannot answer.
 
-**This changes DESIGN-029's actor boundary for approval records:** the
+**This changes DESIGN-029's actor boundary for Ask answers, info and approval alike:** the
 operator stores `answeredBy {issuer, subject, displayName}` for audit,
 rather than only a message HMAC `actorRef`. Portal Ask routes return all
 three. Every session-facing `/v1/asks` response omits issuer and subject
@@ -122,5 +122,4 @@ action. The lead owns independent review, one-at-a-time verified question
 delivery and merge. Q-255-01 is deferred until F2; quiet hours (Q-255-02),
 T4 (Q-255-03) and common-rule approval meaning (Q-255-04) are unsettled.
 Source tests, signed publication, GitOps installation and Tom's usable
-acceptance remain separate evidence. This worker opens one ready PR
-superseding #658 and stops once CI starts, without closing #658 or merging.
+acceptance remain separate evidence.
