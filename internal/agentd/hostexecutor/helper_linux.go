@@ -87,8 +87,9 @@ func Helper() error {
 	go func() { rootDone <- cmd.Wait() }()
 	if err != nil {
 		_ = cmd.Process.Kill()
-		<-rootDone
-		return err
+		// Reap the process killed because its identity could not be read.
+		// Wait's error is the result of that kill and stays with the identity error.
+		return errors.Join(err, <-rootDone)
 	}
 	send := func(m message) error {
 		if e := conn.SetWriteDeadline(time.Now().Add(time.Second)); e != nil {
@@ -121,8 +122,10 @@ func Helper() error {
 		return stopAndReport(c, root, rootDone, send)
 	case <-deadline.C:
 		return stopAndReport(c, root, rootDone, send)
-	case <-rootDone:
-		rootDone <- nil
+	case waitErr := <-rootDone:
+		// The root exited before confirm. stopTree observes that Wait
+		// returned; the exit status is not a separate stop result.
+		rootDone <- waitErr
 		return stopAndReport(c, root, rootDone, send)
 	}
 	select {
@@ -352,7 +355,10 @@ func stopTree(root Identity, rootDone <-chan error, budget time.Duration) error 
 		return err
 	}
 	select {
-	case <-rootDone:
+	case waitErr := <-rootDone:
+		// Wait returning is the observation. The process exit status is
+		// not the stop result; the ECHILD loop below is the reap proof.
+		_ = waitErr
 	case <-time.After(time.Until(until)):
 		return errors.New("native Wait not observed")
 	}

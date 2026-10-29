@@ -253,8 +253,12 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	var werr error
 	select {
 	case werr = <-waitDone:
-	case <-parseFailed:
-		stop("native Codex protocol refused")
+	case perr := <-parseFailed:
+		why := "native Codex protocol refused"
+		if perr != nil {
+			why += ": " + perr.Error()
+		}
+		stop(why)
 		werr = <-waitDone
 	}
 	close(exited)

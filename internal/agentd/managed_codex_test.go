@@ -316,7 +316,7 @@ func TestManagedCodexRunAgentParsesOnlyNativeStdoutAndFailsClosed(t *testing.T) 
 	thread := `{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}`
 	turn := `{"type":"turn.started"}`
 	complete := `{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2,"cached_input_tokens":0}}`
-	for _, kind := range []string{"valid", "stderr-thread", "truncated", "missing-terminal", "provider-failure", "second-thread", "version"} {
+	for _, kind := range []string{"valid", "stderr-thread", "truncated", "missing-terminal", "provider-failure", "second-thread", "malformed", "version"} {
 		t.Run(kind, func(t *testing.T) {
 			s := testSettings(t, t.TempDir())
 			if err := os.MkdirAll(s.WorkDir(), 0o700); err != nil {
@@ -338,6 +338,12 @@ func TestManagedCodexRunAgentParsesOnlyNativeStdoutAndFailsClosed(t *testing.T) 
 				body = "printf '%s\\n' '" + thread + "' '" + turn + "' '{\"type\":\"turn.failed\",\"error\":{\"message\":\"synthetic\"}}'\n"
 			case "second-thread":
 				body = "printf '%s\\n' '" + thread + "' '" + thread + "'\n"
+			case "malformed":
+				body = "printf '%s\\n' '" + thread + "' '{\"type\":\"turn.started\",\"x\":\"SENTINEL-SECRET'\n"
+			}
+			if kind == "second-thread" || kind == "malformed" {
+				// Let the parser stop the process before natural exit can win the wait select.
+				body += "exec sleep 10\n"
 			}
 			version := managedCodexVersion
 			if kind == "version" {
@@ -353,6 +359,19 @@ read -r prompt
 			code := RunAgent(path, pane, make(chan os.Signal), 20*time.Millisecond)
 			if (code == 0) != (kind == "valid") {
 				t.Fatal("native process result did not fail closed", kind, code)
+			}
+			switch kind {
+			case "second-thread":
+				if !strings.Contains(pane.String(), "native Codex protocol refused: native Codex emitted a second thread identity") {
+					t.Fatal("pane omitted the second-thread protocol refusal")
+				}
+			case "malformed":
+				if !strings.Contains(pane.String(), "protocol refused: malformed native Codex JSONL") {
+					t.Fatal("pane omitted the malformed JSONL protocol refusal")
+				}
+				if strings.Contains(pane.String(), "SENTINEL-SECRET") {
+					t.Fatal("pane exposed malformed native Codex output")
+				}
 			}
 			var saved Launch
 			if readJSONFile(path, &saved) != nil {
