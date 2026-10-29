@@ -10,28 +10,44 @@ import (
 )
 
 func TestPagesRenderEscapingAndPolicy(t *testing.T) {
-	snapshot, err := pages.ParseAlertmanager([]byte(`[{"fingerprint":"f","labels":{"alertname":"<script>x</script>","Name":"A","name":"B"},"annotations":{"summary":"<img src=x>","runbook_url":"javascript:alert(1)"},"status":{"state":"unprocessed"}}]`))
-	if err != nil {
-		t.Fatal(err)
+	view := PagesWorkspace{
+		Condition:    "available",
+		Availability: "Available",
+		ObservedAt:   "Unknown",
+		Source:       "Unknown",
+		Coverage:     pages.AggregateCoverage,
+		Groups: []PagesGroup{{
+			ID: "pages-group-1", Default: true,
+			AlertName: "<script>x</script>", AlertNameKnown: true, AlertNameDisplay: "<script>x</script>",
+			Severity: "warning", SeverityKnown: true, SeverityDisplay: "warning",
+			Count: 1, EarliestStart: "Unknown", LatestUpdate: "Unknown",
+			Alerts: []PagesAlert{{
+				Fingerprint: "f", Name: "<script>x</script>", NameKnown: true, NameDisplay: "<script>x</script>",
+				Status: "unprocessed", StartsAt: "Unknown", EndsAt: "Unknown", UpdatedAt: "Unknown",
+				Summary: "<img src=x>", Disposition: "Unknown", Recurrence: "Unknown",
+				Labels: []PagesPair{{Key: "Name", Value: "A"}, {Key: "name", Value: "B"}, {Key: "alertname", Value: "<script>x</script>"}},
+			}},
+		}},
+		Controls: DisconnectedPagesControls(nil),
 	}
-	body, err := RenderPages(snapshot, false, 1<<20)
+	body, err := RenderPages(view, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{"&lt;script&gt;", "&lt;img", ">Name<", ">name<", "Unknown", "unprocessed", "viewport", "Pages · Alertmanager"} {
+	for _, want := range []string{"&lt;script&gt;", "&lt;img", ">Name<", ">name<", "Unknown", "unprocessed", "viewport", "Pages · Alertmanager", PagesControlNotice} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %s", want)
 		}
 	}
-	if strings.Contains(text, "<script>") || strings.Contains(text, "javascript:alert") {
+	if strings.Contains(text, "<script>") || strings.Contains(text, "javascript:alert") || strings.Contains(text, "<form") {
 		t.Fatal("unsafe content")
 	}
 	sum := sha256.Sum256([]byte(viewsStyle + pagesStyle))
 	if !strings.Contains(PagesPolicy, base64.StdEncoding.EncodeToString(sum[:])) {
 		t.Fatal("CSP mismatch")
 	}
-	if _, err := RenderPages(snapshot, false, 100); err == nil {
+	if partial, err := RenderPages(view, 100); err == nil || partial != nil {
 		t.Fatal("render limit ignored")
 	}
 }
@@ -47,27 +63,44 @@ func TestExistingNavigationLinksToPages(t *testing.T) {
 }
 
 func TestPagesTimestampPresence(t *testing.T) {
-	snapshot, err := pages.ParseAlertmanager([]byte(`[{"fingerprint":"missing","labels":{"alertname":"Missing"},"status":{"state":"active"}},{"fingerprint":"present","labels":{"alertname":"Present"},"status":{"state":"active"},"startsAt":"2026-10-28T12:00:00Z","endsAt":"2026-10-28T13:00:00Z","updatedAt":"2026-10-28T12:01:00Z"}]`))
-	if err != nil {
-		t.Fatal(err)
+	view := PagesWorkspace{
+		Condition: "available", Availability: "Available", ObservedAt: "Unknown", Source: "Unknown",
+		Coverage: pages.AggregateCoverage,
+		Groups: []PagesGroup{{
+			ID: "pages-group-1", Default: true,
+			AlertName: "Present", AlertNameKnown: true, AlertNameDisplay: "Present",
+			Severity: "warning", SeverityKnown: true, SeverityDisplay: "warning",
+			Count: 1, EarliestStart: "2026-10-28T12:00:00Z", LatestUpdate: "Unknown",
+			Alerts: []PagesAlert{
+				{Fingerprint: "missing", NameDisplay: "Missing", NameKnown: true, Status: "active", StartsAt: "Unknown", EndsAt: "Unknown", UpdatedAt: "Unknown", Disposition: "Unknown", Recurrence: "Unknown"},
+				{Fingerprint: "present", NameDisplay: "Present", NameKnown: true, Status: "active", StartsAt: "2026-10-28T12:00:00Z", EndsAt: "2026-10-28T13:00:00Z", UpdatedAt: "2026-10-28T12:01:00Z", Disposition: "Unknown", Recurrence: "Unknown"},
+			},
+		}},
+		Controls: DisconnectedPagesControls(nil),
 	}
-	body, err := RenderPages(snapshot, false, 1<<20)
+	body, err := RenderPages(view, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(body)
 	for _, want := range []string{
-		`<dt>Starts at</dt><dd>Unknown</dd><dt>Ends at</dt><dd>Unknown</dd><dt>Updated at</dt><dd>Unknown</dd>`,
-		`<dt>Starts at</dt><dd>2026-10-28T12:00:00Z</dd><dt>Ends at</dt><dd>2026-10-28T13:00:00Z</dd><dt>Updated at</dt><dd>2026-10-28T12:01:00Z</dd>`,
+		`<dt>Starts at</dt><dd>Unknown</dd>`,
+		`<dd>2026-10-28T12:00:00Z</dd>`,
+		`<dd>2026-10-28T13:00:00Z</dd>`,
+		`<dd>2026-10-28T12:01:00Z</dd>`,
+		`datetime="2026-10-28T12:00:00Z"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("timestamp rendering missing %s", want)
 		}
 	}
+	if strings.Count(text, "<h1") != 1 {
+		t.Fatal("page does not have one h1")
+	}
 }
 
 func TestPagesHasSharedProductNavigation(t *testing.T) {
-	body, err := RenderPages(pages.AlertmanagerSnapshot{}, false, 1<<20)
+	body, err := RenderPages(PagesWorkspace{}, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +128,7 @@ func TestSessionsAndPagesRenderConcurrently(t *testing.T) {
 	}()
 	go func() {
 		<-start
-		_, err := RenderPages(pages.AlertmanagerSnapshot{}, false, 1<<20)
+		_, err := RenderPages(PagesWorkspace{}, 1<<20)
 		results <- err
 	}()
 	close(start)

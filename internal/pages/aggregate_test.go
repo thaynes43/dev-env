@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAggregateAvailableEmptyAndUnavailable(t *testing.T) {
@@ -205,6 +206,53 @@ func TestAggregateTimeFloorAndParserAgreement(t *testing.T) {
 	agreed, err := AggregateAlerts(parsed)
 	if err != nil || agreed.Source != " local " || agreed.Availability != "Available" || len(agreed.Groups) != 1 || agreed.Groups[0].AlertName != "Case" || agreed.Groups[0].Severity != "warning" || agreed.Groups[0].EarliestStart != "2026-10-28T00:00:00Z" {
 		t.Fatalf("parser aggregate: %+v %v", agreed, err)
+	}
+}
+
+func TestSnapshotInstantUTCYearAfter9999IsUnknown(t *testing.T) {
+	overflow := "9999-12-31T23:59:59-01:00"
+	parsed, err := time.Parse(time.RFC3339Nano, overflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed = parsed.UTC().Round(0)
+	if parsed.Year() != 10000 {
+		t.Fatalf("offset did not normalize to UTC year 10000: year %d", parsed.Year())
+	}
+	if _, ok, reason := snapshotInstant(overflow); reason != "" || ok {
+		t.Fatalf("UTC year 10000 returned known: ok=%v reason=%s", ok, reason)
+	}
+	known := "9999-12-31T23:59:59Z"
+	got, ok, reason := snapshotInstant(known)
+	if reason != "" || !ok || got.Year() != 9999 || got.Format(time.RFC3339Nano) != known {
+		t.Fatalf("year 9999: %v %v %s", got, ok, reason)
+	}
+	stayed := "9999-12-31T22:59:59-01:00"
+	got, ok, reason = snapshotInstant(stayed)
+	if reason != "" || !ok || got.Year() != 9999 || got.Format(time.RFC3339Nano) != "9999-12-31T23:59:59Z" {
+		t.Fatalf("offset inside 9999: %v %v %s", got, ok, reason)
+	}
+	snapshot := AlertmanagerSnapshot{
+		Availability: "Available",
+		ObservedAt:   overflow,
+		Source:       "local",
+		Alerts: []AlertmanagerAlert{
+			groupedAlert("overflow", "A", true, "warning", true, overflow, overflow),
+			groupedAlert("known", "B", true, "warning", true, known, stayed),
+		},
+	}
+	agg, err := AggregateAlerts(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.ObservedAt != "Unknown" || strings.Contains(fmt.Sprintf("%+v", agg), "10000") {
+		t.Fatalf("year 10000 rendered: %+v", agg)
+	}
+	if len(agg.Groups) != 2 || agg.Groups[0].AlertName != "A" || agg.Groups[0].EarliestStart != "Unknown" || agg.Groups[0].LatestUpdate != "Unknown" {
+		t.Fatalf("overflow group: %+v", agg.Groups)
+	}
+	if agg.Groups[1].EarliestStart != known || agg.Groups[1].LatestUpdate != "9999-12-31T23:59:59Z" {
+		t.Fatalf("known 9999 group: %+v", agg.Groups[1])
 	}
 }
 

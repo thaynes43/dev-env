@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -27,13 +26,6 @@ const (
 	MaxFingerprintBytes = 256
 	// MaxAlertNameBytes bounds a preference alert name, in bytes.
 	MaxAlertNameBytes = 256
-
-	maxPrincipalBytes = 512
-)
-
-const (
-	appliedState      = "Unknown"
-	appliedConnection = "Not connected"
 )
 
 // Desired is the stored wish for one control. It is not applied state.
@@ -93,10 +85,6 @@ type Preferences struct {
 type Principal struct {
 	Issuer  string
 	Subject string
-}
-
-func validPrincipal(p Principal) bool {
-	return validIdentity(p.Issuer) && validIdentity(p.Subject)
 }
 
 // Revision is an opaque compare-and-swap token. The zero value is not a
@@ -316,18 +304,6 @@ func validToken(value string, max int) bool {
 	for i := 0; i < len(value); i++ {
 		c := value[i]
 		if c < 0x20 || c > 0x7e || c == '"' || c == '\\' {
-			return false
-		}
-	}
-	return true
-}
-
-func validIdentity(value string) bool {
-	if value == "" || len(value) > maxPrincipalBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
-		return false
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) {
 			return false
 		}
 	}

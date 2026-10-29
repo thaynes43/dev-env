@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 func TestPreferencesRoundTripAndAllowlists(t *testing.T) {
@@ -393,6 +395,29 @@ func clip(s string) string {
 		return s[:80]
 	}
 	return s
+}
+
+const maxPrincipalBytes = 512
+
+const (
+	appliedState      = "Unknown"
+	appliedConnection = "Not connected"
+)
+
+func validPrincipal(p Principal) bool {
+	return validIdentity(p.Issuer) && validIdentity(p.Subject)
+}
+
+func validIdentity(value string) bool {
+	if value == "" || len(value) > maxPrincipalBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 type memoryRow struct {
