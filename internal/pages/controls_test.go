@@ -3,6 +3,7 @@ package pages
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -158,14 +159,37 @@ func TestPreferencesRejectsMalformed(t *testing.T) {
 	if _, err := ParsePreferences([]byte(documentWithTypes(MaxTypePreferences + 1))); !errors.Is(err, ErrInvalid) {
 		t.Fatal("101 types accepted")
 	}
-	earliest, latest := PreferenceTimeBounds()
-	minBody := `{"version":1,"alerts":[{"fingerprint":"a","escalate":"unset","mute":"on","muteUntil":"` + earliest.Format(time.RFC3339Nano) + `"}],"types":[],"list":{"sort":"alertname","filter":"all"}}`
+	minBody := `{"version":1,"alerts":[{"fingerprint":"a","escalate":"unset","mute":"on","muteUntil":"2000-01-01T00:00:00Z"}],"types":[],"list":{"sort":"alertname","filter":"all"}}`
 	if _, err := ParsePreferences([]byte(minBody)); err != nil {
 		t.Fatal(err)
 	}
-	maxBody := `{"version":1,"alerts":[{"fingerprint":"a","escalate":"unset","mute":"off","muteUntil":"` + latest.Format(time.RFC3339Nano) + `"}],"types":[],"list":{"sort":"alertname","filter":"all"}}`
+	maxBody := `{"version":1,"alerts":[{"fingerprint":"a","escalate":"unset","mute":"off","muteUntil":"2100-01-01T00:00:00Z"}],"types":[],"list":{"sort":"alertname","filter":"all"}}`
 	if _, err := ParsePreferences([]byte(maxBody)); !errors.Is(err, ErrInvalid) {
 		t.Fatal("exclusive latest bound accepted", err)
+	}
+	exactName := strings.Repeat("n", MaxAlertNameBytes)
+	exactFingerprint := strings.Repeat("f", MaxFingerprintBytes)
+	exactBody := `{"version":1,"alerts":[{"fingerprint":"` + exactFingerprint + `","escalate":"unset","mute":"off"}],"types":[{"alertName":"` + exactName + `","autoResponder":"on"}],"list":{"sort":"alertname","filter":"all"}}`
+	if got, err := ParsePreferences([]byte(exactBody)); err != nil || got.Alerts[0].Fingerprint != exactFingerprint || got.Types[0].AlertName != exactName {
+		t.Fatal("256-byte token rejected", err)
+	}
+	for _, token := range []string{`a"b`, `a\b`, "a\u202eb", "a\u200bb", "a\u007fb"} {
+		encoded, err := json.Marshal(token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range []string{"fingerprint", "alertName"} {
+			var body string
+			if field == "fingerprint" {
+				body = fmt.Sprintf(`{"version":1,"alerts":[{"fingerprint":%s,"escalate":"unset","mute":"off"}],"types":[],"list":{"sort":"alertname","filter":"all"}}`, encoded)
+			} else {
+				body = fmt.Sprintf(`{"version":1,"alerts":[],"types":[{"alertName":%s,"autoResponder":"off"}],"list":{"sort":"alertname","filter":"all"}}`, encoded)
+			}
+			_, err = ParsePreferences([]byte(body))
+			if err == nil || !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), field) || strings.Contains(err.Error(), "document") {
+				t.Fatalf("%s %q rejected as %v", field, token, err)
+			}
+		}
 	}
 	both, err := ParsePreferences([]byte(`{"version":1,"alerts":[],"types":[{"alertName":"DiskFull","autoResponder":"on"},{"alertName":"diskfull","autoResponder":"off"}],"list":{"sort":"alertname","filter":"all"}}`))
 	if err != nil || both.Types[0].AlertName != "DiskFull" || both.Types[1].AlertName != "diskfull" {
@@ -212,8 +236,9 @@ func TestMemoryStoreAndUnconfigured(t *testing.T) {
 	if _, err := store.Save(ctx, alice, preferenceDoc("alertname"), rev); !errors.Is(err, ErrConflict) {
 		t.Fatal("stale revision applied", err)
 	}
-	if _, _, err := store.Load(ctx, bob); !errors.Is(err, errMemoryNotFound) {
-		t.Fatal(err)
+	absent, absentRev, err := store.Load(ctx, bob)
+	if err != nil || absentRev != "" || absent.Version != 0 || absent.Alerts != nil || absent.Types != nil || absent.List != (ListPreference{}) {
+		t.Fatal("absent principal looked saved", absentRev, err)
 	}
 	if _, err := store.Save(ctx, bob, preferenceDoc("latestUpdate"), ""); err != nil {
 		t.Fatal(err)
@@ -228,7 +253,7 @@ func TestMemoryStoreAndUnconfigured(t *testing.T) {
 	if _, err := store.Save(ctx, Principal{}, first, ""); !errors.Is(err, ErrInvalid) {
 		t.Fatal(err)
 	}
-	long := Principal{Issuer: alice.Issuer, Subject: strings.Repeat("s", MaxPrincipalBytes+1)}
+	long := Principal{Issuer: alice.Issuer, Subject: strings.Repeat("s", maxPrincipalBytes+1)}
 	if _, err := store.Save(ctx, long, first, ""); !errors.Is(err, ErrInvalid) {
 		t.Fatal(err)
 	}
@@ -297,9 +322,8 @@ func TestMemoryStoreAndUnconfigured(t *testing.T) {
 	if !errors.Is(err, ErrNotConfigured) || rev != "" {
 		t.Fatal(rev, err)
 	}
-	state, connection := Applied()
-	if state != AppliedState || connection != AppliedConnection || strings.Contains(string(mustMarshal(t, first)), "applied") {
-		t.Fatal(state, connection)
+	if appliedState != "Unknown" || appliedConnection != "Not connected" || strings.Contains(string(mustMarshal(t, first)), "applied") {
+		t.Fatal(appliedState, appliedConnection)
 	}
 	if _, _, err := store.Load(ctx, alice); err != nil {
 		t.Fatal(err)
@@ -397,14 +421,14 @@ func (s memoryStore) Load(ctx context.Context, principal Principal) (Preferences
 	if err := ctx.Err(); err != nil {
 		return Preferences{}, "", err
 	}
-	if !principal.Valid() {
+	if !validPrincipal(principal) {
 		return Preferences{}, "", fmt.Errorf("%w: principal", ErrInvalid)
 	}
 	s.backend.mu.Lock()
 	defer s.backend.mu.Unlock()
 	row, ok := s.backend.rows[principal.Issuer+"\x00"+principal.Subject]
 	if !ok {
-		return Preferences{}, "", errMemoryNotFound
+		return Preferences{}, "", nil
 	}
 	return clonePreferences(row.prefs), Revision(strconv.FormatUint(row.rev, 10)), nil
 }
@@ -413,7 +437,7 @@ func (s memoryStore) Save(ctx context.Context, principal Principal, prefs Prefer
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if !principal.Valid() {
+	if !validPrincipal(principal) {
 		return "", fmt.Errorf("%w: principal", ErrInvalid)
 	}
 	canon, err := canonicalPreferences(prefs)
@@ -456,4 +480,88 @@ func clonePreferences(prefs Preferences) Preferences {
 	return out
 }
 
-var errMemoryNotFound = errors.New("pages: test controls not found")
+func TestLargestPreferenceDocumentIsStable(t *testing.T) {
+	until := time.Date(2099, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	prefs := Preferences{
+		Version: PreferencesVersion,
+		Alerts:  make([]AlertPreference, MaxAlertPreferences),
+		Types:   make([]TypePreference, MaxTypePreferences),
+		List:    ListPreference{Sort: "earliestStart", Filter: "unprocessed"},
+	}
+	for i := range prefs.Alerts {
+		suffix := fmt.Sprintf("%03d", i)
+		prefs.Alerts[i] = AlertPreference{
+			Fingerprint: strings.Repeat("a", MaxFingerprintBytes-len(suffix)) + suffix,
+			Escalate:    DesiredUnset,
+			Mute:        DesiredUnset,
+			MuteUntil:   &until,
+		}
+	}
+	for i := range prefs.Types {
+		suffix := fmt.Sprintf("%03d", i)
+		prefs.Types[i] = TypePreference{
+			AlertName:     strings.Repeat("n", MaxAlertNameBytes-len(suffix)) + suffix,
+			AutoResponder: DesiredUnset,
+		}
+	}
+	raw, err := MarshalPreferences(prefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) == 0 || len(raw) > MaxPreferenceBytes {
+		t.Fatalf("largest document length %d", len(raw))
+	}
+	parsed, err := ParsePreferences(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := MarshalPreferences(parsed)
+	if err != nil || !bytes.Equal(raw, again) {
+		t.Fatalf("largest document unstable: %d %d %v", len(raw), len(again), err)
+	}
+}
+
+func TestPreferenceByteGuardIsIndependentOfEscapes(t *testing.T) {
+	if err := boundedPreferenceBytes(bytes.Repeat([]byte("x"), MaxPreferenceBytes)); err != nil {
+		t.Fatal(err)
+	}
+	if err := boundedPreferenceBytes(bytes.Repeat([]byte("x"), MaxPreferenceBytes+1)); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "document") {
+		t.Fatal(err)
+	}
+	_, err := MarshalPreferences(Preferences{
+		Version: PreferencesVersion,
+		Alerts:  []AlertPreference{{Fingerprint: `a"b`, Escalate: DesiredUnset, Mute: DesiredOff}},
+		List:    ListPreference{Sort: "alertname", Filter: "all"},
+	})
+	if err == nil || !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "fingerprint") || strings.Contains(err.Error(), "document") {
+		t.Fatal(err)
+	}
+}
+
+func TestMemoryStoreAbsentCreateOnly(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryStore()
+	who := Principal{Issuer: "https://issuer.example/", Subject: "new"}
+	got, rev, err := store.Load(ctx, who)
+	if err != nil || rev != "" || got.Version != 0 || got.Alerts != nil || got.Types != nil {
+		t.Fatal(got, rev, err)
+	}
+	if _, err := store.Save(ctx, who, preferenceDoc("count"), "1"); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	still, stillRev, err := store.Load(ctx, who)
+	if err != nil || stillRev != "" || still.Version != 0 || still.Alerts != nil {
+		t.Fatal("non-empty revision created a row", stillRev, err)
+	}
+	created, err := store.Save(ctx, who, preferenceDoc("count"), "")
+	if err != nil || created != "1" {
+		t.Fatal(created, err)
+	}
+	if _, err := store.Save(ctx, who, preferenceDoc("severity"), ""); !errors.Is(err, ErrConflict) {
+		t.Fatal("empty revision replaced a row", err)
+	}
+	loaded, loadedRev, err := store.reader().Load(ctx, who)
+	if err != nil || loadedRev != "1" || !samePreferences(t, loaded, preferenceDoc("count")) {
+		t.Fatal(loadedRev, err)
+	}
+}

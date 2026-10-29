@@ -27,15 +27,13 @@ const (
 	MaxFingerprintBytes = 256
 	// MaxAlertNameBytes bounds a preference alert name, in bytes.
 	MaxAlertNameBytes = 256
-	// MaxPrincipalBytes bounds each of issuer and subject, in bytes.
-	MaxPrincipalBytes = 512
+
+	maxPrincipalBytes = 512
 )
 
 const (
-	// AppliedState is the only applied-state fact this package can state.
-	AppliedState = "Unknown"
-	// AppliedConnection is the only connection fact this package can state.
-	AppliedConnection = "Not connected"
+	appliedState      = "Unknown"
+	appliedConnection = "Not connected"
 )
 
 // Desired is the stored wish for one control. It is not applied state.
@@ -97,9 +95,8 @@ type Principal struct {
 	Subject string
 }
 
-// Valid reports whether issuer and subject are exact bounded identity strings.
-func (p Principal) Valid() bool {
-	return validToken(p.Issuer, MaxPrincipalBytes) && validToken(p.Subject, MaxPrincipalBytes)
+func validPrincipal(p Principal) bool {
+	return validIdentity(p.Issuer) && validIdentity(p.Subject)
 }
 
 // Revision is an opaque compare-and-swap token. The zero value is not a
@@ -114,9 +111,14 @@ var (
 )
 
 // ControlStore loads and saves desired preferences for one principal.
-// Save is compare-and-swap: a stale expected revision returns ErrConflict
-// and leaves the stored document unchanged. A saved document is desired
-// state, not applied policy.
+// Load of a principal with no saved row returns the zero Preferences, the
+// zero Revision, and a nil error. Version 0 means there is no saved
+// document. Save is compare-and-swap. An empty expected revision creates a
+// row only when that principal has none. A mismatch, including that empty
+// revision when a row already exists, returns ErrConflict and leaves the
+// stored document unchanged. A saved document is desired state, not applied
+// policy. UnconfiguredStore does not use this absent-row result: it refuses
+// every call with ErrNotConfigured.
 type ControlStore interface {
 	Load(ctx context.Context, principal Principal) (Preferences, Revision, error)
 	Save(ctx context.Context, principal Principal, prefs Preferences, expected Revision) (Revision, error)
@@ -138,11 +140,6 @@ func (UnconfiguredStore) Save(context.Context, Principal, Preferences, Revision)
 	return "", ErrNotConfigured
 }
 
-// Applied returns the fixed applied-state facts. It does not read a store.
-func Applied() (state, connection string) {
-	return AppliedState, AppliedConnection
-}
-
 // PreferenceSorts is the sort allowlist, in canonical byte order of the
 // spellings. The values are desired list order only.
 func PreferenceSorts() []string {
@@ -153,12 +150,6 @@ func PreferenceSorts() []string {
 // The other three are current Alertmanager status names. None is applied here.
 func PreferenceFilters() []string {
 	return []string{"active", "all", "suppressed", "unprocessed"}
-}
-
-// PreferenceTimeBounds returns the inclusive earliest and exclusive latest
-// instant accepted for MuteUntil.
-func PreferenceTimeBounds() (earliest, latest time.Time) {
-	return minPreferenceTime, maxPreferenceTime
 }
 
 var (
@@ -173,12 +164,12 @@ var (
 	preferenceListKeys  = []string{"sort", "filter"}
 )
 
-// ParsePreferences decodes one canonical preference document.
-// The result is sorted and its times are UTC. A refusal is ErrInvalid and
-// the zero Preferences; it is not an empty saved document.
+// ParsePreferences reads the strict preference schema and returns canonical
+// output. The result is sorted and its times are UTC. A refusal is
+// ErrInvalid and the zero Preferences; it is not an empty saved document.
 func ParsePreferences(raw []byte) (Preferences, error) {
-	if len(raw) == 0 || len(raw) > MaxPreferenceBytes || !utf8.Valid(raw) {
-		return Preferences{}, fmt.Errorf("%w: document", ErrInvalid)
+	if err := boundedPreferenceBytes(raw); err != nil {
+		return Preferences{}, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -194,7 +185,9 @@ func ParsePreferences(raw []byte) (Preferences, error) {
 
 // MarshalPreferences encodes prefs in canonical form.
 // Invalid prefs return ErrInvalid and no bytes. Encoding does not escape
-// HTML delimiters, and the result has no trailing newline.
+// HTML delimiters. The encoded bytes, including a document whose tokens
+// did not need escaping, are refused when longer than MaxPreferenceBytes.
+// The result has no trailing newline.
 func MarshalPreferences(prefs Preferences) ([]byte, error) {
 	canon, err := canonicalPreferences(prefs)
 	if err != nil {
@@ -223,7 +216,18 @@ func MarshalPreferences(prefs Preferences) ([]byte, error) {
 	if err := enc.Encode(wire); err != nil {
 		return nil, fmt.Errorf("%w: encode", ErrInvalid)
 	}
-	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+	out := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+	if err := boundedPreferenceBytes(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func boundedPreferenceBytes(raw []byte) error {
+	if len(raw) == 0 || len(raw) > MaxPreferenceBytes || !utf8.Valid(raw) {
+		return fmt.Errorf("%w: document", ErrInvalid)
+	}
+	return nil
 }
 
 func canonicalPreferences(prefs Preferences) (Preferences, error) {
@@ -274,11 +278,6 @@ func validatePreferences(prefs Preferences) error {
 		if !alert.Escalate.Valid() || !alert.Mute.Valid() {
 			return fmt.Errorf("%w: desired", ErrInvalid)
 		}
-		if alert.MuteUntil != nil {
-			if _, err := canonMute(*alert.MuteUntil); err != nil {
-				return err
-			}
-		}
 	}
 	seenName := map[string]struct{}{}
 	for _, item := range prefs.Types {
@@ -311,7 +310,20 @@ func canonMute(stamp time.Time) (time.Time, error) {
 }
 
 func validToken(value string, max int) bool {
-	if value == "" || len(value) > max || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+	if value == "" || len(value) > max || strings.TrimSpace(value) != value {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c < 0x20 || c > 0x7e || c == '"' || c == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+func validIdentity(value string) bool {
+	if value == "" || len(value) > maxPrincipalBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
 		return false
 	}
 	for _, r := range value {
@@ -635,14 +647,10 @@ func expectDelim(dec *json.Decoder, want json.Delim) error {
 }
 
 func rejectTrailing(dec *json.Decoder) error {
-	_, err := dec.Token()
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	if err != nil {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("%w: trailing", ErrInvalid)
 	}
-	return fmt.Errorf("%w: trailing", ErrInvalid)
+	return nil
 }
 
 type wirePreferences struct {

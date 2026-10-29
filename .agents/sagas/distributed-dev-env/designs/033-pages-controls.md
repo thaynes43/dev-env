@@ -89,14 +89,24 @@ Availability is exactly `Available` or `Unavailable`.
 | `Unavailable` and no alerts | `Unavailable`, empty group slice, no error. Source is copied. A known `observedAt` is rendered in UTC; the exact sentinel `Unknown` stays `Unknown`. |
 | Any other availability, `Unavailable` with alerts, a duplicate fingerprint, a fingerprint that appears twice with different bodies, a malformed time, a missing label map, a name that disagrees with `alertname`, a status other than `active`, `suppressed`, or `unprocessed`, more than 1000 alerts, or a source or `observedAt` the current snapshot parser would not have produced | `Unavailable`, empty group slice, `observedAt` and source `Unknown`, and `ErrInvalid`. No partial counts. |
 
-An empty `startsAt` or `updatedAt` is unknown. The group bound is the UTC
-minimum or maximum only when every alert in that group has a parsed instant
-for that field. One missing instant makes the bound `Unknown`. A minimum of
-the known subset is not reported: the missing instant could be earlier, and
-a partial bound would look complete. A non-empty value that is not
-RFC3339Nano fails the whole aggregate, including the literal word `Unknown`
-in an alert time. The snapshot's own `observedAt` sentinel `Unknown` is
-separate and remains valid.
+A source the parser keeps is kept, including leading or trailing spaces.
+An empty label key the parser keeps is kept. It is not the `alertname` or
+`severity` group key. `AggregateAlerts` does not add a tighter source or
+label rule than `ParseAlertmanager`.
+
+An empty `startsAt` or `updatedAt` is unknown. A parsed instant before
+`2000-01-01T00:00:00Z` is also unknown. That includes year 0, the zero time
+`0001-01-01T00:00:00Z`, and the Unix epoch. The instant
+`2000-01-01T00:00:00Z` is known, including when an offset spelling lands on
+that same instant. The group bound is the UTC minimum or maximum only when
+every alert in that group has a known instant for that field. One unknown
+instant makes the bound `Unknown`. A minimum of the known subset is not
+reported, and a pre-2000 instant is not rendered as a successful time. A
+non-empty value that is not RFC3339Nano fails the whole aggregate, including
+the literal word `Unknown` in an alert time. The snapshot's own `observedAt`
+sentinel `Unknown` is separate and remains valid. An `observedAt` before the
+same 2000 floor becomes `Unknown` and does not fail an otherwise acceptable
+snapshot. The `MuteUntil` ceiling of 2100 is not applied to snapshot times.
 
 Known instants are compared with `time.Time` and rendered with
 `time.RFC3339Nano` in UTC. `2026-10-28T00:00:00Z` and
@@ -114,7 +124,7 @@ applying it would drop alerts and change counts.
 ## Desired preferences
 
 Saved preferences are what a principal asked for. They are not applied
-policy. `Applied` always returns state `Unknown` and connection
+policy. The only applied-state facts are the literals `Unknown` and
 `Not connected`. Preferences have no applied-state field. A later view, not
 this phase, uses the sentence `Not connected: saving and live effect unavailable`
 for disabled controls.
@@ -158,7 +168,7 @@ or no narrowing. They are not applied in Phase A.
 | `suppressed` | Alertmanager status `suppressed` |
 | `unprocessed` | Alertmanager status `unprocessed` |
 
-`MarshalPreferences` and `ParsePreferences` are the strict canonical codec.
+`MarshalPreferences` and `ParsePreferences` are a strict schema with canonical output.
 
 Canonical JSON field order is `version`, `alerts`, `types`, `list`. Alert
 objects are `fingerprint`, `escalate`, `mute`, then `muteUntil` only when
@@ -166,7 +176,9 @@ set. Type objects are `alertName`, `autoResponder`. List objects are `sort`,
 `filter`. Alerts are ordered by fingerprint, types by alert name, both in
 case-sensitive byte order. Empty lists are `[]`. Encoding does not escape
 `<`, `>`, or `&` as `\u003c` / `\u003e` / `\u0026`. There is no trailing
-newline. `Marshal(Parse(x))` is stable.
+newline. `Marshal(Parse(x))` is stable. The encoded bytes are refused with
+`ErrInvalid` when longer than 128 KiB. That size check counts the encoded
+document itself. It does not depend on `"` or `\` expanding.
 
 The decoder reads tokens. It does not unmarshal into structs, because
 `encoding/json` folds case and keeps one of a duplicate key. It rejects:
@@ -180,9 +192,11 @@ The decoder reads tokens. It does not unmarshal into structs, because
 - malformed JSON
 - invalid UTF-8
 - a version token other than `1` (`1.0`, `1e0`, a string, a boolean)
-- more than 200 alerts, 100 types, or 128 KiB of input
-- fingerprint or alert name empty, longer than 256 bytes, not valid UTF-8,
-  with leading or trailing space, or with a control character
+- more than 200 alerts, 100 types, or 128 KiB on input or on canonical output
+- fingerprint or alert name empty, longer than 256 bytes, not printable
+  ASCII, a `"` or `\`, or with leading or trailing space. Printable ASCII
+  also refuses invisible characters such as bidi controls and zero-width
+  spaces. An internal space remains valid. Case is preserved.
 - a duplicate fingerprint or a duplicate alert name
 - a desired value, sort, or filter outside its allowlist
 - a `muteUntil` that is not an in-range RFC3339Nano instant
@@ -200,44 +214,53 @@ Save(ctx, principal, Preferences, expected Revision) (Revision, error)
 `Revision` is an opaque string. `Save` is compare-and-swap. A stale expected
 revision returns `ErrConflict` and does not replace the stored value.
 
-`UnconfiguredStore` is the production value in this phase. `Load` returns
-the zero `Preferences`, the zero `Revision`, and `ErrNotConfigured`. `Save`
-returns `ErrNotConfigured`. It has no fields, ignores context and principal,
-and does not validate a document into a stored row. There is no filesystem,
-database, or network adapter.
+For a configured store, `Load` of a principal with no saved row returns the
+zero `Preferences`, the zero `Revision`, and a nil error. Version 0 is not a
+saved document. A saved document has version 1. An empty expected revision
+creates a row only when that principal has none, and the created revision is
+`1`. The same empty revision when a row exists is `ErrConflict`. A non-empty
+expected revision when no row exists is also `ErrConflict` and does not
+create a row.
 
-`Principal.Valid` requires a non-empty issuer and subject, each at most 512
-bytes, valid UTF-8, without leading or trailing space, and without a control
-character. `UnconfiguredStore` does not consult that check.
+`UnconfiguredStore` is the production value in this phase. It is not the
+absent-row result. `Load` returns the zero `Preferences`, the zero
+`Revision`, and `ErrNotConfigured`. `Save` returns `ErrNotConfigured`. It
+has no fields, performs no I/O, ignores context and principal, and does not
+validate a document into a stored row. There is no filesystem, database, or
+network adapter.
 
 The in-memory fake used by tests is not production persistence. Two handles
 can share one process-local map. `Load` on the second handle sees `Save` on
-the first. A missing principal returns a test-only not-found error, which is
-not `ErrNotConfigured`. The first `Save` uses an empty expected revision and
-receives revision `1`. A matching save increments it. Empty expected revision
-after a row exists, or a non-empty expected revision when no row exists, is
-`ErrConflict`. Concurrent saves of the same expected revision produce one
-success and one `ErrConflict`; the stored revision advances once and the
-stored document is the winner only. `Load` returns a copy. A cancelled
-context refuses the fake without writing. None of this survives a process
-restart, and none of it is evidence of a durable store.
+the first. It follows the absent-row and create-only-empty-revision rules
+above. A matching save increments the revision. Concurrent saves of the same
+expected revision produce one success and one `ErrConflict`; the stored
+revision advances once and the stored document is the winner only. `Load`
+returns a copy. A cancelled context refuses the fake without writing. None
+of this survives a process restart, and none of it is evidence of a durable
+store.
 
 ## Tests
 
 `aggregate_test.go` covers available, observed empty, and unavailable input;
 counts across names and severities; exact UTC minima and maxima, including
-equal instants written with `Z` and a numeric offset; missing fields as
-unknown bounds rather than partial minima; malformed times, duplicate and
+equal instants written with `Z` and a numeric offset; the 2000 floor, with
+earlier instants unknown and `2000-01-01T00:00:00Z` retained; missing fields
+as unknown bounds rather than partial minima; malformed times, duplicate and
 conflicting fingerprints, and over-limit input as `ErrInvalid` with no
-groups; input order; case-sensitive labels; and no invented history.
+groups; input order; case-sensitive labels; parser agreement for a
+whitespace-padded source and an empty label key; and no invented history.
 
 `controls_test.go` covers canonical round-trip and byte stability for
 `unset`, `on`, and `off`; every sort and filter; count, byte, version, and
-time bounds; refusal of unknown, null, duplicate, case-variant, trailing,
-malformed, and invalid UTF-8 input; case-sensitive identities; principal
-separation; reload across handles; stale and concurrent revisions; copy
-isolation; and `UnconfiguredStore` refusing both operations with no effect
-on the test double.
+time bounds, including exactly 256-byte tokens; refusal of quotes,
+backslashes, invisible characters, unknown keys, nulls, duplicates,
+case-variants, trailing data, malformed JSON, and invalid UTF-8; the encoded
+128 KiB guard on its own; the largest valid document's stable
+`Marshal(Parse(x))`; case-sensitive identities; an absent principal's zero
+value and create-only empty revision; principal separation; reload across
+handles; stale and concurrent revisions; copy isolation; and
+`UnconfiguredStore` refusing both operations with no effect on the test
+double. The memory fake is not a durability claim.
 
 ## What this does not do
 

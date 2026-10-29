@@ -192,7 +192,7 @@ func prepareAlert(alert AlertmanagerAlert, seen map[string]struct{}) (preparedAl
 		return preparedAlert{}, "labels"
 	}
 	for key, value := range alert.Labels {
-		if key == "" || len(key) > alertmanagerMaxString || len(value) > alertmanagerMaxString || key != cleanAlertText(key) || value != cleanAlertText(value) || !utf8.ValidString(key) || !utf8.ValidString(value) {
+		if len(key) > alertmanagerMaxString || len(value) > alertmanagerMaxString || key != cleanAlertText(key) || value != cleanAlertText(value) || !utf8.ValidString(key) || !utf8.ValidString(value) {
 			return preparedAlert{}, "labels"
 		}
 	}
@@ -236,12 +236,24 @@ func optionalInstant(value string) (time.Time, bool, string) {
 	if value == "" {
 		return time.Time{}, false, ""
 	}
-	if !validAlertTime(value) || !utf8.ValidString(value) {
+	parsed, ok, reason := snapshotInstant(value)
+	if reason != "" {
+		return time.Time{}, false, reason
+	}
+	return parsed, ok, ""
+}
+
+func snapshotInstant(value string) (time.Time, bool, string) {
+	if !utf8.ValidString(value) || !validAlertTime(value) {
 		return time.Time{}, false, "time"
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
 		return time.Time{}, false, "time"
+	}
+	parsed = parsed.UTC().Round(0)
+	if parsed.Before(minPreferenceTime) {
+		return time.Time{}, false, ""
 	}
 	return parsed, true, ""
 }
@@ -250,21 +262,21 @@ func normalizeObserved(value string) (string, error) {
 	if value == timeUnknown {
 		return timeUnknown, nil
 	}
-	if !validAlertTime(value) || !utf8.ValidString(value) {
+	parsed, ok, reason := snapshotInstant(value)
+	if reason != "" {
 		return "", errors.New("observedAt")
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "", errors.New("observedAt")
+	if !ok {
+		return timeUnknown, nil
 	}
-	return parsed.UTC().Format(time.RFC3339Nano), nil
+	return parsed.Format(time.RFC3339Nano), nil
 }
 
 func validSnapshotSource(source string) bool {
 	if source == timeUnknown {
 		return true
 	}
-	if source == "" || len(source) > alertmanagerMaxString || strings.TrimSpace(source) != source || strings.Contains(source, "://") || !utf8.ValidString(source) {
+	if strings.TrimSpace(source) == "" || len(source) > alertmanagerMaxString || strings.Contains(source, "://") || !utf8.ValidString(source) {
 		return false
 	}
 	return source == cleanAlertText(source)

@@ -161,6 +161,53 @@ func TestAggregateMissingMalformedAndNoHistory(t *testing.T) {
 	}
 }
 
+func TestAggregateTimeFloorAndParserAgreement(t *testing.T) {
+	early := AlertmanagerSnapshot{
+		Availability: "Available",
+		ObservedAt:   "1970-01-01T00:00:00Z",
+		Source:       "local",
+		Alerts: []AlertmanagerAlert{
+			groupedAlert("epoch", "A", true, "warning", true, "1970-01-01T00:00:00Z", "0001-01-01T00:00:00Z"),
+			groupedAlert("year0", "A", true, "warning", true, "0000-01-01T00:00:00Z", "2026-10-28T00:00:00Z"),
+			groupedAlert("floor", "B", true, "warning", true, "2000-01-01T00:00:00Z", "1999-12-31T20:00:00-04:00"),
+		},
+	}
+	got, err := AggregateAlerts(early)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ObservedAt != "Unknown" || got.Availability != "Available" {
+		t.Fatalf("epoch observation: %+v", got)
+	}
+	want := []AlertGroup{
+		{AlertName: "A", AlertNameKnown: true, Severity: "warning", SeverityKnown: true, Count: 2, EarliestStart: "Unknown", LatestUpdate: "Unknown"},
+		{AlertName: "B", AlertNameKnown: true, Severity: "warning", SeverityKnown: true, Count: 1, EarliestStart: "2000-01-01T00:00:00Z", LatestUpdate: "2000-01-01T00:00:00Z"},
+	}
+	if !reflect.DeepEqual(got.Groups, want) {
+		t.Fatalf("floor groups: %#v", got.Groups)
+	}
+	kept, err := AggregateAlerts(AlertmanagerSnapshot{
+		Availability: "Available", ObservedAt: "2000-01-01T00:00:00Z", Source: "local",
+		Alerts: []AlertmanagerAlert{groupedAlert("only", "C", true, "warning", true, "1999-12-31T23:59:59Z", "0001-01-01T00:00:00Z")},
+	})
+	if err != nil || kept.ObservedAt != "2000-01-01T00:00:00Z" || kept.Groups[0].EarliestStart != "Unknown" || kept.Groups[0].LatestUpdate != "Unknown" || strings.Contains(fmt.Sprintf("%+v", kept), "0001-01-01") {
+		t.Fatalf("boundary: %+v %v", kept, err)
+	}
+
+	raw := []byte(`{"observedAt":"2026-10-28T00:00:00Z","source":" local ","alerts":[{"fingerprint":"f1","labels":{"":"kept","alertname":"Case","severity":"warning"},"status":{"state":"active"},"startsAt":"2026-10-28T01:00:00+01:00","updatedAt":"2026-10-28T02:00:00Z"}]}`)
+	parsed, err := ParseAlertmanager(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Source != " local " || parsed.Alerts[0].Labels[""] != "kept" {
+		t.Fatalf("parser: %+v", parsed)
+	}
+	agreed, err := AggregateAlerts(parsed)
+	if err != nil || agreed.Source != " local " || agreed.Availability != "Available" || len(agreed.Groups) != 1 || agreed.Groups[0].AlertName != "Case" || agreed.Groups[0].Severity != "warning" || agreed.Groups[0].EarliestStart != "2026-10-28T00:00:00Z" {
+		t.Fatalf("parser aggregate: %+v %v", agreed, err)
+	}
+}
+
 func groupedAlert(fingerprint, name string, nameOK bool, severity string, severityOK bool, start, updated string) AlertmanagerAlert {
 	labels := map[string]string{}
 	shown := ""
