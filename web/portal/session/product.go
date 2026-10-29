@@ -705,16 +705,11 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	}
 	sections := []portal.ProductSection{summary, {Title: "Ownership", Fields: people}}
 	next := taskNextAction(status)
+	var attention *portal.ProductAttention
 	if !fixture && taskGroup(status) == 0 {
-		// The status text is the reason, in the span beside the status badge.
-		sections = append(sections, portal.ProductSection{
-			Title: "Needs attention",
-			States: []portal.ProductState{{
-				Status: portal.ProductStatus{Text: status, Tone: taskTone(status)},
-				Text:   status,
-			}},
-			Note: next,
-		})
+		// The Needs attention panel names the status once, as the reason,
+		// then the next action. The header badge already shows the status.
+		attention = &portal.ProductAttention{Reason: status, NextAction: next}
 	} else if next != "" {
 		sections = append(sections, portal.ProductSection{Title: "Next action", Note: next})
 	}
@@ -736,14 +731,24 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 		Link: "https://work.haynesnetwork.com/work_packages/" + id, LinkLabel: "Open in OpenProject",
 		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: listOwner, Age: age,
 		Badges: badges, Sections: sections, ContextTitle: "Work package", Context: context,
-		Fixture: fixture,
+		Attention: attention, Fixture: fixture,
 	}, nil
 }
 
-// taskFixture is the explicit synthetic marker. Only a raw description that
-// starts with "Synthetic fixture" qualifies; the subject is not read.
+// taskFixturePrefixes are the explicit synthetic markers: the exact opening
+// words a self-declaring synthetic work package writes into its description.
+// Matching is case-sensitive and the description is not trimmed.
+var taskFixturePrefixes = []string{"Synthetic fixture", "Synthetic acceptance fixture", "Negative authorization probe"}
+
+// taskFixture reports whether the raw description starts with one of
+// taskFixturePrefixes. The subject is not read and nothing is inferred.
 func taskFixture(raw string) bool {
-	return strings.HasPrefix(raw, "Synthetic fixture")
+	for _, prefix := range taskFixturePrefixes {
+		if strings.HasPrefix(raw, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // taskNextAction is one line taken only from the status. In progress and

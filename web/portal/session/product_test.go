@@ -585,13 +585,18 @@ func TestTaskNextActionDependsOnlyOnStatus(t *testing.T) {
 			if !ok || dates.Note != "Last updated 13d ago · 16 Oct 2026, 12:00 UTC" {
 				t.Fatalf("updated line %+v", dates)
 			}
-			section, attention := sectionByTitle(row, "Needs attention")
-			if attention != tc.attention {
-				t.Fatalf("attention section %v, want %v", attention, tc.attention)
+			if attention := row.Attention != nil; attention != tc.attention {
+				t.Fatalf("attention panel %v, want %v", attention, tc.attention)
 			}
-			if attention {
-				if len(section.States) != 1 || section.States[0].Status.Text != row.Status.Text || section.States[0].Text != row.Status.Text {
-					t.Fatalf("reason beside badge: %+v", section.States)
+			if _, ok := sectionByTitle(row, "Needs attention"); ok {
+				t.Fatal("needs attention is a section panel as well as the attention panel")
+			}
+			if a := row.Attention; a != nil {
+				if a.Reason != row.Status.Text || a.NextAction != tc.want || a.When != "" || a.Link != "" || len(a.Commands) != 0 {
+					t.Fatalf("attention panel %+v", *a)
+				}
+				if _, ok := sectionByTitle(row, "Next action"); ok {
+					t.Fatal("next action shown twice")
 				}
 			}
 			if row.Link != "https://work.haynesnetwork.com/work_packages/40" || row.LinkLabel != "Open in OpenProject" {
@@ -633,10 +638,13 @@ func TestTaskNextActionDependsOnlyOnStatus(t *testing.T) {
 	if strings.Contains(strings.ToLower(html), "stuck") || !strings.Contains(html, "Open in OpenProject") || !strings.Contains(html, `href="https://work.haynesnetwork.com/work_packages/40"`) {
 		t.Fatal("rendered detail lost its link or inferred a stall from age")
 	}
-	if !strings.Contains(html, `class="badge tone-wait">Paused</span><span>Paused</span>`) || !strings.Contains(html, `class="badge tone-wait">Paused</span>`) {
-		t.Fatal("needs attention row does not show its status beside the badge")
+	if !strings.Contains(html, `<p class="eyebrow">Needs attention</p><h3 id="t1-attention">Paused</h3><p>Paused: resume needs its owner</p>`) || !strings.Contains(html, `class="badge tone-wait">Paused</span>`) {
+		t.Fatal("needs attention panel does not read reason, then next action")
 	}
-	if strings.Contains(html, `class="badge tone-busy">In progress</span><span>In progress</span>`) {
+	if strings.Contains(html, `</span><span>Paused</span>`) || strings.Contains(html, `>Paused</h3><p>Paused</p>`) {
+		t.Fatal("needs attention panel repeats the status")
+	}
+	if strings.Count(html, `class="attention-panel"`) != 1 || strings.Contains(html, `id="t2-attention"`) {
 		t.Fatal("in progress invented an attention reason")
 	}
 }
@@ -711,11 +719,11 @@ func TestCommittedTasksFixtureShowsOwnerNextActionAndSyntheticGroup(t *testing.T
 		t.Fatal(err)
 	}
 	rows, _, complete, err := decodeTaskPage(fixture.Body, 1, map[int]struct{}{}, fixture.Now)
-	if err != nil || !complete || len(rows) != 5 {
+	if err != nil || !complete || len(rows) != 7 {
 		t.Fatalf("rows %d complete %v err %v", len(rows), complete, err)
 	}
 	page := tasksPage(rows, complete, portal.ProductFilter{})
-	if page.Rail.All != "5" || page.Rail.Attention != "1" {
+	if page.Rail.All != "7" || page.Rail.Attention != "1" {
 		t.Fatalf("rail all %s attention %s", page.Rail.All, page.Rail.Attention)
 	}
 	var fixtureTitles, attentionTitles []string
@@ -729,7 +737,7 @@ func TestCommittedTasksFixtureShowsOwnerNextActionAndSyntheticGroup(t *testing.T
 			}
 		}
 	}
-	if strings.Join(fixtureTitles, ",") != "OP-ACCEPTANCE sample" || strings.Join(attentionTitles, ",") != "Fixture: usage collector core" {
+	if strings.Join(fixtureTitles, ",") != "OP-ACCEPTANCE sample,OP-ACCEPTANCE import sample,Paused Saga sample" || strings.Join(attentionTitles, ",") != "Fixture: usage collector core" {
 		t.Fatalf("fixtures %v attention %v", fixtureTitles, attentionTitles)
 	}
 	body, err := renderFixture(page, fixture.Now)
@@ -739,7 +747,8 @@ func TestCommittedTasksFixtureShowsOwnerNextActionAndSyntheticGroup(t *testing.T
 	html := string(body)
 	for _, want := range []string{
 		`<span>Fixtures (synthetic)</span>`, `class="badge tone-muted">Fixture</span>`,
-		"Paused: resume needs its owner", "Owner not recorded", "Waiting for an answer",
+		"Paused: resume needs its owner", "Owner not recorded", "Waiting for approval",
+		`<h3 id="t1-attention">Needs answer</h3><p>Waiting for an answer</p>`,
 		"Last updated", "Open in OpenProject",
 	} {
 		if !strings.Contains(html, want) {
@@ -788,10 +797,11 @@ func sectionByTitle(row portal.ProductRow, title string) (portal.ProductSection,
 }
 
 func nextActionNote(row portal.ProductRow) string {
-	for _, title := range []string{"Needs attention", "Next action"} {
-		if section, ok := sectionByTitle(row, title); ok {
-			return section.Note
-		}
+	if row.Attention != nil {
+		return row.Attention.NextAction
+	}
+	if section, ok := sectionByTitle(row, "Next action"); ok {
+		return section.Note
 	}
 	return ""
 }

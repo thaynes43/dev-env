@@ -2,8 +2,8 @@
  "version": 1,
  "now": "2026-10-26T15:00:00Z",
  "body": {
-  "total": 5,
-  "count": 5,
+  "total": 7,
+  "count": 7,
   "pageSize": 50,
   "offset": 1,
   "_embedded": {
@@ -142,6 +142,64 @@
      "customField3": "dev-env",
      "description": {
       "raw": "Synthetic fixture, never execution approval."
+     },
+     "_links": {
+      "project": {
+       "href": "/api/v3/projects/3"
+      },
+      "status": {
+       "title": "Paused"
+      },
+      "type": {
+       "title": "Story"
+      }
+     },
+     "_embedded": {
+      "project": {
+       "id": 3,
+       "identifier": "haynes-engineering"
+      }
+     }
+    },
+    {
+     "id": 9106,
+     "subject": "OP-ACCEPTANCE import sample",
+     "createdAt": "2026-10-14T12:00:00Z",
+     "updatedAt": "2026-10-15T12:00:00Z",
+     "customField1": "",
+     "customField2": "",
+     "customField3": "dev-env",
+     "description": {
+      "raw": "Synthetic acceptance fixture only. No imported source work, human approval or execution authority."
+     },
+     "_links": {
+      "project": {
+       "href": "/api/v3/projects/3"
+      },
+      "status": {
+       "title": "Needs approval"
+      },
+      "type": {
+       "title": "Story"
+      }
+     },
+     "_embedded": {
+      "project": {
+       "id": 3,
+       "identifier": "haynes-engineering"
+      }
+     }
+    },
+    {
+     "id": 9107,
+     "subject": "Paused Saga sample",
+     "createdAt": "2026-10-15T12:00:00Z",
+     "updatedAt": "2026-10-16T12:00:00Z",
+     "customField1": "",
+     "customField2": "",
+     "customField3": "dev-env",
+     "description": {
+      "raw": "Negative authorization probe only. Never human approval or execution authority."
      },
      "_links": {
       "project": {
