@@ -578,3 +578,7 @@ read keeps a separately configured New agent form available. Page, session and
 last-activity observation timestamps up to two seconds ahead are clamped to
 the portal's now; anything further ahead is refused. Empty, stale and unavailable
 retain their separate meanings; a pending HTTP read shows no invented empty result or zero.
+
+## Tasks list truth (#253)
+
+A task detail always shows Execution owner and Accountable owner, each as recorded or "Not recorded". The list keeps the short owner and shows "Owner not recorded" when both are empty. The next action is one line from the status alone: "Waiting for approval", "Waiting for an answer", "Paused: resume needs its owner", or "On hold". In progress and every other status have no next action. The detail shows "Last updated" with the age and the UTC time. A work package is a fixture only when its raw description starts with one of three exact prefixes: "Synthetic fixture", "Synthetic acceptance fixture" or "Negative authorization probe". The match is case-sensitive, the description is not trimmed, and the subject is never read. A fixture gets a Fixture badge and is listed under "Fixtures (synthetic)" after the real groups. It stays visible and is omitted from Needs attention, including that rail count. A Needs attention task's detail opens with the Needs attention panel: the status once, as the reason, then the next action when there is one. Unknown stays Unknown.

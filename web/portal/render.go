@@ -151,6 +151,11 @@ type ProductRow struct {
 	// (Sessions ?session=). It is the default detail on every viewport and
 	// is never trimmed. Only the first selected row counts.
 	Selected bool
+	// Fixture marks a synthetic task. The list template renders a Fixture
+	// badge only when it is set; Sessions leave it false. The word cannot
+	// live only in Badges: that slice is the detail meta line, and an owner
+	// can be named Fixture.
+	Fixture bool
 }
 
 // ProductMessages is one session's message box. Without Send the box never
