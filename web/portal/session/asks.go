@@ -236,7 +236,7 @@ func (s *AsksSource) answer(ctx context.Context, id string, request apiv1.AskAns
 	var ask apiv1.Ask
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if !strictAskJSON(raw) || decoder.Decode(&ask) != nil || decoder.Decode(new(any)) != io.EOF || apiv1.ValidateAsk(ask) != nil || ask.ID != id || ask.State != apiv1.AskStateAnswered || ask.Answer == nil || ask.Answer.OptionID != request.OptionID || ask.Answer.Text != request.Text || ask.Answer.Approved != request.Approved || ask.Answer.AnsweredBy != request.Actor {
+	if !strictAskJSON(raw) || decoder.Decode(&ask) != nil || decoder.Decode(new(any)) != io.EOF || apiv1.ValidateAsk(ask) != nil || ask.ID != id || ask.State != apiv1.AskStateAnswered || ask.Answer == nil || ask.Answer.OptionID != request.OptionID || ask.Answer.Text != request.Text || !sameAskApproval(ask.Answer.Approved, request.Approved) || ask.Answer.AnsweredBy != request.Actor {
 		return portal.ErrUnavailable
 	}
 	return nil
@@ -355,7 +355,8 @@ func postAskAnswer(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key
 		if len(r.PostForm["decision"]) != 1 || len(r.PostForm["confirm"]) != 1 || r.PostForm.Get("confirm") != "yes" || (r.PostForm.Get("decision") != "approve" && r.PostForm.Get("decision") != "decline") {
 			return portal.ErrDenied
 		}
-		request.Approved = r.PostForm.Get("decision") == "approve"
+		approved := r.PostForm.Get("decision") == "approve"
+		request.Approved = &approved
 	}
 	if len(r.PostForm) != wantKeys {
 		return portal.ErrDenied
@@ -472,7 +473,7 @@ func strictAskJSON(raw []byte) bool {
 		}
 	}
 	if answer, present := fields["answer"]; present {
-		row, ok := askObject(answer, []string{"optionId", "approved", "answeredBy", "answeredAt"}, "text")
+		row, ok := askObject(answer, []string{"optionId", "answeredBy", "answeredAt"}, "text", "approved")
 		if !ok {
 			return false
 		}
@@ -486,4 +487,8 @@ func strictAskJSON(raw []byte) bool {
 		}
 	}
 	return true
+}
+
+func sameAskApproval(a, b *bool) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }

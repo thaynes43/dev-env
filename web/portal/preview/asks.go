@@ -23,7 +23,8 @@ func asksPreviewRecords(now time.Time) []apiv1.Ask {
 	answered := approval
 	answered.ID = "ask-0000000000000003"
 	answered.State = apiv1.AskStateAnswered
-	answered.Answer = &apiv1.AskAnswer{OptionID: "small", Text: "Use the bounded synthetic fixture.", Approved: true, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/fixture-only/", Subject: "synthetic-reader", DisplayName: "Fixture reader"}, AnsweredAt: now.Add(-30 * time.Minute)}
+	approved := true
+	answered.Answer = &apiv1.AskAnswer{OptionID: "small", Text: "Use the bounded synthetic fixture.", Approved: &approved, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/fixture-only/", Subject: "synthetic-reader", DisplayName: "Fixture reader"}, AnsweredAt: now.Add(-30 * time.Minute)}
 	expired := approval
 	expired.ID = "ask-0000000000000004"
 	expired.State = apiv1.AskStateExpired

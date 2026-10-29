@@ -72,13 +72,13 @@ type askCard struct {
 	State, SessionHref, WorkHref, AnswerHref, CSRF, RequestID                  string
 	CreatedAt, CreatedLabel, ExpiresAt, ExpiresLabel                           string
 	ScopeExpiresAt, ScopeExpiresLabel, AnsweredAt, AnsweredLabel, AnswerOption string
-	Approval, ApprovalExpired, CanAnswer, Preview                              bool
+	Approval, Approved, ApprovalExpired, CanAnswer, Preview                    bool
 }
 
 // RenderAsks returns one complete escaped page and its exact CSP. Shared nav
 // trees are copied because html/template rewrites them during escaping.
 func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
-	if limit <= 0 {
+	if limit <= 0 || (page.Connected && page.Now.IsZero()) {
 		return nil, "", ErrUnavailable
 	}
 	view := struct {
@@ -99,11 +99,12 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 			if ask.Context.WorkPackage > 0 {
 				card.WorkHref = "https://work.haynesnetwork.com/work_packages/" + strconv.Itoa(ask.Context.WorkPackage)
 			}
+			scopeExpired := false
 			if ask.Scope != nil {
 				card.ScopeExpiresAt, card.ScopeExpiresLabel = askTime(ask.Scope.ExpiresAt)
-				card.ApprovalExpired = !page.Now.Before(ask.Scope.ExpiresAt)
+				scopeExpired = !page.Now.Before(ask.Scope.ExpiresAt)
 			}
-			if card.State == string(apiv1.AskStateOpen) && (!page.Now.Before(ask.ExpiresAt) || card.ApprovalExpired) {
+			if card.State == string(apiv1.AskStateOpen) && (!page.Now.Before(ask.ExpiresAt) || scopeExpired) {
 				card.State = "expired"
 			}
 			open := card.State == string(apiv1.AskStateOpen)
@@ -116,6 +117,8 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 				card.RequestID = base64.RawURLEncoding.EncodeToString(nonce[:])
 			}
 			if ask.Answer != nil {
+				card.Approved = ask.Answer.Approved != nil && *ask.Answer.Approved
+				card.ApprovalExpired = card.Approved && scopeExpired
 				card.AnsweredAt, card.AnsweredLabel = askTime(ask.Answer.AnsweredAt)
 				for _, option := range ask.Options {
 					if option.ID == ask.Answer.OptionID {

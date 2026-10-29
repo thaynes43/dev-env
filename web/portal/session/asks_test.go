@@ -133,7 +133,8 @@ func TestAsksListRenderingEscapingAndCSP(t *testing.T) {
 	closed.Type = apiv1.AskTypeApproval
 	closed.State = apiv1.AskStateAnswered
 	closed.Scope = &apiv1.AskScope{Action: `<script>action</script>`, Target: `<img src=x>`, ExpiresAt: f.now.Add(time.Hour)}
-	closed.Answer = &apiv1.AskAnswer{OptionID: "small", Text: `<script>answer</script>`, Approved: true, AnsweredAt: f.now, AnsweredBy: apiv1.AskActor{Issuer: "https://issuer.example/", Subject: `<script>subject</script>`, DisplayName: `<script>name</script>`}}
+	approved := true
+	closed.Answer = &apiv1.AskAnswer{OptionID: "small", Text: `<script>answer</script>`, Approved: &approved, AnsweredAt: f.now, AnsweredBy: apiv1.AskActor{Issuer: "https://issuer.example/", Subject: `<script>subject</script>`, DisplayName: `<script>name</script>`}}
 	o.items = append([]apiv1.Ask{closed}, o.items...)
 	w := httptest.NewRecorder()
 	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
@@ -173,7 +174,7 @@ func TestAsksAnswersInfoApprovalAndReplay(t *testing.T) {
 			if w := askPost(f, c, v); w.Code != http.StatusSeeOther || w.Header().Get("Location") != AsksPath {
 				t.Fatalf("answer status %d", w.Code)
 			}
-			if len(o.answers) != 1 || o.answers[0].Actor.Subject != "synthetic-subject" || o.answers[0].Actor.Issuer != f.e.config.Verifier.issuer || o.answers[0].Approved != approval {
+			if len(o.answers) != 1 || o.answers[0].Actor.Subject != "synthetic-subject" || o.answers[0].Actor.Issuer != f.e.config.Verifier.issuer || (approval && (o.answers[0].Approved == nil || !*o.answers[0].Approved)) || (!approval && o.answers[0].Approved != nil) {
 				t.Fatal("answer attribution or decision lost")
 			}
 			if w := askPost(f, c, v); w.Code != http.StatusSeeOther || len(o.answers) != 1 {
@@ -507,7 +508,7 @@ func TestAsksAnswerFormsAndDecline(t *testing.T) {
 	}
 	v.Set("decision", "decline")
 	v.Set("confirm", "yes")
-	if w := askPost(f, c, v); w.Code != http.StatusSeeOther || len(o.answers) != 1 || o.answers[0].Approved {
+	if w := askPost(f, c, v); w.Code != http.StatusSeeOther || len(o.answers) != 1 || o.answers[0].Approved == nil || *o.answers[0].Approved {
 		t.Fatal("decline failed")
 	}
 }
@@ -580,5 +581,62 @@ func TestAsksAttributeTwoGroupMembersToTheirOwnSession(t *testing.T) {
 	v.Set("csrf", first.CSRF)
 	if w := askPost(f, c, v); w.Code != http.StatusForbidden || len(o.answers) != 2 {
 		t.Fatal("cross-session form accepted")
+	}
+}
+
+func TestAsksMultilineAnswersAndApprovalOnlyDecisions(t *testing.T) {
+	for _, mode := range []string{"info-multiline", "approval-only", "approval-note"} {
+		t.Run(mode, func(t *testing.T) {
+			f, c, o, v := asksFixture(t)
+			if mode == "info-multiline" {
+				v.Set("text", "First line\r\nSecond line")
+			} else {
+				o.items[0].Type = apiv1.AskTypeApproval
+				o.items[0].Options = nil
+				o.items[0].Recommended = ""
+				o.items[0].AllowFreeText = false
+				o.items[0].Scope = &apiv1.AskScope{Action: "Run", Target: "Fixture", ExpiresAt: f.now.Add(time.Hour)}
+				v.Set("optionId", "")
+				v.Set("text", "")
+				v.Set("decision", "decline")
+				v.Set("confirm", "yes")
+				if mode == "approval-note" {
+					v.Set("text", "First line\r\nSecond line")
+				}
+			}
+			if w := askPost(f, c, v); w.Code != http.StatusSeeOther || len(o.answers) != 1 {
+				t.Fatalf("amended answer status %d", w.Code)
+			}
+			if mode == "approval-only" {
+				if o.answers[0].Approved == nil || *o.answers[0].Approved || o.answers[0].Text != "" {
+					t.Fatal("decision-only decline lost")
+				}
+			} else if o.answers[0].Text != "First line\nSecond line" {
+				t.Fatal("multiline answer lost or CRLF not normalized")
+			}
+		})
+	}
+}
+
+func TestAsksExpiredApprovalIsHistoricalAndRenderingBounded(t *testing.T) {
+	f, c, o, _ := asksFixture(t)
+	approved := true
+	ask := &o.items[0]
+	ask.Type = apiv1.AskTypeApproval
+	ask.Scope = &apiv1.AskScope{Action: "Run", Target: "Fixture", ExpiresAt: f.now.Add(-time.Minute)}
+	ask.State = apiv1.AskStateAnswered
+	ask.Answer = &apiv1.AskAnswer{OptionID: "small", Approved: &approved, AnsweredBy: apiv1.AskActor{Issuer: "https://identity.example/", Subject: "fixture-reader"}, AnsweredAt: f.now.Add(-2 * time.Minute)}
+	w := httptest.NewRecorder()
+	NewAssembly(c).ServeHTTP(w, f.request(http.MethodGet, AsksPath, ""))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<strong>Approval expired</strong>") || !strings.Contains(w.Body.String(), "Recorded decision: Approved") || strings.Contains(w.Body.String(), "<form") {
+		t.Fatal("expired approval presented as usable")
+	}
+	page := portal.AsksPage{Asks: o.items, Connected: true, Complete: true, Now: f.now}
+	if body, policy, err := portal.RenderAsks(page, 100); err == nil || body != nil || policy != "" {
+		t.Fatal("partial oversized page released")
+	}
+	page.Now = time.Time{}
+	if _, _, err := portal.RenderAsks(page, 1<<20); err == nil {
+		t.Fatal("approval rendered without a current time")
 	}
 }
