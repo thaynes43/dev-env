@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.65.0](https://github.com/thaynes43/dev-env/compare/v2.64.1...v2.65.0) (2026-10-29)
+
+
+### Features
+
+* group current alerts and define desired page controls ([#645](https://github.com/thaynes43/dev-env/issues/645)) ([fc57dd4](https://github.com/thaynes43/dev-env/commit/fc57dd40f1bd1f5944287336c031974dbde135ae))
+* **portal:** authorize send, history and launch by group, not subject ([#649](https://github.com/thaynes43/dev-env/issues/649)) ([1747a26](https://github.com/thaynes43/dev-env/commit/1747a26f0e1e25c3264c39d418d201b73b4a1cb4))
+
+
+### Bug Fixes
+
+* **portal:** make Needs attention say why and how to attend (v2) ([#650](https://github.com/thaynes43/dev-env/issues/650)) ([cbe6a8c](https://github.com/thaynes43/dev-env/commit/cbe6a8c080ceeb7133239a86c65f381efa7ac6e9))
+
 ## [2.64.1](https://github.com/thaynes43/dev-env/compare/v2.64.0...v2.64.1) (2026-10-29)
 
 
