@@ -629,7 +629,7 @@ Add internal/agentrun/rc.go with:
     "nothing was sent";
   - register the command and its help;
   - put the rc-launch.v1 result type in internal/apiserver/apiv1/rclaunch.go (standard library only);
-  - `--agent codex` returns outcome blocked / codex_inventory_unavailable with exit 1 and makes NO network call.
+  - `--agent codex` returns outcome blocked / codex_adapter_not_implemented ("Codex remote launch is not implemented in 2a; no inventory was probed") with exit 1 and makes NO network call. The 3/3 error codex_inventory_unavailable is reserved for an actual failed inventory probe.
 - Local checks: a full model id via apiv1.CheckClaudeModel; a handoff that is non-empty, valid UTF-8, at most 8192 bytes, with no control characters
   except newline and tab (the same rule as podcmd stripControl).
 - Phase records, each with state, firstObservedAt (UTC), sinceRequestMs (monotonic), sourceAt: null, evidenceSource and reason:
