@@ -135,13 +135,13 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		if c.depth > maxSessionDepth {
 			return 0, nil, forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
 		}
-		n, err := s.runningChildren(ctx, c.parent)
+		n, err := s.runningChildren(ctx, c.parent, sess.Spec.Agent)
 		if err != nil {
 			return 0, nil, err
 		}
-		if n >= maxRunningChildren {
+		if n >= maxRunningChildrenPerAgent {
 			return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded,
-				"session %s already has %d running children, the most at a time (DESIGN-001 3.4); one must finish first", c.parent, n)
+				"session %s already has %d unfinished %s children, the limit per agent (DESIGN-001 3.4); one must finish first", c.parent, n, sess.Spec.Agent)
 		}
 	}
 
@@ -262,15 +262,17 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 }
 
 // runningChildren counts a session's unfinished children, read from the API
-// server so a create a moment ago counts.
-func (s *Server) runningChildren(ctx context.Context, parent string) (int, error) {
+// server so a create a moment ago counts. Unknown legacy agents count in every
+// bucket, so malformed stored records cannot bypass the finite cap.
+func (s *Server) runningChildren(ctx context.Context, parent string, agent v1alpha1.AgentKind) (int, error) {
 	var list v1alpha1.AgentSessionList
 	if err := s.Live.List(ctx, &list, client.InNamespace(s.Policy.SessionNamespace)); err != nil {
 		return 0, fromKubeError(err, "list sessions")
 	}
 	n := 0
 	for i := range list.Items {
-		if list.Items[i].Spec.Parent == parent && unfinished(&list.Items[i]) {
+		child := &list.Items[i]
+		if child.Spec.Parent == parent && unfinished(child) && (child.Spec.Agent == agent || (child.Spec.Agent != v1alpha1.AgentClaude && child.Spec.Agent != v1alpha1.AgentCodex && child.Spec.Agent != v1alpha1.AgentOpencode)) {
 			n++
 		}
 	}
@@ -300,7 +302,7 @@ func (s *Server) byIdempotencyKey(ctx context.Context, parent, key string) (*v1a
 }
 
 // unfinished is a session still at work: not reaped, suspended, archived or
-// failed, and its agent not ended. A child counts against its parent's four
+// failed, and its agent not ended. A child counts against its parent's agent cap
 // until then, and an idempotency key returns it until then (V-03).
 func unfinished(s *v1alpha1.AgentSession) bool {
 	if !s.DeletionTimestamp.IsZero() || s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended {

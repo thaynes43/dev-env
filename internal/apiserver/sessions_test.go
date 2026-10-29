@@ -348,6 +348,10 @@ func TestSessionChildren(t *testing.T) {
 		t.Fatalf("retry of the fourth child at the limit: %d %s", w.Code, w.Body.String())
 	}
 
+	changed := keyed
+	changed.Prompt = "changed intent"
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, tok, changed), http.StatusConflict, apiv1.CodeConflict)
+
 	// A child whose task ended no longer counts.
 	child = f.session(child.Name)
 	child.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited}

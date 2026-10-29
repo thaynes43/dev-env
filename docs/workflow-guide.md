@@ -65,6 +65,14 @@ estimate; provider usage remains unavailable. A due checkpoint can latch on read
 These commands do not admit or launch an executor. General private launch and
 native readiness remain unfinished, and this source change is not installed.
 
+**Child cap source policy, 2026-10-29:** A session caller is limited to four
+unfinished children per parent and canonical agent (`claude`, `codex`, or
+`opencode`), across modes. Existing admission restrictions still apply; empty or
+unknown legacy agents count against every bucket. The per-replica create lock
+cannot prevent two replicas from admitting concurrently after each sees three.
+This is repository policy, not a resource measurement or proof of installation;
+portal launches have their separate cap.
+
 ## Start here: how you would use it
 
 1. Open a Claude or Codex session and select the project. The project supplies
