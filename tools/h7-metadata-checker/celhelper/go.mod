@@ -2,11 +2,11 @@ module github.com/thaynes43/dev-env/tools/h7-metadata-checker/celhelper
 
 go 1.27.0
 
-toolchain go1.27.1
+toolchain go1.27.3
 
 require (
+	cel.dev/cel-go v0.32.0
 	github.com/antlr4-go/antlr/v4 v4.13.1
-	github.com/google/cel-go v0.32.0
 )
 
 require (

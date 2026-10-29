@@ -11,10 +11,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"cel.dev/cel-go/common"
+	"cel.dev/cel-go/parser"
+	"cel.dev/cel-go/parser/gen"
 	"github.com/antlr4-go/antlr/v4"
-	"github.com/google/cel-go/common"
-	"github.com/google/cel-go/parser"
-	"github.com/google/cel-go/parser/gen"
 )
 
 const (
