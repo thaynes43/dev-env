@@ -2495,3 +2495,64 @@ Two operating limits, recorded 2026-10-30 from the #729 review:
   and deletes the ended Pod, because its proof still holds.
   `TestTerminalTaskReclaimExplicitResumeRestartsGraceAndSetsSuspender` pins
   the grace restart and the second suspend. The HOME stays retained either way.
+
+### 24.1 Legacy usage proof — 2026-10-30 (OP308)
+
+Tom chose **"Build it, on after tests"** on 2026-10-30, recorded in
+OpenProject #308 journal 3596, following the findings in journal 3589.
+The source extension is default off under
+`--enable-legacy-terminal-task-reclaim`. Parsing requires
+`--enable-terminal-task-pod-reclaim`, which already requires the terminal
+record and executor-stop flags. The lead separately reviews, merges, releases
+and activates it after tests; this source change activates nothing.
+
+Before 2.71.0, agentd did not publish `task.exitSource`. Its retained
+`status.usageObservation.source` supplies the original-attempt binding instead.
+At v2.71.0, `internal/apiserver/usage.go:65-97` accepts this observation once,
+only for the authenticated original Pod, Session, provider and requested model;
+a different replay records a conflict. At v2.45.0,
+`internal/agentd/runagent.go:253-307` waits for the provider before writing the
+result and usage observation. The failed-spawn path at lines 150-154 writes
+exit 127 without waiting, so that exit is refused. No process-absence inference
+or new heartbeat assertion replaces the retained usage receipt.
+
+The alternative proof requires all of the following:
+
+- `task.exitSource` is absent, the flag is on, and both the main executor
+  container's image tag and the `agentd vX.Y.Z (commit ...)` version parse as
+  semver older than 2.71.0. Unknown versions and 2.71.0 development builds
+  are refused too.
+- The agent reports `exited`, no attached client, a task with its required
+  exit code other than 127, and a nonzero finish time no later than now.
+- The usage source matches the Session UID, original and live executor Pod
+  UID, provider and requested model, with a valid nonempty attempt ID.
+  `usageObservation.observedAt` equals `task.finishedAt`, and no
+  `status.usageConflict` exists.
+- At the uncached Session/executor/HOME read after the deadline, the heartbeat
+  is no older than two minutes (and is neither missing nor in the future),
+  and every container and init container has an observed restart count of
+  zero. Missing container status is uncertainty. These checks repeat at the
+  stop intent's own uncached read. The existing UID/resourceVersion-tested
+  Pod patch refuses a restart after that read.
+
+The controller copies the usage source into the immutable
+`privateHistory.taskTerminal.task.exitSource`; it leaves the agent's reported
+task unchanged. This satisfies the existing CEL requirement that the snapshot
+bind the original Pod, Session and provider, with no CRD or API change.
+The condition says `proof=legacy-usage` once that snapshot exists. Gauge reason
+labels stay bounded; refusals use the existing `ProofUnknown` reason. With the
+flag off, the original missing-exit-source condition stays unchanged.
+
+All section 24 protections and sequencing remain: static scope, owner holds,
+descendant walk, immutable observation, grace, suspend, confirmed stop intent,
+deadline patch, whole-executor terminal record and guarded Pod deletion.
+Reaping Sessions remain `Protected`. HOME, its PVC, history and finalizers
+remain retained. A plain delete of a Running private executor is wrong:
+`internal/controller/private_terminal.go:268-281` records `ExecutorMissed`
+and `PreservationUnknown` permanently when no whole-executor terminal record
+exists, blocking HOME expiry rather than proving a safe stop.
+
+Legacy executors predate the 2.71 retention latch, so the zero-restart and
+fresh-heartbeat checks are required. The templates now pin 2.71.0; once the
+legacy backlog clears this extra flag can be retired. The normal 2.71+ exit
+proof, Pod rendering, retention latch and HOME-expiry policy are unchanged.

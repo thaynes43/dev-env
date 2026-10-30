@@ -519,3 +519,34 @@ func TestTerminalTaskReclaimFlagsDefaultOffAndRequireStopProof(t *testing.T) {
 		t.Fatal("reclaim wiring changed retention flags")
 	}
 }
+
+func TestLegacyTerminalTaskReclaimFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+		bad  bool
+	}{
+		{name: "default-off"},
+		{name: "missing-reclaim", args: []string{"--enable-legacy-terminal-task-reclaim"}, bad: true},
+		{name: "stop-without-reclaim", args: []string{"--enable-legacy-terminal-task-reclaim", "--enable-private-terminal-record", "--enable-private-executor-stop"}, bad: true},
+		{name: "missing-prerequisites", args: []string{"--enable-legacy-terminal-task-reclaim", "--enable-terminal-task-pod-reclaim"}, bad: true},
+		{name: "enabled", args: []string{"--enable-legacy-terminal-task-reclaim", "--enable-terminal-task-pod-reclaim", "--enable-private-terminal-record", "--enable-private-executor-stop"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, err := parseFlags(tc.args)
+			if (err != nil) != tc.bad {
+				t.Fatal("dependency validation", err)
+			}
+			if tc.bad {
+				if !strings.Contains(err.Error(), "--enable-terminal-task-pod-reclaim") {
+					t.Fatal("missing reclaim dependency diagnostic", err)
+				}
+				return
+			}
+			if o.legacyTerminalTaskReclaim != tc.want || reconcilerForOptions(o).LegacyTerminalTaskReclaim != tc.want {
+				t.Fatal("legacy flag default or Reconciler wiring differs")
+			}
+		})
+	}
+}

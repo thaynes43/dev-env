@@ -138,6 +138,9 @@ type Reconciler struct {
 	// off; DESIGN-025 24 keeps HOME/history retention separate.
 	TerminalTaskPodReclaim   bool
 	TerminalTaskReclaimGrace time.Duration
+	// LegacyTerminalTaskReclaim permits the pre-2.71 usage receipt as exit
+	// proof, default off and effective only with TerminalTaskPodReclaim.
+	LegacyTerminalTaskReclaim bool
 	// PrivateExecutorStops counts the stop requests
 	// (MetricPrivateExecutorStopRequests); nil counts nothing.
 	PrivateExecutorStops *prometheus.CounterVec

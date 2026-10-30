@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/version"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -85,32 +87,98 @@ func terminalTaskChildrenStopped(ctx context.Context, reader client.Reader, s *v
 }
 
 // taskReclaimProof checks the retained outcome, not an elapsed idle timer.
-func taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) error {
+func (r *Reconciler) taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) (*v1alpha1.TaskStatus, error) {
 	h, a := s.Status.PrivateHistory, s.Status.Agent
 	if err := privateHistoryIdentity(s); err != nil {
-		return err
+		return nil, err
 	}
 	if h.Admission != sharedStarted || h.HomeUID == "" || !h.ExecutorAttempted || h.ExecutorIntent == "" ||
 		h.LastExecutor == nil || h.ExecutorMissed != nil {
-		return errors.New("original private admission and executor are unproved")
+		return nil, errors.New("original private admission and executor are unproved")
 	}
-	if a == nil || a.Status != protocol.AgentExited || a.Attached != 0 || a.Task == nil || a.Task.ExitSource == nil {
-		return errors.New("original provider exit and task result are unproved, or work is active")
+	if a == nil || a.Status != protocol.AgentExited || a.Attached != 0 || a.Task == nil || a.Task.ExitSource == nil && !r.LegacyTerminalTaskReclaim {
+		return nil, errors.New("original provider exit and task result are unproved, or work is active")
 	}
-	task, source := a.Task, a.Task.ExitSource
+	task := a.Task
+	if task.ExitSource == nil {
+		// The API retained this original-pod receipt once. Legacy agentd
+		// publishes it after provider Wait; exit 127 is the no-Wait spawn failure.
+		line, ok := strings.CutPrefix(a.Agentd, "agentd ")
+		tag, build, format := strings.Cut(line, " (commit ")
+		if !ok || !format || len(build) <= 1 || !strings.HasSuffix(build, ")") || !legacyTaskVersion(tag) ||
+			task.ExitCode == 127 || s.Status.UsageObservation == nil || s.Status.UsageConflict != nil {
+			return nil, errors.New("legacy provider exit lacks an unconflicted pre-2.71 usage proof")
+		}
+		task = task.DeepCopy()
+		source := s.Status.UsageObservation.Source
+		task.ExitSource = &source
+	}
+	source := task.ExitSource
 	if !protocol.UsageSource(*source).Valid() || source.SessionUID != string(s.UID) || source.PodUID != h.LastExecutor.PodUID ||
 		source.Provider != string(s.Spec.Agent) || source.RequestedModel != s.Spec.Model || task.FinishedAt.IsZero() || task.FinishedAt.After(now) {
-		return errors.New("provider exit does not bind this Session, executor and attempt")
+		return nil, errors.New("provider exit does not bind this Session, executor and attempt")
 	}
 	// The immutable original-attempt receipt is independent of mutable agent
 	// status. A later or conflicting attempt cannot borrow the old outcome.
 	u := s.Status.UsageObservation
 	if u == nil || u.Source != *source || !u.ObservedAt.Equal(&task.FinishedAt) {
-		return errors.New("task result and retained original attempt contradict or lack proof")
+		return nil, errors.New("task result and retained original attempt contradict or lack proof")
 	}
 	if rec := h.TaskTerminal; rec != nil && (!apiequality.Semantic.DeepEqual(&rec.Task, task) ||
 		rec.ObservedAt.After(now) || rec.Task.FinishedAt.After(rec.ObservedAt.Time) || !rec.DueAt.After(rec.ObservedAt.Time)) {
-		return errors.New("task result contradicts its confirmed terminal observation")
+		return nil, errors.New("task result contradicts its confirmed terminal observation")
+	}
+	return task, nil
+}
+
+// Reject unknown versions, including digest-only images. Compare the release
+// components so a 2.71.0 development build cannot borrow the legacy exception.
+func legacyTaskVersion(tag string) bool {
+	v, err := version.ParseSemantic(tag)
+	return err == nil && (v.Major() < 2 || v.Major() == 2 && v.Minor() < 71)
+}
+
+func legacyTaskProof(s *v1alpha1.AgentSession) bool {
+	return s.Status.Agent != nil && s.Status.Agent.Task != nil && s.Status.Agent.Task.ExitSource == nil
+}
+
+// This check is repeated on the uncached expiry view, including the stop
+// intent's own view. The later UID/RV Pod patch fences a subsequent restart.
+func legacyTaskPodProof(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) error {
+	if pod == nil || s.Status.UsageObservation == nil || s.Status.UsageObservation.Source.PodUID != string(pod.UID) {
+		return errors.New("legacy usage proof does not bind the live executor")
+	}
+	imageOK := false
+	for _, c := range pod.Spec.Containers {
+		if c.Name == ContainerName {
+			image, _, _ := strings.Cut(c.Image, "@")
+			at := strings.LastIndex(image, ":")
+			imageOK = at > strings.LastIndex(image, "/") && legacyTaskVersion(image[at+1:])
+		}
+	}
+	if !imageOK {
+		return errors.New("legacy executor image is not provably older than 2.71.0")
+	}
+	at := s.Status.Agent.LastHeartbeat
+	if at == nil || at.IsZero() || at.After(now) || now.Sub(at.Time) > 2*time.Minute {
+		return errors.New("legacy executor heartbeat is missing, future or older than two minutes")
+	}
+	for _, group := range []struct {
+		containers []corev1.Container
+		statuses   []corev1.ContainerStatus
+	}{{pod.Spec.Containers, pod.Status.ContainerStatuses}, {pod.Spec.InitContainers, pod.Status.InitContainerStatuses}} {
+		seen := make(map[string]bool, len(group.statuses))
+		for _, status := range group.statuses {
+			if status.RestartCount != 0 {
+				return errors.New("legacy executor has a restarted container")
+			}
+			seen[status.Name] = true
+		}
+		for _, c := range group.containers {
+			if !seen[c.Name] {
+				return errors.New("legacy executor container restart count is unavailable")
+			}
+		}
 	}
 	return nil
 }
@@ -124,14 +192,14 @@ func terminalTaskReclaimScope(s *v1alpha1.AgentSession) bool {
 }
 
 // terminalTaskSessionAllowed is also safe on the cache: refusals grant no action.
-func terminalTaskSessionAllowed(s *v1alpha1.AgentSession, now time.Time) (string, error) {
+func (r *Reconciler) terminalTaskSessionAllowed(s *v1alpha1.AgentSession, now time.Time) (string, error) {
 	if !terminalTaskReclaimScope(s) {
 		return "Protected", errors.New("interactive, reusable or pilot session is protected")
 	}
 	if homeExpiryHeld(s) {
 		return "Held", errors.New("owner HOME-expiry hold blocks compute reclaim")
 	}
-	if err := taskReclaimProof(s, now); err != nil {
+	if _, err := r.taskReclaimProof(s, now); err != nil {
 		return "ProofUnknown", err
 	}
 	if s.Status.PrivateHistory.Expiry != nil {
@@ -146,7 +214,7 @@ func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView)
 	if !s.DeletionTimestamp.IsZero() {
 		return "Protected", errors.New("session is being reaped; the reap path owns its stop")
 	}
-	if reason, err := terminalTaskSessionAllowed(s, v.now); err != nil {
+	if reason, err := r.terminalTaskSessionAllowed(s, v.now); err != nil {
 		return reason, err
 	}
 	if err := homeClaimBound(s, v.claim); err != nil {
@@ -160,6 +228,11 @@ func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView)
 			return "ProofUnknown", errors.New("pod absence has no whole-executor terminal proof")
 		}
 		return "Reclaimed", nil
+	}
+	if legacyTaskProof(s) {
+		if err := legacyTaskPodProof(s, pod, v.now); err != nil {
+			return "ProofUnknown", err
+		}
 	}
 	if pod.UID == "" || pod.ResourceVersion == "" || string(pod.UID) != s.Status.PrivateHistory.LastExecutor.PodUID ||
 		!controlledBySession(pod, s) || isHoldPod(pod) ||
@@ -180,6 +253,9 @@ func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView)
 }
 
 func (r *Reconciler) terminalTaskReclaimCondition(s *v1alpha1.AgentSession, reason, detail string) {
+	if r.LegacyTerminalTaskReclaim && legacyTaskProof(s) && s.Status.PrivateHistory != nil && s.Status.PrivateHistory.TaskTerminal != nil {
+		detail = "proof=legacy-usage; " + detail
+	}
 	owner := s.Spec.Parent
 	if owner == "" {
 		owner = s.Name
@@ -234,8 +310,12 @@ func (r *Reconciler) terminalTaskDeadline(s *v1alpha1.AgentSession) (time.Time, 
 
 func (r *Reconciler) terminalTaskStopDue(s *v1alpha1.AgentSession) bool {
 	due, err := r.terminalTaskDeadline(s)
-	return r.terminalTaskReclaimOn() && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended &&
-		err == nil && !due.IsZero() && !r.clock().Before(due) && taskReclaimProof(s, r.clock()) == nil
+	if !r.terminalTaskReclaimOn() || s.Spec.Mode != v1alpha1.ModeTask || s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended ||
+		err != nil || due.IsZero() || r.clock().Before(due) {
+		return false
+	}
+	_, err = r.taskReclaimProof(s, r.clock())
+	return err == nil
 }
 
 // reconcileTerminalTaskReclaim reports a retained reason even when the proof
@@ -261,7 +341,7 @@ func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alph
 	}
 	// Cached refusals need no API traffic or polling: Session/Pod events can
 	// supply changed proof or lift a protection. A settled reclaim is final.
-	if reason, err := terminalTaskSessionAllowed(s, r.clock()); err != nil {
+	if reason, err := r.terminalTaskSessionAllowed(s, r.clock()); err != nil {
 		r.terminalTaskReclaimCondition(s, reason, err.Error())
 		return ctrl.Result{}, false, nil
 	}
@@ -274,10 +354,25 @@ func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alph
 	}
 	h := s.Status.PrivateHistory
 	if h.TaskTerminal == nil {
+		if legacyTaskProof(s) {
+			var pod corev1.Pod
+			if err := r.Client.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
+				r.terminalTaskReclaimCondition(s, "ProofUnknown", "legacy executor observation unavailable")
+				return ctrl.Result{}, false, nil
+			}
+			if err := legacyTaskPodProof(s, &pod, r.clock()); err != nil {
+				r.terminalTaskReclaimCondition(s, "ProofUnknown", err.Error())
+				return ctrl.Result{}, false, nil
+			}
+		}
 		// This cached CAS records an observation only. No resource action is
 		// authorized until a later due reconcile confirms the record uncached.
-		h.TaskTerminal = &v1alpha1.PrivateTaskTerminalStatus{Task: *s.Status.Agent.Task.DeepCopy(), ObservedAt: recordTime(r.clock()), DueAt: recordTime(r.clock().Add(r.terminalTaskReclaimGrace()))}
-		err := r.Client.Status().Update(ctx, s)
+		task, err := r.taskReclaimProof(s, r.clock())
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		h.TaskTerminal = &v1alpha1.PrivateTaskTerminalStatus{Task: *task.DeepCopy(), ObservedAt: recordTime(r.clock()), DueAt: recordTime(r.clock().Add(r.terminalTaskReclaimGrace()))}
+		err = r.Client.Status().Update(ctx, s)
 		return ctrl.Result{RequeueAfter: r.terminalTaskReclaimGrace()}, true, err
 	}
 	due, err := r.terminalTaskDeadline(s)

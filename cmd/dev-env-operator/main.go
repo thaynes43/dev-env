@@ -146,6 +146,7 @@ type options struct {
 	privateHistoryRetention       bool
 	privateTerminalRecord         bool
 	terminalTaskPodReclaim        bool
+	legacyTerminalTaskReclaim     bool
 	terminalTaskReclaimGrace      time.Duration
 	privateExecutorStop           bool
 	homeHistoryArchive            bool
@@ -220,6 +221,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
 	fs.BoolVar(&o.terminalTaskPodReclaim, "enable-terminal-task-pod-reclaim", false, "reclaim original terminal headless task compute after its grace; retains HOME, history and outcome (DESIGN-025 24); needs private terminal record and executor stop")
+	fs.BoolVar(&o.legacyTerminalTaskReclaim, "enable-legacy-terminal-task-reclaim", false, "allow authenticated usage proof for terminal task executors older than 2.71.0; requires terminal task pod reclaim (DESIGN-025 24)")
 	fs.DurationVar(&o.terminalTaskReclaimGrace, "terminal-task-pod-reclaim-grace", controller.DefaultTerminalTaskReclaimGrace, "positive grace after the confirmed original task exit observation, before compute reclaim")
 	fs.BoolVar(&o.privateExecutorStop, "enable-private-executor-stop", false, "stop the recorded executor of a Reaping private Session with activeDeadlineSeconds, after a confirmed stop intent; an owner hold blocks it (DESIGN-025 4); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "run the HOME expiry of private Sessions up to Archived: after the grace, rescue in a hold pod bound to the HOME, export the provider history into the shelf's history archive and verify it; deletes no HOME (DESIGN-025 5); needs --enable-private-terminal-record")
@@ -538,6 +540,9 @@ func parseFlags(args []string) (options, error) {
 	if o.terminalTaskPodReclaim && (!o.privateTerminalRecord || !o.privateExecutorStop) {
 		return o, errors.New("--enable-terminal-task-pod-reclaim requires --enable-private-terminal-record and --enable-private-executor-stop")
 	}
+	if o.legacyTerminalTaskReclaim && !o.terminalTaskPodReclaim {
+		return o, errors.New("--enable-legacy-terminal-task-reclaim requires --enable-terminal-task-pod-reclaim")
+	}
 	if o.terminalTaskReclaimGrace < time.Second {
 		return o, errors.New("--terminal-task-pod-reclaim-grace must be at least one second")
 	}
@@ -601,6 +606,7 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		PrivateHistoryRetention:     o.privateHistoryRetention,
 		PrivateTerminalRecord:       o.privateTerminalRecord,
 		TerminalTaskPodReclaim:      o.terminalTaskPodReclaim,
+		LegacyTerminalTaskReclaim:   o.legacyTerminalTaskReclaim,
 		TerminalTaskReclaimGrace:    o.terminalTaskReclaimGrace,
 		PrivateExecutorStop:         o.privateExecutorStop,
 		HomeHistoryArchive:          o.homeHistoryArchive,
