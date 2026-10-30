@@ -201,6 +201,9 @@ type Reconciler struct {
 	// RemotePilotAgent is an independent default-off ordinary Codex remote image.
 	// Startup refuses tuple collisions; legacy precedence is defense in depth.
 	RemotePilotAgent *PilotAgent
+	// CodexRCAgent selects one existing remote Session UID for image adoption.
+	// It never restarts a pod or changes the templates or other pilot mappings.
+	CodexRCAgent *CodexRCAgent
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.
 	Recorder events.EventRecorder

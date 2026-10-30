@@ -927,3 +927,13 @@ the disabled increment only; install, activation, RPC and failed-host restart
 still need an exact separately accepted runtime plan. The
 [recovery packet](../verification/codex-rc-recovery-qualification-2026-10-30.md)
 qualifies ordinary remote lifecycle recovery separately from fresh creation.
+
+### Existing-host delivery extension (OP272, 2026-10-30)
+
+The [targeted delivery contract](../verification/codex-rc-clean-delivery-2026-10-30.md)
+adds an independent exact Session name/UID agent-image selector, a confined
+ConfigMap packet reader and `agent-run rc fresh`. These are installation and
+client paths for the existing fixed operation above. They do not weaken its
+qualification or add callers. Default rendering and existing pilot mappings
+remain unchanged. The image selector never initiates a restart. Native thread
+and turn acknowledgements remain separate from supported-client phone visibility.

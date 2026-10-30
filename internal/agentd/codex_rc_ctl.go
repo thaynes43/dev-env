@@ -52,7 +52,7 @@ func codexRCControl(ctx context.Context, s Settings, sess protocol.Session, oper
 		}
 		// Config is outside HOME's mutable platform state; missing/unknown pairing
 		// evidence refuses. No connected/code-issued inference or repair is made.
-		raw, err := boundedHostFile(filepath.Join(s.ConfigDir, CodexRCTargetFile), apiv1.CodexRCMaxPacket, false)
+		raw, err := readCodexRCTarget(s.ConfigDir)
 		var configured apiv1.CodexRCTarget
 		if err != nil || apiv1.DecodeCodexRC(raw, &configured, apiv1.CodexRCMaxPacket) != nil || apiv1.CodexRCHash(configured) != apiv1.CodexRCHash(d.Target) {
 			return errCodexRCRefused

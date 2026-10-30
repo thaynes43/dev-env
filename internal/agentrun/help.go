@@ -13,7 +13,7 @@ Usage:
   agent-run [--repo] <repo> --local [flags]       start an interactive session (a TUI)
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
-  agent-run rc start|status -o json               start or observe a Claude remote launch
+  agent-run rc start|status|fresh -o json         launch or observe Remote Control
   agent-run inbox send|list|read|ack               durable inbox
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
@@ -110,6 +110,17 @@ Exit codes:
 var commandHelp = map[string]string{
 	"rc": `Usage: agent-run rc start --project P [--repo R] --agent claude --model <full id> [--effort e] --handoff FILE [--wait 5m] [--idempotency-key K] -o json
        agent-run rc status <session> -o json
+       agent-run rc fresh --session NAME --request FILE -o json
+
+fresh submits one qualified Codex thread+turn request to an existing paired host.
+FILE is a strict CodexRCRequest JSON document: requestID, sessionUID, podUID,
+project, repository, model, effort, handoff (1 to 4096 bytes), deadline (UTC, at
+most 30 seconds ahead). It accepts no thread ID, native method or arbitrary cwd.
+The existing API requires Tom, a configured client, or his recognized workbench;
+this command grants no caller access. The endpoint and target qualification must
+already be installed. One POST only, no redirect/retry/fallback. Exit 0 proves
+native thread+turn ACKs; phoneRegistration remains unobserved until a supported
+client witnesses it. An uncertain result must never be blindly repeated.
 
 Launches a Claude remote session through the existing session API and observes
 its bounded startup phases. The project catalog chooses the repository/base.
