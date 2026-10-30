@@ -697,7 +697,8 @@ a conflict, without replacing concurrent status. Both RC id fields preserve
 the same full `session_` plus 8 to 128 ASCII id characters (136 total maximum).
 A malformed or overlong nonempty id is dropped from both fields with a
 structured `InvalidRemoteControlSessionID` log reason (without the input id);
-the remaining heartbeat is accepted and ids are never clipped. Optional wire fields preserve old-client JSON decoding.
+the remaining heartbeat is accepted and ids are never clipped. Optional wire
+fields preserve old-client JSON decoding.
 Schema admission, heartbeat/view, old-client and interleaving fixtures cover
 this source slice. Current-Pod transition times and the full receipt contract
 below remain follow-up work outside #273's bounded work order.
@@ -737,7 +738,14 @@ Artifacts: source PR/head, generated diff, focused checks/review, CRD-copy PR,
 operator pin and separate installed/usable evidence linked in OpenProject.
 Stop at acceptance, a dependency/approval hold or budget boundary.
 
-**Source status (2026-10-30, OpenProject #273):** the assigned source change is written in this worktree, and `make generate` has rewritten deepcopy and the CRD from the types. Heartbeat storage keeps the agent start time from moving backwards, including when a newer time lands during the status merge, and stores a 136-character bridge id whole on both session reads. Schema bounds, that timing rule, the view, and an old client that ignores the new fields are covered by tests in this repo. `go test -p 1 ./api/... ./internal/apiserver/... -count=1` passed the API packages. The apiserver package reported two failures, both `bind: invalid argument` on a unix socket under the supplied temp directory; it did not report a failure in the new timing tests. `check-generated` exits while these files remain uncommitted, so `check-layout` and lint did not run. No pull request is open. This record is source only. The haynes-ops CRD copy PR must land before any operator pin that needs the new fields; a stale copy prunes status fields. Installation and usable acceptance stay separate, and this slice does not add Pod condition transition times.
+**Author's pre-integration validation (2026-10-30, historical):** the stopped
+Grok author generated the source artifacts and reported passing API packages,
+with apiserver Unix-socket fixture failures under a long temp path. Its
+uncommitted generated files prevented `check-generated`, and layout/lint had
+not run. That handoff is superseded by the integration checks, native review,
+PR and head recorded in [OpenProject #273](https://work.haynesnetwork.com/work_packages/273).
+Generated patch hunks were discarded and regenerated from the types during
+integration. Source, installed and usable acceptance remain separate.
 
 ### 2c — Conditional receipt API behind --enable-rc-launches
 
