@@ -145,6 +145,19 @@ func applyTaskPilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgen
 	}
 }
 
+// applyRemotePilotImage reuses the exact parent/key, repo and protected-path
+// checks of the existing pilot, narrowed to ordinary Codex remote sessions.
+// Only a new session-owned pod is eligible. The original-HOME init verifier is
+// added after sessionPod and copies this selected main image.
+func applyRemotePilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAgent) {
+	if pod == nil || s == nil || s.UID == "" || !metav1.IsControlledBy(pod, s) ||
+		p == nil || p.Parent == "" || s.Spec.Agent != v1alpha1.AgentCodex ||
+		s.Spec.Mode != v1alpha1.ModeRemote || budgetBound(s) {
+		return
+	}
+	applyPilotImage(pod, s, p)
+}
+
 // sessionPod is the session's own pod as the reconciler creates it: the managed
 // pod, on the pilot image when the session is the selected one.
 func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
@@ -152,6 +165,10 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err != nil {
 		return nil, err
 	}
+	// Defense in depth: legacy selection wins on overlap. Startup flags refuse
+	// equal parent/key tuples, so flag configuration cannot reach this case.
+	// Task and remote selection are also disjoint by mode.
+	applyRemotePilotImage(pod, s, r.RemotePilotAgent)
 	applyPilotImage(pod, s, r.PilotAgent)
 	applyTaskPilotImage(pod, s, r.TaskPilotAgent)
 	return pod, nil

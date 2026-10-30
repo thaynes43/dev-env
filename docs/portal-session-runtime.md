@@ -350,6 +350,37 @@ not an authorization to read history or account allowance, or evidence of native
 process ownership; the applicable action scope is still required. Interactive
 sessions do not acquire an automatic TTL from this selector.
 
+### Separate Codex remote pilot image (default off; source only)
+
+`--remote-pilot-agent-session='<parent>|<key>'` and
+`--remote-pilot-agent-image=ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 lowercase hex>`
+are a separate pair. Both must be set or both unset; malformed values fail
+operator startup. The `:2.X.Y` release tag and digest are both required so the
+reference matches the signature-audit policy. Digest-only and tag-only image
+references are refused. The parent is either a DNS-1123 session
+name or `<namespace>/<serviceaccount>`, such as `dev/dev-env`. The namespace is
+a DNS-1123 label and the ServiceAccount name a DNS-1123 subdomain. The key is
+a non-empty Kubernetes label value. Neither parent form nor a label value can
+contain `|`, so exactly one `|` separates the parent from the key. Quote the
+session argument in a shell.
+
+The pair selects only an ordinary Codex remote session in `dev-env` whose
+`spec.parent` and idempotency-key label both match exactly. Workspace, project
+canary, private pilot and task-budget sessions are excluded. Only the image of
+its newly built, owned session pod changes. The original-HOME `home-verify`
+init container uses that selected image too. Hold pods, existing pods and
+unmatched pods stay unchanged; unset flags preserve the existing pod bytes.
+
+The existing `--pilot-agent-*` and `--task-pilot-agent-*` pairs remain
+independent. Startup refuses a remote tuple with the same parent AND key as
+either existing pair, regardless of flag order. Legacy precedence in the pod
+builder remains only as defense in depth; flag configuration cannot reach it.
+Task and remote modes cannot match both task and remote selectors.
+Before separately approved activation, verify that the remote tuple identifies
+one session and do not reuse it: the selector does not reserve a key or enforce
+lifetime uniqueness. This source change activates no flags and grants no
+runtime, lifecycle, access or enrollment authority.
+
 ## Remote Control link in the Sessions view
 
 The portal reader's `view=activity` summary may carry `remoteControl`:

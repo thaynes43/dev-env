@@ -1,0 +1,60 @@
+{
+  "Selected": {
+    "Namespace": "dev-agents",
+    "Name": "dev-env-1019-205125",
+    "SessionUID": "e9a76314-3064-4dce-b4a6-5bb783105bf3",
+    "HomeClaim": "home-dev-env-1019-205125",
+    "Main": {
+      "Image": "ghcr.io/thaynes43/dev-env:2.69.0@sha256:9375dd06fd3729b492bf1faa85897e7bc31d65b25fd6593434421f2493659303",
+      "Command": null,
+      "Args": null,
+      "Env": {
+        "AGENTD_ORIGINAL_HOME_BINDING": "{\"namespace\":\"dev-agents\",\"session\":\"dev-env-1019-205125\",\"sessionUID\":\"e9a76314-3064-4dce-b4a6-5bb783105bf3\",\"pvcUID\":\"03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pv\":\"pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pvUID\":\"b9455c08-72e0-43d2-9a88-04c389c27a74\"}",
+        "AGENTD_SESSION": "{\"sessionUID\":\"e9a76314-3064-4dce-b4a6-5bb783105bf3\",\"name\":\"dev-env-1019-205125\",\"repo\":\"dev-env\",\"base\":\"origin/main\",\"agent\":\"codex\",\"mode\":\"remote\",\"model\":\"gpt-6-astra\"}"
+      },
+      "HomeReadOnly": false
+    },
+    "Init": {
+      "Image": "ghcr.io/thaynes43/dev-env:2.69.0@sha256:9375dd06fd3729b492bf1faa85897e7bc31d65b25fd6593434421f2493659303",
+      "Command": [
+        "/usr/local/bin/agentd"
+      ],
+      "Args": [
+        "home-verify"
+      ],
+      "Env": {
+        "AGENTD_ORIGINAL_HOME_BINDING": "{\"namespace\":\"dev-agents\",\"session\":\"dev-env-1019-205125\",\"sessionUID\":\"e9a76314-3064-4dce-b4a6-5bb783105bf3\",\"pvcUID\":\"03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pv\":\"pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pvUID\":\"b9455c08-72e0-43d2-9a88-04c389c27a74\"}"
+      },
+      "HomeReadOnly": true
+    }
+  },
+  "SelectorRemoved": {
+    "Namespace": "dev-agents",
+    "Name": "dev-env-1019-205125",
+    "SessionUID": "e9a76314-3064-4dce-b4a6-5bb783105bf3",
+    "HomeClaim": "home-dev-env-1019-205125",
+    "Main": {
+      "Image": "ghcr.io/thaynes43/dev-env:2.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "Command": null,
+      "Args": null,
+      "Env": {
+        "AGENTD_ORIGINAL_HOME_BINDING": "{\"namespace\":\"dev-agents\",\"session\":\"dev-env-1019-205125\",\"sessionUID\":\"e9a76314-3064-4dce-b4a6-5bb783105bf3\",\"pvcUID\":\"03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pv\":\"pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pvUID\":\"b9455c08-72e0-43d2-9a88-04c389c27a74\"}",
+        "AGENTD_SESSION": "{\"sessionUID\":\"e9a76314-3064-4dce-b4a6-5bb783105bf3\",\"name\":\"dev-env-1019-205125\",\"repo\":\"dev-env\",\"base\":\"origin/main\",\"agent\":\"codex\",\"mode\":\"remote\",\"model\":\"gpt-6-astra\"}"
+      },
+      "HomeReadOnly": false
+    },
+    "Init": {
+      "Image": "ghcr.io/thaynes43/dev-env:2.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "Command": [
+        "/usr/local/bin/agentd"
+      ],
+      "Args": [
+        "home-verify"
+      ],
+      "Env": {
+        "AGENTD_ORIGINAL_HOME_BINDING": "{\"namespace\":\"dev-agents\",\"session\":\"dev-env-1019-205125\",\"sessionUID\":\"e9a76314-3064-4dce-b4a6-5bb783105bf3\",\"pvcUID\":\"03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pv\":\"pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25\",\"pvUID\":\"b9455c08-72e0-43d2-9a88-04c389c27a74\"}"
+      },
+      "HomeReadOnly": true
+    }
+  }
+}

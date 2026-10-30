@@ -111,6 +111,7 @@ type options struct {
 	taskBudgetWorkerImage         string
 	pilotAgent                    *controller.PilotAgent
 	taskPilotAgent                *controller.PilotAgent
+	remotePilotAgent              *controller.PilotAgent
 	assignedTaskBudgets           map[string]string
 	sessionNamespace              string
 	templatesNamespace            string
@@ -246,6 +247,8 @@ func parseFlags(args []string) (options, error) {
 	pilotSession := fs.String("pilot-agent-session", "", "<creating session name>/<idempotency-key> of the sessions that run --pilot-agent-image; both or neither")
 	taskPilotImage := fs.String("task-pilot-agent-image", "", "digest-pinned Codex task pilot image; pair with --task-pilot-agent-session")
 	taskPilotSession := fs.String("task-pilot-agent-session", "", "<parent>/<idempotency-key> of Codex task pilot; pair with --task-pilot-agent-image")
+	remotePilotImage := fs.String("remote-pilot-agent-image", "", "ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 lowercase hex> with required release tag and digest; pair with --remote-pilot-agent-session")
+	remotePilotSession := fs.String("remote-pilot-agent-session", "", "<parent>|<idempotency-key> of ordinary Codex remote pilot; parent is a session name or namespace/serviceaccount; pair with --remote-pilot-agent-image")
 	assignedBudgets := fs.String("assigned-task-budgets", "", "explicit JSON configured HostID to TaskUID map")
 	hosts := fs.String("coordinator-hosts", "", "explicit JSON host bindings; empty configures none")
 	catalog := fs.String("project-catalog", "", "explicit accepted namespace/name ConfigMap binding")
@@ -498,6 +501,17 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New(strings.ReplaceAll(err.Error(), "--pilot-agent-", "--task-pilot-agent-"))
 	}
 	o.taskPilotAgent = taskPilot
+	if o.remotePilotAgent, err = parseRemotePilotAgent(*remotePilotImage, *remotePilotSession); err != nil {
+		return o, err
+	}
+	for _, existing := range []struct {
+		flag  string
+		pilot *controller.PilotAgent
+	}{{"--pilot-agent-session", o.pilotAgent}, {"--task-pilot-agent-session", o.taskPilotAgent}} {
+		if p := existing.pilot; o.remotePilotAgent != nil && p != nil && p.Parent == o.remotePilotAgent.Parent && p.Key == o.remotePilotAgent.Key {
+			return o, fmt.Errorf("--remote-pilot-agent-session must not equal %s (same parent and key)", existing.flag)
+		}
+	}
 	if o.ownedRootPolicy != "" {
 		if len(validation.IsDNS1123Subdomain(o.ownedRootPolicy)) != 0 || !o.taskBudgetsEnabled || o.nativeFixtureEnabled || !o.coordinatorEnabled || len(o.coordinatorHosts) != 1 || len(o.assignedTaskBudgets) != 1 {
 			return o, errors.New("owned root needs one assigned coordinator, explicit policy and no fixture")
@@ -540,6 +554,44 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("sealed pilot requires the dev-env session directory")
 	}
 	return o, nil
+}
+
+// reconcilerForOptions is the flag-derived controller configuration used by run
+// and the local original-HOME integration proof. Runtime clients are supplied by
+// the caller; no alternate dispatch or admission path is introduced.
+func reconcilerForOptions(o options) *controller.Reconciler {
+	cloneOwner := ""
+	if o.catalogBinding != nil {
+		cloneOwner = o.catalogBinding.CloneOwner
+	}
+	var decisionParents []string
+	if o.coordinatorEnabled && o.managedChildDecisions {
+		for _, host := range o.coordinatorHosts {
+			decisionParents = append(decisionParents, host.ServiceAccount)
+		}
+	}
+	return &controller.Reconciler{
+		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,
+		PilotAgent:                  o.pilotAgent,
+		TaskPilotAgent:              o.taskPilotAgent,
+		RemotePilotAgent:            o.remotePilotAgent,
+		Templates:                   types.NamespacedName{Namespace: o.templatesNamespace, Name: o.templatesName},
+		APIURL:                      o.apiURL,
+		ManagedCodexTasks:           o.managedCodexTasks,
+		RetainedCommonRules:         o.retainedCommonRules,
+		PrivateHistoryRetention:     o.privateHistoryRetention,
+		PrivateTerminalRecord:       o.privateTerminalRecord,
+		PrivateExecutorStop:         o.privateExecutorStop,
+		HomeHistoryArchive:          o.homeHistoryArchive,
+		HomeExpiryGrace:             o.homeExpiryGrace,
+		HomeExpiryDelete:            o.homeExpiryDelete,
+		PrivateProjectCanaries:      o.privateProjectCanaries,
+		PrivatePilot:                o.privatePilot,
+		PrivateProjectCloneOwner:    cloneOwner,
+		ManagedChildDecisions:       o.managedChildDecisions,
+		ManagedChildDecisionParents: decisionParents,
+		OriginalHome:                o.originalHome,
+	}
 }
 
 func run(args []string) error {
@@ -589,16 +641,6 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	var decisionParents []string
-	cloneOwner := ""
-	if o.catalogBinding != nil {
-		cloneOwner = o.catalogBinding.CloneOwner
-	}
-	if o.coordinatorEnabled && o.managedChildDecisions {
-		for _, host := range o.coordinatorHosts {
-			decisionParents = append(decisionParents, host.ServiceAccount)
-		}
-	}
 	var budgets *taskbudget.Service
 	if o.taskBudgetsEnabled {
 		budgets = &taskbudget.Service{Store: taskbudget.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.taskBudgetNamespace}, Validator: controller.ManagedBudgetEvidenceValidator{Reader: mgr.GetAPIReader()}, ManagedInspector: controller.ManagedPodAdmissionInspector{Reader: mgr.GetAPIReader(), Templates: templatesKey, Image: o.taskBudgetWorkerImage}}
@@ -638,37 +680,18 @@ func run(args []string) error {
 	// One limit on this replica's archive execs into the shelf (DESIGN-024
 	// section 5): the HOME expiry's relay and the history reads share it.
 	shelfSlots := shelf.NewExecSlots(shelf.DefaultExecSlots)
-	r := &controller.Reconciler{
-		SessionDirectory: directoryStore,
-		Client:           mgr.GetClient(),
-		TaskBudgets:      budgets, TaskBudgetWorkerImage: o.taskBudgetWorkerImage,
-		PilotAgent:                  o.pilotAgent,
-		TaskPilotAgent:              o.taskPilotAgent,
-		Templates:                   templatesKey,
-		APIURL:                      o.apiURL,
-		ManagedCodexTasks:           o.managedCodexTasks,
-		RetainedCommonRules:         o.retainedCommonRules,
-		PrivateHistoryRetention:     o.privateHistoryRetention,
-		PrivateTerminalRecord:       o.privateTerminalRecord,
-		PrivateExecutorTerminal:     terminalCounter,
-		PrivateExecutorStop:         o.privateExecutorStop,
-		PrivateExecutorStops:        stopCounter,
-		HomeHistoryArchive:          o.homeHistoryArchive,
-		HomeExpiryGrace:             o.homeExpiryGrace,
-		HomeExpiryCounters:          expiryCounters,
-		HomeExpiryDelete:            o.homeExpiryDelete,
-		HistoryRelay:                &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots},
-		PrivateProjectCanaries:      o.privateProjectCanaries,
-		PrivatePilot:                o.privatePilot,
-		PrivateProjectCloneOwner:    cloneOwner,
-		ManagedChildDecisions:       o.managedChildDecisions,
-		ManagedChildDecisionParents: decisionParents,
-		APIReader:                   mgr.GetAPIReader(),
-		OriginalHome:                o.originalHome,
-		Rescuer:                     rescuer,
-		WorkspaceStopper:            rescuer,
-		Recorder:                    mgr.GetEventRecorder(binaryName),
-	}
+	r := reconcilerForOptions(o)
+	r.TaskBudgets = budgets
+	r.SessionDirectory = directoryStore
+	r.Client = mgr.GetClient()
+	r.PrivateExecutorTerminal = terminalCounter
+	r.PrivateExecutorStops = stopCounter
+	r.HomeExpiryCounters = expiryCounters
+	r.HistoryRelay = &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots}
+	r.APIReader = mgr.GetAPIReader()
+	r.Rescuer = rescuer
+	r.WorkspaceStopper = rescuer
+	r.Recorder = mgr.GetEventRecorder(binaryName)
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
 	}
@@ -963,6 +986,34 @@ func parsePilotAgent(image, session string) (*controller.PilotAgent, error) {
 	parent, key, ok := strings.Cut(session, "/")
 	if !ok || strings.Contains(key, "/") || len(validation.IsDNS1123Label(parent)) != 0 || key == "" || len(validation.IsValidLabelValue(key)) != 0 {
 		return nil, errors.New("--pilot-agent-session must be <parent>/<key>: a DNS-1123 label parent and a non-empty label-value key")
+	}
+	return &controller.PilotAgent{Image: image, Parent: parent, Key: key}, nil
+}
+
+// The remote pilot requires both a 2.x release tag and a digest from the same
+// agent repository, matching the signature-audit policy's image references.
+var remotePilotAgentImage = regexp.MustCompile(`^ghcr\.io/thaynes43/dev-env:2\.[0-9]+\.[0-9]+@sha256:[a-f0-9]{64}$`)
+
+// parseRemotePilotAgent is independent of the existing usage/task pilot flags.
+// A parent is a session name or namespace/ServiceAccount. Neither that syntax
+// nor a label-value key permits '|', so exactly one separator is unambiguous.
+func parseRemotePilotAgent(image, session string) (*controller.PilotAgent, error) {
+	if image == "" && session == "" {
+		return nil, nil
+	}
+	if image == "" || session == "" {
+		return nil, errors.New("--remote-pilot-agent-image and --remote-pilot-agent-session must be set together")
+	}
+	if !remotePilotAgentImage.MatchString(image) {
+		return nil, errors.New("--remote-pilot-agent-image must be ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 lowercase hex>; release tag and digest are both required")
+	}
+	parent, key, ok := strings.Cut(session, "|")
+	validParent := len(validation.IsDNS1123Label(parent)) == 0
+	if namespace, name, slash := strings.Cut(parent, "/"); slash {
+		validParent = len(validation.IsDNS1123Label(namespace)) == 0 && len(validation.IsDNS1123Subdomain(name)) == 0
+	}
+	if !ok || !validParent || len(parent) > 253 || key == "" || len(validation.IsValidLabelValue(key)) != 0 {
+		return nil, errors.New("--remote-pilot-agent-session must be <parent>|<key>: parent is a DNS-1123 session name or namespace/serviceaccount, key is a non-empty label value, with exactly one '|'")
 	}
 	return &controller.PilotAgent{Image: image, Parent: parent, Key: key}, nil
 }
