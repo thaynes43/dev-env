@@ -258,3 +258,31 @@ func TestMaintenanceStopPatchIsExact(t *testing.T) {
 		t.Fatal(ops)
 	}
 }
+
+func TestMaintenanceRefusesControlPlane(t *testing.T) {
+	for _, which := range []string{"control-plane label", "master label", "control-plane taint", "master taint"} {
+		t.Run(which, func(t *testing.T) {
+			b, g := maintenanceFixture(t)
+			ctx := context.Background()
+			var node corev1.Node
+			if err := b.Client.Get(ctx, client.ObjectKey{Name: g.Spec.Maintenance.Node}, &node); err != nil {
+				t.Fatal(err)
+			}
+			key := "node-role.kubernetes.io/control-plane"
+			if strings.HasPrefix(which, "master") {
+				key = "node-role.kubernetes.io/master"
+			}
+			if strings.HasSuffix(which, "label") {
+				node.Labels = map[string]string{key: ""}
+			} else {
+				node.Spec.Taints = []corev1.Taint{{Key: key, Effect: corev1.TaintEffectNoSchedule}}
+			}
+			if err := b.Client.Update(ctx, &node); err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckMaintenanceIdentities(ctx, b.APIReader, sessionNS, g); err == nil || !strings.Contains(err.Error(), "control-plane") {
+				t.Fatal("control plane accepted", err)
+			}
+		})
+	}
+}

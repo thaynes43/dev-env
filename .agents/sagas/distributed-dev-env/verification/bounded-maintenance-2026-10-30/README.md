@@ -14,7 +14,7 @@ new task database, orchestration framework or repeated worker approval.
 The immutable AccessGrant scope pins coordinator/session and pod UIDs, explicitly
 allowed direct children, target node UID, resource identity, capabilities, selected
 device/mount paths, digest image, CPU/memory/runtime bounds and restore intent.
-The API authenticates the existing human identity for approval; a bound immutable
+The API authenticates the configured existing human identity for approval; a bound immutable
 annotation hands that decision to the existing broker.Decide. It is distinct from
 unverified coordinator:string attestation. Asks remains held. Delegation uses the
 same approved grant; each command rechecks authoritative parent/session/pod UIDs,
@@ -31,6 +31,8 @@ executor's own NetworkPolicy. Explicit device files still require device/runtime
 policy qualification: a hostPath file alone does not establish a working GPU
 cgroup allocation. This source must refuse activation until those policies are
 reviewed. No assertion of live GPU usability is made.
+
+[ADR-012](../../adrs/012-bounded-maintenance-task-grants.md) records the dated owner ruling.
 
 Expiry/release refuses new API commands immediately and requests deadline stop.
 Kubernetes deletion or a missing/unreachable pod is not proof of termination.
@@ -78,7 +80,7 @@ new broker materialization while preserving this broker's cleanup path, then wai
 for pinned node/lease/container termination evidence and network cleanup. Do not
 replace the broker with an older binary until every maintenance lease is cleaned
 up. A stale/unreachable node keeps Unknown/StopPending visible and the finalizer
-held. TTL begins at approval; Kubernetes deadlines are relative to pod start and
+held. TTL begins when broker.Decide records approval; Kubernetes deadlines are relative to pod start and
 are a backstop, not a promise of on-time termination on an unreachable node.
 Persistent effects need the approved restore/readback, independently recorded.
 
@@ -95,4 +97,5 @@ extensionOf pointing to the earlier record and a separate explicit approval;
 no actor can mutate the original grant TTL or scope. Command content and output
 are not written into operator logs; audit records actor, grant UID, argument count,
 completion and optional bounded attributed restore report. Output is capped64KiB
-per stream. The image's writable root is disabled and no credential is injected.
+per stream. The broker --maintenance-human-service-account must match operator --human-service-account.
+The image's writable root is disabled and no credential is injected.

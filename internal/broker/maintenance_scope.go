@@ -134,6 +134,16 @@ func CheckMaintenanceIdentities(ctx context.Context, r client.Reader, namespace 
 	if string(node.UID) != m.NodeUID || !node.DeletionTimestamp.IsZero() {
 		return errors.New("maintenance target node replaced")
 	}
+	for key := range node.Labels {
+		if key == "node-role.kubernetes.io/control-plane" || key == "node-role.kubernetes.io/master" {
+			return errors.New("maintenance may not target control-plane nodes")
+		}
+	}
+	for _, taint := range node.Spec.Taints {
+		if taint.Key == "node-role.kubernetes.io/control-plane" || taint.Key == "node-role.kubernetes.io/master" {
+			return errors.New("maintenance may not target control-plane nodes")
+		}
+	}
 	return nil
 }
 

@@ -23,6 +23,7 @@ type brokerOptions struct {
 	enableHWSSHGrants   bool
 	enableAttested      bool
 	enableMaintenance   bool
+	maintenanceHuman    string
 	metricsAddr         string
 	probeAddr           string
 }
@@ -41,6 +42,7 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.BoolVar(&o.enableProxmoxGrants, "enable-proxmox-grants", false, "enable keeper-backed Proxmox grants after node trust and acceptance are configured")
 	fs.BoolVar(&o.enableHWSSHGrants, "enable-hw-ssh-grants", false, "enable hw-ssh credential grants (D-89): the keeper leases the static shared hw-ssh key into the session pod. Removing the lease is not revocation: the key stays valid on every host")
 	fs.BoolVar(&o.enableAttested, "enable-attested-grants", false, "approve a request through a GrantPolicy with spec.attested when its requesting session recorded an agent attestation (a claim that the user or a coordinator approved; not verified human identity). Off, attested policies approve nothing")
+	fs.StringVar(&o.maintenanceHuman, "maintenance-human-service-account", "dev-env-system/dev-env-human", "must match operator --human-service-account for authenticated maintenance decisions")
 	fs.BoolVar(&o.enableMaintenance, "enable-maintenance-grants", false, "HELD: enable isolated bounded maintenance leases after policy review")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
@@ -76,15 +78,16 @@ func runBroker(args []string) error {
 		return err
 	}
 	mgr, _, err := broker.NewManager(cfg, broker.Options{
-		SessionNamespace:        o.sessionNamespace,
-		PolicyNamespace:         o.policyNamespace,
-		EnableProxmoxGrants:     o.enableProxmoxGrants,
-		EnableHWSSHGrants:       o.enableHWSSHGrants,
-		EnableAttestedGrants:    o.enableAttested,
-		EnableMaintenanceGrants: o.enableMaintenance,
-		LeaderElect:             o.leaderElect,
-		MetricsAddr:             o.metricsAddr,
-		ProbeAddr:               o.probeAddr,
+		SessionNamespace:               o.sessionNamespace,
+		PolicyNamespace:                o.policyNamespace,
+		EnableProxmoxGrants:            o.enableProxmoxGrants,
+		EnableHWSSHGrants:              o.enableHWSSHGrants,
+		EnableAttestedGrants:           o.enableAttested,
+		EnableMaintenanceGrants:        o.enableMaintenance,
+		MaintenanceHumanServiceAccount: o.maintenanceHuman,
+		LeaderElect:                    o.leaderElect,
+		MetricsAddr:                    o.metricsAddr,
+		ProbeAddr:                      o.probeAddr,
 		// Pushover plugs in at plan 07 step 6; until then the broker logs
 		// that Tom is wanted.
 		Notifier:  broker.LogNotifier{Log: log.WithName("notify")},

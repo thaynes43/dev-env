@@ -17,11 +17,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	clocktesting "k8s.io/utils/clock/testing"
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/broker"
-	clocktesting "k8s.io/utils/clock/testing"
-	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 type maintenanceExec struct {
@@ -207,5 +208,82 @@ func TestMaintenanceAPICommandFreedomAndIdentityFences(t *testing.T) {
 	}
 	if w := f.do(http.MethodPost, path, worker, apiv1.MaintenanceCommand{Command: []string{"true"}}); w.Code != http.StatusForbidden {
 		t.Fatal("replacement accepted", w.Code)
+	}
+}
+
+func TestMaintenanceFinalExecutionBinding(t *testing.T) {
+	for _, which := range []string{"grant UID", "scope", "executor UID", "stop pending", "missing status"} {
+		t.Run(which, func(t *testing.T) {
+			f, _, worker, req := maintenanceAPI(t)
+			got := f.request("tok-session-maintenance-parent", req, http.StatusCreated)
+			ctx := context.Background()
+			g := f.grant(got.Name)
+			g.Status.Phase = v1alpha1.GrantActive
+			g.Status.ExpiresAt = &metav1.Time{Time: f.now.Add(30 * time.Minute)}
+			p := broker.MaintenancePod(g, f.now)
+			p.UID = "fixture-executor-uid"
+			if err := f.c.Create(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			p.Status.Phase = corev1.PodRunning
+			if err := f.c.Status().Update(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			g.Status.Maintenance = &v1alpha1.MaintenanceStatus{PodUID: string(p.UID), Executor: "Running"}
+			if err := f.c.Status().Update(ctx, g); err != nil {
+				t.Fatal(err)
+			}
+			reads := 0
+			f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				if grant, ok := obj.(*v1alpha1.AccessGrant); ok {
+					reads++
+					if reads == 2 {
+						switch which {
+						case "grant UID":
+							grant.UID = "replaced-grant"
+						case "scope":
+							grant.Spec.Maintenance.Operation = "replaced scope"
+						case "executor UID":
+							grant.Status.Maintenance.PodUID = "replaced-executor"
+						case "stop pending":
+							grant.Status.Maintenance.Executor = "StopPending"
+						case "missing status":
+							grant.Status.Maintenance = nil
+						}
+					}
+				}
+				return nil
+			}})
+			ex := &maintenanceExec{}
+			f.srv.Exec = ex
+			w := f.do(http.MethodPost, apiv1.GrantPath(g.Name)+"/maintenance-exec", worker, apiv1.MaintenanceCommand{Command: []string{"chosen-command"}})
+			if w.Code != http.StatusForbidden || ex.args != nil {
+				t.Fatal("stale final binding opened exec", which, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestMaintenanceConfiguredHuman(t *testing.T) {
+	f, parent, _, req := maintenanceAPI(t)
+	const ref = "operator-tools/reviewed-human"
+	f.srv.Policy.Human = ref
+	f.auth[tokHuman] = saIdentity(ref)
+	got := f.request(parent, req, http.StatusCreated)
+	d := apiv1.MaintenanceDecisionRequest{GrantUID: got.UID, Digest: got.MaintenanceDigest, Approve: true}
+	if w := f.do(http.MethodPost, apiv1.GrantPath(got.Name)+"/maintenance-decision", tokHuman, d); w.Code != http.StatusAccepted {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	b := &broker.Broker{Client: f.c, APIReader: f.c, SessionNamespace: sessionNS, PolicyNamespace: "dev-env-system", EnableMaintenanceGrants: true, MaintenanceHumanServiceAccount: ref, Clock: clocktesting.NewFakeClock(f.now)}
+	for range 2 {
+		if _, err := b.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Namespace: sessionNS, Name: got.Name}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if g := f.grant(got.Name); g.Status.Phase != v1alpha1.GrantActive || g.Status.ApprovedBy != "human/"+ref {
+		t.Fatal(g.Status)
 	}
 }

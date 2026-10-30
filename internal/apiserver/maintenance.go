@@ -33,7 +33,7 @@ func maintenanceView(m *v1alpha1.MaintenanceTask) *apiv1.MaintenanceTask {
 // decideMaintenance is a thin OP219 adapter from existing TokenReview human auth
 // to the broker's Decide. It neither enables Asks nor accepts a claimed approver.
 func (s *Server) decideMaintenance(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	if c.kind != kindHuman || c.parent != "dev-env-system/dev-env-human" {
+	if c.kind != kindHuman {
 		return 0, nil, forbidden("maintenance decisions require the configured authenticated human identity")
 	}
 	var req apiv1.MaintenanceDecisionRequest
@@ -138,12 +138,16 @@ func (s *Server) execMaintenance(ctx context.Context, w http.ResponseWriter, r *
 	if req.RestoreEvidence != "" && g.Spec.Maintenance.Restore == "" {
 		return 0, nil, forbidden("restore evidence requires restore/readback in the approved task")
 	}
+	originalUID, originalDigest := g.UID, broker.MaintenanceDigest(&g)
 	// A second fresh grant read narrows release races before opening the stream.
 	if err := s.Live.Get(ctx, key, &g); err != nil {
 		return 0, nil, fromGrantKubeError(err, "recheck maintenance lease")
 	}
 	if err := broker.MaintenanceActor(&g, c.session.Name, string(c.session.UID), string(c.pod.UID), s.now()); err != nil {
 		return 0, nil, forbidden("%s", err)
+	}
+	if g.UID != originalUID || broker.MaintenanceDigest(&g) != originalDigest || g.Status.Maintenance == nil || g.Status.Maintenance.Executor != "Running" || g.Status.Maintenance.PodUID != string(p.UID) {
+		return 0, nil, forbidden("maintenance grant or executor binding changed before execution")
 	}
 	end, cancel := context.WithDeadline(ctx, g.Status.ExpiresAt.Time)
 	defer cancel()

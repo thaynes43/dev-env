@@ -178,7 +178,7 @@ diff --git a/kubernetes/main/apps/kyverno/policies/app/maintenance-executor.yaml
 new file mode 100644
 --- /dev/null
 +++ b/kubernetes/main/apps/kyverno/policies/app/maintenance-executor.yaml
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,137 @@
 +# UNAPPLIED. All broker Pod writes and any maintenance identity are narrowed here.
 +apiVersion: policies.kyverno.io/v1
 +kind: ValidatingPolicy
@@ -209,6 +209,8 @@ new file mode 100644
 +      expression: resource.Get('dev-env.haynesops.com/v1alpha1', 'accessgrants', request.namespace, variables.pod.metadata.name)
 +    - name: task
 +      expression: variables.grant.spec.maintenance
++    - name: node
++      expression: resource.Get('v1', 'nodes', '', variables.task.node)
 +    - name: container
 +      expression: variables.pod.spec.containers[0]
 +    - name: mounts
@@ -231,7 +233,11 @@ new file mode 100644
 +      message: only the broker owns the exact maintenance grant executor; ephemeral containers are refused
 +    - expression: >-
 +        request.operation != 'CREATE' ||
-+        (variables.grant.status.phase == 'Active' && !variables.grant.spec.?release.orValue(false) &&
++        (variables.grant.status.phase == 'Active' &&
++         variables.node.metadata.uid == variables.task.nodeUID &&
++         !('node-role.kubernetes.io/control-plane' in variables.node.metadata.?labels.orValue({})) &&
++         !('node-role.kubernetes.io/master' in variables.node.metadata.?labels.orValue({})) &&
++         !variables.node.spec.?taints.orValue([]).exists(t, t.key in ['node-role.kubernetes.io/control-plane','node-role.kubernetes.io/master']) && !variables.grant.spec.?release.orValue(false) &&
 +         variables.pod.spec.nodeName == variables.task.node &&
 +         variables.pod.spec.serviceAccountName == 'dev-env-maintenance' &&
 +         !variables.pod.spec.automountServiceAccountToken &&
@@ -547,11 +553,15 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/grantpolicies.yaml b/k
                  type: string
              required:
              - description
-@@ -351,7 +352,7 @@
+@@ -349,9 +350,9 @@
+             - type
+             type: object
              x-kubernetes-validations:
-             - message: 'no policy can approve break-glass: Tom approves every one
-                 on the page (D-27)'
+-            - message: 'no policy can approve break-glass: Tom approves every one
+-                on the page (D-27)'
 -              rule: self.type != 'breakglass'
++            - message: 'no standing policy approves break-glass or maintenance: authenticated
++                human approval is required'
 +              rule: self.type != 'breakglass' && self.type != 'maintenance'
              - message: kube is set for type kube, and only there
                rule: (self.type == 'kube') == has(self.kube)

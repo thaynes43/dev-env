@@ -28,6 +28,8 @@ spec:
       expression: resource.Get('dev-env.haynesops.com/v1alpha1', 'accessgrants', request.namespace, variables.pod.metadata.name)
     - name: task
       expression: variables.grant.spec.maintenance
+    - name: node
+      expression: resource.Get('v1', 'nodes', '', variables.task.node)
     - name: container
       expression: variables.pod.spec.containers[0]
     - name: mounts
@@ -50,7 +52,11 @@ spec:
       message: only the broker owns the exact maintenance grant executor; ephemeral containers are refused
     - expression: >-
         request.operation != 'CREATE' ||
-        (variables.grant.status.phase == 'Active' && !variables.grant.spec.?release.orValue(false) &&
+        (variables.grant.status.phase == 'Active' &&
+         variables.node.metadata.uid == variables.task.nodeUID &&
+         !('node-role.kubernetes.io/control-plane' in variables.node.metadata.?labels.orValue({})) &&
+         !('node-role.kubernetes.io/master' in variables.node.metadata.?labels.orValue({})) &&
+         !variables.node.spec.?taints.orValue([]).exists(t, t.key in ['node-role.kubernetes.io/control-plane','node-role.kubernetes.io/master']) && !variables.grant.spec.?release.orValue(false) &&
          variables.pod.spec.nodeName == variables.task.node &&
          variables.pod.spec.serviceAccountName == 'dev-env-maintenance' &&
          !variables.pod.spec.automountServiceAccountToken &&

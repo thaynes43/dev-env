@@ -460,7 +460,7 @@ type AccessGrantList struct {
 // the policy's type, its requester matches every requester list the policy sets,
 // its scope lies inside the policy's scope, and its TTL is at most maxTTL.
 //
-// +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' && self.type != 'maintenance'",message="no policy can approve break-glass: Tom approves every one on the page (D-27)"
+// +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' && self.type != 'maintenance'",message="no standing policy approves break-glass or maintenance: authenticated human approval is required"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube') == has(self.kube)",message="kube is set for type kube, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"

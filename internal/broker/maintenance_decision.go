@@ -26,9 +26,17 @@ func (b *Broker) maintenanceDecision(ctx context.Context, g *v1alpha1.AccessGran
 		return false, nil
 	}
 	var d MaintenanceDecision
-	if len(raw) > 2048 || json.Unmarshal([]byte(raw), &d) != nil || d.GrantUID != string(g.UID) || d.Digest != MaintenanceDigest(g) || d.By != "human/dev-env-system/dev-env-human" || d.At.Before(g.CreationTimestamp.Time) || d.At.After(b.now().Time) || !b.now().Time.Before(d.At.Add(PendingTimeout)) {
+	if len(raw) > 2048 || json.Unmarshal([]byte(raw), &d) != nil || d.GrantUID != string(g.UID) || d.Digest != MaintenanceDigest(g) || d.By != b.maintenanceHumanApprover() || d.At.Before(g.CreationTimestamp.Time) || d.At.After(b.now().Time) || !b.now().Time.Before(d.At.Add(PendingTimeout)) {
 		return true, fmt.Errorf("%w: invalid maintenance decision binding", ErrRefused)
 	}
 	err := b.Decide(ctx, g.Name, Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, MaintenanceUID: d.GrantUID, MaintenanceDigest: d.Digest})
 	return true, err
+}
+
+func (b *Broker) maintenanceHumanApprover() string {
+	ref := b.MaintenanceHumanServiceAccount
+	if ref == "" {
+		ref = "dev-env-system/dev-env-human"
+	}
+	return "human/" + ref
 }

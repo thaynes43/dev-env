@@ -140,8 +140,8 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 		return 0, fmt.Errorf("%w: %s is a policy; Tom decides on the page, and break-glass only ever by him (D-27)", ErrRefused, d.By)
 	}
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
-		if !b.EnableMaintenanceGrants || d.MaintenanceUID != string(g.UID) || d.MaintenanceDigest != MaintenanceDigest(g) || d.By != "human/dev-env-system/dev-env-human" {
-			return 0, fmt.Errorf("%w: maintenance requires authenticated bound human decision", ErrRefused)
+		if !b.EnableMaintenanceGrants || d.MaintenanceUID != string(g.UID) || d.MaintenanceDigest != MaintenanceDigest(g) || d.By != b.maintenanceHumanApprover() {
+			return 0, fmt.Errorf("%w: maintenance requires a bound decision from %s", ErrRefused, b.maintenanceHumanApprover())
 		}
 	}
 	if !d.Approve {

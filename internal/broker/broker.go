@@ -112,6 +112,8 @@ type Broker struct {
 	EnableAttestedGrants bool
 	// EnableMaintenanceGrants is held default off; cleanup remains enabled.
 	EnableMaintenanceGrants bool
+	// MaintenanceHumanServiceAccount must match the operator human identity.
+	MaintenanceHumanServiceAccount string
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.

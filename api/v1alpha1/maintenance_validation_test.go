@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thaynes43/dev-env/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
 func maintenanceGrant() *v1alpha1.AccessGrant {
