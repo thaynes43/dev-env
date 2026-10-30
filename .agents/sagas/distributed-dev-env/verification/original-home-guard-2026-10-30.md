@@ -9,7 +9,9 @@ The runtime decision remains held. No runtime check or action is evidence here.
 
 ## Contract
 
-An omitted `--original-home-binding` leaves existing behavior unchanged. The
+An omitted `--original-home-binding` leaves existing behavior unchanged. Unguarded
+Pod bytes remain identical: no empty guard environment entry or init container
+is added. Only an admitted guarded Pod receives the explicit binding. The
 optional single JSON tuple has namespace, session name, exact Session UID,
 original PVC UID, PV name and exact PV UID. It grants no read or write access.
 Only an ordinary remote Codex Session without workspace, pilot, private history
