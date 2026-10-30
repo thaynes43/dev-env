@@ -57,3 +57,38 @@ func TestCodexRCRequestBounds(t *testing.T) {
 		t.Fatal("valid JSON refused")
 	}
 }
+
+func TestCodexRCTargetStructureAndFreshness(t *testing.T) {
+	now := time.Now().UTC()
+	target := CodexRCTarget{SessionName: "rc-host", SessionUID: "session", PodUID: "pod", Project: "project", Repository: "repo", SnapshotSHA256: strings.Repeat("a", 64), Root: "/home/dev/work/accepted", RootDevice: 1, RootInode: 2, PreparationSHA256: strings.Repeat("b", 64), PID: 123, BootID: "boot", StartTicks: 42, InstallationID: "installation", EnvironmentID: "environment", PairingSource: "supported-client", PairingSHA256: strings.Repeat("c", 64), VerifiedAt: now.Add(-time.Minute), ExpiresAt: now.Add(14 * time.Minute)}
+	if !target.StructurallyValid() || !target.Valid(now) {
+		t.Fatal("valid target refused")
+	}
+	for _, mode := range []string{"expired", "future", "missing-time", "equal-time", "reversed-time", "long-window", "root", "pairing"} {
+		t.Run(mode, func(t *testing.T) {
+			bad := target
+			switch mode {
+			case "expired":
+				bad.VerifiedAt, bad.ExpiresAt = now.Add(-15*time.Minute), now
+			case "future":
+				bad.VerifiedAt, bad.ExpiresAt = now.Add(time.Minute), now.Add(2*time.Minute)
+			case "missing-time":
+				bad.VerifiedAt = time.Time{}
+			case "equal-time":
+				bad.ExpiresAt = bad.VerifiedAt
+			case "reversed-time":
+				bad.ExpiresAt = bad.VerifiedAt.Add(-time.Minute)
+			case "long-window":
+				bad.ExpiresAt = bad.VerifiedAt.Add(15*time.Minute + time.Nanosecond)
+			case "root":
+				bad.Root = "/"
+			case "pairing":
+				bad.PairingSource = "connected"
+			}
+			wantStructure := mode == "expired" || mode == "future"
+			if bad.StructurallyValid() != wantStructure || bad.Valid(now) {
+				t.Fatal("target structure/freshness fence changed")
+			}
+		})
+	}
+}
