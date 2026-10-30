@@ -182,3 +182,14 @@ drift requires renewed review; no admission lookup permission is added. This sou
 runtime, the candidate image, device cgroups or driver libraries. Activation still
 requires concrete review of the exact policy and separately authorized runtime
 qualification. Release #736 and live policies are outside this change.
+
+
+Before live qualification or approval, review the exact digest-pinned executor
+image and **all baked `NVIDIA_*` environment variables**, including inherited
+image configuration. The Pod sets only `NVIDIA_VISIBLE_DEVICES` and
+`NVIDIA_DRIVER_CAPABILITIES`; the NVIDIA runtime can also consume image-defined
+variables such as `NVIDIA_MIG_CONFIG_DEVICES`, `NVIDIA_MIG_MONITOR_DEVICES` and
+other runtime flags. The admission policy cannot inspect image ENV. This profile
+therefore does not prove that image-inherited runtime settings are safe. Record
+the complete image ENV review and its disposition as an explicit prerequisite to
+live qualification and task approval; the current live-activation hold remains.

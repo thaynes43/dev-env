@@ -237,3 +237,36 @@ TLS fixtures emitted bad-certificate handshake diagnostics. Neither suite failed
 The final behavioral source was tested as transferred; a later comment only
 clarifies the quantity helper's qualification limit. Source is frozen uncommitted
 for Root's independent review. No commit/push/activation is authorized here.
+
+## PR739 advisory correction on a858cac — docs and provenance only
+
+The exact-head advisory comment6532436212 found two MEDIUM items. Both are
+addressed without changing runtime code, schema, environment shape or permissions:
+
+- Preserve the haynes-ops AccessGrant CRD provenance header, including the
+  "Never edit the schema here" warning and kustomization prune-disabled note.
+  The header now identifies merged PR732/976ae2a plus profile source PR739/a858cac
+  and explicitly keeps runtime activation held.
+- Require review of the exact executor image digest and every baked/inherited
+  `NVIDIA_*` environment variable before live qualification or task approval.
+  README names MIG config/monitor settings and explains that Pod ENV fixes only
+  UUID visibility and utility capabilities; admission cannot inspect image ENV.
+  The profile does not establish that inherited runtime flags are safe.
+
+Read-only GitHub main lookup still returned haynes-ops
+`2df49e151281eda288681d64292546692d4e5eb3`. The full corrected patch passed
+`git apply --check` and actual apply in a fresh private temporary fixture copied
+from that exact snapshot; no haynes-ops checkout was changed. After stripping
+only provenance comment lines, the applied AccessGrant CRD is byte-identical to
+the generated source CRD. The generated CRD itself remains byte-identical to
+reviewed a858cac, SHA256
+`d83d2b705039ee26fc932e142ffffc2bc290558076bc366469f4ac20c4ef5c74`.
+
+Current exact UNAPPLIED patch SHA256:
+`1c6d97c07b13a6368a2e0df21e8cc32b012324e3b8559b04076085342ca4dfa9`.
+The earlier d5262397 hash describes the pre-correction proposal. Only README,
+this evidence record and the patch header/provenance changed. Existing full Linux
+package results continue to cover unchanged code/schema; no Linux suite rerun or
+pod access was needed for this correction. New-head native delta review and normal
+CI remain required, and human source-publication approval is pending. No merge,
+image build, live policy/grant or runtime qualification follows from this update.

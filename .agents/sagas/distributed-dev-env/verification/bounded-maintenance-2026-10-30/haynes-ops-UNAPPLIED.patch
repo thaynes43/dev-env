@@ -387,19 +387,17 @@ diff --git a/kubernetes/main/apps/kyverno/policies/app/kustomization.yaml b/kube
 diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
 --- a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
 +++ b/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
-@@ -1,11 +1,4 @@
+@@ -1,7 +1,7 @@
  ---
--# The AccessGrant CRD, generated in thaynes43/dev-env from api/v1alpha1.
+ # The AccessGrant CRD, generated in thaynes43/dev-env from api/v1alpha1.
 -# Source: dev-env main eeb15e3, PR #111, including the immutable requester
 -# sessionUID field. The code is reviewed and merged; runtime minting stays off.
--# The generated config/crd/dev-env.haynesops.com_accessgrants.yaml follows below.
--# Never edit the schema here: change api/v1alpha1 in dev-env, run `make generate`,
--# and copy the result. Keep it in step with the broker/operator image pins.
--# The prune-disabled annotation is applied by kustomization.yaml.
- apiVersion: apiextensions.k8s.io/v1
- kind: CustomResourceDefinition
- metadata:
-@@ -241,6 +234,152 @@
++# Source: dev-env 976ae2a (merged PR #732), plus a858cac (source PR #739).
++# Source preparation only; runtime activation remains held.
+ # The generated config/crd/dev-env.haynesops.com_accessgrants.yaml follows below.
+ # Never edit the schema here: change api/v1alpha1 in dev-env, run `make generate`,
+ # and copy the result. Keep it in step with the broker/operator image pins.
+@@ -241,6 +241,152 @@
                      and take no namespaces; the other roles name at least one
                    rule: (self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass')
                      == (!has(self.namespaces) || size(self.namespaces) == 0)
@@ -552,7 +550,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
                reason:
                  description: |-
                    Reason is why the agent asks, in its own words. The approval page shows
-@@ -320,6 +459,7 @@
+@@ -320,6 +466,7 @@
                  - egress
                  - credential
                  - breakglass
@@ -560,7 +558,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
                  type: string
                  x-kubernetes-validations:
                  - message: immutable after create; only release may change
-@@ -335,6 +475,8 @@
+@@ -335,6 +482,8 @@
                rule: (self.type == 'kube' || self.type == 'breakglass') == has(self.kube)
              - message: egress is set for type egress, and only there
                rule: (self.type == 'egress') == has(self.egress)
@@ -569,7 +567,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
              - message: credential is set for type credential, and only there
                rule: (self.type == 'credential') == has(self.credential)
              - message: type breakglass and role dev-env-grant-breakglass go together
-@@ -350,10 +492,16 @@
+@@ -350,10 +499,16 @@
                rule: self.type != 'breakglass' || duration(self.ttl) <= duration('1h')
              - message: immutable after create; only release may change
                rule: has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress)
@@ -587,7 +585,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
            status:
              description: |-
                AccessGrantStatus is the broker's record of the grant. Only the broker
-@@ -398,6 +546,27 @@
+@@ -398,6 +553,27 @@
                    pod (a resume, a drain) gets it installed again.
                  maxLength: 64
                  type: string
