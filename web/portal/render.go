@@ -433,6 +433,102 @@ type ProductUsageTable struct {
 	Rows        []ProductUsageRow
 }
 
+// ProductAllowanceState is an account allowance's fixed user-facing state.
+type ProductAllowanceState string
+
+const (
+	AllowanceNotConnected ProductAllowanceState = "Not connected"
+	AllowanceUnknown      ProductAllowanceState = "Unknown"
+	AllowanceStale        ProductAllowanceState = "Stale"
+	AllowanceMeasured     ProductAllowanceState = "Measured"
+)
+
+// ProductAllowance is one provider's account allowance, independent of session
+// tokens and cost. Value is the typed state, never a numeric allowance.
+type ProductAllowance struct {
+	Provider string
+	Value    ProductAllowanceState
+	Reason   string
+	Windows  []ProductAllowanceWindow
+	// Observed and Provenance summarize window metadata for the compact list.
+	// Usage retains each window's metadata when observations or sources vary.
+	Observed, Provenance string
+	SeenVaries           bool
+}
+
+// ProductAllowanceWindow holds provider-reported display text. Percent includes
+// its reported direction; absent metadata is displayed as Unknown.
+type ProductAllowanceWindow struct {
+	Percent, Window, Reset, Observed, Provenance string
+}
+
+func (a ProductAllowance) Tone() string {
+	if a.Value == AllowanceStale {
+		return "wait"
+	}
+	return "muted"
+}
+
+func (a ProductAllowance) CompactWindows() []ProductAllowanceWindow {
+	var windows []ProductAllowanceWindow
+	for _, w := range a.Windows {
+		if w.Percent != "" && w.Percent != "Unknown" {
+			windows = append(windows, w)
+			if len(windows) == 2 {
+				break
+			}
+		}
+	}
+	return windows
+}
+
+func (a ProductAllowance) More() int { return len(a.Windows) - len(a.CompactWindows()) }
+
+// allowanceViews keeps the provider set fixed, fills absent metadata, and never
+// renders a percent for an untrusted state. It does not inspect session usage.
+func allowanceViews(input []ProductAllowance) []ProductAllowance {
+	out := []ProductAllowance{{Provider: "Claude", Value: AllowanceNotConnected}, {Provider: "Codex", Value: AllowanceNotConnected}}
+	for i := range out {
+		for _, a := range input {
+			if a.Provider != out[i].Provider {
+				continue
+			}
+			a.Observed, a.Provenance, a.SeenVaries = "", "", false
+			switch a.Value {
+			case AllowanceNotConnected, AllowanceUnknown:
+				a.Windows = nil
+			case AllowanceMeasured, AllowanceStale:
+				a.Windows = append([]ProductAllowanceWindow(nil), a.Windows...)
+				for j, w := range a.Windows {
+					w.Percent, w.Window, w.Reset = display(w.Percent), display(w.Window), display(w.Reset)
+					w.Observed, w.Provenance = display(w.Observed), display(w.Provenance)
+					a.Windows[j] = w
+					if j == 0 {
+						a.Observed, a.Provenance = w.Observed, w.Provenance
+					} else if w.Observed != a.Observed || w.Provenance != a.Provenance {
+						a.SeenVaries = true
+					}
+				}
+				if a.SeenVaries {
+					a.Observed, a.Provenance = "", ""
+				}
+				if len(a.CompactWindows()) == 0 {
+					a.Value, a.Reason, a.Windows = AllowanceUnknown, "No percent allowance reported", nil
+					a.Observed, a.Provenance, a.SeenVaries = "", "", false
+				}
+			default:
+				a.Value, a.Reason, a.Windows = AllowanceUnknown, "Unrecognized allowance state", nil
+			}
+			if a.Value == AllowanceUnknown {
+				a.Reason = display(a.Reason)
+			}
+			out[i] = a
+			break
+		}
+	}
+	return out
+}
+
 // ProductUsage is the Sessions page's Usage view: headline counts, account
 // allowance kept apart from token observations, breakdowns that sum reported
 // values only, the per-session table and what the numbers cover. RowsTitle
@@ -440,7 +536,7 @@ type ProductUsageTable struct {
 type ProductUsage struct {
 	Stats            []ProductStat
 	Scope, ScopeNote string
-	Allowance        []ProductField
+	Allowance        []ProductAllowance
 	Breakdowns       []ProductUsageTable
 	Columns          []string
 	Rows             []ProductUsageRow
@@ -584,6 +680,7 @@ type ProductPage struct {
 	Connected, Complete, Quiet, Preview bool
 	Groups                              []ProductGroup
 	Usage                               *ProductUsage
+	Allowance                           []ProductAllowance
 	Rail                                ProductRail
 	Filter                              ProductFilter
 	// ReadCompletedAt is the completion time of this page's successful Sessions
@@ -742,6 +839,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		Groups                                                             []productGroupView
 		Rows                                                               []productRowView
 		Usage                                                              *ProductUsage
+		Allowance                                                          []ProductAllowance
 		Launch                                                             *launchView
 		ReadFailure                                                        *productReadFailureView
 		CanLaunch                                                          bool
@@ -760,6 +858,9 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		}
 	}
 	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter, page.Title)
+	if view.Current == "sessions" && page.ReadFailure == nil {
+		view.Allowance = allowanceViews(page.Allowance)
+	}
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"
 	if view.UsageView {
 		view.Title, view.Current = "Usage", "usage"
@@ -793,6 +894,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		view.Quiet, view.ListCount, view.Usage = page.Quiet, page.ListCount, page.Usage
 		if view.UsageView && view.Usage != nil {
 			usage := *view.Usage
+			usage.Allowance = allowanceViews(usage.Allowance)
 			usage.RowsNote = strings.ReplaceAll(usage.RowsNote, "listed on the left", "shown below")
 			view.Usage = &usage
 		}

@@ -242,10 +242,9 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .coverage h2 { margin: 4px 0 14px; }
 .coverage .kv { grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); }
 .allowance, .breakdown { margin-bottom: 26px; }
+.allowance h2 { margin-top: 10px; }
 .allowance h2, .breakdown h2 { margin-bottom: 10px; font-size: 13px; font-weight: 650; }
-.allowance .kv { max-width: 520px; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); }
 .breakdown .note { margin: -4px 0 10px; }
-.allowance dd.unknown { color: var(--muted); }
 
 .statusbar { height: 26px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 14px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10px; }
 .statusbar .right { margin-left: auto; }
@@ -373,3 +372,23 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .read-failure { overflow-wrap: anywhere; }
 .read-failure p { margin: 12px 0; }
 .read-failure time { color: var(--ink); }
+
+.allowance-strip { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.allowance-link { display: flex; align-items: center; min-height: 24px; width: fit-content; max-width: 100%; }
+.allowance-provider + .allowance-provider { margin-top: 4px; }
+.allowance-strip > ul:not(:has(.allowance-windows)) { display: flex; flex-wrap: wrap; gap: 0 14px; }
+.allowance-strip > ul:not(:has(.allowance-windows)) .allowance-provider + .allowance-provider { margin-top: 0; }
+.allowance-provider-head { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.allowance-name { white-space: nowrap; }
+.allowance-provider-head > span:last-child, .allowance-windows li { min-width: 0; overflow-wrap: anywhere; }
+.allowance-windows { margin-top: 2px; }
+.allowance-windows li + li { margin-top: 2px; }
+.allowance-more { margin-top: 2px; }
+.allowance-state { margin-left: .5em; font-weight: 400; color: var(--muted); background: none; }
+.allowance-state.tone-wait { color: var(--amber); }
+.allowance-account { padding: 12px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.allowance-account h3 { margin-bottom: 12px; font-size: 12px; font-weight: 600; }
+.allowance-account th { font-size: 11px; }
+.allowance-account td { white-space: normal; overflow-wrap: anywhere; }
+.allowance-account table { table-layout: fixed; }
+.allowance-account td::before { flex-shrink: 0; }

@@ -476,7 +476,7 @@ func sessionAttention(s apiv1.PortalSessionSummary, now time.Time, link string) 
 // Usage sums reported values per group only: Unknown is never counted as zero
 // and cache reads are never added to input.
 func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time, filter portal.ProductFilter) portal.ProductPage {
-	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete, Filter: filter}
+	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete, Filter: filter, Allowance: disconnectedAllowances()}
 	group := make([]int, len(sessions))
 	projects := map[string]int{}
 	attention := 0
@@ -559,11 +559,8 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	}
 	usage := &portal.ProductUsage{
 		Scope: "Initial invocations only", ScopeNote: "Headless task sessions' first invocation is measured. Interactive sessions and later turns are not.",
-		Allowance: []portal.ProductField{
-			{Label: "Claude", Value: "Not connected"},
-			{Label: "Codex", Value: "Not connected"},
-		},
-		Columns: []string{"Session", "Input", "Output", "Cache read", "Cache create", "Est. cost"},
+		Allowance: disconnectedAllowances(),
+		Columns:   []string{"Session", "Input", "Output", "Cache read", "Cache create", "Est. cost"},
 		Coverage: []portal.ProductField{
 			{Label: "Measured", Value: "First managed invocation of headless task sessions"},
 			{Label: "Not measured", Value: "Interactive sessions, later turns"},

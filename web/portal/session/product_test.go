@@ -1282,6 +1282,9 @@ func TestServeSessionFailureDetailsAndRetry(t *testing.T) {
 				t.Errorf("%s lost %s (HTTP %d)", query, want, w.Code)
 			}
 		}
+		if strings.Contains(body, `class="allowance-strip"`) || strings.Contains(body, "#usage-allowance") || strings.Contains(body, `id="usage-allowance"`) {
+			t.Errorf("%s failed read exposed allowance or a dead link", query)
+		}
 		if query == "?view=usage" && (strings.Contains(body, `class="rail"`) || strings.Contains(body, `class="list"`) || strings.Count(body, `?view=usage" aria-current="page"`) != 2) {
 			t.Error("failed Usage read lost view state")
 		}

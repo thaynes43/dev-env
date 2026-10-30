@@ -911,6 +911,16 @@ and copy are below, under "Interface".
   - *No version number.* The copy says "an older agent". Measurement reaches a session
     only on an agent image from the first release after 2.50.0.
 
+### Account allowance on Sessions, OP305, 2026-10-30
+
+Sessions regains an account allowance display, which the 2026-10-27 "Stubs removed"
+entry above took out as an all-Unknown bar. The later OP239 request (2026-10-29)
+asks for plan remaining on this surface with window, reset, freshness and provenance.
+While nothing is connected it stays small: one link and one line. Usage's block is
+now typed and also appears on an empty read. Behaviour and states are in
+[docs/portal-read-boundary.md](../../../../docs/portal-read-boundary.md#account-allowance).
+A deployed reader remains separate work; this adds none.
+
 ## OP280: preserve login admission across portal replicas (2026-10-30)
 
 Tom's ruling recorded in OP280 journal 2986 is “Wait for the fix”: keep one

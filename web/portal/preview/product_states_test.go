@@ -13,7 +13,7 @@ func TestProductStatePreviews(t *testing.T) {
 	if err := writeProductStates(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-read-not-started", "sessions-empty", "sessions-stale", "sessions-current", "tasks-empty", "tasks-unavailable", "tasks-unknown", "tasks-not-connected"} {
+	for _, name := range []string{"sessions-allowance-seen-varies", "sessions-allowance-measured", "sessions-allowance-stale", "sessions-allowance-unknown", "usage-allowance", "usage-allowance-stale", "usage-allowance-unknown", "usage-allowance-not-connected", "usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-read-not-started", "sessions-empty", "sessions-stale", "sessions-current", "tasks-empty", "tasks-unavailable", "tasks-unknown", "tasks-not-connected"} {
 		body, err := os.ReadFile(filepath.Join(dir, name+".html"))
 		if err != nil {
 			t.Fatal(err)
@@ -23,7 +23,7 @@ func TestProductStatePreviews(t *testing.T) {
 			t.Errorf("%s lacks fixture label or contains script", name)
 		}
 		footer := regexp.MustCompile(`<footer class="statusbar">(.*?)</footer>`).FindString(text)
-		success := name == "usage" || name == "usage-empty" || name == "sessions-empty" || name == "sessions-stale" || name == "sessions-current" || name == "tasks-empty"
+		success := strings.Contains(name, "allowance") || name == "usage" || name == "usage-empty" || name == "sessions-empty" || name == "sessions-stale" || name == "sessions-current" || name == "tasks-empty"
 		const updated = `Updated <time datetime="2026-10-29T13:59:00Z">29 Oct 2026, 13:59 UTC</time>`
 		if success {
 			if !strings.Contains(footer, updated) {
@@ -165,6 +165,98 @@ func TestTaskFailureStatePreviews(t *testing.T) {
 			} else if !strings.Contains(s, `datetime="2026-10-29T13:59:00Z"`) {
 				t.Errorf("%s lacks last success", name)
 			}
+		}
+	}
+}
+
+func TestAllowancePreviewsUseMappedStates(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeProductStates(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                                  string
+		percent, stale, unknown, disconnected bool
+	}{
+		{"sessions-allowance-measured", true, false, false, false},
+		{"sessions-allowance-stale", true, true, false, false},
+		{"sessions-allowance-unknown", false, false, true, false},
+		{"usage-allowance", true, false, false, false},
+		{"usage-allowance-stale", true, true, false, false},
+		{"usage-allowance-unknown", false, false, true, false},
+		{"usage-allowance-not-connected", false, false, false, true},
+		{"usage", false, false, false, true},
+		{"usage-empty", false, false, false, true},
+	} {
+		body, err := os.ReadFile(filepath.Join(dir, tc.name+".html"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		pattern := `(?s)<div class="allowance-strip">.*?</ul></div>`
+		if strings.HasPrefix(tc.name, "usage") {
+			pattern = `(?s)<section class="allowance".*?Plan limits.*?</section>`
+		}
+		block := regexp.MustCompile(pattern).FindString(text)
+		if block == "" {
+			t.Fatalf("%s: no allowance", tc.name)
+		}
+		if strings.Contains(block, "62% left") != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || strings.Contains(block, "Not connected") != tc.disconnected {
+			t.Errorf("%s: wrong states %s", tc.name, block)
+		}
+		for _, ref := range []string{"anthropic-primary-window", "openai-primary-window", "anthropic-secondary-window", "openai-secondary-window"} {
+			if strings.Contains(text, ref) {
+				t.Errorf("%s displays opaque reference %q", tc.name, ref)
+			}
+		}
+		if tc.percent && (!strings.Contains(block, "7 days") || !strings.Contains(block, "5 hours")) {
+			t.Errorf("%s lacks duration labels", tc.name)
+		}
+		if tc.percent && strings.HasPrefix(tc.name, "sessions") && !strings.Contains(block, ">+1 more</a>") {
+			t.Errorf("%s lacks window overflow", tc.name)
+		}
+		if tc.percent && strings.HasPrefix(tc.name, "usage") && strings.Count(block, `class="allowance-window"`) != 6 {
+			t.Errorf("%s lacks full windows", tc.name)
+		}
+	}
+}
+
+func TestAllowancePreviewStatesAreUniformAndSeenVariesIsExplicit(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeProductStates(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"measured", "stale", "seen-varies"} {
+		allowances, err := allowancePreview(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, allowance := range allowances {
+			want := "Measured"
+			if state == "stale" {
+				want = "Stale"
+			}
+			if string(allowance.Value) != want {
+				t.Errorf("%s provider %s: %s, want %s", state, allowance.Provider, allowance.Value, want)
+			}
+		}
+		body, err := os.ReadFile(filepath.Join(dir, "sessions-allowance-"+state+".html"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := regexp.MustCompile(`(?s)<div class="allowance-strip">.*?</ul></div>`).FindString(string(body))
+		if block == "" {
+			t.Fatalf("%s: missing strip", state)
+		}
+		wantVaries, wantStale := 0, 0
+		if state == "seen-varies" {
+			wantVaries = 2
+		}
+		if state == "stale" {
+			wantStale = 2
+		}
+		if strings.Count(block, "Seen varies · see Usage") != wantVaries || strings.Count(block, `>Stale</span>`) != wantStale {
+			t.Errorf("%s: wrong per-provider seen or stale states: %s", state, block)
 		}
 	}
 }
