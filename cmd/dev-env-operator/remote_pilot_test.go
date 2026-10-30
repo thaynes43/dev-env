@@ -98,3 +98,30 @@ func TestRemotePilotAgentFlagsCoexist(t *testing.T) {
 		t.Fatal("remote flags changed an existing pilot tuple")
 	}
 }
+
+// Both pairs are parsed before comparison, so argv order cannot change refusal.
+func TestRemotePilotAgentFlagsRefuseCollisions(t *testing.T) {
+	const image = "ghcr.io/thaynes43/dev-env:2.69.0@sha256:0000000000000000000000000000000000000000000000000000000000000005"
+	for _, flag := range []string{"--pilot-agent-", "--task-pilot-agent-"} {
+		for _, remoteFirst := range []bool{false, true} {
+			t.Run(flag+map[bool]string{false: "legacy-first", true: "remote-first"}[remoteFirst], func(t *testing.T) {
+				remote := []string{"--remote-pilot-agent-image=" + image, "--remote-pilot-agent-session=parent|key"}
+				legacy := []string{flag + "image=" + image, flag + "session=parent/key"}
+				args := append(append([]string{}, legacy...), remote...)
+				if remoteFirst {
+					args = append(remote, legacy...)
+				}
+				if _, err := parseFlags(args); err == nil || !strings.Contains(err.Error(), "--remote-pilot-agent-session must not equal "+flag+"session (same parent and key)") {
+					t.Fatalf("collision accepted or unclear: %v", err)
+				}
+				// Either differing half permits coexistence.
+				for _, tuple := range []string{"other|key", "parent|other"} {
+					args := append(append([]string{}, legacy...), "--remote-pilot-agent-image="+image, "--remote-pilot-agent-session="+tuple)
+					if _, err := parseFlags(args); err != nil {
+						t.Fatal("distinct tuple refused", err)
+					}
+				}
+			})
+		}
+	}
+}

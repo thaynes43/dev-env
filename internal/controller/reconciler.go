@@ -199,7 +199,7 @@ type Reconciler struct {
 	// TaskPilotAgent is an independently selected, default-off Codex task image.
 	TaskPilotAgent *PilotAgent
 	// RemotePilotAgent is an independent default-off ordinary Codex remote image.
-	// The existing PilotAgent wins if both selectors match.
+	// Startup refuses tuple collisions; legacy precedence is defense in depth.
 	RemotePilotAgent *PilotAgent
 	// Recorder emits the rescue's and the archive's events on the session; nil
 	// emits none.

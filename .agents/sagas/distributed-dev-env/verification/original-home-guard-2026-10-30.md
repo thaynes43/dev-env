@@ -142,6 +142,69 @@ head. No CRD or generated API changes are part of this increment. No operator,
 agent image or template rollout follows from the PR. Built, published,
 installed and usable/accepted remain separate states.
 
+## OP286 linked local proof (2026-10-30 continuation)
+
+Work order `REMOTEPILOT286-FIX-20261030-02`, OP286 journal 3189, consumes
+PR #712's immutable `5ece982dd41d091d74ffd374b78e5df1c93ac6fe` checkpoint.
+The continuation rebases onto `94b3b09` (#710); its namespace refusal and
+replacement checks remain intact. Startup now refuses a remote parent/key
+tuple equal to either legacy or task pilot tuple, in either flag order
+(`TestRemotePilotAgentFlagsRefuseCollisions`). Legacy precedence in
+`sessionPod` remains defense in depth; startup flags cannot reach overlap.
+
+The shared test-only witness is
+[`internal/homeguard/testutil/testdata/root.json`](../../../../internal/homeguard/testutil/testdata/root.json)
+(SHA256 `d1edc5eec4e4d20314356d75c03ab6a8b907059df7eb5b113c2152f53863bbc8`).
+It carries Root's specified non-secret namespace/name/UID, parent/key/depth,
+repo and Codex remote mode, original Bound PVC/PV, owner/claimRef, reclaim
+policy and existing finalizers. Each stage reads this one fixture; the six-field
+binding is derived from its objects. These are fixture witnesses, not live
+observations. The fixture also supplies model/size/profile values needed for
+valid local rendering, and a synthetic task-pilot target/image.
+
+| Stage | Named test and actual boundary | Link/evidence |
+| --- | --- | --- |
+| A, operator | `cmd/dev-env-operator: TestRemotePilotRootStageA` (and `TestRemotePilotRootStageANegatives`) uses real `parseFlags`, `reconcilerForOptions` shared with `run`, and exported `Reconcile` on a controller-runtime fake client. The real parser accepts the templates ConfigMap. | Starts after sticky API admission with the Pod absent. Asserts original HOME claim/owner, Session/PVC/PV identity and retention, explicit binding, main and read-only init on the specified 2.69.0 digest, exact init command/args, usage target `dev-env-1028-031951` on 2.52.0, task pilot preserved, and default bytes with all pilot flags unset. |
+| B, agent | `internal/agentd: TestRemotePilotRootStageB` reads A's golden, loads its actual `AGENTD_SESSION`, and runs the existing `verifyOriginalHomeAPI` implementation against a local TLS metadata server, then `Daemon.startAgent` → `codexRemote.ensure/start` with the existing Codex process/remote and tmux fakes and a local argv-recording executable. | The init check and both native-start checks read the same three identities. Exact process argv is `remote-control start --json`, with no prompt/turn/pairing argument. Unsafe/deleting/replaced identities and PV 403 cause no provider call. No real Codex binary runs. |
+| C, CLI | `internal/agentrun: TestRemotePilotRootStageC` uses real CLI parsing/request serialization/response decoding through the existing local TLS harness. | The same fixture links A to C. A suspend ACK still has a simulated Pod; two `show --json --once` observations expose the transition to stopped/Suspended before resume. Every request resolves the same fixture name/UID, and resume returns Running on it. No local/native process runs. |
+
+A compares the rendered fields byte for byte against
+[`internal/homeguard/testutil/testdata/root-pod.golden.json`](../../../../internal/homeguard/testutil/testdata/root-pod.golden.json)
+(SHA256 `7a1ed022f42117d2fef7af26dfcdcba43ad0ccf5a5f7aa8483d67f00139be45e`).
+That committed golden is the A-to-B link: images, command/args, actual Session
+and binding env, HOME claim, owner UID, and read-only init mount. It also carries
+the rendered result after removing the remote pair AND startup binding while
+the admitted annotation remains. The guard is still explicit; a local simulated
+legacy agentd without `home-verify` exits 2 and does not enter main/native.
+This simulation does not qualify an old image or prove kubelet ordering.
+
+The negative subtests cover Session/PVC/PV UID mismatch, deleting Session/PVC,
+same-name replacement, final native-check replacement, forbidden PV GET, binding
+namespace mismatch in either flag order, and parent/key mismatch (no pilot
+image). Collision refusal is tested for both other selectors in both orders;
+changing either half permits coexistence. The existing
+`TestTmpDefaultPreservesPodBytes` still requires the original
+`c91e28583563011e5e83da0056e2965be4d79bc44212d4dafd2d494029e75e1c` golden.
+
+**Limits and untested boundaries:** this is a linked local proof, not full
+end-to-end or runtime acceptance. The three linked stages do not exercise the
+real API server/admission (including actual lifecycle admission), real kubelet
+or init ordering, CSI attachment/mounts, the real Codex client or pairing,
+installed PV GET RBAC, or the phone client. Existing focused controller envtests
+cover some API resource semantics separately; they do not close these live
+gaps. The in-cluster verifier's service-account token/CA loading is also outside
+the injected HTTP verifier boundary. The rest of boot and the supervisor
+poll/retry loop remain outside this `startAgent` boundary. Native remote starts do not use tmux; the existing tmux
+fake records no call, and no real tmux runs here. Agent-run lifecycle wire requests
+contain the session name, **no UID precondition**; C proves stable resolution and
+UID observations in its fake API, not replacement fencing on that wire.
+Queued remote-client tasks remain **UNKNOWN**, outside the local no-replay
+proof. No live API, native client, RBAC, image, flag or lifecycle action occurs.
+
+Focused local results and the independent native review receipt are recorded
+on OP286 and in the superseding PR. Hosted checks, publication, installation
+and owner acceptance remain separate.
+
 ## Deferred exact recovery approval packet
 
 After source qualification, first establish guard-capable code and consistent

@@ -371,8 +371,10 @@ init container uses that selected image too. Hold pods, existing pods and
 unmatched pods stay unchanged; unset flags preserve the existing pod bytes.
 
 The existing `--pilot-agent-*` and `--task-pilot-agent-*` pairs remain
-independent. If both the existing pilot and remote pilot match, the existing
-pilot wins. Task and remote modes cannot match both task and remote selectors.
+independent. Startup refuses a remote tuple with the same parent AND key as
+either existing pair, regardless of flag order. Legacy precedence in the pod
+builder remains only as defense in depth; flag configuration cannot reach it.
+Task and remote modes cannot match both task and remote selectors.
 Before separately approved activation, verify that the remote tuple identifies
 one session and do not reuse it: the selector does not reserve a key or enforce
 lifetime uniqueness. This source change activates no flags and grants no

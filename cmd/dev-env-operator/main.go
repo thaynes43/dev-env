@@ -504,6 +504,14 @@ func parseFlags(args []string) (options, error) {
 	if o.remotePilotAgent, err = parseRemotePilotAgent(*remotePilotImage, *remotePilotSession); err != nil {
 		return o, err
 	}
+	for _, existing := range []struct {
+		flag  string
+		pilot *controller.PilotAgent
+	}{{"--pilot-agent-session", o.pilotAgent}, {"--task-pilot-agent-session", o.taskPilotAgent}} {
+		if p := existing.pilot; o.remotePilotAgent != nil && p != nil && p.Parent == o.remotePilotAgent.Parent && p.Key == o.remotePilotAgent.Key {
+			return o, fmt.Errorf("--remote-pilot-agent-session must not equal %s (same parent and key)", existing.flag)
+		}
+	}
 	if o.ownedRootPolicy != "" {
 		if len(validation.IsDNS1123Subdomain(o.ownedRootPolicy)) != 0 || !o.taskBudgetsEnabled || o.nativeFixtureEnabled || !o.coordinatorEnabled || len(o.coordinatorHosts) != 1 || len(o.assignedTaskBudgets) != 1 {
 			return o, errors.New("owned root needs one assigned coordinator, explicit policy and no fixture")
@@ -546,6 +554,44 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("sealed pilot requires the dev-env session directory")
 	}
 	return o, nil
+}
+
+// reconcilerForOptions is the flag-derived controller configuration used by run
+// and the local original-HOME integration proof. Runtime clients are supplied by
+// the caller; no alternate dispatch or admission path is introduced.
+func reconcilerForOptions(o options) *controller.Reconciler {
+	cloneOwner := ""
+	if o.catalogBinding != nil {
+		cloneOwner = o.catalogBinding.CloneOwner
+	}
+	var decisionParents []string
+	if o.coordinatorEnabled && o.managedChildDecisions {
+		for _, host := range o.coordinatorHosts {
+			decisionParents = append(decisionParents, host.ServiceAccount)
+		}
+	}
+	return &controller.Reconciler{
+		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,
+		PilotAgent:                  o.pilotAgent,
+		TaskPilotAgent:              o.taskPilotAgent,
+		RemotePilotAgent:            o.remotePilotAgent,
+		Templates:                   types.NamespacedName{Namespace: o.templatesNamespace, Name: o.templatesName},
+		APIURL:                      o.apiURL,
+		ManagedCodexTasks:           o.managedCodexTasks,
+		RetainedCommonRules:         o.retainedCommonRules,
+		PrivateHistoryRetention:     o.privateHistoryRetention,
+		PrivateTerminalRecord:       o.privateTerminalRecord,
+		PrivateExecutorStop:         o.privateExecutorStop,
+		HomeHistoryArchive:          o.homeHistoryArchive,
+		HomeExpiryGrace:             o.homeExpiryGrace,
+		HomeExpiryDelete:            o.homeExpiryDelete,
+		PrivateProjectCanaries:      o.privateProjectCanaries,
+		PrivatePilot:                o.privatePilot,
+		PrivateProjectCloneOwner:    cloneOwner,
+		ManagedChildDecisions:       o.managedChildDecisions,
+		ManagedChildDecisionParents: decisionParents,
+		OriginalHome:                o.originalHome,
+	}
 }
 
 func run(args []string) error {
@@ -595,16 +641,6 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	var decisionParents []string
-	cloneOwner := ""
-	if o.catalogBinding != nil {
-		cloneOwner = o.catalogBinding.CloneOwner
-	}
-	if o.coordinatorEnabled && o.managedChildDecisions {
-		for _, host := range o.coordinatorHosts {
-			decisionParents = append(decisionParents, host.ServiceAccount)
-		}
-	}
 	var budgets *taskbudget.Service
 	if o.taskBudgetsEnabled {
 		budgets = &taskbudget.Service{Store: taskbudget.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.taskBudgetNamespace}, Validator: controller.ManagedBudgetEvidenceValidator{Reader: mgr.GetAPIReader()}, ManagedInspector: controller.ManagedPodAdmissionInspector{Reader: mgr.GetAPIReader(), Templates: templatesKey, Image: o.taskBudgetWorkerImage}}
@@ -644,38 +680,18 @@ func run(args []string) error {
 	// One limit on this replica's archive execs into the shelf (DESIGN-024
 	// section 5): the HOME expiry's relay and the history reads share it.
 	shelfSlots := shelf.NewExecSlots(shelf.DefaultExecSlots)
-	r := &controller.Reconciler{
-		SessionDirectory: directoryStore,
-		Client:           mgr.GetClient(),
-		TaskBudgets:      budgets, TaskBudgetWorkerImage: o.taskBudgetWorkerImage,
-		PilotAgent:                  o.pilotAgent,
-		TaskPilotAgent:              o.taskPilotAgent,
-		RemotePilotAgent:            o.remotePilotAgent,
-		Templates:                   templatesKey,
-		APIURL:                      o.apiURL,
-		ManagedCodexTasks:           o.managedCodexTasks,
-		RetainedCommonRules:         o.retainedCommonRules,
-		PrivateHistoryRetention:     o.privateHistoryRetention,
-		PrivateTerminalRecord:       o.privateTerminalRecord,
-		PrivateExecutorTerminal:     terminalCounter,
-		PrivateExecutorStop:         o.privateExecutorStop,
-		PrivateExecutorStops:        stopCounter,
-		HomeHistoryArchive:          o.homeHistoryArchive,
-		HomeExpiryGrace:             o.homeExpiryGrace,
-		HomeExpiryCounters:          expiryCounters,
-		HomeExpiryDelete:            o.homeExpiryDelete,
-		HistoryRelay:                &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots},
-		PrivateProjectCanaries:      o.privateProjectCanaries,
-		PrivatePilot:                o.privatePilot,
-		PrivateProjectCloneOwner:    cloneOwner,
-		ManagedChildDecisions:       o.managedChildDecisions,
-		ManagedChildDecisionParents: decisionParents,
-		APIReader:                   mgr.GetAPIReader(),
-		OriginalHome:                o.originalHome,
-		Rescuer:                     rescuer,
-		WorkspaceStopper:            rescuer,
-		Recorder:                    mgr.GetEventRecorder(binaryName),
-	}
+	r := reconcilerForOptions(o)
+	r.TaskBudgets = budgets
+	r.SessionDirectory = directoryStore
+	r.Client = mgr.GetClient()
+	r.PrivateExecutorTerminal = terminalCounter
+	r.PrivateExecutorStops = stopCounter
+	r.HomeExpiryCounters = expiryCounters
+	r.HistoryRelay = &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots}
+	r.APIReader = mgr.GetAPIReader()
+	r.Rescuer = rescuer
+	r.WorkspaceStopper = rescuer
+	r.Recorder = mgr.GetEventRecorder(binaryName)
 	if err := r.SetupWithManager(mgr); err != nil {
 		return err
 	}

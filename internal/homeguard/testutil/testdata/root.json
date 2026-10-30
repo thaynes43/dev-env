@@ -1,0 +1,71 @@
+{
+  "Session": {
+    "apiVersion": "dev-env.haynesops.com/v1alpha1",
+    "kind": "AgentSession",
+    "metadata": {
+      "namespace": "dev-agents",
+      "name": "dev-env-1019-205125",
+      "uid": "e9a76314-3064-4dce-b4a6-5bb783105bf3",
+      "labels": {
+        "dev-env.haynesops.com/idempotency-key": "v2-codex-host-1019-01",
+        "dev-env.haynesops.com/depth": "0"
+      },
+      "finalizers": ["dev-env.haynesops.com/rescue"]
+    },
+    "spec": {
+      "parent": "dev/dev-env",
+      "repo": "dev-env",
+      "base": "origin/main",
+      "agent": "codex",
+      "mode": "remote",
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "size": "M",
+      "profile": "full",
+      "operatingMode": "Running"
+    }
+  },
+  "PVC": {
+    "apiVersion": "v1",
+    "kind": "PersistentVolumeClaim",
+    "metadata": {
+      "namespace": "dev-agents",
+      "name": "home-dev-env-1019-205125",
+      "uid": "03912a1c-df4d-4b72-811f-2c34dd3abe25",
+      "finalizers": ["dev-env.haynesops.com/rescue", "kubernetes.io/pvc-protection"],
+      "ownerReferences": [{
+        "apiVersion": "dev-env.haynesops.com/v1alpha1", "kind": "AgentSession",
+        "name": "dev-env-1019-205125", "uid": "e9a76314-3064-4dce-b4a6-5bb783105bf3", "controller": true
+      }]
+    },
+    "spec": {
+      "volumeName": "pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25",
+      "accessModes": ["ReadWriteOnce"],
+      "resources": {"requests": {"storage": "40Gi"}},
+      "storageClassName": "gasha01-rbd"
+    },
+    "status": {"phase": "Bound"}
+  },
+  "PV": {
+    "apiVersion": "v1",
+    "kind": "PersistentVolume",
+    "metadata": {
+      "name": "pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25",
+      "uid": "b9455c08-72e0-43d2-9a88-04c389c27a74",
+      "finalizers": ["kubernetes.io/pv-protection"]
+    },
+    "spec": {
+      "persistentVolumeReclaimPolicy": "Delete",
+      "claimRef": {
+        "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+        "namespace": "dev-agents", "name": "home-dev-env-1019-205125", "uid": "03912a1c-df4d-4b72-811f-2c34dd3abe25"
+      }
+    },
+    "status": {"phase": "Bound"}
+  },
+  "RemoteImage": "ghcr.io/thaynes43/dev-env:2.69.0@sha256:9375dd06fd3729b492bf1faa85897e7bc31d65b25fd6593434421f2493659303",
+  "UsageImage": "ghcr.io/thaynes43/dev-env:2.52.0@sha256:87e8ab9346c2f656c0dfe19eb3d09ae89e220a341dd86e30e9ef0d43230204f9",
+  "UsageParent": "dev-env-1027-111645", "UsageKey": "usage-pilot-1", "UsageName": "dev-env-1028-031951",
+  "TaskImage": "ghcr.io/thaynes43/dev-env:2.69.0@sha256:0000000000000000000000000000000000000000000000000000000000000004",
+  "TaskParent": "dev-env-1019-205125", "TaskKey": "task-pilot-1", "TaskName": "offline-task-pilot"
+}

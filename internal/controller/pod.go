@@ -165,8 +165,9 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err != nil {
 		return nil, err
 	}
-	// Apply the remote selector first so existing pilot targets retain their
-	// images on overlap. Task and remote selection are disjoint by mode.
+	// Defense in depth: legacy selection wins on overlap. Startup flags refuse
+	// equal parent/key tuples, so flag configuration cannot reach this case.
+	// Task and remote selection are also disjoint by mode.
 	applyRemotePilotImage(pod, s, r.RemotePilotAgent)
 	applyPilotImage(pod, s, r.PilotAgent)
 	applyTaskPilotImage(pod, s, r.TaskPilotAgent)
