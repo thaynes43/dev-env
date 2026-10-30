@@ -964,6 +964,11 @@ type AgentStatus struct {
 	// +optional
 	LastHeartbeat *metav1.Time `json:"lastHeartbeat,omitempty"`
 
+	// StartedAt is when the agent process started, as the session pod reported
+	// it on its own heartbeat. An accepted value does not move backwards.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
 	// Agentd is agentd's version line.
 	// +optional
 	Agentd string `json:"agentd,omitempty"`
@@ -990,6 +995,13 @@ type AgentStatus struct {
 	// handle a resume uses.
 	// +optional
 	ConversationID string `json:"conversationId,omitempty"`
+
+	// RemoteControlSessionID is the Remote Control bridge session id from that
+	// same heartbeat when it matches the apiv1 bridge id pattern.
+	// +kubebuilder:validation:MaxLength=136
+	// +kubebuilder:validation:Pattern=`^session_[A-Za-z0-9_-]{8,128}$`
+	// +optional
+	RemoteControlSessionID string `json:"remoteControlSessionId,omitempty"`
 
 	// Task is how a task ended, once it has.
 	// +optional
@@ -1149,6 +1161,7 @@ type RemoteControlStatus struct {
 	Name string `json:"name,omitempty"`
 
 	// SessionID is the Remote Control session id.
+	// +kubebuilder:validation:MaxLength=136
 	// +optional
 	SessionID string `json:"sessionId,omitempty"`
 
