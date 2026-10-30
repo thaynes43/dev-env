@@ -100,10 +100,15 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	receipt := apiv1.CodexRCReceipt{Caller: c.identity.Username, RequestID: req.RequestID, ClientSHA256: digest, DispatchSHA256: apiv1.CodexRCHash(dispatch), Target: target, Model: req.Model, Effort: req.Effort, State: "reserved", Reason: "create_unconfirmed", StartedAt: s.now().UTC()}
 	exec := func(operation string) (apiv1.CodexRCReceipt, error) {
 		var result apiv1.CodexRCReceipt
-		input, _ := json.Marshal(dispatch)
+		var input bytes.Buffer
+		encoder := json.NewEncoder(&input)
+		encoder.SetEscapeHTML(false)
+		if encoder.Encode(dispatch) != nil || input.Len() > apiv1.CodexRCMaxRequest+apiv1.CodexRCMaxPacket {
+			return result, newError(503, apiv1.CodeUnavailable, "codex RC operation unconfirmed")
+		}
 		stdout := &limitedBuffer{max: apiv1.CodexRCMaxPacket + 1}
 		// No shell, dynamic method, new listener, process launch or caller path.
-		err := s.Exec.Run(ctx, key.Namespace, key.Name, controller.ContainerName, []string{"agentd", "ctl", "codex-thread", operation}, bytes.NewReader(input), stdout, io.Discard)
+		err := s.Exec.Run(ctx, key.Namespace, key.Name, controller.ContainerName, []string{"agentd", "ctl", "codex-thread", operation}, &input, stdout, io.Discard)
 		if err != nil || apiv1.DecodeCodexRC([]byte(stdout.String()), &result, apiv1.CodexRCMaxPacket) != nil || result.Caller != c.identity.Username || result.ClientSHA256 != digest || result.DispatchSHA256 != receipt.DispatchSHA256 || apiv1.CodexRCHash(result.Target) != apiv1.CodexRCHash(target) || result.RequestID != req.RequestID || result.Model != req.Model || result.Effort != req.Effort {
 			return result, newError(503, apiv1.CodeUnavailable, "codex RC operation unconfirmed")
 		}
@@ -141,6 +146,11 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 		if result.Acknowledged() {
 			receipt.State, receipt.Reason = "confirmed", "thread_and_turn_acknowledged"
 			status = http.StatusCreated
+		} else if result.State == "refused" && result.Reason == "qualification_refused" && result.ThreadID == "" && result.TurnID == "" && !result.StartedAt.IsZero() && !result.FinishedAt.Before(result.StartedAt) {
+			// The host explicitly refused before consuming native thread/turn
+			// mutation. Passive reads may have run; the one-use fence stays set.
+			receipt.State, receipt.Reason = "refused", "qualification_refused"
+			status = http.StatusConflict
 		}
 	}
 	// Do not clear a reservation on refusal or lost ACK. Its state remains

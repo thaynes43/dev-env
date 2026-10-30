@@ -35,6 +35,11 @@ nor operation on any paired host.
   context. Execution remains deadline-bound; failures retain the consumed fence.
   Independent review of the correction found no findings. New tests/checks and
   final head receipts belong in the PR and canonical OP record.
+  Fresh review after rebase also identified maximum-handoff JSON expansion,
+  definite refusal attribution, and a missing exact design contract. The
+  correction disables HTML expansion on the wire while preserving canonical
+  hashes, retains only the fixed verified pre-mutation refusal without
+  releasing its fence, and records the implemented shape in DESIGN-038 3/3b.
 
 PR696 must go to **main after PR690**, with a retarget/rebase and fresh checks
 on the resulting head. Never merge it into PR690's dependency branch. Discovery
@@ -70,7 +75,7 @@ Read-only Kubernetes metadata confirms:
 | Retained Pod | UID `c77255fd-99c4-4c7c-8420-74c43bac0417`; Failed/Evicted; `/tmp` EmptyDir exceeded 8Gi |
 | Container evidence | Exit 137, `ContainerStatusUnknown`, no start/finish timestamps; this is not a stronger terminal receipt |
 | HOME claim | `home-dev-env-1019-205125`, UID `03912a1c-df4d-4b72-811f-2c34dd3abe25`; Bound; 40Gi; gasha01-rbd |
-| Bound PV name | `pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25`; its immutable UID must also be recorded again before any operation |
+| Bound PV | `pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25`, UID `b9455c08-72e0-43d2-9a88-04c389c27a74`; Bound, reclaimPolicy Delete, no deletion; recheck before operation, no retention change authorized |
 | Installed agent | 2.45.0, commit `86cef5bb619bbde29610e3436299a3a4362b7a88` |
 | Installed operator | image `sha-3e3e93d`, digest `8cf8a2ba541033280563cb483aa891f49e990358d2a9f347648140f827afdd10` |
 | Current template agent | 2.45.0, digest `9578576cfef3dcf87f28189508ad28154deb109c8dbeee6bee308e1406d496eb`; archiveAfter 168h |
@@ -140,6 +145,11 @@ refuse absent, replaced, foreign or deleting HOME and never create a replacement
 claim, release finalizers or manufacture terminal evidence. Test disappearance
 between acceptance and recreation as well as unchanged-HOME success. This
 targeted guard needs no reset framework, roles or new platform.
+
+**Q-252-01, pending:** choose the original-HOME-UID source guard first
+(recommended), explicitly approve one existing lifecycle cycle with the stated
+limits, or keep paused. The native question tool accepted emission; no phone
+delivery or owner answer is established by that receipt. Runtime stays held.
 
 ## Legacy screenshot provenance and the exact blocked read
 

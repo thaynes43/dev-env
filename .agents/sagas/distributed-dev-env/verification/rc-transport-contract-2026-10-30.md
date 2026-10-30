@@ -1,5 +1,15 @@
 # Existing Codex daemon transport: proof and activation packet
 
+**Historical proposal; request shape superseded by OP272/PR696.** The
+[DESIGN-038 3/3b contract](../designs/038-remote-control-launch.md#33b--default-off-existing-daemon-operator-action-op272)
+and [implementation packet](rc-thread-implementation-2026-10-30.md) describe
+the later default-off route, initial handoff/`turn/start`, exact replay status
+and retained one-launch-per-UID fence. Statements below that the operation is
+unimplemented or must not carry a handoff describe this earlier proposal,
+not the resulting source. Runtime activation and target qualification remain
+held. The earlier driving-model self-description is not provider-served model
+evidence; served model remains Unknown.
+
 2026-10-30 UTC. [OP272](https://work.haynesnetwork.com/work_packages/272),
 proposal journal 2913; existing [OP267](https://work.haynesnetwork.com/work_packages/267)
 and [OP271](https://work.haynesnetwork.com/work_packages/271), Epic 91.

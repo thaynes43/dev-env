@@ -849,3 +849,68 @@ Artifacts/handoff: exact source/schema/inventory references, PR/head, finite tes
 and review evidence, caller matrix, preserved-host assertions, installation and
 usable evidence as separate states. Stop on acceptance, dependency/approval hold
 or budget limit. Do not start another story or runtime check automatically.
+
+### 3/3b — Default-off existing-daemon operator action (OP272)
+
+The source increment in PR696 implements a narrow operation on the existing
+authenticated operator listener: `POST /v1/sessions/{name}/codex-thread`.
+`--enable-codex-rc-thread` defaults false (route absent/404); enabling it also
+requires the existing API, an accepted catalog binding and an explicit bounded
+`--codex-rc-target-file`. The target file is structurally validated at startup;
+its maximum 15-minute qualification must still be fresh at each new request
+and at the host before mutation. An expired qualification must refuse this
+operation without preventing the operator from starting.
+
+The unchanged caller predicate admits the configured human, trusted client or
+recognized live workbench. Ordinary session callers and `kindCoordinator` are
+refused; Q-267-01 grants no new authority here. The configured target binds one
+Session UID, Pod UID, accepted project/repository snapshot, exact prepared root
+and device/inode, process PID/boot/start identity, installation/environment and
+independent supported-client pairing evidence. Connected or code-issued state
+cannot supply that evidence. No LIVE tuple is qualified by the source PR.
+
+The strict request has `requestID`, `sessionUID`, `podUID`, `project`,
+`repository`, full `model`, `effort`, `handoff` and absolute `deadline` fields.
+The body is at most 16KiB, the nonempty UTF-8 handoff at most 4096 bytes, and the
+deadline at most 30 seconds ahead. Unknown/duplicate members, caller paths,
+native methods, existing thread IDs and pairing assertions are refused. The
+operator resolves catalog state itself and sends a bounded typed dispatch on
+stdin to fixed `agentd ctl codex-thread preflight|start` through its existing
+PodExecutor; no shell, listener, grant or generic RPC is added. Wire JSON avoids
+HTML expansion of valid handoff text; its canonical digest remains unchanged.
+
+After passive preflight and fresh target checks, a resourceVersion CAS reserves
+one intent in the target Session annotation. The host rechecks configuration,
+preparation and process identity and fsyncs its exclusive local fence immediately
+before mutation. On the existing peer-verified daemon, it sends one fresh
+`thread/start` with the exact root/model and `environments: []`, then one initial
+`turn/start` with the handoff and configured effort. It never resumes a thread,
+pairs, starts a daemon, creates a host or retries either native mutation.
+
+The retained annotation/local fence permits **one launch per AgentSession UID**.
+It is not the complete reusable-host launcher: distinct future conversations
+on the same paired host remain a product gap. Do not reset this fence by
+recreating the host. Reservations are never cleared on uncertainty or refusal.
+An acknowledged thread and turn produce `201` with `confirmed`; a verified
+pre-mutation refusal retains the fixed `refused/qualification_refused` result
+and `409`; lost or inconsistent evidence remains `unconfirmed` with `503`.
+Only final receipt persistence receives a separate bounded five-second context;
+execution keeps its original deadline and the receipt write retains UID,
+frozen-annotation and resourceVersion checks. Identical replay returns `200`
+only for a stored acknowledged result, otherwise `409` with the stored receipt;
+conflicting/new keys cannot bypass the fence. Replay never executes again.
+
+Receipts prove native acknowledgements and configured model/effort only. Served
+model, completed inference, old pairing restoration, link visibility and phone
+handoff acceptance remain unknown without their own witnesses. `agent-run rc
+start --agent codex` still has its earlier adapter refusal; this source API is
+not evidence that the Mac connector or old paired computers are repaired.
+
+This contract supersedes the earlier
+[transport proposal](../verification/rc-transport-contract-2026-10-30.md)'s
+proposed no-handoff/no-turn shape. Retain that packet as historical transport
+evidence, not the implemented request contract. Source tests and review qualify
+the disabled increment only; install, activation, RPC and failed-host restart
+still need an exact separately accepted runtime plan. The
+[recovery packet](../verification/codex-rc-recovery-qualification-2026-10-30.md)
+qualifies ordinary remote lifecycle recovery separately from fresh creation.
