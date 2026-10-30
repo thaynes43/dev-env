@@ -173,6 +173,10 @@ func TestTerminalTaskReclaimProtectionTable(t *testing.T) {
 		{"shared", func(f *terminalFixture, r *Reconciler) { f.s.Spec.Workspace = &v1alpha1.WorkspaceSpec{} }},
 		{"canary", func(f *terminalFixture, r *Reconciler) { f.s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{} }},
 		{"pilot", func(f *terminalFixture, r *Reconciler) { f.s.Spec.PrivatePilot = &v1alpha1.PrivatePilotBinding{} }},
+		{"reaping", func(f *terminalFixture, r *Reconciler) {
+			f.s.Finalizers = []string{Finalizer}
+			f.s.DeletionTimestamp = &metav1.Time{Time: f.now}
+		}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -480,6 +484,13 @@ func TestTerminalTaskRetentionLatchInAgentSessionDocument(t *testing.T) {
 			s.Spec.Limits = nil
 		}, false},
 		{"shared", func(s *v1alpha1.AgentSession) { s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "shared"} }, false},
+		// Reclaim never stops an original-home task, so it keeps D-58 resume.
+		{"original-home", func(s *v1alpha1.AgentSession) {
+			if s.Annotations == nil {
+				s.Annotations = map[string]string{}
+			}
+			s.Annotations[homeguard.Annotation] = "retained-host"
+		}, false},
 	} {
 		for _, reclaim := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/reclaim=%t", test.name, reclaim), func(t *testing.T) {

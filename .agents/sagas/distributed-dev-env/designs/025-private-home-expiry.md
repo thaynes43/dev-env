@@ -2410,7 +2410,9 @@ Only a private headless task with intact admission, original HOME and executor
 identity qualifies. Local/interactive and remote/RC Sessions, reusable hosts,
 canaries/pilots, shared workspaces, hold Pods, active
 providers, attached clients, live or unproved descendants and owner holds never
-qualify. Configured coordinator hosts use a separate, non-session ServiceAccount
+qualify. A Session being reaped (deletion requested) is outside this path: the
+reap's own stop under section 4 owns it, and reclaim neither suspends it nor
+requests a stop. Configured coordinator hosts use a separate, non-session ServiceAccount
 and are outside this path; no configured-host name matching is claimed. A task
 coordinating descendants remains protected by the parent walk. An invalid
 HOME-expiry override is a hold. Cached eligibility and protection checks run
@@ -2447,11 +2449,23 @@ invented: existing output, logs, worktree and tracker handoff retain those
 references. An old agent without exit proof remains retained.
 
 When reclaim is on (its flag and both prerequisite flags), the operator
-explicitly marks a private-history-retained task in its session document. With
-reclaim off, private history retention alone sets no mark, so every retained
-task keeps D-58's TUI resume after a container restart. The mark is fixed when
-the Pod is created: turning reclaim on or off reaches a running task only
-through its next Pod. Only the marked scope refuses automatic resume for a saved terminal result
+explicitly marks a private-history-retained task in its session document. The
+mark uses reclaim's own static scope, so an original-home, canary or pilot task
+that reclaim never stops is never marked. With reclaim off, private history
+retention alone sets no mark, so every retained task keeps D-58's TUI resume
+after a container restart.
+
+The mark is fixed when the Pod is created, and a retained private task has
+exactly one executor Pod. Turning reclaim on therefore leaves every existing
+task unmarked for life, and reclaim still applies to those tasks: reclaiming
+idle compute created before activation is the purpose of this section. If an
+unmarked Pod's container restarts after its provider exits, agentd resumes the
+TUI. The agent then no longer reports Exited, so the proof fails and reclaim
+keeps the Pod (ProofUnknown). If that restart lands after the automatic
+suspend but before the stop request, the Session stays suspended with the Pod
+running and no stop: safe, with compute retained as it is today. If heartbeat
+lag hides the resume, the stop can end that unattended resumed TUI; the HOME
+and history stay retained. Only the marked scope refuses automatic resume for a saved terminal result
 or exit proof, or an interrupted retained launch. Other tasks keep D-58 resume
 and its Interrupted message. A retained private task never automatically starts a provider from its saved
 launch on a later boot, including the TUI `BuildResume` path and interrupted
@@ -2466,9 +2480,11 @@ Two operating limits, recorded 2026-10-30 from the #729 review:
   field, and the CRD rule that keeps the observation immutable refuses the
   write. Turn reclaim off with `--enable-terminal-task-pod-reclaim=false`; keep
   the operator at or above this version.
-- **A resume only helps before the stop request.** An explicit resume restarts
-  the grace while the controller is still waiting. Once the stop request is
+- **A resume delays reclaim by one grace; it does not cancel it.** An explicit
+  resume restarts the grace from `resumed-at`. Once the stop request is
   confirmed and applied to the Pod, a later resume does not withdraw it: the
-  Pod's containers still stop, and the resume does not restart them. The
-  guarded delete then waits, because it requires a suspended Session; the HOME
-  stays retained either way.
+  Pod's containers still stop, and the resume does not restart them. After that
+  grace the controller suspends the Session again (`suspended-by=terminal-task-reclaim`)
+  and deletes the ended Pod, because its proof still holds.
+  `TestTerminalTaskReclaimExplicitResumeRestartsGraceAndSetsSuspender` pins
+  this. The HOME stays retained either way.

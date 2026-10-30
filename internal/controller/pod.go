@@ -564,7 +564,7 @@ func CheckAgentdSession(s *v1alpha1.AgentSession) error {
 // private task keeps D-58's TUI resume after a container restart.
 func sessionDocument(s *v1alpha1.AgentSession, retentionLatch bool) (string, error) {
 	d := protocol.Session{
-		PrivateHistoryRetained: retentionLatch && privateHistoryProtected(s) && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace == nil,
+		PrivateHistoryRetained: retentionLatch && privateHistoryProtected(s) && terminalTaskReclaimScope(s),
 		SessionUID:             string(s.UID),
 		Name:                   s.Name,
 		Repo:                   s.Spec.Repo,

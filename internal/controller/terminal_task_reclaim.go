@@ -114,10 +114,17 @@ func taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) error {
 	return nil
 }
 
+// terminalTaskReclaimScope is the static part of reclaim eligibility. The
+// session document's retention latch uses the same scope (pod.go), so a
+// Session reclaim never stops keeps D-58's TUI resume.
+func terminalTaskReclaimScope(s *v1alpha1.AgentSession) bool {
+	_, originalHome := s.Annotations[homeguard.Annotation]
+	return s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace == nil && s.Spec.ProjectCanary == nil && s.Spec.PrivatePilot == nil && !originalHome
+}
+
 // terminalTaskSessionAllowed is also safe on the cache: refusals grant no action.
 func terminalTaskSessionAllowed(s *v1alpha1.AgentSession, now time.Time) (string, error) {
-	_, originalHome := s.Annotations[homeguard.Annotation]
-	if s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil || originalHome {
+	if !terminalTaskReclaimScope(s) {
 		return "Protected", errors.New("interactive, reusable or pilot session is protected")
 	}
 	if homeExpiryHeld(s) {
@@ -230,7 +237,8 @@ func (r *Reconciler) terminalTaskStopDue(s *v1alpha1.AgentSession) bool {
 // is incomplete. Mutations are serialized by the existing confirmed status
 // write, stop intent and guarded delete; nothing is recreated after a loss.
 func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alpha1.AgentSession) (ctrl.Result, bool, error) {
-	if !r.terminalTaskReclaimOn() || !privateHistoryProtected(s) || s.Spec.Mode != v1alpha1.ModeTask {
+	// A Reaping Session belongs to the reap path's own stop (section 4).
+	if !r.terminalTaskReclaimOn() || !privateHistoryProtected(s) || s.Spec.Mode != v1alpha1.ModeTask || !s.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, false, nil
 	}
 	if h, a := s.Status.PrivateHistory, s.Status.Agent; s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended &&
