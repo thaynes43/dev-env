@@ -228,7 +228,10 @@ repair its authentication as a delivery prerequisite. (It did run on most PRs on
 `RELEASE_APP_ID` or `RELEASE_APP_PRIVATE_KEY` is missing, release-please falls back
 to `GITHUB_TOKEN`, and a PR opened that way starts no workflows: then close and reopen
 the release PR (`gh pr close <n> && gh pr reopen <n>`) as haynes-dev-bot so
-`CI - Success` runs, after every update to it. Agents squash-merge a green release PR
+`CI - Success` runs, after every update to it. This applies only to a release PR that
+started no workflows. It is not a way to re-run failed CI on any other PR. If a re-run
+or any other action is denied, stop and report the denial on the tracker; do not close
+and reopen, push empty commits or use another route or identity. Agents squash-merge a green release PR
 themselves, like any other PR, once they have checked that the version and changelog
 are sane, any available advisory findings are resolved, and `CI - Success` is green on
 its head (Tom, 2026-10-07: "Merge, and let
