@@ -191,6 +191,7 @@ var agentdLayout = []historyRule{
 	// pairing code was issued. Neither holds a code or any native output.
 	{"codex-remote.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-pair-issued.json", protocol.HistoryClassNotHistory, kindAny},
+	{"codex-rc-once.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-preparation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"common-rule-ownership.json", protocol.HistoryClassNotHistory, kindAny},
 	{"common-launch-inputs.json", protocol.HistoryClassNotHistory, kindAny},

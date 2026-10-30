@@ -630,6 +630,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return credentialCtl(ctx, args, stdin, stdout, stderr, getenv, r)
 		case "login":
 			return loginCtl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
+		case "codex-thread":
+			return codexRCCtl(ctx, args[1:], stdin, stdout, stderr, getenv)
 		case "codex-pair":
 			return codexPairCtl(ctx, args[1:], stdout, stderr, getenv)
 		case "deliver", "log":

@@ -116,6 +116,8 @@ type Server struct {
 	PrivatePilot          *projectcanary.PilotPolicy
 	PrivateProjectTasks   bool
 	ManagedCodexTasks     bool
+	CodexRCEnabled        bool
+	CodexRCTarget         *apiv1.CodexRCTarget
 	ManagedChildDecisions bool
 	// Canaries remain independent of ordinary private task admission. Nil is off.
 	PrivateProjectCanaries  *projectcanary.Policy
@@ -223,6 +225,7 @@ func (s *Server) Handler() http.Handler {
 	if len(s.PortalLaunchRepos) > 0 {
 		mux.Handle(apiv1.PortalLaunchPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalLaunch}}))
 	}
+	s.registerCodexRC(mux)
 	s.registerReminders(mux)
 	s.registerAsks(mux)
 	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())

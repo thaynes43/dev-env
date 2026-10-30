@@ -1,0 +1,548 @@
+package apiserver
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/templates"
+)
+
+type rcExec struct {
+	mu          sync.Mutex
+	calls       []string
+	fail        string
+	beforeStart func()
+	afterACK    func()
+	startResult func(*apiv1.CodexRCReceipt)
+	dispatch    func([]byte, apiv1.CodexRCDispatch)
+	now         time.Time
+}
+
+func (e *rcExec) Run(_ context.Context, ns, pod, container string, args []string, in io.Reader, out, stderr io.Writer) error {
+	if ns != sessionNS || pod != "rc-host" || container != "agent" || len(args) != 4 || strings.Join(args[:3], " ") != "agentd ctl codex-thread" {
+		panic("unexpected exec")
+	}
+	e.mu.Lock()
+	e.calls = append(e.calls, args[3])
+	e.mu.Unlock()
+	raw, err := io.ReadAll(in)
+	if err != nil {
+		panic("bad stdin")
+	}
+	d, err := agentd.ReadCodexRCDispatch(bytes.NewReader(raw))
+	if err != nil {
+		panic("bad stdin")
+	}
+	if e.dispatch != nil {
+		e.dispatch(raw, d)
+	}
+	if args[3] == "start" && e.beforeStart != nil {
+		e.beforeStart()
+	}
+	if args[3] == e.fail {
+		return errors.New("SECRET PROVIDER STDERR")
+	}
+	rec := apiv1.CodexRCReceipt{Caller: d.Caller, RequestID: d.Request.RequestID, ClientSHA256: d.ClientSHA256, DispatchSHA256: apiv1.CodexRCHash(d), Target: d.Target, Model: d.Request.Model, Effort: d.Request.Effort, State: "qualified", Reason: "qualified", StartedAt: e.now, FinishedAt: e.now}
+	if args[3] == "start" {
+		rec.State, rec.Reason, rec.ThreadID, rec.TurnID = "confirmed", "thread_and_turn_acknowledged", "fresh-thread", "first-turn"
+		if e.startResult != nil {
+			e.startResult(&rec)
+		}
+	}
+	err = json.NewEncoder(out).Encode(rec)
+	if args[3] == "start" && err == nil && e.afterACK != nil {
+		e.afterACK()
+	}
+	return err
+}
+func rcFixture(t *testing.T) (*fixture, apiv1.CodexRCRequest, *rcExec) {
+	t.Helper()
+	f := coordinatorFixture(t)
+	f.now = time.Now().UTC()
+	bindCatalogFixture(t, f)
+	f.sessionPod("rc-host", "dev", 0)
+	key := types.NamespacedName{Namespace: sessionNS, Name: "rc-host"}
+	var sess v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), key, &sess); err != nil {
+		t.Fatal(err)
+	}
+	sess.Spec.Agent, sess.Spec.Mode, sess.Spec.Prompt = "codex", "remote", ""
+	if err := f.c.Update(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+	sess.Status.Phase = v1alpha1.PhaseRunning
+	if err := f.c.Status().Update(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), key, &pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if err := f.c.Status().Update(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _, err := f.srv.Projects.snapshot(context.Background(), f.c, "sample", "alias")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hash the canonical accepted snapshot, not a caller object.
+	target := apiv1.CodexRCTarget{SessionName: sess.Name, SessionUID: string(sess.UID), PodUID: string(pod.UID), Project: "sample", Repository: "alias", SnapshotSHA256: apiv1.CodexRCHash(json.RawMessage(snapshot)), Root: "/home/dev/work/accepted", RootDevice: 1, RootInode: 2, PreparationSHA256: strings.Repeat("a", 64), PID: 123, BootID: "boot", StartTicks: 42, InstallationID: "installation", EnvironmentID: "environment", PairingSource: "supported-client", PairingSHA256: strings.Repeat("b", 64), VerifiedAt: f.now.Add(-time.Minute), ExpiresAt: f.now.Add(5 * time.Minute)}
+	f.srv.CodexRCEnabled = true
+	f.srv.CodexRCTarget = &target
+	e := &rcExec{now: f.now}
+	f.srv.Exec = e
+	f.h = f.srv.Handler()
+	req := apiv1.CodexRCRequest{RequestID: "fresh-request", SessionUID: target.SessionUID, PodUID: target.PodUID, Project: target.Project, Repository: target.Repository, Model: "gpt-6.1-sol", Effort: "medium", Handoff: "bounded initial handoff", Deadline: f.now.Add(25 * time.Second)}
+	return f, req, e
+}
+
+const rcPath = "/v1/sessions/rc-host/codex-thread"
+
+func TestCodexRCDefaultOffAndCallerFence(t *testing.T) {
+	f, req, e := rcFixture(t)
+	f.srv.CodexRCEnabled = false
+	f.h = f.srv.Handler()
+	if w := f.do("POST", rcPath, tokHuman, req); w.Code != 404 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if len(e.calls) != 0 {
+		t.Fatal(e.calls)
+	}
+	for _, who := range []string{"human", "client", "workbench", "worker", "coordinator"} {
+		t.Run(who, func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			token := tokHuman
+			switch who {
+			case "client":
+				token = tokClient
+			case "worker":
+				token = f.sessionPod("worker", "dev", 0)
+			case "coordinator":
+				token = tokCoordinator
+			case "workbench":
+				token = f.sessionPod("workbench", "workbench", 0)
+				id := f.auth[token]
+				id.ServiceAccount = templates.WorkbenchServiceAccount
+				f.auth[token] = id
+				var pod corev1.Pod
+				_ = f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "workbench"}, &pod)
+				pod.Spec.ServiceAccountName = templates.WorkbenchServiceAccount
+				if err := f.c.Update(context.Background(), &pod); err != nil {
+					t.Fatal(err)
+				}
+				f.srv.Policy.WorkbenchServiceAccount = templates.WorkbenchServiceAccount
+			}
+			f.h = f.srv.Handler()
+			w := f.do("POST", rcPath, token, req)
+			if who == "worker" || who == "coordinator" {
+				if w.Code != 403 || len(e.calls) != 0 {
+					t.Fatal(w.Code, w.Body.String(), e.calls)
+				}
+				return
+			}
+			if w.Code != 201 || strings.Join(e.calls, ",") != "preflight,start" {
+				t.Fatal(w.Code, w.Body.String(), e.calls)
+			}
+		})
+	}
+}
+func TestCodexRCTargetAndMalformedRefusals(t *testing.T) {
+	for _, mode := range []string{"uid", "pod", "repo", "catalog", "pairing", "expired", "mode", "draining", "failed", "unknown", "duplicate", "huge", "model", "effort", "deadline", "empty"} {
+		t.Run(mode, func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			var body any = req
+			switch mode {
+			case "uid":
+				req.SessionUID = "wrong"
+			case "pod":
+				req.PodUID = "wrong"
+			case "repo":
+				req.Repository = "second"
+			case "catalog":
+				f.srv.CodexRCTarget.SnapshotSHA256 = strings.Repeat("c", 64)
+			case "pairing":
+				f.srv.CodexRCTarget.PairingSource = "connected"
+			case "expired":
+				f.srv.CodexRCTarget.ExpiresAt = f.now
+			case "mode":
+				var sess v1alpha1.AgentSession
+				key := types.NamespacedName{Namespace: sessionNS, Name: "rc-host"}
+				_ = f.c.Get(context.Background(), key, &sess)
+				sess.Spec.Mode = "task"
+				_ = f.c.Update(context.Background(), &sess)
+			case "draining", "failed":
+				var sess v1alpha1.AgentSession
+				key := types.NamespacedName{Namespace: sessionNS, Name: "rc-host"}
+				if err := f.c.Get(context.Background(), key, &sess); err != nil {
+					t.Fatal(err)
+				}
+				sess.Status.Phase = v1alpha1.PhaseDraining
+				if mode == "failed" {
+					sess.Status.Phase = v1alpha1.PhaseFailed
+				}
+				if err := f.c.Status().Update(context.Background(), &sess); err != nil {
+					t.Fatal(err)
+				}
+			case "unknown":
+				body = `{"cwd":"/tmp"}`
+			case "duplicate":
+				body = `{"requestID":"a","requestID":"b"}`
+			case "huge":
+				body = strings.Repeat(" ", apiv1.CodexRCMaxRequest+1)
+			case "model":
+				req.Model = "sol"
+			case "effort":
+				req.Effort = "none"
+			case "deadline":
+				req.Deadline = f.now.Add(time.Hour)
+			case "empty":
+				req.Handoff = ""
+			}
+			if _, ok := body.(apiv1.CodexRCRequest); ok {
+				body = req
+			}
+			w := f.do("POST", rcPath, tokHuman, body)
+			if w.Code < 400 || len(e.calls) != 0 {
+				t.Fatal(w.Code, w.Body.String(), e.calls)
+			}
+		})
+	}
+}
+func TestCodexRCOneUseSurvivesServerRestartAndUncertainty(t *testing.T) {
+	for _, fail := range []string{"", "start"} {
+		t.Run("lost-"+fail, func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			e.fail = fail
+			w := f.do("POST", rcPath, tokHuman, req)
+			if fail == "" && w.Code != 201 || fail != "" && w.Code != 503 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			var sess v1alpha1.AgentSession
+			key := types.NamespacedName{Namespace: sessionNS, Name: "rc-host"}
+			if err := f.c.Get(context.Background(), key, &sess); err != nil {
+				t.Fatal(err)
+			}
+			if string(sess.UID) != req.SessionUID || sess.Annotations[apiv1.CodexRCIntentAnnotation] == "" {
+				t.Fatal("identity/fence lost")
+			}
+			// A new handler and changed target readiness must still use the retained receipt.
+			f.srv.Now = func() time.Time { return f.now.Add(time.Hour) }
+			f.h = f.srv.Handler()
+			w = f.do("POST", rcPath, tokHuman, req)
+			want := 200
+			if fail != "" {
+				want = 409
+			}
+			if w.Code != want || len(e.calls) != 2 {
+				t.Fatal(w.Code, w.Body.String(), e.calls)
+			}
+			req.Handoff += "changed"
+			if w = f.do("POST", rcPath, tokHuman, req); w.Code != 409 {
+				t.Fatal(w.Code)
+			}
+			req.RequestID = "new-key"
+			if w = f.do("POST", rcPath, tokHuman, req); w.Code != 409 || len(e.calls) != 2 {
+				t.Fatal(w.Code, e.calls)
+			}
+		})
+	}
+}
+
+func TestCodexRCExplicitRefusalRetainsOneUseFence(t *testing.T) {
+	for _, mode := range []string{"refused", "thread", "turn", "reason", "missing-start", "reversed-time"} {
+		t.Run(mode, func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			e.startResult = func(rec *apiv1.CodexRCReceipt) {
+				rec.State, rec.Reason, rec.ThreadID, rec.TurnID = "refused", "qualification_refused", "", ""
+				switch mode {
+				case "thread":
+					rec.ThreadID = "possible-thread"
+				case "turn":
+					rec.TurnID = "possible-turn"
+				case "reason":
+					rec.Reason = "SECRET PROVIDER STDERR"
+				case "missing-start":
+					rec.StartedAt = time.Time{}
+				case "reversed-time":
+					rec.FinishedAt = rec.StartedAt.Add(-time.Second)
+				}
+			}
+			w := f.do("POST", rcPath, tokHuman, req)
+			wantStatus, wantState, wantReason := 409, "refused", "qualification_refused"
+			if mode != "refused" {
+				wantStatus, wantState, wantReason = 503, "unconfirmed", "create_unconfirmed"
+			}
+			var result apiv1.CodexRCReceipt
+			if w.Code != wantStatus || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.State != wantState || result.Reason != wantReason || strings.Contains(w.Body.String(), "SECRET") {
+				t.Fatal("wrong explicit-refusal outcome", w.Code, w.Body.String())
+			}
+			var sess v1alpha1.AgentSession
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: "rc-host"}, &sess); err != nil {
+				t.Fatal(err)
+			}
+			var saved apiv1.CodexRCReceipt
+			if apiv1.DecodeCodexRC([]byte(sess.Annotations[apiv1.CodexRCIntentAnnotation]), &saved, apiv1.CodexRCMaxPacket) != nil || saved.State != wantState || saved.Reason != wantReason {
+				t.Fatal("refusal or uncertainty was not retained", saved)
+			}
+			f.srv.Now = func() time.Time { return f.now.Add(time.Hour) }
+			f.h = f.srv.Handler()
+			w = f.do("POST", rcPath, tokHuman, req)
+			if w.Code != 409 || strings.Join(e.calls, ",") != "preflight,start" {
+				t.Fatal("replay executed a refused attempt", w.Code, e.calls)
+			}
+			req.RequestID = "different-request"
+			if w = f.do("POST", rcPath, tokHuman, req); w.Code != 409 || len(e.calls) != 2 {
+				t.Fatal("new request bypassed retained refusal", w.Code, e.calls)
+			}
+		})
+	}
+}
+
+func TestCodexRCMaxHandoffFitsActualDispatchReader(t *testing.T) {
+	for _, char := range []string{"<", ">", "&"} {
+		t.Run(char, func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			req.Handoff = strings.Repeat(char, 4096)
+			var dispatchHash string
+			e.dispatch = func(raw []byte, d apiv1.CodexRCDispatch) {
+				t.Helper()
+				want := apiv1.CodexRCDispatch{Caller: d.Caller, Request: req, Target: *f.srv.CodexRCTarget, ClientSHA256: apiv1.CodexRCClientHash(d.Caller, req)}
+				if len(raw) > apiv1.CodexRCMaxRequest+apiv1.CodexRCMaxPacket || !d.Valid(f.now) || d.Request.Handoff != req.Handoff || apiv1.CodexRCHash(d) != apiv1.CodexRCHash(want) {
+					t.Fatal("bounded dispatch changed handoff or canonical digest")
+				}
+				dispatchHash = apiv1.CodexRCHash(want)
+			}
+			var body bytes.Buffer
+			encoder := json.NewEncoder(&body)
+			encoder.SetEscapeHTML(false)
+			if err := encoder.Encode(req); err != nil || body.Len() > apiv1.CodexRCMaxRequest {
+				t.Fatal("valid handoff request could not be encoded", err)
+			}
+			w := f.do("POST", rcPath, tokHuman, body.String())
+			var receipt apiv1.CodexRCReceipt
+			if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &receipt) != nil || !receipt.Acknowledged() || receipt.DispatchSHA256 != dispatchHash || strings.Join(e.calls, ",") != "preflight,start" {
+				t.Fatal("maximum valid handoff refused", w.Code, w.Body.String(), e.calls)
+			}
+		})
+	}
+}
+
+type rcWriteClient struct {
+	client.Client
+	get    func(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error
+	update func(context.Context, client.Object, ...client.UpdateOption) error
+}
+
+func (c rcWriteClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if c.get != nil {
+		return c.get(ctx, key, obj, opts...)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c rcWriteClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	return c.update(ctx, obj, opts...)
+}
+
+func TestCodexRCReceiptPersistsAfterCancellationAtACK(t *testing.T) {
+	for _, failPersistence := range []bool{false, true} {
+		t.Run(strconv.FormatBool(failPersistence), func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			acked := false
+			e.afterACK = func() {
+				acked = true
+				cancel()
+			}
+			checkContext := func(ctx context.Context) {
+				t.Helper()
+				if err := ctx.Err(); err != nil {
+					t.Fatal("persistence inherited request cancellation", err)
+				}
+				if acked {
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) > 5*time.Second || !deadline.After(time.Now()) {
+						t.Fatal("persistence context is not bounded")
+					}
+				}
+			}
+			reads, writes := 0, 0
+			c := rcWriteClient{Client: f.c,
+				get: func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					checkContext(ctx)
+					if acked {
+						reads++
+					}
+					return f.c.Get(ctx, key, obj, opts...)
+				},
+				update: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+					checkContext(ctx)
+					if acked {
+						writes++
+						if failPersistence {
+							return errors.New("receipt write failed")
+						}
+					}
+					return f.c.Update(ctx, obj, opts...)
+				},
+			}
+			f.srv.Live, f.srv.Client = c, c
+			f.h = f.srv.Handler()
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest("POST", rcPath, bytes.NewReader(raw)).WithContext(ctx)
+			r.Header.Set("Authorization", "Bearer "+tokHuman)
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			f.h.ServeHTTP(w, r)
+			wantStatus, wantReplay := 201, 200
+			if failPersistence {
+				wantStatus, wantReplay = 503, 409
+			}
+			if w.Code != wantStatus || !acked || ctx.Err() != context.Canceled || reads != 1 || writes != 1 {
+				t.Fatal(w.Code, w.Body.String(), "persistence calls", reads, writes)
+			}
+			var sess v1alpha1.AgentSession
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: "rc-host"}, &sess); err != nil {
+				t.Fatal(err)
+			}
+			var saved apiv1.CodexRCReceipt
+			if err := apiv1.DecodeCodexRC([]byte(sess.Annotations[apiv1.CodexRCIntentAnnotation]), &saved, apiv1.CodexRCMaxPacket); err != nil {
+				t.Fatal(err)
+			}
+			if failPersistence && saved.State != "reserved" || !failPersistence && !saved.Acknowledged() {
+				t.Fatal("wrong retained outcome", saved.State)
+			}
+			// A later handler returns the retained result without another start,
+			// even after both request and qualification have expired.
+			f.srv.Live, f.srv.Client = f.c, f.c
+			f.srv.Now = func() time.Time { return f.now.Add(time.Hour) }
+			f.h = f.srv.Handler()
+			w = f.do("POST", rcPath, tokHuman, req)
+			if w.Code != wantReplay || strings.Join(e.calls, ",") != "preflight,start" {
+				t.Fatal("retained outcome replayed exec", w.Code, w.Body.String(), e.calls)
+			}
+			req.RequestID = "another-request"
+			if w = f.do("POST", rcPath, tokHuman, req); w.Code != 409 || len(e.calls) != 2 {
+				t.Fatal("new key bypassed one-use fence", w.Code, e.calls)
+			}
+		})
+	}
+}
+
+func TestCodexRCCASContentionOnlyOneMutatingExec(t *testing.T) {
+	f, req, e := rcFixture(t)
+	var arrivals atomic.Int32
+	barrier := make(chan struct{})
+	f.srv.Client = rcWriteClient{Client: f.c, update: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+		var rec apiv1.CodexRCReceipt
+		_ = json.Unmarshal([]byte(obj.GetAnnotations()[apiv1.CodexRCIntentAnnotation]), &rec)
+		if rec.State == "reserved" {
+			if arrivals.Add(1) == 2 {
+				close(barrier)
+			}
+			select {
+			case <-barrier:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return f.c.Update(ctx, obj, opts...)
+	}}
+	f.h = f.srv.Handler()
+	codes := make(chan int, 2)
+	// Exactly two fixed requests, not a stress/retry loop.
+	go func() { codes <- f.do("POST", rcPath, tokHuman, req).Code }()
+	go func() { codes <- f.do("POST", rcPath, tokHuman, req).Code }()
+	a, b := <-codes, <-codes
+	if (a != 201 || b != 409) && (a != 409 || b != 201) {
+		t.Fatal(a, b)
+	}
+	starts := 0
+	for _, op := range e.calls {
+		if op == "start" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatal(e.calls)
+	}
+}
+
+func TestCodexRCUnknownWritesKeepOneUseFence(t *testing.T) {
+	for _, mode := range []string{"reservation-unknown", "receipt-failed", "receipt-unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			updates := 0
+			f.srv.Client = rcWriteClient{Client: f.c, update: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+				updates++
+				if mode == "receipt-failed" && updates == 2 {
+					return errors.New("receipt write failed")
+				}
+				err := f.c.Update(ctx, obj, opts...)
+				if err != nil {
+					return err
+				}
+				if mode == "reservation-unknown" && updates == 1 || mode == "receipt-unknown" && updates == 2 {
+					return errors.New("write outcome unknown")
+				}
+				return nil
+			}}
+			f.h = f.srv.Handler()
+			w := f.do("POST", rcPath, tokHuman, req)
+			if w.Code < 500 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			before := len(e.calls)
+			f.h = f.srv.Handler()
+			w = f.do("POST", rcPath, tokHuman, req)
+			want := 409
+			if mode == "receipt-unknown" {
+				want = 200
+			}
+			if w.Code != want || len(e.calls) != before {
+				t.Fatal("replayed uncertain write", w.Code, w.Body.String(), e.calls)
+			}
+			req.RequestID = "different-key"
+			w = f.do("POST", rcPath, tokHuman, req)
+			if w.Code != 409 || len(e.calls) != before {
+				t.Fatal("new key bypass", w.Code, e.calls)
+			}
+			starts := 0
+			for _, op := range e.calls {
+				if op == "start" {
+					starts++
+				}
+			}
+			wantStarts := 1
+			if mode == "reservation-unknown" {
+				wantStarts = 0
+			}
+			if starts != wantStarts {
+				t.Fatal(e.calls)
+			}
+		})
+	}
+}

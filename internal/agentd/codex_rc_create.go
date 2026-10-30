@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -12,20 +13,25 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
-// This is a source-only building block, deliberately not exposed by a command or
-// operator route. The task-budget native executor is not a paired RC host.
-// A future guarded caller must supply accepted catalog/root and current pairing
-// evidence, fence the host/pod/process, and durably consume one exact intent.
+// The default-off existing-host operation supplies accepted catalog/root and
+// current pairing evidence, fences host/pod/process and durably consumes one
+// exact intent. The task-budget native executor remains a separate computer.
 // Connected status below proves transport identity, not phone pairing.
+var codexRCTurnID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+
 type codexRCThreadSelection struct {
 	InstallationID string
 	EnvironmentID  string
 	Cwd            string // exact accepted repository root on the selected host
 	Model          string
+	Effort         string
+	Handoff        string
+	BeforeTurn     func(context.Context) error
 }
 
 type codexRCThreadReceipt struct {
 	ThreadID string
+	TurnID   string
 	Cwd      string
 	Model    string // configured model, never evidence of served inference
 }
@@ -38,11 +44,13 @@ func (s codexRCThreadSelection) valid() bool {
 }
 
 // startCodexRCThread talks only to the existing peer-verified daemon. It never
-// starts a process, pairs a device, resumes a thread, sends a turn or changes
-// permissions. Errors after authorization remain unconfirmed and MUST NOT be
+// starts a process, pairs a device, resumes a thread or changes
+// permissions. An optional single initial handoff uses only the newly ACKed
+// thread on this same connection. Errors after authorization remain unconfirmed
+// and MUST NOT be
 // retried: thread/start has no idempotency key in the pinned protocol.
 func startCodexRCThread(ctx context.Context, settings Settings, expectedPID int, selection codexRCThreadSelection, authorizeOnce func(context.Context) error) (codexRCThreadReceipt, error) {
-	if !selection.valid() || authorizeOnce == nil || ctx.Err() != nil {
+	if !selection.valid() || authorizeOnce == nil || ctx.Err() != nil || (selection.Handoff != "" && (selection.BeforeTurn == nil || protocol.ValidateCodexEffort(selection.Model, selection.Effort) != nil)) {
 		return codexRCThreadReceipt{}, errCodexHostUnknown
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -90,5 +98,20 @@ func startCodexRCThread(ctx context.Context, settings Settings, expectedPID int,
 	if r.call("thread/start", map[string]any{"cwd": selection.Cwd, "model": selection.Model, "environments": []any{}}, &response) != nil || !nativeThreadID.MatchString(response.Thread.ID) || response.Thread.Environments == nil || len(response.Thread.Environments) != 0 || response.Cwd != selection.Cwd || response.Model != selection.Model {
 		return codexRCThreadReceipt{}, errCodexHostUnknown
 	}
-	return codexRCThreadReceipt{ThreadID: response.Thread.ID, Cwd: response.Cwd, Model: response.Model}, nil
+	receipt := codexRCThreadReceipt{ThreadID: response.Thread.ID, Cwd: response.Cwd, Model: response.Model}
+	if selection.Handoff != "" {
+		if selection.BeforeTurn(ctx) != nil || ctx.Err() != nil {
+			return receipt, errCodexHostUnknown
+		}
+		var turn struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		if r.call("turn/start", map[string]any{"threadId": receipt.ThreadID, "model": selection.Model, "effort": selection.Effort, "input": []any{map[string]string{"type": "text", "text": selection.Handoff}}}, &turn) != nil || !codexRCTurnID.MatchString(turn.Turn.ID) {
+			return receipt, errCodexHostUnknown
+		}
+		receipt.TurnID = turn.Turn.ID
+	}
+	return receipt, nil
 }
