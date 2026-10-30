@@ -477,27 +477,85 @@ general inbox access. Notification credentials stay in the keeper.
 Its read authority and network policy need GitOps review; the notice and
 page record still contain no Ask text or approver identity.
 
-Use a fixed title/body such as “An agent needs your answer” and a link to
-the configured HTTPS portal origin and selected Ask. No question text, PR
+Lane B uses the fixed title and body “An agent needs your answer”, priority 0,
+and a link to the configured HTTPS portal origin plus
+`/portal/projects/dev-env/environments/internal/asks?ask=<id>`. No question text, PR
 title, principal, token or signed approval in the push. The link opens an
 authenticated GET; it never answers or approves. Record Ask ID and event
 kind as correlation. Pushover acceptance is not phone delivery.
 
-Proposed caps: one new-Ask push per Ask, at most one per requester per five
-minutes and six per recipient per hour. Persist deduplication/rate state
-across keeper restarts, in a keeper-owned ConfigMap that holds no Ask
-text; lane B's PR proposes its shape. Coalesce within those caps; never hide the durable
-question. An ambiguous send response is Unknown, not success; do not
-repeat it automatically. A definite pre-send failure may retry once after
-five minutes while open and within caps. Push success does not affect
-Ask storage or answer retrieval. Keeper login notices remain unchanged.
+Source flags: keeper `--enable-ask-notifications` defaults false, requires
+leader election and `--ask-notify-portal-origin` (an HTTPS origin without
+credentials, path, query or fragment). It polls every 30 seconds with bounded
+uncached get/list reads. No keeper Ask write is added. The existing Pushover
+credential files and endpoint flags supply the sender; login notices keep
+their existing behavior and separate state.
+Invalid Ask notification configuration logs one fixed diagnostic and disables
+only this notifier; it must not stop the credential keeper. Validation covers
+the portal origin, window/timezone, HTTPS sender endpoint, leader election and
+separation from the login-notice ConfigMap. Incomplete scans notify from readable
+Asks while skipping dedupe pruning, which requires a complete scan.
 
-**Q-255-02 is unanswered.** The source premise is **no quiet-hours code
-exists**; this is a new Ask notification policy, not reuse of an installed
-schedule. Propose priority 0, 09:00–21:00 America/New_York, DST-aware
-deferral and no agent bypass. Ask Tom before lane B goes live. Tests and
-default-off source work may proceed; live pushes wait for the answer.
-This section settles neither quiet hours nor Q-255-01/03/04.
+At most one new-Ask notification covers an Ask. Pending open Asks from the
+same original requester coalesce into one push linking the oldest pending
+Ask; all covered IDs are deduplicated together. Later pending Asks wait for
+the next eligible slot. Caps are one Ask push per requester per five minutes
+and six Ask pushes per configured recipient per rolling hour. Failed and
+unconfirmed reservations also consume slots conservatively. There is one
+configured recipient, and credential rotation does not reset the ledger.
+Cap timestamps round up the latest permitted dispatch time, including the
+five-second ConfigMap save budget. Refresh decisions after the live GET and
+refuse dispatch after that deadline, window close or selected Ask expiry.
+Cap intervals include this five-second budget and whole-second rounding.
+
+The GitOps-precreated keeper-owned ConfigMap is
+`dev-env-keeper-ask-notifications` in the keeper's namespace, configurable with
+`--ask-notify-state-configmap`; the keeper refuses the login-notice ConfigMap
+name here. Grant only get/update on that exact name, no
+create/list/delete. Its `state.json` contains Ask/group IDs, SHA-256 requester
+UID IDs and UTC Unix-second attempt/retry timestamps, plus schema version.
+At most 4096 Ask IDs/groups and two attempts per group fit within 896 KiB;
+state plus pages is bounded to 960 KiB. Retain dedupe for all existing Asks.
+Only a complete authoritative scan plus expiry of the one-hour rate window
+can prune an absent Ask's ID. State corruption, capacity, missing ConfigMap,
+ledger/list read failure or unconfirmed CAS stops sending without resetting history.
+
+`pages.json` in that same ConfigMap uses DESIGN-031 vocabulary and bounds
+(100 records / 256 KiB). Only the representative Ask ID and `ask-new` event
+kind are correlation data; no title/body/URL, Ask text or principal is stored.
+This separate ledger is not added to the existing pages lookup in lane B.
+State, rate and `recorded` page intent commit atomically with resourceVersion
+before any send. A crash with no saved outcome is Unknown (`recorded`);
+timeouts, 5xx and unconfirmed 2xx are `ambiguous`. Neither is automatically
+repeated. A confirmed acceptance is `sent`, never phone delivery. Definite
+pre-send failure (missing credential files or a late/outside-window reservation
+that never called the sender) is `failed` and may retry once after at least
+five minutes, while the selected Ask stays open and caps/windows allow.
+Other 4xx responses are `failed` without automatic retry. Push results never
+affect Ask storage or answer retrieval.
+
+**Q-255-02 is unanswered.** Lane B adds optional source-only
+`--ask-notify-window="09:00-21:00"` and
+`--ask-notify-timezone="America/New_York"`. The window flag defaults **empty**
+(all hours within caps); timezone defaults America/New_York. The configured
+window is the allowed local delivery window, start inclusive/end exclusive,
+including overnight windows. Outside it, pending Asks defer to the next
+window start, observed on the next poll. DST uses real minutes: a nonexistent
+start defers to the first real minute inside the window; repeated minutes
+are eligible in either occurrence, subject to elapsed UTC caps. No agent
+bypass. The proposed live policy remains 09:00–21:00 America/New_York;
+Tom must rule before activation. Default-off source/tests settle neither
+quiet hours nor Q-255-01/03/04.
+
+The operator reuses default-off `--enable-asks` for its leader-only expiry
+sweeper, requiring leader election. Once per minute it lists at most nine
+pages of 500 Asks without a state-label selector, then rereads each mutation
+authoritatively. The list snapshot skips answered/withdrawn records and records
+whose effective state and label already match; only candidates for a status or
+label change require a GET. `EffectiveState` governs Ask/scope expiry; absent state is
+open. Status updates and label repairs use resourceVersion CAS, rereading on
+conflict. Answered/withdrawn Asks are untouched. A crash between expiry and
+label update is repaired on the next scan. Off means no runnable/Ask I/O.
 
 ## 10. T4: transcripts for compatible Sessions (not v1)
 
@@ -577,7 +635,7 @@ independent review, UI QA and integration.
 | [#256 — lane A backend](https://work.haynesnetwork.com/work_packages/256) | Amended lane 0 | CRD/CEL/store/API behind flag. Prove idempotency/status codes, ownership, session redaction, portal detail, answer-time checks/CAS, uncached-list room limits (16 open, 512 total, 4096 namespace; `429`/`503`; identical retry resolved first) and sorted paging. No InboxMessage create/edit; delivery empty. Generated schema/layout/focused tests pass. |
 | [#257 — lane C MCP](https://work.haynesnetwork.com/work_packages/257) | Lane 0; A for integration | Four immediate tools and TLS/refusal/retry fixtures; Ask JSON, no revision, link only if configured. Session actor projection accepted; validity labelled computed. No Kubernetes imports. |
 | [#258 — lane D portal](https://work.haynesnetwork.com/work_packages/258) | Lane 0; A for integration | Detail route, same-origin answer, CSRF/session/current-group checks, A7 links, primary Approve/Deny plus notes/secondary-option safeguards, escaping/replay/stale-session tests. Lead QA at 320/390/1280, light/dark. Initial count is board-local. |
-| [#259 — lane B keeper/expiry](https://work.haynesnetwork.com/work_packages/259) | A merged; D link; Q-255-02 before live | Narrow keeper get/list Role and bounded pushes. The leader-only expiry sweeper runs in the operator, which alone writes Ask status. Fake clock/sender checks rate limits, restart dedupe, ambiguity and chosen quiet-hours policy. Default off; login notices unchanged. |
+| [#259 — lane B keeper/expiry](https://work.haynesnetwork.com/work_packages/259) | A merged; D link; Q-255-02 before live | Operator expiry reuses default-off `--enable-asks`; leader-only, bounded scan, status/label CAS and real API-server answer-race tests. Keeper `--enable-ask-notifications` defaults off; fixed push, same-requester coalescing, persisted caps/dedupe/Unknown and content-free DESIGN-031 pages in `dev-env-keeper-ask-notifications`. Optional empty-by-default allowed window with fake-clock DST tests. Narrow keeper get/list Ask and exact-name get/update ConfigMap rights are documented for haynes-ops, not installed here. Login notices unchanged. |
 | F1 — operator-origin inbox delivery | A | Separate CRD origin and projectless recipient scope, compatible readers, deterministic recovery and explicit message/ACK linkage. Crash/cap/suspend/absence/replacement/wrong-ACK tests. No fabricated Session sender or provider wake. |
 | F2 — revocation and audit | A/D; Q-255-01 when F2 is picked up; F1 for notices | Reviewed revoke authority, route/form, audit and retry fields. Prove forged actor, swapped session, group removal, stale scope, races and lost response handling. Revocation remains visible even when notice delivery fails. No action adapter. |
 | F3 — Needs attention and agent retrieval | C/D; F1 for inbox wrappers only | Cross-page Waiting for you; qualified Claude/Codex post, continue, read/save answer and resume without reissuing. Explicit inbox wrappers only after F1. No automatic wake. |
@@ -611,7 +669,7 @@ deferred question early.
 | ID / status | Question and recommendation | Alternative / gate |
 |---|---|---|
 | Q-255-01 — **DEFERRED until F2** | May any current portal-group member revoke an unused approval given by another member? Recommend any admitted member, with revoker/time/reason retained. This is a proposal, not current authority. | Original approver only. Ask when F2 begins; no v1 revocation. |
-| Q-255-02 — pending | No quiet-hours code exists. Should new Ask pushes wait outside 09:00–21:00 America/New_York? Recommend daytime only, priority 0, DST-aware deferral and no agent bypass. | All hours within caps. Ask before lane B goes live; source/tests may proceed default off. Login notices unchanged. |
+| Q-255-02 — pending | No live Ask quiet-hours policy is adopted. Source supports an optional empty-by-default window. Should new Ask pushes wait outside 09:00–21:00 America/New_York? Recommend daytime only, priority 0, DST-aware deferral and no agent bypass. | All hours within caps. Ask before lane B goes live; source/tests may proceed default off. Login notices unchanged. |
 | Q-255-03 — pending | May the portal expose transcripts for all compatible Sessions in the resource without per-UID entries, with an operator-owned full/dev profile allowlist, workbench opt-in and exclusion of credential/break-glass grant holders? Recommend that bounded eligibility. | Keep exact targets. Holds T4, which is not v1; Ask board/history links use current scope meanwhile. |
 | Q-255-04 — **RULING, 2026-10-29** | Tom, OpenProject #255 journal 2680: “It's situational, I may be asked to approve binding changes that are beyond one request.” Also: “I don't want to have to approve the same thing over and over we need a way to manage permissions and rules but also one off approvals will happen” and “here I do not want to approve agents to always send emails just that I approve the one that was drafted.” Lead reading (journal 2680), not Tom's words: a v1 portal Approve covers one exact action, target and content, once, within its expiry, and never becomes standing permission. | A standing rule is a separate approval kind: approve a scoped policy once, then list, manage and revoke it. See [DESIGN-036](036-standing-rules.md). Journal 2680 supersedes journal 2675, retracted in 2676. This records the distinction; it grants no credential, removes no other hold and creates no executor. |
 

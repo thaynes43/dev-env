@@ -120,7 +120,7 @@ internal/shelf/          the operator's side of the shelf pod (D-67): finds it, 
 internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), maintenance check, pages list|show (offline, DESIGN-031); finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
-internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
+internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
                          behind a Lease. Only that non-rotating token is a Keeper Job; the rotating Codex login and the
                          Proxmox credential grants are separate journaled, Lease-fenced leader runnables. Unit tests use a fake
                          GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
@@ -158,7 +158,7 @@ internal/commonrules/testutil/  synthetic common-source fixtures for tests
 internal/taskclaim/      the TaskClaim store: immutable explicit ownership, Create only, uncached reads; also the bounds
                          that all three coordination stores apply and their record-count metrics (DESIGN-010)
 internal/inbox/          the inbox store: immutable API messages and explicit read acknowledgements, Create only, uncached reads
-internal/asks/           the Ask store: create, list, withdraw and a set-once answer behind --enable-asks; no inbox delivery in v1 (OpenProject Epic #254)
+internal/asks/           the Ask store: create, list, withdraw, a set-once answer and the operator's leader-only CAS expiry sweeper behind --enable-asks; no inbox delivery in v1 (OpenProject Epic #254)
 internal/contextpublication/  the PublishedContext store: immutable published excerpts, Create only, uncached reads
 internal/sessiondirectory/  the SessionDirectory store: bounded original session metadata and CAS witnesses
 internal/taskbudget/     the task budget ledger: retained, deterministic task admission in ConfigMaps behind CAS (KubeStore)
