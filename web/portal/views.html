@@ -22,7 +22,7 @@
 {{if .Allowance}}<div class="allowance-strip"><a class="allowance-link" href="?view=usage#usage-allowance">Account allowance</a>
 <ul role="list" aria-label="Account allowance by provider">{{range .Allowance}}<li class="allowance-provider">
 <div class="allowance-provider-head"><span class="allowance-name">{{.Provider}}{{if eq .Value "Stale"}} <span class="allowance-state tone-wait">Stale</span>{{end}}</span><span>{{if or (eq .Value "Measured") (eq .Value "Stale")}}{{if .SeenVaries}}Seen varies · see Usage{{else}}Seen {{.Observed}} · {{.Provenance}}{{end}}{{else}}{{template "allowance-summary" .}}{{end}}</span></div>
-{{if .Windows}}<ul class="allowance-windows" role="list" aria-label="Reported windows">{{range .CompactWindows}}<li>{{template "allowance-window" .}}</li>{{end}}</ul>{{if .More}}<a class="allowance-link allowance-more" href="?view=usage#usage-allowance">+{{.More}} more</a>{{end}}{{end}}
+{{if .Windows}}<ul class="allowance-windows" role="list" aria-label="Reported windows">{{range .CompactWindows}}<li>{{template "allowance-window" .}}</li>{{end}}</ul>{{if .More}}<a class="allowance-link allowance-more" href="?view=usage#usage-allowance" aria-label="{{.Provider}}: {{.More}} more allowance window{{if ne .More 1}}s{{end}}">+{{.More}} more</a>{{end}}{{end}}
 </li>{{end}}</ul></div>{{end}}
 <nav class="chips" aria-label="Filters"><a href="{{.All.Href}}"{{if .All.Current}} aria-current="page"{{end}}>All</a><a href="{{.Attention.Href}}"{{if .Attention.Current}} aria-current="page"{{end}}>Needs attention{{if .Attention.Count}} {{.Attention.Count}}{{end}}</a>{{range .Projects}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Name}}</a>{{end}}</nav></div>
 <div class="list-scroll">{{if not .HasRows}}<div class="list-empty" role="status"><p>{{.Notice}}</p></div>{{end}}
@@ -48,7 +48,7 @@
 <div class="product-body"><dl class="stats">{{range .Stats}}<div class="stat"><dt>{{.Label}}</dt><dd{{if eq .Tone "muted"}} class="unknown"{{end}}>{{.Value}}</dd><dd class="stat-note">{{.Note}}</dd></div>{{end}}</dl>
 {{if .Allowance}}<section class="allowance" aria-labelledby="usage-allowance"><h2 id="usage-allowance">Account allowance</h2>
 {{range .Allowance}}<section class="allowance-account"><h3>{{.Provider}} <span class="allowance-state tone-{{.Tone}}">{{template "allowance-summary" .}}</span></h3>
-{{if .Windows}}<div class="table-wrap"><table><caption class="sr-only">{{.Provider}} account allowance windows</caption><thead><tr><th scope="col">Allowance</th><th scope="col">Window</th><th scope="col">Resets</th><th scope="col">Observed</th><th scope="col">Source</th></tr></thead><tbody>
+{{if .Windows}}<div class="table-wrap"><table aria-label="{{.Provider}} account allowance windows"><thead><tr><th scope="col">Allowance</th><th scope="col">Window</th><th scope="col">Resets</th><th scope="col">Observed</th><th scope="col">Source</th></tr></thead><tbody>
 {{range .Windows}}<tr class="allowance-window"><td data-label="Allowance"{{if eq .Percent "Unknown"}} class="unknown"{{end}}>{{.Percent}}</td><td data-label="Window">{{.Window}}</td><td data-label="Resets">{{.Reset}}</td><td data-label="Observed">{{.Observed}}</td><td data-label="Source">{{.Provenance}}</td></tr>{{end}}
 </tbody></table></div>{{end}}</section>{{end}}
 <p class="note">Plan limits come from the provider account, never from these token counts.</p></section>{{end}}

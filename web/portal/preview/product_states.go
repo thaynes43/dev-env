@@ -42,7 +42,7 @@ func writeProductStates(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "usage-empty.html"), body, 0600); err != nil {
 		return err
 	}
-	for _, state := range []string{"measured", "stale", "unknown", "not-connected"} {
+	for _, state := range []string{"measured", "stale", "seen-varies", "unknown", "not-connected"} {
 		allowances, err := allowancePreview(state)
 		if err != nil {
 			return err
@@ -59,6 +59,9 @@ func writeProductStates(dir string) error {
 			if err := os.WriteFile(filepath.Join(dir, "sessions-allowance-"+state+".html"), body, 0600); err != nil {
 				return err
 			}
+		}
+		if state == "seen-varies" {
+			continue
 		}
 		fixtureUsage := *page.Usage
 		fixtureUsage.Allowance = allowances
@@ -279,11 +282,23 @@ func allowancePreview(state string) ([]portal.ProductAllowance, error) {
 			}
 			item.CurrentMeasures = append(item.CurrentMeasures, current)
 		}
-		if state == "stale" || (state == "measured" && provider == "openai") {
+		if state == "stale" {
 			item.Freshness.State = providerallowance.FreshStale
 		}
 		if state == "unknown" {
 			item.Binding.State = providerallowance.BindingMismatch
+		}
+		if state == "seen-varies" {
+			other := item
+			other.Observation.ObservationID += "-other"
+			other.Observation.Sequence = 2
+			other.Observation.ProviderObservedAt = text("2026-10-29T13:58:00Z")
+			other.Observation.Measures = item.Observation.Measures[1:]
+			other.CurrentMeasures = item.CurrentMeasures[1:]
+			item.Observation.Measures = item.Observation.Measures[:1]
+			item.CurrentMeasures = item.CurrentMeasures[:1]
+			doc.Items = append(doc.Items, item, other)
+			continue
 		}
 		doc.Items = append(doc.Items, item)
 	}

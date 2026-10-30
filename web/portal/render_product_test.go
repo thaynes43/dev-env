@@ -902,13 +902,13 @@ func TestRenderAccountAllowanceStatesOnBothPages(t *testing.T) {
 					t.Errorf("wrong stale tone: %s", block)
 				}
 				if usage {
-					if strings.Contains(block, "<table>") != measured {
+					if strings.Contains(block, `<table aria-label="Claude account allowance windows">`) != measured {
 						t.Error("only measured or stale providers may render a table")
 					}
 					if strings.Contains(string(body), `class="allowance-strip"`) || !strings.Contains(block, `id="usage-allowance"`) || !strings.Contains(string(body), "No sessions in this read.") {
 						t.Error("empty Usage or allowance anchor missing, or strip leaked")
 					}
-					if measured && (!strings.Contains(block, "<table>") || !strings.Contains(block, `<th scope="col">Observed</th>`) || !strings.Contains(block, `data-label="Observed"`)) {
+					if measured && (!strings.Contains(block, `<table aria-label="Claude account allowance windows">`) || !strings.Contains(block, `<th scope="col">Observed</th>`) || !strings.Contains(block, `data-label="Observed"`)) {
 						t.Error("windows lack semantic labels")
 					}
 				} else if !strings.Contains(block, `href="?view=usage#usage-allowance">Account allowance</a>`) || !strings.Contains(block, `<ul role="list"`) {
@@ -1012,7 +1012,7 @@ func TestRenderAllowanceWithoutAnyPercentIsUnknown(t *testing.T) {
 				t.Fatal(err)
 			}
 			block := allowanceBlock(t, body, usage)
-			if !strings.Contains(block, "Unknown · No percent allowance reported") || strings.Contains(block, "<table>") || strings.Contains(block, "Stale") || strings.Contains(block, "%") {
+			if !strings.Contains(block, "Unknown · No percent allowance reported") || strings.Contains(block, "<table") || strings.Contains(block, "Stale") || strings.Contains(block, "%") {
 				t.Fatalf("empty measurement rendered: %s", block)
 			}
 		}
@@ -1044,16 +1044,71 @@ func TestOtherProductPagesHaveNoAllowanceStrip(t *testing.T) {
 	}
 }
 
-func TestReadFailureAllowanceMatchesListHeader(t *testing.T) {
-	page := ProductPage{Title: "Sessions", ReadFailure: &ProductReadFailure{ReasonCode: "operator_unreachable"}}
+func TestReadFailureShowsNoAllowance(t *testing.T) {
+	for _, usage := range []bool{false, true} {
+		page := ProductPage{Title: "Sessions", ReadFailure: &ProductReadFailure{ReasonCode: "operator_unreachable"},
+			Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{{Percent: "62% left"}}}}}
+		if usage {
+			page.Filter.View = "usage"
+		}
+		body, err := RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{`class="allowance-strip"`, "#usage-allowance", `id="usage-allowance"`, "62% left"} {
+			if strings.Contains(string(body), forbidden) {
+				t.Errorf("failed read usage=%v contains %q", usage, forbidden)
+			}
+		}
+	}
+}
+
+func TestAllowanceWindowListsStackAndLinksHaveProviderNames(t *testing.T) {
+	windows := []ProductAllowanceWindow{{Percent: "62% left"}, {Percent: "38% used"}, {Percent: "91% left"}}
+	page := ProductPage{Title: "Sessions", Connected: true, Allowance: []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceMeasured, Windows: windows},
+		{Provider: "Codex", Value: AllowanceMeasured, Windows: append(append([]ProductAllowanceWindow(nil), windows...), windows[0])},
+	}}
 	body, err := RenderProduct(page)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(body), `class="list-header"`) {
-		block := allowanceBlock(t, body, false)
-		if strings.Count(block, "Not connected") != 2 || strings.Contains(block, "%") {
-			t.Fatalf("failure allowance: %s", block)
+	strip := allowanceBlock(t, body, false)
+	for _, want := range []string{`aria-label="Claude: 1 more allowance window"`, `aria-label="Codex: 2 more allowance windows"`} {
+		if !strings.Contains(strip, want) {
+			t.Errorf("missing %s", want)
 		}
+	}
+	if strings.Count(strip, `<ul class="allowance-windows"`) != 2 || strings.Count(strip, `<li>`) != 4 {
+		t.Fatal("windows must remain nested lists with two visible windows per provider")
+	}
+	style := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindSubmatch(body)
+	if style == nil {
+		t.Fatal("stylesheet missing")
+	}
+	css := string(style[1])
+	if strings.Contains(css, `.allowance-strip ul:not(:has(.allowance-windows))`) || !strings.Contains(css, `.allowance-strip > ul:not(:has(.allowance-windows))`) {
+		t.Fatal("horizontal provider layout must target only the outer list")
+	}
+	if !strings.Contains(css, `.allowance-link { display: flex; align-items: center; min-height: 24px;`) {
+		t.Fatal("allowance link text must be vertically centered in its target")
+	}
+	if !strings.Contains(css, `.allowance h2 { margin-top: 10px; }`) {
+		t.Fatal("Usage allowance heading needs top spacing")
+	}
+	page.Filter.View = "usage"
+	page.Usage = &ProductUsage{Allowance: page.Allowance}
+	body, err = RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := allowanceBlock(t, body, true)
+	for _, provider := range []string{"Claude", "Codex"} {
+		if !strings.Contains(section, `<table aria-label="`+provider+` account allowance windows">`) {
+			t.Errorf("%s allowance table lacks its accessible name", provider)
+		}
+	}
+	if strings.Contains(section, "<caption") {
+		t.Fatal("allowance tables must use aria-label instead of offscreen captions")
 	}
 }

@@ -13,7 +13,7 @@ func TestProductStatePreviews(t *testing.T) {
 	if err := writeProductStates(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"sessions-allowance-measured", "sessions-allowance-stale", "sessions-allowance-unknown", "usage-allowance", "usage-allowance-stale", "usage-allowance-unknown", "usage-allowance-not-connected", "usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-read-not-started", "sessions-empty", "sessions-stale", "sessions-current", "tasks-empty", "tasks-unavailable", "tasks-unknown", "tasks-not-connected"} {
+	for _, name := range []string{"sessions-allowance-seen-varies", "sessions-allowance-measured", "sessions-allowance-stale", "sessions-allowance-unknown", "usage-allowance", "usage-allowance-stale", "usage-allowance-unknown", "usage-allowance-not-connected", "usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-read-not-started", "sessions-empty", "sessions-stale", "sessions-current", "tasks-empty", "tasks-unavailable", "tasks-unknown", "tasks-not-connected"} {
 		body, err := os.ReadFile(filepath.Join(dir, name+".html"))
 		if err != nil {
 			t.Fatal(err)
@@ -178,10 +178,10 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		name                                  string
 		percent, stale, unknown, disconnected bool
 	}{
-		{"sessions-allowance-measured", true, true, false, false},
+		{"sessions-allowance-measured", true, false, false, false},
 		{"sessions-allowance-stale", true, true, false, false},
 		{"sessions-allowance-unknown", false, false, true, false},
-		{"usage-allowance", true, true, false, false},
+		{"usage-allowance", true, false, false, false},
 		{"usage-allowance-stale", true, true, false, false},
 		{"usage-allowance-unknown", false, false, true, false},
 		{"usage-allowance-not-connected", false, false, false, true},
@@ -217,6 +217,46 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		}
 		if tc.percent && strings.HasPrefix(tc.name, "usage") && strings.Count(block, `class="allowance-window"`) != 6 {
 			t.Errorf("%s lacks full windows", tc.name)
+		}
+	}
+}
+
+func TestAllowancePreviewStatesAreUniformAndSeenVariesIsExplicit(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeProductStates(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"measured", "stale", "seen-varies"} {
+		allowances, err := allowancePreview(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, allowance := range allowances {
+			want := "Measured"
+			if state == "stale" {
+				want = "Stale"
+			}
+			if string(allowance.Value) != want {
+				t.Errorf("%s provider %s: %s, want %s", state, allowance.Provider, allowance.Value, want)
+			}
+		}
+		body, err := os.ReadFile(filepath.Join(dir, "sessions-allowance-"+state+".html"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := regexp.MustCompile(`(?s)<div class="allowance-strip">.*?</ul></div>`).FindString(string(body))
+		if block == "" {
+			t.Fatalf("%s: missing strip", state)
+		}
+		wantVaries, wantStale := 0, 0
+		if state == "seen-varies" {
+			wantVaries = 2
+		}
+		if state == "stale" {
+			wantStale = 2
+		}
+		if strings.Count(block, "Seen varies · see Usage") != wantVaries || strings.Count(block, `>Stale</span>`) != wantStale {
+			t.Errorf("%s: wrong per-provider seen or stale states: %s", state, block)
 		}
 	}
 }

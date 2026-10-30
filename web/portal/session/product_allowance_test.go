@@ -17,12 +17,12 @@ func allowanceMinutes(v pa.Count) *pa.Count { return &v }
 func allowanceRead() pa.ReadResponse {
 	return pa.ReadResponse{Schema: pa.SchemaRead, Items: []pa.ReadItem{{
 		Observation: pa.Observation{Provider: "anthropic", Availability: pa.AvailabilityAvailable,
-			Source: pa.Source{Kind: pa.SourceNativeRPC}, ProviderObservedAt: allowanceString("2026-10-29T13:59:00Z"),
+			Scope: pa.Scope{BindingState: pa.BindingVerified}, Source: pa.Source{Kind: pa.SourceNativeRPC}, ProviderObservedAt: allowanceString("2026-10-29T13:59:00Z"),
 			Measures: []pa.Measure{{ID: "weekly", Category: pa.CategoryIncluded, Unit: pa.UnitPercent, Direction: pa.DirectionRemaining,
 				Value:  pa.MeasureValue{State: pa.ValueKnown, Decimal: allowanceString("62.00")},
 				Window: pa.Window{Ref: "claude-primary-window", DurationMinutes: allowanceMinutes(10080), ResetAt: allowanceString("2026-11-02T14:00:00Z"), ResetPrecision: pa.ResetInstant}}}},
 		Validation: pa.ValidationRecord{State: pa.ValidationSourceFields}, Binding: pa.BindingRecord{State: pa.BindingVerified},
-		Freshness: pa.Freshness{State: pa.FreshFresh}, CurrentMeasures: []pa.CurrentMeasure{{MeasureID: "weekly", State: pa.CurrentKnown, Value: pa.MeasureValue{State: pa.ValueKnown, Decimal: allowanceString("62.00")}}},
+		Freshness: pa.Freshness{State: pa.FreshFresh, Basis: pa.BasisProvider}, CurrentMeasures: []pa.CurrentMeasure{{MeasureID: "weekly", State: pa.CurrentKnown, Value: pa.MeasureValue{State: pa.ValueKnown, Decimal: allowanceString("62.00")}}},
 	}}}
 }
 
@@ -223,7 +223,7 @@ func TestMapProductAllowanceMissingMetadataAndWindows(t *testing.T) {
 		t.Fatal(got)
 	}
 	item.Observation.Measures[0].Window.ResetAt = nil
-	if got := MapProductAllowance(doc)[0].Windows[0].Reset; got != "Unknown (display only)" {
+	if got := MapProductAllowance(doc)[0].Windows[0].Reset; got != "Unknown" {
 		t.Fatal(got)
 	}
 	// Several independent windows remain intact, in the contract's order.
@@ -279,6 +279,8 @@ func TestMapProductAllowanceSourceStatusTrustAndMixedItems(t *testing.T) {
 	doc := allowanceRead()
 	doc.Items = append(doc.Items, allowanceRead().Items[0])
 	doc.Items[1].Freshness.State = pa.FreshStale
+	doc.Items[1].Observation.Measures[0].ID = "daily"
+	doc.Items[1].CurrentMeasures[0].MeasureID = "daily"
 	if got := MapProductAllowance(doc)[0]; got.Value != portal.AllowanceStale || len(got.Windows) != 2 {
 		t.Fatalf("mixed freshness: %+v", got)
 	}
@@ -309,11 +311,12 @@ func TestMapProductAllowanceReadInterfaceExample(t *testing.T) {
 	if got[0].Value != portal.AllowanceNotConnected || got[1].Value != portal.AllowanceUnknown || len(got[1].Windows) != 0 {
 		t.Fatalf("original cached example: %+v", got)
 	}
-	// The original also has an unknown binding. Verify that even a synthetic
-	// verified binding cannot turn capture-only freshness into a measurement.
+	// The original has unverified binding records and observation scope. Verify
+	// that verifying both still cannot turn capture-only freshness into a measurement.
 	for i := range doc.Items {
 		if doc.Items[i].Observation.Provider == "openai" {
 			doc.Items[i].Binding.State = pa.BindingVerified
+			doc.Items[i].Observation.Scope.BindingState = pa.BindingVerified
 		}
 	}
 	for i := range doc.SourceStatuses {
@@ -475,5 +478,171 @@ func TestMapProductAllowanceNeedsAtLeastOnePercent(t *testing.T) {
 				t.Fatalf("%s/%s: %+v", fresh, kind, got)
 			}
 		}
+	}
+}
+
+func TestMapProductAllowanceMeasureIDsAreProviderWide(t *testing.T) {
+	for _, decimal := range []string{"62.00", "18"} {
+		doc := allowanceRead()
+		other := allowanceRead().Items[0]
+		other.Observation.Measures[0].Value.Decimal = allowanceString(decimal)
+		other.CurrentMeasures[0].Value.Decimal = allowanceString(decimal)
+		doc.Items = append(doc.Items, other)
+		if got := MapProductAllowance(doc)[0]; got.Value != portal.AllowanceUnknown || got.Reason != "Conflicting allowance values" || len(got.Windows) != 0 {
+			t.Fatalf("duplicate with decimal %q: %+v", decimal, got)
+		}
+		// The same ID belongs to a separate namespace for each provider.
+		doc.Items[1].Observation.Provider = "openai"
+		for _, got := range MapProductAllowance(doc) {
+			if got.Value != portal.AllowanceMeasured || len(got.Windows) != 1 {
+				t.Fatalf("separate providers: %+v", got)
+			}
+		}
+	}
+}
+
+func TestMapProductAllowanceRequiresProviderFreshnessBasis(t *testing.T) {
+	for _, basis := range []pa.FreshnessBasis{"", pa.BasisCapture, pa.BasisNone} {
+		for _, fresh := range []pa.FreshnessState{pa.FreshFresh, pa.FreshStale} {
+			for _, asStatus := range []bool{false, true} {
+				doc := allowanceRead()
+				if asStatus {
+					i := doc.Items[0]
+					doc.SourceStatuses = []pa.SourceStatus{{Provider: "anthropic", Availability: pa.AvailabilityAvailable, Validation: i.Validation, Binding: i.Binding, Freshness: pa.Freshness{State: fresh, Basis: basis}}}
+				} else {
+					doc.Items[0].Freshness = pa.Freshness{State: fresh, Basis: basis}
+				}
+				if got := MapProductAllowance(doc)[0]; got.Value != portal.AllowanceUnknown || !strings.Contains(got.Reason, "freshness") || len(got.Windows) != 0 {
+					t.Fatalf("basis=%q fresh=%s status=%v: %+v", basis, fresh, asStatus, got)
+				}
+			}
+		}
+	}
+}
+
+func TestMapProductAllowancePartialRead(t *testing.T) {
+	for _, cursor := range []string{"", "synthetic-next-page"} {
+		doc := allowanceRead()
+		doc.NextCursor = allowanceString(cursor)
+		doc.SourceStatuses = []pa.SourceStatus{{Provider: "openai", Availability: pa.AvailabilityUnconfigured}}
+		for _, got := range MapProductAllowance(doc) {
+			if got.Value != portal.AllowanceUnknown || got.Reason != "Partial allowance read" || len(got.Windows) != 0 {
+				t.Fatalf("cursor %q: %+v", cursor, got)
+			}
+		}
+	}
+}
+
+func TestMapProductAllowanceRequiresBothBindings(t *testing.T) {
+	for _, scope := range []pa.BindingState{"", pa.BindingUnknown, pa.BindingMismatch, pa.BindingVerified} {
+		for _, binding := range []pa.BindingState{"", pa.BindingUnknown, pa.BindingMismatch, pa.BindingVerified} {
+			doc := allowanceRead()
+			doc.Items[0].Observation.Scope.BindingState = scope
+			doc.Items[0].Binding.State = binding
+			got := MapProductAllowance(doc)[0]
+			if scope == pa.BindingVerified && binding == pa.BindingVerified {
+				if got.Value != portal.AllowanceMeasured {
+					t.Fatalf("verified bindings: %+v", got)
+				}
+			} else if got.Value != portal.AllowanceUnknown || got.Reason != "Account binding unverified" || len(got.Windows) != 0 {
+				t.Fatalf("scope=%q binding=%q: %+v", scope, binding, got)
+			}
+		}
+	}
+}
+
+func TestMapProductAllowanceAvailabilityPrecedence(t *testing.T) {
+	// Exercise both orders within and across the status and item collections.
+	for _, levels := range []string{"statuses", "items", "status-item", "item-status"} {
+		for _, first := range []pa.Availability{pa.AvailabilityConflict, pa.AvailabilityUnconfigured} {
+			for _, second := range []pa.Availability{pa.AvailabilityConflict, pa.AvailabilityUnconfigured, pa.AvailabilityUnavailable, pa.AvailabilityAvailable} {
+				for _, reverse := range []bool{false, true} {
+					doc := allowanceRead()
+					one, two := first, second
+					if reverse {
+						one, two = two, one
+					}
+					status := func(a pa.Availability) pa.SourceStatus {
+						i := allowanceRead().Items[0]
+						return pa.SourceStatus{Provider: "anthropic", Availability: a, Validation: i.Validation, Binding: i.Binding, Freshness: i.Freshness}
+					}
+					item := func(a pa.Availability, id string) pa.ReadItem {
+						i := allowanceRead().Items[0]
+						i.Observation.Availability = a
+						i.Observation.Measures[0].ID, i.CurrentMeasures[0].MeasureID = id, id
+						return i
+					}
+					switch levels {
+					case "statuses":
+						doc.SourceStatuses = []pa.SourceStatus{status(one), status(two)}
+					case "items":
+						doc.Items = []pa.ReadItem{item(one, "one"), item(two, "two")}
+					case "status-item":
+						doc.SourceStatuses, doc.Items = []pa.SourceStatus{status(one)}, []pa.ReadItem{item(two, "one")}
+					case "item-status":
+						doc.SourceStatuses, doc.Items = []pa.SourceStatus{status(two)}, []pa.ReadItem{item(one, "one")}
+					}
+					got := MapProductAllowance(doc)[0]
+					want, reason := portal.AllowanceNotConnected, ""
+					if first == pa.AvailabilityConflict || second == pa.AvailabilityConflict {
+						want, reason = portal.AllowanceUnknown, "Conflicting allowance reports"
+					}
+					if got.Value != want || got.Reason != reason || len(got.Windows) != 0 {
+						t.Fatalf("%s %s/%s reverse=%v: %+v", levels, first, second, reverse, got)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestMapProductAllowancePercentDecimalGrammar(t *testing.T) {
+	for _, tc := range []struct{ decimal, want string }{
+		{"0", "0% left"}, {"100", "100% left"}, {"100.000001", "100.000001% left"},
+		{"999999.999999", "999999.999999% left"}, {"000001.000001", "000001.000001% left"},
+		{"-1", "Unknown"}, {"", "Unknown"}, {"1000000", "Unknown"}, {"1.0000001", "Unknown"},
+		{".5", "Unknown"}, {"1.", "Unknown"}, {"+1", "Unknown"}, {" 1", "Unknown"}, {"1 ", "Unknown"},
+		{"1e2", "Unknown"}, {"NaN", "Unknown"}, {"1\n", "Unknown"}, {"１", "Unknown"},
+	} {
+		t.Run(tc.decimal, func(t *testing.T) {
+			doc := allowanceRead()
+			// Keep one known window so an invalid percent remains visible as Unknown.
+			i := &doc.Items[0]
+			m, c := i.Observation.Measures[0], i.CurrentMeasures[0]
+			m.ID, c.MeasureID = "secondary", "secondary"
+			m.Value.Decimal, c.Value.Decimal = allowanceString(tc.decimal), allowanceString(tc.decimal)
+			i.Observation.Measures = append(i.Observation.Measures, m)
+			i.CurrentMeasures = append(i.CurrentMeasures, c)
+			got := MapProductAllowance(doc)[0]
+			if got.Value != portal.AllowanceMeasured || len(got.Windows) != 2 || got.Windows[1].Percent != tc.want {
+				t.Fatalf("decimal %q: %+v", tc.decimal, got)
+			}
+		})
+	}
+}
+
+func TestMapProductAllowancePartialAvailabilityAndResetMetadata(t *testing.T) {
+	doc := allowanceRead()
+	doc.Items[0].Observation.Availability = pa.AvailabilityPartial
+	i := doc.Items[0]
+	doc.SourceStatuses = []pa.SourceStatus{{Provider: "anthropic", Availability: pa.AvailabilityPartial, Validation: i.Validation, Binding: i.Binding, Freshness: i.Freshness}}
+	if got := MapProductAllowance(doc)[0]; got.Value != portal.AllowanceMeasured || len(got.Windows) != 1 {
+		t.Fatalf("partial availability: %+v", got)
+	}
+	for _, precision := range []pa.ResetPrecision{pa.ResetNotApplicable, pa.ResetInstant, pa.ResetDisplayOnly} {
+		for _, at := range []*string{nil, allowanceString("not-a-time")} {
+			doc.Items[0].Observation.Measures[0].Window.ResetPrecision = precision
+			doc.Items[0].Observation.Measures[0].Window.ResetAt = at
+			doc.Items[0].Observation.ProviderObservedAt = allowanceString("not-a-time")
+			got := MapProductAllowance(doc)[0]
+			if got.Value != portal.AllowanceMeasured || got.Windows[0].Reset != "Unknown" || got.Windows[0].Observed != "Unknown" {
+				t.Fatalf("precision %s: %+v", precision, got)
+			}
+		}
+	}
+	// Not applicable remains Unknown even if a time is supplied.
+	doc.Items[0].Observation.Measures[0].Window = pa.Window{ResetPrecision: pa.ResetNotApplicable, ResetAt: allowanceString("2026-11-02T14:00:00Z")}
+	if got := MapProductAllowance(doc)[0].Windows[0].Reset; got != "Unknown" {
+		t.Fatal(got)
 	}
 }

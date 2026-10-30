@@ -1,6 +1,7 @@
 package session
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -8,6 +9,8 @@ import (
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 	"github.com/thaynes43/dev-env/web/portal"
 )
+
+var allowancePercent = regexp.MustCompile(`^[0-9]{1,6}(\.[0-9]{1,6})?$`)
 
 func disconnectedAllowances() []portal.ProductAllowance {
 	return []portal.ProductAllowance{
@@ -24,8 +27,45 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 	for i, provider := range []string{"anthropic", "openai"} {
 		a := &out[i]
 		a.Value, a.Reason = portal.AllowanceUnknown, "No trusted allowance reported"
+		if doc.NextCursor != nil {
+			a.Reason = "Partial allowance read"
+			continue
+		}
 		if doc.Schema != providerallowance.SchemaRead {
 			a.Reason = "Unsupported allowance document"
+			continue
+		}
+		// Scan the whole provider before trust checks so availability precedence
+		// and measure identity never depend on item or status order.
+		conflict, unconfigured, duplicate := false, false, false
+		seen := map[string]bool{}
+		for _, status := range doc.SourceStatuses {
+			if status.Provider == provider {
+				conflict = conflict || status.Availability == providerallowance.AvailabilityConflict
+				unconfigured = unconfigured || status.Availability == providerallowance.AvailabilityUnconfigured
+			}
+		}
+		for _, item := range doc.Items {
+			if item.Observation.Provider != provider {
+				continue
+			}
+			conflict = conflict || item.Observation.Availability == providerallowance.AvailabilityConflict
+			unconfigured = unconfigured || item.Observation.Availability == providerallowance.AvailabilityUnconfigured
+			for _, measure := range item.Observation.Measures {
+				duplicate = duplicate || seen[measure.ID]
+				seen[measure.ID] = true
+			}
+		}
+		if conflict {
+			a.Reason = "Conflicting allowance reports"
+			continue
+		}
+		if unconfigured {
+			a.Value, a.Reason = portal.AllowanceNotConnected, ""
+			continue
+		}
+		if duplicate {
+			a.Reason = "Conflicting allowance values"
 			continue
 		}
 		unavailable := false
@@ -34,13 +74,9 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 			if status.Provider != provider {
 				continue
 			}
-			if status.Availability == providerallowance.AvailabilityUnconfigured {
-				a.Value, a.Reason, unavailable = portal.AllowanceNotConnected, "", true
-				break
-			}
 			if reason := allowanceAvailability(status.Availability); reason != "" {
 				a.Reason, unavailable = reason, true
-			} else if reason := allowanceTrust(status.Validation.State, status.Binding.State, status.Freshness.State); reason != "" {
+			} else if reason := allowanceTrust(status.Validation.State, status.Binding.State, status.Freshness); reason != "" {
 				a.Reason, unavailable = reason, true
 			}
 			statusStale = statusStale || status.Freshness.State == providerallowance.FreshStale
@@ -57,10 +93,6 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 		for _, item := range doc.Items {
 			if item.Observation.Provider != provider {
 				continue
-			}
-			if item.Observation.Availability == providerallowance.AvailabilityUnconfigured {
-				a.Value, a.Reason, windows, refused = portal.AllowanceNotConnected, "", nil, true
-				break
 			}
 			mapped, reason := allowanceItem(item)
 			if reason != "" {
@@ -98,14 +130,14 @@ func allowanceAvailability(a providerallowance.Availability) string {
 
 // allowanceTrust applies the same conservative gates to an item and any
 // source status carried beside it. A later refusal cannot be hidden by a value.
-func allowanceTrust(validation providerallowance.ValidationState, binding providerallowance.BindingState, freshness providerallowance.FreshnessState) string {
+func allowanceTrust(validation providerallowance.ValidationState, binding providerallowance.BindingState, freshness providerallowance.Freshness) string {
 	if validation != providerallowance.ValidationSourceFields && validation != providerallowance.ValidationDisplayOnly {
 		return "Allowance validation unavailable"
 	}
 	if binding != providerallowance.BindingVerified {
 		return "Account binding unverified"
 	}
-	if freshness != providerallowance.FreshFresh && freshness != providerallowance.FreshStale {
+	if freshness.Basis != providerallowance.BasisProvider || (freshness.State != providerallowance.FreshFresh && freshness.State != providerallowance.FreshStale) {
 		return "Allowance freshness unknown or expired"
 	}
 	return ""
@@ -116,7 +148,10 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	if reason := allowanceAvailability(o.Availability); reason != "" {
 		return nil, reason
 	}
-	if reason := allowanceTrust(item.Validation.State, item.Binding.State, item.Freshness.State); reason != "" {
+	if o.Scope.BindingState != providerallowance.BindingVerified {
+		return nil, "Account binding unverified"
+	}
+	if reason := allowanceTrust(item.Validation.State, item.Binding.State, item.Freshness); reason != "" {
 		return nil, reason
 	}
 	source := ""
@@ -141,12 +176,7 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 		currents[current.MeasureID] = current
 	}
 	var windows []portal.ProductAllowanceWindow
-	seen := map[string]bool{}
 	for _, m := range o.Measures {
-		if seen[m.ID] {
-			return nil, "Conflicting allowance values"
-		}
-		seen[m.ID] = true
 		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
 			continue
 		}
@@ -165,7 +195,7 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 			suffix = "% used"
 		}
 		percent := "Unknown"
-		if ok && current.State == providerallowance.CurrentKnown && current.Value.State == providerallowance.ValueKnown && current.Value.Decimal != nil && *current.Value.Decimal != "" && m.Value.State == providerallowance.ValueKnown && m.Value.Decimal != nil && *m.Value.Decimal != "" && suffix != "" {
+		if ok && current.State == providerallowance.CurrentKnown && current.Value.State == providerallowance.ValueKnown && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal) && m.Value.State == providerallowance.ValueKnown && m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && suffix != "" {
 			percent = *current.Value.Decimal + suffix
 		}
 		reset := "Unknown"
@@ -173,7 +203,10 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 		case providerallowance.ResetInstant:
 			reset = allowanceTime(m.Window.ResetAt)
 		case providerallowance.ResetDisplayOnly:
-			reset = allowanceTime(m.Window.ResetAt) + " (display only)"
+			reset = allowanceTime(m.Window.ResetAt)
+			if reset != "Unknown" {
+				reset += " (display only)"
+			}
 		}
 		windows = append(windows, portal.ProductAllowanceWindow{
 			Percent: percent, Window: allowanceWindow(m.Window),

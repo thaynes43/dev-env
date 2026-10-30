@@ -191,7 +191,7 @@ func (s *SessionSource) finishRead(ctx context.Context, filter portal.ProductFil
 	if failure.ReasonCode == "not_connected" {
 		notice = "Sessions not connected"
 	}
-	page = portal.ProductPage{Title: "Sessions", Notice: notice, Filter: filter, Allowance: disconnectedAllowances(), ReadFailure: &failure.ProductReadFailure}
+	page = portal.ProductPage{Title: "Sessions", Notice: notice, Filter: filter, ReadFailure: &failure.ProductReadFailure}
 	level := slog.LevelWarn
 	if failure.ReasonCode == "not_connected" || failure.ReasonCode == "cancelled" {
 		level = slog.LevelInfo

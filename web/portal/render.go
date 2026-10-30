@@ -858,7 +858,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		}
 	}
 	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter, page.Title)
-	if view.Current == "sessions" {
+	if view.Current == "sessions" && page.ReadFailure == nil {
 		view.Allowance = allowanceViews(page.Allowance)
 	}
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"

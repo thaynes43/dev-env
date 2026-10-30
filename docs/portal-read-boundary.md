@@ -145,6 +145,7 @@ the policy.
 
 Sessions shows a compact Account allowance list in the list header. Usage shows the
 same model in full, also on a read with no rows. Tasks, Asks and Pages show none.
+A failed Sessions read shows no allowance.
 No allowance reader is deployed, so production shows Claude and Codex as
 `Not connected`, with no percent.
 
