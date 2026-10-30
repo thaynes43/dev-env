@@ -634,6 +634,8 @@ type AgentSessionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.expiry) || has(self.expiry) || !(oldSelf.expiry.phase in ['Deleting', 'Expired'])",message="the HOME expiry record cannot be removed once Deleting"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.expiryClearedAt) || (has(self.expiryClearedAt) && self.expiryClearedAt >= oldSelf.expiryClearedAt)",message="expiryClearedAt cannot be removed or move back"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.expiry) || has(self.expiry) || (has(self.expiryClearedAt) && (!has(oldSelf.expiryClearedAt) || self.expiryClearedAt > oldSelf.expiryClearedAt))",message="removing the HOME expiry record (a cancel) records a newer expiryClearedAt in the same write"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.taskTerminal) || (has(self.taskTerminal) && self.taskTerminal == oldSelf.taskTerminal)",message="the terminal task observation cannot change or be removed"
+// +kubebuilder:validation:XValidation:rule="!has(self.taskTerminal) || (has(self.lastExecutor) && self.taskTerminal.task.exitSource.podUID == self.lastExecutor.podUID && self.taskTerminal.task.exitSource.sessionUID == self.sessionUID && self.taskTerminal.task.exitSource.provider == self.provider)",message="the terminal task must name the original Session and executor"
 type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:Enum=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention version is immutable"
@@ -678,9 +680,13 @@ type PrivateHistoryStatus struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="retention provider is immutable"
 	Provider string `json:"provider"`
 	// StopState stays Unknown: executorTerminal is evidence for HOME expiry
-	// only, never DESIGN-010's stop contract (DESIGN-025 3.1).
+	// and gated compute reclaim, never DESIGN-010's stop contract (DESIGN-025).
 	// +kubebuilder:validation:Enum=Unknown
 	StopState string `json:"stopState"`
+	// TaskTerminal is the confirmed original provider exit and outcome. It
+	// authorizes compute reclaim only with its separate default-off flag.
+	// +optional
+	TaskTerminal *PrivateTaskTerminalStatus `json:"taskTerminal,omitempty"`
 	// +optional
 	LastExecutor *PrivateExecutorStatus `json:"lastExecutor,omitempty"`
 	// ExecutorTerminal is the durable terminal record of the recorded executor
@@ -688,7 +694,7 @@ type PrivateHistoryStatus struct {
 	// Pod named by lastExecutor.podUID reached a terminal phase, every container
 	// terminated, on a Ready node with a fresh lease. It sits beside
 	// lastExecutor, which every observation rebuilds. It is evidence for HOME
-	// expiry only: stopState stays Unknown, and it authorizes no claim
+	// expiry and gated compute reclaim: stopState stays Unknown, with no claim
 	// transfer, resume or replacement. Once written it never changes or goes.
 	// +optional
 	ExecutorTerminal *PrivateExecutorTerminalStatus `json:"executorTerminal,omitempty"`
@@ -1097,6 +1103,9 @@ type ProjectBootstrapProjectStatus struct {
 
 // TaskStatus is how a task ended (D-42): the CLI's exit and its result event.
 type TaskStatus struct {
+	// ExitSource binds a post-Wait result to the original provider attempt.
+	// +optional
+	ExitSource *UsageSourceStatus `json:"exitSource,omitempty"`
 	// ExitCode is the CLI's exit code.
 	// +required
 	ExitCode int32 `json:"exitCode"`
@@ -1111,6 +1120,7 @@ type TaskStatus struct {
 
 	// Subtype is the result event's subtype: success, error_max_turns or
 	// error_during_execution.
+	// +kubebuilder:validation:MaxLength=256
 	// +optional
 	Subtype string `json:"subtype,omitempty"`
 
@@ -1121,6 +1131,16 @@ type TaskStatus struct {
 	// NumTurns is the number of turns the task took.
 	// +optional
 	NumTurns int32 `json:"numTurns,omitempty"`
+}
+
+// PrivateTaskTerminalStatus preserves the task outcome independently of later
+// heartbeats. The whole-Pod terminal record remains required before deletion.
+// +kubebuilder:validation:XValidation:rule="has(self.task.exitSource)",message="terminal task requires original provider exit proof"
+// +kubebuilder:validation:XValidation:rule="self.dueAt > self.observedAt && self.task.finishedAt <= self.observedAt",message="terminal task grace follows a real observed exit"
+type PrivateTaskTerminalStatus struct {
+	Task       TaskStatus  `json:"task"`
+	ObservedAt metav1.Time `json:"observedAt"`
+	DueAt      metav1.Time `json:"dueAt"`
 }
 
 // TaskResultStatus is the operator's reading of agent.task: a state, a

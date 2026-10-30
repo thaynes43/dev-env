@@ -143,6 +143,8 @@ type options struct {
 	codexRCTarget                 *apiv1.CodexRCTarget
 	privateHistoryRetention       bool
 	privateTerminalRecord         bool
+	terminalTaskPodReclaim        bool
+	terminalTaskReclaimGrace      time.Duration
 	privateExecutorStop           bool
 	homeHistoryArchive            bool
 	historyArchiveReads           bool
@@ -212,6 +214,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
+	fs.BoolVar(&o.terminalTaskPodReclaim, "enable-terminal-task-pod-reclaim", false, "reclaim original terminal headless task compute after its grace; retains HOME, history and outcome (DESIGN-025 24); needs private terminal record and executor stop")
+	fs.DurationVar(&o.terminalTaskReclaimGrace, "terminal-task-pod-reclaim-grace", controller.DefaultTerminalTaskReclaimGrace, "positive grace after the confirmed original task exit observation, before compute reclaim")
 	fs.BoolVar(&o.privateExecutorStop, "enable-private-executor-stop", false, "stop the recorded executor of a Reaping private Session with activeDeadlineSeconds, after a confirmed stop intent; an owner hold blocks it (DESIGN-025 4); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.homeHistoryArchive, "enable-home-history-archive", false, "run the HOME expiry of private Sessions up to Archived: after the grace, rescue in a hold pod bound to the HOME, export the provider history into the shelf's history archive and verify it; deletes no HOME (DESIGN-025 5); needs --enable-private-terminal-record")
 	fs.BoolVar(&o.historyArchiveReads, "enable-history-archive-reads", false, "serve shared archived provider history on /v1/history to configured trusted callers (DESIGN-025 8, D-92); off, those routes answer 404")
@@ -523,6 +527,12 @@ func parseFlags(args []string) (options, error) {
 	if o.privateExecutorStop && !o.privateTerminalRecord {
 		return o, errors.New("--enable-private-executor-stop requires --enable-private-terminal-record: the terminal record is what proves the stop (DESIGN-025 13)")
 	}
+	if o.terminalTaskPodReclaim && (!o.privateTerminalRecord || !o.privateExecutorStop) {
+		return o, errors.New("--enable-terminal-task-pod-reclaim requires --enable-private-terminal-record and --enable-private-executor-stop")
+	}
+	if o.terminalTaskReclaimGrace < time.Second {
+		return o, errors.New("--terminal-task-pod-reclaim-grace must be at least one second")
+	}
 	if o.homeHistoryArchive && !o.privateTerminalRecord {
 		return o, errors.New("--enable-home-history-archive requires --enable-private-terminal-record: the HOME expiry rests on the terminal record (DESIGN-025 13)")
 	}
@@ -565,32 +575,40 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		cloneOwner = o.catalogBinding.CloneOwner
 	}
 	var decisionParents []string
+	var protectedSessions []string
+	for _, host := range o.coordinatorHosts {
+		namespace, _, _ := strings.Cut(host.ServiceAccount, "/")
+		protectedSessions = append(protectedSessions, namespace+"/"+host.PodName)
+	}
 	if o.coordinatorEnabled && o.managedChildDecisions {
 		for _, host := range o.coordinatorHosts {
 			decisionParents = append(decisionParents, host.ServiceAccount)
 		}
 	}
 	return &controller.Reconciler{
-		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,
-		PilotAgent:                  o.pilotAgent,
-		TaskPilotAgent:              o.taskPilotAgent,
-		RemotePilotAgent:            o.remotePilotAgent,
-		Templates:                   types.NamespacedName{Namespace: o.templatesNamespace, Name: o.templatesName},
-		APIURL:                      o.apiURL,
-		ManagedCodexTasks:           o.managedCodexTasks,
-		RetainedCommonRules:         o.retainedCommonRules,
-		PrivateHistoryRetention:     o.privateHistoryRetention,
-		PrivateTerminalRecord:       o.privateTerminalRecord,
-		PrivateExecutorStop:         o.privateExecutorStop,
-		HomeHistoryArchive:          o.homeHistoryArchive,
-		HomeExpiryGrace:             o.homeExpiryGrace,
-		HomeExpiryDelete:            o.homeExpiryDelete,
-		PrivateProjectCanaries:      o.privateProjectCanaries,
-		PrivatePilot:                o.privatePilot,
-		PrivateProjectCloneOwner:    cloneOwner,
-		ManagedChildDecisions:       o.managedChildDecisions,
-		ManagedChildDecisionParents: decisionParents,
-		OriginalHome:                o.originalHome,
+		TaskBudgetWorkerImage:         o.taskBudgetWorkerImage,
+		PilotAgent:                    o.pilotAgent,
+		TaskPilotAgent:                o.taskPilotAgent,
+		RemotePilotAgent:              o.remotePilotAgent,
+		Templates:                     types.NamespacedName{Namespace: o.templatesNamespace, Name: o.templatesName},
+		APIURL:                        o.apiURL,
+		ManagedCodexTasks:             o.managedCodexTasks,
+		RetainedCommonRules:           o.retainedCommonRules,
+		PrivateHistoryRetention:       o.privateHistoryRetention,
+		PrivateTerminalRecord:         o.privateTerminalRecord,
+		TerminalTaskPodReclaim:        o.terminalTaskPodReclaim,
+		TerminalTaskReclaimGrace:      o.terminalTaskReclaimGrace,
+		TerminalTaskProtectedSessions: protectedSessions,
+		PrivateExecutorStop:           o.privateExecutorStop,
+		HomeHistoryArchive:            o.homeHistoryArchive,
+		HomeExpiryGrace:               o.homeExpiryGrace,
+		HomeExpiryDelete:              o.homeExpiryDelete,
+		PrivateProjectCanaries:        o.privateProjectCanaries,
+		PrivatePilot:                  o.privatePilot,
+		PrivateProjectCloneOwner:      cloneOwner,
+		ManagedChildDecisions:         o.managedChildDecisions,
+		ManagedChildDecisionParents:   decisionParents,
+		OriginalHome:                  o.originalHome,
 	}
 }
 
@@ -705,7 +723,7 @@ func run(args []string) error {
 	}
 	// The sessions' metrics, read from the cache at scrape time on every
 	// replica: the RescueFailed page's source (D-57).
-	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
+	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, TerminalTaskReclaim: o.terminalTaskPodReclaim})
 	// The HOME expiry's gauges, read from the same cache at scrape time
 	// (DESIGN-025 10).
 	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete})

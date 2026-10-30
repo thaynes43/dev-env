@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -22,8 +23,10 @@ import (
 // target's (the operator's, dev-env-system), and every session lives in the one
 // namespace the collector reads (D-02).
 const (
-	MetricRescueFailed = "dev_env_session_rescue_failed"
-	MetricSessions     = "dev_env_sessions"
+	MetricRescueFailed            = "dev_env_session_rescue_failed"
+	MetricSessions                = "dev_env_sessions"
+	MetricTerminalTaskRetained    = "dev_env_terminal_task_pods_retained"
+	MetricTerminalTaskRetainedAge = "dev_env_terminal_task_pods_oldest_seconds"
 )
 
 // collectTimeout bounds one scrape's read of the sessions.
@@ -36,7 +39,13 @@ var (
 	sessionsDesc = prometheus.NewDesc(MetricSessions,
 		"The number of sessions in each phase. A phase with no session reports 0, so the series exist whenever the operator is scraped.",
 		[]string{"phase"}, nil)
+	terminalTaskRetainedDesc = prometheus.NewDesc(MetricTerminalTaskRetained,
+		"Terminal headless task compute retained by current reclaim reason (DESIGN-025 24).", []string{"reason"}, nil)
+	terminalTaskRetainedAgeDesc = prometheus.NewDesc(MetricTerminalTaskRetainedAge,
+		"Oldest retained terminal headless task compute age in seconds by current reclaim reason.", []string{"reason"}, nil)
 )
+
+var terminalTaskRetainedReasons = []string{"ProofUnknown", "IdentityUnknown", "Protected", "Held", "ChildrenActive", "Grace", "Stopping"}
 
 // allReportedPhases are the phases dev_env_sessions always reports, with "" as
 // "Unknown" for a session the operator has not observed yet.
@@ -50,13 +59,17 @@ type SessionCollector struct {
 	// Reader lists sessions; the manager's cache in the operator.
 	Reader client.Reader
 	// Namespace is where the sessions live (dev-agents).
-	Namespace string
+	Namespace           string
+	TerminalTaskReclaim bool
+	Now                 func() time.Time
 }
 
 // Describe implements prometheus.Collector.
 func (c *SessionCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- rescueFailedDesc
 	ch <- sessionsDesc
+	ch <- terminalTaskRetainedDesc
+	ch <- terminalTaskRetainedAgeDesc
 }
 
 // Collect implements prometheus.Collector. A failed list reports an invalid
@@ -72,6 +85,11 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	counts := map[string]int{"Unknown": 0}
+	retained, oldest := map[string]float64{}, map[string]float64{}
+	now := time.Now()
+	if c.Now != nil {
+		now = c.Now()
+	}
 	for _, p := range allReportedPhases {
 		counts[string(p)] = 0
 	}
@@ -82,11 +100,31 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 			phase = "Unknown"
 		}
 		counts[phase]++
+		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim); c.TerminalTaskReclaim && s.Status.PodName != "" && cond != nil && cond.Status == metav1.ConditionTrue {
+			reason := cond.Reason
+			if !slices.Contains(terminalTaskRetainedReasons, reason) {
+				reason = "ProofUnknown"
+			}
+			retained[reason]++
+			at := s.CreationTimestamp.Time
+			if h := s.Status.PrivateHistory; h != nil && h.TaskTerminal != nil {
+				at = h.TaskTerminal.ObservedAt.Time
+			}
+			if !at.IsZero() {
+				oldest[reason] = max(oldest[reason], max(0, now.Sub(at).Seconds()))
+			}
+		}
 		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionRescueFailed); cond != nil && cond.Status == metav1.ConditionTrue {
 			ch <- prometheus.MustNewConstMetric(rescueFailedDesc, prometheus.GaugeValue, 1, s.Name, cond.Reason)
 		}
 	}
 	for phase, n := range counts {
 		ch <- prometheus.MustNewConstMetric(sessionsDesc, prometheus.GaugeValue, float64(n), phase)
+	}
+	if c.TerminalTaskReclaim {
+		for _, reason := range terminalTaskRetainedReasons {
+			ch <- prometheus.MustNewConstMetric(terminalTaskRetainedDesc, prometheus.GaugeValue, retained[reason], reason)
+			ch <- prometheus.MustNewConstMetric(terminalTaskRetainedAgeDesc, prometheus.GaugeValue, oldest[reason], reason)
+		}
 	}
 }

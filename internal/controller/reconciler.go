@@ -134,6 +134,11 @@ type Reconciler struct {
 	// It acts only while PrivateTerminalRecord is on too. Off, no intent is
 	// written and no Pod is patched.
 	PrivateExecutorStop bool
+	// TerminalTaskPodReclaim removes only terminal headless compute, default
+	// off; DESIGN-025 24 keeps HOME/history retention separate.
+	TerminalTaskPodReclaim        bool
+	TerminalTaskReclaimGrace      time.Duration
+	TerminalTaskProtectedSessions []string
 	// PrivateExecutorStops counts the stop requests
 	// (MetricPrivateExecutorStopRequests); nil counts nothing.
 	PrivateExecutorStops *prometheus.CounterVec
@@ -420,16 +425,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}
 	}
 
+	reclaimResult, reclaimStop, reclaimErr := r.reconcileTerminalTaskReclaim(ctx, &s)
+	if reclaimErr != nil || reclaimStop {
+		return reclaimResult, reclaimErr
+	}
+
 	// DESIGN-025 5: the HOME expiry, up to Archived, after the observation
 	// above confirmed the terminal record it rests on.
-	var expiryResult ctrl.Result
+	expiryResult := reclaimResult
 	if privateHistoryProtected(&s) {
 		obs.expiryExecutorEnded = r.homeExpiryOn() && recordedExecutorEnded(&s, obs)
 		res, stop, err := r.reconcileHomeExpiry(ctx, &s, &obs)
 		if err != nil || stop {
 			return res, err
 		}
-		expiryResult = res
+		expiryResult = sooner(expiryResult, res)
 	}
 
 	if s.Spec.SessionDirectory != nil {
@@ -1480,6 +1490,9 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 // is Failed whatever its task did; this is where its success or failure shows.
 // It is a pure function of status, so a fresh operator computes the same.
 func taskResult(s *v1alpha1.AgentSession, a *v1alpha1.AgentStatus) *v1alpha1.TaskResultStatus {
+	if h := s.Status.PrivateHistory; h != nil && h.TaskTerminal != nil {
+		a = &v1alpha1.AgentStatus{Task: &h.TaskTerminal.Task}
+	}
 	if s.Spec.Mode != v1alpha1.ModeTask || a == nil || a.Task == nil {
 		return nil
 	}
