@@ -30,10 +30,12 @@ The short version:
   features from planned ones. ADR-001 was Accepted 2026-10-06. The saga is
   [`.agents/sagas/distributed-dev-env/`](.agents/sagas/distributed-dev-env/README.md).
   Deploy manifests live in thaynes43/haynes-ops, not here.
-- Docs first; one native phone-delivered question prompt at a time to Tom,
-  recommended option first, recorded as `Q-NN` in the design. Use the provider's
-  user-question tool once phone delivery is verified. Codex phone delivery is
-  currently unverified; a question buried in commentary is not delivery.
+- Docs first. Routine worker, parent and coordinator questions use the existing
+  `agent-run` coordination route; `msg` only when safe, durable inbox where
+  supported. Never paste into a TUI with a pending native question modal or
+  impersonate another session. Actual user questions and decisions go to Tom
+  through the native phone prompt, one at a time; see [CLAUDE.md](CLAUDE.md#how-work-happens-here)
+  for delivery and escalation rules.
 - Worktree per task, branch `agent/<task>`, ready PR, never push to main.
 - No CPU burners on any shared node; a CPU limit on anything you run in the
   cluster. No secrets in git. One owner per rotating refresh token. Full model ids.

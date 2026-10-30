@@ -173,6 +173,7 @@ images/portal/           Dockerfile: ghcr.io/thaynes43/dev-env-portal, the inter
 images/agent/            Dockerfile: ghcr.io/thaynes43/dev-env, tag line 2.x (D-53); smoke-test.sh; tools/ (pve, hw-ssh, v1 copies). CI only, never in the pod
 images/codex-login/      Dockerfile: ghcr.io/thaynes43/dev-env-codex-login, the keeper's login-only helper (D-78); published by publish.yml
 images/git-wait/         the git-wait trial fixture: a patched Git build recipe; publish-git-wait.yml, fixture tags only
+scripts/codex-clean-session.py  native client-only clean launcher and offline tests; [usage](docs/codex-clean-session.md), no operator or daemon changes
 scripts/trials/          bounded synthetic trial scripts and their checks (git-wait, workspace CephFS); run only in reviewed fixture Jobs
 scripts/trials/native_lifecycle_profile/  renders the isolated native lifecycle profile; provisions nothing
 scripts/trials/pilot_rendezvous/  default-off bounded existing-CLI pilot gate/one-dispatch harness; offline injected checks
@@ -268,8 +269,19 @@ and `make check-layout` (run in CI beside `check-generated`) fails without one.
   design for the how, a backlog plan for the steps, then code. Docs change in the same
   PR as the behaviour they describe. An Accepted ADR is never edited; a new ADR
   supersedes it.
-- **Questions go to Tom one at a time through the native phone prompt**, at the
-  moment the decision arises. Claude uses AskUserQuestion. Codex must use an
+- **Routine agent coordination goes to the parent/coordinator through the
+  existing `agent-run` route** (Tom, 2026-10-30; OP272/3416, OP252/3435).
+  Use `agent-run msg <session> -` with the text on stdin only when TUI delivery
+  is safe. Never send TUI input while a native question modal is pending.
+  For headless, unavailable or unsafe TUI recipients, use `agent-run inbox`
+  where supported, with the verified recipient identity and project scope;
+  consult `agent-run help inbox`. Delivery is not acknowledgement. Preserve
+  unconfirmed outcomes and durable tracker handoffs; do not blindly resend,
+  create a new notification channel or impersonate another session. Native
+  subagents use their supported collaboration route. Routine coordination
+  does not require a phone prompt or grant authority to answer for Tom.
+- **Actual user questions, observations and decisions go to Tom one at a time
+  through the native phone prompt**, at the moment the decision arises. Claude uses AskUserQuestion. Codex must use an
   available native user-question tool **once phone delivery is verified**; that
   delivery is currently unverified for this client and is a plan 11 acceptance
   requirement. Plain commentary, final-message
