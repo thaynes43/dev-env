@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -54,9 +55,23 @@ func rcResult(t *testing.T, h *harness) apiv1.RCLaunchResult {
 		t.Fatalf("incomplete contract: %+v", v)
 	}
 	for name, phase := range v.Phases {
-		if phase.State == "" || phase.Reason == "" || phase.EvidenceSource == "" || phase.FirstObservedAt.Location() != time.UTC || phase.SourceAt != nil || phase.SinceRequestMs < 0 || phase.SinceRequestMs > v.TotalMs {
+		switch phase.State {
+		case "ok", "error", "blocked", "unknown", "not_applicable":
+		default:
+			t.Errorf("invalid %s state: %s", name, phase.State)
+		}
+		if phase.Reason == "" || phase.EvidenceSource == "" || (phase.FirstObservedAt != nil && phase.FirstObservedAt.Location() != time.UTC) || phase.SourceAt != nil || phase.SinceRequestMs < 0 || phase.SinceRequestMs > v.TotalMs {
 			t.Errorf("invalid %s phase: %+v", name, phase)
 		}
+		if phase.Reason == "not_observed" && phase.FirstObservedAt != nil {
+			t.Errorf("unobserved %s phase has a timestamp", name)
+		}
+	}
+	if v.Phases["provider_auth_ok"].FirstObservedAt != nil || v.Phases["cli_recorded"].FirstObservedAt != nil {
+		t.Error("unavailable provider/input evidence has a timestamp")
+	}
+	if v.Error != nil && v.Error.Message == "" {
+		t.Error("error lacks a fixed diagnostic message")
 	}
 	if strings.Contains(string(raw)+h.stderr.String(), rcTestText) {
 		t.Fatal("private handoff appeared in output")
@@ -107,9 +122,13 @@ func TestRCHappyPathAndKeyReplay(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			h := newHarness(t)
 			rcServe(h, status, func(poll int) apiv1.Session { return rcView(min(poll, 5)) }, http.StatusAccepted)
-			h.mustRun(ExitOK, rcArgs(h)...)
+			wantExit, wantOutcome, wantMessages := ExitOK, "link_available", 1
+			if status == http.StatusOK {
+				wantExit, wantOutcome, wantMessages = ExitUnconfirmed, "unconfirmed", 0
+			}
+			h.mustRun(wantExit, rcArgs(h)...)
 			r := rcResult(t, h)
-			if r.Outcome != "link_available" || r.Link == nil || *r.Link != rcTestLink || r.Error != nil || !r.RCRegistered || r.Polls != 5 || r.TotalMs != 10000 || r.DeadlineMs != 300000 || r.IdempotencyKey != "agent-run-testkey" || rcCountMessages(h) != 1 {
+			if r.Outcome != wantOutcome || r.Link == nil || *r.Link != rcTestLink || !r.RCRegistered || r.Polls != 5 || r.TotalMs != 10000 || r.DeadlineMs != 300000 || r.IdempotencyKey != "agent-run-testkey" || rcCountMessages(h) != wantMessages {
 				t.Fatalf("unexpected result: %+v", r)
 			}
 			for _, phase := range []string{"provider_auth_ok", "rc_ready", "cli_recorded"} {
@@ -117,16 +136,39 @@ func TestRCHappyPathAndKeyReplay(t *testing.T) {
 					t.Error("unearned readiness/input evidence", phase)
 				}
 			}
-			if r.Phases["handoff"].State != "transport_submitted" || r.Phases["pairing_required"].State != "not_applicable" {
-				t.Fatal("handoff or pairing state")
+			if status == http.StatusOK {
+				if r.Error == nil || r.Error.Code != "handoff_unconfirmed" || r.Phases["api_accepted"].Reason != "reused_by_key" || r.Phases["handoff"].State != "unknown" || r.Phases["handoff"].Reason != "reused_by_key_not_resent" {
+					t.Fatal("replay uncertainty not recorded", r)
+				}
+			} else if r.Error != nil || r.Phases["handoff"].State != "ok" || r.Phases["handoff"].Reason != "transport_submitted" {
+				t.Fatal("transport submission not recorded", r)
 			}
-			if status == http.StatusOK && r.Phases["api_accepted"].Reason != "reused_by_key" {
-				t.Fatal("replay not recorded")
+			if r.Phases["pairing_required"].State != "not_applicable" {
+				t.Fatal("pairing state")
 			}
 			if r.Phases["pod_scheduled"].SinceRequestMs != 2000 || r.Phases["pod_ready"].SinceRequestMs != 4000 || r.Phases["agent_started"].SinceRequestMs != 6000 || r.Phases["link_available"].SinceRequestMs != 10000 {
 				t.Fatal("phase timings did not use the fake clock")
 			}
+			if r.Phases["pod_scheduled"].FirstObservedAt == nil || !r.Phases["pod_scheduled"].FirstObservedAt.Equal(testNow.Add(2*time.Second)) {
+				t.Fatal("observed phase lacks its timestamp")
+			}
 		})
+	}
+}
+
+func TestRCKeyReuseAfterUnconfirmedHandoffDoesNotSendChangedText(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session { return rcView(5) }, http.StatusInternalServerError)
+	h.mustRun(ExitUnconfirmed, rcArgs(h)...)
+	if rcResult(t, h).Error.Code != "handoff_unconfirmed" || rcCountMessages(h) != 1 {
+		t.Fatal("missing initial unconfirmed message")
+	}
+	rcServe(h, http.StatusOK, func(int) apiv1.Session { return rcView(5) }, http.StatusAccepted)
+	changedText := "SYNTHETIC_CHANGED_HANDOFF_268"
+	h.mustRun(ExitUnconfirmed, rcArgs(h, "--handoff", h.write("changed.txt", changedText))...)
+	r := rcResult(t, h)
+	if r.Outcome != "unconfirmed" || r.Error.Code != "handoff_unconfirmed" || r.Link == nil || r.Phases["handoff"].Reason != "reused_by_key_not_resent" || rcCountMessages(h) != 1 || strings.Contains(h.stdout.String()+h.stderr.String(), changedText) {
+		t.Fatal("key reuse resent or exposed the changed handoff", r)
 	}
 }
 
@@ -145,7 +187,7 @@ func TestRCPhaseTimeoutsAndGlobalDeadline(t *testing.T) {
 				rcServe(h, http.StatusCreated, func(int) apiv1.Session { return rcView(level) }, http.StatusAccepted)
 				h.mustRun(ExitPending, rcArgs(h, "--wait", wait)...)
 				r := rcResult(t, h)
-				if r.Error == nil || r.Error.Code != wantCode || r.Error.Phase != stage.phase || r.TotalMs != wantMs || rcCountMessages(h) != 0 || r.SessionName != "remote-268" {
+				if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != wantCode || r.Error.Phase != stage.phase || r.TotalMs != wantMs || rcCountMessages(h) != 0 || r.SessionName != "remote-268" {
 					t.Fatalf("wrong timeout: %+v", r)
 				}
 				for _, d := range h.sleeps {
@@ -163,7 +205,7 @@ func TestRCZeroWait(t *testing.T) {
 	rcServe(h, http.StatusCreated, func(int) apiv1.Session { return rcView(5) }, http.StatusAccepted)
 	h.mustRun(ExitPending, rcArgs(h, "--wait", "0")...)
 	r := rcResult(t, h)
-	if r.SessionName != "remote-268" || r.Error.Code != "launch_deadline" || r.Polls != 0 || len(h.api.requests()) != 1 || len(h.sleeps) != 0 {
+	if r.Outcome != "accepted" || r.SessionName != "remote-268" || r.Error.Code != "launch_deadline" || r.Polls != 0 || len(h.api.requests()) != 1 || len(h.sleeps) != 0 {
 		t.Fatal("zero wait polled or submitted handoff")
 	}
 }
@@ -224,6 +266,9 @@ func TestRCRefusalsAndRedaction(t *testing.T) {
 			if r.Error.Code != tc.code || r.IdempotencyKey != "explicit-key" || len(h.api.requests()) != 1 {
 				t.Fatalf("wrong refusal: %+v", r)
 			}
+			if tc.code == "project_unavailable" && (r.Error.Phase != "project_inventory_ok" || r.Phases["project_inventory_ok"].State != "error" || r.Phases["api_accepted"].FirstObservedAt != nil) {
+				t.Fatal("project admission error assigned to API acceptance", r)
+			}
 		})
 	}
 }
@@ -268,7 +313,7 @@ func TestRCHandoffRejectionAndLostReplyNeverResent(t *testing.T) {
 }
 
 func TestRCAuthOwnerAction(t *testing.T) {
-	for msg, code := range map[string]string{"login-conflict: private synthetic detail": "login_conflict", "claude authentication requires a current keeper projection": "auth_projection_unavailable"} {
+	for msg, code := range map[string]string{"login-conflict: private synthetic detail": "login_conflict", "login-conflict: auth_projection_unavailable": "login_conflict", "claude authentication requires a current keeper projection": "auth_projection_unavailable", "login-required: waiting for the keeper's Claude projection; no login is run in this pod": "auth_projection_unavailable"} {
 		h := newHarness(t)
 		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
 			v := rcView(5)
@@ -280,6 +325,29 @@ func TestRCAuthOwnerAction(t *testing.T) {
 		if r.Outcome != "action_required" || r.Error.Code != code || r.Link == nil || !r.RCRegistered || rcCountMessages(h) != 0 {
 			t.Fatal("missing owner action", r)
 		}
+		wantMs := int64(0)
+		if code == "auth_projection_unavailable" {
+			wantMs = 30000
+		}
+		if r.TotalMs != wantMs || r.Phases["agent_started"].State != "blocked" {
+			t.Fatal("wrong authentication settle interval", r)
+		}
+	}
+}
+
+func TestRCAuthProjectionRecoversAfterOnePoll(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+		v := rcView(5)
+		if poll == 0 {
+			v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+		}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitOK, rcArgs(h)...)
+	r := rcResult(t, h)
+	if r.Outcome != "link_available" || r.Error != nil || r.Polls != 1 || r.TotalMs != 2000 || rcCountMessages(h) != 1 {
+		t.Fatal("transient keeper projection stopped startup", r)
 	}
 }
 
@@ -294,10 +362,12 @@ func TestRCLocalValidationAndCodexNoRequests(t *testing.T) {
 			}
 		})
 	}
-	for _, extra := range [][]string{{"--model", "opus"}, {"--model", "claude-opus-latest"}, {"--effort", "none"}, {"--wait", "-1s"}, {"--idempotency-key", "bad/key"}, {"--project", "../sample"}, {"--repo", "owner/repo"}, {"--unknown", rcTestText}} {
+	for _, extra := range [][]string{{"--model", "opus"}, {"--model", "claude-opus-latest"}, {"--effort", "none"}, {"--wait", "-1s"}, {"--wait", "10m1ns"}, {"--idempotency-key", "bad/key"}, {"--project", "../sample"}, {"--repo", "owner/repo"}, {"--unknown", rcTestText}} {
 		h := newHarness(t)
 		h.mustRun(ExitUsage, rcArgs(h, extra...)...)
-		rcResult(t, h)
+		if rcResult(t, h).Error.Code != "invalid_input" {
+			t.Fatal("invalid local input classified incorrectly")
+		}
 		if len(h.api.requests()) != 0 {
 			t.Fatal("invalid input sent")
 		}
@@ -305,7 +375,7 @@ func TestRCLocalValidationAndCodexNoRequests(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitFailed, rcArgs(h, "--agent", "codex", "--model", "gpt-6.1-sol")...)
 	r := rcResult(t, h)
-	if r.Outcome != "blocked" || r.Error.Code != "codex_inventory_unavailable" || len(h.api.requests()) != 0 || len(h.ran) != 0 {
+	if r.Outcome != "blocked" || r.Error.Code != "codex_adapter_not_implemented" || r.Error.Message != "Codex remote launch is not implemented in 2a; no inventory was probed" || len(h.api.requests()) != 0 || len(h.ran) != 0 {
 		t.Fatal("Codex made a request")
 	}
 }
@@ -323,6 +393,56 @@ func TestRCStatusOneReadNoMessage(t *testing.T) {
 		if len(h.api.requests()) != 1 || h.api.requests()[0].method != http.MethodGet || r.Phases["handoff"].State != "unknown" {
 			t.Fatal("status mutated or claimed a handoff")
 		}
+		if r.Phases["api_accepted"].FirstObservedAt != nil || r.Phases["project_inventory_ok"].FirstObservedAt != nil || r.Phases["handoff"].FirstObservedAt != nil {
+			t.Fatal("status invented create or handoff observation times", r)
+		}
+	}
+}
+
+func TestRCSessionEnded(t *testing.T) {
+	for _, state := range []string{"Failed", "Suspended", "Archived", "Reaping"} {
+		for _, command := range []string{"create", "follow", "status"} {
+			t.Run(state+"/"+command, func(t *testing.T) {
+				h := newHarness(t)
+				rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+					v := rcView(5) // Even a retained valid link cannot revive a session.
+					if command != "follow" || poll > 0 {
+						v.Phase = state
+						v.Reaping = state == "Reaping"
+					} else {
+						v.AgentStatus = nil
+					}
+					return v
+				}, http.StatusAccepted)
+				args := rcArgs(h)
+				if command == "status" {
+					args = []string{"rc", "status", "remote-268", "-o", "json"}
+				}
+				h.mustRun(ExitFailed, args...)
+				r := rcResult(t, h)
+				wantRequests := 1
+				if command == "follow" {
+					wantRequests = 2
+				}
+				if r.Outcome != "failed" || r.Error.Code != "session_ended" || r.SessionName != "remote-268" || r.Link == nil || rcCountMessages(h) != 0 || len(h.api.requests()) != wantRequests {
+					t.Fatal("ended session reported a usable launch or kept polling", r)
+				}
+			})
+		}
+	}
+}
+
+func TestRCStatusTransientAuthProjectionRemainsPending(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(2)
+		v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, "rc", "status", "remote-268", "-o", "json")
+	r := rcResult(t, h)
+	if r.Outcome != "pending" || r.Error != nil || len(h.api.requests()) != 1 {
+		t.Fatal("single status read inferred persistent projection failure", r)
 	}
 }
 
@@ -365,6 +485,10 @@ func TestRCDeadlineDuringStatusRequest(t *testing.T) {
 	h.env.Sleep = func(ctx context.Context, d time.Duration) error { h.now = h.now.Add(d); return ctx.Err() }
 	before := time.Now()
 	h.mustRun(ExitPending, rcArgs(h, "--wait", "3s")...)
+	r := rcResult(t, h)
+	if r.Outcome != "timed_out" || r.Error.Code != "launch_deadline" || r.SessionName != "remote-268" {
+		t.Fatal("deadline lost its outcome or handle", r)
+	}
 	if time.Since(before) > 2500*time.Millisecond {
 		t.Fatal("request exceeded remaining deadline")
 	}
@@ -382,6 +506,65 @@ func TestRCScheduledContainerCreatingUsesPodReadyBudget(t *testing.T) {
 	r := rcResult(t, h)
 	if r.Error.Code != "pod_ready_timeout" || r.TotalMs != 120000 || r.Phases["pod_scheduled"].SinceRequestMs != 0 {
 		t.Fatal("scheduled image pull was mistaken for scheduler timeout", r)
+	}
+}
+
+func TestRCPodReadyBudgetStartsAtAcceptance(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+		if poll < 25 {
+			return rcView(0)
+		}
+		return rcView(1) // Scheduling takes 50s of the existing 120s budget.
+	}, http.StatusAccepted)
+	serve := h.api.handle
+	h.api.handle = func(w http.ResponseWriter, req *http.Request, body []byte) {
+		if req.Method == http.MethodPost {
+			h.now = h.now.Add(5 * time.Second) // Acceptance is after the create exchange.
+		}
+		serve(w, req, body)
+	}
+	h.mustRun(ExitPending, rcArgs(h, "--wait", "10m")...)
+	r := rcResult(t, h)
+	if r.Outcome != "timed_out" || r.Error.Code != "pod_ready_timeout" || r.TotalMs != 125000 || r.Phases["api_accepted"].SinceRequestMs != 5000 || r.Phases["pod_scheduled"].SinceRequestMs != 55000 {
+		t.Fatal("pod readiness budget did not start at acceptance", r)
+	}
+}
+
+func TestRCHandoffLocalFailuresAreNotRetried(t *testing.T) {
+	for _, tokenFailure := range []bool{true, false} {
+		name := "dial"
+		wantExit, wantCode := ExitPending, "status_unavailable"
+		if tokenFailure {
+			name, wantExit, wantCode = "token", ExitAuth, "unauthenticated"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			rcServe(h, http.StatusCreated, func(poll int) apiv1.Session { return rcView(min(poll, 5)) }, http.StatusAccepted)
+			serve := h.api.handle
+			h.api.handle = func(w http.ResponseWriter, req *http.Request, body []byte) {
+				if req.Method == http.MethodGet && len(h.api.requests()) == 6 {
+					if tokenFailure {
+						if err := os.WriteFile(h.vars[envTokenFile], nil, 0o600); err != nil {
+							t.Error(err)
+						}
+					} else {
+						// Finish this GET but force the handoff to make a new,
+						// refused dial. No message reaches the fake API.
+						w.Header().Set("Connection", "close")
+						if err := h.api.srv.Listener.Close(); err != nil {
+							t.Error(err)
+						}
+					}
+				}
+				serve(w, req, body)
+			}
+			h.mustRun(wantExit, rcArgs(h)...)
+			r := rcResult(t, h)
+			if r.Outcome != "failed" || r.Error.Code != wantCode || r.Error.Phase != "handoff" || r.Link == nil || r.Phases["handoff"].State != "unknown" || r.Phases["handoff"].Reason != "not_sent" || rcCountMessages(h) != 0 || len(h.api.requests()) != 6 {
+				t.Fatal("local handoff failure misclassified or retried", r)
+			}
+		})
 	}
 }
 
@@ -455,6 +638,9 @@ func TestRCStatusRejectsUnboundedModelMetadata(t *testing.T) {
 func TestRCDoesNotWidenOrdinaryProjectFlags(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitUsage, "run", "--project", "sample", "--interactive", "--repo", "haynes-ops")
+	if h.stderr.String() != "agent-run: --project selects a new task; it cannot combine with rescue restore, --local or --interactive\n" {
+		t.Fatal("ordinary create failed for the wrong reason", h.stderr.String())
+	}
 	if len(h.api.requests()) != 0 {
 		t.Fatal("ordinary remote create widened")
 	}

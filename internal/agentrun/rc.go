@@ -32,33 +32,44 @@ var rcStages = []struct {
 }
 
 type rcRun struct {
-	a       *app
-	started time.Time
-	wait    time.Duration
-	result  apiv1.RCLaunchResult
+	a        *app
+	started  time.Time
+	accepted time.Duration
+	reused   bool
+	wait     time.Duration
+	result   apiv1.RCLaunchResult
 }
 
 func newRCRun(a *app) *rcRun {
 	r := &rcRun{a: a, started: a.env.Now()}
 	r.result = apiv1.RCLaunchResult{Version: apiv1.RCLaunchVersion, Outcome: "accepted", PollIntervalMs: 2000, Phases: make(map[string]apiv1.RCLaunchPhase)}
 	for _, phase := range []string{"api_accepted", "project_inventory_ok", "pod_scheduled", "pod_ready", "agent_started", "provider_auth_ok", "rc_ready", "link_available", "pairing_required", "handoff", "cli_recorded"} {
-		r.phase(phase, "unknown", "client", "not_observed")
+		r.unobserved(phase, "client", "not_observed")
 	}
-	r.phase("provider_auth_ok", "unknown", "session_view", "provider_readiness_unavailable")
-	r.phase("rc_ready", "unknown", "session_view", "provider_readiness_unavailable")
+	for _, phase := range []string{"provider_auth_ok", "rc_ready", "cli_recorded"} {
+		reason := "provider_readiness_unavailable"
+		if phase == "cli_recorded" {
+			reason = "input_record_unavailable"
+		}
+		r.unobserved(phase, "session_view", reason)
+	}
 	r.phase("pairing_required", "not_applicable", "client", "claude_remote")
-	r.phase("cli_recorded", "unknown", "session_view", "input_record_unavailable")
 	return r
 }
 
 func (r *rcRun) elapsed() time.Duration { return max(0, r.a.env.Now().Sub(r.started)) }
+
+func (r *rcRun) unobserved(name, source, reason string) {
+	r.result.Phases[name] = apiv1.RCLaunchPhase{State: "unknown", EvidenceSource: source, Reason: reason}
+}
 
 func (r *rcRun) phase(name, state, source, reason string) {
 	old, exists := r.result.Phases[name]
 	if exists && old.State == state && (state != "unknown" || old.Reason == reason && old.EvidenceSource == source) {
 		return
 	}
-	r.result.Phases[name] = apiv1.RCLaunchPhase{State: state, FirstObservedAt: r.a.env.Now().UTC(), SinceRequestMs: r.elapsed().Milliseconds(), EvidenceSource: source, Reason: reason}
+	now := r.a.env.Now().UTC()
+	r.result.Phases[name] = apiv1.RCLaunchPhase{State: state, FirstObservedAt: &now, SinceRequestMs: r.elapsed().Milliseconds(), EvidenceSource: source, Reason: reason}
 }
 
 func (r *rcRun) finish(outcome, code, phase string, exit int) error {
@@ -66,7 +77,7 @@ func (r *rcRun) finish(outcome, code, phase string, exit int) error {
 	r.result.TotalMs = r.elapsed().Milliseconds()
 	r.result.DeadlineMs = max(0, r.wait.Milliseconds())
 	if code != "" {
-		r.result.Error = &apiv1.RCLaunchError{Code: code, Phase: phase}
+		r.result.Error = &apiv1.RCLaunchError{Code: code, Message: rcErrorMessages[code], Phase: phase}
 	}
 	b, err := json.Marshal(r.result)
 	if err != nil || len(b)+1 > 32<<10 {
@@ -77,6 +88,28 @@ func (r *rcRun) finish(outcome, code, phase string, exit int) error {
 		return fail(ExitFailed, "rc output unavailable")
 	}
 	return &exitError{code: exit}
+}
+
+// Diagnostics are fixed client text, never reflected API messages or inputs.
+var rcErrorMessages = map[string]string{
+	"invalid_input":                 "Invalid launch input",
+	"codex_adapter_not_implemented": "Codex remote launch is not implemented in 2a; no inventory was probed",
+	"unauthenticated":               "API authentication is unavailable or was refused",
+	"launch_forbidden":              "The caller is not allowed to launch this session",
+	"project_unavailable":           "Project admission is unavailable",
+	"request_conflict":              "The idempotency key conflicts with the launch request",
+	"scheduling_timeout":            "Pod scheduling exceeded its budget",
+	"pod_ready_timeout":             "Pod readiness exceeded its budget",
+	"agent_start_timeout":           "Agent startup exceeded its budget",
+	"login_conflict":                "A login conflict requires owner action",
+	"auth_projection_unavailable":   "The keeper authentication projection remained unavailable for 30 seconds during agent startup",
+	"rc_registration_timeout":       "Remote Control registration exceeded its budget",
+	"link_unavailable":              "A valid Remote Control link was not observed within its budget",
+	"session_ended":                 "The session has ended or is being reaped",
+	"handoff_rejected":              "The handoff was refused",
+	"handoff_unconfirmed":           "Handoff submission is unconfirmed; it will not be resent",
+	"launch_deadline":               "The launch wait ended; retain the session handle",
+	"status_unavailable":            "The session exchange is unavailable or unconfirmed",
 }
 
 func (a *app) rc(ctx context.Context, args []string) error {
@@ -118,10 +151,13 @@ func (r *rcRun) start(ctx context.Context, args []string) error {
 		}
 		return r.finish("failed", "invalid_input", "", ExitUsage)
 	}
-	if agent == "codex" {
-		return r.finish("blocked", "codex_inventory_unavailable", "", ExitFailed)
+	if r.wait < 0 || r.wait > 10*time.Minute {
+		return r.finish("failed", "invalid_input", "", ExitUsage)
 	}
-	if len(pos) != 0 || cmd.c.output != outputJSON || !projectName.MatchString(project) || (repo != "" && !apiv1.ValidRepoName(repo)) || agent != "claude" || apiv1.CheckClaudeModel(model) != apiv1.ClaudeModelOK || len(model) > 128 || (effort != "" && !apiv1.ClaudeEffortAccepted(model, effort)) || handoff == "" || r.wait < 0 || (key != "" && !rcKeyPattern.MatchString(key)) {
+	if agent == "codex" {
+		return r.finish("blocked", "codex_adapter_not_implemented", "", ExitFailed)
+	}
+	if len(pos) != 0 || cmd.c.output != outputJSON || !projectName.MatchString(project) || (repo != "" && !apiv1.ValidRepoName(repo)) || agent != "claude" || apiv1.CheckClaudeModel(model) != apiv1.ClaudeModelOK || len(model) > 128 || (effort != "" && !apiv1.ClaudeEffortAccepted(model, effort)) || handoff == "" || (key != "" && !rcKeyPattern.MatchString(key)) {
 		return r.finish("failed", "invalid_input", "", ExitUsage)
 	}
 	text, ok := rcReadHandoff(handoff)
@@ -168,8 +204,11 @@ func (r *rcRun) start(ctx context.Context, args []string) error {
 	reason := "created"
 	if status == http.StatusOK {
 		reason = "reused_by_key"
+		r.reused = true
+		r.phase("handoff", "unknown", "create_response", "reused_by_key_not_resent")
 	}
-	r.phase("api_accepted", "succeeded", "create_response", reason)
+	r.accepted = r.elapsed()
+	r.phase("api_accepted", "ok", "create_response", reason)
 	var view apiv1.Session
 	decodeErr := json.Unmarshal(raw, &view)
 	if decodeErr == nil && projectName.MatchString(view.Name) {
@@ -179,7 +218,7 @@ func (r *rcRun) start(ctx context.Context, args []string) error {
 		return r.finish("unconfirmed", "status_unavailable", "project_inventory_ok", ExitUnconfirmed)
 	}
 	r.result.SessionName, r.result.Repo, r.result.Base = view.Name, view.Repo, view.Base
-	r.phase("project_inventory_ok", "succeeded", "create_response", "accepted_repo_and_base_echoed")
+	r.phase("project_inventory_ok", "ok", "create_response", "accepted_repo_and_base_echoed")
 	return r.follow(ctx, c, view, text)
 }
 
@@ -240,14 +279,14 @@ func (r *rcRun) observe(v apiv1.Session) string {
 	for _, c := range v.Conditions {
 		switch {
 		case c.Type == "PodScheduled" && c.Status == "True":
-			r.phase("pod_scheduled", "succeeded", "session_conditions", "PodScheduled")
+			r.phase("pod_scheduled", "ok", "session_conditions", "PodScheduled")
 		case c.Type == "PodReady" && c.Status == "False" && rcScheduledCondition(c, v.Node):
-			r.phase("pod_scheduled", "succeeded", "session_conditions", "node_bound_pod_condition")
+			r.phase("pod_scheduled", "ok", "session_conditions", "node_bound_pod_condition")
 		case c.Type == "PodReady" && c.Status == "True":
-			r.phase("pod_ready", "succeeded", "session_conditions", "PodReady")
+			r.phase("pod_ready", "ok", "session_conditions", "PodReady")
 			// A ready Pod necessarily passed scheduling, even on older views
 			// that report only the PodReady condition.
-			r.phase("pod_scheduled", "succeeded", "session_conditions", "PodReady")
+			r.phase("pod_scheduled", "ok", "session_conditions", "PodReady")
 		}
 	}
 	authCode := ""
@@ -256,11 +295,11 @@ func (r *rcRun) observe(v apiv1.Session) string {
 		if strings.Contains(msg, "login-conflict") || strings.Contains(msg, "login_conflict") {
 			authCode = "login_conflict"
 		}
-		if strings.Contains(msg, "auth_projection_unavailable") || strings.Contains(msg, "claude authentication requires a current keeper projection") || strings.Contains(msg, "login-required: waiting for the keeper's claude projection") {
+		if authCode == "" && (strings.Contains(msg, "auth_projection_unavailable") || strings.Contains(msg, "claude authentication requires a current keeper projection") || strings.Contains(msg, "login-required: waiting for the keeper's claude projection")) {
 			authCode = "auth_projection_unavailable"
 		}
 		if v.AgentStatus.State == "running" && strings.TrimSpace(v.AgentStatus.ConversationID) != "" {
-			r.phase("agent_started", "succeeded", "session_agent_status", "running_with_conversation_id")
+			r.phase("agent_started", "ok", "session_agent_status", "running_with_conversation_id")
 		}
 	}
 	if v.RemoteControl != nil {
@@ -272,7 +311,7 @@ func (r *rcRun) observe(v apiv1.Session) string {
 		if rcLinkPattern.MatchString(v.RemoteControl.URL) {
 			link := v.RemoteControl.URL
 			r.result.Link = &link
-			r.phase("link_available", "succeeded", "session_remote_control", "validated_rc_url")
+			r.phase("link_available", "ok", "session_remote_control", "validated_rc_url")
 		}
 	}
 	return authCode
@@ -282,18 +321,31 @@ func (r *rcRun) stageDone(name string) bool {
 	if name == "rc_ready" {
 		return r.result.RCRegistered
 	}
-	return r.result.Phases[name].State == "succeeded"
+	return r.result.Phases[name].State == "ok"
+}
+
+func rcSessionEnded(v apiv1.Session) bool {
+	return v.Reaping || v.Phase == "Failed" || v.Phase == "Suspended" || v.Phase == "Archived"
 }
 
 func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff string) error {
 	stage := 0
-	stageStart := r.elapsed()
+	stageStart := r.accepted
+	var projectionSince *time.Duration
 	for {
-		if code := r.observe(view); code != "" {
-			return r.finish("action_required", code, "agent_started", ExitPending)
+		authCode := r.observe(view)
+		if rcSessionEnded(view) {
+			return r.finish("failed", "session_ended", rcStages[stage].phase, ExitFailed)
 		}
-		if r.wait == 0 || r.elapsed() >= r.wait || ctx.Err() != nil {
+		if authCode == "login_conflict" {
+			r.phase("agent_started", "blocked", "session_agent_status", authCode)
+			return r.finish("action_required", authCode, "agent_started", ExitPending)
+		}
+		if r.wait == 0 {
 			return r.finish("accepted", "launch_deadline", rcStages[stage].phase, ExitPending)
+		}
+		if r.elapsed() >= r.wait || ctx.Err() != nil {
+			return r.finish("timed_out", "launch_deadline", rcStages[stage].phase, ExitPending)
 		}
 		for r.stageDone(rcStages[stage].phase) {
 			stage++
@@ -301,6 +353,23 @@ func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff
 			if stage == len(rcStages) {
 				return r.handoff(ctx, c, handoff)
 			}
+			if rcStages[stage].phase == "pod_ready" {
+				stageStart = r.accepted
+			}
+		}
+		// The keeper projection can recover while agentd waits. Count only
+		// continuous observations within the agent-start stage, not pod startup.
+		if rcStages[stage].phase == "agent_started" && authCode == "auth_projection_unavailable" {
+			if projectionSince == nil {
+				now := r.elapsed()
+				projectionSince = &now
+			}
+			if r.elapsed()-*projectionSince >= 30*time.Second {
+				r.phase("agent_started", "blocked", "session_agent_status", authCode)
+				return r.finish("action_required", authCode, "agent_started", ExitPending)
+			}
+		} else {
+			projectionSince = nil
 		}
 		end := min(r.wait, stageStart+rcStages[stage].budget)
 		if r.elapsed() >= end {
@@ -311,7 +380,7 @@ func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff
 			return r.finish("timed_out", code, rcStages[stage].phase, ExitPending)
 		}
 		if r.a.env.Sleep(ctx, min(pollInterval, end-r.elapsed())) != nil {
-			return r.finish("accepted", "launch_deadline", rcStages[stage].phase, ExitPending)
+			return r.finish("timed_out", "launch_deadline", rcStages[stage].phase, ExitPending)
 		}
 		// No extra read at the deadline; a slow request is bounded by the same
 		// remaining phase/global budget, not the ordinary 30s call timeout.
@@ -352,17 +421,33 @@ func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff
 }
 
 func (r *rcRun) handoff(ctx context.Context, c *conn, text string) error {
+	// The create request hash excludes the handoff. A reused key therefore
+	// cannot authorize another message, even if a previous attempt sent none.
+	if r.reused {
+		return r.finish("unconfirmed", "handoff_unconfirmed", "handoff", ExitUnconfirmed)
+	}
 	payload, _ := json.Marshal(apiv1.MessageRequest{Text: text})
 	status, _, err := r.a.send(ctx, c, http.MethodPost, c.url+apiv1.SessionMessagesPath(r.result.SessionName), payload)
+	if err != nil {
+		var ee *exitError
+		if errors.As(err, &ee) {
+			r.phase("handoff", "unknown", "client", "not_sent")
+			return r.finish("failed", "unauthenticated", "handoff", ExitAuth)
+		}
+		if nothingSent(err) {
+			r.phase("handoff", "unknown", "client", "not_sent")
+			return r.finish("failed", "status_unavailable", "handoff", ExitPending)
+		}
+	}
 	if err != nil || status >= 500 || status/100 == 2 && status != http.StatusAccepted {
 		r.phase("handoff", "unknown", "message_response", "handoff_unconfirmed")
 		return r.finish("unconfirmed", "handoff_unconfirmed", "handoff", ExitUnconfirmed)
 	}
 	if status != http.StatusAccepted {
-		r.phase("handoff", "rejected", "message_response", "handoff_rejected")
+		r.phase("handoff", "error", "message_response", "handoff_rejected")
 		return r.finish("failed", "handoff_rejected", "handoff", ExitFailed)
 	}
-	r.phase("handoff", "transport_submitted", "message_response", "http_202")
+	r.phase("handoff", "ok", "message_response", "transport_submitted")
 	return r.finish("link_available", "", "", ExitOK)
 }
 
@@ -386,6 +471,10 @@ func (r *rcRun) refusal(status int, raw []byte, phase string) error {
 				}
 			}
 		}
+	}
+	if code == "project_unavailable" {
+		phase = "project_inventory_ok"
+		r.phase(phase, "error", "create_response", code)
 	}
 	return r.finish("failed", code, phase, exit)
 }
@@ -429,13 +518,18 @@ func (r *rcRun) status(ctx context.Context, args []string) error {
 	if rcKeyPattern.MatchString(v.IdempotencyKey) {
 		r.result.IdempotencyKey = v.IdempotencyKey
 	}
-	r.phase("api_accepted", "unknown", "session_view", "create_receipt_unavailable")
-	r.phase("project_inventory_ok", "unknown", "session_view", "create_echo_unavailable")
-	if code := r.observe(v); code != "" {
-		return r.finish("action_required", code, "agent_started", ExitPending)
+	r.unobserved("api_accepted", "session_view", "create_receipt_unavailable")
+	r.unobserved("project_inventory_ok", "session_view", "create_echo_unavailable")
+	authCode := r.observe(v)
+	if rcSessionEnded(v) {
+		return r.finish("failed", "session_ended", "", ExitFailed)
+	}
+	if authCode == "login_conflict" {
+		r.phase("agent_started", "blocked", "session_agent_status", authCode)
+		return r.finish("action_required", authCode, "agent_started", ExitPending)
 	}
 	if r.result.Link != nil {
 		return r.finish("link_available", "", "", ExitOK)
 	}
-	return r.finish("accepted", "", "", ExitPending)
+	return r.finish("pending", "", "", ExitPending)
 }

@@ -115,12 +115,17 @@ Launches a Claude remote session through the existing session API and observes
 its bounded startup phases. The project catalog chooses the repository/base.
 The idempotency key is always sent and printed; retain it and the session handle.
 --wait 0 creates only, returning exit 7 without polling or sending the handoff.
-Status makes one read and never submits a handoff. Codex is blocked locally.
+--wait defaults to 5m and cannot exceed 10m. A positive wait that expires reports
+timed_out with the session handle. Status makes one read and never submits a handoff.
+Codex is blocked locally with codex_adapter_not_implemented:
+Codex remote launch is not implemented in 2a; no inventory was probed
 
 The handoff file must contain 1 to 8192 bytes of UTF-8 text, with no control
 characters except newline and tab. It is submitted at most once after the link
-appears and is never printed. A 202 proves transport submission only; provider
-readiness and CLI input recording remain unknown. The result is link_available,
+appears and is never printed. A 202 proves transport submission only.
+On a reused idempotency key (HTTP 200), the handoff is never sent; after following
+to the link, the result is unconfirmed / handoff_unconfirmed, exit 6.
+Provider readiness and CLI input recording remain unknown. The result is link_available,
 never ready. JSON puts the validated link first and is at most 32 KiB.
 
 Exit 0: link available (and transport submitted for start); 1: blocked/refused;
