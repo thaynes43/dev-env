@@ -46,6 +46,26 @@ func TestProductPolicyHashesTheRenderedStylesheet(t *testing.T) {
 	}
 }
 
+func TestTabletShellTracksMatchVisibleCells(t *testing.T) {
+	tablet := regexp.MustCompile(`(?s)@media \(max-width: 960px\) \{(.*?)\n\}`).FindStringSubmatch(viewsStyle)
+	if tablet == nil {
+		t.Fatal("missing 960px media block")
+	}
+	if !strings.Contains(tablet[1], ".rail { display: none; }") {
+		t.Fatal("tablet rail is not hidden")
+	}
+	columns := regexp.MustCompile(`\.shell\s*\{\s*grid-template-columns:\s*([^;]+);`).FindStringSubmatch(tablet[1])
+	if columns == nil {
+		t.Fatal("missing tablet shell columns")
+	}
+	// Spaces inside minmax(0, 1fr) do not separate grid tracks.
+	tracks := regexp.MustCompile(`\([^)]*\)`).ReplaceAllString(columns[1], "")
+	// With the rail hidden, only .list and .workspace occupy the shell.
+	if got := len(strings.Fields(tracks)); got != 2 {
+		t.Fatalf("tablet shell has %d tracks for 2 visible cells (.list and .workspace): %s", got, columns[1])
+	}
+}
+
 func TestRenderProductKeepsAnchorsTonesAndCountsSafe(t *testing.T) {
 	page := ProductPage{Title: "Sessions", Notice: "Connected session summaries.", Connected: true, Complete: true, Quiet: true, ObservedAt: "2026-10-26T15:00:00Z",
 		Groups: []ProductGroup{{Title: "Needs attention", Attention: true, Rows: []ProductRow{
