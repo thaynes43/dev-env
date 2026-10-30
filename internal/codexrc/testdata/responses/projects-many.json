@@ -1,0 +1,33 @@
+{
+  "data": [
+    {
+      "createdAt": 1700000000,
+      "id": "native-project-fixture",
+      "metadata": {},
+      "name": "Synthetic native project",
+      "position": 0,
+      "recencyAt": null,
+      "roots": [
+        {
+          "path": "/workspace/example"
+        }
+      ],
+      "updatedAt": 1700000000
+    },
+    {
+      "createdAt": 1700000000,
+      "id": "native-project-other",
+      "metadata": {},
+      "name": "Synthetic native project",
+      "position": 0,
+      "recencyAt": null,
+      "roots": [
+        {
+          "path": "/workspace/example"
+        }
+      ],
+      "updatedAt": 1700000000
+    }
+  ],
+  "nextCursor": null
+}
