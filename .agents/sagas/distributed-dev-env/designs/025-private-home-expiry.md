@@ -2446,11 +2446,29 @@ history deletion is part of this path. No structured PR-reference record is
 invented: existing output, logs, worktree and tracker handoff retain those
 references. An old agent without exit proof remains retained.
 
-The operator explicitly marks a private-history-retained task in its session
-document. Only that scope refuses automatic resume for a saved terminal result
+When reclaim is on (its flag and both prerequisite flags), the operator
+explicitly marks a private-history-retained task in its session document. With
+reclaim off, private history retention alone sets no mark, so every retained
+task keeps D-58's TUI resume after a container restart. The mark is fixed when
+the Pod is created: turning reclaim on or off reaches a running task only
+through its next Pod. Only the marked scope refuses automatic resume for a saved terminal result
 or exit proof, or an interrupted retained launch. Other tasks keep D-58 resume
 and its Interrupted message. A retained private task never automatically starts a provider from its saved
 launch on a later boot, including the TUI `BuildResume` path and interrupted
 launches with no result. A missing or
 unreadable result remains uncertain and cannot authorize reclaim. Explicit
 human recovery into a different bounded task remains separate.
+
+Two operating limits, recorded 2026-10-30 from the #729 review:
+
+- **Turn it off with the flag, not an older operator.** Once any Session holds
+  `taskTerminal`, an operator older than this code writes status without the
+  field, and the CRD rule that keeps the observation immutable refuses the
+  write. Turn reclaim off with `--enable-terminal-task-pod-reclaim=false`; keep
+  the operator at or above this version.
+- **A resume only helps before the stop request.** An explicit resume restarts
+  the grace while the controller is still waiting. Once the stop request is
+  confirmed and applied to the Pod, a later resume does not withdraw it: the
+  Pod's containers still stop, and the resume does not restart them. The
+  guarded delete then waits, because it requires a suspended Session; the HOME
+  stays retained either way.

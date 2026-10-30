@@ -90,7 +90,7 @@ func TestWorkspacePodRequiresBothOptInsAndRetainsPrivateHome(t *testing.T) {
 	if got := envOf(shared.Spec.Containers[0], templates.WorkspaceIDEnv); got == nil || got.Value != "projects-v2" {
 		t.Fatal("workspace binding not operator-owned")
 	}
-	doc, err := sessionDocument(s)
+	doc, err := sessionDocument(s, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +653,7 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 			case "no-configured-parents":
 				parents = nil
 			}
-			p, err := buildManagedPod(s, tmpl, "", managed, enabled, parents)
+			p, err := buildManagedPod(s, tmpl, "", managed, enabled, parents, false)
 			if kind == "hold" {
 				p, err = buildHoldPod(s, tmpl)
 			}

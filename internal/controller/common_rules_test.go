@@ -50,7 +50,7 @@ func TestCommonCanaryFixedFileTransportKeepsWholeExecutorBounds(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			f := testutil.New(t, provider, "dev/dev-env")
 			accepted := commonCanaryController(t, &f, "COMMON_VALIDATION_MARKER")
-			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)
+			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +98,7 @@ func TestCommonCanaryFixedFileTransportKeepsWholeExecutorBounds(t *testing.T) {
 			f.Session.Spec.ProjectCanary.CommonRevision = ""
 			f.Record.CommonRevision = ""
 			f.Session.Spec.ProjectCanary.PolicyDigest = f.Record.Digest()
-			old, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)
+			old, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false)
 			if err != nil || envOf(old.Spec.Containers[0], protocol.SessionEnv).Value == "" || envOf(old.Spec.Containers[0], protocol.SessionFileEnv).Value != "" {
 				t.Fatal("legacy env route changed", err)
 			}
@@ -183,23 +183,23 @@ func TestCommonCanaryPromptRepeatingCommonCreatesNoExecutor(t *testing.T) {
 func TestCommonSessionSerializedExactAndOversizeBounds(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
 	commonCanaryController(t, &f, "")
-	base, err := sessionDocument(f.Session)
+	base, err := sessionDocument(f.Session, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	extra := protocol.MaxSessionFileBytes - len(base)
 	text := strings.Repeat("\x01", extra/6) + strings.Repeat("x", extra%6)
 	commonCanaryController(t, &f, text)
-	exact, err := sessionDocument(f.Session)
+	exact, err := sessionDocument(f.Session, false)
 	if err != nil || len(exact) != protocol.MaxSessionFileBytes {
 		t.Fatal("exact serialized bound refused", len(exact), err)
 	}
 	commonCanaryController(t, &f, text+"x")
-	if _, err := sessionDocument(f.Session); err == nil {
+	if _, err := sessionDocument(f.Session, false); err == nil {
 		t.Fatal("over serialized bound accepted")
 	}
 	commonCanaryController(t, &f, strings.Repeat("\x01", commonrules.MaxCommonBytes))
-	if _, err := sessionDocument(f.Session); err == nil {
+	if _, err := sessionDocument(f.Session, false); err == nil {
 		t.Fatal("raw accepted worst escaping exceeded serialized cap")
 	}
 	// The API reserves the eventual original UID before admitting a new Session.

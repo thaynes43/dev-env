@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -480,21 +481,63 @@ func TestTerminalTaskRetentionLatchInAgentSessionDocument(t *testing.T) {
 		}, false},
 		{"shared", func(s *v1alpha1.AgentSession) { s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "shared"} }, false},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			s, _ := privateHistoryFixture()
-			test.change(s)
-			doc, err := sessionDocument(s)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := protocol.ParseSession([]byte(doc))
-			if err != nil || got.PrivateHistoryRetained != test.retained {
-				t.Fatalf("retention latch=%t want %t error=%v", got.PrivateHistoryRetained, test.retained, err)
-			}
-			if !test.retained && strings.Contains(doc, "privateHistoryRetained") {
-				t.Fatal("default session document changed")
-			}
-		})
+		for _, reclaim := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reclaim=%t", test.name, reclaim), func(t *testing.T) {
+				s, _ := privateHistoryFixture()
+				test.change(s)
+				// Retention alone (production's --enable-private-history-retention)
+				// leaves D-58's TUI resume intact; only reclaim sets the latch.
+				r := &Reconciler{PrivateTerminalRecord: true, PrivateExecutorStop: true, TerminalTaskPodReclaim: reclaim}
+				doc, err := sessionDocument(s, r.terminalTaskReclaimOn())
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := protocol.ParseSession([]byte(doc))
+				if want := test.retained && reclaim; err != nil || got.PrivateHistoryRetained != want {
+					t.Fatalf("retention latch=%t want %t error=%v", got.PrivateHistoryRetained, want, err)
+				}
+				if (!test.retained || !reclaim) && strings.Contains(doc, "privateHistoryRetained") {
+					t.Fatal("default session document changed")
+				}
+			})
+		}
+	}
+}
+
+// The reconciler's own Pod carries the latch only when reclaim is on, with
+// each of its three flags required; a hold Pod never carries it.
+func TestTerminalTaskRetentionLatchFollowsReclaimFlags(t *testing.T) {
+	for _, test := range []struct {
+		record, stop, reclaim, want bool
+	}{
+		{false, false, false, false},
+		{false, false, true, false},
+		{false, true, true, false},
+		{true, false, true, false},
+		{true, true, false, false},
+		{true, true, true, true},
+	} {
+		r := &Reconciler{PrivateTerminalRecord: test.record, PrivateExecutorStop: test.stop, TerminalTaskPodReclaim: test.reclaim}
+		s, _ := privateHistoryFixture()
+		pod, err := r.sessionPod(s, exampleTemplates(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := envOf(pod.Spec.Containers[0], protocol.SessionEnv)
+		if e == nil {
+			t.Fatal("no AGENTD_SESSION")
+		}
+		got, err := protocol.ParseSession([]byte(e.Value))
+		if err != nil || got.PrivateHistoryRetained != test.want {
+			t.Fatalf("flags %+v: retention latch=%t want %t error=%v", test, got.PrivateHistoryRetained, test.want, err)
+		}
+		hold, err := buildHoldPod(s, exampleTemplates(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e := envOf(hold.Spec.Containers[0], protocol.SessionEnv); e != nil && strings.Contains(e.Value, "privateHistoryRetained") {
+			t.Fatal("hold pod carries the retention latch")
+		}
 	}
 }
 

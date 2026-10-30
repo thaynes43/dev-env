@@ -161,7 +161,7 @@ func TestManagedBudgetPodEnvironmentIsFixedAndHoldHasNoTimer(t *testing.T) {
 	f.s.Annotations = budgetAnnotations(b, "child")
 	_, obs := workspaceFixtureController(t, f, c)
 	obs.templates.Env = append(obs.templates.Env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: "arbitrary profile override"})
-	pod, err := buildManagedPod(f.s, obs.templates, "", true, false, nil)
+	pod, err := buildManagedPod(f.s, obs.templates, "", true, false, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
