@@ -200,12 +200,18 @@ func (e *Engine) begin(w http.ResponseWriter, r *http.Request) {
 		authFailure(w, portal.ErrDenied)
 		return
 	}
-	// A single bounded limiter per engine, not a map keyed by attacker addresses.
-	// Under the proposed two-replica ceiling: burst 8, sustained 2 login starts/sec.
-	// A restart cannot bypass the independent shared-store cardinality ceiling.
+	// The process limiter bounds database traffic. Production also consumes the
+	// shared bucket before allocating a login, preserving burst 4/rate 1 per
+	// second across replicas and process restarts.
 	if e.loginAdmission == nil || !e.loginAdmission.AllowN(e.config.Now(), 1) {
 		authFailure(w, portal.ErrUnavailable)
 		return
+	}
+	if store, ok := e.config.Store.(*PostgresStore); ok {
+		if err := store.AdmitLogin(r.Context()); err != nil {
+			authFailure(w, portal.ErrUnavailable)
+			return
+		}
 	}
 	handle, key, err := randomHandle()
 	if err != nil {
