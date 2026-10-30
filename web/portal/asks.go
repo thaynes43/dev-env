@@ -19,6 +19,7 @@ var asksSource string
 
 const asksStyle = `
 .asks-content{flex:1;min-height:0;overflow:auto;padding:24px;overflow-wrap:anywhere}
+.asks-content:focus-visible{outline:3px solid var(--focus);outline-offset:-3px}
 .asks-content>section,.asks-heading{max-width:64rem;margin:0 auto 24px}
 .asks-heading h1{font-size:24px;letter-spacing:-.5px;margin:4px 0}
 .asks-heading>p:last-child,.asks-empty,.ask-options p{color:var(--muted)}

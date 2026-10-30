@@ -702,7 +702,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	}
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
-		SessionsHref, TasksHref                                            string
+		SessionsHref                                                       string
 		ListTitle, ListCount, Access, AccessLower, DefaultID               string
 		Quiet, Preview, Banner, HasRows, CanSend, Selected, UsageView      bool
 		All, Attention                                                     railLinkView
@@ -715,8 +715,8 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		CanLaunch                                                          bool
 	}{Policy: strings.TrimSuffix(ProductPolicyFor(page), "; frame-ancestors 'none'"), Title: page.Title, Current: strings.ToLower(page.Title), Notice: page.Notice,
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
-		SessionsHref: productSessionsHref, TasksHref: productTasksHref,
-		ListTitle: page.ListTitle}
+		SessionsHref: productSessionsHref,
+		ListTitle:    page.ListTitle}
 	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter)
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"
 	if view.UsageView {
