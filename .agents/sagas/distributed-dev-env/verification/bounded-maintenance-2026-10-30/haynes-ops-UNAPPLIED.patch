@@ -219,7 +219,7 @@ new file mode 100644
 +      expression: variables.task.?devices.orValue([])
 +  validations:
 +    - expression: >-
-+        request.namespace == 'dev-agents' && request.subResource == '' &&
++        request.namespace == 'dev-agents' && request.?subResource.orValue('') == '' &&
 +        request.userInfo.username == 'system:serviceaccount:dev-env-system:dev-env-broker' &&
 +        variables.grant.spec.type == 'maintenance' &&
 +        variables.pod.metadata.labels['dev-env.haynesops.com/maintenance'] == variables.grant.metadata.uid &&
@@ -254,7 +254,7 @@ new file mode 100644
 +             t.operator == 'Exists' && t.effect == 'NoExecute' && t.tolerationSeconds == 300 &&
 +             t.?value.orValue('') == '') &&
 +           variables.container.?env.orValue([]) == [
-+             {'name':'NVIDIA_VISIBLE_DEVICES','value':variables.task.resource},
++             {'name':'NVIDIA_VISIBLE_DEVICES','value':string(variables.task.resource)},
 +             {'name':'NVIDIA_DRIVER_CAPABILITIES','value':'utility'}])) &&
 +         !has(variables.pod.spec.initContainers) && !has(variables.pod.spec.ephemeralContainers) &&
 +         variables.pod.spec.restartPolicy == 'Never' && !variables.pod.spec.enableServiceLinks &&

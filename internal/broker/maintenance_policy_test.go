@@ -12,6 +12,8 @@ import (
 	"github.com/google/cel-go/cel"
 	celtypes "github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	admissionv1 "k8s.io/api/admission/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -99,7 +101,11 @@ func maintenanceAdmissionAllowed(t *testing.T, operation, caller string, oldPod,
 	if !ok {
 		devices = []any{}
 	}
-	args := map[string]any{"object": object, "oldObject": oldObject, "request": map[string]any{"operation": operation, "namespace": sessionNS, "subResource": "", "userInfo": map[string]any{"username": caller}}, "variables": map[string]any{"pod": selected, "grant": g, "task": task, "container": container, "mounts": mounts, "devices": devices, "node": map[string]any{"metadata": map[string]any{"uid": task["nodeUID"]}, "spec": map[string]any{}}}}
+	request := admissionJSON(t, admissionv1.AdmissionRequest{Operation: admissionv1.Operation(operation), Namespace: sessionNS, UserInfo: authenticationv1.UserInfo{Username: caller}})
+	if _, present := request["subResource"]; present {
+		t.Fatal("empty AdmissionRequest subResource must be omitted by JSON normalization")
+	}
+	args := map[string]any{"object": object, "oldObject": oldObject, "request": request, "variables": map[string]any{"pod": selected, "grant": g, "task": task, "container": container, "mounts": mounts, "devices": devices, "node": map[string]any{"metadata": map[string]any{"uid": task["nodeUID"]}, "spec": map[string]any{}}}}
 	for _, expression := range maintenancePolicyExpressions(t) {
 		ast, issues := env.Compile(expression)
 		if issues.Err() != nil {
@@ -244,5 +250,18 @@ func TestMaintenanceDeadlineAPIServerLifecycle(t *testing.T) {
 	}
 	if err := admin.Delete(ctx, p, client.GracePeriodSeconds(0), client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Pod requests omit the empty JSON field, while CONNECT exec retains its
+// nonempty subresource. Normalization must not erase the latter.
+func TestMaintenanceAdmissionRequestSubresourceJSON(t *testing.T) {
+	pod := admissionJSON(t, admissionv1.AdmissionRequest{Operation: admissionv1.Create})
+	if _, present := pod["subResource"]; present {
+		t.Fatal("empty subresource was not omitted")
+	}
+	connect := admissionJSON(t, admissionv1.AdmissionRequest{Operation: admissionv1.Connect, SubResource: "exec"})
+	if connect["subResource"] != "exec" || connect["operation"] != "CONNECT" {
+		t.Fatal("CONNECT exec subresource was lost", connect)
 	}
 }

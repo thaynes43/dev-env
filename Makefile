@@ -77,6 +77,10 @@ check-generated: generate ## Fail if the generated files differ from what is com
 		exit 1; \
 	fi
 
+.PHONY: check-maintenance-policy
+check-maintenance-policy: ## Compile/evaluate the UNAPPLIED executor packet with checksum-pinned offline Kyverno.
+	$(NICE) python3 scripts/check_maintenance_policy.py
+
 .PHONY: check-layout
 check-layout: ## Fail if a Go package under api/, cmd/, internal/ or scripts/ has no line in CLAUDE.md's Layout.
 	@layout="$$(awk '/^## Layout/ {in_section = 1} in_section && /^```/ {fence++; if (fence == 2) exit; next} fence == 1' CLAUDE.md)"; \

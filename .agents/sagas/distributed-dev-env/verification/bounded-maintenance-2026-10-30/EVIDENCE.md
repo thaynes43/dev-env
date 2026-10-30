@@ -270,3 +270,60 @@ package results continue to cover unchanged code/schema; no Linux suite rerun or
 pod access was needed for this correction. New-head native delta review and normal
 CI remain required, and human source-publication approval is pending. No merge,
 image build, live policy/grant or runtime qualification follows from this update.
+
+## Actual Kyverno compiler/request correction — 2026-10-30
+
+Offline inspection with the official checksum-verified Kyverno1.19.2 CLI found
+two genuine packet defects on a5966aa before source-publication or live approval:
+
+1. The real typed compiler rejects the environment list because the UUID value
+   is dyn while the other map is map(string,string). The literal now uses
+   `string(variables.task.resource)`; the approved value is unchanged.
+2. Real Pod AdmissionRequest JSON omits empty `subResource`. Ownership now uses
+   `request.?subResource.orValue('') == ''`. A nonempty subresource is still
+   refused; no caller/permission or operation scope is expanded.
+
+The permissive direct CEL mock and hand-built request with an explicit empty key
+missed both failures. The broker test helper now marshals Kubernetes
+AdmissionRequest itself and checks that empty subResource is omitted. An explicit
+CONNECT/exec JSON regression proves its nonempty subresource is retained. This
+is normalization evidence, not CONNECT enforcement qualification.
+
+`scripts/check_maintenance_policy.py` supplies a small dependency-free regression
+with the actual official CLI, checksum-pinned Darwin arm64 and Linux amd64 release
+archives, verified version1.19.2/commit
+`e63308f1e16c05cd009ac4864be6ec25c66b49be`, synthetic resource.Get context fixtures,
+KUBECONFIG=/dev/null and no cluster/registry flags. `make check-maintenance-policy`
+runs it in the existing generated-code CI job. No Go SDK dependency was added.
+The checked Darwin archive SHA256 is
+`7915c03c613c22363a100adb3da8d06f2e2626d9d21a98b97f921795ffdc536f`;
+the official Linux amd64 checksum is
+`357eaf1df8bc24ddd5a73979fadeaae6a032e8710f11af264229756e4956bf4a`.
+
+All10 official-engine regression cases PASS: reverse-fix probes reproduce the
+original compile error and missing-key evaluation error; exact generic and utility
+CREATE classify Pass with zero errors; visible-all, compute, other-runtime,
+other-actor and control-plane label/taint classify explicit Fail with zero errors.
+A nonzero exit or engine Error never counts as a production-denial pass. Logs:
+`/var/folders/51/21_vmcbd5kqbw690hkzz820w0000gn/T/maintenance-policy-offline-56jtjv5i`.
+Pinned full Linux-target lint0issues, formatting, layout, Python syntax and broker
+cross-compilation PASS. Full updated broker Linux execution follows below.
+
+Current exact UNAPPLIED patch SHA256:
+`74b74f9cb9dcd88112440b8b3f5ebaa77f061d91f6dccb60b105a6ea603a92db`.
+Full patch check/apply in a fresh private haynes-ops2df49e1 fixture PASS; executor
+YAML is byte-identical to the corrected packet, and the applied CRD still matches
+the unchanged generated schema after provenance comment removal. Earlier hashes
+qualify earlier packets only. No production code/API/schema, environment values,
+capability, RBAC, credential or live-policy setting changed. Image ENV review,
+lookup permissions/webhook order, CONNECT exec, Cilium, device/image/runtime,
+hardware and termination qualification remain held; offline compiler success does
+not establish these. Reviewer separately found the official CLI cannot evaluate
+CONNECT subresources (processor supplies an empty subresource); zero matching
+rules cannot be reported as an exec-enforcement pass. Final new-head normal CI,
+native review and human source-publication approval remain required.
+Full updated Linux internal/broker suite PASS (exit0) using the released existing
+idle source-test pod, GOMAXPROCS=2 and isolated envtest1.35.0 in the existing
+`/tmp/maintenance-nvidia-tests-20261030` task directory. The command completed;
+no provider, cluster policy or GPU operation was performed. Frozen for independent
+delta review before the genuine ordinary correction push; no merge or activation.

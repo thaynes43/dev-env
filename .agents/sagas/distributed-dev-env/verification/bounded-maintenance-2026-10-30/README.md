@@ -150,11 +150,12 @@ retain background:true. HostPath's reported restrictedField is
 `spec.volumes[*].hostPath` with path-valued exclusions, not `.hostPath.path`.
 Capabilities requires images; pod-level HostPath must omit images.
 
-Qualification gap: direct CEL tests execute the packet ownership/UPDATE/DELETE
-expressions over admission JSON. A real isolated API server proves defaulted
+Qualification gap: direct CEL tests execute all four packet validation branches
+over JSON-normalized AdmissionRequests. The pinned official CLI additionally
+compiles and evaluates synthetic generic/profile CREATE and refusal cases offline. A real isolated API server proves defaulted
 CREATE, UID/RV-fenced JSON PATCH, generation/managedFields normalization, terminal
 status observation and DELETE. The harness has no Kyverno, kubelet or device
-runtime. It does not establish Kyverno compilation, exception-condition matching,
+runtime. Offline compiler/engine evidence does not establish installed exception matching,
 actual lookup permissions/webhook ordering, admission-enforced lifecycle or
 termination on a real node. These exact proposals remain UNAPPLIED and held for
 Tom's concrete policy review and separately authorized isolated runtime
@@ -193,3 +194,20 @@ other runtime flags. The admission policy cannot inspect image ENV. This profile
 therefore does not prove that image-inherited runtime settings are safe. Record
 the complete image ENV review and its disposition as an explicit prerequisite to
 live qualification and task approval; the current live-activation hold remains.
+
+
+The offline policy regression uses the checksum-pinned official Kyverno1.19.2
+CLI to compile and evaluate the exact executor CREATE packet against synthetic
+resources and request normalization. It covers the homogeneous typed environment
+literal and omitted empty AdmissionRequest subResource that the permissive CEL
+harness missed. This is compiler/offline-engine evidence only: live lookups,
+webhook ordering, CONNECT exec enforcement, Cilium, runtime/image/hardware and
+termination qualification remain held. The CLI cannot qualify CONNECT because
+its1.19.2 processor supplies an empty subresource; a zero-match run is not a pass.
+
+Run `make check-maintenance-policy` for the pinned offline regression. It verifies
+the official release archive checksum and CLI version/commit, uses synthetic
+context-file resources with KUBECONFIG=/dev/null, and enables neither cluster nor
+registry access. The script's `--archive` option reuses the same verified archive
+without downloading it. Production denials must be explicit Fail results with no
+engine errors; compilation or evaluation errors never count as a denial pass.
