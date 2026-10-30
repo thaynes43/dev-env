@@ -622,7 +622,15 @@ confirmation: it reaps the sessions it is given.
 
 A reap returns at once; agent-run show <name> follows it until the session is gone.
 `,
-	"grant": `Usage: agent-run grant list [--session <name>] [--phase <phase>] [--mine] [-o json]
+	"grant": `Maintenance source routes are held default OFF. They require reviewed activation.
+  maintenance-request --task-json <envelope JSON> --reason <why> [--ttl 30m]
+  maintenance-decide --grant-uid <UID> --digest <digest> [--approve] <grant>
+  maintenance-exec [--restore-evidence <report>] <grant> <command> [args...]
+The authenticated human approves an immutable task envelope. Listed workers share
+its remaining lease and choose their commands. Extensions use a new request with
+extensionOf and a new approval. Expiry stops compute; it does not restore hardware.
+
+Usage: agent-run grant list [--session <name>] [--phase <phase>] [--mine] [-o json]
        agent-run grant show <grant-id> [-o json]
        agent-run grant request --type <type> --reason <why> [--no-wait] [type flags] [-o json]
        agent-run grant release <grant-id> [-o json]

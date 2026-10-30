@@ -58,6 +58,7 @@ const (
 // role and namespaces; egress takes fqdns, cidrs, endpoints and ports;
 // credential takes credential.
 type CreateGrantRequest struct {
+	Maintenance *MaintenanceTask `json:"maintenance,omitempty"`
 	// Type is kube, egress, credential or breakglass.
 	Type string `json:"type"`
 	// Role is a role from the grant catalog, for type kube. Break-glass is
@@ -100,7 +101,11 @@ type GrantPort struct {
 // Grant is one grant as the API shows it: GET /v1/grants/{name}, the items of
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
-	Name string `json:"name"`
+	UID               string             `json:"uid,omitempty"`
+	Maintenance       *MaintenanceTask   `json:"maintenance,omitempty"`
+	MaintenanceStatus *MaintenanceStatus `json:"maintenanceStatus,omitempty"`
+	MaintenanceDigest string             `json:"maintenanceDigest,omitempty"`
+	Name              string             `json:"name"`
 
 	// The requester, from the session's token.
 	Session string `json:"session"`

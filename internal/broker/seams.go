@@ -48,6 +48,8 @@ type Installer interface {
 
 // Decision is Tom's answer to a pending grant, from the approval page.
 type Decision struct {
+	// Maintenance bindings are set by the authenticated annotation adapter only.
+	MaintenanceUID, MaintenanceDigest string
 	// Approve approves the grant; false denies it.
 	Approve bool
 	// By is who decided: "authentik/<username>". A policy approves only
@@ -89,6 +91,11 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 		ttl, err := b.decisionAllowed(&g, d, now.Time)
 		if err != nil {
 			return err
+		}
+		if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
+			if err := CheckMaintenanceIdentities(ctx, b.APIReader, b.SessionNamespace, &g); err != nil {
+				return fmt.Errorf("%w: %w", ErrRefused, err)
+			}
 		}
 		msg := ""
 		if d.Approve {
@@ -132,12 +139,18 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 	case strings.HasPrefix(d.By, PolicyApprover):
 		return 0, fmt.Errorf("%w: %s is a policy; Tom decides on the page, and break-glass only ever by him (D-27)", ErrRefused, d.By)
 	}
+	if g.Spec.Type == v1alpha1.GrantMaintenance {
+		if !b.EnableMaintenanceGrants || d.MaintenanceUID != string(g.UID) || d.MaintenanceDigest != MaintenanceDigest(g) || d.By != "human/dev-env-system/dev-env-human" {
+			return 0, fmt.Errorf("%w: maintenance requires authenticated bound human decision", ErrRefused)
+		}
+	}
 	if !d.Approve {
 		return 0, nil
 	}
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return 0, fmt.Errorf("%w: credential approvals require a matching standing policy", ErrRefused)
 	}
+
 	if err := check(g, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrRefused, err)
 	}
