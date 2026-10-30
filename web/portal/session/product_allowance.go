@@ -184,8 +184,13 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	var windows []portal.ProductAllowanceWindow
 	for _, m := range o.Measures {
 		current, ok := currents[m.ID]
-		validDecimals := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
-		if validDecimals && *m.Value.Decimal != *current.Value.Decimal {
+		measureFits := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal)
+		currentFits := current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
+		validDecimals := measureFits && currentFits
+		// Differing decimals refuse when both fit the percent grammar or neither
+		// does; exactly one out-of-grammar side shows Unknown on its row instead.
+		// The comparison is textual, so 62 and 62.00 refuse: the safe direction.
+		if m.Value.Decimal != nil && current.Value.Decimal != nil && measureFits == currentFits && *m.Value.Decimal != *current.Value.Decimal {
 			return nil, "Conflicting allowance values"
 		}
 		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {

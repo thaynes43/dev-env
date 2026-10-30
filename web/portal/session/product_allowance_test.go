@@ -410,6 +410,11 @@ func TestMapProductAllowanceMixedMeasureStates(t *testing.T) {
 			i.Observation.Measures[1].Value.Decimal = allowanceString("1500000.25")
 			i.CurrentMeasures[1].Value.Decimal = allowanceString("1499999.75")
 		}, 0, true},
+		// A displayed window whose two values are both outside the grammar still conflicts.
+		{"F1-displayed-both-out-of-grammar-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[0].Value.Decimal = allowanceString("1000000")
+			i.CurrentMeasures[0].Value.Decimal = allowanceString("2000000")
+		}, 0, true},
 		{"F1-negative-money-decimal-disagreement", func(i *pa.ReadItem) {
 			i.Observation.Measures[1].Unit = pa.UnitMoney
 			i.Observation.Measures[1].Value.Decimal = allowanceString("-2.5")

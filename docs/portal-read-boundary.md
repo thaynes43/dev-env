@@ -165,8 +165,11 @@ or `% used`). The portal never converts used to remaining, reads no derivation a
 takes no token or cost input. A window label comes from `durationMinutes`; a contract
 ref is never displayed. Windows that are not percent, or not `included_quota` or
 `rate_limit`, are left out. A window with no known value shows `Unknown` beside any
-known ones. Any current conflict or disagreement between valid decimals in a provider's
-items refuses that provider before filtering measures into displayed rows.
+known ones. Any current conflict in a provider's items refuses that provider, whether or
+not the measure is displayed. Differing decimals also refuse it: on a measure the portal
+never displays, any difference; on a displayed window, when both values fit the percent
+grammar or neither does. A window with exactly one value outside that grammar shows
+`Unknown` instead.
 
 ## Mobile presentation
 
