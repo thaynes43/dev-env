@@ -98,7 +98,7 @@ authentication/authorization; 5 means nothing was sent; 6 means an unconfirmed
 exchange; 7 means accepted/pending, timed out with a handle, or owner action
 required. These commands never use exit 5 for an accepted pending launch.
 Before a handoff is sent, a local token failure returns `unauthenticated`, exit 3.
-A failed dial records handoff state `unknown`, reason `not_sent`, and exits 7;
+A failed dial records handoff state `error`, reason `not_sent`, and exits 7;
 rerunning start with that key cannot deliver the handoff.
 A key makes session creation idempotent; it does not make handoff delivery
 idempotent. Do not rerun start to retry an unconfirmed handoff. Use status to
