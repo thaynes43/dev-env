@@ -43,6 +43,9 @@ type PostgresStore struct {
 	// beforeCommit is a test seam: nil in production. Tests pause a real
 	// transaction at its pre-commit boundary with it.
 	beforeCommit func(context.Context) error
+	// admissionNow is a test-only clock transform after the real database clock
+	// read. Production leaves it nil; concurrent fixtures can freeze/advance it.
+	admissionNow func(time.Time) time.Time
 }
 
 // NewPostgresStore accepts only the proposed dedicated DB/role and CNPG primary
@@ -263,7 +266,7 @@ func insertError(err error) error {
 // Serialize insertion admission across replicas without table-wide locks. A
 // transaction advisory lock is taken only by inserters; revocation
 // and callback DELETEs never acquire it. No role/admin grant is added.
-func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
+func lockPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
 	var key int32
 	switch table {
 	case "pending_logins":
@@ -278,7 +281,13 @@ func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
 	if _, err := tx.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock($1,$2)", int32(178), key); err != nil {
 		return portal.ErrUnavailable
 	}
+	return nil
+}
 
+func admitPortalInsert(ctx context.Context, tx pgx.Tx, table string) error {
+	if err := lockPortalInsert(ctx, tx, table); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, "DELETE FROM portal."+table+" WHERE handle IN (SELECT handle FROM portal."+table+" WHERE expires_at<=clock_timestamp() LIMIT 32)"); err != nil {
 		return portal.ErrUnavailable
 	}

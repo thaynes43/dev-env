@@ -121,6 +121,8 @@ func TestPostgresIntegration(t *testing.T) {
 	record := Record{Principal: portal.Principal{Issuer: "https://issuer.example/portal/", Subject: "synthetic-subject"}, CSRF: strings.Repeat("c", 43), CreatedAt: now.Add(-time.Second), IdleExpiresAt: now.Add(time.Minute), ExpiresAt: now.Add(time.Minute), accessToken: "SYNTHETIC-TOKEN-CANARY", tokenExpiresAt: now.Add(time.Hour)}
 	handle := func(label string) Handle { return sha256.Sum256([]byte(label)) }
 
+	t.Run("aggregate-login-admission", func(t *testing.T) { testSharedLoginAdmission(t, admin, a, b) })
+
 	t.Run("wrong-state-does-not-consume-and-two-pools-take-once", func(t *testing.T) {
 		h := handle("atomic-login")
 		if a.PutLogin(ctx, h, login) != nil {

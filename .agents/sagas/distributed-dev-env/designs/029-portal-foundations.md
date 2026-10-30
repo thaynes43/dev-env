@@ -910,3 +910,37 @@ and copy are below, under "Interface".
     provider, replacing "a subset that can overlap input".
   - *No version number.* The copy says "an older agent". Measurement reaches a session
     only on an agent image from the first release after 2.50.0.
+
+## OP280: preserve login admission across portal replicas (2026-10-30)
+
+Tom's ruling recorded in OP280 journal 2986 is “Wait for the fix”: keep one
+portal replica until source preserves the overall login-start limit. Replica
+approval does not approve a larger aggregate allowance. This bounded change
+retains burst four and refill one token per second; it adds no generic limiter
+service, schema, grants, credentials, endpoint or provider interaction.
+
+Production retains the per-engine limiter as a cheap database-load filter and
+adds admission through its existing PostgresStore before constructing a login.
+A single purpose-bound reserved record in the existing sessions table tracks
+aggregate token debt. The existing transaction advisory insertion lock protects
+read/replace admission. Database time after taking the lock is authoritative;
+replica clocks, restarts, rolling surges and key generations cannot create
+independent buckets. Existing SELECT/INSERT/DELETE privileges suffice. This
+record consumes one of the existing table's 256 bounded slots while present.
+
+The debt expires when the full bucket would have refilled, at most four seconds
+after the latest admitted start. Existing expired-row cleanup can then remove
+it safely. Unexpired invalid ciphertext, a key/generation mismatch, database
+failure or uncertain commit fails closed, with no automatic retry. A legitimate
+key rotation can wait out the bounded debt instead of requiring a new reset
+operation. Purpose-bound ciphertext cannot authorize a browser session.
+
+Tests must cover a four-start aggregate burst across independent pools,
+concurrent admission, refill arithmetic, replica reconstruction, expired-state
+cleanup, unexpired key/generation mismatch, and transaction failure. Disposable
+PostgreSQL tests prove transaction behavior; local skips do not. Deploy the
+reviewed signed portal source at one replica first, wait until old-version
+processes are absent, and qualify it before a separate reviewed two-replica
+GitOps change. Keep launch disabled until its independent cross-replica
+idempotency problem is resolved. No node drain, keeper move, user RC restart or
+storage-loss acceptance follows from this source change.
