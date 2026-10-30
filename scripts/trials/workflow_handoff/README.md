@@ -67,7 +67,14 @@ text. A page of 20 items is about 14KiB, well inside the 128KiB bound. A page
 with `has_more` or the owner scope "selected page" is reported as partial, and
 its recommendations are withheld, so a real run with an empty contexts file lists every
 item as `unbound` with no intents. On 2026-10-30 the merged CLI read one such
-real export with exit 0.
+real export with exit 0. The export came from a clean haynes-ops checkout at
+`2611885e77d3a8b6d159c87de9e5e657f6bdd3f6`. That run proves the export shape
+and the refusal path only, on one selected page. It is not a full backlog
+triage, and nothing was executed.
+
+Use your own pod's checkout and your own session identity. Never use another
+session's checkout or credentials. The `opwork` on `PATH` is left as it is, and
+it still works for its existing commands.
 
 The synthetic files above are a complete runnable example. The export is the
 canonical object with `page`, `page_size`, `has_more`, `owner_filter_scope`,
