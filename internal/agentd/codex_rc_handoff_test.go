@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
