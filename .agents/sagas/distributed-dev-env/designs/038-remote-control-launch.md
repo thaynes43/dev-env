@@ -555,7 +555,7 @@ No remedy grants permission to perform an otherwise unauthorized action.
 | `request_conflict` / 10s call | `This launch key already names a different immutable request.` | Inspect the original receipt. Do not change a key to retry an attempted mutation. |
 | `mutation_unconfirmed` / capped provider/delivery call | `The thread or handoff request may have succeeded; its one-use attempt is consumed. Do not replay.` | Read the same receipt/provider handle through authorized reads; preserve uncertainty for the lead. |
 | `launch_deadline` / absolute 5m default, 10m maximum | `RC launch reached its deadline at PHASE after N ms; created resources were preserved.` | Inspect the same handle with bounded status; no automatic cleanup or new launch. |
-| `session_ended` / next session read | `The Session ended (Failed, Suspended, Archived or being reaped) before the link was available.` | Stop with exit 1; report the last observed phase. No replacement launch, resume or cleanup is implied. |
+| `session_ended` / next session read | `The Session ended (Failed, Suspended, Archived or being reaped); a retained link is not usable.` | Stop with exit 1; report the last observed phase when one exists. No replacement launch, resume or cleanup is implied. |
 | `status_unavailable` / 10s read | `Current RC evidence could not be read; last successful phase is historical.` | Report unknown/stale state and retain the handle. A later explicit status read is safe; a replacement launch is not implied. |
 
 ## Authorization and lead-held questions
