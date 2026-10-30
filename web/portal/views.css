@@ -269,7 +269,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .usage-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 960px) {
-  .shell { grid-template-columns: 0 260px minmax(0, 1fr); }
+  .shell { grid-template-columns: 260px minmax(0, 1fr); }
   .rail { display: none; }
   .chips { display: flex; }
   .top-nav { gap: 16px; }
