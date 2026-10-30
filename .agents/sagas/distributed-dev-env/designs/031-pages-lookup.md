@@ -252,3 +252,63 @@ normalization and content revisions; it does not record notification history,
 register a parent connector, or grant access. The current parent cannot consume
 arbitrary local stdio. Remote transport, authentication, source access and live
 acceptance require separate decisions. See [the source contract](../../../../docs/pages-mcp-readonly.md).
+
+## 13. Existing order and canonical claim join (2026-10-30, OP313)
+
+OP223 journal 3558 defines this source-only increment. A shared response
+projection in `internal/pages` joins the exact alert fingerprint and original
+`startsAt` string to an existing V1 order attempt, then to an existing TaskClaim
+or OpenProject work package. Portal detail and MCP list/get carry that same
+projection. Source interfaces only read; they cannot create claims, dispatch,
+retry or execute. Two readers obtain the same existing order and owner.
+
+The read-only source reference is haynes-ops at
+`0cfb60c2d55a4c13b7ca72f2dc78685ec7ff464b`:
+`.agents/runbooks/alert-responder.md`, `.agents/runbooks/agentic-remediation.md`,
+`kubernetes/main/apps/upgrade-agent/health-gate/app/resources/remediate.sh`, and
+`dev-env-ops/app/resources/{work-order-watch,order-status}.sh` under that same
+`upgrade-agent` directory. No runtime store was read.
+
+V1 uses two different keys. The diagnosis incident hash is the first 12 hex
+characters of SHA-256 of `fingerprint|startsAt`. The work-order ConfigMap
+`upgrade-agent/upgrade-work-orders` has a data key such as
+`rem-responder-<sig8>` whose value is a single JSON-encoded object. Only `status`,
+`created` and `updated` (Unix seconds stored as strings) are needed here, along
+with the actual data key. That order key can be reused and overwritten after a
+terminal attempt. It is not the incident hash. This projection never synthesizes
+an order key from labels or a fingerprint. Its source must evidence the exact
+alert-to-order association and the order's `created` value. A later reader must
+establish that association explicitly; the current store alone does not provide
+a universal fingerprint/start join. Missing association stays Unknown.
+Direct `esc-responder-<sig8>` and promoted `esc-rem-<sig8>` keys use the same
+order subset (`health-gate/app/resources/escalate.sh`); they are accepted only
+with an explicit incident binding too.
+
+`ResponderOrderSource` supplies a bounded order observation and its explicit
+alert identity binding. `CanonicalClaimSource` supplies the matching order key
+and creation timestamp, canonical reference (kind plus stable ID), owner and
+explicit state evidence with a timestamp and safe HTTPS evidence link. Each
+observation includes source attribution and observation time. TaskClaim has no
+lifecycle status: its mere existence cannot establish responding or resolution.
+Adapters must supply explicit workflow evidence; arbitrary order notes are not
+parsed into state. Neither adapter has a production implementation in this slice.
+
+The caller supplies an evaluation time and a positive maximum observation age.
+Unconfigured, unavailable, empty, stale, invalid and unjoined observations remain
+distinct reasons for Unknown. No wall clock or cached fallback is used. Fresh
+observations must cover their event timestamps, and both bindings must agree.
+Claimed/responding require explicit canonical evidence and a V1 claimed/working
+order. Needs-user requires explicit canonical evidence and an escalated or failed
+order. Resolved requires explicit canonical evidence and a done order. Pending,
+failed, escalated, missing current alerts and old terminal records alone never
+mean resolved. A refire has a different start identity even if its order key is
+reused. Unknown fields are literal `Unknown`; unsafe evidence is never linked.
+Evidence links require HTTPS without credentials, query or fragment, with the
+existing redaction guard and no control or invisible formatting characters.
+
+Production entry points continue to use unconfigured response sources,
+`UnconfiguredStore` and `DisconnectedPagesControls`. No reader, endpoint, CRD,
+claim registry, access path, control or automation is activated. Synthetic table
+tests cover all states and failure distinctions, reused order attempts, refires,
+two callers, evidence sanitation and portal/MCP parity. Source and tested are
+separate from installed or accepted; this story claims only the former two.

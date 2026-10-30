@@ -34,28 +34,30 @@ type pagesBackend interface {
 	Fetch(context.Context, string) ([]byte, error)
 }
 type pagesMCPSession struct {
-	ctx     context.Context
-	config  pagesMCPConfig
-	backend pagesBackend
-	now     func() time.Time
+	ctx       context.Context
+	config    pagesMCPConfig
+	backend   pagesBackend
+	responses pages.ResponseSources
+	now       func() time.Time
 }
 
 type pagesMCPItem struct {
-	Kind          string            `json:"kind"`
-	Key           string            `json:"key"`
-	Name          string            `json:"name"`
-	Group         string            `json:"group,omitempty"`
-	Status        string            `json:"status,omitempty"`
-	StartsAt      string            `json:"startsAt,omitempty"`
-	EndsAt        string            `json:"endsAt,omitempty"`
-	UpdatedAt     string            `json:"updatedAt,omitempty"`
-	Summary       string            `json:"summary,omitempty"`
-	Description   string            `json:"description,omitempty"`
-	Labels        map[string]string `json:"labels,omitempty"`
-	Timestamp     string            `json:"timestamp,omitempty"`
-	Success       *bool             `json:"success,omitempty"`
-	HTTPStatus    *int64            `json:"httpStatus,omitempty"`
-	DurationNanos *int64            `json:"durationNanos,omitempty"`
+	Response      *pages.ResponseProjection `json:"response,omitempty"`
+	Kind          string                    `json:"kind"`
+	Key           string                    `json:"key"`
+	Name          string                    `json:"name"`
+	Group         string                    `json:"group,omitempty"`
+	Status        string                    `json:"status,omitempty"`
+	StartsAt      string                    `json:"startsAt,omitempty"`
+	EndsAt        string                    `json:"endsAt,omitempty"`
+	UpdatedAt     string                    `json:"updatedAt,omitempty"`
+	Summary       string                    `json:"summary,omitempty"`
+	Description   string                    `json:"description,omitempty"`
+	Labels        map[string]string         `json:"labels,omitempty"`
+	Timestamp     string                    `json:"timestamp,omitempty"`
+	Success       *bool                     `json:"success,omitempty"`
+	HTTPStatus    *int64                    `json:"httpStatus,omitempty"`
+	DurationNanos *int64                    `json:"durationNanos,omitempty"`
 }
 type pagesMCPResult struct {
 	Availability     string         `json:"availability"`
@@ -354,6 +356,13 @@ func (s *pagesMCPSession) call(raw json.RawMessage) map[string]any {
 	items, coverage, err := normalizePagesMCP(source, body, at)
 	if err != nil {
 		return mcpToolError("Unavailable: current snapshot")
+	}
+	if source == "alertmanager" {
+		for i := range items {
+			identity := pages.AlertIdentity{Fingerprint: items[i].Key, StartsAt: items[i].StartsAt}
+			response := pages.ProjectResponse(s.ctx, identity, s.responses, at)
+			items[i].Response = &response
+		}
 	}
 	all, err := json.Marshal(items)
 	if err != nil || len(all) > pages.AlertmanagerMaxBytes {

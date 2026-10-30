@@ -47,6 +47,15 @@
 <dt>Updated at</dt><dd>{{template "pages-time" .UpdatedAt}}</dd>
 <dt>Disposition</dt><dd>{{.Disposition}}</dd>
 <dt>Recurrence</dt><dd>{{.Recurrence}}</dd>
+{{with .Response}}
+<dt>Order</dt><dd class="mono">{{.Order.Key}} · {{.Order.Created}}</dd>
+<dt>Claim</dt><dd>{{.Claim.Kind}} · {{.Claim.ID}}</dd>
+<dt>Owner</dt><dd>{{.Owner}}</dd>
+<dt>Response</dt><dd>{{.State}} · {{template "pages-time" .StateAt}}</dd>
+<dt>Evidence</dt><dd>{{if eq .EvidenceURL "Unknown"}}Unknown{{else}}<a href="{{.EvidenceURL}}" target="_blank" rel="noopener noreferrer">Evidence</a>{{end}}</dd>
+<dt>Order source</dt><dd>{{.OrderCondition}} · {{.OrderSource}} · {{template "pages-time" .OrderObservedAt}}</dd>
+<dt>Claim source</dt><dd>{{.ClaimCondition}} · {{.ClaimSource}} · {{template "pages-time" .ClaimObservedAt}}</dd>
+{{end}}
 </dl>
 {{if .Summary}}<p class="turn-text">{{.Summary}}</p>{{else}}<p class="turn-text pages-empty-value">No summary</p>{{end}}
 {{if .Description}}<p class="turn-text">{{.Description}}</p>{{else}}<p class="turn-text pages-empty-value">No description</p>{{end}}
