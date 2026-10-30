@@ -85,7 +85,7 @@ api/coordination/v1alpha1/  CRD types, the separate protected group coordination
 cmd/dev-env-operator/    the operator, and the access broker as its second mode, `dev-env-operator broker` (broker.go, D-61)
 cmd/dev-env-keeper/      the keeper, its own binary in the operator image (D-38); main only, the work is internal/keeper
 cmd/dev-env-portal/      the internal read-only portal process; main only, the assembly is web/portal/session
-cmd/agentd/              the in-pod supervisor: `run`, `hold` (the rescue pod, D-55), `shelf [--history-archive]` (the shelf pod,
+cmd/agentd/              the in-pod supervisor: `run`, `home-verify` (the original-HOME init check, OP252), `hold` (the rescue pod, D-55), `shelf [--history-archive]` (the shelf pod,
                          D-67, DESIGN-025), `run-agent`
                          (a task, or a TUI, D-58), `claude-login[-status|-idle]` (the keeper pod's Claude login helper, T09 increment 5), `render`, `ctl status|rescue [--stop-agent]|prepare-restart` (D-40 to D-43,
                          D-48, D-58), `ctl deliver|log` (D-65), `ctl codex-pair` (Story110 T17), `ctl login url|code|status` (remote sessions), `ctl rescues|hold-rescue|prune` (D-67),
@@ -129,6 +129,7 @@ internal/broker/         the access broker (D-61): decides AccessGrants (GrantPo
                          a Notifier), makes kube, break-glass and egress grants (a ServiceAccount and RoleBindings or a
                          ClusterRoleBinding per grant) and revokes them; ExecInstaller installs kube tokens on stdin into the pod's grants tmpfs (D-63), guarded by pod UID; older pods fail/revoke after three attempts. Its envtest
                          suite runs it as dev-env-broker under haynes-ops' RBAC and broker guard, copied into testdata/
+internal/homeguard/     exact original HOME binding validation, metadata only; default-off OP252 lifecycle/start guard
 internal/grantattest/    the agent attestation of a grant (DESIGN-001 D-88): one annotation, its bounds and the scope digest, shared by the operator's API and the broker; pure. A claim, not verified human identity
 internal/egress/         the scoped CiliumNetworkPolicy builder and ownership checks (D-64), shared by broker and operator
 internal/grantexpiry/    the operator's separate egress expiry backstop (D-64), watches grants, reads CNPs by name only,

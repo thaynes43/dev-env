@@ -82,6 +82,7 @@ type codexPairIssued struct {
 // primitives (the scrubbed native runner, the passive process inspector and the
 // RPC status probe); tests fake the codex binary.
 type codexRemoteDeps struct {
+	home   func(context.Context) error // read-only original-HOME check; nil uses production verifier
 	native func(context.Context, Settings, string, []string, io.Writer) ([]byte, error)
 	remote func(context.Context, Settings, bool, int) (codexHostRemote, error)
 	sync   func(Settings, time.Time) error
@@ -264,7 +265,17 @@ func (c *codexRemote) ensure(ctx context.Context, s Settings, now time.Time) err
 	return err
 }
 
+func (c *codexRemote) verifyHome(ctx context.Context) error {
+	if c.deps.home != nil {
+		return c.deps.home(ctx)
+	}
+	return VerifyOriginalHome(ctx)
+}
+
 func (c *codexRemote) start(ctx context.Context, s Settings, now time.Time) error {
+	if err := c.verifyHome(ctx); err != nil {
+		return err
+	}
 	// The keeper's login must be applied and on disk before the daemon starts.
 	if s.CodexAccessFile == "" || c.deps.sync(s, now) != nil {
 		return ErrCodexAccess
@@ -281,6 +292,9 @@ func (c *codexRemote) start(ctx context.Context, s Settings, now time.Time) erro
 	}
 	sctx, cancel := context.WithTimeout(ctx, codexRemoteStartTimeout)
 	defer cancel()
+	if err := c.verifyHome(sctx); err != nil {
+		return err
+	}
 	if _, err := c.deps.native(sctx, s, s.CodexBin, []string{"remote-control", "start", "--json"}, nil); err != nil {
 		return errCodexRemoteStart
 	}
