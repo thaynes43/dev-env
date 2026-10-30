@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"time"
@@ -75,15 +76,18 @@ func startCodexRCThread(ctx context.Context, settings Settings, expectedPID int,
 	}
 	var response struct {
 		Thread struct {
-			ID string `json:"id"`
+			ID           string            `json:"id"`
+			Environments []json.RawMessage `json:"environments"`
 		} `json:"thread"`
 		Cwd   string `json:"cwd"`
 		Model string `json:"model"`
 	}
 	// cwd on this daemon is independent of the Mac connector project catalog.
-	// Deliberately omit projectId, environment overrides, provider fallback,
-	// config, sandbox and approval overrides; retain the daemon's requirements.
-	if r.call("thread/start", map[string]string{"cwd": selection.Cwd, "model": selection.Model}, &response) != nil || !nativeThreadID.MatchString(response.Thread.ID) || response.Cwd != selection.Cwd || response.Model != selection.Model {
+	// Explicitly disable execution-environment selection: omission could choose
+	// an unrelated default remote environment. The RC registration environment
+	// checked above is not an execution-environment registry identity. Omit
+	// projectId, provider fallback, config, sandbox and approval overrides.
+	if r.call("thread/start", map[string]any{"cwd": selection.Cwd, "model": selection.Model, "environments": []any{}}, &response) != nil || !nativeThreadID.MatchString(response.Thread.ID) || response.Thread.Environments == nil || len(response.Thread.Environments) != 0 || response.Cwd != selection.Cwd || response.Model != selection.Model {
 		return codexRCThreadReceipt{}, errCodexHostUnknown
 	}
 	return codexRCThreadReceipt{ThreadID: response.Thread.ID, Cwd: response.Cwd, Model: response.Model}, nil

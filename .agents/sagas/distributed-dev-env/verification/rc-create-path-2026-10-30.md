@@ -26,8 +26,10 @@ increment; newer documentation does not prove availability on a live host.
 `internal/agentd/codex_rc_create.go` adds a package-private existing-daemon
 thread/start implementation. It connects to the existing local Unix control
 socket with the existing peer PID/UID check, verifies pinned native version and
-connected installation/environment identity, and sends only the exact selected
-cwd and model. The selection must come from accepted host/catalog and pairing
+connected installation/environment identity, and sends the exact selected
+cwd and model with `environments: []`. An explicit empty environment list in the
+response is required. RC registration identity is distinct from execution-environment
+selection; omission could select an unrelated default execution environment. The selection must come from accepted host/catalog and pairing
 evidence; connected transport alone never proves phone pairing. A mandatory
 one-use authorization callback runs immediately before mutation. Errors are
 unconfirmed, with no retry, resume, turn, pairing or process launch.
@@ -61,6 +63,11 @@ were not changed. OP272 remains held; its cwd-only proposal is not RC acceptance
 
 ## Delivery state
 
-Source: prepared; targeted tests and independent review recorded in the PR/OP271.
+Independent native QA at `47dce51` found one P2: implicit execution-environment
+selection. The fix sends an explicit empty selection and rejects missing, null
+and nonempty response selections. No other actionable findings; QA performed no
+runtime calls. Targeted tests and final source evidence are recorded in PR/OP271.
+
+Source: prepared and independently reviewed, pending final checks.
 Released: no. Installed: no. Usable/owner accepted: no.
 The complete RC repair remains blocked on the authorized transport above.

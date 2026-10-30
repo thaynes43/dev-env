@@ -47,7 +47,7 @@ func TestCodexRCStartPinnedSchema(t *testing.T) {
 // Only an inert local server is used. No native CLI, real host, credential,
 // provider request, remote enrollment or private provider stream is involved.
 func TestCodexRCStartExistingDaemonProtocol(t *testing.T) {
-	for _, mode := range []string{"ok", "wrong-peer", "wrong-version", "wrong-installation", "wrong-environment", "disconnected", "unauthorized", "nil-authorizer", "cancel-before", "cancel-after-authorize", "lost-ack", "wrong-cwd", "wrong-model", "bad-thread", "server-request", "null-result", "rpc-error", "oversize"} {
+	for _, mode := range []string{"ok", "wrong-peer", "wrong-version", "wrong-installation", "wrong-environment", "disconnected", "unauthorized", "nil-authorizer", "cancel-before", "cancel-after-authorize", "lost-ack", "wrong-cwd", "wrong-model", "bad-thread", "server-request", "null-result", "rpc-error", "oversize", "missing-environments", "null-environments", "remote-environment"} {
 		t.Run(mode, func(t *testing.T) {
 			home, err := os.MkdirTemp("/tmp", "rc-create-")
 			if err != nil {
@@ -108,8 +108,12 @@ func TestCodexRCStartExistingDaemonProtocol(t *testing.T) {
 						result = status
 					case "thread/start":
 						starts.Add(1)
-						if authorized.Load() != 1 || len(req.Params) != 2 || req.Params["cwd"] != "/accepted/repo" || req.Params["model"] != "gpt-6.1-sol" {
+						if authorized.Load() != 1 || len(req.Params) != 3 || req.Params["cwd"] != "/accepted/repo" || req.Params["model"] != "gpt-6.1-sol" {
 							t.Error("incorrect or unauthorized mutation", req.Params)
+						}
+						envs, ok := req.Params["environments"].([]any)
+						if !ok || len(envs) != 0 {
+							t.Error("environment selection not explicitly disabled")
 						}
 						if mode == "lost-ack" {
 							return
@@ -135,7 +139,17 @@ func TestCodexRCStartExistingDaemonProtocol(t *testing.T) {
 						if mode == "bad-thread" {
 							id = "../private"
 						}
-						result = map[string]any{"thread": map[string]string{"id": id}, "cwd": cwd, "model": model}
+						thread := map[string]any{"id": id, "environments": []any{}}
+						if mode == "missing-environments" {
+							delete(thread, "environments")
+						}
+						if mode == "null-environments" {
+							thread["environments"] = nil
+						}
+						if mode == "remote-environment" {
+							thread["environments"] = []any{map[string]string{"environmentId": "other", "cwd": cwd}}
+						}
+						result = map[string]any{"thread": thread, "cwd": cwd, "model": model}
 						if mode == "null-result" {
 							result = nil
 						}
@@ -184,7 +198,7 @@ func TestCodexRCStartExistingDaemonProtocol(t *testing.T) {
 			}
 			wantStarts := int32(0)
 			switch mode {
-			case "ok", "lost-ack", "wrong-cwd", "wrong-model", "bad-thread", "server-request", "null-result", "rpc-error", "oversize":
+			case "ok", "lost-ack", "wrong-cwd", "wrong-model", "bad-thread", "server-request", "null-result", "rpc-error", "oversize", "missing-environments", "null-environments", "remote-environment":
 				wantStarts = 1
 			}
 			if starts.Load() != wantStarts {
