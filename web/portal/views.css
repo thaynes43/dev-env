@@ -61,7 +61,7 @@ h1, h2, h3, p, dl, dd, ul, ol, table { margin: 0; }
 ul { list-style: none; padding: 0; }
 a { color: var(--accent); text-decoration: none; }
 a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
-.detail:focus, .workspace:focus, .list:focus, .receipt:focus { outline: 3px solid var(--focus); outline-offset: -3px; }
+.detail:focus-visible, .workspace:focus-visible, .list:focus-visible, .receipt:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
 svg.i { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .mono { font-family: var(--mono); font-size: 11px; }
 .eyebrow { font-size: 10px; letter-spacing: .11em; font-weight: 700; text-transform: uppercase; color: var(--muted); }
