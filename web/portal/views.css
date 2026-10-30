@@ -375,6 +375,8 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .allowance-strip { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .allowance-link { display: block; min-height: 24px; width: fit-content; max-width: 100%; }
 .allowance-provider + .allowance-provider { margin-top: 4px; }
+.allowance-strip ul:not(:has(.allowance-windows)) { display: flex; flex-wrap: wrap; gap: 0 14px; }
+.allowance-strip ul:not(:has(.allowance-windows)) .allowance-provider + .allowance-provider { margin-top: 0; }
 .allowance-provider-head { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 8px; }
 .allowance-name { white-space: nowrap; }
 .allowance-provider-head > span:last-child, .allowance-windows li { min-width: 0; overflow-wrap: anywhere; }

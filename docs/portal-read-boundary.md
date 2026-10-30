@@ -68,7 +68,7 @@ already includes them. Cache reads are never added to input. Cost is shown only 
 charge or a subscription quota. The Usage view sums reported values per group
 (by how sessions ran, by provider and requested model, by project); an
 `Unknown` counter or cost is never counted as zero, and the account allowance
-is shown apart as not connected. The portal accepts a row of exactly the six base keys, or those six
+is shown apart, with its own state (see [Account allowance](#account-allowance)). The portal accepts a row of exactly the six base keys, or those six
 and a valid `activity`; a row without `activity` renders every activity field
 `Unknown`, never zero. It refuses a null or malformed `activity`, an unknown key,
 a null, a word outside its set, an `Unknown` scope that carries a reported value,
@@ -140,6 +140,31 @@ inline stylesheet under `default-src 'none'`; this was checked on the fixture
 preview on 2026-10-26. `html/template` drops CSS comments from template
 text, so `views.css` carries none; a test hashes the rendered `<style>` against
 the policy.
+
+## Account allowance
+
+Sessions shows a compact Account allowance list in the list header. Usage shows the
+same model in full, also on a read with no rows. Tasks, Asks and Pages show none.
+No allowance reader is deployed, so production shows Claude and Codex as
+`Not connected`, with no percent.
+
+`MapProductAllowance` is the pure projection a later reader will use. It maps a
+decoded `providerallowance.read.v1` document ([DESIGN-030](../.agents/sagas/distributed-dev-env/designs/030-provider-allowance-contract.md))
+to four states. Only the preview fixtures call it today.
+
+| State | Meaning | Percent |
+| --- | --- | --- |
+| `Not connected` | no reader, or `unconfigured` availability | never |
+| `Unknown` | a reader answered, but the value cannot be trusted; carries a safe reason | never |
+| `Stale` | validated, verified, known value with `stale` freshness | as reported |
+| `Measured` | validated, verified, known value with `fresh` freshness | as reported |
+
+A percent is printed as the contract spells it, with its reported direction (`% left`
+or `% used`). The portal never converts used to remaining, reads no derivation and
+takes no token or cost input. A window label comes from `durationMinutes`; a contract
+ref is never displayed. Windows that are not percent, or not `included_quota` or
+`rate_limit`, are left out. A window with no known value shows `Unknown` beside any
+known ones. A conflict refuses the provider.
 
 ## Mobile presentation
 
