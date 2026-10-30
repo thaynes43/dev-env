@@ -451,3 +451,29 @@ func TestAllowanceWindowNeverUsesRef(t *testing.T) {
 		}
 	}
 }
+
+func TestMapProductAllowanceNeedsAtLeastOnePercent(t *testing.T) {
+	for _, fresh := range []pa.FreshnessState{pa.FreshFresh, pa.FreshStale} {
+		for _, kind := range []string{"unknown", "unreported", "direction", "ignored-unit", "ignored-category"} {
+			doc := allowanceRead()
+			item := &doc.Items[0]
+			item.Freshness.State = fresh
+			switch kind {
+			case "unknown":
+				item.CurrentMeasures[0].State = pa.CurrentUnknown
+			case "unreported":
+				item.CurrentMeasures[0].State = pa.CurrentNotReported
+			case "direction":
+				item.Observation.Measures[0].Direction = pa.DirectionUnknown
+			case "ignored-unit":
+				item.Observation.Measures[0].Unit = "tokens"
+			case "ignored-category":
+				item.Observation.Measures[0].Category = pa.CategorySpend
+			}
+			got := MapProductAllowance(doc)[0]
+			if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 || got.Reason != "No percent allowance reported" {
+				t.Fatalf("%s/%s: %+v", fresh, kind, got)
+			}
+		}
+	}
+}

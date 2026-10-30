@@ -650,7 +650,7 @@ func TestAccountAllowanceNeverComesFromSessionTokensOrCost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pattern := `(?s)<p class="allowance-strip">.*?</p>`
+		pattern := `(?s)<div class="allowance-strip">.*?</ul></div>`
 		if view == "usage" {
 			pattern = `(?s)<section class="allowance".*?Plan limits.*?</section>`
 		}
