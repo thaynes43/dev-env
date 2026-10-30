@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.73.1](https://github.com/thaynes43/dev-env/compare/v2.73.0...v2.73.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **portal:** keep the top bar in place when a session is selected ([#311](https://github.com/thaynes43/dev-env/issues/311)) ([#743](https://github.com/thaynes43/dev-env/issues/743)) ([912ac81](https://github.com/thaynes43/dev-env/commit/912ac815cc481cf691327a65b88ec8e7fcd0062e))
+
 ## [2.73.0](https://github.com/thaynes43/dev-env/compare/v2.72.0...v2.73.0) (2026-10-30)
 
 
