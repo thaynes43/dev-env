@@ -145,14 +145,18 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	// Do not clear a reservation on refusal or lost ACK. Its state remains
 	// one-use forever for this UID. Receipt persistence failure is uncertainty.
+	// An ACK may arrive as the request expires or its caller disconnects. Only
+	// persistence gets a short detached context; execution keeps its deadline.
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer persistCancel()
 	var latest v1alpha1.AgentSession
-	if s.Live.Get(ctx, key, &latest) != nil || latest.UID != sess.UID || latest.Annotations[apiv1.CodexRCIntentAnnotation] != string(frozen) {
+	if s.Live.Get(persistCtx, key, &latest) != nil || latest.UID != sess.UID || latest.Annotations[apiv1.CodexRCIntentAnnotation] != string(frozen) {
 		receipt.State, receipt.Reason = "unconfirmed", "receipt_unconfirmed"
 		return 503, receipt, nil
 	}
 	data, _ := json.Marshal(receipt)
 	latest.Annotations[apiv1.CodexRCIntentAnnotation] = string(data)
-	if s.Client.Update(ctx, &latest) != nil {
+	if s.Client.Update(persistCtx, &latest) != nil {
 		receipt.State, receipt.Reason = "unconfirmed", "receipt_unconfirmed"
 		return 503, receipt, nil
 	}
@@ -160,10 +164,11 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	return status, receipt, nil
 }
 
-// ParseCodexRCTarget accepts only a bounded deployment-owned qualification file.
-func ParseCodexRCTarget(raw []byte, now time.Time) (*apiv1.CodexRCTarget, error) {
+// ParseCodexRCTarget accepts a structurally valid, bounded deployment-owned
+// qualification file. Request and host checks enforce freshness before use.
+func ParseCodexRCTarget(raw []byte) (*apiv1.CodexRCTarget, error) {
 	var target apiv1.CodexRCTarget
-	if apiv1.DecodeCodexRC(raw, &target, apiv1.CodexRCMaxPacket) != nil || !target.Valid(now) {
+	if apiv1.DecodeCodexRC(raw, &target, apiv1.CodexRCMaxPacket) != nil || !target.StructurallyValid() {
 		return nil, badRequest("invalid codex RC target packet")
 	}
 	return &target, nil

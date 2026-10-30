@@ -66,8 +66,14 @@ type CodexRCTarget struct {
 	ExpiresAt         time.Time `json:"expiresAt"`
 }
 
+// StructurallyValid checks deployment input without making operator startup
+// depend on a short-lived qualification still being fresh.
+func (t CodexRCTarget) StructurallyValid() bool {
+	return projectcatalog.ValidName(t.SessionName) && codexRCID.MatchString(t.SessionUID) && codexRCID.MatchString(t.PodUID) && projectcatalog.ValidName(t.Project) && projectcatalog.ValidName(t.Repository) && codexRCDigest.MatchString(t.SnapshotSHA256) && codexRCDigest.MatchString(t.PreparationSHA256) && filepath.IsAbs(t.Root) && filepath.Clean(t.Root) == t.Root && t.Root != "/" && len(t.Root) <= 4096 && !strings.ContainsAny(t.Root, "\\\x00\r\n") && utf8.ValidString(t.Root) && t.RootInode > 0 && t.PID > 1 && codexRCID.MatchString(t.BootID) && t.StartTicks > 0 && codexRCID.MatchString(t.InstallationID) && codexRCID.MatchString(t.EnvironmentID) && t.PairingSource == "supported-client" && codexRCDigest.MatchString(t.PairingSHA256) && !t.VerifiedAt.IsZero() && t.ExpiresAt.After(t.VerifiedAt) && t.ExpiresAt.Sub(t.VerifiedAt) <= 15*time.Minute
+}
+
 func (t CodexRCTarget) Valid(now time.Time) bool {
-	return projectcatalog.ValidName(t.SessionName) && codexRCID.MatchString(t.SessionUID) && codexRCID.MatchString(t.PodUID) && projectcatalog.ValidName(t.Project) && projectcatalog.ValidName(t.Repository) && codexRCDigest.MatchString(t.SnapshotSHA256) && codexRCDigest.MatchString(t.PreparationSHA256) && filepath.IsAbs(t.Root) && filepath.Clean(t.Root) == t.Root && t.Root != "/" && len(t.Root) <= 4096 && !strings.ContainsAny(t.Root, "\\\x00\r\n") && utf8.ValidString(t.Root) && t.RootInode > 0 && t.PID > 1 && codexRCID.MatchString(t.BootID) && t.StartTicks > 0 && codexRCID.MatchString(t.InstallationID) && codexRCID.MatchString(t.EnvironmentID) && t.PairingSource == "supported-client" && codexRCDigest.MatchString(t.PairingSHA256) && !t.VerifiedAt.IsZero() && !t.VerifiedAt.After(now) && t.ExpiresAt.After(now) && t.ExpiresAt.Sub(t.VerifiedAt) <= 15*time.Minute
+	return t.StructurallyValid() && !t.VerifiedAt.After(now) && t.ExpiresAt.After(now)
 }
 func (t CodexRCTarget) Matches(r CodexRCRequest) bool {
 	return t.SessionUID == r.SessionUID && t.PodUID == r.PodUID && t.Project == r.Project && t.Repository == r.Repository

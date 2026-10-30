@@ -1,10 +1,13 @@
 package apiserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +28,7 @@ type rcExec struct {
 	calls       []string
 	fail        string
 	beforeStart func()
+	afterACK    func()
 	now         time.Time
 }
 
@@ -49,7 +53,11 @@ func (e *rcExec) Run(_ context.Context, ns, pod, container string, args []string
 	if args[3] == "start" {
 		rec.State, rec.Reason, rec.ThreadID, rec.TurnID = "confirmed", "thread_and_turn_acknowledged", "fresh-thread", "first-turn"
 	}
-	return json.NewEncoder(out).Encode(rec)
+	err := json.NewEncoder(out).Encode(rec)
+	if args[3] == "start" && err == nil && e.afterACK != nil {
+		e.afterACK()
+	}
+	return err
 }
 func rcFixture(t *testing.T) (*fixture, apiv1.CodexRCRequest, *rcExec) {
 	t.Helper()
@@ -248,11 +256,108 @@ func TestCodexRCOneUseSurvivesServerRestartAndUncertainty(t *testing.T) {
 
 type rcWriteClient struct {
 	client.Client
+	get    func(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error
 	update func(context.Context, client.Object, ...client.UpdateOption) error
+}
+
+func (c rcWriteClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if c.get != nil {
+		return c.get(ctx, key, obj, opts...)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func (c rcWriteClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
 	return c.update(ctx, obj, opts...)
+}
+
+func TestCodexRCReceiptPersistsAfterCancellationAtACK(t *testing.T) {
+	for _, failPersistence := range []bool{false, true} {
+		t.Run(strconv.FormatBool(failPersistence), func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			acked := false
+			e.afterACK = func() {
+				acked = true
+				cancel()
+			}
+			checkContext := func(ctx context.Context) {
+				t.Helper()
+				if err := ctx.Err(); err != nil {
+					t.Fatal("persistence inherited request cancellation", err)
+				}
+				if acked {
+					deadline, ok := ctx.Deadline()
+					if !ok || time.Until(deadline) > 5*time.Second || !deadline.After(time.Now()) {
+						t.Fatal("persistence context is not bounded")
+					}
+				}
+			}
+			reads, writes := 0, 0
+			c := rcWriteClient{Client: f.c,
+				get: func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					checkContext(ctx)
+					if acked {
+						reads++
+					}
+					return f.c.Get(ctx, key, obj, opts...)
+				},
+				update: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+					checkContext(ctx)
+					if acked {
+						writes++
+						if failPersistence {
+							return errors.New("receipt write failed")
+						}
+					}
+					return f.c.Update(ctx, obj, opts...)
+				},
+			}
+			f.srv.Live, f.srv.Client = c, c
+			f.h = f.srv.Handler()
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest("POST", rcPath, bytes.NewReader(raw)).WithContext(ctx)
+			r.Header.Set("Authorization", "Bearer "+tokHuman)
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			f.h.ServeHTTP(w, r)
+			wantStatus, wantReplay := 201, 200
+			if failPersistence {
+				wantStatus, wantReplay = 503, 409
+			}
+			if w.Code != wantStatus || !acked || ctx.Err() != context.Canceled || reads != 1 || writes != 1 {
+				t.Fatal(w.Code, w.Body.String(), "persistence calls", reads, writes)
+			}
+			var sess v1alpha1.AgentSession
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: "rc-host"}, &sess); err != nil {
+				t.Fatal(err)
+			}
+			var saved apiv1.CodexRCReceipt
+			if err := apiv1.DecodeCodexRC([]byte(sess.Annotations[apiv1.CodexRCIntentAnnotation]), &saved, apiv1.CodexRCMaxPacket); err != nil {
+				t.Fatal(err)
+			}
+			if failPersistence && saved.State != "reserved" || !failPersistence && !saved.Acknowledged() {
+				t.Fatal("wrong retained outcome", saved.State)
+			}
+			// A later handler returns the retained result without another start,
+			// even after both request and qualification have expired.
+			f.srv.Live, f.srv.Client = f.c, f.c
+			f.srv.Now = func() time.Time { return f.now.Add(time.Hour) }
+			f.h = f.srv.Handler()
+			w = f.do("POST", rcPath, tokHuman, req)
+			if w.Code != wantReplay || strings.Join(e.calls, ",") != "preflight,start" {
+				t.Fatal("retained outcome replayed exec", w.Code, w.Body.String(), e.calls)
+			}
+			req.RequestID = "another-request"
+			if w = f.do("POST", rcPath, tokHuman, req); w.Code != 409 || len(e.calls) != 2 {
+				t.Fatal("new key bypassed one-use fence", w.Code, e.calls)
+			}
+		})
+	}
 }
 
 func TestCodexRCCASContentionOnlyOneMutatingExec(t *testing.T) {

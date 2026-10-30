@@ -336,7 +336,7 @@ func parseFlags(args []string) (options, error) {
 		if err != nil || len(raw) > apiv1.CodexRCMaxPacket {
 			return o, errors.New("codex RC target packet unavailable")
 		}
-		o.codexRCTarget, err = apiserver.ParseCodexRCTarget(raw, time.Now())
+		o.codexRCTarget, err = apiserver.ParseCodexRCTarget(raw)
 		if err != nil {
 			return o, err
 		}
