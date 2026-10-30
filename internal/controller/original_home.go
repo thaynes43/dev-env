@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -61,6 +62,7 @@ func (r *Reconciler) originalHome(ctx context.Context, s *v1alpha1.AgentSession)
 // complete before boot writes. The supervisor repeats verification on each start.
 func addOriginalHomeVerifier(p *corev1.Pod, b homeguard.Binding) {
 	c := &p.Spec.Containers[0]
+	c.Env = slices.DeleteFunc(c.Env, func(e corev1.EnvVar) bool { return e.Name == homeguard.Env })
 	c.Env = append(c.Env, corev1.EnvVar{Name: homeguard.Env, Value: b.String()})
 	p.Spec.InitContainers = append(p.Spec.InitContainers, corev1.Container{
 		Name: "original-home-verify", Image: c.Image, ImagePullPolicy: c.ImagePullPolicy,

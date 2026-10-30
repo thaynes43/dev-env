@@ -88,6 +88,19 @@ func TestOriginalHomeRecreationAndRace(t *testing.T) {
 				if writes != 1 || obs.pod.obj == nil || len(obs.pod.obj.Spec.InitContainers) != 1 {
 					t.Fatalf("successful original HOME: writes=%d blocked=%v build=%v", writes, obs.removalBlocked, obs.buildErr)
 				}
+				agent := obs.pod.obj.Spec.Containers[0]
+				count := 0
+				for _, e := range agent.Env {
+					if e.Name == homeguard.Env {
+						count++
+						if e.Value != b.String() || e.ValueFrom != nil {
+							t.Fatal("main guard binding differs from init")
+						}
+					}
+				}
+				if count != 1 {
+					t.Fatal("ambiguous main guard environment")
+				}
 				init := obs.pod.obj.Spec.InitContainers[0]
 				if !init.VolumeMounts[0].ReadOnly || len(init.EnvFrom) != 0 || init.SecurityContext.AllowPrivilegeEscalation == nil || *init.SecurityContext.AllowPrivilegeEscalation {
 					t.Fatal("init authority changed")
