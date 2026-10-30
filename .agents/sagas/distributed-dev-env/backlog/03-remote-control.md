@@ -216,12 +216,24 @@ Signal: the last user or assistant entry of the session's own transcript
 there is no session record to prefer. The CLI's real error text is **Unknown** until
 the checkpoint; the fixture shape (an assistant entry flagged `isApiErrorMessage`, or
 text starting "API Error", naming a revoked or expired OAuth token) is what to confirm.
-`claude-continue.json` records the generation last evaluated and is written before the
-send, so repeated polls and an agentd restart send once; nothing is sent when the last
-turn is healthy, the merge was held back, or the pod is in task mode or pod-owned
-mode. A user turn last (a request that may still be on the old token) and an agent
-that is not running decide nothing and are looked at again on the next poll, as is a
-Deliver failure before the paste; a failure after the paste is not repeated.
+The 2026-10-30 recovery correction ([OP310](https://work.haynesnetwork.com/work_packages/310))
+keeps `claude-continue.json` as a durable generation, outcome and evaluation-cutoff
+receipt. A first healthy evaluation establishes a `skipped` baseline. After a newer
+generation merges, a healthy or missing last entry sends nothing at that poll but
+leaves a `waiting` receipt with the prior evaluation cutoff. That cutoff survives
+healthy polls and agentd restarts, including when an error happened before the new
+generation was observed but its transcript entry arrives afterward. Waiting has no
+time limit: the transcript cannot identify which access token failed, so a later
+authentication error on the replacement token can also consume that generation's
+single recovery opportunity. This does not prove that an old token caused the error.
+
+The `sending` receipt is written before Deliver; `sending` and `sent` remain terminal
+for that generation, so repeated polls or a restart cannot repeat a confirmed or
+uncertain send. A confirmed Deliver failure before the paste can retry. A last user
+turn (a request that may still be in flight) or an agent that is not running decides
+nothing until a later poll. A held-back merge, task mode or pod-owned mode never
+sends. Delivery alone does not prove successful authentication, and the correction
+does not eliminate the provider-revocation and Secret-propagation window.
 
 Still in this plan (increments 3 to 6): keeper journal, transport, publisher and the refresh worker with its Lease fence
 (`--enable-claude-auth`, default off); the keeper-side login helper; the GitOps

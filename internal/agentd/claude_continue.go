@@ -20,7 +20,8 @@ import (
 // keeper's access token is revoked or lapses before agentd merges the next
 // generation, the TUI's last turn ends in an authentication error and the CLI
 // sits idle. Once a NEW generation has been merged, agentd sends that session
-// exactly one `continue` through Deliver, so the work resumes on the new token.
+// at most one `continue` through Deliver to retry using the merged credentials.
+// Delivery does not prove the retry authenticated successfully.
 //
 // Signal: the last conversational entry of the session's own transcript
 // (projects/*/<conversation id>.jsonl under the Claude config dir). agentd
@@ -30,11 +31,15 @@ import (
 // entry flagged isApiErrorMessage, or text starting "API Error", naming a
 // revoked or expired OAuth token) and is the one thing to confirm there.
 //
-// Never twice: claude-continue.json on the volume records the generation last
-// evaluated. It is written before the send, so a crash or restart after the
-// send does not repeat it; only "agent not running yet" (nothing sent) leaves
-// no new receipt, and a failure before the paste, are retried. A last turn that
-// is a user turn is not decided either: the request may still be on the old token.
+// Never twice: claude-continue.json records the generation, outcome and evaluation
+// cutoff. A first healthy evaluation establishes a skipped baseline. A newer
+// generation observed without an eligible error stays waiting with the prior
+// cutoff, across polls and restarts, so a delayed transcript entry is not lost.
+// Waiting has no time limit; the transcript does not identify which token failed,
+// so a later error on the replacement token can also consume its one recovery.
+// Sending is persisted before Deliver; sending and sent are terminal for that
+// generation, including an uncertain send. Only a confirmed failure before the
+// paste is retried. A last user turn or an agent not yet running decides nothing.
 
 const (
 	continueReceiptFile = "claude-continue.json"
@@ -42,7 +47,7 @@ const (
 	transcriptTailBytes = 256 << 10
 	// continueFrom is the sender Deliver names; it is not a session, so no reply hint.
 	continueFrom = "agentd/claude-login"
-	continueText = "The keeper renewed this session's Claude login after your last turn failed with a revoked or expired token error. Nothing you did caused it. Please continue the work you were doing."
+	continueText = "agentd applied a keeper-provided Claude login generation and observed an authentication error in this session. Please retry the work once with the available login. If authentication still fails, report the blocker; do not change credentials or start another login."
 )
 
 var conversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
@@ -55,7 +60,7 @@ const authErrorCode = "authentication_failed"
 
 type continueReceipt struct {
 	Generation  uint64    `json:"generation"`
-	Outcome     string    `json:"outcome"` // sending, sent or skipped
+	Outcome     string    `json:"outcome"` // waiting, sending, sent or skipped
 	EvaluatedAt time.Time `json:"evaluatedAt"`
 }
 
@@ -202,7 +207,7 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 	var prev continueReceipt
 	havePrev := false
 	if err := readJSONFile(receiptPath, &prev); err == nil {
-		if prev.Generation >= applied.Generation {
+		if prev.Generation > applied.Generation || (prev.Generation == applied.Generation && prev.Outcome != "waiting") {
 			return
 		}
 		havePrev = true
@@ -231,7 +236,22 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 	// was already handled. A missing timestamp does not block the one send.
 	stale := havePrev && !turn.At.IsZero() && !turn.At.After(prev.EvaluatedAt)
 	if !turn.Revoked || stale {
-		_ = writeJSONFile(receiptPath, continueReceipt{applied.Generation, "skipped", now})
+		// A replacement may reach the pod before the client records its old-token
+		// failure. Keep that generation eligible until a new error arrives. Its
+		// prior evaluation cutoff stays fixed: the error may have happened before
+		// this observation but not yet reached the transcript. The first observed
+		// generation establishes only a baseline; it does not authorize retrying
+		// a later failure on its own.
+		if havePrev && prev.Generation == applied.Generation {
+			return
+		}
+		outcome := "skipped"
+		cutoff := now
+		if havePrev {
+			outcome = "waiting"
+			cutoff = prev.EvaluatedAt
+		}
+		_ = writeJSONFile(receiptPath, continueReceipt{applied.Generation, outcome, cutoff})
 		return
 	}
 	if writeJSONFile(receiptPath, continueReceipt{applied.Generation, "sending", now}) != nil {
