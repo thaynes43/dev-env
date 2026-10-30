@@ -1,5 +1,19 @@
 # HANDOFF: start here
 
+## RC launch design — 2026-10-29 (#267)
+
+[DESIGN-038](sagas/distributed-dev-env/designs/038-remote-control-launch.md)
+proposes the bounded Claude/Codex `agent-run rc` contract, phase evidence,
+timings, errors and build stories under Epic #91. This is documentation only.
+The Mac connector's Codex remote project inventory remains blocked; a bounded
+source adapter over the existing host's official app-server proxy may proceed
+under the existing human/workbench-only guards (#267 journal 2799). Q-267-01/02
+are pending recommendations for the lead, not delivered
+questions or permission changes. Proposed; stories 2a-2d and 3/3 pending in
+OpenProject [#267](https://work.haynesnetwork.com/work_packages/267) and
+[#268](https://work.haynesnetwork.com/work_packages/268). Source, installation
+and usable acceptance remain separate.
+
 ## Current state — 2026-10-22 UTC (v2 release 2.39.1; documentation reconciliation)
 
 This block supersedes the installed-version and open-item summaries in the

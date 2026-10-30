@@ -1,5 +1,13 @@
 # 04: rolling updates and Codex
 
+**Launch tooling proposal, 2026-10-29:**
+[DESIGN-038](../designs/038-remote-control-launch.md),
+[OpenProject #267](https://work.haynesnetwork.com/work_packages/267), proposes
+healthy paired-host reuse with a fresh Codex thread. Its story 3/3 waits for the
+supported remote project inventory and adapter; a connected daemon or an issued
+pairing code is insufficient. Documentation only: caller/profile restrictions,
+keeper ownership, enrollment, history and active threads remain protected.
+
 **Status:** multiple hosts with common rules/context and private repos under ADR-003;
 implementation and actual client/refresh acceptance remain backlog
 **Depends on:** 02; Q-03 (drain on idle, then resume: decided 2026-10-06); spikes

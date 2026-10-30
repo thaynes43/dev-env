@@ -1,5 +1,13 @@
 # 03: Remote Control
 
+**Launch tooling proposal, 2026-10-29:**
+[DESIGN-038](../designs/038-remote-control-launch.md),
+[OpenProject #267](https://work.haynesnetwork.com/work_packages/267), separates
+pod readiness from provider RC readiness/link delivery and specifies the proposed
+`agent-run rc` API/skill path. Documentation only; it grants no new caller rights
+and does not consume or repurpose the standby. Its story 2/3 proposal is the
+Claude implementation slice after lead review.
+
 **Status:** partly delivered (2026-10-20): Claude and Codex Remote Control, the shared keeper logins, the workbench, the standby and standing access grants are installed and proven in release 2.37.0. The console page, archive on reap through the keeper and messaging tier 2 are still open. See "Delivered and open".
 **Depends on:** 02; 07's deployed broker core; spike S-1 (which auth
 path), S-5 (cross-pod messaging), S-6 (resume keeps the phone entry), S-15 (archive on
