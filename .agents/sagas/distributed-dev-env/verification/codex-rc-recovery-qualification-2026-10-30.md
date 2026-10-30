@@ -146,7 +146,10 @@ claim, release finalizers or manufacture terminal evidence. Test disappearance
 between acceptance and recreation as well as unchanged-HOME success. This
 targeted guard needs no reset framework, roles or new platform.
 
-**Q-252-01, pending:** choose the original-HOME-UID source guard first
+**Historical Q-252-01:** journals 3041/3046 and the current direct continuation
+select the [original-HOME guard source increment](original-home-guard-2026-10-30.md).
+The source choice is resolved; runtime activation/cycle remains held. The earlier
+question offered: choose the original-HOME-UID source guard first
 (recommended), explicitly approve one existing lifecycle cycle with the stated
 limits, or keep paused. The native question tool accepted emission; no phone
 delivery or owner answer is established by that receipt. Runtime stays held.

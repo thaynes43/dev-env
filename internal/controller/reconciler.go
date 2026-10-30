@@ -55,6 +55,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
@@ -109,6 +110,8 @@ func CacheOptions(sessionNamespace string, tmpl types.NamespacedName) cache.Opti
 
 // Reconciler builds and watches session pods and volumes.
 type Reconciler struct {
+	// OriginalHome is an exact default-off lifecycle restriction, never an access grant.
+	OriginalHome *homeguard.Binding
 	// Client reads from the manager's cache and writes to the API server.
 	Client client.Client
 	// Templates is the dev-env-templates ConfigMap.
@@ -857,6 +860,28 @@ func archiveDeadline(s *v1alpha1.AgentSession, t *templates.Templates) (at time.
 // record (D-62). With no valid rescue and no pod, a hold pod rescues the volume
 // first (D-55). done means the reconcile ends here with res.
 func (r *Reconciler) archive(ctx context.Context, s *v1alpha1.AgentSession, obs *observation, archiveDue bool) (res ctrl.Result, done bool, err error) {
+	// A cached pre-admission Session must not bypass a durable original-HOME
+	// restriction after startup configuration is removed.
+	var fresh v1alpha1.AgentSession
+	if r.APIReader == nil {
+		return ctrl.Result{}, false, homeguard.ErrUnsafe
+	}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if fresh.UID != s.UID {
+		return ctrl.Result{}, false, homeguard.ErrUnsafe
+	}
+	if _, exists := fresh.Annotations[homeguard.Annotation]; exists {
+		obs.removalBlocked = homeguard.ErrUnsafe
+		return ctrl.Result{}, false, nil
+	}
+
+	if b, e := homeguard.Select(r.OriginalHome, s.Namespace, s.Name, string(s.UID), s.Annotations); b != nil || e != nil {
+		obs.removalBlocked = homeguard.ErrUnsafe
+		return ctrl.Result{}, false, nil
+	}
+
 	// A private HOME stays. The one pass is DESIGN-025 section 23: a reaped
 	// never-started Session whose cache already shows no claim. The empty
 	// path below asks the API server before releaseIfEmpty lifts anything,
@@ -1085,6 +1110,20 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if !obs.pod.missing {
 		return nil
 	}
+	b, guardErr := r.originalHome(ctx, s)
+	if guardErr != nil {
+		obs.removalBlocked = guardErr
+		return nil
+	}
+	if b != nil {
+		// Cached absence must never create a replacement claim for this target.
+		var claim corev1.PersistentVolumeClaim
+		if r.APIReader.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Claim()}, &claim) != nil {
+			obs.removalBlocked = homeguard.ErrUnsafe
+			return nil
+		}
+		obs.claim = owned[*corev1.PersistentVolumeClaim]{obj: &claim}
+	}
 	if err := r.validateProjectCanary(ctx, s, t); err != nil {
 		obs.removalBlocked = err
 		return nil
@@ -1230,6 +1269,13 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		}
 		obs.removalBlocked = err
 		return nil
+	}
+	if b != nil {
+		if _, err := r.originalHome(ctx, s); err != nil {
+			obs.removalBlocked = err
+			return nil
+		}
+		addOriginalHomeVerifier(pod, *b)
 	}
 	if err := r.create(ctx, "pod", pod); err != nil {
 		return err

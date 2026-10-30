@@ -220,6 +220,15 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return exitUsage
 		}
 		return shelf(ctx, log, getenv, historyArchive, coordinationArchive)
+	case "home-verify":
+		if len(args) != 1 {
+			return exitUsage
+		}
+		if err := agentd.VerifyOriginalHome(ctx); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return exitFailure
+		}
+		return exitOK
 	case "hold":
 		if len(args) > 1 {
 			_, _ = fmt.Fprintf(stderr, "%s: hold takes no arguments, got %q\n", binaryName, args[1:])

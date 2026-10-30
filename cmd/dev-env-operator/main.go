@@ -50,6 +50,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
+	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/podexec"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
@@ -88,6 +89,7 @@ func main() {
 }
 
 type options struct {
+	originalHome                  *homeguard.Binding
 	directoryEnabled              bool
 	directoryProjects             []string
 	metadataDiscoveryProjects     []string
@@ -168,6 +170,14 @@ func parseFlags(args []string) (options, error) {
 	}
 	var o options
 	fs := flag.NewFlagSet(binaryName, flag.ContinueOnError)
+	fs.Func("original-home-binding", "default-off exact original HOME JSON tuple; restricts existing lifecycle only", func(raw string) error {
+		if o.originalHome != nil {
+			return errors.New("only one original HOME binding is supported")
+		}
+		b, err := homeguard.Parse(raw)
+		o.originalHome = b
+		return err
+	})
 	fs.StringVar(&o.sessionNamespace, "session-namespace", "dev-agents", "namespace of the AgentSessions and their pods and volumes (D-02)")
 	fs.StringVar(&o.templatesNamespace, "templates-namespace", ownNamespace, "namespace of the templates ConfigMap; the leader-election Lease lives there too")
 	fs.StringVar(&o.templatesName, "templates-name", templates.DefaultName, "name of the templates ConfigMap (D-04)")
@@ -651,6 +661,7 @@ func run(args []string) error {
 		ManagedChildDecisions:       o.managedChildDecisions,
 		ManagedChildDecisionParents: decisionParents,
 		APIReader:                   mgr.GetAPIReader(),
+		OriginalHome:                o.originalHome,
 		Rescuer:                     rescuer,
 		WorkspaceStopper:            rescuer,
 		Recorder:                    mgr.GetEventRecorder(binaryName),
@@ -760,6 +771,7 @@ func run(args []string) error {
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
 			NativeOwnerControl: nativeControl,
 			Live:               mgr.GetAPIReader(),
+			OriginalHome:       o.originalHome,
 			Auth:               apiserver.TokenReviewer{Client: mgr.GetClient()},
 			Policy: apiserver.Policy{
 				Human:                   o.humanSA,

@@ -15,6 +15,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/commonrules"
+	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/taskbudget"
@@ -284,6 +285,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_RETAINED_COMMON_RULES", Value: fmt.Sprint(s.Spec.CommonRules != nil && !hold)})
 	// Controller-owned deadline and feature gates follow template/profile env.
 	env = append(env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: budgetEnv})
+	env = append(env, corev1.EnvVar{Name: homeguard.Env, Value: ""})
 	// Controller-owned feature gate cannot be widened by template/profile env.
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: fmt.Sprint(childDecisions && managedCodex && !hold && s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace != nil)})

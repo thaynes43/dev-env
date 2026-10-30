@@ -60,6 +60,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
+	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
@@ -71,6 +72,7 @@ import (
 
 // Server holds the API's handlers and what they read and write.
 type Server struct {
+	OriginalHome *homeguard.Binding // nil leaves original-HOME admission off
 	// PortalConversationTargets is an explicit Session UID to name read scope; nil disables it.
 	PortalConversationTargets map[string]string
 	// PortalMessageTargets is an explicit session-name to immutable UID action scope. Nil disables the command endpoint.

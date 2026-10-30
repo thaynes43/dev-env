@@ -10,6 +10,8 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/homeguard"
 )
 
 // Suspend and resume (DESIGN-001 3.4, D-60). Each sets spec.operatingMode, the
@@ -66,14 +68,28 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 				"session %s was archived at %s: its volume is gone, so a resume would start its task again on a new one; restore it from its bundle instead (D-62)",
 				sess.Name, sess.Status.ArchivedAt.UTC().Format("2006-01-02T15:04:05Z"))
 		}
+		var binding *homeguard.Binding
+		if mode == v1alpha1.OperatingModeRunning {
+			var guardErr error
+			binding, guardErr = homeguard.Select(s.OriginalHome, sess.Namespace, sess.Name, string(sess.UID), sess.Annotations)
+			if guardErr != nil || binding != nil && controller.CheckOriginalHome(ctx, s.Live, &sess, binding, false) != nil {
+				return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "original HOME binding is unavailable, changed or unsafe; preserve HOME")
+			}
+		}
 		cur := sess.Spec.OperatingMode
 		if cur == "" {
 			cur = v1alpha1.OperatingModeRunning
 		}
-		if cur == mode {
+		if cur == mode && (binding == nil || sess.Annotations[homeguard.Annotation] == binding.String()) {
 			return http.StatusOK, view(&sess, false), nil
 		}
 		orig := sess.DeepCopy()
+		if binding != nil {
+			if sess.Annotations == nil {
+				sess.Annotations = map[string]string{}
+			}
+			sess.Annotations[homeguard.Annotation] = binding.String()
+		}
 		sess.Spec.OperatingMode = mode
 		if mode == v1alpha1.OperatingModeSuspended {
 			if sess.Annotations == nil {
