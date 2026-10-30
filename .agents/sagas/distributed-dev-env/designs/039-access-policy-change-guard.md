@@ -3,9 +3,13 @@
 - **Status:** Proposed, 2026-10-30. Design only; no activation or decision.
 - **Tracking:** OpenProject [#269](https://work.haynesnetwork.com/work_packages/269),
   Epic [#112](https://work.haynesnetwork.com/work_packages/112), Saga #85.
-- **Work order:** POLICY269-GUARD-DESIGN-20261030-01.
+- **Work orders:** POLICY269-GUARD-DESIGN-20261030-01;
+  docs fixes POLICY269-GUARD-DESIGN-FIX-20261030-02.
 - **Source examined:** dev-env `9377637b8a1f253521118af6d2f934d7dbf27a3a`;
   haynes-ops `8d841940d3e64d447ee2272dad81554b87d28e63`, read only.
+  Fix-round configuration and history checks: haynes-ops
+  `a84481c28ed5dee9e17b98a32a96389bda14126a`; dev-env history
+  `23163d265013f529512324c8363f08a59ceb22a0`.
 - **Related:** [DESIGN-034](034-agent-asks-and-approvals-board.md),
   [DESIGN-036](036-standing-rules.md),
   [ADR-011](../adrs/011-standing-rules-as-policy-asks.md), all read on main.
@@ -17,6 +21,11 @@ to review every deployment. An agent cannot use the repository's delivery
 identity to grant itself more access or disable the controls that stop it.
 An approved administrative action remains possible, including a reviewed
 change to those controls.
+
+A separate delivery service would merge ordinary deployments automatically.
+Changes that widen access or weaken a guard would need verified consent for
+the exact change. The service and its keys must sit outside what an ordinary
+agent can replace.
 
 Tom's direction is recorded in **#261 journal 2828**, 2026-10-30:
 
@@ -87,7 +96,8 @@ platform's other controls; those do not establish verified human consent.
 | **Legacy GrantPolicy:** [policies][policies], [policy Kustomization][policy-ks], [matcher](../../../../internal/broker/match.go), [schema](../../../../api/v1alpha1/accessgrant_types.go) | Add a legacy policy or broaden requester profiles/repos, targets, roles, ports or TTL. Replacing an attested variant with legacy selectors can remove the attestation prerequisite. The broker then matches a later request. | The broker reads policies, and schema/matcher exclude some dangerous scopes. They do not require a portal consent digest for ordinary policies. This is DESIGN-036 SR6's recorded bypass. D-88 attestation is an agent claim, not verified human consent. |
 | **RBAC roles and bindings:** [agent role/bindings][agent], [catalog][catalog], [broker RBAC][broker-rbac], [workbench RBAC][workbench] | Add verbs or subjects; widen namespaces; add bind, escalate or impersonate authority; change a role already referenced by a binding. Aggregated ClusterRoles can gain permissions without changing that binding. | The baseline cannot write RBAC directly. Flux can deliver its desired RBAC. Mutable catalog roles affect existing grants too; checking only a GrantPolicy digest misses this path (DESIGN-036 SR-K). |
 | **Egress:** [platform tier][platform], [web tier][web], [broker policy builder](../../../../internal/egress/policy.go) | Add a namespaced CiliumNetworkPolicy or cluster-wide allow, broaden selectors/destinations/ports, or alter labels that select a tier. Additive allows can open a route without editing the original restriction. | Broker-owned policies have ownership checks. A separately applied allow or changed baseline need not be broker-owned. Protect CNP, CCNP, ordinary NetworkPolicy, relevant identity labels and both sides of a permitted connection. |
-| **Admission guards:** [dev-env-agent-guard][agent-guard], [dev-env-identity-guard][identity-guard], [broker guard][broker-guard], [exec guard][exec-guard] | Remove a binding or policy, change a subject/namespace exclusion, relax validation, change failure behavior, or replace the enforcing component. DELETE/prune matters as much as CREATE/UPDATE. | The CEL guards match specific Kubernetes callers; Flux is not the session caller. They do not turn an agent-authored Git change into a session API request. API-managed VAPs also cannot protect their own policy/binding kinds; see §3. |
+| **Admission guards:** [dev-env-agent-guard][agent-guard], [dev-env-identity-guard][identity-guard], [broker guard][broker-guard], [exec guard][exec-guard], [Kyverno RBAC policy][kyverno-rbac], [pod baseline][kyverno-pss], [RBAC exceptions][kyverno-rbac-exceptions], [pod exceptions][kyverno-pss-exceptions] | Remove a binding or policy, change a subject/namespace exclusion, relax validation, change failure behavior, or replace the enforcing component. DELETE/prune matters as much as CREATE/UPDATE. Add a PolicyException in kyverno or a name to exceptions/rbac-legit.yaml; switch a rule to Audit; rely on the RBAC-escalation webhook's fail-open `failurePolicy: Ignore`. | Kyverno already enforces RBAC-escalation and pod-security baselines on what Flux applies, but its policies and exceptions arrive by the same unreviewed path. Its RBAC policy covers cluster-admin/admin/edit/controller bindings and wildcard/escalate/bind/impersonate roles. The CEL guards match specific Kubernetes callers; Flux is not the session caller. API-managed VAPs also cannot protect their own policy/binding kinds; see §3. |
+| **Secrets: ClusterSecretStore:** [onepassword-connect][cluster-secret-store] | Add an ExternalSecret in any namespace naming any item the store reads, and use it in a workload the agent controls. | The store sets no namespace conditions. Agents cannot read Secrets via the API, but a merged workload can. New ExternalSecret references and Secret consumers are credential-access changes. |
 | **Session profiles and templates:** [templates][templates], [ConfigMap generator][template-generator], [controller construction](../../../../internal/controller/pod.go) | Change effective serviceAccount, secret/env/mount references, default profile, egress labels or the agent image. A stronger identity or credential mount can be supplied without changing a grant. | Strict template parsing protects shape and owned paths, not consent to a valid but more powerful profile. Full is the default; workbench names a different ServiceAccount and mounts additional material. Future session construction and any adoption/drain effects need separate review. |
 | **Broker and other authority services:** [broker HelmRelease][broker-config], [broker RBAC][broker-rbac], [keeper credential RBAC][keeper-credentials], [operator HelmRelease][operator-config] | Change a feature flag, policy source/namespace, credential source, service identity, command, config or image to bypass the expected verifier. Similar risks apply to the portal answerer, keeper and a future merger/checker. | A signed image proves publication provenance, not that its behavior has approved authority. A new enforcing binary or a downgrade can bypass a configuration-only check. Code and dependency changes across repositories enter through the deployed artifact digest. |
 | **Flux and render inputs:** [GitRepository/cluster][flux-source], [cluster-apps][flux-apps], [controller config][flux-config], [RBAC Kustomization][rbac-ks] | Change a source/ref/path, impersonated identity, patch, generator, substitution, chart or dependency. Move a protected object to an ordinary app directory; make a chart create it; remove it from inventory so prune deletes a guard. | Flux follows haynes-ops main. The inspected Kustomizations do not set `serviceAccountName`; this inspection did not prove the controllers' installed effective RBAC. Protect the entire apply chain, not just `grant-policies/`. |
@@ -106,11 +116,11 @@ commitments. Every option needs protection for its own configuration and updates
 
 | Option | Security | Routine-deploy friction | Effort and limit |
 |---|---|---|---|
-| **A. Path-scoped rulesets and a separate merger identity** | Strong for an exhaustive protected path set when GitHub enforces the identity split. Weak against new paths, charts and generated objects unless paired with rendered-object checks. | Ordinary paths can keep automated delivery. Protected proposals go through the merger; Tom need not review unrelated apps. | Medium. GitHub branch rules select refs, not a conditional security review by file path. Documented push rules restrict paths in private/internal repositories and affect every push, including proposal branches. Haynes-ops is public, so do not assume this primitive is available here. Qualify plan/API capabilities before choosing it. |
+| **A. Path-scoped rulesets and a separate merger identity** | Strong for an exhaustive protected path set when GitHub enforces the identity split. Weak against new paths, charts and generated objects unless paired with rendered-object checks. | Ordinary paths can keep automated delivery. Protected proposals go through the merger; Tom need not review unrelated apps. | Medium. GitHub's one path-conditional review is [code-owner review][github-codeowners], which needs a user account or team with write access; journal 2828 rules out CODEOWNERS and Tom-only review, so it is excluded. Otherwise branch rules select refs, not file paths. Documented push rules restrict paths in private/internal repositories and affect every push, including proposal branches. haynes-ops is public, so do not assume this primitive is available here. Qualify plan/API capabilities before choosing it. |
 | **B. Admission or Flux-side gate: consent digest or pinned policy objects** | Stops unapproved effective objects even if a PR merges. A trusted reviewed pin can preserve exact legacy policy objects; new managed rules require verified portal consent. Must cover deletes, controller-produced objects and guard updates too. | Existing approved objects reconcile normally. Only changed authority waits. A failed verifier blocks that authority change, not unrelated app reconciliation. | High. Requires isolated apply identities and a root ordinary Flux cannot edit. A pin stored beside freely editable manifests is not a root. A broker-only check closes GrantPolicy matching, not RBAC/network/profile bypasses. |
 | **C. CI policy-diff gate keyed to recorded approval** | Good early explanation and exact diff checks if the producer and required-check configuration are independent. A workflow/script editable by the same bot, an author exemption or path-only diff is insufficient. | Most routine PRs pass automatically. Authority changes show the missing consent and exact scope. | Medium for the classifier, high for credible isolation/render coverage. Main currently requires no checks. Required App-bound status and merger enforcement must be installed separately; this design adds neither. |
 | **D. Separate policy repository** | A useful ownership and release boundary if ordinary agents cannot merge there and ordinary Flux cannot apply policy objects from anywhere else. A directory move alone closes nothing. | Routine apps remain in haynes-ops. Policy releases have their own consent and delivery flow; cross-repo changes need coordinated versions. | High migration and operations cost. Protect haynes-ops source refs, policy-repo pins, trust keys and root-controller configuration or the agent can redirect the source. |
-| **E. Kyverno or ValidatingAdmissionPolicy on policy CRs** | Useful for GrantPolicy shape, allowed compiler identity, immutable role versions, references and narrowly specified invariants. Applies regardless of Git file path. | Known valid policy updates and ordinary workloads pass without human review. | Medium for bounded checks. CEL is not a general external-consent client or arbitrary graph/digest engine. Kyverno adds webhook/lookup availability and RBAC dependencies. Neither protects every admission control object or its own deploy root. Pair with B and protected delivery. |
+| **E. Kyverno or ValidatingAdmissionPolicy on policy CRs** | Useful for GrantPolicy shape, allowed compiler identity, immutable role versions, references and narrowly specified invariants. Applies regardless of Git file path. | Known valid policy updates and ordinary workloads pass without human review. | Medium for bounded checks. CEL is not a general external-consent client or arbitrary graph/digest engine. Kyverno is already installed and enforces restrict-rbac-escalation and pod-security-baseline on Flux applies; extending it is cheaper than a new engine, but its fail-open webhook and its PolicyExceptions join the protected root. Neither protects every admission control object or its own deploy root. Pair with B and protected delivery. |
 
 [GitHub's available-rules documentation][github-rules] supports the limits in A;
 no new GitHub plan or repository visibility change is proposed. A separate merger
@@ -148,6 +158,9 @@ no repository-administration or live-cluster credential. Required tests remain
 enforced by separate rules that its update permission cannot waive. General
 agent credentials cannot impersonate it, alter the rule or mint its checks.
 Qualify the actual GitHub App/ruleset behavior before activation.
+Its key is not a GitHub Actions secret in any repository where the shared
+delivery token has workflow write, and not an item the unconditioned
+ClusterSecretStore can deliver to an ordinary namespace.
 
 An agent requests delivery of a PR and exact head. The service checks normal
 CI/review requirements and a trusted policy classifier, then merges a routine
@@ -173,12 +186,28 @@ merger credentials or approval authority is protected even when RBAC is equal.
 Broker/operator/keeper/portal-answerer and enforcement-controller artifacts,
 their trust configuration and deployment inputs belong to that protected set.
 An already approved artifact pin can use routine delivery within its envelope;
-a new enforcing artifact needs consent or a separately qualified release
+a new enforcing artifact needs consent or the qualified G269-1b release
 contract that proves the approved enforcement component is unchanged. A
 signature alone is insufficient. If UI and approval enforcement share an
 artifact, this conservative classification has real release friction; a later
 source story may isolate them. Do not promise every current dev-env image bump
-will automatically qualify as routine.
+will automatically qualify as routine. G269-1b must be built and qualified
+before activation so unchanged enforcement code can keep shipping automatically.
+
+Measured 2026-10-23 to 10-30, using full UTC dates through the source pins
+above: **32 dev-env releases**, **19 operator/broker deployment-file commits**
+(of which **10 changed operator/broker image pins**), and **5 commits touching
+the grant-core paths**. The release contract is part of the recommendation.
+The release count uses GitHub `publishedAt`, from v2.41.0 through v2.68.0.
+The deployment count uses `git log` over the operator and broker HelmRelease
+files; flags, pilot selections and comments explain why it exceeds image-pin
+changes. The grant-core count uses `internal/broker/`, `internal/grantattest/`,
+`internal/egress/`, `internal/grantexpiry/`, `internal/apiserver/grants.go` and
+`internal/apiserver/grant_attestation.go`, including tests and comments. It is
+a narrow friction sample, not the full proposed enforcement source set:
+including the Ask store/handlers and portal answer path raises it to **9**.
+G269-1b must define that full set and its dependencies before classifying a
+release; these counts do not establish that any release is safe.
 
 ### Verified consent for authority changes
 
@@ -310,16 +339,18 @@ prerequisites, budget and stop criteria. Propose one worker, about 1–2 hours
 per source slice with a 90-minute checkpoint; split anything that does not fit.
 Token/API cost is Unknown. No concurrency is assumed between shared schemas,
 root configuration or controller identities. Only isolated fixtures may proceed
-in parallel after their contracts are fixed.
+in parallel after their contracts are fixed. G269-1 and G269-3 are expected
+to need two or more slices each; split them at pickup.
 
 | Slice / serial prerequisites | Source-only deliverable and acceptance |
 |---|---|
-| **G269-1 — authority inventory and renderer contract**; design review | Bounded typed inventory of protected kinds, authority workloads, transitive inputs and known deployment envelopes. Pin and compare rendered old/new sets across Kustomize, Helm and substitutions; unknown inputs require review. Fixtures detect moved/new files, additional policies, CRDs, aggregated RBAC, prune and chart-generated controls. Include safe ordinary-app positive cases and service-account/secret/label changes. No merge/apply integration. |
+| **G269-1 — authority inventory and renderer contract**; design review | Bounded typed inventory of protected kinds, authority workloads, transitive inputs and known deployment envelopes. Pin and compare rendered old/new sets across Kustomize, Helm and substitutions; unknown inputs require review. Fixtures detect moved/new files, additional policies, CRDs, aggregated RBAC, ExternalSecret/SecretStore references, prune and chart-generated controls. Include safe ordinary-app positive cases and service-account/secret/label changes. No merge/apply integration. |
+| **G269-1b — enforcing-artifact release contract**; G269-1 | Define the enforcement source set (broker, grantattest, egress, grant and Ask-answer handlers, portal answer path), including transitive code, dependencies and build inputs. Bind a signed digest to its source commit and diff that set against the last approved digest's commit using trusted build provenance. Unchanged: routine within the existing deployment envelope. Changed or unknown provenance: consent. Fixtures: portal-only presentation and agentd-only releases with unchanged enforcement inputs stay routine; a broker change or a missing commit annotation needs consent. Source only. Qualify before activation. |
 | **G269-2 — approval/digest adapter**; G269-1 contract, DESIGN-034/F2 authority and audit contract; DESIGN-036 for rule semantics | Exact canonical approval envelope and authoritative verifier with expiry, epoch, revocation, group provenance, CAS reservation and Unknown/reconciliation semantics. Tests refuse D-88 claims, free-text answers, spoofed actors, changed role/dependency digests, changed base/head, replay and restored consent. No generic executor or policy writer; default off. |
-| **G269-3 — isolated merger and required-check producer**; G269-1/2 | Implement a narrow service and offline GitHub adapter plus proposed admin-owned settings, without creating an App or installing rules. Every author and every PR gets the same exact-merge-result check. Tests show routine delivery needs no new human approval, widening requires consent, PR code cannot mint/check/replace the service, and missing checks fail closed. Prove no direct-push or check-bypass entitlement in the proposed role split. No live merge. |
-| **G269-4 — restricted apply and local validation**; G269-1/2; fixed G269-3 trust root | Source manifests and finite API/admission fixtures for separated Kustomize/Helm identities, protected root updates and policy-CR invariants. Cover arbitrary path/chart RBAC, CNP/CCNP, GrantPolicy, template privilege, guard deletion/prune, alternate controller/impersonation and self-update. Prove ordinary identities cannot change API-exempt admission configuration; do not claim VAP self-protection. No cluster installation. Split controller and admission work into separately owned stories if needed. |
+| **G269-3 — isolated merger and required-check producer**; G269-1, G269-1b and G269-2 | Implement a narrow service and offline GitHub adapter plus proposed admin-owned settings, without creating an App or installing rules. Every author and every PR gets the same exact-merge-result check. Tests show routine delivery needs no new human approval, widening requires consent, PR code cannot mint/check/replace the service, and missing checks fail closed. Prove no direct-push or check-bypass entitlement in the proposed role split. No live merge. |
+| **G269-4 — restricted apply and local validation**; G269-1/2; fixed G269-3 trust root | Source manifests and finite API/admission fixtures for separated Kustomize/Helm identities, protected root updates and policy-CR invariants. Cover arbitrary path/chart RBAC, CNP/CCNP, GrantPolicy, template privilege, Kyverno policy/PolicyException changes, ExternalSecret references and Secret consumers, guard deletion/prune, alternate controller/impersonation and self-update. Prove ordinary identities cannot change API-exempt admission configuration; do not claim VAP self-protection. No cluster installation. Split controller and admission work into separately owned stories if needed. |
 | **G269-5 — legacy baseline, admin and recovery contract**; G269-1/2/4; owner choices below | Produce an inspectable baseline candidate from pinned source, not a live approval. Bind catalog roles and dependencies; mark attested/legacy provenance honestly. Define typed admin scope, one-use/TTL/revoke/audit and human-held recovery custody with refusal fixtures. Positive fixtures retain useful admin and ordinary deployment cases; negative ones reject standing bypasses. No credential enrollment, migration, live probe or automatic rights removal. |
-| **G269-6 — activation review packet**; source slices independently reviewed, required CI; signed artifacts where applicable | Source-only packet names exact ruleset/App permissions, images, root bundle, schema/guards, apply identities, every affected workflow, preservation/rollback plan and bounded disposable tests. Verify an ordinary deployment and an approved admin case are both feasible. Identify shared-image release friction. Tom reviews the exact activation scope; no settings, GitOps activation merge or runtime change before that review and explicit authorization. |
+| **G269-6 — activation review packet**; source slices independently reviewed, required CI; signed artifacts where applicable | Source-only packet names exact ruleset/App permissions, images, root bundle, schema/guards, apply identities, every affected workflow, preservation/rollback plan and bounded disposable tests. Verify an ordinary deployment and an approved admin case are both feasible. Verify G269-1b keeps releases with unchanged enforcement code routine. Activation needs one new GitHub App for the merger and check producer, and its key custody: the only new credential this design foresees. Tom reviews the exact activation scope; no settings, GitOps activation merge or runtime change before that review and explicit authorization. |
 | **G269-7 — later installed/usable evidence**; separately authorized G269-6 activation, qualified Asks path and SR prerequisites | A new story first prepares source-only trial definitions. Execution remains held for Tom. On authorization, prove routine deployment without a fresh approval, denied self-widening through every matrix row, one exact consented policy change, an approved admin action, revocation/expiry/restore/downgrade refusal and isolated verifier outage. Record exact heads/digests, installed identities and observed effects. No v1 restart or valuable session as a fixture. |
 
 Use fake clocks and deterministic race tests. No CPU burners, stress or wide
@@ -336,7 +367,9 @@ fixed. Activation must preserve existing explicit holds and running sessions.
 
 **Q-269-NN have not been delivered.** The lead owns later delivery one at a
 time through its verified route. This work order records them only. None
-reopens or answers Q-261-04/05/06, Q-255-01 or another existing hold.
+reopens Q-261-05/06, Q-255-01 or another hold. Journal 2828 answered
+Q-261-04 part 2. Q-269-01 generalizes the still-open Q-261-04 part 1;
+ask them together.
 
 | ID | Question and recommendation | Alternative / dependent gate |
 |---|---|---|
@@ -344,12 +377,14 @@ reopens or answers Q-261-04/05/06, Q-255-01 or another existing hold.
 | **Q-269-02** | Where should the merger and apply root bundle live so ordinary agents cannot replace it? Recommend an independently administered pinned root first; choose a separate policy repository if that isolation cannot be demonstrated in the existing layout. | Separate policy repository from the outset. Settle trust custody before either merge or apply enforcement is activated. A new repo/account is not authorized by this recommendation. |
 | **Q-269-03** | Who may approve authority changes and invoke admin recovery? Recommend the explicitly configured policy-admin capability with fresh portal group/resource checks, plus a separately human-controlled audited recovery path. | Tom alone initially for root updates, with later scoped delegation. Reconcile Q-261-01 and F2 authority without assuming ordinary portal login conveys policy-admin rights. Activation waits for the choice. |
 | **Q-269-04** | May exact reviewed legacy policy and role digests form the initial baseline without changing existing use? Recommend yes, after an explicit inventory review; additions or widening require new verified consent. | Migrate each legacy policy to a managed rule before enforcement. Neither option silently removes existing approved access or upgrades agent attestation into human verification. Holds baseline activation and SR6 integration. |
-| **Q-269-05** | Should new enforcing images be protected until a qualified release contract proves their enforcement component unchanged? Recommend yes; ordinary app images and already approved enforcing pins remain automatic within their envelope. | First split UI/rendering from approval enforcement to reduce policy-review frequency. Measure actual dev-env release friction before activation; signatures alone cannot approve new authority behavior. |
+| **Q-269-05** | Should new enforcing images be protected until a qualified release contract proves their enforcement component unchanged? Recommend yes, with G269-1b built before activation, so releases that leave enforcement code unchanged stay automatic. Ordinary app images and already approved enforcing pins remain automatic within their envelope. | First split UI/rendering from approval enforcement to reduce policy-review frequency. Use the measured release friction in §4 to qualify G269-1b before activation; signatures alone cannot approve new authority behavior. |
 
 ## 7. Source links
 
-Haynes-ops links below use the inspected immutable main commit. Names and paths
-come from repository source; no additional operational endpoints are introduced.
+haynes-ops links below use the inspected immutable main commits. Kyverno and
+ClusterSecretStore links use the fix-round pin; the others retain the original
+inspection pin. Names and paths come from repository source; no additional
+operational endpoints are introduced.
 
 [main-rules]: https://api.github.com/repos/thaynes43/haynes-ops/rules/branches/main
 [main-ruleset]: https://github.com/thaynes43/haynes-ops/rules/14013135
@@ -378,3 +413,10 @@ come from repository source; no additional operational endpoints are introduced.
 [github-rules]: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
 [vap-limits]: https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-admission-policy-v1/
 [flux-impersonation]: https://fluxcd.io/flux/components/kustomize/kustomizations/#role-based-access-control
+
+[kyverno-rbac]: https://github.com/thaynes43/haynes-ops/blob/a84481c28ed5dee9e17b98a32a96389bda14126a/kubernetes/main/apps/kyverno/policies/app/restrict-rbac-escalation.yaml
+[kyverno-pss]: https://github.com/thaynes43/haynes-ops/blob/a84481c28ed5dee9e17b98a32a96389bda14126a/kubernetes/main/apps/kyverno/policies/app/pod-security-baseline.yaml
+[kyverno-rbac-exceptions]: https://github.com/thaynes43/haynes-ops/blob/a84481c28ed5dee9e17b98a32a96389bda14126a/kubernetes/main/apps/kyverno/policies/app/exceptions/rbac-legit.yaml
+[kyverno-pss-exceptions]: https://github.com/thaynes43/haynes-ops/blob/a84481c28ed5dee9e17b98a32a96389bda14126a/kubernetes/main/apps/kyverno/policies/app/exceptions/pss-baseline.yaml
+[cluster-secret-store]: https://github.com/thaynes43/haynes-ops/blob/a84481c28ed5dee9e17b98a32a96389bda14126a/kubernetes/main/apps/external-secrets/external-secrets/stores/clustersecretstore.yaml
+[github-codeowners]: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
