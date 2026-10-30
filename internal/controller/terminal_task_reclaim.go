@@ -365,7 +365,11 @@ func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alph
 		if legacyTaskProof(s) {
 			var pod corev1.Pod
 			if err := r.Client.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
-				r.terminalTaskReclaimCondition(s, "ProofUnknown", "legacy executor observation unavailable")
+				detail := "legacy executor observation unavailable"
+				if apierrors.IsNotFound(err) {
+					detail = "legacy executor Pod is absent; the usage proof cannot bind a live executor"
+				}
+				r.terminalTaskReclaimCondition(s, "ProofUnknown", detail)
 				return ctrl.Result{}, false, nil
 			}
 			if err := legacyTaskPodProof(s, &pod, r.clock()); err != nil {

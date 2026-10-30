@@ -50,6 +50,45 @@ func storedLegacyHOME(t *testing.T, c client.Reader, f terminalFixture) *corev1.
 	return &home
 }
 
+// legacyRefusalMessages names the check each ProofUnknown row must hit.
+var legacyRefusalMessages = func() map[string]string {
+	m := map[string]string{}
+	for msg, rows := range map[string][]string{
+		"original provider exit and task result are unproved, or work is active": {
+			"agentd-2.71", "agentd-newer", "agentd-development-2.71", "agentd-unparseable", "agentd-wrong-format",
+			"missing-task", "not-exited", "attached",
+		},
+		"legacy executor image is not provably older than 2.71.0":         {"image-2.71", "image-newer", "image-unparseable", "image-digest-only"},
+		"legacy provider exit lacks an unconflicted pre-2.71 usage proof": {"spawn-failure", "missing-usage", "usage-conflict"},
+		"provider exit does not bind this Session, executor and attempt": {
+			"future-finish", "missing-finish", "source-session", "source-last-executor", "source-provider", "source-model", "empty-attempt",
+		},
+		"legacy usage proof does not bind the live executor":                 {"source-live-pod"},
+		"task result and retained original attempt contradict or lack proof": {"observed-finish-mismatch"},
+		"legacy executor heartbeat is missing, future or older than two minutes": {
+			"stale-heartbeat", "missing-heartbeat", "future-heartbeat",
+		},
+		"legacy executor has a restarted container":              {"main-restart", "sidecar-restart", "init-restart", "terminal-restart"},
+		"legacy executor container restart count is unavailable": {"unknown-restarts"},
+	} {
+		for _, row := range rows {
+			m[row] = msg
+		}
+	}
+	return m
+}()
+
+// terminateLegacyPod marks the fixture executor as ended by the kubelet.
+func terminateLegacyPod(pod *corev1.Pod, at time.Time) {
+	pod.Status.Phase, pod.Status.Reason = corev1.PodFailed, "DeadlineExceeded"
+	for i := range pod.Status.ContainerStatuses {
+		pod.Status.ContainerStatuses[i].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 143, FinishedAt: metav1.NewTime(at)}}
+	}
+	for i := range pod.Status.InitContainerStatuses {
+		pod.Status.InitContainerStatuses[i].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{FinishedAt: metav1.NewTime(at.Add(-time.Hour))}}
+	}
+}
+
 func TestLegacyTerminalTaskReclaimProofTable(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -120,6 +159,16 @@ func TestLegacyTerminalTaskReclaimProofTable(t *testing.T) {
 		{"sidecar-restart", func(f *terminalFixture, _ *Reconciler) { f.pod.Status.ContainerStatuses[1].RestartCount = 1 }, "ProofUnknown"},
 		{"init-restart", func(f *terminalFixture, _ *Reconciler) { f.pod.Status.InitContainerStatuses[0].RestartCount = 1 }, "ProofUnknown"},
 		{"unknown-restarts", func(f *terminalFixture, _ *Reconciler) { f.pod.Status.InitContainerStatuses = nil }, "ProofUnknown"},
+		// A terminal executor runs no work, so its heartbeat may be old; restarts still refuse.
+		{"accept-terminal-stale-heartbeat", func(f *terminalFixture, _ *Reconciler) {
+			terminateLegacyPod(f.pod, f.now.Add(-10*time.Minute))
+			f.s.Status.Agent.LastHeartbeat.Time = f.now.Add(-10 * time.Minute)
+		}, ""},
+		{"terminal-restart", func(f *terminalFixture, _ *Reconciler) {
+			terminateLegacyPod(f.pod, f.now.Add(-10*time.Minute))
+			f.s.Status.Agent.LastHeartbeat.Time = f.now.Add(-10 * time.Minute)
+			f.pod.Status.ContainerStatuses[0].RestartCount = 1
+		}, "ProofUnknown"},
 		{"reaping", func(f *terminalFixture, _ *Reconciler) {
 			f.s.DeletionTimestamp = &metav1.Time{Time: f.now}
 			meta.SetStatusCondition(&f.s.Status.Conditions, metav1.Condition{Type: ConditionTerminalTaskReclaim, Status: metav1.ConditionTrue, Reason: "Grace", Message: "fixture"})
@@ -172,6 +221,10 @@ func TestLegacyTerminalTaskReclaimProofTable(t *testing.T) {
 				cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim)
 				if tc.reason == "" && cond != nil || tc.reason != "" && (cond == nil || cond.Reason != tc.reason) {
 					t.Fatalf("condition: %+v, want %q", cond, tc.reason)
+				}
+				// ProofUnknown is shared by many checks; the message pins the one that refused.
+				if want, ok := legacyRefusalMessages[tc.name]; ok && !strings.Contains(cond.Message, want) {
+					t.Fatalf("refused by the wrong check: %q, want %q", cond.Message, want)
 				}
 				if tc.name == "flag-off" {
 					want := "owner=" + s.Name + "; deadline=unknown; original provider exit and task result are unproved, or work is active; original HOME, history and outcome retained"
@@ -412,5 +465,101 @@ func TestLegacyTerminalTaskReclaimStopAndDeletePreservesHOME(t *testing.T) {
 			}
 			assertLegacyHOMEUnchanged(t, base, home)
 		})
+	}
+}
+
+// A legacy executor that ended on its own (eviction, deadline) before any
+// stop is still bound by its usage proof: recorded, then removed once the
+// whole-executor terminal record exists. Its stale heartbeat does not block it.
+func TestLegacyTerminalTaskSelfEndedPodIsReclaimed(t *testing.T) {
+	f := legacyTerminalTaskFixture(false)
+	terminateLegacyPod(f.pod, f.now.Add(-10*time.Minute))
+	f.s.Status.Agent.LastHeartbeat.Time = f.now.Add(-10 * time.Minute)
+	base := f.client()
+	home := storedLegacyHOME(t, base, f)
+	r := terminalTaskReconciler(f, base, base)
+	r.LegacyTerminalTaskReclaim = true
+	now := f.now
+	r.Now = func() time.Time { return now }
+	reconcileSession(t, r, f.s, 3)
+	if storedHistory(t, base, f.s).Status.PrivateHistory.TaskTerminal == nil {
+		t.Fatal("self-ended legacy executor was not recorded")
+	}
+	now = now.Add(5 * time.Minute)
+	lease := f.lease.DeepCopy()
+	lease.Spec.RenewTime.Time = now.Add(-time.Second)
+	if err := base.Update(context.Background(), lease); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSession(t, r, f.s, 4)
+	var pod corev1.Pod
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); !apierrors.IsNotFound(err) {
+		t.Fatal("self-ended legacy executor retained", err)
+	}
+	got := storedHistory(t, base, f.s)
+	if cond := meta.FindStatusCondition(got.Status.Conditions, ConditionTerminalTaskReclaim); !executorTerminalRecorded(got.Status.PrivateHistory) ||
+		cond == nil || cond.Reason != "Reclaimed" {
+		t.Fatalf("self-ended legacy outcome: %+v", got.Status)
+	}
+	assertLegacyHOMEUnchanged(t, base, home)
+}
+
+// Without a whole-executor terminal record (here the node lease is stale), a
+// terminal legacy executor is kept; the missing heartbeat is not the proof.
+func TestLegacyTerminalTaskKeepsTerminalPodWithoutRecord(t *testing.T) {
+	f := legacyTerminalTaskFixture(false)
+	base := f.client()
+	home := storedLegacyHOME(t, base, f)
+	r := terminalTaskReconciler(f, base, base)
+	r.LegacyTerminalTaskReclaim = true
+	now := f.now
+	r.Now = func() time.Time { return now }
+	reconcileSession(t, r, f.s, 3)
+	now = now.Add(time.Minute)
+	reconcileSession(t, r, f.s, 3)
+	var pod corev1.Pod
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); err != nil || pod.Spec.ActiveDeadlineSeconds == nil {
+		t.Fatal("legacy stop was not requested", err)
+	}
+	terminateLegacyPod(&pod, now)
+	if err := base.Status().Update(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(5 * time.Minute)
+	lease := f.lease.DeepCopy()
+	lease.Spec.RenewTime.Time = now.Add(-time.Hour)
+	if err := base.Update(context.Background(), lease); err != nil {
+		t.Fatal(err)
+	}
+	reconcileSession(t, r, f.s, 4)
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); err != nil {
+		t.Fatal("terminal legacy executor without a terminal record was removed", err)
+	}
+	got := storedHistory(t, base, f.s)
+	if cond := meta.FindStatusCondition(got.Status.Conditions, ConditionTerminalTaskReclaim); executorTerminalRecorded(got.Status.PrivateHistory) ||
+		cond == nil || cond.Reason == "Reclaimed" {
+		t.Fatalf("unrecorded terminal executor settled: %+v", cond)
+	}
+	assertLegacyHOMEUnchanged(t, base, home)
+}
+
+// A legacy Session whose executor Pod is already gone says so plainly and
+// records nothing: the usage proof binds a live executor only.
+func TestLegacyTerminalTaskAbsentPodSaysSo(t *testing.T) {
+	f := legacyTerminalTaskFixture(false)
+	base := f.client()
+	if err := base.Delete(context.Background(), f.pod.DeepCopy()); err != nil {
+		t.Fatal(err)
+	}
+	r := terminalTaskReconciler(f, base, base)
+	r.LegacyTerminalTaskReclaim = true
+	s := storedHistory(t, base, f.s)
+	if _, _, err := r.reconcileTerminalTaskReclaim(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim)
+	if s.Status.PrivateHistory.TaskTerminal != nil || cond == nil || cond.Reason != "ProofUnknown" ||
+		!strings.Contains(cond.Message, "legacy executor Pod is absent") {
+		t.Fatalf("absent legacy executor: %+v", cond)
 	}
 }
