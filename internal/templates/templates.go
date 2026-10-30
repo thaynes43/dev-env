@@ -31,6 +31,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/homeguard"
 )
 
 const (
@@ -70,7 +71,10 @@ var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants
 // supply them. The exception is CLAUDE_CODE_OAUTH_TOKEN outside task and local
 // mode: an empty value is not the same as an unset one to every program, so the
 // operator leaves it out there, and agentd's remote mode unsets it (plan 03).
+// The original-HOME binding is also omitted when unused to preserve legacy Pod
+// bytes; it is reserved in explicit template env, but not masked in envFrom.
 var ReservedEnv = []string{
+	homeguard.Env,
 	"AGENTD_ENABLE_RETAINED_COMMON_RULES",
 	"HOME",
 	"XDG_RUNTIME_DIR",

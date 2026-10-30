@@ -185,6 +185,7 @@ func TestValidateRefuses(t *testing.T) {
 		{"a reserved volume name", "name: config-codex,", "name: home,", `volume name "home" is already used by the operator`},
 		{"session input reserved volume", "name: config-codex,", "name: session-input,", `volume name "session-input" is already used by the operator`},
 		{"common input reserved env", "  - { name: CODEX_HOME, value: /home/dev/.codex }", "  - { name: AGENTD_ENABLE_RETAINED_COMMON_RULES, value: \"true\" }", "AGENTD_ENABLE_RETAINED_COMMON_RULES is set by the operator"},
+		{"original HOME binding in profile env", "      - name: CIGAR_JOURNAL_TOKEN", "      - name: AGENTD_ORIGINAL_HOME_BINDING", "AGENTD_ORIGINAL_HOME_BINDING is set by the operator"},
 		{"session input mount path", "path: /opt/dev-env/config/codex }", "path: /opt/dev-env/session }", "overlaps /opt/dev-env/session"},
 		{"session input mount ancestor", "path: /opt/dev-env/config/codex }", "path: /opt/dev-env }", "overlaps /opt/dev-env/session"},
 		{"the grants volume name", "name: config-codex,", "name: grants,", `volume name "grants" is already used by the operator`},

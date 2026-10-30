@@ -65,7 +65,7 @@ func TestUsage(t *testing.T) {
 	if code, _, errOut := runArgs([]string{"fly"}, nil); code != exitUsage || !strings.Contains(errOut, `unknown command "fly"`) {
 		t.Errorf("unknown: %d %q", code, errOut)
 	}
-	if code, out, _ := runArgs([]string{"help"}, nil); code != exitOK || !strings.Contains(out, "render") {
+	if code, out, _ := runArgs([]string{"help"}, nil); code != exitOK || !strings.Contains(out, "render") || !strings.Contains(out, "home-verify") {
 		t.Errorf("help: %d %q", code, out)
 	}
 }

@@ -44,6 +44,7 @@ Commands:
   hold                     The rescue pod's command (D-55): hold the session
                            volume for the operator's rescue and start nothing
                            (no config, clone, agent or heartbeat), until SIGTERM.
+  home-verify              Verify the original HOME binding before main boot.
   shelf [--history-archive] [--coordination-archive]
                            The shelf pod's command (D-67): check that the shared
                            volume is mounted, then wait until SIGTERM. The

@@ -260,6 +260,9 @@ func parseFlags(args []string) (options, error) {
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" {
 		return o, errors.New("--session-namespace, --templates-namespace and --templates-name must not be empty")
 	}
+	if o.originalHome != nil && o.originalHome.Namespace != o.sessionNamespace {
+		return o, errors.New("--original-home-binding namespace must match --session-namespace")
+	}
 	if o.portalReaderEnabled && o.sessionNamespace != "dev-agents" {
 		return o, errors.New("--enable-portal-reader requires --session-namespace=dev-agents")
 	}
