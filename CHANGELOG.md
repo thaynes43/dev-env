@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.69.0](https://github.com/thaynes43/dev-env/compare/v2.68.0...v2.69.0) (2026-10-30)
+
+
+### Features
+
+* **rc:** Codex project discovery over the pinned app-server protocol (3/3a) ([#691](https://github.com/thaynes43/dev-env/issues/691)) ([35bcd23](https://github.com/thaynes43/dev-env/commit/35bcd233f3adbf07aae870b4cdafe31dec35981f))
+* **rc:** default-off existing-daemon thread and initial handoff ([#696](https://github.com/thaynes43/dev-env/issues/696)) ([34c1e02](https://github.com/thaynes43/dev-env/commit/34c1e02fd8f361a153d4a39ed534d021bcd90171))
+* **rc:** prepare existing-daemon fresh thread creation ([#690](https://github.com/thaynes43/dev-env/issues/690)) ([e325d0c](https://github.com/thaynes43/dev-env/commit/e325d0c1ff32906cc2b4b546f177adaa901da415))
+
+
+### Bug Fixes
+
+* **agentd:** de-flake TestCoordArchiveProcessExecRunsTheRealCommand ([#692](https://github.com/thaynes43/dev-env/issues/692)) ([9a98253](https://github.com/thaynes43/dev-env/commit/9a98253e7d364a29b57e68c004f891cd0d05d86a))
+* **agentd:** keep boot status honest and preserve conversation history ([#704](https://github.com/thaynes43/dev-env/issues/704)) ([9377637](https://github.com/thaynes43/dev-env/commit/9377637b8a1f253521118af6d2f934d7dbf27a3a))
+* **deps:** update module golang.org/x/net to v0.62.0 ([#699](https://github.com/thaynes43/dev-env/issues/699)) ([9e67f78](https://github.com/thaynes43/dev-env/commit/9e67f784930fce14cf18082b53b8e57ca9611b87))
+* guard original HOME identity during Codex remote recovery ([#706](https://github.com/thaynes43/dev-env/issues/706)) ([23163d2](https://github.com/thaynes43/dev-env/commit/23163d265013f529512324c8363f08a59ceb22a0))
+* **portal:** consistent keyboard focus across views ([#707](https://github.com/thaynes43/dev-env/issues/707)) ([e815ddc](https://github.com/thaynes43/dev-env/commit/e815ddcf2b1df45df1c9c893c07e83b76dc724ef))
+* **portal:** preserve aggregate login admission across replicas ([#703](https://github.com/thaynes43/dev-env/issues/703)) ([aad7340](https://github.com/thaynes43/dev-env/commit/aad7340e5e7dcee361f2146147d1e6180f02fefa))
+* **portal:** QA sweep fixes across views ([#693](https://github.com/thaynes43/dev-env/issues/693)) ([3cb1913](https://github.com/thaynes43/dev-env/commit/3cb19139fad2b0e3e2d5c09c6f6ebcdaa831b615))
+
 ## [2.68.0](https://github.com/thaynes43/dev-env/compare/v2.67.0...v2.68.0) (2026-10-30)
 
 
