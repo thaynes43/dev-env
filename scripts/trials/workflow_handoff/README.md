@@ -52,6 +52,35 @@ GOTOOLCHAIN=local CGO_ENABLED=0 go run . \
   --contexts testdata/checkins-contexts.json
 ```
 
+To take a real export in a session pod, run opwork under your own session
+identity. The `opwork` on `PATH` in agent image 2.45.0 predates `checkins`.
+The supported fallback is the pod's own haynes-ops checkout, which has had it
+since haynes-ops #4406:
+
+```bash
+python3 -I ~/repos/haynes-ops/scripts/openproject/opwork.py checkins -o json --limit 20 \
+  > "$XDG_RUNTIME_DIR/checkins.json"
+```
+
+Keep the export in `$XDG_RUNTIME_DIR` and never commit it: it holds live tracker
+text. A page of 20 items is about 14KiB, well inside the 128KiB bound.
+
+Two separate rules apply to such a run. First, an item with no matching context
+stays `unbound` with no intents, so an empty contexts file leaves every item
+unbound. Second, a page after the first (`page > 1`), a page with `has_more`, or
+the owner scope "selected page" is reported as partial, and its recommendations
+are withheld even for bound items. On 2026-10-30 the merged CLI read one real
+export with an empty contexts file and exited 0: every item was unbound, and the
+page was partial. The export came
+from a clean haynes-ops checkout at
+`2611885e77d3a8b6d159c87de9e5e657f6bdd3f6`. That run proves the export shape
+and the refusal path only, on one selected page. It is not a full backlog
+triage, and nothing was executed.
+
+Use your own pod's checkout and your own session identity. Never use another
+session's checkout or credentials. The `opwork` on `PATH` is left as it is, and
+it still works for its existing commands.
+
 The synthetic files above are a complete runnable example. The export is the
 canonical object with `page`, `page_size`, `has_more`, `owner_filter_scope`,
 `owner_match_total`, `total_before_owner_filter`, and `items`. `owner_match_total`
