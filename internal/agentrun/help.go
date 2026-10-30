@@ -13,6 +13,7 @@ Usage:
   agent-run [--repo] <repo> --local [flags]       start an interactive session (a TUI)
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
+  agent-run rc start|status -o json               start or observe a Claude remote launch
   agent-run inbox send|list|read|ack               durable inbox
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
@@ -103,9 +104,36 @@ Exit codes:
      sent, got no confirmed answer and was not repeated. A message or create
      may have taken effect: observe it, do not repeat it. A one-shot request
      exits 5 only when nothing was sent
+  7  rc accepted/pending, timed out with a handle, or owner action required
 `
 
 var commandHelp = map[string]string{
+	"rc": `Usage: agent-run rc start --project P [--repo R] --agent claude --model <full id> [--effort e] --handoff FILE [--wait 5m] [--idempotency-key K] -o json
+       agent-run rc status <session> -o json
+
+Launches a Claude remote session through the existing session API and observes
+its bounded startup phases. The project catalog chooses the repository/base.
+The idempotency key is always sent and printed; retain it and the session handle.
+--wait 0 creates only, returning exit 7 without polling or sending the handoff.
+--wait defaults to 5m and cannot exceed 10m. A positive wait that expires reports
+timed_out with the session handle. Status makes one read and never submits a handoff.
+Codex is blocked locally with codex_adapter_not_implemented:
+Codex remote launch is not implemented in 2a; no inventory was probed
+
+The handoff file must contain 1 to 8192 bytes of UTF-8 text, with no control
+characters except newline and tab. It is submitted at most once after the link
+appears and is never printed. A 202 proves transport submission only.
+On a reused idempotency key (HTTP 200), the handoff is never sent; after following
+to the link, the result is unconfirmed / handoff_unconfirmed, exit 6.
+Provider readiness and CLI input recording remain unknown. The result is link_available,
+never ready. JSON puts the validated link first and is at most 32 KiB.
+
+Exit 0: link available (and transport submitted for start); 1: blocked/refused;
+2: invalid input; 3: authentication/authorization; 5: nothing sent;
+6: unconfirmed exchange, never resend the handoff; 7: pending, deadline, or
+owner action required. Use rc status with the retained handle to observe progress.
+No login, pairing, permission, operator flag, or runtime configuration changes.
+`,
 	"auth": `Usage: agent-run auth status [--warn <duration>] [-o json]
 
 Shows how the keeper's shared Claude and Codex logins stand, for a session that
