@@ -77,16 +77,18 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 	}
 	if a := s.Status.Agent; a != nil {
 		v.AgentStatus = &apiv1.AgentStatus{
-			State:          a.Status,
-			Boot:           a.Boot,
-			Problems:       a.Problems,
-			Branch:         a.Branch,
-			Head:           a.Head,
-			ConversationID: a.ConversationID,
-			LastActivity:   timeOf(a.LastActivity),
-			LastHeartbeat:  timeOf(a.LastHeartbeat),
-			Message:        a.Message,
-			Agentd:         a.Agentd,
+			State:                  a.Status,
+			Boot:                   a.Boot,
+			Problems:               a.Problems,
+			Branch:                 a.Branch,
+			Head:                   a.Head,
+			ConversationID:         a.ConversationID,
+			LastActivity:           timeOf(a.LastActivity),
+			LastHeartbeat:          timeOf(a.LastHeartbeat),
+			Message:                a.Message,
+			Agentd:                 a.Agentd,
+			RemoteControlSessionID: a.RemoteControlSessionID,
+			StartedAt:              timeOf(a.StartedAt),
 		}
 		v.AgentStatus.ProjectBootstrap = projectBootstrapView(a.ProjectBootstrap)
 		if t := a.Task; t != nil {
@@ -97,7 +99,7 @@ func view(s *v1alpha1.AgentSession, withPrompt bool) apiv1.Session {
 		}
 	}
 	if rc := s.Status.RemoteControl; rc != nil {
-		v.RemoteControl = &apiv1.RemoteControl{Name: rc.Name, URL: rc.URL, State: rc.State}
+		v.RemoteControl = &apiv1.RemoteControl{Name: rc.Name, SessionID: rc.SessionID, URL: rc.URL, State: rc.State}
 	}
 	if o := s.Status.Outcome; o != nil {
 		v.Outcome = &apiv1.Outcome{State: string(o.State), Note: o.Note, At: timeOf(o.At)}

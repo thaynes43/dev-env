@@ -828,6 +828,19 @@ spec:
                     required:
                     - state
                     type: object
+                  remoteControlSessionId:
+                    description: |-
+                      RemoteControlSessionID is the Remote Control bridge session id from that
+                      same heartbeat when it matches the apiv1 bridge id pattern.
+                    maxLength: 136
+                    pattern: ^session_[A-Za-z0-9_-]{8,128}$
+                    type: string
+                  startedAt:
+                    description: |-
+                      StartedAt is when the agent process started, as the session pod reported
+                      it on its own heartbeat. An accepted value does not move backwards.
+                    format: date-time
+                    type: string
                   status:
                     description: |-
                       Status is the agent's state, agentd's: pending, busy, idle, waiting,
@@ -2244,6 +2257,7 @@ spec:
                     type: string
                   sessionId:
                     description: SessionID is the Remote Control session id.
+                    maxLength: 136
                     type: string
                   state:
                     description: State is the entry's registration state, for example

@@ -454,6 +454,10 @@ func (in *AgentStatus) DeepCopyInto(out *AgentStatus) {
 		in, out := &in.LastHeartbeat, &out.LastHeartbeat
 		*out = (*in).DeepCopy()
 	}
+	if in.StartedAt != nil {
+		in, out := &in.StartedAt, &out.StartedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Problems != nil {
 		in, out := &in.Problems, &out.Problems
 		*out = make([]string, len(*in))

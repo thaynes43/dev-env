@@ -27,6 +27,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/testenv"
 )
 
@@ -604,6 +605,63 @@ func TestStatusSubresource(t *testing.T) {
 			c.mutate(&got.Status)
 			wantInvalid(t, k8s.Status().Update(ctx(t), got), c.want)
 		})
+	}
+}
+
+// TestAgentStartTimeAndRCSessionIDSchema accepts the optional start time and
+// a bridge session id at the CRD bound, and refuses an id outside that bound.
+func TestAgentStartTimeAndRCSessionIDSchema(t *testing.T) {
+	s := remoteSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	started := metav1.NewTime(time.Date(2026, 10, 30, 1, 18, 0, 0, time.UTC))
+	id := "session_" + strings.Repeat("b", 128)
+	if len(id) != apiv1.RemoteControlSessionIDMaxLength {
+		t.Fatal("schema fixture does not exercise the heartbeat's id bound")
+	}
+	s.Status.Agent = &v1alpha1.AgentStatus{StartedAt: &started, RemoteControlSessionID: id}
+	s.Status.RemoteControl = &v1alpha1.RemoteControlStatus{SessionID: id}
+	if err := k8s.Status().Update(ctx(t), s); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+	got := get(t, s)
+	if got.Status.Agent == nil || got.Status.Agent.RemoteControlSessionID != id || got.Status.Agent.StartedAt == nil || !got.Status.Agent.StartedAt.Time.Equal(started.Time) {
+		t.Fatalf("stored %+v", got.Status.Agent)
+	}
+	if got.Status.RemoteControl == nil || got.Status.RemoteControl.SessionID != id {
+		t.Fatalf("remote control id was pruned: %+v", got.Status.RemoteControl)
+	}
+
+	refuses := []struct {
+		title string
+		id    string
+	}{
+		{"a short bridge id", "session_abc"},
+		{"an id past the pattern", "session_" + strings.Repeat("b", 129)},
+		{"a link instead of an id", "https://claude.ai/code/session_01AbCdEf"},
+		{"a value past max length", strings.Repeat("a", 137)},
+	}
+	for _, c := range refuses {
+		t.Run(c.title, func(t *testing.T) {
+			bad := get(t, s)
+			bad.Status.Agent.RemoteControlSessionID = c.id
+			wantInvalid(t, k8s.Status().Update(ctx(t), bad), "status.agent.remoteControlSessionId")
+		})
+	}
+	bad := get(t, s)
+	bad.Status.RemoteControl.SessionID = id + "b"
+	wantInvalid(t, k8s.Status().Update(ctx(t), bad), "status.remoteControl.sessionId")
+
+	cleared := get(t, s)
+	cleared.Status.Agent.RemoteControlSessionID = ""
+	cleared.Status.Agent.StartedAt = nil
+	if err := k8s.Status().Update(ctx(t), cleared); err != nil {
+		t.Fatalf("absent fields: %v", err)
+	}
+	got = get(t, s)
+	if got.Status.Agent == nil || got.Status.Agent.StartedAt != nil || got.Status.Agent.RemoteControlSessionID != "" {
+		t.Fatalf("absent fields kept %+v", got.Status.Agent)
 	}
 }
 

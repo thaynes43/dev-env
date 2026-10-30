@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,8 +61,9 @@ func TestHeartbeat(t *testing.T) {
 		a.Head != "0123456789abcdef" || a.ConversationID != "9b1c" || a.Attached != 1 || a.Agentd == "" {
 		t.Fatalf("status.agent %+v", a)
 	}
-	if !a.LastHeartbeat.Time.Equal(f.now) || a.LastActivity == nil {
-		t.Errorf("times %v %v", a.LastHeartbeat, a.LastActivity)
+	wantStart := time.Date(2026, 10, 6, 17, 20, 0, 0, time.UTC)
+	if !a.LastHeartbeat.Time.Equal(f.now) || a.LastActivity == nil || a.StartedAt == nil || !a.StartedAt.Time.Equal(wantStart) {
+		t.Errorf("times heartbeat %v activity %v start %v", a.LastHeartbeat, a.LastActivity, a.StartedAt)
 	}
 	if len(a.Problems) != 1 || a.Problems[0] != "mcp: warn: vexa: timed out" {
 		t.Errorf("problems %q", a.Problems)
@@ -104,7 +106,7 @@ func TestHeartbeatCaps(t *testing.T) {
 		st.Problems = append(st.Problems, protocol.Step{Name: "step", State: "fail"})
 	}
 	st.Usage.CostUSD = -1
-	a := agentStatus(st, metav1.Now())
+	a := agentStatus(st, metav1.Now(), nil)
 	if len(a.Message) > maxMessage+len("…") || !strings.HasSuffix(a.Message, "…") {
 		t.Errorf("message of %d bytes", len(a.Message))
 	}
@@ -163,7 +165,7 @@ func TestHeartbeatProjectBootstrapCopiesOnlyKnownValues(t *testing.T) {
 	}
 	st := status("s")
 	st.ProjectBootstrap = &protocol.ProjectBootstrap{State: "Ready", CatalogRevision: strings.Repeat("f", 64)}
-	if a := agentStatus(st, metav1.Now()); a.ProjectBootstrap == nil || a.ProjectBootstrap.CatalogRevision != strings.Repeat("f", 64) {
+	if a := agentStatus(st, metav1.Now(), nil); a.ProjectBootstrap == nil || a.ProjectBootstrap.CatalogRevision != strings.Repeat("f", 64) {
 		t.Fatalf("agentStatus dropped the bootstrap: %+v", a.ProjectBootstrap)
 	}
 }
@@ -524,13 +526,13 @@ func TestHeartbeatCopiesRemoteControl(t *testing.T) {
 	st := status(name)
 	st.Agent = protocol.AgentState{State: protocol.AgentBusy}
 	st.RemoteControl = &protocol.RemoteControl{
-		Name: name, SessionID: "session_abc", URL: "https://claude.ai/code/session_abc", State: protocol.RemoteRegistered,
+		Name: name, SessionID: "session_abcdefgh", URL: "https://claude.ai/code/session_abcdefgh", State: protocol.RemoteRegistered,
 	}
 	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
 		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
 	}
 	rc := f.session(name).Status.RemoteControl
-	if rc == nil || rc.Name != name || rc.SessionID != "session_abc" || rc.URL != "https://claude.ai/code/session_abc" || rc.State != protocol.RemoteRegistered {
+	if rc == nil || rc.Name != name || rc.SessionID != "session_abcdefgh" || rc.URL != "https://claude.ai/code/session_abcdefgh" || rc.State != protocol.RemoteRegistered {
 		t.Fatalf("status.remoteControl %+v", rc)
 	}
 
@@ -548,5 +550,247 @@ func TestHeartbeatCopiesRemoteControl(t *testing.T) {
 	}
 	if rc := f.session(name).Status.RemoteControl; rc != nil {
 		t.Errorf("a heartbeat without an entry kept %+v", rc)
+	}
+}
+
+// TestHeartbeatStoresStartTimeAndRCSessionID pins DESIGN-038 story 2b: the
+// agent's own heartbeat is the only source, a start time does not move
+// backwards or land from the future, and a missing time stays absent.
+func TestHeartbeatStoresStartTimeAndRCSessionID(t *testing.T) {
+	f := newFixture(t)
+	const name = "haynes-ops-1006-100000"
+	tok := f.sessionPod(name, "full", 0)
+	path := protocol.HeartbeatPath(name)
+	const validID = "session_01AbCdEf"
+
+	post := func(st protocol.Status) {
+		t.Helper()
+		if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+			t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+		}
+	}
+	agent := func() *v1alpha1.AgentStatus {
+		t.Helper()
+		a := f.session(name).Status.Agent
+		if a == nil {
+			t.Fatal("missing agent status")
+		}
+		return a
+	}
+
+	st := status(name)
+	st.Agent.StartedAt = nil
+	st.RemoteControl = nil
+	post(st)
+	if agent().StartedAt != nil || agent().RemoteControlSessionID != "" {
+		t.Fatalf("missing evidence was stored: %+v", agent())
+	}
+	if v := view(f.session(name), false); v.AgentStatus == nil || v.AgentStatus.StartedAt != nil || v.AgentStatus.RemoteControlSessionID != "" || v.RemoteControl != nil {
+		t.Fatalf("view invented timing: %+v rc %+v", v.AgentStatus, v.RemoteControl)
+	}
+
+	first := f.now.Add(-time.Minute)
+	st.Agent.StartedAt = &first
+	st.RemoteControl = &protocol.RemoteControl{
+		Name: name, SessionID: validID, URL: "https://claude.ai/code/" + validID, State: protocol.RemoteRegistered,
+	}
+	post(st)
+	if agent().StartedAt == nil || !agent().StartedAt.Time.Equal(first) || agent().RemoteControlSessionID != validID {
+		t.Fatalf("stored %+v", agent())
+	}
+	rc := f.session(name).Status.RemoteControl
+	if rc == nil || rc.SessionID != validID {
+		t.Fatalf("remote control %+v", rc)
+	}
+	v := view(f.session(name), false)
+	if v.AgentStatus == nil || v.AgentStatus.StartedAt == nil || !v.AgentStatus.StartedAt.Equal(first) || v.AgentStatus.RemoteControlSessionID != validID {
+		t.Fatalf("view agent %+v", v.AgentStatus)
+	}
+	if v.RemoteControl == nil || v.RemoteControl.SessionID != validID || v.RemoteControl.URL != st.RemoteControl.URL || v.RemoteControl.State != protocol.RemoteRegistered {
+		t.Fatalf("view remote control %+v", v.RemoteControl)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old struct {
+		Name        string `json:"name"`
+		AgentStatus *struct {
+			State          string     `json:"state"`
+			ConversationID string     `json:"conversationId"`
+			LastHeartbeat  *time.Time `json:"lastHeartbeat"`
+		} `json:"agentStatus"`
+		RemoteControl *struct {
+			Name  string `json:"name"`
+			URL   string `json:"url"`
+			State string `json:"state"`
+		} `json:"remoteControl"`
+	}
+	if json.Unmarshal(raw, &old) != nil || old.Name != name || old.AgentStatus == nil || old.AgentStatus.ConversationID != "9b1c" || old.AgentStatus.LastHeartbeat == nil || old.RemoteControl == nil || old.RemoteControl.URL != st.RemoteControl.URL {
+		t.Fatalf("old client: %+v %+v", old.AgentStatus, old.RemoteControl)
+	}
+	for _, key := range []string{`"startedAt"`, `"remoteControlSessionId"`, `"sessionId"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Fatalf("view JSON missing %s: %s", key, raw)
+		}
+	}
+
+	earlier := first.Add(-time.Minute)
+	st.Agent.StartedAt = &earlier
+	post(st)
+	if agent().StartedAt == nil || !agent().StartedAt.Time.Equal(first) {
+		t.Fatalf("start moved backwards to %v", agent().StartedAt)
+	}
+
+	later := first.Add(30 * time.Second)
+	st.Agent.StartedAt = &later
+	post(st)
+	if agent().StartedAt == nil || !agent().StartedAt.Time.Equal(later) {
+		t.Fatalf("later start not stored: %v", agent().StartedAt)
+	}
+
+	fraction := f.now.Add(agentStartSkew + 400*time.Millisecond)
+	st.Agent.StartedAt = &fraction
+	post(st)
+	if agent().StartedAt == nil || !agent().StartedAt.Time.Equal(later) {
+		t.Fatalf("subsecond future report replaced stored time with %v", agent().StartedAt)
+	}
+
+	skewed := f.now.Add(agentStartSkew)
+	st.Agent.StartedAt = &skewed
+	post(st)
+	if agent().StartedAt == nil || !agent().StartedAt.Time.Equal(skewed) {
+		t.Fatalf("skew boundary %v", agent().StartedAt)
+	}
+
+	beyond := f.now.Add(agentStartSkew + time.Second)
+	st.Agent.StartedAt = &beyond
+	post(st)
+	if agent().StartedAt == nil || !agent().StartedAt.Time.Equal(skewed) {
+		t.Fatalf("future start replaced stored time with %v", agent().StartedAt)
+	}
+
+	st.Agent.StartedAt = nil
+	post(st)
+	if agent().StartedAt == nil || !agent().StartedAt.Time.Equal(skewed) {
+		t.Fatalf("omitted start cleared %v", agent().StartedAt)
+	}
+
+	maxID := "session_" + strings.Repeat("a", 128)
+	if len(maxID) != apiv1.RemoteControlSessionIDMaxLength || !remoteControlSessionIDPattern.MatchString(maxID) {
+		t.Fatalf("pattern bound %d %q", apiv1.RemoteControlSessionIDMaxLength, maxID)
+	}
+	st.RemoteControl.SessionID = maxID
+	post(st)
+	if agent().RemoteControlSessionID != maxID {
+		t.Fatalf("max id %q", agent().RemoteControlSessionID)
+	}
+	if got := f.session(name).Status.RemoteControl; got == nil || got.SessionID != maxID {
+		t.Fatalf("remote control stored %+v", f.session(name).Status.RemoteControl)
+	}
+	seen := view(f.session(name), false)
+	if seen.AgentStatus == nil || seen.AgentStatus.RemoteControlSessionID != maxID || seen.RemoteControl == nil || seen.RemoteControl.SessionID != maxID {
+		t.Fatalf("view ids agent=%+v rc=%+v", seen.AgentStatus, seen.RemoteControl)
+	}
+
+	var logs []string
+	f.srv.Log = funcr.New(func(_, args string) { logs = append(logs, args) }, funcr.Options{})
+	for _, id := range []string{"session_abc", maxID + "a", "https://claude.ai/code/" + validID, "session_abcdefg…"} {
+		st.RemoteControl.SessionID = id
+		before := len(logs)
+		post(st)
+		stored := f.session(name)
+		if stored.Status.Agent.RemoteControlSessionID != "" || stored.Status.RemoteControl.SessionID != "" || stored.Status.Agent.LastHeartbeat == nil || !stored.Status.Agent.LastHeartbeat.Time.Equal(f.now) {
+			t.Fatal("invalid id was stored or prevented the heartbeat")
+		}
+		if len(logs) != before+1 || !strings.Contains(logs[before], "InvalidRemoteControlSessionID") || !strings.Contains(logs[before], "136") || strings.Contains(logs[before], id) {
+			t.Fatalf("id drop missing a bounded reason, or logged the input: %v", logs[before:])
+		}
+	}
+}
+
+// A newer start lands while the older heartbeat's status patch is in flight.
+// That patch does not carry a start, and the following read keeps the newer time.
+func TestHeartbeatStartDoesNotRegressAcrossInterleaving(t *testing.T) {
+	f := newFixture(t)
+	const name = "haynes-ops-1006-100000"
+	tok := f.sessionPod(name, "full", 0)
+	path := protocol.HeartbeatPath(name)
+	later := f.now.Add(-time.Minute)
+	earlier := later.Add(-time.Minute)
+	interfered := false
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		if !interfered {
+			interfered = true
+			fresh := f.session(name)
+			if fresh.Status.Agent == nil {
+				fresh.Status.Agent = &v1alpha1.AgentStatus{}
+			}
+			at := metav1.NewTime(later)
+			fresh.Status.Agent.StartedAt = &at
+			if err := f.c.Status().Update(ctx, fresh); err != nil {
+				return err
+			}
+		}
+		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+	}})
+	st := status(name)
+	st.Agent.StartedAt = &earlier
+	if w := f.do(http.MethodPost, path, tok, st); w.Code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+	}
+	got := f.session(name).Status.Agent
+	if !interfered || got == nil || got.StartedAt == nil || !got.StartedAt.Time.Equal(later) {
+		t.Fatalf("older interleaved start replaced %v", got)
+	}
+}
+
+// Force a real resourceVersion conflict after persistAgentStart's read. It
+// must recompute from the winner, preserving its newer start or other status.
+func TestHeartbeatStartCASRetriesFromFreshStatus(t *testing.T) {
+	for _, newerStart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("newerStart=%t", newerStart), func(t *testing.T) {
+			f := newFixture(t)
+			const name = "haynes-ops-1006-100000"
+			tok := f.sessionPod(name, "full", 0)
+			reported := f.now.Add(-2 * time.Minute)
+			later := reported.Add(time.Minute)
+			writes, conflicts := 0, 0
+			f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				writes++
+				if writes == 1 {
+					fresh := f.session(name)
+					if obj.GetResourceVersion() == "" || obj.GetResourceVersion() != fresh.ResourceVersion {
+						t.Fatal("start update lacks the read resourceVersion")
+					}
+					fresh.Status.Conditions = []metav1.Condition{{Type: "ConcurrentFixture", Status: metav1.ConditionTrue, Reason: "Synthetic", LastTransitionTime: metav1.NewTime(f.now)}}
+					if newerStart {
+						at := metav1.NewTime(later)
+						fresh.Status.Agent.StartedAt = &at
+					}
+					if err := f.c.Status().Update(ctx, fresh); err != nil {
+						t.Fatal(err)
+					}
+				}
+				err := c.SubResource(sub).Update(ctx, obj, opts...)
+				if apierrors.IsConflict(err) {
+					conflicts++
+				}
+				return err
+			}})
+			st := status(name)
+			st.Agent.StartedAt = &reported
+			if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+				t.Fatalf("heartbeat: %d %s", w.Code, w.Body.String())
+			}
+			want, wantWrites := reported, 2
+			if newerStart {
+				want, wantWrites = later, 1
+			}
+			got := f.session(name).Status
+			if conflicts != 1 || writes != wantWrites || got.Agent == nil || got.Agent.StartedAt == nil || !got.Agent.StartedAt.Time.Equal(want) || len(got.Conditions) != 1 || got.Conditions[0].Type != "ConcurrentFixture" {
+				t.Fatalf("stale start/status survived CAS retry: writes=%d conflicts=%d status=%+v", writes, conflicts, got)
+			}
+		})
 	}
 }

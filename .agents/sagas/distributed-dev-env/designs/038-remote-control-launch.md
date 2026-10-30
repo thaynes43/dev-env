@@ -68,7 +68,7 @@ These source references were rechecked for this design:
 | --- | --- |
 | [CLI create](../../../../internal/agentrun/create.go) | `--interactive` selects `remote`; the CLI rejects `--project`, a prompt/handoff, task limits and `--local` in that combination. The project refusal is CLI-only for Claude remote. Default wait is 30s with 2s polls. It waits for session/pod settlement, not provider RC readiness. A follow error after create can still return success with a warning. |
 | [API admission](../../../../internal/apiserver/validate.go) | `kindCoordinator` is accepted-project/task/dev/S-or-M only. Other allowed callers can create Claude remote sessions with accepted project snapshots, subject to the existing project feature gate and admission limits; no test currently pins this combination. Codex remote creation separately accepts human, trusted client or recognized workbench session, and rejects a project task snapshot. Session children retain their parent's profile; a workbench-created Codex remote host must omit profile and uses the template default. |
-| [Controller](../../../../internal/controller/reconciler.go), [API view](../../../../internal/apiserver/view.go) | `Running` can mean PodReady while agentd is still booting. The view exposes condition words, not their transition times, plus conversation ID and last heartbeat. Protocol `AgentState.StartedAt` is dropped earlier by [heartbeat storage](../../../../internal/apiserver/heartbeat.go#L143-L151): `v1alpha1.AgentStatus` has no start-time field. The RC view drops `sessionId`. Accurate phase timing needs a CRD change as well as API transport. |
+| [Controller](../../../../internal/controller/reconciler.go), [API view](../../../../internal/apiserver/view.go) | `Running` can mean PodReady while agentd is still booting. The view exposes condition words, not their transition times, plus conversation ID and last heartbeat. Protocol `AgentState.StartedAt` is stored on `status.agent.startedAt` by [heartbeat storage](../../../../internal/apiserver/heartbeat.go). A later report does not move that time backwards, and a report more than a small skew in the future is not stored. The session view exposes that time and the RC session id on both reads: `status.agent.remoteControlSessionId` when it matches the bridge id pattern, and `status.remoteControl.sessionId` stored whole for that same pattern. A nonempty remote-control id outside that pattern is dropped from both id fields with a structured reason; the remaining heartbeat is accepted and neither field clips ids. Condition words still have no transition times. The haynes-ops CRD copy must land before any operator pin; a stale copy prunes these status fields. |
 | [Claude launch](../../../../internal/agentd/launch.go), [daemon](../../../../internal/agentd/daemon.go), [RC collector](../../../../internal/agentd/remote.go) | First launch chooses a fresh UUID with `--session-id` and `--remote-control`; later boots resume the saved conversation. The RC collector verifies live PID/process-start identity against the CLI session record, then reports `registered` and a bridge link. Its decoded record has only bridge ID/process start: this is registration evidence, not current provider connection or account acceptance. |
 | [Claude projection](../../../../internal/agentd/claude_auth.go), [projection type](../../../../internal/claudeauth/access.go) | Merge access-only fields, retain CLI-owned fields, fence generations and refuse refresh material. Missing/invalid/expired access holds start; a pod-owned login with projection mode is `login-conflict`. |
 | [Pod login CLI](../../../../internal/agentrun/login.go), [agentd login](../../../../internal/agentd/remote.go), [ctl entry](../../../../cmd/agentd/main.go) | `login url/code/status` is the legacy pod-owned ceremony. Projection mode refuses url/code. A live agent and login start exclude each other. URL lookup is bounded at 60s; code uses stdin. |
@@ -687,6 +687,26 @@ unknowns in #268. Stop at the work order's ready-PR/checks-started boundary.
 
 ### 2b — Server timing fields and CRD copy
 
+**Source implemented, 2026-10-30 (#273):** the bounded work order carries
+`status.agent.startedAt` and `status.agent.remoteControlSessionId` through the
+heartbeat and session view, and exposes `remoteControl.sessionId`. Missing
+start evidence stays absent. Start reports more than five seconds ahead of
+the operator clock are ignored; accepted starts never move backwards. The
+start write uses resourceVersion CAS and recomputes from a fresh read after
+a conflict, without replacing concurrent status. Both RC id fields preserve
+the same full `session_` plus 8 to 128 ASCII id characters (136 total maximum).
+A malformed or overlong nonempty id is dropped from both fields with a
+structured `InvalidRemoteControlSessionID` log reason (without the input id);
+the remaining heartbeat is accepted and ids are never clipped. Optional wire
+fields preserve old-client JSON decoding.
+Schema admission, heartbeat/view, old-client and interleaving fixtures cover
+this source slice. Current-Pod transition times and the full receipt contract
+below remain follow-up work outside #273's bounded work order.
+
+**Installation pending:** a separate **haynes-ops CRD copy PR must land before
+any operator pin** using these fields; a stale CRD silently prunes them. This
+source change neither installs the schema nor establishes usable acceptance.
+
 **Outcome/scope:** carry protocol start evidence through heartbeat storage and
 expose current-Pod condition transition times with clear source/observation time
 and identity. Include `api/v1alpha1.AgentStatus`, heartbeat conversion, API view
@@ -717,6 +737,15 @@ budget before pickup and checkpoint/split if it will not fit.
 Artifacts: source PR/head, generated diff, focused checks/review, CRD-copy PR,
 operator pin and separate installed/usable evidence linked in OpenProject.
 Stop at acceptance, a dependency/approval hold or budget boundary.
+
+**Author's pre-integration validation (2026-10-30, historical):** the stopped
+Grok author generated the source artifacts and reported passing API packages,
+with apiserver Unix-socket fixture failures under a long temp path. Its
+uncommitted generated files prevented `check-generated`, and layout/lint had
+not run. That handoff is superseded by the integration checks, native review,
+PR and head recorded in [OpenProject #273](https://work.haynesnetwork.com/work_packages/273).
+Generated patch hunks were discarded and regenerated from the types during
+integration. Source, installed and usable acceptance remain separate.
 
 ### 2c — Conditional receipt API behind --enable-rc-launches
 

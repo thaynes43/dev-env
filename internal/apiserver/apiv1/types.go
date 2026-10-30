@@ -308,6 +308,12 @@ type AgentStatus struct {
 	Task           *TaskResult `json:"task,omitempty"`
 	Message        string      `json:"message,omitempty"`
 	Agentd         string      `json:"agentd,omitempty"`
+	// RemoteControlSessionID is the Remote Control bridge session id from the
+	// session's own heartbeat when it matches RemoteControlSessionIDPattern.
+	RemoteControlSessionID string `json:"remoteControlSessionId,omitempty"`
+	// StartedAt is when the agent process started, as that heartbeat reported
+	// it. It is absent when no accepted start time is stored.
+	StartedAt *time.Time `json:"startedAt,omitempty"`
 	// ProjectBootstrap is the boot's private catalog bootstrap: catalog
 	// names, states, steps and reason codes only (DESIGN-006).
 	ProjectBootstrap *ProjectBootstrap `json:"projectBootstrap,omitempty"`
@@ -422,6 +428,8 @@ type RemoteControl struct {
 	Name  string `json:"name,omitempty"`
 	URL   string `json:"url,omitempty"`
 	State string `json:"state,omitempty"`
+	// SessionID is the bridge session id stored from the session's own heartbeat.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // Outcome is what a summoned session reported (plan 10).
@@ -506,6 +514,15 @@ type PortalSessionActivity struct {
 // portal carries: https, host claude.ai, path /code/session_<id>, no query,
 // fragment or whitespace.
 const PortalRemoteControlURLPattern = `^https://claude\.ai/code/session_[A-Za-z0-9_-]{8,128}$`
+
+// RemoteControlSessionIDPattern is the bridge session id inside
+// PortalRemoteControlURLPattern. status.agent.remoteControlSessionId uses the
+// same pattern.
+const RemoteControlSessionIDPattern = `^session_[A-Za-z0-9_-]{8,128}$`
+
+// RemoteControlSessionIDMaxLength is the longest match of
+// RemoteControlSessionIDPattern ("session_" plus 128 id characters).
+const RemoteControlSessionIDMaxLength = len("session_") + 128
 
 // PortalRemoteControlStatePattern is the shape of a Remote Control state word
 // such as registered, starting or pair-code-issued.
