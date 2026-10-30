@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html"
+	"html/template"
 	"net/url"
 	"regexp"
 	"slices"
@@ -689,4 +690,36 @@ func TestClaudeConversationLinksOpenInNewTab(t *testing.T) {
 	check(anchor(render(ProductRow{ID: "s1", Title: "waiting", Attention: &ProductAttention{Reason: "Waiting for your input", Link: link}, Link: link, LinkLabel: "Open in Claude"}), "Answer in Claude"))
 	// Header Open in Claude, from a row with no attention link.
 	check(anchor(render(ProductRow{ID: "s2", Title: "running", Link: link, LinkLabel: "Open in Claude"}), "Open in Claude"))
+}
+
+func TestReceiptAndLaunchResultCarryTheFullNavigation(t *testing.T) {
+	receipt, err := RenderReceipt(ProductReceipt{RequestID: "request-0000000001", Session: "agent-a", SessionUID: "uid-a", ResolvedPodUID: "pod-a", TransportStatus: "Delivered", ObservedAt: time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := RenderLaunchResult(ProductLaunchResult{Outcome: "limit", Back: productSessionsHref + "#launch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"receipt": string(receipt), "launch result": string(launch)} {
+		for _, href := range []string{
+			`href="/portal/projects/dev-env/environments/internal/sessions?view=usage"`,
+			`href="/portal/projects/dev-env/environments/internal/asks"`,
+			`href="/portal/projects/dev-env/environments/internal/pages"`,
+		} {
+			if strings.Count(body, href) != 2 {
+				t.Errorf("%s: top and mobile navigation lack %s", name, href)
+			}
+		}
+		if strings.Count(body, `href="/portal/projects/dev-env/environments/internal/sessions" aria-current="page"`) != 2 {
+			t.Errorf("%s: Agents is not marked current in both navigations", name)
+		}
+	}
+	for _, target := range []*template.Template{receiptTemplate, launchResultTemplate} {
+		for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
+			if viewsTemplate.Lookup(name).Tree == target.Lookup(name).Tree {
+				t.Fatalf("%s shares a mutable parse tree with %s", name, target.Name())
+			}
+		}
+	}
 }

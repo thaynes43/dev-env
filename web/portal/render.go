@@ -1064,10 +1064,10 @@ func RenderReceipt(r ProductReceipt) ([]byte, error) {
 	}
 	view := struct {
 		receiptState
-		Policy, SessionsHref, TasksHref, Self, Back, Observed, Reason string
-		Fields                                                        []ProductField
-		Preview                                                       bool
-	}{receiptState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, TasksHref: productTasksHref, Observed: observed, Preview: r.Preview}
+		Policy, SessionsHref, Self, Back, Observed, Reason string
+		Fields                                             []ProductField
+		Preview                                            bool
+	}{receiptState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, Observed: observed, Preview: r.Preview}
 	if sendRequestID.MatchString(r.RequestID) {
 		view.Self = ProductSessionMessagesHref + "/" + r.RequestID
 	}
@@ -1149,10 +1149,10 @@ func RenderLaunchResult(r ProductLaunchResult) ([]byte, error) {
 	}
 	view := struct {
 		launchResultState
-		Policy, SessionsHref, TasksHref, Back string
-		Fields                                []ProductField
-		Preview                               bool
-	}{launchResultState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, TasksHref: productTasksHref, Back: back, Preview: r.Preview}
+		Policy, SessionsHref, Back string
+		Fields                     []ProductField
+		Preview                    bool
+	}{launchResultState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, Back: back, Preview: r.Preview}
 	for i, f := range r.Fields {
 		if i == 8 {
 			break
