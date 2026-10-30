@@ -19,9 +19,7 @@
       "agent": "codex",
       "mode": "remote",
       "model": "gpt-6-astra",
-      "effort": "max",
-      "size": "M",
-      "profile": "full",
+      "size": "S",
       "operatingMode": "Running"
     }
   },
@@ -52,10 +50,11 @@
     "metadata": {
       "name": "pvc-03912a1c-df4d-4b72-811f-2c34dd3abe25",
       "uid": "b9455c08-72e0-43d2-9a88-04c389c27a74",
-      "finalizers": ["kubernetes.io/pv-protection"]
+      "finalizers": ["external-provisioner.volume.kubernetes.io/finalizer", "kubernetes.io/pv-protection", "external-attacher/gasha01-rbd-csi-ceph-com"]
     },
     "spec": {
       "persistentVolumeReclaimPolicy": "Delete",
+      "storageClassName": "gasha01-rbd",
       "claimRef": {
         "apiVersion": "v1", "kind": "PersistentVolumeClaim",
         "namespace": "dev-agents", "name": "home-dev-env-1019-205125", "uid": "03912a1c-df4d-4b72-811f-2c34dd3abe25"

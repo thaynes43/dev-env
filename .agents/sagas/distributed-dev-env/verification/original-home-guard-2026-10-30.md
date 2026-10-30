@@ -152,37 +152,111 @@ tuple equal to either legacy or task pilot tuple, in either flag order
 (`TestRemotePilotAgentFlagsRefuseCollisions`). Legacy precedence in
 `sessionPod` remains defense in depth; startup flags cannot reach overlap.
 
+Review correction `REMOTEPILOT286-FIX-20261030-03` consumes PR #713's
+immutable `997003c65fe50c82a68c2a29dc0ee9e62b70b70c` checkpoint and rebases on
+fresh `origin/main` (`94b3b09`), without conflict. OP286 journal 3210 corrects
+the lead's live non-secret field read to about **07:44Z**, rather than the
+estimated 07:47Z in the order. All six findings are addressed below; this round
+changes production behavior only by requiring the remote image's release tag.
+
 The shared test-only witness is
 [`internal/homeguard/testutil/testdata/root.json`](../../../../internal/homeguard/testutil/testdata/root.json)
-(SHA256 `d1edc5eec4e4d20314356d75c03ab6a8b907059df7eb5b113c2152f53863bbc8`).
+(SHA256 `299a34acc4dc98208eb4c69a8fb39480d44d83c2ce7d2409f64c00eea651ec0f`).
 It carries Root's specified non-secret namespace/name/UID, parent/key/depth,
 repo and Codex remote mode, original Bound PVC/PV, owner/claimRef, reclaim
 policy and existing finalizers. Each stage reads this one fixture; the six-field
 binding is derived from its objects. These are fixture witnesses, not live
-observations. The fixture also supplies model/size/profile values needed for
-valid local rendering, and a synthetic task-pilot target/image.
+observations. Its covered Session fields now match the lead's supplied values:
+`codex`, `origin/main`, `remote`, `gpt-6-astra`, `Running`, parent `dev/dev-env`,
+repo `dev-env`, size `S`, **no effort and no profile**. Its labels are the given
+depth `0` and idempotency key; its Session rescue finalizer is unchanged. PVC
+storage remains `40Gi` on `gasha01-rbd`, with both rescue and PVC-protection
+finalizers. PV storageClass is `gasha01-rbd`, reclaim `Delete`, phase `Bound`,
+with all three supplied provisioner/protection/attacher finalizers. Session,
+PVC and PV UIDs, PV name, PVC name and ownership/claimRef match the supplied
+identities. No supplied live value required a local substitution.
+
+Local boundaries remain explicit: this is a projection of the supplied fields,
+not a complete live-object dump. Live resourceVersions, timestamps, other status
+fields and the CSI volume source are not reproduced. The templates ConfigMap is
+`internal/templates/testdata/templates.yaml`, including its synthetic default
+2.0.0 image, default profile `full` and size-S resources; it is not the live
+ConfigMap. The task-pilot target/image is synthetic. These do not change the
+covered Root spec fields: the real `sessionDocument` renders **no `effort` key**
+in `AGENTD_SESSION` when Root's effort is absent. Stage A checks size S and the
+omitted effort/profile, and Stage B consumes that rendered document.
 
 | Stage | Named test and actual boundary | Link/evidence |
 | --- | --- | --- |
 | A, operator | `cmd/dev-env-operator: TestRemotePilotRootStageA` (and `TestRemotePilotRootStageANegatives`) uses real `parseFlags`, `reconcilerForOptions` shared with `run`, and exported `Reconcile` on a controller-runtime fake client. The real parser accepts the templates ConfigMap. | Starts after sticky API admission with the Pod absent. Asserts original HOME claim/owner, Session/PVC/PV identity and retention, explicit binding, main and read-only init on the specified 2.69.0 digest, exact init command/args, usage target `dev-env-1028-031951` on 2.52.0, task pilot preserved, and default bytes with all pilot flags unset. |
 | B, agent | `internal/agentd: TestRemotePilotRootStageB` reads A's golden, loads its actual `AGENTD_SESSION`, and runs the existing `verifyOriginalHomeAPI` implementation against a local TLS metadata server, then `Daemon.startAgent` → `codexRemote.ensure/start` with the existing Codex process/remote and tmux fakes and a local argv-recording executable. | The init check and both native-start checks read the same three identities. Exact process argv is `remote-control start --json`, with no prompt/turn/pairing argument. Unsafe/deleting/replaced identities and PV 403 cause no provider call. No real Codex binary runs. |
-| C, CLI | `internal/agentrun: TestRemotePilotRootStageC` uses real CLI parsing/request serialization/response decoding through the existing local TLS harness. | The same fixture links A to C. A suspend ACK still has a simulated Pod; two `show --json --once` observations expose the transition to stopped/Suspended before resume. Every request resolves the same fixture name/UID, and resume returns Running on it. No local/native process runs. |
+| C, CLI | `internal/agentrun: TestRemotePilotRootStageC` uses real CLI parsing/request serialization/response decoding through the existing local TLS harness. | The same fixture links A to C. A suspend ACK still has a simulated Pod; two `show --json --once` observations expose the transition to stopped/Suspended before resume. Each request extracts its target name from the route and resolves it in the fake API's object map; the recorded UID is that resolved object's UID. The success case resumes the original object. In the negative case a same-name replacement resolves to a different UID at resume, the fake returns 409 with the original-HOME refusal, and agent-run exits nonzero without polling or printing success. No local/native process runs. |
 
 A compares the rendered fields byte for byte against
 [`internal/homeguard/testutil/testdata/root-pod.golden.json`](../../../../internal/homeguard/testutil/testdata/root-pod.golden.json)
-(SHA256 `7a1ed022f42117d2fef7af26dfcdcba43ad0ccf5a5f7aa8483d67f00139be45e`).
+(SHA256 `e5673459639b04e77315ad97ff17fa28bd478f6e3635786f2c323d39df40692e`).
 That committed golden is the A-to-B link: images, command/args, actual Session
 and binding env, HOME claim, owner UID, and read-only init mount. It also carries
 the rendered result after removing the remote pair AND startup binding while
-the admitted annotation remains. The guard is still explicit; a local simulated
-legacy agentd without `home-verify` exits 2 and does not enter main/native.
-This simulation does not qualify an old image or prove kubelet ordering.
+the admitted annotation remains. Assertions now inspect Stage A's actual
+Reconcile render: `original-home-verify` stays on the templates image with
+command `[/usr/local/bin/agentd]`, args `[home-verify]` and a read-only HOME.
+The complete main container is unchanged after accounting for the expected
+image change back to the templates image. The prior self-written old-agentd
+script has been removed; an old image's **unknown-command refusal is UNVERIFIED
+locally**. Kubelet ordering and old-image qualification remain untested.
 
-The negative subtests cover Session/PVC/PV UID mismatch, deleting Session/PVC,
-same-name replacement, final native-check replacement, forbidden PV GET, binding
+Golden regeneration method for this round: temporarily insert an
+`OP286_GENERATE_ROOT_GOLDEN=1` branch immediately before Stage A's final golden
+comparison. It writes the `json.MarshalIndent(fixture.Golden{Selected: witness,
+SelectorRemoved: removed}, "", "  ")` bytes plus a newline to
+`/tmp/t/root-pod.generated.json`; both witnesses come from the test's real
+`parseFlags` → `reconcilerForOptions` → `Reconcile` path. Run exactly:
+
+```sh
+GOTOOLCHAIN=local GOMAXPROCS=2 GOTMPDIR=/tmp/t TMPDIR=/tmp/t \
+  OP286_GENERATE_ROOT_GOLDEN=1 nice -n 19 go test -p 1 -count=1 \
+  ./cmd/dev-env-operator -run '^TestRemotePilotRootStageA$' -timeout=5m
+```
+
+Copy that generated file to `internal/homeguard/testutil/testdata/root-pod.golden.json`,
+remove the temporary generator branch, then run the required operator filter
+without the generation environment. No handwritten JSON substitution or
+permanent update switch is used. The test again byte-compares the committed
+artifact consumed by Stage B.
+
+Stage A's UID/deleting-PVC/replacement negatives assert the recorded
+`RemovalBlocked=True`, reason `SuspendNeedsRescue`, and exact original-HOME
+unsafe message. Its Session deletion case is honestly named `Session deletion
+path`: it reaches the archive retention guard and asserts `DeleteNeedsRescue`
+and the exact original-HOME message. The PV-read denial asserts the returned
+Forbidden error names `persistentvolumes` and the injected `offline denied`
+reason; that error returns before a status write. Parent/key mismatches assert
+successful default rendering with sticky guard and no RemovalBlocked condition.
+Stage B separately verifies deleting Session/PVC and final-native-check
+replacement. Additional negatives cover binding
 namespace mismatch in either flag order, and parent/key mismatch (no pilot
 image). Collision refusal is tested for both other selectors in both orders;
-changing either half permits coexistence. The existing
+changing either half permits coexistence. Remote image parsing now requires
+`:2.X.Y@sha256:<64 lowercase hex>`; a digest-only refusal test protects the
+signature-audit reference requirement, and help/docs require both tag and digest.
+
+`internal/apiserver: TestOriginalHomeLifecycleReplacementUID/startup_binding_refuses`
+uses the shared Root fixture with a different Session UID and no sticky annotation.
+With the startup binding configured, the real lifecycle handler returns 409 with
+the original-HOME refusal **before any Patch**; the test counts patches and
+compares the stored object unchanged. Its `no_binding_is_unguarded` case
+explicitly proves the limit: if the startup binding is removed and a replacement
+has no sticky annotation, it is treated as unguarded and API resume is accepted.
+Protection then falls back to the controller's PVC ownership check.
+`internal/controller: TestOriginalHomeReplacementWithoutBindingKeepsForeignPVC`
+proves that the original Session's PVC is recognized as foreign, records the
+`PodReady=False/NameTaken` reason, creates no Pod and preserves the claim.
+The existing stale-cache test
+`TestOriginalHomeUnguardedCacheCannotBypassGuardedReplacement` covers the separate
+case of a guarded replacement with stale unguarded cached metadata.
+
+The existing
 `TestTmpDefaultPreservesPodBytes` still requires the original
 `c91e28583563011e5e83da0056e2965be4d79bc44212d4dafd2d494029e75e1c` golden.
 

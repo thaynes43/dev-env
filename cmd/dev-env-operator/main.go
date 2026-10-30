@@ -247,7 +247,7 @@ func parseFlags(args []string) (options, error) {
 	pilotSession := fs.String("pilot-agent-session", "", "<creating session name>/<idempotency-key> of the sessions that run --pilot-agent-image; both or neither")
 	taskPilotImage := fs.String("task-pilot-agent-image", "", "digest-pinned Codex task pilot image; pair with --task-pilot-agent-session")
 	taskPilotSession := fs.String("task-pilot-agent-session", "", "<parent>/<idempotency-key> of Codex task pilot; pair with --task-pilot-agent-image")
-	remotePilotImage := fs.String("remote-pilot-agent-image", "", "ghcr.io/thaynes43/dev-env[:2.X.Y]@sha256:<64 lowercase hex> with required digest; pair with --remote-pilot-agent-session")
+	remotePilotImage := fs.String("remote-pilot-agent-image", "", "ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 lowercase hex> with required release tag and digest; pair with --remote-pilot-agent-session")
 	remotePilotSession := fs.String("remote-pilot-agent-session", "", "<parent>|<idempotency-key> of ordinary Codex remote pilot; parent is a session name or namespace/serviceaccount; pair with --remote-pilot-agent-image")
 	assignedBudgets := fs.String("assigned-task-budgets", "", "explicit JSON configured HostID to TaskUID map")
 	hosts := fs.String("coordinator-hosts", "", "explicit JSON host bindings; empty configures none")
@@ -990,9 +990,9 @@ func parsePilotAgent(image, session string) (*controller.PilotAgent, error) {
 	return &controller.PilotAgent{Image: image, Parent: parent, Key: key}, nil
 }
 
-// The remote pilot requires a digest from the same agent repository. A 2.x
-// release tag may accompany the digest, but a tag alone never selects an image.
-var remotePilotAgentImage = regexp.MustCompile(`^ghcr\.io/thaynes43/dev-env(?::2\.[0-9]+\.[0-9]+)?@sha256:[a-f0-9]{64}$`)
+// The remote pilot requires both a 2.x release tag and a digest from the same
+// agent repository, matching the signature-audit policy's image references.
+var remotePilotAgentImage = regexp.MustCompile(`^ghcr\.io/thaynes43/dev-env:2\.[0-9]+\.[0-9]+@sha256:[a-f0-9]{64}$`)
 
 // parseRemotePilotAgent is independent of the existing usage/task pilot flags.
 // A parent is a session name or namespace/ServiceAccount. Neither that syntax
@@ -1005,7 +1005,7 @@ func parseRemotePilotAgent(image, session string) (*controller.PilotAgent, error
 		return nil, errors.New("--remote-pilot-agent-image and --remote-pilot-agent-session must be set together")
 	}
 	if !remotePilotAgentImage.MatchString(image) {
-		return nil, errors.New("--remote-pilot-agent-image must be ghcr.io/thaynes43/dev-env[:2.X.Y]@sha256:<64 lowercase hex>; tag-only images are refused")
+		return nil, errors.New("--remote-pilot-agent-image must be ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 lowercase hex>; release tag and digest are both required")
 	}
 	parent, key, ok := strings.Cut(session, "|")
 	validParent := len(validation.IsDNS1123Label(parent)) == 0

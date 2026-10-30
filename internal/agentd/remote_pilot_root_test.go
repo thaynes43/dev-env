@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -183,28 +182,4 @@ func TestRemotePilotRootStageB(t *testing.T) {
 			}
 		})
 	}
-	t.Run("selector removed keeps init gate", func(t *testing.T) {
-		f := fixture.Load(t)
-		pod := fixture.LoadGolden(t).SelectorRemoved
-		b := f.Binding(t)
-		if pod.Main.Image == f.RemoteImage || pod.Init.Image != pod.Main.Image || pod.Init.Env[homeguard.Env] != b.String() || pod.Main.Env[homeguard.Env] != b.String() || !pod.Init.HomeReadOnly || !slices.Equal(pod.Init.Args, []string{"home-verify"}) {
-			t.Fatal("selector removal opened unguarded HOME")
-		}
-		// Local simulation of an old image lacking home-verify. No image is
-		// launched or qualified: a failing init must not cross into main/native.
-		legacyAgentd := filepath.Join(t.TempDir(), "agentd")
-		writeHostFixture(t, legacyAgentd, "#!/bin/sh\n[ \"$1\" = home-verify ] || exit 99\necho 'unknown command home-verify' >&2\nexit 2\n")
-		if err := os.Chmod(legacyAgentd, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		world := newFakeCodexWorld(t)
-		cmd := exec.CommandContext(context.Background(), legacyAgentd, pod.Init.Args...)
-		out, err := cmd.CombinedOutput()
-		if err == nil || !strings.Contains(string(out), "unknown command home-verify") {
-			t.Fatal("legacy init simulation did not refuse", err)
-		}
-		if len(world.calls) != 0 {
-			t.Fatal("native crossed failed init")
-		}
-	})
 }

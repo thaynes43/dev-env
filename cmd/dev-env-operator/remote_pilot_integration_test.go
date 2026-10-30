@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -145,7 +146,8 @@ func TestRemotePilotRootStageA(t *testing.T) {
 	task.Labels = map[string]string{v1alpha1.LabelIdempotencyKey: f.TaskKey}
 	task.Spec.Mode, task.Spec.Prompt = v1alpha1.ModeTask, "offline fixture"
 	// Ordinary Codex task construction needs the existing explicit gate.
-	taskArgs := append(rootPilotFlags(t, true), "--enable-managed-codex-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43")
+	managedTaskFlags := []string{"--enable-managed-codex-tasks", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"}
+	taskArgs := append(rootPilotFlags(t, true), managedTaskFlags...)
 	o, err := parseFlags(taskArgs)
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +155,11 @@ func TestRemotePilotRootStageA(t *testing.T) {
 	r, cl := rootPilotClient(t, o, s, pvc, pv, usage, task)
 	p := reconcileRootPilot(t, r, s)
 	witness := rootPodWitness(t, p)
+	var renderedSession protocol.Session
+	fixture.Decode(t, []byte(witness.Main.Env[protocol.SessionEnv]), &renderedSession)
+	if s.Spec.Size != v1alpha1.SizeS || s.Spec.Effort != "" || s.Spec.Profile != "" || renderedSession.Effort != "" || strings.Contains(witness.Main.Env[protocol.SessionEnv], `"effort"`) {
+		t.Fatal("Root size or omitted effort/profile changed")
+	}
 	if witness.Namespace != b.Namespace || witness.Name != b.Session || witness.SessionUID != b.SessionUID || witness.HomeClaim != b.Claim() {
 		t.Fatal("HOME/session identity changed")
 	}
@@ -189,7 +196,7 @@ func TestRemotePilotRootStageA(t *testing.T) {
 	if got := reconcileRootPilot(t, r, task).Spec.Containers[0].Image; got != f.TaskImage {
 		t.Fatal("task pilot displaced", got)
 	}
-	without, err := parseFlags(rootPilotFlags(t, false))
+	without, err := parseFlags(append(rootPilotFlags(t, false), managedTaskFlags...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,8 +205,26 @@ func TestRemotePilotRootStageA(t *testing.T) {
 	rRemoved, _ := rootPilotClient(t, without, rs, rc, rv)
 	removedPod := reconcileRootPilot(t, rRemoved, rs)
 	removed := rootPodWitness(t, removedPod)
+	var cm corev1.ConfigMap
+	if err := rRemoved.Client.Get(ctx, rRemoved.Templates, &cm); err != nil {
+		t.Fatal(err)
+	}
+	parsedTemplates, err := templates.Parse(cm.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removedPod.Spec.InitContainers[0].Name != "original-home-verify" || removed.Init.Image != parsedTemplates.Image || removed.Main.Image != parsedTemplates.Image || !slices.Equal(removed.Init.Command, []string{"/usr/local/bin/agentd"}) {
+		t.Fatal("selector removal did not retain real init on templates image")
+	}
+	// Removing only image selection must preserve the complete main container
+	// after accounting for the expected return to the templates image.
+	wantMain := p.Spec.Containers[0].DeepCopy()
+	wantMain.Image = parsedTemplates.Image
+	if !apiequality.Semantic.DeepEqual(*wantMain, removedPod.Spec.Containers[0]) {
+		t.Fatal("selector removal changed main container beyond its image")
+	}
 	t.Run("all pilot flags unset preserve default bytes", func(t *testing.T) {
-		defaults, err := parseFlags([]string{"--session-namespace=" + b.Namespace})
+		defaults, err := parseFlags(append([]string{"--session-namespace=" + b.Namespace}, managedTaskFlags...))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -235,7 +260,7 @@ func TestRemotePilotRootStageA(t *testing.T) {
 
 func TestRemotePilotRootStageANegatives(t *testing.T) {
 	f := fixture.Load(t)
-	for _, name := range []string{"Session UID mismatch", "PVC UID mismatch", "PV UID mismatch", "Session deleting", "PVC deleting", "same-name replaced Session", "forbidden PV read", "parent mismatch", "key mismatch"} {
+	for _, name := range []string{"Session UID mismatch", "PVC UID mismatch", "PV UID mismatch", "Session deletion path", "PVC deleting", "same-name replaced Session", "forbidden PV read", "parent mismatch", "key mismatch"} {
 		t.Run(name, func(t *testing.T) {
 			s, pvc, pv := rootPilotObjects(t)
 			switch name {
@@ -245,7 +270,7 @@ func TestRemotePilotRootStageANegatives(t *testing.T) {
 				pvc.UID = "mismatched-home"
 			case "PV UID mismatch":
 				pv.UID = "mismatched-pv"
-			case "Session deleting":
+			case "Session deletion path":
 				now := metav1.Now()
 				s.DeletionTimestamp = &now
 			case "PVC deleting":
@@ -278,8 +303,29 @@ func TestRemotePilotRootStageANegatives(t *testing.T) {
 				if !apierrors.IsForbidden(err) {
 					t.Fatal("PV denial lost", err)
 				}
+				if !strings.Contains(err.Error(), "persistentvolumes") || !strings.Contains(err.Error(), "offline denied") {
+					t.Fatal("wrong forbidden read caused refusal", err)
+				}
 			} else if err != nil {
 				t.Fatal(err)
+			}
+			var after v1alpha1.AgentSession
+			if err := cl.Get(context.Background(), client.ObjectKeyFromObject(s), &after); err != nil {
+				t.Fatal(err)
+			}
+			blocked := meta.FindStatusCondition(after.Status.Conditions, controller.ConditionRemovalBlocked)
+			if name == "parent mismatch" || name == "key mismatch" {
+				if blocked != nil {
+					t.Fatal("selector mismatch incorrectly blocked guarded default", blocked)
+				}
+			} else if name != "forbidden PV read" {
+				reason, prefix := "SuspendNeedsRescue", "suspend waits: "
+				if name == "Session deletion path" {
+					reason, prefix = "DeleteNeedsRescue", "delete is a reap and waits: "
+				}
+				if blocked == nil || blocked.Status != metav1.ConditionTrue || blocked.Reason != reason || blocked.Message != prefix+homeguard.ErrUnsafe.Error() {
+					t.Fatalf("wrong preservation refusal: %+v", blocked)
+				}
 			}
 			var pods corev1.PodList
 			if err := cl.List(context.Background(), &pods); err != nil {

@@ -353,10 +353,11 @@ sessions do not acquire an automatic TTL from this selector.
 ### Separate Codex remote pilot image (default off; source only)
 
 `--remote-pilot-agent-session='<parent>|<key>'` and
-`--remote-pilot-agent-image=ghcr.io/thaynes43/dev-env@sha256:<64 lowercase hex>`
+`--remote-pilot-agent-image=ghcr.io/thaynes43/dev-env:2.X.Y@sha256:<64 lowercase hex>`
 are a separate pair. Both must be set or both unset; malformed values fail
-operator startup. A `:2.X.Y` release tag may precede the required digest;
-tag-only image references are refused. The parent is either a DNS-1123 session
+operator startup. The `:2.X.Y` release tag and digest are both required so the
+reference matches the signature-audit policy. Digest-only and tag-only image
+references are refused. The parent is either a DNS-1123 session
 name or `<namespace>/<serviceaccount>`, such as `dev/dev-env`. The namespace is
 a DNS-1123 label and the ServiceAccount name a DNS-1123 subdomain. The key is
 a non-empty Kubernetes label value. Neither parent form nor a label value can

@@ -13,11 +13,9 @@ func TestRemotePilotAgentFlags(t *testing.T) {
 		t.Fatalf("remote pilot must be off by default: %+v %v", o.remotePilotAgent, err)
 	}
 	for _, parent := range []string{"dev/dev-env", "dev-env-1027-111645", "dev/dev-env.client", "dev/" + strings.Repeat("s", 249)} {
-		for _, img := range []string{image, "ghcr.io/thaynes43/dev-env" + digest} {
-			o, err := parseFlags([]string{"--remote-pilot-agent-image=" + img, "--remote-pilot-agent-session=" + parent + "|remote-pilot_1.A"})
-			if err != nil || o.remotePilotAgent == nil || o.remotePilotAgent.Image != img || o.remotePilotAgent.Parent != parent || o.remotePilotAgent.Key != "remote-pilot_1.A" {
-				t.Fatalf("valid remote pilot refused or misread: %+v %v", o.remotePilotAgent, err)
-			}
+		o, err := parseFlags([]string{"--remote-pilot-agent-image=" + image, "--remote-pilot-agent-session=" + parent + "|remote-pilot_1.A"})
+		if err != nil || o.remotePilotAgent == nil || o.remotePilotAgent.Image != image || o.remotePilotAgent.Parent != parent || o.remotePilotAgent.Key != "remote-pilot_1.A" {
+			t.Fatalf("valid remote pilot refused or misread: %+v %v", o.remotePilotAgent, err)
 		}
 	}
 	for name, args := range map[string][]string{
@@ -60,6 +58,7 @@ func TestRemotePilotAgentFlags(t *testing.T) {
 		})
 	}
 	for name, img := range map[string]string{
+		"digest only":      "ghcr.io/thaynes43/dev-env" + digest,
 		"tag only":         "ghcr.io/thaynes43/dev-env:2.69.0",
 		"latest tag":       "ghcr.io/thaynes43/dev-env:latest",
 		"no tag or digest": "ghcr.io/thaynes43/dev-env",
