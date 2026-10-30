@@ -42,6 +42,10 @@ Everything here is default off. Five operator flags turn it on, in haynes-ops
 changes that come in the order of section 13. Deletion is the last, after the
 archived-history read is accepted on the installed system.
 
+**2026-10-30, OpenProject #291:** section 24 adds a separately gated,
+compute-only exception for a terminal headless task. It preserves the original
+HOME and history and does not activate or shorten the HOME expiry policy.
+
 ## 1. What runs, in one picture
 
 ```mermaid
@@ -2370,3 +2374,124 @@ so the finalizer can lift. A present Pod or HOME, or any other read result,
 keeps the finalizer. `TestNeverStartedReleasePredicate` locks the predicate.
 `TestNeverStartedReleaseLiftsFinalizerOnlyWhenPodAndHomeAreAbsent` locks the
 three call sites.
+
+## 24. Terminal headless task compute reclaim — 2026-10-30 (#291)
+
+Source and tests only, authorized by work orders PODRECLAIM291-20261030-01
+and PODRECLAIM291-FIX-20261030-02 (one bounded review correction).
+The phase-1 checkpoint is OpenProject #291 journal 3321. The relevant private
+stop/expiry/terminal paths are unchanged between v2.63.1 and v2.70.1. A task's
+provider exits, but agentd stays alive; its Running Pod cannot produce the
+whole-executor terminal record. Suspended private Sessions cannot use the
+reap-only stop path, and even an ended executor is retained outside HOME expiry.
+`stopState: Unknown` is an intentional schema invariant, not a missing update.
+
+Proposed operator flags: `--enable-terminal-task-pod-reclaim=false` and
+`--terminal-task-pod-reclaim-grace=10m`. The grace must be at least one second. Enabling
+requires the existing private terminal-record and executor-stop flags. Tom must
+choose whether to activate this policy and accept the grace in a separate
+reviewed runtime change. The new CRD copy must reach haynes-ops **before** any operator pin
+carrying this code (haynes-ops #3502). A stale copy drops `taskTerminal` and
+`exitSource`, so nothing is reclaimed: this fails safe. An upgraded agent is
+also a prerequisite; old results are never backfilled from process absence or an old heartbeat.
+
+Agentd adds provider-exit proof only after waiting for the original headless
+provider. The proof uses its existing confirmed initial-attempt receipt and
+binds the result to the Session UID, Pod UID, provider and attempt ID. A failed
+spawn, missing receipt or contradictory identity supplies no proof. The API
+accepts that binding only from the original Pod's authenticated heartbeat.
+The controller confirms an immutable `privateHistory.taskTerminal` snapshot of
+that result, its observation time and reclaim deadline. Repeated observations
+and operator restarts do not restart its grace or erase its outcome. An explicit
+resume restarts the effective grace from `resumed-at`; the immutable terminal
+snapshot stays unchanged. Automatic suspend records `suspended-by=terminal-task-reclaim`.
+
+Only a private headless task with intact admission, original HOME and executor
+identity qualifies. Local/interactive and remote/RC Sessions, reusable hosts,
+canaries/pilots, shared workspaces, hold Pods, active
+providers, attached clients, live or unproved descendants and owner holds never
+qualify. A Session being reaped (deletion requested) is outside this path: the
+reap's own stop under section 4 owns it. The cached early return, the uncached
+view and the guarded delete each refuse a deletion timestamp. The suspend
+patch and the status CAS before the guarded delete conflict with a delete that
+lands after the uncached read. A delete that lands before the stop intent's
+own Session read takes section 4's reap branch, which writes the same intent
+and deadline. An open reclaim reason closes as `Protected` when the reap
+starts, and the retained gauges count the Pod under that reason; a settled
+`Reclaimed` stays. Configured coordinator hosts use a separate, non-session ServiceAccount
+and are outside this path; no configured-host name matching is claimed. A task
+coordinating descendants remains protected by the parent walk. An invalid
+HOME-expiry override is a hold. Cached eligibility and protection checks run
+first. The terminal snapshot is saved with a status CAS; resource actions read
+the Session, executor, HOME and children uncached only after the effective
+deadline. Settled and ineligible outcomes do not poll. Transient uncertainty
+retries at the HOME-expiry scale (one minute for unknown reads, fifteen minutes
+for protection refusals), with Pod/Session events still triggering reconciles. Missing or contradictory proof
+keeps compute and reports its reason, accountable parent (or owner), and known
+or unknown deadline in a status condition. The existing session collector
+exports retained counts and oldest age by bounded reason; no alert is added.
+
+After the grace the controller suspends the task if needed, then uses section
+4's confirmed stop intent and UID/resourceVersion-tested deadline patch. This
+is a narrow exception to the reap-only rule: the original headless provider
+already exited and its result is retained. It waits for section 3's unchanged
+kubelet terminal record before calling the existing guarded `deletePod` for
+that exact Pod with UID/resourceVersion preconditions and normal termination
+grace. Session CAS confirmation precedes the delete, as for the stop request;
+a hold observed before that confirmation wins. No force deletion is used.
+
+Known liveness limit: exit proof covers the original provider process and its
+result, not every process in the Pod. A background process left in its process
+group with redirected output, or a process started in tmux and detached, may
+still be running and is killed by the stop. No new process tracker is added.
+`/tmp` and tmpfs contents are lost when compute stops.
+
+This is a new no-rescue case beside D-51: removing ended compute requires no
+Git rescue because the original HOME, PVC, provider history, task-result,
+launch, logs and Session finalizers all remain. HOME archive/expiry keeps its
+own trigger, grace, verification and flags. No volume/finalizer release or
+history deletion is part of this path. No structured PR-reference record is
+invented: existing output, logs, worktree and tracker handoff retain those
+references. An old agent without exit proof remains retained.
+
+When reclaim is on (its flag and both prerequisite flags), the operator
+explicitly marks a private-history-retained task in its session document. The
+mark uses reclaim's own static scope, so an original-home, canary or pilot task
+(any `projectcanary.IsPilot` match) that reclaim never stops is not marked when
+its Pod is created. With reclaim off, private history
+retention alone sets no mark, so every retained task keeps D-58's TUI resume
+after a container restart.
+
+The mark is fixed when the Pod is created, and a retained private task has
+exactly one executor Pod. Turning reclaim on therefore leaves every existing
+task unmarked for life, and reclaim still applies to those tasks: reclaiming
+idle compute created before activation is the purpose of this section. If an
+unmarked Pod's container restarts after its provider exits, agentd resumes the
+TUI. The agent then no longer reports Exited, so the proof fails and reclaim
+keeps the Pod (ProofUnknown). If that restart lands after the automatic
+suspend but before the stop request, the Session stays suspended with the Pod
+running and no stop: safe, with compute retained as it is today. If heartbeat
+lag hides the resume, the stop can end that resumed TUI, including a client
+that attached within the same lag; the HOME and history stay retained. Only the marked scope refuses automatic resume for a saved terminal result
+or exit proof, or an interrupted retained launch. Other tasks keep D-58 resume
+and its Interrupted message. A retained private task never automatically starts a provider from its saved
+launch on a later boot, including the TUI `BuildResume` path and interrupted
+launches with no result. A missing or
+unreadable result remains uncertain and cannot authorize reclaim. Explicit
+human recovery into a different bounded task remains separate.
+
+Two operating limits, recorded 2026-10-30 from the #729 review:
+
+- **Turn it off with the flag, not an older operator.** Once any Session holds
+  `taskTerminal`, an operator older than this code writes status without the
+  field, and the CRD rule that keeps the observation immutable refuses the
+  write. Turn reclaim off with `--enable-terminal-task-pod-reclaim=false`; keep
+  the operator at or above this version.
+- **A resume delays reclaim by one grace; it does not cancel it.** An explicit
+  resume restarts the grace from `resumed-at`. Once the stop request is
+  confirmed and applied to the Pod, a later resume does not withdraw it: the
+  Pod's containers still stop, and the resume does not restart them. After that
+  grace the controller suspends the Session again (`suspended-by=terminal-task-reclaim`)
+  and deletes the ended Pod, because its proof still holds.
+  `TestTerminalTaskReclaimExplicitResumeRestartsGraceAndSetsSuspender` pins
+  the grace restart and the second suspend. The HOME stays retained either way.

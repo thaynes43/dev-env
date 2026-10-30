@@ -150,7 +150,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		_ = pr.Close()
 		_ = pw.Close()
 		_, _ = fmt.Fprintf(out, "agentd run-agent: start %s: %v\n", l.Argv[0], err)
-		writeResult(stateDir, l, started, 127, false, streamResult{})
+		writeResult(stateDir, l, started, 127, false, streamResult{}, false)
 		_, _ = fmt.Fprintf(out, "TASK-EXIT:%d\n", 127)
 		return 127
 	}
@@ -308,7 +308,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 			code = 1
 		}
 	}
-	writeResult(stateDir, l, started, code, to, res)
+	writeResult(stateDir, l, started, code, to, res, true)
 	_ = os.Remove(filepath.Join(stateDir, pidFile))
 	_, _ = fmt.Fprintf(out, "TASK-EXIT:%d\n", code)
 	return code
@@ -437,7 +437,7 @@ func exitCode(cmd *exec.Cmd, err error) int {
 	return cmd.ProcessState.ExitCode()
 }
 
-func writeResult(stateDir string, l Launch, started time.Time, code int, timedOut bool, res streamResult) {
+func writeResult(stateDir string, l Launch, started time.Time, code int, timedOut bool, res streamResult, waited bool) {
 	tr := taskResult{
 		TaskResult: protocol.TaskResult{
 			ExitCode:   code,
@@ -450,6 +450,10 @@ func writeResult(stateDir string, l Launch, started time.Time, code int, timedOu
 		StartedAt:      started,
 		ConversationID: l.ConversationID,
 		BootID:         l.BootID,
+	}
+	if waited && confirmedInitialUsage(l, stateDir) {
+		source := *l.UsageSource
+		tr.ExitSource = &source
 	}
 	if res.Seen {
 		u := res.Usage

@@ -134,6 +134,10 @@ type Reconciler struct {
 	// It acts only while PrivateTerminalRecord is on too. Off, no intent is
 	// written and no Pod is patched.
 	PrivateExecutorStop bool
+	// TerminalTaskPodReclaim removes only terminal headless compute, default
+	// off; DESIGN-025 24 keeps HOME/history retention separate.
+	TerminalTaskPodReclaim   bool
+	TerminalTaskReclaimGrace time.Duration
 	// PrivateExecutorStops counts the stop requests
 	// (MetricPrivateExecutorStopRequests); nil counts nothing.
 	PrivateExecutorStops *prometheus.CounterVec
@@ -423,16 +427,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}
 	}
 
+	statusBeforeReclaim := s.Status.DeepCopy()
+	reclaimResult, reclaimStop, reclaimErr := r.reconcileTerminalTaskReclaim(ctx, &s)
+	if reclaimErr != nil || reclaimStop {
+		return reclaimResult, reclaimErr
+	}
+
+	reclaimStatusChanged := !apiequality.Semantic.DeepEqual(statusBeforeReclaim, &s.Status)
+
 	// DESIGN-025 5: the HOME expiry, up to Archived, after the observation
 	// above confirmed the terminal record it rests on.
-	var expiryResult ctrl.Result
+	expiryResult := reclaimResult
 	if privateHistoryProtected(&s) {
 		obs.expiryExecutorEnded = r.homeExpiryOn() && recordedExecutorEnded(&s, obs)
 		res, stop, err := r.reconcileHomeExpiry(ctx, &s, &obs)
 		if err != nil || stop {
 			return res, err
 		}
-		expiryResult = res
+		expiryResult = sooner(expiryResult, res)
 	}
 
 	if s.Spec.SessionDirectory != nil {
@@ -517,7 +529,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	result = sooner(result, expiryResult)
 	next := s.Status.DeepCopy()
 	observe(&s, obs, next)
-	if !apiequality.Semantic.DeepEqual(&s.Status, next) {
+	if reclaimStatusChanged || !apiequality.Semantic.DeepEqual(&s.Status, next) {
 		s.Status = *next
 		return r.writeStatus(ctx, &s, result)
 	}
@@ -557,6 +569,11 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		// Legacy rescue may exec and change provider HOME. Retain the original
 		// executor before either rescue or deletion, including uncertain history.
 		obs.removalBlocked = errPrivateHistoryRetained
+		// Terminal task compute reclaim owns non-Reaping stops and its retry
+		// cadence. Do not repeat that path after a refusal or grace wait.
+		if s.DeletionTimestamp.IsZero() {
+			return ctrl.Result{}, false, nil
+		}
 		// A Reaping private Session's recorded executor is asked to end
 		// instead (DESIGN-025 4); its Pod object stays.
 		return r.requestPrivateExecutorStop(ctx, s, obs)
@@ -1483,6 +1500,9 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 // is Failed whatever its task did; this is where its success or failure shows.
 // It is a pure function of status, so a fresh operator computes the same.
 func taskResult(s *v1alpha1.AgentSession, a *v1alpha1.AgentStatus) *v1alpha1.TaskResultStatus {
+	if h := s.Status.PrivateHistory; h != nil && h.TaskTerminal != nil {
+		a = &v1alpha1.AgentStatus{Task: &h.TaskTerminal.Task}
+	}
 	if s.Spec.Mode != v1alpha1.ModeTask || a == nil || a.Task == nil {
 		return nil
 	}
@@ -1541,6 +1561,9 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 		// recorded Deleting is archived (D-62) until it is reaped.
 		return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the HOME expiry archived the history as %s and deletes the HOME %s; an archived session is not resumed: read its history with agent-run history (DESIGN-025)",
 			s.Status.PrivateHistory.Expiry.Archive.Entry, HomeClaimName(s.Name)))
+	case privateHistoryProtected(s) && obs.pod.missing && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() &&
+		s.Status.PrivateHistory.TaskTerminal != nil && executorTerminalRecorded(s.Status.PrivateHistory):
+		return v1alpha1.PhaseSuspended, notReady("TaskPodReclaimed", "terminal task compute is absent with confirmed stop proof; original HOME, history and outcome remain retained")
 	case privateHistoryProtected(s) && wantsPodGone(s):
 		if s.DeletionTimestamp.IsZero() {
 			return v1alpha1.PhaseSuspended, notReady("RetentionPending", "private HOME and durable identity remain retained; private stop evidence is unknown")

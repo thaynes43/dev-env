@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,5 +79,20 @@ func TestSessionCollector(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestTerminalTaskReclaimCollectorRetainedCountAndAge(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	s := sessionWith("held-task", v1alpha1.PhaseSuspended, metav1.Condition{Type: ConditionTerminalTaskReclaim, Status: metav1.ConditionTrue, Reason: "Held"})
+	s.CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+	s.Status.PodName = s.Name
+	reclaimed := sessionWith("reclaimed-task", v1alpha1.PhaseSuspended, metav1.Condition{Type: ConditionTerminalTaskReclaim, Status: metav1.ConditionFalse, Reason: "Reclaimed"})
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(s, reclaimed).Build()
+	got := strings.Join(gather(t, &SessionCollector{Reader: c, Namespace: s.Namespace, TerminalTaskReclaim: true, Now: func() time.Time { return now }}), "\n")
+	for _, want := range []string{"dev_env_terminal_task_pods_retained{reason=Held} 1", "dev_env_terminal_task_pods_oldest_seconds{reason=Held} 3600", "dev_env_terminal_task_pods_retained{reason=ProofUnknown} 0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s in %s", want, got)
+		}
 	}
 }

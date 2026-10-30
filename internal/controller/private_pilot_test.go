@@ -55,7 +55,7 @@ func TestPrivatePilotControllerExpiryDriftAndPreservedPeer(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				pod, e := buildManagedPod(s, b.Templates, r.APIURL, true, false, nil)
+				pod, e := buildManagedPod(s, b.Templates, r.APIURL, true, false, nil, r.terminalTaskReclaimOn())
 				if e != nil {
 					t.Fatal("pilot cannot render", e)
 				}
@@ -231,7 +231,7 @@ func TestPrivatePilotFreshCohortBothSlotsAndLegacyRetention(t *testing.T) {
 			if err := r.validateProjectCanary(context.Background(), s, b.Templates); err != nil {
 				t.Fatal("fresh cohort slot refused", err)
 			}
-			pod, err := buildManagedPod(s, b.Templates, r.APIURL, true, false, nil)
+			pod, err := buildManagedPod(s, b.Templates, r.APIURL, true, false, nil, r.terminalTaskReclaimOn())
 			if err != nil {
 				t.Fatal("fresh session document/retained record", err)
 			}

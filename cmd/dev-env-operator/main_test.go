@@ -493,3 +493,29 @@ func TestTaskPilotAgentTupleIsIndependent(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalTaskReclaimFlagsDefaultOffAndRequireStopProof(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.terminalTaskPodReclaim || o.terminalTaskReclaimGrace != 10*time.Minute {
+		t.Fatal("unsafe reclaim defaults", err)
+	}
+	for _, args := range [][]string{
+		{"--enable-terminal-task-pod-reclaim"},
+		{"--enable-terminal-task-pod-reclaim", "--enable-private-terminal-record"},
+		{"--terminal-task-pod-reclaim-grace=0"},
+		{"--terminal-task-pod-reclaim-grace=-1m"},
+		{"--terminal-task-pod-reclaim-grace=1ms"},
+	} {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("unsafe reclaim flags accepted", args)
+		}
+	}
+	o, err = parseFlags([]string{"--enable-terminal-task-pod-reclaim", "--enable-private-terminal-record", "--enable-private-executor-stop", "--terminal-task-pod-reclaim-grace=20m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := reconcilerForOptions(o)
+	if !r.TerminalTaskPodReclaim || r.TerminalTaskReclaimGrace != 20*time.Minute || !r.PrivateExecutorStop || !r.PrivateTerminalRecord || r.HomeHistoryArchive || r.HomeExpiryDelete {
+		t.Fatal("reclaim wiring changed retention flags")
+	}
+}

@@ -43,7 +43,7 @@ func pilotTestSession() *v1alpha1.AgentSession {
 // buildPilotPod builds the session's pod the way the reconciler does.
 func buildPilotPod(t *testing.T, s *v1alpha1.AgentSession, p *PilotAgent) *corev1.Pod {
 	t.Helper()
-	pod, err := buildManagedPod(s, exampleTemplates(t), "https://api", false, false, nil)
+	pod, err := buildManagedPod(s, exampleTemplates(t), "https://api", false, false, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestPilotAgentSelectionIsExact(t *testing.T) {
 				t.Fatalf("pilotImageFor %q, want empty", got)
 			}
 			if s.Spec.Agent == "unknown" {
-				if _, err := buildManagedPod(s, tmpl, "https://api", false, false, nil); err == nil {
+				if _, err := buildManagedPod(s, tmpl, "https://api", false, false, nil, false); err == nil {
 					t.Fatal("unknown agent was accepted by pod builder")
 				}
 				return
@@ -227,7 +227,7 @@ func TestReconcilerSessionPodUsesThePilotImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := buildManagedPod(selected, tmpl, off.APIURL, off.ManagedCodexTasks, off.ManagedChildDecisions, off.ManagedChildDecisionParents)
+	want, err := buildManagedPod(selected, tmpl, off.APIURL, off.ManagedCodexTasks, off.ManagedChildDecisions, off.ManagedChildDecisionParents, off.terminalTaskReclaimOn())
 	if err != nil {
 		t.Fatal(err)
 	}

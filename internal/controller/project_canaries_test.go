@@ -27,7 +27,7 @@ func TestProjectCanaryPodWholeExecutorBounds(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
 		t.Run(provider, func(t *testing.T) {
 			f := testutil.New(t, provider, "dev/dev-env")
-			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, true, nil)
+			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, true, nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -59,12 +59,12 @@ func TestProjectCanaryPodWholeExecutorBounds(t *testing.T) {
 				if envOf(pod.Spec.Containers[0], "AGENTD_CODEX_ACCESS_FILE").Value != projectcanary.CodexAccessPath+"/access.json" {
 					t.Fatal("missing access-only projection")
 				}
-				if _, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", false, false, nil); err == nil {
+				if _, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", false, false, nil, false); err == nil {
 					t.Fatal("disabled managed Codex rendered")
 				}
 			}
 			f.Session.Spec.Prompt += "caller change"
-			if _, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil); err == nil {
+			if _, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false); err == nil {
 				t.Fatal("foreign bound prompt rendered")
 			}
 		})
@@ -101,7 +101,7 @@ func TestProjectCanaryRenderedPromptAndArgsCarryNoRuleLine(t *testing.T) {
 					common := commonCanaryControllerWith(t, &f, "COMMON_RENDER_MARKER\nKeep the common rules out of the prompt.", "HEADER_RENDER_MARKER\nCodex reads this header first.")
 					lines = append(append(lines, ruleLines(common.Common.Text)...), ruleLines(common.Header.Text)...)
 				}
-				pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, true, nil)
+				pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, true, nil, false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -631,7 +631,7 @@ func TestProjectCanaryNonAttemptMarkCoversOnlyItsOwnLatchWrite(t *testing.T) {
 
 func TestProjectCanaryFinalExecutorRefusesForeignPVCAndMountAliases(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
-	pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)
+	pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

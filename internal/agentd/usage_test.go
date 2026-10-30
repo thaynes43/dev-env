@@ -137,7 +137,7 @@ func TestUsagePrivateOriginalReceiptAndRetainedResume(t *testing.T) {
 	}
 	var result streamResult
 	renderStreamLine([]byte(`{"type":"result","subtype":"success","total_cost_usd":0,"usage":{"input_tokens":3}}`), io.Discard, &result)
-	writeResult(s.StateDir, l, l.CreatedAt, 0, false, result)
+	writeResult(s.StateDir, l, l.CreatedAt, 0, false, result, false)
 	var tr taskResult
 	if err := readJSONFile(s.statePath(resultFile), &tr); err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestUsagePrivateOriginalReceiptAndRetainedResume(t *testing.T) {
 		t.Fatal("resume relabelled or lost initial snapshot")
 	}
 	before, _ := os.ReadFile(s.statePath(resultFile))
-	writeResult(s.StateDir, l, l.CreatedAt.Add(time.Hour), 1, false, streamResult{})
+	writeResult(s.StateDir, l, l.CreatedAt.Add(time.Hour), 1, false, streamResult{}, false)
 	after, _ := os.ReadFile(s.statePath(resultFile))
 	if !bytes.Equal(before, after) {
 		t.Fatal("original result overwritten")
@@ -283,7 +283,7 @@ func TestUsageOutgoingHeartbeatMixedVersionPreservesPrivateEvidence(t *testing.T
 				renderStreamLine([]byte(`{"type":"result","subtype":"error_max_turns","num_turns":3,"usage":{"input_tokens":5,"output_tokens":7}`+tc.cost+`}`), io.Discard, &result)
 			}
 			result.NumTurns = 3
-			writeResult(s.StateDir, launch, launch.CreatedAt, 124, true, result)
+			writeResult(s.StateDir, launch, launch.CreatedAt, 124, true, result, false)
 			var private taskResult
 			if err := readJSONFile(s.statePath(resultFile), &private); err != nil || private.Usage == nil || private.Usage.InputTokens != 5 {
 				t.Fatal("private raw task evidence lost", err, private)

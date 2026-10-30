@@ -23,8 +23,8 @@ const TmuxSession = "agent"
 // what the last pod did.
 const (
 	bootFile = "boot.json"
-	// launchFile is the session's first launch: the record that its agent was
-	// started, and the conversation every later boot resumes (D-42, D-58).
+	// launchFile is the session's first launch. Interactive/shared Sessions
+	// may resume it; private tasks retain it without automatic resume.
 	launchFile = "launch.json"
 	// resumeFile is the launch of a later boot's TUI, which resumes the
 	// conversation of launchFile (D-58).
@@ -249,12 +249,13 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	return l, nil
 }
 
-// BuildResume builds a later boot's launch (D-58): the TUI, resuming the
-// conversation the first launch started. A task's prompt never runs again
-// (D-42); its conversation comes back as an interactive session instead, with
-// the task's guard. The model and effort are the session's, which spec fixes
-// at create (D-39).
+// BuildResume builds an interactive/shared later launch (D-58). Retained
+// private tasks cannot automatically resume, even when their result is lost
+// (DESIGN-025 24). The model and effort remain fixed at create (D-39).
 func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first Launch, bootID string, now time.Time) (Launch, error) {
+	if retainedPrivateTask(s, sess) {
+		return Launch{}, errors.New("a terminal private task cannot automatically resume its provider")
+	}
 	if sess.Agent == protocol.AgentCodex {
 		return buildCodexLaunch(s, sess, ws, &first, bootID, now)
 	}
@@ -434,4 +435,19 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+func retainedPrivateTask(s Settings, sess protocol.Session) bool {
+	if sess.Mode != protocol.ModeTask || sess.Workspace != nil || !sess.PrivateHistoryRetained {
+		return false
+	}
+	// A saved launch is enough to prohibit automatic TUI resume, including
+	// an interrupted task with no result. Constructing an unsaved launch in
+	// isolation is not proof that an original invocation ever ran.
+	for _, name := range []string{launchFile, resultFile} {
+		if _, err := os.Lstat(s.statePath(name)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }

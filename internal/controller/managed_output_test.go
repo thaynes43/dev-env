@@ -13,7 +13,7 @@ import (
 
 func TestManagedOutputTransportUsesOnlyTrustedCanaryBinding(t *testing.T) {
 	f := testutil.New(t, "claude", "dev/dev-env")
-	doc, err := sessionDocument(f.Session)
+	doc, err := sessionDocument(f.Session, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestManagedOutputTransportUsesOnlyTrustedCanaryBinding(t *testing.T) {
 	f.Record.CaptureOutput = true
 	f.Session.Spec.ProjectCanary.CaptureOutput = true
 	f.Session.Spec.ProjectCanary.PolicyDigest = f.Record.Digest()
-	doc, err = sessionDocument(f.Session)
+	doc, err = sessionDocument(f.Session, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestManagedOutputCommonCanaryOwnedFixedFile(t *testing.T) {
 			f := testutil.New(t, provider, "dev/dev-env")
 			f.Record.CaptureOutput, f.Session.Spec.ProjectCanary.CaptureOutput = true, true
 			accepted := commonCanaryController(t, &f, "ACCEPTED_COMMON")
-			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil)
+			pod, err := buildManagedPod(f.Session, f.Templates, "https://operator.example", true, false, nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}

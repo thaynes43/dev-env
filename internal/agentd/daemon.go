@@ -288,11 +288,14 @@ func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
 }
 
 // startAgent starts the session's agent. On the volume's first boot that is
-// the task (D-42) or a local session's TUI; on every later boot it is the TUI,
-// resuming the first launch's conversation, so a task's prompt never runs
-// twice and resume is the way back in (D-58). It returns the boot step and,
+// the task (D-42) or a local session's TUI. Later interactive/shared boots
+// resume the TUI (D-58); retained private tasks never automatically resume
+// (DESIGN-025 24). It returns the boot step and,
 // when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
+	if repo.State != StepFail && retainedPrivateTask(d.S, d.Session) {
+		return newStep("agent", []string{"private task launch/result retained; no automatic provider resume"}, nil), ""
+	}
 	if codexRemoteSession(d.Session) {
 		// Story110 T17: no CLI launch and no conversation to resume; the
 		// agent is the phone daemon, which the poll loop keeps up.

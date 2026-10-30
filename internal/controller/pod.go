@@ -78,14 +78,16 @@ func HomeClaimName(session string) string { return "home-" + session }
 // updated after create: a change in the templates reaches a session only through
 // a drain (5.2).
 func buildPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex ...bool) (*corev1.Pod, error) {
-	return buildManagedPod(s, t, apiURL, len(managedCodex) > 0 && managedCodex[0], false, nil)
+	return buildManagedPod(s, t, apiURL, len(managedCodex) > 0 && managedCodex[0], false, nil, false)
 }
 
-func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string) (*corev1.Pod, error) {
+// buildManagedPod's retentionLatch is the reconciler's terminalTaskReclaimOn:
+// agentd refuses automatic TUI resume only for a task the operator can reclaim.
+func buildManagedPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, managedCodex, childDecisions bool, coordinatorParents []string, retentionLatch bool) (*corev1.Pod, error) {
 	// The API assigns Parent from authenticated caller identity. Only exact
 	// configured coordinator SAs can use the coordinator-only decision route.
 	childDecisions = childDecisions && s.Spec.Parent != "" && slices.Contains(coordinatorParents, s.Spec.Parent)
-	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions)
+	return buildSessionPod(s, t, apiURL, false, managedCodex, childDecisions, retentionLatch)
 }
 
 // PilotAgent selects the sessions with one parent and idempotency key for a
@@ -182,7 +184,7 @@ func applyRemotePilotImage(pod *corev1.Pod, s *v1alpha1.AgentSession, p *PilotAg
 // sessionPod is the session's own pod as the reconciler creates it: the managed
 // pod, on the pilot image when the session is the selected one.
 func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
-	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents)
+	pod, err := buildManagedPod(s, t, r.APIURL, r.ManagedCodexTasks, r.ManagedChildDecisions, r.ManagedChildDecisionParents, r.terminalTaskReclaimOn())
 	if err != nil {
 		return nil, err
 	}
@@ -204,13 +206,13 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 // Other profile mounts are only for agents. Heartbeats are off, because no
 // agent runs in it.
 func buildHoldPod(s *v1alpha1.AgentSession, t *templates.Templates) (*corev1.Pod, error) {
-	return buildSessionPod(s, t, "", true, false, false)
+	return buildSessionPod(s, t, "", true, false, false, false)
 }
 
 // isHoldPod reports whether the pod is a session's rescue pod (D-55).
 func isHoldPod(p *corev1.Pod) bool { return p.Labels[v1alpha1.LabelHold] == "true" }
 
-func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool) (*corev1.Pod, error) {
+func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL string, hold bool, managedCodex bool, childDecisions bool, retentionLatch bool) (*corev1.Pod, error) {
 	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
 		if validateProjectCanaryPod(s, t, !hold && (s.Spec.Agent != v1alpha1.AgentCodex || managedCodex)) != nil {
 			return nil, projectcanary.ErrRefused
@@ -236,7 +238,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	if size.TmpSizeLimit != nil {
 		tmpLimit = size.TmpSizeLimit.DeepCopy()
 	}
-	doc, err := sessionDocument(s)
+	doc, err := sessionDocument(s, retentionLatch && !hold)
 	if err != nil {
 		return nil, err
 	}
@@ -573,24 +575,27 @@ func (e sessionInvalidError) Unwrap() error { return e.err }
 // session that could never start is refused to its caller instead of failing
 // later.
 func CheckAgentdSession(s *v1alpha1.AgentSession) error {
-	_, err := sessionDocument(s)
+	_, err := sessionDocument(s, false)
 	return err
 }
 
 // sessionDocument is AGENTD_SESSION's value (D-40): the session's name and the
 // spec fields agentd needs, checked with agentd's own rules, so the operator never
-// starts a pod whose agentd would refuse its session at boot.
-func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
+// starts a pod whose agentd would refuse its session at boot. retentionLatch
+// is false unless terminal task reclaim is on: with reclaim off, a retained
+// private task keeps D-58's TUI resume after a container restart.
+func sessionDocument(s *v1alpha1.AgentSession, retentionLatch bool) (string, error) {
 	d := protocol.Session{
-		SessionUID: string(s.UID),
-		Name:       s.Name,
-		Repo:       s.Spec.Repo,
-		Base:       s.Spec.Base,
-		Agent:      string(s.Spec.Agent),
-		Mode:       string(s.Spec.Mode),
-		Model:      s.Spec.Model,
-		Effort:     s.Spec.Effort,
-		Prompt:     s.Spec.Prompt,
+		PrivateHistoryRetained: retentionLatch && privateHistoryProtected(s) && terminalTaskReclaimScope(s),
+		SessionUID:             string(s.UID),
+		Name:                   s.Name,
+		Repo:                   s.Spec.Repo,
+		Base:                   s.Spec.Base,
+		Agent:                  string(s.Spec.Agent),
+		Mode:                   string(s.Spec.Mode),
+		Model:                  s.Spec.Model,
+		Effort:                 s.Spec.Effort,
+		Prompt:                 s.Spec.Prompt,
 		// The rescue the session restores from (D-67).
 		Restore: s.Spec.Restore,
 	}

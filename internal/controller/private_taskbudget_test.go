@@ -56,7 +56,7 @@ func newPrivateBudgetFixture(t *testing.T, provider string) privateBudgetFixture
 		LastExecutor: &v1alpha1.PrivateExecutorStatus{PodUID: "pod-original", PodName: s.Name, Revision: f.Record.TemplateRevision, Generation: 1}}
 	home := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: HomeClaimName(s.Name), UID: "home-original", Finalizers: []string{Finalizer},
 		OwnerReferences: []metav1.OwnerReference{ownerRef(s)}, Annotations: map[string]string{privateHistoryAdmissionAnnotation: "1"}}}
-	pod, err := buildManagedPod(s, f.Templates, "https://synthetic.invalid", true, false, nil)
+	pod, err := buildManagedPod(s, f.Templates, "https://synthetic.invalid", true, false, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

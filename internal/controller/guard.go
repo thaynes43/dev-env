@@ -349,9 +349,11 @@ var errArchiveNotRecorded = errors.New("the archive is not recorded in the sessi
 
 // deletePod deletes the session's pod if the guard allows it. With deleteVolume
 // it is the only delete in the package.
-func deletePod(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, pod *corev1.Pod) error {
+func deletePod(ctx context.Context, c client.Client, s *v1alpha1.AgentSession, pod *corev1.Pod, reclaim ...terminalTaskPodRemovalProof) error {
 	if err := podRemovalAllowed(s, pod); err != nil {
-		return err
+		if len(reclaim) != 1 || !terminalTaskPodRemovalAllowed(s, pod, reclaim[0]) {
+			return err
+		}
 	}
 	// The preconditions make the delete hit this pod, in the state the guard
 	// judged, and no other: not one that replaced it, and not this one after
