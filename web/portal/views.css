@@ -123,8 +123,9 @@ svg.i { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentCo
 .group-label { display: flex; justify-content: space-between; padding: 13px 9px 6px; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .item { display: block; position: relative; margin-bottom: 5px; padding: 13px 12px; border: 1px solid transparent; border-radius: 7px; color: var(--ink); }
 .item:hover { background: var(--surface); border-color: var(--line); }
-.shell:not(:has(.detail:target)) .item.default { background: var(--soft); border-color: var(--control-line); }
-.shell:not(:has(.detail:target)) .item.default::before { content: ""; position: absolute; top: 15px; bottom: 15px; left: -1px; width: 3px; border-radius: 3px; background: var(--accent); }
+.shell:not(:has(.detail:target)) .item.default, .item[aria-current="page"] { background: var(--soft); border-color: var(--control-line); }
+.shell:not(:has(.detail:target)) .item.default::before, .item[aria-current="page"]::before { content: ""; position: absolute; top: 15px; bottom: 15px; left: -1px; width: 3px; border-radius: 3px; background: var(--accent); }
+.item[aria-current="page"] h3 { font-weight: 700; }
 .item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .item-kicker { font: 9.5px var(--mono); color: var(--muted); }
 .item .badge { font-size: 9px; padding: 2px 5px; }
@@ -289,8 +290,8 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .list-count { font-size: 12px; }
   .list-scroll { padding: 0 12px 16px; overflow: visible; }
   .list-foot { display: block; padding: 4px 18px 12px; font-size: 11px; }
-  .shell:not(:has(.detail:target)) .item.default { background: var(--surface); border-color: var(--line); }
-  .shell:not(:has(.detail:target)) .item.default::before { content: none; }
+  .shell:not(:has(.detail:target)) .item.default:not([aria-current]) { background: var(--surface); border-color: var(--line); }
+  .shell:not(:has(.detail:target)) .item.default:not([aria-current])::before { content: none; }
   .item { padding: 15px 13px; border-radius: 10px; border-color: var(--line); background: var(--surface); margin-bottom: 8px; }
   .item h3 { font-size: 14px; }
   .item .badge { font-size: 10px; }
@@ -364,6 +365,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .badge, .item, .tile, .btn, .coverage, .scope-chip, .chips a, .rail-link[aria-current="page"], .composer { border: 1px solid CanvasText; }
   .btn:disabled { color: GrayText; border-color: GrayText; }
   .btn.primary { forced-color-adjust: none; background: ButtonText; color: ButtonFace; }
+  .item[aria-current="page"]::before { forced-color-adjust: none; background: Highlight; }
 }
 
 .shell.usage-view { grid-template-columns: minmax(0, 1fr); }

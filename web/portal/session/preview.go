@@ -50,6 +50,20 @@ func RenderTasksFixture(source io.Reader) ([]byte, error) {
 	return renderFixture(tasksPage(rows, complete, portal.ProductFilter{}), f.Now)
 }
 
+// RenderTasksSelectedFixture renders the Tasks fixture with one work package
+// selected, as Tasks ?task= selects it, labelled as a fixture preview.
+func RenderTasksSelectedFixture(source io.Reader) ([]byte, error) {
+	f, err := readProductFixture(source)
+	if err != nil {
+		return nil, err
+	}
+	rows, _, complete, err := decodeTaskPage(f.Body, 1, map[int]struct{}{}, f.Now)
+	if err != nil {
+		return nil, err
+	}
+	return renderFixture(tasksPage(rows, complete, portal.ProductFilter{Task: "9104"}), f.Now)
+}
+
 func readProductFixture(source io.Reader) (productFixture, error) {
 	var f productFixture
 	raw, err := io.ReadAll(io.LimitReader(source, 256<<10+1))

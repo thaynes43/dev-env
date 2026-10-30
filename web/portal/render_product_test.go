@@ -418,8 +418,15 @@ func TestSelectedRowIsTheDefaultDetailOnEveryViewport(t *testing.T) {
 		if strings.Count(html, `<section class="detail default"`) != 1 || !strings.Contains(html, `<section class="detail default" id="`+tc.want+`"`) {
 			t.Errorf("%s: default detail is not %s", tc.name, tc.want)
 		}
-		if strings.Count(html, `class="item default"`) != 1 || !strings.Contains(html, `<a class="item default" href="#`+tc.want+`">`) {
+		current := ""
+		if tc.shell {
+			current = ` aria-current="page"`
+		}
+		if strings.Count(html, `class="item default"`) != 1 || !strings.Contains(html, `<a class="item default" href="#`+tc.want+`"`+current+`>`) {
 			t.Errorf("%s: list highlight is not %s", tc.name, tc.want)
+		}
+		if strings.Count(html, `" aria-current="page"><span class="item-top">`) != strings.Count(current, "aria-current") {
+			t.Errorf("%s: current items do not match the selection", tc.name)
 		}
 		if strings.Contains(html, `<div class="shell selected">`) != tc.shell {
 			t.Errorf("%s: shell selected %v", tc.name, !tc.shell)
@@ -431,7 +438,7 @@ func TestSelectedRowIsTheDefaultDetailOnEveryViewport(t *testing.T) {
 		".workspace:not(:has(.detail:target)) .detail.default, .detail:target { display: flex; }",
 		".shell.selected:not(:has(:target)) .workspace { display: block; }",
 		".shell.selected:not(:has(:target)) .list { display: none; }",
-		".shell:not(:has(.detail:target)) .item.default {",
+		`.shell:not(:has(.detail:target)) .item.default, .item[aria-current="page"] {`,
 	} {
 		if !strings.Contains(viewsStyle, rule) {
 			t.Errorf("stylesheet lacks %s", rule)
@@ -1130,5 +1137,120 @@ func TestAllowanceWindowListsStackAndLinksHaveProviderNames(t *testing.T) {
 	}
 	if strings.Contains(section, "<caption") {
 		t.Fatal("allowance tables must use aria-label instead of offscreen captions")
+	}
+}
+
+// itemTags returns every list item's opening tag, in list order.
+func itemTags(html string) []string {
+	return regexp.MustCompile(`<a class="item[^>]*>`).FindAllString(html, -1)
+}
+
+func TestSelectedItemIsTheOnlyCurrentItem(t *testing.T) {
+	sessions := ProductPage{Title: "Sessions", Connected: true, Complete: true, Quiet: true,
+		Groups: []ProductGroup{{Title: "Running", Rows: []ProductRow{
+			{ID: "s1", Key: "uid-a", Title: "a"},
+			{ID: "s2", Key: "uid-b", Title: "b", Selected: true},
+			{ID: "s3", Key: "uid-c", Title: "c", Selected: true}, // only the first selected row counts
+			{ID: "s4", Title: "no-key"},
+			{ID: "s5", Key: `uid"x`, Title: "bad-key"},
+		}}},
+		Filter: ProductFilter{Project: "dev-env", Session: "uid-b"}}
+	tasks := ProductPage{Title: "Tasks", Connected: true, Complete: true, Quiet: true,
+		Groups: []ProductGroup{{Title: "Needs attention", Attention: true, Rows: []ProductRow{
+			{ID: "t1", Key: "12", Title: "twelve"},
+			{ID: "t2", Key: "312", Title: "selected", Selected: true},
+			{ID: "t3", Key: "0312", Title: "bad-key"},
+		}}},
+		Filter: ProductFilter{Attention: true, Task: "312"}}
+	for _, tc := range []struct {
+		page    ProductPage
+		current string
+		hrefs   []string
+	}{
+		{sessions, productSessionsHref + "?project=dev-env&amp;session=uid-b", []string{
+			productSessionsHref + "?project=dev-env&amp;session=uid-a", productSessionsHref + "?project=dev-env&amp;session=uid-b",
+			productSessionsHref + "?project=dev-env&amp;session=uid-c", "#s4", "#s5"}},
+		{tasks, productTasksHref + "?show=attention&amp;task=312", []string{
+			productTasksHref + "?show=attention&amp;task=12", productTasksHref + "?show=attention&amp;task=312", "#t3"}},
+	} {
+		body, err := RenderProduct(tc.page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		html := string(body)
+		tags := itemTags(html)
+		if len(tags) != len(tc.hrefs) {
+			t.Fatalf("%s: %d items, want %d: %q", tc.page.Title, len(tags), len(tc.hrefs), tags)
+		}
+		currents := 0
+		for i, tag := range tags {
+			if !strings.Contains(tag, `href="`+tc.hrefs[i]+`"`) {
+				t.Errorf("%s item %d: %s, want href %s", tc.page.Title, i, tag, tc.hrefs[i])
+			}
+			if strings.Contains(tag, "aria-current") {
+				currents++
+				if want := `<a class="item default" href="` + tc.current + `" aria-current="page">`; tag != want {
+					t.Errorf("%s: current item %s, want %s", tc.page.Title, tag, want)
+				}
+			}
+		}
+		if currents != 1 {
+			t.Errorf("%s: %d current items, want exactly 1: %q", tc.page.Title, currents, tags)
+		}
+		if !strings.Contains(html, `class="shell selected"`) {
+			t.Errorf("%s: shell is not marked selected", tc.page.Title)
+		}
+	}
+
+	// Without a selection no item is current; the first row stays the default detail.
+	for i := range sessions.Groups[0].Rows {
+		sessions.Groups[0].Rows[i].Selected = false
+	}
+	sessions.Filter = ProductFilter{}
+	body, err := RenderProduct(sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := itemTags(string(body))
+	if strings.Contains(strings.Join(tags, ""), "aria-current") || tags[0] != `<a class="item default" href="`+productSessionsHref+`?session=uid-a">` {
+		t.Fatalf("unselected list marked an item current or lost its default: %q", tags)
+	}
+}
+
+// The selected marker holds wherever a detail is open, also on a phone, and is
+// not colour alone: a bar, a border and a heavier title.
+func TestSelectedItemMarkerIsNotColourAlone(t *testing.T) {
+	for _, want := range []string{
+		`.shell:not(:has(.detail:target)) .item.default, .item[aria-current="page"] { background: var(--soft); border-color: var(--control-line); }`,
+		`.item[aria-current="page"]::before { content: ""; position: absolute;`,
+		`.item[aria-current="page"] h3 { font-weight: 700; }`,
+		`.shell:not(:has(.detail:target)) .item.default:not([aria-current])::before { content: none; }`,
+		`.item[aria-current="page"]::before { forced-color-adjust: none; background: Highlight; }`,
+	} {
+		if !strings.Contains(viewsStyle, want) {
+			t.Errorf("stylesheet lacks %s", want)
+		}
+	}
+}
+
+func TestReadFailureRetryKeepsFilterAndSelection(t *testing.T) {
+	for _, tc := range []struct {
+		title  string
+		filter ProductFilter
+		want   string
+	}{
+		{"Sessions", ProductFilter{Attention: true, Session: "uid-a"}, productSessionsHref + "?session=uid-a&amp;show=attention"},
+		{"Sessions", ProductFilter{Project: "dev-env", Session: "uid-a"}, productSessionsHref + "?project=dev-env&amp;session=uid-a"},
+		{"Sessions", ProductFilter{Session: "uid-a"}, productSessionsHref + "?session=uid-a"},
+		{"Tasks", ProductFilter{Attention: true, Task: "312"}, productTasksHref + "?show=attention&amp;task=312"},
+		{"Tasks", ProductFilter{Session: "uid-a", Task: "312"}, productTasksHref + "?task=312"},
+	} {
+		body, err := RenderProduct(ProductPage{Title: tc.title, Notice: "read failed", Filter: tc.filter, ReadFailure: &ProductReadFailure{ReasonCode: "operator_unreachable"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), `<a class="btn" href="`+tc.want+`">Retry</a>`) {
+			t.Errorf("%s %+v: retry is not %s", tc.title, tc.filter, tc.want)
+		}
 	}
 }

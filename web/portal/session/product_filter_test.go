@@ -649,3 +649,83 @@ func TestFailureRecency(t *testing.T) {
 		}
 	}
 }
+
+func TestProductFilterKeepsAFilterBesideASelection(t *testing.T) {
+	for raw, want := range map[string]*portal.ProductFilter{
+		SessionsPath + "?project=dev-env&session=uid-a":                {Project: "dev-env", Session: "uid-a"},
+		SessionsPath + "?session=uid-a&show=attention":                 {Attention: true, Session: "uid-a"},
+		TasksPath + "?task=312":                                        {Task: "312"},
+		TasksPath + "?show=attention&task=312":                         {Attention: true, Task: "312"},
+		TasksPath + "?task=9999999999":                                 {Task: "9999999999"},
+		SessionsPath + "?session=uid-a&project=dev-env":                nil, // not canonical
+		SessionsPath + "?session=uid-a&view=usage":                     nil,
+		SessionsPath + "?project=dev-env&show=attention":               nil,
+		SessionsPath + "?project=dev-env&session=uid-a&show=attention": nil,
+		SessionsPath + "?session=uid-a&task=312":                       nil,
+		SessionsPath + "?task=312":                                     nil,
+		TasksPath + "?project=dev-env&task=312":                        nil,
+		TasksPath + "?task=312&view=usage":                             nil,
+		TasksPath + "?session=uid-a&task=312":                          nil,
+		TasksPath + "?task=0312":                                       nil,
+		TasksPath + "?task=0":                                          nil,
+		TasksPath + "?task=12345678901":                                nil,
+		TasksPath + "?task=1&task=2":                                   nil,
+		TasksPath + "?task=":                                           nil,
+	} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := productFilter(u)
+		if ok != (want != nil) || (ok && got != *want) {
+			t.Errorf("%s: ok %v filter %+v, want %+v", raw, ok, got, want)
+		}
+	}
+}
+
+func TestTasksPageSelectsOneWorkPackage(t *testing.T) {
+	rows := []portal.ProductRow{
+		{Key: "11", Title: "a", Status: portal.ProductStatus{Text: "In progress"}},
+		{Key: "12", Title: "b", Status: portal.ProductStatus{Text: "Needs answer"}},
+		{Key: "12", Title: "duplicate", Status: portal.ProductStatus{Text: "New"}},
+	}
+	page := tasksPage(rows, true, portal.ProductFilter{Task: "12"})
+	var selected []string
+	for _, g := range page.Groups {
+		for _, r := range g.Rows {
+			if r.Selected {
+				selected = append(selected, r.Title)
+			}
+		}
+	}
+	if strings.Join(selected, ",") != "b" || page.Filter.Task != "12" || !page.Quiet {
+		t.Fatalf("selected %v filter %+v quiet %v notice %q", selected, page.Filter, page.Quiet, page.Notice)
+	}
+	// A selection outside the list, here outside Needs attention, says so.
+	page = tasksPage(rows, true, portal.ProductFilter{Attention: true, Task: "11"})
+	if page.Quiet || page.Notice != "The selected task is not in this list." {
+		t.Fatalf("missing selection notice: quiet %v %q", page.Quiet, page.Notice)
+	}
+	// A warning already on the page stays ahead of it.
+	page = tasksPage(rows, false, portal.ProductFilter{Task: "99"})
+	if page.Quiet || page.Notice != "Tasks read is incomplete. This is not the full inventory. The selected task is not in this list." {
+		t.Fatalf("missing selection notice: quiet %v %q", page.Quiet, page.Notice)
+	}
+}
+
+func TestTasksFixtureMarksTheSelectedWorkPackageCurrent(t *testing.T) {
+	f, err := os.Open(filepath.Join("..", "..", "..", "scripts", "trials", "portal_product", "tasks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := RenderTasksSelectedFixture(f)
+	if closeErr := f.Close(); err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	html := string(body)
+	if strings.Count(html, ` aria-current="page"><span class="item-top">`) != 1 ||
+		!strings.Contains(html, `<a class="item default" href="`+TasksPath+`?task=9104" aria-current="page">`) ||
+		!strings.Contains(html, `<div class="shell selected">`) || !strings.Contains(html, `href="`+TasksPath+`?task=9101">`) {
+		t.Fatal("the selected work package is not the one current item")
+	}
+}

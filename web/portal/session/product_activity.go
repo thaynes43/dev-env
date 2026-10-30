@@ -955,6 +955,7 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 		out.Description = "Waiting for you"
 	}
 	out.Messages = sessionMessages(row, a)
+	out.Key = row.UID
 	return out
 }
 

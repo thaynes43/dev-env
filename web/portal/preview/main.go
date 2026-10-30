@@ -175,9 +175,10 @@ func main() {
 	fmt.Println("Wrote offline synthetic Attention preview.")
 }
 
-// writeProduct renders sessions.html, tasks.html, sessions-send.html (send
-// route configured) and sessions-history.html (one session selected, with a
-// fixture conversation) from the committed synthetic fixtures, and one receipt
+// writeProduct renders sessions.html, tasks.html, tasks-selected.html (one
+// work package selected), sessions-send.html (send route configured) and
+// sessions-history.html (one session selected, with a fixture conversation)
+// from the committed synthetic fixtures, and one receipt
 // page per transport status. Every page carries the Fixture preview label.
 func writeProduct(dir string) error {
 	for _, page := range []struct {
@@ -186,6 +187,7 @@ func writeProduct(dir string) error {
 	}{
 		{"scripts/trials/portal_product/sessions.json", "sessions.html", session.RenderSessionsFixture},
 		{"scripts/trials/portal_product/tasks.json", "tasks.html", session.RenderTasksFixture},
+		{"scripts/trials/portal_product/tasks.json", "tasks-selected.html", session.RenderTasksSelectedFixture},
 		{"scripts/trials/portal_product/sessions.json", "sessions-send.html", session.RenderSessionsSendFixture},
 		{"scripts/trials/portal_product/sessions.json", "sessions-history.html", session.RenderSessionsHistoryFixture},
 		{"scripts/trials/portal_product/sessions.json", "sessions-launch.html", session.RenderSessionsLaunchFixture},
