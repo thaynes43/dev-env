@@ -2412,9 +2412,13 @@ canaries/pilots, shared workspaces, hold Pods, active
 providers, attached clients, live or unproved descendants and owner holds never
 qualify. A Session being reaped (deletion requested) is outside this path: the
 reap's own stop under section 4 owns it. The cached early return, the uncached
-view and the guarded delete each refuse a deletion timestamp, and the
-resource CAS fences a delete that lands after the uncached read. An open reclaim
-reason closes as `Protected` when the reap starts; a settled `Reclaimed` stays. Configured coordinator hosts use a separate, non-session ServiceAccount
+view and the guarded delete each refuse a deletion timestamp. The suspend
+patch and the status CAS before the guarded delete conflict with a delete that
+lands after the uncached read. A delete that lands before the stop intent's
+own Session read takes section 4's reap branch, which writes the same intent
+and deadline. An open reclaim reason closes as `Protected` when the reap
+starts, and the retained gauges count the Pod under that reason; a settled
+`Reclaimed` stays. Configured coordinator hosts use a separate, non-session ServiceAccount
 and are outside this path; no configured-host name matching is claimed. A task
 coordinating descendants remains protected by the parent walk. An invalid
 HOME-expiry override is a hold. Cached eligibility and protection checks run

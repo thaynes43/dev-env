@@ -246,7 +246,8 @@ func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alph
 		return ctrl.Result{}, false, nil
 	}
 	// A Reaping Session belongs to the reap path's own stop (section 4). An
-	// open reason is closed, so the retained gauges stop reporting it.
+	// open reason such as Grace closes as Protected; the gauges still count
+	// the retained Pod, now under Protected.
 	if !s.DeletionTimestamp.IsZero() {
 		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim); cond != nil && cond.Reason != "Reclaimed" {
 			r.terminalTaskReclaimCondition(s, "Protected", "session is being reaped; the reap path owns its stop")
