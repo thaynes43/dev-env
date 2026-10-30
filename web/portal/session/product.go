@@ -53,9 +53,12 @@ type SessionSource struct {
 // TaskSource reads project 3's work-package collection. It does not follow an
 // arbitrary HAL origin or path.
 type TaskSource struct {
-	path   string
-	client *http.Client
-	now    func() time.Time
+	path          string
+	client        *http.Client
+	now           func() time.Time
+	lastSuccessMu sync.Mutex
+	lastSuccess   time.Time
+	logger        *slog.Logger
 }
 
 func newSessionSource(tokenPath string, ca []byte, now func() time.Time, dial func(context.Context, string, string) (net.Conn, error)) (*SessionSource, error) {
@@ -74,7 +77,8 @@ func newTaskSource(tokenPath string, ca []byte, now func() time.Time, dial func(
 	return &TaskSource{path: tokenPath, client: client, now: now}, nil
 }
 
-// sessionReadError carries only fixed codes and integer positions, never source
+// sessionReadError is shared by Sessions and Tasks. It carries only fixed
+// codes and integer positions, never source
 // errors, response values, URLs, credentials or headers. RowIndex is zero-based;
 // -1 means the failure belongs to the page envelope or transport.
 type sessionReadError struct{ portal.ProductReadFailure }
@@ -275,14 +279,80 @@ func (s *SessionSource) read(ctx context.Context, filter portal.ProductFilter, r
 	return page, nil
 }
 
-func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (portal.ProductPage, error) {
-	page := portal.ProductPage{Title: "Tasks", Connected: true}
-	if s == nil || s.client == nil || s.now == nil {
-		return page, portal.ErrUnavailable
+// finishRead uses the shared safe failure model, but keeps Tasks success state
+// independent of Sessions. Partial rows are never retained after a failed read.
+func (s *TaskSource) finishRead(ctx context.Context, filter portal.ProductFilter, page portal.ProductPage, err error, stats sessionReadStats) (portal.ProductPage, error) {
+	observed := time.Now().UTC()
+	logger := slog.Default()
+	lastSuccess := time.Time{}
+	if s != nil {
+		if s.now != nil {
+			observed = s.now().UTC()
+		}
+		if s.logger != nil {
+			logger = s.logger
+		}
+		s.lastSuccessMu.Lock()
+		if err == nil && observed.After(s.lastSuccess) {
+			s.lastSuccess = observed
+		}
+		lastSuccess = s.lastSuccess
+		s.lastSuccessMu.Unlock()
 	}
+	if err == nil {
+		if !observed.IsZero() {
+			page.ReadCompletedAt = observed.Format(time.RFC3339Nano)
+		}
+		return page, nil
+	}
+	// Copy only allowlisted codes and bounded numeric diagnostics into the log.
+	failure := readFailure("unknown")
+	var classified *sessionReadError
+	if errors.As(err, &classified) {
+		switch classified.ReasonCode {
+		case "not_connected", "credential_unavailable", "operator_unreachable", "operator_refused", "response_contract", "clock_ahead", "cancelled":
+			failure.ReasonCode = classified.ReasonCode
+		}
+		if classified.RowIndex >= 0 && classified.RowIndex < productPageSize {
+			failure.RowIndex = classified.RowIndex
+		}
+		if classified.HTTPStatus >= 100 && classified.HTTPStatus <= 599 {
+			failure.HTTPStatus = classified.HTTPStatus
+		}
+		failure.TimedOut = classified.TimedOut
+	}
+	if stats.page > 0 && stats.page <= productPageCap {
+		failure.Page = stats.page
+	}
+	failure.ObservedAt = observed.Format(time.RFC3339Nano)
+	if !lastSuccess.IsZero() {
+		failure.LastSuccessAt = lastSuccess.Format(time.RFC3339Nano)
+	}
+	notice := "Tasks unavailable"
+	level := slog.LevelWarn
+	if failure.ReasonCode == "not_connected" {
+		notice = "Tasks not connected"
+	}
+	if failure.ReasonCode == "not_connected" || failure.ReasonCode == "cancelled" {
+		level = slog.LevelInfo
+	}
+	logger.LogAttrs(ctx, level, "portal_task_read_failed",
+		slog.String("reason_code", failure.ReasonCode), slog.Int("page", failure.Page), slog.Int("row_index", failure.RowIndex), slog.Int("http_status", failure.HTTPStatus), slog.Bool("timed_out", failure.TimedOut), slog.Int64("elapsed_ms", time.Since(stats.started).Milliseconds()),
+		slog.Int64("credential_ms", stats.credential.Milliseconds()), slog.Int64("fetch_ms", stats.fetch.Milliseconds()), slog.Int64("decode_ms", stats.decode.Milliseconds()), slog.Int64("projection_ms", stats.projection.Milliseconds()))
+	return portal.ProductPage{Title: "Tasks", Notice: notice, Filter: filter, ReadFailure: &failure.ProductReadFailure}, failure
+}
+
+func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (page portal.ProductPage, err error) {
+	stats := sessionReadStats{started: time.Now()}
+	defer func() { page, err = s.finishRead(ctx, filter, page, err, stats) }()
+	if s == nil || s.client == nil || s.now == nil {
+		return page, readFailure("not_connected")
+	}
+	step := time.Now()
 	token, err := readBearerFile(s.path)
+	stats.credential = time.Since(step)
 	if err != nil {
-		return page, portal.ErrUnavailable
+		return page, readFailure("credential_unavailable")
 	}
 	seen := map[int]struct{}{}
 	total := 0
@@ -290,13 +360,21 @@ func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (por
 	complete := false
 	var all []portal.ProductRow
 	for pageNo := 1; pageNo <= productPageCap; pageNo++ {
+		stats.page = pageNo
+		step = time.Now()
 		body, err := productGet(ctx, s.client, taskCollectionURL(pageNo), token, productHALLimit, mediaHAL)
+		stats.fetch += time.Since(step)
 		if err != nil {
 			return page, err
 		}
+		step = time.Now()
 		rows, pageTotal, done, err := decodeTaskPage(body, pageNo, seen, s.now())
-		if err != nil || (haveTotal && pageTotal != total) {
-			return page, portal.ErrUnavailable
+		stats.decode += time.Since(step)
+		if err != nil {
+			return page, err
+		}
+		if haveTotal && pageTotal != total {
+			return page, readFailure("response_contract")
 		}
 		total = pageTotal
 		haveTotal = true
@@ -306,10 +384,10 @@ func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (por
 			break
 		}
 	}
+	stats.page = 0
+	step = time.Now()
 	page = tasksPage(all, complete, filter)
-	if completed := s.now(); !completed.IsZero() {
-		page.ReadCompletedAt = completed.UTC().Format(time.RFC3339Nano)
-	}
+	stats.projection = time.Since(step)
 	return page, nil
 }
 
@@ -441,7 +519,12 @@ func sessionPhase(phase string) bool {
 	}
 }
 
-func decodeTaskPage(body []byte, page int, seen map[int]struct{}, now time.Time) ([]portal.ProductRow, int, bool, error) {
+func decodeTaskPage(body []byte, page int, seen map[int]struct{}, now time.Time) (rows []portal.ProductRow, total int, complete bool, err error) {
+	defer func() {
+		if err != nil {
+			err = sessionFailure(err)
+		}
+	}()
 	obj, err := jsonObject(body)
 	if err != nil {
 		return nil, 0, false, err
@@ -476,18 +559,24 @@ func decodeTaskPage(body []byte, page int, seen map[int]struct{}, now time.Time)
 	if _, err := jsonObject(obj["_links"]); err != nil {
 		return nil, 0, false, err
 	}
-	rows := make([]portal.ProductRow, 0, len(elements))
-	for _, raw := range elements {
+	rows = make([]portal.ProductRow, 0, len(elements))
+	for i, raw := range elements {
 		var element halWorkPackage
 		if json.Unmarshal(raw, &element) != nil {
-			return nil, 0, false, portal.ErrUnavailable
+			failure := readFailure("response_contract")
+			failure.RowIndex = i
+			return nil, 0, false, failure
 		}
 		if _, dup := seen[element.ID]; dup {
-			return nil, 0, false, portal.ErrUnavailable
+			failure := readFailure("response_contract")
+			failure.RowIndex = i
+			return nil, 0, false, failure
 		}
 		row, err := taskRow(element, now)
 		if err != nil {
-			return nil, 0, false, err
+			failure := sessionFailure(err)
+			failure.RowIndex = i
+			return nil, 0, false, failure
 		}
 		seen[element.ID] = struct{}{}
 		rows = append(rows, row)
@@ -960,26 +1049,34 @@ func taskCollectionURL(page int) string {
 func productGet(ctx context.Context, client *http.Client, rawURL, token string, limit int64, accept string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil || client == nil || !bearerText(token) {
-		return nil, portal.ErrUnavailable
+		return nil, readFailure("response_contract")
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Authorization", "Bearer "+token)
 	response, err := client.Do(req)
-	if err != nil || response == nil {
-		return nil, portal.ErrUnavailable
+	if err != nil {
+		return nil, sessionTransportFailure(ctx, err)
+	}
+	if response == nil {
+		return nil, readFailure("operator_unreachable")
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
-		return nil, portal.ErrUnavailable
+		failure := readFailure("operator_refused")
+		failure.HTTPStatus = response.StatusCode
+		return nil, failure
 	}
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || media != accept {
-		return nil, portal.ErrUnavailable
+		return nil, readFailure("response_contract")
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if err != nil || int64(len(body)) > limit {
-		return nil, portal.ErrUnavailable
+	if err != nil {
+		return nil, sessionTransportFailure(ctx, err)
+	}
+	if int64(len(body)) > limit {
+		return nil, readFailure("response_contract")
 	}
 	return body, nil
 }
@@ -1109,16 +1206,13 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
 	case TasksPath:
-		page = portal.ProductPage{Title: "Tasks", Notice: "Tasks not connected"}
-		if c.Tasks != nil {
-			page, err = c.Tasks.Read(r.Context(), filter)
+		page, err = c.Tasks.Read(r.Context(), filter)
+		if c.Tasks == nil {
+			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
 	default:
 		authFailure(w, portal.ErrDenied)
 		return
-	}
-	if err != nil && r.URL.Path == TasksPath {
-		page = portal.ProductPage{Title: "Tasks", Notice: "Tasks unavailable", Filter: filter}
 	}
 	// Final session, authorization and form-scope checks share one deadline,
 	// inherited from the request, leaving headroom for rendering and writing.

@@ -1620,3 +1620,230 @@ func TestServeProductPostReadChecksShareRequestDeadline(t *testing.T) {
 		})
 	}
 }
+
+func taskReadFixture(t *testing.T, now func() time.Time, trip tripFunc) *TaskSource {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "task-token")
+	if err := os.WriteFile(path, []byte("fixture-task-token-canary"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return &TaskSource{path: path, now: now, client: &http.Client{Transport: trip}}
+}
+
+func taskReadPage(offset, total int, rows ...string) string {
+	return fmt.Sprintf(`{"total":%d,"count":%d,"pageSize":50,"offset":%d,"_embedded":{"elements":[%s]},"_links":{}}`, total, len(rows), offset, strings.Join(rows, ","))
+}
+
+func TestTaskReadFailureReasons(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, code, words, body, media string
+		status                         int
+		transportErr                   error
+		bodyErr                        error
+		missing, disconnected          bool
+	}{
+		{name: "not connected", code: "not_connected", words: "The Tasks source is not connected.", disconnected: true},
+		{name: "credential", code: "credential_unavailable", words: "The Tasks credential is unavailable.", missing: true},
+		{name: "transport", code: "operator_unreachable", words: "The Tasks source could not be reached.", transportErr: errors.New("SECRET-TRANSPORT")},
+		{name: "timeout", code: "operator_unreachable", words: "The Tasks read timed out.", transportErr: context.DeadlineExceeded},
+		{name: "cancelled", code: "cancelled", words: "The Tasks read was cancelled.", transportErr: context.Canceled},
+		{name: "refused", code: "operator_refused", words: "The Tasks source refused the read (HTTP 403).", status: 403, body: "SECRET-REFUSAL"},
+		{name: "non-200", code: "operator_refused", words: "The Tasks source refused the read (HTTP 503).", status: 503, body: "SECRET-ERROR"},
+		{name: "redirect", code: "operator_refused", words: "The Tasks source refused the read (HTTP 302).", status: 302, body: "SECRET-REDIRECT"},
+		{name: "media", code: "response_contract", words: "The returned task data could not be read.", status: 200, media: "text/SECRET-MEDIA", body: "SECRET-BODY"},
+		{name: "size", code: "response_contract", words: "The returned task data could not be read.", status: 200, body: "SECRET-SIZE" + strings.Repeat("x", int(productHALLimit))},
+		{name: "body read", code: "operator_unreachable", words: "The Tasks source could not be reached.", status: 200, bodyErr: errors.New("SECRET-BODY-READ")},
+		{name: "contract", code: "response_contract", words: "The returned task data could not be read.", status: 200, body: `{"SECRET-ENVELOPE":true}`},
+		{name: "row", code: "response_contract", words: "Page 1, row index 0", status: 200, body: taskReadPage(1, 1, `{"id":0,"subject":"SECRET-ROW"}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			s := taskReadFixture(t, func() time.Time { return now }, func(r *http.Request) (*http.Response, error) {
+				calls++
+				if tc.transportErr != nil {
+					return nil, tc.transportErr
+				}
+				media := tc.media
+				if media == "" {
+					media = mediaHAL
+				}
+				var body io.ReadCloser = io.NopCloser(strings.NewReader(tc.body))
+				if tc.bodyErr != nil {
+					body = failedSessionBody{tc.bodyErr}
+				}
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {media}}, Body: body}, nil
+			})
+			if tc.missing {
+				s.path += "-SECRET-MISSING"
+			}
+			if tc.disconnected {
+				s = nil
+			}
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			page, err := s.Read(t.Context(), portal.ProductFilter{Attention: true})
+			var failure *sessionReadError
+			if !errors.Is(err, portal.ErrUnavailable) || !errors.As(err, &failure) || failure.ReasonCode != tc.code {
+				t.Fatalf("wrong classification: %v", err)
+			}
+			wantPage, wantRow := 1, -1
+			if tc.missing || tc.disconnected {
+				wantPage = 0
+			}
+			if tc.name == "row" {
+				wantRow = 0
+			}
+			if failure.Page != wantPage || failure.RowIndex != wantRow || failure.TimedOut != (tc.name == "timeout") || failure.LastSuccessAt != "" {
+				t.Fatalf("unsafe failure metadata: %+v", failure)
+			}
+			body, err := portal.RenderProduct(page)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(body)
+			for _, want := range []string{tc.words, "Observed:", "Last successful read in this process: Unknown", `href="` + TasksPath + `?show=attention">Retry</a>`} {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing %q", want)
+				}
+			}
+			if page.Connected || page.Complete || len(page.Groups) != 0 || page.ReadCompletedAt != "" || strings.Contains(text, "Updated <time") {
+				t.Fatal("failed read retained rows or success freshness")
+			}
+			var line map[string]any
+			if strings.Count(strings.TrimSpace(logs.String()), "\n") != 0 || json.Unmarshal(logs.Bytes(), &line) != nil || line["msg"] != "portal_task_read_failed" || line["reason_code"] != tc.code || line["page"] != float64(wantPage) || line["row_index"] != float64(wantRow) {
+				t.Fatalf("expected one safe failure log: %s", logs.String())
+			}
+			for _, key := range []string{"elapsed_ms", "credential_ms", "fetch_ms", "decode_ms", "projection_ms"} {
+				if n, ok := line[key].(float64); !ok || n < 0 {
+					t.Errorf("invalid duration %s", key)
+				}
+			}
+			for _, sensitive := range []string{"SECRET-", "fixture-task-token-canary", "offset=", "filters=", openProjectPortalOrigin} {
+				if strings.Contains(text, sensitive) || strings.Contains(logs.String(), sensitive) {
+					t.Fatalf("diagnostics leaked %s", sensitive)
+				}
+			}
+			if (tc.missing || tc.disconnected) && calls != 0 {
+				t.Fatal("unconfigured reader fetched data")
+			}
+		})
+	}
+}
+
+func TestTaskReadLatePageFailureHasPositionAndLastSuccess(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	reading := 0
+	rows := make([]string, productPageSize)
+	for i := range rows {
+		rows[i] = fmt.Sprintf(`{"id":%d,"subject":"SECRET-PARTIAL","_links":{"project":{"href":"/api/v3/projects/3"}}}`, i+1)
+	}
+	var logs bytes.Buffer
+	s := taskReadFixture(t, func() time.Time { return now }, func(r *http.Request) (*http.Response, error) {
+		body := taskReadPage(1, 0)
+		if reading > 0 {
+			body = taskReadPage(1, 52, rows...)
+			if r.URL.Query().Get("offset") == "2" {
+				body = taskReadPage(2, 52, `{"id":51,"_links":{"project":{"href":"/api/v3/projects/3"}}}`, `{"id":0,"subject":"SECRET-LATE-ROW"}`)
+			}
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {mediaHAL}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	page, err := s.Read(t.Context(), portal.ProductFilter{})
+	if err != nil || page.ReadCompletedAt != now.Format(time.RFC3339) || logs.Len() != 0 {
+		t.Fatalf("successful read failed: %v", err)
+	}
+	reading++
+	now = now.Add(time.Minute)
+	page, err = s.Read(t.Context(), portal.ProductFilter{Attention: true})
+	var failure *sessionReadError
+	if !errors.As(err, &failure) || failure.Page != 2 || failure.RowIndex != 1 || failure.LastSuccessAt != "2026-10-30T12:00:00Z" || failure.ObservedAt != "2026-10-30T12:01:00Z" {
+		t.Fatalf("late failure lost its position or read times: %+v", failure)
+	}
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Page 2, row index 1", `datetime="2026-10-30T12:00:00Z"`, `datetime="2026-10-30T12:01:00Z"`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if len(page.Groups) != 0 || page.ReadCompletedAt != "" || strings.Contains(string(body), "SECRET-") || strings.Contains(logs.String(), "SECRET-") {
+		t.Fatal("late failure exposed partial data")
+	}
+	now = now.Add(time.Minute)
+	_, _ = s.Read(t.Context(), portal.ProductFilter{})
+	if !s.lastSuccess.Equal(time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)) {
+		t.Fatal("failure advanced last success")
+	}
+}
+
+// Tasks has no upstream observation-time contract. Keep its existing date
+// decoder behavior; exercise clock and unknown codes at the diagnostic boundary.
+func TestTaskReadFailureDiagnosticBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		cause       error
+		words, code string
+	}{
+		{readFailure("clock_ahead"), "A Tasks timestamp is more than 2 seconds ahead", "clock_ahead"},
+		{readFailure("SECRET-NEW-CODE"), "reason is Unknown", "unknown"},
+		{errors.New("SECRET-ERROR"), "reason is Unknown", "unknown"},
+	} {
+		t.Run(tc.code+tc.words, func(t *testing.T) {
+			var logs bytes.Buffer
+			s := &TaskSource{now: func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC) }, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+			page, _ := s.finishRead(t.Context(), portal.ProductFilter{}, portal.ProductPage{}, tc.cause, sessionReadStats{started: time.Now()})
+			body, err := portal.RenderProduct(page)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), tc.words) || strings.Contains(string(body), "SECRET-") || strings.Contains(logs.String(), "SECRET-") || !strings.Contains(logs.String(), `"reason_code":"`+tc.code+`"`) {
+				t.Fatal("unsafe diagnostic boundary")
+			}
+		})
+	}
+}
+
+func TestServeTaskFailureDetailsAndRetry(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	var logs bytes.Buffer
+	tasks := taskReadFixture(t, func() time.Time { return f.now }, func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 403, Header: http.Header{"Content-Type": {mediaHAL}}, Body: io.NopCloser(strings.NewReader("SECRET-REFUSAL"))}, nil
+	})
+	tasks.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	for _, connected := range []bool{true, false} {
+		var source *TaskSource
+		if connected {
+			source = tasks
+		}
+		h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Tasks: source, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+		for _, query := range []string{"", "?show=attention"} {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, f.request(http.MethodGet, TasksPath+query, ""))
+			body := w.Body.String()
+			for _, want := range []string{"Observed:", `datetime="` + f.now.Format(time.RFC3339) + `"`, "Last successful read in this process: Unknown", `href="` + TasksPath + query + `">Retry</a>`} {
+				if w.Code != 200 || !strings.Contains(body, want) {
+					t.Errorf("missing %s (HTTP %d)", want, w.Code)
+				}
+			}
+			if connected && !strings.Contains(body, "The Tasks source refused the read (HTTP 403). Page 1.") {
+				t.Error("handler lost failure reason")
+			}
+			if !connected && !strings.Contains(body, "The Tasks source is not connected.") {
+				t.Error("handler lost disconnection reason")
+			}
+			if strings.Contains(body, "SECRET-") || strings.Contains(body, "fixture-task-token-canary") || strings.Contains(body, "Updated <time") {
+				t.Fatal("unsafe failure page")
+			}
+		}
+	}
+	if strings.Contains(logs.String(), "SECRET-") || strings.Contains(logs.String(), "fixture-task-token-canary") {
+		t.Fatal("unsafe failure log")
+	}
+}

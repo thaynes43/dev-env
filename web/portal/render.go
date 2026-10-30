@@ -472,9 +472,10 @@ type ProductRail struct {
 	Projects       []ProductCount
 }
 
-// ProductReadFailure is a failed Sessions read. ReasonCode is one of
+// ProductReadFailure is a failed Sessions or Tasks read. ReasonCode is one of
 // not_connected, credential_unavailable, operator_unreachable, operator_refused,
-// response_contract, clock_ahead, read_not_started or cancelled. Only fixed wording is rendered.
+// response_contract, clock_ahead, read_not_started or cancelled. Any other code
+// renders Unknown. Only fixed wording is rendered.
 // Page is one-based (0 outside an inventory-page read); RowIndex is zero-based (-1 for no row).
 // Times describe reads in this process, not cached session data.
 type ProductReadFailure struct {
@@ -488,7 +489,7 @@ type productReadFailureView struct {
 	Reason, RetryHref, ObservedAt, ObservedLabel, LastSuccessAt, LastSuccessLabel string
 }
 
-func productReadFailure(f *ProductReadFailure, filter ProductFilter) *productReadFailureView {
+func productReadFailure(f *ProductReadFailure, filter ProductFilter, title string) *productReadFailureView {
 	if f == nil {
 		return nil
 	}
@@ -519,6 +520,33 @@ func productReadFailure(f *ProductReadFailure, filter ProductFilter) *productRea
 	default:
 		v.Reason = "The read failed; its reason is Unknown."
 	}
+	if title == "Tasks" {
+		v.RetryHref = productTasksHref
+		switch f.ReasonCode {
+		case "not_connected":
+			v.Reason = "The Tasks source is not connected."
+		case "credential_unavailable":
+			v.Reason = "The Tasks credential is unavailable."
+		case "operator_unreachable":
+			v.Reason = "The Tasks source could not be reached."
+			if f.TimedOut {
+				v.Reason = "The Tasks read timed out. Try again."
+			}
+		case "operator_refused":
+			v.Reason = "The Tasks source refused the read."
+			if f.HTTPStatus >= 100 && f.HTTPStatus <= 599 {
+				v.Reason = fmt.Sprintf("The Tasks source refused the read (HTTP %d).", f.HTTPStatus)
+			}
+		case "response_contract":
+			v.Reason = "The returned task data could not be read."
+		case "clock_ahead":
+			v.Reason = "A Tasks timestamp is more than 2 seconds ahead of the portal clock."
+		case "cancelled":
+			v.Reason = "The Tasks read was cancelled."
+		default:
+			v.Reason = "The read failed; its reason is Unknown."
+		}
+	}
 	if f.Page > 0 && f.Page <= 10 {
 		v.Reason += fmt.Sprintf(" Page %d", f.Page)
 		if f.RowIndex >= 0 && f.RowIndex < 50 {
@@ -526,13 +554,13 @@ func productReadFailure(f *ProductReadFailure, filter ProductFilter) *productRea
 		}
 		v.Reason += "."
 	}
-	if filter.View == "usage" {
+	if filter.View == "usage" && title != "Tasks" {
 		v.RetryHref += "?view=usage"
 	} else if filter.Attention {
 		v.RetryHref += "?show=attention"
-	} else if filter.Project != "" {
+	} else if filter.Project != "" && title != "Tasks" {
 		v.RetryHref += "?project=" + url.QueryEscape(filter.Project)
-	} else if filter.Session != "" {
+	} else if filter.Session != "" && title != "Tasks" {
 		v.RetryHref += "?session=" + url.QueryEscape(filter.Session)
 	}
 	label := func(raw string) (string, string) {
@@ -731,7 +759,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 			}
 		}
 	}
-	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter)
+	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter, page.Title)
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"
 	if view.UsageView {
 		view.Title, view.Current = "Usage", "usage"

@@ -94,18 +94,50 @@ func writeProductStates(dir string) error {
 			return err
 		}
 	}
-	for _, state := range []string{"empty", "unavailable", "unknown", "not-connected"} {
+	for _, fixture := range []struct {
+		name, reason      string
+		timedOut          bool
+		page, row, status int
+	}{
+		{"not-connected", "not_connected", false, 0, -1, 0},
+		{"credential-unavailable", "credential_unavailable", false, 0, -1, 0},
+		{"unreachable", "operator_unreachable", false, 1, -1, 0},
+		{"timed-out", "operator_unreachable", true, 3, -1, 0},
+		{"refused", "operator_refused", false, 1, -1, 403},
+		{"non-200", "operator_refused", false, 1, -1, 503},
+		{"media-or-size", "response_contract", false, 1, -1, 0},
+		{"contract-refused", "response_contract", false, 2, 1, 0},
+		{"clock-ahead", "clock_ahead", false, 2, 0, 0},
+		{"cancelled", "cancelled", false, 1, -1, 0},
+		{"unavailable", "unknown", false, 0, -1, 0},
+	} {
+		failure := &portal.ProductReadFailure{ReasonCode: fixture.reason, Page: fixture.page, RowIndex: fixture.row, HTTPStatus: fixture.status, TimedOut: fixture.timedOut, ObservedAt: "2026-10-29T14:00:00Z"}
+		if fixture.reason != "not_connected" && fixture.reason != "unknown" {
+			failure.LastSuccessAt = "2026-10-29T13:59:00Z"
+		}
+		for _, attention := range []bool{false, true} {
+			page := portal.ProductPage{Title: "Tasks", Notice: "Tasks unavailable", Preview: true, ObservedAt: failure.ObservedAt, ReadFailure: failure, Filter: portal.ProductFilter{Attention: attention}}
+			if fixture.reason == "not_connected" {
+				page.Notice = "Tasks not connected"
+			}
+			body, err := portal.RenderProduct(page)
+			if err != nil {
+				return err
+			}
+			name := "tasks-" + fixture.name
+			if attention {
+				name += "-attention"
+			}
+			if err = os.WriteFile(filepath.Join(dir, name+".html"), body, 0600); err != nil {
+				return err
+			}
+		}
+	}
+	for _, state := range []string{"empty", "unknown"} {
 		page := portal.ProductPage{Title: "Tasks", Notice: "The completed task read returned no work packages.", Preview: true, Connected: true, Complete: true,
 			ObservedAt: "2026-10-29T14:00:00Z", ReadCompletedAt: "2026-10-29T13:59:00Z"}
-		switch state {
-		case "unavailable":
-			page.Connected, page.Complete = false, false
-			page.Notice, page.ReadCompletedAt = "Tasks unavailable", ""
-		case "unknown":
+		if state == "unknown" {
 			page.ReadCompletedAt = ""
-		case "not-connected":
-			page.Connected, page.Complete = false, false
-			page.Notice, page.ReadCompletedAt = "Tasks not connected", ""
 		}
 		body, err := portal.RenderProduct(page)
 		if err != nil {

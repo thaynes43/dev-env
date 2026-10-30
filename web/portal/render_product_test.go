@@ -818,3 +818,33 @@ func TestReceiptAndLaunchResultCarryTheFullNavigation(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskReadFailureHidesDataAndKeepsSafeDiagnostics(t *testing.T) {
+	for _, attention := range []bool{false, true} {
+		page := ProductPage{Title: "Tasks", Connected: true, Complete: true, ReadCompletedAt: "2026-10-30T12:00:00Z", Filter: ProductFilter{Attention: attention, Project: "SECRET-PROJECT", Session: "SECRET-SESSION", View: "usage"}, Groups: []ProductGroup{{Rows: []ProductRow{{ID: "t1", Title: "SECRET-CACHED-ROW"}}}}, ReadFailure: &ProductReadFailure{ReasonCode: "SECRET-REASON", ObservedAt: "SECRET-TIME", LastSuccessAt: "SECRET-LAST", Page: 1000, RowIndex: 1000, HTTPStatus: 1000}}
+		body, err := RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		href := productTasksHref
+		if attention {
+			href += "?show=attention"
+		}
+		for _, want := range []string{"reason is Unknown", "Observed: Unknown", "Last successful read in this process: Unknown", `href="` + href + `">Retry</a>`} {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("missing %s", want)
+			}
+		}
+		if strings.Contains(string(body), "SECRET-") || strings.Contains(string(body), "1000") || strings.Contains(string(body), "Updated <time") {
+			t.Fatal("unsafe Tasks diagnostics")
+		}
+		page.ReadFailure.ReasonCode = "operator_refused"
+		body, err = RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), "The Tasks source refused the read.") || strings.Contains(string(body), "HTTP 1000") {
+			t.Fatal("invalid HTTP status rendered")
+		}
+	}
+}
