@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"net/http"
@@ -49,7 +50,7 @@ func TestCheckinsTriageFixtures(t *testing.T) {
 	}{
 		{"known-due", "planned", 1}, {"not-due", "current", 0}, {"blocked", "blocked", 0}, {"missing-ack", "planned", 1}, {"unknown", "unknown", 0},
 		{"incomplete-history", "incomplete", 0}, {"partial-page", "incomplete", 0}, {"selected-page", "incomplete", 0},
-		{"no-context", "unbound", 0}, {"pre-pr", "unbound", 0}, {"unknown-export-fields", "planned", 1},
+		{"unknown-owner", "unbound", 0}, {"missing-owner", "unbound", 0}, {"no-context", "unbound", 0}, {"pre-pr", "unbound", 0}, {"unknown-export-fields", "planned", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := checkinsCase(t, tc.name, 0)
@@ -220,7 +221,7 @@ func TestCheckinsCLINoNetworkOrProcess(t *testing.T) {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
-		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,10 +230,25 @@ func TestCheckinsCLINoNetworkOrProcess(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if imp.Name != nil {
+				t.Fatalf("production import alias can hide side effects: %s", path)
+			}
 			if !allowed[name] {
 				t.Fatalf("production dependency %s can introduce network/process effects", name)
 			}
 		}
+		osSelectors := map[string]bool{"Open": true, "Exit": true, "Args": true, "Stdin": true, "Stdout": true, "Stderr": true}
+		ast.Inspect(f, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := selector.X.(*ast.Ident)
+			if ok && pkg.Name == "os" && !osSelectors[selector.Sel.Name] {
+				t.Fatalf("production os.%s can introduce mutation/process effects", selector.Sel.Name)
+			}
+			return true
+		})
 	}
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")

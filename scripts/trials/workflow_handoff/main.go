@@ -53,7 +53,7 @@ func run(args []string, in io.Reader, out, errw io.Writer) int {
 }
 
 func usage(out, errw io.Writer) int {
-	msg := "usage: workflow_handoff <file> | workflow_handoff - | workflow_handoff --watchdog <file> | workflow_handoff --watchdog -"
+	msg := "usage: workflow_handoff <file> | workflow_handoff - | workflow_handoff --watchdog <file> | workflow_handoff --watchdog - | workflow_handoff --checkins <export.json|-> --contexts <contexts.json>"
 	_, _ = fmt.Fprintln(errw, msg)
 	_ = writeResult(out, refused(msg))
 	return 2

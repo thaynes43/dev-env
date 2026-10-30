@@ -147,8 +147,8 @@ func planCheckins(data, contextData []byte) (checkinsPlan, int) {
 		if err := json.Unmarshal(raw, &item); err != nil {
 			return refusedCheckins("invalid check-in item")
 		}
-		if item.ID <= 0 || item.Owner == "" || item.Reasons == nil {
-			return refusedCheckins("check-in requires positive id, owner and reasons list")
+		if item.ID <= 0 || item.Reasons == nil {
+			return refusedCheckins("check-in requires positive id and reasons list")
 		}
 		items[item.ID] = appendDistinctJSON(items[item.ID], raw)
 	}
@@ -206,7 +206,7 @@ func planCheckin(view checkinView, item checkinItem, raw []json.RawMessage, obse
 	// A refused or ambiguous reducer result can never supply a picked binding.
 	var doc document
 	_ = json.Unmarshal(ctx.Handoff, &doc)
-	if ctx.Owner == "Unknown" || ctx.Owner != item.Owner || ctx.Story != strconv.Itoa(item.ID) || ctx.Story != doc.Story || ctx.Repository != doc.Repository || ctx.PullRequest != doc.PullRequest || ctx.Head != doc.Head || ctx.Coordinator != doc.Coordinator || doc.ReviewBinding == nil || ctx.Task != doc.ReviewBinding.Task || ctx.UID != doc.ReviewBinding.UID || !validToken(ctx.Task) || !validToken(ctx.UID) || !validHead(ctx.Head) || !validToken(ctx.Coordinator) {
+	if ctx.Owner == "" || ctx.Owner == "Unknown" || ctx.Owner != item.Owner || ctx.Story != strconv.Itoa(item.ID) || ctx.Story != doc.Story || ctx.Repository != doc.Repository || ctx.PullRequest != doc.PullRequest || ctx.Head != doc.Head || ctx.Coordinator != doc.Coordinator || doc.ReviewBinding == nil || ctx.Task != doc.ReviewBinding.Task || ctx.UID != doc.ReviewBinding.UID || !validToken(ctx.Task) || !validToken(ctx.UID) || !validHead(ctx.Head) || !validToken(ctx.Coordinator) {
 		view.Reasons = append(view.Reasons, "exact owner/story/task/UID/repository/PR/head/coordinator binding does not match")
 		return view
 	}
