@@ -1,0 +1,84 @@
+{
+  "export": {
+    "page": 1,
+    "page_size": 20,
+    "has_more": false,
+    "owner_filter_scope": "all matching items",
+    "owner_match_total": 1,
+    "total_before_owner_filter": 1,
+    "items": [
+      {
+        "id": 9001,
+        "subject": "Synthetic check-in exercise",
+        "url": "https://tracker.example.invalid/work_packages/9001",
+        "status": "In progress",
+        "owner": "agent | worktree synthetic-session | branch agent/synthetic-session",
+        "check_after": "2030-01-02T19:00:00Z",
+        "last_verified": "2030-01-02T16:00:00Z",
+        "evidence": "synthetic-evidence",
+        "handoff": "synthetic-handoff",
+        "next_action": "Synthetic local planning only",
+        "reasons": [],
+        "history_complete": true,
+        "provenance": {
+          "source": "synthetic-fixture"
+        },
+        "metadata": {
+          "ack": false,
+          "blocked": null
+        },
+        "comment_source": null
+      }
+    ]
+  },
+  "contexts": {
+    "schema": "dev-env.workflow-checkin-contexts/v1",
+    "observedAt": "2030-01-02T18:00:00Z",
+    "contexts": [
+      {
+        "id": 9001,
+        "owner": "agent | worktree synthetic-session | branch agent/synthetic-session",
+        "story": "9001",
+        "repository": "github.com/example/synthetic-project",
+        "pullRequest": 9002,
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "coordinator": "synthetic-coordinator",
+        "task": "synthetic-task-9001",
+        "uid": "uid-synthetic-task-9001",
+        "kind": "start_ack",
+        "handoff": {
+          "schema": "dev-env.workflow-handoff/v1",
+          "story": "9001",
+          "relatedStories": [],
+          "repository": "github.com/example/synthetic-project",
+          "pullRequest": 9002,
+          "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "coordinator": "synthetic-coordinator",
+          "reviewBinding": {
+            "task": "synthetic-task-9001",
+            "uid": "uid-synthetic-task-9001"
+          },
+          "modelProvenance": {
+            "serving": "Unknown",
+            "cost": "Unknown",
+            "configuredUI": "simulation"
+          },
+          "events": [
+            {
+              "kind": "review-observation",
+              "identity": "obs-approved",
+              "sourceTime": "2030-01-01T15:00:00Z",
+              "task": "synthetic-task-9001",
+              "uid": "uid-synthetic-task-9001",
+              "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source": "native-review-log",
+              "phase": "terminal",
+              "verdict": "approved"
+            }
+          ]
+        },
+        "receipts": []
+      }
+    ]
+  }
+}

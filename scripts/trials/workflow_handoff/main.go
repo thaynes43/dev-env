@@ -17,6 +17,9 @@ func main() {
 }
 
 func run(args []string, in io.Reader, out, errw io.Writer) int {
+	if len(args) >= 1 && args[0] == "--checkins" {
+		return runCheckins(args, in, out, errw)
+	}
 	if len(args) >= 1 && args[0] == "--watchdog" {
 		if len(args) != 2 {
 			return usage(out, errw)
@@ -50,7 +53,7 @@ func run(args []string, in io.Reader, out, errw io.Writer) int {
 }
 
 func usage(out, errw io.Writer) int {
-	msg := "usage: workflow_handoff <file> | workflow_handoff - | workflow_handoff --watchdog <file> | workflow_handoff --watchdog -"
+	msg := "usage: workflow_handoff <file> | workflow_handoff - | workflow_handoff --watchdog <file> | workflow_handoff --watchdog - | workflow_handoff --checkins <export.json|-> --contexts <contexts.json>"
 	_, _ = fmt.Fprintln(errw, msg)
 	_ = writeResult(out, refused(msg))
 	return 2
