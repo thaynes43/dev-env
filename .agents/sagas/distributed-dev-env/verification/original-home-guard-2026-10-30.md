@@ -34,6 +34,10 @@ conflicts; it does not automatically reinterpret an uncertain admission snapshot
 as safe. This availability limit is retained for this preservation increment.
 
 
+Unavailable Kubernetes reads return to the controller’s existing error backoff;
+missing or mismatched identities remain preservation refusals. This also keeps
+unguarded legacy creation from stalling after transient read failures.
+
 Controller recreation checks the durable binding with uncached reads before
 building and immediately before Pod Create. Cached claim absence cannot enter
 the replacement-PVC branch. It never creates a missing guarded HOME. Existing

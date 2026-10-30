@@ -1113,13 +1113,19 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	b, guardErr := r.originalHome(ctx, s)
 	if guardErr != nil {
 		obs.removalBlocked = guardErr
+		if !errors.Is(guardErr, homeguard.ErrUnsafe) {
+			return guardErr
+		}
 		return nil
 	}
 	if b != nil {
 		// Cached absence must never create a replacement claim for this target.
 		var claim corev1.PersistentVolumeClaim
-		if r.APIReader.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Claim()}, &claim) != nil {
-			obs.removalBlocked = homeguard.ErrUnsafe
+		if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Claim()}, &claim); err != nil {
+			obs.removalBlocked = originalHomeReadError(err)
+			if !errors.Is(obs.removalBlocked, homeguard.ErrUnsafe) {
+				return obs.removalBlocked
+			}
 			return nil
 		}
 		obs.claim = owned[*corev1.PersistentVolumeClaim]{obj: &claim}
@@ -1273,6 +1279,9 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if b != nil {
 		if _, err := r.originalHome(ctx, s); err != nil {
 			obs.removalBlocked = err
+			if !errors.Is(err, homeguard.ErrUnsafe) {
+				return err
+			}
 			return nil
 		}
 		addOriginalHomeVerifier(pod, *b)

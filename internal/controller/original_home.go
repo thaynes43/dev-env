@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -24,13 +25,31 @@ func CheckOriginalHome(ctx context.Context, live client.Reader, s *v1alpha1.Agen
 	var fresh v1alpha1.AgentSession
 	var pvc corev1.PersistentVolumeClaim
 	var pv corev1.PersistentVolume
-	if live.Get(ctx, client.ObjectKeyFromObject(s), &fresh) != nil || fresh.UID != s.UID || fresh.ResourceVersion != s.ResourceVersion || live.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Claim()}, &pvc) != nil || live.Get(ctx, client.ObjectKey{Name: b.PV}, &pv) != nil {
+	if err := live.Get(ctx, client.ObjectKeyFromObject(s), &fresh); err != nil {
+		return originalHomeReadError(err)
+	}
+	if fresh.UID != s.UID || fresh.ResourceVersion != s.ResourceVersion {
 		return homeguard.ErrUnsafe
+	}
+	if err := live.Get(ctx, client.ObjectKey{Namespace: b.Namespace, Name: b.Claim()}, &pvc); err != nil {
+		return originalHomeReadError(err)
+	}
+	if err := live.Get(ctx, client.ObjectKey{Name: b.PV}, &pv); err != nil {
+		return originalHomeReadError(err)
 	}
 	sb, _ := json.Marshal(&fresh)
 	cb, _ := json.Marshal(&pvc)
 	vb, _ := json.Marshal(&pv)
 	return b.Verify(sb, cb, vb, running)
+}
+
+// Missing identity is a preservation refusal; unavailable reads need the
+// controller's existing error backoff, including for unguarded legacy sessions.
+func originalHomeReadError(err error) error {
+	if apierrors.IsNotFound(err) {
+		return homeguard.ErrUnsafe
+	}
+	return err
 }
 
 func (r *Reconciler) originalHome(ctx context.Context, s *v1alpha1.AgentSession) (*homeguard.Binding, error) {
@@ -40,7 +59,10 @@ func (r *Reconciler) originalHome(ctx context.Context, s *v1alpha1.AgentSession)
 		return nil, homeguard.ErrUnsafe
 	}
 	var live v1alpha1.AgentSession
-	if r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live) != nil || live.UID != s.UID {
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(s), &live); err != nil {
+		return nil, originalHomeReadError(err)
+	}
+	if live.UID != s.UID {
 		return nil, homeguard.ErrUnsafe
 	}
 	b, err := homeguard.Select(r.OriginalHome, live.Namespace, live.Name, string(live.UID), live.Annotations)

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -187,5 +188,54 @@ func TestOriginalHomeNameReuseRaceEnvtest(t *testing.T) {
 	var retained corev1.PersistentVolumeClaim
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(c), &retained); err != nil || retained.UID != c.UID || retained.DeletionTimestamp.IsZero() {
 		t.Fatalf("original identity not anchored: %v", err)
+	}
+}
+
+func TestOriginalHomeUnavailableReadsKeepControllerBackoff(t *testing.T) {
+	for _, guarded := range []bool{false, true} {
+		t.Run(fmt.Sprint(guarded), func(t *testing.T) {
+			s, c, v, b := originalFixture()
+			if !guarded {
+				s.Annotations = nil
+			}
+			scheme := runtime.NewScheme()
+			_ = v1alpha1.AddToScheme(scheme)
+			_ = corev1.AddToScheme(scheme)
+			base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(s, c, v).Build()
+			if err := base.Get(context.Background(), client.ObjectKeyFromObject(s), s); err != nil {
+				t.Fatal(err)
+			}
+			transient := errors.New("synthetic API observation unavailable")
+			failures := 2
+			reader := interceptor.NewClient(base, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+				// The guarded path must retry failed PV reads as well as initial Session reads.
+				_, isSession := o.(*v1alpha1.AgentSession)
+				_, isPV := o.(*corev1.PersistentVolume)
+				if failures > 0 && (!guarded && isSession || guarded && isPV) {
+					failures--
+					return transient
+				}
+				return c.Get(ctx, key, o, opts...)
+			}})
+			r := &Reconciler{Client: base, APIReader: reader}
+			if guarded {
+				r.OriginalHome = &b
+			}
+			observe := func() *observation {
+				return &observation{pod: owned[*corev1.Pod]{missing: true}, claim: owned[*corev1.PersistentVolumeClaim]{obj: c}}
+			}
+			for range 2 {
+				if err := r.ensure(context.Background(), s, exampleTemplates(t), observe()); !errors.Is(err, transient) {
+					t.Fatalf("read failure lost controller backoff: %v", err)
+				}
+			}
+			obs := observe()
+			if err := r.ensure(context.Background(), s, exampleTemplates(t), obs); err != nil || obs.pod.obj == nil {
+				t.Fatalf("backoff retry did not recover: %v blocked=%v", err, obs.removalBlocked)
+			}
+			if got := len(obs.pod.obj.Spec.InitContainers); (got == 1) != guarded {
+				t.Fatal("default-off guard shape changed", got)
+			}
+		})
 	}
 }
