@@ -17,10 +17,21 @@ import time
 MAX_FRAME = 65536
 MAX_PROMPT = 16384
 LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
+# The provider child gets these names only when set, never the pod's tokens or keys.
+# A Cursor auth variable needs its own separately approved change.
+CHILD_ENVIRONMENT = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "XDG_RUNTIME_DIR")
+SHUTDOWN_GRACE = 1.0
 
 
 class Refusal(Exception):
     pass
+
+
+class Arguments(argparse.ArgumentParser):
+    """Bad arguments get a fixed-reason receipt, not usage text on stderr."""
+    def error(self, message):
+        raise Refusal("invalid-arguments")
 
 
 def strict_object(raw):
@@ -117,7 +128,10 @@ class Session:
             raise Refusal("invalid-method")
         if "id" not in message:
             if method == "session/update":
-                if params.get("sessionId") != self.session_id or not self.session_id:
+                # Fail closed: before session/new answers, no session id exists to correlate.
+                if not self.session_id:
+                    raise Refusal("early-session-update")
+                if params.get("sessionId") != self.session_id:
                     raise Refusal("cross-session-update")
                 update = params.get("update", {})
                 if not isinstance(update, dict) or not label(update.get("sessionUpdate")):
@@ -125,7 +139,9 @@ class Session:
                 # Deliberately do not emit any update content, tool data or text.
             return
         ident = message["id"]
-        if not request_id(ident) or (type(ident), ident) in self.seen_requests:
+        if not request_id(ident):
+            raise Refusal("invalid-request-id")
+        if (type(ident), ident) in self.seen_requests:
             raise Refusal("duplicate-request")
         if len(self.seen_requests) >= 256 or len(self.pending) >= 16:
             raise Refusal("request-bound-exceeded")
@@ -140,7 +156,7 @@ class Session:
                 raise Refusal("invalid-permission-options")
             projected = []
             for item in options:
-                if not isinstance(item, dict) or not label(item.get("optionId")) or item.get("kind") not in {"allow_once", "allow_always", "reject_once", "reject_always"}:
+                if not isinstance(item, dict) or not label(item.get("optionId")) or not isinstance(item.get("kind"), str) or item["kind"] not in PERMISSION_KINDS:
                     raise Refusal("invalid-permission-options")
                 if item["optionId"] in [x["optionID"] for x in projected]:
                     raise Refusal("duplicate-permission-option")
@@ -261,6 +277,8 @@ def read_frames(stream, events, source):
                 raise Refusal("invalid-frame")
     except (OSError, ValueError, Refusal):
         events.put(("failure", "invalid-frame"))
+    except Exception:
+        events.put(("failure", "internal-error"))
 
 
 def run_transport(process, coordinator_input, session, timeout, clock=time.monotonic, deadline=None):
@@ -292,17 +310,50 @@ def run_transport(process, coordinator_input, session, timeout, clock=time.monot
             raise Refusal("decision-input-closed")
 
 
+def child_environment(source=None):
+    """Only allowlisted names reach the third-party binary; nothing else is inherited."""
+    source = os.environ if source is None else source
+    return {name: source[name] for name in CHILD_ENVIRONMENT if name in source}
+
+
+def signal_group(group, number):
+    try:
+        os.killpg(group, number)
+    except OSError:
+        pass  # Already gone (ProcessLookupError); cleanup never raises.
+
+
+def leader_exited(process):
+    if not hasattr(os, "waitid"):
+        return process.poll() is not None
+    try:
+        # WNOWAIT leaves the leader unreaped, so its id cannot name another group yet.
+        return os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+    except ChildProcessError:
+        return True
+
+
+def stop_group(process, grace=SHUTDOWN_GRACE, clock=time.monotonic):
+    """SIGTERM the owned group, allow a short grace, then always SIGKILL the group.
+
+    A child or grandchild that ignores SIGTERM must not outlive the client, so
+    SIGKILL goes to the whole group even when the leader exited in time.
+    """
+    group = process.pid  # start_new_session=True makes the leader's pid the group id.
+    signal_group(group, signal.SIGTERM)
+    end = clock() + grace
+    while clock() < end and not leader_exited(process):
+        time.sleep(0.02)
+    signal_group(group, signal.SIGKILL)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass  # The group is already SIGKILLed; reaping must not raise past cleanup.
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["run"])
-    parser.add_argument("--client", required=True)
-    parser.add_argument("--worktree", required=True)
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--prompt-file", required=True)
-    parser.add_argument("--timeout", type=int, default=600)
-    args = parser.parse_args(argv)
     process = None
-    deadline = time.monotonic() + max(1, min(args.timeout, 3600))
+    deadline = None
     def emit(value, best_effort=False):
         raw = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
         if len(raw.encode("utf-8")) + 1 > MAX_FRAME:
@@ -319,6 +370,15 @@ def main(argv=None):
         finally:
             os.set_blocking(descriptor, previous)
     try:
+        parser = Arguments(description=__doc__)
+        parser.add_argument("command", choices=["run"])
+        parser.add_argument("--client", required=True)
+        parser.add_argument("--worktree", required=True)
+        parser.add_argument("--model", required=True)
+        parser.add_argument("--prompt-file", required=True)
+        parser.add_argument("--timeout", type=int, default=600)
+        args = parser.parse_args(argv)
+        deadline = time.monotonic() + max(1, min(args.timeout, 3600))
         client, cwd, prompt_path = Path(args.client), Path(args.worktree), Path(args.prompt_file)
         if not client.is_absolute() or not client.is_file() or not os.access(client, os.X_OK) or not cwd.is_absolute() or not cwd.is_dir() or not prompt_path.is_absolute() or not prompt_path.is_file() or not label(args.model) or not 1 <= args.timeout <= 3600:
             raise Refusal("invalid-input")
@@ -330,7 +390,7 @@ def main(argv=None):
             prompt = raw.decode("utf-8")
         except UnicodeError:
             raise Refusal("invalid-prompt-encoding") from None
-        process = subprocess.Popen([str(client.resolve()), "--model", args.model, "acp"], cwd=str(cwd.resolve()), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+        process = subprocess.Popen([str(client.resolve()), "--model", args.model, "acp"], cwd=str(cwd.resolve()), env=child_environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
         def send(value):
             raw = json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
             if len(raw) > MAX_FRAME:
@@ -339,23 +399,17 @@ def main(argv=None):
         session = Session(send, emit, str(cwd.resolve()), prompt, args.model)
         run_transport(process, sys.stdin.buffer, session, args.timeout, deadline=deadline)
         return 0
-    except (Refusal, OSError) as error:
+    except Exception as error:
+        # Reason codes only: never an exception message, provider text or traceback.
+        reason = str(error) if isinstance(error, Refusal) else "process-io-failed" if isinstance(error, OSError) else "internal-error"
         try:
-            emit({"event": "failed", "reason": str(error) if isinstance(error, Refusal) else "process-io-failed"}, best_effort=True)
-        except (Refusal, OSError):
+            emit({"event": "failed", "reason": reason}, best_effort=True)
+        except Exception:
             pass  # A blocked coordinator output must never postpone child cleanup.
         return 2
     finally:
         if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=2)
+            stop_group(process)
 
 
 if __name__ == "__main__":

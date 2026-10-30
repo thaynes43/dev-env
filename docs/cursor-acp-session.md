@@ -10,13 +10,33 @@ Do not use it to route around a transcript, authentication, or access denial.
 
 ## Supported route and limits
 
-The official [Cursor ACP interface](https://cursor.com/docs/cli/acp) runs
-`cursor-agent --model <requested-model> acp` as a child with newline-delimited
-JSON-RPC over stdin/stdout. The client initializes protocol1, creates exactly one
+The client targets Cursor's ACP mode, described in
+[Cursor's ACP documentation](https://cursor.com/docs/cli/acp). It runs
+`<client> --model <requested-model> acp` as a child with newline-delimited
+JSON-RPC over stdin/stdout. The client initializes protocol 1, creates exactly one
 fresh session in an explicit worktree with no supplied MCP servers, and sends one
 prompt. Existing CLI authentication is used; this client never logs in, supplies
 credentials, or changes Cursor permissions. The model id is requested metadata,
 not served-model evidence. Existing workspace settings may still load.
+
+**UNVERIFIED against Cursor's current public ACP documentation.** These points
+follow the generic ACP schema. They have not been checked against Cursor's
+current doc or a live run:
+
+- The `--model` flag placed before the `acp` subcommand, and whether `acp` honours it.
+- Permission option spelling. The client requires ACP schema kinds
+  (`allow_once`, `allow_always`, `reject_once`, `reject_always`). If Cursor sends
+  another spelling, such as `allow-once`, the request fails closed with
+  `invalid-permission-options`. The client accepts only a `reject_once` decision.
+- The skipped ACP `authenticate` step. The client relies on an existing CLI login.
+  If Cursor requires `authenticate`, `session/new` fails with
+  `provider-error-session-new`; the client does not authenticate.
+- Whether Cursor sends `session/update` before answering `session/new`. The
+  client fails closed on that with `early-session-update`, because no session id
+  exists yet to correlate it. A live run that shows this order needs a separate
+  reviewed change, not a silent ignore.
+
+None of this is live acceptance.
 
 A later, separately authorized owner can invoke:
 
@@ -27,11 +47,26 @@ python3 scripts/cursor-acp-session.py run \
   --prompt-file /absolute/path/to/work-order.txt --timeout 600
 ```
 
+`--client`, `--worktree` and `--prompt-file` must be absolute. `--model` must
+match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, so it cannot start with `-`; bad
+arguments fail with `invalid-arguments` or `invalid-input` before any child starts.
+
 No live invocation is part of this source increment. This client cannot adopt the
 existing tmux task or bypass its inspection restriction. The subprocess uses the
 caller's identity and workspace; it does not become an authenticated dev-env
 session or gain inbox permissions. There is no daemon, listener, registry, or
 new API endpoint.
+
+## Child environment
+
+The child does not inherit the caller's environment. It receives exactly these
+names, each only when set in the caller's environment, and nothing else:
+
+`PATH`, `HOME`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `XDG_RUNTIME_DIR`
+
+Pod tokens and keys (for example `CLAUDE_CODE_OAUTH_TOKEN`) never reach the
+third-party binary. Any Cursor authentication variable, such as an API key,
+needs a separate approved change; this increment passes none.
 
 ## Coordinator input and receipts
 
@@ -49,7 +84,8 @@ this client's stdin (one option per question unless allowMultiple):
 {"requestID":42,"sessionID":"observed-session-id","kind":"question","answers":[{"questionId":"q1","selectedOptionIds":["option1"]}]}
 ```
 
-For a permission request, the client accepts only an explicit rejection:
+For a permission request, the client accepts only an explicit rejection, naming
+the `optionID` of a `reject_once` option from `permission-required`:
 
 ```json
 {"requestID":43,"sessionID":"observed-session-id","kind":"permission","optionID":"reject-once"}
@@ -67,22 +103,33 @@ No automatic retry, resume, cancellation of another process, or fresh launch occ
 The client reports `prompt-complete` only for a matching successful prompt result.
 A sent response and a completed process do not establish that a human approved it,
 that tools did useful work, or that durable dev-env inbox/claim state changed.
-`failed` output uses reason codes only; provider errors and raw output are withheld.
+`failed` output uses fixed reason codes only; provider errors, exception text
+and raw output are withheld. An unexpected client error is reported as
+`internal-error`. A malformed request id is `invalid-request-id`; a reused one is
+`duplicate-request`.
 Coordinator receipt writes and provider input writes are nonblocking and share
 the same deadline. If the coordinator stops reading stdout, the failure receipt
 may be absent or partial, but the client still terminates its child.
-Shutdown terminates this subprocess group; it is not proof against a tool that
-escaped the process group and is not a replacement for managed task lifecycle.
+Shutdown sends SIGTERM to the child's process group, waits up to one second for
+the leader, then always sends SIGKILL to the group, so a child or grandchild that
+ignores SIGTERM does not survive. It is not proof against a tool that escaped the
+process group (for example with `setsid`) and is not a replacement for managed
+task lifecycle.
 
 ## Qualification
 
 ```sh
-nice -n 19 python3 -B -m unittest discover -s scripts -p 'test_cursor_acp_session.py' -v
+nice -n 19 python3 -I -B -m unittest discover -s scripts -p 'test_cursor_acp_session.py' -v
 ```
 
-Tests use an injected fake transport only: initialize/new/prompt correlation,
-question/reply and denied permission, stale and duplicate decisions, cross-session
-requests, provider failures, bounded frames and deadlines, including an undrained coordinator output pipe. They neither start a
-provider nor touch credentials, existing conversations, or live panes. Actual
+Tests use an injected fake transport and a fake CLI script only:
+initialize/new/prompt correlation, question/reply and denied permission (also
+over the subprocess transport), stale and duplicate decisions, malformed ids,
+early and cross-session updates, `fs/*` and `terminal/*` callbacks refused with
+-32601, provider failures and early exit, bad inputs, bounded frames and
+deadlines, an undrained coordinator output pipe, the child environment (synthetic
+token names absent; names compared, values never read out), and a grandchild that
+ignores SIGTERM. They neither start a provider nor touch credentials, existing
+conversations, or live panes. Actual
 provider compatibility, startup/version/trust, allowed identity and workspace,
 resource policy, and live communication acceptance remain later prerequisites.
