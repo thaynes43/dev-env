@@ -27,6 +27,13 @@ identical admitted no-op keeps its existing 200 behavior. The annotation remains
 effective after the flag is removed; removal is not an implemented reset route.
 No live flag or annotation is set by this source change.
 
+Admission deliberately refuses a changed Session resourceVersion, including an
+unrelated status write between its two reads. That conservative 409 causes no
+lifecycle mutation or provider dispatch. The existing loop still retries Patch
+conflicts; it does not automatically reinterpret an uncertain admission snapshot
+as safe. This availability limit is retained for this preservation increment.
+
+
 Controller recreation checks the durable binding with uncached reads before
 building and immediately before Pod Create. Cached claim absence cannot enter
 the replacement-PVC branch. It never creates a missing guarded HOME. Existing
