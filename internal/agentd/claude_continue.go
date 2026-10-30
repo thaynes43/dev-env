@@ -47,7 +47,7 @@ const (
 	transcriptTailBytes = 256 << 10
 	// continueFrom is the sender Deliver names; it is not a session, so no reply hint.
 	continueFrom = "agentd/claude-login"
-	continueText = "The keeper renewed this session's Claude login after your last turn failed with a revoked or expired token error. Nothing you did caused it. Please continue the work you were doing."
+	continueText = "agentd applied a keeper-provided Claude login generation and observed an authentication error in this session. Please retry the work once with the available login. If authentication still fails, report the blocker; do not change credentials or start another login."
 )
 
 var conversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
