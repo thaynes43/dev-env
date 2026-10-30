@@ -572,7 +572,7 @@ The operator source also supports a separate default-off pair, `--task-pilot-age
 
 This is source behavior only: no operator flags or task pilot are activated by it. It adds no project, profile, model, capacity or credential authority. A signed qualified image, separately authorized configuration and capacity, and live acceptance remain prerequisites. The parent/key pair can match more than one successive Session; one-use handling remains an operational responsibility.
 
-## Usage navigation and Sessions read diagnostics (#241)
+## Usage navigation and read diagnostics (#241, #290)
 
 Usage has a canonical view URL, `sessions?view=usage`, with its own active top
 and mobile navigation item. It shows usage without the session rail or list;
@@ -609,6 +609,29 @@ read keeps a separately configured New agent form available. Page, session and
 last-activity observation timestamps up to two seconds ahead are clamped to
 the portal's now; anything further ahead is refused. Empty, stale and unavailable
 retain their separate meanings; a pending HTTP read shows no invented empty result or zero.
+
+The Tasks failure page uses the same allowlisted reason pattern as Sessions:
+`not_connected`, `credential_unavailable`, `operator_unreachable` (including
+timeout), `operator_refused`, `response_contract`, `clock_ahead` or `cancelled`;
+anything else becomes Unknown. It shows "Observed" and "Last successful read in
+this process" (or Unknown before a successful Tasks read), with last-success
+state independent of Sessions. Retry preserves All at
+`/portal/projects/dev-env/environments/internal/tasks` or Needs attention at
+`/portal/projects/dev-env/environments/internal/tasks?show=attention`.
+No partial or cached task rows or "Updated" time appear after a failed read.
+Tasks does not currently generate `clock_ahead` from task timestamps; that code
+has fixed wording in the shared failure renderer.
+
+One structured `portal_task_read_failed` line records each failed Tasks read
+with exactly these diagnostic fields: `reason_code`, `page` (0 outside an
+inventory-page read), `row_index` (-1 without a row), `http_status` (0 without a
+response), `timed_out`, `elapsed_ms` (from the start of the Tasks source read),
+`credential_ms`, `fetch_ms`, `decode_ms` and `projection_ms`. It has no
+`pre_read_ms` or `history_ms`, and includes no upstream errors, values, headers
+or credentials. As with Sessions, `not_connected` and `cancelled` log at Info;
+other failures log at Warn. The Tasks read has no read deadline today; it
+inherits the request context, and each upstream HTTP request still has its
+five-second timeout. Adding a Tasks read deadline is separate follow-up work.
 
 ## Tasks list truth (#253)
 

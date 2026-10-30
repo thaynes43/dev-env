@@ -120,3 +120,51 @@ func TestAttentionStatePreviews(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskFailureStatePreviews(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeProductStates(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, reason string }{
+		{"not-connected", "The Tasks source is not connected."},
+		{"credential-unavailable", "The Tasks credential is unavailable."},
+		{"unreachable", "The Tasks source could not be reached."},
+		{"timed-out", "The Tasks read timed out."},
+		{"refused", "The Tasks source refused the read (HTTP 403)."},
+		{"non-200", "The Tasks source refused the read (HTTP 503)."},
+		{"media-or-size", "The returned task data could not be read."},
+		{"contract-refused", "Page 2, row index 1"},
+		{"clock-ahead", "A Tasks timestamp is more than 2 seconds ahead"},
+		{"cancelled", "The Tasks read was cancelled."},
+		{"unavailable", "reason is Unknown"},
+	} {
+		for _, attention := range []bool{false, true} {
+			name, href := "tasks-"+tc.name, "/portal/projects/dev-env/environments/internal/tasks"
+			if attention {
+				name += "-attention"
+				href += "?show=attention"
+			}
+			body, err := os.ReadFile(filepath.Join(dir, name+".html"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := string(body)
+			for _, want := range []string{"Fixture preview", tc.reason, "Observed:", `datetime="2026-10-29T14:00:00Z"`, "Last successful read in this process:", `href="` + href + `">Retry</a>`} {
+				if !strings.Contains(s, want) {
+					t.Errorf("%s lacks %s", name, want)
+				}
+			}
+			if strings.Count(s, `class="read-failure"`) != 1 || strings.Count(s, ">Retry</a>") != 1 || strings.Contains(s, "Updated <time") || strings.Contains(s, "SECRET-") || strings.Contains(s, "<form") {
+				t.Errorf("%s has unsafe failure markup", name)
+			}
+			if tc.name == "not-connected" || tc.name == "unavailable" {
+				if !strings.Contains(s, "Last successful read in this process: Unknown") {
+					t.Errorf("%s lacks Unknown last success", name)
+				}
+			} else if !strings.Contains(s, `datetime="2026-10-29T13:59:00Z"`) {
+				t.Errorf("%s lacks last success", name)
+			}
+		}
+	}
+}
