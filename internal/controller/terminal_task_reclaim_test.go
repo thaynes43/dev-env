@@ -142,12 +142,6 @@ func TestTerminalTaskReclaimProtectionTable(t *testing.T) {
 		{"reusable-host", func(f *terminalFixture, r *Reconciler) {
 			f.s.Annotations = map[string]string{homeguard.Annotation: "retained-host"}
 		}},
-		{"configured-coordinator", func(f *terminalFixture, r *Reconciler) {
-			r.TerminalTaskProtectedSessions = []string{f.s.Namespace + "/" + f.s.Name}
-		}},
-		{"coordinator-pod", func(f *terminalFixture, r *Reconciler) {
-			f.pod.Annotations["dev-env.haynesops.com/coordinator-host"] = "host"
-		}},
 		{"busy", func(f *terminalFixture, r *Reconciler) { f.s.Status.Agent.Status = protocol.AgentBusy }},
 		{"attached", func(f *terminalFixture, r *Reconciler) { f.s.Status.Agent.Attached = 1 }},
 		{"no-result", func(f *terminalFixture, r *Reconciler) { f.s.Status.Agent.Task = nil }},
@@ -247,7 +241,7 @@ func TestTerminalTaskReclaimProtectsLiveAndUnprovedChildren(t *testing.T) {
 }
 
 func TestTerminalTaskReclaimReadAndCASFailuresKeepCompute(t *testing.T) {
-	for _, failure := range []string{"read", "hold-before-confirmation", "pod-version"} {
+	for _, failure := range []string{"read", "hold-before-confirmation", "resume-before-confirmation", "pod-version"} {
 		t.Run(failure, func(t *testing.T) {
 			f := terminalTaskFixture(true)
 			f.pod.Status.Phase = corev1.PodFailed
@@ -257,10 +251,14 @@ func TestTerminalTaskReclaimReadAndCASFailuresKeepCompute(t *testing.T) {
 			once := false
 			deleteAttempted := false
 			c := interceptor.NewClient(base, interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
-				if !once && failure == "hold-before-confirmation" {
+				if !once && (failure == "hold-before-confirmation" || failure == "resume-before-confirmation") {
 					once = true
 					s := storedHistory(t, base, f.s)
 					s.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: v1alpha1.HomeExpiryHold}
+					if failure == "resume-before-confirmation" {
+						s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+						s.Annotations = map[string]string{v1alpha1.AnnotationResumedAt: f.now.UTC().Format(time.RFC3339)}
+					}
 					if err := base.Update(ctx, s); err != nil {
 						return err
 					}
@@ -281,12 +279,15 @@ func TestTerminalTaskReclaimReadAndCASFailuresKeepCompute(t *testing.T) {
 			}
 			r := terminalTaskReconciler(f, c, reader)
 			s := storedHistory(t, base, f.s)
-			_, _, _ = r.reconcileTerminalTaskReclaim(context.Background(), s)
+			result, _, _ := r.reconcileTerminalTaskReclaim(context.Background(), s)
+			if failure == "read" && result.RequeueAfter < homeExpiryUnknownRetry {
+				t.Fatal("transient read failure polls too quickly")
+			}
 			var pod corev1.Pod
 			if err := base.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); err != nil {
 				t.Fatal("compute removed after failed proof", err)
 			}
-			if failure == "hold-before-confirmation" && !once || failure == "pod-version" && !deleteAttempted {
+			if (failure == "hold-before-confirmation" || failure == "resume-before-confirmation") && !once || failure == "pod-version" && !deleteAttempted {
 				t.Fatal("test did not reach its intended confirmation/delete boundary")
 			}
 		})
@@ -358,5 +359,141 @@ func TestTerminalTaskReclaimSkipsOrdinaryActiveTaskAndKeepsMissingStopUnknown(t 
 	}
 	if reason, err := r.terminalTaskViewAllowed(context.Background(), v); err == nil || reason != "ProofUnknown" {
 		t.Fatal("absence manufactured stop proof", reason, err)
+	}
+}
+
+func TestTerminalTaskReclaimCachedGatesAvoidUncachedReadsAndPolling(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*terminalFixture)
+		wait   time.Duration
+	}{
+		{"settled", func(f *terminalFixture) {
+			meta.SetStatusCondition(&f.s.Status.Conditions, metav1.Condition{Type: ConditionTerminalTaskReclaim, Status: metav1.ConditionFalse, Reason: "Reclaimed"})
+		}, 0},
+		{"interactive", func(f *terminalFixture) { f.s.Spec.Mode = v1alpha1.ModeLocal }, 0},
+		{"shared", func(f *terminalFixture) { f.s.Spec.Workspace = &v1alpha1.WorkspaceSpec{} }, 0},
+		{"held", func(f *terminalFixture) {
+			f.s.Annotations = map[string]string{v1alpha1.AnnotationHomeExpiry: v1alpha1.HomeExpiryHold}
+		}, 0},
+		{"legacy-result", func(f *terminalFixture) { f.s.Status.Agent.Task.ExitSource = nil }, 0},
+		{"busy", func(f *terminalFixture) { f.s.Status.Agent.Status = protocol.AgentBusy }, 0},
+		{"attached", func(f *terminalFixture) { f.s.Status.Agent.Attached = 1 }, 0},
+		{"reusable", func(f *terminalFixture) { f.s.Annotations = map[string]string{homeguard.Annotation: "retained-host"} }, 0},
+		{"grace", func(f *terminalFixture) {
+			f.s.Status.PrivateHistory.TaskTerminal.DueAt = recordTime(f.now.Add(time.Hour))
+		}, time.Hour},
+		{"first-observation", func(f *terminalFixture) { f.s.Status.PrivateHistory.TaskTerminal = nil }, terminalTaskReclaimRetry},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := terminalTaskFixture(true)
+			test.change(&f)
+			base := f.client()
+			reads := 0
+			reader := interceptor.NewClient(base, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					reads++
+					return c.Get(ctx, key, obj, opts...)
+				},
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					reads++
+					return c.List(ctx, list, opts...)
+				},
+			})
+			r := terminalTaskReconciler(f, base, reader)
+			s := storedHistory(t, base, f.s)
+			result, _, err := r.reconcileTerminalTaskReclaim(context.Background(), s)
+			if err != nil || reads != 0 || result.RequeueAfter != test.wait {
+				t.Fatalf("uncached reads=%d result=%+v want wait=%s error=%v", reads, result, test.wait, err)
+			}
+		})
+	}
+}
+
+func TestTerminalTaskReclaimAbsentExecutorSettlesWithoutPolling(t *testing.T) {
+	f := terminalTaskFixture(true)
+	f.s.Status.PrivateHistory.ExecutorTerminal = &v1alpha1.PrivateExecutorTerminalStatus{PodUID: string(f.pod.UID)}
+	base := f.client(f.pod)
+	reads := 0
+	reader := interceptor.NewClient(base, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			reads++
+			return c.Get(ctx, key, obj, opts...)
+		},
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			reads++
+			return c.List(ctx, list, opts...)
+		},
+	})
+	r := terminalTaskReconciler(f, base, reader)
+	s := storedHistory(t, base, f.s)
+	for i := range 2 {
+		result, _, err := r.reconcileTerminalTaskReclaim(context.Background(), s)
+		if err != nil || result.RequeueAfter != 0 || reads != 4 {
+			t.Fatalf("pass %d reads=%d result=%+v error=%v", i, reads, result, err)
+		}
+		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim); cond == nil || cond.Reason != "Reclaimed" {
+			t.Fatalf("absence not settled: %+v", cond)
+		}
+	}
+}
+
+func TestTerminalTaskReclaimExplicitResumeRestartsGraceAndSetsSuspender(t *testing.T) {
+	f := terminalTaskFixture(true)
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	f.s.Annotations = map[string]string{v1alpha1.AnnotationResumedAt: f.now.UTC().Format(time.RFC3339)}
+	base := f.client()
+	r := terminalTaskReconciler(f, base, base)
+	s := storedHistory(t, base, f.s)
+	result, stop, err := r.reconcileTerminalTaskReclaim(context.Background(), s)
+	if err != nil || stop || result.RequeueAfter != time.Minute || storedHistory(t, base, f.s).Spec.OperatingMode != v1alpha1.OperatingModeRunning {
+		t.Fatalf("explicit resume immediately suspended: %+v %t %v", result, stop, err)
+	}
+	s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if r.terminalTaskStopDue(s) {
+		t.Fatal("resume grace did not protect stop intent")
+	}
+	r.Now = func() time.Time { return f.now.Add(time.Minute) }
+	s = storedHistory(t, base, f.s)
+	_, stop, err = r.reconcileTerminalTaskReclaim(context.Background(), s)
+	got := storedHistory(t, base, f.s)
+	if err != nil || !stop || got.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || got.Annotations[v1alpha1.AnnotationSuspendedBy] != TerminalTaskReclaimSuspender {
+		t.Fatalf("due reclaim lacks suspend convention: %+v %v", got, err)
+	}
+	if !apiequality.Semantic.DeepEqual(got.Status.PrivateHistory.TaskTerminal, f.s.Status.PrivateHistory.TaskTerminal) {
+		t.Fatal("resume changed immutable observation")
+	}
+}
+
+func TestTerminalTaskRetentionLatchInAgentSessionDocument(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		change   func(*v1alpha1.AgentSession)
+		retained bool
+	}{
+		{"private-retained-task", func(*v1alpha1.AgentSession) {}, true},
+		{"ordinary-task", func(s *v1alpha1.AgentSession) { s.Status.PrivateHistory = nil }, false},
+		{"local", func(s *v1alpha1.AgentSession) {
+			s.Spec.Mode = v1alpha1.ModeLocal
+			s.Spec.Prompt = ""
+			s.Spec.Limits = nil
+		}, false},
+		{"shared", func(s *v1alpha1.AgentSession) { s.Spec.Workspace = &v1alpha1.WorkspaceSpec{ID: "shared"} }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, _ := privateHistoryFixture()
+			test.change(s)
+			doc, err := sessionDocument(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := protocol.ParseSession([]byte(doc))
+			if err != nil || got.PrivateHistoryRetained != test.retained {
+				t.Fatalf("retention latch=%t want %t error=%v", got.PrivateHistoryRetained, test.retained, err)
+			}
+			if !test.retained && strings.Contains(doc, "privateHistoryRetained") {
+				t.Fatal("default session document changed")
+			}
+		})
 	}
 }

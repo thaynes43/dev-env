@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -25,7 +24,8 @@ import (
 
 const DefaultTerminalTaskReclaimGrace = 10 * time.Minute
 const ConditionTerminalTaskReclaim = "TerminalTaskPodReclaim"
-const terminalTaskReclaimRetry = 30 * time.Second
+const terminalTaskReclaimRetry = homeExpiryUnknownRetry
+const TerminalTaskReclaimSuspender = "terminal-task-reclaim"
 
 func (r *Reconciler) terminalTaskReclaimOn() bool {
 	return r.TerminalTaskPodReclaim && r.PrivateTerminalRecord && r.PrivateExecutorStop
@@ -41,8 +41,12 @@ func (r *Reconciler) terminalTaskReclaimGrace() time.Duration {
 // Unknown states are deliberately retained, including a child whose executor
 // vanished before a terminal observation. Pod absence alone proves no stop.
 func (r *Reconciler) terminalTaskChildrenStopped(ctx context.Context, s *v1alpha1.AgentSession) error {
+	return terminalTaskChildrenStopped(ctx, r.APIReader, s)
+}
+
+func terminalTaskChildrenStopped(ctx context.Context, reader client.Reader, s *v1alpha1.AgentSession) error {
 	var children v1alpha1.AgentSessionList
-	if err := r.APIReader.List(ctx, &children, client.InNamespace(s.Namespace)); err != nil {
+	if err := reader.List(ctx, &children, client.InNamespace(s.Namespace)); err != nil {
 		return fmt.Errorf("children cannot be observed: %w", err)
 	}
 	byParent := make(map[string][]int)
@@ -63,7 +67,7 @@ func (r *Reconciler) terminalTaskChildrenStopped(ctx context.Context, s *v1alpha
 			seen[child.Name] = true
 			queue = append(queue, child.Name)
 			var pod corev1.Pod
-			err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(child), &pod)
+			err := reader.Get(ctx, client.ObjectKeyFromObject(child), &pod)
 			if err == nil && (!controlledBySession(&pod, child) || (!podEnded(&pod) || allContainersTerminated(&pod) != nil)) || err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("child %s has live or uncertain compute", child.Name)
 			}
@@ -110,37 +114,46 @@ func taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) error {
 	return nil
 }
 
-func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView) (string, error) {
-	s, pod := v.s, v.pod
+// terminalTaskSessionAllowed is also safe on the cache: refusals grant no action.
+func terminalTaskSessionAllowed(s *v1alpha1.AgentSession, now time.Time) (string, error) {
 	_, originalHome := s.Annotations[homeguard.Annotation]
-	if s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil ||
-		originalHome || slices.Contains(r.TerminalTaskProtectedSessions, s.Namespace+"/"+s.Name) {
-		return "Protected", errors.New("interactive, reusable, pilot or configured coordinator Session is protected")
+	if s.Spec.Mode != v1alpha1.ModeTask || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil || originalHome {
+		return "Protected", errors.New("interactive, reusable or pilot session is protected")
 	}
 	if homeExpiryHeld(s) {
 		return "Held", errors.New("owner HOME-expiry hold blocks compute reclaim")
 	}
-	if err := taskReclaimProof(s, v.now); err != nil {
+	if err := taskReclaimProof(s, now); err != nil {
 		return "ProofUnknown", err
+	}
+	if s.Status.PrivateHistory.Expiry != nil {
+		return "Protected", errors.New("separate HOME expiry is in progress")
+	}
+	return "", nil
+}
+
+func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView) (string, error) {
+	s, pod := v.s, v.pod
+	if reason, err := terminalTaskSessionAllowed(s, v.now); err != nil {
+		return reason, err
 	}
 	if err := homeClaimBound(s, v.claim); err != nil {
 		return "IdentityUnknown", err
 	}
-	if len(v.mounts) != 0 || s.Status.PrivateHistory.Expiry != nil {
-		return "Protected", errors.New("HOME is mounted elsewhere or its separate expiry is in progress")
+	if len(v.mounts) != 0 {
+		return "Protected", errors.New("HOME is mounted elsewhere")
 	}
 	if pod == nil {
 		if !executorTerminalRecorded(s.Status.PrivateHistory) {
-			return "ProofUnknown", errors.New("Pod absence has no whole-executor terminal proof")
+			return "ProofUnknown", errors.New("pod absence has no whole-executor terminal proof")
 		}
 		return "Reclaimed", nil
 	}
-	_, coordinator := pod.Annotations["dev-env.haynesops.com/coordinator-host"]
 	if pod.UID == "" || pod.ResourceVersion == "" || string(pod.UID) != s.Status.PrivateHistory.LastExecutor.PodUID ||
-		!controlledBySession(pod, s) || isHoldPod(pod) || coordinator ||
+		!controlledBySession(pod, s) || isHoldPod(pod) ||
 		pod.Annotations[privateHistoryExecutorAnnotation] != s.Status.PrivateHistory.ExecutorIntent ||
 		pod.Annotations[privateHistoryHomeAnnotation] != s.Status.PrivateHistory.HomeUID || !privateExecutorUsesHome(pod, s.Status.PrivateHistory.HomeClaim) {
-		return "IdentityUnknown", errors.New("Pod is not the original private task executor, or is a protected host")
+		return "IdentityUnknown", errors.New("pod is not the original private task executor, or is a protected host")
 	}
 	if err := r.terminalTaskChildrenStopped(ctx, s); err != nil {
 		return "ChildrenActive", err
@@ -154,14 +167,14 @@ func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView)
 	return "", nil
 }
 
-func terminalTaskReclaimCondition(s *v1alpha1.AgentSession, reason, detail string) {
+func (r *Reconciler) terminalTaskReclaimCondition(s *v1alpha1.AgentSession, reason, detail string) {
 	owner := s.Spec.Parent
 	if owner == "" {
 		owner = s.Name
 	}
 	deadline := "unknown"
-	if h := s.Status.PrivateHistory; h != nil && h.TaskTerminal != nil {
-		deadline = h.TaskTerminal.DueAt.UTC().Format(time.RFC3339)
+	if due, err := r.terminalTaskDeadline(s); err == nil && !due.IsZero() {
+		deadline = due.UTC().Format(time.RFC3339)
 	}
 	status := metav1.ConditionTrue
 	if reason == "Reclaimed" {
@@ -176,22 +189,41 @@ func terminalTaskReclaimCondition(s *v1alpha1.AgentSession, reason, detail strin
 // a confirmed Session CAS. deletePod still validates its exact object versions.
 // It gives no authority to any volume or finalizer guard.
 type terminalTaskPodRemovalProof struct {
-	sessionUID, sessionVersion, podUID, podVersion string
+	sessionUID, podUID, podVersion string
 }
 
 func terminalTaskPodRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod, proof terminalTaskPodRemovalProof) bool {
-	return proof.sessionUID != "" && proof.sessionVersion != "" && proof.podUID != "" && proof.podVersion != "" &&
-		proof.sessionUID == string(s.UID) && proof.sessionVersion == s.ResourceVersion &&
+	return proof.sessionUID != "" && proof.podUID != "" && proof.podVersion != "" &&
+		proof.sessionUID == string(s.UID) &&
 		proof.podUID == string(pod.UID) && proof.podVersion == pod.ResourceVersion &&
 		s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && !homeExpiryHeld(s) &&
 		executorTerminalRecorded(s.Status.PrivateHistory) && s.Status.PrivateHistory.TaskTerminal != nil &&
 		string(pod.UID) == s.Status.PrivateHistory.ExecutorTerminal.PodUID && controlledBySession(pod, s) && !isHoldPod(pod) && podEnded(pod) && allContainersTerminated(pod) == nil
 }
 
+// The observation is immutable; an explicit resume extends only its effective deadline.
+func (r *Reconciler) terminalTaskDeadline(s *v1alpha1.AgentSession) (time.Time, error) {
+	h := s.Status.PrivateHistory
+	if h == nil || h.TaskTerminal == nil {
+		return time.Time{}, nil
+	}
+	due := h.TaskTerminal.DueAt.Time
+	if raw, ok := s.Annotations[v1alpha1.AnnotationResumedAt]; ok {
+		at, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return time.Time{}, errors.New("explicit resume time is invalid")
+		}
+		if resumedDue := at.Add(r.terminalTaskReclaimGrace()); resumedDue.After(due) {
+			due = resumedDue
+		}
+	}
+	return due, nil
+}
+
 func (r *Reconciler) terminalTaskStopDue(s *v1alpha1.AgentSession) bool {
+	due, err := r.terminalTaskDeadline(s)
 	return r.terminalTaskReclaimOn() && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended &&
-		s.Status.PrivateHistory != nil && s.Status.PrivateHistory.TaskTerminal != nil &&
-		!r.clock().Before(s.Status.PrivateHistory.TaskTerminal.DueAt.Time) && taskReclaimProof(s, r.clock()) == nil
+		err == nil && !due.IsZero() && !r.clock().Before(due) && taskReclaimProof(s, r.clock()) == nil
 }
 
 // reconcileTerminalTaskReclaim reports a retained reason even when the proof
@@ -206,37 +238,76 @@ func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alph
 		// A new task still running normally is not retained terminal compute.
 		return ctrl.Result{}, false, nil
 	}
+	// Cached refusals need no API traffic or polling: Session/Pod events can
+	// supply changed proof or lift a protection. A settled reclaim is final.
+	if reason, err := terminalTaskSessionAllowed(s, r.clock()); err != nil {
+		r.terminalTaskReclaimCondition(s, reason, err.Error())
+		return ctrl.Result{}, false, nil
+	}
+	if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim); cond != nil && cond.Reason == "Reclaimed" {
+		return ctrl.Result{}, false, nil
+	}
+	if err := terminalTaskChildrenStopped(ctx, r.Client, s); err != nil {
+		r.terminalTaskReclaimCondition(s, "ChildrenActive", err.Error())
+		return ctrl.Result{RequeueAfter: homeExpiryRefusalRetry}, false, nil
+	}
+	h := s.Status.PrivateHistory
+	if h.TaskTerminal == nil {
+		// This cached CAS records an observation only. No resource action is
+		// authorized until a later due reconcile confirms the record uncached.
+		h.TaskTerminal = &v1alpha1.PrivateTaskTerminalStatus{Task: *s.Status.Agent.Task.DeepCopy(), ObservedAt: recordTime(r.clock()), DueAt: recordTime(r.clock().Add(r.terminalTaskReclaimGrace()))}
+		err := r.Client.Status().Update(ctx, s)
+		return ctrl.Result{RequeueAfter: terminalTaskReclaimRetry}, true, err
+	}
+	due, err := r.terminalTaskDeadline(s)
+	if err != nil {
+		r.terminalTaskReclaimCondition(s, "ProofUnknown", err.Error())
+		return ctrl.Result{}, false, nil
+	}
+	if r.clock().Before(due) {
+		r.terminalTaskReclaimCondition(s, "Grace", "original provider exited; waiting for compute grace")
+		return ctrl.Result{RequeueAfter: due.Sub(r.clock())}, false, nil
+	}
 	v, err := r.readExpiryView(ctx, s)
 	if err != nil {
-		terminalTaskReclaimCondition(s, "ProofUnknown", "uncached reclaim observation unavailable")
+		r.terminalTaskReclaimCondition(s, "ProofUnknown", "uncached reclaim observation unavailable")
 		return ctrl.Result{RequeueAfter: terminalTaskReclaimRetry}, false, nil
 	}
 	reason, refusal := r.terminalTaskViewAllowed(ctx, v)
 	if refusal != nil || reason == "Reclaimed" {
 		detail := "original executor Pod is absent"
+		result := ctrl.Result{}
 		if refusal != nil {
 			detail = refusal.Error()
+			result.RequeueAfter = homeExpiryRefusalRetry
 		}
-		terminalTaskReclaimCondition(s, reason, detail)
+		r.terminalTaskReclaimCondition(s, reason, detail)
+		return result, false, nil
+	}
+	// A fresh resume/hold/result can overtake the cached deadline. The later
+	// resource CAS still fences changes after this uncached observation.
+	due, err = r.terminalTaskDeadline(v.s)
+	if err != nil || due.IsZero() {
+		r.terminalTaskReclaimCondition(s, "ProofUnknown", "fresh reclaim deadline unavailable")
 		return ctrl.Result{RequeueAfter: terminalTaskReclaimRetry}, false, nil
 	}
-	h := v.s.Status.PrivateHistory
-	if h.TaskTerminal == nil {
-		h.TaskTerminal = &v1alpha1.PrivateTaskTerminalStatus{Task: *v.s.Status.Agent.Task.DeepCopy(), ObservedAt: recordTime(v.now), DueAt: recordTime(v.now.Add(r.terminalTaskReclaimGrace()))}
-		return ctrl.Result{RequeueAfter: time.Second}, true, r.writePrivateHistory(ctx, s, v.s)
+	if v.now.Before(due) {
+		r.terminalTaskReclaimCondition(s, "Grace", "explicit resume restarted compute grace")
+		return ctrl.Result{RequeueAfter: due.Sub(v.now)}, false, nil
 	}
-	if v.now.Before(h.TaskTerminal.DueAt.Time) {
-		terminalTaskReclaimCondition(s, "Grace", "original provider exited; waiting for compute grace")
-		return ctrl.Result{RequeueAfter: min(h.TaskTerminal.DueAt.Sub(v.now), terminalTaskReclaimRetry)}, false, nil
-	}
+	h = v.s.Status.PrivateHistory
 	if v.s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
 		base := v.s.DeepCopy()
 		v.s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		if v.s.Annotations == nil {
+			v.s.Annotations = map[string]string{}
+		}
+		v.s.Annotations[v1alpha1.AnnotationSuspendedBy] = TerminalTaskReclaimSuspender
 		err := r.Client.Patch(ctx, v.s, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 		return ctrl.Result{RequeueAfter: time.Second}, true, client.IgnoreNotFound(err)
 	}
 	if !podPhaseTerminal(v.pod) {
-		terminalTaskReclaimCondition(s, "Stopping", "waiting for kubelet terminal proof after the confirmed stop request")
+		r.terminalTaskReclaimCondition(s, "Stopping", "waiting for kubelet terminal proof after the confirmed stop request")
 		obs := observation{pod: owned[*corev1.Pod]{obj: v.pod}}
 		res, stop, err := r.requestPrivateExecutorStop(ctx, v.s, &obs)
 		if err != nil || stop {
@@ -245,24 +316,25 @@ func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alph
 		// Adopt the confirmed stop intent's new Session resourceVersion before
 		// the ordinary status write at the end of this reconcile.
 		*s = *v.s
-		terminalTaskReclaimCondition(s, "Stopping", "waiting for kubelet terminal proof after the confirmed stop request")
-		return sooner(res, ctrl.Result{RequeueAfter: terminalTaskReclaimRetry}), false, nil
+		r.terminalTaskReclaimCondition(s, "Stopping", "waiting for kubelet terminal proof after the confirmed stop request")
+		res.RequeueAfter = max(res.RequeueAfter, terminalTaskReclaimRetry)
+		return res, false, nil
 	}
 	if !executorTerminalRecorded(h) {
-		terminalTaskReclaimCondition(s, "ProofUnknown", "whole-Pod terminal record has not been confirmed")
+		r.terminalTaskReclaimCondition(s, "ProofUnknown", "whole-Pod terminal record has not been confirmed")
 		return ctrl.Result{RequeueAfter: terminalTaskReclaimRetry}, false, nil
 	}
 	// A confirming CAS fences holds/resumes/heartbeats that overtook the read.
 	if err := r.writePrivateHistory(ctx, s, v.s); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, err
 	}
-	proof := terminalTaskPodRemovalProof{string(s.UID), s.ResourceVersion, string(v.pod.UID), v.pod.ResourceVersion}
+	proof := terminalTaskPodRemovalProof{string(s.UID), string(v.pod.UID), v.pod.ResourceVersion}
 	if !terminalTaskPodRemovalAllowed(s, v.pod, proof) {
 		return ctrl.Result{RequeueAfter: terminalTaskReclaimRetry}, true, nil
 	}
 	if err := deletePod(ctx, r.Client, s, v.pod, proof); err != nil {
 		return ctrl.Result{RequeueAfter: time.Second}, true, client.IgnoreNotFound(err)
 	}
-	terminalTaskReclaimCondition(s, "Reclaimed", "original terminal executor Pod removed with normal grace")
-	return ctrl.Result{RequeueAfter: time.Second}, true, r.Client.Status().Update(ctx, s)
+	r.terminalTaskReclaimCondition(s, "Reclaimed", "original terminal executor Pod removed with normal grace")
+	return ctrl.Result{}, true, r.Client.Status().Update(ctx, s)
 }

@@ -575,40 +575,34 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		cloneOwner = o.catalogBinding.CloneOwner
 	}
 	var decisionParents []string
-	var protectedSessions []string
-	for _, host := range o.coordinatorHosts {
-		namespace, _, _ := strings.Cut(host.ServiceAccount, "/")
-		protectedSessions = append(protectedSessions, namespace+"/"+host.PodName)
-	}
 	if o.coordinatorEnabled && o.managedChildDecisions {
 		for _, host := range o.coordinatorHosts {
 			decisionParents = append(decisionParents, host.ServiceAccount)
 		}
 	}
 	return &controller.Reconciler{
-		TaskBudgetWorkerImage:         o.taskBudgetWorkerImage,
-		PilotAgent:                    o.pilotAgent,
-		TaskPilotAgent:                o.taskPilotAgent,
-		RemotePilotAgent:              o.remotePilotAgent,
-		Templates:                     types.NamespacedName{Namespace: o.templatesNamespace, Name: o.templatesName},
-		APIURL:                        o.apiURL,
-		ManagedCodexTasks:             o.managedCodexTasks,
-		RetainedCommonRules:           o.retainedCommonRules,
-		PrivateHistoryRetention:       o.privateHistoryRetention,
-		PrivateTerminalRecord:         o.privateTerminalRecord,
-		TerminalTaskPodReclaim:        o.terminalTaskPodReclaim,
-		TerminalTaskReclaimGrace:      o.terminalTaskReclaimGrace,
-		TerminalTaskProtectedSessions: protectedSessions,
-		PrivateExecutorStop:           o.privateExecutorStop,
-		HomeHistoryArchive:            o.homeHistoryArchive,
-		HomeExpiryGrace:               o.homeExpiryGrace,
-		HomeExpiryDelete:              o.homeExpiryDelete,
-		PrivateProjectCanaries:        o.privateProjectCanaries,
-		PrivatePilot:                  o.privatePilot,
-		PrivateProjectCloneOwner:      cloneOwner,
-		ManagedChildDecisions:         o.managedChildDecisions,
-		ManagedChildDecisionParents:   decisionParents,
-		OriginalHome:                  o.originalHome,
+		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,
+		PilotAgent:                  o.pilotAgent,
+		TaskPilotAgent:              o.taskPilotAgent,
+		RemotePilotAgent:            o.remotePilotAgent,
+		Templates:                   types.NamespacedName{Namespace: o.templatesNamespace, Name: o.templatesName},
+		APIURL:                      o.apiURL,
+		ManagedCodexTasks:           o.managedCodexTasks,
+		RetainedCommonRules:         o.retainedCommonRules,
+		PrivateHistoryRetention:     o.privateHistoryRetention,
+		PrivateTerminalRecord:       o.privateTerminalRecord,
+		TerminalTaskPodReclaim:      o.terminalTaskPodReclaim,
+		TerminalTaskReclaimGrace:    o.terminalTaskReclaimGrace,
+		PrivateExecutorStop:         o.privateExecutorStop,
+		HomeHistoryArchive:          o.homeHistoryArchive,
+		HomeExpiryGrace:             o.homeExpiryGrace,
+		HomeExpiryDelete:            o.homeExpiryDelete,
+		PrivateProjectCanaries:      o.privateProjectCanaries,
+		PrivatePilot:                o.privatePilot,
+		PrivateProjectCloneOwner:    cloneOwner,
+		ManagedChildDecisions:       o.managedChildDecisions,
+		ManagedChildDecisionParents: decisionParents,
+		OriginalHome:                o.originalHome,
 	}
 }
 

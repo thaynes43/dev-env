@@ -2,8 +2,10 @@ package agentd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +54,7 @@ func TestTerminalPrivateTaskNeverAutomaticallyResumes(t *testing.T) {
 			t.Run(provider+"/"+state, func(t *testing.T) {
 				s, sess, ws := launchFixture(t)
 				sess.Agent = provider
+				sess.PrivateHistoryRetained = true
 				if err := os.MkdirAll(s.StateDir, 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -81,6 +84,43 @@ func TestTerminalPrivateTaskNeverAutomaticallyResumes(t *testing.T) {
 					t.Fatal("BuildResume accepted a retained private task")
 				}
 			})
+		}
+	}
+}
+
+func TestTerminalTaskResumeGateAndInterruptedMessage(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		for _, mode := range []string{protocol.ModeTask, protocol.ModeLocal, protocol.ModeRemote} {
+			for _, shared := range []bool{false, true} {
+				t.Run(fmt.Sprintf("retained=%t/%s/shared=%t", retained, mode, shared), func(t *testing.T) {
+					s, sess, ws := launchFixture(t)
+					sess.Mode, sess.PrivateHistoryRetained = mode, retained
+					if shared {
+						sess.Workspace = &protocol.WorkspaceBinding{ID: "shared", SessionUID: sess.SessionUID}
+					}
+					first := Launch{Session: sess.Name, ConversationID: "11111111-2222-4333-8444-555555555555", BootID: "earlier", CreatedAt: time.Now().Add(-time.Hour)}
+					if err := writeJSONFile(s.statePath(bootFile), bootRecord{BootID: "new", Boot: protocol.BootReady}); err != nil {
+						t.Fatal(err)
+					}
+					if err := writeJSONFile(s.statePath(launchFile), first); err != nil {
+						t.Fatal(err)
+					}
+					blocked := retained && mode == protocol.ModeTask && !shared
+					if got := retainedPrivateTask(s, sess); got != blocked {
+						t.Fatalf("resume blocked=%t want %t", got, blocked)
+					}
+					if mode == protocol.ModeTask && !shared {
+						_, err := BuildResume(s, sess, ws, first, "new", time.Now())
+						if (err != nil) != blocked {
+							t.Fatalf("BuildResume error=%v blocked=%t", err, blocked)
+						}
+						st := CollectStatus(context.Background(), &fakeRunner{}, s, sess, time.Now())
+						if st.Agent.State != protocol.AgentInterrupted || strings.Contains(st.Agent.Error, "D-58") == blocked {
+							t.Fatalf("Interrupted message changed outside gate: %+v", st.Agent)
+						}
+					}
+				})
+			}
 		}
 	}
 }

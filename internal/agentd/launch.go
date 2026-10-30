@@ -438,7 +438,7 @@ func writeJSONFile(path string, v any) error {
 }
 
 func retainedPrivateTask(s Settings, sess protocol.Session) bool {
-	if sess.Mode != protocol.ModeTask || sess.Workspace != nil {
+	if sess.Mode != protocol.ModeTask || sess.Workspace != nil || !sess.PrivateHistoryRetained {
 		return false
 	}
 	// A saved launch is enough to prohibit automatic TUI resume, including

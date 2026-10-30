@@ -560,15 +560,16 @@ func CheckAgentdSession(s *v1alpha1.AgentSession) error {
 // starts a pod whose agentd would refuse its session at boot.
 func sessionDocument(s *v1alpha1.AgentSession) (string, error) {
 	d := protocol.Session{
-		SessionUID: string(s.UID),
-		Name:       s.Name,
-		Repo:       s.Spec.Repo,
-		Base:       s.Spec.Base,
-		Agent:      string(s.Spec.Agent),
-		Mode:       string(s.Spec.Mode),
-		Model:      s.Spec.Model,
-		Effort:     s.Spec.Effort,
-		Prompt:     s.Spec.Prompt,
+		PrivateHistoryRetained: privateHistoryProtected(s) && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace == nil,
+		SessionUID:             string(s.UID),
+		Name:                   s.Name,
+		Repo:                   s.Spec.Repo,
+		Base:                   s.Spec.Base,
+		Agent:                  string(s.Spec.Agent),
+		Mode:                   string(s.Spec.Mode),
+		Model:                  s.Spec.Model,
+		Effort:                 s.Spec.Effort,
+		Prompt:                 s.Spec.Prompt,
 		// The rescue the session restores from (D-67).
 		Restore: s.Spec.Restore,
 	}

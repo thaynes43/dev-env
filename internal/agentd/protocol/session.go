@@ -50,10 +50,12 @@ const SessionInputAnnotation = "dev-env.haynesops.com/retained-session-input"
 // the spec's (DESIGN-001 3.3), plus the session's name. Unknown fields are
 // ignored, so a newer operator can add fields an older agentd does not read.
 type Session struct {
-	CommonRules     json.RawMessage `json:"commonRules,omitempty"`
-	CaptureOutput   bool            `json:"captureOutput,omitempty"`
-	SessionUID      string          `json:"sessionUID,omitempty"`
-	ProjectSnapshot json.RawMessage `json:"projectSnapshot,omitempty"`
+	// PrivateHistoryRetained is the operator-owned retention latch; workspace absence alone is insufficient.
+	PrivateHistoryRetained bool            `json:"privateHistoryRetained,omitempty"`
+	CommonRules            json.RawMessage `json:"commonRules,omitempty"`
+	CaptureOutput          bool            `json:"captureOutput,omitempty"`
+	SessionUID             string          `json:"sessionUID,omitempty"`
+	ProjectSnapshot        json.RawMessage `json:"projectSnapshot,omitempty"`
 	// Workspace is the operator's explicit shared-storage binding. SessionUID
 	// distinguishes an existing session from another created with the same name.
 	Workspace *WorkspaceBinding `json:"workspace,omitempty"`

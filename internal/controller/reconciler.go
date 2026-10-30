@@ -136,9 +136,8 @@ type Reconciler struct {
 	PrivateExecutorStop bool
 	// TerminalTaskPodReclaim removes only terminal headless compute, default
 	// off; DESIGN-025 24 keeps HOME/history retention separate.
-	TerminalTaskPodReclaim        bool
-	TerminalTaskReclaimGrace      time.Duration
-	TerminalTaskProtectedSessions []string
+	TerminalTaskPodReclaim   bool
+	TerminalTaskReclaimGrace time.Duration
 	// PrivateExecutorStops counts the stop requests
 	// (MetricPrivateExecutorStopRequests); nil counts nothing.
 	PrivateExecutorStops *prometheus.CounterVec

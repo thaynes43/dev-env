@@ -145,7 +145,7 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		default:
 			st.Agent.State = protocol.AgentInterrupted
 			st.Agent.Error = "the agent's process is gone and it left no result; agentd does not run a task's prompt twice (D-42), and the next boot resumes it (D-58)"
-			if sess.Mode == protocol.ModeTask && sess.Workspace == nil {
+			if retainedPrivateTask(s, sess) {
 				st.Agent.Error = "the private task's process is gone without a result; its launch and HOME remain retained, and agentd never automatically resumes it"
 			}
 		}
