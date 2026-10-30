@@ -1830,7 +1830,7 @@ spec:
                       Pod named by lastExecutor.podUID reached a terminal phase, every container
                       terminated, on a Ready node with a fresh lease. It sits beside
                       lastExecutor, which every observation rebuilds. It is evidence for HOME
-                      expiry only: stopState stays Unknown, and it authorizes no claim
+                      expiry and gated compute reclaim: stopState stays Unknown, with no claim
                       transfer, resume or replacement. Once written it never changes or goes.
                     properties:
                       claudeConfigDir:
@@ -2195,7 +2195,7 @@ spec:
                   stopState:
                     description: |-
                       StopState stays Unknown: executorTerminal is evidence for HOME expiry
-                      only, never DESIGN-010's stop contract (DESIGN-025 3.1).
+                      and gated compute reclaim, never DESIGN-010's stop contract (DESIGN-025).
                     enum:
                     - Unknown
                     type: string
