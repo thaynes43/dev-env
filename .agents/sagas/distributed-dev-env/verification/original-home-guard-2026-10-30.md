@@ -49,6 +49,29 @@ is protected even before the API has admitted it; archive also reads the latest
 Session annotation to avoid a stale cache hiding a durable binding. No size,
 storage class, reclaim policy, archiveAfter or expiry annotation is changed.
 
+OP285 source follow-ups reserve `AGENTD_ORIGINAL_HOME_BINDING` against explicit
+template/profile env and list `home-verify` in agentd help. The unused binding
+remains absent from unguarded Pods; this reservation does not mask `envFrom`.
+Operator startup rejects a binding namespace different from `--session-namespace`,
+after parsing all flags so argument order does not matter.
+
+The proposed OP285 Session GET optimization is deferred pending a scope decision
+on the canonical item. Native independent review found that even immutable
+agent/mode cannot prove a cached Session is unguarded: a same-name replacement
+has a different UID and can be guarded while the cache still holds the old
+unguarded Session and HOME. Skipping the live identity check could create an
+unguarded Pod mounting the replacement HOME by name. Merely checking cached
+annotations or startup configuration also fails the existing sticky-binding
+regression after flag removal. No read or guard check is removed. New regression
+tests count the existing unguarded Session GETs and require stale unguarded state
+to refuse creation/archive against a guarded replacement. Existing guarded,
+stale-cache and backoff tests remain unchanged. A safe optimization needs an
+explicit fresh identity observation to reuse, beyond a cached eligibility test.
+Q-285-01 was emitted through the native async question tool: ship the three safe
+fixes and defer the optimization (recommended), or expand OP285 for fresh
+observation reuse. Emission does not prove phone delivery or an owner answer;
+none has been observed at this source checkpoint. OP285 remains incomplete.
+
 ## Actual mount and provider boundary
 
 Two API reads are not an atomic mount fence. Kubernetes Pods reference PVCs by
