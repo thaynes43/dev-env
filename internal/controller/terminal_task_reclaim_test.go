@@ -20,6 +20,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/homeguard"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 )
 
 func terminalTaskFixture(recorded bool) terminalFixture {
@@ -173,6 +174,9 @@ func TestTerminalTaskReclaimProtectionTable(t *testing.T) {
 		{"shared", func(f *terminalFixture, r *Reconciler) { f.s.Spec.Workspace = &v1alpha1.WorkspaceSpec{} }},
 		{"canary", func(f *terminalFixture, r *Reconciler) { f.s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{} }},
 		{"pilot", func(f *terminalFixture, r *Reconciler) { f.s.Spec.PrivatePilot = &v1alpha1.PrivatePilotBinding{} }},
+		{"legacy-pilot", func(f *terminalFixture, r *Reconciler) {
+			f.s.Annotations = map[string]string{projectcanary.PilotAnnotation: "fixture"}
+		}},
 		{"reaping", func(f *terminalFixture, r *Reconciler) {
 			f.s.Finalizers = []string{Finalizer}
 			f.s.DeletionTimestamp = &metav1.Time{Time: f.now}
@@ -197,6 +201,51 @@ func TestTerminalTaskReclaimProtectionTable(t *testing.T) {
 				t.Fatal("protected task got a stop intent")
 			}
 		})
+	}
+}
+
+// A reap seen only by the uncached read still stops reclaim: the view and the
+// guarded delete refuse a Session with a deletion timestamp, and an open
+// reclaim reason closes when the reap starts.
+func TestTerminalTaskReclaimYieldsToReap(t *testing.T) {
+	f := terminalTaskFixture(true)
+	r := terminalTaskReconciler(f, nil, nil)
+	pod := f.pod.DeepCopy()
+	pod.ResourceVersion = "1"
+	pod.Status.Phase = corev1.PodFailed
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: ContainerName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, FinishedAt: recordTime(f.now.Add(-time.Minute))}}}}
+	live := f.s.DeepCopy()
+	live.Status.PrivateHistory.ExecutorTerminal = &v1alpha1.PrivateExecutorTerminalStatus{PodUID: string(pod.UID)}
+	proof := terminalTaskPodRemovalProof{sessionUID: string(live.UID), podUID: string(pod.UID), podVersion: pod.ResourceVersion}
+	if !terminalTaskPodRemovalAllowed(live, pod, proof) {
+		t.Fatal("fixture: the guarded delete refuses a live Session")
+	}
+	reaping := live.DeepCopy()
+	reaping.Finalizers = []string{Finalizer}
+	reaping.DeletionTimestamp = &metav1.Time{Time: f.now}
+	if terminalTaskPodRemovalAllowed(reaping, pod, proof) {
+		t.Fatal("guarded delete allowed for a Reaping Session")
+	}
+	if reason, err := r.terminalTaskViewAllowed(context.Background(), &expiryView{s: reaping, pod: pod, now: f.now}); reason != "Protected" || err == nil {
+		t.Fatalf("view of a Reaping Session: %q %v", reason, err)
+	}
+	for _, before := range []string{"", "Grace", "Reclaimed"} {
+		s := reaping.DeepCopy()
+		if before != "" {
+			r.terminalTaskReclaimCondition(s, before, "fixture")
+		}
+		if _, stop, err := r.reconcileTerminalTaskReclaim(context.Background(), s); stop || err != nil {
+			t.Fatal(stop, err)
+		}
+		cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim)
+		switch {
+		case before == "" && cond != nil:
+			t.Fatalf("reap added a reclaim condition: %+v", cond)
+		case before == "Grace" && (cond == nil || cond.Reason != "Protected"):
+			t.Fatalf("open reason not closed: %+v", cond)
+		case before == "Reclaimed" && (cond == nil || cond.Reason != "Reclaimed"):
+			t.Fatalf("settled reclaim overwritten: %+v", cond)
+		}
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/homeguard"
+	"github.com/thaynes43/dev-env/internal/projectcanary"
 )
 
 const DefaultTerminalTaskReclaimGrace = 10 * time.Minute
@@ -119,7 +120,7 @@ func taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) error {
 // Session reclaim never stops keeps D-58's TUI resume.
 func terminalTaskReclaimScope(s *v1alpha1.AgentSession) bool {
 	_, originalHome := s.Annotations[homeguard.Annotation]
-	return s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace == nil && s.Spec.ProjectCanary == nil && s.Spec.PrivatePilot == nil && !originalHome
+	return s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace == nil && s.Spec.ProjectCanary == nil && !projectcanary.IsPilot(s) && !originalHome
 }
 
 // terminalTaskSessionAllowed is also safe on the cache: refusals grant no action.
@@ -141,6 +142,10 @@ func terminalTaskSessionAllowed(s *v1alpha1.AgentSession, now time.Time) (string
 
 func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView) (string, error) {
 	s, pod := v.s, v.pod
+	// The uncached read can see a reap the cached early return missed.
+	if !s.DeletionTimestamp.IsZero() {
+		return "Protected", errors.New("session is being reaped; the reap path owns its stop")
+	}
 	if reason, err := terminalTaskSessionAllowed(s, v.now); err != nil {
 		return reason, err
 	}
@@ -201,7 +206,7 @@ type terminalTaskPodRemovalProof struct {
 
 func terminalTaskPodRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod, proof terminalTaskPodRemovalProof) bool {
 	return proof.sessionUID != "" && proof.podUID != "" && proof.podVersion != "" &&
-		proof.sessionUID == string(s.UID) &&
+		proof.sessionUID == string(s.UID) && s.DeletionTimestamp.IsZero() &&
 		proof.podUID == string(pod.UID) && proof.podVersion == pod.ResourceVersion &&
 		s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && !homeExpiryHeld(s) &&
 		executorTerminalRecorded(s.Status.PrivateHistory) && s.Status.PrivateHistory.TaskTerminal != nil &&
@@ -237,8 +242,15 @@ func (r *Reconciler) terminalTaskStopDue(s *v1alpha1.AgentSession) bool {
 // is incomplete. Mutations are serialized by the existing confirmed status
 // write, stop intent and guarded delete; nothing is recreated after a loss.
 func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alpha1.AgentSession) (ctrl.Result, bool, error) {
-	// A Reaping Session belongs to the reap path's own stop (section 4).
-	if !r.terminalTaskReclaimOn() || !privateHistoryProtected(s) || s.Spec.Mode != v1alpha1.ModeTask || !s.DeletionTimestamp.IsZero() {
+	if !r.terminalTaskReclaimOn() || !privateHistoryProtected(s) || s.Spec.Mode != v1alpha1.ModeTask {
+		return ctrl.Result{}, false, nil
+	}
+	// A Reaping Session belongs to the reap path's own stop (section 4). An
+	// open reason is closed, so the retained gauges stop reporting it.
+	if !s.DeletionTimestamp.IsZero() {
+		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim); cond != nil && cond.Reason != "Reclaimed" {
+			r.terminalTaskReclaimCondition(s, "Protected", "session is being reaped; the reap path owns its stop")
+		}
 		return ctrl.Result{}, false, nil
 	}
 	if h, a := s.Status.PrivateHistory, s.Status.Agent; s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended &&
