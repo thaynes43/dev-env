@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.73.0](https://github.com/thaynes43/dev-env/compare/v2.72.0...v2.73.0) (2026-10-30)
+
+
+### Features
+
+* add fixed NVIDIA utility maintenance profile ([#739](https://github.com/thaynes43/dev-env/issues/739)) ([386317b](https://github.com/thaynes43/dev-env/commit/386317b84e97817c511cc54ac9a75470f6538840))
+* **controller:** add gated legacy terminal task reclaim ([#738](https://github.com/thaynes43/dev-env/issues/738)) ([f7566d8](https://github.com/thaynes43/dev-env/commit/f7566d8c4dd82af2e108233123c538f800c12d59))
+
+
+### Bug Fixes
+
+* **agentd:** recover delayed Claude rotation errors once ([#741](https://github.com/thaynes43/dev-env/issues/741)) ([96d4b42](https://github.com/thaynes43/dev-env/commit/96d4b4280842597d3f53341d602d2a6c3ebcf34c))
+* guard interactive Cursor receipts and terminal input ([#737](https://github.com/thaynes43/dev-env/issues/737)) ([acaf1ae](https://github.com/thaynes43/dev-env/commit/acaf1aed0ac0debdf3ee68d048681b5dfb85773c))
+* **portal:** keep the session list usable from 701 to 960px ([#306](https://github.com/thaynes43/dev-env/issues/306)) ([#742](https://github.com/thaynes43/dev-env/issues/742)) ([b07217e](https://github.com/thaynes43/dev-env/commit/b07217e8d87bff7e085d83d99854d1a4ba7d1d13))
+
 ## [2.72.0](https://github.com/thaynes43/dev-env/compare/v2.71.0...v2.72.0) (2026-10-30)
 
 
