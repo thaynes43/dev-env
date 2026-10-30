@@ -66,6 +66,12 @@ The operator's existing API and pods/exec authority are reused; no grant identit
 receives pods/create or pods/exec. Node and node-lease reads by the broker are stop
 evidence only. Unrelated v1 behavior is preserved.
 
+The pinned platform and web CCNPs select dev-agents broadly. The patch explicitly
+excludes the maintenance label from both: Kubernetes NetworkPolicy isolation is
+additive and cannot override an already matching allow policy. Offline selector
+tests prove ordinary session selection remains and maintenance selection is refused.
+This does not establish runtime Cilium enforcement.
+
 The proposed Kyverno policy requires isolated policy qualification in the lead's
 separate policy PR, including defaulting, update metadata and resource lookup RBAC.
 This source's fake/API tests do NOT prove live Kyverno enforcement. Neither flag

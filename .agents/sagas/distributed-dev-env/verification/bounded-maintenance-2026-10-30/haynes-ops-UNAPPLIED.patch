@@ -316,6 +316,32 @@ new file mode 100644
 +        variables.policy.spec.policyTypes == ['Ingress','Egress'] &&
 +        size(variables.policy.spec.?ingress.orValue([])) == 0 && size(variables.policy.spec.?egress.orValue([])) == 0
 +      message: broker may manage only its grant-owned deny-all maintenance network policy
+diff --git a/kubernetes/main/apps/dev-env-system/network/app/session-platform.yaml b/kubernetes/main/apps/dev-env-system/network/app/session-platform.yaml
+--- a/kubernetes/main/apps/dev-env-system/network/app/session-platform.yaml
++++ b/kubernetes/main/apps/dev-env-system/network/app/session-platform.yaml
+@@ -26,6 +26,9 @@
+       io.kubernetes.pod.namespace: dev-agents
+     # These bounded checks have their own policies; no additive MCP/API tier.
+     matchExpressions:
++      # Maintenance executors have no additive platform or public-web tier.
++      - key: dev-env.haynesops.com/maintenance
++        operator: DoesNotExist
+       - key: dev-env.haynesops.com/project-canary
+         operator: DoesNotExist
+       - key: app.kubernetes.io/name
+diff --git a/kubernetes/main/apps/dev-env-system/network/app/session-web.yaml b/kubernetes/main/apps/dev-env-system/network/app/session-web.yaml
+--- a/kubernetes/main/apps/dev-env-system/network/app/session-web.yaml
++++ b/kubernetes/main/apps/dev-env-system/network/app/session-web.yaml
+@@ -26,6 +26,9 @@
+     matchLabels:
+       io.kubernetes.pod.namespace: dev-agents
+     matchExpressions:
++      # Maintenance executors have no additive platform or public-web tier.
++      - key: dev-env.haynesops.com/maintenance
++        operator: DoesNotExist
+       - key: dev-env.haynesops.com/project-canary
+         operator: DoesNotExist
+       # These fixtures have dedicated egress; no additive public-web tier.
 diff --git a/kubernetes/main/apps/dev-env-system/rbac/app/kustomization.yaml b/kubernetes/main/apps/dev-env-system/rbac/app/kustomization.yaml
 --- a/kubernetes/main/apps/dev-env-system/rbac/app/kustomization.yaml
 +++ b/kubernetes/main/apps/dev-env-system/rbac/app/kustomization.yaml

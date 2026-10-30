@@ -48,3 +48,11 @@ Built source and tested source do not mean installed, usable or accepted. No new
 adapter was activated, no credential semantics changed, no node/GPU/keeper/user
 session operation ran, and no haynes-ops file was written. Both held TUIs were left
 untouched. This story's durable output is the source branch/PR plus review packet.
+
+Final network-reference audit found the pinned platform/web CCNP selectors would
+also select maintenance executors. The UNAPPLIED patch now excludes the maintenance
+label from both; an additive Kubernetes NetworkPolicy alone cannot override their
+allow rules. Offline selector fixtures verify normal sessions stay selected and
+maintenance executors are excluded. These tests do not establish live Cilium policy
+enforcement. The final immutable-head receipts on OP233/219 and PR732 supersede
+earlier source-head qualification when this packet changes.
