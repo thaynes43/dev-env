@@ -3,6 +3,7 @@ package agentd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,10 @@ func ValidatePrivateProjectBootstrap(s Settings) error {
 // no shared mount, marker, writer or administrative-lock dependency. The only
 // serialization is a nonblocking lock inside this pod's private state.
 func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *ProjectCatalogSource) (report PrivateProjectReport, resultErr error) {
+	return refreshPrivateProjects(ctx, r, s, source, nil)
+}
+
+func refreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *ProjectCatalogSource, progress func(string)) (report PrivateProjectReport, resultErr error) {
 	report = PrivateProjectReport{Version: 1, State: "Disabled"}
 	if err := ValidatePrivateProjectBootstrap(s); err != nil {
 		if s.PrivateProjectBootstrap || s.PrivateProjectRoots {
@@ -141,7 +146,8 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 	report.CatalogNamespace, report.CatalogName = accepted.Namespace, accepted.Name
 	report.CatalogUID, report.CatalogResourceVersion = accepted.UID, accepted.ResourceVersion
 	report.CatalogRevision = catalog.Revision()
-	for _, repo := range catalog.Repositories() {
+	repos := catalog.Repositories()
+	for _, repo := range repos {
 		owner, _, _ := strings.Cut(repo.GitHub, "/")
 		if !strings.EqualFold(owner, s.ProjectCloneOwner) {
 			report.Failure, report.Reason = "catalog repository is outside the configured clone owner", protocol.ReasonOwnerMismatch
@@ -153,7 +159,10 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 		return report, errPrivateProjectBootstrap
 	}
 	s.privateProjectGit = true
-	for _, repo := range catalog.Repositories() {
+	for i, repo := range repos {
+		if progress != nil {
+			progress(fmt.Sprintf("bootstrapping projects: repository %d/%d", i+1, len(repos)))
+		}
 		if authority.confirm(ctx) != nil {
 			report.Failure, report.Reason = "accepted catalog changed or became unconfirmed; remaining repositories preserved", protocol.ReasonCatalogUnconfirmed
 			return report, errPrivateProjectBootstrap
@@ -168,7 +177,11 @@ func RefreshPrivateProjects(ctx context.Context, r Runner, s Settings, source *P
 		}
 	}
 	if s.PrivateProjectRoots {
-		for _, project := range catalog.ProjectNames() {
+		projects := catalog.ProjectNames()
+		for i, project := range projects {
+			if progress != nil {
+				progress(fmt.Sprintf("bootstrapping projects: project %d/%d", i+1, len(projects)))
+			}
 			bounded, stop := context.WithTimeout(ctx, sharedGitPrepareBudget)
 			snapshot, _ := catalog.ProjectSnapshot(project)
 			observed := refreshPrivateProjectRoot(bounded, r, s, snapshot, authority)
