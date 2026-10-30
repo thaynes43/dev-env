@@ -558,6 +558,9 @@ type ProductPage struct {
 	Usage                               *ProductUsage
 	Rail                                ProductRail
 	Filter                              ProductFilter
+	// ReadCompletedAt is the completion time of this page's successful Sessions
+	// read. An empty value is unknown; ObservedAt is only the render time.
+	ReadCompletedAt string
 	// Launch is the Sessions page's launch form, set only when the route is
 	// configured for this caller.
 	Launch      *ProductLaunch
@@ -702,6 +705,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	}
 	view := struct {
 		Policy, Title, Current, Section, Notice, ObservedAt, ObservedLabel string
+		FooterUpdatedAt, FooterUpdatedLabel                                string
 		SessionsHref                                                       string
 		ListTitle, ListCount, Access, AccessLower, DefaultID               string
 		Quiet, Preview, Banner, HasRows, CanSend, Selected, UsageView      bool
@@ -717,6 +721,16 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		ObservedAt: page.ObservedAt, ObservedLabel: observedLabel(page.ObservedAt), Preview: page.Preview,
 		SessionsHref: productSessionsHref,
 		ListTitle:    page.ListTitle}
+	view.FooterUpdatedAt, view.FooterUpdatedLabel = view.ObservedAt, view.ObservedLabel
+	if view.Current == "sessions" {
+		view.FooterUpdatedAt, view.FooterUpdatedLabel = "", ""
+		if page.Connected && page.ReadFailure == nil {
+			if at, err := time.Parse(time.RFC3339Nano, page.ReadCompletedAt); err == nil && !at.IsZero() {
+				view.FooterUpdatedAt = at.UTC().Truncate(time.Second).Format(time.RFC3339)
+				view.FooterUpdatedLabel = observedLabel(view.FooterUpdatedAt)
+			}
+		}
+	}
 	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter)
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"
 	if view.UsageView {

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,19 @@ func TestProductStatePreviews(t *testing.T) {
 		text := string(body)
 		if !strings.Contains(text, "Fixture preview") || strings.Contains(text, "<script") {
 			t.Errorf("%s lacks fixture label or contains script", name)
+		}
+		footer := regexp.MustCompile(`<footer class="statusbar">(.*?)</footer>`).FindString(text)
+		success := name == "usage" || name == "usage-empty" || name == "sessions-empty" || name == "sessions-stale" || name == "sessions-current"
+		const updated = `Updated <time datetime="2026-10-29T13:59:00Z">29 Oct 2026, 13:59 UTC</time>`
+		if success {
+			if !strings.Contains(footer, updated) {
+				t.Errorf("%s lacks synthetic successful read completion: %s", name, footer)
+			}
+			if strings.HasPrefix(name, "sessions-") && !strings.Contains(text, `<p class="list-foot">`+updated+`</p>`) {
+				t.Errorf("%s list foot differs from successful read completion", name)
+			}
+		} else if strings.Contains(footer, "Updated") || strings.Contains(text, `<p class="list-foot">`) {
+			t.Errorf("%s failure preview claims successful read freshness", name)
 		}
 		if strings.HasPrefix(name, "usage") && (strings.Contains(text, `class="rail"`) || strings.Contains(text, `class="list"`) || strings.Count(text, `?view=usage" aria-current="page"`) != 2) {
 			t.Errorf("%s has the session browser or wrong current nav", name)
