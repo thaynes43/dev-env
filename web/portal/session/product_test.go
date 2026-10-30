@@ -1668,7 +1668,7 @@ func TestTaskReadFailureReasons(t *testing.T) {
 				if media == "" {
 					media = mediaHAL
 				}
-				var body io.ReadCloser = io.NopCloser(strings.NewReader(tc.body))
+				body := io.NopCloser(strings.NewReader(tc.body))
 				if tc.bodyErr != nil {
 					body = failedSessionBody{tc.bodyErr}
 				}

@@ -1197,16 +1197,16 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		// Leave room within the 20s write timeout for final auth checks and rendering.
 		readCtx, cancel := context.WithDeadline(r.Context(), started.Add(sessionReadTimeout))
 		if readCtx.Err() != nil {
-			page, err = c.Sessions.skippedRead(readCtx, filter, started)
+			page, _ = c.Sessions.skippedRead(readCtx, filter, started)
 		} else {
-			page, err = c.Sessions.read(readCtx, filter, started)
+			page, _ = c.Sessions.read(readCtx, filter, started)
 		}
 		cancel()
 		if page.ReadFailure != nil && c.Sessions == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
 	case TasksPath:
-		page, err = c.Tasks.Read(r.Context(), filter)
+		page, _ = c.Tasks.Read(r.Context(), filter)
 		if c.Tasks == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
