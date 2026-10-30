@@ -1206,7 +1206,9 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
 	case TasksPath:
-		page, _ = c.Tasks.Read(r.Context(), filter)
+		readCtx, cancel := context.WithDeadline(r.Context(), started.Add(sessionReadTimeout))
+		page, _ = c.Tasks.Read(readCtx, filter)
+		cancel()
 		if page.ReadFailure != nil && c.Tasks == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}

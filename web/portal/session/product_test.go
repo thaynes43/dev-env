@@ -1634,6 +1634,80 @@ func taskReadPage(offset, total int, rows ...string) string {
 	return fmt.Sprintf(`{"total":%d,"count":%d,"pageSize":50,"offset":%d,"_embedded":{"elements":[%s]},"_links":{}}`, total, len(rows), offset, strings.Join(rows, ","))
 }
 
+func TestServeTasksReadDeadlineAcrossPages(t *testing.T) {
+	for _, initialDelay := range []time.Duration{0, 2 * time.Second} {
+		t.Run(initialDelay.String(), func(t *testing.T) {
+			f := setupAuth(t)
+			f.login(t)
+			synctest.Test(t, func(t *testing.T) {
+				started := time.Now()
+				checks, reads := 0, 0
+				authorizer := authorizeFunc(func(ctx context.Context, _ portal.Principal, _ portal.Resource) error {
+					checks++
+					if checks == 1 {
+						time.Sleep(initialDelay)
+					} else {
+						time.Sleep(time.Second)
+					}
+					return ctx.Err()
+				})
+				s := taskReadFixture(t, func() time.Time { return f.now }, func(r *http.Request) (*http.Response, error) {
+					reads++
+					if r.URL.Query().Get("offset") != strconv.Itoa(reads) {
+						t.Fatalf("unexpected Tasks page: %s", r.URL.RawQuery)
+					}
+					deadline, ok := r.Context().Deadline()
+					if !ok || deadline.After(started.Add(sessionReadTimeout)) {
+						t.Error("Tasks page escaped the request's read deadline")
+					}
+					// Each page would finish inside its own five-second timeout,
+					// but four pages would exceed the final-check deadline.
+					timer := time.NewTimer(4900 * time.Millisecond)
+					defer timer.Stop()
+					select {
+					case <-r.Context().Done():
+						return nil, r.Context().Err()
+					case <-timer.C:
+					}
+					rows := make([]string, productPageSize)
+					if reads == productPageCap {
+						rows = rows[:1]
+					}
+					for i := range rows {
+						rows[i] = fmt.Sprintf(`{"id":%d,"subject":"PARTIAL-TASK","_links":{"project":{"href":"/api/v3/projects/3"}}}`, (reads-1)*productPageSize+i+1)
+					}
+					body := taskReadPage(reads, 151, rows...)
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {mediaHAL}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+				})
+				s.client.Timeout = 5 * time.Second
+				lastSuccess := f.now.Add(-time.Minute)
+				s.lastSuccess = lastSuccess
+				var logs bytes.Buffer
+				s.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+				h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Tasks: s, FreshFor: time.Minute, Now: func() time.Time { return f.now }})
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, f.request(http.MethodGet, TasksPath+"?show=attention", ""))
+				body := w.Body.String()
+				if w.Code != http.StatusOK || reads != 3 || checks != 2 || time.Since(started) != sessionReadTimeout+time.Second || time.Since(started) >= 19*time.Second {
+					t.Fatalf("HTTP=%d reads=%d checks=%d elapsed=%s", w.Code, reads, checks, time.Since(started))
+				}
+				for _, want := range []string{"Tasks unavailable", "The Tasks read timed out.", "Last successful read in this process:", `datetime="` + lastSuccess.Format(time.RFC3339) + `"`, `href="` + TasksPath + `?show=attention">Retry</a>`} {
+					if !strings.Contains(body, want) {
+						t.Errorf("Tasks timeout page lacks %q", want)
+					}
+				}
+				if strings.Contains(body, "Updated") || strings.Contains(body, "PARTIAL-TASK") || !s.lastSuccess.Equal(lastSuccess) {
+					t.Fatal("Tasks timeout exposed freshness or partial rows, or advanced last success")
+				}
+				var line map[string]any
+				if json.Unmarshal(logs.Bytes(), &line) != nil || line["msg"] != "portal_task_read_failed" || line["timed_out"] != true || line["reason_code"] != "operator_unreachable" || line["page"] != float64(3) || line["elapsed_ms"] != float64((sessionReadTimeout-initialDelay).Milliseconds()) {
+					t.Fatalf("misleading Tasks timeout diagnostics: %s", logs.String())
+				}
+			})
+		})
+	}
+}
+
 func TestTaskReadFailureReasons(t *testing.T) {
 	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
