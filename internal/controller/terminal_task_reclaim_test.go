@@ -34,6 +34,8 @@ func terminalTaskFixture(recorded bool) terminalFixture {
 	f.s.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentExited, Task: task, ConversationID: f.s.Status.PrivateHistory.LastExecutor.ConversationID}
 	f.s.Status.UsageObservation = &v1alpha1.UsageObservationStatus{Source: source, ObservedAt: task.FinishedAt}
 	if recorded {
+		task.FinishedAt = recordTime(f.now.Add(-2 * time.Hour))
+		f.s.Status.UsageObservation.ObservedAt = task.FinishedAt
 		f.s.Status.PrivateHistory.TaskTerminal = &v1alpha1.PrivateTaskTerminalStatus{Task: *task.DeepCopy(), ObservedAt: recordTime(f.now.Add(-time.Hour)), DueAt: recordTime(f.now.Add(-time.Minute))}
 	}
 	return f
@@ -119,6 +121,12 @@ func TestTerminalTaskReclaimGraceStopProofOutcomeAndRestart(t *testing.T) {
 	if deletes != 1 || !apiequality.Semantic.DeepEqual(rec, got.Status.PrivateHistory.TaskTerminal) || got.Status.TaskResult == nil || len(got.Finalizers) == 0 {
 		t.Fatal("restart changed terminal result or retention")
 	}
+	if ready := meta.FindStatusCondition(got.Status.Conditions, ConditionPodReady); ready == nil || ready.Reason != "TaskPodReclaimed" {
+		t.Fatalf("compute removal still reports unproved stop: %+v", ready)
+	}
+	if result := taskResult(got, nil); result == nil || result.State != v1alpha1.TaskResultFailed {
+		t.Fatal("missing heartbeat cleared the preserved task outcome")
+	}
 }
 
 func TestTerminalTaskReclaimProtectionTable(t *testing.T) {
@@ -154,6 +162,8 @@ func TestTerminalTaskReclaimProtectionTable(t *testing.T) {
 		{"future-exit", func(f *terminalFixture, r *Reconciler) {
 			f.s.Status.Agent.Task.FinishedAt = recordTime(f.now.Add(time.Hour))
 		}},
+		{"no-start-time", func(f *terminalFixture, r *Reconciler) { f.pod.Status.StartTime = nil }},
+		{"terminal-container-contradiction", func(f *terminalFixture, r *Reconciler) { f.pod.Status.Phase = corev1.PodFailed }},
 		{"no-home-proof", func(f *terminalFixture, r *Reconciler) { f.s.Status.PrivateHistory.HomeUID = "" }},
 		{"replaced-home", func(f *terminalFixture, r *Reconciler) { f.home.UID = "replacement" }},
 		{"replaced-pod", func(f *terminalFixture, r *Reconciler) { f.pod.UID = "replacement" }},
@@ -241,10 +251,11 @@ func TestTerminalTaskReclaimReadAndCASFailuresKeepCompute(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			f := terminalTaskFixture(true)
 			f.pod.Status.Phase = corev1.PodFailed
-			f.pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: ContainerName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}}
+			f.pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: ContainerName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, FinishedAt: recordTime(f.now.Add(-time.Minute))}}}}
 			f.s.Status.PrivateHistory.ExecutorTerminal = &v1alpha1.PrivateExecutorTerminalStatus{PodUID: string(f.pod.UID)}
 			base := f.client()
 			once := false
+			deleteAttempted := false
 			c := interceptor.NewClient(base, interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) error {
 				if !once && failure == "hold-before-confirmation" {
 					once = true
@@ -257,6 +268,7 @@ func TestTerminalTaskReclaimReadAndCASFailuresKeepCompute(t *testing.T) {
 				return c.SubResource(sub).Update(ctx, o, opts...)
 			}, Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) error {
 				if failure == "pod-version" {
+					deleteAttempted = true
 					return apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, o.GetName(), errors.New("changed"))
 				}
 				return c.Delete(ctx, o, opts...)
@@ -274,6 +286,77 @@ func TestTerminalTaskReclaimReadAndCASFailuresKeepCompute(t *testing.T) {
 			if err := base.Get(context.Background(), client.ObjectKeyFromObject(f.pod), &pod); err != nil {
 				t.Fatal("compute removed after failed proof", err)
 			}
+			if failure == "hold-before-confirmation" && !once || failure == "pod-version" && !deleteAttempted {
+				t.Fatal("test did not reach its intended confirmation/delete boundary")
+			}
 		})
+	}
+}
+
+func TestTerminalTaskReclaimProtectsDescendantsAndCycles(t *testing.T) {
+	for _, state := range []string{"live-grandchild", "unproved-grandchild", "ownership-cycle"} {
+		t.Run(state, func(t *testing.T) {
+			f := terminalTaskFixture(true)
+			if state == "ownership-cycle" {
+				f.s.Spec.Parent = "child"
+			}
+			base := f.client()
+			child := f.s.DeepCopy()
+			child.Name, child.UID, child.ResourceVersion = "child", "child-session", ""
+			child.Spec.Parent = f.s.Name
+			child.Status.PrivateHistory.TaskTerminal = nil
+			child.Status.PrivateHistory.SessionUID = string(child.UID)
+			child.Status.PrivateHistory.HomeClaim = HomeClaimName(child.Name)
+			child.Status.PrivateHistory.LastExecutor.PodName = child.Name
+			child.Status.PrivateHistory.LastExecutor.PodUID = "child-pod"
+			child.Status.PrivateHistory.ExecutorTerminal = &v1alpha1.PrivateExecutorTerminalStatus{PodUID: "child-pod"}
+			if err := base.Create(context.Background(), child); err != nil {
+				t.Fatal(err)
+			}
+			if state != "ownership-cycle" {
+				grandchild := child.DeepCopy()
+				grandchild.Name, grandchild.UID, grandchild.ResourceVersion = "grandchild", "grandchild-session", ""
+				grandchild.Spec.Parent = child.Name
+				grandchild.Status.PrivateHistory.ExecutorTerminal = nil
+				if err := base.Create(context.Background(), grandchild); err != nil {
+					t.Fatal(err)
+				}
+				if state == "live-grandchild" {
+					pod := f.pod.DeepCopy()
+					pod.Name, pod.UID, pod.ResourceVersion = grandchild.Name, "grandchild-pod", ""
+					pod.OwnerReferences = []metav1.OwnerReference{ownerRef(grandchild)}
+					pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName = HomeClaimName(grandchild.Name)
+					if err := base.Create(context.Background(), pod); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			r := terminalTaskReconciler(f, base, base)
+			if err := r.terminalTaskChildrenStopped(context.Background(), f.s); err == nil {
+				t.Fatal("active or uncertain descendant tree accepted")
+			}
+		})
+	}
+}
+
+func TestTerminalTaskReclaimSkipsOrdinaryActiveTaskAndKeepsMissingStopUnknown(t *testing.T) {
+	f := terminalTaskFixture(false)
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	f.s.Status.Agent.Status, f.s.Status.Agent.Task = protocol.AgentBusy, nil
+	c := f.client()
+	r := terminalTaskReconciler(f, c, c)
+	_, stop, err := r.reconcileTerminalTaskReclaim(context.Background(), f.s)
+	if err != nil || stop || meta.FindStatusCondition(f.s.Status.Conditions, ConditionTerminalTaskReclaim) != nil {
+		t.Fatal("ordinary active compute reported as retained terminal compute")
+	}
+	f = terminalTaskFixture(true)
+	c = f.client(f.pod)
+	r = terminalTaskReconciler(f, c, c)
+	v, err := r.readExpiryView(context.Background(), f.s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason, err := r.terminalTaskViewAllowed(context.Background(), v); err == nil || reason != "ProofUnknown" {
+		t.Fatal("absence manufactured stop proof", reason, err)
 	}
 }

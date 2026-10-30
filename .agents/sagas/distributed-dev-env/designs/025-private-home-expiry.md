@@ -2386,7 +2386,7 @@ reap-only stop path, and even an ended executor is retained outside HOME expiry.
 `stopState: Unknown` is an intentional schema invariant, not a missing update.
 
 Proposed operator flags: `--enable-terminal-task-pod-reclaim=false` and
-`--terminal-task-pod-reclaim-grace=10m`. The grace must be positive. Enabling
+`--terminal-task-pod-reclaim-grace=10m`. The grace must be at least one second. Enabling
 requires the existing private terminal-record and executor-stop flags. Tom must
 choose whether to activate this policy and accept the grace in a separate
 reviewed runtime change. Upgraded CRD, operator and agent are prerequisites;
@@ -2404,7 +2404,7 @@ and operator restarts do not restart its grace or erase its outcome.
 Only a private headless task with intact admission, original HOME and executor
 identity qualifies. Local/interactive and remote/RC Sessions, reusable hosts,
 configured coordinators, canaries/pilots, shared workspaces, hold Pods, active
-providers, attached clients, live or unproved children and owner holds never
+providers, attached clients, live or unproved descendants and owner holds never
 qualify. An invalid HOME-expiry override is a hold. Each action reads the
 Session, executor, HOME and children uncached. Missing or contradictory proof
 keeps compute and reports its reason, accountable parent (or owner), and known
@@ -2428,7 +2428,8 @@ history deletion is part of this path. No structured PR-reference record is
 invented: existing output, logs, worktree and tracker handoff retain those
 references. An old agent without exit proof remains retained.
 
-A terminal private task never automatically starts a provider from its saved
-launch on a later boot, including the TUI `BuildResume` path. A missing or
+A retained private task never automatically starts a provider from its saved
+launch on a later boot, including the TUI `BuildResume` path and interrupted
+launches with no result. A missing or
 unreadable result remains uncertain and cannot authorize reclaim. Explicit
 human recovery into a different bounded task remains separate.

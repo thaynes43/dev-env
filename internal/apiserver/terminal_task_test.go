@@ -30,6 +30,7 @@ func TestTerminalTaskHeartbeatAcceptsOnlyOriginalExitedAttempt(t *testing.T) {
 			u := fixtureUsage(f, name, token)
 			st := status(name)
 			st.Agent.State = protocol.AgentExited
+			st.Agent.Attached = 0
 			st.Agent.Task = &protocol.TaskResult{ExitSource: &u.Source, ExitCode: 1, FinishedAt: f.now, Subtype: "error_during_execution"}
 			test.edit(&st)
 			w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, st)

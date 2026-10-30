@@ -77,10 +77,8 @@ func TestTerminalPrivateTaskNeverAutomaticallyResumes(t *testing.T) {
 				if why != "" || step.State == StepFail || len(runner.calls) != 0 {
 					t.Fatalf("saved private task ran again: %+v %q calls=%+v", step, why, runner.calls)
 				}
-				if state == "result" || state == "malformed-result" {
-					if _, err := BuildResume(s, sess, ws, first, "rebuilt-pod", time.Now()); err == nil {
-						t.Fatal("BuildResume accepted terminal private task")
-					}
+				if _, err := BuildResume(s, sess, ws, first, "rebuilt-pod", time.Now()); err == nil {
+					t.Fatal("BuildResume accepted a retained private task")
 				}
 			})
 		}
