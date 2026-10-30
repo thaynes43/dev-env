@@ -1012,6 +1012,61 @@ func TestServeTasksFooterUsesReadCompletion(t *testing.T) {
 	}
 }
 
+func TestServeTasksLatePageFailureOmitsFreshness(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	readAt := f.now.Add(10 * time.Second)
+	rendered := readAt.Add(time.Minute)
+	path := filepath.Join(t.TempDir(), "openproject-token")
+	if err := os.WriteFile(path, []byte("fixture-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rows := make([]string, 50)
+	for i := range rows {
+		rows[i] = fmt.Sprintf(`{"id":%d,"subject":"First-page task %d","_links":{"project":{"href":"/api/v3/projects/3"}},"_embedded":{"project":{"id":3,"identifier":"haynes-engineering"}}}`, i+1, i+1)
+	}
+	firstPage := fmt.Sprintf(`{"total":51,"count":50,"pageSize":50,"offset":1,"_embedded":{"elements":[%s]},"_links":{}}`, strings.Join(rows, ","))
+	now := f.now
+	var offsets []string
+	tasks := &TaskSource{path: path, now: func() time.Time { return now }, client: &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
+		offset := r.URL.Query().Get("offset")
+		offsets = append(offsets, offset)
+		switch offset {
+		case "1":
+			now = readAt
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {mediaHAL}}, Body: io.NopCloser(strings.NewReader(firstPage))}, nil
+		case "2":
+			now = readAt.Add(time.Second)
+			return nil, errors.New("fixture second-page read failure")
+		default:
+			t.Fatalf("unexpected Tasks page offset %q", offset)
+			return nil, errors.New("unexpected Tasks page")
+		}
+	})}}
+	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Tasks: tasks, FreshFor: time.Minute, Now: func() time.Time { return rendered }})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, f.request(http.MethodGet, TasksPath, ""))
+	body := w.Body.String()
+	_, footer, found := strings.Cut(body, `<footer class="statusbar">`)
+	footer, _, _ = strings.Cut(footer, "</footer>")
+	if w.Code != http.StatusOK || !found || !strings.Contains(body, "Tasks unavailable") {
+		t.Fatalf("Tasks failure page missing (HTTP %d): %s", w.Code, body)
+	}
+	if strings.Join(offsets, ",") != "1,2" {
+		t.Fatalf("did not reach the second-page failure: offsets=%v", offsets)
+	}
+	if strings.Contains(footer, "Updated") || strings.Contains(body, `<p class="list-foot">`) {
+		t.Fatalf("failed Tasks read exposed freshness: %s", body)
+	}
+	if strings.Contains(body, rendered.Format(time.RFC3339)) || strings.Contains(body, rendered.Format("2 Jan 2006, 15:04 MST")) {
+		t.Fatalf("failed Tasks read exposed render time: %s", body)
+	}
+	if strings.Contains(body, "First-page task") {
+		t.Fatal("failed Tasks read exposed partial first-page data")
+	}
+}
+
 func TestSessionReadCompletionTime(t *testing.T) {
 	started := time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)
 	completed := started.Add(10 * time.Second)

@@ -167,10 +167,10 @@ func TestTasksFooterRequiresSuccessfulReadTime(t *testing.T) {
 		{name: "success", completed: completedAt, want: true},
 		{name: "offset converted to UTC seconds", completed: "2026-10-30T10:10:00.123456789+02:00", want: true},
 		{name: "capped successful read", completed: completedAt, capped: true, want: true},
-		{name: "failure", completed: completedAt, disconnected: true},
+		{name: "disconnected with completion time", completed: completedAt, disconnected: true},
 		{name: "read failure", completed: completedAt, failure: &ProductReadFailure{ReasonCode: "operator_unreachable"}},
 		{name: "unknown"},
-		{name: "not connected", disconnected: true},
+		{name: "disconnected without completion time", disconnected: true},
 		{name: "invalid", completed: "Unknown"},
 		{name: "zero", completed: time.Time{}.Format(time.RFC3339Nano)},
 	} {
