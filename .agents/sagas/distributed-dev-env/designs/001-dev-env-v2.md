@@ -752,6 +752,14 @@ variable, and its config port keeps v1's layout.**
   copies the status into `status.agent` and `status.usage`.
 - `agentd ctl status` prints the same document, built by the same code, so the exec
   path (D-08) and the heartbeat never disagree.
+- Slow-boot status (#277, 2026-10-30): during admission, rendering, private
+  catalog bootstrap and repo preparation, every session sends a boot heartbeat
+  at most once every 10 s. The existing `boot=booting`, `agent.state=pending`
+  and `agent.error` text carry the current step, including repository/project
+  counts; the operator maps that text to `status.agent.message`. The private
+  boot record retains that step for `ctl status`. Login and previous-launch
+  state are evaluated only after the agent step completes;
+  remote entry status stays `starting` during boot. No API schema change.
 - The base URL is `AGENTD_API_URL`; `AGENTD_API_CA_FILE` adds the CA that signed the
   API's certificate. With no URL, heartbeats are off and agentd says so once. A failed
   heartbeat never touches the agent (D-01). agentd logs the first failure, every tenth

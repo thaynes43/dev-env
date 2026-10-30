@@ -12,12 +12,15 @@ import (
 
 // bootRecord is ~/.agentd/boot.json: what the latest boot did.
 type bootRecord struct {
-	BootID     string              `json:"bootId"`
-	BootedAt   time.Time           `json:"bootedAt"`
-	Boot       string              `json:"boot"`
-	Steps      []Step              `json:"steps,omitempty"`
-	Workspace  *protocol.Workspace `json:"workspace,omitempty"`
-	AgentError string              `json:"agentError,omitempty"`
+	BootID   string    `json:"bootId"`
+	BootedAt time.Time `json:"bootedAt"`
+	Boot     string    `json:"boot"`
+	// CurrentStep is local boot progress, carried in the existing pending
+	// agent's message so older operators need no status schema change.
+	CurrentStep string              `json:"currentStep,omitempty"`
+	Steps       []Step              `json:"steps,omitempty"`
+	Workspace   *protocol.Workspace `json:"workspace,omitempty"`
+	AgentError  string              `json:"agentError,omitempty"`
 	// ProjectBootstrap is this boot's private catalog bootstrap, as names
 	// and codes only (DESIGN-006, reason codes).
 	ProjectBootstrap *protocol.ProjectBootstrap `json:"projectBootstrap,omitempty"`
@@ -40,12 +43,6 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		Agent:      protocol.AgentState{State: protocol.AgentPending},
 		ObservedAt: now.UTC(),
 	}
-	if s.ManagedChildDecisions {
-		if result, err := ReadDecision(ctx, s); err == nil && result.Decision != nil {
-			record := result.Decision
-			st.Decision = &protocol.DecisionOutcome{ID: record.ID, SessionUID: record.SessionUID, PodUID: record.PodUID, WriterGeneration: record.WriterGeneration, ThreadID: record.ThreadID, State: record.State, AnswerDigest: protocol.AnswerAuthority(*record, record.Answer).Digest, At: record.CreatedAt}
-		}
-	}
 	var boot bootRecord
 	if readJSONFile(s.statePath(bootFile), &boot) == nil {
 		st.BootID, st.BootedAt, st.Boot = boot.BootID, boot.BootedAt, boot.Boot
@@ -55,27 +52,43 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 				st.Problems = append(st.Problems, step)
 			}
 		}
-		if boot.Workspace != nil {
-			ws := *boot.Workspace
-			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			if b, err := s.git(ctx, r, ws.Worktree, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-				ws.Branch = b
-			}
-			if h, err := s.git(ctx, r, ws.Worktree, "rev-parse", "HEAD"); err == nil {
-				ws.Head = h
-			}
-			cancel()
-			// The durable record names the task's source, not a boot's copy.
-			// An unreadable record, or one that binds another session or
-			// source, is a problem, not a task without one.
-			source, err := sessionTaskSource(s, sess)
-			ws.Source = source
-			if err != nil {
-				st.Problems = append(st.Problems, Step{Name: "task-source", State: StepWarn,
-					Notes: []string{"the task source record is not reported; preserved: " + err.Error()}})
-			}
-			st.Workspace = &ws
+	}
+	// Before the agent step completes, missing credentials and records from a
+	// previous boot say nothing about this boot's agent. In particular, the
+	// keeper's Claude projection is applied by startAgent, not by rendering.
+	if st.Boot == protocol.BootBooting {
+		st.Agent.Error = boot.CurrentStep
+		if sess.Mode == protocol.ModeRemote {
+			st.RemoteControl = &protocol.RemoteControl{Name: sess.Name, State: protocol.RemoteStarting}
 		}
+		return st
+	}
+	if s.ManagedChildDecisions {
+		if result, err := ReadDecision(ctx, s); err == nil && result.Decision != nil {
+			record := result.Decision
+			st.Decision = &protocol.DecisionOutcome{ID: record.ID, SessionUID: record.SessionUID, PodUID: record.PodUID, WriterGeneration: record.WriterGeneration, ThreadID: record.ThreadID, State: record.State, AnswerDigest: protocol.AnswerAuthority(*record, record.Answer).Digest, At: record.CreatedAt}
+		}
+	}
+	if boot.Workspace != nil {
+		ws := *boot.Workspace
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if b, err := s.git(ctx, r, ws.Worktree, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+			ws.Branch = b
+		}
+		if h, err := s.git(ctx, r, ws.Worktree, "rev-parse", "HEAD"); err == nil {
+			ws.Head = h
+		}
+		cancel()
+		// The durable record names the task's source, not a boot's copy.
+		// An unreadable record, or one that binds another session or
+		// source, is a problem, not a task without one.
+		source, err := sessionTaskSource(s, sess)
+		ws.Source = source
+		if err != nil {
+			st.Problems = append(st.Problems, Step{Name: "task-source", State: StepWarn,
+				Notes: []string{"the task source record is not reported; preserved: " + err.Error()}})
+		}
+		st.Workspace = &ws
 	}
 
 	// The first launch is the session's conversation; this boot's agent is a

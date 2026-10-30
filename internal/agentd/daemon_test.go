@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -146,6 +147,10 @@ func TestDaemonSharedSamePodRestartReportsRefusedWriter(t *testing.T) {
 }
 
 func TestDaemonSharedAdmissionWaitHeartbeatsAndJoinsOnCancellation(t *testing.T) {
+	synctest.Test(t, testDaemonSharedAdmissionWaitHeartbeatsAndJoinsOnCancellation)
+}
+
+func testDaemonSharedAdmissionWaitHeartbeatsAndJoinsOnCancellation(t *testing.T) {
 	r := newDaemonRig(t, nil)
 	s, sess := sharedSettings(t, r.d.S, r.d.Session.Name)
 	unlock, err := workspaceAdminLock(context.Background(), s, sess.Repo)
@@ -155,10 +160,12 @@ func TestDaemonSharedAdmissionWaitHeartbeatsAndJoinsOnCancellation(t *testing.T)
 	defer unlock()
 	r.d.S, r.d.Session = s, sess
 	stop := r.start(t)
-	waitFor(t, func() bool {
-		st, count := r.beats.last()
-		return count >= 3 && st.Boot == protocol.BootBooting && st.Agent.State == protocol.AgentPending
-	})
+	synctest.Wait()
+	time.Sleep(21 * time.Second)
+	synctest.Wait()
+	if st, count := r.beats.last(); count < 3 || st.Boot != protocol.BootBooting || st.Agent.State != protocol.AgentPending || st.Agent.Error != "admitting workspace" {
+		t.Fatalf("admission wait: %d heartbeats, %+v", count, st)
+	}
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}

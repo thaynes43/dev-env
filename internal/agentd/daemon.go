@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
-	"github.com/thaynes43/dev-env/internal/version"
 )
 
 // Daemon is `agentd run`, the session pod's supervisor under tini (DESIGN-001
@@ -169,15 +168,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)
 	}
-	rec := bootRecord{BootID: newBootID(), BootedAt: d.now().UTC(), Boot: protocol.BootBooting}
+	rec := bootRecord{BootID: newBootID(), BootedAt: d.now().UTC(), Boot: protocol.BootBooting, CurrentStep: "admitting workspace"}
 	if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
 		return fmt.Errorf("boot record: %w", err)
 	}
 	d.Log.Info("boot", "session", d.Session.Name, "boot", rec.BootID, "repo", d.Session.Repo, "agent", d.Session.Agent, "mode", d.Session.Mode, "model", d.Session.Model, "promptBytes", len(d.Session.Prompt))
-	stopBootHeartbeat := d.workspaceBootHeartbeat(ctx, rec)
+	stopBootHeartbeat := d.bootHeartbeat(ctx)
 	defer stopBootHeartbeat()
-	if d.S.WorkspaceID == "" {
-		d.beat(ctx)
+	progress := func(step string) {
+		rec.CurrentStep = step
+		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+			d.Log.Warn("boot progress record", "err", err)
+		}
 	}
 	writer, writerErr := retryWorkspaceWriterAdmission(ctx, func() (*writerLease, error) {
 		return acquireWorkspaceWriter(ctx, d.R, d.S, d.Session, d.now())
@@ -198,6 +200,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return d.supervise(ctx)
 	}
 
+	progress("admitting project")
 	if err := prepareProjectTask(&d.S, d.Session); err != nil {
 		stopBootHeartbeat()
 		d.writerRefused = true
@@ -209,14 +212,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.beat(ctx)
 		return d.supervise(ctx)
 	}
+	progress("rendering configuration")
 	steps := Render(ctx, d.R, d.S, d.Session)
 	if d.S.PrivateProjectBootstrap {
-		report, err := RefreshPrivateProjects(ctx, d.R, d.S, d.ProjectCatalog)
+		progress("bootstrapping projects: reading catalog")
+		report, err := refreshPrivateProjects(ctx, d.R, d.S, d.ProjectCatalog, progress)
 		// The first note is the code summary status.agent.problems carries;
 		// the codes themselves go to status.agent.projectBootstrap.
 		steps = append(steps, newStep("project-bootstrap", []string{report.summary()}, err))
 		rec.ProjectBootstrap = report.published()
 	}
+	progress("preparing repo")
 	ws, repoStep := PrepareRepo(ctx, d.R, d.S, d.Session)
 	steps = append(steps, repoStep)
 	if stop, err := workspaceStopRequested(d.S, d.Session); err != nil || stop {
@@ -224,12 +230,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.shutdown()
 		return err
 	}
+	progress("starting agent")
 	agentStep, agentErr := d.startAgent(ctx, ws, repoStep, rec.BootID)
 	steps = append(steps, agentStep)
 	LogSteps(d.Log, steps)
 	stopBootHeartbeat()
 
 	rec.Steps, rec.Workspace, rec.AgentError = steps, &ws, agentErr
+	rec.CurrentStep = ""
 	rec.Boot = protocol.BootReady
 	if agentErr != "" {
 		rec.Boot = protocol.BootFailed
@@ -241,27 +249,28 @@ func (d *Daemon) Run(ctx context.Context) error {
 	return d.supervise(ctx)
 }
 
-// workspaceBootHeartbeat observes an admission or Git preparation wait. It
+const bootHeartbeatEvery = 10 * time.Second
+
+// bootHeartbeat observes admission, rendering and Git preparation waits. It
 // never reads the shared worktree, runs another command, or claims a writer.
 // Its sender is joined before the final boot status and normal supervision,
 // so heartbeat state has one owner and cancellation leaves no boot goroutine.
-func (d *Daemon) workspaceBootHeartbeat(ctx context.Context, rec bootRecord) func() {
-	if d.S.WorkspaceID == "" || d.Send == nil {
+func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
+	if d.Send == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	// Project admission may update d.S while the boot proceeds. The boot
+	// status needs only these stable local paths, never the mutable writer.
+	s, sess, r := d.S, d.Session, d.R
 	beat := func() {
-		d.sendHeartbeat(ctx, protocol.Status{
-			Session: d.Session.Name, Agentd: version.Get().String("agentd"),
-			BootID: rec.BootID, BootedAt: rec.BootedAt, Boot: protocol.BootBooting,
-			Agent: protocol.AgentState{State: protocol.AgentPending}, ObservedAt: d.now().UTC(),
-		})
+		d.sendHeartbeat(ctx, CollectStatus(ctx, r, s, sess, d.now()))
 	}
 	beat()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tick := time.NewTicker(d.Interval)
+		tick := time.NewTimer(bootHeartbeatEvery)
 		defer tick.Stop()
 		for {
 			select {
@@ -269,6 +278,9 @@ func (d *Daemon) workspaceBootHeartbeat(ctx context.Context, rec bootRecord) fun
 				return
 			case <-tick.C:
 				beat()
+				// Start the next interval after sending: a slow request must
+				// not leave a queued tick that sends again immediately.
+				tick.Reset(bootHeartbeatEvery)
 			}
 		}
 	}()
