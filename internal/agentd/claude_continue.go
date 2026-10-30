@@ -55,7 +55,7 @@ const authErrorCode = "authentication_failed"
 
 type continueReceipt struct {
 	Generation  uint64    `json:"generation"`
-	Outcome     string    `json:"outcome"` // sending, sent or skipped
+	Outcome     string    `json:"outcome"` // waiting, sending, sent or skipped
 	EvaluatedAt time.Time `json:"evaluatedAt"`
 }
 
@@ -202,7 +202,7 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 	var prev continueReceipt
 	havePrev := false
 	if err := readJSONFile(receiptPath, &prev); err == nil {
-		if prev.Generation >= applied.Generation {
+		if prev.Generation > applied.Generation || (prev.Generation == applied.Generation && prev.Outcome != "waiting") {
 			return
 		}
 		havePrev = true
@@ -231,7 +231,19 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 	// was already handled. A missing timestamp does not block the one send.
 	stale := havePrev && !turn.At.IsZero() && !turn.At.After(prev.EvaluatedAt)
 	if !turn.Revoked || stale {
-		_ = writeJSONFile(receiptPath, continueReceipt{applied.Generation, "skipped", now})
+		// A replacement may reach the pod before the client records its old-token
+		// failure. Keep that generation eligible until a new error arrives. Its
+		// evaluation time stays fixed so repeated healthy polls cannot hide the
+		// delayed error. The first observed generation still establishes only a
+		// baseline; it does not authorize retrying a later failure on its own.
+		if havePrev && prev.Generation == applied.Generation {
+			return
+		}
+		outcome := "skipped"
+		if havePrev {
+			outcome = "waiting"
+		}
+		_ = writeJSONFile(receiptPath, continueReceipt{applied.Generation, outcome, now})
 		return
 	}
 	if writeJSONFile(receiptPath, continueReceipt{applied.Generation, "sending", now}) != nil {
