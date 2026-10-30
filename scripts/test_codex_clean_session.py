@@ -37,11 +37,23 @@ if args[0] == 'new-session':
     if mode == 'collision':
         print('private task secret', file=sys.stderr)
         sys.exit(1)
+    if mode == 'unicode-launch':
+        os.write(1, b'\\xff')
+        sys.exit(0)
+    if mode == 'bad-pane':
+        print('not-a-pane')
+        sys.exit(0)
     command = args[-1]
     import shlex
     Path(os.environ['FAKE_ARGV']).write_text(json.dumps(shlex.split(command)[1:]))
+    print('%7')
     sys.exit(0)
 if args[0] == 'display-message':
+    if mode == 'unicode-observe':
+        os.write(1, b'\\xff')
+        sys.exit(0)
+    if args[args.index('-t') + 1] != '%7':
+        raise SystemExit(78)
     print('1:123' if mode == 'dead' else '0:123')
     sys.exit(1 if mode == 'gone' else 0)
 raise SystemExit(77)
@@ -137,7 +149,8 @@ class LauncherTests(unittest.TestCase):
 
     def test_collision_and_early_exit_never_retry_or_inject(self):
         for mode, expected in (('collision', 'launch-unconfirmed'), ('dead', 'client-not-running'),
-                               ('gone', 'client-not-running')):
+                               ('gone', 'client-not-running'), ('unicode-launch', 'launch-unconfirmed'),
+                               ('unicode-observe', 'launch-unconfirmed'), ('bad-pane', 'launch-unconfirmed')):
             with self.subTest(mode=mode):
                 self.log.unlink(missing_ok=True)
                 (self.root / "state/codex-clean-session/task-unique-1").unlink(missing_ok=True)
@@ -167,7 +180,7 @@ class LauncherTests(unittest.TestCase):
                 calls.append(argv)
                 if argv[1] == phase:
                     raise subprocess.TimeoutExpired(argv, 5)
-                return subprocess.CompletedProcess(argv, 0, '--remote --no-alt-screen', '')
+                return subprocess.CompletedProcess(argv, 0, '%7' if argv[1] == 'new-session' else '--remote --no-alt-screen', '')
             with self.subTest(phase=phase), mock.patch.dict(os.environ, XDG_STATE_HOME=str(self.root / phase)), mock.patch.object(launcher, 'run', fake_run):
                 with self.assertRaises(launcher.Refusal) as caught:
                     launcher.launch(args)

@@ -1,7 +1,10 @@
 # Native clean-session client
 
 For an already authorized repository and existing paired daemon, run the source
-wrapper with Python 3 and installed Codex/tmux. This is a local client wrapper,
+wrapper with Python 3 and installed Codex/tmux. The tmux `default-shell` must
+be POSIX compatible (for example `/bin/sh` or bash); non-POSIX shells are
+unsupported. `shlex.join` quotes for a POSIX shell, and the wrapper does not
+inspect or change the existing tmux shell configuration. This is a local client wrapper,
 separate from operator-backed `agent-run rc fresh`. It creates a uniquely named
 detached tmux client using the supported interactive `codex --remote unix://…`
 route. No project ID is required. It never forks, resumes, selects an old thread,
@@ -44,9 +47,9 @@ JSON states and exits:
 | State | Exit | Meaning and next step |
 | --- | --- | --- |
 | `dry-run` | 0 | Local inputs checked; daemon and provider readiness unknown. |
-| `client-running-unverified` | 0 | Pane alive after the observation delay; inspect this task's native client for connection, new thread and task acceptance. This is not provider-ready or accepted evidence. |
+| `client-running-unverified` | 0 | The exact newly returned pane ID is alive after the observation delay; inspect this task's native client for connection, new thread and task acceptance. This is not provider-ready or accepted evidence. |
 | `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed` | 2 | Correct the explicit input or executable; launch was not attempted. Argparse usage errors also exit 2. |
-| `launch-unconfirmed` | 3 | tmux failed, collided or timed out, or observation failed. It may have launched; inspect this exact task name before deciding anything. No automatic retry. |
+| `launch-unconfirmed` | 3 | tmux failed, collided, timed out, returned undecodable output or an invalid pane ID, or observation failed. It may have launched; inspect this exact task name before deciding anything. No automatic retry. |
 | `client-not-running` | 3 | Pane exited or its status is unknown. Inspect this task's client locally; do not switch to an old context or blindly launch again. |
 
 Every tool call has a five-second timeout; observation waits one second by
@@ -59,6 +62,8 @@ content are not captured into the JSON receipt; no other conversation is read.
 If a client exits quickly, tmux may remove its pane and its error text; run only
 when this limited observation is sufficient, and preserve available native errors
 before considering a further explicitly authorized launch.
+
+The [source handoff and communication ruling](../.agents/sagas/distributed-dev-env/verification/native-clean-session-source-2026-10-30.md) records scope and gates.
 
 The supported route was demonstrated with installed Codex 0.160.1 on an existing
 paired host (OP267/3393,3395; OP272/3416). That evidence predates this wrapper and

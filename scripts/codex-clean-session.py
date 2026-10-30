@@ -59,6 +59,7 @@ def prepare(args):
     argv = [client, "--remote", "unix://" + args.socket, "-C", str(repo),
             "-m", args.model, "-c", f'model_reasoning_effort="{args.effort}"',
             "--no-alt-screen", "--", task]
+    # Requires a POSIX tmux default-shell (documented prerequisite).
     # tmux's single shell-command is parsed by a shell. Quote EVERY argument,
     # including the executable and multiline task. Never send keys to a pane.
     command = "exec " + shlex.join(argv)
@@ -92,17 +93,20 @@ def launch(args):
     # new-session atomically refuses duplicate names. Do not attach, kill, rename,
     # resume or retry on failure: even an uncertain response may have launched.
     try:
-        result = run([tmux, "new-session", "-d", "-s", args.name, "-c", str(repo), command])
-    except (subprocess.TimeoutExpired, OSError):
+        result = run([tmux, "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", args.name, "-c", str(repo), command])
+    except (subprocess.TimeoutExpired, OSError, UnicodeError):
         raise Refusal("launch-unconfirmed", "tmux launch outcome unknown; inspect this task's exact name before any retry. No automatic retry.", 3)
     if result.returncode:
         # Do not print subprocess output: it may contain task text or credentials.
         raise Refusal("launch-unconfirmed", "tmux refused or failed (possible name collision); inspect this exact task name. Never reuse an existing client; no retry.", 3)
+    pane = result.stdout.strip()
+    if not re.fullmatch(r"%[0-9]+", pane):
+        raise Refusal("launch-unconfirmed", "tmux returned no valid new pane identity; inspect this exact task name. No automatic retry.", 3)
     time.sleep(args.observe_seconds)
     try:
-        observed = run([tmux, "display-message", "-p", "-t", "=" + args.name,
+        observed = run([tmux, "display-message", "-p", "-t", pane,
                         "#{pane_dead}:#{pane_pid}"])
-    except (subprocess.TimeoutExpired, OSError):
+    except (subprocess.TimeoutExpired, OSError, UnicodeError):
         raise Refusal("launch-unconfirmed", "Client observation failed; inspect this exact task name. Do not relaunch automatically.", 3)
     if observed.returncode or not re.fullmatch(r"0:[1-9][0-9]*\n?", observed.stdout):
         raise Refusal("client-not-running", "Client did not survive observation or status is unknown; inspect this task's tmux pane locally. No fallback or retry.", 3)
