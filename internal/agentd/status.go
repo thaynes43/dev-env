@@ -53,10 +53,23 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 			}
 		}
 	}
-	// Before the agent step completes, missing credentials and records from a
-	// previous boot say nothing about this boot's agent. In particular, the
-	// keeper's Claude projection is applied by startAgent, not by rendering.
+	// The first launch and task result survive restarts (D-58). Boot heartbeats
+	// must retain this history: the operator replaces status.agent wholesale,
+	// and private history reads its conversation ID even during boot.
+	var first Launch
+	launched := readJSONFile(s.statePath(launchFile), &first) == nil
+	var res taskResult
+	finished := readJSONFile(s.statePath(resultFile), &res) == nil
+	// Before the agent step completes, missing credentials and previous process
+	// state say nothing about this boot's agent. The keeper's Claude projection
+	// is applied by startAgent, not by rendering.
 	if st.Boot == protocol.BootBooting {
+		if launched {
+			st.Agent.ConversationID = first.ConversationID
+		}
+		if finished {
+			st.Agent.Task = &res.TaskResult
+		}
 		st.Agent.Error = boot.CurrentStep
 		if sess.Mode == protocol.ModeRemote {
 			st.RemoteControl = &protocol.RemoteControl{Name: sess.Name, State: protocol.RemoteStarting}
@@ -93,10 +106,6 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 
 	// The first launch is the session's conversation; this boot's agent is a
 	// resume of it after the first boot (D-58).
-	var first Launch
-	launched := readJSONFile(s.statePath(launchFile), &first) == nil
-	var res taskResult
-	finished := readJSONFile(s.statePath(resultFile), &res) == nil
 	cur, hasCur := first, launched && first.BootID == boot.BootID
 	var resumed Launch
 	if readJSONFile(s.statePath(resumeFile), &resumed) == nil && resumed.BootID == boot.BootID && boot.BootID != "" {

@@ -14,7 +14,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
-func TestCollectStatusBootingDefersLoginAndPreviousLaunch(t *testing.T) {
+func TestCollectStatusBootingDefersLoginAndPreservesHistory(t *testing.T) {
 	for _, agent := range []string{protocol.AgentClaude, protocol.AgentCodex} {
 		for _, previous := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/previous=%t", agent, previous), func(t *testing.T) {
@@ -26,21 +26,68 @@ func TestCollectStatusBootingDefersLoginAndPreviousLaunch(t *testing.T) {
 					t.Fatal("boot status ran a command")
 					return Result{}, nil
 				}}
+				wantTask := protocol.TaskResult{ExitCode: 1, FinishedAt: loginNow.Add(-time.Hour), TimedOut: true,
+					Subtype: "error_max_turns", IsError: true, NumTurns: 12}
 				if previous {
-					writeJSON(t, s.statePath(launchFile), Launch{BootID: "old", ConversationID: "old"})
-					writeJSON(t, s.statePath(resultFile), taskResult{TaskResult: protocol.TaskResult{ExitCode: 0}})
+					writeJSON(t, s.statePath(launchFile), Launch{BootID: "old", ConversationID: "first-conversation"})
+					writeJSON(t, s.statePath(resumeFile), Launch{BootID: "new", ConversationID: "another-conversation", TUI: true})
+					writeJSON(t, s.statePath(resultFile), taskResult{TaskResult: wantTask})
 				}
 				for _, step := range []string{"", "rendering configuration", "bootstrapping projects: project 2/7", "preparing repo", "starting agent"} {
 					if step != "" {
 						writeJSON(t, s.statePath(bootFile), bootRecord{BootID: "new", Boot: protocol.BootBooting, CurrentStep: step})
 					}
 					st := CollectStatus(context.Background(), r, s, sess, loginNow)
-					if st.Boot != protocol.BootBooting || st.Agent.State != protocol.AgentPending || st.Agent.Error != step || st.Agent.Task != nil || st.Agent.ConversationID != "" || st.RemoteControl == nil || st.RemoteControl.State != protocol.RemoteStarting {
+					if st.Boot != protocol.BootBooting || st.Agent.State != protocol.AgentPending || st.Agent.Error != step || st.RemoteControl == nil || st.RemoteControl.State != protocol.RemoteStarting {
 						t.Fatalf("step %q: %+v", step, st)
+					}
+					if previous {
+						if st.Agent.ConversationID != "first-conversation" || st.Agent.Task == nil || *st.Agent.Task != wantTask {
+							t.Fatalf("step %q lost saved history: %+v", step, st.Agent)
+						}
+					} else if st.Agent.ConversationID != "" || st.Agent.Task != nil {
+						t.Fatalf("step %q invented history on first boot: %+v", step, st.Agent)
 					}
 				}
 			})
 		}
+	}
+}
+
+func TestBootHeartbeatPreservesHistoryAcrossRestartAndResume(t *testing.T) {
+	s := testSettings(t, t.TempDir())
+	wantTask := protocol.TaskResult{ExitCode: 0, FinishedAt: loginNow.Add(-time.Hour), Subtype: "success", NumTurns: 7}
+	writeJSON(t, s.statePath(launchFile), Launch{BootID: "first", ConversationID: "first-conversation"})
+	writeJSON(t, s.statePath(resultFile), taskResult{TaskResult: wantTask})
+	r := &fakeRunner{handle: func(Cmd) (Result, error) {
+		t.Fatal("boot heartbeat ran a command")
+		return Result{}, nil
+	}}
+	for _, bootID := range []string{"restart", "resume"} {
+		t.Run(bootID, func(t *testing.T) {
+			writeJSON(t, s.statePath(bootFile), bootRecord{BootID: bootID, Boot: protocol.BootBooting, CurrentStep: "preparing repo"})
+			if bootID == "resume" {
+				writeJSON(t, s.statePath(resumeFile), Launch{BootID: bootID, ConversationID: "first-conversation", TUI: true})
+			}
+			synctest.Test(t, func(t *testing.T) {
+				sent := 0
+				d := &Daemon{S: s, R: r, Session: remoteSession(), Log: slog.Default(), Send: func(_ context.Context, st protocol.Status) error {
+					sent++
+					if st.BootID != bootID || st.Boot != protocol.BootBooting || st.Agent.State != protocol.AgentPending || st.Agent.Error != "preparing repo" ||
+						st.Agent.ConversationID != "first-conversation" || st.Agent.Task == nil || *st.Agent.Task != wantTask || st.RemoteControl == nil || st.RemoteControl.State != protocol.RemoteStarting {
+						t.Errorf("boot heartbeat lost history or inferred login/process state: %+v", st)
+					}
+					return nil
+				}}
+				stop := d.bootHeartbeat(context.Background())
+				time.Sleep(25 * time.Second)
+				synctest.Wait()
+				stop() // The executor can end while this boot is still pending.
+				if sent < 3 {
+					t.Fatalf("only %d boot heartbeats", sent)
+				}
+			})
+		})
 	}
 }
 

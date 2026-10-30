@@ -759,7 +759,11 @@ variable, and its config port keeps v1's layout.**
   counts; the operator maps that text to `status.agent.message`. The private
   boot record retains that step for `ctl status`. Login and previous-launch
   state are evaluated only after the agent step completes;
-  remote entry status stays `starting` during boot. No API schema change.
+  remote entry status stays `starting` during boot. The first launch's known
+  conversation ID and the saved task result remain in boot heartbeats: the
+  operator replaces `status.agent`, and private history reads its conversation
+  ID even if the executor ends during boot. A first boot invents neither field.
+  No API schema change.
 - The base URL is `AGENTD_API_URL`; `AGENTD_API_CA_FILE` adds the CA that signed the
   API's certificate. With no URL, heartbeats are off and agentd says so once. A failed
   heartbeat never touches the agent (D-01). agentd logs the first failure, every tenth
