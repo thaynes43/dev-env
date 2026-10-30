@@ -50,7 +50,7 @@
 <aside class="coverage" aria-labelledby="usage-coverage"><p class="eyebrow">Coverage and accounting</p><h2 id="usage-coverage">What these numbers cover</h2><dl class="kv">{{range .Coverage}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl></aside></div>{{else}}<p class="note">No sessions in this read.</p>{{end}}</div></section>
 {{end}}{{end}}
 </main></div>
-<footer class="statusbar">{{if .Quiet}}<span role="status">{{.Notice}}</span>{{else}}<span>{{.Access}} portal</span>{{end}}<span class="right">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></span></footer>
+<footer class="statusbar">{{if .Quiet}}<span role="status">{{.Notice}}</span>{{else}}<span>{{.Access}} portal</span>{{end}}{{if .FooterUpdatedAt}}<span class="right">Updated <time datetime="{{.FooterUpdatedAt}}">{{.FooterUpdatedLabel}}</time></span>{{end}}</footer>
 {{template "product-mobile-nav" .Current}}
 </body></html>
 

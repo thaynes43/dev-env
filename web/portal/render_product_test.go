@@ -101,6 +101,45 @@ func TestRenderProductKeepsAnchorsTonesAndCountsSafe(t *testing.T) {
 	}
 }
 
+func TestSessionsFooterRequiresSuccessfulReadTime(t *testing.T) {
+	const renderedAt = "2026-10-30T08:12:00Z"
+	const completedAt = "2026-10-30T08:10:00.123Z"
+	for _, tc := range []struct {
+		name      string
+		completed string
+		failure   *ProductReadFailure
+		want      bool
+	}{
+		{name: "success", completed: completedAt, want: true},
+		{name: "failed after success", completed: completedAt, failure: &ProductReadFailure{ReasonCode: "operator_unreachable", LastSuccessAt: completedAt}},
+		{name: "unknown"},
+		{name: "invalid", completed: "Unknown"},
+		{name: "zero", completed: time.Time{}.Format(time.RFC3339Nano)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page := ProductPage{Title: "Sessions", Connected: true, Complete: true,
+				ObservedAt: renderedAt, ReadCompletedAt: tc.completed, ReadFailure: tc.failure}
+			body, err := RenderProduct(page)
+			if err != nil {
+				t.Fatal(err)
+			}
+			footer := regexp.MustCompile(`<footer class="statusbar">(.*?)</footer>`).FindString(string(body))
+			if footer == "" {
+				t.Fatal("statusbar missing")
+			}
+			if strings.Contains(footer, "Updated") != tc.want {
+				t.Fatalf("unexpected footer freshness: %s", footer)
+			}
+			if tc.want && !strings.Contains(footer, `Updated <time datetime="`+completedAt+`">30 Oct 2026, 08:10 UTC</time>`) {
+				t.Fatalf("footer did not use read completion: %s", footer)
+			}
+			if strings.Contains(footer, renderedAt) {
+				t.Fatalf("footer exposed render time as freshness: %s", footer)
+			}
+		})
+	}
+}
+
 func sendRow(id string, send *ProductSend, draftable bool) ProductRow {
 	return ProductRow{ID: id, Title: "agent-" + id, Status: ProductStatus{Text: "Idle", Tone: "muted"},
 		Messages: &ProductMessages{Agent: "claude · claude-opus-5-5", History: "history", Gate: "send gate", Route: ProductStatus{Text: "CLI route", Tone: "info"},

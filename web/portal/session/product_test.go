@@ -953,6 +953,67 @@ func sessionReadFixture(t *testing.T, now func() time.Time, transport tripFunc) 
 	return &SessionSource{path: path, now: now, client: &http.Client{Transport: transport}}
 }
 
+func TestSessionReadCompletionTime(t *testing.T) {
+	started := time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)
+	completed := started.Add(10 * time.Second)
+	now := started
+	s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+		now = completed
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(activityPage()))}, nil
+	})
+	page, err := s.Read(t.Context(), portal.ProductFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = completed.Add(time.Minute)
+	if page.ReadCompletedAt != completed.Format(time.RFC3339Nano) || !s.lastSuccess.Equal(completed) {
+		t.Fatalf("successful read lost its completion time: %q, last success %s", page.ReadCompletedAt, s.lastSuccess)
+	}
+	if page.ReadCompletedAt == now.Format(time.RFC3339Nano) {
+		t.Fatal("read completion followed the later clock")
+	}
+}
+
+func TestServeSessionsFooterUsesReadCompletion(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	completed := f.now.Add(10 * time.Second)
+	rendered := completed.Add(time.Minute)
+	now := f.now
+	s := sessionReadFixture(t, func() time.Time { return now }, func(*http.Request) (*http.Response, error) {
+		now = completed
+		body := strings.Replace(activityPage(), "2026-10-25T11:59:00Z", f.now.Format(time.RFC3339), 1)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+	h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: s, FreshFor: time.Minute, Now: func() time.Time { return rendered }})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, f.request(http.MethodGet, SessionsPath, ""))
+	_, footer, found := strings.Cut(w.Body.String(), `<footer class="statusbar">`)
+	footer, _, _ = strings.Cut(footer, "</footer>")
+	if w.Code != http.StatusOK || !found || !strings.Contains(footer, `Updated <time datetime="`+completed.Format(time.RFC3339Nano)+`">`) || strings.Contains(footer, rendered.Format(time.RFC3339)) {
+		t.Fatalf("footer did not retain read completion (HTTP %d): %s", w.Code, footer)
+	}
+}
+
+func TestSessionReadUnknownCompletionHasNoFooterUpdated(t *testing.T) {
+	s := &SessionSource{now: func() time.Time { return time.Time{} }}
+	page, err := s.finishRead(t.Context(), portal.ProductFilter{}, portal.ProductPage{Title: "Sessions", Connected: true, Complete: true}, nil, sessionReadStats{})
+	if err != nil || page.ReadCompletedAt != "" {
+		t.Fatalf("unknown completion invented a read time: %q, %v", page.ReadCompletedAt, err)
+	}
+	page.ObservedAt = "2026-10-30T08:12:00Z"
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, footer, found := strings.Cut(string(body), `<footer class="statusbar">`)
+	footer, _, _ = strings.Cut(footer, "</footer>")
+	if !found || strings.Contains(footer, "Updated") {
+		t.Fatalf("unknown completion exposed footer freshness: %s", footer)
+	}
+}
+
 func TestSessionReadLatePageFailureHasPositionAndLastSuccess(t *testing.T) {
 	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
 	reading := 0
@@ -986,6 +1047,9 @@ func TestSessionReadLatePageFailureHasPositionAndLastSuccess(t *testing.T) {
 	}
 	if page.ReadFailure.LastSuccessAt != "2026-10-29T14:00:00Z" || page.ReadFailure.ObservedAt != "2026-10-29T14:01:00Z" {
 		t.Fatalf("read times missing: %+v", page.ReadFailure)
+	}
+	if page.ReadCompletedAt != "" {
+		t.Fatalf("failed read retained a successful completion: %s", page.ReadCompletedAt)
 	}
 	body, err := portal.RenderProduct(page)
 	if err != nil {
@@ -1071,6 +1135,11 @@ func TestServeSessionFailureDetailsAndRetry(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, f.request(http.MethodGet, SessionsPath+query, ""))
 		body := w.Body.String()
+		_, footer, found := strings.Cut(body, `<footer class="statusbar">`)
+		footer, _, _ = strings.Cut(footer, "</footer>")
+		if !found || strings.Contains(footer, "Updated") {
+			t.Errorf("%s failed read exposed footer freshness: %s", query, footer)
+		}
 		for _, want := range []string{"Sessions unavailable", "The operator refused the read (HTTP 403).", "Page 1.", `href="` + SessionsPath + query + `">Retry</a>`, `datetime="` + f.now.Format(time.RFC3339) + `"`} {
 			if w.Code != 200 || !strings.Contains(body, want) {
 				t.Errorf("%s lost %s (HTTP %d)", query, want, w.Code)

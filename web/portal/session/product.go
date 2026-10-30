@@ -171,6 +171,9 @@ func (s *SessionSource) finishRead(ctx context.Context, filter portal.ProductFil
 		s.lastSuccessMu.Unlock()
 	}
 	if err == nil {
+		if !observed.IsZero() {
+			page.ReadCompletedAt = observed.Format(time.RFC3339Nano)
+		}
 		return page, nil
 	}
 	failure := sessionFailure(err)
