@@ -10,14 +10,20 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/providerallowance"
 	"github.com/thaynes43/dev-env/web/portal"
 	"github.com/thaynes43/dev-env/web/portal/session"
 )
 
 func writeProductStates(dir string) error {
+	disconnected, err := allowancePreview("not-connected")
+	if err != nil {
+		return err
+	}
 	page := portal.ProductPage{Title: "Sessions", Connected: true, Complete: true, Preview: true,
 		ObservedAt: "2026-10-29T14:00:00Z", ReadCompletedAt: "2026-10-29T13:59:00Z", Filter: portal.ProductFilter{View: "usage"},
-		Usage: &portal.ProductUsage{Scope: "Synthetic usage preview", ScopeNote: "Fixture data only.",
+		Allowance: disconnected,
+		Usage: &portal.ProductUsage{Allowance: disconnected, Scope: "Synthetic usage preview", ScopeNote: "Fixture data only.",
 			Stats:   []portal.ProductStat{{Label: "Measured", Value: "Unknown", Tone: "muted"}},
 			Columns: []string{"Session", "Input"}, Rows: []portal.ProductUsageRow{{ID: "s1", SessionUID: "uid-synthetic-agent", Name: "synthetic-agent", Cells: []portal.ProductUsageCell{{Label: "Input", Value: "Unknown", Unknown: true}}}}}}
 	body, err := portal.RenderProduct(page)
@@ -28,13 +34,48 @@ func writeProductStates(dir string) error {
 		return err
 	}
 	empty := page
-	empty.Usage = &portal.ProductUsage{Stats: []portal.ProductStat{{Label: "Measured", Value: "0 of 0"}, {Label: "Interactive", Value: "0"}, {Label: "Headless", Value: "0"}}}
+	empty.Usage = &portal.ProductUsage{Allowance: disconnected, Stats: []portal.ProductStat{{Label: "Measured", Value: "0 of 0"}, {Label: "Interactive", Value: "0"}, {Label: "Headless", Value: "0"}}}
 	body, err = portal.RenderProduct(empty)
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "usage-empty.html"), body, 0600); err != nil {
 		return err
+	}
+	for _, state := range []string{"measured", "stale", "unknown", "not-connected"} {
+		allowances, err := allowancePreview(state)
+		if err != nil {
+			return err
+		}
+		fixturePage := page
+		fixturePage.Filter = portal.ProductFilter{}
+		fixturePage.Allowance = allowances
+		fixturePage.Groups = []portal.ProductGroup{{Title: "In progress", Rows: []portal.ProductRow{{ID: "s1", Title: "synthetic-agent", Status: portal.ProductStatus{Text: "Idle", Tone: "muted"}}}}}
+		body, err := portal.RenderProduct(fixturePage)
+		if err != nil {
+			return err
+		}
+		if state != "not-connected" {
+			if err := os.WriteFile(filepath.Join(dir, "sessions-allowance-"+state+".html"), body, 0600); err != nil {
+				return err
+			}
+		}
+		fixtureUsage := *page.Usage
+		fixtureUsage.Allowance = allowances
+		fixtureUsage.Coverage = []portal.ProductField{{Label: "Account allowance", Value: "Synthetic provider account windows; independent of token counts"}}
+		fixturePage.Usage = &fixtureUsage
+		fixturePage.Filter = portal.ProductFilter{View: "usage"}
+		body, err = portal.RenderProduct(fixturePage)
+		if err != nil {
+			return err
+		}
+		name := "usage-allowance-" + state + ".html"
+		if state == "measured" {
+			name = "usage-allowance.html"
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0600); err != nil {
+			return err
+		}
 	}
 	for _, fixture := range []struct {
 		name, reason      string
@@ -194,4 +235,59 @@ func writeAttentionStates(dir string) error {
 		}
 	}
 	return nil
+}
+
+// allowancePreview uses an explicitly synthetic document shaped like a provider
+// API read. Every consumer page carries Preview and the existing fixture banner.
+// No provider is contacted, and no captured account data is used.
+func allowancePreview(state string) ([]portal.ProductAllowance, error) {
+	text := func(v string) *string { return &v }
+	doc := providerallowance.ReadResponse{Schema: providerallowance.SchemaRead, SnapshotRevision: "synthetic-allowance-305", ServedAt: "2026-10-29T14:00:00Z"}
+	for _, provider := range []string{"anthropic", "openai"} {
+		if state == "not-connected" {
+			doc.SourceStatuses = append(doc.SourceStatuses, providerallowance.SourceStatus{Provider: provider, Availability: providerallowance.AvailabilityUnconfigured,
+				Freshness:  providerallowance.Freshness{State: providerallowance.FreshUnknown, AsOf: doc.ServedAt, Basis: providerallowance.BasisNone},
+				Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationUnverified}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingUnknown},
+				LastAttempt: providerallowance.LastAttempt{AttemptedAt: doc.ServedAt, Result: providerallowance.AttemptUnavailable}})
+			continue
+		}
+		item := providerallowance.ReadItem{
+			Observation: providerallowance.Observation{Schema: providerallowance.SchemaObservation, ObservationID: "synthetic-" + provider, ProducerRef: "synthetic-preview", ProducerIncarnation: "fixture-1", Sequence: 1,
+				Provider: provider, Source: providerallowance.Source{Kind: providerallowance.SourceNativeRPC, Version: "synthetic-preview", CapabilityRef: "synthetic-only"},
+				Scope: providerallowance.Scope{BindingState: providerallowance.BindingVerified}, CapturedAt: doc.ServedAt, ProviderObservedAt: text("2026-10-29T13:59:00Z"), Availability: providerallowance.AvailabilityAvailable, Completeness: providerallowance.CompletenessComplete},
+			ReceivedAt: doc.ServedAt, Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationSourceFields}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingVerified},
+			Freshness: providerallowance.Freshness{State: providerallowance.FreshFresh, AsOf: doc.ServedAt, Basis: providerallowance.BasisProvider},
+		}
+		for i, window := range []string{"7 days", "5 hours", "Additional window"} {
+			value, direction := "62", providerallowance.DirectionRemaining
+			if provider == "openai" {
+				value, direction = "38.00", providerallowance.DirectionUsed
+			}
+			measure := providerallowance.Measure{ID: window, Category: providerallowance.CategoryIncluded, Window: providerallowance.Window{Ref: window, ResetAt: text("2026-11-02T14:00:00Z"), ResetPrecision: providerallowance.ResetInstant}, Unit: providerallowance.UnitPercent, Direction: direction, Value: providerallowance.MeasureValue{State: providerallowance.ValueKnown, Decimal: text(value)}}
+			if i == 1 {
+				measure.Window.ResetPrecision = providerallowance.ResetDisplayOnly
+			}
+			if i == 2 {
+				measure.Window.Ref, measure.Window.ResetAt, measure.Window.ResetPrecision = "", nil, providerallowance.ResetUnknown
+			}
+			item.Observation.Measures = append(item.Observation.Measures, measure)
+			item.CurrentMeasures = append(item.CurrentMeasures, providerallowance.CurrentMeasure{MeasureID: measure.ID, State: providerallowance.CurrentKnown, Value: measure.Value})
+		}
+		if state == "stale" || (state == "measured" && provider == "openai") {
+			item.Freshness.State = providerallowance.FreshStale
+		}
+		if state == "unknown" {
+			item.Binding.State = providerallowance.BindingMismatch
+		}
+		doc.Items = append(doc.Items, item)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits)
+	if err != nil {
+		return nil, err
+	}
+	return session.MapProductAllowance(decoded), nil
 }

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -626,5 +627,36 @@ func TestAttentionLogGuidanceFollowsSessionPhase(t *testing.T) {
 				t.Fatalf("commands %v, want %s", panel.Commands, want)
 			}
 		})
+	}
+}
+
+func TestAccountAllowanceNeverComesFromSessionTokensOrCost(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	count := int64(62000)
+	row := apiv1.PortalSessionSummary{Name: "synthetic-worker", UID: "synthetic-worker", Repo: "fixture", Phase: "Running", Activity: &apiv1.PortalSessionActivity{
+		Mode: "task", Provider: "claude", Usage: apiv1.PortalSessionUsage{Scope: protocol.UsageInitial,
+			InputTokens:  protocol.TokenObservation{State: protocol.UsageReported, Amount: &count},
+			OutputTokens: protocol.TokenObservation{State: protocol.UsageReported, Amount: &count},
+			Cost:         protocol.CostObservation{State: protocol.UsageReported, Amount: "38.00", Unit: "USD"}},
+	}}
+	for _, view := range []string{"", "usage"} {
+		page := sessionsPage([]apiv1.PortalSessionSummary{row}, true, "observed", now, portal.ProductFilter{View: view})
+		for _, a := range append(append([]portal.ProductAllowance{}, page.Allowance...), page.Usage.Allowance...) {
+			if a.Value != portal.AllowanceNotConnected || len(a.Windows) != 0 {
+				t.Fatalf("usage became allowance: %+v", a)
+			}
+		}
+		body, err := portal.RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pattern := `(?s)<p class="allowance-strip">.*?</p>`
+		if view == "usage" {
+			pattern = `(?s)<section class="allowance".*?Plan limits.*?</section>`
+		}
+		block := regexp.MustCompile(pattern).FindString(string(body))
+		if block == "" || strings.Count(block, "Not connected") != 2 || strings.Contains(block, "%") || strings.Contains(block, "38.00") || strings.Contains(block, "62,000") {
+			t.Fatalf("usage leaked into allowance: %s", block)
+		}
 	}
 }

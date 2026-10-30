@@ -848,3 +848,131 @@ func TestTaskReadFailureHidesDataAndKeepsSafeDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+func allowanceBlock(t *testing.T, body []byte, usage bool) string {
+	t.Helper()
+	pattern := `(?s)<p class="allowance-strip">(.*?)</p>`
+	if usage {
+		pattern = `(?s)<section class="allowance".*?</section>\s*<p class="note">Plan limits.*?</section>`
+	}
+	match := regexp.MustCompile(pattern).Find(body)
+	if match == nil {
+		t.Fatalf("allowance missing (usage=%v)", usage)
+	}
+	return string(match)
+}
+
+func TestRenderAccountAllowanceStatesOnBothPages(t *testing.T) {
+	for _, state := range []ProductAllowanceState{AllowanceNotConnected, AllowanceUnknown, AllowanceStale, AllowanceMeasured} {
+		for _, usage := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/usage=%v", state, usage), func(t *testing.T) {
+				a := []ProductAllowance{{Provider: "Claude", Value: state, Reason: "Account binding unverified", Windows: []ProductAllowanceWindow{{Percent: "62.00% left", Window: "7 days", Reset: "2 Nov 14:00 UTC (display only)", Observed: "29 Oct 13:59 UTC", Provenance: "Provider API"}}}, {Provider: "Codex", Value: AllowanceNotConnected}}
+				page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Allowance: a, Usage: &ProductUsage{Allowance: a}}
+				if usage {
+					page.Filter.View = "usage"
+				}
+				body, err := RenderProduct(page)
+				if err != nil {
+					t.Fatal(err)
+				}
+				block := allowanceBlock(t, body, usage)
+				for _, want := range []string{"Claude", "Codex", "Not connected"} {
+					if !strings.Contains(block, want) {
+						t.Errorf("missing %q: %s", want, block)
+					}
+				}
+				if (usage || state != AllowanceMeasured) && !strings.Contains(block, string(state)) {
+					t.Errorf("missing state %q: %s", state, block)
+				}
+				measured := state == AllowanceStale || state == AllowanceMeasured
+				if strings.Contains(block, "62.00% left") != measured || strings.Contains(block, "%") != measured {
+					t.Fatalf("percent leaked or missing: %s", block)
+				}
+				if measured {
+					for _, want := range []string{"7 days", "2 Nov 14:00 UTC (display only)", "29 Oct 13:59 UTC", "Provider API"} {
+						if !strings.Contains(block, want) {
+							t.Errorf("missing %q", want)
+						}
+					}
+				}
+				if state == AllowanceUnknown && !strings.Contains(block, "Account binding unverified") {
+					t.Error("Unknown lacks its safe reason")
+				}
+				if strings.Contains(block, "tone-wait") != (state == AllowanceStale) {
+					t.Errorf("wrong stale tone: %s", block)
+				}
+				if usage {
+					if strings.Contains(string(body), `class="allowance-strip"`) || !strings.Contains(block, `id="usage-allowance"`) || !strings.Contains(string(body), "No sessions in this read.") {
+						t.Error("empty Usage or allowance anchor missing, or strip leaked")
+					}
+					if measured && (!strings.Contains(block, "<dl") || !strings.Contains(block, "<dt>Observed</dt>")) {
+						t.Error("windows lack semantic labels")
+					}
+				} else if !strings.Contains(block, `href="?view=usage#usage-allowance">Account allowance</a>`) {
+					t.Error("missing keyboard-reachable Usage link")
+				}
+			})
+		}
+	}
+}
+
+func TestRenderAllowanceMissingMetadataAndWindowLimit(t *testing.T) {
+	a := []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{{Percent: "62% left"}, {Percent: "38% used"}, {Percent: "91% left"}, {Percent: "12% used"}}}}
+	page := ProductPage{Title: "Sessions", Connected: true, Allowance: a, Usage: &ProductUsage{Allowance: a}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strip := allowanceBlock(t, body, false)
+	if !strings.Contains(strip, `>+2 more</a>`) || strings.Contains(strip, "91% left") || strings.Contains(strip, "12% used") || strings.Count(strip, "Unknown") != 8 {
+		t.Fatalf("limit or missing metadata: %s", strip)
+	}
+	page.Filter.View = "usage"
+	body, err = RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := allowanceBlock(t, body, true)
+	if strings.Contains(section, "more</a>") || strings.Count(section, `class="allowance-window"`) != 4 || strings.Count(section, ">Unknown</dd>") != 16 {
+		t.Fatalf("full windows or missing metadata: %s", section)
+	}
+}
+
+func TestOtherProductPagesHaveNoAllowanceStrip(t *testing.T) {
+	for _, title := range []string{"Tasks", "Asks", "Pages"} {
+		body, err := RenderProduct(ProductPage{Title: title, Connected: true, Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{{Percent: "62% left"}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), `class="allowance-strip"`) {
+			t.Errorf("%s renders the strip", title)
+		}
+	}
+	asks, _, err := RenderAsks(AsksPage{}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages, err := RenderPages(PagesWorkspace{}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range [][]byte{asks, pages} {
+		if strings.Contains(string(body), `class="allowance-strip"`) {
+			t.Error("standalone page renders strip")
+		}
+	}
+}
+
+func TestReadFailureAllowanceMatchesListHeader(t *testing.T) {
+	page := ProductPage{Title: "Sessions", ReadFailure: &ProductReadFailure{ReasonCode: "operator_unreachable"}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), `class="list-header"`) {
+		block := allowanceBlock(t, body, false)
+		if strings.Count(block, "Not connected") != 2 || strings.Contains(block, "%") {
+			t.Fatalf("failure allowance: %s", block)
+		}
+	}
+}

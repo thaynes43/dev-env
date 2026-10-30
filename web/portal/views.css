@@ -243,9 +243,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .coverage .kv { grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); }
 .allowance, .breakdown { margin-bottom: 26px; }
 .allowance h2, .breakdown h2 { margin-bottom: 10px; font-size: 13px; font-weight: 650; }
-.allowance .kv { max-width: 520px; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); }
 .breakdown .note { margin: -4px 0 10px; }
-.allowance dd.unknown { color: var(--muted); }
 
 .statusbar { height: 26px; flex: none; display: flex; align-items: center; gap: 16px; padding: 0 14px; border-top: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10px; }
 .statusbar .right { margin-left: auto; }
@@ -373,3 +371,15 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .read-failure { overflow-wrap: anywhere; }
 .read-failure p { margin: 12px 0; }
 .read-failure time { color: var(--ink); }
+
+.allowance-strip { margin-top: 10px; color: var(--muted); font-size: 10.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.allowance-strip > a { margin-right: .6em; color: var(--accent); }
+.allowance-provider, .allowance-state { background: none; }
+.allowance-provider.tone-wait, .allowance-state.tone-wait { color: var(--amber); }
+.allowance-account { padding: 12px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.allowance-account h3 { font-size: 12px; font-weight: 600; }
+.allowance-state { margin-left: .5em; font-weight: 400; color: var(--muted); }
+.allowance-window { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 10px 16px; margin-top: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.allowance-window div { min-width: 0; }
+.allowance-window dt { color: var(--muted); font-size: 10px; }
+.allowance-window dd { margin: 4px 0 0; font-size: 11px; overflow-wrap: anywhere; }
