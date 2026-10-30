@@ -204,6 +204,10 @@ func TestStrictDiscoveryResponses(t *testing.T) {
 		{"trailing document", append(append([]byte(nil), project...), []byte(` {}`)...), false},
 		{"oversized response", []byte(strings.Repeat(" ", maxResponseBytes) + string(project)), false},
 		{"invalid UTF8", bytes.ReplaceAll(project, []byte(`Synthetic native project`), []byte{0xff}), false},
+		{"unpaired high surrogate in project ID", bytes.ReplaceAll(project, []byte(`native-project-fixture`), []byte(`\ud800`)), false},
+		{"unpaired low surrogate in project ID", bytes.ReplaceAll(project, []byte(`native-project-fixture`), []byte(`\udc00`)), false},
+		{"unpaired surrogate in root", bytes.ReplaceAll(project, []byte(`/workspace/example`), []byte(`/workspace/\ud800`)), false},
+		{"unpaired surrogate in status identity", bytes.ReplaceAll(status, []byte(`installation-fixture`), []byte(`\ud800`)), true},
 		{"unknown connection enum", bytes.ReplaceAll(status, []byte(`connected`), []byte(`future`)), true},
 		{"unknown status field", bytes.Replace(status, []byte(`"status":`), []byte(`"hostId": "other", "status":`), 1), true},
 		{"missing installation ID", bytes.ReplaceAll(status, []byte(`"installationId": "installation-fixture",`), nil), true},
@@ -221,6 +225,27 @@ func TestStrictDiscoveryResponses(t *testing.T) {
 			result := Discover(target, []HostInventory{host})
 			if result.Outcome != InvalidInventory || result.Project != nil || result.RCLaunchError().Code != "protocol_unsupported" {
 				t.Fatalf("malformed response produced %+v", result)
+			}
+		})
+	}
+}
+
+func TestUnicodeIdentityPreservation(t *testing.T) {
+	for _, tc := range []struct {
+		name, wireID, wantID string
+	}{
+		{"valid surrogate pair", `\ud83d\ude00`, "😀"},
+		{"literal replacement character", "�", "�"},
+		{"escaped replacement character", `\ufffd`, "�"},
+		{"escaped backslash is literal", `\\ud800`, `\ud800`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := targetFixture(t)
+			host := hostFixture(t, target)
+			host.ProjectPages[0] = bytes.ReplaceAll(host.ProjectPages[0], []byte(`native-project-fixture`), []byte(tc.wireID))
+			result := Discover(target, []HostInventory{host})
+			if result.Outcome != Matched || result.Project.ProjectID != tc.wantID {
+				t.Fatalf("valid Unicode identity changed: %+v", result)
 			}
 		})
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -100,7 +101,7 @@ func decodeProjects(pages []json.RawMessage) ([]projectResponse, error) {
 // The local exact-field policy is deliberately stricter than draft-07's default
 // additionalProperties behavior: a changed pinned protocol requires review.
 func strictDecode(raw []byte, dst any) error {
-	if len(raw) == 0 || len(raw) > maxResponseBytes || !utf8.Valid(raw) {
+	if len(raw) == 0 || len(raw) > maxResponseBytes || !utf8.Valid(raw) || !validUnicodeEscapes(raw) {
 		return errProtocol
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -115,6 +116,48 @@ func strictDecode(raw []byte, dst any) error {
 		return errProtocol
 	}
 	return nil
+}
+
+// encoding/json replaces unpaired UTF-16 surrogates with U+FFFD. Identity
+// matching must never operate on a silently repaired project, root or host ID.
+// Walk string escapes before decoding; escaped backslashes are skipped so a
+// literal backslash followed by "ud800" is not mistaken for a Unicode escape.
+func validUnicodeEscapes(raw []byte) bool {
+	inString := false
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == '"' {
+			inString = !inString
+		} else if inString && raw[i] == '\\' {
+			i++
+			if i >= len(raw) {
+				return false
+			}
+			if raw[i] != 'u' {
+				continue
+			}
+			if i+4 >= len(raw) {
+				return false
+			}
+			unit, err := strconv.ParseUint(string(raw[i+1:i+5]), 16, 16)
+			if err != nil {
+				return false
+			}
+			i += 4
+			if unit >= 0xd800 && unit <= 0xdbff {
+				if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+					return false
+				}
+				low, err := strconv.ParseUint(string(raw[i+3:i+7]), 16, 16)
+				if err != nil || low < 0xdc00 || low > 0xdfff {
+					return false
+				}
+				i += 6
+			} else if unit >= 0xdc00 && unit <= 0xdfff {
+				return false
+			}
+		}
+	}
+	return !inString
 }
 
 func uniqueKeys(d *json.Decoder, depth int) bool {

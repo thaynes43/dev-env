@@ -9,7 +9,7 @@ proxy, socket, host, pairing or RPC was started or contacted.
 Only `ProjectListResponse` (`project/list`) and
 `RemoteControlStatusReadResponse` (`remoteControl/status/read`) are retained.
 The adapter uses exact fields, required fields, nullability and enum/range
-checks, plus bounded sizes and duplicate-key rejection. Its unknown-field
+checks, plus bounded sizes, duplicate-key and unpaired-surrogate rejection. Its unknown-field
 refusal is intentionally stricter than the generated draft-07 schemas.
 
 The native project schema has `id`, `roots` and string-valued `metadata`; it has
