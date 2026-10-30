@@ -13,7 +13,8 @@ import subprocess
 import sys
 import time
 
-MAX_TASK = 16384
+MAX_TASK = 4096
+MAX_COMMAND_BYTES = 8192
 COMMAND_TIMEOUT = 5
 
 
@@ -53,7 +54,7 @@ def prepare(args):
         with open(args.task_file, "rb") as handle:
             raw = handle.read(MAX_TASK + 1)
     if not raw.strip() or len(raw) > MAX_TASK or b"\0" in raw:
-        raise Refusal("invalid-input", "Task must contain 1..16384 UTF-8 bytes without NUL; supply only the new task handoff.")
+        raise Refusal("invalid-input", "Task must contain 1..4096 UTF-8 bytes without NUL; supply only the new task handoff.")
     task = raw.decode("utf-8")
     client, tmux = executable(args.client), executable(args.tmux)
     argv = [client, "--remote", "unix://" + args.socket, "-C", str(repo),
@@ -63,6 +64,13 @@ def prepare(args):
     # tmux's single shell-command is parsed by a shell. Quote EVERY argument,
     # including the executable and multiline task. Never send keys to a pane.
     command = "exec " + shlex.join(argv)
+    # Bound the complete quoted tmux message before probes/name reservation.
+    # Keep a conservative allowance for tmux framing, not just raw task bytes.
+    message = ["new-session", "-d", "-P", "-F", "#{pane_id}", "-s",
+               args.name, "-c", str(repo), command]
+    message_bytes = 128 + sum(len(value.encode("utf-8")) + 1 for value in message)
+    if message_bytes > MAX_COMMAND_BYTES:
+        raise Refusal("invalid-input", "Quoted launch command exceeds the 8192-byte budget; shorten the handoff or explicit paths. No name reserved.")
     return repo, client, tmux, command
 
 

@@ -20,12 +20,16 @@ python3 scripts/codex-clean-session.py \
   --task-file /path/to/task-only-handoff.txt
 ```
 
-Supply only the new task handoff (1..16384 UTF-8 bytes), without an earlier
+Supply only the new task handoff (1..4096 UTF-8 bytes), without an earlier
 conversation transcript. `--task-file -` reads stdin; quote the here-document
 delimiter if supplying literal shell text. All command arguments are shell quoted
 and the task follows `--`, so task text cannot become CLI flags or shell commands.
 `--tmux /path/to/tmux` selects an explicit executable when PATH is unsuitable.
 The repository path resolves locally; use the authorized directory on this host.
+The full quoted tmux command, explicit paths and framing allowance must also fit
+the conservative 8192-byte budget; quote-heavy tasks can hit this before the raw
+4096-byte task limit. Oversized commands are rejected before any tool call or
+name reservation. Shorten the task or paths; no launch has been attempted.
 The supplied socket must be an existing local Unix socket; existence alone does
 not prove the daemon accepts connections. Inherited provider settings and rules
 still apply. Fresh conversation context does not mean a blank HOME or no rules.

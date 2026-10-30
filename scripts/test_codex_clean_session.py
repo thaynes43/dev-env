@@ -132,12 +132,26 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(self.calls(), [])
 
     def test_task_bounds_encoding_and_nul(self):
-        for raw in (b'', b'   ', b'x' * 16385, b'bad\0task', b'\xff'):
+        for raw in (b'', b'   ', b'x' * (launcher.MAX_TASK + 1), b'bad\0task', b'\xff'):
             with self.subTest(raw=raw[:20]):
                 self.task.write_bytes(raw)
                 code, _ = self.invoke()
                 self.assertEqual(code, 2)
                 self.assertEqual(self.calls(), [])
+
+    def test_quote_expansion_rejected_before_name_reservation(self):
+        self.task.write_text("'" * launcher.MAX_TASK)
+        code, receipt = self.invoke()
+        self.assertEqual((code, receipt["state"]), (2, "invalid-input"))
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.root / "state" / "codex-clean-session").exists())
+
+    def test_maximum_plain_task_fits_command_budget(self):
+        self.task.write_text("x" * launcher.MAX_TASK)
+        code, receipt = self.invoke()
+        self.assertEqual((code, receipt["state"]), (0, "client-running-unverified"))
+        self.assertEqual(json.loads((self.root / "argv").read_text())[-1],
+                         "x" * launcher.MAX_TASK)
 
     def test_unsupported_and_failed_probes_do_not_launch(self):
         for mode in ('unsupported', 'client-error', 'tmux-error'):
