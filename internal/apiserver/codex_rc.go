@@ -73,7 +73,7 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	defer cancel()
 	qualify := func() error {
 		var current v1alpha1.AgentSession
-		if s.Live.Get(ctx, key, &current) != nil || current.UID != sess.UID || !current.DeletionTimestamp.IsZero() || current.Spec.Agent != v1alpha1.AgentCodex || current.Spec.Mode != v1alpha1.ModeRemote || current.Spec.OperatingMode == v1alpha1.OperatingModeSuspended {
+		if s.Live.Get(ctx, key, &current) != nil || current.UID != sess.UID || !current.DeletionTimestamp.IsZero() || current.Spec.Agent != v1alpha1.AgentCodex || current.Spec.Mode != v1alpha1.ModeRemote || current.Status.Phase != v1alpha1.PhaseRunning || current.Spec.OperatingMode == v1alpha1.OperatingModeSuspended {
 			return newError(409, apiv1.CodeConflict, "codex RC target changed")
 		}
 		pod, err := s.runningPod(ctx, &current)

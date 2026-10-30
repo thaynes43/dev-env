@@ -66,6 +66,10 @@ func rcFixture(t *testing.T) (*fixture, apiv1.CodexRCRequest, *rcExec) {
 	if err := f.c.Update(context.Background(), &sess); err != nil {
 		t.Fatal(err)
 	}
+	sess.Status.Phase = v1alpha1.PhaseRunning
+	if err := f.c.Status().Update(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
 	var pod corev1.Pod
 	if err := f.c.Get(context.Background(), key, &pod); err != nil {
 		t.Fatal(err)
@@ -141,7 +145,7 @@ func TestCodexRCDefaultOffAndCallerFence(t *testing.T) {
 	}
 }
 func TestCodexRCTargetAndMalformedRefusals(t *testing.T) {
-	for _, mode := range []string{"uid", "pod", "repo", "catalog", "pairing", "expired", "mode", "unknown", "duplicate", "huge", "model", "effort", "deadline", "empty"} {
+	for _, mode := range []string{"uid", "pod", "repo", "catalog", "pairing", "expired", "mode", "reaping", "failed", "unknown", "duplicate", "huge", "model", "effort", "deadline", "empty"} {
 		t.Run(mode, func(t *testing.T) {
 			f, req, e := rcFixture(t)
 			var body any = req
@@ -164,6 +168,19 @@ func TestCodexRCTargetAndMalformedRefusals(t *testing.T) {
 				_ = f.c.Get(context.Background(), key, &sess)
 				sess.Spec.Mode = "task"
 				_ = f.c.Update(context.Background(), &sess)
+			case "reaping", "failed":
+				var sess v1alpha1.AgentSession
+				key := types.NamespacedName{Namespace: sessionNS, Name: "rc-host"}
+				if err := f.c.Get(context.Background(), key, &sess); err != nil {
+					t.Fatal(err)
+				}
+				sess.Status.Phase = v1alpha1.PhaseReaping
+				if mode == "failed" {
+					sess.Status.Phase = v1alpha1.PhaseFailed
+				}
+				if err := f.c.Status().Update(context.Background(), &sess); err != nil {
+					t.Fatal(err)
+				}
 			case "unknown":
 				body = `{"cwd":"/tmp"}`
 			case "duplicate":
