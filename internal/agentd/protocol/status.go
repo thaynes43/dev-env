@@ -163,8 +163,11 @@ type AgentState struct {
 
 // TaskResult is how a task ended.
 type TaskResult struct {
-	ExitCode   int       `json:"exitCode"`
-	FinishedAt time.Time `json:"finishedAt"`
+	// ExitSource is emitted only after Wait, for the confirmed initial attempt.
+	// A saved result without it is an outcome, not provider-stop evidence.
+	ExitSource *UsageSource `json:"exitSource,omitempty"`
+	ExitCode   int          `json:"exitCode"`
+	FinishedAt time.Time    `json:"finishedAt"`
 	// TimedOut is set when agentd stopped the task at limits.timeout.
 	TimedOut bool `json:"timedOut,omitempty"`
 	// Subtype and IsError come from the CLI's result event: success,

@@ -235,7 +235,7 @@ func TestUsageRetainedObservationCarriesBillingBasis(t *testing.T) {
 	}
 	var result streamResult
 	renderStreamLine([]byte(`{"type":"result","subtype":"success","total_cost_usd":0.5,"usage":{"input_tokens":3},"modelUsage":{"claude-opus-5-5":{"inputTokens":3,"costUSD":0.5}}}`), io.Discard, &result)
-	writeResult(s.StateDir, l, l.CreatedAt, 0, false, result)
+	writeResult(s.StateDir, l, l.CreatedAt, 0, false, result, false)
 	var tr taskResult
 	if err := readJSONFile(s.statePath(resultFile), &tr); err != nil {
 		t.Fatal(err)

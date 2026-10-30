@@ -218,6 +218,7 @@ func TestDaemonBootsStartsAndReports(t *testing.T) {
 // and the first launch stays as it was.
 func TestDaemonResumesALaunchedSession(t *testing.T) {
 	r := newDaemonRig(t, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "static"})
+	r.d.Session.Mode = protocol.ModeLocal
 	if _, step := PrepareRepo(context.Background(), r.d.R, r.d.S, r.d.Session); step.State != StepOK {
 		t.Fatal(step.Notes)
 	}
