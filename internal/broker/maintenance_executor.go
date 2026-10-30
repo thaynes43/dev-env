@@ -111,11 +111,8 @@ func (b *Broker) activeMaintenance(ctx context.Context, g *v1alpha1.AccessGrant,
 			// A definitive admission/auth/body refusal cannot have created this
 			// executor. Timeouts/5xx/AlreadyExists remain ambiguous and fenced.
 			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
-				g.Status.Maintenance.Executor = "NotCreated"
-				if written, writeErr := b.writeStatus(ctx, g); writeErr != nil {
-					return ctrl.Result{}, writeErr
-				} else if !written {
-					return ctrl.Result{RequeueAfter: time.Second}, nil
+				if writeErr := b.recordMaintenanceRefusal(ctx, g); writeErr != nil {
+					return ctrl.Result{}, fmt.Errorf("executor creation definitively refused (%v), but refusal receipt failed: %w", err, writeErr)
 				}
 				return b.end(ctx, g, v1alpha1.GrantFailed, "", "executor creation refused: "+err.Error(), now)
 			}
@@ -210,4 +207,38 @@ func (b *Broker) deleteMaintenanceNetwork(ctx context.Context, g *v1alpha1.Acces
 		return errors.New("maintenance network ownership changed")
 	}
 	return client.IgnoreNotFound(b.Client.Delete(ctx, &n, client.Preconditions{UID: &n.UID}))
+}
+
+// recordMaintenanceRefusal keeps the known no-create outcome across status CAS
+// conflicts (including a concurrent release). It never repeats the Pod create.
+func (b *Broker) recordMaintenanceRefusal(ctx context.Context, g *v1alpha1.AccessGrant) error {
+	uid := g.UID
+	for range 5 {
+		if g.Status.Maintenance == nil || g.Status.Maintenance.PodUID != "" {
+			return errors.New("refusal receipt encountered another executor binding")
+		}
+		g.Status.Maintenance.Executor = "NotCreated"
+		err := b.Client.Status().Update(ctx, g)
+		if err == nil {
+			return nil
+		}
+		if apierrors.IsNotFound(err) {
+			return b.deleteMaintenanceNetwork(ctx, g)
+		}
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+		var latest v1alpha1.AccessGrant
+		if err := b.APIReader.Get(ctx, client.ObjectKeyFromObject(g), &latest); err != nil {
+			if apierrors.IsNotFound(err) {
+				return b.deleteMaintenanceNetwork(ctx, g)
+			}
+			return err
+		}
+		if latest.UID != uid {
+			return errors.New("grant UID changed while recording definitive executor refusal")
+		}
+		*g = latest
+	}
+	return errors.New("definitive executor refusal receipt kept conflicting; cleanup remains unproven")
 }

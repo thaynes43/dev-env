@@ -65,3 +65,11 @@ claim termination. Offline refusal-versus-timeout fixtures verify one create onl
 cleanup idempotence for refusal and retained network/Unknown for ambiguous failure.
 No production denial was encountered or bypassed. Final source receipts follow on
 the PR and OP records after immutable review and requiredCI.
+
+Native review of the refusal correction found one CAS edge: a concurrent release
+could conflict with the NotCreated status receipt and lose the known refusal.
+The source now retains that definitive result across up to five fresh UID-checked
+status retries without another create. A synthetic conflict at the second status
+write preserves release, ends Failed/NotCreated and completes idempotent network
+cleanup. Unavailable storage or repeated conflicts still return an explicit error;
+this does not claim durable receipt or cleanup when the API cannot record it.

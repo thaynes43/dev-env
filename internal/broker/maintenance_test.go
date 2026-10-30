@@ -339,3 +339,50 @@ func TestMaintenanceCreateRefusalVersusAmbiguousFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestMaintenanceRefusalReceiptSurvivesConcurrentRelease(t *testing.T) {
+	b, g := maintenanceFixture(t)
+	ctx := context.Background()
+	approve(g, "human/dev-env-system/dev-env-human", g.Spec.TTL.Duration, b.now())
+	if err := b.Client.Status().Update(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	base := b.Client.(client.WithWatch)
+	creates, statusWrites := 0, 0
+	b.Client = interceptor.NewClient(base, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*corev1.Pod); ok {
+				creates++
+				return apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, obj.GetName(), errors.New("synthetic admission refusal"))
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			statusWrites++
+			if statusWrites == 2 {
+				var latest v1alpha1.AccessGrant
+				if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &latest); err != nil {
+					return err
+				}
+				latest.Spec.Release = true
+				if err := c.Update(ctx, &latest); err != nil {
+					return err
+				}
+				return apierrors.NewConflict(schema.GroupResource{Resource: "accessgrants"}, obj.GetName(), errors.New("concurrent release"))
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+	if _, err := b.activeMaintenance(ctx, g, b.now()); err != nil {
+		t.Fatal(err)
+	}
+	if creates != 1 || statusWrites < 3 || !g.Spec.Release || g.Status.Phase != v1alpha1.GrantFailed || g.Status.Maintenance.Executor != "NotCreated" {
+		t.Fatal("refusal lost across release conflict", creates, statusWrites, g.Spec, g.Status)
+	}
+	if err := base.Get(ctx, client.ObjectKeyFromObject(g), &networkingv1.NetworkPolicy{}); !apierrors.IsNotFound(err) {
+		t.Fatal("network cleanup did not finish", err)
+	}
+	if err := b.stopMaintenance(ctx, g); err != nil {
+		t.Fatal("cleanup not idempotent", err)
+	}
+}
