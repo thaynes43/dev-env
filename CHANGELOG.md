@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.71.0](https://github.com/thaynes43/dev-env/compare/v2.70.1...v2.71.0) (2026-10-30)
+
+
+### Features
+
+* **cli:** add native clean-session launcher and agent question routing ([#731](https://github.com/thaynes43/dev-env/issues/731)) ([64930d0](https://github.com/thaynes43/dev-env/commit/64930d09ba09b636a5ba2d1cae0665336ce11810))
+* **codex-rc:** deliver targeted host adoption and clean thread launch ([#730](https://github.com/thaynes43/dev-env/issues/730)) ([117c113](https://github.com/thaynes43/dev-env/commit/117c113b30fec8a90ff55fc34508fcd8b2174814))
+* **controller:** bound terminal task pod reclaim and scope task resume ([#729](https://github.com/thaynes43/dev-env/issues/729)) ([d8f45f5](https://github.com/thaynes43/dev-env/commit/d8f45f54ad206317b070c99e67b9c2d4cd69ebfe))
+
+
+### Bug Fixes
+
+* **portal:** give a failed Tasks read a safe reason, observed time and Retry ([#725](https://github.com/thaynes43/dev-env/issues/725)) ([c603bc5](https://github.com/thaynes43/dev-env/commit/c603bc5d0d17545cabda080213e86dcaa00ae3e2))
+* **portal:** give the Tasks read a deadline ([#728](https://github.com/thaynes43/dev-env/issues/728)) ([df7c27c](https://github.com/thaynes43/dev-env/commit/df7c27c6832c9aa2078f2780612f36c1e87f4515))
+
 ## [2.70.1](https://github.com/thaynes43/dev-env/compare/v2.70.0...v2.70.1) (2026-10-30)
 
 
