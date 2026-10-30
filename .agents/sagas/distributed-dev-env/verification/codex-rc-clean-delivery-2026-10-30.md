@@ -98,16 +98,10 @@ step, never a reason to grant this implementation worker new access.
   that new thread on the paired host; record that witness separately. No
   inferred phone registration, fork, old history or second launch on uncertainty.
 
-The initial handoff concerns HaynesTower array free space/growth/distribution,
-physical data versus duplicate mounts/hardlinks, the actual download/media stack
-and stale/orphan/failed downloads, plus stopped Trash recommendations and deleted
-Trash returning (generation, exclusions, deletion/sync/reimport/errors/persistence).
-Read-only first: no media deletion, array moves or configuration changes. Use
-existing access and bundle missing scopes. Routine haynesnetwork fixes follow
-its repository reviews/CI. Tom drives the conversation. Only task-specific prior
-evidence may be referenced: `/home/dev/work/orders/haynesnetwork-storage-trash-20261030/REPORT.md`
-and `/home/dev/work/haynesnetwork-trash-read-1030` on the target. The launcher
-implementation does not start this research or import prior conversation history.
+The launch caller supplies the task-specific handoff privately in the request.
+Reference only authorized task evidence, never inherited conversation history.
+The launcher does not begin that task's research. Retain the exact private
+handoff with the runtime launch evidence, outside the public repository.
 
 ## Evidence and ending state
 
