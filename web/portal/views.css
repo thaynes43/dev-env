@@ -60,9 +60,8 @@ body { margin: 0; height: 100dvh; display: flex; flex-direction: column; overflo
 h1, h2, h3, p, dl, dd, ul, ol, table { margin: 0; }
 ul { list-style: none; padding: 0; }
 a { color: var(--accent); text-decoration: none; }
-a:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
-.pages-content:focus-visible, .asks-content:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
-.detail:focus, .workspace:focus, .list:focus { outline: none; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+.detail:focus, .workspace:focus, .list:focus, .receipt:focus { outline: 3px solid var(--focus); outline-offset: -3px; }
 svg.i { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .mono { font-family: var(--mono); font-size: 11px; }
 .eyebrow { font-size: 10px; letter-spacing: .11em; font-weight: 700; text-transform: uppercase; color: var(--muted); }
@@ -202,7 +201,6 @@ svg.i { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentCo
 .composer-bar .send { margin-left: auto; }
 .btn.primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); cursor: pointer; }
 .btn.primary:hover { border-color: var(--focus); }
-.btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .btn:disabled { opacity: .55; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--line); }
 .gate { margin-top: 8px; font-size: 11px; }

@@ -18,6 +18,7 @@ var pagesWorkspaceSource string
 
 const pagesStyle = `
 .pages-content{flex:1;min-height:0;overflow-x:clip;overflow-y:auto;padding:24px;overflow-wrap:anywhere;min-width:0}
+.pages-content:focus{outline:3px solid var(--focus);outline-offset:-3px}
 .pages-content .panel{max-width:72rem;margin:0 auto 16px}
 .pages-content .turn-text{margin:10px 0}
 .pages-workspace{display:grid;grid-template-columns:minmax(0,22rem) minmax(0,1fr);grid-template-areas:"intro intro" "list stage" "config config";gap:16px;min-width:0}
