@@ -187,9 +187,10 @@ func planCheckins(data, contextData []byte) (checkinsPlan, int) {
 		}
 		p.Items = append(p.Items, view)
 	}
-	if code == 3 {
+	switch code {
+	case 3:
 		p.Status = "conflict"
-	} else if code == 2 {
+	case 2:
 		p.Status = "refused"
 	}
 	return p, code
