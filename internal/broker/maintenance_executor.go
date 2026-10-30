@@ -40,6 +40,10 @@ func MaintenancePod(g *v1alpha1.AccessGrant, now time.Time) *corev1.Pod {
 			Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: *resource.NewMilliQuantity(m.CPUMillis, resource.DecimalSI), corev1.ResourceMemory: resource.MustParse(strconv.FormatInt(m.MemoryMiB, 10) + "Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: *resource.NewMilliQuantity(m.CPUMillis, resource.DecimalSI), corev1.ResourceMemory: resource.MustParse(strconv.FormatInt(m.MemoryMiB, 10) + "Mi")}},
 		}},
 	}}
+	if m.RuntimeProfile == "nvidia-utility" {
+		p.Spec.RuntimeClassName = ptr.To("nvidia")
+		p.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "NVIDIA_VISIBLE_DEVICES", Value: m.Resource}, {Name: "NVIDIA_DRIVER_CAPABILITIES", Value: "utility"}}
+	}
 	for _, group := range []struct {
 		paths    []string
 		readOnly bool

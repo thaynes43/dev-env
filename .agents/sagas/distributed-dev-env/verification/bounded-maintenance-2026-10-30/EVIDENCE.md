@@ -179,3 +179,61 @@ Final local `make check-generated check-layout lint` PASS; generated files are
 unchanged and pinned golangci-lint v2.15.0 reports0issues. No local suite failed
 in this correction. Schema-extraction and patch-fixture setup failures above
 are retained separately from the prior author's actual failed test history.
+
+## Optional NVIDIA utility profile source preparation — 2026-10-30
+
+Fresh source worktree based on merged PR732 `976ae2affc8b0687b606a028ebf7f83672c71520`;
+release PR736 is untouched. This uncommitted change adds only optional immutable
+`runtimeProfile: nvidia-utility`, exact GPU UUID validation, derived fixed runtime
+and two environment variables, and a matching fail-closed UNAPPLIED CREATE branch.
+No arbitrary environment/runtime inputs or implicit capability additions exist.
+Explicit devices must be empty for this profile; existing read-only input bounds
+remain. Omitted profile keeps the generic executor unchanged.
+
+The coordinator's separately supplied 19:57 UTC read reports the current nvidia
+RuntimeClass handler=nvidia, with overhead and scheduling absent. This worker made
+no live RuntimeClass or hardware read. The proposed fixed profile requires those
+properties during activation review. Unexpected overhead/node selector/runtime
+scheduling tolerations fail closed; only normal Kubernetes not-ready/unreachable
+NoExecute Exists 300-second defaults are accepted. No RuntimeClass lookup RBAC
+is added. Admission runtime qualification remains held.
+
+Local full API schema suite PASS7.537s using pinned isolated kube-apiserver1.35.0.
+Linux cross-compilation of all four affected test packages PASS; full pinned
+Linux-target lint PASS0issues. Native Darwin broker test build failed in unchanged
+Linux-specific hostexecutor definitions (EvidenceConfig/PinnedNativeVersion/
+unix.SOCK_CLOEXEC); this is retained as a platform limitation, not a test pass.
+Initial sandbox tool/cache/network access failures and one incorrect relative
+Make tool target are setup failures; escalated pinned installs succeeded. One
+formatter check found import grouping and was corrected before pinned lint.
+
+Exact updated UNAPPLIED patch SHA256:
+`d52623974df393ea2003695ef67d10432b47ed3d439e6431e2fbc012a154df5d`.
+Forward `git apply --check` PASS against the coordinator's private read-only
+haynes-ops `2df49e151281eda288681d64292546692d4e5eb3` snapshot. The packet's
+original f12bbf base remains historical; no haynes-ops checkout was changed.
+No commit, push, cluster policy/grant/token/TUI/GPU call or release-head change.
+The approved idle pod source-test execution and final review receipts follow.
+
+Pinned second `make generate` produced byte-identical generated files; `make
+check-layout`, final pinned `fmt --diff` and `git diff --check` PASS. Raw
+`check-generated` compares with committed HEAD and is unsuitable for this expressly
+uncommitted review checkpoint; generation stability and the exact schema diff are
+provided instead. No default golden was changed.
+
+Approved source-only Linux execution used existing idle pod dev-env-1030-184308,
+dedicated `/tmp/maintenance-nvidia-tests-20261030`, four cross-compiled amd64 test
+binaries and pinned isolated envtest1.35.0, GOMAXPROCS=2, sequential packages with
+180-second per-package timeout. The pod's Kubernetes/GPU credentials were never
+read; tests use their isolated API server and synthetic fixtures only. The source
+bundle plus binaries/assets remains below2GiB. No provider session or pod was
+created or restarted. All TestMaintenance broker regressions PASS, including
+actual packet CREATE/UPDATE/DELETE CEL, exact utility/runtime/env refusal cases,
+real API-normalized profile CREATE and existing UID/RV deadline lifecycle.
+Full Linux api/v1alpha1 and internal/broker packages PASS (exit0).
+Full Linux internal/apiserver and internal/agentrun packages also PASS (exit0).
+API emitted the existing controller-runtime unset-logger diagnostic; CLI negative
+TLS fixtures emitted bad-certificate handshake diagnostics. Neither suite failed.
+The final behavioral source was tested as transferred; a later comment only
+clarifies the quantity helper's qualification limit. Source is frozen uncommitted
+for Root's independent review. No commit/push/activation is authorized here.

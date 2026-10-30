@@ -30,6 +30,8 @@ const (
 	MaintenanceMaxTTL             = time.Hour
 )
 
+var maintenanceGPUUUID = regexp.MustCompile(`^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+
 var digestImage = regexp.MustCompile(`^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$`)
 
 // MaintenanceDigest binds the complete immutable spec, including requester UID.
@@ -59,6 +61,9 @@ func ValidateMaintenance(g *v1alpha1.AccessGrant) error {
 	}
 	if m.CPUMillis < 10 || m.CPUMillis > 2000 || m.MemoryMiB < 16 || m.MemoryMiB > 4096 || len(m.Restore) > 1000 || len(m.Workers) > 8 || len(m.Devices) > 8 || len(m.ReadOnlyMounts) > 8 || len(m.Capabilities) > 2 {
 		return errors.New("maintenance resource or list bounds exceeded")
+	}
+	if m.RuntimeProfile != "" && (m.RuntimeProfile != "nvidia-utility" || !maintenanceGPUUUID.MatchString(m.Resource) || len(m.Devices) != 0) {
+		return errors.New("nvidia-utility requires an exact GPU UUID and no explicit devices; unknown runtime profile refused")
 	}
 	seen := map[string]bool{m.Coordinator.Name: true}
 	for _, w := range m.Workers {

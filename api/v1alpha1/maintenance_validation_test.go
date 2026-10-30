@@ -28,6 +28,10 @@ func TestMaintenanceSchemaImmutableEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mut := range []func(*v1alpha1.AccessGrant){
+		func(g *v1alpha1.AccessGrant) {
+			g.Spec.Maintenance.RuntimeProfile = "nvidia-utility"
+			g.Spec.Maintenance.Resource = "GPU-d8a856f1-f955-f683-bc24-654561496774"
+		},
 		func(g *v1alpha1.AccessGrant) { g.Spec.Maintenance.NodeUID = "replaced" },
 		func(g *v1alpha1.AccessGrant) { g.Spec.Maintenance.Coordinator.PodUID = "replaced" },
 		func(g *v1alpha1.AccessGrant) { g.Spec.Maintenance.Capabilities = []string{"SYS_RAWIO"} },
@@ -45,6 +49,13 @@ func TestMaintenanceSchemaImmutableEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mut := range []func(*v1alpha1.AccessGrant){
+		func(g *v1alpha1.AccessGrant) { g.Spec.Maintenance.RuntimeProfile = "unknown" },
+		func(g *v1alpha1.AccessGrant) { g.Spec.Maintenance.RuntimeProfile = "nvidia-utility" },
+		func(g *v1alpha1.AccessGrant) {
+			g.Spec.Maintenance.RuntimeProfile = "nvidia-utility"
+			g.Spec.Maintenance.Resource = "GPU-d8a856f1-f955-f683-bc24-654561496774"
+			g.Spec.Maintenance.Devices = []string{"/dev/nvidia0"}
+		},
 		func(g *v1alpha1.AccessGrant) { g.Spec.TTL = ttl(2 * time.Hour) },
 		func(g *v1alpha1.AccessGrant) { g.Spec.Requester.SessionUID = "" },
 		func(g *v1alpha1.AccessGrant) { g.Spec.Maintenance.Coordinator.UID = "other" },
@@ -55,5 +66,18 @@ func TestMaintenanceSchemaImmutableEnvelope(t *testing.T) {
 		if err := k8s.Create(ctx, bad); !apierrors.IsInvalid(err) {
 			t.Fatalf("invalid envelope accepted: %v", err)
 		}
+	}
+}
+
+func TestMaintenanceSchemaUtilityProfile(t *testing.T) {
+	g := maintenanceGrant()
+	g.Spec.Maintenance.RuntimeProfile = "nvidia-utility"
+	g.Spec.Maintenance.Resource = "GPU-d8a856f1-f955-f683-bc24-654561496774"
+	if err := k8s.Create(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	g.Spec.Maintenance.RuntimeProfile = ""
+	if err := k8s.Update(context.Background(), g); !apierrors.IsInvalid(err) {
+		t.Fatalf("profile removal accepted: %v", err)
 	}
 }

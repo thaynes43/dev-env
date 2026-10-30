@@ -161,3 +161,24 @@ Tom's concrete policy review and separately authorized isolated runtime
 qualification. No live policy apply, dry-run or test is authorized by this packet.
 Shared NVIDIA control devices remain broader than GPU UUID intent; persistent
 hardware-state restoration is separate from TTL. No limits/capabilities grow.
+
+## Optional fixed NVIDIA utility profile — source preparation only
+
+The immutable optional `runtimeProfile: nvidia-utility` derives only
+`runtimeClassName: nvidia`, `NVIDIA_VISIBLE_DEVICES` equal to the approved exact
+GPU UUID resource, and `NVIDIA_DRIVER_CAPABILITIES: utility`. Omission preserves
+the generic host-device path. The profile requires an empty devices list;
+existing explicitly approved read-only inputs keep their validation. No caller
+runtime class, environment map, compute capability or implicit SYS_RAWIO is added.
+The complete scope digest and schema immutability include the profile.
+
+The UNAPPLIED CREATE policy must compare the exact profile-derived runtime and
+environment and fail closed for unknown profiles or malformed GPU UUIDs. RuntimeClass
+admission may add overhead and scheduling constraints; policy qualification must
+pin the existing nvidia RuntimeClass with no overhead or scheduling. The profile
+refuses any added overhead or node selector and tolerations beyond Kubernetes
+default not-ready/unreachable NoExecute Exists 300-second entries. RuntimeClass
+drift requires renewed review; no admission lookup permission is added. This source preparation does not qualify that
+runtime, the candidate image, device cgroups or driver libraries. Activation still
+requires concrete review of the exact policy and separately authorized runtime
+qualification. Release #736 and live policies are outside this change.
