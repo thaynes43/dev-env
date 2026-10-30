@@ -85,7 +85,9 @@ Rollback of source activation means disable the API (no new execution), disable
 new broker materialization while preserving this broker's cleanup path, then wait
 for pinned node/lease/container termination evidence and network cleanup. Do not
 replace the broker with an older binary until every maintenance lease is cleaned
-up. A stale/unreachable node keeps Unknown/StopPending visible and the finalizer
+up. A definitive admission/auth/body create refusal records NotCreated and cleans the
+owned network policy; ambiguous create errors remain Unknown and never recreate.
+A stale/unreachable node keeps Unknown/StopPending visible and the finalizer
 held. TTL begins when broker.Decide records approval; Kubernetes deadlines are relative to pod start and
 are a backstop, not a promise of on-time termination on an unreachable node.
 Persistent effects need the approved restore/readback, independently recorded.

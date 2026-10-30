@@ -546,6 +546,7 @@ spec:
                     - StopPending
                     - Terminated
                     - Unknown
+                    - NotCreated
                     type: string
                   podUID:
                     maxLength: 64

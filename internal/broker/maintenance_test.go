@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,8 +13,10 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
@@ -282,6 +285,56 @@ func TestMaintenanceRefusesControlPlane(t *testing.T) {
 			}
 			if err := CheckMaintenanceIdentities(ctx, b.APIReader, sessionNS, g); err == nil || !strings.Contains(err.Error(), "control-plane") {
 				t.Fatal("control plane accepted", err)
+			}
+		})
+	}
+}
+
+func TestMaintenanceCreateRefusalVersusAmbiguousFailure(t *testing.T) {
+	for _, ambiguous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ambiguous=%t", ambiguous), func(t *testing.T) {
+			b, g := maintenanceFixture(t)
+			ctx := context.Background()
+			approve(g, "human/dev-env-system/dev-env-human", g.Spec.TTL.Duration, b.now())
+			if err := b.Client.Status().Update(ctx, g); err != nil {
+				t.Fatal(err)
+			}
+			base := b.Client.(client.WithWatch)
+			creates := 0
+			b.Client = interceptor.NewClient(base, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*corev1.Pod); ok {
+					creates++
+					if ambiguous {
+						return apierrors.NewTimeoutError("synthetic uncertain create", 1)
+					}
+					return apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, obj.GetName(), errors.New("synthetic admission refusal"))
+				}
+				return c.Create(ctx, obj, opts...)
+			}})
+			_, err := b.activeMaintenance(ctx, g, b.now())
+			if ambiguous {
+				if err == nil || g.Status.Maintenance.Executor != "Unknown" || g.Status.Phase != v1alpha1.GrantActive {
+					t.Fatal("ambiguous create claimed absent/terminated", err, g.Status)
+				}
+				if _, err = b.activeMaintenance(ctx, g, b.now()); err == nil {
+					t.Fatal("ambiguous absence should retain cleanup uncertainty")
+				}
+				if err := base.Get(ctx, client.ObjectKeyFromObject(g), &networkingv1.NetworkPolicy{}); err != nil {
+					t.Fatal("ambiguous create lost deny-all network", err)
+				}
+			} else {
+				if err != nil || g.Status.Phase != v1alpha1.GrantFailed || g.Status.Maintenance.Executor != "NotCreated" {
+					t.Fatal("refused create did not finish visibly", err, g.Status)
+				}
+				if err := base.Get(ctx, client.ObjectKeyFromObject(g), &networkingv1.NetworkPolicy{}); !apierrors.IsNotFound(err) {
+					t.Fatal("refused create leaked network policy", err)
+				}
+				if err := b.stopMaintenance(ctx, g); err != nil {
+					t.Fatal("refusal cleanup not idempotent", err)
+				}
+			}
+			if creates != 1 {
+				t.Fatal("create retried despite refusal/uncertainty", creates)
 			}
 		})
 	}

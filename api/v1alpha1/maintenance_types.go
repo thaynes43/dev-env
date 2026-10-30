@@ -77,7 +77,7 @@ type MaintenanceStatus struct {
 	// +kubebuilder:validation:MaxLength=64
 	// +optional
 	PodUID string `json:"podUID,omitempty"`
-	// +kubebuilder:validation:Enum=Running;StopPending;Terminated;Unknown
+	// +kubebuilder:validation:Enum=Running;StopPending;Terminated;Unknown;NotCreated
 	// +optional
 	Executor string `json:"executor,omitempty"`
 	// RestoreEvidence is an attributed agent report, not independently proven hardware state.

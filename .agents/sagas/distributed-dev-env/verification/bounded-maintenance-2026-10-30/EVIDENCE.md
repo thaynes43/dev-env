@@ -56,3 +56,12 @@ allow rules. Offline selector fixtures verify normal sessions stay selected and
 maintenance executors are excluded. These tests do not establish live Cilium policy
 enforcement. The final immutable-head receipts on OP233/219 and PR732 supersede
 earlier source-head qualification when this packet changes.
+
+Final advisory41098971312 found deterministic Pod-create rejection left Unknown
+cleanup indefinitely. Source now records NotCreated for definitive admission/auth/
+invalid-body refusal, ends Failed with the refusal visible and cleans the owned
+network policy. Timeout/5xx/AlreadyExists remain ambiguous and cannot recreate or
+claim termination. Offline refusal-versus-timeout fixtures verify one create only,
+cleanup idempotence for refusal and retained network/Unknown for ambiguous failure.
+No production denial was encountered or bypassed. Final source receipts follow on
+the PR and OP records after immutable review and requiredCI.

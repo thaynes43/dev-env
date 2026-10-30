@@ -541,7 +541,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
            status:
              description: |-
                AccessGrantStatus is the broker's record of the grant. Only the broker
-@@ -398,6 +543,26 @@
+@@ -398,6 +543,27 @@
                    pod (a resume, a drain) gets it installed again.
                  maxLength: 64
                  type: string
@@ -555,6 +555,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
 +                    - StopPending
 +                    - Terminated
 +                    - Unknown
++                    - NotCreated
 +                    type: string
 +                  podUID:
 +                    maxLength: 64

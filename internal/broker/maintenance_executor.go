@@ -108,6 +108,17 @@ func (b *Broker) activeMaintenance(ctx context.Context, g *v1alpha1.AccessGrant,
 		}
 		p = MaintenancePod(g, now.Time)
 		if err = b.Client.Create(ctx, p); err != nil {
+			// A definitive admission/auth/body refusal cannot have created this
+			// executor. Timeouts/5xx/AlreadyExists remain ambiguous and fenced.
+			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
+				g.Status.Maintenance.Executor = "NotCreated"
+				if written, writeErr := b.writeStatus(ctx, g); writeErr != nil {
+					return ctrl.Result{}, writeErr
+				} else if !written {
+					return ctrl.Result{RequeueAfter: time.Second}, nil
+				}
+				return b.end(ctx, g, v1alpha1.GrantFailed, "", "executor creation refused: "+err.Error(), now)
+			}
 			return ctrl.Result{}, err
 		}
 	} else if err != nil {
@@ -143,9 +154,9 @@ func (b *Broker) stopMaintenance(ctx context.Context, g *v1alpha1.AccessGrant) e
 		g.Status.Maintenance = &v1alpha1.MaintenanceStatus{}
 	}
 	st := g.Status.Maintenance
-	if apierrors.IsNotFound(err) && st.PodUID == "" && st.Executor == "" {
+	if apierrors.IsNotFound(err) && st.PodUID == "" && (st.Executor == "" || st.Executor == "NotCreated") {
 		return b.deleteMaintenanceNetwork(ctx, g)
-	} // no creation intent was ever persisted
+	} // no intent, or confirmed refusal: no executor was created
 	if apierrors.IsNotFound(err) && st.Executor == "Terminated" {
 		return b.deleteMaintenanceNetwork(ctx, g)
 	}
