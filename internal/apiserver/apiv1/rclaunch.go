@@ -31,11 +31,12 @@ type RCLaunchResult struct {
 // RCLaunchPhase reports when this invocation first observed the current state.
 // SinceRequestMs uses the client's monotonic clock. The existing Session view
 // supplies no source time for these observations; SourceAt remains null.
-// FirstObservedAt is null for phases this invocation has not observed.
+// FirstObservedAt and SinceRequestMs are null for phases this invocation has
+// not observed: missing times and durations are null, not zero.
 type RCLaunchPhase struct {
 	State           string     `json:"state"`
 	FirstObservedAt *time.Time `json:"firstObservedAt"`
-	SinceRequestMs  int64      `json:"sinceRequestMs"`
+	SinceRequestMs  *int64     `json:"sinceRequestMs"`
 	SourceAt        *time.Time `json:"sourceAt"`
 	EvidenceSource  string     `json:"evidenceSource"`
 	Reason          string     `json:"reason"`

@@ -60,7 +60,7 @@ func rcResult(t *testing.T, h *harness) apiv1.RCLaunchResult {
 		default:
 			t.Errorf("invalid %s state: %s", name, phase.State)
 		}
-		if phase.Reason == "" || phase.EvidenceSource == "" || (phase.FirstObservedAt != nil && phase.FirstObservedAt.Location() != time.UTC) || phase.SourceAt != nil || phase.SinceRequestMs < 0 || phase.SinceRequestMs > v.TotalMs {
+		if phase.Reason == "" || phase.EvidenceSource == "" || (phase.FirstObservedAt != nil && phase.FirstObservedAt.Location() != time.UTC) || phase.SourceAt != nil || (phase.SinceRequestMs == nil) != (phase.FirstObservedAt == nil) || sinceMs(phase) > v.TotalMs {
 			t.Errorf("invalid %s phase: %+v", name, phase)
 		}
 		if phase.Reason == "not_observed" && phase.FirstObservedAt != nil {
@@ -146,7 +146,7 @@ func TestRCHappyPathAndKeyReplay(t *testing.T) {
 			if r.Phases["pairing_required"].State != "not_applicable" {
 				t.Fatal("pairing state")
 			}
-			if r.Phases["pod_scheduled"].SinceRequestMs != 2000 || r.Phases["pod_ready"].SinceRequestMs != 4000 || r.Phases["agent_started"].SinceRequestMs != 6000 || r.Phases["link_available"].SinceRequestMs != 10000 {
+			if sinceMs(r.Phases["pod_scheduled"]) != 2000 || sinceMs(r.Phases["pod_ready"]) != 4000 || sinceMs(r.Phases["agent_started"]) != 6000 || sinceMs(r.Phases["link_available"]) != 10000 {
 				t.Fatal("phase timings did not use the fake clock")
 			}
 			if r.Phases["pod_scheduled"].FirstObservedAt == nil || !r.Phases["pod_scheduled"].FirstObservedAt.Equal(testNow.Add(2*time.Second)) {
@@ -441,7 +441,7 @@ func TestRCStatusTransientAuthProjectionRemainsPending(t *testing.T) {
 	}, http.StatusAccepted)
 	h.mustRun(ExitPending, "rc", "status", "remote-268", "-o", "json")
 	r := rcResult(t, h)
-	if r.Outcome != "pending" || r.Error != nil || len(h.api.requests()) != 1 {
+	if r.Outcome != "accepted" || r.Error != nil || len(h.api.requests()) != 1 {
 		t.Fatal("single status read inferred persistent projection failure", r)
 	}
 }
@@ -504,7 +504,7 @@ func TestRCScheduledContainerCreatingUsesPodReadyBudget(t *testing.T) {
 	}, http.StatusAccepted)
 	h.mustRun(ExitPending, rcArgs(h, "--wait", "10m")...)
 	r := rcResult(t, h)
-	if r.Error.Code != "pod_ready_timeout" || r.TotalMs != 120000 || r.Phases["pod_scheduled"].SinceRequestMs != 0 {
+	if r.Error.Code != "pod_ready_timeout" || r.TotalMs != 120000 || sinceMs(r.Phases["pod_scheduled"]) != 0 {
 		t.Fatal("scheduled image pull was mistaken for scheduler timeout", r)
 	}
 }
@@ -526,7 +526,7 @@ func TestRCPodReadyBudgetStartsAtAcceptance(t *testing.T) {
 	}
 	h.mustRun(ExitPending, rcArgs(h, "--wait", "10m")...)
 	r := rcResult(t, h)
-	if r.Outcome != "timed_out" || r.Error.Code != "pod_ready_timeout" || r.TotalMs != 125000 || r.Phases["api_accepted"].SinceRequestMs != 5000 || r.Phases["pod_scheduled"].SinceRequestMs != 55000 {
+	if r.Outcome != "timed_out" || r.Error.Code != "pod_ready_timeout" || r.TotalMs != 125000 || sinceMs(r.Phases["api_accepted"]) != 5000 || sinceMs(r.Phases["pod_scheduled"]) != 55000 {
 		t.Fatal("pod readiness budget did not start at acceptance", r)
 	}
 }
@@ -561,7 +561,7 @@ func TestRCHandoffLocalFailuresAreNotRetried(t *testing.T) {
 			}
 			h.mustRun(wantExit, rcArgs(h)...)
 			r := rcResult(t, h)
-			if r.Outcome != "failed" || r.Error.Code != wantCode || r.Error.Phase != "handoff" || r.Link == nil || r.Phases["handoff"].State != "unknown" || r.Phases["handoff"].Reason != "not_sent" || rcCountMessages(h) != 0 || len(h.api.requests()) != 6 {
+			if r.Outcome != "failed" || r.Error.Code != wantCode || r.Error.Phase != "handoff" || r.Link == nil || r.Phases["handoff"].State != "error" || r.Phases["handoff"].Reason != "not_sent" || rcCountMessages(h) != 0 || len(h.api.requests()) != 6 {
 				t.Fatal("local handoff failure misclassified or retried", r)
 			}
 		})
@@ -644,4 +644,12 @@ func TestRCDoesNotWidenOrdinaryProjectFlags(t *testing.T) {
 	if len(h.api.requests()) != 0 {
 		t.Fatal("ordinary remote create widened")
 	}
+}
+
+// sinceMs is a phase's elapsed milliseconds, or -1 when it was not observed.
+func sinceMs(p apiv1.RCLaunchPhase) int64 {
+	if p.SinceRequestMs == nil {
+		return -1
+	}
+	return *p.SinceRequestMs
 }

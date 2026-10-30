@@ -58,9 +58,9 @@ null source time, evidence source and reason. Scheduling and PodReady budgets
 both start at acceptance; later stage budgets run serially. All are capped by
 `--wait` (default 5m, maximum 10m), including network requests. `--wait 0`
 submits the create and prints its handle without polling or sending a handoff.
-Only this zero-wait start returns `accepted`; an expired positive wait returns
-`timed_out` with the handle. Status makes one GET and never sends a message;
-an active session without a link is `pending`.
+A zero-wait start and a status read of an active session without a link
+return `accepted` (exit 7); an expired positive wait returns `timed_out` with
+the handle. Status makes one GET and never sends a message.
 
 A reused idempotency key (HTTP 200) never sends a handoff, including after a
 previous uncertain or unsent attempt and when the handoff text has changed.

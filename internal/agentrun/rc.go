@@ -53,7 +53,7 @@ func newRCRun(a *app) *rcRun {
 		}
 		r.unobserved(phase, "session_view", reason)
 	}
-	r.phase("pairing_required", "not_applicable", "client", "claude_remote")
+	r.result.Phases["pairing_required"] = apiv1.RCLaunchPhase{State: "not_applicable", EvidenceSource: "client", Reason: "claude_remote"}
 	return r
 }
 
@@ -69,7 +69,8 @@ func (r *rcRun) phase(name, state, source, reason string) {
 		return
 	}
 	now := r.a.env.Now().UTC()
-	r.result.Phases[name] = apiv1.RCLaunchPhase{State: state, FirstObservedAt: &now, SinceRequestMs: r.elapsed().Milliseconds(), EvidenceSource: source, Reason: reason}
+	since := r.elapsed().Milliseconds()
+	r.result.Phases[name] = apiv1.RCLaunchPhase{State: state, FirstObservedAt: &now, SinceRequestMs: &since, EvidenceSource: source, Reason: reason}
 }
 
 func (r *rcRun) finish(outcome, code, phase string, exit int) error {
@@ -431,11 +432,11 @@ func (r *rcRun) handoff(ctx context.Context, c *conn, text string) error {
 	if err != nil {
 		var ee *exitError
 		if errors.As(err, &ee) {
-			r.phase("handoff", "unknown", "client", "not_sent")
+			r.phase("handoff", "error", "client", "not_sent")
 			return r.finish("failed", "unauthenticated", "handoff", ExitAuth)
 		}
 		if nothingSent(err) {
-			r.phase("handoff", "unknown", "client", "not_sent")
+			r.phase("handoff", "error", "client", "not_sent")
 			return r.finish("failed", "status_unavailable", "handoff", ExitPending)
 		}
 	}
@@ -531,5 +532,5 @@ func (r *rcRun) status(ctx context.Context, args []string) error {
 	if r.result.Link != nil {
 		return r.finish("link_available", "", "", ExitOK)
 	}
-	return r.finish("pending", "", "", ExitPending)
+	return r.finish("accepted", "", "", ExitPending)
 }
