@@ -112,7 +112,7 @@ func (b *Broker) activeMaintenance(ctx context.Context, g *v1alpha1.AccessGrant,
 			// executor. Timeouts/5xx/AlreadyExists remain ambiguous and fenced.
 			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
 				if writeErr := b.recordMaintenanceRefusal(ctx, g); writeErr != nil {
-					return ctrl.Result{}, fmt.Errorf("executor creation definitively refused (%v), but refusal receipt failed: %w", err, writeErr)
+					return ctrl.Result{}, fmt.Errorf("executor creation definitively refused (%w), but refusal receipt failed: %w", err, writeErr)
 				}
 				return b.end(ctx, g, v1alpha1.GrantFailed, "", "executor creation refused: "+err.Error(), now)
 			}
