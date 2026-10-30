@@ -26,13 +26,17 @@ const pagesStyle = `
 .pages-workspace.is-list-only{display:block}
 .pages-stage{grid-area:stage;min-width:0}
 .pages-config{grid-area:config;min-width:0;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.pages-intro h1{font-size:22px;line-height:1.2;font-weight:650;letter-spacing:-.4px;overflow-wrap:anywhere}
+.pages-intro h1{margin-bottom:8px;font-size:22px;line-height:1.2;font-weight:650;letter-spacing:-.4px;overflow-wrap:anywhere}
+.pages-intro .kv{margin-top:14px}
 .pages-content .pages-group,.pages-content .item-line,.pages-content .badge,.pages-content .btn,.pages-content .mono{white-space:normal;overflow-wrap:anywhere}
 .pages-earliest,.pages-latest,.pages-count{font-variant-numeric:tabular-nums}
 .pages-coverage{display:block;margin-top:6px;color:var(--muted);font-size:10.5px}
 .pages-detail{display:none;min-width:0}
 .pages-stage:not(:has(.pages-detail:target)) .pages-detail.is-default{display:block}
 .pages-detail:target{display:block}
+.pages-detail>h2,.pages-config>h2{margin-bottom:12px}
+.pages-content .pages-alert{padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.pages-alert>a{display:inline-flex;align-items:center;min-height:44px;margin-right:16px}
 .pages-back{display:none}
 .pages-content .pages-labels{width:100%;table-layout:fixed;border-collapse:collapse}
 .pages-content .pages-labels caption{text-align:left;font-weight:650;margin:0 0 6px}
@@ -47,7 +51,7 @@ const pagesStyle = `
 .pages-content [data-known="false"]{font-style:italic}
 .pages-content .pages-group{padding:13px 12px;border:1px solid var(--line);border-radius:7px;background:var(--surface);margin-bottom:8px}
 .pages-content .pages-group:hover{background:var(--soft);border-color:var(--control-line)}
-.pages-content .pages-group h3{margin:7px 0 3px;font-size:12px;font-weight:600;line-height:1.45;letter-spacing:-.1px}
+.pages-content .pages-group h2{margin:7px 0 3px;font-size:12px;font-weight:600;line-height:1.45;letter-spacing:-.1px}
 .pages-content .pages-group .item-kicker{font:9.5px var(--mono);color:var(--muted)}
 .pages-current-group{color:inherit;text-decoration:none}
 .pages-detail:target,.pages-config:target{scroll-margin-top:16px}
@@ -61,7 +65,7 @@ const pagesStyle = `
 .pages-back{display:flex;gap:16px;flex-wrap:wrap}
 .pages-back a{display:inline-flex;min-height:44px;align-items:center}
 .pages-content .pages-group{padding:15px 13px;border-radius:10px}
-.pages-content .pages-group h3{font-size:14px}
+.pages-content .pages-group h2{font-size:14px}
 .pages-content select{min-height:44px;font-size:16px}
 .pages-content .pages-labels,.pages-content .pages-labels caption,.pages-content .pages-labels tbody,.pages-content .pages-labels tr,.pages-content .pages-labels th,.pages-content .pages-labels td{display:block;width:auto}
 .pages-content .pages-labels caption{margin:0;padding:0 0 6px;border-bottom:1px solid var(--line);font-size:13px;overflow-wrap:normal;word-break:normal}

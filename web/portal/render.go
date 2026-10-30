@@ -53,11 +53,13 @@ var (
 	launchResultTemplate = template.Must(template.New("launch-result").Parse(strings.Replace(launchResultSource, "/*PORTAL_STYLE*/", viewsStyle, 1)))
 )
 
-// Pages uses the product navigation without coupling its body to ProductPage.
+// Standalone pages use the product navigation without depending on ProductPage.
 func init() {
-	for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
-		// html/template rewrites trees during escaping; each template set owns its copy.
-		template.Must(pagesTemplate.AddParseTree(name, viewsTemplate.Lookup(name).Tree.Copy()))
+	for _, target := range []*template.Template{pagesTemplate, receiptTemplate, launchResultTemplate} {
+		for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
+			// html/template rewrites trees during escaping; each template set owns its copy.
+			template.Must(target.AddParseTree(name, viewsTemplate.Lookup(name).Tree.Copy()))
+		}
 	}
 }
 
@@ -509,7 +511,7 @@ func productReadFailure(f *ProductReadFailure, filter ProductFilter) *productRea
 			v.Reason = fmt.Sprintf("The operator refused the read (HTTP %d).", f.HTTPStatus)
 		}
 	case "response_contract":
-		v.Reason = "The operator response was refused by the Sessions contract."
+		v.Reason = "The returned session data could not be read."
 	case "clock_ahead":
 		v.Reason = "An operator timestamp is more than 2 seconds ahead of the portal clock."
 	case "cancelled":
@@ -1062,10 +1064,10 @@ func RenderReceipt(r ProductReceipt) ([]byte, error) {
 	}
 	view := struct {
 		receiptState
-		Policy, SessionsHref, TasksHref, Self, Back, Observed, Reason string
-		Fields                                                        []ProductField
-		Preview                                                       bool
-	}{receiptState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, TasksHref: productTasksHref, Observed: observed, Preview: r.Preview}
+		Policy, SessionsHref, Self, Back, Observed, Reason string
+		Fields                                             []ProductField
+		Preview                                            bool
+	}{receiptState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, Observed: observed, Preview: r.Preview}
 	if sendRequestID.MatchString(r.RequestID) {
 		view.Self = ProductSessionMessagesHref + "/" + r.RequestID
 	}
@@ -1147,10 +1149,10 @@ func RenderLaunchResult(r ProductLaunchResult) ([]byte, error) {
 	}
 	view := struct {
 		launchResultState
-		Policy, SessionsHref, TasksHref, Back string
-		Fields                                []ProductField
-		Preview                               bool
-	}{launchResultState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, TasksHref: productTasksHref, Back: back, Preview: r.Preview}
+		Policy, SessionsHref, Back string
+		Fields                     []ProductField
+		Preview                    bool
+	}{launchResultState: state, Policy: strings.TrimSuffix(ProductPolicy, "; frame-ancestors 'none'"), SessionsHref: productSessionsHref, Back: back, Preview: r.Preview}
 	for i, f := range r.Fields {
 		if i == 8 {
 			break

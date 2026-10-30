@@ -91,7 +91,7 @@ func TestCommittedSessionsFixtureShowsConversationUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	u := string(usageBody)
-	for _, want := range []string{`<h3 id="usage-b0">Conversation usage by provider and served model</h3>`, "codex · gpt-6-astra", `<td data-label="Cache create" class="unknown">Unknown</td>`} {
+	for _, want := range []string{`<h2 id="usage-b0">Conversation usage by provider and served model</h2>`, "codex · gpt-6-astra", `<td data-label="Cache create" class="unknown">Unknown</td>`} {
 		if !strings.Contains(u, want) {
 			t.Errorf("the fixture Usage view lacks %q", want)
 		}

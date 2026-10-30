@@ -15,7 +15,7 @@
 {{range .Groups}}
 {{if $.ListOnly}}<article class="item pages-group">{{else}}<a class="item pages-group" href="#{{.ID}}">{{end}}
 <span class="item-top"><span class="item-kicker">Current snapshot only</span><span class="badge{{if .SeverityEmpty}} pages-empty-value{{end}}" data-known="{{.SeverityKnown}}">{{.SeverityDisplay}}</span></span>
-<h3 data-known="{{.AlertNameKnown}}" class="pages-name{{if .AlertNameEmpty}} pages-empty-value{{end}}">{{.AlertNameDisplay}}</h3>
+<h2 data-known="{{.AlertNameKnown}}" class="pages-name{{if .AlertNameEmpty}} pages-empty-value{{end}}">{{.AlertNameDisplay}}</h2>
 <span class="item-line"><span>Count</span><span class="pages-count">{{.Count}}</span></span>
 <span class="item-line"><span>Earliest start</span><span class="pages-earliest">{{if eq .EarliestStart "Unknown"}}Unknown{{else}}<time datetime="{{.EarliestStart}}">{{pagesTime .EarliestStart}}</time>{{end}}</span></span>
 <span class="item-line"><span>Latest update</span><span class="pages-latest">{{if eq .LatestUpdate "Unknown"}}Unknown{{else}}<time datetime="{{.LatestUpdate}}">{{pagesTime .LatestUpdate}}</time>{{end}}</span></span>
@@ -79,7 +79,7 @@
 <h2 id="pages-configuration-title">Configuration</h2>
 <p class="pages-back"><a href="#pages-list">Alert groups</a></p>
 <p id="pages-not-connected" class="pages-notice">{{.Controls.Notice}}</p>
-{{if .Controls.DocumentLoaded}}<p>Saved preferences are loaded.</p>{{else}}<p class="pages-unloaded">No preference document is loaded. This is not a loaded empty store.</p>{{end}}
+{{if .Controls.DocumentLoaded}}<p>Saved preferences are loaded.</p>{{else}}<p class="pages-unloaded">Saved preferences are unavailable. Their values are unknown.</p>{{end}}
 <dl class="kv">
 <dt>Store</dt><dd>{{.Controls.Store}}</dd>
 <dt>Applied</dt><dd>{{.Controls.Applied}}</dd>

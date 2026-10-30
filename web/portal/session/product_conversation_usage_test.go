@@ -368,7 +368,7 @@ func TestConversationUsageRendersEscapedInTheTemplate(t *testing.T) {
 	}
 	u := string(ubody)
 	for _, want := range []string{"Conversation usage by provider and served model", "claude · claude-opus-5-5",
-		`<h3 id="usage-rows">Initial invocations by session</h3>`, "Recorded token usage is not account consumption."} {
+		`<h2 id="usage-rows">Initial invocations by session</h2>`, "Recorded token usage is not account consumption."} {
 		if !strings.Contains(u, want) {
 			t.Errorf("the Usage view lacks %q", want)
 		}
