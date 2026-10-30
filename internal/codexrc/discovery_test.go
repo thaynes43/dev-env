@@ -153,6 +153,50 @@ func TestDiscovery(t *testing.T) {
 	}
 }
 
+func TestUnreadyCandidatesCannotResolveAmbiguity(t *testing.T) {
+	for _, state := range []string{"connecting", "errored", "disabled", "null environment"} {
+		t.Run(state, func(t *testing.T) {
+			target := targetFixture(t)
+			ready := hostFixture(t, target)
+			unready := secondHost(ready)
+			if state == "null environment" {
+				unready.Status = bytes.ReplaceAll(unready.Status, []byte(`"environment-fixture"`), []byte(`null`))
+			} else {
+				unready.Status = bytes.ReplaceAll(unready.Status, []byte(`"connected"`), []byte(`"`+state+`"`))
+			}
+			// An unready unique candidate must refuse without prompting pairing.
+			unready.Pairing.State = RequiresPairing
+			nonmatching := unready
+			nonmatching.ProjectPages = []json.RawMessage{bytes.ReplaceAll(unready.ProjectPages[0], []byte(target.CWD), []byte("/workspace/other"))}
+			for _, tc := range []struct {
+				name    string
+				hosts   []HostInventory
+				outcome Outcome
+			}{
+				{"unique unready", []HostInventory{unready}, None},
+				{"ready then unready", []HostInventory{ready, unready}, Ambiguous},
+				{"unready then ready", []HostInventory{unready, ready}, Ambiguous},
+				{"ready then nonmatching unready", []HostInventory{ready, nonmatching}, Matched},
+				{"nonmatching unready then ready", []HostInventory{nonmatching, ready}, Matched},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					result := Discover(target, tc.hosts)
+					if result.Outcome != tc.outcome || len(result.OwnerAction) != 0 {
+						t.Fatalf("unexpected discovery or pairing action: %+v, want %s", result, tc.outcome)
+					}
+					if tc.outcome == Matched {
+						if result.Project == nil || result.Project.HostID != *ready.HostID {
+							t.Fatalf("connected matching host not selected: %+v", result)
+						}
+					} else if result.Project != nil {
+						t.Fatalf("refusal selected a project: %+v", result)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestMacChatGPTOnlyEvidence(t *testing.T) {
 	// This is the retained evidence's count/kind/host shape, not invented native
 	// ProjectListResponse fields or a claim to possess the original Mac payload.

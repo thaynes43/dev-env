@@ -132,6 +132,7 @@ func Discover(target Target, hosts []HostInventory) Result {
 	type candidate struct {
 		project Project
 		host    HostInventory
+		ready   bool
 	}
 	var matches []candidate
 	seenHosts := map[string]bool{}
@@ -159,13 +160,11 @@ func Discover(target Target, hosts []HostInventory) Result {
 		if err != nil {
 			return Result{Outcome: InvalidInventory}
 		}
-		if status.Status != "connected" || status.EnvironmentID == nil || !identifier(*status.EnvironmentID) {
-			continue
-		}
+		ready := status.Status == "connected" && status.EnvironmentID != nil && identifier(*status.EnvironmentID)
 		for _, project := range projects {
 			for _, root := range project.Roots {
 				if root.Path == target.CWD {
-					matches = append(matches, candidate{Project{Kind: "codex", ProjectID: project.ID, HostID: *host.HostID, InstallationID: host.InstallationID, CWD: root.Path}, host})
+					matches = append(matches, candidate{Project{Kind: "codex", ProjectID: project.ID, HostID: *host.HostID, InstallationID: host.InstallationID, CWD: root.Path}, host, ready})
 					break
 				}
 			}
@@ -178,6 +177,9 @@ func Discover(target Target, hosts []HostInventory) Result {
 		return Result{Outcome: Ambiguous}
 	}
 	m := matches[0]
+	if !m.ready {
+		return Result{Outcome: None}
+	}
 	pair := m.host.Pairing
 	if pair.HostID != m.project.HostID || pair.InstallationID != m.project.InstallationID || !identifier(pair.EvidenceSource) {
 		return Result{Outcome: PairingUnknown}
