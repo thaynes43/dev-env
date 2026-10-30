@@ -52,6 +52,23 @@ GOTOOLCHAIN=local CGO_ENABLED=0 go run . \
   --contexts testdata/checkins-contexts.json
 ```
 
+To take a real export in a session pod, run opwork under your own session
+identity. The `opwork` on `PATH` in agent image 2.45.0 predates `checkins`.
+The supported fallback is the pod's own haynes-ops checkout, which has had it
+since haynes-ops #4406:
+
+```bash
+python3 -I ~/repos/haynes-ops/scripts/openproject/opwork.py checkins -o json --limit 20 \
+  > "$XDG_RUNTIME_DIR/checkins.json"
+```
+
+Keep the export in `$XDG_RUNTIME_DIR` and never commit it: it holds live tracker
+text. A page of 20 items is about 14KiB, well inside the 128KiB bound. A page
+with `has_more` or the owner scope "selected page" is reported as partial, and
+its recommendations are withheld, so a real run without contexts lists every
+item as `unbound` with no intents. On 2026-10-30 the merged CLI read one such
+real export with exit 0.
+
 The synthetic files above are a complete runnable example. The export is the
 canonical object with `page`, `page_size`, `has_more`, `owner_filter_scope`,
 `owner_match_total`, `total_before_owner_filter`, and `items`. `owner_match_total`
