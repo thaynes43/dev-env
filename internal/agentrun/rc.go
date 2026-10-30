@@ -126,6 +126,8 @@ func (a *app) rc(ctx context.Context, args []string) error {
 		return r.start(ctx, args[1:])
 	case "status":
 		return r.status(ctx, args[1:])
+	case "fresh":
+		return a.rcFresh(ctx, args[1:])
 	default:
 		return r.finish("failed", "invalid_input", "", ExitUsage)
 	}

@@ -99,6 +99,27 @@ type PilotAgent struct {
 	Image, Parent, Key string
 }
 
+// CodexRCAgent is an independent, default-off image selection for one immutable
+// Session identity. Deployment must separately establish an idle restart boundary.
+type CodexRCAgent struct {
+	Image, Name, UID string
+}
+
+func applyCodexRCImage(pod *corev1.Pod, s *v1alpha1.AgentSession, target *CodexRCAgent) {
+	if target == nil || target.Image == "" || target.Name == "" || target.UID == "" ||
+		pod == nil || s == nil || s.Name != target.Name || string(s.UID) != target.UID ||
+		!metav1.IsControlledBy(pod, s) || isHoldPod(pod) || budgetBound(s) ||
+		s.Spec.Agent != v1alpha1.AgentCodex || s.Spec.Mode != v1alpha1.ModeRemote ||
+		s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil {
+		return
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == ContainerName {
+			pod.Spec.Containers[i].Image = target.Image
+		}
+	}
+}
+
 // pilotImageFor returns the pilot image when the session is the one selected,
 // and "" otherwise. All of these must hold: the parent and the idempotency key
 // match, the agent is Claude remote/local or Codex remote, the repo is dev-env,
@@ -168,6 +189,7 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	// Defense in depth: legacy selection wins on overlap. Startup flags refuse
 	// equal parent/key tuples, so flag configuration cannot reach this case.
 	// Task and remote selection are also disjoint by mode.
+	applyCodexRCImage(pod, s, r.CodexRCAgent)
 	applyRemotePilotImage(pod, s, r.RemotePilotAgent)
 	applyPilotImage(pod, s, r.PilotAgent)
 	applyTaskPilotImage(pod, s, r.TaskPilotAgent)
