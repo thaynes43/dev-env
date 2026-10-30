@@ -555,6 +555,7 @@ No remedy grants permission to perform an otherwise unauthorized action.
 | `request_conflict` / 10s call | `This launch key already names a different immutable request.` | Inspect the original receipt. Do not change a key to retry an attempted mutation. |
 | `mutation_unconfirmed` / capped provider/delivery call | `The thread or handoff request may have succeeded; its one-use attempt is consumed. Do not replay.` | Read the same receipt/provider handle through authorized reads; preserve uncertainty for the lead. |
 | `launch_deadline` / absolute 5m default, 10m maximum | `RC launch reached its deadline at PHASE after N ms; created resources were preserved.` | Inspect the same handle with bounded status; no automatic cleanup or new launch. |
+| `session_ended` / next session read | `The Session ended (Failed, Suspended, Archived or being reaped) before the link was available.` | Stop with exit 1; report the last observed phase. No replacement launch, resume or cleanup is implied. |
 | `status_unavailable` / 10s read | `Current RC evidence could not be read; last successful phase is historical.` | Report unknown/stale state and retain the handle. A later explicit status read is safe; a replacement launch is not implied. |
 
 ## Authorization and lead-held questions
@@ -648,7 +649,10 @@ Add internal/agentrun/rc.go with:
 - Errors: invalid_input, unauthenticated, launch_forbidden (403, including the coordinator refusal), project_unavailable, request_conflict (409
   for a reused key with a changed request), scheduling_timeout, pod_ready_timeout, agent_start_timeout, login_conflict and
   auth_projection_unavailable (from the agent message), rc_registration_timeout, link_unavailable, handoff_rejected (409 not addressable),
-  handoff_unconfirmed (exit 6; never resent), launch_deadline (exit 7), status_unavailable.
+  handoff_unconfirmed (exit 6; never resent), launch_deadline (exit 7), session_ended (exit 1: the Session reached Failed, Suspended or Archived,
+  or is being reaped), status_unavailable.
+- `rc status` of an active Session that has no link yet reports outcome `accepted` with exit 7 (ExitPending); it makes one GET and never
+  sends a message.
 - Output: outcome link_available with exit 0, never "ready". The link comes first. Valid JSON of at most 32 KiB. The handoff text NEVER appears in
   stdout, stderr or logs.
 - Tests:
