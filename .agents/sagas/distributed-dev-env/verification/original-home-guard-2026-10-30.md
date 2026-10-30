@@ -7,6 +7,8 @@ select this SOURCE increment; the current direct work order transfers the
 stopped 032005 author's custody. Q-252-01 no longer blocks the source choice.
 The runtime decision remains held. No runtime check or action is evidence here.
 
+[OP286](https://work.haynesnetwork.com/work_packages/286) adds the separate default-off [remote pilot image selector](../../../../docs/portal-session-runtime.md#separate-codex-remote-pilot-image-default-off-source-only) for OP252's slash-parent image path (Option B); activation remains held.
+
 ## Contract
 
 An omitted `--original-home-binding` leaves existing behavior unchanged. Unguarded
