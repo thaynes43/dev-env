@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -692,16 +693,18 @@ func TestHeartbeatStoresStartTimeAndRCSessionID(t *testing.T) {
 		t.Fatalf("view ids agent=%+v rc=%+v", seen.AgentStatus, seen.RemoteControl)
 	}
 
+	var logs []string
+	f.srv.Log = funcr.New(func(_, args string) { logs = append(logs, args) }, funcr.Options{})
 	for _, id := range []string{"session_abc", maxID + "a", "https://claude.ai/code/" + validID, "session_abcdefg…"} {
 		st.RemoteControl.SessionID = id
-		before := f.session(name).ResourceVersion
-		w := f.do(http.MethodPost, path, tok, st)
-		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "remoteControl.sessionId") || !strings.Contains(w.Body.String(), "136") {
-			t.Fatalf("invalid id: %d %s", w.Code, w.Body.String())
-		}
+		before := len(logs)
+		post(st)
 		stored := f.session(name)
-		if stored.ResourceVersion != before || stored.Status.Agent.RemoteControlSessionID != maxID || stored.Status.RemoteControl.SessionID != maxID {
-			t.Fatal("refused id changed stored status")
+		if stored.Status.Agent.RemoteControlSessionID != "" || stored.Status.RemoteControl.SessionID != "" || stored.Status.Agent.LastHeartbeat == nil || !stored.Status.Agent.LastHeartbeat.Time.Equal(f.now) {
+			t.Fatal("invalid id was stored or prevented the heartbeat")
+		}
+		if len(logs) != before+1 || !strings.Contains(logs[before], "InvalidRemoteControlSessionID") || !strings.Contains(logs[before], "136") || strings.Contains(logs[before], id) {
+			t.Fatalf("id drop missing a bounded reason, or logged the input: %v", logs[before:])
 		}
 	}
 }

@@ -58,7 +58,11 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 	if rc := st.RemoteControl; rc != nil && rc.SessionID != "" &&
 		(len(rc.SessionID) > apiv1.RemoteControlSessionIDMaxLength || !remoteControlSessionIDPattern.MatchString(rc.SessionID)) {
-		return 0, nil, invalid(fieldError("remoteControl.sessionId", "must match %s and contain at most %d characters", apiv1.RemoteControlSessionIDPattern, apiv1.RemoteControlSessionIDMaxLength))
+		// Preserve liveness for older collectors with ids outside this schema.
+		// Never clip an identifier or log the untrusted value.
+		s.Log.Info("dropping Remote Control session id", "session", key.Name,
+			"reason", "InvalidRemoteControlSessionID", "maxLength", apiv1.RemoteControlSessionIDMaxLength)
+		rc.SessionID = ""
 	}
 
 	// The base is read from the API server, so the patch clears exactly what
