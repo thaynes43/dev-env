@@ -97,6 +97,32 @@ func TestOriginalHomeInitFailedSuspend(t *testing.T) {
 		{name: "init waiting after success", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
 			p.Status.InitContainerStatuses[0].LastTerminationState.Terminated.ExitCode = 0
 		}},
+		{name: "init running after earlier success", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify", RestartCount: 1,
+				State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}}
+		}},
+		{name: "init terminated exit 1 after earlier success", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify", RestartCount: 1,
+				State:                corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}}
+		}},
+		{name: "init running after earlier failure", remove: true, edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify", RestartCount: 1,
+				State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}}
+		}},
+		{name: "init terminated exit 1 after earlier failure", remove: true, edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify", RestartCount: 1,
+				State:                corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 2}}}
+		}},
+		{name: "init running with ambiguous last state", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify", RestartCount: 1,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+				LastTerminationState: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{},
+					Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}}
+		}},
 		{name: "init reports ready while failed", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
 			p.Status.InitContainerStatuses[0].Ready = true
 		}},

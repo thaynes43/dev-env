@@ -216,16 +216,23 @@ func originalHomeAgentNeverStarted(s *v1alpha1.AgentSession, p *corev1.Pod) bool
 	}
 	// A successful verifier can release main boot before its status becomes
 	// visible. Only an exclusive running or failed init state is evidence
-	// that main is still gated; Waiting alone is not failure evidence.
+	// that main is still gated; Waiting alone is not failure evidence. The
+	// kubelet keeps only the latest earlier termination: in every branch it
+	// must be absent or an exclusive failure, never a visible success.
+	last := status.LastTerminationState
+	lastEmpty := last.Running == nil && last.Waiting == nil && last.Terminated == nil
+	lastFailed := last.Terminated != nil && last.Terminated.ExitCode != 0 && last.Running == nil && last.Waiting == nil
 	switch state := status.State; {
 	case state.Running != nil && state.Waiting == nil && state.Terminated == nil:
+		if !lastEmpty && !lastFailed {
+			return false
+		}
 	case state.Waiting != nil && state.Running == nil && state.Terminated == nil:
-		last := status.LastTerminationState
-		if last.Terminated == nil || last.Terminated.ExitCode == 0 || last.Running != nil || last.Waiting != nil {
+		if !lastFailed {
 			return false
 		}
 	case state.Terminated != nil && state.Running == nil && state.Waiting == nil:
-		if state.Terminated.ExitCode == 0 {
+		if state.Terminated.ExitCode == 0 || !lastEmpty && !lastFailed {
 			return false
 		}
 	default:

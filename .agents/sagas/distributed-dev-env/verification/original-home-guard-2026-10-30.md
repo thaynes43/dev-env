@@ -295,9 +295,12 @@ Waiting with an empty ContainerID, zero restarts and no current or previous run/
 sole init container is the operator's `agentd home-verify` command with the full
 read-only HOME mount and no writable mounts or volume devices. Additional
 read-only mounts, including ServiceAccount admission's token/CA/namespace mount,
-are allowed. The verifier must still be Running or have FAILED, never succeeded:
-its exclusive state is Running, Waiting after a nonzero last termination, or
-Terminated with a nonzero exit code. It must not be Ready, and the Pod must
+are allowed. The verifier must still be Running or have FAILED, with no VISIBLE
+success: its exclusive state is Running, Waiting after a nonzero last termination, or
+Terminated with a nonzero exit code, and in every case its last termination must be
+absent or an exclusive nonzero failure. The kubelet keeps only the latest earlier
+termination, so an older success that a later failure replaced is not visible here;
+the main-container checks (zero restarts, no previous run) are the backstop. It must not be Ready, and the Pod must
 not report Initialized=True. A successful termination, including a previous
 successful termination while Waiting, or Waiting with restarts but no last
 termination retains the rescue requirement. The verifier image must equal
@@ -309,8 +312,8 @@ command, ephemeral containers or uncertain ownership cannot use this exception.
 This conservative exception does not apply to reap, active drain or hold Pods.
 A stale Draining phase with Suspended mode still uses the suspend guard and
 requires the same evidence. Deletion
-still uses the existing UID and resourceVersion preconditions; no force deletion
-or other resource mutation is added.
+still uses the existing UID and resourceVersion preconditions and the normal
+grace period; no force deletion or other resource mutation is added.
 
 `TestOriginalHomeInitFailedSuspend` exercises the real Reconcile/removePod/deletePod
 path using the existing fake rescuer and an admission-shaped projected-token
@@ -343,8 +346,25 @@ The initial reviewer did not run tests or runtime checks.
 passed with the same environment; lint reported zero issues.
 
 The fix-round focused run on code head `7be59054ca91dd80960452875cb38c8c3b128c4b`
-passed the exact requested controller filter: 88 top-level tests, 286 test/subtest
-passes, zero skips or failures, 41.106 seconds. All 52 suspend fixture cases
+passed its controller filter with zero skips or failures in 41.106 seconds. The
+independent re-review could not reproduce the counts first recorded here (88 top-level
+tests, 286 passes) with the requested filter at `83e05e4`; it measured 67 top-level
+tests and 198 pass events. The lead's run of the final head is recorded below.
+
+Lead correction round (2026-10-30, sole writer after the author exited). The
+adversarial re-review of `83e05e4` found that the Running and Terminated-nonzero
+branches ignored the last termination, so a verifier that had visibly succeeded
+earlier (Running, or Terminated 1, after an exit 0) was still accepted. Every
+branch now requires the last termination to be absent or an exclusive nonzero
+failure. Five cases were added: two earlier-success shapes (refused), two
+earlier-failure shapes (accepted) and an ambiguous last state (refused). The two
+earlier-success cases fail against the previous guard and pass with the fix. The
+requested filter
+`OriginalHomeInitFailed|Guard|Rescue|Suspend|Archive|TmpDefaultPreservesPodBytes|OriginalHome`
+passed: 67 top-level tests, 203 pass events, zero failures or skips, 39.8 s
+(Go 1.27.2, `GOMAXPROCS=2`, `-p 1`, `nice -n 19`). `make check-generated
+check-layout lint` passed with zero issues. This remains source-tested, not
+runtime-accepted. All 52 suspend fixture cases
 passed, including the review gaps above, as did `TestTmpDefaultPreservesPodBytes`
 with its unchanged hash. It used the same caps and `/tmp/t` after a fresh
 `make GO_PARALLELISM=1 GOMAXPROCS=2 envtest` setup.
@@ -366,8 +386,10 @@ on OP288 for a separate coordinator scope decision, with no follow-up execution
 here. The new negative cases retain the failed/restarted verifier fixture to
 isolate this exception; they do not claim to harden the legacy helper.
 
-Residual risk shared with the existing `podNeverStarted`: kubelet status lag
-can briefly hide a just-changed container state, even before this API read.
+Residual risk shared with the existing `podNeverStarted`: an init-to-main
+status-lag race. The kubelet can start the main container just after the verifier
+succeeds and before it reports that change, so one API read cannot prove that main
+never ran.
 Deletion retains its UID and resourceVersion preconditions, which fence API
 changes after the read but cannot eliminate kubelet reporting lag. Suspend never
 deletes the HOME volume, and any later archive still requires a verified rescue
