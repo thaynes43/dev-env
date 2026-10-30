@@ -17,6 +17,9 @@ func main() {
 }
 
 func run(args []string, in io.Reader, out, errw io.Writer) int {
+	if len(args) >= 1 && args[0] == "--checkins" {
+		return runCheckins(args, in, out, errw)
+	}
 	if len(args) >= 1 && args[0] == "--watchdog" {
 		if len(args) != 2 {
 			return usage(out, errw)

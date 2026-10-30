@@ -1,0 +1,41 @@
+{
+  "export": {
+    "page": 1,
+    "page_size": 20,
+    "has_more": false,
+    "owner_filter_scope": "all matching items",
+    "owner_match_total": 1,
+    "total_before_owner_filter": 1,
+    "items": [
+      {
+        "id": 9001,
+        "subject": "Synthetic check-in exercise",
+        "url": "https://tracker.example.invalid/work_packages/9001",
+        "status": "In progress",
+        "owner": "agent | worktree synthetic-session | branch agent/synthetic-session",
+        "check_after": "2030-01-02T17:00:00Z",
+        "last_verified": "2030-01-02T16:00:00Z",
+        "evidence": "synthetic-evidence",
+        "handoff": "synthetic-handoff",
+        "next_action": "Synthetic local planning only",
+        "reasons": [
+          "canonical synthetic due reason"
+        ],
+        "history_complete": true,
+        "provenance": {
+          "source": "synthetic-fixture"
+        },
+        "metadata": {
+          "ack": false,
+          "blocked": null
+        },
+        "comment_source": null
+      }
+    ]
+  },
+  "contexts": {
+    "schema": "dev-env.workflow-checkin-contexts/v1",
+    "observedAt": "2030-01-02T18:00:00Z",
+    "contexts": []
+  }
+}

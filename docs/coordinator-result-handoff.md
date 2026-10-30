@@ -172,3 +172,21 @@ python3 -I -B scripts/delivery/deliver_dev_env_pr.py deliver \
 ```
 
 `deliver` writes the audit, refuses a mismatched, hash-mismatched, or dirty checkout, and invokes the pinned guard once. The guard runs this wrapper's `preflight` subcommand. Both nested commands use isolated Python interpreters. The supported top-level route above must also use `-I`: a wrapper already started without isolation cannot undo imports it has already loaded. Preflight reads the open pull request and current `main`, writes those observations, then applies the evidence and check gates. `CI - Success` must be green. A named advisory failure may be the only failing check. Advisory success does not replace required CI or the native verdict. An unknown, blocked, behind, draft, or conflicting result refuses. For the two explicitly named optional Claude advisory checks only, duplicate runs may combine SUCCESS, FAILURE (or another recognized terminal nonzero result), and an already-permitted conditional SKIPPED result. Each outcome must be individually allowed; pending, running, unknown, or unrecognized outcomes still refuse. Advisory failures remain in the observed audit and count toward the existing unstable-state exception. Differing duplicate outcomes for required or other checks still refuse. Action-specific holds stay in force: a non-empty `pendingHolds` or a true `writableImplementer` refuses.
+
+## Offline canonical check-in triage
+
+The checker's `--checkins <export.json|-> --contexts <contexts.json>` mode joins
+one saved `opwork checkins -o json` export to bounded local PR contexts. The
+[context format and runnable synthetic example](../scripts/trials/workflow_handoff/README.md#canonical-openproject-check-ins)
+are documented with the CLI. Export reasons and provenance remain visible
+without a second opwork reason engine. The context binds the tracker ID and exact
+owner label to the story, coordinator, task UID, repository, PR and head. The
+existing watchdog reducer handles the resulting explicit obligation and receipts.
+No context or a pre-PR task remains unbound. Partial-page visibility and incomplete
+history withhold recommendations. Conflicting records never select a binding.
+
+This mode is source-only dry-run triage. It performs no network call, process
+launch, tracker update, live wake or notification. Every report and recommendation
+has `dryRun: true`, `executed: false`, and `checkerAuthority: none`. Acceptance of
+these offline fixtures establishes neither live subscription/delivery nor the
+broader #211 outcome.

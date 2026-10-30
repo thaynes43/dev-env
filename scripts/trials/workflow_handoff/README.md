@@ -37,3 +37,76 @@ When `observedAt` is at or after an explicit due, an unresolved unwaited obligat
 Every plan and intent has `dryRun: true`, `executed: false`, and `checkerAuthority: none`. `overallDone` is true only when the handoff checker reports completion and every obligation has resolution evidence for the current coordinator. Worker exit, delivery, acknowledgment, and a user question do not complete the task. Publication stays distinct from deployment. The planner performs neither.
 
 This is a PR-bound simulation. It does not accept a pre-PR task, invent a pull request or head, or talk to Codex, Claude, or Pushover. `codex-native` and `claude-rc` in the fixtures are coordinator labels for the same rules, not live sessions. Full live wake, notification, scheduler, and non-PR task support remain future work.
+
+## Canonical OpenProject check-ins
+
+`workflow_handoff --checkins <export.json|-> --contexts <contexts.json>` joins a
+saved `opwork checkins -o json` export to explicit local contexts. It performs no
+export retrieval. Use a previously authorized export from a CLI version that has
+`checkins`; the mode needs neither opwork nor a network connection at runtime.
+Both files are bounded to 128KiB, with at most 48 input items and 48 contexts.
+
+```bash
+GOTOOLCHAIN=local CGO_ENABLED=0 go run . \
+  --checkins testdata/checkins-export.json \
+  --contexts testdata/checkins-contexts.json
+```
+
+The synthetic files above are a complete runnable example. The export is the
+canonical object with `page`, `page_size`, `has_more`, `owner_filter_scope`,
+`owner_match_total`, `total_before_owner_filter`, and `items`. `owner_match_total`
+may be `"Unknown"`. Each item carries `id`, `subject`, `url`, `status`, `owner`,
+`check_after`, `last_verified`, `evidence`, `handoff`, `next_action`, `reasons`,
+`history_complete`, `provenance`, `metadata`, and nullable `comment_source`.
+The output retains every item field, including unknown export fields, in
+`sources`; export fields outside `items` remain in `visibility`. Canonical
+`reasons`, status, ACK, blocked, evidence and provenance are opaque display
+facts. This adapter does not reproduce opwork's reason engine or interpret those
+facts as authority, receipt states, resolution evidence or holds. A relevant
+hold must be recorded in the handoff for the existing reducer to enforce it.
+
+The local contexts document has schema `dev-env.workflow-checkin-contexts/v1`,
+an explicit RFC3339 `observedAt` (no wall clock is read), and a `contexts` array.
+Each context supplies:
+
+- `id` and the exact export `owner` string;
+- `story` equal to the decimal tracker ID, `repository`, positive `pullRequest`,
+  exact lowercase 40-character `head`, `task` and `uid`;
+- `coordinator`, the bounded coordinator identifier in the existing handoff;
+- an explicit obligation `kind` (`start_ack`, `progress`, `pickup`, or
+  `user_question`), an existing `handoff` document, and a `receipts` array;
+- optionally `ownerEscalationDueAt`, an explicit deadline for the existing planner.
+
+The export owner label may contain spaces and pipes; the context explicitly maps
+it to the handoff coordinator token. There is no owner-name inference. Every
+material binding must match the handoff header and its review binding. Missing,
+Unknown, foreign and pre-PR bindings remain `unbound` with an explanation and no
+plan. An exact binding alone does not establish a usable picked review: the
+existing handoff reducer still checks that evidence and suppresses advice when
+it is refused, ambiguous, conflicted or blocked.
+
+One obligation named `checkin-<id>` is passed to `planWatchdog`, using the context
+kind and coordinator and the export's `check_after` as `dueAt`. A null, empty or
+`"Unknown"` date supplies no due time. Other dates must follow the watchdog's
+RFC3339 rules, including its refusal of fractional seconds. No deadline is
+inferred from prose. The output embeds the unchanged watchdog plan, preserving
+its receipt validation, replay, idempotency, escalation and refusal semantics.
+`accepted` and `acknowledged` receipts do not mean done. New `nextReceipts` are
+recommendations only; this command does not persist them.
+
+`has_more: true` or owner-filter scope `"selected page"` is visible partial-page
+evidence. Incomplete or absent item history is also visible. Either condition
+withholds recommendations, even with a matching context. Distinct item variants
+are retained and sorted; exact duplicate JSON values collapse. Conflicting
+items or contexts for the same ID yield `conflict` and no plan for that ID.
+Other items remain independently visible. Ordering of items, contexts and object
+keys does not choose a winner. Unknown fields in the strict local contexts,
+handoff or receipt schemas retain the existing refusal rules; export extension
+fields are not schema violations.
+
+Exit 0 emits triage (including unbound, incomplete and blocked entries), exit 2
+reports a refused document or watchdog wrapper, and exit 3 reports conflicting
+item/context identities. Every report, item, watchdog plan and intent carries
+`dryRun: true`, `executed: false`, and `checkerAuthority: none`. No service,
+scheduler, tracker write, process launch, notification or live subscription is
+part of this mode. Source fixtures do not prove live delivery or #211 acceptance.
