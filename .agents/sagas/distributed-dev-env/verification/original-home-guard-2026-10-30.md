@@ -349,22 +349,7 @@ The fix-round focused run on code head `7be59054ca91dd80960452875cb38c8c3b128c4b
 passed its controller filter with zero skips or failures in 41.106 seconds. The
 independent re-review could not reproduce the counts first recorded here (88 top-level
 tests, 286 passes) with the requested filter at `83e05e4`; it measured 67 top-level
-tests and 198 pass events. The lead's run of the final head is recorded below.
-
-Lead correction round (2026-10-30, sole writer after the author exited). The
-adversarial re-review of `83e05e4` found that the Running and Terminated-nonzero
-branches ignored the last termination, so a verifier that had visibly succeeded
-earlier (Running, or Terminated 1, after an exit 0) was still accepted. Every
-branch now requires the last termination to be absent or an exclusive nonzero
-failure. Five cases were added: two earlier-success shapes (refused), two
-earlier-failure shapes (accepted) and an ambiguous last state (refused). The two
-earlier-success cases fail against the previous guard and pass with the fix. The
-requested filter
-`OriginalHomeInitFailed|Guard|Rescue|Suspend|Archive|TmpDefaultPreservesPodBytes|OriginalHome`
-passed: 67 top-level tests, 203 pass events, zero failures or skips, 39.8 s
-(Go 1.27.2, `GOMAXPROCS=2`, `-p 1`, `nice -n 19`). `make check-generated
-check-layout lint` passed with zero issues. This remains source-tested, not
-runtime-accepted. All 52 suspend fixture cases
+tests and 198 pass events. All 52 suspend fixture cases at that head
 passed, including the review gaps above, as did `TestTmpDefaultPreservesPodBytes`
 with its unchanged hash. It used the same caps and `/tmp/t` after a fresh
 `make GO_PARALLELISM=1 GOMAXPROCS=2 envtest` setup.
@@ -376,6 +361,27 @@ the three-file delta from rebased predecessor `74134bc` and found no in-scope
 source findings. It ran no tests or runtime checks and changed no files.
 Exact securityContext equality is intentionally conservative: harmless admission
 differences also retain the Pod.
+
+Lead correction round (2026-10-30, sole writer after the author exited). The
+adversarial re-review of `83e05e4` found that the Running and Terminated-nonzero
+branches ignored the last termination, so a verifier that had visibly succeeded
+earlier (Running, or Terminated 1, after an exit 0) was still accepted. Every
+branch now requires the last termination to be absent or an exclusive nonzero
+failure. Five cases were added, bringing TestOriginalHomeInitFailedSuspend to 57 cases: two
+earlier-success shapes (refused), two earlier-failure shapes (accepted) and an
+ambiguous last state (refused). The two
+earlier-success cases fail against the previous guard and pass with the fix. The
+requested filter
+`OriginalHomeInitFailed|Guard|Rescue|Suspend|Archive|TmpDefaultPreservesPodBytes|OriginalHome`
+passed: 67 top-level tests, 203 pass events, zero failures or skips, 39.8 s
+(Go 1.27.2, `GOMAXPROCS=2`, `-p 1`, `nice -n 19`); all 57 suspend fixture cases
+passed. `make check-generated check-layout lint` passed with zero issues. An
+independent adversarial re-review of `fe1b718` probed 1296 combinations of init
+state, last termination, restart count, Ready and Initialized: the new predicate
+matched the rule in all of them and adds no removal beyond it. The 60 combinations
+where removal is still allowed beyond the rule all come from the unchanged
+`podNeverStarted`, and main `38ffdf28` allows them too (the legacy limit below).
+This remains source-tested, not runtime-accepted.
 
 The reviewer also identified an unchanged legacy limit: `podNeverStarted` can
 accept contradictory zero-restart status (for example Waiting plus Terminated,
