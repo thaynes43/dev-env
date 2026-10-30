@@ -305,7 +305,7 @@ the named agent container's image. Its security context must match the agent's,
 with no privileged mode, no added capabilities and explicit refusal of privilege
 escalation; missing or changed security context fails closed. Missing,
 duplicate or unknown main status, another init, writable HOME, altered init
-command, ephemeral containers or uncertain ownership retain the rescue requirement.
+command, ephemeral containers or uncertain ownership cannot use this exception.
 This conservative exception does not apply to reap, active drain or hold Pods.
 A stale Draining phase with Suspended mode still uses the suspend guard and
 requires the same evidence. Deletion
@@ -341,6 +341,30 @@ and the ContainerID/image/privilege gaps addressed by this fix round.
 The initial reviewer did not run tests or runtime checks.
 `make GO_PARALLELISM=1 GOMAXPROCS=2 check-generated check-layout lint` also
 passed with the same environment; lint reported zero issues.
+
+The fix-round focused run on code head `7be59054ca91dd80960452875cb38c8c3b128c4b`
+passed the exact requested controller filter: 88 top-level tests, 286 test/subtest
+passes, zero skips or failures, 41.106 seconds. All 52 suspend fixture cases
+passed, including the review gaps above, as did `TestTmpDefaultPreservesPodBytes`
+with its unchanged hash. It used the same caps and `/tmp/t` after a fresh
+`make GO_PARALLELISM=1 GOMAXPROCS=2 envtest` setup.
+The fix round also passed
+`make GO_PARALLELISM=1 GOMAXPROCS=2 check-generated check-layout lint` with
+the same environment, serially after that suite; lint reported zero issues.
+Independent native `gpt-6.1-sol`, `xhigh`, reviewer `/root/op288_review` reviewed
+the three-file delta from rebased predecessor `74134bc` and found no in-scope
+source findings. It ran no tests or runtime checks and changed no files.
+Exact securityContext equality is intentionally conservative: harmless admission
+differences also retain the Pod.
+
+The reviewer also identified an unchanged legacy limit: `podNeverStarted` can
+accept contradictory zero-restart status (for example Waiting plus Terminated,
+Ready or Initialized=True), independently of this exception. Those synthetic
+shapes were already accepted before PR #719; changing that helper would extend
+this round into excluded legacy never-started/reap/hold behavior. This is recorded
+on OP288 for a separate coordinator scope decision, with no follow-up execution
+here. The new negative cases retain the failed/restarted verifier fixture to
+isolate this exception; they do not claim to harden the legacy helper.
 
 Residual risk shared with the existing `podNeverStarted`: kubelet status lag
 can briefly hide a just-changed container state, even before this API read.
