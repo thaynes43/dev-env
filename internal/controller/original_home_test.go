@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -117,11 +118,15 @@ func TestOriginalHomeRecreationAndRace(t *testing.T) {
 	}
 }
 func TestOriginalHomeRetainsFinalizer(t *testing.T) {
-	s, _, _, _ := originalFixture()
+	s, c, _, _ := originalFixture()
 	s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 	if volumeRemovalAllowed(s, false, true) == nil {
 		t.Fatal("guarded HOME can be archived")
 	}
+	if err := expiryVolumeRemovalAllowed(s, c); !errors.Is(err, homeguard.ErrUnsafe) {
+		t.Fatal("private expiry did not honor original HOME preservation", err)
+	}
+
 }
 
 func TestOriginalHomeStickyBindingWithStaleCache(t *testing.T) {

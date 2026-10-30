@@ -402,6 +402,9 @@ func deleteExpiryHold(ctx context.Context, c client.Client, pod *corev1.Pod, ev 
 // never be resumed onto a new HOME (D-62). The caller runs the archive's
 // verify and the Pod checks in the same call path first (removeExpiredHome).
 func expiryVolumeRemovalAllowed(s *v1alpha1.AgentSession, claim *corev1.PersistentVolumeClaim) error {
+	if _, exists := s.Annotations[homeguard.Annotation]; exists {
+		return homeguard.ErrUnsafe
+	}
 	h := s.Status.PrivateHistory
 	switch {
 	case s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil:
