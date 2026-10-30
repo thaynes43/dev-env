@@ -101,12 +101,17 @@ func (r *codexHostRPC) call(method string, params any, result any) error {
 			return errCodexHostUnknown
 		}
 		if envelope.Method != "" {
+			// A server request needs an interactive owner. Never discard it as
+			// though it were a notification while waiting for a mutation ACK.
+			if envelope.ID != nil {
+				return errCodexHostUnknown
+			}
 			if strings.HasPrefix(envelope.Method, "thread/") || strings.HasPrefix(envelope.Method, "turn/") {
 				r.churn = true
 			}
 			continue
 		}
-		if envelope.ID == nil || *envelope.ID != r.next || len(envelope.Error) > 0 || len(envelope.Result) == 0 {
+		if envelope.ID == nil || *envelope.ID != r.next || len(envelope.Error) > 0 && string(envelope.Error) != "null" || len(envelope.Result) == 0 || string(envelope.Result) == "null" {
 			return errCodexHostUnknown
 		}
 		if json.Unmarshal(envelope.Result, result) != nil {
