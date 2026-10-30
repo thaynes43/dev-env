@@ -71,7 +71,7 @@ func TestOnlyStopPrivateExecutorPatchesPods(t *testing.T) {
 	}
 	// The scan must see the one allowed patch, the one allowed delete and the
 	// one guarded call, or it proves nothing.
-	wants := []string{"pod Patch in stopPrivateExecutor", "stopPrivateExecutor in requestPrivateExecutorStop", "confirmedStopIntent in stopIntentConfirmed"}
+	wants := []string{"pod Patch in stopPrivateExecutor", "pod Patch in stopMaintenance", "stopPrivateExecutor in requestPrivateExecutorStop", "confirmedStopIntent in stopIntentConfirmed"}
 	for fn := range podDeleters {
 		wants = append(wants, "pod Delete in "+fn)
 	}
@@ -401,6 +401,17 @@ func scanPodWriteBody(scan *podWriteScan, report func(token.Pos, string, string,
 			return true
 		}
 		switch {
+		case name == "Patch" && !onSub && fn == "stopMaintenance":
+			scan.seen["pod Patch in stopMaintenance"]++
+			if scan.seen["pod Patch in stopMaintenance"] > 1 || len(call.Args) != 3 || !isJSONPatch(call.Args[2]) {
+				report(call.Pos(), fn, "maintenance stop must send exactly one JSON patch")
+			} else {
+				raw := call.Args[2].(*ast.CallExpr)
+				helper, ok := raw.Args[1].(*ast.CallExpr)
+				if !ok || calleeName(helper) != "StopMaintenancePatch" || len(helper.Args) != 1 {
+					report(call.Pos(), fn, "maintenance stop must use the UID/resourceVersion deadline-only helper")
+				}
+			}
 		case name == "Patch" && !onSub && fn == "stopPrivateExecutor":
 			podPatches++
 			scan.seen["pod Patch in stopPrivateExecutor"]++

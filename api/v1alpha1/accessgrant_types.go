@@ -34,12 +34,14 @@ import (
 
 // GrantType is what a grant gives (DESIGN-001 6.12). The LLM lease of 8.3
 // joins this list in plan 09.
-// +kubebuilder:validation:Enum=kube;egress;credential;breakglass
+// +kubebuilder:validation:Enum=kube;egress;credential;breakglass;maintenance
 type GrantType string
 
 const (
 	// GrantKube binds a catalog role to a ServiceAccount made for the grant.
 	GrantKube GrantType = "kube"
+	// GrantMaintenance leases an isolated executor for one immutable task.
+	GrantMaintenance GrantType = "maintenance"
 	// GrantEgress opens destinations to the session's pod with a
 	// CiliumNetworkPolicy.
 	GrantEgress GrantType = "egress"
@@ -140,14 +142,21 @@ const (
 //
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube' || self.type == 'breakglass') == has(self.kube)",message="kube is set for types kube and breakglass, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
+// +kubebuilder:validation:XValidation:rule="(self.type == 'maintenance') == has(self.maintenance)",message="maintenance is set only for a maintenance task"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || ((self.type == 'breakglass') == (self.kube.role == 'dev-env-grant-breakglass'))",message="type breakglass and role dev-env-grant-breakglass go together (D-27)"
 // +kubebuilder:validation:XValidation:rule="duration(self.ttl) >= duration('10m') && duration(self.ttl) <= duration('8h')",message="ttl runs from 10m to 8h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.ttl) <= duration('4h')",message="a credential grant lasts at most 4h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' || duration(self.ttl) <= duration('1h')",message="break-glass lasts at most 1h (D-27)"
-// +kubebuilder:validation:XValidation:rule="has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress) && has(self.credential) == has(oldSelf.credential)",message="immutable after create; only release may change"
+// +kubebuilder:validation:XValidation:rule="has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress) && has(self.credential) == has(oldSelf.credential) && has(self.maintenance) == has(oldSelf.maintenance)",message="immutable after create; only release may change"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.release) && oldSelf.release) || (has(self.release) && self.release)",message="release cannot be taken back"
+// +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || (duration(self.ttl) <= duration('1h') && has(self.requester.sessionUID) && self.maintenance.coordinator.name == self.requester.session && self.maintenance.coordinator.uid == self.requester.sessionUID)",message="maintenance requires the authenticated coordinator UID and at most one hour"
 type AccessGrantSpec struct {
+	// Maintenance is an immutable task envelope.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable task scope"
+	// +optional
+	Maintenance *MaintenanceTask `json:"maintenance,omitempty"`
+
 	// Requester is the session the grant is for, as the API found it from the
 	// caller's token.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; only release may change"
@@ -346,6 +355,10 @@ type CredentialGrant struct {
 // AccessGrantStatus is the broker's record of the grant. Only the broker
 // writes it (accessgrants/status); the operator's API reads it.
 type AccessGrantStatus struct {
+	// Maintenance keeps executor termination and restore evidence separate.
+	// +optional
+	Maintenance *MaintenanceStatus `json:"maintenance,omitempty"`
+
 	// Phase is where the grant stands.
 	// +optional
 	Phase GrantPhase `json:"phase,omitempty"`
@@ -447,7 +460,7 @@ type AccessGrantList struct {
 // the policy's type, its requester matches every requester list the policy sets,
 // its scope lies inside the policy's scope, and its TTL is at most maxTTL.
 //
-// +kubebuilder:validation:XValidation:rule="self.type != 'breakglass'",message="no policy can approve break-glass: Tom approves every one on the page (D-27)"
+// +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' && self.type != 'maintenance'",message="no standing policy approves break-glass or maintenance: authenticated human approval is required"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube') == has(self.kube)",message="kube is set for type kube, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"

@@ -38,6 +38,8 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return &exitError{code: ExitUsage}
 	}
 	switch args[0] {
+	case "maintenance-request", "maintenance-decide", "maintenance-exec":
+		return a.grantMaintenance(ctx, args[0], args[1:])
 	case "list":
 		return a.grantList(ctx, args[1:])
 	case "show":
@@ -460,6 +462,13 @@ func noticeFor(text string, grants ...apiv1.Grant) string {
 }
 
 func (a *app) printGrant(out apiv1.Grant) error {
+	if out.Maintenance != nil {
+		a.outf("maintenance node: %s (%s) resource: %s operation: %s\n", out.Maintenance.Node, out.Maintenance.NodeUID, out.Maintenance.Resource, out.Maintenance.Operation)
+		a.outf("maintenance grant UID: %s digest: %s\n", out.UID, out.MaintenanceDigest)
+		if out.MaintenanceStatus != nil {
+			a.outf("executor: %s restore report: %s\n", out.MaintenanceStatus.Executor, out.MaintenanceStatus.RestoreEvidence)
+		}
+	}
 	expires := "-"
 	if out.ExpiresAt != nil && !out.ExpiresAt.IsZero() {
 		expires = out.ExpiresAt.UTC().Format(timeRFC3339)

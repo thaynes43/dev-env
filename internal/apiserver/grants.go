@@ -20,6 +20,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
@@ -56,6 +57,11 @@ func (s *Server) createGrant(ctx context.Context, w http.ResponseWriter, r *http
 		return 0, nil, err
 	}
 
+	if g.Spec.Type == v1alpha1.GrantMaintenance {
+		if err := broker.CheckMaintenanceIdentities(ctx, s.Live, s.Policy.SessionNamespace, g); err != nil {
+			return 0, nil, forbidden("maintenance identity or target: %s", err)
+		}
+	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 
@@ -123,20 +129,21 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
 	notFor := func(kind string, set map[string]bool) {
-		for _, f := range []string{"role", "namespaces", "fqdns", "cidrs", "endpoints", "ports", "credential"} {
+		for _, f := range []string{"role", "namespaces", "fqdns", "cidrs", "endpoints", "ports", "credential", "maintenance"} {
 			if set[f] {
 				add(f, "not for type %s", kind)
 			}
 		}
 	}
 	set := map[string]bool{
-		"role":       req.Role != "",
-		"namespaces": len(req.Namespaces) > 0,
-		"fqdns":      len(req.FQDNs) > 0,
-		"cidrs":      len(req.CIDRs) > 0,
-		"endpoints":  len(req.Endpoints) > 0,
-		"ports":      len(req.Ports) > 0,
-		"credential": req.Credential != "",
+		"role":        req.Role != "",
+		"namespaces":  len(req.Namespaces) > 0,
+		"fqdns":       len(req.FQDNs) > 0,
+		"cidrs":       len(req.CIDRs) > 0,
+		"endpoints":   len(req.Endpoints) > 0,
+		"ports":       len(req.Ports) > 0,
+		"credential":  req.Credential != "",
+		"maintenance": req.Maintenance != nil,
 	}
 	others := func(keep ...string) map[string]bool {
 		out := map[string]bool{}
@@ -161,6 +168,19 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	}
 	ttl := apiv1.DefaultGrantTTL
 	switch typ {
+	case v1alpha1.GrantMaintenance:
+		if !s.MaintenanceEnabled {
+			return nil, forbidden("bounded maintenance is disabled")
+		}
+		ttl = broker.MaintenanceDefaultTTL
+		if req.Maintenance == nil {
+			add("maintenance", "required task envelope")
+		} else {
+			spec.Maintenance = maintenanceSpec(req.Maintenance)
+			// Requester identity is derived from TokenReview, never trusted from JSON.
+			spec.Maintenance.Coordinator = v1alpha1.MaintenanceIdentity{Name: c.session.Name, UID: string(c.session.UID), PodUID: string(c.pod.UID)}
+		}
+		notFor(req.Type, others("maintenance"))
 	case v1alpha1.GrantKube:
 		if req.Role == "" {
 			add("role", "required for type kube: a role from the grant catalog, such as %s", v1alpha1.RoleWorkloads)
@@ -223,6 +243,11 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		}
 	}
 	spec.TTL = metav1.Duration{Duration: ttl}
+	if typ == v1alpha1.GrantMaintenance && spec.Maintenance != nil {
+		if err := broker.ValidateMaintenance(&v1alpha1.AccessGrant{Spec: spec}); err != nil {
+			add("maintenance", "%s", err)
+		}
+	}
 	if strings.TrimSpace(req.Reason) == "" {
 		add("reason", "required: why the session asks, in a sentence; Tom reads it on the approval page")
 	}
@@ -312,6 +337,9 @@ type grantScope struct {
 
 // scopeKey is a grant's scope as a string that compares lists as sets.
 func scopeKey(spec *v1alpha1.AccessGrantSpec) string {
+	if spec.Maintenance != nil {
+		return broker.MaintenanceDigest(&v1alpha1.AccessGrant{Spec: *spec})
+	}
 	k := grantScope{Type: string(spec.Type)}
 	if kg := spec.Kube; kg != nil {
 		k.Role, k.Namespaces = kg.Role, sortedSet(kg.Namespaces)
@@ -512,6 +540,17 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 		ServiceAccount:  st.ServiceAccount,
 		InstalledPodUID: st.InstalledPodUID,
 		InstalledAt:     timeOf(st.InstalledAt),
+	}
+	if g.Spec.Maintenance != nil {
+		v.UID = string(g.UID)
+		v.Maintenance = maintenanceView(g.Spec.Maintenance)
+		v.MaintenanceDigest = broker.MaintenanceDigest(g)
+		if st.Maintenance != nil {
+			raw, _ := json.Marshal(st.Maintenance)
+			var status apiv1.MaintenanceStatus
+			_ = json.Unmarshal(raw, &status)
+			v.MaintenanceStatus = &status
+		}
 	}
 	if kg := g.Spec.Kube; kg != nil {
 		v.Role, v.Namespaces = kg.Role, kg.Namespaces

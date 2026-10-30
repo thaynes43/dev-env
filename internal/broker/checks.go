@@ -47,6 +47,12 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 		return fmt.Errorf("the name %q is not grant-<id>, a DNS label (D-54)", g.Name)
 	}
 	s := &g.Spec
+	if s.Type == v1alpha1.GrantMaintenance {
+		return ValidateMaintenance(g)
+	}
+	if s.Maintenance != nil {
+		return errors.New("maintenance envelope on another grant type")
+	}
 	if s.Requester.Session == "" {
 		return errors.New("the grant names no requesting session")
 	}

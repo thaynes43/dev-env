@@ -178,6 +178,8 @@ type Server struct {
 	// GrantAttestation serves POST /v1/grants/{name}/attestation. Default off:
 	// the route is not registered and answers 404.
 	GrantAttestation bool
+	// MaintenanceEnabled is held default off; new routes are absent until enabled.
+	MaintenanceEnabled bool
 	// Asks serves /v1/asks and /v1/portal/asks (OpenProject Epic #254). Nil leaves both
 	// unregistered. v1 does not write an inbox message when an ask is answered.
 	Asks *asks.KubeStore
@@ -287,6 +289,10 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:    s.getGrant,
 		http.MethodDelete: s.releaseGrant,
 	}}))
+	if s.MaintenanceEnabled {
+		mux.Handle(apiv1.GrantsPath+"/{name}/maintenance-decision", s.serve(route{methods: map[string]handler{http.MethodPost: s.decideMaintenance}}))
+		mux.Handle(apiv1.GrantsPath+"/{name}/maintenance-exec", s.serve(route{methods: map[string]handler{http.MethodPost: s.execMaintenance}}))
+	}
 	if s.GrantAttestation {
 		mux.Handle(apiv1.GrantsPath+"/{name}/attestation", s.serve(route{methods: map[string]handler{http.MethodPost: s.attestGrant}}))
 	}

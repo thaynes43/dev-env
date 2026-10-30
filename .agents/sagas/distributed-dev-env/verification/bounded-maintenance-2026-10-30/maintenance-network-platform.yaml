@@ -1,0 +1,170 @@
+---
+# Platform tier (DESIGN-001 D-24): what EVERY session pod in dev-agents may reach, whatever
+# its profile. It also makes every session pod default-deny, in both directions, the
+# moment it exists: a pod selected by any policy with an `egress` or `ingress` section
+# is closed to everything not allowed by some policy.
+#
+# Ingress: none. `kubectl exec` and attach go through the kubelet, not the pod network,
+# and kubelet probes are always admitted from the local host. (Cilium reads an empty
+# rule `- {}` as "selects the pod, allows no peer", unlike a Kubernetes NetworkPolicy.)
+#
+# The shared in-cluster MCP services and the authoring tool pods (D-14, KICKOFF 8.10) are
+# the last rules below. Ingress to ha-mcp, mcp-grafana, mcp-unifi and vexa is open in
+# the cluster today (they have no policy of their own), so only this egress half is
+# needed for them. The haynesnetwork hop and the audio and Blender services admit
+# their callers by label, so each of those policies also admits dev-agents (the
+# ingress half, same PR). Ports and labels are copied from the v1 pod's policy
+# (apps/dev/dev-env/app/networkpolicy.yaml).
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: dev-env-session-platform
+spec:
+  description: dev-env v2 session pods, platform tier (default-deny, DNS, API server, operator API)
+  endpointSelector:
+    matchLabels:
+      io.kubernetes.pod.namespace: dev-agents
+    # These bounded checks have their own policies; no additive MCP/API tier.
+    matchExpressions:
+      # Maintenance executors have no additive platform or public-web tier.
+      - key: dev-env.haynesops.com/maintenance
+        operator: DoesNotExist
+      - key: dev-env.haynesops.com/project-canary
+        operator: DoesNotExist
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values:
+          - dev-env-owned-native-lifecycle
+          - dev-env-owned-luna-1019
+          - dev-env-owned-luna-1019-2
+          - dev-env-owned-luna-1019-3
+          - dev-env-owned-luna-1019-4
+          - dev-env-owned-luna-1019-5
+          - dev-env-owned-luna-1019-6
+          - dev-env-owned-luna-1019-7
+          - dev-env-owned-luna-1019-8
+          - dev-env-owned-luna-1019-9
+          - dev-env-project-bootstrap-check
+          - dev-env-v2-portal
+  ingress:
+    - {}
+  egress:
+    # DNS through CoreDNS. The `*` DNS rule routes lookups through Cilium's DNS proxy,
+    # which is what lets Hubble record each pod's lookups (6.10's audit trail) and lets
+    # any toFQDNs grant resolve. It allows every name, and the web tier below allows
+    # every public address, so this filters nothing the web tier does not already allow.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    # Kubernetes API server, in-cluster kubectl via kubernetes.default.svc (same pair of
+    # ports as the v1 policy: the Service port and the node's real one).
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+            - port: "6443"
+              protocol: TCP
+    # The operator's /v1 API (heartbeats, the agent-run client). The operator
+    # HelmRelease (8.9) must label its pods app.kubernetes.io/name: dev-env-operator
+    # (the app-template default for a release of that name does).
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: dev-env-system
+            app.kubernetes.io/name: dev-env-operator
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    # Shared MCP services (D-14), the same set and ports v1 reaches. Reached by service
+    # FQDN; DNS above allows every name.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: home-automation
+            app.kubernetes.io/name: ha-mcp
+      toPorts:
+        - ports:
+            - port: "8086"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: observability
+            app.kubernetes.io/name: mcp-grafana
+      toPorts:
+        - ports:
+            - port: "8000"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: observability
+            app.kubernetes.io/name: mcp-unifi
+      toPorts:
+        - ports:
+            - port: "3000"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: ai
+            app.kubernetes.io/instance: vexa
+            app.kubernetes.io/component: gateway
+      toPorts:
+        - ports:
+            - port: "8000"
+              protocol: TCP
+    # The haynesnetwork Watch Companion hop (the hop injects the consumer token itself).
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: frontend
+            app.kubernetes.io/name: haynesnetwork-mcp-hop
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # The OpenProject private agent API (Story97 / opwork), the same fixed destination v1
+    # reaches. DNS above already resolves openproject-web.frontend.svc.cluster.local. The
+    # matching ingress is in apps/frontend/openproject/app/networkpolicy.yaml. The
+    # exclusions in this policy's endpointSelector still keep the bounded fixtures closed.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: frontend
+            app.kubernetes.io/instance: openproject
+      toPorts:
+        - ports:
+            - port: "8082"
+              protocol: TCP
+    # Authoring services in dev (Blender x2, audio runtime; the audio provisioner is not
+    # a caller target). Each also admits dev-agents on its own side.
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: dev
+            app.kubernetes.io/name: blender-authoring
+      toPorts:
+        - ports:
+            - port: "8000"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: dev
+            app.kubernetes.io/name: blender-authoring-2
+      toPorts:
+        - ports:
+            - port: "8000"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: dev
+            app.kubernetes.io/name: audio-authoring
+            app.kubernetes.io/component: runtime
+      toPorts:
+        - ports:
+            - port: "8000"
+              protocol: TCP

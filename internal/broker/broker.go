@@ -110,6 +110,10 @@ type Broker struct {
 	// that carries its session's agent attestation. Off, the broker skips every
 	// attested policy and so never approves through one.
 	EnableAttestedGrants bool
+	// EnableMaintenanceGrants is held default off; cleanup remains enabled.
+	EnableMaintenanceGrants bool
+	// MaintenanceHumanServiceAccount must match the operator human identity.
+	MaintenanceHumanServiceAccount string
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.
@@ -162,6 +166,10 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if err := checkCapabilities(&g, b.EnableProxmoxGrants || g.Status.Phase == v1alpha1.GrantActive, b.EnableHWSSHGrants || g.Status.Phase == v1alpha1.GrantActive, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return b.end(ctx, &g, v1alpha1.GrantDenied, DeniedByBroker, err.Error(), now)
 	}
+	if g.Spec.Type == v1alpha1.GrantMaintenance && !b.EnableMaintenanceGrants && g.Status.Phase != v1alpha1.GrantActive {
+		return b.end(ctx, &g, v1alpha1.GrantDenied, DeniedByBroker, "maintenance disabled", now)
+	}
+
 	sess, err := b.requestingSession(ctx, &g)
 	if sess != nil && !sess.DeletionTimestamp.IsZero() {
 		sess = nil
@@ -200,6 +208,12 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 		return b.end(ctx, g, v1alpha1.GrantDenied, DeniedByTimeout, "no answer in 30 minutes", now)
 	}
 
+	if g.Spec.Type == v1alpha1.GrantMaintenance {
+		if handled, err := b.maintenanceDecision(ctx, g); handled {
+			return ctrl.Result{RequeueAfter: time.Second}, err
+		}
+		return ctrl.Result{RequeueAfter: min(5*time.Second, deadline.Sub(now.Time))}, nil
+	}
 	var policies v1alpha1.GrantPolicyList
 	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list the grant policies: %w", err)
@@ -259,6 +273,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	}
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released by its session", now)
+	}
+	if g.Spec.Type == v1alpha1.GrantMaintenance {
+		return b.activeMaintenance(ctx, g, now)
 	}
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)

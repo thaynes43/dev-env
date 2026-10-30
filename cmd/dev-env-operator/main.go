@@ -127,6 +127,7 @@ type options struct {
 	clientSAs                     []string
 	grantApprovalURL              string
 	grantAttestation              bool
+	maintenanceEnabled            bool
 	asksEnabled                   bool
 	coordinatorEnabled            bool
 	portalReaderEnabled           bool
@@ -193,6 +194,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.apiTLSDir, "api-tls-dir", "/etc/dev-env-operator/api-tls", "directory holding the /v1 API's tls.crt and tls.key, the cert-manager Secret's mount")
 	fs.StringVar(&o.humanSA, "human-service-account", ownNamespace+"/dev-env-human", "Tom's ServiceAccount, <namespace>/<name>, whose token his laptop mints (D-05)")
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
+	fs.BoolVar(&o.maintenanceEnabled, "enable-maintenance-api", false, "HELD: authenticated bounded maintenance API after policy review")
 	fs.BoolVar(&o.grantAttestation, "enable-grant-attestation", false, "serve POST /v1/grants/{name}/attestation, where a grant's requesting session records its claim that the user or a coordinator approved it (agent attestation, not verified human identity); off, the route does not exist")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
@@ -848,6 +850,7 @@ func run(args []string) error {
 			Log:                      ctrl.Log.WithName("api"),
 			GrantApprovalURL:         o.grantApprovalURL,
 			GrantAttestation:         o.grantAttestation,
+			MaintenanceEnabled:       o.maintenanceEnabled,
 			Asks:                     askStore,
 		}
 		// The standby session is default off. It is made through the API's own
