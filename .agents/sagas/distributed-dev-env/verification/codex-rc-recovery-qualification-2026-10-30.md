@@ -43,7 +43,8 @@ agentd failures are retained in the original PRs; no baseline equivalence or
 new full-suite pass is asserted.
 
 The default-off route is `POST /v1/sessions/{name}/codex-thread`, enabled only
-by `--enable-codex-rc-thread` plus `--codex-rc-target-file`. It uses fixed
+by `--enable-codex-rc-thread` plus `--codex-rc-target-file`, the existing API
+and an accepted catalog binding. It uses fixed
 `agentd ctl codex-thread preflight|start` against the existing native daemon.
 No live target/root/process/supported-client-pairing tuple is qualified here.
 
@@ -114,7 +115,7 @@ controller and HOME recreation path. **No step below has been executed.**
    `agent-run resume dev-env-1019-205125`. Observe a new Pod UID on the same
    AgentSession UID and original HOME/PV. Do not shorten archiveAfter, create
    a new host, copy enrollment, clear native files, mount a rescue pod or pair.
-5. Read normal public lifecycle/RC status and ask for supported-client
+5. Read normal authenticated lifecycle/RC status and ask for supported-client
    confirmation that the **previously paired identity** returns online with its
    history. Do not guess pairing IDs. Native connected or code-issued status
    alone cannot satisfy this step. If identity/pairing is missing or unknown,
