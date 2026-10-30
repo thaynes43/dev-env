@@ -974,6 +974,29 @@ func TestSessionReadCompletionTime(t *testing.T) {
 	}
 }
 
+func TestRenderFixtureShowsSuccessfulReadTime(t *testing.T) {
+	now := time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)
+	for _, failed := range []bool{false, true} {
+		page := portal.ProductPage{Title: "Sessions", Connected: true, Complete: true}
+		if failed {
+			page.ReadFailure = &portal.ProductReadFailure{ReasonCode: "operator_unreachable"}
+		}
+		body, err := renderFixture(page, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, footer, found := strings.Cut(string(body), `<footer class="statusbar">`)
+		footer, _, _ = strings.Cut(footer, "</footer>")
+		const updated = `Updated <time datetime="2026-10-30T08:00:00Z">30 Oct 2026, 08:00 UTC</time>`
+		if !found || strings.Contains(footer, updated) == failed {
+			t.Fatalf("fixture freshness (failed=%t): %s", failed, footer)
+		}
+		if failed && (strings.Contains(footer, "Updated") || strings.Contains(string(body), `<p class="list-foot">`)) {
+			t.Fatal("failed fixture claims successful read freshness")
+		}
+	}
+}
+
 func TestServeSessionsFooterUsesReadCompletion(t *testing.T) {
 	f := setupAuth(t)
 	f.login(t)

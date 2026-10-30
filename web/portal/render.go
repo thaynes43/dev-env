@@ -726,7 +726,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		view.FooterUpdatedAt, view.FooterUpdatedLabel = "", ""
 		if page.Connected && page.ReadFailure == nil {
 			if at, err := time.Parse(time.RFC3339Nano, page.ReadCompletedAt); err == nil && !at.IsZero() {
-				view.FooterUpdatedAt = at.UTC().Format(time.RFC3339Nano)
+				view.FooterUpdatedAt = at.UTC().Truncate(time.Second).Format(time.RFC3339)
 				view.FooterUpdatedLabel = observedLabel(view.FooterUpdatedAt)
 			}
 		}

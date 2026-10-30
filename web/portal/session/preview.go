@@ -67,6 +67,9 @@ func readProductFixture(source io.Reader) (productFixture, error) {
 func renderFixture(page portal.ProductPage, now time.Time) ([]byte, error) {
 	page.Preview = true
 	page.ObservedAt = now.UTC().Format(time.RFC3339)
+	if page.Connected && page.ReadFailure == nil {
+		page.ReadCompletedAt = page.ObservedAt
+	}
 	return portal.RenderProduct(page)
 }
 

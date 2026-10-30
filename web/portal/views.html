@@ -23,7 +23,7 @@
 <div class="list-scroll">{{if not .HasRows}}<div class="list-empty" role="status"><p>{{.Notice}}</p></div>{{end}}
 {{range .Groups}}<h2 class="group-label" id="{{.ID}}"><span>{{.Title}}</span><span>{{.Count}}</span></h2>
 <ul>{{range .Rows}}<li><a class="item{{if eq .ID $.DefaultID}} default{{end}}" href="#{{.ID}}"><span class="item-top"><span class="item-kicker">{{.Kicker}}</span>{{if .Fixture}}<span><span class="badge tone-{{.Status.Tone}}">{{.Status.Text}}</span> <span class="badge tone-muted">Fixture</span></span>{{else}}<span class="badge tone-{{.Status.Tone}}">{{.Status.Text}}</span>{{end}}</span><h3>{{.Title}}</h3>{{if .Description}}<span class="item-desc">{{.Description}}</span>{{end}}<span class="item-line"><span>{{.Meta}}</span><span>{{.Age}}</span></span></a></li>{{end}}</ul>{{end}}</div>
-<p class="list-foot">Updated <time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time></p></section>
+{{if .FooterUpdatedAt}}<p class="list-foot">Updated <time datetime="{{.FooterUpdatedAt}}">{{.FooterUpdatedLabel}}</time></p>{{end}}</section>
 {{end}}<main class="workspace" id="main" tabindex="-1">
 {{if not .UsageView}}{{range .Rows}}{{$id := .ID}}{{$name := .Title}}<section class="detail{{if .Default}} default{{end}}" id="{{.ID}}" aria-labelledby="{{.ID}}-title" tabindex="-1"><div class="detail-head">
 <p class="crumb"><a class="back" href="#list"><svg class="i"><use href="#i-back"/></svg>{{$.ListTitle}}</a><span>dev-env</span><span>/</span><span>{{$.Section}}</span><span>/</span><span class="mono">{{.Crumb}}</span></p>

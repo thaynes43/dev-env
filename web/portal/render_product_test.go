@@ -104,21 +104,27 @@ func TestRenderProductKeepsAnchorsTonesAndCountsSafe(t *testing.T) {
 func TestSessionsFooterRequiresSuccessfulReadTime(t *testing.T) {
 	const renderedAt = "2026-10-30T08:12:00Z"
 	const completedAt = "2026-10-30T08:10:00.123Z"
+	const updated = `Updated <time datetime="2026-10-30T08:10:00Z">30 Oct 2026, 08:10 UTC</time>`
 	for _, tc := range []struct {
-		name      string
-		completed string
-		failure   *ProductReadFailure
-		want      bool
+		name, view, completed string
+		failure               *ProductReadFailure
+		incomplete            bool
+		want                  bool
 	}{
 		{name: "success", completed: completedAt, want: true},
+		{name: "nanoseconds and offset truncated to UTC seconds", completed: "2026-10-30T10:10:00.123456789+02:00", want: true},
+		{name: "capped successful read", completed: completedAt, incomplete: true, want: true},
+		{name: "usage success", view: "usage", completed: completedAt, want: true},
+		{name: "usage unknown", view: "usage"},
+		{name: "usage failure", view: "usage", completed: completedAt, failure: &ProductReadFailure{ReasonCode: "operator_unreachable"}},
 		{name: "failed after success", completed: completedAt, failure: &ProductReadFailure{ReasonCode: "operator_unreachable", LastSuccessAt: completedAt}},
 		{name: "unknown"},
 		{name: "invalid", completed: "Unknown"},
 		{name: "zero", completed: time.Time{}.Format(time.RFC3339Nano)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			page := ProductPage{Title: "Sessions", Connected: true, Complete: true,
-				ObservedAt: renderedAt, ReadCompletedAt: tc.completed, ReadFailure: tc.failure}
+			page := ProductPage{Title: "Sessions", Connected: true, Complete: !tc.incomplete,
+				ObservedAt: renderedAt, ReadCompletedAt: tc.completed, ReadFailure: tc.failure, Filter: ProductFilter{View: tc.view}}
 			body, err := RenderProduct(page)
 			if err != nil {
 				t.Fatal(err)
@@ -130,13 +136,39 @@ func TestSessionsFooterRequiresSuccessfulReadTime(t *testing.T) {
 			if strings.Contains(footer, "Updated") != tc.want {
 				t.Fatalf("unexpected footer freshness: %s", footer)
 			}
-			if tc.want && !strings.Contains(footer, `Updated <time datetime="`+completedAt+`">30 Oct 2026, 08:10 UTC</time>`) {
+			if tc.want && !strings.Contains(footer, updated) {
 				t.Fatalf("footer did not use read completion: %s", footer)
 			}
 			if strings.Contains(footer, renderedAt) {
 				t.Fatalf("footer exposed render time as freshness: %s", footer)
 			}
+			listFoot := regexp.MustCompile(`<p class="list-foot">(.*?)</p>`).FindString(string(body))
+			if tc.want && tc.view != "usage" {
+				if listFoot != `<p class="list-foot">`+updated+`</p>` {
+					t.Fatalf("list foot did not match footer completion: %s", listFoot)
+				}
+			} else if listFoot != "" {
+				t.Fatalf("unexpected list foot: %s", listFoot)
+			}
 		})
+	}
+}
+
+func TestTasksKeepsExistingFooterTime(t *testing.T) {
+	const renderedAt = "2026-10-30T08:12:00.123Z"
+	const completedAt = "2026-10-30T08:10:00Z"
+	body, err := RenderProduct(ProductPage{Title: "Tasks", Connected: true, Complete: true,
+		ObservedAt: renderedAt, ReadCompletedAt: completedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	footer := regexp.MustCompile(`<footer class="statusbar">(.*?)</footer>`).FindString(string(body))
+	const updated = `Updated <time datetime="` + renderedAt + `">30 Oct 2026, 08:12 UTC</time>`
+	if !strings.Contains(footer, updated) || strings.Contains(footer, completedAt) {
+		t.Fatalf("Tasks footer time changed: %s", footer)
+	}
+	if !strings.Contains(string(body), `<p class="list-foot">`+updated+`</p>`) {
+		t.Fatal("Tasks list foot time changed")
 	}
 }
 
