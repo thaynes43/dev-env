@@ -2559,6 +2559,7 @@ and `PreservationUnknown` permanently when no whole-executor terminal record
 exists, blocking HOME expiry rather than proving a safe stop.
 
 Legacy executors predate the 2.71 retention latch, so the zero-restart and
-fresh-heartbeat checks are required. The templates now pin 2.71.0; once the
+fresh-heartbeat checks are required (the heartbeat only while the Pod is not
+terminal). The templates now pin 2.71.0; once the
 legacy backlog clears this extra flag can be retired. The normal 2.71+ exit
 proof, Pod rendering, retention latch and HOME-expiry policy are unchanged.

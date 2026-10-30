@@ -498,7 +498,7 @@ func TestLegacyTerminalTaskSelfEndedPodIsReclaimed(t *testing.T) {
 	}
 	got := storedHistory(t, base, f.s)
 	if cond := meta.FindStatusCondition(got.Status.Conditions, ConditionTerminalTaskReclaim); !executorTerminalRecorded(got.Status.PrivateHistory) ||
-		cond == nil || cond.Reason != "Reclaimed" {
+		cond == nil || cond.Reason != "Reclaimed" || got.Status.PrivateHistory.StopRequest != nil {
 		t.Fatalf("self-ended legacy outcome: %+v", got.Status)
 	}
 	assertLegacyHOMEUnchanged(t, base, home)
@@ -537,8 +537,8 @@ func TestLegacyTerminalTaskKeepsTerminalPodWithoutRecord(t *testing.T) {
 	}
 	got := storedHistory(t, base, f.s)
 	if cond := meta.FindStatusCondition(got.Status.Conditions, ConditionTerminalTaskReclaim); executorTerminalRecorded(got.Status.PrivateHistory) ||
-		cond == nil || cond.Reason == "Reclaimed" {
-		t.Fatalf("unrecorded terminal executor settled: %+v", cond)
+		cond == nil || cond.Reason != "ProofUnknown" || !strings.Contains(cond.Message, "whole-Pod terminal record has not been confirmed") {
+		t.Fatalf("unrecorded terminal executor not kept for its missing record: %+v", cond)
 	}
 	assertLegacyHOMEUnchanged(t, base, home)
 }
