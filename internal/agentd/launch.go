@@ -255,6 +255,9 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 // the task's guard. The model and effort are the session's, which spec fixes
 // at create (D-39).
 func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first Launch, bootID string, now time.Time) (Launch, error) {
+	if terminalPrivateTask(s, sess) {
+		return Launch{}, errors.New("a terminal private task cannot automatically resume its provider")
+	}
 	if sess.Agent == protocol.AgentCodex {
 		return buildCodexLaunch(s, sess, ws, &first, bootID, now)
 	}
@@ -434,4 +437,13 @@ func writeJSONFile(path string, v any) error {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+func terminalPrivateTask(s Settings, sess protocol.Session) bool {
+	if sess.Mode != protocol.ModeTask || sess.Workspace != nil {
+		return false
+	}
+	_, err := os.Lstat(s.statePath(resultFile))
+	// Unreadable or malformed retained state never permits another invocation.
+	return !errors.Is(err, os.ErrNotExist)
 }

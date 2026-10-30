@@ -42,6 +42,10 @@ Everything here is default off. Five operator flags turn it on, in haynes-ops
 changes that come in the order of section 13. Deletion is the last, after the
 archived-history read is accepted on the installed system.
 
+**2026-10-30, OpenProject #291:** section 24 adds a separately gated,
+compute-only exception for a terminal headless task. It preserves the original
+HOME and history and does not activate or shorten the HOME expiry policy.
+
 ## 1. What runs, in one picture
 
 ```mermaid
@@ -2370,3 +2374,61 @@ so the finalizer can lift. A present Pod or HOME, or any other read result,
 keeps the finalizer. `TestNeverStartedReleasePredicate` locks the predicate.
 `TestNeverStartedReleaseLiftsFinalizerOnlyWhenPodAndHomeAreAbsent` locks the
 three call sites.
+
+## 24. Terminal headless task compute reclaim — 2026-10-30 (#291)
+
+Source and tests only, authorized by work order PODRECLAIM291-20261030-01.
+The phase-1 checkpoint is OpenProject #291 journal 3321. The relevant private
+stop/expiry/terminal paths are unchanged between v2.63.1 and v2.70.1. A task's
+provider exits, but agentd stays alive; its Running Pod cannot produce the
+whole-executor terminal record. Suspended private Sessions cannot use the
+reap-only stop path, and even an ended executor is retained outside HOME expiry.
+`stopState: Unknown` is an intentional schema invariant, not a missing update.
+
+Proposed operator flags: `--enable-terminal-task-pod-reclaim=false` and
+`--terminal-task-pod-reclaim-grace=10m`. The grace must be positive. Enabling
+requires the existing private terminal-record and executor-stop flags. Tom must
+choose whether to activate this policy and accept the grace in a separate
+reviewed runtime change. Upgraded CRD, operator and agent are prerequisites;
+old results are never backfilled from process absence or an old heartbeat.
+
+Agentd adds provider-exit proof only after waiting for the original headless
+provider. The proof uses its existing confirmed initial-attempt receipt and
+binds the result to the Session UID, Pod UID, provider and attempt ID. A failed
+spawn, missing receipt or contradictory identity supplies no proof. The API
+accepts that binding only from the original Pod's authenticated heartbeat.
+The controller confirms an immutable `privateHistory.taskTerminal` snapshot of
+that result, its observation time and reclaim deadline. Repeated observations
+and operator restarts do not restart its grace or erase its outcome.
+
+Only a private headless task with intact admission, original HOME and executor
+identity qualifies. Local/interactive and remote/RC Sessions, reusable hosts,
+configured coordinators, canaries/pilots, shared workspaces, hold Pods, active
+providers, attached clients, live or unproved children and owner holds never
+qualify. An invalid HOME-expiry override is a hold. Each action reads the
+Session, executor, HOME and children uncached. Missing or contradictory proof
+keeps compute and reports its reason, accountable parent (or owner), and known
+or unknown deadline in a status condition. The existing session collector
+exports retained counts and oldest age by bounded reason; no alert is added.
+
+After the grace the controller suspends the task if needed, then uses section
+4's confirmed stop intent and UID/resourceVersion-tested deadline patch. This
+is a narrow exception to the reap-only rule: the original headless provider
+already exited and its result is retained. It waits for section 3's unchanged
+kubelet terminal record before calling the existing guarded `deletePod` for
+that exact Pod with UID/resourceVersion preconditions and normal termination
+grace. Session CAS confirmation precedes the delete, as for the stop request;
+a hold observed before that confirmation wins. No force deletion is used.
+
+This is a new no-rescue case beside D-51: removing ended compute requires no
+Git rescue because the original HOME, PVC, provider history, task-result,
+launch, logs and Session finalizers all remain. HOME archive/expiry keeps its
+own trigger, grace, verification and flags. No volume/finalizer release or
+history deletion is part of this path. No structured PR-reference record is
+invented: existing output, logs, worktree and tracker handoff retain those
+references. An old agent without exit proof remains retained.
+
+A terminal private task never automatically starts a provider from its saved
+launch on a later boot, including the TUI `BuildResume` path. A missing or
+unreadable result remains uncertain and cannot authorize reclaim. Explicit
+human recovery into a different bounded task remains separate.
