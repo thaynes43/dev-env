@@ -38,7 +38,7 @@ func rcControlFixture(t *testing.T) (Settings, protocol.Session, apiv1.CodexRCDi
 	info, _ := os.Stat(root)
 	st := info.Sys().(*syscall.Stat_t)
 	now := time.Now().UTC()
-	target := apiv1.CodexRCTarget{SessionName: "host", SessionUID: "session", PodUID: "pod", Project: "sample", Repository: "repo", SnapshotSHA256: apiv1.CodexRCHash(snapshot), Root: root, RootDevice: uint64(st.Dev), RootInode: st.Ino, PreparationSHA256: strings.Repeat("a", 64), PID: 222, BootID: "boot", StartTicks: 55, InstallationID: "installation", EnvironmentID: "environment", PairingSource: "supported-client", PairingSHA256: strings.Repeat("b", 64), VerifiedAt: now.Add(-time.Minute), ExpiresAt: now.Add(5 * time.Minute)}
+	target := apiv1.CodexRCTarget{SessionName: "host", SessionUID: "session", PodUID: "pod", Project: "sample", Repository: "repo", SnapshotSHA256: apiv1.CodexRCHash(snapshot), Root: root, RootDevice: st.Dev, RootInode: st.Ino, PreparationSHA256: strings.Repeat("a", 64), PID: 222, BootID: "boot", StartTicks: 55, InstallationID: "installation", EnvironmentID: "environment", PairingSource: "supported-client", PairingSHA256: strings.Repeat("b", 64), VerifiedAt: now.Add(-time.Minute), ExpiresAt: now.Add(5 * time.Minute)}
 
 	head := strings.Repeat("a", 40)
 	operation := PrivateProjectRootReport{Project: "sample", State: "Ready", CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision(), Head: head, ObservedAt: now}
@@ -228,7 +228,7 @@ func TestCodexRCRemotePreparationProducerNeedsNoTaskSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 			st := info.Sys().(*syscall.Stat_t)
-			d.Target.RootDevice, d.Target.RootInode = uint64(st.Dev), st.Ino
+			d.Target.RootDevice, d.Target.RootInode = st.Dev, st.Ino
 			d.Target.PreparationSHA256 = projectcatalog.Digest(mustRead(t, privateRootReceiptPath(prepared)))
 			data, _ := json.Marshal(d.Target)
 			if err := os.WriteFile(filepath.Join(prepared.ConfigDir, CodexRCTargetFile), data, 0600); err != nil {

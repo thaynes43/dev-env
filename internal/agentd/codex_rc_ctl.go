@@ -69,7 +69,7 @@ func codexRCControl(ctx context.Context, s Settings, sess protocol.Session, oper
 			return errCodexRCRefused
 		}
 		st, ok := root.Sys().(*syscall.Stat_t)
-		if !ok || uint64(st.Dev) != d.Target.RootDevice || st.Ino != d.Target.RootInode || int(st.Uid) != os.Geteuid() || root.Mode().Perm()&0o022 != 0 {
+		if !ok || st.Dev != d.Target.RootDevice || st.Ino != d.Target.RootInode || int(st.Uid) != os.Geteuid() || root.Mode().Perm()&0o022 != 0 {
 			return errCodexRCRefused
 		}
 

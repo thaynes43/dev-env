@@ -263,7 +263,7 @@ func TestCodexRCCASContentionOnlyOneMutatingExec(t *testing.T) {
 	go func() { codes <- f.do("POST", rcPath, tokHuman, req).Code }()
 	go func() { codes <- f.do("POST", rcPath, tokHuman, req).Code }()
 	a, b := <-codes, <-codes
-	if !(a == 201 && b == 409 || a == 409 && b == 201) {
+	if (a != 201 || b != 409) && (a != 409 || b != 201) {
 		t.Fatal(a, b)
 	}
 	starts := 0
