@@ -154,21 +154,45 @@ func TestSessionsFooterRequiresSuccessfulReadTime(t *testing.T) {
 	}
 }
 
-func TestTasksKeepsExistingFooterTime(t *testing.T) {
+func TestTasksFooterRequiresSuccessfulReadTime(t *testing.T) {
 	const renderedAt = "2026-10-30T08:12:00.123Z"
-	const completedAt = "2026-10-30T08:10:00Z"
-	body, err := RenderProduct(ProductPage{Title: "Tasks", Connected: true, Complete: true,
-		ObservedAt: renderedAt, ReadCompletedAt: completedAt})
-	if err != nil {
-		t.Fatal(err)
-	}
-	footer := regexp.MustCompile(`<footer class="statusbar">(.*?)</footer>`).FindString(string(body))
-	const updated = `Updated <time datetime="` + renderedAt + `">30 Oct 2026, 08:12 UTC</time>`
-	if !strings.Contains(footer, updated) || strings.Contains(footer, completedAt) {
-		t.Fatalf("Tasks footer time changed: %s", footer)
-	}
-	if !strings.Contains(string(body), `<p class="list-foot">`+updated+`</p>`) {
-		t.Fatal("Tasks list foot time changed")
+	const completedAt = "2026-10-30T08:10:00.123456789Z"
+	const updated = `Updated <time datetime="2026-10-30T08:10:00Z">30 Oct 2026, 08:10 UTC</time>`
+	for _, tc := range []struct {
+		name, completed      string
+		failure              *ProductReadFailure
+		disconnected, capped bool
+		want                 bool
+	}{
+		{name: "success", completed: completedAt, want: true},
+		{name: "offset converted to UTC seconds", completed: "2026-10-30T10:10:00.123456789+02:00", want: true},
+		{name: "capped successful read", completed: completedAt, capped: true, want: true},
+		{name: "disconnected with completion time", completed: completedAt, disconnected: true},
+		{name: "read failure", completed: completedAt, failure: &ProductReadFailure{ReasonCode: "operator_unreachable"}},
+		{name: "unknown"},
+		{name: "disconnected without completion time", disconnected: true},
+		{name: "invalid", completed: "Unknown"},
+		{name: "zero", completed: time.Time{}.Format(time.RFC3339Nano)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := RenderProduct(ProductPage{Title: "Tasks", Connected: !tc.disconnected, Complete: !tc.capped,
+				ObservedAt: renderedAt, ReadCompletedAt: tc.completed, ReadFailure: tc.failure})
+			if err != nil {
+				t.Fatal(err)
+			}
+			footer := regexp.MustCompile(`<footer class="statusbar">(.*?)</footer>`).FindString(string(body))
+			listFoot := regexp.MustCompile(`<p class="list-foot">(.*?)</p>`).FindString(string(body))
+			if footer == "" || strings.Contains(footer, "Updated") != tc.want || strings.Contains(footer, renderedAt) {
+				t.Fatalf("unexpected Tasks footer freshness: %s", footer)
+			}
+			if tc.want {
+				if !strings.Contains(footer, updated) || listFoot != `<p class="list-foot">`+updated+`</p>` {
+					t.Fatalf("Tasks freshness did not use read completion: %s %s", footer, listFoot)
+				}
+			} else if listFoot != "" {
+				t.Fatalf("unexpected Tasks list foot: %s", listFoot)
+			}
+		})
 	}
 }
 
