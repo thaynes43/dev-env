@@ -27,7 +27,11 @@
         },
         "metadata": {
           "ack": false,
-          "blocked": null
+          "blocked": null,
+          "future_field": {
+            "Task": "opaque",
+            "HEAD": "opaque"
+          }
         },
         "comment_source": null,
         "future_field": {
@@ -36,7 +40,8 @@
       }
     ],
     "future_field": {
-      "new": "opaque"
+      "Task": "opaque",
+      "HEAD": "opaque"
     }
   },
   "contexts": {

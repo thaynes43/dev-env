@@ -94,7 +94,7 @@ its receipt validation, replay, idempotency, escalation and refusal semantics.
 `accepted` and `acknowledged` receipts do not mean done. New `nextReceipts` are
 recommendations only; this command does not persist them.
 
-`has_more: true` or owner-filter scope `"selected page"` is visible partial-page
+`page > 1`, `has_more: true`, or owner-filter scope `"selected page"` is visible partial-page
 evidence. Incomplete or absent item history is also visible. Either condition
 withholds recommendations, even with a matching context. Distinct item variants
 are retained and sorted; exact duplicate JSON values collapse. Conflicting

@@ -49,7 +49,7 @@ func TestCheckinsTriageFixtures(t *testing.T) {
 		intents      int
 	}{
 		{"known-due", "planned", 1}, {"not-due", "current", 0}, {"blocked", "blocked", 0}, {"missing-ack", "planned", 1}, {"unknown", "unknown", 0},
-		{"incomplete-history", "incomplete", 0}, {"partial-page", "incomplete", 0}, {"selected-page", "incomplete", 0},
+		{"incomplete-history", "incomplete", 0}, {"partial-page", "incomplete", 0}, {"selected-page", "incomplete", 0}, {"last-page", "incomplete", 0},
 		{"unknown-owner", "unbound", 0}, {"missing-owner", "unbound", 0}, {"no-context", "unbound", 0}, {"pre-pr", "unbound", 0}, {"unknown-export-fields", "planned", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,6 +188,7 @@ func TestCheckinsInputRefusals(t *testing.T) {
 		{"oversized-export", bytes.Repeat([]byte(" "), maxDocumentBytes+1), c},
 		{"oversized-context", e, bytes.Repeat([]byte(" "), maxDocumentBytes+1)},
 		{"duplicate-key", []byte(`{"items":[],"items":[]}`), c},
+		{"nested-duplicate-key", []byte(`{"metadata":{"future":{"Task":1,"Task":2}}}`), c},
 		{"case-variant", bytes.Replace(e, []byte(`"owner"`), []byte(`"Owner"`), 1), c},
 		{"trailing", append(append([]byte{}, e...), []byte(` {}`)...), c},
 		{"null-export", []byte(`null`), c},

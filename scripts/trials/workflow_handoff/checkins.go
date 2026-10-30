@@ -137,7 +137,7 @@ func planCheckins(data, contextData []byte) (checkinsPlan, int) {
 	p := newCheckinsPlan()
 	p.ObservedAt = contexts.ObservedAt
 	p.Visibility = visibility
-	partial := *export.HasMore || export.OwnerFilterScope == "selected page"
+	partial := export.Page > 1 || *export.HasMore || export.OwnerFilterScope == "selected page"
 	if partial {
 		p.Reasons = append(p.Reasons, "partial-page visibility; recommendations withheld")
 	}
@@ -241,9 +241,17 @@ func parseCheckins(data, contextData []byte) (checkinsExport, checkinContexts, j
 		if len(raw) > maxDocumentBytes {
 			return export, contexts, nil, errors.New("document exceeds 128KiB")
 		}
-		if err := rejectDuplicateKeys(raw); err != nil {
-			return export, contexts, nil, err
-		}
+	}
+	exportDecoder := json.NewDecoder(bytes.NewReader(data))
+	exportDecoder.UseNumber()
+	if err := consumeExportValue(exportDecoder); err != nil {
+		return export, contexts, nil, err
+	}
+	if err := requireEOF(exportDecoder); err != nil {
+		return export, contexts, nil, err
+	}
+	if err := rejectDuplicateKeys(contextData); err != nil {
+		return export, contexts, nil, err
 	}
 	// Unknown export fields are retained, not rejected. Local contexts are strict.
 	var root map[string]json.RawMessage
@@ -307,4 +315,49 @@ func appendDistinctJSON(items []json.RawMessage, raw json.RawMessage) []json.Raw
 		}
 	}
 	return append(items, canonical)
+}
+
+// Export extensions are opaque; only their JSON structure and duplicate keys
+// are checked here. The handoff validator's schema-key folding is deliberately
+// reserved for contexts, while known export keys are checked at their own level.
+func consumeExportValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			tok, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := tok.(string)
+			if !ok {
+				return errors.New("export object key is not a string")
+			}
+			if seen[key] {
+				return errors.New("duplicate JSON key in export")
+			}
+			seen[key] = true
+			if err := consumeExportValue(dec); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for dec.More() {
+			if err := consumeExportValue(dec); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("unexpected JSON delimiter in export")
+	}
+	_, err = dec.Token()
+	return err
 }
