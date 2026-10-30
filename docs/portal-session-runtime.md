@@ -629,9 +629,11 @@ response), `timed_out`, `elapsed_ms` (from the start of the Tasks source read),
 `credential_ms`, `fetch_ms`, `decode_ms` and `projection_ms`. It has no
 `pre_read_ms` or `history_ms`, and includes no upstream errors, values, headers
 or credentials. As with Sessions, `not_connected` and `cancelled` log at Info;
-other failures log at Warn. The Tasks read has no read deadline today; it
-inherits the request context, and each upstream HTTP request still has its
-five-second timeout. Adding a Tasks read deadline is separate follow-up work.
+other failures log at Warn. Served Tasks reads share Sessions' deadline of
+request start plus 12 seconds, including initial authentication and authorization,
+or the request's earlier deadline. The deadline spans all four upstream pages;
+each HTTP request retains its five-second timeout. A read timeout shows the safe
+Tasks failure page and leaves headroom for the existing final checks and rendering.
 
 ## Tasks list truth (#253)
 
