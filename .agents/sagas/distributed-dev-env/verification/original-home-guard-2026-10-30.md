@@ -243,15 +243,18 @@ signature-audit reference requirement, and help/docs require both tag and digest
 
 `internal/apiserver: TestOriginalHomeLifecycleReplacementUID/startup_binding_refuses`
 uses the shared Root fixture with a different Session UID and no sticky annotation.
-With the startup binding configured, the real lifecycle handler returns 409 with
-the original-HOME refusal **before any Patch**; the test counts patches and
-compares the stored object unchanged. Its `no_binding_is_unguarded` case
+Valid original Root PVC/PV fixtures are present. With the startup binding
+configured, the real lifecycle handler returns 409 with the original-HOME refusal
+**before any storage GET or Patch**; the test counts both and compares the stored
+object unchanged. This isolates the Session UID rejection in `homeguard.Select`
+from a missing-storage or later binding-verification failure. Its `no_binding_is_unguarded` case
 explicitly proves the limit: if the startup binding is removed and a replacement
 has no sticky annotation, it is treated as unguarded and API resume is accepted.
 Protection then falls back to the controller's PVC ownership check.
 `internal/controller: TestOriginalHomeReplacementWithoutBindingKeepsForeignPVC`
-proves that the original Session's PVC is recognized as foreign, records the
-`PodReady=False/NameTaken` reason, creates no Pod and preserves the claim.
+proves that the original Session's PVC is recognized as foreign, computes the
+`PodReady=False/NameTaken` condition through the real `podPhase` function,
+creates no Pod and preserves the claim.
 The existing stale-cache test
 `TestOriginalHomeUnguardedCacheCannotBypassGuardedReplacement` covers the separate
 case of a guarded replacement with stale unguarded cached metadata.

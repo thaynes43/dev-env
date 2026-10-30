@@ -26,17 +26,30 @@ func TestOriginalHomeLifecycleReplacementUID(t *testing.T) {
 	for _, configured := range []bool{true, false} {
 		t.Run(map[bool]string{true: "startup binding refuses", false: "no binding is unguarded"}[configured], func(t *testing.T) {
 			var replacement v1alpha1.AgentSession
+			var pvc corev1.PersistentVolumeClaim
+			var pv corev1.PersistentVolume
 			rootfixture.Decode(t, root.Session, &replacement)
+			rootfixture.Decode(t, root.PVC, &pvc)
+			rootfixture.Decode(t, root.PV, &pv)
 			replacement.UID = "replacement-session-uid"
 			replacement.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 			if _, sticky := replacement.Annotations[homeguard.Annotation]; sticky {
 				t.Fatal("replacement unexpectedly admitted")
 			}
-			patches := 0
-			f := newFixtureWith(t, interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				patches++
-				return c.Patch(ctx, obj, patch, opts...)
-			}}, &replacement)
+			patches, storageReads := 0, 0
+			f := newFixtureWith(t, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					switch obj.(type) {
+					case *corev1.PersistentVolumeClaim, *corev1.PersistentVolume:
+						storageReads++
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					patches++
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			}, &replacement, &pvc, &pv)
 			if configured {
 				f.srv.OriginalHome = &b
 			}
@@ -52,8 +65,8 @@ func TestOriginalHomeLifecycleReplacementUID(t *testing.T) {
 			}
 			if configured {
 				e := wantError(t, w, http.StatusConflict, apiv1.CodeConflict)
-				if e.Message != homeguard.ErrUnsafe.Error() || patches != 0 || !reflect.DeepEqual(before, after) {
-					t.Fatalf("UID refusal mutated replacement: error=%q patches=%d", e.Message, patches)
+				if e.Message != homeguard.ErrUnsafe.Error() || patches != 0 || storageReads != 0 || !reflect.DeepEqual(before, after) {
+					t.Fatalf("wrong UID refusal path: error=%q patches=%d storage GETs=%d", e.Message, patches, storageReads)
 				}
 			} else if w.Code != http.StatusAccepted || patches != 1 || after.Spec.OperatingMode != v1alpha1.OperatingModeRunning || after.Annotations[homeguard.Annotation] != "" {
 				t.Fatalf("unguarded replacement: status=%d patches=%d session=%+v", w.Code, patches, after)
