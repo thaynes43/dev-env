@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +31,13 @@ import (
 // shelf coordination-archive client. The executor runs agentd's real command
 // entry, and the object read back matches the bytes that were stored.
 func TestCoordArchiveProcessExecRunsTheRealCommand(t *testing.T) {
+	// The command runs synchronously, including real file/directory fsyncs.
+	// Keep the one-second exec deadline on fake time so slow storage or CI
+	// scheduling cannot turn this command round trip into a latency test.
+	synctest.Test(t, testCoordArchiveProcessExecRunsTheRealCommand)
+}
+
+func testCoordArchiveProcessExecRunsTheRealCommand(t *testing.T) {
 	restore := agentd.SetCoordArchiveMountCheck(func(string, string) error { return nil })
 	t.Cleanup(restore)
 	home := t.TempDir()
@@ -44,6 +53,7 @@ func TestCoordArchiveProcessExecRunsTheRealCommand(t *testing.T) {
 	}}
 	manifest, object, _ := coordCLIData(t)
 	ctx := context.Background()
+	start := time.Now()
 	put, err := archive.Put(ctx, protocol.CoordArchivePutRequest{Manifest: manifest, Object: object}, false)
 	if err != nil || put.GraceStart != nil || put.Manifest.Object != manifest.Object || put.Manifest.ArchivedAt.IsZero() || put.Manifest.ArchivedAt.Location() != time.UTC {
 		t.Fatalf("put = %#v, %v", put, err)
@@ -66,9 +76,31 @@ func TestCoordArchiveProcessExecRunsTheRealCommand(t *testing.T) {
 	if strings.Join(exec.cmds, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("commands =\n%s\nwant\n%s", strings.Join(exec.cmds, "\n"), strings.Join(want, "\n"))
 	}
+	if elapsed := time.Since(start); elapsed != 0 || !put.Manifest.ArchivedAt.Equal(start) {
+		t.Fatalf("filesystem round trip advanced fake time: elapsed=%v archivedAt=%v start=%v", elapsed, put.Manifest.ArchivedAt, start)
+	}
+
+	// A completed command still loses to an expired exec deadline. Advance
+	// only fake time after the real command succeeds to pin the original
+	// failure path without a wall-clock sleep or a larger timeout.
+	exec.afterRun = func(ctx context.Context) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) != time.Second {
+			t.Fatalf("exec deadline = %v, %v; want one second of fake time", deadline, ok)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+	}
+	if out, err := archive.Lookup(ctx, []protocol.CoordArchiveIdentity{{Resource: manifest.Resource, Project: manifest.Project, Name: manifest.Name, UID: manifest.UID}}); !errors.Is(err, context.DeadlineExceeded) || out != nil {
+		t.Fatalf("late successful command = %#v, %v; want no result and deadline exceeded", out, err)
+	}
 }
 
 func TestCoordArchiveProcessExecHoldsAndClearsRetentionGrace(t *testing.T) {
+	synctest.Test(t, testCoordArchiveProcessExecHoldsAndClearsRetentionGrace)
+}
+
+func testCoordArchiveProcessExecHoldsAndClearsRetentionGrace(t *testing.T) {
 	restore := agentd.SetCoordArchiveMountCheck(func(string, string) error { return nil })
 	t.Cleanup(restore)
 	home := t.TempDir()
@@ -128,8 +160,9 @@ func shelfPodClient(t *testing.T) client.Client {
 // processCoordExec is the pod exec fake. It runs the agentd command the shelf
 // client built, in this process, against the test's archive directory.
 type processCoordExec struct {
-	env  map[string]string
-	cmds []string
+	env      map[string]string
+	cmds     []string
+	afterRun func(context.Context)
 }
 
 func (e *processCoordExec) Run(ctx context.Context, namespace, pod, container string, cmd []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -142,6 +175,9 @@ func (e *processCoordExec) Run(ctx context.Context, namespace, pod, container st
 	e.cmds = append(e.cmds, strings.Join(cmd, " "))
 	code := run(ctx, cmd[1:], stdin, stdout, stderr, func(key string) string { return e.env[key] }, noRunner{})
 	if code == exitOK {
+		if e.afterRun != nil {
+			e.afterRun(ctx)
+		}
 		return nil
 	}
 	return utilexec.CodeExitError{Err: fmt.Errorf("agentd exited %d", code), Code: code}
