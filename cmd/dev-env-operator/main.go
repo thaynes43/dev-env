@@ -134,6 +134,9 @@ type options struct {
 	privatePilot                  *projectcanary.PilotPolicy
 	privateProjectTasks           bool
 	managedCodexTasks             bool
+	codexRCEnabled                bool
+	codexRCTargetFile             string
+	codexRCTarget                 *apiv1.CodexRCTarget
 	privateHistoryRetention       bool
 	privateTerminalRecord         bool
 	privateExecutorStop           bool
@@ -192,6 +195,8 @@ func parseFlags(args []string) (options, error) {
 	fs.IntVar(&o.portalLaunchMaxUnfinished, "portal-launch-max-unfinished", apiv1.DefaultPortalLaunchMaxUnfinished, "most unfinished portal-launched sessions at once (1 to 8); only with --portal-launch-repo")
 	fs.Func("portal-history-target", "explicit history target name=SessionUID; repeat for each target", func(v string) error { return addPortalTarget(&o.portalConversationTargets, v, true) })
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
+	fs.BoolVar(&o.codexRCEnabled, "enable-codex-rc-thread", false, "enable the fixed qualified existing-daemon thread-and-handoff operation; default off, runtime activation requires separate approval")
+	fs.StringVar(&o.codexRCTargetFile, "codex-rc-target-file", "", "deployment-owned bounded existing-host qualification packet")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
 	fs.BoolVar(&o.privateHistoryRetention, "enable-private-history-retention", false, "retain private managed HOME and durable Session identity on reap and suspended autoarchive")
 	fs.BoolVar(&o.privateTerminalRecord, "enable-private-terminal-record", false, "record the durable terminal observation of a private executor, and the missed marker, in its Session's status (DESIGN-025 3); records only, deletes nothing")
@@ -313,6 +318,21 @@ func parseFlags(args []string) (options, error) {
 	}
 	if (o.coordinatorEnabled || o.managedCodexTasks || o.privateProjectTasks) && (o.apiAddr == "0" || o.catalogBinding == nil) {
 		return o, errors.New("enabled task features require the API and a concrete accepted catalog binding")
+	}
+	if o.codexRCEnabled {
+		if o.apiAddr == "0" || o.catalogBinding == nil || o.codexRCTargetFile == "" {
+			return o, errors.New("codex RC requires existing API, catalog and explicit target packet")
+		}
+		raw, err := os.ReadFile(o.codexRCTargetFile)
+		if err != nil || len(raw) > apiv1.CodexRCMaxPacket {
+			return o, errors.New("codex RC target packet unavailable")
+		}
+		o.codexRCTarget, err = apiserver.ParseCodexRCTarget(raw, time.Now())
+		if err != nil {
+			return o, err
+		}
+	} else if o.codexRCTargetFile != "" {
+		return o, errors.New("codex RC target requires explicit enable-codex-rc-thread")
 	}
 	if o.coordinatorEnabled && (!o.managedCodexTasks || len(o.coordinatorHosts) == 0) {
 		return o, errors.New("coordinators require managed task support and explicit host bindings")
@@ -746,7 +766,7 @@ func run(args []string) error {
 			},
 			PrivatePilot: o.privatePilot,
 			Reminders:    reminderConfig(o),
-			Projects:     o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, ManagedChildDecisions: o.managedChildDecisions,
+			Projects:     o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, CodexRCEnabled: o.codexRCEnabled, CodexRCTarget: o.codexRCTarget, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
 			ChildUsageCapture:        o.childUsageCapture,
