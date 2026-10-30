@@ -1670,6 +1670,18 @@ a reaped session's volume, only after a verified rescue of the volume's last pod
   resourceVersion the guard judged, so a pod that was scheduled or started since
   the read is judged again. A rescue that cannot run (agentd down, a crash-looping
   container) keeps the pod, and the operator tries again every minute.
+  *Added 2026-10-30 (OpenProject #288, PR #720; source-tested, not runtime-accepted;
+  recorded by the lead, not a new D-number).* One more suspend goes without a
+  rescue: an original-HOME guarded pod stuck in its verifier. Its only init
+  container is the operator's read-only `agentd home-verify`, still running or
+  visibly failed (not Ready, the pod not Initialized, no visible earlier success),
+  with the agent image and security context. Every main container is Waiting with
+  no container ID, no restarts and no earlier run, so no agent ran. The exception
+  is for suspend only: not reap, not drain, not a hold pod. The delete keeps the UID
+  and resourceVersion preconditions and the normal grace, the volume stays, and
+  archive still needs a verified rescue (D-55). One status read cannot rule out
+  the kubelet starting main just after the verifier succeeds and before it reports
+  it; the verification record discloses that race.
 - **An old rescue never counts.** As soon as the session asks for its pod again (a
   resume), the operator marks the record `superseded` and writes that before it
   does anything else, a new pod included. A superseded rescue lets no volume go and
