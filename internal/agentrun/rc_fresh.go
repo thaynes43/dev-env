@@ -1,6 +1,7 @@
 package agentrun
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,12 @@ func (a *app) rcFresh(ctx context.Context, args []string) error {
 	if readErr != nil || apiv1.DecodeCodexRC(raw, &req, apiv1.CodexRCMaxRequest) != nil || !req.Valid(a.env.Now()) {
 		return usageError("invalid or expired rc fresh request")
 	}
+	var payload bytes.Buffer
+	encoder := json.NewEncoder(&payload)
+	encoder.SetEscapeHTML(false)
+	if encoder.Encode(req) != nil || payload.Len() > apiv1.CodexRCMaxRequest {
+		return usageError("rc fresh request exceeds wire limit")
+	}
 	ctx, cancel := context.WithTimeout(ctx, req.Deadline.Sub(a.env.Now()))
 	defer cancel()
 	c, err := a.connect(ctx, cmd.c.conn)
@@ -47,10 +54,9 @@ func (a *app) rcFresh(ctx context.Context, args []string) error {
 	one := *c
 	one.http, one.rejectOversizeResponse = &hc, true
 	path := apiv1.SessionPath(session) + "/codex-thread"
-	payload, _ := json.Marshal(req)
 	// Keep the raw body: decoding into json.RawMessage first would discard
 	// trailing whitespace and let an oversized padded receipt pass the fence.
-	status, response, err := a.send(ctx, &one, http.MethodPost, one.url+path, payload)
+	status, response, err := a.send(ctx, &one, http.MethodPost, one.url+path, payload.Bytes())
 	if err != nil {
 		var ee *exitError
 		if errors.As(err, &ee) {

@@ -131,3 +131,25 @@ func TestCodexRCFreshInvalidInputIsLocal(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexRCFreshHandoffHTMLDoesNotExpandPastWireLimit(t *testing.T) {
+	h := newHarness(t)
+	req := freshRequest(h)
+	req.Handoff = strings.Repeat("<&", 2048)
+	// A valid bounded input document must remain valid after typed re-encoding.
+	raw, _ := json.Marshal(req)
+	raw = []byte(strings.ReplaceAll(strings.ReplaceAll(string(raw), `\u003c`, "<"), `\u0026`, "&"))
+	args := freshArgs(h, freshRequest(h))
+	args[5] = h.write("request.json", string(raw))
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, b []byte) {
+		var got apiv1.CodexRCRequest
+		if apiv1.DecodeCodexRC(b, &got, apiv1.CodexRCMaxRequest) != nil || got != req {
+			t.Error("valid handoff expanded or changed")
+		}
+		writeTestJSON(w, http.StatusCreated, freshReceipt(h, req))
+	}
+	h.mustRun(ExitOK, args...)
+	if len(h.api.requests()) != 1 {
+		t.Fatal("request not sent exactly once")
+	}
+}
