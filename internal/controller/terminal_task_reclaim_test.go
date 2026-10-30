@@ -497,3 +497,32 @@ func TestTerminalTaskRetentionLatchInAgentSessionDocument(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalTaskReclaimFullReconcileRefusalKeepsBackoffAndCondition(t *testing.T) {
+	f := terminalTaskFixture(true)
+	base := f.client()
+	r := terminalTaskReconciler(f, base, base)
+	r.TerminalTaskPodReclaim = false
+	// Settle the pre-existing observation fields, so only the new reclaim
+	// condition changes in the regression reconcile.
+	reconcileSession(t, r, f.s, 3)
+	r.TerminalTaskPodReclaim = true
+	podLists := 0
+	r.APIReader = interceptor.NewClient(base, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*corev1.PodList); ok {
+				podLists++
+				return errors.New("uncached pod list unavailable")
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	result := reconcileSession(t, r, f.s, 1)
+	got := storedHistory(t, base, f.s)
+	if result.RequeueAfter < homeExpiryUnknownRetry || podLists != 1 || got.Status.PrivateHistory.StopRequest != nil {
+		t.Fatalf("normal suspend repeated reclaim: result=%+v lists=%d stop=%+v", result, podLists, got.Status.PrivateHistory.StopRequest)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, ConditionTerminalTaskReclaim); cond == nil || cond.Reason != "ProofUnknown" {
+		t.Fatalf("reclaim condition was not persisted: %+v", cond)
+	}
+}

@@ -257,7 +257,7 @@ func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alph
 		// authorized until a later due reconcile confirms the record uncached.
 		h.TaskTerminal = &v1alpha1.PrivateTaskTerminalStatus{Task: *s.Status.Agent.Task.DeepCopy(), ObservedAt: recordTime(r.clock()), DueAt: recordTime(r.clock().Add(r.terminalTaskReclaimGrace()))}
 		err := r.Client.Status().Update(ctx, s)
-		return ctrl.Result{RequeueAfter: terminalTaskReclaimRetry}, true, err
+		return ctrl.Result{RequeueAfter: r.terminalTaskReclaimGrace()}, true, err
 	}
 	due, err := r.terminalTaskDeadline(s)
 	if err != nil {

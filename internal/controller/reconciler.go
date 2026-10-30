@@ -424,10 +424,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 		}
 	}
 
+	statusBeforeReclaim := s.Status.DeepCopy()
 	reclaimResult, reclaimStop, reclaimErr := r.reconcileTerminalTaskReclaim(ctx, &s)
 	if reclaimErr != nil || reclaimStop {
 		return reclaimResult, reclaimErr
 	}
+
+	reclaimStatusChanged := !apiequality.Semantic.DeepEqual(statusBeforeReclaim, &s.Status)
 
 	// DESIGN-025 5: the HOME expiry, up to Archived, after the observation
 	// above confirmed the terminal record it rests on.
@@ -523,7 +526,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	result = sooner(result, expiryResult)
 	next := s.Status.DeepCopy()
 	observe(&s, obs, next)
-	if !apiequality.Semantic.DeepEqual(&s.Status, next) {
+	if reclaimStatusChanged || !apiequality.Semantic.DeepEqual(&s.Status, next) {
 		s.Status = *next
 		return r.writeStatus(ctx, &s, result)
 	}
@@ -563,6 +566,11 @@ func (r *Reconciler) removePod(ctx context.Context, s *v1alpha1.AgentSession, ob
 		// Legacy rescue may exec and change provider HOME. Retain the original
 		// executor before either rescue or deletion, including uncertain history.
 		obs.removalBlocked = errPrivateHistoryRetained
+		// Terminal task compute reclaim owns non-Reaping stops and its retry
+		// cadence. Do not repeat that path after a refusal or grace wait.
+		if s.DeletionTimestamp.IsZero() {
+			return ctrl.Result{}, false, nil
+		}
 		// A Reaping private Session's recorded executor is asked to end
 		// instead (DESIGN-025 4); its Pod object stays.
 		return r.requestPrivateExecutorStop(ctx, s, obs)
