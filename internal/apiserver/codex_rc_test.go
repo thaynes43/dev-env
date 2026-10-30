@@ -145,7 +145,7 @@ func TestCodexRCDefaultOffAndCallerFence(t *testing.T) {
 	}
 }
 func TestCodexRCTargetAndMalformedRefusals(t *testing.T) {
-	for _, mode := range []string{"uid", "pod", "repo", "catalog", "pairing", "expired", "mode", "reaping", "failed", "unknown", "duplicate", "huge", "model", "effort", "deadline", "empty"} {
+	for _, mode := range []string{"uid", "pod", "repo", "catalog", "pairing", "expired", "mode", "draining", "failed", "unknown", "duplicate", "huge", "model", "effort", "deadline", "empty"} {
 		t.Run(mode, func(t *testing.T) {
 			f, req, e := rcFixture(t)
 			var body any = req
@@ -168,13 +168,13 @@ func TestCodexRCTargetAndMalformedRefusals(t *testing.T) {
 				_ = f.c.Get(context.Background(), key, &sess)
 				sess.Spec.Mode = "task"
 				_ = f.c.Update(context.Background(), &sess)
-			case "reaping", "failed":
+			case "draining", "failed":
 				var sess v1alpha1.AgentSession
 				key := types.NamespacedName{Namespace: sessionNS, Name: "rc-host"}
 				if err := f.c.Get(context.Background(), key, &sess); err != nil {
 					t.Fatal(err)
 				}
-				sess.Status.Phase = v1alpha1.PhaseReaping
+				sess.Status.Phase = v1alpha1.PhaseDraining
 				if mode == "failed" {
 					sess.Status.Phase = v1alpha1.PhaseFailed
 				}
