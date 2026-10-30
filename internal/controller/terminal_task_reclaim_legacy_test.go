@@ -385,6 +385,10 @@ func TestLegacyTerminalTaskReclaimStopAndDeletePreservesHOME(t *testing.T) {
 			if err := base.Status().Update(context.Background(), &pod); err != nil {
 				t.Fatal(err)
 			}
+			// agentd stopped with the Pod, so its heartbeat ages past the
+			// pre-stop window before the guarded delete. The terminal record,
+			// not the heartbeat, proves the stopped executor.
+			now = now.Add(5 * time.Minute)
 			lease := f.lease.DeepCopy()
 			lease.Spec.RenewTime.Time = now.Add(-time.Second)
 			if err := base.Update(context.Background(), lease); err != nil {

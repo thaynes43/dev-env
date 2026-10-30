@@ -163,8 +163,10 @@ func legacyTaskPodProof(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time
 	if !imageOK {
 		return errors.New("legacy executor image is not provably older than 2.71.0")
 	}
+	// A fresh heartbeat shows the exited state is current before the stop.
+	// agentd ends with a stopped Pod, so its terminal record proves the rest.
 	at := s.Status.Agent.LastHeartbeat
-	if at == nil || at.IsZero() || at.After(now) || now.Sub(at.Time) > 2*time.Minute {
+	if !podPhaseTerminal(pod) && (at == nil || at.IsZero() || at.After(now) || now.Sub(at.Time) > 2*time.Minute) {
 		return errors.New("legacy executor heartbeat is missing, future or older than two minutes")
 	}
 	for _, group := range []struct {

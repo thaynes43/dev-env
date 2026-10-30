@@ -2533,7 +2533,11 @@ The alternative proof requires all of the following:
   and every container and init container has an observed restart count of
   zero. Missing container status is uncertainty. These checks repeat at the
   stop intent's own uncached read. The existing UID/resourceVersion-tested
-  Pod patch refuses a restart after that read.
+  Pod patch refuses a restart after that read. The heartbeat window applies
+  only while the executor Pod is not terminal: agentd stops with the Pod, so
+  after the stop the whole-executor terminal record is the proof, and the
+  guarded delete does not wait on a heartbeat that can no longer arrive (lead
+  fix, 2026-10-30).
 
 The controller copies the usage source into the immutable
 `privateHistory.taskTerminal.task.exitSource`; it leaves the agent's reported
