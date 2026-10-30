@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"time"
 
@@ -167,7 +168,8 @@ func podNeverStarted(p *corev1.Pod) bool {
 }
 
 // originalHomeAgentNeverStarted lets suspend remove an owned executor stuck
-// in the read-only verifier. It proves nothing about earlier Pods' HOME data:
+// in the read-only verifier, still running or failed, never succeeded. It
+// proves nothing about earlier Pods' HOME data:
 // archive and its rescue requirements remain separate. deletePod still pins
 // the observed Pod UID and resourceVersion, including these container states.
 func originalHomeAgentNeverStarted(s *v1alpha1.AgentSession, p *corev1.Pod) bool {
@@ -191,6 +193,44 @@ func originalHomeAgentNeverStarted(s *v1alpha1.AgentSession, p *corev1.Pod) bool
 		init.RestartPolicy != nil || init.Lifecycle != nil || len(init.VolumeDevices) != 0 {
 		return false
 	}
+	// The verifier must be the agent image with the same security context,
+	// and explicitly unable to escalate or add capabilities. A changed or
+	// uncertain verifier cannot establish that HOME was only read.
+	agent := slices.IndexFunc(p.Spec.Containers, func(c corev1.Container) bool { return c.Name == ContainerName })
+	security := init.SecurityContext
+	if agent < 0 || init.Image == "" || init.Image != p.Spec.Containers[agent].Image || security == nil ||
+		!reflect.DeepEqual(security, p.Spec.Containers[agent].SecurityContext) ||
+		security.Privileged != nil && *security.Privileged ||
+		security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation ||
+		security.Capabilities != nil && len(security.Capabilities.Add) != 0 {
+		return false
+	}
+	for _, condition := range p.Status.Conditions {
+		if condition.Type == corev1.PodInitialized && condition.Status == corev1.ConditionTrue {
+			return false
+		}
+	}
+	status := p.Status.InitContainerStatuses[0]
+	if status.Ready {
+		return false
+	}
+	// A successful verifier can release main boot before its status becomes
+	// visible. Only an exclusive running or failed init state is evidence
+	// that main is still gated; Waiting alone is not failure evidence.
+	switch state := status.State; {
+	case state.Running != nil && state.Waiting == nil && state.Terminated == nil:
+	case state.Waiting != nil && state.Running == nil && state.Terminated == nil:
+		last := status.LastTerminationState
+		if last.Terminated == nil || last.Terminated.ExitCode == 0 || last.Running != nil || last.Waiting != nil {
+			return false
+		}
+	case state.Terminated != nil && state.Running == nil && state.Waiting == nil:
+		if state.Terminated.ExitCode == 0 {
+			return false
+		}
+	default:
+		return false
+	}
 	home := false
 	for _, mount := range init.VolumeMounts {
 		if !mount.ReadOnly {
@@ -210,7 +250,7 @@ func originalHomeAgentNeverStarted(s *v1alpha1.AgentSession, p *corev1.Pod) bool
 	// must not hide a main container that might have run.
 	waiting := make(map[string]bool, len(p.Status.ContainerStatuses))
 	for _, cs := range p.Status.ContainerStatuses {
-		if waiting[cs.Name] || cs.Ready || cs.Started != nil && *cs.Started ||
+		if waiting[cs.Name] || cs.Ready || cs.Started != nil && *cs.Started || cs.ContainerID != "" ||
 			cs.State.Waiting == nil || cs.State.Running != nil || cs.State.Terminated != nil ||
 			cs.RestartCount != 0 || cs.LastTerminationState.Terminated != nil || cs.LastTerminationState.Running != nil {
 			return false

@@ -285,17 +285,30 @@ and owner acceptance remain separate.
 ## OP288: suspend a verifier-only executor
 
 Work order `INITSTUCK288-20261030-01`, [OP288](https://work.haynesnetwork.com/work_packages/288)
-journal 3240, starts from `6af7f59a` (includes OP286 PR #715). Suspend may use
+journal 3240, starts from `6af7f59a` (includes OP286 PR #715). The bounded review
+fix round `INITSTUCK288-FIX-20261030-02` supersedes PR #719's immutable head
+`2dace79b9f8ac949a201d545a1b776416df2214e`, rebased onto `38ffdf2`.
+Suspend may use
 the existing guarded Pod deletion without a rescue exec when the Session's
 admitted binding and exact Pod ownership match, every named main container is
-Waiting with zero restarts and no current or previous run/termination, and the
+Waiting with an empty ContainerID, zero restarts and no current or previous run/termination, and the
 sole init container is the operator's `agentd home-verify` command with the full
 read-only HOME mount and no writable mounts or volume devices. Additional
 read-only mounts, including ServiceAccount admission's token/CA/namespace mount,
-are allowed. The verifier may have failed and restarted. Missing,
+are allowed. The verifier must still be Running or have FAILED, never succeeded:
+its exclusive state is Running, Waiting after a nonzero last termination, or
+Terminated with a nonzero exit code. It must not be Ready, and the Pod must
+not report Initialized=True. A successful termination, including a previous
+successful termination while Waiting, or Waiting with restarts but no last
+termination retains the rescue requirement. The verifier image must equal
+the named agent container's image. Its security context must match the agent's,
+with no privileged mode, no added capabilities and explicit refusal of privilege
+escalation; missing or changed security context fails closed. Missing,
 duplicate or unknown main status, another init, writable HOME, altered init
 command, ephemeral containers or uncertain ownership retain the rescue requirement.
-This conservative exception does not apply to reap, drain or hold Pods. Deletion
+This conservative exception does not apply to reap, active drain or hold Pods.
+A stale Draining phase with Suspended mode still uses the suspend guard and
+requires the same evidence. Deletion
 still uses the existing UID and resourceVersion preconditions; no force deletion
 or other resource mutation is added.
 
@@ -304,7 +317,11 @@ path using the existing fake rescuer and an admission-shaped projected-token
 fixture. It starts with RemovalBlocked set, checks
 zero rescue calls and condition removal on success, checks the normal delete
 preconditions, and covers the unsafe/uncertain cases and unchanged unguarded and
-reap behavior. Contradictory main Started/Ready reports also require rescue.
+reap behavior. Each review gap has a separate case: successful or uncertain
+init states, Initialized=True, Running/Unknown Pod phases, native sidecar init,
+subPath HOME, hold Pod, contradictory states, spoofed Command, Lifecycle hooks,
+VolumeDevices, main ContainerID, Draining plus Suspended, and altered init image
+or privilege settings. Contradictory main Started/Ready reports also require rescue.
 Foreign Pods remain untouched without exec.
 `TestOriginalHomeInitFailedArchiveStillRetainsHOME` proves the stronger existing
 original-HOME archive refusal even with a verified rescue, and separately checks
@@ -313,15 +330,24 @@ Existing hold-Pod archive/rescue tests cover the legacy rescue execution path.
 The default Pod golden remains
 `c91e28583563011e5e83da0056e2965be4d79bc44212d4dafd2d494029e75e1c`.
 
-Local qualification used checksum-verified Go 1.27.3, envtest Kubernetes 1.35.0,
+PR #719's initial local qualification used checksum-verified Go 1.27.3, envtest Kubernetes 1.35.0,
 `GOTOOLCHAIN=local GOMAXPROCS=2 GOTMPDIR=/tmp/t TMPDIR=/tmp/t`, and
 `nice -n 19 go test -p 1 -count=1`. The required controller filter plus all tests
 in the existing guard/rescue/bootstrap test files passed: 325 test/subtest
 events, 41.691 seconds. Native Sol review caught the admission mount mismatch;
-the corrected implementation and admitted-shape regression have no remaining
-source findings. The reviewer did not run tests or runtime checks.
+that round's reviewer reported no remaining source findings after its correction.
+The later independent adversarial Opus review found the succeeded-init regression
+and the ContainerID/image/privilege gaps addressed by this fix round.
+The initial reviewer did not run tests or runtime checks.
 `make GO_PARALLELISM=1 GOMAXPROCS=2 check-generated check-layout lint` also
 passed with the same environment; lint reported zero issues.
+
+Residual risk shared with the existing `podNeverStarted`: kubelet status lag
+can briefly hide a just-changed container state, even before this API read.
+Deletion retains its UID and resourceVersion preconditions, which fence API
+changes after the read but cannot eliminate kubelet reporting lag. Suspend never
+deletes the HOME volume, and any later archive still requires a verified rescue
+under the existing archive guards.
 
 This increment is **source-tested, not runtime-accepted**; local results and the
 independent native review receipt are recorded on OP288 and its PR. No installed

@@ -67,6 +67,93 @@ func TestOriginalHomeInitFailedSuspend(t *testing.T) {
 		foreign bool
 	}{
 		{name: "verifier failed and main never ran", remove: true},
+		{name: "init running", remove: true, edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify",
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
+		}},
+		{name: "init waiting after exit 1", remove: true, edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0].RestartCount = 1
+			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodInitialized, Status: corev1.ConditionFalse}}
+		}},
+		{name: "init terminated exit 1", remove: true, edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify",
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}}
+		}},
+		{name: "init succeeded ready and initialized", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify", Ready: true,
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}}
+			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodInitialized, Status: corev1.ConditionTrue}}
+		}},
+		{name: "init succeeded not ready", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "original-home-verify",
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}}
+		}},
+		{name: "initialized while init waiting", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodInitialized, Status: corev1.ConditionTrue}}
+		}},
+		{name: "init waiting restarted without last state", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0].LastTerminationState = corev1.ContainerState{}
+		}},
+		{name: "init waiting after success", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0].LastTerminationState.Terminated.ExitCode = 0
+		}},
+		{name: "init reports ready while failed", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0].Ready = true
+		}},
+		{name: "init state unknown", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0].State = corev1.ContainerState{}
+		}},
+		{name: "init running and waiting together", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.InitContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+		}},
+		{name: "pod phase Running", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Status.Phase = corev1.PodRunning }},
+		{name: "pod phase Unknown", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Status.Phase = corev1.PodUnknown }},
+		{name: "native sidecar init", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			restart := corev1.ContainerRestartPolicyAlways
+			p.Spec.InitContainers[0].RestartPolicy = &restart
+		}},
+		{name: "subPath HOME", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].VolumeMounts[0].SubPath = "partial-home"
+		}},
+		{name: "hold pod", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Labels[v1alpha1.LabelHold] = "true" }},
+		{name: "spoofed init command", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].Command = []string{"/tmp/agentd"}
+		}},
+		{name: "init lifecycle hooks", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].Lifecycle = &corev1.Lifecycle{PostStart: &corev1.LifecycleHandler{
+				Exec: &corev1.ExecAction{Command: []string{"touch", "/home/dev/changed"}},
+			}}
+		}},
+		{name: "init volume devices", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].VolumeDevices = []corev1.VolumeDevice{{Name: "raw-home", DevicePath: "/dev/home"}}
+		}},
+		{name: "init image differs from agent", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].Image = "example.invalid/other:fixture"
+		}},
+		{name: "privileged init", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			privileged := true
+			p.Spec.InitContainers[0].SecurityContext.Privileged = &privileged
+		}},
+		{name: "init adds capabilities", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].SecurityContext.Capabilities.Add = []corev1.Capability{"SYS_ADMIN"}
+		}},
+		{name: "init allows privilege escalation", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			escalate := true
+			p.Spec.InitContainers[0].SecurityContext.AllowPrivilegeEscalation = &escalate
+		}},
+		{name: "init escalation default unknown", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].SecurityContext.AllowPrivilegeEscalation = nil
+		}},
+		{name: "init security context missing", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].SecurityContext = nil
+		}},
+		{name: "Draining and Suspended verifier failed", remove: true, edit: func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
+			s.Status.Phase = v1alpha1.PhaseDraining
+		}},
+		{name: "Draining and Suspended main ran", edit: func(s *v1alpha1.AgentSession, p *corev1.Pod) {
+			s.Status.Phase = v1alpha1.PhaseDraining
+			p.Status.ContainerStatuses[0].RestartCount = 1
+		}},
 		{name: "all main containers waiting", remove: true, edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
 			other := *p.Spec.Containers[0].DeepCopy()
 			other.Name = "other-main"
@@ -77,6 +164,12 @@ func TestOriginalHomeInitFailedSuspend(t *testing.T) {
 		}},
 		{name: "main running", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
 			p.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+		}},
+		{name: "main running and waiting together", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+		}},
+		{name: "waiting main has ContainerID", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Status.ContainerStatuses[0].ContainerID = "containerd://uncertain-state"
 		}},
 		{name: "main restarted", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Status.ContainerStatuses[0].RestartCount = 1 }},
 		{name: "main reports started", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
