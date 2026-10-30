@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.70.0](https://github.com/thaynes43/dev-env/compare/v2.69.0...v2.70.0) (2026-10-30)
+
+
+### Features
+
+* **operator:** default-off remote pilot image selector for one Codex remote session ([#715](https://github.com/thaynes43/dev-env/issues/715)) ([6af7f59](https://github.com/thaynes43/dev-env/commit/6af7f59ab5e15bc4a4835d9db7a9a392f8863b10))
+* **watchdog:** plan from canonical OpenProject check-ins ([#714](https://github.com/thaynes43/dev-env/issues/714)) ([1176d33](https://github.com/thaynes43/dev-env/commit/1176d33245d29d173cb3d50503b59af15de3bdc3))
+
+
+### Bug Fixes
+
+* **controller:** harden UID guard configuration and replacement checks ([#710](https://github.com/thaynes43/dev-env/issues/710)) ([94b3b09](https://github.com/thaynes43/dev-env/commit/94b3b099b351a835bb3269f1cacf18da0d676384))
+* **controller:** let suspend clear a pod stuck in original-home-verify ([#720](https://github.com/thaynes43/dev-env/issues/720)) ([7e5aaba](https://github.com/thaynes43/dev-env/commit/7e5aabac75081e4c35faff93d5c6885b528acd0a))
+* **portal:** never label render time as Sessions freshness ([#718](https://github.com/thaynes43/dev-env/issues/718)) ([38ffdf2](https://github.com/thaynes43/dev-env/commit/38ffdf288e4376d77bfd1ee87b1f8e7ced8bec12))
+
 ## [2.69.0](https://github.com/thaynes43/dev-env/compare/v2.68.0...v2.69.0) (2026-10-30)
 
 
