@@ -30,6 +30,18 @@ func originalHomeInitFailedFixture(t *testing.T) (*v1alpha1.AgentSession, *corev
 		t.Fatal(err)
 	}
 	addOriginalHomeVerifier(pod, binding)
+	// Model ServiceAccount admission: both containers also receive the
+	// standard read-only projected token/CA/namespace mount.
+	tokenMount := corev1.VolumeMount{Name: "kube-api-access-fixture", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount", ReadOnly: true}
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{Name: tokenMount.Name, VolumeSource: corev1.VolumeSource{
+		Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{
+			{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token"}},
+			{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"}, Items: []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}}}},
+			{DownwardAPI: &corev1.DownwardAPIProjection{Items: []corev1.DownwardAPIVolumeFile{{Path: "namespace", FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}},
+		}},
+	}})
+	pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, tokenMount)
+	pod.Spec.InitContainers[0].VolumeMounts = append(pod.Spec.InitContainers[0].VolumeMounts, tokenMount)
 	pod.UID = "init-failed-pod"
 	pod.ResourceVersion = "1"
 	pod.Spec.NodeName = "fixture-node"
@@ -67,6 +79,11 @@ func TestOriginalHomeInitFailedSuspend(t *testing.T) {
 			p.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
 		}},
 		{name: "main restarted", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Status.ContainerStatuses[0].RestartCount = 1 }},
+		{name: "main reports started", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			started := true
+			p.Status.ContainerStatuses[0].Started = &started
+		}},
+		{name: "main reports ready", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Status.ContainerStatuses[0].Ready = true }},
 		{name: "main terminated", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
 			p.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{}}
 		}},
@@ -95,6 +112,13 @@ func TestOriginalHomeInitFailedSuspend(t *testing.T) {
 		}},
 		{name: "writable HOME alias", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
 			p.Spec.InitContainers[0].VolumeMounts = append(p.Spec.InitContainers[0].VolumeMounts, corev1.VolumeMount{Name: "home", MountPath: "/writable"})
+		}},
+		{name: "writable non-HOME mount", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.InitContainers[0].VolumeMounts = append(p.Spec.InitContainers[0].VolumeMounts, corev1.VolumeMount{Name: "tmp", MountPath: "/scratch"})
+		}},
+		{name: "ephemeral container ran", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) {
+			p.Spec.EphemeralContainers = []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug"}}}
+			p.Status.EphemeralContainerStatuses = []corev1.ContainerStatus{{Name: "debug", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{}}}}
 		}},
 		{name: "init name alone is not proof", edit: func(_ *v1alpha1.AgentSession, p *corev1.Pod) { p.Spec.InitContainers[0].Args = []string{"run"} }},
 		{name: "unguarded pod unchanged", edit: func(s *v1alpha1.AgentSession, _ *corev1.Pod) { s.Annotations = nil }},

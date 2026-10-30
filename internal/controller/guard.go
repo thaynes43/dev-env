@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"time"
 
@@ -184,20 +183,35 @@ func originalHomeAgentNeverStarted(s *v1alpha1.AgentSession, p *corev1.Pod) bool
 		len(p.Spec.EphemeralContainers) != 0 || len(p.Status.EphemeralContainerStatuses) != 0 {
 		return false
 	}
-	// Require the operator's verifier command and its sole, read-only HOME
-	// mount, rather than trusting an init container's name alone.
+	// Require the operator's verifier command, rather than trusting an init
+	// container's name alone. Admission also adds read-only token mounts.
 	init := p.Spec.InitContainers[0]
 	if init.Name != "original-home-verify" || p.Status.InitContainerStatuses[0].Name != init.Name ||
 		!slices.Equal(init.Command, []string{"/usr/local/bin/agentd"}) || !slices.Equal(init.Args, []string{"home-verify"}) ||
-		init.RestartPolicy != nil || init.Lifecycle != nil || len(init.VolumeDevices) != 0 ||
-		!reflect.DeepEqual(init.VolumeMounts, []corev1.VolumeMount{{Name: "home", MountPath: "/home/dev", ReadOnly: true}}) {
+		init.RestartPolicy != nil || init.Lifecycle != nil || len(init.VolumeDevices) != 0 {
+		return false
+	}
+	home := false
+	for _, mount := range init.VolumeMounts {
+		if !mount.ReadOnly {
+			return false
+		}
+		if mount.Name == "home" && mount.MountPath == "/home/dev" && mount.SubPath == "" && mount.SubPathExpr == "" {
+			if home {
+				return false
+			}
+			home = true
+		}
+	}
+	if !home {
 		return false
 	}
 	// Match by name as well as count: duplicate or unknown status entries
 	// must not hide a main container that might have run.
 	waiting := make(map[string]bool, len(p.Status.ContainerStatuses))
 	for _, cs := range p.Status.ContainerStatuses {
-		if waiting[cs.Name] || cs.State.Waiting == nil || cs.State.Running != nil || cs.State.Terminated != nil ||
+		if waiting[cs.Name] || cs.Ready || cs.Started != nil && *cs.Started ||
+			cs.State.Waiting == nil || cs.State.Running != nil || cs.State.Terminated != nil ||
 			cs.RestartCount != 0 || cs.LastTerminationState.Terminated != nil || cs.LastTerminationState.Running != nil {
 			return false
 		}
