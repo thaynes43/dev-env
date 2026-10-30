@@ -111,3 +111,71 @@ node/driver risk; task intent is not kernel containment. Tom's review of the exa
 concrete policy/access changes is still required before activation. No merge,
 release, deploy, live grant/security/hardware action or runtime acceptance occurs
 in this recovery. PR597/565/563 remain preserved.
+
+## Bounded policy correction — 2026-10-30, custodian184308
+
+Fresh PR732 head709f4007d2588569e43f15dee7068b5f587afff2 and fetched branch
+agent/dev-env-1030-170111 verified before source edits. Author180930 exited0
+at18:37:26; OP233/3548 released custody. This private worktree is the sole
+correction writer. Parent relay retains grant-outcome/release followthrough;
+lead132039 retains user control, UI182804 is untouched. No competing backlog,
+PR, formal GitHub approval, merge, release, deployment or live action.
+
+OP233/3527 / GitHub6530523839 P1 corrected in the UNAPPLIED exact UPDATE rule:
+protected metadata explicit/optional comparisons, all other metadata unchanged
+except generation/managedFields/resourceVersion, exact olddeadline>1 to1 and
+no other spec delta. JSON Patch UID/resourceVersion tests and actor/owner checks
+remain. The independent source/schema audit found the pinned global baseline
+would deny these existing capability/hostPath choices, and admission lacked
+AccessGrant/node lookup reads. The packet therefore includes the smallest
+broker-subject, Pod-only two-control PolicyException and GET-only admission
+lookup RBAC proposal. No global baseline policy, ordinary-session permissions,
+network exclusions, limits, capability set or production Go behavior changes.
+
+Validation, Go1.27.3, GOMAXPROCS2/-p2, short TMPDIR=/tmp, isolated envtest1.35.0:
+
+- Initial direct packet CEL / real API lifecycle regressions PASS4.426s.
+- Full affected packages after adding actual stale UID/RV refusal and changed
+  managedFields assertions: broker25.507s; schema7.564s; operator0.113s;
+  API66.932s; CLI3.299s; controller81.086s — all PASS.
+- Adversarial packet-CEL cases refuse protected UID/name/namespace/labels/
+  annotations/owners/finalizers/creationTimestamp, spec node/image/capability/
+  added or removed key/other deadline, non-shortening updates and non-broker
+  callers. Optional absent metadata works. Both synthetic bookkeeping changes
+  and actual server-incremented generation/managedFields/RV admit the exact
+  deadline patch. Nonterminal DELETE refuses; terminal observation permits.
+- Real API lifecycle creates the defaulted Pod, refuses stale UID and RV patch
+  tests, applies the exact broker JSON patch, observes normalized state, writes
+  synthetic terminal status, then deletes. No scheduler/kubelet/device or
+  Kyverno runs. Existing broker tests separately retain node/lease/container
+  proof requirements; synthetic terminal status alone is not stop proof.
+- Exact forward patch applicability PASS against private files extracted only
+  from haynes-ops f12bbf60057e1a09d654143ad5c3b54058571dcb. Initial check copied
+  empty intent-to-add entries and correctly failed; a fresh pinned-only fixture
+  corrected that harness issue. No haynes-ops checkout or cluster was changed.
+- Pinned chart3.9.2 PolicyException v2 structural schema validation PASS.
+  Initial two extraction attempts treated Helm directives as YAML and failed;
+  omitting only template directive lines allowed structural schema validation.
+  This does not execute exception conditions or the Kyverno admission engine.
+
+Current exact UNAPPLIED patch SHA256:
+`f15ac0df65e086954348aade5f6143e393a543a258b7c92367f103882a81e37c`.
+The earlier06dd079a hash qualifies only the prior packet. Original source base
+remains030133dc; prior failed hosted stale expectations and local overlong-TMPDIR
+socket failures remain recorded above and in OP233/219, without counter reset.
+
+The packet README names precise remaining runtime gaps: Kyverno compilation,
+condition/match/lookup/webhook/defaulting behavior, exec isolation, Cilium,
+device cgroups/runtime/image usability and actual expiry/termination/cleanup
+with separately authorized restore/readback. SYS_ADMIN remains broadly
+administrative with node/driver risk; shared NVIDIA control nodes are not UUID
+containment, and hardware persistence is separate from TTL. Source and schema
+checks do not establish usable/installed/accepted runtime. Exact final commit,
+native immutable-head review and ordinary-push CI receipts are recorded on
+PR732 and OP233/219 without an evidence-only follow-up push. Tom's concrete
+policy review and activation holds remain intact.
+
+Final local `make check-generated check-layout lint` PASS; generated files are
+unchanged and pinned golangci-lint v2.15.0 reports0issues. No local suite failed
+in this correction. Schema-extraction and patch-fixture setup failures above
+are retained separately from the prior author's actual failed test history.

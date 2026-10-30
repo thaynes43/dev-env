@@ -1,5 +1,5 @@
 # UNAPPLIED. Separate guard covers baseline, workbench and other-grant identities.
-# No baseline exception, no fixed argv list: only the authenticated operator proxy
+# No baseline exec exception, no fixed argv list: only the authenticated operator proxy
 # may enter a maintenance executor; it checks approved participants and TTL.
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy

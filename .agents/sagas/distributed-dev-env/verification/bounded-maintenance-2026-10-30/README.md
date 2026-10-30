@@ -1,7 +1,8 @@
 # Bounded maintenance source preparation (OP233 / OP219)
 
 Source base: dev-env 030133dc9dd9ac24a2c61f30f12ee8e402bd4bf2.
-Sole source author: dev-env-1030-170111. Lead dev-env-1029-132039 owns sequencing
+Initial source author: dev-env-1030-170111; bounded policy-correction custodian:
+dev-env-1030-184308, after180930 released source at709f4007 (OP233/3548). Lead dev-env-1029-132039 owns sequencing
 and release. This packet authorizes no merge, live policy, grant, adapter activation,
 node command, hardware operation or pilot. All execution defaults stay off.
 
@@ -60,8 +61,9 @@ against the commit above, generated without writing that checkout. Its adjacent
 YAML files are review inputs, never applied fixtures or deployment authorization.
 The patch adds a tokenless, unbound executor ServiceAccount; broker-only pod/network
 management narrowed by grant ownership/shape; authenticated annotation provenance;
-and an exec guard for ALL other baseline, workbench and grant identities. It changes
-no global baseline capability exception and creates no public endpoint or namespace.
+and an exec guard for ALL other baseline, workbench and grant identities. It leaves
+the global baseline policy unchanged and adds only the broker-specific, Pod-only
+partial exception described below; it creates no public endpoint or namespace.
 The operator's existing API and pods/exec authority are reused; no grant identity
 receives pods/create or pods/exec. Node and node-lease reads by the broker are stop
 evidence only. Unrelated v1 behavior is preserved.
@@ -107,3 +109,55 @@ are not written into operator logs; audit records actor, grant UID, argument cou
 completion and optional bounded attributed restore report. Output is capped64KiB
 per stream. The broker --maintenance-human-service-account must match operator --human-service-account.
 The image's writable root is disabled and no credential is injected.
+
+## Deadline correction and exact baseline proposal (OP233/3527)
+
+The UPDATE rule explicitly preserves UID/name/namespace and optional labels,
+annotations, ownerReferences and finalizers. All remaining metadata is also
+preserved except server-managed generation, managedFields and resourceVersion.
+This admits Kubernetes1.35 normalization before validating admission. Only an
+old deadline greater than1 becoming1 is allowed; every other spec field and
+its key set must match. The actor, grant ownership, PodUID patch test and
+resourceVersion patch test remain. CREATE node UID/control-plane restrictions,
+network exclusions, decision authentication and stop-proof guards are unchanged.
+
+The pinned global `pod-security-baseline` rejects SYS_ADMIN/SYS_RAWIO and hostPath.
+`maintenance-baseline-exception.yaml` proposes a `kyverno.io/v2` PolicyException
+for only bare Pods in dev-agents with the maintenance label, broker admission
+subject, tokenless executor ServiceAccount name and matching controller-owner /
+grant-label metadata. It waives only Capabilities values SYS_ADMIN/SYS_RAWIO and
+HostPath Volumes for the existing device/input path classes. No autogen rule,
+ordinary session or other baseline control is exempted. Those path patterns are
+not exact grant authorization: the separate fail-closed executor CREATE policy
+must perform authoritative AccessGrant lookup and exact capability/image/node/
+mount comparisons. Owner/label claims alone cannot authenticate an AccessGrant.
+All policies must be reviewed and qualified together, before enabling either flag.
+
+`maintenance-admission-lookups.yaml` proposes only GET AccessGrants in dev-agents
+and GET nodes for kyverno/kyverno-admission-controller. Pinned chart3.9.2 already
+binds that identity to `view` for Pod GETs, but does not supply node/custom-grant
+reads. Broker RBAC does not authorize admission lookups. The pinned1.19.2
+[resource.Get implementation](https://github.com/kyverno/kyverno/blob/v1.19.2/pkg/cel/libs/context.go)
+uses direct named dynamic-client GETs, so these calls require no list/watch/write
+permissions. Executor/session identities receive none of these permissions.
+
+The pinned [chart3.9.2 package](https://kyverno.github.io/kyverno/kyverno-3.9.2.tgz)
+declares appVersion1.19.2; SHA256
+`f6fe7184544d5e2ee33a77808c09e67aa603ce6560cc197038fde31d727c861e`.
+Its exception schema and source support background:false actor matches,
+conditions and control-specific podSecurity exclusions; the global baseline can
+retain background:true. HostPath's reported restrictedField is
+`spec.volumes[*].hostPath` with path-valued exclusions, not `.hostPath.path`.
+Capabilities requires images; pod-level HostPath must omit images.
+
+Qualification gap: direct CEL tests execute the packet ownership/UPDATE/DELETE
+expressions over admission JSON. A real isolated API server proves defaulted
+CREATE, UID/RV-fenced JSON PATCH, generation/managedFields normalization, terminal
+status observation and DELETE. The harness has no Kyverno, kubelet or device
+runtime. It does not establish Kyverno compilation, exception-condition matching,
+actual lookup permissions/webhook ordering, admission-enforced lifecycle or
+termination on a real node. These exact proposals remain UNAPPLIED and held for
+Tom's concrete policy review and separately authorized isolated runtime
+qualification. No live policy apply, dry-run or test is authorized by this packet.
+Shared NVIDIA control devices remain broader than GPU UUID intent; persistent
+hardware-state restoration is separate from TTL. No limits/capabilities grow.

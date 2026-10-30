@@ -139,7 +139,7 @@ new file mode 100644
 +++ b/kubernetes/main/apps/kyverno/policies/app/maintenance-exec.yaml
 @@ -0,0 +1,36 @@
 +# UNAPPLIED. Separate guard covers baseline, workbench and other-grant identities.
-+# No baseline exception, no fixed argv list: only the authenticated operator proxy
++# No baseline exec exception, no fixed argv list: only the authenticated operator proxy
 +# may enter a maintenance executor; it checks approved participants and TTL.
 +apiVersion: policies.kyverno.io/v1
 +kind: ValidatingPolicy
@@ -178,7 +178,7 @@ diff --git a/kubernetes/main/apps/kyverno/policies/app/maintenance-executor.yaml
 new file mode 100644
 --- /dev/null
 +++ b/kubernetes/main/apps/kyverno/policies/app/maintenance-executor.yaml
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,146 @@
 +# UNAPPLIED. All broker Pod writes and any maintenance identity are narrowed here.
 +apiVersion: policies.kyverno.io/v1
 +kind: ValidatingPolicy
@@ -274,8 +274,17 @@ new file mode 100644
 +      message: maintenance creation must match the approved bounded task shape and no other host/API access
 +    - expression: >-
 +        request.operation != 'UPDATE' ||
-+        (object.metadata == oldObject.metadata &&
-+         object.spec.activeDeadlineSeconds == 1 &&
++        (object.metadata.uid == oldObject.metadata.uid &&
++         object.metadata.name == oldObject.metadata.name &&
++         object.metadata.namespace == oldObject.metadata.namespace &&
++         object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({}) &&
++         object.metadata.?annotations.orValue({}) == oldObject.metadata.?annotations.orValue({}) &&
++         object.metadata.?ownerReferences.orValue([]) == oldObject.metadata.?ownerReferences.orValue([]) &&
++         object.metadata.?finalizers.orValue([]) == oldObject.metadata.?finalizers.orValue([]) &&
++         object.metadata.all(k, k in ['uid','name','namespace','labels','annotations','ownerReferences','finalizers','generation','managedFields','resourceVersion'] ||
++           (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
++         oldObject.metadata.all(k, k in ['uid','name','namespace','labels','annotations','ownerReferences','finalizers','generation','managedFields','resourceVersion'] || k in object.metadata) &&
++         oldObject.spec.activeDeadlineSeconds > 1 && object.spec.activeDeadlineSeconds == 1 &&
 +         size(object.spec) == size(oldObject.spec) &&
 +         object.spec.all(k, k == 'activeDeadlineSeconds' || (k in oldObject.spec && object.spec[k] == oldObject.spec[k])))
 +      message: broker updates may only shorten the owned executor deadline to one second
@@ -354,12 +363,14 @@ diff --git a/kubernetes/main/apps/dev-env-system/rbac/app/kustomization.yaml b/k
 diff --git a/kubernetes/main/apps/kyverno/policies/app/kustomization.yaml b/kubernetes/main/apps/kyverno/policies/app/kustomization.yaml
 --- a/kubernetes/main/apps/kyverno/policies/app/kustomization.yaml
 +++ b/kubernetes/main/apps/kyverno/policies/app/kustomization.yaml
-@@ -19,3 +19,5 @@
+@@ -19,3 +19,7 @@
    - ./exceptions/egpu-test-capabilities.yaml
    - ./exceptions/llama-card-b-power-cap.yaml
    - ./exceptions/arc-dind.yaml
 +  - ./maintenance-exec.yaml
 +  - ./maintenance-executor.yaml
++  - ./exceptions/dev-env-maintenance.yaml
++  - ./maintenance-admission-lookups.yaml
 diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
 --- a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
 +++ b/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
@@ -593,3 +604,124 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/grantpolicies.yaml b/k
              - message: kube is set for type kube, and only there
                rule: (self.type == 'kube') == has(self.kube)
              - message: egress is set for type egress, and only there
+diff --git a/kubernetes/main/apps/kyverno/policies/app/exceptions/dev-env-maintenance.yaml b/kubernetes/main/apps/kyverno/policies/app/exceptions/dev-env-maintenance.yaml
+new file mode 100644
+--- /dev/null
++++ b/kubernetes/main/apps/kyverno/policies/app/exceptions/dev-env-maintenance.yaml
+@@ -0,0 +1,65 @@
++# UNAPPLIED. Requires the separate fail-closed maintenance shape/owner/exec guards.
++# No controller/autogen, namespace-wide or ordinary-session exception.
++apiVersion: kyverno.io/v2
++kind: PolicyException
++metadata:
++  name: pss-baseline-dev-env-maintenance
++  namespace: kyverno
++spec:
++  background: false
++  exceptions:
++    - policyName: pod-security-baseline
++      ruleNames: [baseline]
++  match:
++    any:
++      - resources:
++          kinds: [Pod]
++          namespaces: [dev-agents]
++          selector:
++            matchExpressions:
++              - key: dev-env.haynesops.com/maintenance
++                operator: Exists
++        subjects:
++          - kind: ServiceAccount
++            name: dev-env-broker
++            namespace: dev-env-system
++  conditions:
++    all:
++      - key: "{{ request.object.spec.serviceAccountName || '' }}"
++        operator: Equals
++        value: dev-env-maintenance
++      - key: "{{ request.object.metadata.labels.\"dev-env.haynesops.com/maintenance\" || '' }}"
++        operator: NotEquals
++        value: ""
++      - key: "{{ request.object.metadata.labels.\"dev-env.haynesops.com/grant\" || '' }}"
++        operator: Equals
++        value: "{{ request.object.metadata.name }}"
++      - key: "{{ length(request.object.metadata.ownerReferences || `[]`) }}"
++        operator: Equals
++        value: 1
++      - key: "{{ request.object.metadata.ownerReferences[0].apiVersion || '' }}"
++        operator: Equals
++        value: dev-env.haynesops.com/v1alpha1
++      - key: "{{ request.object.metadata.ownerReferences[0].kind || '' }}"
++        operator: Equals
++        value: AccessGrant
++      - key: "{{ request.object.metadata.ownerReferences[0].name || '' }}"
++        operator: Equals
++        value: "{{ request.object.metadata.name }}"
++      - key: "{{ request.object.metadata.ownerReferences[0].uid || '' }}"
++        operator: Equals
++        value: "{{ request.object.metadata.labels.\"dev-env.haynesops.com/maintenance\" }}"
++      - key: "{{ request.object.metadata.ownerReferences[0].controller || `false` }}"
++        operator: Equals
++        value: true
++  podSecurity:
++    - controlName: Capabilities
++      images: ["*"]
++      restrictedField: spec.containers[*].securityContext.capabilities.add
++      values: [SYS_ADMIN, SYS_RAWIO]
++    - controlName: HostPath Volumes
++      restrictedField: spec.volumes[*].hostPath
++      values:
++        - /dev/nvidia*
++        - /dev/dri/renderD*
++        - /var/lib/maintenance-inputs/*
+diff --git a/kubernetes/main/apps/kyverno/policies/app/maintenance-admission-lookups.yaml b/kubernetes/main/apps/kyverno/policies/app/maintenance-admission-lookups.yaml
+new file mode 100644
+--- /dev/null
++++ b/kubernetes/main/apps/kyverno/policies/app/maintenance-admission-lookups.yaml
+@@ -0,0 +1,46 @@
++# UNAPPLIED. Named GET lookups by admission, not executor or session authority.
++apiVersion: rbac.authorization.k8s.io/v1
++kind: Role
++metadata:
++  name: dev-env-maintenance-admission-lookups
++  namespace: dev-agents
++rules:
++  - apiGroups: [dev-env.haynesops.com]
++    resources: [accessgrants]
++    verbs: [get]
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: RoleBinding
++metadata:
++  name: dev-env-maintenance-admission-lookups
++  namespace: dev-agents
++roleRef:
++  apiGroup: rbac.authorization.k8s.io
++  kind: Role
++  name: dev-env-maintenance-admission-lookups
++subjects:
++  - kind: ServiceAccount
++    name: kyverno-admission-controller
++    namespace: kyverno
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRole
++metadata:
++  name: dev-env-maintenance-admission-lookups
++rules:
++  - apiGroups: ['']
++    resources: [nodes]
++    verbs: [get]
++---
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRoleBinding
++metadata:
++  name: dev-env-maintenance-admission-lookups
++roleRef:
++  apiGroup: rbac.authorization.k8s.io
++  kind: ClusterRole
++  name: dev-env-maintenance-admission-lookups
++subjects:
++  - kind: ServiceAccount
++    name: kyverno-admission-controller
++    namespace: kyverno
