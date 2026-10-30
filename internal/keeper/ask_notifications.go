@@ -32,12 +32,12 @@ const (
 var errAskNotifications = errors.New("ask notifications unavailable")
 
 // AskNotificationOptions is independent of login notice windows. Empty
-// QuietHours permits all hours; a configured window is the ALLOWED local
+// Window permits all hours; a configured window is the ALLOWED local
 // delivery window. Q-255-02 still holds activation, even with source present.
 type AskNotificationOptions struct {
 	Enabled        bool
 	PortalOrigin   string
-	QuietHours     string // e.g. 09:00-21:00, empty by default
+	Window         string // e.g. 09:00-21:00, empty by default
 	Timezone       string // America/New_York by default
 	StateConfigMap string
 }
@@ -57,6 +57,27 @@ func (o AskNotificationOptions) Validate() error {
 	return nil
 }
 
+// DisableInvalid keeps optional notification configuration from stopping the
+// credential keeper. Command and direct Run callers share this validation;
+// disabled options pass through without logging again. Never log flag values.
+func (o AskNotificationOptions) DisableInvalid(notices NoticeOptions, leaderElect bool, log logr.Logger) AskNotificationOptions {
+	if !o.Enabled {
+		return o
+	}
+	notices = notices.withDefaults()
+	name := o.StateConfigMap
+	if name == "" {
+		name = DefaultAskNotificationConfigMap
+	}
+	if !leaderElect || o.Validate() != nil || !strings.HasPrefix(notices.URL, "https://") || name == notices.StateConfigMap {
+		o.Enabled = false
+		if log.GetSink() != nil {
+			log.Error(nil, "ask notifications disabled: invalid configuration")
+		}
+	}
+	return o
+}
+
 type askNoticeWindow struct {
 	zone       *time.Location
 	start, end time.Duration
@@ -72,11 +93,11 @@ func (o AskNotificationOptions) window() (askNoticeWindow, error) {
 	if err != nil {
 		return askNoticeWindow{}, errors.New("ask notification timezone is unknown")
 	}
-	w := askNoticeWindow{zone: loc, allHours: o.QuietHours == ""}
+	w := askNoticeWindow{zone: loc, allHours: o.Window == ""}
 	if w.allHours {
 		return w, nil
 	}
-	parts := strings.Split(o.QuietHours, "-")
+	parts := strings.Split(o.Window, "-")
 	if len(parts) != 2 {
 		return w, errors.New("ask notification window must be HH:MM-HH:MM")
 	}
@@ -178,7 +199,7 @@ func askRequesterID(a apiv1.Ask) string {
 
 func (n *askNotifier) tick(ctx context.Context) {
 	now := n.clock.Now()
-	if n.window.next(now).After(now) {
+	if !n.window.allows(now) {
 		return // defer; no persisted intent or cap consumed outside the window
 	}
 	ledger, err := n.store.load(ctx)
@@ -187,7 +208,7 @@ func (n *askNotifier) tick(ctx context.Context) {
 		return
 	}
 	asks, incomplete, err := n.reader.ListNamespace(ctx)
-	if err != nil || incomplete || len(asks) > askNotifyMaxIDs {
+	if err != nil || len(asks) > askNotifyMaxIDs {
 		n.log.Error(nil, "ask notification scan unavailable")
 		return
 	}
@@ -201,7 +222,9 @@ func (n *askNotifier) tick(ctx context.Context) {
 	for _, a := range asks {
 		live[a.ID] = true
 	}
-	ledger.prune(live, now)
+	if !incomplete {
+		ledger.prune(live, now)
+	}
 	for _, a := range asks {
 		now = n.clock.Now()
 		if ctx.Err() != nil || !n.window.allows(now) || a.EffectiveState(now) != apiv1.AskStateOpen {

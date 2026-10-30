@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -96,23 +95,12 @@ func noticesStart(providerCount int, notices NoticeOptions) bool {
 // Run runs the keeper until ctx ends or this process loses the leader election,
 // which returns an error so the process exits and the kubelet restarts it.
 func Run(ctx context.Context, cfg *rest.Config, o Options) error {
-	if o.AskNotifications.Enabled && !o.LeaderElect {
-		return errors.New("ask notifications require keeper leader election")
-	}
-	if err := o.AskNotifications.Validate(); err != nil {
-		return err
-	}
-	if o.AskNotifications.Enabled && !strings.HasPrefix(o.Notices.withDefaults().URL, "https://") {
-		return errors.New("ask notifications require an HTTPS Pushover endpoint")
-	}
-	if o.AskNotifications.Enabled {
-		name := o.AskNotifications.StateConfigMap
-		if name == "" {
-			name = DefaultAskNotificationConfigMap
-		}
-		if name == o.Notices.withDefaults().StateConfigMap {
-			return errors.New("ask notifications require a ConfigMap separate from login notices")
-		}
+	o.AskNotifications = o.AskNotifications.DisableInvalid(o.Notices, o.LeaderElect, o.Log)
+	// Direct callers need the same non-fatal handling as the command. An
+	// invalid shared Pushover URL must not stop login workers or token minting.
+	if !o.Notices.Disabled && o.Notices.Validate() != nil {
+		o.Notices.Disabled = true
+		o.Log.Error(nil, "notices disabled: invalid configuration")
 	}
 	if o.Namespace == "" || o.GHTokenSecret.Namespace == "" || o.GHTokenSecret.Name == "" || o.GitHubApp == nil {
 		return errors.New("keeper: the namespace, the gh token Secret and the GitHub App are required")

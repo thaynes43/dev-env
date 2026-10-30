@@ -82,6 +82,9 @@ func TestEnvtestAskSweeper(t *testing.T) {
 	if _, err := store.Withdraw(ctx, withdrawn.Name, req, now); err != nil {
 		t.Fatal(err)
 	}
+	// Terminal records are never repaired, even when their labels are stale.
+	forceStateLabel(t, c, ctx, answered.Name, "open")
+	forceStateLabel(t, c, ctx, withdrawn.Name, "open")
 	stale := makeAsk("ask-0000000000000005")
 	stale.Status.State = "expired"
 	if err := c.Status().Update(ctx, stale); err != nil {
@@ -98,12 +101,21 @@ func TestEnvtestAskSweeper(t *testing.T) {
 	if disabledReader.reads != 0 || load(open.Name).ResourceVersion != before.ResourceVersion {
 		t.Fatal("disabled sweeper touched Kubernetes")
 	}
-	s := Sweeper{Enabled: true, Store: store, Clock: clk}
+	reader := &countAskReader{Reader: c}
+	s := Sweeper{Enabled: true, Store: KubeStore{Client: c, Live: reader, Namespace: Namespace}, Clock: clk}
+	assertMutationReads := func(want int) {
+		t.Helper()
+		if reader.gets != want {
+			t.Fatalf("got %d GETs, want %d records needing mutation", reader.gets, want)
+		}
+		reader.gets = 0
+	}
 	if !s.NeedLeaderElection() {
 		t.Fatal("sweeper is not leader only")
 	}
 	clk.Step(59 * time.Second)
 	s.Sweep(ctx)
+	assertMutationReads(2) // only open and stale need label repairs
 	got := load(open.Name)
 	if got.Status.State != "" || got.Labels[StateLabel] != "open" {
 		t.Fatalf("premature expiry or failed open label repair: %+v", got.Status)
@@ -114,6 +126,7 @@ func TestEnvtestAskSweeper(t *testing.T) {
 	answeredBefore, withdrawnBefore := load(answered.Name), load(withdrawn.Name)
 	clk.Step(time.Second)
 	s.Sweep(ctx)
+	assertMutationReads(2) // only open and approval need expiry writes
 	for _, id := range []string{open.Name, approval.Name} {
 		got := load(id)
 		if got.Status.State != "expired" || got.Labels[StateLabel] != "expired" || got.Status.Answer != nil {
@@ -126,6 +139,8 @@ func TestEnvtestAskSweeper(t *testing.T) {
 	if got := load(withdrawn.Name); got.ResourceVersion != withdrawnBefore.ResourceVersion || got.Status.State != "withdrawn" {
 		t.Fatal("withdrawn Ask was changed")
 	}
+	s.Sweep(ctx)
+	assertMutationReads(0) // all nonterminal records already have correct state/labels
 
 	race := makeAsk("ask-0000000000000006")
 	// An answer already validated just before expiry commits after the
@@ -146,10 +161,12 @@ func TestEnvtestAskSweeper(t *testing.T) {
 type countAskReader struct {
 	client.Reader
 	reads int
+	gets  int
 }
 
 func (r *countAskReader) Get(ctx context.Context, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
 	r.reads++
+	r.gets++
 	return r.Reader.Get(ctx, k, o, opts...)
 }
 func (r *countAskReader) List(ctx context.Context, l client.ObjectList, opts ...client.ListOption) error {

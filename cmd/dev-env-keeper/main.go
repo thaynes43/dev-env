@@ -186,7 +186,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.notices.StateConfigMap, "notice-state-configmap", keeper.DefaultNoticeStateConfigMap, "ConfigMap in the keeper's namespace that keeps the notice deduplication state")
 	fs.BoolVar(&o.askNotifications.Enabled, "enable-ask-notifications", false, "send coalesced new-Ask pushes; source only, activation awaits Q-255-02 and GitOps RBAC")
 	fs.StringVar(&o.askNotifications.PortalOrigin, "ask-notify-portal-origin", "", "HTTPS portal origin for authenticated Ask board GET links")
-	fs.StringVar(&o.askNotifications.QuietHours, "ask-notify-quiet-hours", "", "optional ALLOWED local delivery window HH:MM-HH:MM; empty permits all hours within caps")
+	fs.StringVar(&o.askNotifications.Window, "ask-notify-window", "", "optional ALLOWED local delivery window HH:MM-HH:MM; empty permits all hours within caps")
 	fs.StringVar(&o.askNotifications.Timezone, "ask-notify-timezone", keeper.DefaultNoticeZone, "IANA timezone for the Ask delivery window; independent of login notices")
 	fs.StringVar(&o.askNotifications.StateConfigMap, "ask-notify-state-configmap", keeper.DefaultAskNotificationConfigMap, "precreated keeper-owned ConfigMap for Ask dedupe, rate timestamps and content-free page records")
 	if err := fs.Parse(args); err != nil {
@@ -216,15 +216,8 @@ func parseFlags(args []string) (options, error) {
 	if o.claudeAuth.Enabled && (!o.leaderElect || o.claudeAuth.JournalSecret == "" || o.claudeAuth.LiveSecret == "" || !filepath.IsAbs(o.claudeAuth.LoginDir) || o.namespace == o.secretNamespace) {
 		return o, errors.New("claude auth requires leader election, separate private/public namespaces, an absolute login directory and nonempty named configuration")
 	}
-	if o.askNotifications.Enabled && !o.leaderElect {
-		return o, errors.New("ask notifications require leader election")
-	}
-	if err := o.askNotifications.Validate(); err != nil {
-		return o, err
-	}
-	if o.askNotifications.Enabled && !strings.HasPrefix(o.notices.URL, "https://") {
-		return o, errors.New("ask notifications require an HTTPS Pushover endpoint")
-	}
+	o.askNotifications = o.askNotifications.DisableInvalid(o.notices, o.leaderElect,
+		logr.FromSlogHandler(slog.NewJSONHandler(noticeFailureLog, nil)).WithName(binaryName))
 	if err := o.notices.Validate(); err != nil {
 		// Plan 13, story 13.1 follow-up 1: a bad notice flag disables notices
 		// and is logged. It must not stop the credential keeper.

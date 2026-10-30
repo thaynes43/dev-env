@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -338,7 +340,7 @@ func TestAskNotificationsWriteAheadFailureAndUnknown(t *testing.T) {
 	}
 }
 
-func TestAskNotificationQuietWindowDST(t *testing.T) {
+func TestAskNotificationWindowDST(t *testing.T) {
 	for _, tc := range []struct{ name, window, now, next string }{
 		{"empty-all-hours", "", "2026-11-01T04:30:00Z", "2026-11-01T04:30:00Z"},
 		{"fall-back-next-morning", "09:00-21:00", "2026-11-01T02:30:00Z", "2026-11-01T14:00:00Z"},
@@ -349,7 +351,7 @@ func TestAskNotificationQuietWindowDST(t *testing.T) {
 		{"overnight", "21:00-09:00", "2026-10-29T14:00:00Z", "2026-10-30T01:00:00Z"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			o := AskNotificationOptions{QuietHours: tc.window, Timezone: "America/New_York"}
+			o := AskNotificationOptions{Window: tc.window, Timezone: "America/New_York"}
 			w, err := o.window()
 			if err != nil {
 				t.Fatal(err)
@@ -361,7 +363,7 @@ func TestAskNotificationQuietWindowDST(t *testing.T) {
 		})
 	}
 	f := newAskNoticeFixture(t)
-	f.opts.QuietHours = "09:00-21:00"
+	f.opts.Window = "09:00-21:00"
 	f.opts.Timezone = "America/New_York"
 	f.clock.SetTime(time.Date(2026, 11, 1, 2, 30, 0, 0, time.UTC))
 	f.add(1, "requester")
@@ -382,13 +384,11 @@ func TestAskNotificationsOffAndUnavailable(t *testing.T) {
 	if err != nil || n != nil {
 		t.Fatal("off flag created a runnable")
 	}
-	for _, tc := range []string{"incomplete", "list-error", "corrupt-state", "missing-cm", "closed-at-get", "expired", "approval-expired"} {
+	for _, tc := range []string{"list-error", "corrupt-state", "missing-cm", "closed-at-get", "expired", "approval-expired"} {
 		t.Run(tc, func(t *testing.T) {
 			f := newAskNoticeFixture(t)
 			id := f.add(1, "requester")
 			switch tc {
-			case "incomplete":
-				f.reader.incomplete = true
 			case "list-error":
 				f.reader.err = errors.New("unavailable")
 			case "corrupt-state":
@@ -424,15 +424,115 @@ func TestAskNotificationsOffAndUnavailable(t *testing.T) {
 	}
 }
 
-func TestAskNotificationsCannotOverwriteLoginNoticeState(t *testing.T) {
-	for _, name := range []string{DefaultNoticeStateConfigMap, "custom-login-notices"} {
-		err := Run(context.Background(), nil, Options{LeaderElect: true,
-			AskNotifications: AskNotificationOptions{Enabled: true, PortalOrigin: "https://portal.example", StateConfigMap: name},
-			Notices:          NoticeOptions{StateConfigMap: name},
+func TestAskNotificationsIncompleteScanSendsWithoutPruning(t *testing.T) {
+	f := newAskNoticeFixture(t)
+	unreadable := f.add(1, "requester-1")
+	f.n.tick(f.ctx)
+	f.clock.Step(65 * time.Minute) // old enough for a complete scan to prune
+	delete(f.reader.asks, unreadable)
+	readable := f.add(2, "requester-2")
+	f.reader.incomplete = true
+	f.n.tick(f.ctx)
+	l := f.ledger(t)
+	if len(f.sender.notices) != 2 || l.State.Seen[readable] != readable {
+		t.Fatal("incomplete scan blocked a readable Ask")
+	}
+	if l.State.Seen[unreadable] != unreadable {
+		t.Fatal("incomplete scan pruned an unreadable Ask's dedupe")
+	}
+	f.restart(t)
+	f.n.tick(f.ctx)
+	if len(f.sender.notices) != 2 {
+		t.Fatal("incomplete scan replayed a readable Ask")
+	}
+	f.reader.incomplete = false
+	f.clock.Step(askRequesterInterval + noticeStoreTimeout)
+	f.add(3, "requester-3") // persist the completed scan's prune with a new reservation
+	f.n.tick(f.ctx)
+	if _, exists := f.ledger(t).State.Seen[unreadable]; exists {
+		t.Fatal("complete scan did not prune an absent Ask")
+	}
+}
+
+func TestAskNotificationsInvalidConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options AskNotificationOptions
+		notices NoticeOptions
+		leader  bool
+	}{
+		{name: "missing-origin", options: AskNotificationOptions{Enabled: true}, leader: true},
+		{name: "invalid-origin", options: AskNotificationOptions{Enabled: true, PortalOrigin: "https://token@portal.example"}, leader: true},
+		{name: "bad-window", options: AskNotificationOptions{Enabled: true, PortalOrigin: "https://portal.example", Window: "bad"}, leader: true},
+		{name: "non-https", options: AskNotificationOptions{Enabled: true, PortalOrigin: "https://portal.example"}, notices: NoticeOptions{URL: "http://push.example"}, leader: true},
+		{name: "shared-default-ledger", options: AskNotificationOptions{Enabled: true, PortalOrigin: "https://portal.example", StateConfigMap: DefaultNoticeStateConfigMap}, leader: true},
+		{name: "shared-custom-ledger", options: AskNotificationOptions{Enabled: true, PortalOrigin: "https://portal.example", StateConfigMap: "shared"}, notices: NoticeOptions{StateConfigMap: "shared"}, leader: true},
+		{name: "no-leader", options: AskNotificationOptions{Enabled: true, PortalOrigin: "https://portal.example"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			log := logr.FromSlogHandler(slog.NewJSONHandler(&logs, nil))
+			o := tc.options.DisableInvalid(tc.notices, tc.leader, log)
+			o = o.DisableInvalid(tc.notices, tc.leader, log)
+			if o.Enabled || strings.Count(logs.String(), `"msg":"ask notifications disabled: invalid configuration"`) != 1 || strings.Contains(logs.String(), "example") {
+				t.Fatalf("invalid config not safely disabled once: enabled=%v logs=%s", o.Enabled, logs.String())
+			}
 		})
-		if err == nil || !strings.Contains(err.Error(), "ConfigMap separate from login notices") {
-			t.Fatal("shared ledger was accepted", err)
+	}
+}
+
+func TestAskNotificationsInvalidConfigKeepsTokenKeeperRunning(t *testing.T) {
+	cfg := envConfig(t)
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const namespace = "ask-notification-keeper"
+	const publicNamespace = "ask-notification-agents"
+	secret := types.NamespacedName{Namespace: publicNamespace, Name: "gh-token"}
+	for _, obj := range []client.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: publicNamespace}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: publicNamespace, Name: secret.Name}},
+	} {
+		if err := c.Create(ctx, obj); err != nil {
+			t.Fatal(err)
 		}
+	}
+	k := keys(t)
+	gh := newFakeGitHub(t, &k[0].PublicKey, time.Now)
+	app := gh.app(writeAppDir(t, k[0]))
+	// Keep the synthetic login worker's Unix socket path short. Its journal
+	// is absent in envtest, so it cannot refresh or publish any credential.
+	loginDir, err := os.MkdirTemp("", "ask-notify-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(loginDir) })
+	ctx, cancel := context.WithCancel(ctx)
+	r := &running{cancel: cancel, done: make(chan error, 1), logs: &logBuffer{}}
+	t.Cleanup(func() { r.stop(t) })
+	go func() {
+		r.done <- Run(ctx, cfg, Options{
+			Namespace: namespace, GHTokenSecret: secret, GitHubApp: app,
+			LeaderElect: true, MetricsAddr: "0", ProbeAddr: "0", Log: r.logs.logger(),
+			AskNotifications: AskNotificationOptions{Enabled: true, PortalOrigin: "https://portal.example", Window: "invalid-private-window"},
+			Notices:          NoticeOptions{URL: "http://push.example"},
+			CodexAuth:        CodexOptions{Enabled: true, LoginDir: loginDir},
+		})
+	}()
+	onServer(t, "the token keeper to mint despite invalid Ask settings", func() bool {
+		var s corev1.Secret
+		return c.Get(ctx, secret, &s) == nil && len(s.Data[GHTokenKey]) > 0
+	})
+	r.stop(t)
+	if logs := r.logs.String(); strings.Count(logs, "ask notifications disabled: invalid configuration") != 1 || strings.Contains(logs, "invalid-private-window") {
+		t.Fatalf("missing fixed configuration diagnostic: %s", logs)
 	}
 }
 
@@ -510,7 +610,7 @@ func TestAskNotificationsSlowReadsAndReservationBoundaries(t *testing.T) {
 			f := newAskNoticeFixture(t)
 			f.clock.SetTime(time.Date(2026, 10, 30, 0, 59, 59, 0, time.UTC)) // 20:59:59 New York
 			f.add(1, "requester")
-			f.opts.QuietHours = "09:00-21:00"
+			f.opts.Window = "09:00-21:00"
 			f.restart(t)
 			if phase == "get" {
 				f.reader.beforeGet = func(string) { f.clock.Step(2 * time.Second); f.reader.beforeGet = nil }

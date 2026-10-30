@@ -83,6 +83,8 @@ The operator reuses `--enable-asks` for a leader-only sweeper; enabling asks
 requires leader election. Every minute it scans at most nine pages of 500
 records, without trusting the state label. It applies `EffectiveState` to the
 Ask deadline and, for approval, the scope deadline. An absent state is open.
+The list snapshot selects only records needing a status or label change for
+an authoritative GET; unchanged, answered and withdrawn records need no GET.
 An expired open Ask becomes `expired` through a status update carrying its
 resourceVersion. On conflict it rereads, so an answer that already committed
 wins. Answered and withdrawn Asks are untouched, even after approval expiry.
@@ -98,9 +100,13 @@ The keeper adds `--enable-ask-notifications` (default false). It requires
 leader election, `--ask-notify-portal-origin=https://<portal-host>` and the
 existing Pushover credential files/endpoint flags. It runs independently of
 login notices. **Q-255-02 is unanswered; live Ask pushes remain held.**
+Invalid Ask notification settings log one fixed diagnostic and disable only
+Ask notifications; the credential keeper continues minting tokens.
 
 Every 30 seconds, the keeper reads a bounded Ask list from the API server and
 rechecks the selected Ask with GET. Only effectively open Asks can notify.
+An unreadable Ask does not block pushes for readable records. An incomplete
+scan preserves all dedupe entries because it cannot prove any Ask absent.
 The title and body are both `An agent needs your answer`, priority 0. The
 link is the configured HTTPS origin plus
 `/portal/projects/dev-env/environments/internal/asks?ask=<id>`. It opens an
@@ -108,8 +114,11 @@ authenticated GET; the push carries no question, PR title, principal, token
 or approval material.
 
 Pending Asks from the same original requester coalesce into one push linking
-the oldest pending Ask. All those IDs are deduplicated together; their durable
-questions remain on the board. Later Asks wait for an eligible slot. Caps are
+the oldest pending Ask. All those IDs are marked done for notification
+purposes with their representative, including after a failed attempt. If the
+representative closes before its eligible retry, its coalesced siblings get
+no separate push; their durable questions stay visible on the board. Later
+Asks wait for an eligible slot. Caps are
 one Ask push per requester per five minutes and six Ask pushes per configured
 recipient per rolling hour. Reservations, including failed attempts, consume
 slots conservatively. The keeper has one configured Pushover recipient; its
@@ -130,7 +139,7 @@ Unix-second attempt/retry timestamps, plus a schema version. It retains at
 most 4096 Ask IDs and groups, with at most two attempts per group. Entries for
 existing Asks remain deduplicated; an absent Ask's entry can be removed only
 after a complete authoritative scan and the one-hour rate window. Size bounds
-are 896 KiB for state and 960 KiB for state plus page records. Capacity, read,
+are 896 KiB for state and 960 KiB for state plus page records. Capacity, ledger/list read,
 corruption and CAS failures stop sending; they never reset dedupe to empty.
 Keep this ConfigMap across upgrades and flag changes.
 
@@ -148,7 +157,7 @@ Ask is still open and all caps/windows allow. Other 4xx responses are `failed` w
 automatic retry. The existing pages lookup is not extended to this separate
 ConfigMap by lane B.
 
-`--ask-notify-quiet-hours` defaults to empty: all hours within caps. When set,
+`--ask-notify-window` defaults to empty: all hours within caps. When set,
 it names the **allowed delivery window**, for example `09:00-21:00`, with
 `--ask-notify-timezone=America/New_York` (the default timezone). Start is
 inclusive, end exclusive; overnight windows are supported. Outside the window,

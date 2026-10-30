@@ -120,7 +120,7 @@ internal/shelf/          the operator's side of the shelf pod (D-67): finds it, 
 internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, maintenance check, pages list|show (offline, DESIGN-031); finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
-internal/keeper/         the keeper (D-52): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
+internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
                          behind a Lease. Only that non-rotating token is a Keeper Job; the rotating Codex login and the
                          Proxmox credential grants are separate journaled, Lease-fenced leader runnables. Unit tests use a fake
                          GitHub (httptest) and a fake clock; its envtest suite runs it as its ServiceAccount with exactly
