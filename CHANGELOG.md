@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.68.0](https://github.com/thaynes43/dev-env/compare/v2.67.0...v2.68.0) (2026-10-30)
+
+
+### Features
+
+* **asks:** add default-off expiry and keeper notifications ([#687](https://github.com/thaynes43/dev-env/issues/687)) ([8e30c74](https://github.com/thaynes43/dev-env/commit/8e30c74a004440e452a552fcdfc5d2bc7789c3db))
+
+
+### Bug Fixes
+
+* **agent-run:** correct Claude rc launch safety and observations (2a) ([#688](https://github.com/thaynes43/dev-env/issues/688)) ([866f561](https://github.com/thaynes43/dev-env/commit/866f561f40c27c7e811ef056a70ba7e622e39a77))
+* **deps:** preserve Kyverno CEL pin with Go 1.27.3 ([#682](https://github.com/thaynes43/dev-env/issues/682)) ([7376940](https://github.com/thaynes43/dev-env/commit/7376940e6c80853d003eabcd8e6699806dd600fd))
+
 ## [2.67.0](https://github.com/thaynes43/dev-env/compare/v2.66.0...v2.67.0) (2026-10-29)
 
 
