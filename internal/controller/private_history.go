@@ -396,6 +396,11 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 		// executor Pod is expected. The HOME stays protected.
 		c.Reason = "ExecutorEnded"
 		c.Message = "original private HOME and durable Session identity remain protected; the recorded private executor ended (executorTerminal); private stop state is Unknown"
+		if s.Status.PrivateHistory.TaskTerminal != nil {
+			c.Reason = "TaskComputeReclaimed"
+			c.Message = "terminal task compute is absent with confirmed executor proof; original HOME, history, task outcome and durable Session identity remain retained"
+			removal = c
+		}
 	}
 	if h := s.Status.PrivateHistory; homeExpiryRemovingHome(s) {
 		// DESIGN-025 6.5: the HOME goes, or went, after its history was

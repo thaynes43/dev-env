@@ -1551,6 +1551,9 @@ func podPhase(s *v1alpha1.AgentSession, obs observation) (v1alpha1.SessionPhase,
 		// recorded Deleting is archived (D-62) until it is reaped.
 		return v1alpha1.PhaseArchived, notReady("Archived", fmt.Sprintf("the HOME expiry archived the history as %s and deletes the HOME %s; an archived session is not resumed: read its history with agent-run history (DESIGN-025)",
 			s.Status.PrivateHistory.Expiry.Archive.Entry, HomeClaimName(s.Name)))
+	case privateHistoryProtected(s) && obs.pod.missing && s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && s.DeletionTimestamp.IsZero() &&
+		s.Status.PrivateHistory.TaskTerminal != nil && executorTerminalRecorded(s.Status.PrivateHistory):
+		return v1alpha1.PhaseSuspended, notReady("TaskPodReclaimed", "terminal task compute is absent with confirmed stop proof; original HOME, history and outcome remain retained")
 	case privateHistoryProtected(s) && wantsPodGone(s):
 		if s.DeletionTimestamp.IsZero() {
 			return v1alpha1.PhaseSuspended, notReady("RetentionPending", "private HOME and durable identity remain retained; private stop evidence is unknown")

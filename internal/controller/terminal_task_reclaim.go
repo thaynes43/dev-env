@@ -45,22 +45,35 @@ func (r *Reconciler) terminalTaskChildrenStopped(ctx context.Context, s *v1alpha
 	if err := r.APIReader.List(ctx, &children, client.InNamespace(s.Namespace)); err != nil {
 		return fmt.Errorf("children cannot be observed: %w", err)
 	}
+	byParent := make(map[string][]int)
 	for i := range children.Items {
-		child := &children.Items[i]
-		if child.Spec.Parent != s.Name {
-			continue
-		}
-		var pod corev1.Pod
-		err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(child), &pod)
-		if err == nil && (!controlledBySession(&pod, child) || !podEnded(&pod)) || err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("child %s has live or uncertain compute", child.Name)
-		}
-		if a := child.Status.Agent; a != nil && (a.Status != protocol.AgentExited || a.Attached != 0) {
-			return fmt.Errorf("child %s still reports active work", child.Name)
-		}
-		if child.Status.Phase != v1alpha1.PhaseArchived && (!executorTerminalRecorded(child.Status.PrivateHistory) ||
-			child.Status.Agent == nil || child.Status.Agent.Status != protocol.AgentExited || child.Status.Agent.Attached != 0) {
-			return fmt.Errorf("child %s has no confirmed terminal outcome", child.Name)
+		parent := children.Items[i].Spec.Parent
+		byParent[parent] = append(byParent[parent], i)
+	}
+	queue := []string{s.Name}
+	seen := map[string]bool{s.Name: true}
+	for len(queue) != 0 {
+		parent := queue[0]
+		queue = queue[1:]
+		for _, i := range byParent[parent] {
+			child := &children.Items[i]
+			if seen[child.Name] {
+				return errors.New("descendant ownership is cyclic or uncertain")
+			}
+			seen[child.Name] = true
+			queue = append(queue, child.Name)
+			var pod corev1.Pod
+			err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(child), &pod)
+			if err == nil && (!controlledBySession(&pod, child) || (!podEnded(&pod) || allContainersTerminated(&pod) != nil)) || err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("child %s has live or uncertain compute", child.Name)
+			}
+			if a := child.Status.Agent; a != nil && (a.Status != protocol.AgentExited || a.Attached != 0) {
+				return fmt.Errorf("child %s still reports active work", child.Name)
+			}
+			if child.Status.Phase != v1alpha1.PhaseArchived && (!executorTerminalRecorded(child.Status.PrivateHistory) ||
+				child.Status.Agent == nil || child.Status.Agent.Status != protocol.AgentExited || child.Status.Agent.Attached != 0) {
+				return fmt.Errorf("child %s has no confirmed terminal outcome", child.Name)
+			}
 		}
 	}
 	return nil
@@ -91,7 +104,7 @@ func taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) error {
 		return errors.New("task result and retained original attempt contradict or lack proof")
 	}
 	if rec := h.TaskTerminal; rec != nil && (!apiequality.Semantic.DeepEqual(&rec.Task, task) ||
-		rec.ObservedAt.After(now) || !rec.DueAt.After(rec.ObservedAt.Time)) {
+		rec.ObservedAt.After(now) || rec.Task.FinishedAt.After(rec.ObservedAt.Time) || !rec.DueAt.After(rec.ObservedAt.Time)) {
 		return errors.New("task result contradicts its confirmed terminal observation")
 	}
 	return nil
@@ -132,6 +145,12 @@ func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView)
 	if err := r.terminalTaskChildrenStopped(ctx, s); err != nil {
 		return "ChildrenActive", err
 	}
+	if !podPhaseTerminal(pod) && pod.Status.StartTime == nil {
+		return "ProofUnknown", errors.New("executor start time is unavailable; no safe stop deadline")
+	}
+	if podPhaseTerminal(pod) && allContainersTerminated(pod) != nil {
+		return "ProofUnknown", errors.New("terminal Pod has contradictory or missing container stop proof")
+	}
 	return "", nil
 }
 
@@ -166,7 +185,7 @@ func terminalTaskPodRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod, pr
 		proof.podUID == string(pod.UID) && proof.podVersion == pod.ResourceVersion &&
 		s.Spec.OperatingMode == v1alpha1.OperatingModeSuspended && !homeExpiryHeld(s) &&
 		executorTerminalRecorded(s.Status.PrivateHistory) && s.Status.PrivateHistory.TaskTerminal != nil &&
-		string(pod.UID) == s.Status.PrivateHistory.ExecutorTerminal.PodUID && controlledBySession(pod, s) && !isHoldPod(pod) && podEnded(pod)
+		string(pod.UID) == s.Status.PrivateHistory.ExecutorTerminal.PodUID && controlledBySession(pod, s) && !isHoldPod(pod) && podEnded(pod) && allContainersTerminated(pod) == nil
 }
 
 func (r *Reconciler) terminalTaskStopDue(s *v1alpha1.AgentSession) bool {
@@ -180,6 +199,11 @@ func (r *Reconciler) terminalTaskStopDue(s *v1alpha1.AgentSession) bool {
 // write, stop intent and guarded delete; nothing is recreated after a loss.
 func (r *Reconciler) reconcileTerminalTaskReclaim(ctx context.Context, s *v1alpha1.AgentSession) (ctrl.Result, bool, error) {
 	if !r.terminalTaskReclaimOn() || !privateHistoryProtected(s) || s.Spec.Mode != v1alpha1.ModeTask {
+		return ctrl.Result{}, false, nil
+	}
+	if h, a := s.Status.PrivateHistory, s.Status.Agent; s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended &&
+		(h == nil || h.TaskTerminal == nil) && (a == nil || a.Task == nil && a.Status != protocol.AgentExited && a.Status != protocol.AgentInterrupted && a.Status != protocol.AgentFailed) {
+		// A new task still running normally is not retained terminal compute.
 		return ctrl.Result{}, false, nil
 	}
 	v, err := r.readExpiryView(ctx, s)
