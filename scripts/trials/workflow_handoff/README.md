@@ -63,11 +63,15 @@ python3 -I ~/repos/haynes-ops/scripts/openproject/opwork.py checkins -o json --l
 ```
 
 Keep the export in `$XDG_RUNTIME_DIR` and never commit it: it holds live tracker
-text. A page of 20 items is about 14KiB, well inside the 128KiB bound. A page
-with `has_more` or the owner scope "selected page" is reported as partial, and
-its recommendations are withheld, so a real run with an empty contexts file lists every
-item as `unbound` with no intents. On 2026-10-30 the merged CLI read one such
-real export with exit 0. The export came from a clean haynes-ops checkout at
+text. A page of 20 items is about 14KiB, well inside the 128KiB bound.
+
+Two separate rules apply to such a run. First, an item with no matching context
+stays `unbound` with no intents, so an empty contexts file leaves every item
+unbound. Second, a page with `has_more` or the owner scope "selected page" is
+reported as partial, and its recommendations are withheld even for bound items.
+On 2026-10-30 the merged CLI read one real export with an empty contexts file
+and exit 0: every item was unbound, and the page was partial. The export came
+from a clean haynes-ops checkout at
 `2611885e77d3a8b6d159c87de9e5e657f6bdd3f6`. That run proves the export shape
 and the refusal path only, on one selected page. It is not a full backlog
 triage, and nothing was executed.
