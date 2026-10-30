@@ -8,7 +8,7 @@ func TestParseBrokerFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := brokerOptions{sessionNamespace: "dev-agents", policyNamespace: "dev-env-system", leaderElect: true, metricsAddr: ":8080", probeAddr: ":8081"}
+	want := brokerOptions{sessionNamespace: "dev-agents", policyNamespace: "dev-env-system", maintenanceHuman: "dev-env-system/dev-env-human", leaderElect: true, metricsAddr: ":8080", probeAddr: ":8081"}
 	if o != want {
 		t.Errorf("defaults %+v, want %+v", o, want)
 	}

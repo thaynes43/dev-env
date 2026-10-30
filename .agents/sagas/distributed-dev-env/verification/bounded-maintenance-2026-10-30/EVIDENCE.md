@@ -73,3 +73,41 @@ status retries without another create. A synthetic conflict at the second status
 write preserves release, ends Failed/NotCreated and completes idempotent network
 cleanup. Unavailable storage or repeated conflicts still return an explicit error;
 this does not claim durable receipt or cleanup when the API cannot record it.
+
+## Existing PR732 CI recovery — 2026-10-30
+
+Recovery owner dev-env-1030-180930 verified PR732 OPEN at
+1bcc48a460d003b17f7a5d4f2b9c1f2bd07997b6, prior author exited0 at17:42:40,
+and custody release in OP233 activity3518. Parent relay owns follow-through;
+lead dev-env-1029-132039 retains sequencing. No TUI input was sent.
+Canonical work packages are OP233 and OP219; activity IDs are not work packages.
+
+Required hosted run41100377197 failed Test (job124216878060), so the earlier
+queued receipt is superseded by FAILURE, never a qualification pass. The two
+reported failures are stale fixtures: TestGrantPolicyRejects/break-glass expected
+the previous denial text, while source and generated CEL now explicitly deny
+both break-glass and maintenance standing approval; TestParseBrokerFlags omitted
+the configured existing human identity from its complete default-options value.
+Only those two expectations change. The rejection assertion and whole-struct
+flag comparison remain, including maintenance execution default false. No
+production code, generated schema, enforcement or policy input is relaxed.
+
+Full api/v1alpha1 and cmd/dev-env-operator packages, affected broker/API/CLI/
+controller regressions, generated/layout checks and pinned lint are required for
+this correction. Exact final-head local results, independent native source
+review and ordinary-push hosted CI receipts will be recorded in the existing PR
+and OP233/219, avoiding evidence-only CI cycling. Earlier receipts remain
+historical and do not qualify the corrected head.
+
+Policy packet remains byte-identical and UNAPPLIED against haynes-ops
+f12bbf60057e1a09d654143ad5c3b54058571dcb. Patch SHA-256:
+06dd079a997188a870ff10b2af5bfaead062a6556b171b4f67e5c2cf2d98ef66.
+The platform/web maintenance-label exclusions remain intact. Required runtime
+qualification remains admission CEL/defaulting/update/resource-lookup behavior,
+baseline and other-grant exec isolation, Cilium enforcement, device cgroup/runtime
+and image tooling, actual expiry/termination/cleanup and separately authorized
+restore/readback. SYS_ADMIN remains broadly administrative with residual selected
+node/driver risk; task intent is not kernel containment. Tom's review of the exact
+concrete policy/access changes is still required before activation. No merge,
+release, deploy, live grant/security/hardware action or runtime acceptance occurs
+in this recovery. PR597/565/563 remain preserved.

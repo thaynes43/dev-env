@@ -438,7 +438,7 @@ func TestGrantPolicyRejects(t *testing.T) {
 	}{
 		{"break-glass", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Type = v1alpha1.GrantBreakglass
-		}, "no policy can approve break-glass"},
+		}, "no standing policy approves break-glass or maintenance: authenticated human approval is required"},
 		{"the break-glass role", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Kube.Roles = []string{v1alpha1.RoleBreakglass}
 		}, "no policy approves dev-env-grant-breakglass or dev-env-grant-secrets-read"},
