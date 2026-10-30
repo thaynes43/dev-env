@@ -211,6 +211,26 @@ func TestLegacyTerminalTaskFlagLeavesModernProofUnchanged(t *testing.T) {
 			t.Fatalf("legacy=%v changed modern proof: %s, %v", enabled, reason, err)
 		}
 	}
+	// Losing a modern source cannot be relabelled as successful legacy proof,
+	// even when a previous modern terminal snapshot is still retained.
+	wantMessage := ""
+	for _, enabled := range []bool{false, true} {
+		r.LegacyTerminalTaskReclaim = enabled
+		s := f.s.DeepCopy()
+		s.Status.Agent.Task.ExitSource = nil
+		if _, _, err := r.reconcileTerminalTaskReclaim(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+		cond := meta.FindStatusCondition(s.Status.Conditions, ConditionTerminalTaskReclaim)
+		if cond == nil || cond.Reason != "ProofUnknown" || strings.Contains(cond.Message, "proof=legacy-usage") {
+			t.Fatalf("contradictory modern task labelled legacy: %+v", cond)
+		}
+		if !enabled {
+			wantMessage = cond.Message
+		} else if cond.Message != wantMessage {
+			t.Fatalf("flag changed modern refusal: %q != %q", cond.Message, wantMessage)
+		}
+	}
 	assertLegacyHOMEUnchanged(t, base, home)
 }
 

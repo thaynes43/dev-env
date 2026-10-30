@@ -96,17 +96,15 @@ func (r *Reconciler) taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) (
 		h.LastExecutor == nil || h.ExecutorMissed != nil {
 		return nil, errors.New("original private admission and executor are unproved")
 	}
-	if a == nil || a.Status != protocol.AgentExited || a.Attached != 0 || a.Task == nil || a.Task.ExitSource == nil && !r.LegacyTerminalTaskReclaim {
+	if a == nil || a.Status != protocol.AgentExited || a.Attached != 0 || a.Task == nil ||
+		a.Task.ExitSource == nil && (!r.LegacyTerminalTaskReclaim || !legacyTaskAgentdVersion(a.Agentd)) {
 		return nil, errors.New("original provider exit and task result are unproved, or work is active")
 	}
 	task := a.Task
 	if task.ExitSource == nil {
 		// The API retained this original-pod receipt once. Legacy agentd
 		// publishes it after provider Wait; exit 127 is the no-Wait spawn failure.
-		line, ok := strings.CutPrefix(a.Agentd, "agentd ")
-		tag, build, format := strings.Cut(line, " (commit ")
-		if !ok || !format || len(build) <= 1 || !strings.HasSuffix(build, ")") || !legacyTaskVersion(tag) ||
-			task.ExitCode == 127 || s.Status.UsageObservation == nil || s.Status.UsageConflict != nil {
+		if task.ExitCode == 127 || s.Status.UsageObservation == nil || s.Status.UsageConflict != nil {
 			return nil, errors.New("legacy provider exit lacks an unconflicted pre-2.71 usage proof")
 		}
 		task = task.DeepCopy()
@@ -136,6 +134,12 @@ func (r *Reconciler) taskReclaimProof(s *v1alpha1.AgentSession, now time.Time) (
 func legacyTaskVersion(tag string) bool {
 	v, err := version.ParseSemantic(tag)
 	return err == nil && (v.Major() < 2 || v.Major() == 2 && v.Minor() < 71)
+}
+
+func legacyTaskAgentdVersion(line string) bool {
+	line, prefix := strings.CutPrefix(line, "agentd ")
+	tag, build, format := strings.Cut(line, " (commit ")
+	return prefix && format && len(build) > 1 && strings.HasSuffix(build, ")") && legacyTaskVersion(tag)
 }
 
 func legacyTaskProof(s *v1alpha1.AgentSession) bool {
@@ -254,7 +258,9 @@ func (r *Reconciler) terminalTaskViewAllowed(ctx context.Context, v *expiryView)
 
 func (r *Reconciler) terminalTaskReclaimCondition(s *v1alpha1.AgentSession, reason, detail string) {
 	if r.LegacyTerminalTaskReclaim && legacyTaskProof(s) && s.Status.PrivateHistory != nil && s.Status.PrivateHistory.TaskTerminal != nil {
-		detail = "proof=legacy-usage; " + detail
+		if _, err := r.taskReclaimProof(s, r.clock()); err == nil {
+			detail = "proof=legacy-usage; " + detail
+		}
 	}
 	owner := s.Spec.Parent
 	if owner == "" {
