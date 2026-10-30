@@ -65,7 +65,7 @@ python3 -I ~/repos/haynes-ops/scripts/openproject/opwork.py checkins -o json --l
 Keep the export in `$XDG_RUNTIME_DIR` and never commit it: it holds live tracker
 text. A page of 20 items is about 14KiB, well inside the 128KiB bound. A page
 with `has_more` or the owner scope "selected page" is reported as partial, and
-its recommendations are withheld, so a real run without contexts lists every
+its recommendations are withheld, so a real run with an empty contexts file lists every
 item as `unbound` with no intents. On 2026-10-30 the merged CLI read one such
 real export with exit 0.
 
