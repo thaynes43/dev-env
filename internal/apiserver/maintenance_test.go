@@ -287,3 +287,11 @@ func TestMaintenanceConfiguredHuman(t *testing.T) {
 		t.Fatal(g.Status)
 	}
 }
+
+func TestMaintenanceRuntimeProfileRoundTrip(t *testing.T) {
+	task := &apiv1.MaintenanceTask{RuntimeProfile: "nvidia-utility", Resource: "GPU-d8a856f1-f955-f683-bc24-654561496774"}
+	got := maintenanceView(maintenanceSpec(task))
+	if got.RuntimeProfile != task.RuntimeProfile || got.Resource != task.Resource {
+		t.Fatal(got)
+	}
+}

@@ -1,0 +1,80 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "grant-synthetic",
+    "namespace": "dev-agents",
+    "labels": {
+      "dev-env.haynesops.com/maintenance": "11111111-2222-3333-4444-555555555555",
+      "dev-env.haynesops.com/grant": "grant-synthetic"
+    },
+    "ownerReferences": [
+      {
+        "apiVersion": "dev-env.haynesops.com/v1alpha1",
+        "kind": "AccessGrant",
+        "name": "grant-synthetic",
+        "uid": "11111111-2222-3333-4444-555555555555",
+        "controller": true
+      }
+    ]
+  },
+  "spec": {
+    "nodeName": "synthetic-node",
+    "serviceAccountName": "dev-env-maintenance",
+    "automountServiceAccountToken": false,
+    "runtimeClassName": "nvidia",
+    "restartPolicy": "Never",
+    "enableServiceLinks": false,
+    "activeDeadlineSeconds": 1800,
+    "terminationGracePeriodSeconds": 10,
+    "securityContext": {
+      "seccompProfile": {
+        "type": "RuntimeDefault"
+      }
+    },
+    "containers": [
+      {
+        "name": "maintenance",
+        "image": "ghcr.io/example/tool@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "command": [
+          "/bin/sleep",
+          "infinity"
+        ],
+        "env": [
+          {
+            "name": "NVIDIA_VISIBLE_DEVICES",
+            "value": "GPU-00000000-0000-0000-0000-000000000001"
+          },
+          {
+            "name": "NVIDIA_DRIVER_CAPABILITIES",
+            "value": "utility"
+          }
+        ],
+        "securityContext": {
+          "privileged": false,
+          "allowPrivilegeEscalation": false,
+          "readOnlyRootFilesystem": true,
+          "runAsUser": 0,
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ],
+            "add": [
+              "SYS_ADMIN"
+            ]
+          }
+        },
+        "resources": {
+          "requests": {
+            "cpu": "100m",
+            "memory": "128Mi"
+          },
+          "limits": {
+            "cpu": "100m",
+            "memory": "128Mi"
+          }
+        }
+      }
+    ]
+  }
+}

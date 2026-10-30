@@ -20,12 +20,12 @@ func TestMaintenanceCLI(t *testing.T) {
 		},
 		apiv1.GrantPath("grant-fixture") + "/maintenance-exec": func(*http.Request) (int, string) { return http.StatusOK, `{"stdout":"synthetic","stderr":""}` },
 	})
-	h.mustRun(ExitOK, "grant", "maintenance-request", "--task-json", `{"node":"synthetic-node","nodeUID":"node-uid","resource":"device","operation":"maintain","image":"digest-reviewed","cpuMillis":100,"memoryMiB":128,"coordinator":{"name":"ignored","uid":"ignored","podUID":"ignored"}}`, "--reason", "synthetic maintenance")
+	h.mustRun(ExitOK, "grant", "maintenance-request", "--task-json", `{"runtimeProfile":"nvidia-utility","node":"synthetic-node","nodeUID":"node-uid","resource":"device","operation":"maintain","image":"digest-reviewed","cpuMillis":100,"memoryMiB":128,"coordinator":{"name":"ignored","uid":"ignored","podUID":"ignored"}}`, "--reason", "synthetic maintenance")
 	var req apiv1.CreateGrantRequest
 	if err := json.Unmarshal(h.api.requests()[0].body, &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.Type != "maintenance" || req.Maintenance == nil || req.TTL != "" {
+	if req.Type != "maintenance" || req.Maintenance == nil || req.Maintenance.RuntimeProfile != "nvidia-utility" || req.TTL != "" {
 		t.Fatal(req)
 	}
 	h.mustRun(ExitOK, "grant", "maintenance-decide", "--grant-uid", "fixture-uid", "--digest", "scope-digest", "--approve", "grant-fixture")
@@ -43,6 +43,10 @@ func TestMaintenanceCLI(t *testing.T) {
 	}
 	if !reflect.DeepEqual(command.Command, []string{"/bin/sh", "-c", "printf chosen"}) {
 		t.Fatal(command)
+	}
+
+	for _, task := range []string{`{"runtimeClassName":"nvidia"}`, `{"env":{"NVIDIA_VISIBLE_DEVICES":"all"}}`} {
+		h.mustRun(ExitUsage, "grant", "maintenance-request", "--task-json", task, "--reason", "bounded")
 	}
 	h.mustRun(ExitUsage, "grant", "maintenance-decide", "grant-fixture")
 	h.mustRun(ExitUsage, "grant", "maintenance-request", "--task-json", "{}", "--reason", "x", "--ttl", "2h")

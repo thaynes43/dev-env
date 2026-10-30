@@ -191,6 +191,8 @@ jobs:
         run: make check-generated
       - name: make check-layout
         run: make check-layout
+      - name: Offline maintenance policy compiler and request regression
+        run: make check-maintenance-policy
 
   # Build only, never push. No .git in the build context, so COMMIT is passed.
   image-operator:

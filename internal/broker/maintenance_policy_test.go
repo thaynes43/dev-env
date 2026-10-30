@@ -10,7 +10,12 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	celtypes "github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
+	admissionv1 "k8s.io/api/admission/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -20,7 +25,8 @@ import (
 
 // Evaluate the actual packet CEL over JSON admission objects, not a Go rewrite.
 // resource.Get is deliberately not emulated: its grant result is supplied here.
-// These tests do not qualify Kyverno's lookup RBAC, compiler or webhook runtime.
+// quantity() comparisons use Kubernetes quantity parsing and canonical strings.
+// These tests do not qualify Kyverno's lookup RBAC, quantity library, compiler or webhook runtime.
 func maintenancePolicyExpressions(t *testing.T) []string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", ".agents", "sagas", "distributed-dev-env", "verification", "bounded-maintenance-2026-10-30", "maintenance-executor.yaml"))
@@ -41,7 +47,7 @@ func maintenancePolicyExpressions(t *testing.T) []string {
 		t.Fatal("expected ownership/create/update/delete validations")
 	}
 	result := []string{}
-	for _, i := range []int{0, 2, 3} {
+	for _, i := range []int{0, 1, 2, 3} {
 		result = append(result, policy.Spec.Validations[i].Expression)
 	}
 	return result
@@ -62,7 +68,13 @@ func admissionJSON(t *testing.T, o any) map[string]any {
 
 func maintenanceAdmissionAllowed(t *testing.T, operation, caller string, oldPod, pod *corev1.Pod, grant any) bool {
 	t.Helper()
-	env, err := cel.NewEnv(cel.OptionalTypes(), cel.Variable("object", cel.DynType), cel.Variable("oldObject", cel.DynType), cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType))
+	env, err := cel.NewEnv(cel.OptionalTypes(), cel.Function("quantity", cel.Overload("quantity_string", []*cel.Type{cel.StringType}, cel.StringType, cel.UnaryBinding(func(value ref.Val) ref.Val {
+		q, err := resource.ParseQuantity(string(value.(celtypes.String)))
+		if err != nil {
+			return celtypes.NewErr("invalid quantity: %v", err)
+		}
+		return celtypes.String(q.String())
+	}))), cel.Variable("object", cel.DynType), cel.Variable("oldObject", cel.DynType), cel.Variable("request", cel.DynType), cel.Variable("variables", cel.DynType))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +89,23 @@ func maintenanceAdmissionAllowed(t *testing.T, operation, caller string, oldPod,
 	if selected == nil {
 		selected = oldObject
 	}
-	args := map[string]any{"object": object, "oldObject": oldObject, "request": map[string]any{"operation": operation, "namespace": sessionNS, "subResource": "", "userInfo": map[string]any{"username": caller}}, "variables": map[string]any{"pod": selected, "grant": admissionJSON(t, grant)}}
+	g := admissionJSON(t, grant)
+	task := g["spec"].(map[string]any)["maintenance"].(map[string]any)
+	selectedPod := selected.(map[string]any)
+	container := selectedPod["spec"].(map[string]any)["containers"].([]any)[0]
+	mounts, ok := task["readOnlyMounts"]
+	if !ok {
+		mounts = []any{}
+	}
+	devices, ok := task["devices"]
+	if !ok {
+		devices = []any{}
+	}
+	request := admissionJSON(t, admissionv1.AdmissionRequest{Operation: admissionv1.Operation(operation), Namespace: sessionNS, UserInfo: authenticationv1.UserInfo{Username: caller}})
+	if _, present := request["subResource"]; present {
+		t.Fatal("empty AdmissionRequest subResource must be omitted by JSON normalization")
+	}
+	args := map[string]any{"object": object, "oldObject": oldObject, "request": request, "variables": map[string]any{"pod": selected, "grant": g, "task": task, "container": container, "mounts": mounts, "devices": devices, "node": map[string]any{"metadata": map[string]any{"uid": task["nodeUID"]}, "spec": map[string]any{}}}}
 	for _, expression := range maintenancePolicyExpressions(t) {
 		ast, issues := env.Compile(expression)
 		if issues.Err() != nil {
@@ -222,5 +250,18 @@ func TestMaintenanceDeadlineAPIServerLifecycle(t *testing.T) {
 	}
 	if err := admin.Delete(ctx, p, client.GracePeriodSeconds(0), client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Pod requests omit the empty JSON field, while CONNECT exec retains its
+// nonempty subresource. Normalization must not erase the latter.
+func TestMaintenanceAdmissionRequestSubresourceJSON(t *testing.T) {
+	pod := admissionJSON(t, admissionv1.AdmissionRequest{Operation: admissionv1.Create})
+	if _, present := pod["subResource"]; present {
+		t.Fatal("empty subresource was not omitted")
+	}
+	connect := admissionJSON(t, admissionv1.AdmissionRequest{Operation: admissionv1.Connect, SubResource: "exec"})
+	if connect["subResource"] != "exec" || connect["operation"] != "CONNECT" {
+		t.Fatal("CONNECT exec subresource was lost", connect)
 	}
 }

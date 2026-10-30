@@ -1,0 +1,15 @@
+{
+  "apiVersion": "cli.kyverno.io/v1alpha1",
+  "kind": "UserInfo",
+  "metadata": {
+    "name": "synthetic-broker"
+  },
+  "userInfo": {
+    "username": "system:serviceaccount:dev-env-system:dev-env-broker",
+    "groups": [
+      "system:serviceaccounts",
+      "system:serviceaccounts:dev-env-system",
+      "system:authenticated"
+    ]
+  }
+}

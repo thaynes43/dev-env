@@ -330,6 +330,12 @@ spec:
                       not automatic rollback.
                     maxLength: 1000
                     type: string
+                  runtimeProfile:
+                    description: RuntimeProfile selects a fixed broker-derived runtime;
+                      omission preserves host devices.
+                    enum:
+                    - nvidia-utility
+                    type: string
                   workers:
                     description: Workers are explicitly delegated direct children,
                       sharing the same lease.
@@ -370,6 +376,10 @@ spec:
                 x-kubernetes-validations:
                 - message: immutable task scope
                   rule: self == oldSelf
+                - message: nvidia-utility requires an exact GPU UUID and no explicit
+                    devices
+                  rule: '!has(self.runtimeProfile) || (self.resource.matches(''^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$'')
+                    && (!has(self.devices) || size(self.devices) == 0))'
               reason:
                 description: |-
                   Reason is why the agent asks, in its own words. The approval page shows

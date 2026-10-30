@@ -179,3 +179,151 @@ Final local `make check-generated check-layout lint` PASS; generated files are
 unchanged and pinned golangci-lint v2.15.0 reports0issues. No local suite failed
 in this correction. Schema-extraction and patch-fixture setup failures above
 are retained separately from the prior author's actual failed test history.
+
+## Optional NVIDIA utility profile source preparation — 2026-10-30
+
+Fresh source worktree based on merged PR732 `976ae2affc8b0687b606a028ebf7f83672c71520`;
+release PR736 is untouched. This uncommitted change adds only optional immutable
+`runtimeProfile: nvidia-utility`, exact GPU UUID validation, derived fixed runtime
+and two environment variables, and a matching fail-closed UNAPPLIED CREATE branch.
+No arbitrary environment/runtime inputs or implicit capability additions exist.
+Explicit devices must be empty for this profile; existing read-only input bounds
+remain. Omitted profile keeps the generic executor unchanged.
+
+The coordinator's separately supplied 19:57 UTC read reports the current nvidia
+RuntimeClass handler=nvidia, with overhead and scheduling absent. This worker made
+no live RuntimeClass or hardware read. The proposed fixed profile requires those
+properties during activation review. Unexpected overhead/node selector/runtime
+scheduling tolerations fail closed; only normal Kubernetes not-ready/unreachable
+NoExecute Exists 300-second defaults are accepted. No RuntimeClass lookup RBAC
+is added. Admission runtime qualification remains held.
+
+Local full API schema suite PASS7.537s using pinned isolated kube-apiserver1.35.0.
+Linux cross-compilation of all four affected test packages PASS; full pinned
+Linux-target lint PASS0issues. Native Darwin broker test build failed in unchanged
+Linux-specific hostexecutor definitions (EvidenceConfig/PinnedNativeVersion/
+unix.SOCK_CLOEXEC); this is retained as a platform limitation, not a test pass.
+Initial sandbox tool/cache/network access failures and one incorrect relative
+Make tool target are setup failures; escalated pinned installs succeeded. One
+formatter check found import grouping and was corrected before pinned lint.
+
+Exact updated UNAPPLIED patch SHA256:
+`d52623974df393ea2003695ef67d10432b47ed3d439e6431e2fbc012a154df5d`.
+Forward `git apply --check` PASS against the coordinator's private read-only
+haynes-ops `2df49e151281eda288681d64292546692d4e5eb3` snapshot. The packet's
+original f12bbf base remains historical; no haynes-ops checkout was changed.
+No commit, push, cluster policy/grant/token/TUI/GPU call or release-head change.
+The approved idle pod source-test execution and final review receipts follow.
+
+Pinned second `make generate` produced byte-identical generated files; `make
+check-layout`, final pinned `fmt --diff` and `git diff --check` PASS. Raw
+`check-generated` compares with committed HEAD and is unsuitable for this expressly
+uncommitted review checkpoint; generation stability and the exact schema diff are
+provided instead. No default golden was changed.
+
+Approved source-only Linux execution used existing idle pod dev-env-1030-184308,
+dedicated `/tmp/maintenance-nvidia-tests-20261030`, four cross-compiled amd64 test
+binaries and pinned isolated envtest1.35.0, GOMAXPROCS=2, sequential packages with
+180-second per-package timeout. The pod's Kubernetes/GPU credentials were never
+read; tests use their isolated API server and synthetic fixtures only. The source
+bundle plus binaries/assets remains below2GiB. No provider session or pod was
+created or restarted. All TestMaintenance broker regressions PASS, including
+actual packet CREATE/UPDATE/DELETE CEL, exact utility/runtime/env refusal cases,
+real API-normalized profile CREATE and existing UID/RV deadline lifecycle.
+Full Linux api/v1alpha1 and internal/broker packages PASS (exit0).
+Full Linux internal/apiserver and internal/agentrun packages also PASS (exit0).
+API emitted the existing controller-runtime unset-logger diagnostic; CLI negative
+TLS fixtures emitted bad-certificate handshake diagnostics. Neither suite failed.
+The final behavioral source was tested as transferred; a later comment only
+clarifies the quantity helper's qualification limit. Source is frozen uncommitted
+for Root's independent review. No commit/push/activation is authorized here.
+
+## PR739 advisory correction on a858cac — docs and provenance only
+
+The exact-head advisory comment6532436212 found two MEDIUM items. Both are
+addressed without changing runtime code, schema, environment shape or permissions:
+
+- Preserve the haynes-ops AccessGrant CRD provenance header, including the
+  "Never edit the schema here" warning and kustomization prune-disabled note.
+  The header now identifies merged PR732/976ae2a plus profile source PR739/a858cac
+  and explicitly keeps runtime activation held.
+- Require review of the exact executor image digest and every baked/inherited
+  `NVIDIA_*` environment variable before live qualification or task approval.
+  README names MIG config/monitor settings and explains that Pod ENV fixes only
+  UUID visibility and utility capabilities; admission cannot inspect image ENV.
+  The profile does not establish that inherited runtime flags are safe.
+
+Read-only GitHub main lookup still returned haynes-ops
+`2df49e151281eda288681d64292546692d4e5eb3`. The full corrected patch passed
+`git apply --check` and actual apply in a fresh private temporary fixture copied
+from that exact snapshot; no haynes-ops checkout was changed. After stripping
+only provenance comment lines, the applied AccessGrant CRD is byte-identical to
+the generated source CRD. The generated CRD itself remains byte-identical to
+reviewed a858cac, SHA256
+`d83d2b705039ee26fc932e142ffffc2bc290558076bc366469f4ac20c4ef5c74`.
+
+Current exact UNAPPLIED patch SHA256:
+`1c6d97c07b13a6368a2e0df21e8cc32b012324e3b8559b04076085342ca4dfa9`.
+The earlier d5262397 hash describes the pre-correction proposal. Only README,
+this evidence record and the patch header/provenance changed. Existing full Linux
+package results continue to cover unchanged code/schema; no Linux suite rerun or
+pod access was needed for this correction. New-head native delta review and normal
+CI remain required, and human source-publication approval is pending. No merge,
+image build, live policy/grant or runtime qualification follows from this update.
+
+## Actual Kyverno compiler/request correction — 2026-10-30
+
+Offline inspection with the official checksum-verified Kyverno1.19.2 CLI found
+two genuine packet defects on a5966aa before source-publication or live approval:
+
+1. The real typed compiler rejects the environment list because the UUID value
+   is dyn while the other map is map(string,string). The literal now uses
+   `string(variables.task.resource)`; the approved value is unchanged.
+2. Real Pod AdmissionRequest JSON omits empty `subResource`. Ownership now uses
+   `request.?subResource.orValue('') == ''`. A nonempty subresource is still
+   refused; no caller/permission or operation scope is expanded.
+
+The permissive direct CEL mock and hand-built request with an explicit empty key
+missed both failures. The broker test helper now marshals Kubernetes
+AdmissionRequest itself and checks that empty subResource is omitted. An explicit
+CONNECT/exec JSON regression proves its nonempty subresource is retained. This
+is normalization evidence, not CONNECT enforcement qualification.
+
+`scripts/check_maintenance_policy.py` supplies a small dependency-free regression
+with the actual official CLI, checksum-pinned Darwin arm64 and Linux amd64 release
+archives, verified version1.19.2/commit
+`e63308f1e16c05cd009ac4864be6ec25c66b49be`, synthetic resource.Get context fixtures,
+KUBECONFIG=/dev/null and no cluster/registry flags. `make check-maintenance-policy`
+runs it in the existing generated-code CI job. No Go SDK dependency was added.
+The checked Darwin archive SHA256 is
+`7915c03c613c22363a100adb3da8d06f2e2626d9d21a98b97f921795ffdc536f`;
+the official Linux amd64 checksum is
+`357eaf1df8bc24ddd5a73979fadeaae6a032e8710f11af264229756e4956bf4a`.
+
+All10 official-engine regression cases PASS: reverse-fix probes reproduce the
+original compile error and missing-key evaluation error; exact generic and utility
+CREATE classify Pass with zero errors; visible-all, compute, other-runtime,
+other-actor and control-plane label/taint classify explicit Fail with zero errors.
+A nonzero exit or engine Error never counts as a production-denial pass. Logs:
+`/var/folders/51/21_vmcbd5kqbw690hkzz820w0000gn/T/maintenance-policy-offline-56jtjv5i`.
+Pinned full Linux-target lint0issues, formatting, layout, Python syntax and broker
+cross-compilation PASS. Full updated broker Linux execution follows below.
+
+Current exact UNAPPLIED patch SHA256:
+`74b74f9cb9dcd88112440b8b3f5ebaa77f061d91f6dccb60b105a6ea603a92db`.
+Full patch check/apply in a fresh private haynes-ops2df49e1 fixture PASS; executor
+YAML is byte-identical to the corrected packet, and the applied CRD still matches
+the unchanged generated schema after provenance comment removal. Earlier hashes
+qualify earlier packets only. No production code/API/schema, environment values,
+capability, RBAC, credential or live-policy setting changed. Image ENV review,
+lookup permissions/webhook order, CONNECT exec, Cilium, device/image/runtime,
+hardware and termination qualification remain held; offline compiler success does
+not establish these. Reviewer separately found the official CLI cannot evaluate
+CONNECT subresources (processor supplies an empty subresource); zero matching
+rules cannot be reported as an exec-enforcement pass. Final new-head normal CI,
+native review and human source-publication approval remain required.
+Full updated Linux internal/broker suite PASS (exit0) using the released existing
+idle source-test pod, GOMAXPROCS=2 and isolated envtest1.35.0 in the existing
+`/tmp/maintenance-nvidia-tests-20261030` task directory. The command completed;
+no provider, cluster policy or GPU operation was performed. Frozen for independent
+delta review before the genuine ordinary correction push; no merge or activation.

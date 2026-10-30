@@ -15,8 +15,13 @@ type MaintenanceIdentity struct {
 
 // MaintenanceTask is a user-approved envelope, not a command allowlist. Commands
 // are chosen by its agents. SYS_ADMIN does not enforce semantic task intent.
+// +kubebuilder:validation:XValidation:rule="!has(self.runtimeProfile) || (self.resource.matches('^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$') && (!has(self.devices) || size(self.devices) == 0))",message="nvidia-utility requires an exact GPU UUID and no explicit devices"
 type MaintenanceTask struct {
-	Coordinator MaintenanceIdentity `json:"coordinator"`
+	// RuntimeProfile selects a fixed broker-derived runtime; omission preserves host devices.
+	// +kubebuilder:validation:Enum=nvidia-utility
+	// +optional
+	RuntimeProfile string              `json:"runtimeProfile,omitempty"`
+	Coordinator    MaintenanceIdentity `json:"coordinator"`
 	// Workers are explicitly delegated direct children, sharing the same lease.
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=8

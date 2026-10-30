@@ -38,7 +38,7 @@ spec:
       expression: variables.task.?devices.orValue([])
   validations:
     - expression: >-
-        request.namespace == 'dev-agents' && request.subResource == '' &&
+        request.namespace == 'dev-agents' && request.?subResource.orValue('') == '' &&
         request.userInfo.username == 'system:serviceaccount:dev-env-system:dev-env-broker' &&
         variables.grant.spec.type == 'maintenance' &&
         variables.pod.metadata.labels['dev-env.haynesops.com/maintenance'] == variables.grant.metadata.uid &&
@@ -61,7 +61,20 @@ spec:
          variables.pod.spec.serviceAccountName == 'dev-env-maintenance' &&
          !variables.pod.spec.automountServiceAccountToken &&
          !variables.pod.spec.?hostPID.orValue(false) && !variables.pod.spec.?hostIPC.orValue(false) &&
-         !variables.pod.spec.?hostNetwork.orValue(false) && !has(variables.pod.spec.runtimeClassName) &&
+         !variables.pod.spec.?hostNetwork.orValue(false) &&
+         ((!has(variables.task.runtimeProfile) && !has(variables.pod.spec.runtimeClassName) && !has(variables.container.env)) ||
+          (variables.task.?runtimeProfile.orValue('') == 'nvidia-utility' &&
+           variables.task.resource.matches('^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$') &&
+           size(variables.devices) == 0 && variables.pod.spec.?runtimeClassName.orValue('') == 'nvidia' &&
+           size(variables.pod.spec.?overhead.orValue({})) == 0 &&
+           size(variables.pod.spec.?nodeSelector.orValue({})) == 0 &&
+           variables.pod.spec.?tolerations.orValue([]).all(t,
+             t.?key.orValue('') in ['node.kubernetes.io/not-ready','node.kubernetes.io/unreachable'] &&
+             t.operator == 'Exists' && t.effect == 'NoExecute' && t.tolerationSeconds == 300 &&
+             t.?value.orValue('') == '') &&
+           variables.container.?env.orValue([]) == [
+             {'name':'NVIDIA_VISIBLE_DEVICES','value':string(variables.task.resource)},
+             {'name':'NVIDIA_DRIVER_CAPABILITIES','value':'utility'}])) &&
          !has(variables.pod.spec.initContainers) && !has(variables.pod.spec.ephemeralContainers) &&
          variables.pod.spec.restartPolicy == 'Never' && !variables.pod.spec.enableServiceLinks &&
          variables.pod.spec.activeDeadlineSeconds >= 1 && variables.pod.spec.activeDeadlineSeconds <= 3600 &&
@@ -69,7 +82,7 @@ spec:
          size(variables.pod.spec.containers) == 1 && variables.container.name == 'maintenance' &&
          variables.container.image == variables.task.image &&
          variables.container.command == ['/bin/sleep','infinity'] &&
-         !has(variables.container.args) && !has(variables.container.env) && !has(variables.container.envFrom) &&
+         !has(variables.container.args) && !has(variables.container.envFrom) &&
          !has(variables.container.lifecycle) && !has(variables.container.livenessProbe) && !has(variables.container.startupProbe) &&
          !has(variables.container.ports) && !has(variables.container.volumeDevices) &&
          !variables.container.securityContext.privileged && !variables.container.securityContext.allowPrivilegeEscalation &&

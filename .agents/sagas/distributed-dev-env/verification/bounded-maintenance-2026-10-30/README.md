@@ -150,14 +150,64 @@ retain background:true. HostPath's reported restrictedField is
 `spec.volumes[*].hostPath` with path-valued exclusions, not `.hostPath.path`.
 Capabilities requires images; pod-level HostPath must omit images.
 
-Qualification gap: direct CEL tests execute the packet ownership/UPDATE/DELETE
-expressions over admission JSON. A real isolated API server proves defaulted
+Qualification gap: direct CEL tests execute all four packet validation branches
+over JSON-normalized AdmissionRequests. The pinned official CLI additionally
+compiles and evaluates synthetic generic/profile CREATE and refusal cases offline. A real isolated API server proves defaulted
 CREATE, UID/RV-fenced JSON PATCH, generation/managedFields normalization, terminal
 status observation and DELETE. The harness has no Kyverno, kubelet or device
-runtime. It does not establish Kyverno compilation, exception-condition matching,
+runtime. Offline compiler/engine evidence does not establish installed exception matching,
 actual lookup permissions/webhook ordering, admission-enforced lifecycle or
 termination on a real node. These exact proposals remain UNAPPLIED and held for
 Tom's concrete policy review and separately authorized isolated runtime
 qualification. No live policy apply, dry-run or test is authorized by this packet.
 Shared NVIDIA control devices remain broader than GPU UUID intent; persistent
 hardware-state restoration is separate from TTL. No limits/capabilities grow.
+
+## Optional fixed NVIDIA utility profile — source preparation only
+
+The immutable optional `runtimeProfile: nvidia-utility` derives only
+`runtimeClassName: nvidia`, `NVIDIA_VISIBLE_DEVICES` equal to the approved exact
+GPU UUID resource, and `NVIDIA_DRIVER_CAPABILITIES: utility`. Omission preserves
+the generic host-device path. The profile requires an empty devices list;
+existing explicitly approved read-only inputs keep their validation. No caller
+runtime class, environment map, compute capability or implicit SYS_RAWIO is added.
+The complete scope digest and schema immutability include the profile.
+
+The UNAPPLIED CREATE policy must compare the exact profile-derived runtime and
+environment and fail closed for unknown profiles or malformed GPU UUIDs. RuntimeClass
+admission may add overhead and scheduling constraints; policy qualification must
+pin the existing nvidia RuntimeClass with no overhead or scheduling. The profile
+refuses any added overhead or node selector and tolerations beyond Kubernetes
+default not-ready/unreachable NoExecute Exists 300-second entries. RuntimeClass
+drift requires renewed review; no admission lookup permission is added. This source preparation does not qualify that
+runtime, the candidate image, device cgroups or driver libraries. Activation still
+requires concrete review of the exact policy and separately authorized runtime
+qualification. Release #736 and live policies are outside this change.
+
+
+Before live qualification or approval, review the exact digest-pinned executor
+image and **all baked `NVIDIA_*` environment variables**, including inherited
+image configuration. The Pod sets only `NVIDIA_VISIBLE_DEVICES` and
+`NVIDIA_DRIVER_CAPABILITIES`; the NVIDIA runtime can also consume image-defined
+variables such as `NVIDIA_MIG_CONFIG_DEVICES`, `NVIDIA_MIG_MONITOR_DEVICES` and
+other runtime flags. The admission policy cannot inspect image ENV. This profile
+therefore does not prove that image-inherited runtime settings are safe. Record
+the complete image ENV review and its disposition as an explicit prerequisite to
+live qualification and task approval; the current live-activation hold remains.
+
+
+The offline policy regression uses the checksum-pinned official Kyverno1.19.2
+CLI to compile and evaluate the exact executor CREATE packet against synthetic
+resources and request normalization. It covers the homogeneous typed environment
+literal and omitted empty AdmissionRequest subResource that the permissive CEL
+harness missed. This is compiler/offline-engine evidence only: live lookups,
+webhook ordering, CONNECT exec enforcement, Cilium, runtime/image/hardware and
+termination qualification remain held. The CLI cannot qualify CONNECT because
+its1.19.2 processor supplies an empty subresource; a zero-match run is not a pass.
+
+Run `make check-maintenance-policy` for the pinned offline regression. It verifies
+the official release archive checksum and CLI version/commit, uses synthetic
+context-file resources with KUBECONFIG=/dev/null, and enables neither cluster nor
+registry access. The script's `--archive` option reuses the same verified archive
+without downloading it. Production denials must be explicit Fail results with no
+engine errors; compilation or evaluation errors never count as a denial pass.

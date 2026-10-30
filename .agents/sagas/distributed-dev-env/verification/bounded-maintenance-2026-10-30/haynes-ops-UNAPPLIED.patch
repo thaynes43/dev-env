@@ -178,7 +178,7 @@ diff --git a/kubernetes/main/apps/kyverno/policies/app/maintenance-executor.yaml
 new file mode 100644
 --- /dev/null
 +++ b/kubernetes/main/apps/kyverno/policies/app/maintenance-executor.yaml
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,159 @@
 +# UNAPPLIED. All broker Pod writes and any maintenance identity are narrowed here.
 +apiVersion: policies.kyverno.io/v1
 +kind: ValidatingPolicy
@@ -219,7 +219,7 @@ new file mode 100644
 +      expression: variables.task.?devices.orValue([])
 +  validations:
 +    - expression: >-
-+        request.namespace == 'dev-agents' && request.subResource == '' &&
++        request.namespace == 'dev-agents' && request.?subResource.orValue('') == '' &&
 +        request.userInfo.username == 'system:serviceaccount:dev-env-system:dev-env-broker' &&
 +        variables.grant.spec.type == 'maintenance' &&
 +        variables.pod.metadata.labels['dev-env.haynesops.com/maintenance'] == variables.grant.metadata.uid &&
@@ -242,7 +242,20 @@ new file mode 100644
 +         variables.pod.spec.serviceAccountName == 'dev-env-maintenance' &&
 +         !variables.pod.spec.automountServiceAccountToken &&
 +         !variables.pod.spec.?hostPID.orValue(false) && !variables.pod.spec.?hostIPC.orValue(false) &&
-+         !variables.pod.spec.?hostNetwork.orValue(false) && !has(variables.pod.spec.runtimeClassName) &&
++         !variables.pod.spec.?hostNetwork.orValue(false) &&
++         ((!has(variables.task.runtimeProfile) && !has(variables.pod.spec.runtimeClassName) && !has(variables.container.env)) ||
++          (variables.task.?runtimeProfile.orValue('') == 'nvidia-utility' &&
++           variables.task.resource.matches('^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$') &&
++           size(variables.devices) == 0 && variables.pod.spec.?runtimeClassName.orValue('') == 'nvidia' &&
++           size(variables.pod.spec.?overhead.orValue({})) == 0 &&
++           size(variables.pod.spec.?nodeSelector.orValue({})) == 0 &&
++           variables.pod.spec.?tolerations.orValue([]).all(t,
++             t.?key.orValue('') in ['node.kubernetes.io/not-ready','node.kubernetes.io/unreachable'] &&
++             t.operator == 'Exists' && t.effect == 'NoExecute' && t.tolerationSeconds == 300 &&
++             t.?value.orValue('') == '') &&
++           variables.container.?env.orValue([]) == [
++             {'name':'NVIDIA_VISIBLE_DEVICES','value':string(variables.task.resource)},
++             {'name':'NVIDIA_DRIVER_CAPABILITIES','value':'utility'}])) &&
 +         !has(variables.pod.spec.initContainers) && !has(variables.pod.spec.ephemeralContainers) &&
 +         variables.pod.spec.restartPolicy == 'Never' && !variables.pod.spec.enableServiceLinks &&
 +         variables.pod.spec.activeDeadlineSeconds >= 1 && variables.pod.spec.activeDeadlineSeconds <= 3600 &&
@@ -250,7 +263,7 @@ new file mode 100644
 +         size(variables.pod.spec.containers) == 1 && variables.container.name == 'maintenance' &&
 +         variables.container.image == variables.task.image &&
 +         variables.container.command == ['/bin/sleep','infinity'] &&
-+         !has(variables.container.args) && !has(variables.container.env) && !has(variables.container.envFrom) &&
++         !has(variables.container.args) && !has(variables.container.envFrom) &&
 +         !has(variables.container.lifecycle) && !has(variables.container.livenessProbe) && !has(variables.container.startupProbe) &&
 +         !has(variables.container.ports) && !has(variables.container.volumeDevices) &&
 +         !variables.container.securityContext.privileged && !variables.container.securityContext.allowPrivilegeEscalation &&
@@ -374,7 +387,17 @@ diff --git a/kubernetes/main/apps/kyverno/policies/app/kustomization.yaml b/kube
 diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
 --- a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
 +++ b/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml
-@@ -241,6 +241,142 @@
+@@ -1,7 +1,7 @@
+ ---
+ # The AccessGrant CRD, generated in thaynes43/dev-env from api/v1alpha1.
+-# Source: dev-env main eeb15e3, PR #111, including the immutable requester
+-# sessionUID field. The code is reviewed and merged; runtime minting stays off.
++# Source: dev-env 976ae2a (merged PR #732), plus a858cac (source PR #739).
++# Source preparation only; runtime activation remains held.
+ # The generated config/crd/dev-env.haynesops.com_accessgrants.yaml follows below.
+ # Never edit the schema here: change api/v1alpha1 in dev-env, run `make generate`,
+ # and copy the result. Keep it in step with the broker/operator image pins.
+@@ -241,6 +241,152 @@
                      and take no namespaces; the other roles name at least one
                    rule: (self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass')
                      == (!has(self.namespaces) || size(self.namespaces) == 0)
@@ -474,6 +497,12 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
 +                      not automatic rollback.
 +                    maxLength: 1000
 +                    type: string
++                  runtimeProfile:
++                    description: RuntimeProfile selects a fixed broker-derived runtime;
++                      omission preserves host devices.
++                    enum:
++                    - nvidia-utility
++                    type: string
 +                  workers:
 +                    description: Workers are explicitly delegated direct children,
 +                      sharing the same lease.
@@ -514,10 +543,14 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
 +                x-kubernetes-validations:
 +                - message: immutable task scope
 +                  rule: self == oldSelf
++                - message: nvidia-utility requires an exact GPU UUID and no explicit
++                    devices
++                  rule: '!has(self.runtimeProfile) || (self.resource.matches(''^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$'')
++                    && (!has(self.devices) || size(self.devices) == 0))'
                reason:
                  description: |-
                    Reason is why the agent asks, in its own words. The approval page shows
-@@ -320,6 +456,7 @@
+@@ -320,6 +466,7 @@
                  - egress
                  - credential
                  - breakglass
@@ -525,7 +558,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
                  type: string
                  x-kubernetes-validations:
                  - message: immutable after create; only release may change
-@@ -335,6 +472,8 @@
+@@ -335,6 +482,8 @@
                rule: (self.type == 'kube' || self.type == 'breakglass') == has(self.kube)
              - message: egress is set for type egress, and only there
                rule: (self.type == 'egress') == has(self.egress)
@@ -534,7 +567,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
              - message: credential is set for type credential, and only there
                rule: (self.type == 'credential') == has(self.credential)
              - message: type breakglass and role dev-env-grant-breakglass go together
-@@ -350,10 +489,16 @@
+@@ -350,10 +499,16 @@
                rule: self.type != 'breakglass' || duration(self.ttl) <= duration('1h')
              - message: immutable after create; only release may change
                rule: has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress)
@@ -552,7 +585,7 @@ diff --git a/kubernetes/main/apps/dev-env-system/crds/app/accessgrants.yaml b/ku
            status:
              description: |-
                AccessGrantStatus is the broker's record of the grant. Only the broker
-@@ -398,6 +543,27 @@
+@@ -398,6 +553,27 @@
                    pod (a resume, a drain) gets it installed again.
                  maxLength: 64
                  type: string
