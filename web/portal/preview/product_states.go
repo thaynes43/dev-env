@@ -258,20 +258,26 @@ func allowancePreview(state string) ([]portal.ProductAllowance, error) {
 			ReceivedAt: doc.ServedAt, Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationSourceFields}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingVerified},
 			Freshness: providerallowance.Freshness{State: providerallowance.FreshFresh, AsOf: doc.ServedAt, Basis: providerallowance.BasisProvider},
 		}
-		for i, window := range []string{"7 days", "5 hours", "Additional window"} {
+		for i, window := range []string{"primary", "secondary", "additional"} {
 			value, direction := "62", providerallowance.DirectionRemaining
 			if provider == "openai" {
 				value, direction = "38.00", providerallowance.DirectionUsed
 			}
-			measure := providerallowance.Measure{ID: window, Category: providerallowance.CategoryIncluded, Window: providerallowance.Window{Ref: window, ResetAt: text("2026-11-02T14:00:00Z"), ResetPrecision: providerallowance.ResetInstant}, Unit: providerallowance.UnitPercent, Direction: direction, Value: providerallowance.MeasureValue{State: providerallowance.ValueKnown, Decimal: text(value)}}
+			minutes := []providerallowance.Count{10080, 300, 60}[i]
+			measure := providerallowance.Measure{ID: window, Category: providerallowance.CategoryIncluded, Window: providerallowance.Window{Ref: provider + "-" + window + "-window", DurationMinutes: &minutes, ResetAt: text("2026-11-02T14:00:00Z"), ResetPrecision: providerallowance.ResetInstant}, Unit: providerallowance.UnitPercent, Direction: direction, Value: providerallowance.MeasureValue{State: providerallowance.ValueKnown, Decimal: text(value)}}
 			if i == 1 {
 				measure.Window.ResetPrecision = providerallowance.ResetDisplayOnly
 			}
 			if i == 2 {
-				measure.Window.Ref, measure.Window.ResetAt, measure.Window.ResetPrecision = "", nil, providerallowance.ResetUnknown
+				measure.Window.DurationMinutes, measure.Window.ResetAt, measure.Window.ResetPrecision = nil, nil, providerallowance.ResetUnknown
+				measure.Value = providerallowance.MeasureValue{State: providerallowance.ValueNotReported}
 			}
 			item.Observation.Measures = append(item.Observation.Measures, measure)
-			item.CurrentMeasures = append(item.CurrentMeasures, providerallowance.CurrentMeasure{MeasureID: measure.ID, State: providerallowance.CurrentKnown, Value: measure.Value})
+			current := providerallowance.CurrentMeasure{MeasureID: measure.ID, State: providerallowance.CurrentKnown, Value: measure.Value}
+			if i == 2 {
+				current.State = providerallowance.CurrentNotReported
+			}
+			item.CurrentMeasures = append(item.CurrentMeasures, current)
 		}
 		if state == "stale" || (state == "measured" && provider == "openai") {
 			item.Freshness.State = providerallowance.FreshStale

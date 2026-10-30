@@ -372,14 +372,20 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .read-failure p { margin: 12px 0; }
 .read-failure time { color: var(--ink); }
 
-.allowance-strip { margin-top: 10px; color: var(--muted); font-size: 10.5px; line-height: 1.6; overflow-wrap: anywhere; }
-.allowance-strip > a { margin-right: .6em; color: var(--accent); }
-.allowance-provider, .allowance-state { background: none; }
-.allowance-provider.tone-wait, .allowance-state.tone-wait { color: var(--amber); }
+.allowance-strip { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.allowance-link { display: block; min-height: 24px; width: fit-content; max-width: 100%; }
+.allowance-provider + .allowance-provider { margin-top: 4px; }
+.allowance-provider-head { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.allowance-name { white-space: nowrap; }
+.allowance-provider-head > span:last-child, .allowance-windows li { min-width: 0; overflow-wrap: anywhere; }
+.allowance-windows { margin-top: 2px; }
+.allowance-windows li + li { margin-top: 2px; }
+.allowance-more { margin-top: 2px; }
+.allowance-state { margin-left: .5em; font-weight: 400; color: var(--muted); background: none; }
+.allowance-state.tone-wait { color: var(--amber); }
 .allowance-account { padding: 12px 0; border-bottom: 1px solid var(--line); min-width: 0; }
-.allowance-account h3 { font-size: 12px; font-weight: 600; }
-.allowance-state { margin-left: .5em; font-weight: 400; color: var(--muted); }
-.allowance-window { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: 10px 16px; margin-top: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
-.allowance-window div { min-width: 0; }
-.allowance-window dt { color: var(--muted); font-size: 10px; }
-.allowance-window dd { margin: 4px 0 0; font-size: 11px; overflow-wrap: anywhere; }
+.allowance-account h3 { margin-bottom: 12px; font-size: 12px; font-weight: 600; }
+.allowance-account th { font-size: 11px; }
+.allowance-account td { white-space: normal; overflow-wrap: anywhere; }
+.allowance-account table { table-layout: fixed; }
+.allowance-account td::before { flex-shrink: 0; }

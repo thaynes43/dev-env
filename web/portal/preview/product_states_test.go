@@ -193,7 +193,7 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(body)
-		pattern := `(?s)<p class="allowance-strip">.*?</p>`
+		pattern := `(?s)<div class="allowance-strip">.*?</ul></div>`
 		if strings.HasPrefix(tc.name, "usage") {
 			pattern = `(?s)<section class="allowance".*?Plan limits.*?</section>`
 		}
@@ -203,6 +203,14 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		}
 		if strings.Contains(block, "62% left") != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || strings.Contains(block, "Not connected") != tc.disconnected {
 			t.Errorf("%s: wrong states %s", tc.name, block)
+		}
+		for _, ref := range []string{"anthropic-primary-window", "openai-primary-window", "anthropic-secondary-window", "openai-secondary-window"} {
+			if strings.Contains(text, ref) {
+				t.Errorf("%s displays opaque reference %q", tc.name, ref)
+			}
+		}
+		if tc.percent && (!strings.Contains(block, "7 days") || !strings.Contains(block, "5 hours")) {
+			t.Errorf("%s lacks duration labels", tc.name)
 		}
 		if tc.percent && strings.HasPrefix(tc.name, "sessions") && !strings.Contains(block, ">+1 more</a>") {
 			t.Errorf("%s lacks window overflow", tc.name)

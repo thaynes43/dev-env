@@ -450,6 +450,10 @@ type ProductAllowance struct {
 	Value    ProductAllowanceState
 	Reason   string
 	Windows  []ProductAllowanceWindow
+	// Observed and Provenance summarize window metadata for the compact list.
+	// Usage retains each window's metadata when observations or sources vary.
+	Observed, Provenance string
+	SeenVaries           bool
 }
 
 // ProductAllowanceWindow holds provider-reported display text. Percent includes
@@ -466,10 +470,19 @@ func (a ProductAllowance) Tone() string {
 }
 
 func (a ProductAllowance) CompactWindows() []ProductAllowanceWindow {
-	return a.Windows[:min(2, len(a.Windows))]
+	var windows []ProductAllowanceWindow
+	for _, w := range a.Windows {
+		if w.Percent != "" && w.Percent != "Unknown" {
+			windows = append(windows, w)
+			if len(windows) == 2 {
+				break
+			}
+		}
+	}
+	return windows
 }
 
-func (a ProductAllowance) More() int { return max(0, len(a.Windows)-2) }
+func (a ProductAllowance) More() int { return len(a.Windows) - len(a.CompactWindows()) }
 
 // allowanceViews keeps the provider set fixed, fills absent metadata, and never
 // renders a percent for an untrusted state. It does not inspect session usage.
@@ -480,18 +493,28 @@ func allowanceViews(input []ProductAllowance) []ProductAllowance {
 			if a.Provider != out[i].Provider {
 				continue
 			}
+			a.Observed, a.Provenance, a.SeenVaries = "", "", false
 			switch a.Value {
 			case AllowanceNotConnected, AllowanceUnknown:
 				a.Windows = nil
 			case AllowanceMeasured, AllowanceStale:
 				a.Windows = append([]ProductAllowanceWindow(nil), a.Windows...)
-				if len(a.Windows) == 0 {
-					a.Value, a.Reason = AllowanceUnknown, "No trusted windows"
-				}
 				for j, w := range a.Windows {
 					w.Percent, w.Window, w.Reset = display(w.Percent), display(w.Window), display(w.Reset)
 					w.Observed, w.Provenance = display(w.Observed), display(w.Provenance)
 					a.Windows[j] = w
+					if j == 0 {
+						a.Observed, a.Provenance = w.Observed, w.Provenance
+					} else if w.Observed != a.Observed || w.Provenance != a.Provenance {
+						a.SeenVaries = true
+					}
+				}
+				if a.SeenVaries {
+					a.Observed, a.Provenance = "", ""
+				}
+				if len(a.CompactWindows()) == 0 {
+					a.Value, a.Reason, a.Windows = AllowanceUnknown, "No percent allowance reported", nil
+					a.Observed, a.Provenance, a.SeenVaries = "", "", false
 				}
 			default:
 				a.Value, a.Reason, a.Windows = AllowanceUnknown, "Unrecognized allowance state", nil

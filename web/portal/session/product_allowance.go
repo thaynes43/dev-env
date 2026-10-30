@@ -72,8 +72,14 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 			}
 			windows = append(windows, mapped...)
 		}
-		if !refused && len(windows) > 0 {
-			a.Value, a.Reason, a.Windows = state, "", windows
+		if !refused {
+			a.Reason = "No percent allowance reported"
+			for _, w := range windows {
+				if w.Percent != "Unknown" {
+					a.Value, a.Reason, a.Windows = state, "", windows
+					break
+				}
+			}
 		}
 	}
 	return out
@@ -141,15 +147,15 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 			return nil, "Conflicting allowance values"
 		}
 		seen[m.ID] = true
-		current, ok := currents[m.ID]
-		if !ok || current.State != providerallowance.CurrentKnown || current.Value.State != providerallowance.ValueKnown || current.Value.Decimal == nil || *current.Value.Decimal == "" || m.Value.State != providerallowance.ValueKnown || m.Value.Decimal == nil || *m.Value.Decimal == "" {
-			return nil, "Allowance value unknown"
+		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
+			continue
 		}
-		if *m.Value.Decimal != *current.Value.Decimal {
+		current, ok := currents[m.ID]
+		if current.State == providerallowance.CurrentConflict {
 			return nil, "Conflicting allowance values"
 		}
-		if m.Unit != providerallowance.UnitPercent {
-			return nil, "No percent allowance reported"
+		if m.Value.Decimal != nil && current.Value.Decimal != nil && *m.Value.Decimal != *current.Value.Decimal {
+			return nil, "Conflicting allowance values"
 		}
 		suffix := ""
 		switch m.Direction {
@@ -157,8 +163,10 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 			suffix = "% left"
 		case providerallowance.DirectionUsed:
 			suffix = "% used"
-		default:
-			return nil, "Allowance direction unknown"
+		}
+		percent := "Unknown"
+		if ok && current.State == providerallowance.CurrentKnown && current.Value.State == providerallowance.ValueKnown && current.Value.Decimal != nil && *current.Value.Decimal != "" && m.Value.State == providerallowance.ValueKnown && m.Value.Decimal != nil && *m.Value.Decimal != "" && suffix != "" {
+			percent = *current.Value.Decimal + suffix
 		}
 		reset := "Unknown"
 		switch m.Window.ResetPrecision {
@@ -168,7 +176,7 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 			reset = allowanceTime(m.Window.ResetAt) + " (display only)"
 		}
 		windows = append(windows, portal.ProductAllowanceWindow{
-			Percent: *current.Value.Decimal + suffix, Window: allowanceWindow(m.Window),
+			Percent: percent, Window: allowanceWindow(m.Window),
 			Reset: reset, Observed: allowanceTime(o.ProviderObservedAt), Provenance: source,
 		})
 	}
@@ -187,9 +195,6 @@ func allowanceTime(raw *string) string {
 }
 
 func allowanceWindow(w providerallowance.Window) string {
-	if strings.TrimSpace(w.Ref) != "" {
-		return w.Ref
-	}
 	if w.DurationMinutes == nil || *w.DurationMinutes <= 0 {
 		return "Unknown"
 	}

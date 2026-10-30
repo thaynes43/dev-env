@@ -19,7 +19,11 @@
 <div class="rail-spacer"></div>
 <div class="connection-box">{{if .Preview}}<strong><span class="dot sample"></span>Fixture preview</strong>Synthetic data. No agents or repositories connected.{{else}}<strong><span class="dot"></span>{{.Access}}</strong>Operator summaries and OpenProject tasks{{if .CanSend}}; messages to running interactive sessions{{end}}.{{end}}</div></nav>
 <section class="list" id="list" aria-labelledby="list-title" tabindex="-1"><div class="list-header"><h1 id="list-title">{{.ListTitle}}</h1>{{if .ListCount}}<p class="list-count">{{.ListCount}}</p>{{end}}{{if .Launch}}<p class="list-actions"><a class="btn primary" href="#launch">New agent</a></p>{{end}}
-{{if .Allowance}}<p class="allowance-strip"><a href="?view=usage#usage-allowance">Account allowance</a>{{range $i, $a := .Allowance}}{{if $i}} · {{end}}<span class="allowance-provider tone-{{.Tone}}">{{.Provider}} {{if ne .Value "Measured"}}{{template "allowance-summary" .}}{{end}}{{range $w, $window := .CompactWindows}}{{if or $w (ne $a.Value "Measured")}} · {{end}}{{template "allowance-window" .}}{{end}}{{if .More}} · <a href="?view=usage#usage-allowance">+{{.More}} more</a>{{end}}</span>{{end}}</p>{{end}}
+{{if .Allowance}}<div class="allowance-strip"><a class="allowance-link" href="?view=usage#usage-allowance">Account allowance</a>
+<ul role="list" aria-label="Account allowance by provider">{{range .Allowance}}<li class="allowance-provider">
+<div class="allowance-provider-head"><span class="allowance-name">{{.Provider}}{{if eq .Value "Stale"}} <span class="allowance-state tone-wait">Stale</span>{{end}}</span><span>{{if or (eq .Value "Measured") (eq .Value "Stale")}}{{if .SeenVaries}}Seen varies · see Usage{{else}}Seen {{.Observed}} · {{.Provenance}}{{end}}{{else}}{{template "allowance-summary" .}}{{end}}</span></div>
+{{if .Windows}}<ul class="allowance-windows" role="list" aria-label="Reported windows">{{range .CompactWindows}}<li>{{template "allowance-window" .}}</li>{{end}}</ul>{{if .More}}<a class="allowance-link allowance-more" href="?view=usage#usage-allowance">+{{.More}} more</a>{{end}}{{end}}
+</li>{{end}}</ul></div>{{end}}
 <nav class="chips" aria-label="Filters"><a href="{{.All.Href}}"{{if .All.Current}} aria-current="page"{{end}}>All</a><a href="{{.Attention.Href}}"{{if .Attention.Current}} aria-current="page"{{end}}>Needs attention{{if .Attention.Count}} {{.Attention.Count}}{{end}}</a>{{range .Projects}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Name}}</a>{{end}}</nav></div>
 <div class="list-scroll">{{if not .HasRows}}<div class="list-empty" role="status"><p>{{.Notice}}</p></div>{{end}}
 {{range .Groups}}<h2 class="group-label" id="{{.ID}}"><span>{{.Title}}</span><span>{{.Count}}</span></h2>
@@ -43,7 +47,10 @@
 <h1 id="usage-title">Usage</h1><p>Recorded token usage is not account consumption.{{if $.ListTitle}} Showing: {{$.ListTitle}}.{{end}}</p></div>
 <div class="product-body"><dl class="stats">{{range .Stats}}<div class="stat"><dt>{{.Label}}</dt><dd{{if eq .Tone "muted"}} class="unknown"{{end}}>{{.Value}}</dd><dd class="stat-note">{{.Note}}</dd></div>{{end}}</dl>
 {{if .Allowance}}<section class="allowance" aria-labelledby="usage-allowance"><h2 id="usage-allowance">Account allowance</h2>
-{{range .Allowance}}<section class="allowance-account"><h3>{{.Provider}} <span class="allowance-state tone-{{.Tone}}">{{template "allowance-summary" .}}</span></h3>{{range .Windows}}<dl class="allowance-window"><div><dt>Allowance</dt><dd>{{.Percent}}</dd></div><div><dt>Window</dt><dd>{{.Window}}</dd></div><div><dt>Resets</dt><dd>{{.Reset}}</dd></div><div><dt>Observed</dt><dd>{{.Observed}}</dd></div><div><dt>Source</dt><dd>{{.Provenance}}</dd></div></dl>{{end}}</section>{{end}}
+{{range .Allowance}}<section class="allowance-account"><h3>{{.Provider}} <span class="allowance-state tone-{{.Tone}}">{{template "allowance-summary" .}}</span></h3>
+{{if .Windows}}<div class="table-wrap"><table><caption class="sr-only">{{.Provider}} account allowance windows</caption><thead><tr><th scope="col">Allowance</th><th scope="col">Window</th><th scope="col">Resets</th><th scope="col">Observed</th><th scope="col">Source</th></tr></thead><tbody>
+{{range .Windows}}<tr class="allowance-window"><td data-label="Allowance"{{if eq .Percent "Unknown"}} class="unknown"{{end}}>{{.Percent}}</td><td data-label="Window">{{.Window}}</td><td data-label="Resets">{{.Reset}}</td><td data-label="Observed">{{.Observed}}</td><td data-label="Source">{{.Provenance}}</td></tr>{{end}}
+</tbody></table></div>{{end}}</section>{{end}}
 <p class="note">Plan limits come from the provider account, never from these token counts.</p></section>{{end}}
 {{if .Rows}}<p class="scope-row"><span class="scope-chip">{{.Scope}}</span><span>{{.ScopeNote}}</span></p>
 {{range $i, $t := .Breakdowns}}<section class="breakdown" aria-labelledby="usage-b{{$i}}"><h2 id="usage-b{{$i}}">{{$t.Title}}</h2>{{if $t.Note}}<p class="note">{{$t.Note}}</p>{{end}}<div class="table-wrap"><table><thead><tr>{{range $t.Columns}}<th scope="col">{{.}}</th>{{end}}</tr></thead>
@@ -72,4 +79,4 @@
 {{define "product-read-failure"}}<div class="read-failure"><p>{{.Reason}}</p><p>Observed: {{if .ObservedAt}}<time datetime="{{.ObservedAt}}">{{.ObservedLabel}}</time>{{else}}Unknown{{end}}</p><p>Last successful read in this process: {{if .LastSuccessAt}}<time datetime="{{.LastSuccessAt}}">{{.LastSuccessLabel}}</time>{{else}}Unknown{{end}}</p><p><a class="btn" href="{{.RetryHref}}">Retry</a></p></div>{{end}}
 
 {{define "allowance-summary"}}{{.Value}}{{if eq .Value "Unknown"}} · {{.Reason}}{{end}}{{end}}
-{{define "allowance-window"}}{{.Percent}} · {{.Window}} · resets {{.Reset}} · seen {{.Observed}} · {{.Provenance}}{{end}}
+{{define "allowance-window"}}{{.Percent}} · {{.Window}} · resets {{.Reset}}{{end}}

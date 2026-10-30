@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,15 +11,16 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
-func allowanceString(v string) *string { return &v }
+func allowanceString(v string) *string      { return &v }
+func allowanceMinutes(v pa.Count) *pa.Count { return &v }
 
 func allowanceRead() pa.ReadResponse {
 	return pa.ReadResponse{Schema: pa.SchemaRead, Items: []pa.ReadItem{{
 		Observation: pa.Observation{Provider: "anthropic", Availability: pa.AvailabilityAvailable,
 			Source: pa.Source{Kind: pa.SourceNativeRPC}, ProviderObservedAt: allowanceString("2026-10-29T13:59:00Z"),
-			Measures: []pa.Measure{{ID: "weekly", Unit: pa.UnitPercent, Direction: pa.DirectionRemaining,
+			Measures: []pa.Measure{{ID: "weekly", Category: pa.CategoryIncluded, Unit: pa.UnitPercent, Direction: pa.DirectionRemaining,
 				Value:  pa.MeasureValue{State: pa.ValueKnown, Decimal: allowanceString("62.00")},
-				Window: pa.Window{Ref: "7 days", ResetAt: allowanceString("2026-11-02T14:00:00Z"), ResetPrecision: pa.ResetInstant}}}},
+				Window: pa.Window{Ref: "claude-primary-window", DurationMinutes: allowanceMinutes(10080), ResetAt: allowanceString("2026-11-02T14:00:00Z"), ResetPrecision: pa.ResetInstant}}}},
 		Validation: pa.ValidationRecord{State: pa.ValidationSourceFields}, Binding: pa.BindingRecord{State: pa.BindingVerified},
 		Freshness: pa.Freshness{State: pa.FreshFresh}, CurrentMeasures: []pa.CurrentMeasure{{MeasureID: "weekly", State: pa.CurrentKnown, Value: pa.MeasureValue{State: pa.ValueKnown, Decimal: allowanceString("62.00")}}},
 	}}}
@@ -283,5 +285,169 @@ func TestMapProductAllowanceSourceStatusTrustAndMixedItems(t *testing.T) {
 	doc.Items[1].Binding.State = pa.BindingMismatch
 	if got := MapProductAllowance(doc)[0]; got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 {
 		t.Fatalf("mixed trust: %+v", got)
+	}
+}
+
+func TestMapProductAllowanceReadInterfaceExample(t *testing.T) {
+	raw, err := os.ReadFile("../../../internal/providerallowance/testdata/read-interface-examples.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var example struct {
+		HTTP struct {
+			Body json.RawMessage `json:"body"`
+		} `json:"http"`
+	}
+	if err := json.Unmarshal(raw, &example); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := pa.DecodeReadResponse(example.HTTP.Body, pa.FixtureParseLimits)
+	if err != nil {
+		t.Fatalf("contract HTTP body cannot be strictly decoded: %v", err)
+	}
+	got := MapProductAllowance(doc)
+	if got[0].Value != portal.AllowanceNotConnected || got[1].Value != portal.AllowanceUnknown || len(got[1].Windows) != 0 {
+		t.Fatalf("original cached example: %+v", got)
+	}
+	// The original also has an unknown binding. Verify that even a synthetic
+	// verified binding cannot turn capture-only freshness into a measurement.
+	for i := range doc.Items {
+		if doc.Items[i].Observation.Provider == "openai" {
+			doc.Items[i].Binding.State = pa.BindingVerified
+		}
+	}
+	for i := range doc.SourceStatuses {
+		if doc.SourceStatuses[i].Provider == "openai" {
+			doc.SourceStatuses[i].Binding.State = pa.BindingVerified
+		}
+	}
+	if got := MapProductAllowance(doc)[1]; got.Value != portal.AllowanceUnknown || !strings.Contains(got.Reason, "freshness") || len(got.Windows) != 0 {
+		t.Fatalf("capture is not provider freshness: %+v", got)
+	}
+	// Explicit synthetic trust/current-value inputs; no provider read occurred.
+	for i := range doc.Items {
+		item := &doc.Items[i]
+		if item.Observation.Provider != "openai" {
+			continue
+		}
+		item.Freshness.State = pa.FreshFresh
+		item.Freshness.Basis = pa.BasisProvider
+		item.Freshness.Reason = "Synthetic test only"
+		item.CurrentMeasures[0].State = pa.CurrentKnown
+		item.CurrentMeasures[0].Value = item.Observation.Measures[0].Value
+		item.CurrentMeasures[1].State = pa.CurrentNotReported
+		item.CurrentMeasures[1].Value = item.Observation.Measures[1].Value
+	}
+	for i := range doc.SourceStatuses {
+		if doc.SourceStatuses[i].Provider == "openai" {
+			doc.SourceStatuses[i].Freshness.State = pa.FreshFresh
+			doc.SourceStatuses[i].Freshness.Basis = pa.BasisProvider
+			doc.SourceStatuses[i].Freshness.Reason = "Synthetic test only"
+		}
+	}
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = pa.DecodeReadResponse(raw, pa.FixtureParseLimits)
+	if err != nil {
+		t.Fatalf("synthetic fresh variant cannot be strictly decoded: %v", err)
+	}
+	got = MapProductAllowance(doc)
+	if got[0].Value != portal.AllowanceNotConnected || got[1].Value != portal.AllowanceMeasured || len(got[1].Windows) != 2 || got[1].Windows[0].Percent != "50% used" || got[1].Windows[0].Window != "7 days" || got[1].Windows[1].Percent != "Unknown" {
+		t.Fatalf("fresh known plus unreported windows: %+v", got)
+	}
+	for _, usage := range []bool{false, true} {
+		page := portal.ProductPage{Title: "Sessions", Connected: true, Allowance: got, Usage: &portal.ProductUsage{Allowance: got}}
+		if usage {
+			page.Filter.View = "usage"
+		}
+		body, err := portal.RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ref := range []string{"codex-primary-window", "codex-secondary-window"} {
+			if strings.Contains(string(body), ref) {
+				t.Fatalf("opaque ref %q rendered on usage=%v", ref, usage)
+			}
+		}
+	}
+}
+
+func TestMapProductAllowanceMixedMeasureStates(t *testing.T) {
+	type measureCase struct {
+		name   string
+		change func(*pa.ReadItem)
+		rows   int
+		refuse bool
+	}
+	tests := []measureCase{
+		{"rate-limit", func(i *pa.ReadItem) { i.Observation.Measures[1].Category = pa.CategoryRateLimit }, 2, false},
+		{"current-conflict", func(i *pa.ReadItem) { i.CurrentMeasures[1].State = pa.CurrentConflict }, 0, true},
+		{"disagreement", func(i *pa.ReadItem) { i.CurrentMeasures[1].Value.Decimal = allowanceString("4") }, 0, true},
+		{"duplicate-measure", func(i *pa.ReadItem) { i.Observation.Measures[1].ID = "weekly" }, 0, true},
+		{"duplicate-current", func(i *pa.ReadItem) { i.CurrentMeasures[1].MeasureID = "weekly" }, 0, true},
+		{"missing-current", func(i *pa.ReadItem) { i.CurrentMeasures = i.CurrentMeasures[:1] }, 2, false},
+	}
+	for _, state := range []pa.CurrentState{"", pa.CurrentUnknown, pa.CurrentExpired, pa.CurrentNotReported, pa.CurrentNotApplicable, pa.CurrentUncapped} {
+		tests = append(tests, measureCase{"current/" + string(state), func(i *pa.ReadItem) { i.CurrentMeasures[1].State = state }, 2, false})
+	}
+	for _, state := range []pa.ValueState{"", pa.ValueUnknown, pa.ValueNotReported, pa.ValueNotApplicable, pa.ValueUncapped} {
+		tests = append(tests,
+			measureCase{"current-value/" + string(state), func(i *pa.ReadItem) { i.CurrentMeasures[1].Value.State = state }, 2, false},
+			measureCase{"measure-value/" + string(state), func(i *pa.ReadItem) { i.Observation.Measures[1].Value.State = state }, 2, false})
+	}
+	for _, direction := range []pa.Direction{"", pa.DirectionLimit, pa.DirectionNone, pa.DirectionUnknown, "future-direction"} {
+		tests = append(tests, measureCase{"direction/" + string(direction), func(i *pa.ReadItem) { i.Observation.Measures[1].Direction = direction }, 2, false})
+	}
+	for _, unit := range []string{"", "tokens", "bytes", pa.UnitMoney} {
+		tests = append(tests, measureCase{"ignored-unit/" + unit, func(i *pa.ReadItem) { i.Observation.Measures[1].Unit = unit }, 1, false})
+	}
+	for _, category := range []pa.Category{"", pa.CategorySpend, pa.CategoryLocal, pa.CategoryAdvisory} {
+		tests = append(tests, measureCase{"ignored-category/" + string(category), func(i *pa.ReadItem) { i.Observation.Measures[1].Category = category }, 1, false})
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := allowanceRead()
+			item := &doc.Items[0]
+			item.Observation.Measures = append(item.Observation.Measures, item.Observation.Measures[0])
+			item.Observation.Measures[1].ID = "secondary"
+			item.CurrentMeasures = append(item.CurrentMeasures, item.CurrentMeasures[0])
+			item.CurrentMeasures[1].MeasureID = "secondary"
+			tc.change(item)
+			for _, fresh := range []pa.FreshnessState{pa.FreshFresh, pa.FreshStale} {
+				item.Freshness.State = fresh
+				got := MapProductAllowance(doc)[0]
+				if tc.refuse {
+					if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 || !strings.Contains(got.Reason, "Conflicting") {
+						t.Fatalf("conflict did not refuse provider: %+v", got)
+					}
+					continue
+				}
+				wantState := portal.AllowanceMeasured
+				if fresh == pa.FreshStale {
+					wantState = portal.AllowanceStale
+				}
+				if got.Value != wantState || len(got.Windows) != tc.rows || got.Windows[0].Percent != "62.00% left" {
+					t.Fatalf("valid percent lost: %+v", got)
+				}
+				if tc.rows == 2 && tc.name != "rate-limit" && got.Windows[1].Percent != "Unknown" {
+					t.Fatalf("unknown window gained a number: %+v", got)
+				}
+			}
+		})
+	}
+}
+
+func TestAllowanceWindowNeverUsesRef(t *testing.T) {
+	for _, duration := range []*pa.Count{nil, allowanceMinutes(0), allowanceMinutes(300)} {
+		window := pa.Window{Ref: "codex-primary-window", DurationMinutes: duration}
+		want := "Unknown"
+		if duration != nil && *duration == 300 {
+			want = "5 hours"
+		}
+		if got := allowanceWindow(window); got != want {
+			t.Fatalf("duration %v: got %q, want %q", duration, got, want)
+		}
 	}
 }

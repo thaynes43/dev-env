@@ -851,7 +851,7 @@ func TestTaskReadFailureHidesDataAndKeepsSafeDiagnostics(t *testing.T) {
 
 func allowanceBlock(t *testing.T, body []byte, usage bool) string {
 	t.Helper()
-	pattern := `(?s)<p class="allowance-strip">(.*?)</p>`
+	pattern := `(?s)<div class="allowance-strip">(.*?)</ul></div>`
 	if usage {
 		pattern = `(?s)<section class="allowance".*?</section>\s*<p class="note">Plan limits.*?</section>`
 	}
@@ -902,13 +902,16 @@ func TestRenderAccountAllowanceStatesOnBothPages(t *testing.T) {
 					t.Errorf("wrong stale tone: %s", block)
 				}
 				if usage {
+					if strings.Contains(block, "<table>") != measured {
+						t.Error("only measured or stale providers may render a table")
+					}
 					if strings.Contains(string(body), `class="allowance-strip"`) || !strings.Contains(block, `id="usage-allowance"`) || !strings.Contains(string(body), "No sessions in this read.") {
 						t.Error("empty Usage or allowance anchor missing, or strip leaked")
 					}
-					if measured && (!strings.Contains(block, "<dl") || !strings.Contains(block, "<dt>Observed</dt>")) {
+					if measured && (!strings.Contains(block, "<table>") || !strings.Contains(block, `<th scope="col">Observed</th>`) || !strings.Contains(block, `data-label="Observed"`)) {
 						t.Error("windows lack semantic labels")
 					}
-				} else if !strings.Contains(block, `href="?view=usage#usage-allowance">Account allowance</a>`) {
+				} else if !strings.Contains(block, `href="?view=usage#usage-allowance">Account allowance</a>`) || !strings.Contains(block, `<ul role="list"`) {
 					t.Error("missing keyboard-reachable Usage link")
 				}
 			})
@@ -924,7 +927,7 @@ func TestRenderAllowanceMissingMetadataAndWindowLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	strip := allowanceBlock(t, body, false)
-	if !strings.Contains(strip, `>+2 more</a>`) || strings.Contains(strip, "91% left") || strings.Contains(strip, "12% used") || strings.Count(strip, "Unknown") != 8 {
+	if !strings.Contains(strip, `>+2 more</a>`) || strings.Contains(strip, "91% left") || strings.Contains(strip, "12% used") || strings.Count(strip, "Unknown") != 6 {
 		t.Fatalf("limit or missing metadata: %s", strip)
 	}
 	page.Filter.View = "usage"
@@ -933,8 +936,86 @@ func TestRenderAllowanceMissingMetadataAndWindowLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := allowanceBlock(t, body, true)
-	if strings.Contains(section, "more</a>") || strings.Count(section, `class="allowance-window"`) != 4 || strings.Count(section, ">Unknown</dd>") != 16 {
+	if strings.Contains(section, "more</a>") || strings.Count(section, `class="allowance-window"`) != 4 || strings.Count(section, ">Unknown</td>") != 16 {
 		t.Fatalf("full windows or missing metadata: %s", section)
+	}
+}
+
+func TestRenderCompactAllowanceSelectsPercentsAndSharesMetadata(t *testing.T) {
+	window := func(percent string) ProductAllowanceWindow {
+		return ProductAllowanceWindow{Percent: percent, Window: "7 days", Reset: "2 Nov 14:00 UTC", Observed: "29 Oct 13:59 UTC", Provenance: "Provider API"}
+	}
+	for _, state := range []ProductAllowanceState{AllowanceMeasured, AllowanceStale} {
+		windows := []ProductAllowanceWindow{window("Unknown"), window("62% left"), window("Unknown"), window("38% used"), window("91% left")}
+		page := ProductPage{Title: "Sessions", Connected: true, Allowance: []ProductAllowance{{Provider: "Claude", Value: state, Windows: windows}}}
+		body, err := RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		strip := allowanceBlock(t, body, false)
+		for _, want := range []string{"62% left", "38% used", ">+3 more</a>", `<ul role="list"`, `<li class="allowance-provider">`} {
+			if !strings.Contains(strip, want) {
+				t.Errorf("missing %q: %s", want, strip)
+			}
+		}
+		if strings.Contains(strip, "91% left") || strings.Contains(strip, "Unknown") || strings.Count(strip, "29 Oct 13:59 UTC") != 1 || strings.Count(strip, "Provider API") != 1 {
+			t.Fatalf("compact windows or shared metadata: %s", strip)
+		}
+		if strings.Count(strip, "tone-wait") != map[bool]int{true: 1, false: 0}[state == AllowanceStale] || (state == AllowanceStale && !strings.Contains(strip, `<span class="allowance-state tone-wait">Stale</span>`)) {
+			t.Fatalf("only Stale may use wait tone: %s", strip)
+		}
+	}
+}
+
+func TestRenderCompactAllowanceDoesNotPickVaryingMetadata(t *testing.T) {
+	for _, field := range []string{"observed", "source"} {
+		a := ProductAllowance{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{
+			{Percent: "62% left", Observed: "29 Oct 13:59 UTC", Provenance: "Provider API"},
+			{Percent: "Unknown", Observed: "29 Oct 13:59 UTC", Provenance: "Provider API"},
+		}}
+		if field == "observed" {
+			a.Windows[1].Observed = "28 Oct 13:59 UTC"
+		} else {
+			a.Windows[1].Provenance = "Provider display"
+		}
+		page := ProductPage{Title: "Sessions", Connected: true, Allowance: []ProductAllowance{a}, Usage: &ProductUsage{Allowance: []ProductAllowance{a}}}
+		body, err := RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		strip := allowanceBlock(t, body, false)
+		if !strings.Contains(strip, "Seen varies · see Usage") || strings.Contains(strip, "Provider API") || strings.Contains(strip, "Provider display") || strings.Contains(strip, "29 Oct") {
+			t.Fatalf("%s disagreement hidden: %s", field, strip)
+		}
+		page.Filter.View = "usage"
+		body, err = RenderProduct(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		section := allowanceBlock(t, body, true)
+		if !strings.Contains(section, a.Windows[1].Observed) || !strings.Contains(section, a.Windows[1].Provenance) || strings.Count(section, `class="allowance-window"`) != 2 {
+			t.Fatalf("Usage lost per-window metadata: %s", section)
+		}
+	}
+}
+
+func TestRenderAllowanceWithoutAnyPercentIsUnknown(t *testing.T) {
+	for _, state := range []ProductAllowanceState{AllowanceMeasured, AllowanceStale} {
+		for _, usage := range []bool{false, true} {
+			a := []ProductAllowance{{Provider: "Claude", Value: state, Windows: []ProductAllowanceWindow{{Percent: "Unknown"}, {}}}}
+			page := ProductPage{Title: "Sessions", Connected: true, Allowance: a, Usage: &ProductUsage{Allowance: a}}
+			if usage {
+				page.Filter.View = "usage"
+			}
+			body, err := RenderProduct(page)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := allowanceBlock(t, body, usage)
+			if !strings.Contains(block, "Unknown · No percent allowance reported") || strings.Contains(block, "<table>") || strings.Contains(block, "Stale") || strings.Contains(block, "%") {
+				t.Fatalf("empty measurement rendered: %s", block)
+			}
+		}
 	}
 }
 
