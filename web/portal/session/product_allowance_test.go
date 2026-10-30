@@ -404,6 +404,17 @@ func TestMapProductAllowanceMixedMeasureStates(t *testing.T) {
 			i.Observation.Measures[1].Unit = pa.UnitMoney
 			i.CurrentMeasures[1].Value.Decimal = allowanceString("4")
 		}, 0, true},
+		// Money values outside the displayed percent grammar still conflict.
+		{"F1-large-money-decimal-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.Observation.Measures[1].Value.Decimal = allowanceString("1500000.25")
+			i.CurrentMeasures[1].Value.Decimal = allowanceString("1499999.75")
+		}, 0, true},
+		{"F1-negative-money-decimal-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.Observation.Measures[1].Value.Decimal = allowanceString("-2.5")
+			i.CurrentMeasures[1].Value.Decimal = allowanceString("-3")
+		}, 0, true},
 		{"duplicate-measure", func(i *pa.ReadItem) { i.Observation.Measures[1].ID = "weekly" }, 0, true},
 		{"duplicate-current", func(i *pa.ReadItem) { i.CurrentMeasures[1].MeasureID = "weekly" }, 0, true},
 		{"missing-current", func(i *pa.ReadItem) { i.CurrentMeasures = i.CurrentMeasures[:1] }, 2, false},

@@ -184,10 +184,12 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	var windows []portal.ProductAllowanceWindow
 	for _, m := range o.Measures {
 		current, ok := currents[m.ID]
-		validDecimals := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
-		if validDecimals && *m.Value.Decimal != *current.Value.Decimal {
+		// Any two reported decimals that differ refuse the provider, whatever
+		// their unit or size; only matching percent decimals can be shown.
+		if m.Value.Decimal != nil && current.Value.Decimal != nil && *m.Value.Decimal != *current.Value.Decimal {
 			return nil, "Conflicting allowance values"
 		}
+		validDecimals := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
 		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
 			continue
 		}
