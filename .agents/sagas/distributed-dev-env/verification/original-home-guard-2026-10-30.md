@@ -320,6 +320,8 @@ in the existing guard/rescue/bootstrap test files passed: 325 test/subtest
 events, 41.691 seconds. Native Sol review caught the admission mount mismatch;
 the corrected implementation and admitted-shape regression have no remaining
 source findings. The reviewer did not run tests or runtime checks.
+`make GO_PARALLELISM=1 GOMAXPROCS=2 check-generated check-layout lint` also
+passed with the same environment; lint reported zero issues.
 
 This increment is **source-tested, not runtime-accepted**; local results and the
 independent native review receipt are recorded on OP288 and its PR. No installed
