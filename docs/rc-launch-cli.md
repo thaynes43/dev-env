@@ -103,3 +103,33 @@ rerunning start with that key cannot deliver the handoff.
 A key makes session creation idempotent; it does not make handoff delivery
 idempotent. Do not rerun start to retry an unconfirmed handoff. Use status to
 observe the retained session, and preserve uncertainty about the handoff.
+
+## Codex discovery source slice (3/3a)
+
+OpenProject [#271](https://work.haynesnetwork.com/work_packages/271) adds the
+pure `internal/codexrc` discovery adapter and offline-generated app-server
+response schemas pinned to `codex-cli 0.160.1`. It maps an accepted catalog
+repository and exact normalized POSIX root to one existing host's Codex project
+ID, host ID and cwd. The caller must supply authorized host/catalog bindings,
+the expected native installation ID, complete project pages and supported
+client pairing evidence. Native `project/list` has IDs/roots rather than
+connector `projectKind`/`hostId` fields; those source distinctions are preserved.
+Daemon connection status alone cannot confirm phone pairing.
+
+One unique paired match succeeds at discovery only. No match, multiple matches,
+ChatGPT-only projects or null host IDs yield `codex_inventory_unavailable`
+after an actual mapping attempt. Missing pairing evidence yields
+`pairing_unknown`; confirmed required pairing returns `pairing_required` with
+the exact `agent-run pair SESSION` owner action from a verified managed-session
+mapping. Without that mapping it returns `pairing_action_unavailable`.
+It never substitutes a provider host ID for SESSION or pairs automatically.
+Unsupported CLI versions, malformed responses or incomplete pagination yield
+`protocol_unsupported`. Missing accepted repository/root input yields
+`project_unavailable`.
+
+This package performs no I/O and is not wired into `rc start`. That command
+continues to return `codex_adapter_not_implemented` with zero network requests
+for Codex. Thread creation and handoff are left for 3/3b; installation and usable
+phone acceptance require separate work. Existing caller and native-control
+guards are unchanged. [Fixture provenance and source
+boundaries](../internal/codexrc/testdata/README.md) describe the offline evidence.

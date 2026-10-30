@@ -142,6 +142,7 @@ internal/agentd/protocol/  what agentd and the operator exchange: the session do
                          the rescue report, and the rescue layout and manifest on the shared volume; the history
                          archive's wire types and the canonical JSON both sides hash (canonical.go, DESIGN-025 5.4)
 internal/agentd/hostexecutor/  owns one foreground native computer for one immutable budget binding (no budget authority, no pairing)
+internal/codexrc/        pure pinned Codex project/host discovery and rc-launch error mapping; no I/O, launch or pairing authority
 internal/codexauth/      the access-only Codex document the keeper publishes and agentd reads; it cannot carry a refresh token
 internal/claudeauth/     the access-only Claude projection document (dev-env-claude-live) and the merge of its access fields into a pod's .credentials.json; it cannot carry a refresh token; pure, no I/O (Story110 T09 increment 1)
 internal/claudelogin/    the keeper-owned Claude login ceremony (Story110 T09 increment 5): the control socket's wire types and client, and the helper that runs the pinned `claude auth login` in a memory-backed staging HOME, prints only the sign-in link and reads the one-time code on stdin; reads no credential

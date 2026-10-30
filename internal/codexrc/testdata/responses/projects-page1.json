@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "createdAt": 1700000000,
+      "id": "unrelated-project",
+      "metadata": {},
+      "name": "Synthetic native project",
+      "position": 0,
+      "recencyAt": null,
+      "roots": [
+        {
+          "path": "/workspace/other"
+        }
+      ],
+      "updatedAt": 1700000000
+    }
+  ],
+  "nextCursor": "cursor-fixture"
+}

@@ -788,6 +788,19 @@ acceptance are recorded separately; do not start the next story automatically.
 
 ### 3/3 — Codex existing-host source adapter and guarded launch
 
+**Bounded source split:** [OpenProject #271](https://work.haynesnetwork.com/work_packages/271)
+is **3/3a: discovery only**. Its pure `internal/codexrc` adapter pins schemas
+generated offline from codex-cli 0.160.1 and maps caller-authorized catalog/root,
+host identity and client pairing observations to one existing Codex project.
+Native `project/list` supplies IDs/roots, not connector `projectKind`/`hostId`;
+external host/catalog binding and pairing knowledge must remain explicit.
+None/ambiguous/ChatGPT-only mappings yield `codex_inventory_unavailable`.
+The CLI still refuses Codex locally with `codex_adapter_not_implemented` and
+does not probe inventory. **3/3b retains thread creation and handoff**, launch
+wiring, runtime revalidation and the remaining source acceptance below.
+3/3a grants no live RPC, pairing, host restart or new caller rights and does
+not establish installation, app visibility, links or usable acceptance.
+
 **Outcome:** reuse an authorized healthy paired host, select its real remote
 project/root, create a fresh model-bound thread and deliver the handoff once;
 return the supported link or exact pairing action/error with timings. Preserve
