@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.72.0](https://github.com/thaynes43/dev-env/compare/v2.71.0...v2.72.0) (2026-10-30)
+
+
+### Features
+
+* **grants:** prepare default-off bounded maintenance task leases ([#732](https://github.com/thaynes43/dev-env/issues/732)) ([976ae2a](https://github.com/thaynes43/dev-env/commit/976ae2affc8b0687b606a028ebf7f83672c71520))
+* **portal:** show honest account allowance on Sessions and Usage ([#305](https://github.com/thaynes43/dev-env/issues/305)) ([#735](https://github.com/thaynes43/dev-env/issues/735)) ([055b071](https://github.com/thaynes43/dev-env/commit/055b0718d55d13bec62d01e7f6b02ddb5ea0f546))
+
 ## [2.71.0](https://github.com/thaynes43/dev-env/compare/v2.70.1...v2.71.0) (2026-10-30)
 
 
