@@ -282,6 +282,37 @@ Focused local results and the independent native review receipt are recorded
 on OP286 and in the superseding PR. Hosted checks, publication, installation
 and owner acceptance remain separate.
 
+## OP288: suspend a verifier-only executor
+
+Work order `INITSTUCK288-20261030-01`, [OP288](https://work.haynesnetwork.com/work_packages/288)
+journal 3240, starts from `6af7f59a` (includes OP286 PR #715). Suspend may use
+the existing guarded Pod deletion without a rescue exec when the Session's
+admitted binding and exact Pod ownership match, every named main container is
+Waiting with zero restarts and no current or previous run/termination, and the
+sole init container is the operator's `agentd home-verify` command with only
+the read-only HOME mount. The verifier may have failed and restarted. Missing,
+duplicate or unknown main status, another init, writable HOME, altered init
+command, ephemeral containers or uncertain ownership retain the rescue requirement.
+This conservative exception does not apply to reap, drain or hold Pods. Deletion
+still uses the existing UID and resourceVersion preconditions; no force deletion
+or other resource mutation is added.
+
+`TestOriginalHomeInitFailedSuspend` exercises the real Reconcile/removePod/deletePod
+path using the existing fake rescuer. It starts with RemovalBlocked set, checks
+zero rescue calls and condition removal on success, checks the normal delete
+preconditions, and covers the unsafe/uncertain cases and unchanged unguarded and
+reap behavior. Foreign Pods remain untouched without exec.
+`TestOriginalHomeInitFailedArchiveStillRetainsHOME` proves the stronger existing
+original-HOME archive refusal even with a verified rescue, and separately checks
+that the legacy volume guard still requires verified rescue when the Pod is gone.
+Existing hold-Pod archive/rescue tests cover the legacy rescue execution path.
+The default Pod golden remains
+`c91e28583563011e5e83da0056e2965be4d79bc44212d4dafd2d494029e75e1c`.
+
+This increment is **source-tested, not runtime-accepted**; local results and the
+independent native review receipt are recorded on OP288 and its PR. No installed
+operator, HOME, RBAC, finalizer, history or lifecycle action is part of this work.
+
 ## Deferred exact recovery approval packet
 
 After source qualification, first establish guard-capable code and consistent

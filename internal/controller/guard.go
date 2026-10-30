@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -122,7 +124,7 @@ func podRemovalAllowed(s *v1alpha1.AgentSession, pod *corev1.Pod) error {
 		return errDrainNeedsRestart
 	case !wantsPodGone(s):
 		return fmt.Errorf("the session is neither draining nor suspending (operatingMode %s); its pod stays (DESIGN-001 5.1)", s.Spec.OperatingMode)
-	case podNeverStarted(pod), podEnded(pod), rescueRanIn(s, pod):
+	case podNeverStarted(pod), originalHomeAgentNeverStarted(s, pod), podEnded(pod), rescueRanIn(s, pod):
 		return nil
 	default:
 		return errNeedsRescue
@@ -165,6 +167,50 @@ func podNeverStarted(p *corev1.Pod) bool {
 	return true
 }
 
+// originalHomeAgentNeverStarted lets suspend remove an owned executor stuck
+// in the read-only verifier. It proves nothing about earlier Pods' HOME data:
+// archive and its rescue requirements remain separate. deletePod still pins
+// the observed Pod UID and resourceVersion, including these container states.
+func originalHomeAgentNeverStarted(s *v1alpha1.AgentSession, p *corev1.Pod) bool {
+	if s.Spec.OperatingMode != v1alpha1.OperatingModeSuspended || !s.DeletionTimestamp.IsZero() ||
+		p.Name != s.Name || p.Namespace != s.Namespace || p.UID == "" || p.ResourceVersion == "" ||
+		!controlledBySession(p, s) || isHoldPod(p) || p.Status.Phase != corev1.PodPending {
+		return false
+	}
+	b, err := homeguard.Select(nil, s.Namespace, s.Name, string(s.UID), s.Annotations)
+	if err != nil || b == nil || len(p.Spec.Containers) == 0 ||
+		len(p.Status.ContainerStatuses) != len(p.Spec.Containers) ||
+		len(p.Spec.InitContainers) != 1 || len(p.Status.InitContainerStatuses) != 1 ||
+		len(p.Spec.EphemeralContainers) != 0 || len(p.Status.EphemeralContainerStatuses) != 0 {
+		return false
+	}
+	// Require the operator's verifier command and its sole, read-only HOME
+	// mount, rather than trusting an init container's name alone.
+	init := p.Spec.InitContainers[0]
+	if init.Name != "original-home-verify" || p.Status.InitContainerStatuses[0].Name != init.Name ||
+		!slices.Equal(init.Command, []string{"/usr/local/bin/agentd"}) || !slices.Equal(init.Args, []string{"home-verify"}) ||
+		init.RestartPolicy != nil || init.Lifecycle != nil || len(init.VolumeDevices) != 0 ||
+		!reflect.DeepEqual(init.VolumeMounts, []corev1.VolumeMount{{Name: "home", MountPath: "/home/dev", ReadOnly: true}}) {
+		return false
+	}
+	// Match by name as well as count: duplicate or unknown status entries
+	// must not hide a main container that might have run.
+	waiting := make(map[string]bool, len(p.Status.ContainerStatuses))
+	for _, cs := range p.Status.ContainerStatuses {
+		if waiting[cs.Name] || cs.State.Waiting == nil || cs.State.Running != nil || cs.State.Terminated != nil ||
+			cs.RestartCount != 0 || cs.LastTerminationState.Terminated != nil || cs.LastTerminationState.Running != nil {
+			return false
+		}
+		waiting[cs.Name] = true
+	}
+	for _, c := range p.Spec.Containers {
+		if !waiting[c.Name] {
+			return false
+		}
+	}
+	return true
+}
+
 // podEnded reports whether every container of the pod has stopped for good,
 // for example after an eviction.
 func podEnded(p *corev1.Pod) bool {
@@ -178,7 +224,7 @@ func podEnded(p *corev1.Pod) bool {
 // retry while the last one failed.
 func needsRescue(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time, retry time.Duration) bool {
 	switch {
-	case podNeverStarted(pod) || podEnded(pod):
+	case podNeverStarted(pod) || originalHomeAgentNeverStarted(s, pod) || podEnded(pod):
 		return false
 	case !isHoldPod(pod):
 		return !rescueRanIn(s, pod)
