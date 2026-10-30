@@ -306,7 +306,11 @@ func (s *TaskSource) Read(ctx context.Context, filter portal.ProductFilter) (por
 			break
 		}
 	}
-	return tasksPage(all, complete, filter), nil
+	page = tasksPage(all, complete, filter)
+	if completed := s.now(); !completed.IsZero() {
+		page.ReadCompletedAt = completed.UTC().Format(time.RFC3339Nano)
+	}
+	return page, nil
 }
 
 func decodeSessionPage(body []byte, now time.Time) (page apiv1.PortalSessionPage, err error) {

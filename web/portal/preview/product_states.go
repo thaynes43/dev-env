@@ -94,6 +94,27 @@ func writeProductStates(dir string) error {
 			return err
 		}
 	}
+	for _, state := range []string{"empty", "unavailable", "unknown", "not-connected"} {
+		page := portal.ProductPage{Title: "Tasks", Notice: "The completed task read returned no work packages.", Preview: true, Connected: true, Complete: true,
+			ObservedAt: "2026-10-29T14:00:00Z", ReadCompletedAt: "2026-10-29T13:59:00Z"}
+		switch state {
+		case "unavailable":
+			page.Connected, page.Complete = false, false
+			page.Notice, page.ReadCompletedAt = "Tasks unavailable", ""
+		case "unknown":
+			page.ReadCompletedAt = ""
+		case "not-connected":
+			page.Connected, page.Complete = false, false
+			page.Notice, page.ReadCompletedAt = "Tasks not connected", ""
+		}
+		body, err := portal.RenderProduct(page)
+		if err != nil {
+			return err
+		}
+		if err = os.WriteFile(filepath.Join(dir, "tasks-"+state+".html"), body, 0600); err != nil {
+			return err
+		}
+	}
 	return writeAttentionStates(dir)
 }
 

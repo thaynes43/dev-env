@@ -953,6 +953,65 @@ func sessionReadFixture(t *testing.T, now func() time.Time, transport tripFunc) 
 	return &SessionSource{path: path, now: now, client: &http.Client{Transport: transport}}
 }
 
+func TestServeTasksFooterUsesReadCompletion(t *testing.T) {
+	f := setupAuth(t)
+	f.login(t)
+	completed := f.now.Add(10*time.Second + 123456789*time.Nanosecond)
+	rendered := completed.Add(time.Minute)
+	for _, tc := range []struct {
+		name      string
+		completed time.Time
+		failed    bool
+		connected bool
+	}{
+		{name: "success", completed: completed, connected: true},
+		{name: "failure", completed: completed, failed: true, connected: true},
+		{name: "unknown completion", connected: true},
+		{name: "not connected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "openproject-token")
+			if err := os.WriteFile(path, []byte("fixture-token"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			now := f.now
+			var tasks *TaskSource
+			if tc.connected {
+				tasks = &TaskSource{path: path, now: func() time.Time { return now }, client: &http.Client{Transport: tripFunc(func(*http.Request) (*http.Response, error) {
+					now = tc.completed
+					if tc.failed {
+						return nil, errors.New("fixture read failure")
+					}
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {mediaHAL}}, Body: io.NopCloser(strings.NewReader(`{"total":0,"count":0,"pageSize":50,"offset":1,"_embedded":{"elements":[]},"_links":{}}`))}, nil
+				})}}
+			}
+			authorizer := currentFixture(f, func(*http.Request) (*http.Response, error) { return userInfoResponse(currentAllow), nil })
+			h := NewAssembly(AssemblyConfig{Session: f.e, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Tasks: tasks, FreshFor: time.Minute, Now: func() time.Time { return rendered }})
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, f.request(http.MethodGet, TasksPath, ""))
+			body := w.Body.String()
+			_, footer, found := strings.Cut(body, `<footer class="statusbar">`)
+			footer, _, _ = strings.Cut(footer, "</footer>")
+			if w.Code != http.StatusOK || !found {
+				t.Fatalf("Tasks page failed (HTTP %d): %s", w.Code, body)
+			}
+			wantUpdated := tc.connected && !tc.failed && !tc.completed.IsZero()
+			if strings.Contains(footer, "Updated") != wantUpdated || strings.Contains(body, `<p class="list-foot">`) != wantUpdated {
+				t.Fatalf("unexpected Tasks freshness: %s", body)
+			}
+			if wantUpdated {
+				at := completed.UTC().Truncate(time.Second).Format(time.RFC3339)
+				if strings.Count(body, `Updated <time datetime="`+at+`">`) != 2 || strings.Contains(footer, rendered.Format(time.RFC3339)) {
+					t.Fatalf("Tasks did not retain read completion: %s", body)
+				}
+			}
+			if tc.failed && !strings.Contains(body, "Tasks unavailable") {
+				t.Fatal("Tasks read failure was not shown")
+			}
+		})
+	}
+}
+
 func TestSessionReadCompletionTime(t *testing.T) {
 	started := time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)
 	completed := started.Add(10 * time.Second)

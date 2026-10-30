@@ -559,7 +559,7 @@ type ProductPage struct {
 	Rail                                ProductRail
 	Filter                              ProductFilter
 	// ReadCompletedAt is the completion time of this page's successful Sessions
-	// read. An empty value is unknown; ObservedAt is only the render time.
+	// or Tasks read. An empty value is unknown; ObservedAt is only the render time.
 	ReadCompletedAt string
 	// Launch is the Sessions page's launch form, set only when the route is
 	// configured for this caller.
@@ -722,7 +722,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		SessionsHref: productSessionsHref,
 		ListTitle:    page.ListTitle}
 	view.FooterUpdatedAt, view.FooterUpdatedLabel = view.ObservedAt, view.ObservedLabel
-	if view.Current == "sessions" {
+	if view.Current == "sessions" || view.Current == "tasks" {
 		view.FooterUpdatedAt, view.FooterUpdatedLabel = "", ""
 		if page.Connected && page.ReadFailure == nil {
 			if at, err := time.Parse(time.RFC3339Nano, page.ReadCompletedAt); err == nil && !at.IsZero() {
