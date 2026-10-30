@@ -112,8 +112,8 @@ func sessionTransportFailure(ctx context.Context, err error) *sessionReadError {
 	return failure
 }
 
-// sessionGet preserves the failure category; the independent Tasks reader keeps
-// productGet's existing contract. Both use the same pinned, non-redirecting client.
+// sessionGet and productGet preserve classified failure categories for Sessions
+// and Tasks. Both use pinned, non-redirecting clients.
 func sessionGet(ctx context.Context, client *http.Client, rawURL, token string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -1207,7 +1207,7 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		}
 	case TasksPath:
 		page, _ = c.Tasks.Read(r.Context(), filter)
-		if c.Tasks == nil {
+		if page.ReadFailure != nil && c.Tasks == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)
 		}
 	default:
