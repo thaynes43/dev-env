@@ -1,7 +1,8 @@
 # OP272: default-off existing-daemon thread and handoff
 
 Owner: `dev-env-1030-015210`, branch `agent/dev-env-1030-015210`.
-Actual driving model: GPT-6 Astra. Direct October 30 work order and OP272
+Requested model/effort: gpt-6.1-sol / medium. Driver self-description: GPT-6 Astra;
+that is not provider evidence. Actual served model: Unknown. Direct October 30 work order and OP272
 journal2926 authorize disabled implementation, fixtures and normal publication.
 No runtime exposure, live RPC, installation, pairing or actor grant follows.
 
@@ -34,8 +35,10 @@ new thread ID, exact model/effort and one text handoff. No existing conversation
 resume, environment selection, approval/sandbox override or generic RPC exists.
 
 The configured root is never taken from HTTP input. The operator resolves the
-accepted catalog snapshot; agentd requires the same saved snapshot and the
-SHA256 of an existing Ready `project-bootstrap.json` for that catalog/repository.
+accepted catalog snapshot; agentd resolves the saved snapshot from the existing remote-host
+`project-roots/<project>.json` receipt and binds its exact SHA256. The selected
+repository anchor, Ready root-operation/bootstrap reports and absence of a pending
+root advance must match. A task-only project-snapshot.json is never required.
 It verifies the deployment-qualified root's device/inode, ownership, permissions,
 HOME containment and no symlink components. It performs no Git preparation,
 fetch or root repair. The existing registered process must match PID, boot ID,
@@ -89,7 +92,7 @@ never provider stderr, credentials or raw native data.
 
 The same exact JSON target packet must be independently qualified and supplied
 to the operator file and the existing host's fixed
-`$AGENTD_CONFIG_DIR/codex/rc-target.json`. This is deployment-owned configuration;
+`$AGENTD_CONFIG_DIR/codex/rc-target.json`. This is deployment-owned configuration (a regular file; final symlinks refuse);
 there is no HTTP pairing assertion or endpoint that creates this witness.
 The DTO is `apiv1.CodexRCTarget` in `internal/apiserver/apiv1/codex_rc.go`:
 
@@ -101,10 +104,10 @@ The DTO is `apiv1.CodexRCTarget` in `internal/apiserver/apiv1/codex_rc.go`:
   "project": "ACCEPTED_PROJECT",
   "repository": "ACCEPTED_REPOSITORY",
   "snapshotSHA256": "SHA256_OF_CANONICAL_ACCEPTED_SNAPSHOT",
-  "root": "/home/dev/work/QUALIFIED_PREPARED_ROOT",
+  "root": "/home/dev/codex/ACCEPTED_PROJECT/ACCEPTED_REPOSITORY",
   "rootDevice": 0,
   "rootInode": 0,
-  "preparationSHA256": "SHA256_OF_EXISTING_READY_PROJECT_BOOTSTRAP_BYTES",
+  "preparationSHA256": "SHA256_OF_EXISTING_ACCEPTED_PROJECT_ROOT_RECEIPT_BYTES",
   "pid": 0,
   "bootID": "EXISTING_BOOT_ID",
   "startTicks": 0,

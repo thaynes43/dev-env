@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 )
 
 type rcExec struct {
+	mu          sync.Mutex
 	calls       []string
 	fail        string
 	beforeStart func()
@@ -28,7 +32,9 @@ func (e *rcExec) Run(_ context.Context, ns, pod, container string, args []string
 	if ns != sessionNS || pod != "rc-host" || container != "agent" || len(args) != 4 || strings.Join(args[:3], " ") != "agentd ctl codex-thread" {
 		panic("unexpected exec")
 	}
+	e.mu.Lock()
 	e.calls = append(e.calls, args[3])
+	e.mu.Unlock()
 	var d apiv1.CodexRCDispatch
 	if json.NewDecoder(in).Decode(&d) != nil {
 		panic("bad stdin")
@@ -39,7 +45,7 @@ func (e *rcExec) Run(_ context.Context, ns, pod, container string, args []string
 	if args[3] == e.fail {
 		return errors.New("SECRET PROVIDER STDERR")
 	}
-	rec := apiv1.CodexRCReceipt{RequestID: d.Request.RequestID, ClientSHA256: d.ClientSHA256, DispatchSHA256: apiv1.CodexRCHash(d), Target: d.Target, Model: d.Request.Model, Effort: d.Request.Effort, State: "qualified", Reason: "qualified", StartedAt: e.now, FinishedAt: e.now}
+	rec := apiv1.CodexRCReceipt{Caller: d.Caller, RequestID: d.Request.RequestID, ClientSHA256: d.ClientSHA256, DispatchSHA256: apiv1.CodexRCHash(d), Target: d.Target, Model: d.Request.Model, Effort: d.Request.Effort, State: "qualified", Reason: "qualified", StartedAt: e.now, FinishedAt: e.now}
 	if args[3] == "start" {
 		rec.State, rec.Reason, rec.ThreadID, rec.TurnID = "confirmed", "thread_and_turn_acknowledged", "fresh-thread", "first-turn"
 	}
@@ -218,6 +224,110 @@ func TestCodexRCOneUseSurvivesServerRestartAndUncertainty(t *testing.T) {
 			req.RequestID = "new-key"
 			if w = f.do("POST", rcPath, tokHuman, req); w.Code != 409 || len(e.calls) != 2 {
 				t.Fatal(w.Code, e.calls)
+			}
+		})
+	}
+}
+
+type rcWriteClient struct {
+	client.Client
+	update func(context.Context, client.Object, ...client.UpdateOption) error
+}
+
+func (c rcWriteClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	return c.update(ctx, obj, opts...)
+}
+
+func TestCodexRCCASContentionOnlyOneMutatingExec(t *testing.T) {
+	f, req, e := rcFixture(t)
+	var arrivals atomic.Int32
+	barrier := make(chan struct{})
+	f.srv.Client = rcWriteClient{Client: f.c, update: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+		var rec apiv1.CodexRCReceipt
+		_ = json.Unmarshal([]byte(obj.GetAnnotations()[apiv1.CodexRCIntentAnnotation]), &rec)
+		if rec.State == "reserved" {
+			if arrivals.Add(1) == 2 {
+				close(barrier)
+			}
+			select {
+			case <-barrier:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return f.c.Update(ctx, obj, opts...)
+	}}
+	f.h = f.srv.Handler()
+	codes := make(chan int, 2)
+	// Exactly two fixed requests, not a stress/retry loop.
+	go func() { codes <- f.do("POST", rcPath, tokHuman, req).Code }()
+	go func() { codes <- f.do("POST", rcPath, tokHuman, req).Code }()
+	a, b := <-codes, <-codes
+	if !(a == 201 && b == 409 || a == 409 && b == 201) {
+		t.Fatal(a, b)
+	}
+	starts := 0
+	for _, op := range e.calls {
+		if op == "start" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatal(e.calls)
+	}
+}
+
+func TestCodexRCUnknownWritesKeepOneUseFence(t *testing.T) {
+	for _, mode := range []string{"reservation-unknown", "receipt-failed", "receipt-unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			f, req, e := rcFixture(t)
+			updates := 0
+			f.srv.Client = rcWriteClient{Client: f.c, update: func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+				updates++
+				if mode == "receipt-failed" && updates == 2 {
+					return errors.New("receipt write failed")
+				}
+				err := f.c.Update(ctx, obj, opts...)
+				if err != nil {
+					return err
+				}
+				if mode == "reservation-unknown" && updates == 1 || mode == "receipt-unknown" && updates == 2 {
+					return errors.New("write outcome unknown")
+				}
+				return nil
+			}}
+			f.h = f.srv.Handler()
+			w := f.do("POST", rcPath, tokHuman, req)
+			if w.Code < 500 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			before := len(e.calls)
+			f.h = f.srv.Handler()
+			w = f.do("POST", rcPath, tokHuman, req)
+			want := 409
+			if mode == "receipt-unknown" {
+				want = 200
+			}
+			if w.Code != want || len(e.calls) != before {
+				t.Fatal("replayed uncertain write", w.Code, w.Body.String(), e.calls)
+			}
+			req.RequestID = "different-key"
+			w = f.do("POST", rcPath, tokHuman, req)
+			if w.Code != 409 || len(e.calls) != before {
+				t.Fatal("new key bypass", w.Code, e.calls)
+			}
+			starts := 0
+			for _, op := range e.calls {
+				if op == "start" {
+					starts++
+				}
+			}
+			wantStarts := 1
+			if mode == "reservation-unknown" {
+				wantStarts = 0
+			}
+			if starts != wantStarts {
+				t.Fatal(e.calls)
 			}
 		})
 	}

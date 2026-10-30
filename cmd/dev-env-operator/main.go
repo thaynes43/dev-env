@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -323,7 +324,15 @@ func parseFlags(args []string) (options, error) {
 		if o.apiAddr == "0" || o.catalogBinding == nil || o.codexRCTargetFile == "" {
 			return o, errors.New("codex RC requires existing API, catalog and explicit target packet")
 		}
-		raw, err := os.ReadFile(o.codexRCTargetFile)
+		if !filepath.IsAbs(o.codexRCTargetFile) {
+			return o, errors.New("codex RC target file must be absolute")
+		}
+		file, err := os.Open(o.codexRCTargetFile)
+		if err != nil {
+			return o, errors.New("codex RC target packet unavailable")
+		}
+		raw, err := io.ReadAll(io.LimitReader(file, apiv1.CodexRCMaxPacket+1))
+		_ = file.Close()
 		if err != nil || len(raw) > apiv1.CodexRCMaxPacket {
 			return o, errors.New("codex RC target packet unavailable")
 		}

@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -39,14 +40,14 @@ func CodexRCControl(ctx context.Context, s Settings, sess protocol.Session, oper
 	return codexRCControl(ctx, s, sess, operation, d, realCodexRCDeps())
 }
 func codexRCControl(ctx context.Context, s Settings, sess protocol.Session, operation string, d apiv1.CodexRCDispatch, deps codexRCDeps) (apiv1.CodexRCReceipt, error) {
-	rec := apiv1.CodexRCReceipt{RequestID: d.Request.RequestID, ClientSHA256: d.ClientSHA256, DispatchSHA256: apiv1.CodexRCHash(d), Target: d.Target, Model: d.Request.Model, Effort: d.Request.Effort, State: "refused", Reason: "qualification_refused", StartedAt: deps.now().UTC()}
+	rec := apiv1.CodexRCReceipt{Caller: d.Caller, RequestID: d.Request.RequestID, ClientSHA256: d.ClientSHA256, DispatchSHA256: apiv1.CodexRCHash(d), Target: d.Target, Model: d.Request.Model, Effort: d.Request.Effort, State: "refused", Reason: "qualification_refused", StartedAt: deps.now().UTC()}
 	finish := func() (apiv1.CodexRCReceipt, error) { rec.FinishedAt = deps.now().UTC(); return rec, nil }
 	if operation != "preflight" && operation != "start" {
 		return rec, errCodexRCRefused
 	}
 	check := func(context.Context) error {
 		now := deps.now()
-		if ctx.Err() != nil || !codexRemoteSession(sess) || sess.Name != d.Target.SessionName || sess.SessionUID != d.Target.SessionUID || s.PodUID != d.Target.PodUID || !d.Request.Valid(now) || !d.Target.Valid(now) || !d.Target.Matches(d.Request) || len(d.ClientSHA256) != 64 {
+		if ctx.Err() != nil || !codexRemoteSession(sess) || sess.Name != d.Target.SessionName || sess.SessionUID != d.Target.SessionUID || s.PodUID != d.Target.PodUID || !d.Valid(now) {
 			return errCodexRCRefused
 		}
 		// Config is outside HOME's mutable platform state; missing/unknown pairing
@@ -71,29 +72,55 @@ func codexRCControl(ctx context.Context, s Settings, sess protocol.Session, oper
 		if !ok || uint64(st.Dev) != d.Target.RootDevice || st.Ino != d.Target.RootInode || int(st.Uid) != os.Geteuid() || root.Mode().Perm()&0o022 != 0 {
 			return errCodexRCRefused
 		}
-		raw, err = boundedHostFile(s.statePath("project-snapshot.json"), projectcatalog.MaxSnapshotBytes, true)
-		if err != nil {
-			return errCodexRCRefused
-		}
-		snapshot, err := projectcatalog.ParseSnapshot(raw)
-		if err != nil || apiv1.CodexRCHash(snapshot) != d.Target.SnapshotSHA256 || snapshot.Project() != d.Target.Project || snapshot.Selected().Name != d.Target.Repository {
-			return errCodexRCRefused
-		}
 
-		raw, err = boundedHostFile(s.statePath(privateProjectBootstrapFile), 256<<10, true)
-		var preparation PrivateProjectReport
-		if err != nil || projectcatalog.Digest(raw) != d.Target.PreparationSHA256 || decodeHostJSON(raw, &preparation) != nil || preparation.Version != 1 || preparation.State != "Ready" || preparation.CatalogRevision != snapshot.CatalogRevision() {
+		parent := filepath.Join(s.StateDir, "project-roots")
+		receiptPath := filepath.Join(parent, d.Target.Project+".json")
+		if noSymlinkComponents(receiptPath) != nil {
 			return errCodexRCRefused
 		}
-		prepared := 0
-		for _, repo := range preparation.Repositories {
+		raw, err = boundedHostFile(receiptPath, int(privateRootReceiptLimit), true)
+		var owned privateRootReceipt
+		if err != nil || projectcatalog.Digest(raw) != d.Target.PreparationSHA256 || decodeHostJSON(raw, &owned) != nil || owned.Version != 1 || owned.Root != filepath.Join(s.Home, "codex", d.Target.Project) || d.Target.Root != filepath.Join(owned.Root, d.Target.Repository) {
+			return errCodexRCRefused
+		}
+		if _, err := os.Lstat(filepath.Join(parent, d.Target.Project+".pending.json")); !errors.Is(err, os.ErrNotExist) {
+			return errCodexRCRefused
+		}
+		// Project roots retain the catalog's default selection. Only selection is
+		// normalized for another declared repository; all accepted bytes still bind.
+		if _, err := projectcatalog.ParseSnapshot(owned.Snapshot); err != nil {
+			return errCodexRCRefused
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(owned.Snapshot, &fields) != nil {
+			return errCodexRCRefused
+		}
+		fields["selected"], _ = json.Marshal(d.Target.Repository)
+		normalized, _ := json.Marshal(fields)
+		snapshot, err := projectcatalog.ParseSnapshot(normalized)
+		if err != nil || apiv1.CodexRCHash(snapshot) != d.Target.SnapshotSHA256 || snapshot.Project() != d.Target.Project {
+			return errCodexRCRefused
+		}
+		var operation PrivateProjectRootReport
+		var preparation PrivateProjectReport
+		if readWorkspaceJSON(filepath.Join(parent, d.Target.Project+".operation.json"), &operation) != nil || operation.State != "Ready" || operation.Project != d.Target.Project || operation.Head != owned.Head || operation.CatalogRevision != snapshot.CatalogRevision() || operation.RulesRevision != snapshot.RulesRevision() || readWorkspaceJSON(s.statePath(privateProjectBootstrapFile), &preparation) != nil || preparation.Version != 1 || preparation.State != "Ready" || preparation.FinishedAt.IsZero() || preparation.CatalogRevision != snapshot.CatalogRevision() {
+			return errCodexRCRefused
+		}
+		prepared, projectReady := 0, 0
+		for _, repo := range owned.Repositories {
 			if repo.Repository == snapshot.Selected() && repo.State == "Ready" {
 				prepared++
 			}
 		}
-		if prepared != 1 {
+		for _, project := range preparation.Projects {
+			if project.Project == d.Target.Project && project.State == "Ready" && project.Head == operation.Head && project.CatalogRevision == operation.CatalogRevision && project.RulesRevision == operation.RulesRevision && project.ObservedAt.Equal(operation.ObservedAt) {
+				projectReady++
+			}
+		}
+		if prepared != 1 || projectReady != 1 {
 			return errCodexRCRefused
 		}
+
 		p, err := deps.process(s, realCodexHostFS())
 		if err != nil || p.State != "Live" || p.PID != d.Target.PID || p.Identity.BootID != d.Target.BootID || p.Identity.StartTicks != d.Target.StartTicks {
 			return errCodexRCRefused

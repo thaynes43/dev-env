@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 func TestCodexRCThreadAndHandoffExistingDaemonFixture(t *testing.T) {
@@ -25,6 +26,15 @@ func TestCodexRCThreadAndHandoffExistingDaemonFixture(t *testing.T) {
 			}
 			defer func() { _ = os.RemoveAll(socketHome) }()
 			s.CodexHome = socketHome
+			history := filepath.Join(socketHome, "existing-history-marker")
+			if err := os.WriteFile(history, []byte("preserved existing history"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			sentinel := filepath.Join(socketHome, "new-daemon-forbidden")
+			s.CodexBin = filepath.Join(socketHome, "codex-forbidden")
+			if err := os.WriteFile(s.CodexBin, []byte("#!/bin/sh\ntouch "+sentinel+"\nexit 1\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
 			dir := filepath.Join(socketHome, "app-server-control")
 			if err := os.Mkdir(dir, 0700); err != nil {
 				t.Fatal(err)
@@ -141,7 +151,19 @@ func TestCodexRCThreadAndHandoffExistingDaemonFixture(t *testing.T) {
 			if starts.Load() != wantStarts || turns.Load() != wantTurns {
 				t.Fatal("duplicate RPC")
 			}
+			if exists(sentinel) || string(mustRead(t, history)) != "preserved existing history" {
+				t.Fatal("daemon launch or history change")
+			}
 		})
 	}
 }
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+func TestCodexRCTurnPinnedSchema(t *testing.T) {
+	for name, digest := range map[string]string{"TurnStartParams": "07771223642e1b61bd9aac0069fc0f98143a1c047724ca02c7ceb13653442738", "TurnStartResponse": "12c5151421bb061297c9790ff795a44aa4b9bdb91fbb68012dcf0a08cf4198b1"} {
+		data, err := os.ReadFile(filepath.Join("testdata", "codex_rc_create", name+".json"))
+		if err != nil || projectcatalog.Digest(data) != digest {
+			t.Fatal("pinned schema changed", name, err)
+		}
+	}
+}

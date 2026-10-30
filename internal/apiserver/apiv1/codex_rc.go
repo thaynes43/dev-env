@@ -74,11 +74,13 @@ func (t CodexRCTarget) Matches(r CodexRCRequest) bool {
 }
 
 type CodexRCDispatch struct {
+	Caller       string         `json:"caller"`
 	Request      CodexRCRequest `json:"request"`
 	Target       CodexRCTarget  `json:"target"`
 	ClientSHA256 string         `json:"clientSHA256"`
 }
 type CodexRCReceipt struct {
+	Caller         string        `json:"caller"`
 	RequestID      string        `json:"requestID"`
 	ClientSHA256   string        `json:"clientSHA256"`
 	DispatchSHA256 string        `json:"dispatchSHA256"`
@@ -118,4 +120,8 @@ func DecodeCodexRC(raw []byte, out any, limit int) error {
 // inference, served model, enrollment or phone visibility.
 func (r CodexRCReceipt) Acknowledged() bool {
 	return r.State == "confirmed" && r.Reason == "thread_and_turn_acknowledged" && codexRCID.MatchString(r.ThreadID) && codexRCID.MatchString(r.TurnID) && !r.StartedAt.IsZero() && !r.FinishedAt.Before(r.StartedAt)
+}
+
+func (d CodexRCDispatch) Valid(now time.Time) bool {
+	return d.Request.Valid(now) && d.Target.Valid(now) && d.Target.Matches(d.Request) && len(d.Caller) > 0 && len(d.Caller) <= 256 && utf8.ValidString(d.Caller) && !strings.ContainsFunc(d.Caller, unicode.IsControl) && codexRCDigest.MatchString(d.ClientSHA256)
 }

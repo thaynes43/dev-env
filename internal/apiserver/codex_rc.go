@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -95,15 +96,15 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	if err := qualify(); err != nil {
 		return 0, nil, err
 	}
-	dispatch := apiv1.CodexRCDispatch{Request: req, Target: target, ClientSHA256: digest}
-	receipt := apiv1.CodexRCReceipt{RequestID: req.RequestID, ClientSHA256: digest, DispatchSHA256: apiv1.CodexRCHash(dispatch), Target: target, Model: req.Model, Effort: req.Effort, State: "reserved", Reason: "create_unconfirmed", StartedAt: s.now().UTC()}
+	dispatch := apiv1.CodexRCDispatch{Caller: c.identity.Username, Request: req, Target: target, ClientSHA256: digest}
+	receipt := apiv1.CodexRCReceipt{Caller: c.identity.Username, RequestID: req.RequestID, ClientSHA256: digest, DispatchSHA256: apiv1.CodexRCHash(dispatch), Target: target, Model: req.Model, Effort: req.Effort, State: "reserved", Reason: "create_unconfirmed", StartedAt: s.now().UTC()}
 	exec := func(operation string) (apiv1.CodexRCReceipt, error) {
 		var result apiv1.CodexRCReceipt
 		input, _ := json.Marshal(dispatch)
 		stdout := &limitedBuffer{max: apiv1.CodexRCMaxPacket + 1}
 		// No shell, dynamic method, new listener, process launch or caller path.
 		err := s.Exec.Run(ctx, key.Namespace, key.Name, controller.ContainerName, []string{"agentd", "ctl", "codex-thread", operation}, bytes.NewReader(input), stdout, io.Discard)
-		if err != nil || apiv1.DecodeCodexRC([]byte(stdout.String()), &result, apiv1.CodexRCMaxPacket) != nil || result.ClientSHA256 != digest || result.DispatchSHA256 != receipt.DispatchSHA256 || apiv1.CodexRCHash(result.Target) != apiv1.CodexRCHash(target) || result.RequestID != req.RequestID || result.Model != req.Model || result.Effort != req.Effort {
+		if err != nil || apiv1.DecodeCodexRC([]byte(stdout.String()), &result, apiv1.CodexRCMaxPacket) != nil || result.Caller != c.identity.Username || result.ClientSHA256 != digest || result.DispatchSHA256 != receipt.DispatchSHA256 || apiv1.CodexRCHash(result.Target) != apiv1.CodexRCHash(target) || result.RequestID != req.RequestID || result.Model != req.Model || result.Effort != req.Effort {
 			return result, newError(503, apiv1.CodeUnavailable, "codex RC operation unconfirmed")
 		}
 		return result, nil
@@ -122,6 +123,9 @@ func (s *Server) codexRCThread(ctx context.Context, w http.ResponseWriter, r *ht
 	sess.Annotations[apiv1.CodexRCIntentAnnotation] = string(frozen)
 	// ResourceVersion CAS across replicas. No retry on conflict or unknown write.
 	if err := s.Client.Update(ctx, &sess); err != nil {
+		if apierrors.IsConflict(err) {
+			return 0, nil, newError(409, apiv1.CodeConflict, "codex RC reservation conflict; do not replay")
+		}
 		return 0, nil, fromKubeError(err, "codex RC reserve")
 	}
 	s.Log.Info("codex RC reserved", "caller", c.identity.Username, "sessionUID", sess.UID, "digest", digest)

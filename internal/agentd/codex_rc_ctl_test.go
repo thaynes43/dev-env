@@ -20,8 +20,8 @@ func rcControlFixture(t *testing.T) (Settings, protocol.Session, apiv1.CodexRCDi
 	t.Helper()
 	base := t.TempDir()
 	s := Settings{Home: filepath.Join(base, "home"), StateDir: filepath.Join(base, "home", ".agentd"), ConfigDir: filepath.Join(base, "config"), PodUID: "pod"}
-	root := filepath.Join(s.Home, "work", "repo")
-	for _, dir := range []string{s.StateDir, root, filepath.Join(s.ConfigDir, "codex")} {
+	root := filepath.Join(s.Home, "codex", "sample", "repo")
+	for _, dir := range []string{s.StateDir, filepath.Join(s.StateDir, "project-roots"), root, filepath.Join(s.ConfigDir, "codex")} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -35,23 +35,33 @@ func rcControlFixture(t *testing.T) (Settings, protocol.Session, apiv1.CodexRCDi
 		t.Fatal(err)
 	}
 	data, _ := json.Marshal(snapshot)
-	if err := os.WriteFile(s.statePath("project-snapshot.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
 	info, _ := os.Stat(root)
 	st := info.Sys().(*syscall.Stat_t)
 	now := time.Now().UTC()
 	target := apiv1.CodexRCTarget{SessionName: "host", SessionUID: "session", PodUID: "pod", Project: "sample", Repository: "repo", SnapshotSHA256: apiv1.CodexRCHash(snapshot), Root: root, RootDevice: uint64(st.Dev), RootInode: st.Ino, PreparationSHA256: strings.Repeat("a", 64), PID: 222, BootID: "boot", StartTicks: 55, InstallationID: "installation", EnvironmentID: "environment", PairingSource: "supported-client", PairingSHA256: strings.Repeat("b", 64), VerifiedAt: now.Add(-time.Minute), ExpiresAt: now.Add(5 * time.Minute)}
-	preparation, _ := json.Marshal(PrivateProjectReport{Version: 1, State: "Ready", CatalogRevision: snapshot.CatalogRevision(), Repositories: []PrivateProjectSource{{Repository: snapshot.Selected(), State: "Ready"}}})
+
+	head := strings.Repeat("a", 40)
+	operation := PrivateProjectRootReport{Project: "sample", State: "Ready", CatalogRevision: snapshot.CatalogRevision(), RulesRevision: snapshot.RulesRevision(), Head: head, ObservedAt: now}
+	owned := privateRootReceipt{Version: 1, Root: filepath.Dir(root), Head: head, Snapshot: data, Repositories: []PrivateProjectSource{{Repository: snapshot.Selected(), State: "Ready"}}}
+	receipt, _ := json.Marshal(owned)
+	if err := os.WriteFile(filepath.Join(s.StateDir, "project-roots", "sample.json"), receipt, 0600); err != nil {
+		t.Fatal(err)
+	}
+	operationBytes, _ := json.Marshal(operation)
+	if err := os.WriteFile(filepath.Join(s.StateDir, "project-roots", "sample.operation.json"), operationBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	preparation, _ := json.Marshal(PrivateProjectReport{Version: 1, State: "Ready", FinishedAt: now, CatalogRevision: snapshot.CatalogRevision(), Projects: []PrivateProjectRootReport{operation}})
 	if err := os.WriteFile(s.statePath(privateProjectBootstrapFile), preparation, 0600); err != nil {
 		t.Fatal(err)
 	}
-	target.PreparationSHA256 = projectcatalog.Digest(preparation)
+	target.PreparationSHA256 = projectcatalog.Digest(receipt)
+
 	data, _ = json.Marshal(target)
 	if err := os.WriteFile(filepath.Join(s.ConfigDir, CodexRCTargetFile), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	d := apiv1.CodexRCDispatch{Target: target, ClientSHA256: strings.Repeat("c", 64), Request: apiv1.CodexRCRequest{RequestID: "request", SessionUID: "session", PodUID: "pod", Project: "sample", Repository: "repo", Model: "gpt-6.1-sol", Effort: "medium", Handoff: "initial bounded handoff", Deadline: now.Add(25 * time.Second)}}
+	d := apiv1.CodexRCDispatch{Caller: "system:serviceaccount:test:human", Target: target, ClientSHA256: strings.Repeat("c", 64), Request: apiv1.CodexRCRequest{RequestID: "request", SessionUID: "session", PodUID: "pod", Project: "sample", Repository: "repo", Model: "gpt-6.1-sol", Effort: "medium", Handoff: "initial bounded handoff", Deadline: now.Add(25 * time.Second)}}
 	mutations := new(int)
 	deps := realCodexRCDeps()
 	deps.now = func() time.Time { return now }
@@ -98,7 +108,7 @@ func TestCodexRCControlQualificationAndOneUse(t *testing.T) {
 	}
 }
 func TestCodexRCControlRefusesMismatchesWithoutMutation(t *testing.T) {
-	for _, mode := range []string{"missing-config", "session", "pod", "mode", "repo", "root", "inode", "snapshot", "preparation", "process", "boot", "ticks", "pairing", "expires", "symlink", "state-mode"} {
+	for _, mode := range []string{"missing-config", "session", "pod", "mode", "repo", "root", "inode", "snapshot", "preparation", "operation", "pending", "anchor", "process", "boot", "ticks", "pairing", "expires", "symlink", "state-mode"} {
 		t.Run(mode, func(t *testing.T) {
 			s, sess, d, deps, count := rcControlFixture(t)
 			switch mode {
@@ -117,9 +127,15 @@ func TestCodexRCControlRefusesMismatchesWithoutMutation(t *testing.T) {
 			case "inode":
 				d.Target.RootInode++
 			case "snapshot":
-				_ = os.WriteFile(s.statePath("project-snapshot.json"), []byte(`{}`), 0600)
+				_ = os.WriteFile(filepath.Join(s.StateDir, "project-roots", "sample.json"), []byte(`{}`), 0600)
 			case "preparation":
 				_ = os.WriteFile(s.statePath(privateProjectBootstrapFile), []byte(`{}`), 0600)
+			case "operation":
+				_ = os.WriteFile(filepath.Join(s.StateDir, "project-roots", "sample.operation.json"), []byte(`{}`), 0600)
+			case "pending":
+				_ = os.WriteFile(filepath.Join(s.StateDir, "project-roots", "sample.pending.json"), []byte(`{}`), 0600)
+			case "anchor":
+				d.Target.Root = filepath.Dir(d.Target.Root)
 			case "process":
 				deps.process = func(Settings, codexHostFS) (codexHostProcess, error) { return codexHostProcess{State: "Absent"}, nil }
 			case "boot":
@@ -179,6 +195,49 @@ func TestCodexRCControlLostAckAndDurabilityFailureNeverReplay(t *testing.T) {
 			rec, _ = codexRCControl(context.Background(), s, sess, "start", d, deps)
 			if *count != before || rec.State == "confirmed" {
 				t.Fatal("replayed", rec, *count)
+			}
+		})
+	}
+}
+
+func TestCodexRCRemotePreparationProducerNeedsNoTaskSnapshot(t *testing.T) {
+	for _, selection := range []struct{ declaration, repo string }{{projectTestCatalog, "demo"}, {twoRepositoryRootDeclaration(), "extra"}} {
+		t.Run(selection.repo, func(t *testing.T) {
+			_, prepared, runner, source := privateRootsFixture(t, selection.declaration)
+			owned := requirePrivateRootReady(t, prepared, runner, source)
+			if exists(prepared.statePath("project-snapshot.json")) {
+				t.Fatal("remote producer unexpectedly wrote task snapshot")
+			}
+			configured, _, d, deps, _ := rcControlFixture(t)
+			prepared.ConfigDir = configured.ConfigDir
+			prepared.PodUID = d.Target.PodUID
+			catalog, err := projectcatalog.Parse([]byte(selection.declaration))
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := catalog.Snapshot("sample", selection.repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Request.Repository = snapshot.Selected().Name
+			d.Target.Repository = d.Request.Repository
+			d.Target.SnapshotSHA256 = apiv1.CodexRCHash(snapshot)
+			d.Target.Root = filepath.Join(owned.Root, d.Target.Repository)
+			info, err := os.Stat(d.Target.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := info.Sys().(*syscall.Stat_t)
+			d.Target.RootDevice, d.Target.RootInode = uint64(st.Dev), st.Ino
+			d.Target.PreparationSHA256 = projectcatalog.Digest(mustRead(t, privateRootReceiptPath(prepared)))
+			data, _ := json.Marshal(d.Target)
+			if err := os.WriteFile(filepath.Join(prepared.ConfigDir, CodexRCTargetFile), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			session := protocol.Session{Name: d.Target.SessionName, SessionUID: d.Target.SessionUID, Agent: "codex", Mode: "remote"}
+			rec, err := codexRCControl(context.Background(), prepared, session, "preflight", d, deps)
+			if err != nil || rec.State != "qualified" {
+				t.Fatal("actual remote preparation refused", rec, err)
 			}
 		})
 	}
