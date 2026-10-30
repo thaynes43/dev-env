@@ -388,6 +388,22 @@ func TestMapProductAllowanceMixedMeasureStates(t *testing.T) {
 		{"rate-limit", func(i *pa.ReadItem) { i.Observation.Measures[1].Category = pa.CategoryRateLimit }, 2, false},
 		{"current-conflict", func(i *pa.ReadItem) { i.CurrentMeasures[1].State = pa.CurrentConflict }, 0, true},
 		{"disagreement", func(i *pa.ReadItem) { i.CurrentMeasures[1].Value.Decimal = allowanceString("4") }, 0, true},
+		{"F1-ignored-unit-conflict", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.CurrentMeasures[1].State = pa.CurrentConflict
+		}, 0, true},
+		{"F1-ignored-category-conflict", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Category = pa.CategorySpend
+			i.CurrentMeasures[1].State = pa.CurrentConflict
+		}, 0, true},
+		{"F1-unmatched-current-conflict", func(i *pa.ReadItem) {
+			i.CurrentMeasures[1].MeasureID = "unmatched"
+			i.CurrentMeasures[1].State = pa.CurrentConflict
+		}, 0, true},
+		{"F1-money-decimal-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.CurrentMeasures[1].Value.Decimal = allowanceString("4")
+		}, 0, true},
 		{"duplicate-measure", func(i *pa.ReadItem) { i.Observation.Measures[1].ID = "weekly" }, 0, true},
 		{"duplicate-current", func(i *pa.ReadItem) { i.CurrentMeasures[1].MeasureID = "weekly" }, 0, true},
 		{"missing-current", func(i *pa.ReadItem) { i.CurrentMeasures = i.CurrentMeasures[:1] }, 2, false},
@@ -422,7 +438,7 @@ func TestMapProductAllowanceMixedMeasureStates(t *testing.T) {
 				item.Freshness.State = fresh
 				got := MapProductAllowance(doc)[0]
 				if tc.refuse {
-					if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 || !strings.Contains(got.Reason, "Conflicting") {
+					if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 || got.Reason != "Conflicting allowance values" {
 						t.Fatalf("conflict did not refuse provider: %+v", got)
 					}
 					continue

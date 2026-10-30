@@ -165,6 +165,12 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	default:
 		return nil, "Source is not a provider measurement"
 	}
+	// A current conflict refuses the item even without a matching measure.
+	for _, current := range item.CurrentMeasures {
+		if current.State == providerallowance.CurrentConflict {
+			return nil, "Conflicting allowance values"
+		}
+	}
 	if len(o.Measures) == 0 {
 		return nil, "No allowance windows reported"
 	}
@@ -177,16 +183,13 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	}
 	var windows []portal.ProductAllowanceWindow
 	for _, m := range o.Measures {
-		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
-			continue
-		}
 		current, ok := currents[m.ID]
-		if current.State == providerallowance.CurrentConflict {
-			return nil, "Conflicting allowance values"
-		}
 		validDecimals := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
 		if validDecimals && *m.Value.Decimal != *current.Value.Decimal {
 			return nil, "Conflicting allowance values"
+		}
+		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
+			continue
 		}
 		suffix := ""
 		switch m.Direction {
