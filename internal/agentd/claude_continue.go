@@ -233,17 +233,20 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 	if !turn.Revoked || stale {
 		// A replacement may reach the pod before the client records its old-token
 		// failure. Keep that generation eligible until a new error arrives. Its
-		// evaluation time stays fixed so repeated healthy polls cannot hide the
-		// delayed error. The first observed generation still establishes only a
-		// baseline; it does not authorize retrying a later failure on its own.
+		// prior evaluation cutoff stays fixed: the error may have happened before
+		// this observation but not yet reached the transcript. The first observed
+		// generation establishes only a baseline; it does not authorize retrying
+		// a later failure on its own.
 		if havePrev && prev.Generation == applied.Generation {
 			return
 		}
 		outcome := "skipped"
+		cutoff := now
 		if havePrev {
 			outcome = "waiting"
+			cutoff = prev.EvaluatedAt
 		}
-		_ = writeJSONFile(receiptPath, continueReceipt{applied.Generation, outcome, now})
+		_ = writeJSONFile(receiptPath, continueReceipt{applied.Generation, outcome, cutoff})
 		return
 	}
 	if writeJSONFile(receiptPath, continueReceipt{applied.Generation, "sending", now}) != nil {

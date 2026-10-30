@@ -450,6 +450,30 @@ func TestClaudeContinueHandlesAuthErrorAfterHealthyMergeEvaluation(t *testing.T)
 	rg.assertNoToken()
 }
 
+// A failure's timestamp may precede observation of the replacement generation
+// even though its transcript entry becomes visible only afterward.
+func TestClaudeContinueHandlesDelayedPersistedAuthError(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.generation(1) // baseline evaluation at one hour
+	rg.d.Now = func() time.Time { return loginNow.Add(3 * time.Hour) }
+	rg.generation(2) // the old healthy tail is still all that is visible
+	rg.restart()
+	rg.d.Now = func() time.Time { return loginNow.Add(4 * time.Hour) }
+	// The error happened after the prior generation's evaluation, but its
+	// persisted transcript entry arrives after the new generation was observed.
+	rg.appendTurn(userTurn(loginNow.Add(2*time.Hour)), revokedTurn(loginNow.Add(2*time.Hour+time.Second)))
+	rg.poll()
+	if rg.continues() != 1 {
+		t.Fatalf("continues after a delayed persisted 401: %d, want 1", rg.continues())
+	}
+	rg.poll()
+	if rg.continues() != 1 {
+		t.Fatal("repeated recovery after a confirmed send")
+	}
+	rg.assertNoToken()
+}
+
 // A failure before anything reaches the pane is retried; one after the paste
 // started is not.
 func TestClaudeContinueRetriesOnlyFailuresBeforeThePaste(t *testing.T) {
