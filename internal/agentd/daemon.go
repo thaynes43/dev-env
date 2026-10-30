@@ -293,7 +293,7 @@ func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
 // twice and resume is the way back in (D-58). It returns the boot step and,
 // when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
-	if d.Session.Mode == protocol.ModeTask && d.Session.Workspace == nil {
+	if d.Session.Mode == protocol.ModeTask && d.Session.Workspace == nil && repo.State != StepFail {
 		_, err := os.Lstat(d.S.statePath(launchFile))
 		if terminalPrivateTask(d.S, d.Session) || !errors.Is(err, os.ErrNotExist) {
 			return newStep("agent", []string{"private task launch/result retained; no automatic provider resume"}, nil), ""

@@ -106,10 +106,10 @@ func homeExpiryHeld(s *v1alpha1.AgentSession) bool {
 // record flag, an intact retention record, a Started admission, a bound HOME,
 // a recorded executor, no terminal record or missed marker yet), and it is
 // Reaping and private (no workspace, no canary binding). A Suspended Session is
-// never stopped, before or after its archive deadline (ADR-006; plan 11
-// follow-up F3 is not planned).
+// never stopped for its archive deadline (ADR-006). DESIGN-025 section 24's
+// separately gated original terminal task is the compute-only exception.
 func (r *Reconciler) privateStopApplies(s *v1alpha1.AgentSession) bool {
-	if !r.PrivateExecutorStop || !r.terminalRecordApplies(s) || s.DeletionTimestamp.IsZero() || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil {
+	if !r.PrivateExecutorStop || !r.terminalRecordApplies(s) || s.DeletionTimestamp.IsZero() && !r.terminalTaskStopDue(s) || s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil {
 		return false
 	}
 	h := s.Status.PrivateHistory
@@ -249,6 +249,17 @@ func (r *Reconciler) stopIntentConfirmed(ctx context.Context, s *v1alpha1.AgentS
 	}
 	if _, ok := privateStopNeeded(fresh, &pod, r.clock()); !ok {
 		return confirmedStopIntent{}, errStopNotNeeded
+	}
+	if fresh.DeletionTimestamp.IsZero() {
+		// A terminal task is the narrow compute-only exception to reap-only
+		// stop. Recheck hosts, HOME, children and proof before its CAS intent.
+		v, err := r.readExpiryView(ctx, fresh)
+		if err != nil || v.s.ResourceVersion != fresh.ResourceVersion {
+			return confirmedStopIntent{}, errStopChanged
+		}
+		if _, err := r.terminalTaskViewAllowed(ctx, v); err != nil {
+			return confirmedStopIntent{}, errStopNotNeeded
+		}
 	}
 	h := fresh.Status.PrivateHistory
 	if h.StopRequest == nil {

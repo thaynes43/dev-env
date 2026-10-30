@@ -96,6 +96,16 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	}
 	sess.Status.Agent = agentStatus(st, metav1.NewTime(s.now()))
+	if task := sess.Status.Agent.Task; task != nil && st.Agent.Task.ExitSource != nil {
+		source := st.Agent.Task.ExitSource
+		if source.Valid() && c.pod != nil && source.SessionUID == string(sess.UID) && source.PodUID == string(c.pod.UID) &&
+			source.Provider == string(sess.Spec.Agent) && source.RequestedModel == sess.Spec.Model &&
+			sess.Spec.Mode == v1alpha1.ModeTask && st.Agent.State == protocol.AgentExited && st.Agent.Attached == 0 &&
+			!st.Agent.Task.FinishedAt.IsZero() && !st.Agent.Task.FinishedAt.After(s.now()) {
+			bound := v1alpha1.UsageSourceStatus(*source)
+			task.ExitSource = &bound
+		}
+	}
 	sess.Status.RemoteControl = remoteControlStatus(st.RemoteControl)
 	// The conversation's usage is its own field. An absent or unusable one leaves
 	// the stored value; usageObservation is never touched here.

@@ -260,6 +260,7 @@ var guardedCalls = []struct {
 	{"releaseSession", "releaseIfEmpty", ""},
 	{"releaseVolume", "deleteVolume", "volumeRemovalAllowed"},
 	{"deletePod", "removePod", "podRemovalAllowed"},
+	{"deletePod", "reconcileTerminalTaskReclaim", "terminalTaskPodRemovalAllowed"},
 	{"deletePod", "removeSharedPod", "podRemovalAllowed"},
 	// Idle drain (DESIGN-001 5.2) calls deletePod only after podRemovalAllowed
 	// has seen the prepare-restart proof. It does not lift a volume finalizer.
