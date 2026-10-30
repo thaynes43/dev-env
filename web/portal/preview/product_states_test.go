@@ -13,7 +13,7 @@ func TestProductStatePreviews(t *testing.T) {
 	if err := writeProductStates(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-read-not-started", "sessions-empty", "sessions-stale", "sessions-current"} {
+	for _, name := range []string{"usage", "usage-empty", "usage-timed-out", "sessions-not-connected", "sessions-credential-unavailable", "sessions-unreachable", "sessions-timed-out", "sessions-refused", "sessions-contract-refused", "sessions-clock-ahead", "sessions-cancelled", "sessions-read-not-started", "sessions-empty", "sessions-stale", "sessions-current", "tasks-empty", "tasks-unavailable", "tasks-unknown", "tasks-not-connected"} {
 		body, err := os.ReadFile(filepath.Join(dir, name+".html"))
 		if err != nil {
 			t.Fatal(err)
@@ -23,13 +23,13 @@ func TestProductStatePreviews(t *testing.T) {
 			t.Errorf("%s lacks fixture label or contains script", name)
 		}
 		footer := regexp.MustCompile(`<footer class="statusbar">(.*?)</footer>`).FindString(text)
-		success := name == "usage" || name == "usage-empty" || name == "sessions-empty" || name == "sessions-stale" || name == "sessions-current"
+		success := name == "usage" || name == "usage-empty" || name == "sessions-empty" || name == "sessions-stale" || name == "sessions-current" || name == "tasks-empty"
 		const updated = `Updated <time datetime="2026-10-29T13:59:00Z">29 Oct 2026, 13:59 UTC</time>`
 		if success {
 			if !strings.Contains(footer, updated) {
 				t.Errorf("%s lacks synthetic successful read completion: %s", name, footer)
 			}
-			if strings.HasPrefix(name, "sessions-") && !strings.Contains(text, `<p class="list-foot">`+updated+`</p>`) {
+			if (strings.HasPrefix(name, "sessions-") || strings.HasPrefix(name, "tasks-")) && !strings.Contains(text, `<p class="list-foot">`+updated+`</p>`) {
 				t.Errorf("%s list foot differs from successful read completion", name)
 			}
 		} else if strings.Contains(footer, "Updated") || strings.Contains(text, `<p class="list-foot">`) {
