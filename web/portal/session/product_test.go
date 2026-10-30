@@ -908,7 +908,7 @@ func TestSessionReadFailureReasons(t *testing.T) {
 					t.Errorf("missing failure UI %s", want)
 				}
 			}
-			words := map[string]string{"not_connected": "not connected", "credential_unavailable": "credential is unavailable", "operator_unreachable": "could not be reached", "operator_refused": "HTTP " + strconv.Itoa(tc.status), "response_contract": "refused by the Sessions contract", "clock_ahead": "ahead of the portal clock", "cancelled": "was cancelled"}
+			words := map[string]string{"not_connected": "not connected", "credential_unavailable": "credential is unavailable", "operator_unreachable": "could not be reached", "operator_refused": "HTTP " + strconv.Itoa(tc.status), "response_contract": "returned session data could not be read", "clock_ahead": "ahead of the portal clock", "cancelled": "was cancelled"}
 			want := words[tc.reason]
 			if tc.name == "timeout" {
 				want = "timed out"

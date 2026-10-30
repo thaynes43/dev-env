@@ -5,8 +5,8 @@
 <meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
 <title>Launch result · dev-env</title><style>/*PORTAL_STYLE*/</style></head>
 <body><a class="skip" href="#main">Skip to content</a>
-<header class="topbar"><a class="brand" href="{{.SessionsHref}}"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>
-<nav class="top-nav" aria-label="Product sections"><a href="{{.SessionsHref}}" aria-current="page">Agents</a><a href="{{.TasksHref}}">Tasks</a></nav>
+<header class="topbar">{{template "product-icons"}}<a class="brand" href="{{.SessionsHref}}"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>
+{{template "product-nav" "sessions"}}
 {{if .Preview}}<span class="demo-label">Fixture preview · sample data</span>{{end}}</header>
 <main class="receipt" id="main" tabindex="-1"><div class="receipt-card">
 <p class="crumb"><a href="{{.SessionsHref}}">Agents</a><span>/</span><span>Launch result</span></p>
@@ -16,5 +16,5 @@
 {{if .Fields}}<dl class="kv">{{range .Fields}}<dt>{{.Label}}</dt><dd{{if .Mono}} class="mono"{{end}}>{{.Value}}</dd>{{end}}</dl>{{end}}
 <p class="receipt-actions"><a class="btn" href="{{.Back}}">Back to the agents</a></p>
 </div></main>
-<nav class="mobile-nav" aria-label="Sections"><a href="{{.SessionsHref}}" aria-current="page"><span>Agents</span></a><a href="{{.TasksHref}}"><span>Tasks</span></a></nav>
+{{template "product-mobile-nav" "sessions"}}
 </body></html>

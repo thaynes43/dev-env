@@ -74,7 +74,7 @@ func TestPagesWorkspaceRendersAggregateDetailAndControls(t *testing.T) {
 		"caller coverage stays visible",
 		`<fieldset disabled>`,
 		portal.PagesControlNotice,
-		"No preference document is loaded. This is not a loaded empty store.",
+		"Saved preferences are unavailable. Their values are unknown.",
 		`class="pages-detail is-default"`,
 	} {
 		if !strings.Contains(text, want) {

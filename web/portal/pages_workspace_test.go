@@ -85,7 +85,7 @@ func TestPagesWorkspaceFocusAndWidths(t *testing.T) {
 		PagesDesiredUnset,
 		PagesDesiredOn,
 		PagesDesiredOff,
-		"No preference document is loaded. This is not a loaded empty store.",
+		"Saved preferences are unavailable. Their values are unknown.",
 		`href="#pages-group-1"`,
 		`href="#pages-configuration"`,
 	} {

@@ -5,8 +5,8 @@
 <meta http-equiv="Content-Security-Policy" content="{{.Policy}}">
 <title>Message receipt · dev-env</title><style>/*PORTAL_STYLE*/</style></head>
 <body><a class="skip" href="#main">Skip to content</a>
-<header class="topbar"><a class="brand" href="{{.SessionsHref}}"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>
-<nav class="top-nav" aria-label="Product sections"><a href="{{.SessionsHref}}" aria-current="page">Agents</a><a href="{{.TasksHref}}">Tasks</a></nav>
+<header class="topbar">{{template "product-icons"}}<a class="brand" href="{{.SessionsHref}}"><span class="brand-mark" aria-hidden="true">/&gt;</span>dev-env<sup>V2</sup></a>
+{{template "product-nav" "sessions"}}
 {{if .Preview}}<span class="demo-label">Fixture preview · sample data</span>{{end}}</header>
 <main class="receipt" id="main" tabindex="-1"><div class="receipt-card">
 <p class="crumb"><a href="{{.SessionsHref}}">Agents</a><span>/</span><span>Message receipt</span></p>
@@ -18,5 +18,5 @@
 <p class="receipt-actions">{{if .Self}}<a class="btn" href="{{.Self}}">Check again</a>{{end}}<a class="btn" href="{{.Back}}">Back to the session</a></p>
 <p class="note">Message history and the agent's reply are not shown here. This receipt covers this one send.</p>
 </div></main>
-<nav class="mobile-nav" aria-label="Sections"><a href="{{.SessionsHref}}" aria-current="page"><span>Agents</span></a><a href="{{.TasksHref}}"><span>Tasks</span></a></nav>
+{{template "product-mobile-nav" "sessions"}}
 </body></html>

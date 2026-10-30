@@ -24,7 +24,7 @@ func TestPagesFixturesAreSyntheticAndDistinguishStates(t *testing.T) {
 		{"pages-unavailable.html", []string{"Fixture preview · synthetic data", "Alertmanager is unavailable"}},
 		{"pages-disabled.html", []string{"Fixture preview · synthetic data", "Pages not enabled", "Unavailable"}},
 		{"pages-detail.html", []string{"Fixture preview · synthetic data", `id="pages-group-2" class="pages-detail is-default"`, "synthetic-detail-other", "Warning detail summary", "28 Oct 2026, 15:00 UTC", "https://example.test/graph?g0.expr=up", "https://example.test/runbook", "Generator", "Runbook"}},
-		{"pages-configuration.html", []string{"Fixture preview · synthetic data", "Not connected: saving and live effect unavailable", "No preference document is loaded. This is not a loaded empty store.", "Unknown / Not connected", "DiskFull", "InodeFull", "Unset", "Desired", "<fieldset disabled"}},
+		{"pages-configuration.html", []string{"Fixture preview · synthetic data", "Not connected: saving and live effect unavailable", "Saved preferences are unavailable. Their values are unknown.", "Unknown / Not connected", "DiskFull", "InodeFull", "Unset", "Desired", "<fieldset disabled"}},
 	}
 	for _, tc := range tests {
 		body, err := os.ReadFile(filepath.Join(dir, tc.name))

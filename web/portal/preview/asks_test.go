@@ -15,7 +15,7 @@ func TestAsksPreviewsAreSyntheticAndAnswersDisabled(t *testing.T) {
 	if err := writeAsks(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct{ name, want string }{{"asks.html", "Approval scope"}, {"asks-empty.html", "No open asks."}, {"asks-disconnected.html", "Asks API yet"}, {"asks-unavailable.html", "The operator did not answer in time."}, {"asks-partial.html", "partial read"}, {"asks-history-page.html", "Older asks"}, {"asks-selected.html", "Selected ask"}, {"asks-validation.html", "Write an answer"}, {"asks-withdrawn.html", "Withdrawn"}, {"asks-denied.html", "<strong>Denied</strong>"}, {"asks-answered-info.html", "Use the small fixture."}, {"asks-expired-open.html", "Expired"}, {"asks-approval-expired.html", `Approval expired <time datetime="2026-10-29T19:04:00Z">29 Oct 2026, 19:04 UTC</time> (computed by the portal)`}} {
+	for _, test := range []struct{ name, want string }{{"asks.html", "Approval scope"}, {"asks-empty.html", "No open asks."}, {"asks-disconnected.html", "until Asks is turned on"}, {"asks-unavailable.html", "The operator did not answer in time."}, {"asks-partial.html", "partial read"}, {"asks-history-page.html", "Older asks"}, {"asks-selected.html", "Selected ask"}, {"asks-validation.html", "Write an answer"}, {"asks-withdrawn.html", "Withdrawn"}, {"asks-denied.html", "<strong>Denied</strong>"}, {"asks-answered-info.html", "Use the small fixture."}, {"asks-expired-open.html", "Expired"}, {"asks-approval-expired.html", `Approval expired <time datetime="2026-10-29T19:04:00Z">29 Oct 2026, 19:04 UTC</time> (computed by the portal)`}} {
 		raw, err := os.ReadFile(filepath.Join(dir, test.name))
 		if err != nil {
 			t.Fatal(err)
