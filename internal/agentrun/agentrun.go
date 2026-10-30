@@ -287,11 +287,13 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 // commands are the words agent-run takes first, built or not yet.
 var commands = []string{"run", "rc", "list", "inbox", "directory", "canary", "show", "usage", "usage-export", "log", "msg", "reap", "suspend", "resume", "rescue", "history", "grant", "budget", "mcp", "pages-mcp", "breakglass", "declare-activity", "maintenance", "pages", "remind", "fleet", "version", "help", "attach", "detach", "login", "pair", "auth", "keeper-login", "prune", "sweep", "codex-remote"}
 
-// nearestCommand is the command within two edits of word, or "".
+// nearestCommand is the command within two edits of word, or "". The
+// distance must also be shorter than the command, so a short repository name
+// is not taken for a typo of a two-letter command ("a" is not "rc").
 func nearestCommand(word string) string {
 	best, bestD := "", 3
 	for _, c := range commands {
-		if d := editDistance(word, c); d < bestD {
+		if d := editDistance(word, c); d < bestD && d < len(c) {
 			best, bestD = c, d
 		}
 	}

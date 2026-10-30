@@ -79,6 +79,10 @@ func TestNearestCommand(t *testing.T) {
 		"haynes-ops": "",
 		"dev-env":    "",
 		"hass":       "",
+		"a":          "",
+		"ab":         "",
+		"r":          "rc",
+		"rcc":        "rc",
 	} {
 		if got := nearestCommand(word); got != want {
 			t.Errorf("%q: %q, want %q", word, got, want)
