@@ -20,7 +20,8 @@ import (
 // keeper's access token is revoked or lapses before agentd merges the next
 // generation, the TUI's last turn ends in an authentication error and the CLI
 // sits idle. Once a NEW generation has been merged, agentd sends that session
-// exactly one `continue` through Deliver, so the work resumes on the new token.
+// at most one `continue` through Deliver to retry using the merged credentials.
+// Delivery does not prove the retry authenticated successfully.
 //
 // Signal: the last conversational entry of the session's own transcript
 // (projects/*/<conversation id>.jsonl under the Claude config dir). agentd
@@ -30,11 +31,15 @@ import (
 // entry flagged isApiErrorMessage, or text starting "API Error", naming a
 // revoked or expired OAuth token) and is the one thing to confirm there.
 //
-// Never twice: claude-continue.json on the volume records the generation last
-// evaluated. It is written before the send, so a crash or restart after the
-// send does not repeat it; only "agent not running yet" (nothing sent) leaves
-// no new receipt, and a failure before the paste, are retried. A last turn that
-// is a user turn is not decided either: the request may still be on the old token.
+// Never twice: claude-continue.json records the generation, outcome and evaluation
+// cutoff. A first healthy evaluation establishes a skipped baseline. A newer
+// generation observed without an eligible error stays waiting with the prior
+// cutoff, across polls and restarts, so a delayed transcript entry is not lost.
+// Waiting has no time limit; the transcript does not identify which token failed,
+// so a later error on the replacement token can also consume its one recovery.
+// Sending is persisted before Deliver; sending and sent are terminal for that
+// generation, including an uncertain send. Only a confirmed failure before the
+// paste is retried. A last user turn or an agent not yet running decides nothing.
 
 const (
 	continueReceiptFile = "claude-continue.json"
