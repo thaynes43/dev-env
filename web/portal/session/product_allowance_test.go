@@ -604,20 +604,30 @@ func TestMapProductAllowancePercentDecimalGrammar(t *testing.T) {
 		{".5", "Unknown"}, {"1.", "Unknown"}, {"+1", "Unknown"}, {" 1", "Unknown"}, {"1 ", "Unknown"},
 		{"1e2", "Unknown"}, {"NaN", "Unknown"}, {"1\n", "Unknown"}, {"１", "Unknown"},
 	} {
-		t.Run(tc.decimal, func(t *testing.T) {
-			doc := allowanceRead()
-			// Keep one known window so an invalid percent remains visible as Unknown.
-			i := &doc.Items[0]
-			m, c := i.Observation.Measures[0], i.CurrentMeasures[0]
-			m.ID, c.MeasureID = "secondary", "secondary"
-			m.Value.Decimal, c.Value.Decimal = allowanceString(tc.decimal), allowanceString(tc.decimal)
-			i.Observation.Measures = append(i.Observation.Measures, m)
-			i.CurrentMeasures = append(i.CurrentMeasures, c)
-			got := MapProductAllowance(doc)[0]
-			if got.Value != portal.AllowanceMeasured || len(got.Windows) != 2 || got.Windows[1].Percent != tc.want {
-				t.Fatalf("decimal %q: %+v", tc.decimal, got)
+		for _, operand := range []string{"both", "measure", "current"} {
+			if tc.want != "Unknown" && operand != "both" {
+				continue
 			}
-		})
+			t.Run(tc.decimal+"/"+operand, func(t *testing.T) {
+				doc := allowanceRead()
+				// Keep one known window so an invalid percent remains visible as Unknown.
+				i := &doc.Items[0]
+				m, c := i.Observation.Measures[0], i.CurrentMeasures[0]
+				m.ID, c.MeasureID = "secondary", "secondary"
+				if operand != "current" {
+					m.Value.Decimal = allowanceString(tc.decimal)
+				}
+				if operand != "measure" {
+					c.Value.Decimal = allowanceString(tc.decimal)
+				}
+				i.Observation.Measures = append(i.Observation.Measures, m)
+				i.CurrentMeasures = append(i.CurrentMeasures, c)
+				got := MapProductAllowance(doc)[0]
+				if got.Value != portal.AllowanceMeasured || len(got.Windows) != 2 || got.Windows[1].Percent != tc.want {
+					t.Fatalf("decimal %q on %s: %+v", tc.decimal, operand, got)
+				}
+			})
+		}
 	}
 }
 

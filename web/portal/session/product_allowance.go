@@ -184,7 +184,8 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 		if current.State == providerallowance.CurrentConflict {
 			return nil, "Conflicting allowance values"
 		}
-		if m.Value.Decimal != nil && current.Value.Decimal != nil && *m.Value.Decimal != *current.Value.Decimal {
+		validDecimals := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
+		if validDecimals && *m.Value.Decimal != *current.Value.Decimal {
 			return nil, "Conflicting allowance values"
 		}
 		suffix := ""
@@ -195,7 +196,7 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 			suffix = "% used"
 		}
 		percent := "Unknown"
-		if ok && current.State == providerallowance.CurrentKnown && current.Value.State == providerallowance.ValueKnown && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal) && m.Value.State == providerallowance.ValueKnown && m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && suffix != "" {
+		if ok && current.State == providerallowance.CurrentKnown && current.Value.State == providerallowance.ValueKnown && m.Value.State == providerallowance.ValueKnown && validDecimals && suffix != "" {
 			percent = *current.Value.Decimal + suffix
 		}
 		reset := "Unknown"
