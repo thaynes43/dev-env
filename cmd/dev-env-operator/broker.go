@@ -18,19 +18,21 @@ import (
 
 // brokerOptions are the flags of `dev-env-operator broker` (D-61).
 type brokerOptions struct {
-	sessionNamespace    string
-	policyNamespace     string
-	leaderElect         bool
-	enableProxmoxGrants bool
-	enableHWSSHGrants   bool
-	enableAttested      bool
-	enableMaintenance   bool
-	enableAttestedMaint bool
-	maintenanceHuman    string
-	grantDelegates      []string
-	metricsAddr         string
-	probeAddr           string
-	attestedCreators    []string
+	sessionNamespace     string
+	policyNamespace      string
+	leaderElect          bool
+	enableProxmoxGrants  bool
+	enableHWSSHGrants    bool
+	enableAttested       bool
+	enableMaintenance    bool
+	enableAttestedMaint  bool
+	maintenanceHuman     string
+	grantDelegates       []string
+	grantPolicyDelegates []string
+	legacyGrantDelegates []broker.LegacyDelegateBinding
+	metricsAddr          string
+	probeAddr            string
+	attestedCreators     []string
 }
 
 func parseBrokerFlags(args []string) (brokerOptions, error) {
@@ -51,6 +53,8 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.BoolVar(&o.enableMaintenance, "enable-maintenance-grants", false, "HELD: enable isolated bounded maintenance leases after policy review")
 	fs.BoolVar(&o.enableAttestedMaint, "enable-attested-maintenance", false, "HELD (ADR-013): also approve a maintenance grant through an attested GrantPolicy whose maintenance scope matches its envelope exactly, when its requesting session recorded an agent attestation (a claim, not verified human identity). Needs --enable-attested-grants and --enable-maintenance-grants; the human decision route is checked first and is unchanged. Off, maintenance is approved by the human route only, or by a listed --grant-delegates delegate through a GrantPolicy with spec.delegated")
 	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, whose recorded delegate decisions the broker applies through a GrantPolicy with spec.delegated (approvedBy delegate/<namespace>/<name>; not a human decision). Must match the operator's --grant-delegates. Empty applies none")
+	policyDelegates := fs.String("grant-policy-delegates", "", "HELD (DESIGN-042 6.6): default-empty subset of --grant-delegates allowed exact live delegated-policy reach outside their tree. Must match both services")
+	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
 	creators := fs.String("attested-maintenance-creators", "", "HELD (DESIGN-042 S6): comma-separated ServiceAccounts, <namespace>/<name>, at most 16. With --enable-attested-maintenance, only a top-level session whose spec.parent is exactly one of them (depth 0) may approve maintenance for itself; a child session never does. Unset: the --maintenance-human-service-account value. Set empty: no creator, so no session approves maintenance for itself")
@@ -78,9 +82,22 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 		return o, errors.New("--session-namespace and --policy-namespace must not be empty")
 	}
 	var err error
-	o.grantDelegates, err = broker.ParseGrantDelegates(*delegates, o.maintenanceHuman,
-		o.sessionNamespace+"/"+controller.ServiceAccountName, o.sessionNamespace+"/"+templates.WorkbenchServiceAccount)
+	o.legacyGrantDelegates, err = broker.ParseLegacyGrantDelegates(*legacyDelegates, o.sessionNamespace, controller.ServiceAccountName)
 	if err != nil {
+		return o, err
+	}
+	refused := []string{o.maintenanceHuman, o.sessionNamespace + "/" + templates.WorkbenchServiceAccount, "dev-agents/dev-env-v2-portal"}
+	if len(o.legacyGrantDelegates) == 0 {
+		refused = append(refused, o.sessionNamespace+"/"+controller.ServiceAccountName)
+	}
+	o.grantDelegates, err = broker.ParseGrantDelegates(*delegates, refused...)
+	if err != nil {
+		return o, err
+	}
+	if o.grantPolicyDelegates, err = broker.ParseGrantPolicyDelegates(*policyDelegates, o.grantDelegates); err != nil {
+		return o, err
+	}
+	if err = broker.ValidateLegacyDelegateLists(o.legacyGrantDelegates, o.grantDelegates, o.grantPolicyDelegates); err != nil {
 		return o, err
 	}
 	return o, nil
@@ -116,6 +133,8 @@ func runBroker(args []string) error {
 		EnableAttestedMaintenance:      o.enableAttestedMaint,
 		MaintenanceHumanServiceAccount: o.maintenanceHuman,
 		GrantDelegates:                 o.grantDelegates,
+		GrantPolicyDelegates:           o.grantPolicyDelegates,
+		LegacyGrantDelegates:           o.legacyGrantDelegates,
 		LeaderElect:                    o.leaderElect,
 		MetricsAddr:                    o.metricsAddr,
 		ProbeAddr:                      o.probeAddr,

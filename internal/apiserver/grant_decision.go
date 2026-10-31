@@ -7,7 +7,7 @@ package apiserver
 // writes a status: the broker applies it, and only through a GrantPolicy whose
 // spec.delegated covers the grant. A delegate decision is not a human decision.
 //
-// Two delegate forms, both on --grant-delegates:
+// Default tree delegates and exact legacy delegates remain distinct:
 //
 //  1. a configured coordinator host, verified by resolveCoordinator (its own
 //     ServiceAccount, its configured pod name, a live pod UID and the
@@ -23,12 +23,17 @@ package apiserver
 // A top-level session uses mode (a), attestation: its delegate is Tom, by
 // message. spec.delegated still caps the types and the scope.
 //
+// Form 3 is an explicitly configured exact legacy session/Pod/SA-UID tuple;
+// only it may use exact identity separation instead of broad same-SA refusal.
+// Designated actors use the shared policy reach checker (DESIGN-042 6.6).
+//
 // Form 2 uses S4's named coordinator caller classification and exported
 // launch-eligibility rule, plus a live check that this session is the sole holder.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -72,6 +77,16 @@ func ParseGrantDelegates(raw string, p Policy) ([]string, error) {
 	return broker.ParseGrantDelegates(raw, refused...)
 }
 
+// ParseGrantDelegatesWithLegacy permits the shared account only when exact
+// legacy bindings have been parsed. No other refused class becomes eligible.
+func ParseGrantDelegatesWithLegacy(raw string, p Policy, legacy []broker.LegacyDelegateBinding) ([]string, error) {
+	if len(legacy) == 0 {
+		return ParseGrantDelegates(raw, p)
+	}
+	p.SessionServiceAccount = ""
+	return ParseGrantDelegates(raw, p)
+}
+
 // grantDelegate is an authenticated delegate: its ServiceAccount on the list,
 // its live pod, and the AgentSession controlling that pod, when one does.
 type grantDelegate struct {
@@ -106,8 +121,14 @@ func (s *Server) delegateOf(ctx context.Context, c *caller) (*grantDelegate, err
 		form = 1
 	case kindSession:
 		form = 2
+		if ref == s.Policy.SessionNamespace+"/"+s.Policy.SessionServiceAccount {
+			form = 3
+		}
 	default:
 		return nil, forbidden("%s is not a grant delegate: a delegate is a coordinator host or a session pod", c)
+	}
+	if ref == s.Policy.SessionNamespace+"/"+s.Policy.SessionServiceAccount && form != 3 {
+		return nil, forbidden("shared session account requires exact legacy form")
 	}
 	id := c.identity
 	var pod corev1.Pod
@@ -134,7 +155,7 @@ func (s *Server) delegateOf(ctx context.Context, c *caller) (*grantDelegate, err
 	if err != nil {
 		return nil, err
 	}
-	if form == 2 && (sess == nil || c.session == nil || sess.UID != c.session.UID) {
+	if (form == 2 || form == 3) && (sess == nil || c.session == nil || sess.UID != c.session.UID) {
 		// Form 2 (S4): the pod is still controlled by the session it was
 		// classified as.
 		return nil, forbidden("a delegate session decides from its own pod, controlled by its own session")
@@ -144,6 +165,18 @@ func (s *Server) delegateOf(ctx context.Context, c *caller) (*grantDelegate, err
 		if !sess.DeletionTimestamp.IsZero() || sess.Status.Phase != v1alpha1.PhaseRunning || sess.Status.ArchivedAt != nil ||
 			(mode != "" && mode != v1alpha1.OperatingModeRunning) {
 			return nil, forbidden("delegate session %s is not Running and eligible: suspended, draining, archived or being reaped", sess.Name)
+		}
+	}
+	if form == 3 {
+		actor := &broker.DelegateIdentity{Form: 3, ServiceAccountUID: id.ServiceAccountUID, Session: sess.Name, SessionUID: string(sess.UID), PodName: pod.Name, PodUID: string(pod.UID)}
+		if !slices.Contains(s.GrantPolicyDelegates, ref) {
+			return nil, forbidden("legacy actor requires explicit policy designation")
+		}
+		if err := broker.CheckLegacyDelegate(ctx, s.Live, s.LegacyGrantDelegates, broker.DelegateRef(ref), actor, sess, &pod); err != nil {
+			if errors.Is(err, broker.ErrRefused) {
+				return nil, forbidden("%s", err)
+			}
+			return nil, fromKubeError(err, "verify legacy delegate identity")
 		}
 	}
 	return &grantDelegate{ref: ref, form: form, pod: &pod, session: sess}, nil
@@ -186,7 +219,7 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 		}
 		// Refuse same-account decisions independently of S4's sole-holder
 		// check, including a cross-replica launch race.
-		if rp.Namespace+"/"+rp.Spec.ServiceAccountName == d.ref {
+		if d.form != 3 && rp.Namespace+"/"+rp.Spec.ServiceAccountName == d.ref {
 			return forbidden("a delegate never decides a grant whose requester runs as its own delegate account")
 		}
 	} else if !apierrors.IsNotFound(err) {
@@ -199,8 +232,10 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 			}
 		}
 	}
-	if err := s.delegateReach(ctx, g, d); err != nil {
-		return err
+	if !slices.Contains(s.GrantPolicyDelegates, d.ref) {
+		if err := s.delegateReach(ctx, g, d); err != nil {
+			return err
+		}
 	}
 	if d.form == 2 {
 		if !s.Policy.NamedCoordinatorSessionEligible(d.session) || d.session.Labels[templates.CoordinatorIdentityLabel] != d.pod.Spec.ServiceAccountName {
@@ -343,11 +378,23 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 		At: s.now().UTC().Truncate(time.Second), Ref: req.Ref, Reason: req.Reason,
 		Delegate: &broker.DelegateIdentity{Form: d.form, PodName: d.pod.Name, PodUID: string(d.pod.UID)},
 	}
+	if d.form == 3 {
+		rec.Delegate.ServiceAccountUID = c.identity.ServiceAccountUID
+	}
 	if d.form == 1 {
 		rec.Delegate.HostID = d.pod.Annotations[CoordinatorHostAnnotation]
 	}
 	if d.session != nil {
 		rec.Delegate.Session, rec.Delegate.SessionUID = d.session.Name, string(d.session.UID)
+	}
+	if slices.Contains(s.GrantPolicyDelegates, d.ref) {
+		rec.Reach, err = broker.NewDelegateReach(ctx, s.Live, s.Policy.SessionNamespace, s.PolicyNamespace, &g, rec.Delegate, rec.By, s.GrantPolicyDelegates)
+		if err != nil {
+			if errors.Is(err, broker.ErrRefused) {
+				return 0, nil, forbidden("%s", err)
+			}
+			return 0, nil, fromKubeError(err, "verify delegated reach")
+		}
 	}
 	raw, err := json.Marshal(rec)
 	if err != nil {

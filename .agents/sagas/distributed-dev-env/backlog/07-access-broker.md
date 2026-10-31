@@ -343,3 +343,13 @@ denial alone is not acceptance. Do not preserve the Headlamp fallback permanentl
 - A broker restart during an active grant changes nothing for the session.
 - Every grant of the test run is listed by `agent-run grant list --all` with
   requester, approver and times.
+
+### DESIGN-042 designated reach source continuation (OP337)
+
+[ADR-017](../adrs/017-exact-legacy-delegate-policy-reach.md) proposes a default-off
+exact legacy actor tuple and designated delegated-policy reach. Its
+[source design](../designs/042-policy-reach-source.md) preserves current tree
+defaults and separates source qualification from held runtime activation. The
+form3 same-account exception is explicit proposed scope, not unchanged S2
+behavior or accepted live risk. S7 reuses the actor/reach seam under separate
+custody. OpenProject remains the canonical queue.
