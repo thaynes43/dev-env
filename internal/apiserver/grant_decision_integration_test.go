@@ -158,7 +158,7 @@ func TestGrantDecisionCombinedRechecksDelegate(t *testing.T) {
 		"requester leaves tree": func(f *fixture, lead string) {
 			var sessions v1alpha1.AgentSessionList
 			if err := f.c.List(context.Background(), &sessions, client.InNamespace(sessionNS)); err != nil {
-				f.f.t.Fatal(err)
+				f.t.Fatal(err)
 			}
 			for i := range sessions.Items {
 				if sessions.Items[i].Spec.Parent == lead {
