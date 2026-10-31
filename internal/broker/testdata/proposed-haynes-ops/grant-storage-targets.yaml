@@ -1,0 +1,85 @@
+# SOURCE PROPOSAL ONLY. No apply or deployment is authorized.
+# This is an admission guard, never a deletion operation. It selects the caller's
+# own grant by its authenticated ServiceAccount name, and verifies the current
+# ServiceAccount UID as well as the exact grant UID before looking at targets.
+# It never selects all grants as params and never borrows another grant's scope.
+# Missing resources, failed lookups, missing oldObject/UID, and expired or ended
+# grants fail closed. The exact object UID is checked at DELETE admission.
+#
+# Requires reviewed Kyverno get-only RBAC for AccessGrants in dev-agents and
+# ServiceAccounts there, protected grant status/decision annotations, and broker
+# grant-uid labels. This fixture installs none of those prerequisites.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: dev-env-grant-storage-targets
+spec:
+  failurePolicy: Fail
+  validationActions: [Deny]
+  evaluation:
+    background:
+      enabled: false
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: [v1]
+        operations: [DELETE]
+        resources: [persistentvolumeclaims]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [DELETE]
+        resources: [statefulsets]
+      - apiGroups: [snapshot.storage.k8s.io]
+        apiVersions: [v1]
+        operations: [DELETE]
+        resources: [volumesnapshots]
+  matchConditions:
+    - name: grant-identity
+      expression: request.userInfo.username.startsWith('system:serviceaccount:dev-agents:grant-')
+  variables:
+    - name: grantName
+      expression: request.userInfo.username.substring(size('system:serviceaccount:dev-agents:'))
+    - name: grant
+      expression: resource.Get('dev-env.haynesops.com/v1alpha1', 'accessgrants', 'dev-agents', variables.grantName)
+    - name: subject
+      expression: resource.Get('v1', 'serviceaccounts', 'dev-agents', variables.grantName)
+    - name: bounds
+      expression: variables.grant.status.reserved
+    - name: decision
+      expression: json.unmarshal(variables.grant.metadata.annotations['dev-env.haynesops.com/maintenance-decision'])
+  validations:
+    - expression: >-
+        request.operation == 'DELETE' && request.?subResource.orValue('') == '' &&
+        oldObject != null && oldObject.metadata.uid != '' && request.name == oldObject.metadata.name &&
+        request.namespace == oldObject.metadata.namespace &&
+        variables.grant.metadata.name == variables.grantName && variables.grant.metadata.namespace == 'dev-agents' &&
+        variables.grant.metadata.uid != '' && !has(variables.grant.metadata.deletionTimestamp) &&
+        variables.subject.metadata.uid == request.userInfo.uid &&
+        variables.subject.metadata.labels['dev-env.haynesops.com/grant-uid'] == variables.grant.metadata.uid &&
+        variables.subject.metadata.labels['dev-env.haynesops.com/grant'] == variables.grantName &&
+        !has(variables.subject.metadata.deletionTimestamp) &&
+        variables.grant.status.serviceAccount == variables.grantName
+      message: storage deletes require the authenticated caller's own exact grant and ServiceAccount UIDs
+    - expression: >-
+        variables.grant.status.phase == 'Active' && !variables.grant.spec.?release.orValue(false) &&
+        timestamp(variables.grant.status.expiresAt) > time.now() &&
+        variables.grant.status.approvedBy.startsWith('delegate/') &&
+        variables.grant.spec.type == 'kube' && variables.grant.spec.kube.role == 'dev-env-grant-storage' &&
+        size(variables.grant.spec.kube.namespaces) == 1 && variables.grant.spec.kube.namespaces[0] == request.namespace &&
+        variables.decision.approve && variables.decision.by == variables.grant.status.approvedBy &&
+        variables.decision.grantUID == variables.grant.metadata.uid &&
+        variables.decision.reserved == variables.bounds &&
+        variables.bounds.case == 'rd4-storage' && variables.bounds.boundsRevision == '1' &&
+        variables.bounds.grantUID == variables.grant.metadata.uid &&
+        variables.bounds.requesterUID == variables.grant.spec.requester.sessionUID &&
+        variables.bounds.actorUID != '' && variables.bounds.actorUID != variables.bounds.requesterPodUID &&
+        variables.bounds.tomRef.matches('^[A-Za-z0-9_.:/#-]{1,128}$') &&
+        size(variables.bounds.scopeDigest) == 43 && size(variables.bounds.effectiveDigest) == 43 &&
+        duration(variables.bounds.ttl) >= duration('10m') && duration(variables.bounds.ttl) <= duration('1h') &&
+        timestamp(variables.bounds.decidedAt) <= time.now()
+      message: storage deletion requires a current reserved delegate decision on that own Active unexpired grant
+    - expression: >-
+        size(variables.grant.spec.kube.storageTargets) >= 1 && size(variables.grant.spec.kube.storageTargets) <= 8 &&
+        variables.grant.spec.kube.storageTargets.exists(t,
+          t.kind == oldObject.kind && t.name == oldObject.metadata.name && t.uid == oldObject.metadata.uid)
+      message: the exact storage kind/name/UID must be in this grant's reviewed one-namespace targets

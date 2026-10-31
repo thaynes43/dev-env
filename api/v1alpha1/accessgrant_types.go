@@ -148,6 +148,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || ((self.type == 'breakglass') == (self.kube.role == 'dev-env-grant-breakglass'))",message="type breakglass and role dev-env-grant-breakglass go together (D-27)"
 // +kubebuilder:validation:XValidation:rule="duration(self.ttl) >= duration('10m') && duration(self.ttl) <= duration('8h')",message="ttl runs from 10m to 8h"
+// +kubebuilder:validation:XValidation:rule="!has(self.kube) || (!(has(self.kube.allNamespaces) && self.kube.allNamespaces) && (!has(self.kube.storageTargets) || size(self.kube.storageTargets) == 0)) || duration(self.ttl) <= duration('1h')",message="reserved namespace snapshots and exact storage targets have a maximum TTL of 1h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.ttl) <= duration('4h')",message="a credential grant lasts at most 4h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' || duration(self.ttl) <= duration('1h')",message="break-glass lasts at most 1h (D-27)"
 // +kubebuilder:validation:XValidation:rule="has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress) && has(self.credential) == has(oldSelf.credential) && has(self.maintenance) == has(oldSelf.maintenance)",message="immutable after create; only release may change"
@@ -250,8 +251,22 @@ type GrantRequester struct {
 // KubeGrant is a catalog role in named namespaces, or cluster-wide for the
 // cluster-wide roles.
 //
-// +kubebuilder:validation:XValidation:rule="(self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass') == (!has(self.namespaces) || size(self.namespaces) == 0)",message="dev-env-grant-nodes and dev-env-grant-breakglass are cluster-wide and take no namespaces; the other roles name at least one"
+// +kubebuilder:validation:XValidation:rule="has(self.allNamespaces) && self.allNamespaces ? (self.role == 'dev-env-grant-secrets-read' && (!has(self.namespaces) || size(self.namespaces) == 0)) : ((self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass') == (!has(self.namespaces) || size(self.namespaces) == 0))",message="allNamespaces is reserved Secret read only; otherwise cluster-wide roles take no namespaces and namespaced roles name at least one"
+// +kubebuilder:validation:XValidation:rule="!has(self.storageTargets) || size(self.storageTargets) == 0 || (self.role == 'dev-env-grant-storage' && has(self.namespaces) && size(self.namespaces) == 1)",message="storage targets require the storage role in exactly one namespace"
+// +kubebuilder:validation:XValidation:rule="!has(self.storageTargets) || self.storageTargets.all(t, self.storageTargets.filter(o, o.uid == t.uid).size() == 1)",message="storage target UIDs must be unique"
 type KubeGrant struct {
+	// AllNamespaces requests RD3b: the approved namespace UID snapshot is
+	// materialized as individual RoleBindings. It never means a cluster binding.
+	// +optional
+	AllNamespaces bool `json:"allNamespaces,omitempty"`
+	// StorageTargets are the exact reviewed object UIDs of an RD4 storage
+	// request. The proposed deletion guard fails closed without them.
+	// +listType=map
+	// +listMapKey=kind
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	StorageTargets []GrantStorageTarget `json:"storageTargets,omitempty"`
 	// Role is a ClusterRole from the grant role catalog.
 	// +kubebuilder:validation:Enum=dev-env-grant-workloads;dev-env-grant-storage;dev-env-grant-secrets-read;dev-env-grant-nodes;dev-env-grant-breakglass
 	// +required
@@ -357,6 +372,10 @@ type CredentialGrant struct {
 // AccessGrantStatus is the broker's record of the grant. Only the broker
 // writes it (accessgrants/status); the operator's API reads it.
 type AccessGrantStatus struct {
+	// Reserved is the broker-retained S7 binding. It is an authenticated
+	// delegate's agent assertion, never verified human consent.
+	// +optional
+	Reserved *ReservedDecisionBinding `json:"reserved,omitempty"`
 	// Maintenance keeps executor termination and restore evidence separate.
 	// +optional
 	Maintenance *MaintenanceStatus `json:"maintenance,omitempty"`

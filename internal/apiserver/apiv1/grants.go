@@ -58,7 +58,11 @@ const (
 // role and namespaces; egress takes fqdns, cidrs, endpoints and ports;
 // credential takes credential.
 type CreateGrantRequest struct {
-	Maintenance *MaintenanceTask `json:"maintenance,omitempty"`
+	// AllNamespaces is reserved RD3b, Secret-read role only, default false.
+	AllNamespaces bool `json:"allNamespaces,omitempty"`
+	// StorageTargets are exact RD4 storage kind/name/UIDs in one namespace.
+	StorageTargets []GrantStorageTarget `json:"storageTargets,omitempty"`
+	Maintenance    *MaintenanceTask     `json:"maintenance,omitempty"`
 	// Type is kube, egress, credential or breakglass.
 	Type string `json:"type"`
 	// Role is a role from the grant catalog, for type kube. Break-glass is
@@ -107,6 +111,10 @@ const GrantTaskClaimsV1 = "v1"
 // Grant is one grant as the API shows it: GET /v1/grants/{name}, the items of
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
+	AllNamespaces  bool                 `json:"allNamespaces,omitempty"`
+	StorageTargets []GrantStorageTarget `json:"storageTargets,omitempty"`
+	// HardwareIntent is an audit receipt, never permission or proof of use.
+	HardwareIntent *HardwareIntentReceipt `json:"hardwareIntent,omitempty"`
 	// TaskClaims is a read-only requester observation, not approval or transfer.
 	TaskClaims *SessionTaskClaims `json:"taskClaims,omitempty"`
 	// UID is the grant's UID: set for a maintenance grant, and for every grant
@@ -198,6 +206,12 @@ func GrantDecisionPath(name string) string { return GrantPath(name) + "/decision
 // replayed, mismatched or already decided request, invalid for a bad TTL, ref
 // or reason, and not_found for a grant that does not exist.
 type GrantDecisionRequest struct {
+	// Reserved explicitly selects an enabled S7 case. Default false preserves
+	// the ordinary delegated-policy decision. Missing policy never selects S7.
+	Reserved bool `json:"reserved,omitempty"`
+	// TomRef is a mandatory nonsecret fresh-message reference for S7. It is
+	// an agent assertion alongside the authenticated actor, not human provenance.
+	TomRef string `json:"tomRef,omitempty"`
 	// GrantUID is the Grant.UID the delegate reviewed.
 	GrantUID string `json:"grantUID"`
 	// Digest is the Grant.ScopeDigest the delegate reviewed. A different
