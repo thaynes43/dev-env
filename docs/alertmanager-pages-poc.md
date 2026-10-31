@@ -43,12 +43,22 @@ work lanes and digest bookkeeping do not supply responder evidence. Any other ke
 under a responder prefix is counted as ignored (`IgnoredKeys`), never trusted,
 and cannot invalidate the other orders; its value must still be a bounded JSON
 object. No order reason, note, diagnosis, alert context
-or signature reaches the output. The producer scripts and one read-only live
-shape inspection found no explicit alert fingerprint/start identity or incident
-hash. All current responder records therefore remain Unjoined; a valid empty
-responder store is Empty. Neither a reused key nor a refire inherits an old
-attempt. Lookalike identity fields are ignored pending an actual producer
-contract. Order/owner/state remain literal Unknown without verified joins.
+or signature reaches the output.
+
+An order joins an alert only when its optional `alertIdentity` object
+(`fingerprint` and `startsAt`, exactly two string fields) equals the alert's
+Alertmanager fingerprint and `startsAt` by decoded string equality, no
+normalization. It also needs a creation time not earlier than `startsAt`
+minus 30 seconds, and no other order asserting the same identity (a malformed
+twin with readable strings counts). A joined order shows only its order key
+and creation time; the state, owner and claim stay Unknown until the canonical
+claim source is wired. Everything else is Unjoined: legacy, storm, aggregate and
+watchdog orders with no identity, malformed identities, duplicates, refires and
+reused keys, and escalated remediations (the promotion path copies a parent's
+identity into its `esc-rem-*` child, so the pair is a duplicate). A valid empty
+responder store is Empty. Lookalike fields other than `alertIdentity` are
+ignored. Real joins need haynes-ops #4489 merged and installed; until then
+every real alert stays Unjoined. See DESIGN-031 section 15.
 
 Missing/unreadable order files yield Unavailable; malformed files yield Invalid,
 however old their capture time (Invalid is decided before freshness). Both return
@@ -63,9 +73,9 @@ consumed fields, invalid types/status/timestamps or order events after capture
 are refused as a whole; errors do not echo input. Synthetic fixtures match the
 real mixed store shape; real order contents are never committed.
 
-Before any real join can succeed, the V1 producer must write an explicit alert
-identity into order JSON. That haynes-ops responder change is proposed only;
-this slice does not make it. A portal or operator reader would need read access
+Before any real join can succeed, the V1 producer must write the `alertIdentity`
+field into order JSON. That haynes-ops change (#4489) is a held draft, not
+merged or installed; this slice does not make it. A portal or operator reader would need read access
 to `upgrade-agent` ConfigMaps, which requires a separate approved access decision.
 Those readers remain Unconfigured. No RBAC, activation or runtime acceptance
 follows from this offline adapter; canonical claim wiring also remains open.
