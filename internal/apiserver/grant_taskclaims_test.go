@@ -20,7 +20,7 @@ import (
 const grantClaimsTestHeader = "X-Dev-Env-Grant-Task-Claims"
 
 func TestMaintenanceGrantTaskClaims(t *testing.T) {
-	for _, mode := range []string{"same UID", "peer caller", "cross-project caller", "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot", "no envelope reference", "non-maintenance", "legacy", "old header", "future header"} {
+	for _, mode := range []string{"same UID", "peer caller", "cross-project caller", "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot", "no envelope reference", "non-maintenance", "legacy", "old header", "future header", "replaced requester, cross-project caller", "missing requester, unauthorized"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newFixture(t)
 			bindCatalogFixture(t, f)
@@ -73,6 +73,21 @@ func TestMaintenanceGrantTaskClaims(t *testing.T) {
 				header.Set(grantClaimsTestHeader, "v0")
 			case "future header":
 				header.Set(grantClaimsTestHeader, "v2")
+			case "replaced requester, cross-project caller":
+				reader = claimSession(t, f, "maintenance-reader", clientSA)
+				bindSecondProjectSnapshot(t, f, "maintenance-reader")
+				g.Spec.Requester.SessionUID = "old-uid"
+			case "missing requester, unauthorized":
+				reader = tokClient
+				// Remove the fixture finalizer so this is an absent requester,
+				// rather than a retained deleting session that still owns claims.
+				sess.Finalizers = nil
+				if err := f.c.Update(context.Background(), sess); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.c.Delete(context.Background(), sess); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := f.c.Create(context.Background(), g); err != nil {
 				t.Fatal(err)
@@ -115,7 +130,7 @@ func TestMaintenanceGrantTaskClaims(t *testing.T) {
 				if err := d.Decode(reflect.New(reflect.StructOf(fields)).Interface()); err != nil {
 					t.Fatal("strict older client", err)
 				}
-			case "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot", "cross-project caller":
+			case "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot", "cross-project caller", "replaced requester, cross-project caller", "missing requester, unauthorized":
 				reason := "IdentityUnconfirmed"
 				if mode == "unauthorized" || mode == "missing snapshot" || mode == "cross-project caller" {
 					reason = "ScopeUnconfirmed"
