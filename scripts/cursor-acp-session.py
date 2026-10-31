@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 
 MAX_FRAME = 65536
 MAX_PROMPT = 16384
@@ -69,6 +70,104 @@ def bounded_text(value, maximum=2048):
     except UnicodeError:
         return False
     return 0 < size <= maximum and not any(ord(c) < 32 and c not in "\n\t" for c in value)
+
+
+# Permission context is untrusted display data, never approval authority.
+TOOL_KINDS = frozenset({"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"})
+RAW_FIELDS = frozenset({"command", "args", "path", "paths", "query", "description"})
+SECRET_NAME = re.compile(r"token|key|secret|password|auth|cookie|credential", re.I)
+SECRET_VALUE = re.compile(r"bearer\s|[A-Za-z0-9+/=_-]{32,}", re.I)
+REDACTED = "[REDACTED]"
+MAX_CONTEXT = 2048
+
+
+def context_string(value, path=False):
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise ValueError
+    # Reject control bytes, DEL, bidi/format controls and surrogate code points.
+    if any(unicodedata.category(c).startswith("C") for c in value):
+        raise ValueError
+    if len(value.encode("utf-8")) > 256:
+        raise ValueError
+    # Redact the whole value before reducing paths, so a secret in a parent
+    # directory, command flag or prose prefix cannot survive as a fragment.
+    if SECRET_NAME.search(value) or SECRET_VALUE.search(value):
+        return REDACTED
+    # Free-form command/title/argument text cannot distinguish a spaced path
+    # from prose or multiple arguments. Refuse rather than leak parent fragments.
+    # Explicit path/paths fields can safely reduce the entire value.
+    if not path and ("/" in value or "\\" in value) and any(c.isspace() or c in "\"'<>" for c in value):
+        raise ValueError
+    def basename(text):
+        name = text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        if name in {"", ".", ".."}:
+            raise ValueError
+        return name
+    return basename(value) if path or "/" in value or "\\" in value else value
+
+
+def context_input(value, depth=0, path=False):
+    if depth > 3:
+        raise ValueError
+    if isinstance(value, str):
+        return context_string(value, path)
+    if isinstance(value, list):
+        if not 1 <= len(value) <= 8:
+            raise ValueError
+        return [context_input(item, depth + 1, path) for item in value]
+    if isinstance(value, dict):
+        if not 1 <= len(value) <= 8:
+            raise ValueError
+        # No arbitrary input key is copied. Even a secret-bearing KEY may itself
+        # contain a credential, so redact its containing object as a fixed value.
+        if any(SECRET_NAME.search(key) for key in value):
+            return REDACTED
+        clean = {key: context_input(item, depth + 1, key in {"path", "paths"})
+                 for key, item in value.items() if key in RAW_FIELDS}
+        if not clean:
+            raise ValueError
+        return clean
+    # ACP permits arbitrary JSON; this display subset intentionally does not.
+    raise ValueError
+
+
+def permission_context(tool):
+    """Project ONLY this request's supported toolCall fields; never recover history."""
+    insufficient = {"state": "insufficient-context"}
+    try:
+        if not isinstance(tool, dict):
+            return insufficient
+        # Bound the source as well as the output, including discarded fields.
+        if len(json.dumps(tool, ensure_ascii=True, separators=(",", ":"))) > 4096:
+            return insufficient
+        if not label(tool.get("toolCallId")) or tool.get("kind") not in TOOL_KINDS:
+            return insufficient
+        title = context_string(tool.get("title"))
+        clean = {"state": "insufficient-context" if title == REDACTED else "available",
+                 "kind": tool["kind"], "title": title}
+        locations = tool.get("locations")
+        if locations is not None:
+            if not isinstance(locations, list) or len(locations) > 8:
+                return insufficient
+            projected = []
+            for location in locations:
+                if not isinstance(location, dict):
+                    return insufficient
+                entry = {"path": context_string(location.get("path"), path=True)}
+                line = location.get("line")
+                if line is not None:
+                    if type(line) is not int or not 0 <= line <= 2147483647:
+                        return insufficient
+                    entry["line"] = line
+                projected.append(entry)
+            clean["locations"] = projected
+        if tool.get("rawInput") is not None:
+            clean["rawInput"] = context_input(tool["rawInput"])
+        if len(json.dumps(clean, ensure_ascii=True, separators=(",", ":"))) > MAX_CONTEXT:
+            return insufficient
+        return clean
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return insufficient
 
 
 class Session:
@@ -162,7 +261,7 @@ class Session:
                     raise Refusal("duplicate-permission-option")
                 projected.append({"optionID": item["optionId"], "kind": item["kind"]})
             self.pending[(type(ident), ident)] = ("permission", projected)
-            self.emit({"event": "permission-required", "requestID": ident, "sessionID": self.session_id, "options": projected})
+            self.emit({"event": "permission-required", "requestID": ident, "sessionID": self.session_id, "options": projected, "context": permission_context(params.get("toolCall"))})
         elif method == "cursor/ask_question":
             if "sessionId" in params and params["sessionId"] != self.session_id:
                 raise Refusal("cross-session-question")

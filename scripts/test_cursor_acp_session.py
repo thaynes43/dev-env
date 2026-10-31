@@ -78,6 +78,33 @@ class ProtocolTests(unittest.TestCase):
         self.session.decision({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "no"})
         self.assertEqual(self.sent[-1]["result"]["outcome"]["optionId"], "no")
 
+    def test_context_binding_and_every_non_reject_option_never_sends(self):
+        self.ready()
+        for ident, tool in enumerate([VALID_CONTEXT, None, dict(VALID_CONTEXT, title="x" * 257)], 80):
+            options = [{"optionId": kind, "kind": kind} for kind in ["allow_once", "allow_always", "reject_once", "reject_always"]]
+            message = {"jsonrpc": "2.0", "id": ident, "method": "session/request_permission", "params": {"sessionId": "fixture-session", "toolCall": tool, "options": options}}
+            before = list(self.sent)
+            self.session.provider(message)
+            self.assertEqual(self.sent, before, "request must not send any automatic decision")
+            for option in ["allow_once", "allow_always", "reject_always", "missing"]:
+                with self.assertRaisesRegex(ACP.Refusal, "approval-not-supported"):
+                    self.session.decision({"requestID": ident, "sessionID": "fixture-session", "kind": "permission", "optionID": option})
+                self.assertEqual(self.sent, before)
+            for change in [{"requestID": str(ident)}, {"requestID": 999}, {"sessionID": "foreign"}, {"kind": "question"}]:
+                decision = {"requestID": ident, "sessionID": "fixture-session", "kind": "permission", "optionID": "reject_once"}
+                decision.update(change)
+                with self.assertRaises(ACP.Refusal):
+                    self.session.decision(decision)
+                self.assertEqual(self.sent, before)
+            self.session.decision({"requestID": ident, "sessionID": "fixture-session", "kind": "permission", "optionID": "reject_once"})
+            self.assertEqual(self.sent[-1], {"jsonrpc": "2.0", "id": ident, "result": {"outcome": {"outcome": "selected", "optionId": "reject_once"}}})
+            with self.assertRaisesRegex(ACP.Refusal, "stale"):
+                self.session.decision({"requestID": ident, "sessionID": "fixture-session", "kind": "permission", "optionID": "reject_once"})
+        before_events = list(self.events)
+        with self.assertRaisesRegex(ACP.Refusal, "cross-session-request"):
+            self.session.provider({"jsonrpc": "2.0", "id": 99, "method": "session/request_permission", "params": {"sessionId": "foreign", "toolCall": VALID_CONTEXT}})
+        self.assertEqual(self.events, before_events)
+
     def test_foreign_request_and_updates_refused(self):
         self.ready()
         for message in [
@@ -179,10 +206,50 @@ class ProtocolTests(unittest.TestCase):
                 ACP.strict_object(raw)
 
 
+VALID_CONTEXT = {
+    "toolCallId": "fixture-call", "kind": "execute", "title": "Run fixture checks",
+    "locations": [{"path": "/private/project/check.py", "line": 12}],
+    "rawInput": {"command": "python3", "args": ["check.py"], "path": "/private/project/check.py"},
+}
+CONTEXT_FIXTURES = {
+    "valid": VALID_CONTEXT,
+    "missing": None,
+    "oversized": dict(VALID_CONTEXT, title="x" * 257),
+    "total": dict(VALID_CONTEXT, rawInput={"args": ["short words " * 20] * 8}),
+    "raw-oversized": dict(VALID_CONTEXT, rawInput={"command": "x" * 257}),
+    "source-oversized": dict(VALID_CONTEXT, unknown="x" * 4097),
+    "raw-unknown": dict(VALID_CONTEXT, rawInput={"unknown": "DO_NOT_EXPORT"}),
+    "raw-null": dict(VALID_CONTEXT, rawInput=None),
+    "raw-scalar": dict(VALID_CONTEXT, rawInput=42),
+    "location-control": dict(VALID_CONTEXT, locations=[{"path": "/fixture/\x7ffile.py"}]),
+    "raw-control": dict(VALID_CONTEXT, rawInput={"command": "run\nfixture"}),
+    "spaced-path-args": dict(VALID_CONTEXT, rawInput={"args": ["/a/customer b/f.py"]}),
+    "spaced-path-command": dict(VALID_CONTEXT, rawInput={"command": 'python3 "/a/customer b/f.py"'}),
+    "spaced-path-title": dict(VALID_CONTEXT, title='Read "/a/customer b/f.py"'),
+    "explicit-spaced-path": dict(VALID_CONTEXT, rawInput={"path": "/a/customer b/f.py"}),
+    "quoted-path-args": dict(VALID_CONTEXT, rawInput={"args": ["/a/customer'b/f.py"]}),
+    "double-quoted-path-args": dict(VALID_CONTEXT, rawInput={"args": ['/a/customer"b/f.py']}),
+    "angle-path-args": dict(VALID_CONTEXT, rawInput={"args": ["/a/customer<b/f.py"]}),
+    "explicit-quoted-path": dict(VALID_CONTEXT, rawInput={"path": "/a/customer'b/f.py"}),
+    "controls": dict(VALID_CONTEXT, title="Run\x1b[31m fixture"),
+    "unicode-control": dict(VALID_CONTEXT, title="Run\u202e fixture"),
+    "malformed": dict(VALID_CONTEXT, locations="check.py"),
+    "unknown-kind": dict(VALID_CONTEXT, kind="invented"),
+    "unknown-only": {"unrecognized": "DO_NOT_EXPORT"},
+    "title-secret": dict(VALID_CONTEXT, title="Use Bearer synthetic-sensitive-value"),
+    "raw-secret": dict(VALID_CONTEXT, rawInput={"command": "run", "args": ["--password=synthetic-sensitive-value"]}),
+    "key-secret": dict(VALID_CONTEXT, rawInput={"command": {"apiToken": "synthetic-sensitive-value"}}),
+    "hex-secret": dict(VALID_CONTEXT, rawInput={"command": "ab" * 32}),
+    "base64-secret": dict(VALID_CONTEXT, rawInput={"command": "QWxhZGRpbjpvcGVuIHNlc2FtZUZpeHR1cmU="}),
+    "unknown-fields": dict(VALID_CONTEXT, content="DO_NOT_EXPORT", rawOutput="DO_NOT_EXPORT", _meta={"command": "DO_NOT_EXPORT"}, rawInput={"command": "python3", "unknown": "DO_NOT_EXPORT"}),
+}
+
+
 FAKE = '''#!/usr/bin/env python3
 import json,os,sys,time
 from pathlib import Path
 mode=MODE
+tool_context=CONTEXT
 # Names only, never values. /proc gives the exact exec-time environment on Linux.
 try:
  raw=open("/proc/self/environ","rb").read()
@@ -218,8 +285,8 @@ for line in sys.stdin:
   if mode=="error": write({"jsonrpc":"2.0","id":3,"error":{"message":"PRIVATE_PROVIDER_ERROR"}}); continue
   if mode=="exit": sys.exit(0)
   if mode in ("grandchild","env"): write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}); continue
-  if mode=="permission":
-   write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":{"toolCallId":"fixture-call","title":"PRIVATE_TOOL_CONTENT","rawInput":"PRIVATE_ARGUMENT"},"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
+  if mode=="permission" or mode.startswith("context-"):
+   write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":tool_context,"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
    continue
   if mode=="callbacks":
    write({"jsonrpc":"2.0","id":50,"method":"fs/read_text_file","params":{"sessionId":"fixture-session","path":"/PRIVATE_PATH"}})
@@ -227,7 +294,7 @@ for line in sys.stdin:
    write({"jsonrpc":"2.0","id":52,"method":"terminal/create","params":{"sessionId":"fixture-session","command":"PRIVATE_COMMAND"}})
    continue
   write({"jsonrpc":"2.0","id":40,"method":"cursor/ask_question","params":{"questions":[{"id":"q1","prompt":"Fixture choice?","options":[{"id":"a","label":"First"}]}]}})
- elif mode=="permission" and msg.get("id")==41:
+ elif (mode=="permission" or mode.startswith("context-")) and msg.get("id")==41:
   if msg.get("result")=={"outcome":{"outcome":"selected","optionId":"deny"}}: write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
   else: write({"jsonrpc":"2.0","id":3,"error":{"message":"fixture expected rejection"}})
  elif mode=="callbacks" and msg.get("id") in (50,51,52):
@@ -256,7 +323,7 @@ def pid_gone(pid, limit=5.0):
 class SubprocessTests(unittest.TestCase):
     def fake(self, directory, mode):
         client = Path(directory) / "fake-cursor"
-        client.write_text(FAKE.replace("MODE", repr(mode)))
+        client.write_text(FAKE.replace("MODE", repr(mode)).replace("CONTEXT", repr(CONTEXT_FIXTURES.get(mode.removeprefix("context-")))))
         client.chmod(0o700)
         prompt = Path(directory) / "prompt.txt"
         prompt.write_text("Synthetic offline task")
@@ -293,6 +360,9 @@ class SubprocessTests(unittest.TestCase):
                 observed.extend(json.loads(x) for x in stdout.splitlines())
                 self.assertEqual(process.returncode, 0, stderr)
                 self.assertEqual([x["event"] for x in observed], ["starting", "session-created", "question-required", "decision-sent", "prompt-complete"])
+                checked = subprocess.run([sys.executable, "-I", "-B", str(CLIENT.with_name("cursor-acp-smoke-check.py")), "-"], input="".join(json.dumps(x) + "\n" for x in observed), text=True, capture_output=True, timeout=5)
+                self.assertEqual(checked.returncode, 0, checked.stdout)
+                self.assertTrue(json.loads(checked.stdout)["questionDecisionSent"])
             finally:
                 if process.poll() is None:
                     process.kill()
@@ -334,6 +404,87 @@ class SubprocessTests(unittest.TestCase):
             self.assertEqual(process.returncode, 2)
             self.assertEqual(observed[-1], {"event": "failed", "reason": "permission-approval-not-supported"})
             self.assertNotIn("decision-sent", output)
+
+    def test_permission_context_fixtures_over_fake_cli(self):
+        insufficient = {"quoted-path-args", "double-quoted-path-args", "angle-path-args", "spaced-path-args", "spaced-path-command", "spaced-path-title", "raw-oversized", "source-oversized", "raw-unknown", "raw-scalar", "location-control", "raw-control", "missing", "oversized", "total", "controls", "unicode-control", "malformed", "unknown-kind", "unknown-only", "title-secret"}
+        for name in CONTEXT_FIXTURES:
+            with self.subTest(fixture=name), tempfile.TemporaryDirectory() as directory:
+                process = self.launch(directory, "context-" + name)
+                observed = []
+                try:
+                    while True:
+                        event = json.loads(process.stdout.readline())
+                        observed.append(event)
+                        if event["event"] == "permission-required":
+                            break
+                    # A request alone never produces a provider response.
+                    self.assertEqual(event["requestID"], 41)
+                    self.assertEqual(event["sessionID"], "fixture-session")
+                    context = event["context"]
+                    self.assertEqual(context["state"], "insufficient-context" if name in insufficient else "available")
+                    self.assertLessEqual(len(json.dumps(context, ensure_ascii=True, separators=(",", ":"))), 2048)
+                    if name == "valid":
+                        self.assertEqual(context["title"], "Run fixture checks")
+                        self.assertEqual(context["kind"], "execute")
+                        self.assertEqual(context["locations"], [{"path": "check.py", "line": 12}])
+                        self.assertEqual(context["rawInput"], {"command": "python3", "args": ["check.py"], "path": "check.py"})
+                    if name in {"explicit-spaced-path", "explicit-quoted-path"}:
+                        self.assertEqual(context["rawInput"], {"path": "f.py"})
+                    if name.startswith("spaced-path-"):
+                        self.assertNotIn("customer", json.dumps(context))
+                    if "secret" in name:
+                        self.assertIn("[REDACTED]", json.dumps(context))
+                    decision = {"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"}
+                    process.stdin.write(json.dumps(decision) + "\n")
+                    process.stdin.flush()
+                    stdout, stderr = process.communicate(timeout=15)
+                    observed.extend(json.loads(x) for x in stdout.splitlines())
+                    self.assertEqual(process.returncode, 0, stderr)
+                    output = json.dumps(observed) + stderr
+                    for private in ["synthetic-sensitive-value", "ab" * 32, "QWxhZGRpbjpvcGVuIHNlc2FtZUZpeHR1cmU=", "DO_NOT_EXPORT", "/private/project", "\x1b", "\u202e"]:
+                        self.assertNotIn(private, output)
+                    self.assertEqual(observed[-2]["event"], "decision-sent")
+                    # OP314 intentionally refuses an unknown receipt extension.
+                    checked = subprocess.run([sys.executable, "-I", "-B", str(CLIENT.with_name("cursor-acp-smoke-check.py")), "-"], input="".join(json.dumps(x) + "\n" for x in observed), text=True, capture_output=True, timeout=5)
+                    self.assertEqual(checked.returncode, 2)
+                    self.assertEqual(json.loads(checked.stdout), {"event": "refused", "reason": "unexpected-field"})
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        stream.close()
+
+    def test_fake_context_binding_approval_and_no_decision_fail_closed(self):
+        cases = [
+            ({"requestID": "41"}, "stale-or-cross-session-decision"),
+            ({"sessionID": "foreign"}, "stale-or-cross-session-decision"),
+            ({"kind": "question"}, "decision-kind-mismatch"),
+            ({"optionID": "allow"}, "permission-approval-not-supported"),
+            (None, "decision-input-closed"),
+        ]
+        for mode in ["context-valid", "context-missing"]:
+            for change, reason in cases:
+                with self.subTest(mode=mode, change=change), tempfile.TemporaryDirectory() as directory:
+                    process = self.launch(directory, mode)
+                    try:
+                        while json.loads(process.stdout.readline())["event"] != "permission-required":
+                            pass
+                        if change is not None:
+                            decision = {"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"}
+                            decision.update(change)
+                            process.stdin.write(json.dumps(decision) + "\n")
+                            process.stdin.flush()
+                        events, output = self.finish(process)
+                        self.assertEqual(process.returncode, 2)
+                        self.assertEqual(events[-1], {"event": "failed", "reason": reason})
+                        self.assertNotIn("decision-sent", output)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
+                        for stream in (process.stdin, process.stdout, process.stderr):
+                            stream.close()
 
     def test_real_fake_transport_fs_and_terminal_get_method_not_found(self):
         with tempfile.TemporaryDirectory() as directory:

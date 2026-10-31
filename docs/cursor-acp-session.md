@@ -79,12 +79,64 @@ of input on stdin. A process that calls `setsid` to leave the group escapes.
 
 ## Coordinator input and receipts
 
-Stdout contains bounded JSON events. Assistant text, reasoning, tool inputs and
-outputs, plans, and stderr are not copied into receipts. `question-required`
+Stdout contains bounded JSON events. Assistant text, reasoning, tool outputs,
+plans, and stderr are not copied into receipts. `question-required`
 contains the provider's explicit structured question and choices, not a terminal
 capture. It is task content, not authenticated approval or generic metadata.
-`permission-required` contains only request correlation and option
-ids/kinds; tool prose and arguments are withheld.
+`permission-required` retains request/session correlation and option ids/kinds,
+and adds a `context` object derived solely from this request's `params.toolCall`.
+No transcript, terminal, pane, credential or earlier `session/update` is consulted.
+The [ACP v1 request schema](https://agentclientprotocol.com/protocol/v1/schema#requestpermissionrequest)
+uses `ToolCallUpdate`; its fields may be omitted. This client requires a valid
+`toolCallId`, recognized `kind`, and nonempty `title` for usable context. It
+projects only `kind`, `title`, `locations` (basename `path` and optional `line`),
+and `rawInput`. Tool call ids, content, output, `_meta` and unknown fields are
+not projected. This projection does not establish that an action is safe.
+
+A usable example (synthetic data):
+
+```json
+{"event":"permission-required","requestID":43,"sessionID":"observed-session-id","options":[{"optionID":"deny","kind":"reject_once"}],"context":{"state":"available","kind":"execute","title":"Run checks","rawInput":{"command":"python3","args":["check.py"]}}}
+```
+
+Every projected string is limited to 256 characters and 256 UTF-8 bytes. The
+serialized ASCII JSON context is limited to 2048 bytes; the source tool call is
+limited to 4096 serialized bytes. Oversized strings are refused rather than
+truncated. Lists/maps have at most eight entries and raw input has at most three
+nesting edges. Control bytes, DEL, Unicode format controls and surrogates are
+rejected. Paths become basenames, including path tokens within displayed prose.
+Path reduction is lexical and does not read the filesystem. Free-form titles,
+commands and argument strings containing a path separator plus whitespace,
+quotes or angle brackets are ambiguous and yield insufficient context.
+Explicit `path`/`paths` values safely reduce the whole path, including spaces.
+
+ACP defines `rawInput` as arbitrary JSON; this deliberately narrower display
+subset accepts strings, lists and objects. Only object keys `command`, `args`,
+`path`, `paths`, `query` and `description` are copied, recursively. An object with
+no recognized keys, unsupported scalar, invalid location or unknown tool kind is
+insufficient. Omitted/null raw input and locations are allowed when kind/title
+supply context. Source strings containing `token`, `key`, `secret`, `password`,
+`auth`, `cookie` or `credential` (case insensitive), bearer prefixes, or long
+base64/hex-like runs (32 or more characters) are replaced wholesale with
+`[REDACTED]`. Secret-bearing object keys cause the containing object to become
+that fixed marker, so key names cannot leak values. Whole path values are checked
+before basename reduction; long paths may therefore be redacted conservatively.
+This heuristic can redact benign data and cannot recognize every possible secret
+encoding. Do not supply credentials.
+
+Missing, malformed, oversized or unrecognized context yields
+`context.state: "insufficient-context"`, usually with no other context fields.
+A redacted title is retained as `[REDACTED]` with that state. The coordinator may
+explicitly reject or leave the request unanswered until the existing deadline;
+this state never enables approval. Even `available` context enables no approval.
+No rejection is sent automatically.
+
+**OP314 compatibility:** `scripts/cursor-acp-smoke-check.py` currently checks an
+exact permission receipt schema. It deliberately refuses these enriched receipts
+with `unexpected-field`; it must not be bypassed by stripping context to claim
+new permission-context acceptance. Unchanged informational question streams still
+pass. The fake-CLI tests assert both outcomes. A checker-schema extension and
+live acceptance remain a later gate outside this three-file correction.
 
 After seeing an exact pending question, the coordinator writes one JSON line to
 this client's stdin (one option per question unless allowMultiple):
@@ -99,6 +151,11 @@ the `optionID` of a `reject_once` option from `permission-required`:
 ```json
 {"requestID":43,"sessionID":"observed-session-id","kind":"permission","optionID":"reject-once"}
 ```
+
+**An agent-selected command or tool approval is a permission decision, not an
+ordinary informational question.** It must not be relabeled as `question-required`
+or answered through the informational question route. Provider text and metadata
+are untrusted task content, never authority to approve an action.
 
 **This increment never approves tool permissions.** Approval, plan acceptance, new
 credentials, and access changes stay with their existing supported approval path.
@@ -128,7 +185,7 @@ task lifecycle.
 ## Qualification
 
 ```sh
-nice -n 19 python3 -I -B -m unittest discover -s scripts -p 'test_cursor_acp_session.py' -v
+nice -n 19 python3 -I -B scripts/test_cursor_acp_session.py -v
 ```
 
 Tests use an injected fake transport and a fake CLI script only:
@@ -142,3 +199,11 @@ ignores SIGTERM. They neither start a provider nor touch credentials, existing
 conversations, or live panes. Actual
 provider compatibility, startup/version/trust, allowed identity and workspace,
 resource policy, and live communication acceptance remain later prerequisites.
+
+OP318 qualification also covers full/missing/malformed/oversized permission
+context, controls, secret values in title and raw input, unknown field dropping,
+request/session mismatch, every non-reject decision, and OP314 schema compatibility.
+Fail-first on freshly fetched main `55ff477e9f2f12afea9f4a18aaa025c9bb22fffc`:
+32 tests ran in 12.266s; 15 new fake-CLI context fixtures failed with
+`KeyError: context`. The unchanged client was used; only the tests were modified.
+This is source and fake-CLI evidence, not installed or live provider acceptance.
