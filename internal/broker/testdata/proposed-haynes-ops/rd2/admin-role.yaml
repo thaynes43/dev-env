@@ -1,0 +1,14 @@
+# PROPOSED / NON-AUTHORITATIVE. No subjects or bindings; never auto-loaded.
+# Effective root resource RBAC AND every non-resource endpoint, DESIGN-043.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dev-env-grant-breakglass
+  labels:
+    dev-env.haynesops.com/grant-role: "true"
+rules:
+  - apiGroups: ['*']
+    resources: ['*']
+    verbs: ['*']
+  - nonResourceURLs: ['*']
+    verbs: ['*']

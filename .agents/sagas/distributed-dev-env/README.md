@@ -1,5 +1,12 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**2026-10-31 RD2 proposal, OP233:** [DESIGN-043](designs/043-rd2-minimal-admin-lease.md)
+recommends an exact SA-name/UID static admission exemption for a 30-minute admin
+lease, with explicit revocation/cache and derived-authority limits. Proposed role
+and guard fixtures plus envtest evidence are source only; the compiler is unwired,
+default off. Lead exact-head review and all activation remain held. RD3/storage
+and PR799/800 source custody are separate.
+
 **2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md)
 proposes Session-owned upgrade attempt claims and exact PR/head joins.
 Q-325-01 and Q-325-02 are pending for Tom; no writer or activation follows.
