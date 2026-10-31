@@ -131,6 +131,10 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 		}
 	}
 
+	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
+		return 0, nil, err
+	}
+
 	if c.kind == kindSession {
 		if c.depth > maxSessionDepth {
 			return 0, nil, forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
