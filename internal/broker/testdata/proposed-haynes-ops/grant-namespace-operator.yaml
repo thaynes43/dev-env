@@ -19,6 +19,11 @@
 #   - a command the agent chooses, in a Job that uses a named Secret, can print it.
 # So the class effectively grants read of every Secret mounted in the namespace's pods,
 # plus the named ones. The named-Secret guard bounds only what a new pod may add.
+#
+# Release or expiry deletes the grant's bindings and ServiceAccount, so new API calls
+# fail at once. An exec stream already open runs until it closes. A Job keeps running
+# until its activeDeadlineSeconds, which dev-env-grant-secret-names caps at 3600. A
+# Secret value already printed or copied cannot be recalled.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
