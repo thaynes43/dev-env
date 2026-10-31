@@ -53,7 +53,7 @@ No new framework, per-command gate or approval service is proposed.
 
 | Grant type | Standing policy | Attested policy (D-88) | Human decision | Live policies (13:50Z) |
 |---|---|---|---|---|
-| kube | yes | yes | no route: only `maintenance_decision.go:32` calls `Decide`; the phone page is #219, in progress | `kube-nodes-attested` |
+| kube | yes | yes | no route: only `internal/broker/maintenance_decision.go:32` calls `Decide`; the phone page is #219, in progress | `kube-nodes-attested` |
 | egress | yes | yes | no route (same) | `lan-ceph-mgr-metrics`, `lan-internal-ingress`, `lan-pve-api-lb`, `lan-pve-api-nodes`, `lan-ssh-tier`, `egress-haynesintelligence-ssh-attested`, `egress-pikvm-ssh-attested` |
 | credential | yes | yes | refused (`internal/broker/seams.go:151`) | `credential-proxmox`, `credential-hw-ssh-attested` |
 | maintenance | refused (`api/v1alpha1/accessgrant_types.go:463`; `internal/broker/match.go:111`) | refused (same) | only `dev-env-system/dev-env-human` (`internal/apiserver/maintenance.go:36`; `seams.go:143`; broker flag `--maintenance-human-service-account`) | none |
@@ -91,7 +91,7 @@ native control gates are out of scope.
 
 - Only the grant's own requesting session may attest (`grant_attestation.go:24`). It is
   a requester self-statement. The broker message says "agent attestation, not verified
-  human identity" (`internal/grantattest/attest.go:235`).
+  human identity" (`internal/grantattest/attest.go:49`, used by `Message` at `:235`).
 - The statement binds the grant UID, the scope digest, the TTL, and the attestor's
   session, session UID and pod UID from the token (`attest.go:81-90`). One statement per
   grant: an identical retry returns 200 and a different one 409. It must arrive in the
@@ -105,7 +105,7 @@ native control gates are out of scope.
 - The broker re-verifies the statement against the live session and its running pod
   (`internal/broker/attestation.go:48`). It writes `approvedBy policy/<name>`
   (`broker.go:222`). Credential execution re-checks it (`credentials.go:159`).
-- Known gap (`D001:4170`): kube and egress execution never re-read `approvedBy`.
+- Known gap (`D001:4163`): kube and egress execution never re-read `approvedBy`.
 - Flags are live: operator `--enable-grant-attestation=true`
   (`DES/operator/app/helmrelease.yaml:312`), broker `--enable-attested-grants=true`
   (`DES/broker/app/helmrelease.yaml:76`).
@@ -121,7 +121,7 @@ native control gates are out of scope.
 | `dev-env-grant-nodes` | Cluster-wide. Node patch, pod eviction. | `grant-catalog.yaml:93-114` |
 | `dev-env-grant-breakglass` | Named in the broker guard and CRD. **Not in git and not live.** | `grant-catalog.yaml:15-16`; live `kubectl get clusterrole` returned NotFound |
 | `dev-env-agent-guard` | Matches only `dev-agents/dev-env-agent`. Jobs run as `default` and mount no Secret except `*-volsync-aws-secret`. Workloads: restart only. CronJob: suspend only. Flux: reconcile and suspend. ExternalSecret: force-sync. | `DES/rbac/app/agent-guard.yaml:59, 67-68, 175-182` |
-| `dev-env-identity-guard` | Matches every `dev-agents` SA except the workbench, so every `grant-*` identity. No writes in dev-env namespaces; grants write nothing in flux-system, kyverno, external-secrets, kube-system; pods run as `default` and meet the baseline; **no new Secret reference** except the volsync suffix. | `DES/rbac/app/identity-guard.yaml:48-53, 176, 254` |
+| `dev-env-identity-guard` | Matches every `dev-agents` SA except the workbench, so every `grant-*` identity. No writes in dev-env namespaces; grants write nothing in flux-system, kyverno, external-secrets, kube-system; pods run as `default` and meet the baseline; **no new Secret reference** except the volsync suffix. | `DES/rbac/app/identity-guard.yaml:50-54, 176, 254` |
 | `dev-env-broker-guard` | The broker touches only `grant-*` objects in `dev-agents`, and binds only catalog roles to the grant's own SA. | `DES/rbac/app/broker-guard.yaml:78-119` |
 | `dev-env-maintenance-annotations` | Only the operator sets the maintenance decision annotation, once. | `DES/rbac/app/maintenance-annotations.yaml` |
 | Maintenance executor | The broker creates a bare Pod pinned to the node and node UID, SA `dev-env-maintenance` with no token, caps drop ALL plus the named ones, not privileged, a deny-all NetworkPolicy, and RuntimeClass `nvidia` with `NVIDIA_VISIBLE_DEVICES=<GPU UUID>` for `nvidia-utility`. Control-plane nodes are refused. | `internal/broker/maintenance_executor.go:27-96`; `maintenance_scope.go:142-151` |
@@ -138,7 +138,7 @@ reconcile patches (`DES/rbac/app/agent.yaml:78-118`). It has no Secret read.
 | `grant-1031-033915-fc19` (maintenance, Card C, SYS_ADMIN, 10m) | Denied, `deniedBy: timeout`, "no answer in 30 minutes" |
 | `grant-1031-132422-84ca` (same scope) | Pending at 13:51Z; Denied by `timeout` when read at 13:55:48Z |
 | `grant-1031-033808-7327` (same, without SYS_ADMIN) | Released before an answer |
-| `grant-1030-122127-d7d9`, `grant-1030-130136-9897` (kube `dev-env-grant-nodes`, workbench, haynes-ops) | Denied by `timeout`. `kube-nodes-attested` names profile `full` only, so a workbench session matched nothing. This is the whack-a-mole Tom describes. |
+| `grant-1030-122127-d7d9`, `grant-1030-130136-9897` (kube `dev-env-grant-nodes`, workbench, haynes-ops) | Denied by `timeout`. `kube-nodes-attested` names profile `full` (and repo `haynes-ops`) only, so a workbench session matched nothing. This is the whack-a-mole Tom describes. |
 
 ## 3. v1 baseline against v2 today
 
@@ -198,22 +198,25 @@ needs a new role and one guard expression.
 
 | Class | Max TTL, proposed | Revocation and cleanup | Audit | GitOps or runtime | Status |
 |---|---|---|---|---|---|
-| C1 | 3h (type max 8h) | release or expiry deletes the SA, so every token dies; RoleBindings go with it | AccessGrant kept 90 days (`broker.go:68`), `approvedBy`, attestation annotation, objects changed by `grant-<id>`; API audit log Unknown | runtime for live fixes, scaling and one-off Jobs; persistent change in git (Flux reverts drift) | role exists; policy new |
-| C2 | 1h | as C1; Jobs carry `activeDeadlineSeconds` no later than the grant's end and `ttlSecondsAfterFinished` of 1h at most | as C1, plus the Job spec shows each Secret reference and the command | runtime one-shots; recurring work becomes a CronJob in git | new, small |
+| C1 | 3h coordinator band, 8h user band | release or expiry deletes the SA, so every token dies; RoleBindings go with it | AccessGrant kept 90 days (`broker.go:68`), `approvedBy`, attestation annotation, objects changed by `grant-<id>`; API audit log Unknown | runtime for live fixes, scaling and one-off Jobs; persistent change in git (Flux reverts drift) | role exists; policy new |
+| C2 | 1h | as C1. Release does not stop a running Job: revoke deletes only the SA and RoleBindings (`kube.go:162-176`). So the guard requires `activeDeadlineSeconds` and `ttlSecondsAfterFinished` of 3600 at most on Jobs a grant creates. | as C1, plus the Job spec shows each Secret reference and the command | runtime one-shots; recurring work becomes a CronJob in git | new, small |
 | C3 | 3h | broker deletes the CNP; the expiry backstop also does | grant, Hubble flows | runtime | mechanism exists; policy new |
-| C4 | egress 3h; credentials 1h | CNP deleted; credential removed from tmpfs. Removal is not revocation of a copied static key (D-89). | grant, CredentialJob receipt, keeper journal | runtime | exists; policies widened |
+| C4 | egress 3h, SSH 1h; credentials 1h | CNP deleted; credential removed from tmpfs. Removal is not revocation of a copied static key (D-89). | grant, CredentialJob receipt, keeper journal | runtime | exists; policies widened |
 | C5 | 1h (30m default) | `stopMaintenance` proves the Pod stopped on the node UID, then deletes Pod and NetworkPolicy | grant, attestation, exec log lines, restore evidence | runtime | exists; attested path in flight (S1) |
 
 **C2 in detail.** The new ClusterRole holds `secrets` with the single verb `use`, plus
 Job create, get, list, watch and delete, pod read and `pods/log` get. It holds no `get`
-or `list` on Secrets. The identity guard's `addedSecrets` filter
-(`identity-guard.yaml:176`) gains one clause: a grant identity may reference Secret `n`
-in the request namespace when
-`authorizer.group('').resource('secrets').namespace(ns).name(n).check('use').allowed()`.
-The broker binds the role only in the namespaces the grant names, only while it lives.
-`dev-env-agent` never holds `use`, so its volsync-only rule is unchanged. Kubernetes
-RBAC accepts a custom verb, and VAP CEL exposes `authorizer`. A server dry-run must
-confirm both on the cluster's 1.35 API server before activation.
+or `list` on Secrets. The identity guard's rule 4 (`identity-guard.yaml:254`) gains
+one namespace-level test, outside the `addedSecrets` filter: a grant identity passes when
+`authorizer.group('').resource('secrets').namespace(request.namespace).check('use').allowed()`.
+One check per request keeps the expression inside the CEL cost budget, which prices each
+authorization check at 350000 of 1000000. A per-Secret check inside the filter would
+refuse any Job with three or more Secret references. The role has no resourceNames, so
+a name adds nothing. A pod can reference only Secrets in its own namespace, and the Job
+must still run as `default`. The broker binds the role only in the namespaces the grant
+names, only while it lives. `dev-env-agent` never holds `use`, so its volsync-only rule
+is unchanged. A server dry-run on the 1.35 API server confirms the custom verb and the
+check before activation.
 
 **C2 is not read-back-proof.** The agent writes the Job. A Job can print a value, and
 the baseline identity can exec into the Job's pod and read its logs. That equals v1's
@@ -239,8 +242,9 @@ C5 and widens who is eligible.
 4. The requester runs `agent-run grant attest <grant> --approved-by user|coordinator:<session> --ref <message id>`.
 5. The broker approves under the matching attested policy, or the grant times out.
 
-No grant is approved without an attested statement that cites the approver's message
-ref. An attestation is the requester's claim. It is never verified human identity, and
+No grant is approved under an attested policy without a statement that cites the
+approver's message ref. Standing policies such as `lan-*` and `credential-proxmox` still
+approve without one, as today. An attestation is the requester's claim. It is never verified human identity, and
 no record, log or UI may call it that.
 
 ### 6.2 What binds, and what is new
@@ -258,8 +262,10 @@ no record, log or UI may call it that.
 - `spec.attested` (exists): the approver may be `user` or `coordinator:<ref>`. This is
   the coordinator band: narrow scope, short TTL.
 - `spec.userAttested` (new, S3): the statement's approver must be `user`. This is the
-  user band: wider namespaces, longer TTL. It is still an attestation. The different
-  policy name makes the audit honest about who was asked.
+  user band: wider namespaces, longer TTL. It is still an attestation. The approver
+  field is written by the requester and checked for syntax only (`attest.go:93-102`), so
+  the policy name records whom the requester says it asked. It is not enforcement.
+- A policy that sets both `attested` and `userAttested` is refused.
 
 The requester rule at `accessgrant_types.go:467` must accept `userAttested` as the
 requester block, with `profiles`, `repos`, `agents` and `attested` empty. An older
@@ -279,7 +285,7 @@ space is H1 to H5 or a policy change.
 
 ### 6.5 Delegated approvers (optional, not in the bundle)
 
-The audit's alternative is a configured list of coordinator identities that decide
+The lead's gate audit proposed a configured list of coordinator identities that decide
 themselves, recorded as `delegate/<ref>`, so audit never reads a delegate as human. It
 gives real requester/approver separation. It needs a new decision route, a new caller
 class or list, and broker `Decide` changes. It is larger than the rest of the bundle
@@ -295,7 +301,7 @@ Everything outside this list is delegable.
 | H2 | Secret read through the API (`dev-env-grant-secrets-read`, any namespace) | Lists and returns every value at once, with no record of which were used; copies cannot be recalled | `match.go:120`, CRD `:573`. C2 is the delegable form: named Secrets mounted into a Job whose spec is the record. |
 | H3 | Claude Max and Codex login ceremony | One owner per rotating refresh token; a second refresher revoked the family on 2026-08-29 | keeper-only design |
 | H4 | Changes to the bounds: GrantPolicies, catalog roles, guards, broker and operator RBAC and flags | An agent that widens its own bounds makes them meaningless | Tom's review. This is a convention today: agents can self-merge haynes-ops (Q-16 residual risk). DESIGN-039 proposes enforcement; Q-269-03 is pending. |
-| H5 | Destructive storage or data operations: `dev-env-grant-storage`, database, Ceph pool, volume or backup deletion, disk wipes, firmware writes | Not undone by a rollback | no policy names `dev-env-grant-storage`; hardware operations state "non-destructive" or wait for Tom. The baseline's narrow `database` PVC delete for CNPG re-clone stays. |
+| H5 | Destructive storage or data operations: `dev-env-grant-storage`, database, Ceph pool, volume or backup deletion, disk wipes, firmware writes | Not undone by a rollback | Enforced: no policy names `dev-env-grant-storage` or the storage and data namespaces (9.2). Convention: a hardware operation states that it is non-destructive, or waits for Tom. The baseline's narrow `database` PVC delete for CNPG re-clone stays. |
 
 Refused by code for everyone, Tom included: maintenance on control-plane nodes
 (`maintenance_scope.go:142-151`), grants in the dev-env namespaces, and profile `ops`.
@@ -315,7 +321,7 @@ Refused by code for everyone, Tom included: maintenance on control-plane nodes
 | Class | Coordinator band | User band | Concurrency per session (rule; the broker does not enforce one today) |
 |---|---|---|---|
 | C1 | 3h, app namespaces | 8h, plus infrastructure namespaces | 2 active |
-| C2 | 1h, app namespaces | 1h, plus infrastructure namespaces | 1 per namespace |
+| C2 | 1h, app namespaces | 1h, plus `network` | 1 per namespace |
 | C3 | 3h, app namespaces | none in this bundle | 2 active |
 | C4 egress | 3h (SSH 1h) | none in this bundle | — |
 | C4 credential | 1h `hw-ssh`, 1h `proxmox` | none in this bundle | 1 per credential |
@@ -330,8 +336,8 @@ added by a later policy PR only when a real request needs it.
 
 | ID | Change | Status | Default |
 |---|---|---|---|
-| S1 | OP233-ATTESTED-MAINT: an attested maintenance GrantPolicy; CRD rule `:463` keeps breakglass refused; the match binds `MaintenanceDigest`; the policy scope covers runtime profile, capabilities, nodes, image digests, CPU, memory and max TTL. | **In flight**, separate worker. Branch `agent/op233-attested-maint` was not on origin at 13:58Z. Field and flag names belong to it. | default-off flag |
-| S2 | Add `dev-env-grant-secret-use` to both kube role enums (`api/v1alpha1/accessgrant_types.go:254, 572`) and the broker catalog (`internal/broker/checks.go:28`); namespaced only; run `make generate`. | New, small | inert until haynes-ops binds it |
+| S1 | OP233-ATTESTED-MAINT. An attested maintenance GrantPolicy. CRD rule `:463` still refuses breakglass. The match binds `MaintenanceDigest`. The policy scope covers runtime profile, capabilities, nodes, image digests, CPU, memory and max TTL. | **In flight**, separate worker. Branch `agent/op233-attested-maint` was not on origin at 14:05Z. Field and flag names belong to it. | default-off flag |
+| S2 | Add `dev-env-grant-secret-use` to both kube role enums (`api/v1alpha1/accessgrant_types.go:254, 572`) and the broker catalog (`internal/broker/checks.go:28`), plus the envtest copies in `internal/broker/testdata/haynes-ops/` (`broker-guard.yaml`, `broker.yaml`, `grant-catalog.yaml`); namespaced only; run `make generate`. | New, small | inert until haynes-ops binds it |
 | S3 | `GrantPolicy.spec.userAttested`: same shape as `attested`; approver must be `user`; the requester rule at `accessgrant_types.go:467` accepts it. | New, small | inert until a policy sets it; fail-closed on rollback |
 | S4 | CLI and MCP say when no policy covers a request and point to message escalation; attest help requires the approver's message ref. | New, small | text and a read-only match |
 | S5 | Refuse a second attestation that cites one ref for a different digest. | New, small, optional | — |
@@ -346,17 +352,17 @@ broker pins, as CLAUDE.md requires.
 |---|---|---|---|
 | R1 | CRD copy from the release | `DES/crds/app/` | remove the user-band and maintenance policies first, then revert the copy |
 | R2 | Operator and broker pins to the release | `DES/operator/app/helmrelease.yaml`, `DES/broker/app/helmrelease.yaml` | pin back |
-| P1 | ClusterRole `dev-env-grant-secret-use` with the grant-role label; broker `bind` resourceNames gain it (`DES/rbac/app/broker.yaml:25-33`); broker-guard RoleBinding catalog gains it (`broker-guard.yaml:78-82`) | `DES/rbac/app/grant-catalog.yaml` | revert; active grants end at release or expiry |
-| P2 | Identity guard: a grant identity may reference a Secret it may `use`; grant-created Jobs need `activeDeadlineSeconds` and `ttlSecondsAfterFinished` | `DES/rbac/app/identity-guard.yaml:176, 254` | revert; new Secret references are refused again |
+| P1 | ClusterRole `dev-env-grant-secret-use` with the grant-role label; broker `bind` resourceNames gain it (`DES/rbac/app/broker.yaml:25-33`); broker-guard RoleBinding catalog gains it (`broker-guard.yaml:52-56`) | `DES/rbac/app/grant-catalog.yaml` | revert; active grants end at release or expiry |
+| P2 | Identity guard rule 4: a grant identity that may `use` Secrets in the request namespace may reference them (one check per request); Jobs a grant creates carry `activeDeadlineSeconds` and `ttlSecondsAfterFinished` of 3600 at most | `DES/rbac/app/identity-guard.yaml:176, 254` | revert; new Secret references are refused again |
 | P3 | GrantPolicies (table below) | `DES/grant-policies/app/policies.yaml` | delete a policy; matching stops and active grants run out |
 | P4 | Broker flag for attested maintenance (name from S1) | `DES/broker/app/helmrelease.yaml` | set it false |
 
 | P3 policy | Type | Band | Scope | maxTTL |
 |---|---|---|---|---|
 | `kube-workloads-attested` | kube | attested | `dev-env-grant-workloads`; app namespaces (Q-042-03) | 3h |
-| `kube-workloads-user-attested` | kube | userAttested | same role; plus infrastructure namespaces | 8h |
+| `kube-workloads-user-attested` | kube | userAttested | same role; plus the infrastructure namespaces | 8h |
 | `kube-secret-use-attested` | kube | attested | `dev-env-grant-secret-use`; app namespaces | 1h |
-| `kube-secret-use-user-attested` | kube | userAttested | same role; plus infrastructure namespaces | 1h |
+| `kube-secret-use-user-attested` | kube | userAttested | same role; plus `network` only (Authentik wiring) | 1h |
 | `egress-cluster-services-attested` | egress | attested | endpoints by app namespace; the app Service ports, up to 16 (list Unknown until the PR enumerates them). Whether an entry with empty `matchLabels` admits any pod is Unknown and must be tested. | 3h |
 | `kube-nodes-attested` (widen) | kube | attested | requesters per Q-042-01 | 3h |
 | `lan-ssh-attested` | egress | attested | the eight `lan-ssh-tier` FQDNs and the PiKVM CIDR of `egress-pikvm-ssh-attested`, port 22 | 1h |
@@ -369,9 +375,12 @@ The 33 live namespaces, proposed split:
 
 - **App (coordinator band):** `ai`, `downloads`, `frontend`, `home-automation`, `media`,
   `observability`, `office`, `photos`.
-- **Infrastructure (user band):** `arc-runners`, `arc-systems`, `ceph-csi`,
-  `cert-manager`, `database`, `k8tz`, `network`, `openebs-system`, `rook-ceph`,
-  `storage-util`, `upgrade-agent`, `volsync-system`.
+- **Infrastructure (user band, C1 only; C2 adds `network` alone):** `arc-runners`,
+  `arc-systems`, `cert-manager`, `k8tz`, `network`, `upgrade-agent`. C2 stays out of
+  `cert-manager` (the DNS token) and `upgrade-agent` (the shepherd and responder App
+  keys), because a Job can print what it mounts.
+- **Storage and data (H5; no policy in this bundle):** `ceph-csi`, `database`,
+  `openebs-system`, `rook-ceph`, `storage-util`, `volsync-system`.
 - **Never:** `dev-env-system`, `dev-agents`, `dev-tools`, `dev-env-budgets`, `dev` (the
   v1 pod), `default`, `flux-system`, `kyverno`, `external-secrets`, `kube-system`,
   `kube-public`, `kube-node-lease`, `cilium-secrets`.
@@ -438,7 +447,8 @@ applied.
    the implementation is MyAnonamouse, sets only field `mamId`, then PUT. It may run the
    indexer test. It prints status codes and booleans only.
 4. Expect admission to pass. Negative checks: the same Job from `dev-env-agent` is
-   refused; a Job naming a Secret in an ungranted namespace is refused.
+   refused; the same Job from a C1 grant identity (no `use`) is refused; a Job naming a
+   Secret in an ungranted namespace is refused.
 5. Release. Expect the SA gone.
 
 Traffic stays inside `downloads`, which has no NetworkPolicy, so no egress grant is
@@ -454,9 +464,9 @@ Evidence: the grant, the Job spec and status, its status-only log, Prowlarr's in
 | ID | Question | Recommended answer |
 |---|---|---|
 | Q-042-01 | Which sessions may use the attested classes? | Every `full` and `workbench` session in any repo, and their children. `dev` stays on the baseline; `ops` never matches (D-18). |
-| Q-042-02 | Who may approve by message for each class? | Tom or the requester's coordinator for C1 to C5 in the coordinator band. Only Tom for the user band. |
-| Q-042-03 | Which namespaces belong to each band for C1 and C2? | The app and infrastructure lists in 9.2. |
-| Q-042-04 | Amend ADR-012 so an attested policy may approve the bounded GPU maintenance class? | Yes, by a new ADR. Every other maintenance scope keeps the human decision route. |
+| Q-042-02 | Who may approve by message for each class? | Tom or the requester's coordinator for C1 to C5 in the coordinator band. Only Tom for the user band; the requester's statement says so, and nothing verifies it. |
+| Q-042-03 | Which namespaces belong to each band for C1 and C2? | The lists in 9.2. Named risk: C2 in `network` lets a Job mount Authentik's Secrets. |
+| Q-042-04 | Amend ADR-012 so an attested policy may approve the bounded GPU maintenance class? | Yes, by a new ADR. Other maintenance scopes get their own attested policy by policy PR (6.4). The `dev-env-human` route stays only as a fallback. |
 | Q-042-05 | Build delegate decisions (`delegate/<ref>`) now? | No. Defer to #304. Attestation by message covers both acceptance cases. |
 | Q-042-06 | Extend hardware access (all eight SSH targets, PVE API, hw-ssh key and Proxmox operator token) to every eligible session on attestation? | Yes, with 1h credential leases. Destructive hardware operations stay H5. |
 
