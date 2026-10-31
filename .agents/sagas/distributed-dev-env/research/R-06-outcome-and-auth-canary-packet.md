@@ -18,11 +18,21 @@ selector-session and lifecycle reads are from 05:21Z.
   - Stage A (outcome): one fresh Codex task on 2.75.0, through the existing task
     selector. It writes an outcome and is reclaimed. API and CLI evidence before
     and after reclaim. Tom's authenticated portal view after reclaim, at his
-    convenience.
+    convenience. **Stage A is non-destructive on its own:** its HOME is kept by
+    the private-history latch (re-verified in source and live, section 5).
   - Stage B (auth): one fresh Claude remote canary on the same 2.75.0 image,
     through the existing generic selector. Its window is two natural keeper
     refreshes or 24 hours, whichever comes first. It ends with `agent-run
     suspend` and a selector revert.
+- **No supported non-destructive end exists today for a remote session.** After
+  suspend, the existing archive deletes the HOME at `suspendedAt` +
+  `archiveAfter`. A longer `archiveAfter` is only a longer timer. Every way to
+  keep a remote HOME indefinitely is a policy change (section 5, "Is there a
+  non-destructive end for a remote session?").
+- **So Stage B needs its own, separate retention line.** Approving Stage B does
+  not approve deleting its HOME. Tom must approve that deletion explicitly, at a
+  stated timer (proposed: 720 hours after the suspend). Without that approval,
+  Stage B does not start.
 - **An ordinary auth soak is not proof of the recovery branch.** It proves that
   branch only if a natural 401 happens during the window. There is no forced
   revocation and no refresh probe.
@@ -305,6 +315,25 @@ operator rollouts (A1 and its revert).
   its HOME while the private-history latch holds and the DESIGN-025 HOME-expiry
   flags stay off, as they are now (`internal/controller/guard.go:314-320`). No
   reap is needed.
+- **Retained-HOME check, re-verified for this exact path** (a Codex task the lead
+  creates through the task selector):
+  - With `--enable-private-history-retention=true` (live), every task without a
+    workspace is marked (`private_history.go:43-45`). The reconciler writes
+    `status.privateHistory` before the finalizer and before any pod
+    (`reconciler.go:283-287`; `private_history.go:113-131`).
+  - The task selector changes only the pod image, later, in `sessionPod()`
+    (`pod.go:156-169, 186-199`). It does not touch the marking.
+  - The CRD refuses removal of `privateHistory` once set
+    (`api/v1alpha1/agentsession_types.go:490`). The flag's own text says it
+    keeps the HOME "on reap and suspended autoarchive"
+    (`cmd/dev-env-operator/main.go:221`).
+  - Live at 05:41Z: `dev-env-1029-014357` (selected by the task selector, parent
+    Root) and `dev-env-1031-043646` (a Codex task the lead created) both have
+    `privateHistory` with admission `Started`, their own home claim, and the
+    rescue finalizer.
+  - Limit: this holds while the HOME-expiry delete flags stay off. If Tom later
+    turns on `--enable-home-history-archive` and `--enable-home-expiry-delete`,
+    private HOMEs can be archived and then deleted by that separate path.
 - If the canary is resumed after the revert, its new pod gets 2.71.0. A resumed
   task never runs its prompt again.
 
@@ -323,7 +352,7 @@ Claude task on 2.75 waits for the template move.
 | Window | not stated | two natural keeper refreshes or 24 hours, whichever comes first |
 | Turns | not stated | one short ordinary turn per hour |
 | End | not stated | `agent-run suspend`, then revert the selector to `usage-pilot-1` |
-| HOME retention | not stated | created with `--archive-after 720h` |
+| HOME retention | not stated | created with `--archive-after <T>`. Deletion at T needs its own explicit approval (section 6, line 3). Proposed T: 720 hours. |
 | Exclusions | as listed in section 1 | Same: no template change, no active-session upgrade, no credentials, no login, no refresh or revocation probe, no pairing copy, no user-input inspection |
 
 **Steps, with the evidence each one gives:**
@@ -332,7 +361,7 @@ Claude task on 2.75 waits for the template move.
 |---|---|---|---|
 | B0 | Run after Stage A, because both stages edit `helmrelease.yaml`. Take a baseline snapshot. Check that zero sessions carry the key. | The baseline. | The usage coordinator objects (see custody). |
 | B1 | One haynes-ops PR. It changes exactly two operator args: `--pilot-agent-image=ghcr.io/thaynes43/dev-env:2.75.0@sha256:15dc76a6…` and `--pilot-agent-session=dev-env-1029-132039/auth310-2730-canary-20261031`. Final PR review, guard, merge. | Args diff is 2 lines. The operator is 2/2 ready. Every session pod is unchanged, including `dev-env-1028-031951` (same UID, still 2.52.0). | Anything else differs, or any session pod changed. |
-| B2 | The lead creates one ordinary Claude remote session (`agent-run --interactive`) with that key and `--archive-after 720h`. | Session name and UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. Neither projection warning line appears, and the first turn is answered. | Wrong image. Or "Claude authentication requires a current keeper projection" or "pod holds its own login" persists. Then suspend (B5) and stop. |
+| B2 | The lead creates one ordinary Claude remote session (`agent-run --interactive`) with that key and `--archive-after <T>`, where T is the timer Tom approved in section 6, line 3. | Session name and UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. Neither projection warning line appears, and the first turn is answered. | Wrong image. Or "Claude authentication requires a current keeper projection" or "pod holds its own login" persists. Then suspend (B5) and stop. |
 | B3 | One short ordinary turn per hour, through `agent-run msg`. | The lead reads each reply. Keeper `state=refreshed` log lines give each natural refresh time. The first turn after each refresh is answered. `conversationUsage.turns` is weak corroboration only. | A turn gets no answer and no recovery follows. Suspend (B5) and stop. |
 | B4 | The window ends: two natural refreshes after B2, or 24 hours, whichever comes first. Save only the fixed agentd lines from the container log (the two projection warnings, `projection applied` if a recovery happened, `continued after the login was renewed`, `continue ... was not confirmed`). Also save the Session `conversationUsage`. | A receipt with those lines and counts. These container log lines are lost when the pod stops, so this step comes first. Loki may also hold them; its retention is Unknown. | Not applicable. |
 | B5 | `agent-run suspend <canary>`, then verify that the canary's pod and provider have actually exited, not just that the spec or phase says Suspended. | Phase Suspended, `suspendedAt` set, rescue result recorded, PVC Bound. The canary pod is NotFound (`kubectl get pod -n dev-agents <canary>`), and `agent-run show` reports the agent exited. | The rescue fails, or the pod or provider is still running. Record it and stop before B6. Do not delete the HOME, force-delete the pod or replay any work; the volume is kept for a human. |
@@ -350,12 +379,18 @@ revert).
 - **Archive timer:** a suspended session is archived at `suspendedAt` +
   `archiveAfter`. The templates' default is 168 hours (`templates.yaml:49`
   `lifecycle.archiveAfter`). A session can override it at creation with
-  `agent-run --archive-after` (`internal/controller/reconciler.go:844-879`). This
-  proposal uses 720 hours, so the HOME stays 30 days after B5. **At that expiry
-  the existing archive deletes the canary's HOME** after a verified rescue (next
-  bullet). This is not indefinite history preservation. It is a proposed
-  retention consequence for this one canary, which Tom reviews in section 6. It
+  `agent-run --archive-after` (`internal/controller/reconciler.go:844-879`). The
+  proposed T is 720 hours, so the HOME would stay 30 days after B5. **At that
+  expiry the existing archive deletes the canary's HOME** after a verified rescue
+  (next bullet). This is not indefinite history preservation. It needs Tom's own
+  explicit approval (section 6, line 3); approving Stage B does not imply it. It
   is not a change to any live or global retention policy.
+- **The timer is an upper bound, not a guarantee.** Any caller may reap any
+  session, and a reap archives the volume right after the rescue (`agent-run help
+  reap`). The API sets `lifecycle` only at creation; I found no route that
+  changes it later.
+- **The volume data goes with the claim.** The StorageClass `gasha01-rbd` has
+  reclaim policy `Delete` (live read), so deleting the PVC deletes the volume.
 - **What archive deletes:** the HOME volume, after a verified rescue
   (`reconciler.go:885-960`; `guard.go:314-340`). The rescue bundle holds git refs
   and tracked or untracked worktree files only. Gitignored files, the
@@ -379,33 +414,88 @@ revert).
   a resume is a new decision.
 - **No rollback floor from Stage B.** A remote session records no `taskOutcome`.
 
+### Is there a non-destructive end for a remote session?
+
+Checked in v2.75.0 source, the templates and the live operator args. Each
+candidate is judged on three questions: is it supported today, does it keep the
+HOME indefinitely or only longer, and is using it a policy change.
+
+| Candidate | Supported today? | Indefinite, or a timer? | Policy change to use it? |
+|---|---|---|---|
+| A long `archiveAfter`, set at creation (`agent-run --archive-after`) | Yes. The CRD and the API require only a positive Go duration (`api/v1alpha1/agentsession_types.go:479-483`; `internal/apiserver/validate.go:238-255`). There is no other maximum; Go's limit is about 292 years. I did not test a very large value against the API server. | **A timer only.** The HOME is still deleted at expiry, and any reap deletes it sooner. | No. It is an existing per-session field (`templates.yaml:40-42`). But deletion at that timer still needs Tom's explicit approval. |
+| `original-home-binding` annotation | It exists and blocks archive (`reconciler.go:901-910`; `guard.go:315-317`). | Indefinite while bound. | **Yes.** It is admitted only by an operator flag naming one exact Session, and its check requires a **Codex remote** session (`internal/homeguard/binding.go:113`). It cannot cover a Claude remote canary. |
+| `home-expiry` owner hold annotation | It exists for the private HOME expiry and stop paths (`private_stop.go:98-101`). | Not applicable. | The ordinary archive path does not read it (`guard.go:314-340`; `reconciler.go:888-960`), so it does not protect a remote HOME. Agents also cannot write annotations in `dev-agents`. |
+| `agentd ctl hold-rescue` | It exists, as part of a restore. | It only resets a rescue bundle's time so the shelf prune skips it (`cmd/agentd/main.go:115-118`). It keeps git content, not the HOME. | Not a session end. |
+| A refused or failed rescue | It blocks archive: "the newest rescue failed, so the volume is kept for a human" (`guard.go:337`). | Indefinite until a human decides. A hold pod retries a failed rescue every 15 minutes (`reconciler.go:87-90`). | Causing it on purpose would game a safety guard. It is not a supported end. |
+| A keep option on `agent-run suspend` | No. The only option is `-o json`, and the API call has no body (`internal/agentrun/lifecycle.go:18-45`; `internal/apiserver/lifecycle.go:25-27`). | Not applicable. | Not applicable. |
+| Private-history marking of a remote session (DESIGN-025) | **No.** Only tasks are newly marked; "Remote and local sessions are never marked" (`private_history.go:40-45`, ADR-008). The other protected kinds, sealed pilots and project canaries, are limited to tasks by the CRD (`agentsession_types.go:144, 147`). | Indefinite, but only for tasks. | **Yes:** a new ADR and a source change. |
+| A longer global `lifecycle.archiveAfter` | Yes (`templates.yaml:49`). | A timer. | **Yes:** a global retention change for every session. |
+| `tools/h7-retain-action` | A fixed, one-attempt action for the history-archive volume, run by the owner (`tools/h7-retain-action/main.go:1-3`). | Not applicable. | Not a session path. It needs its own owner decision. |
+| Leave the canary Running | Yes, with a long `--idle-suspend-after`. | Indefinite only while it runs. | **Not allowed here:** it would be an unbounded running canary. |
+
+**Verdict:** no supported, non-destructive, stop-and-retain end exists for a
+remote session today without a policy change. The only supported stop is
+suspend. After suspend, the HOME is deleted by archive at the session's timer,
+or sooner by a reap. A longer timer delays deletion but does not prevent it.
+
+**Stage B dependency:** Stage B can start only if Tom explicitly approves deleting
+the canary's HOME at a stated timer. The other route is a separate story that
+adds a retention policy for one remote canary (an ADR and source, then review and
+release) before Stage B. Either way, the canary never runs unbounded.
+
+**What the HOME holds after B4:** the transcript and `~/.agentd`, including the
+continue receipt. This packet does not read either of them. The B4 receipt and
+the Session record carry the evidence. That is context for the choice, not a
+recommendation to delete.
+
 ## 6. The decision for Tom
 
-**Approve the staged pair as scoped in section 5?**
+One decision with three line items. Line 3 is separate on purpose: approving
+Stage B does **not** approve deleting its HOME.
 
-- Stage A: one fresh Codex task on signed dev-env:2.75.0 through the existing
-  task selector, retargeted from Root's completed key. API and CLI evidence
-  before and after reclaim. Tom's portal view after reclaim, at his convenience.
-- Stage B, after Stage A: one fresh Claude remote canary on the same signed
-  2.75.0 image through the existing generic selector. The window is two natural
-  keeper refreshes or 24 hours, whichever comes first. One short turn per hour.
-  It ends with suspend, a check that the pod and provider exited, and then a
-  selector revert. **Retention consequence for this one canary:** its HOME is kept
-  for 720 hours after the suspend. At that expiry the existing archive DELETES it,
-  after a verified rescue that keeps git content only. A remote session has no
-  history export. Approving Stage B approves this consequence for this canary
-  only. It is not a live or global retention-policy change, and the deletion is not
-  approved unless Tom approves Stage B.
+**Line 1. Stage A: approve?** One fresh Codex task on signed dev-env:2.75.0
+through the existing task selector, retargeted from Root's completed key. API
+and CLI evidence before and after reclaim. Tom's portal view after reclaim, at
+his convenience. **Stage A is non-destructive on its own:** its HOME is kept by
+the verified private-history latch (section 5, "Retained-HOME check"). Reclaim
+removes only its compute pod.
 
-Options:
+**Line 2. Stage B: approve?** After Stage A: one fresh Claude remote canary on
+the same signed 2.75.0 image through the existing generic selector. The window
+is two natural keeper refreshes or 24 hours, whichever comes first. One short
+turn per hour. It ends with suspend, a check that the pod and provider exited,
+and then a selector revert. Line 2 counts only together with a yes on line 3.
 
-- **Yes, both stages as scoped. Recommended.** It gives #741 its first
-  runtime run seen in this cluster (an absence claim, per OP310 journals 3678 and
-  3716 and the live images) on a remote session and gives the outcome record its first
-  installed run. A yes also accepts the narrow 031951 exposure (section 5,
-  "Custody from current data"), unless the usage coordinator objects before B1.
-- **Narrower: Stage A only.** Stage B stays held. Cost: #741 stays without any
-  production evidence on a remote session.
+**Line 3. Stage B retention: required if line 2 is yes.**
+
+- (i) A supported non-destructive end: **none exists today** (section 5, "Is
+  there a non-destructive end for a remote session?"). This packet does not
+  claim one.
+- (ii) Explicit approval of HOME deletion: the existing archive deletes the
+  canary's HOME at `suspendedAt` + T, after a verified rescue that keeps git
+  content only. A remote session has no history export. A reap by any caller
+  would delete it sooner. **Proposed T: 720 hours.** Tom may name a longer
+  finite T. This applies to this one canary only. It is not a change to any live
+  or global retention policy.
+- If line 2 is yes and line 3 is no: Stage B does not start. Its dependency is a
+  separate story that adds a retention policy for one remote canary. Stage B
+  never starts without a safe end, and the canary is never left running
+  unbounded.
+
+**Options:**
+
+- **Lines 1, 2 and 3(ii) at T = 720 hours. Recommended.** It gives #741 its
+  first runtime run seen in this cluster (an absence claim, per OP310 journals
+  3678 and 3716 and the live images) on a remote session, and the outcome record
+  its first installed run. The deletion is explicitly approved for this one
+  canary at a stated time. A yes also accepts the narrow 031951 exposure
+  (section 5, "Custody from current data"), unless the usage coordinator objects
+  before B1.
+- **Lines 1, 2 and 3(ii) at a longer T that Tom names.** Same, with a later
+  deletion. It is still a finite timer.
+- **Line 1 only: Stage A only.** Stage A is non-destructive on its own. Stage B
+  waits for either a line 3(ii) approval or the retention-policy story. Cost:
+  #741 stays without production evidence on a remote session until then.
 - **No.** Both stay held.
 
 Notes on a yes:
@@ -425,6 +515,9 @@ Notes on a yes:
   global templates and their revision are not touched.
 - **Rollback floor:** after Stage A, the operator must stay at 2.75 or later for
   the canary task's Session (section 5, Stage A).
+- **HOME deletion:** none is approved by lines 1 or 2. Stage A's HOME is kept by
+  the private-history latch. Stage B's HOME is deleted, after a verified rescue,
+  at the timer approved on line 3(ii), or sooner by a reap.
 - **Old-pilot rebuild fallback:**
   - During Stage A, a resume of `dev-env-1029-014357` would get 2.71.0, not
     2.63.0.
@@ -455,9 +548,13 @@ Notes on a yes:
 - `opwork search` matches subjects only. No item has "canary" in its subject.
 - The provider's access-token life, and so the refresh cadence, is Unknown. It
   was not inspected by design. A 24-hour window may see fewer than two refreshes.
-- Every supported end of a remote session deletes its HOME on a timer: suspend
-  at `suspendedAt` + `archiveAfter`, reap right after the rescue. Remote sessions
-  get no history retention or export.
+- No supported non-destructive end exists for a remote session. Every
+  supported end deletes its HOME: suspend at `suspendedAt` + `archiveAfter`,
+  reap right after the rescue. Each way to keep it indefinitely is a policy
+  change. Remote sessions get no history retention or export.
+- A very large `archiveAfter` was not tested against the API server. The API
+  sets `lifecycle` only at creation.
+- Stage A's retained HOME depends on the HOME-expiry delete flags staying off.
 - agentd's container log lines are lost when the pod stops. Loki retention is
   Unknown. Evidence must be saved before the suspend.
 - agentd logs "Claude projection applied" only when a failed sync recovers, so a
@@ -482,8 +579,12 @@ Notes on a yes:
   selector key for OP235). Templates unchanged at main d20f3971 (05:07Z).
 - dev-env v2.75.0 (`fac30c80`): `internal/controller/pod.go:93-199, 482-488`;
   `drain.go:56-71`; `terminal_task_reclaim.go:89-215`;
-  `private_history.go:34-45`; `guard.go:300-345`; `reconciler.go:500-530,
-  844-960`; `internal/shelf/pruner.go:16-103`;
+  `private_history.go:34-45, 113-131`; `guard.go:300-345`; `reconciler.go:87-90,
+  283-287, 500-530, 844-960`; `private_stop.go:98-101`;
+  `internal/homeguard/binding.go:113`; `internal/apiserver/validate.go:238-255`;
+  `internal/apiserver/lifecycle.go:25-27`; `internal/agentrun/lifecycle.go:18-45`;
+  `cmd/agentd/main.go:115-118`; `cmd/dev-env-operator/main.go:221`;
+  `tools/h7-retain-action/main.go:1-3`; `internal/shelf/pruner.go:16-103`;
   `internal/agentd/claude_continue.go:19-41, 198-271`; `daemon.go:536-559`;
   `settings.go:54, 146`; `runagent.go:441-475`; `status.go:63`;
   `internal/keeper/claude_worker.go:108-117, 236`;
@@ -501,5 +602,10 @@ Notes on a yes:
   sessions, pods and PVCs. Operator args have no `history` or `expiry` flag
   besides `--enable-private-history-retention=true` and the portal history
   target. `kubectl auth can-i get pods/log -n dev-agents` is yes.
+- Cluster reads at 05:41Z: `privateHistory` (admission `Started`) and the rescue
+  finalizer on `dev-env-1029-014357` and `dev-env-1031-043646`. StorageClass
+  `gasha01-rbd` reclaim policy `Delete`. Operator generation 142 on
+  `sha-fac30c8`. haynes-ops templates and operator files unchanged from d20f3971
+  to a036fda0.
 - Signing: `gh release view v2.75.0`. publish-agent run 41169349678, job
   124443724051, log lines for push (04:42:14Z) and verification (04:42:21Z).
