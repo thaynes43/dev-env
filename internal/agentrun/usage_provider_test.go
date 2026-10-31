@@ -55,7 +55,7 @@ func TestUsageShowProviderReportedModelsBillingAndRollup(t *testing.T) {
 		"Initial task cost:", "0.75 USD (CLI equivalent estimate)",
 		"claude-haiku-4-5: input 10, output Unknown, cache read Unknown, cache create Unknown, cost 0.05 USD (CLI equivalent estimate)",
 		"claude-opus-5-5: input 20, output 5, cache read Unknown, cache create Unknown, cost Unknown",
-		"Descendant usage:", "Complete over 2 retained descendant Sessions, 2 invocations counted once each; retained reaped/reclaimed Sessions included; deleted Sessions excluded",
+		"Descendant usage:", "Complete over 2 retained descendant Sessions, 2 invocations counted once each; retained reaped/reclaimed Sessions included; deleted Sessions, and descendants reached only through them, excluded",
 		"input tokens:", "111", "cost:", "0.6 USD (CLI equivalent estimate)", "models:", "claude-haiku-4-5, claude-opus-5-5 (provider reported)")
 	if strings.Contains(out, "$") {
 		t.Fatal("unqualified dollars", out)
@@ -72,7 +72,7 @@ func TestUsageShowPartialRollupStaysUnknown(t *testing.T) {
 	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, s) }
 	h.mustRun(ExitOK, "show", s.Name)
 	out := h.stdout.String()
-	contains(t, "partial rollup", out, "Partial over 3 retained descendant Sessions, 0 invocations counted once each; walk stopped at the bound; retained reaped/reclaimed Sessions included; deleted Sessions excluded")
+	contains(t, "partial rollup", out, "Partial over 3 retained descendant Sessions, 0 invocations counted once each; walk stopped at the bound; retained reaped/reclaimed Sessions included; deleted Sessions, and descendants reached only through them, excluded")
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "input tokens:") || strings.HasPrefix(strings.TrimSpace(line), "cost:") {
 			if !strings.HasSuffix(strings.TrimSpace(line), "Unknown") {

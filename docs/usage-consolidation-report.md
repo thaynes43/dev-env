@@ -139,7 +139,7 @@ Actual deletion of a Session object is a separate boundary: ordinary portal
 inventory and descendant rollups exclude it. Existing opt-in captured
 parent receipts can survive a child's deletion and be exported explicitly;
 they are never added to a retained-descendant rollup. Without such retained
-evidence, deleted historical usage is Unknown. This source/test contract does
+evidence, deleted historical usage is outside the retained-descendant scope: it is absent from a total that can still read Complete. This source/test contract does
 not enable capture, connect an allowance reader or activate a deployment.
 
 The portal also validates Session identity across the entire paginated read.

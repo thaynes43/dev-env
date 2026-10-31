@@ -285,7 +285,7 @@ caller may read any Session and gets the keys.
 
 `agent-run show` prints the served models, provenance, billing basis, each
 model's counters and cost, and the retained descendants' rollup, saying that
-deleted Session objects are excluded; retained reaped/reclaimed Sessions count.
+deleted Session objects are excluded, and so are descendants reachable only through a deleted Session (the walk follows parent names); retained reaped/reclaimed Sessions count.
 
 **Out of scope.** Pricing from tokens, subscription quota, API billing, local
 inference, TUI/resume/native coverage, the SessionDirectory usage fields and
@@ -396,11 +396,11 @@ If a Session object has already been deleted, the ordinary rollup and portal
 inventory cannot reconstruct it from HOME or a missing pod. Existing optional
 parent receipts may preserve its initial invocation for explicit capture/export
 reads; they remain a separate `CaptureOnly` view, not an all-history total.
-Without a retained observation or receipt, that historical usage is Unknown.
+Without a retained observation or receipt, that historical usage is outside the retained-descendant scope: it is absent from a total that can still read Complete.
 No live-pod read, provider-account call, allowance connection, capture enabling
 or activation is part of this contract. Tokens remain usage, never quota.
 
-The OP315 trace also found a portal aggregation defect: identity uniqueness was
+The OP315 trace also hardened the portal read contract (a conformant operator pages one consistent snapshot, so this cannot occur today): identity uniqueness was
 checked within each page, but a repeated Session on a later page contributed
 again to the Usage breakdowns. The read must reject duplicate Session names or
 UIDs across pages before projection, preserving the existing response-contract
