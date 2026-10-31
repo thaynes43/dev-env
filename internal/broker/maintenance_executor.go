@@ -84,6 +84,13 @@ func (b *Broker) activeMaintenance(ctx context.Context, g *v1alpha1.AccessGrant,
 		}
 		return ctrl.Result{}, err
 	}
+	// So is a delegate approval (DESIGN-042 6.2).
+	if err := b.delegatedHolds(ctx, g); err != nil {
+		if p := (permanent{}); errors.As(err, &p) {
+			return b.end(ctx, g, v1alpha1.GrantReleased, "", "maintenance approval no longer holds: "+err.Error(), now)
+		}
+		return ctrl.Result{}, err
+	}
 	// Deny network before any executor is made. RBAC/admission review is held.
 	policy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: g.Namespace, Name: g.Name, Labels: grantLabels(g), OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(g, v1alpha1.GroupVersion.WithKind("AccessGrant"))}}, Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{MaintenanceLabel: string(g.UID)}}, PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress}}}
 	var have networkingv1.NetworkPolicy

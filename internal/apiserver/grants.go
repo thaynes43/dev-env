@@ -475,6 +475,12 @@ func (s *Server) grantKey(r *http.Request) (types.NamespacedName, error) {
 
 // getGrant serves GET /v1/grants/{name}.
 func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	// A coordinator host reaches this route only while delegates are
+	// configured, and reads a grant only when it is a listed delegate
+	// (DESIGN-042 6.2): it reviews the scope it decides.
+	if c.kind == kindCoordinator && !slices.Contains(s.GrantDelegates, c.identity.serviceAccountRef()) {
+		return 0, nil, coordinatorDenied()
+	}
 	key, err := s.grantKey(r)
 	if err != nil {
 		return 0, nil, err
@@ -484,7 +490,7 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
 	v := s.grantView(&g)
-	if g.Spec.Type == v1alpha1.GrantMaintenance && r.Header.Get(apiv1.GrantTaskClaimsHeader) == apiv1.GrantTaskClaimsV1 {
+	if c.kind != kindCoordinator && g.Spec.Type == v1alpha1.GrantMaintenance && r.Header.Get(apiv1.GrantTaskClaimsHeader) == apiv1.GrantTaskClaimsV1 {
 		v.TaskClaims = s.grantTaskClaims(ctx, &g, c)
 	}
 	return http.StatusOK, v, nil
@@ -495,6 +501,9 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 // and clients may release a grant; another session may not. The grant object
 // stays: it is the audit record (DESIGN-001 6.12).
 func (s *Server) releaseGrant(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if c.kind == kindCoordinator {
+		return 0, nil, coordinatorDenied()
+	}
 	key, err := s.grantKey(r)
 	if err != nil {
 		return 0, nil, err
@@ -544,6 +553,10 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 		ServiceAccount:  st.ServiceAccount,
 		InstalledPodUID: st.InstalledPodUID,
 		InstalledAt:     timeOf(st.InstalledAt),
+	}
+	if len(s.GrantDelegates) > 0 {
+		// A delegate decision echoes the UID (DESIGN-042 6.2).
+		v.UID = string(g.UID)
 	}
 	if g.Spec.Maintenance != nil {
 		v.UID = string(g.UID)

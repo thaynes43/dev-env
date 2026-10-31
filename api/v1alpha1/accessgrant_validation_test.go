@@ -434,6 +434,32 @@ func TestGrantPolicyAccepts(t *testing.T) {
 			p.Spec.Credential = &v1alpha1.CredentialPolicy{Names: []v1alpha1.CredentialName{v1alpha1.CredentialProxmox}}
 			p.Spec.MaxTTL = ttl(4 * time.Hour)
 		}},
+		// DESIGN-042 6.2: a delegated policy, alone or with attested.
+		{"delegated policy: requesters only under delegated", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full", "workbench", "coordinator"}}
+		}},
+		{"attested and delegated workloads", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}}
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Repos: []string{"haynes-ops"}, Agents: []v1alpha1.AgentKind{"claude"}}
+		}},
+		{"delegated egress", printerPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+		}},
+		{"delegated-only maintenance for Card C", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Attested = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full", "workbench", "coordinator"}}
+		}},
+		{"attested and delegated maintenance for Card C", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+		}},
+		{"attested storage stays possible", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}}
+			p.Spec.Kube.Roles = []string{v1alpha1.RoleStorage}
+		}},
 		{"attested maintenance for Card C (ADR-013)", maintenancePolicy, nil},
 		{"attested maintenance on the generic path with exact lists, 1h", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
 			m := p.Spec.Maintenance
@@ -476,7 +502,7 @@ func TestGrantPolicyRejects(t *testing.T) {
 		{"a standing maintenance policy", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Attested = nil
 			p.Spec.Repos = []string{"haynes-ops"}
-		}, "no standing policy approves maintenance: only an attested policy may name a maintenance scope"},
+		}, "no standing policy approves maintenance: only an attested or delegated policy may name a maintenance scope"},
 		{"maintenance without a scope", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Maintenance = nil
 		}, "maintenance is set for type maintenance, and only there"},
@@ -551,7 +577,51 @@ func TestGrantPolicyRejects(t *testing.T) {
 		}, "no policy matches profile ops"},
 		{"attested policy that also sets legacy requesters", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}}
-		}, "attested policy names them only under attested"},
+		}, "names them only under attested or delegated"},
+		// DESIGN-042 6.2: spec.delegated, alone or beside spec.attested.
+		{"delegated policy that also sets legacy requesters", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+		}, "names them only under attested or delegated"},
+		{"delegated policy naming no requester", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Agents: []v1alpha1.AgentKind{"claude"}}
+		}, "name the requesters"},
+		{"both blocks, delegated naming no requester", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}}
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{}
+		}, "in each block it carries"},
+		{"both blocks, attested naming no requester", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{}
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+		}, "in each block it carries"},
+		{"delegated profile ops", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"ops"}}
+		}, "no policy matches profile ops"},
+		{"delegated credential", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+			p.Spec.Type = v1alpha1.GrantCredential
+			p.Spec.Kube = nil
+			p.Spec.Credential = &v1alpha1.CredentialPolicy{Names: []v1alpha1.CredentialName{v1alpha1.CredentialHWSSH}}
+		}, "no delegated policy approves a credential"},
+		{"delegated storage", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+			p.Spec.Kube.Roles = []string{v1alpha1.RoleWorkloads, v1alpha1.RoleStorage}
+		}, "no delegated policy approves dev-env-grant-storage"},
+		{"delegated break-glass", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+			p.Spec.Type = v1alpha1.GrantBreakglass
+		}, "no policy approves break-glass: authenticated human approval is required"},
+		{"delegated secrets-read", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+			p.Spec.Kube.Roles = []string{v1alpha1.RoleSecretsRead}
+		}, "no policy approves dev-env-grant-breakglass or dev-env-grant-secrets-read"},
 		{"attested policy naming no requester", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Repos = nil
 			p.Spec.Attested = &v1alpha1.AttestedRequesters{}
