@@ -64,9 +64,18 @@ names, each only when set in the caller's environment, and nothing else:
 
 `PATH`, `HOME`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `XDG_RUNTIME_DIR`
 
-Pod tokens and keys (for example `CLAUDE_CODE_OAUTH_TOKEN`) never reach the
-third-party binary. Any Cursor authentication variable, such as an API key,
-needs a separate approved change; this increment passes none.
+Pod tokens and keys held in environment variables (for example
+`CLAUDE_CODE_OAUTH_TOKEN`) never reach the third-party binary through its
+environment. That is an environment boundary only: the child runs as the same
+user, so it can still read files that user can read, such as `/creds/gh_token`,
+the ServiceAccount token, and anything under `HOME` or `XDG_RUNTIME_DIR`. A live
+run therefore needs a separate identity or filesystem boundary, reviewed in its
+own change. Any Cursor authentication variable, such as an API key, also needs a
+separate approved change; this increment passes none.
+
+If the client itself receives SIGTERM or SIGHUP, it still stops the child's
+process group. SIGKILL to the client cannot be handled; the child then sees end
+of input on stdin. A process that calls `setsid` to leave the group escapes.
 
 ## Coordinator input and receipts
 

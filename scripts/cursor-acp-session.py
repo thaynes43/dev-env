@@ -329,8 +329,8 @@ def leader_exited(process):
     try:
         # WNOWAIT leaves the leader unreaped, so its id cannot name another group yet.
         return os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
-    except ChildProcessError:
-        return True
+    except OSError:
+        return True  # Unknown leader state: stop waiting and send the SIGKILL.
 
 
 def stop_group(process, grace=SHUTDOWN_GRACE, clock=time.monotonic):
@@ -340,15 +340,23 @@ def stop_group(process, grace=SHUTDOWN_GRACE, clock=time.monotonic):
     SIGKILL goes to the whole group even when the leader exited in time.
     """
     group = process.pid  # start_new_session=True makes the leader's pid the group id.
-    signal_group(group, signal.SIGTERM)
-    end = clock() + grace
-    while clock() < end and not leader_exited(process):
-        time.sleep(0.02)
-    signal_group(group, signal.SIGKILL)
     try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        pass  # The group is already SIGKILLed; reaping must not raise past cleanup.
+        signal_group(group, signal.SIGTERM)
+        end = clock() + grace
+        while clock() < end and not leader_exited(process):
+            time.sleep(0.02)
+    finally:
+        # Always, even if the grace wait is interrupted.
+        signal_group(group, signal.SIGKILL)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass  # The group is already SIGKILLed; reaping must not raise past cleanup.
+
+
+def exit_on_signal(signum, frame):
+    """Turn SIGTERM/SIGHUP to the client into SystemExit so cleanup stops the child group."""
+    raise SystemExit(128 + signum)
 
 
 def main(argv=None):
@@ -390,6 +398,9 @@ def main(argv=None):
             prompt = raw.decode("utf-8")
         except UnicodeError:
             raise Refusal("invalid-prompt-encoding") from None
+        # A signal to the client must still reach the finally that stops the child group.
+        signal.signal(signal.SIGTERM, exit_on_signal)
+        signal.signal(signal.SIGHUP, exit_on_signal)
         process = subprocess.Popen([str(client.resolve()), "--model", args.model, "acp"], cwd=str(cwd.resolve()), env=child_environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
         def send(value):
             raw = json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"

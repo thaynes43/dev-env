@@ -411,6 +411,37 @@ class SubprocessTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
+    def test_sigterm_to_client_still_stops_provider_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "hang", 30)
+            child = None
+            try:
+                children = Path(f"/proc/{process.pid}/task/{process.pid}/children")
+                end = time.monotonic() + 10
+                while child is None and time.monotonic() < end:
+                    try:
+                        listed = children.read_text().split()
+                    except OSError:
+                        listed = []
+                    child = int(listed[0]) if listed else None
+                    if child is None:
+                        time.sleep(0.05)
+                self.assertIsNotNone(child, "provider child never started")
+                process.send_signal(signal.SIGTERM)
+                process.communicate(timeout=15)
+                self.assertNotEqual(process.returncode, 0)
+                self.assertTrue(pid_gone(child), "provider survived SIGTERM to the client")
+                child = None
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                if child is not None:
+                    try:
+                        os.killpg(child, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     def test_unexpected_exception_still_emits_fixed_failed_receipt(self):
         driver = "import importlib.util,sys\nspec=importlib.util.spec_from_file_location('acp',sys.argv[1])\nm=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\ndef boom(self,message): raise RuntimeError('PRIVATE_INTERNAL_DETAIL')\nm.Session.provider=boom\nraise SystemExit(m.main(sys.argv[2:]))\n"
         with tempfile.TemporaryDirectory() as directory:
