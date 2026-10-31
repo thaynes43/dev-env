@@ -24,6 +24,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // Body limits. A create carries a prompt of at most 64 KiB
@@ -261,11 +262,20 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	// The exception is a Codex host a workbench session starts (Story110 T30):
 	// it runs on the default profile, never the workbench's, so the phone-driven
 	// Codex agent gets no pods/exec and cannot start more hosts.
+	// A named coordinator identity (DESIGN-042 6.4, S4) is never inherited: a
+	// child of a session on such a profile runs on the default profile, which
+	// cannot name one. Only the workbench among sessions launches one, by naming
+	// its profile.
 	switch {
 	case s.isWorkbenchSession(c) && v1alpha1.AgentKind(req.Agent) == v1alpha1.AgentCodex && req.Mode == "remote":
 		if spec.Profile != "" {
 			return nil, forbidden("a codex host started by a workbench session runs on the default profile; omit the profile")
 		}
+	case c.kind == kindSession && c.profile != "" && s.profileIdentity(ctx, c.profile) != "":
+		if spec.Profile != "" {
+			return nil, forbidden("a child of a session on profile %s, which runs as a named coordinator identity, runs on the default profile; omit the profile", c.profile)
+		}
+	case s.isWorkbenchSession(c) && spec.Profile != "" && s.profileIdentity(ctx, spec.Profile) != "":
 	case c.kind == kindSession && c.profile != "":
 		switch spec.Profile {
 		case "":
@@ -285,6 +295,12 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	if len(fields) > 0 {
 		return nil, invalid(fields...)
 	}
+	identity := s.profileIdentity(ctx, spec.Profile)
+	if identity != "" {
+		if !s.mayLaunchNamedCoordinator(c) {
+			return nil, forbidden("profile %s runs as a named coordinator identity; only Tom, a client or the workbench launches it (DESIGN-042 6.4)", spec.Profile)
+		}
+	}
 
 	sess := &v1alpha1.AgentSession{
 		ObjectMeta: metav1.ObjectMeta{
@@ -292,6 +308,13 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			Labels:    map[string]string{v1alpha1.LabelDepth: fmt.Sprint(c.depth)},
 		},
 		Spec: spec,
+	}
+	if identity != "" {
+		// The admission record the controller requires before it runs the pod
+		// as the account (controller.buildPod). Every create path checks that
+		// no other session holds it (admitNamedCoordinator) under the create
+		// lock, after an idempotent repeat has had its answer.
+		sess.Labels[templates.CoordinatorIdentityLabel] = identity
 	}
 	if len(snapshot) != 0 {
 		sess.Annotations = map[string]string{v1alpha1.AnnotationProjectSnapshot: string(snapshot)}

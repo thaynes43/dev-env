@@ -87,6 +87,9 @@ func (s *Server) createPrivatePilot(ctx context.Context, w http.ResponseWriter, 
 	if err != nil || string(latest.Snapshot) != string(evidence.Snapshot) || latest.CatalogUID != evidence.CatalogUID || latest.CatalogResourceVersion != evidence.CatalogResourceVersion || evidence.Common.Confirm(ctx, s.Live) != nil || (!dryRun && !p.Open(s.now())) {
 		return 0, nil, forbidden("pilot admission expired or authority changed before create")
 	}
+	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
+		return 0, nil, err
+	}
 	if dryRun {
 		if err := s.Client.Create(ctx, sess, client.DryRunAll); err != nil {
 			return 0, nil, fromKubeError(err, "validate sealed pilot dry-run")

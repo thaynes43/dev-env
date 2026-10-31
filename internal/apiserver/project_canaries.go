@@ -98,6 +98,9 @@ func (s *Server) createProjectCanary(ctx context.Context, w http.ResponseWriter,
 	if s.RetainedCommonRules && common.Confirm(ctx, s.Live) != nil {
 		return 0, nil, invalid(fieldError("canaryID", "accepted common authority changed before create"))
 	}
+	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
+		return 0, nil, err
+	}
 	createErr := s.Client.Create(ctx, sess)
 	// A lost acknowledgement or another replica's atomic create is resolved
 	// only through the original exact name; no generated suffix or new key.

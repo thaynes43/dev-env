@@ -276,12 +276,22 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		// Set, empty unless this is a workbench pod, so no envFrom source sets it.
 		{Name: templates.WorkbenchEnv, Value: ""},
 	}
-	// A profile may run its pods as the workbench identity, and only that one
-	// (templates.Validate). A hold pod, which rescues a volume, never does.
+	// A profile may run its pods as the workbench identity or a named coordinator
+	// identity, and no other (templates.Validate). A hold pod, which rescues a
+	// volume, never does. A named coordinator identity also needs the API's
+	// admission record (DESIGN-042 6.4, S4): the API alone enforces who may launch
+	// one and that one session holds each account. A session that reached such a
+	// profile any other way (kubectl, the standby, a create while the templates
+	// could not be read) runs as dev-env-agent.
 	serviceAccount := ServiceAccountName
-	if !hold && profile.ServiceAccount == templates.WorkbenchServiceAccount {
+	switch {
+	case hold:
+	case profile.ServiceAccount == templates.WorkbenchServiceAccount:
 		serviceAccount = profile.ServiceAccount
 		env[len(env)-1].Value = "1"
+	case templates.IsCoordinatorServiceAccount(profile.ServiceAccount) &&
+		s.Labels[templates.CoordinatorIdentityLabel] == profile.ServiceAccount:
+		serviceAccount = profile.ServiceAccount
 	}
 
 	// An explicit empty value overrides envFrom on legacy and hold Pods.

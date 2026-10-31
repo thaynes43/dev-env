@@ -83,6 +83,13 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 		if cur == mode && (binding == nil || sess.Annotations[homeguard.Annotation] == binding.String()) {
 			return http.StatusOK, view(&sess, false), nil
 		}
+		if mode == v1alpha1.OperatingModeRunning {
+			// A resume starts a pod: a named coordinator identity's session
+			// waits until no other session holds the account (DESIGN-042 6.4).
+			if err := s.admitNamedCoordinator(ctx, &sess); err != nil {
+				return 0, nil, err
+			}
+		}
 		orig := sess.DeepCopy()
 		if binding != nil {
 			if sess.Annotations == nil {

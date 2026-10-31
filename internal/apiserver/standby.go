@@ -31,6 +31,9 @@ func (s *Server) CreateStandby(ctx context.Context, req apiv1.CreateSessionReque
 
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
+		return "", err
+	}
 	base := generatedName(sess.Spec.Repo, s.now())
 	for i := 1; i <= nameAttempts; i++ {
 		sess.Name = base
