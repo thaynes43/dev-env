@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.76.0](https://github.com/thaynes43/dev-env/compare/v2.75.0...v2.76.0) (2026-10-31)
+
+
+### Features
+
+* **claims:** join session and Page ownership with bounded reads ([#765](https://github.com/thaynes43/dev-env/issues/765)) ([916dc02](https://github.com/thaynes43/dev-env/commit/916dc027f22a1b6ef50f10b790e64d65cbeefdae))
+* **cursor-acp:** smoke checker accepts bounded permission context (OP318) ([#763](https://github.com/thaynes43/dev-env/issues/763)) ([f8b0d06](https://github.com/thaynes43/dev-env/commit/f8b0d064948b5dfa5c00d00625554289099a69ea))
+* **portal:** show a task's retained outcome after reclaim (OP326) ([#762](https://github.com/thaynes43/dev-env/issues/762)) ([fbe0c74](https://github.com/thaynes43/dev-env/commit/fbe0c7448c799d1dcf98cc4e186c769c3a92b626))
+
+
+### Bug Fixes
+
+* **agent:** sync opwork with haynes-ops a036fda0 (OP327 outage recovery) ([#764](https://github.com/thaynes43/dev-env/issues/764)) ([d0846b2](https://github.com/thaynes43/dev-env/commit/d0846b2c32411f5e0d8b0a6504d9e711d616065d))
+* **inbox:** review fixes for ask/reply (supersedes [#766](https://github.com/thaynes43/dev-env/issues/766), OP321) ([#769](https://github.com/thaynes43/dev-env/issues/769)) ([7f884db](https://github.com/thaynes43/dev-env/commit/7f884db589e407068ddb2a64919239987dc14006))
+
 ## [2.75.0](https://github.com/thaynes43/dev-env/compare/v2.74.0...v2.75.0) (2026-10-31)
 
 
