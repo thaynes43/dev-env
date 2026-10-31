@@ -9,6 +9,7 @@ import io
 import json
 import re
 import sys
+import unicodedata
 
 MAX_FRAME = 65536
 MAX_EVENTS = 515
@@ -20,6 +21,15 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REASON = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
 DECISION_KINDS = frozenset({"question", "permission"})
+# Mirrors cursor-acp-session.py permission_context(); a test pins these to its constants.
+TOOL_KINDS = frozenset({"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"})
+RAW_FIELDS = frozenset({"command", "args", "path", "paths", "query", "description"})
+CONTEXT_STRING_MAX = 256
+CONTEXT_ENTRIES_MAX = 8
+CONTEXT_DEPTH_MAX = 3
+CONTEXT_MAX = 2048
+REDACTED = "[REDACTED]"
+PRINTABLE_ASCII = re.compile(r"[ -~]*")
 
 
 class Refusal(Exception):
@@ -181,6 +191,98 @@ def validate_permission_options(options):
         seen.add(option["optionID"])
 
 
+def context_string_ok(value):
+    """One receipt string: the session's display form, so ASCII with no path separator."""
+    if not isinstance(value, str) or not value or len(value) > CONTEXT_STRING_MAX:
+        return False
+    if any(unicodedata.category(char).startswith(("C", "Zl", "Zp")) for char in value):
+        return False
+    try:
+        if len(value.encode("utf-8")) > CONTEXT_STRING_MAX:
+            return False
+    except UnicodeError:
+        return False
+    if PRINTABLE_ASCII.fullmatch(unicodedata.normalize("NFKC", value)) is None or PRINTABLE_ASCII.fullmatch(value) is None:
+        return False
+    # The session reduces every path-like string to its basename before emitting it.
+    return "/" not in value and "\\" not in value and value not in {".", ".."}
+
+
+def context_input_ok(value, depth=0):
+    if depth > CONTEXT_DEPTH_MAX:
+        return False
+    if isinstance(value, str):
+        return context_string_ok(value)
+    if isinstance(value, list):
+        return 1 <= len(value) <= CONTEXT_ENTRIES_MAX and all(context_input_ok(item, depth + 1) for item in value)
+    if type(value) is dict:
+        return (
+            1 <= len(value) <= CONTEXT_ENTRIES_MAX
+            and set(value) <= RAW_FIELDS
+            and all(context_input_ok(item, depth + 1) for item in value.values())
+        )
+    return False
+
+
+def context_locations_ok(locations):
+    if not isinstance(locations, list) or len(locations) > CONTEXT_ENTRIES_MAX:
+        return False
+    for location in locations:
+        if type(location) is not dict or "path" not in location or set(location) - {"path", "line"}:
+            return False
+        if not context_string_ok(location["path"]):
+            return False
+        if "line" in location and not (type(location["line"]) is int and 0 <= location["line"] <= 2147483647):
+            return False
+    return True
+
+
+def validate_permission_context(context):
+    """Check #758's bounded permission context, then drop every string.
+
+    Returns "available" or "insufficient". Anything the session would not emit
+    raises Refusal("invalid-permission-context"). The text is never returned.
+    """
+    if type(context) is not dict:
+        raise Refusal("invalid-permission-context")
+    state = context.get("state")
+    keys = set(context)
+    ok = False
+    if state == "insufficient-context":
+        # Bare, or the fail-closed redaction shape: kind kept, text replaced.
+        if keys == {"state"}:
+            ok = True
+        elif keys in ({"state", "kind", "title"}, {"state", "kind", "title", "rawInput"}):
+            ok = (
+                isinstance(context["kind"], str)
+                and context["kind"] in TOOL_KINDS
+                and context["title"] == REDACTED
+                and context.get("rawInput", REDACTED) == REDACTED
+            )
+        result = "insufficient"
+    elif state == "available":
+        result = "available"
+        if {"state", "kind", "title"} <= keys <= {"state", "kind", "title", "locations", "rawInput"}:
+            ok = (
+                isinstance(context["kind"], str)
+                and context["kind"] in TOOL_KINDS
+                and context_string_ok(context["title"])
+                and ("locations" not in context or context_locations_ok(context["locations"]))
+                and ("rawInput" not in context or context_input_ok(context["rawInput"]))
+            )
+    else:
+        result = None
+    if not ok:
+        raise Refusal("invalid-permission-context")
+    try:
+        size = len(json.dumps(context, ensure_ascii=True, separators=(",", ":")))
+    except (TypeError, ValueError):
+        raise Refusal("invalid-permission-context") from None
+    if size > CONTEXT_MAX:
+        raise Refusal("invalid-permission-context")
+    return result
+
+
 class Checker:
     """One pass over client receipts. Ids and kinds only; no transcript store."""
 
@@ -195,6 +297,7 @@ class Checker:
         self.decisions_seen = 0
         self.question_decisions = []
         self.permission_decisions = []
+        self.permission_contexts = []
         self.unsupported = 0
         self.stop_reason = None
         self.helper_failed = None
@@ -278,13 +381,19 @@ class Checker:
         self.questions_seen += 1
 
     def on_permission(self, event):
-        exact(event, ("event", "requestID", "sessionID", "options"))
+        # `context` is optional: receipts from before dev-env #758 carry none.
+        if "context" in event:
+            exact(event, ("event", "requestID", "sessionID", "options", "context"))
+        else:
+            exact(event, ("event", "requestID", "sessionID", "options"))
         self.require_session(event["sessionID"])
         ident = event["requestID"]
         if not request_id_ok(ident):
             raise Refusal("invalid-request-id")
         validate_permission_options(event["options"])
+        state = validate_permission_context(event["context"]) if "context" in event else "absent"
         self.remember(ident, "permission")
+        self.permission_contexts.append({"requestID": ident, "permissionContext": state})
 
     def on_decision(self, event):
         exact(event, ("event", "requestID", "sessionID", "kind"))
@@ -389,6 +498,14 @@ class Checker:
             out["questionRequestIDs"] = list(self.question_decisions)
         if self.permission_decisions:
             out["permissionRequestIDs"] = list(self.permission_decisions)
+            # The decision-sent receipt carries no option id. The client sends only
+            # reject_once and refuses any other kind; that is its contract, not an
+            # observed option. It is never a question reply and never an approval.
+            out["permissionDecisionMeaning"] = "client-reject-once-only-not-approval"
+            out["permissionCountedAsQuestionReply"] = False
+        if self.permission_contexts:
+            # State only. No title, path, location or raw input is ever copied.
+            out["permissionContexts"] = list(self.permission_contexts)
         return out
 
 

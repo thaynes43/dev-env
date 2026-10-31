@@ -11,6 +11,12 @@ SPEC = importlib.util.spec_from_file_location(
 )
 CHK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHK)
+# Read only: the session's constants and a real event source for end-to-end checks.
+SESSION_SPEC = importlib.util.spec_from_file_location(
+    "cursor_acp_session", Path(__file__).with_name("cursor-acp-session.py")
+)
+ACP = importlib.util.module_from_spec(SESSION_SPEC)
+SESSION_SPEC.loader.exec_module(ACP)
 
 SESSION = "fixture-session"
 MODEL = "grok-synthetic-requested"
@@ -72,6 +78,32 @@ def permission(ident=41, session_id=SESSION):
             {"optionID": "deny", "kind": "reject_once"},
         ],
     }
+
+
+def permission_with(context, ident=41, session_id=SESSION):
+    event = permission(ident, session_id)
+    event["context"] = context
+    return event
+
+
+def available(**extra):
+    return dict({"state": "available", "kind": "execute", "title": "Run checks"}, **extra)
+
+
+INSUFFICIENT = {"state": "insufficient-context"}
+REDACTED_CONTEXT = {"state": "insufficient-context", "kind": "execute", "title": "[REDACTED]", "rawInput": "[REDACTED]"}
+PRIVATE_CONTEXT = available(
+    title="PRIVATE_TITLE",
+    locations=[{"path": "PRIVATE_FILE.py", "line": 12}],
+    rawInput={"command": "PRIVATE_COMMAND", "args": ["PRIVATE_ARG"], "path": "PRIVATE_PATH"},
+)
+
+
+def nested(depth):
+    value = "x"
+    for _ in range(depth):
+        value = [value]
+    return value
 
 
 LIMITS = {
@@ -380,6 +412,311 @@ class CheckerTests(unittest.TestCase):
                 self.assertNotIn("TypeError", output)
                 self.assertNotIn("PRIVATE", output)
                 self.assertNotIn(QUESTION_TEXT, output)
+
+    # --- dev-env #758 permission context -----------------------------------
+
+    def permission_stream(self, context=None, with_context=True):
+        event = permission_with(context) if with_context else permission()
+        return receipt(starting(), session(), event, decision(41, kind="permission"), prompt())
+
+    def test_context_states_are_recorded_without_text(self):
+        for name, context, with_context, expected in [
+            ("available", PRIVATE_CONTEXT, True, "available"),
+            ("available-minimal", available(), True, "available"),
+            ("insufficient", INSUFFICIENT, True, "insufficient"),
+            ("insufficient-redacted", REDACTED_CONTEXT, True, "insufficient"),
+            ("insufficient-redacted-no-raw", {"state": "insufficient-context", "kind": "read", "title": "[REDACTED]"}, True, "insufficient"),
+            ("absent", None, False, "absent"),
+        ]:
+            with self.subTest(case=name):
+                verdict = self.classify(self.permission_stream(context, with_context))
+                self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": expected}])
+                self.assert_omits(verdict, "PRIVATE", "Run checks", "execute", "locations", "rawInput")
+
+    def test_each_permission_request_gets_its_own_context_state(self):
+        verdict = self.classify(receipt(
+            starting(), session(),
+            permission_with(available(), 41), permission_with(INSUFFICIENT, 42), permission(43),
+            decision(43, kind="permission"), decision(41, kind="permission"), decision(42, kind="permission"),
+            prompt(),
+        ))
+        self.assertEqual(verdict["permissionContexts"], [
+            {"requestID": 41, "permissionContext": "available"},
+            {"requestID": 42, "permissionContext": "insufficient"},
+            {"requestID": 43, "permissionContext": "absent"},
+        ])
+
+    def test_unanswered_permission_still_records_its_context_state(self):
+        verdict = self.classify(receipt(starting(), session(), permission_with(available())))
+        self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "available"}])
+        self.assertEqual(verdict["pendingRequests"], 1)
+        self.assertIs(verdict["permissionDecisionSent"], False)
+        self.assertNotIn("permissionDecisionMeaning", verdict)
+
+    def test_streams_without_permission_requests_gain_no_permission_fields(self):
+        verdict = self.classify(receipt(starting(), session(), question(), decision(), prompt()))
+        self.assertNotIn("permissionContexts", verdict)
+        self.assertNotIn("permissionDecisionMeaning", verdict)
+
+    def test_context_bounds_exceeded_by_one_are_refused(self):
+        cases = [
+            ("string-257-chars", available(title="a" * 257)),
+            ("raw-string-257-chars", available(rawInput={"command": "a" * 257})),
+            ("location-path-257-chars", available(locations=[{"path": "a" * 257}])),
+            ("locations-9", available(locations=[{"path": "f%d.py" % n} for n in range(9)])),
+            ("list-9", available(rawInput={"args": ["a"] * 9})),
+            ("list-empty", available(rawInput={"args": []})),
+            ("map-empty", available(rawInput={})),
+            ("map-unknown-key", available(rawInput={"command": "a", "env": "b"})),
+            ("depth-4", available(rawInput={"args": nested(3)})),
+            ("scalar-raw-input", available(rawInput=42)),
+            ("null-raw-input", available(rawInput=None)),
+            ("bool-line", available(locations=[{"path": "a.py", "line": True}])),
+            ("negative-line", available(locations=[{"path": "a.py", "line": -1}])),
+            ("line-too-big", available(locations=[{"path": "a.py", "line": 2147483648}])),
+            ("location-extra-key", available(locations=[{"path": "a.py", "column": 1}])),
+            ("location-no-path", available(locations=[{"line": 1}])),
+            ("location-not-object", available(locations=["a.py"])),
+            ("locations-not-list", available(locations="a.py")),
+            ("empty-title", available(title="")),
+            ("non-string-title", available(title=7)),
+            ("unknown-kind", available(kind="invented")),
+            ("list-kind", available(kind=["execute"])),
+            ("missing-title", {"state": "available", "kind": "execute"}),
+            ("missing-kind", {"state": "available", "title": "Run checks"}),
+        ]
+        for name, context in cases:
+            with self.subTest(case=name):
+                self.assertEqual(self.reason(self.permission_stream(context)), "invalid-permission-context")
+        # Boundary values just inside each bound are accepted.
+        accepted = [
+            ("string-256-chars", available(title="a" * 256)),
+            ("locations-8", available(locations=[{"path": "f%d.py" % n} for n in range(8)])),
+            ("locations-empty", available(locations=[])),
+            ("list-8", available(rawInput={"args": ["a"] * 8})),
+            ("depth-3", available(rawInput={"args": nested(2)})),
+            ("all-six-raw-keys", available(rawInput={"command": "a", "args": ["b"], "path": "c", "paths": ["d"], "query": "e", "description": "f"})),
+            ("line-max", available(locations=[{"path": "a.py", "line": 2147483647}])),
+        ]
+        for name, context in accepted:
+            with self.subTest(case=name):
+                self.assertEqual(self.classify(self.permission_stream(context))["permissionContexts"][0]["permissionContext"], "available")
+
+    def test_context_total_size_bound_is_exact(self):
+        def sized(last):
+            return available(rawInput={"args": ["a" * 250] * 7 + ["a" * last]})
+
+        def size(context):
+            return len(json.dumps(context, ensure_ascii=True, separators=(",", ":")))
+
+        last = CHK.CONTEXT_MAX - size(sized(0))
+        self.assertTrue(1 <= last < CHK.CONTEXT_STRING_MAX)
+        self.assertEqual(size(sized(last)), CHK.CONTEXT_MAX)
+        self.assertEqual(size(sized(last + 1)), CHK.CONTEXT_MAX + 1)
+        self.assertEqual(self.classify(self.permission_stream(sized(last)))["permissionContexts"][0]["permissionContext"], "available")
+        self.assertEqual(self.reason(self.permission_stream(sized(last + 1))), "invalid-permission-context")
+
+    def test_context_text_forms_are_refused(self):
+        cases = [
+            ("non-ascii", available(title="Caf\u00e9 checks")),
+            ("non-ascii-raw", available(rawInput={"command": "caf\u00e9"})),
+            ("fullwidth", available(title="\uff52\uff55\uff4e")),
+            ("combining", available(title="Run\u0336 fixture")),
+            ("control-nul", available(title="Run\x00fixture")),
+            ("control-newline", available(title="Run\nfixture")),
+            ("control-tab", available(title="Run\tfixture")),
+            ("control-escape", available(rawInput={"command": "run\x1b[31m"})),
+            ("del", available(title="Run\x7ffixture")),
+            ("bidi-format", available(title="Run\u202efixture")),
+            ("line-separator", available(title="Run\u2028fixture")),
+            ("control-in-location", available(locations=[{"path": "a\x07.py"}])),
+            ("absolute-path", available(locations=[{"path": "/fixture/parent/check.py"}])),
+            ("relative-path", available(locations=[{"path": "dir/check.py"}])),
+            ("backslash-path", available(locations=[{"path": "dir\\check.py"}])),
+            ("dot-path", available(locations=[{"path": ".."}])),
+            ("path-in-raw-input", available(rawInput={"path": "/fixture/parent/check.py"})),
+            ("path-in-title", available(title="Read /fixture/parent/check.py")),
+            ("path-in-args", available(rawInput={"args": ["../up.py"]})),
+        ]
+        for name, context in cases:
+            with self.subTest(case=name):
+                self.assertEqual(self.reason(self.permission_stream(context)), "invalid-permission-context")
+
+    def test_unknown_or_malformed_context_is_refused(self):
+        cases = [
+            ("unknown-key", dict(available(), content="PRIVATE_CONTENT")),
+            ("unknown-key-insufficient", dict(INSUFFICIENT, title="PRIVATE_TITLE")),
+            ("insufficient-extra", dict(INSUFFICIENT, note="PRIVATE_NOTE")),
+            ("insufficient-kind-only", {"state": "insufficient-context", "kind": "execute"}),
+            ("redacted-wrong-title", dict(REDACTED_CONTEXT, title="Run checks")),
+            ("redacted-wrong-raw", dict(REDACTED_CONTEXT, rawInput="PRIVATE_RAW")),
+            ("redacted-bad-kind", dict(REDACTED_CONTEXT, kind="invented")),
+            ("redacted-list-kind", dict(REDACTED_CONTEXT, kind=["execute"])),
+            ("redacted-locations", dict(REDACTED_CONTEXT, locations=[])),
+            ("unknown-state", {"state": "approved"}),
+            ("list-state", {"state": ["available"]}),
+            ("no-state", {"kind": "execute", "title": "Run checks"}),
+            ("empty", {}),
+            ("null", None),
+            ("string", "available"),
+            ("list", [available()]),
+            ("number", 1),
+        ]
+        for name, context in cases:
+            with self.subTest(case=name):
+                self.assertEqual(self.reason(self.permission_stream(context)), "invalid-permission-context")
+
+    def test_context_text_is_never_in_a_refusal(self):
+        code, output = run_main(["-"], stdin=self.permission_stream(available(title="PRIVATE_TITLE" + "x" * 300)).encode())
+        self.assertEqual(code, 2)
+        self.assertEqual(output, '{"event":"refused","reason":"invalid-permission-context"}\n')
+
+    def test_no_context_text_reaches_cli_output(self):
+        code, output = run_main(["-"], stdin=self.permission_stream(PRIVATE_CONTEXT).encode())
+        self.assertEqual(code, 0)
+        self.assertNotIn("PRIVATE", output)
+        self.assertEqual(json.loads(output)["permissionContexts"], [{"requestID": 41, "permissionContext": "available"}])
+
+    def test_context_does_not_loosen_the_rest_of_the_permission_event(self):
+        extra = permission_with(available())
+        extra["note"] = "PRIVATE_NOTE"
+        self.assertEqual(self.reason(receipt(starting(), session(), extra)), "unexpected-field")
+        self.assertEqual(self.reason(receipt(starting(), session(), permission_with(available(), session_id="other-session"))), "cross-session")
+        bad_options = permission_with(available())
+        bad_options["options"] = [{"optionID": "deny", "kind": "allow-once"}]
+        self.assertEqual(self.reason(receipt(starting(), session(), bad_options)), "invalid-permission")
+        self.assertEqual(self.reason(receipt(starting(), session(), permission_with(available()), permission_with(available()))), "duplicate-request")
+        self.assertEqual(self.reason(receipt(starting(), session(), permission_with(available()), prompt())), "prompt-complete-with-pending")
+
+    def test_context_on_question_or_decision_events_is_still_refused(self):
+        with_context = question()
+        with_context["context"] = available()
+        self.assertEqual(self.reason(receipt(starting(), session(), with_context)), "unexpected-field")
+        self.assertEqual(self.reason(receipt(
+            starting(), session(), permission_with(available()), dict(decision(41, kind="permission"), context=available()),
+        )), "unexpected-field")
+
+    def test_constants_match_the_session(self):
+        self.assertEqual(CHK.TOOL_KINDS, ACP.TOOL_KINDS)
+        self.assertEqual(CHK.RAW_FIELDS, ACP.RAW_FIELDS)
+        self.assertEqual(CHK.CONTEXT_MAX, ACP.MAX_CONTEXT)
+        self.assertEqual(CHK.REDACTED, ACP.REDACTED)
+
+    # --- the three decisions stay apart ------------------------------------
+
+    def test_reject_once_is_not_question_reply_acceptance(self):
+        for context, with_context in [(available(), True), (INSUFFICIENT, True), (None, False)]:
+            with self.subTest(context=context):
+                verdict = self.classify(self.permission_stream(context, with_context))
+                self.assertIs(verdict["permissionDecisionSent"], True)
+                self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+                self.assertIs(verdict["permissionCountedAsQuestionReply"], False)
+                self.assertEqual(verdict["permissionApproval"], "not-inferred")
+                self.assertIs(verdict["questionDecisionSent"], False)
+                self.assertIs(verdict["promptCompleteAfterDecision"], False)
+                self.assertNotIn("correlated-question-decision-sent", verdict["stages"])
+                self.assertNotIn("prompt-complete-after-decision", verdict["stages"])
+                self.assertNotIn("questionRequestIDs", verdict)
+                self.assertNotIn("questionOrigin", verdict)
+                self.assertEqual(verdict["autonomousQuestionReplyReason"], "no-correlated-question-decision")
+                self.assertIs(verdict["autonomousQuestionReply"], False)
+
+    def test_question_stage_needs_a_question_decision_even_beside_a_permission_one(self):
+        verdict = self.classify(receipt(
+            starting(), session(), question(), permission_with(available()),
+            decision(41, kind="permission"), decision(40), prompt(),
+        ))
+        self.assertEqual(verdict["questionRequestIDs"], [40])
+        self.assertEqual(verdict["permissionRequestIDs"], [41])
+        self.assertIs(verdict["permissionCountedAsQuestionReply"], False)
+        # A permission decision cannot stand in for the question's decision.
+        self.assertEqual(self.reason(receipt(
+            starting(), session(), question(), permission_with(available()), decision(40, kind="permission"),
+        )), "decision-kind-mismatch")
+        self.assertEqual(self.reason(receipt(
+            starting(), session(), permission_with(available()), decision(41, kind="question"),
+        )), "decision-kind-mismatch")
+
+    def test_an_approve_decision_cannot_be_carried_by_a_receipt(self):
+        # decision-sent has no option field. The session never sends allow_once or
+        # allow_always, so a receipt that names one is refused, never counted.
+        for option in ("allow", "allow_once", "allow_always", "deny", "reject_once"):
+            for key in ("optionID", "optionId", "kind_detail"):
+                with self.subTest(option=option, key=key):
+                    event = dict(decision(41, kind="permission"))
+                    event[key] = option
+                    self.assertEqual(self.reason(receipt(
+                        starting(), session(), permission_with(available()), event,
+                    )), "unexpected-field")
+        for kind in ("allow_once", "allow_always", "approve", "reject_once"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.reason(receipt(
+                    starting(), session(), permission_with(available()), decision(41, kind=kind),
+                )), "invalid-decision")
+
+    # --- receipts from the real session -------------------------------------
+
+    def session_events(self, tool, ident=41):
+        sent, events = [], []
+        live = ACP.Session(sent.append, events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic")
+        live.start()
+        live.provider({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}})
+        live.provider({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": SESSION}})
+        message = {"sessionId": SESSION, "options": [
+            {"optionId": "yes", "kind": "allow_once", "name": "Allow"},
+            {"optionId": "no", "kind": "reject_once", "name": "Deny"},
+        ]}
+        if tool is not None:
+            message["toolCall"] = tool
+        live.provider({"jsonrpc": "2.0", "id": ident, "method": "session/request_permission", "params": message})
+        live.decision({"requestID": ident, "sessionID": SESSION, "kind": "permission", "optionID": "no"})
+        live.provider({"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}})
+        return events
+
+    def test_real_session_receipts_pass_end_to_end(self):
+        good = {
+            "toolCallId": "fixture-call", "kind": "execute", "title": "Run fixture checks",
+            "locations": [{"path": "/fixture-parent/project/check.py", "line": 12}],
+            "rawInput": {"command": "python3", "args": ["check.py"], "path": "/fixture-parent/project/check.py"},
+        }
+        cases = [
+            ("available", good, "available"),
+            ("missing-toolcall", None, "insufficient"),
+            ("unknown-kind", dict(good, kind="invented"), "insufficient"),
+            ("oversized-title", dict(good, title="x" * 257), "insufficient"),
+            ("non-ascii-title", dict(good, title="Caf\u00e9 checks"), "insufficient"),
+            ("control-title", dict(good, title="Run\x1b[31m fixture"), "insufficient"),
+            ("secret-title", dict(good, title="Use Bearer synthetic-sensitive-value"), "insufficient"),
+            ("secret-raw-input", dict(good, rawInput={"command": "run", "args": ["--password=synthetic-sensitive-value"]}), "insufficient"),
+        ]
+        for name, tool, expected in cases:
+            with self.subTest(case=name):
+                events = self.session_events(tool)
+                raw = receipt(*events)
+                emitted = [e for e in events if e["event"] == "permission-required"][0]
+                self.assertIn("context", emitted)
+                verdict = CHK.classify(raw)
+                self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": expected}])
+                self.assertIs(verdict["permissionDecisionSent"], True)
+                self.assertIs(verdict["questionDecisionSent"], False)
+                self.assertIs(verdict["autonomousQuestionReply"], False)
+                self.assert_omits(verdict, "Run ", "checks", "synthetic-sensitive-value", "check.py", "python3")
+
+    def test_real_session_context_fixtures_are_all_accepted(self):
+        # Every projection the session's own context tests produce must pass.
+        fixtures = importlib.util.spec_from_file_location(
+            "test_cursor_acp_session", Path(__file__).with_name("test_cursor_acp_session.py")
+        )
+        module = importlib.util.module_from_spec(fixtures)
+        fixtures.loader.exec_module(module)
+        self.assertGreater(len(module.CONTEXT_FIXTURES), 40)
+        for name, tool in module.CONTEXT_FIXTURES.items():
+            with self.subTest(fixture=name):
+                events = self.session_events(tool)
+                verdict = CHK.classify(receipt(*events))
+                state = verdict["permissionContexts"][0]["permissionContext"]
+                self.assertIn(state, {"available", "insufficient"})
+                self.assert_omits(verdict, "DO_NOT_EXPORT", "customer")
 
 
 MAX_UNSUPPORTED_PLUS = CHK.MAX_UNSUPPORTED + 1

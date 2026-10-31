@@ -191,12 +191,11 @@ The coordinator may explicitly reject or leave the request unanswered until the
 existing deadline; this state never enables approval. Even `available` context
 enables no approval. No rejection is sent automatically.
 
-**OP314 compatibility:** `scripts/cursor-acp-smoke-check.py` currently checks an
-exact permission receipt schema. It deliberately refuses these enriched receipts
-with `unexpected-field`; it must not be bypassed by stripping context to claim
-new permission-context acceptance. Unchanged informational question streams still
-pass. The fake-CLI tests assert both outcomes. A checker-schema extension and
-live acceptance remain a later gate outside this three-file correction.
+**OP314 compatibility:** `scripts/cursor-acp-smoke-check.py` accepts this optional
+`context` on a permission receipt, checks it against the bounds above and records
+only its state (`available`, `insufficient` or `absent`), never the text. A
+permission rejection stays apart from a structured question decision. See
+[the checker](cursor-acp-smoke-check.md). Live acceptance remains a later gate.
 
 After seeing an exact pending question, the coordinator writes one JSON line to
 this client's stdin (one option per question unless allowMultiple):

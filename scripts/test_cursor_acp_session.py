@@ -705,10 +705,11 @@ class SubprocessTests(unittest.TestCase):
                     for private in ["synthetic-sensitive-value", "ab" * 32, "QWxhZGRpbjpvcGVuIHNlc2FtZUZpeHR1cmU=", "DO_NOT_EXPORT", "/fixture-parent/project", "S3cr3tVal", "hunter2", "customer", "\x1b", "\u202e"]:
                         self.assertNotIn(private, output)
                     self.assertEqual(observed[-2]["event"], "decision-sent")
-                    # OP314 intentionally refuses an unknown receipt extension.
+                    # The OP314 checker accepts the bounded context and records only its state.
                     checked = subprocess.run([sys.executable, "-I", "-B", str(CLIENT.with_name("cursor-acp-smoke-check.py")), "-"], input="".join(json.dumps(x) + "\n" for x in observed), text=True, capture_output=True, timeout=5)
-                    self.assertEqual(checked.returncode, 2)
-                    self.assertEqual(json.loads(checked.stdout), {"event": "refused", "reason": "unexpected-field"})
+                    self.assertEqual(checked.returncode, 0, checked.stdout)
+                    self.assertEqual(json.loads(checked.stdout)["permissionContexts"], [{"requestID": 41, "permissionContext": "insufficient" if name in insufficient else "available"}])
+                    self.assertIs(json.loads(checked.stdout)["questionDecisionSent"], False)
                 finally:
                     if process.poll() is None:
                         process.kill()
