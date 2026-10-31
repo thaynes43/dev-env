@@ -48,7 +48,8 @@ one-step rollback.
 5. **GPU:** a message may approve SYS_ADMIN maintenance on Card C, within #781's
    exact-envelope policy.
 6. **App Secrets:** a GitOps one-shot Job that mounts existing Secrets of its own
-   namespace is a routine deploy. Agents may self-merge it, as #4501 was. The Job's
+   namespace is a routine deploy, if that namespace is an App namespace or `network`
+   (9.2). Agents may self-merge it, as #4501 was. The Job's
    author can print what it mounts.
 
 The reserved decisions (section 7) stay with Tom.
@@ -258,6 +259,11 @@ Five classes cover a home lab. Each uses an existing mechanism.
 
 - The Job mounts only existing Secrets of its own namespace. It runs as its own SA, with
   no token and no RBAC. A CNP limits its egress to the one app and DNS.
+- Its namespace is an App namespace, or `network` for Authentik wiring (9.2). A
+  one-shot that mounts Secrets anywhere else falls under RD3, and under RD4 in the
+  storage and data namespaces. That covers `upgrade-agent` (bot and LLM keys),
+  `cert-manager` (the DNS token), and the dev-env, Flux and external-secrets
+  namespaces.
 - It prints status codes and booleans only. The author can print a value, so this is
   a rule, not a control.
 - It is a routine deploy that an agent may self-merge, followed by its cleanup PR. A
@@ -415,7 +421,7 @@ Refused by code for everyone: maintenance on control-plane nodes
 | Class | Mode (a) or (b) | Mode (b) only | Concurrency per session (a rule; the broker enforces none) |
 |---|---|---|---|
 | C1 | 3h, app namespaces | 8h, infrastructure namespaces | 2 active |
-| C2 | GitOps; no grant | — | one Job per PR, then its cleanup PR |
+| C2 | GitOps; no grant; App namespaces and `network` | — | one Job per PR, then its cleanup PR |
 | C3 | 3h, app namespaces | — | 2 active |
 | C4 egress | 3h, SSH 1h | — | — |
 | C4 credential | 1h, mode (a) only | — | 1 per credential |
@@ -446,10 +452,10 @@ one policy per target.
 
 ### 9.2 Namespaces (33 live)
 
-- **App** (C1 and C3): `ai`, `downloads`, `frontend`, `home-automation`, `media`,
+- **App** (C1, C2 and C3): `ai`, `downloads`, `frontend`, `home-automation`, `media`,
   `observability`, `office`, `photos`.
-- **Infrastructure** (C1, mode (b) only): `arc-runners`, `arc-systems`, `cert-manager`,
-  `k8tz`, `network`, `upgrade-agent`.
+- **Infrastructure** (C1, mode (b) only; C2 in `network` only): `arc-runners`,
+  `arc-systems`, `cert-manager`, `k8tz`, `network`, `upgrade-agent`.
 - **Storage and data** (RD4, no policy): `ceph-csi`, `database`, `openebs-system`,
   `rook-ceph`, `storage-util`, `volsync-system`.
 - **Never:** `dev-env-system`, `dev-agents`, `dev-tools`, `dev-env-budgets`, `dev` (the
