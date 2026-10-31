@@ -217,7 +217,8 @@ engine errors; compilation or evaluation errors never count as a denial pass.
 Tom, 2026-10-31, relayed by lead dev-env-1029-132039 in the OP233 work order:
 "I or an agent can approve with a message to the agent requesting the grant."
 [ADR-013](../../adrs/013-attested-maintenance-approval.md) records the ruling and
-amends ADR-012's "independent of unverified agent attestation" clause. This
+amends ADR-012's "independent of unverified agent coordinator:string attestation"
+clause. This
 section is the source design for ADR-013's path (a), the requester's
 self-attestation. Path (b), authenticated delegate approval on the
 maintenance-decision route, is a separate follow-up. This section authorizes no

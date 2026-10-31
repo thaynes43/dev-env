@@ -74,8 +74,12 @@ That sentence names two paths:
    human, client or coordinator caller's ServiceAccount (`namespace/name`),
    or empty, and its depth label is absent or 0. An example is
    `haynes-ops-1029-223503`, with parent `dev-env-system/dev-env-human`. A
-   child task session waits for the human route, so a headless task never
-   self-approves SYS_ADMIN.
+   child session never self-approves; it waits for the human route. A
+   top-level session does self-approve, whatever its mode, including a
+   headless task that the human, a client (the workbench, the v1 pod) or a
+   coordinator host created. Before activation, the bundle adds one guard
+   (DESIGN-042): a broker list of creators whose top-level sessions may
+   self-approve, defaulting to the human ServiceAccount only.
 5. An extension (`extensionOf`) is never approved this way. It needs the
    human route, as ADR-012 says.
 6. Before it approves, the broker checks what it checks for every attested
