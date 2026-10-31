@@ -11,7 +11,7 @@ func TestParseBrokerFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := brokerOptions{sessionNamespace: "dev-agents", policyNamespace: "dev-env-system", maintenanceHuman: "dev-env-system/dev-env-human", leaderElect: true, metricsAddr: ":8080", probeAddr: ":8081", attestedCreators: []string{"dev-env-system/dev-env-human"}}
+	want := brokerOptions{reservedExcludedNamespaces: []string{"cilium-secrets", "default", "dev", "dev-agents", "dev-env-budgets", "dev-env-system", "dev-tools", "external-secrets", "flux-system", "kube-node-lease", "kube-public", "kube-system", "kyverno"}, sessionNamespace: "dev-agents", policyNamespace: "dev-env-system", maintenanceHuman: "dev-env-system/dev-env-human", leaderElect: true, metricsAddr: ":8080", probeAddr: ":8081", attestedCreators: []string{"dev-env-system/dev-env-human"}}
 	if !reflect.DeepEqual(o, want) {
 		t.Errorf("defaults %+v, want %+v", o, want)
 	}

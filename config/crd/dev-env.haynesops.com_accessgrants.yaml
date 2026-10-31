@@ -201,6 +201,11 @@ spec:
                 description: Kube is the role and namespaces of a kube or breakglass
                   grant.
                 properties:
+                  allNamespaces:
+                    description: |-
+                      AllNamespaces requests RD3b: the approved namespace UID snapshot is
+                      materialized as individual RoleBindings. It never means a cluster binding.
+                    type: boolean
                   namespaces:
                     description: Namespaces are where a namespaced role is bound,
                       each named.
@@ -208,13 +213,14 @@ spec:
                       maxLength: 63
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
-                      x-kubernetes-validations:
-                      - message: no grant reaches the dev-env namespaces (DESIGN-001
-                          6.12)
-                        rule: '!(self in [''dev-env-system'', ''dev-agents'', ''dev-tools''])'
                     maxItems: 16
                     type: array
                     x-kubernetes-list-type: set
+                  reserved:
+                    description: |-
+                      Reserved marks an immutable S7 request, including a bounded configured
+                      namespace exception. It grants no authority and defaults false.
+                    type: boolean
                   role:
                     description: Role is a ClusterRole from the grant role catalog.
                     enum:
@@ -241,16 +247,69 @@ spec:
                     maxItems: 16
                     type: array
                     x-kubernetes-list-type: set
+                  storageTargets:
+                    description: |-
+                      StorageTargets are the exact reviewed object UIDs of an RD4 storage
+                      request. The proposed deletion guard fails closed without them.
+                    items:
+                      description: |-
+                        GrantStorageTarget is one exact object reviewed for an RD4 storage delete.
+                        A kind/name without its immutable UID never authorizes a deletion.
+                      properties:
+                        kind:
+                          enum:
+                          - PersistentVolumeClaim
+                          - VolumeSnapshot
+                          - StatefulSet
+                          type: string
+                        name:
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                          type: string
+                        uid:
+                          maxLength: 36
+                          minLength: 1
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 8
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - kind
+                    - name
+                    x-kubernetes-list-type: map
                 required:
                 - role
                 type: object
                 x-kubernetes-validations:
                 - message: immutable after create; only release may change
                   rule: self == oldSelf
-                - message: dev-env-grant-nodes and dev-env-grant-breakglass are cluster-wide
-                    and take no namespaces; the other roles name at least one
-                  rule: (self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass')
-                    == (!has(self.namespaces) || size(self.namespaces) == 0)
+                - message: allNamespaces is reserved Secret read only; otherwise cluster-wide
+                    roles take no namespaces and the other roles name at least one
+                  rule: 'has(self.allNamespaces) && self.allNamespaces ? (self.role
+                    == ''dev-env-grant-secrets-read'' && (!has(self.namespaces) ||
+                    size(self.namespaces) == 0)) : ((self.role == ''dev-env-grant-nodes''
+                    || self.role == ''dev-env-grant-breakglass'') == (!has(self.namespaces)
+                    || size(self.namespaces) == 0))'
+                - message: storage targets require the storage role in exactly one
+                    namespace
+                  rule: '!has(self.storageTargets) || size(self.storageTargets) ==
+                    0 || (self.role == ''dev-env-grant-storage'' && has(self.namespaces)
+                    && size(self.namespaces) == 1)'
+                - message: storage target UIDs must be unique
+                  rule: '!has(self.storageTargets) || self.storageTargets.all(t, self.storageTargets.filter(o,
+                    o.uid == t.uid).size() == 1)'
+                - message: no grant reaches the dev-env namespaces without explicit
+                    reserved scope and configured reviewed bounds (DESIGN-001 6.12)
+                  rule: '!has(self.namespaces) || (has(self.reserved) && self.reserved
+                    && self.role in [''dev-env-grant-secrets-read'',''dev-env-grant-storage''])
+                    || self.namespaces.all(n, !(n in [''dev-env-system'',''dev-agents'',''dev-tools'']))'
+                - message: reserved scope is one of the S7 catalog cases
+                  rule: '!has(self.reserved) || !self.reserved || self.role in [''dev-env-grant-breakglass'',''dev-env-grant-secrets-read'',''dev-env-grant-storage'']'
                 - message: dev-env-grant-namespace-operator names the Secrets it will
                     use, one to 16, and only that role takes secrets (DESIGN-042 5.1)
                   rule: (self.role == 'dev-env-grant-namespace-operator') == (has(self.secrets)
@@ -507,6 +566,12 @@ spec:
             - message: ttl runs from 10m to 8h
               rule: duration(self.ttl) >= duration('10m') && duration(self.ttl) <=
                 duration('8h')
+            - message: reserved namespace snapshots and exact storage targets have
+                a maximum TTL of 1h
+              rule: '!has(self.kube) || (!(has(self.kube.reserved) && self.kube.reserved)
+                && !(has(self.kube.allNamespaces) && self.kube.allNamespaces) && (!has(self.kube.storageTargets)
+                || size(self.kube.storageTargets) == 0)) || duration(self.ttl) <=
+                duration(''1h'')'
             - message: a credential grant lasts at most 4h
               rule: self.type != 'credential' || duration(self.ttl) <= duration('4h')
             - message: break-glass lasts at most 1h (D-27)
@@ -680,6 +745,127 @@ spec:
                 - Released
                 - Failed
                 type: string
+              reserved:
+                description: |-
+                  Reserved is the broker-retained S7 binding. It is an authenticated
+                  delegate's agent assertion, never verified human consent.
+                properties:
+                  actorSessionUID:
+                    maxLength: 36
+                    type: string
+                  actorUID:
+                    description: |-
+                      ActorUID is the TokenReview-bound actor Pod UID, including host actors
+                      that have no AgentSession. ActorSessionUID, when present, binds it too.
+                    maxLength: 36
+                    minLength: 1
+                    type: string
+                  approve:
+                    description: Approve binds the asserted outcome, including a retained
+                      denial.
+                    type: boolean
+                  boundsRevision:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  case:
+                    enum:
+                    - rd2
+                    - rd3a
+                    - rd3b
+                    - rd4-storage
+                    type: string
+                  decidedAt:
+                    format: date-time
+                    type: string
+                  effectiveDigest:
+                    description: EffectiveDigest additionally binds the namespace
+                      snapshot and revision.
+                    maxLength: 43
+                    minLength: 43
+                    type: string
+                  excludedNamespaces:
+                    description: |-
+                      ExcludedNamespaces is the exact reviewed configuration at decision time.
+                      Empty is explicit configuration, never a lookup-failure fallback.
+                    items:
+                      maxLength: 63
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-type: set
+                  grantUID:
+                    maxLength: 36
+                    minLength: 1
+                    type: string
+                  namespaces:
+                    description: |-
+                      Namespaces is frozen at approval for RD3b, excluding Never namespaces.
+                      Future namespaces are excluded. The finite storage bound fails closed
+                      rather than widening to a ClusterRoleBinding.
+                    items:
+                      description: |-
+                        ReservedNamespace is one namespace present at an RD3b decision. Its UID
+                        prevents a replacement with the same name inheriting Secret-read authority.
+                      properties:
+                        name:
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                        uid:
+                          maxLength: 36
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  ref:
+                    description: Ref retains request/reply correlation separately
+                      from the Tom assertion.
+                    maxLength: 128
+                    type: string
+                  requesterPodUID:
+                    maxLength: 36
+                    minLength: 1
+                    type: string
+                  requesterUID:
+                    maxLength: 36
+                    minLength: 1
+                    type: string
+                  scopeDigest:
+                    maxLength: 43
+                    minLength: 43
+                    type: string
+                  tomRef:
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9_.:/#-]{1,128}$
+                    type: string
+                  ttl:
+                    type: string
+                required:
+                - actorUID
+                - approve
+                - boundsRevision
+                - case
+                - decidedAt
+                - effectiveDigest
+                - excludedNamespaces
+                - grantUID
+                - ref
+                - requesterPodUID
+                - requesterUID
+                - scopeDigest
+                - tomRef
+                - ttl
+                type: object
               serviceAccount:
                 description: |-
                   ServiceAccount is the grant's identity in dev-agents, for kube and

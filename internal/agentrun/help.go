@@ -709,8 +709,10 @@ grant waits for Tom); one attestation per grant.
 
 grant decide records one allowlisted delegate's decision on another agent's
 pending grant. The caller must be an allowlisted delegate. It cannot decide
-its own or an ancestor's request. It decides only for its own descendants
-(a coordinator host: its own child sessions); the operator checks reach and policy.
+its own or an ancestor's request. Tree reach is the default. Only an
+explicitly configured designated delegate can reach eligible unrelated requesters;
+requester descendants and maintenance participants remain refused. The operator
+rechecks the live actor and exact policy or reserved bounds.
 The digest is Grant.ScopeDigest from
 grant show -o json. A delegate decision is not a human decision. Omit
 --approve to deny. The command prints the scope digest and secret names it is
@@ -722,6 +724,22 @@ does not mean the grant is Active.
   --approve          approve; omit to deny
   --ttl <duration>   optional Go duration, at least 10m and at most the requested TTL
   --reason <text>    optional; at most 256 characters, no control or format characters
+  --reserved         explicit default-off S7 case, no standing/attested approval
+  --tom-ref <ref>     required with --reserved; fresh nonsecret Tom-message reference
+
+The Tom reference is an agent assertion, not verified human consent. Reserved TTL
+is at most 1h; maintenance keeps its 30m default. Use grant request --reserved with
+--all-namespaces for an approval-time Secret-read namespace UID snapshot, or repeat
+--storage-target Kind/name@UID (1–8) with one --namespace for exact storage deletes.
+The configured proposed namespace exclusions can have explicitly reviewed bounded
+exceptions; no missing-policy or lookup failure widens them.
+
+grant hardware-intent <grant> --grant-uid <uid> --digest <digest>
+  --operation <operation> --host <host> --device <device> --firmware <id>
+  --tom-ref <ref>
+Records audit intent only on the authenticated requester's own installed Active
+C4 lease. Credential authority and keeper policy remain unchanged. It enforces no
+command or target, reads no key, calls no hardware, and cannot extend a lease.
 
 grant use runs agentd ctl grant-use. The name is grant-<id> or default.
 It does not call the API.
@@ -735,7 +753,7 @@ approves it. This command does not approve the grant or install it.
 	"mcp": `Usage: agent-run mcp
 
 Serve the dev-env access tools on stdin and stdout (MCP). The tools are
-request_access, grant_status, release_access and decide_grant. They call
+request_access, grant_status, release_access, decide_grant and hardware_intent. They call
 /v1/grants. request_access asks; Tom still approves. release_access asks the
 broker to end one grant. grant_status reads. decide_grant is for an
 allowlisted delegate only and is not a human decision. None of them install

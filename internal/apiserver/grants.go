@@ -130,22 +130,25 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
 	notFor := func(kind string, set map[string]bool) {
-		for _, f := range []string{"role", "namespaces", "secrets", "fqdns", "cidrs", "endpoints", "ports", "credential", "maintenance"} {
+		for _, f := range []string{"reserved", "allNamespaces", "storageTargets", "role", "namespaces", "secrets", "fqdns", "cidrs", "endpoints", "ports", "credential", "maintenance"} {
 			if set[f] {
 				add(f, "not for type %s", kind)
 			}
 		}
 	}
 	set := map[string]bool{
-		"role":        req.Role != "",
-		"namespaces":  len(req.Namespaces) > 0,
-		"secrets":     len(req.Secrets) > 0,
-		"fqdns":       len(req.FQDNs) > 0,
-		"cidrs":       len(req.CIDRs) > 0,
-		"endpoints":   len(req.Endpoints) > 0,
-		"ports":       len(req.Ports) > 0,
-		"credential":  req.Credential != "",
-		"maintenance": req.Maintenance != nil,
+		"secrets":        len(req.Secrets) > 0,
+		"reserved":       req.Reserved,
+		"allNamespaces":  req.AllNamespaces,
+		"storageTargets": len(req.StorageTargets) > 0,
+		"role":           req.Role != "",
+		"namespaces":     len(req.Namespaces) > 0,
+		"fqdns":          len(req.FQDNs) > 0,
+		"cidrs":          len(req.CIDRs) > 0,
+		"endpoints":      len(req.Endpoints) > 0,
+		"ports":          len(req.Ports) > 0,
+		"credential":     req.Credential != "",
+		"maintenance":    req.Maintenance != nil,
 	}
 	others := func(keep ...string) map[string]bool {
 		out := map[string]bool{}
@@ -189,15 +192,18 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		}
 		secrets, bad := grantSecrets(req.Role, req.Secrets)
 		fields = append(fields, bad...)
-		spec.Kube = &v1alpha1.KubeGrant{Role: req.Role, Namespaces: req.Namespaces, Secrets: secrets}
-		notFor(req.Type, others("role", "namespaces", "secrets"))
+		spec.Kube = &v1alpha1.KubeGrant{Role: req.Role, Namespaces: req.Namespaces, AllNamespaces: req.AllNamespaces, Reserved: req.Reserved, Secrets: secrets}
+		for _, target := range req.StorageTargets {
+			spec.Kube.StorageTargets = append(spec.Kube.StorageTargets, v1alpha1.GrantStorageTarget{Kind: target.Kind, Name: target.Name, UID: target.UID})
+		}
+		notFor(req.Type, others("role", "namespaces", "reserved", "allNamespaces", "storageTargets", "secrets"))
 	case v1alpha1.GrantBreakglass:
 		if req.Role != "" && req.Role != v1alpha1.RoleBreakglass {
 			add("role", "break-glass is always %s (D-27); leave role empty", v1alpha1.RoleBreakglass)
 		}
 		ttl = apiv1.DefaultBreakglassTTL
-		spec.Kube = &v1alpha1.KubeGrant{Role: v1alpha1.RoleBreakglass, Namespaces: req.Namespaces}
-		notFor(req.Type, others("role", "namespaces"))
+		spec.Kube = &v1alpha1.KubeGrant{Role: v1alpha1.RoleBreakglass, Namespaces: req.Namespaces, Reserved: req.Reserved}
+		notFor(req.Type, others("role", "namespaces", "reserved"))
 	case v1alpha1.GrantEgress:
 		if len(req.FQDNs)+len(req.CIDRs)+len(req.Endpoints) == 0 {
 			add("", "name at least one destination: fqdns, cidrs or endpoints")
@@ -257,6 +263,11 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	}
 	if len(fields) > 0 {
 		return nil, invalid(fields...)
+	}
+	if spec.Kube != nil && (spec.Kube.Reserved || spec.Kube.AllNamespaces || len(spec.Kube.StorageTargets) > 0) {
+		if err := broker.ValidateReservedRequestShape(&v1alpha1.AccessGrant{Spec: spec}, s.ReservedDecisionClasses, s.ReservedExcludedNamespaces); err != nil {
+			return nil, forbidden("reserved request: %s", err)
+		}
 	}
 	return &v1alpha1.AccessGrant{
 		ObjectMeta: metav1.ObjectMeta{
@@ -342,6 +353,9 @@ type grantScope struct {
 
 // scopeKey is a grant's scope as a string that compares lists as sets.
 func scopeKey(spec *v1alpha1.AccessGrantSpec) string {
+	if spec.Kube != nil && (spec.Kube.Reserved || spec.Kube.AllNamespaces || len(spec.Kube.StorageTargets) > 0) {
+		return grantattest.ScopeDigest(&v1alpha1.AccessGrant{Spec: *spec})
+	}
 	if spec.Maintenance != nil {
 		return broker.MaintenanceDigest(&v1alpha1.AccessGrant{Spec: *spec})
 	}
@@ -499,9 +513,8 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 			return 0, nil, coordinatorDenied()
 		}
 		if _, err := s.childForCoordinator(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: g.Spec.Requester.Session}, c, g.Spec.Requester.SessionUID); err != nil {
-			// S3 reads the grant before posting its UID/digest-bound decision. The
-			// explicit designated subset may review an out-of-tree grant only through
-			// the SAME live actor, separation and exact delegated-policy coverage.
+			// Preserve existing tree reads. Only extra out-of-tree reads use
+			// the explicit policy/reserved union and the shared live actor seam.
 			if !slices.Contains(s.GrantPolicyDelegates, c.identity.serviceAccountRef()) {
 				return 0, nil, err
 			}
@@ -575,7 +588,7 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 		InstalledPodUID: st.InstalledPodUID,
 		InstalledAt:     timeOf(st.InstalledAt),
 	}
-	if len(s.GrantDelegates) > 0 {
+	if len(s.GrantDelegates) > 0 || len(s.ReservedDecisionClasses) > 0 {
 		// A delegate decision echoes the UID (DESIGN-042 6.2).
 		v.UID = string(g.UID)
 	}
@@ -591,7 +604,13 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 		}
 	}
 	if kg := g.Spec.Kube; kg != nil {
-		v.Role, v.Namespaces, v.Secrets = kg.Role, kg.Namespaces, kg.Secrets
+		v.Role, v.Namespaces = kg.Role, kg.Namespaces
+		v.Reserved = kg.Reserved
+		v.AllNamespaces = kg.AllNamespaces
+		for _, target := range kg.StorageTargets {
+			v.StorageTargets = append(v.StorageTargets, apiv1.GrantStorageTarget{Kind: target.Kind, Name: target.Name, UID: target.UID})
+		}
+		v.Secrets = kg.Secrets
 	}
 	if e := g.Spec.Egress; e != nil {
 		v.FQDNs, v.CIDRs = e.FQDNs, e.CIDRs
@@ -614,6 +633,28 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 	}
 	if st.ApprovedTTL != nil {
 		v.ApprovedTTL = st.ApprovedTTL.Duration.String()
+	}
+	if raw := g.Annotations[hardwareIntentAnnotation]; raw != "" && len(raw) <= 4096 {
+		var receipt apiv1.HardwareIntentReceipt
+		if json.Unmarshal([]byte(raw), &receipt) == nil {
+			v.HardwareIntent = &receipt
+		}
+	}
+	var reserved *v1alpha1.ReservedDecisionBinding
+	if g.Status.Reserved != nil {
+		reserved = g.Status.Reserved
+	} else if raw := g.Annotations[broker.MaintenanceDecisionAnnotation]; len(raw) <= broker.MaxReservedDecisionBytes {
+		var decision broker.MaintenanceDecision
+		if json.Unmarshal([]byte(raw), &decision) == nil {
+			reserved = decision.Reserved
+		}
+	}
+	if reserved != nil {
+		raw, _ := json.Marshal(reserved)
+		var audit apiv1.ReservedDecisionBinding
+		if json.Unmarshal(raw, &audit) == nil {
+			v.ReservedDecision = &audit
+		}
 	}
 	v.ScopeDigest = grantattest.ScopeDigest(g)
 	if st, err := grantattest.Parse(g.Annotations[grantattest.Annotation]); err == nil {

@@ -73,3 +73,43 @@ func TestDesignatedHostReadRequiresLiveCoverage(t *testing.T) {
 		})
 	}
 }
+
+func TestDesignatedHostRetainsOwnChildReadWithoutPolicy(t *testing.T) {
+	for _, mode := range []string{"policy absent", "uncovered", "stopped requester"} {
+		t.Run(mode, func(t *testing.T) {
+			f, _, g := delegateFixture(t)
+			reachRunning(t, f, "requester")
+			f.srv.GrantPolicyDelegates = []string{coordinatorSA}
+			var list v1alpha1.GrantPolicyList
+			if err := f.c.List(context.Background(), &list); err != nil {
+				t.Fatal(err)
+			}
+			for i := range list.Items {
+				if mode == "uncovered" {
+					list.Items[i].Spec.Kube.Namespaces = []string{"other"}
+					if err := f.c.Update(context.Background(), &list.Items[i]); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := f.c.Delete(context.Background(), &list.Items[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "stopped requester" {
+				var requester v1alpha1.AgentSession
+				if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "requester"}, &requester); err != nil {
+					t.Fatal(err)
+				}
+				requester.Status.Phase = v1alpha1.PhaseSuspended
+				if err := f.c.Update(context.Background(), &requester); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if w := f.do(http.MethodGet, apiv1.GrantPath(g.Name), tokCoordinator, nil); w.Code != http.StatusOK {
+				t.Fatal("existing own-child read changed", w.Code, w.Body.String())
+			}
+			if _, ok := f.decisionAnnotation(g.Name); ok {
+				t.Fatal("read consumed decision")
+			}
+		})
+	}
+}

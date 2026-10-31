@@ -197,12 +197,12 @@ func TestAsksMCPToolSchemas(t *testing.T) {
 		}
 		schemas[tool.Name] = tool.Schema
 	}
-	for _, name := range []string{"request_access", "grant_status", "release_access", "decide_grant", "ask", "ask_status", "list_my_asks", "withdraw"} {
+	for _, name := range []string{"request_access", "grant_status", "release_access", "decide_grant", "hardware_intent", "ask", "ask_status", "list_my_asks", "withdraw"} {
 		if schemas[name] == nil {
 			t.Fatalf("missing tool %s", name)
 		}
 	}
-	if len(schemas) != 8 || len(h.api.requests()) != 0 {
+	if len(schemas) != 9 || len(h.api.requests()) != 0 {
 		t.Fatalf("tools/list advertised unexpected tools or called the API: %s", h.stdout.String())
 	}
 	for _, name := range []string{"ask", "ask_status", "list_my_asks", "withdraw"} {

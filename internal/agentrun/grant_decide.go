@@ -19,13 +19,16 @@ import (
 func (a *app) grantDecide(ctx context.Context, args []string) error {
 	cmd := newCommand("grant", outputJSON)
 	var uid, digest, ttl, ref, reason string
-	var approve bool
+	var approve, reserved bool
+	var tomRef string
 	cmd.fs.StringVar(&uid, "grant-uid", "", "")
 	cmd.fs.StringVar(&digest, "digest", "", "")
 	cmd.fs.StringVar(&ttl, "ttl", "", "")
 	cmd.fs.StringVar(&ref, "ref", "", "")
 	cmd.fs.StringVar(&reason, "reason", "", "")
 	cmd.fs.BoolVar(&approve, "approve", false, "")
+	cmd.fs.BoolVar(&reserved, "reserved", false, "")
+	cmd.fs.StringVar(&tomRef, "tom-ref", "", "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
@@ -34,6 +37,12 @@ func (a *app) grantDecide(ctx context.Context, args []string) error {
 		return usageError("grant decide takes one grant-<id> name, --grant-uid, --digest and --ref; omit --approve to deny")
 	}
 	if err := validateGrantDecision(pos[0], uid, digest, ttl, ref, reason); err != nil {
+		return err
+	}
+	req := grantDecisionRequest(uid, digest, ttl, ref, reason, approve)
+	req.Reserved = reserved
+	req.TomRef = tomRef
+	if err := validateReservedDecisionExtras(req); err != nil {
 		return err
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
@@ -52,14 +61,19 @@ func (a *app) grantDecide(ctx context.Context, args []string) error {
 	if current.UID != uid || current.ScopeDigest != digest {
 		return fail(ExitFailed, "grant decide: grant UID or scope digest changed; read grant show -o json and review the current scope before deciding")
 	}
-	req := grantDecisionRequest(uid, digest, ttl, ref, reason, approve)
+	if err := validateReservedCurrent(req, current); err != nil {
+		return err
+	}
 	binding := grantDecisionBinding(pos[0], uid, digest, current.Secrets, approve)
+	if req.Reserved {
+		binding += " Reserved case; Tom message reference " + req.TomRef + " is an agent assertion, not verified human consent."
+	}
 	if cmd.c.output == outputJSON {
 		_, _ = fmt.Fprintln(a.env.Stderr, binding)
 	} else {
 		a.outf("%s\n", binding)
 	}
-	out, err := a.postGrantDecision(ctx, c, pos[0], req)
+	out, err := a.postGrantDecision(ctx, c, pos[0], req, &current)
 	if err != nil {
 		return err
 	}
@@ -137,7 +151,10 @@ func validGrantDecisionRef(ref string) bool {
 }
 
 // postGrantDecision is the one decision route, shared by the CLI and decide_grant.
-func (a *app) postGrantDecision(ctx context.Context, c *conn, name string, req apiv1.GrantDecisionRequest) (apiv1.Grant, error) {
+func (a *app) postGrantDecision(ctx context.Context, c *conn, name string, req apiv1.GrantDecisionRequest, expected ...*apiv1.Grant) (apiv1.Grant, error) {
+	if req.Reserved {
+		return a.postReservedDecision(ctx, c, name, req, expected...)
+	}
 	var out apiv1.Grant
 	retriedUncertain := false
 	status, err := a.callWithRetryObserver(ctx, c, http.MethodPost, apiv1.GrantDecisionPath(name), nil, req, &out, true, func(status int, err error) {

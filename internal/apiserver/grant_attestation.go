@@ -46,6 +46,9 @@ func (s *Server) attestGrant(ctx context.Context, w http.ResponseWriter, r *http
 	if err := s.Live.Get(ctx, key, &g); err != nil {
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
+	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0) {
+		return 0, nil, forbidden("reserved scope cannot use requester attestation")
+	}
 	if g.Spec.Requester.SessionUID == "" || !grantRequestedBy(&g, c.parent, c.session.UID) {
 		return 0, nil, forbidden("grant %s belongs to another requesting session; a session attests only its own grants", g.Name)
 	}

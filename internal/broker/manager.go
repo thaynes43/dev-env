@@ -64,7 +64,10 @@ type Options struct {
 	// GrantDelegates are the delegate ServiceAccounts, "<namespace>/<name>",
 	// whose decisions the broker applies (DESIGN-042 6.2). It must match the
 	// operator's --grant-delegates. Empty, the default, applies none.
-	GrantDelegates []string
+	// S7 is default off; exclusions are explicit reviewed bounds.
+	ReservedDecisionClasses    []string
+	ReservedExcludedNamespaces []string
+	GrantDelegates             []string
 	// GrantPolicyDelegates is the default-empty subset allowed exact policy reach.
 	GrantPolicyDelegates []string
 	LegacyGrantDelegates []LegacyDelegateBinding
@@ -165,6 +168,8 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		EnableAttestedMaintenance:      o.EnableAttestedMaintenance,
 		MaintenanceHumanServiceAccount: o.MaintenanceHumanServiceAccount,
 		GrantDelegates:                 o.GrantDelegates,
+		ReservedDecisionClasses:        o.ReservedDecisionClasses,
+		ReservedExcludedNamespaces:     o.ReservedExcludedNamespaces,
 		GrantPolicyDelegates:           o.GrantPolicyDelegates,
 		LegacyGrantDelegates:           o.LegacyGrantDelegates,
 		Clock:                          clk,

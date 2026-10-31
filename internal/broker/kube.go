@@ -70,9 +70,18 @@ func (b *Broker) ensure(ctx context.Context, g *v1alpha1.AccessGrant) ([]string,
 		}
 		return made, nil
 	}
-	for _, ns := range k.Namespaces {
+	for _, ns := range bindingNamespaces(g) {
+		if uid := snapshotNamespaceUID(g, ns); uid != "" {
+			var live corev1.Namespace
+			if err := b.APIReader.Get(ctx, client.ObjectKey{Name: ns}, &live); err != nil {
+				return made, err
+			}
+			if string(live.UID) != uid || !live.DeletionTimestamp.IsZero() {
+				return made, permanent{fmt.Errorf("reserved namespace UID changed")}
+			}
+		}
 		rb := &rbacv1.RoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: g.Name, Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: g.Name, Labels: bindingLabels(g, ns, labels)},
 			RoleRef:    roleRef,
 			Subjects:   subjects,
 		}
@@ -85,6 +94,18 @@ func (b *Broker) ensure(ctx context.Context, g *v1alpha1.AccessGrant) ([]string,
 		}
 		if created {
 			made = append(made, "rolebinding "+ns+"/"+g.Name)
+		}
+		// Namespace UID reads cannot precondition a namespaced API Create.
+		// Fence initial creation on both sides and clean up our exact object
+		// if replacement won. No token is issued until all fences pass.
+		if uid := snapshotNamespaceUID(g, ns); uid != "" {
+			var live corev1.Namespace
+			if err := b.APIReader.Get(ctx, client.ObjectKey{Name: ns}, &live); err != nil {
+				return made, err
+			}
+			if string(live.UID) != uid || !live.DeletionTimestamp.IsZero() {
+				return made, permanent{fmt.Errorf("reserved namespace UID changed during binding creation")}
+			}
 		}
 		use, err := b.ensureSecretUse(ctx, g, ns)
 		made = append(made, use...)
@@ -106,6 +127,9 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 			if have.GetLabels()[v1alpha1.LabelGrant] != g.Name {
 				return false, permanent{fmt.Errorf("%s %s exists and the broker did not make it for this grant", kind, describe(want))}
 			}
+			if g.Status.Reserved != nil && (have.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) || (want.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != "" && have.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != want.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"])) {
+				return false, permanent{fmt.Errorf("reserved resource ownership differs from exact grant/namespace UID")}
+			}
 			if !have.GetDeletionTimestamp().IsZero() {
 				return false, fmt.Errorf("%s %s is still being deleted", kind, describe(want))
 			}
@@ -118,6 +142,12 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 			return false, nil
 		case !apierrors.IsNotFound(err):
 			return false, fmt.Errorf("read %s %s: %w", kind, describe(want), err)
+		}
+		if _, binding := want.(*rbacv1.RoleBinding); binding && snapshotNamespaceUID(g, want.GetNamespace()) != "" && g.Status.ServiceAccount != "" {
+			// The materialization marker is persisted before the first token
+			// mint. Never create fresh snapshot authority once a token may
+			// exist, even after a crash or a binding deletion.
+			return false, permanent{fmt.Errorf("reserved snapshot binding disappeared after materialization; request a new grant")}
 		}
 		err = b.Client.Create(ctx, want)
 		switch {
@@ -168,7 +198,7 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 		if v1alpha1.ClusterWideRole(k.Role) {
 			del(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: g.Name}})
 		} else {
-			for _, ns := range k.Namespaces {
+			for _, ns := range bindingNamespaces(g) {
 				for _, o := range secretUseObjects(g, ns) {
 					del(o)
 				}
@@ -225,6 +255,17 @@ func (b *Broker) deleteOwn(ctx context.Context, g *v1alpha1.AccessGrant, o clien
 			return true, nil
 		}
 		return false, fmt.Errorf("read %s %s: %w", kindOf(o), describe(o), err)
+	}
+	if g.Status.Reserved != nil {
+		if o.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) {
+			return false, nil
+		}
+		if uid := snapshotNamespaceUID(g, o.GetNamespace()); uid != "" && o.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != uid {
+			return false, nil
+		}
+		// A live namespace replacement is not a reason to retain an exact
+		// UID-labelled binding we created in the read/Create race. The object
+		// UID deletion precondition below protects a newer binding.
 	}
 	if o.GetLabels()[v1alpha1.LabelGrant] != g.Name {
 		log.FromContext(ctx).Info("left alone: not made for this grant", "grant", g.Name, "kind", kindOf(o), "object", describe(o))

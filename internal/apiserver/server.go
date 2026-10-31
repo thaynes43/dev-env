@@ -191,7 +191,10 @@ type Server struct {
 	// (DESIGN-042 6.2). It must match the broker's --grant-delegates. Empty,
 	// the default, leaves the route unregistered (404) and every other route
 	// and view as before.
-	GrantDelegates []string
+	// S7 is default off; exclusions are explicit reviewed bounds.
+	ReservedDecisionClasses    []string
+	ReservedExcludedNamespaces []string
+	GrantDelegates             []string
 	// GrantPolicyDelegates is the default-empty subset allowed exact policy reach.
 	GrantPolicyDelegates []string
 	LegacyGrantDelegates []broker.LegacyDelegateBinding
@@ -308,6 +311,9 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:    s.getGrant,
 		http.MethodDelete: s.releaseGrant,
 	}}))
+	if slices.Contains(s.ReservedDecisionClasses, "rd4-hardware") {
+		mux.Handle(apiv1.GrantsPath+"/{name}/hardware-intent", s.serve(route{methods: map[string]handler{http.MethodPost: s.hardwareIntent}}))
+	}
 	if s.MaintenanceEnabled {
 		mux.Handle(apiv1.GrantsPath+"/{name}/maintenance-decision", s.serve(route{methods: map[string]handler{http.MethodPost: s.decideMaintenance}}))
 		mux.Handle(apiv1.GrantsPath+"/{name}/maintenance-exec", s.serve(route{methods: map[string]handler{http.MethodPost: s.execMaintenance}}))

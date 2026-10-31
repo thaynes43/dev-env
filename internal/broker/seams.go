@@ -48,6 +48,7 @@ type Installer interface {
 
 // Decision is Tom's answer to a pending grant, from the approval page.
 type Decision struct {
+	Reserved *v1alpha1.ReservedDecisionBinding
 	// Maintenance bindings are set by the authenticated annotation adapter only.
 	MaintenanceUID, MaintenanceDigest string
 	// Approve approves the grant; false denies it.
@@ -109,13 +110,15 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 			if err := b.delegateGrantHolds(ctx, &g, recorded); err != nil {
 				return err
 			}
-			// At apply time, from the API server: the named delegated policy
-			// still covers this grant.
-			if recorded.Reach != nil && recorded.Reach.PolicyName != d.Policy {
-				return fmt.Errorf("%w: decision names another reach policy", ErrRefused)
-			}
-			if err := b.delegatedPolicyCovers(ctx, &g, d.Policy); err != nil {
-				return err
+			if recorded.Reserved == nil {
+				// At apply time, from the API server: the named delegated policy
+				// still covers this grant.
+				if recorded.Reach != nil && recorded.Reach.PolicyName != d.Policy {
+					return fmt.Errorf("%w: decision names another reach policy", ErrRefused)
+				}
+				if err := b.delegatedPolicyCovers(ctx, &g, d.Policy); err != nil {
+					return err
+				}
 			}
 		}
 		if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
@@ -130,6 +133,9 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 		if delegate {
 			if recorded, ok := parseDecision(&g); ok {
 				g.Status.DelegateReach = recorded.Reach
+				if recorded.Reserved != nil {
+					g.Status.Reserved = recorded.Reserved.DeepCopy()
+				}
 			}
 		}
 		if d.Approve {
@@ -180,6 +186,9 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 		return 0, fmt.Errorf("%w: %s is a policy; Tom decides on the page, and break-glass only ever by him (D-27)", ErrRefused, d.By)
 	}
 	delegate := strings.HasPrefix(d.By, DelegateApprover)
+	if d.Reserved != nil && !delegate {
+		return 0, fmt.Errorf("%w: reserved decision requires the authenticated delegate route", ErrRefused)
+	}
 	if delegate {
 		if err := b.delegateDecisionAllowed(g, d); err != nil {
 			return 0, err
@@ -201,6 +210,12 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 		return 0, fmt.Errorf("%w: credential approvals require a matching standing policy", ErrRefused)
 	}
 
+	if d.Reserved != nil {
+		return d.TTL, nil
+	}
+	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0) {
+		return 0, fmt.Errorf("%w: new reserved scope requires an explicit bound reserved delegate decision", ErrRefused)
+	}
 	if err := check(g, b.SessionNamespace, b.PolicyNamespace); err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrRefused, err)
 	}

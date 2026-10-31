@@ -131,7 +131,7 @@ internal/broker/         the access broker (D-61): decides AccessGrants (GrantPo
                          suite runs it as dev-env-broker under haynes-ops' RBAC and broker guard, copied into testdata/
 internal/homeguard/testutil/  non-secret offline Root fixture and rendered Pod golden linking OP286 local stages
 internal/homeguard/     exact original HOME binding validation, metadata only; default-off OP252 lifecycle/start guard
-internal/grantattest/    the agent attestation of a grant (DESIGN-001 D-88): one annotation, its bounds and the scope digest, shared by the operator's API and the broker; pure. A claim, not verified human identity
+internal/grantattest/    pure reserved decision bounds/snapshot/storage/audit helpers (DESIGN-042 S7, no authority) and the agent attestation of a grant (DESIGN-001 D-88): one annotation, its bounds and the scope digest, shared by the operator's API and the broker; pure. A claim, not verified human identity
 internal/egress/         the scoped CiliumNetworkPolicy builder and ownership checks (D-64), shared by broker and operator
 internal/grantexpiry/    the operator's separate egress expiry backstop (D-64), watches grants, reads CNPs by name only,
                          deletes by verified ownership and UID, and preserves the broker's grant audit record

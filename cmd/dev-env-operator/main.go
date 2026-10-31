@@ -50,6 +50,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 	"github.com/thaynes43/dev-env/internal/grantexpiry"
 	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/inbox"
@@ -130,6 +131,8 @@ type options struct {
 	clientSAs                     []string
 	grantApprovalURL              string
 	grantAttestation              bool
+	reservedDecisionClasses       []string
+	reservedExcludedNamespaces    []string
 	grantDelegates                []string
 	grantPolicyDelegates          []string
 	legacyGrantDelegates          []broker.LegacyDelegateBinding
@@ -204,6 +207,8 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.maintenanceEnabled, "enable-maintenance-api", false, "HELD: authenticated bounded maintenance API after policy review")
 	fs.BoolVar(&o.grantAttestation, "enable-grant-attestation", false, "serve POST /v1/grants/{name}/attestation, where a grant's requesting session records its claim that the user or a coordinator approved it (agent attestation, not verified human identity); off, the route does not exist")
+	reservedClasses := fs.String("reserved-decision-classes", "", "HELD SOURCE ONLY: explicit S7 classes rd2,rd3a,rd3b,rd4-storage,rd4-hardware; empty disables reserved decisions and hardware audit. Must match operator/broker; Tom message references are agent assertions, never verified human consent")
+	reservedExcluded := fs.String("reserved-excluded-namespaces", strings.Join(grantattest.ReservedDefaultExclusions(), ","), "HELD: exact reviewed namespace exclusion bounds for S7 namespaced cases; proposed defaults are not permanent human-only restrictions. Explicit empty changes the bound; no implicit fallback. Must match operator/broker and requires the held activation review")
 	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, that may decide other agents' grants on POST /v1/grants/{name}/decision: a configured coordinator host, or a session pod running as that account. Never the human, a client, workbench or portal account. The shared baseline account requires an exact --grant-legacy-delegates binding and policy designation. Must match the broker's --grant-delegates. Empty, the route does not exist")
 	policyDelegates := fs.String("grant-policy-delegates", "", "HELD (DESIGN-042 6.6): default-empty subset of --grant-delegates allowed exact live delegated-policy reach outside their tree. Must match both services")
 	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
@@ -338,6 +343,14 @@ func parseFlags(args []string) (options, error) {
 		return o, err
 	}
 	if o.legacyGrantDelegates, err = broker.ParseLegacyGrantDelegates(*legacyDelegates, o.sessionNamespace, controller.ServiceAccountName); err != nil {
+		return o, err
+	}
+	o.reservedDecisionClasses, err = grantattest.ParseReservedClasses(*reservedClasses)
+	if err != nil {
+		return o, err
+	}
+	o.reservedExcludedNamespaces, err = grantattest.ParseReservedExclusions(*reservedExcluded)
+	if err != nil {
 		return o, err
 	}
 	if o.grantDelegates, err = apiserver.ParseGrantDelegatesWithLegacy(*delegates, policy, o.legacyGrantDelegates); err != nil {
@@ -874,25 +887,27 @@ func run(args []string) error {
 			Projects:     o.catalogBinding, PrivateProjectTasks: o.privateProjectTasks, ManagedCodexTasks: o.managedCodexTasks, CodexRCEnabled: o.codexRCEnabled, CodexRCTarget: o.codexRCTarget, ManagedChildDecisions: o.managedChildDecisions,
 			PrivateProjectCanaries: o.privateProjectCanaries, RetainedCommonRules: o.retainedCommonRules,
 			PrivateHistoryRetention: o.privateHistoryRetention, PrivateCanaryTemplates: templatesKey,
-			ChildUsageCapture:        o.childUsageCapture,
-			Exec:                     podExec,
-			KeeperLogin:              &apiserver.KeeperLogin{Namespace: o.templatesNamespace, Exec: podExec, Leader: leaderNow(mgr, o.leaderElect)},
-			Shelf:                    rescueShelf,
-			HistoryReads:             o.historyArchiveReads,
-			History:                  &shelf.HistoryReader{Shelf: rescueShelf},
-			ShelfSlots:               shelfSlots,
-			CoordinationArchiveReads: o.coordinationArchiveReads,
-			CoordinationArchive:      &shelf.CoordinationArchive{Shelf: rescueShelf},
-			Templates:                apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
-			Log:                      ctrl.Log.WithName("api"),
-			GrantApprovalURL:         o.grantApprovalURL,
-			GrantAttestation:         o.grantAttestation,
-			MaintenanceEnabled:       o.maintenanceEnabled,
-			GrantDelegates:           o.grantDelegates,
-			GrantPolicyDelegates:     o.grantPolicyDelegates,
-			LegacyGrantDelegates:     o.legacyGrantDelegates,
-			PolicyNamespace:          o.policyNamespace,
-			Asks:                     askStore,
+			ChildUsageCapture:          o.childUsageCapture,
+			Exec:                       podExec,
+			KeeperLogin:                &apiserver.KeeperLogin{Namespace: o.templatesNamespace, Exec: podExec, Leader: leaderNow(mgr, o.leaderElect)},
+			Shelf:                      rescueShelf,
+			HistoryReads:               o.historyArchiveReads,
+			History:                    &shelf.HistoryReader{Shelf: rescueShelf},
+			ShelfSlots:                 shelfSlots,
+			CoordinationArchiveReads:   o.coordinationArchiveReads,
+			CoordinationArchive:        &shelf.CoordinationArchive{Shelf: rescueShelf},
+			Templates:                  apiserver.TemplatesFrom(mgr.GetClient(), templatesKey),
+			Log:                        ctrl.Log.WithName("api"),
+			GrantApprovalURL:           o.grantApprovalURL,
+			GrantAttestation:           o.grantAttestation,
+			MaintenanceEnabled:         o.maintenanceEnabled,
+			GrantDelegates:             o.grantDelegates,
+			ReservedDecisionClasses:    o.reservedDecisionClasses,
+			ReservedExcludedNamespaces: o.reservedExcludedNamespaces,
+			GrantPolicyDelegates:       o.grantPolicyDelegates,
+			LegacyGrantDelegates:       o.legacyGrantDelegates,
+			PolicyNamespace:            o.policyNamespace,
+			Asks:                       askStore,
 		}
 		// The standby session is default off. It is made through the API's own
 		// creation path and found again by its label (Story110 T25, plan 03).

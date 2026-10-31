@@ -93,6 +93,14 @@ var errDelegateDecisionFuture = errors.New("the decision timestamp is ahead of t
 // delegateMessage is the audit text of a delegate decision. It never says a
 // human decided.
 func delegateMessage(d Decision) string {
+	if d.Reserved != nil {
+		verb := "denied"
+		if d.Approve {
+			verb = "approved"
+		}
+		return fmt.Sprintf("%s by %s under reserved/%s bounds/%s (ref %s, tomRef %s): %s", verb, d.By, d.Reserved.Case, d.Reserved.BoundsRevision, d.Ref, d.Reserved.TomRef, grantattest.ReservedWording)
+	}
+
 	if d.Approve {
 		return fmt.Sprintf("approved by %s under policy/%s (ref %s): %s", d.By, d.Policy, d.Ref, DelegateWording)
 	}
@@ -109,6 +117,9 @@ func delegateMessage(d Decision) string {
 // decide, and the decision, approval or denial, names the delegated policy
 // that covers it: a delegate decides only inside the scopes Tom delegated.
 func (b *Broker) delegateDecisionAllowed(g *v1alpha1.AccessGrant, d Decision) error {
+	if d.Reserved != nil {
+		return b.reservedDecisionAllowed(g, d)
+	}
 	switch {
 	case !delegateListed(d.By, b.GrantDelegates):
 		return fmt.Errorf("%w: %s is not a configured grant delegate", ErrRefused, d.By)
@@ -279,7 +290,7 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		}
 		return refuse(err.Error())
 	}
-	dec := Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, Reason: d.Reason, GrantUID: d.GrantUID, ScopeDigest: d.Digest, Ref: d.Ref}
+	dec := Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, Reason: d.Reason, GrantUID: d.GrantUID, ScopeDigest: d.Digest, Ref: d.Ref, Reserved: d.Reserved}
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
 		dec.MaintenanceUID, dec.MaintenanceDigest = string(g.UID), MaintenanceDigest(g)
 	}
@@ -287,25 +298,31 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	// denial outside every delegated policy would let one delegate end any
 	// agent's request. Select live: a policy cache miss must never clear a
 	// decision that the API server's policy still covers.
-	var policies v1alpha1.GrantPolicyList
-	if err := b.APIReader.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
-		return ctrl.Result{}, true, fmt.Errorf("list the grant policies: %w", err)
-	}
-	p := MatchDelegated(g, policies.Items)
-	if d.Reach != nil {
-		p = nil
-		for i := range policies.Items {
-			candidate := &policies.Items[i]
-			if candidate.Name == d.Reach.PolicyName && string(candidate.UID) == d.Reach.PolicyUID && candidate.DeletionTimestamp.IsZero() && MatchesDelegated(candidate, g) && DelegatedPolicyDigest(candidate) == d.Reach.PolicyDigest {
-				p = candidate
-				break
+	if d.Reserved != nil {
+		if _, err := b.checkReservedBinding(g, d, now.Time); err != nil {
+			return refuse(err.Error())
+		}
+	} else {
+		var policies v1alpha1.GrantPolicyList
+		if err := b.APIReader.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
+			return ctrl.Result{}, true, fmt.Errorf("list the grant policies: %w", err)
+		}
+		p := MatchDelegated(g, policies.Items)
+		if d.Reach != nil {
+			p = nil
+			for i := range policies.Items {
+				candidate := &policies.Items[i]
+				if candidate.Name == d.Reach.PolicyName && string(candidate.UID) == d.Reach.PolicyUID && candidate.DeletionTimestamp.IsZero() && MatchesDelegated(candidate, g) && DelegatedPolicyDigest(candidate) == d.Reach.PolicyDigest {
+					p = candidate
+					break
+				}
 			}
 		}
+		if p == nil {
+			return refuse("no policy with spec.delegated covers this grant's scope and requester")
+		}
+		dec.Policy = p.Name
 	}
-	if p == nil {
-		return refuse("no policy with spec.delegated covers this grant's scope and requester")
-	}
-	dec.Policy = p.Name
 	if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
 		busy, err := b.maintenanceTargetBusy(ctx, g)
 		if err != nil {
@@ -387,6 +404,9 @@ func (b *Broker) delegatedHolds(ctx context.Context, g *v1alpha1.AccessGrant) er
 			return permanent{err}
 		}
 		return err
+	}
+	if d.Reserved != nil {
+		return nil
 	}
 	var policies v1alpha1.GrantPolicyList
 	if err := b.APIReader.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {

@@ -16,8 +16,9 @@ import (
 //
 // The schema refuses what no grant or policy may ever do, whoever writes it:
 //
-//   - no grant or policy targets dev-env-system, dev-agents or dev-tools (a
-//     namespace, an endpoint, or an in-cluster name);
+//   - ordinary grants and policies do not target dev-env-system, dev-agents or dev-tools (a
+//     namespace, an endpoint, or an in-cluster name); explicit S7 requests need
+//     separately enabled exact reviewed bounds and authenticated reserved decisions;
 //   - a grant's TTL runs from 10 minutes (the shortest token TokenRequest issues)
 //     to its type's longest: 8 h for kube and egress, 4 h for credential, 1 h for
 //     break-glass;
@@ -54,7 +55,8 @@ const (
 	// (Q-07).
 	GrantCredential GrantType = "credential"
 	// GrantBreakglass is a kube grant of dev-env-grant-breakglass cluster-wide,
-	// approved by Tom only (D-27).
+	// decided through the ordinary human route or an explicitly enabled bound S7
+	// delegate assertion; neither source publication nor a ref proves human consent.
 	GrantBreakglass GrantType = "breakglass"
 )
 
@@ -72,8 +74,9 @@ const (
 	RoleSecretsRead = "dev-env-grant-secrets-read"
 	// RoleNodes cordons, uncordons and drains nodes, cluster-wide.
 	RoleNodes = "dev-env-grant-nodes"
-	// RoleBreakglass is every verb on every resource minus the exclusions of
-	// D-27, cluster-wide. Type breakglass only.
+	// RoleBreakglass names the cluster-wide catalog role. S7 proposes every API
+	// resource/verb, root equivalent with derived-credential residuals, separately
+	// held for activation. This constant changes no live role. Type breakglass only.
 	RoleBreakglass = "dev-env-grant-breakglass"
 	// RoleNamespaceOperator execs into pods, restarts workloads, and runs Jobs
 	// that use the Secrets its grant names, in the granted namespaces
@@ -164,6 +167,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || ((self.type == 'breakglass') == (self.kube.role == 'dev-env-grant-breakglass'))",message="type breakglass and role dev-env-grant-breakglass go together (D-27)"
 // +kubebuilder:validation:XValidation:rule="duration(self.ttl) >= duration('10m') && duration(self.ttl) <= duration('8h')",message="ttl runs from 10m to 8h"
+// +kubebuilder:validation:XValidation:rule="!has(self.kube) || (!(has(self.kube.reserved) && self.kube.reserved) && !(has(self.kube.allNamespaces) && self.kube.allNamespaces) && (!has(self.kube.storageTargets) || size(self.kube.storageTargets) == 0)) || duration(self.ttl) <= duration('1h')",message="reserved namespace snapshots and exact storage targets have a maximum TTL of 1h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.ttl) <= duration('4h')",message="a credential grant lasts at most 4h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' || duration(self.ttl) <= duration('1h')",message="break-glass lasts at most 1h (D-27)"
 // +kubebuilder:validation:XValidation:rule="has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress) && has(self.credential) == has(oldSelf.credential) && has(self.maintenance) == has(oldSelf.maintenance)",message="immutable after create; only release may change"
@@ -266,9 +270,30 @@ type GrantRequester struct {
 // KubeGrant is a catalog role in named namespaces, or cluster-wide for the
 // cluster-wide roles.
 //
-// +kubebuilder:validation:XValidation:rule="(self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass') == (!has(self.namespaces) || size(self.namespaces) == 0)",message="dev-env-grant-nodes and dev-env-grant-breakglass are cluster-wide and take no namespaces; the other roles name at least one"
+// +kubebuilder:validation:XValidation:rule="has(self.allNamespaces) && self.allNamespaces ? (self.role == 'dev-env-grant-secrets-read' && (!has(self.namespaces) || size(self.namespaces) == 0)) : ((self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass') == (!has(self.namespaces) || size(self.namespaces) == 0))",message="allNamespaces is reserved Secret read only; otherwise cluster-wide roles take no namespaces and the other roles name at least one"
+// +kubebuilder:validation:XValidation:rule="!has(self.storageTargets) || size(self.storageTargets) == 0 || (self.role == 'dev-env-grant-storage' && has(self.namespaces) && size(self.namespaces) == 1)",message="storage targets require the storage role in exactly one namespace"
+// +kubebuilder:validation:XValidation:rule="!has(self.storageTargets) || self.storageTargets.all(t, self.storageTargets.filter(o, o.uid == t.uid).size() == 1)",message="storage target UIDs must be unique"
+// +kubebuilder:validation:XValidation:rule="!has(self.namespaces) || (has(self.reserved) && self.reserved && self.role in ['dev-env-grant-secrets-read','dev-env-grant-storage']) || self.namespaces.all(n, !(n in ['dev-env-system','dev-agents','dev-tools']))",message="no grant reaches the dev-env namespaces without explicit reserved scope and configured reviewed bounds (DESIGN-001 6.12)"
+// +kubebuilder:validation:XValidation:rule="!has(self.reserved) || !self.reserved || self.role in ['dev-env-grant-breakglass','dev-env-grant-secrets-read','dev-env-grant-storage']",message="reserved scope is one of the S7 catalog cases"
 // +kubebuilder:validation:XValidation:rule="(self.role == 'dev-env-grant-namespace-operator') == (has(self.secrets) && size(self.secrets) > 0)",message="dev-env-grant-namespace-operator names the Secrets it will use, one to 16, and only that role takes secrets (DESIGN-042 5.1)"
 type KubeGrant struct {
+	// Reserved marks an immutable S7 request, including a bounded configured
+	// namespace exception. It grants no authority and defaults false.
+	// +optional
+	Reserved bool `json:"reserved,omitempty"`
+
+	// AllNamespaces requests RD3b: the approved namespace UID snapshot is
+	// materialized as individual RoleBindings. It never means a cluster binding.
+	// +optional
+	AllNamespaces bool `json:"allNamespaces,omitempty"`
+	// StorageTargets are the exact reviewed object UIDs of an RD4 storage
+	// request. The proposed deletion guard fails closed without them.
+	// +listType=map
+	// +listMapKey=kind
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	StorageTargets []GrantStorageTarget `json:"storageTargets,omitempty"`
 	// Role is a ClusterRole from the grant role catalog.
 	// +kubebuilder:validation:Enum=dev-env-grant-workloads;dev-env-grant-storage;dev-env-grant-secrets-read;dev-env-grant-nodes;dev-env-grant-breakglass;dev-env-grant-namespace-operator
 	// +required
@@ -293,7 +318,6 @@ type KubeGrant struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:items:MaxLength=63
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	// +kubebuilder:validation:items:XValidation:rule="!(self in ['dev-env-system', 'dev-agents', 'dev-tools'])",message="no grant reaches the dev-env namespaces (DESIGN-001 6.12)"
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`
 }
@@ -388,6 +412,10 @@ type CredentialGrant struct {
 // AccessGrantStatus is the broker's record of the grant. Only the broker
 // writes it (accessgrants/status); the operator's API reads it.
 type AccessGrantStatus struct {
+	// Reserved is the broker-retained S7 binding. It is an authenticated
+	// delegate's agent assertion, never verified human consent.
+	// +optional
+	Reserved *ReservedDecisionBinding `json:"reserved,omitempty"`
 	// DelegateReach records the reviewed policy and identity binding (DESIGN-042 6.6).
 	// +optional
 	DelegateReach *DelegateReachBinding `json:"delegateReach,omitempty"`

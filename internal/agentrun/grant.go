@@ -52,6 +52,8 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return a.grantRelease(ctx, args[1:])
 	case "attest":
 		return a.grantAttest(ctx, args[1:])
+	case "hardware-intent":
+		return a.grantHardwareIntent(ctx, args[1:])
 	case "decide":
 		return a.grantDecide(ctx, args[1:])
 	case "use":
@@ -121,7 +123,8 @@ func (a *app) grantList(ctx context.Context, args []string) error {
 func (a *app) grantRequest(ctx context.Context, args []string) error {
 	cmd := newCommand("grant", outputJSON)
 	var typ, role, credential, ttl, reason string
-	var noWait bool
+	var noWait, reserved, allNamespaces bool
+	var targets stringList
 	var namespaces, fqdns, cidrs, endpoints, ports, secrets stringList
 	cmd.fs.StringVar(&typ, "type", "", "")
 	cmd.fs.StringVar(&role, "role", "", "")
@@ -129,6 +132,9 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	cmd.fs.StringVar(&ttl, "ttl", "", "")
 	cmd.fs.StringVar(&reason, "reason", "", "")
 	cmd.fs.BoolVar(&noWait, "no-wait", false, "")
+	cmd.fs.BoolVar(&reserved, "reserved", false, "")
+	cmd.fs.BoolVar(&allNamespaces, "all-namespaces", false, "")
+	cmd.fs.Var(&targets, "storage-target", "")
 	cmd.fs.Var(&namespaces, "namespace", "")
 	cmd.fs.Var(&secrets, "secret", "")
 	cmd.fs.Var(&fqdns, "fqdn", "")
@@ -144,6 +150,18 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	}
 	req, err := grantRequestBody(typ, role, credential, ttl, reason, namespaces, secrets, fqdns, cidrs, endpoints, ports)
 	if err != nil {
+		return err
+	}
+	req.Reserved = reserved || allNamespaces || len(targets) > 0
+	req.AllNamespaces = allNamespaces
+	for _, raw := range targets {
+		target, err := parseStorageTarget(raw)
+		if err != nil {
+			return err
+		}
+		req.StorageTargets = append(req.StorageTargets, target)
+	}
+	if err := validateReservedRequest(req); err != nil {
 		return err
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
@@ -547,6 +565,15 @@ func (a *app) printGrant(out apiv1.Grant) error {
 		printSessionTaskClaims(out.TaskClaims, func(label, format string, args ...any) {
 			a.outf("%s: "+format+"\n", append([]any{label}, args...)...)
 		})
+	}
+	if audit := out.ReservedDecision; audit != nil {
+		a.outf("reserved %s bounds %s ref %s tomRef %s: agent assertion, not verified human consent\n", audit.Case, audit.BoundsRevision, audit.Ref, audit.TomRef)
+		if audit.Case == "rd2" {
+			a.outf("Root equivalent: impersonation, SA tokens and Secret reads across Never; derived credentials and persistent effects are not recalled by original lease expiry.\n")
+		}
+	}
+	if out.HardwareIntent != nil {
+		a.outf("%s\n", hardwareIntentNotice)
 	}
 	if out.Maintenance != nil {
 		a.outf("maintenance node: %s (%s) resource: %s operation: %s\n", out.Maintenance.Node, out.Maintenance.NodeUID, out.Maintenance.Resource, out.Maintenance.Operation)

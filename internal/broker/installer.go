@@ -55,7 +55,7 @@ func (e *ExecInstaller) Install(ctx context.Context, pod *corev1.Pod, g *v1alpha
 	if g.Spec.Kube == nil || token == "" {
 		return errors.New("the kube grant or its token is missing")
 	}
-	cmd := agentprotocol.GrantInstallCommand(g.Name, g.Spec.Kube.Role, g.Spec.Kube.Namespaces, expires, string(pod.UID))
+	cmd := agentprotocol.GrantInstallCommand(g.Name, g.Spec.Kube.Role, bindingNamespaces(g), expires, string(pod.UID))
 	return e.run(ctx, pod, cmd, strings.NewReader(token+"\n"))
 }
 

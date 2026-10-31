@@ -132,7 +132,10 @@ type Broker struct {
 	// whose recorded decisions the broker applies through a GrantPolicy with
 	// spec.delegated (DESIGN-042 6.2). It must match the operator's
 	// --grant-delegates. Empty, the default, reads no delegate decision.
-	GrantDelegates []string
+	// S7 is default off; exclusions are explicit reviewed bounds.
+	ReservedDecisionClasses    []string
+	ReservedExcludedNamespaces []string
+	GrantDelegates             []string
 	// GrantPolicyDelegates is the default-empty subset allowed exact policy reach.
 	GrantPolicyDelegates []string
 	LegacyGrantDelegates []LegacyDelegateBinding
@@ -185,7 +188,7 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	if g.Status.Phase.Ended() {
 		return b.retain(ctx, &g, now)
 	}
-	if err := checkCapabilities(&g, b.EnableProxmoxGrants || g.Status.Phase == v1alpha1.GrantActive, b.EnableHWSSHGrants || g.Status.Phase == v1alpha1.GrantActive, b.SessionNamespace, b.PolicyNamespace); err != nil {
+	if err := b.checkReservedOrLegacyCapabilities(&g); err != nil {
 		return b.end(ctx, &g, v1alpha1.GrantDenied, DeniedByBroker, err.Error(), now)
 	}
 	if g.Spec.Type == v1alpha1.GrantMaintenance && !b.EnableMaintenanceGrants && g.Status.Phase != v1alpha1.GrantActive {
@@ -329,6 +332,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)
 	}
+	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0 || g.Status.Reserved != nil) && (g.Status.Reserved == nil || !strings.HasPrefix(g.Status.ApprovedBy, DelegateApprover)) {
+		return b.end(ctx, g, v1alpha1.GrantFailed, "", "reserved scope has no bound authenticated delegate approval", now)
+	}
 	// A delegate approval (DESIGN-042 6.2) is authority only while it holds.
 	if err := b.delegatedHolds(ctx, g); err != nil {
 		if p := (permanent{}); errors.As(err, &p) {
@@ -343,6 +349,15 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 			return b.end(ctx, g, v1alpha1.GrantFailed, "", "could not be made: "+err.Error(), now)
 		}
 		return ctrl.Result{}, err
+	}
+	if g.Status.Reserved != nil && g.Spec.Kube != nil && g.Spec.Kube.AllNamespaces && g.Status.ServiceAccount == "" {
+		// Commit a durable no-recreation fence before mint/install can expose
+		// any token. A crash after installation cannot reopen creation.
+		g.Status.ServiceAccount = g.Name
+		written, err := b.writeStatus(ctx, g)
+		if err != nil || !written {
+			return ctrl.Result{}, err
+		}
 	}
 	if len(made) > 0 {
 		log.FromContext(ctx).Info("made the grant", append(grantFields(g), "made", made)...)
@@ -623,11 +638,15 @@ func truncate(s string) string {
 
 // grantLabels go on everything the broker makes for a grant.
 func grantLabels(g *v1alpha1.AccessGrant) map[string]string {
-	return map[string]string{
+	labels := map[string]string{
 		v1alpha1.LabelGrant:     g.Name,
 		v1alpha1.LabelSession:   g.Spec.Requester.Session,
 		v1alpha1.LabelManagedBy: ManagedBy,
 	}
+	if g.Status.Reserved != nil {
+		labels[v1alpha1.LabelPrefix+"grant-uid"] = string(g.UID)
+	}
+	return labels
 }
 
 // ManagedBy is app.kubernetes.io/managed-by on what the broker makes.

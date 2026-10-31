@@ -514,7 +514,7 @@ func TestEnvtestGrants(t *testing.T) {
 		e := unmarshal[apiv1.ErrorResponse](t, l.want(http.MethodPost, apiv1.GrantsPath, agent, r, http.StatusUnprocessableEntity)).Error
 		found := false
 		for _, fe := range e.Fields {
-			found = found || (fe.Field == "namespaces[1]" && strings.Contains(fe.Message, "no grant reaches the dev-env namespaces (DESIGN-001 6.12)"))
+			found = found || (fe.Field == "" && strings.Contains(fe.Message, "no grant reaches the dev-env namespaces without explicit reserved scope and configured reviewed bounds (DESIGN-001 6.12)"))
 		}
 		if e.Code != apiv1.CodeInvalid || !found {
 			t.Errorf("dev-agents: %+v", e)
