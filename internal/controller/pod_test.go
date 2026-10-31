@@ -677,6 +677,77 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 	}
 }
 
+// A profile that names a named coordinator identity (DESIGN-042 6.4, S4) runs
+// a session as it only when the API's admission label names that same account,
+// and never with the workbench's exec cue. A session that reached the profile
+// without the label (a kubectl create, or a create while the templates could not
+// be read) or with a label for another account runs as dev-env-agent, and a hold
+// pod never uses the identity.
+func TestCoordinatorProfilePodRunsAsItsIdentityOnlyWhenAdmitted(t *testing.T) {
+	const lead = "dev-env-coordinator-lead"
+	tmpl := exampleTemplates(t)
+	p := tmpl.Profiles["dev"]
+	p.ServiceAccount = lead
+	tmpl.Profiles["dev"] = p
+	for label, want := range map[string]string{
+		lead:                        lead,
+		"":                          ServiceAccountName, // no label
+		"dev-env-coordinator-other": ServiceAccountName,
+		"dev-env-coordinator-lead2": ServiceAccountName,
+		"dev-env-agent":             ServiceAccountName,
+		"x":                         ServiceAccountName,
+	} {
+		s := taskSession()
+		s.Spec.Profile = "dev"
+		s.Labels = map[string]string{v1alpha1.LabelDepth: "1"}
+		if label != "" {
+			s.Labels[templates.CoordinatorIdentityLabel] = label
+		}
+		pod, err := buildPod(s, tmpl, "https://api")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := pod.Spec.ServiceAccountName; got != want {
+			t.Errorf("label %q: service account %q, want %q", label, got, want)
+		}
+		if e := envOf(pod.Spec.Containers[0], templates.WorkbenchEnv); e == nil || e.Value != "" {
+			t.Errorf("label %q: %s %+v", label, templates.WorkbenchEnv, e)
+		}
+		hold, err := buildHoldPod(s, tmpl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hold.Spec.ServiceAccountName; got != ServiceAccountName {
+			t.Errorf("label %q: hold pod service account %q", label, got)
+		}
+	}
+	// The label alone grants nothing: on a profile that names no identity the
+	// session keeps the agents' account.
+	s := taskSession()
+	s.Spec.Profile = "full"
+	s.Labels = map[string]string{templates.CoordinatorIdentityLabel: lead}
+	other, err := buildPod(s, tmpl, "https://api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Spec.ServiceAccountName != ServiceAccountName {
+		t.Errorf("full profile service account %q", other.Spec.ServiceAccountName)
+	}
+	// An account that is not a valid identity is never used, even if it slipped
+	// past Validate and a label repeats it.
+	p.ServiceAccount = "dev-env-coordinator-"
+	tmpl.Profiles["dev"] = p
+	s.Spec.Profile = "dev"
+	s.Labels[templates.CoordinatorIdentityLabel] = "dev-env-coordinator-"
+	bad, err := buildPod(s, tmpl, "https://api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bad.Spec.ServiceAccountName != ServiceAccountName {
+		t.Errorf("malformed identity service account %q", bad.Spec.ServiceAccountName)
+	}
+}
+
 // A profile that names the workbench account runs the session as it, with the
 // cue agent-run reads. Every other profile, and every hold pod, keeps the
 // agents' account and an empty cue.
