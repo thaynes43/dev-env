@@ -116,7 +116,7 @@ func TestProductFiltersAndProjects(t *testing.T) {
 	for _, want := range []string{
 		`All sessions<span class="count">5</span>`, `Needs attention<span class="attention-count">1</span>`,
 		`?project=dev-env">`, `dev-env<span class="count">2</span>`, `haynes-ops<span class="count">2</span>`, `sigo-alumni<span class="count">1</span>`,
-		`class="badge tone-muted">Succeeded`, `class="badge tone-bad">Task failed`, `class="badge tone-bad">Timed out`,
+		`class="badge tone-muted">Exited 0`, `class="badge tone-bad">Task failed`, `class="badge tone-bad">Timed out`,
 		"Interactive (remote)", "Headless (task)", "launched by dev-env-1019-205125",
 	} {
 		if !strings.Contains(all, want) {
@@ -528,11 +528,14 @@ func worstSession(i int, now time.Time) apiv1.PortalSessionSummary {
 	at := now.Add(-time.Duration(i) * time.Minute)
 	model := "m" + strings.Repeat("x", protocol.MaxUsageModelID-1)
 	reported := protocol.TokenObservation{State: protocol.UsageReported, Amount: &limit}
+	pr := "https://github.com/thaynes43/" + strings.Repeat("x", 256-len("https://github.com/thaynes43/")-len("/pull/999999")) + "/pull/999999"
+	outcome := &protocol.TaskOutcome{SessionUID: strings.Repeat("u", 36), PodUID: strings.Repeat("p", 128), Record: protocol.TaskOutcomeRecord{
+		PRURLs: []string{pr, pr, pr}, HeadSHAs: []string{strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)}, Summary: strings.Repeat("&", 200)}}
 	return apiv1.PortalSessionSummary{
 		Name: strconv.Itoa(i) + "-" + strings.Repeat("n", 240), UID: strings.Repeat("u", 36), Repo: strings.Repeat("r", 100),
 		Phase: "Running", ObservedAt: at, Freshness: "observed",
 		Activity: &apiv1.PortalSessionActivity{Mode: "task", Provider: "claude", AgentState: "busy", LastActivity: &at, RequestedModel: model,
-			LaunchedBy: "l" + strings.Repeat("x", 252), TaskResult: "Unknown",
+			LaunchedBy: "l" + strings.Repeat("x", 252), TaskResult: "Unknown", TaskOutcome: outcome,
 			Usage: apiv1.PortalSessionUsage{Scope: protocol.UsageInitial, ResultState: "Final", ServedModels: []string{model, model, model, model},
 				InputTokens: reported, OutputTokens: reported, CacheReadInputTokens: reported, CacheCreationInputTokens: reported,
 				Cost: protocol.CostObservation{State: protocol.UsageReported, Amount: "123456789.123456789", Unit: "USD", Kind: "ProviderCLIEquivalentEstimate"}}},

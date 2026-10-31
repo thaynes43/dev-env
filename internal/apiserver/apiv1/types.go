@@ -455,7 +455,8 @@ type SessionList struct {
 }
 
 // PortalSessionSummary is the only session object the portal reader returns.
-// It has no prompt, log, environment, outcome, or control fields. Activity is
+// It has no prompt, log, environment, summoned-session outcome, or control
+// fields; a task's retained outcome is opt-in in its activity. Activity is
 // set only for GET /v1/sessions?view=activity; without it a summary keeps the
 // six keys that earlier portal images require.
 type PortalSessionSummary struct {
@@ -470,6 +471,11 @@ type PortalSessionSummary struct {
 
 // PortalViewActivity is the one value of the portal reader's view parameter.
 const PortalViewActivity = "activity"
+
+// PortalSessionPageMaxBytes is the most the portal reads of one session page
+// of 50. A page with every activity field at its bound, task outcomes
+// included, stays under it; a larger page fails the whole read.
+const PortalSessionPageMaxBytes = 512 << 10
 
 // PortalLauncherPattern is the shape of a launchedBy value: a session name, a
 // namespace/name or a ServiceAccount reference. The operator omits a
@@ -496,6 +502,12 @@ type PortalSessionActivity struct {
 	LaunchedBy     string               `json:"launchedBy,omitempty"`
 	TaskResult     string               `json:"taskResult,omitempty"`
 	RemoteControl  *PortalRemoteControl `json:"remoteControl,omitempty"`
+	// TaskOutcome is a task session's retained status.taskOutcome: the task's
+	// own record at its first exit, bound to the original Session and Pod UIDs.
+	// It is sent only when the portal asks with TaskOutcomeHeader, because an
+	// older portal refuses an unknown activity key. It is separate from
+	// TaskResult, which says only how the process ended.
+	TaskOutcome *protocol.TaskOutcome `json:"taskOutcome,omitempty"`
 	// ConversationUsage is the registered interactive conversation's measured
 	// usage. It is sent only when the operator is started with
 	// --portal-conversation-usage, because an older portal refuses an unknown

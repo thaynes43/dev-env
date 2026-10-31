@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -100,9 +101,12 @@ type groupView struct {
 }
 
 // ProductField is one label and value. Mono sets identifiers in monospace.
+// Href links the value in a detail panel. Only a task outcome's pull request
+// URL, on github.com/thaynes43, renders as a link; any other Href is dropped
+// and the value shows as text.
 type ProductField struct {
-	Label, Value string
-	Mono         bool
+	Label, Value, Href string
+	Mono               bool
 }
 
 // ProductStatus is a status badge. Tone is one of ok, busy, wait, bad, info
@@ -717,6 +721,7 @@ const (
 var (
 	productTones            = map[string]bool{"ok": true, "busy": true, "wait": true, "bad": true, "info": true, "muted": true}
 	productRemoteControlURL = regexp.MustCompile(apiv1.PortalRemoteControlURLPattern)
+	productPullRequestURL   = regexp.MustCompile(protocol.TaskOutcomePRURLPattern)
 	productSessionUID       = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 	productID               = regexp.MustCompile(`^[st][0-9]{1,4}$`)
 	productTaskKey          = regexp.MustCompile(`^[1-9][0-9]{0,9}$`)
@@ -730,7 +735,8 @@ func productTone(tone string) string {
 }
 
 // sectionTones returns sections with every state badge's tone in the fixed
-// set. It copies what it changes, so the caller's page is left as it was.
+// set and only allowlisted field links. It copies what it changes, so the
+// caller's page is left as it was.
 func sectionTones(sections []ProductSection) []ProductSection {
 	if sections == nil {
 		return nil
@@ -745,7 +751,25 @@ func sectionTones(sections []ProductSection) []ProductSection {
 			}
 			s.States = states
 		}
+		s.Metrics, s.Fields = fieldLinks(s.Metrics), fieldLinks(s.Fields)
 		out[i] = s
+	}
+	return out
+}
+
+// fieldLinks returns fields with any Href outside the pull request allowlist
+// dropped. Every ProductField slice passes through it, whichever template
+// renders it. It copies what it changes.
+func fieldLinks(fields []ProductField) []ProductField {
+	if len(fields) == 0 {
+		return fields
+	}
+	out := make([]ProductField, len(fields))
+	for i, f := range fields {
+		if f.Href != "" && (len(f.Href) > 256 || !productPullRequestURL.MatchString(f.Href)) {
+			f.Href = ""
+		}
+		out[i] = f
 	}
 	return out
 }
@@ -964,7 +988,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					continue
 				}
 				row.Status.Tone = productTone(row.Status.Tone)
-				row.Sections = sectionTones(row.Sections)
+				row.Sections, row.Context = sectionTones(row.Sections), fieldLinks(row.Context)
 				// A header link leaves the portal: https only, or none.
 				if !strings.HasPrefix(row.Link, "https://") {
 					row.Link, row.LinkLabel = "", ""

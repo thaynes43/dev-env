@@ -12,10 +12,13 @@ import (
 
 const MaxTaskOutcomeBytes = 2048
 
-// taskOutcomePR's repository segment is never "." or "..": a browser would
-// normalize either off the organization. ".github" and other names stay valid.
-// The CRD carries the same pattern.
-var taskOutcomePR = regexp.MustCompile(`^https://github\.com/thaynes43/(?:\.?[A-Za-z0-9_-][A-Za-z0-9._-]*|\.\.[A-Za-z0-9._-]+)/pull/[0-9]{1,6}$`)
+// TaskOutcomePRURLPattern's repository segment is never "." or "..": a browser
+// would normalize either off the organization. ".github" and other names stay
+// valid. The CRD carries the same pattern, and the portal links only a URL
+// that matches it.
+const TaskOutcomePRURLPattern = `^https://github\.com/thaynes43/(?:\.?[A-Za-z0-9_-][A-Za-z0-9._-]*|\.\.[A-Za-z0-9._-]+)/pull/[0-9]{1,6}$`
+
+var taskOutcomePR = regexp.MustCompile(TaskOutcomePRURLPattern)
 var taskOutcomeSHA = regexp.MustCompile(`^[a-fA-F0-9]{40}$`)
 
 // taskOutcomeIdentifier is the CRD's sessionUID and podUID pattern. It is

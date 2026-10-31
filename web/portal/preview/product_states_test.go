@@ -121,6 +121,57 @@ func TestAttentionStatePreviews(t *testing.T) {
 	}
 }
 
+// The outcome previews go through the live decoder and page builder. A
+// recorded outcome links only its allowlisted pull requests; a missing one is
+// Unknown; hostile text stays text.
+func TestTaskOutcomeStatePreviews(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeProductStates(dir); err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) string {
+		t.Helper()
+		body, err := os.ReadFile(filepath.Join(dir, "outcome-"+name+".html"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(body)
+		if !strings.Contains(s, "Fixture preview") || strings.Count(s, "<h1") != 1 || strings.Contains(s, "<script") || strings.Contains(s, "<form") || strings.Contains(s, "<img") {
+			t.Fatalf("%s: unsafe preview or duplicate heading", name)
+		}
+		return s
+	}
+	recorded := read("recorded")
+	for _, want := range []string{"<h3>Task outcome</h3>", "Recorded</span><span>Written by the task when it exited.", "Opened PR 101 and PR 202; both wait for lead review.",
+		`href="https://github.com/thaynes43/fixture-repo/pull/101" target="_blank" rel="noopener noreferrer">thaynes43/fixture-repo#101`,
+		`href="https://github.com/thaynes43/fixture-ops/pull/202" target="_blank" rel="noopener noreferrer">thaynes43/fixture-ops#202`,
+		`<dd class="mono">0f1e2d3</dd>`, `<dd class="mono">uid-synthetic-outcome</dd>`, `<dd class="mono">5e6f7a8b…</dd>`,
+		"<dt>Process exit</dt><dd>Exited 0</dd>", "<dt>Phase</dt><dd>Suspended</dd>"} {
+		if !strings.Contains(recorded, want) {
+			t.Errorf("recorded: missing %s", want)
+		}
+	}
+	none := read("none")
+	if !strings.Contains(none, "Unknown</span><span>No outcome recorded.") || !strings.Contains(none, "<dt>Process exit</dt><dd>Exited 0</dd>") || strings.Contains(none, "Succeeded") || strings.Contains(none, `class="kv-link"`) {
+		t.Error("none: a clean exit without an outcome is not Unknown")
+	}
+	hostile := read("hostile")
+	if !strings.Contains(hostile, "&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt; &amp; &lt;img src=x onerror=alert(1)&gt; stays text") || !strings.Contains(hostile, "<dt>Phase</dt><dd>Archived</dd>") {
+		t.Error("hostile: summary not escaped or phase lost")
+	}
+	links := read("hostile-links")
+	if strings.Count(links, `class="kv-link"`) != 1 || strings.Contains(links, `href="javascript`) || strings.Contains(links, `href="https://github.com.example`) || strings.Contains(links, `href="https://github.com/someone-else`) ||
+		!strings.Contains(links, "javascript:alert(1)") {
+		t.Error("hostile-links: a refused link rendered, or its text was lost")
+	}
+	list := read("list")
+	for _, want := range []string{"synthetic-outcome", "synthetic-no-outcome", "synthetic-running", `class="badge tone-muted">Exited 0`} {
+		if !strings.Contains(list, want) {
+			t.Errorf("list: missing %s", want)
+		}
+	}
+}
+
 func TestTaskFailureStatePreviews(t *testing.T) {
 	dir := t.TempDir()
 	if err := writeProductStates(dir); err != nil {
