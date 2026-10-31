@@ -49,16 +49,18 @@ An order joins an alert only when its optional `alertIdentity` object
 (`fingerprint` and `startsAt`, exactly two string fields) equals the alert's
 Alertmanager fingerprint and `startsAt` by decoded string equality, no
 normalization. It also needs a creation time not earlier than `startsAt`
-minus 30 seconds, and no other order asserting the same identity (a malformed
-twin with readable strings counts). A joined order shows only its order key
-and creation time; the state, owner and claim stay Unknown until the canonical
-claim source is wired. Everything else is Unjoined: legacy, storm, aggregate and
-watchdog orders with no identity, malformed identities, duplicates, refires and
-reused keys, and escalated remediations (the promotion path copies a parent's
-identity into its `esc-rem-*` child, so the pair is a duplicate). A valid empty
-responder store is Empty. Lookalike fields other than `alertIdentity` are
-ignored. Real joins need haynes-ops #4489 merged and installed; until then
-every real alert stays Unjoined. See DESIGN-031 section 15.
+minus 30 seconds. Multiple assertions join only if every member forms one
+explicit `parentOrder: {key, created}` chain: each reference must exactly match
+a present parent's key and creation string, with no fork, cycle or disconnected
+member. The leaf joins; `orderChain` reports keys from root to leaf. Missing or
+malformed lineage and legacy duplicate pairs remain Unjoined. Malformed
+`parentOrder` values increment `MalformedLineages`; their assertions still
+block a join. A malformed identity twin with readable strings also blocks it.
+State, owner and claim stay Unknown until the canonical claim source is wired.
+Legacy, storm, aggregate and watchdog orders with no identity remain Unjoined.
+A valid empty responder store is Empty. Real joins require the held producer
+identity draft #4489 and lineage extension merged and installed, which is Tom's
+activation decision. See DESIGN-031 section 15.
 
 Missing/unreadable order files yield Unavailable; malformed files yield Invalid,
 however old their capture time (Invalid is decided before freshness). Both return
