@@ -165,6 +165,14 @@ func TestGrantPolicyNamedSecretsAccepts(t *testing.T) {
 		mutate func(*v1alpha1.GrantPolicy)
 	}{
 		{"kube-namespace-operator, attested, opted in, with a deny list", nil},
+		{"delegated-only namespace operator", func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Attested = nil
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full", "workbench"}}
+		}},
+		{"both approval paths with no attested Secret opt-in", func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Attested.AllowSecretUse = false
+			p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+		}},
 		{"without a deny list", func(p *v1alpha1.GrantPolicy) { p.Spec.Kube.DeniedSecrets = nil }},
 		{"without the mode (a) opt-in (delegate decisions only)", func(p *v1alpha1.GrantPolicy) { p.Spec.Attested.AllowSecretUse = false }},
 		{"the namespace operator beside workloads in one attested policy", func(p *v1alpha1.GrantPolicy) {

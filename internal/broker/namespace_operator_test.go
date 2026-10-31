@@ -200,6 +200,35 @@ func TestMatchesAttestedNamedSecrets(t *testing.T) {
 	}
 }
 
+// S2 delegation and S5 Secret scopes compose without enabling mode (a).
+func TestMatchesDelegatedNamedSecrets(t *testing.T) {
+	for _, both := range []bool{false, true} {
+		for _, denied := range []bool{false, true} {
+			t.Run(fmt.Sprintf("both=%t/denied=%t", both, denied), func(t *testing.T) {
+				p := namespaceOperatorPolicy("p", false)
+				if !both {
+					p.Spec.Attested = nil
+				}
+				p.Spec.Delegated = &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+				if denied {
+					p.Spec.Kube.DeniedSecrets = []string{"private-*"}
+				}
+				g := namespaceOperatorGrant("private-token")
+				if got := MatchesDelegated(&p, g); got == denied {
+					t.Fatalf("delegated named-Secret match = %v, denied = %v", got, denied)
+				}
+				if MatchesAttested(&p, g) || Matches(&p, g) {
+					t.Fatal("delegated coverage bypassed attested Secret opt-in or standing refusal")
+				}
+				g.Spec.Kube.Namespaces = []string{"media"}
+				if MatchesDelegated(&p, g) {
+					t.Fatal("delegated policy covered an unnamed namespace")
+				}
+			})
+		}
+	}
+}
+
 func TestSecretDenied(t *testing.T) {
 	for _, c := range []struct {
 		name, entry string

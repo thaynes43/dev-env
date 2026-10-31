@@ -559,9 +559,9 @@ spec:
             - message: kube is set for type kube, and only there
               rule: (self.type == 'kube') == has(self.kube)
             - message: 'no standing policy approves dev-env-grant-namespace-operator:
-                only an attested policy may (DESIGN-042 5.1)'
+                only an attested or delegated policy may (DESIGN-042 5.1)'
               rule: '!has(self.kube) || !self.kube.roles.exists(r, r == ''dev-env-grant-namespace-operator'')
-                || has(self.attested)'
+                || has(self.attested) || has(self.delegated)'
             - message: attested.allowSecretUse is only for a policy that names dev-env-grant-namespace-operator
                 (DESIGN-042 5.1)
               rule: '!has(self.attested) || !has(self.attested.allowSecretUse) ||

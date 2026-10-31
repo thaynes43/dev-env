@@ -3604,8 +3604,10 @@ the coordinator's review of PR #785).* A kube grant may now name Secrets.
   policy that names it, and the broker's standing match approves nothing through such a
   policy or for such a grant.
 - **Who approves the list.** Mode (a), the requester's own attestation, applies only
-  when the policy opts in with `attested.allowSecretUse: true`. The schema allows that
-  field only on a policy that names the role. Mode (b), a delegate decision, arrives
+  when the policy opts in with `attested.allowSecretUse: true`. The policy may
+  instead carry only `delegated`, or both blocks; delegated Secret use does not
+  enable the attested path without that opt-in. The schema allows that field only
+  on a policy that names the role. Mode (b), a delegate decision, arrives
   with S2. Tom's own decision (`Decide`) needs no policy. **Activation-review risk for
   Tom:** within a policy's namespaces, an approver may authorize the use of any Secret
   the deny list does not name.

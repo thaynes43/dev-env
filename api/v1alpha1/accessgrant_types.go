@@ -500,7 +500,7 @@ type AccessGrantList struct {
 // +kubebuilder:validation:XValidation:rule="(self.type == 'maintenance') == has(self.maintenance)",message="maintenance is set for type maintenance, and only there"
 // +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || duration(self.maxTTL) <= duration('1h')",message="a maintenance grant lasts at most 1h"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube') == has(self.kube)",message="kube is set for type kube, and only there"
-// +kubebuilder:validation:XValidation:rule="!has(self.kube) || !self.kube.roles.exists(r, r == 'dev-env-grant-namespace-operator') || has(self.attested)",message="no standing policy approves dev-env-grant-namespace-operator: only an attested policy may (DESIGN-042 5.1)"
+// +kubebuilder:validation:XValidation:rule="!has(self.kube) || !self.kube.roles.exists(r, r == 'dev-env-grant-namespace-operator') || has(self.attested) || has(self.delegated)",message="no standing policy approves dev-env-grant-namespace-operator: only an attested or delegated policy may (DESIGN-042 5.1)"
 // +kubebuilder:validation:XValidation:rule="!has(self.attested) || !has(self.attested.allowSecretUse) || !self.attested.allowSecretUse || (has(self.kube) && self.kube.roles.exists(r, r == 'dev-env-grant-namespace-operator'))",message="attested.allowSecretUse is only for a policy that names dev-env-grant-namespace-operator (DESIGN-042 5.1)"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
