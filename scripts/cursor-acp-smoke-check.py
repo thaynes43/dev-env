@@ -21,6 +21,8 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REASON = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 # Framing detail on an "invalid-frame" failure: fixed kinds and byte counts only.
 FRAME_DETAILS = frozenset({"frame-too-large", "frame-malformed-json", "frame-duplicate-key", "frame-truncated-eof"})
+# Optional beside detail: which stream failed. Receipts from before it carry none.
+FRAME_SOURCES = frozenset({"provider", "coordinator"})
 MAX_FRAME_COUNT = 1 << 31
 PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
 DECISION_KINDS = frozenset({"question", "permission"})
@@ -69,14 +71,20 @@ def bounded_text(value, maximum):
 
 
 def frame_detail(event):
-    """Validate an invalid-frame detail: a fixed kind plus bounded byte counts, never text."""
+    """Validate an invalid-frame detail: fixed kind and source plus bounded byte counts, never text."""
     detail = event["detail"]
-    if detail not in FRAME_DETAILS:
+    # A list or object is unhashable, so check the type before the set lookup.
+    if not isinstance(detail, str) or detail not in FRAME_DETAILS:
         raise Refusal("invalid-failure-detail")
     counted = detail in ("frame-too-large", "frame-truncated-eof")
     if ("byte_count" in event) != counted or ("limit" in event) != (detail == "frame-too-large"):
         raise Refusal("invalid-failure-detail")
     out = {"detail": detail}
+    if "source" in event:
+        source = event["source"]
+        if not isinstance(source, str) or source not in FRAME_SOURCES:
+            raise Refusal("invalid-failure-detail")
+        out["source"] = source
     for key, name in (("byte_count", "byteCount"), ("limit", "limit")):
         if key in event:
             value = event[key]
@@ -467,7 +475,7 @@ class Checker:
     def on_failed(self, event):
         keys = ("event", "reason")
         if event.get("reason") == "invalid-frame" and "detail" in event:
-            keys += ("detail",) + tuple(k for k in ("byte_count", "limit") if k in event)
+            keys += ("detail",) + tuple(k for k in ("source", "byte_count", "limit") if k in event)
         exact(event, keys)
         reason = event["reason"]
         if not isinstance(reason, str) or REASON.fullmatch(reason) is None:

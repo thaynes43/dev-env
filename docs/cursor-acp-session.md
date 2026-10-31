@@ -42,9 +42,30 @@ Provider-to-client JSON frames are bounded by `MAX_PROVIDER_FRAME`: 4 MiB
 (4,194,304 bytes), including the terminating newline. This allows file contents
 and tool output in `session/update` frames above the former 64 KiB bound.
 Coordinator input, client-to-provider frames and receipts retain the 64 KiB
-`MAX_FRAME` bound. Reads remain in chunks of at most 4096 bytes; an incomplete
-frame buffer holds at most its limit plus one byte, and the event queue remains
-bounded to 128 entries. Oversized input is refused without draining it.
+`MAX_FRAME` bound. Reads remain in chunks of at most 4096 bytes, and an
+incomplete frame buffer holds at most its limit plus one byte. Oversized input is
+refused without draining it.
+
+Provider frames also share a byte budget of `MAX_PROVIDER_FRAME`. The reader
+takes a frame's wire bytes, newline included, before parsing it, and the client
+returns them after handling it, first in, first out. While the budget is full,
+the reader waits and reads nothing more, so a fast provider blocks on its own
+writes. With nothing outstanding, any frame within the bound is admitted. The
+128-entry event queue can no longer fill with parsed 4 MiB frames. In the worst
+case the client holds:
+
+- parsed or parsing provider frames whose wire bytes total at most
+  `MAX_PROVIDER_FRAME`;
+- one more raw frame that waits for budget; and
+- the read buffer that frame came from (at most the limit plus one byte, with a
+  short-lived second copy while it grows or splits).
+
+Parsed JSON is larger than its wire form. Measured with `tracemalloc` on Python
+3.11, the peak reached about 45 times the wire size for deeply nested empty
+lists. It was about 25 times for empty objects, 13 times for short strings and
+2 times for one long string. Provider framing therefore holds roughly 200 MiB at
+worst. Coordinator input has no budget. It is the caller's own input: at most
+128 queued frames of at most 64 KiB each (8 MiB of wire bytes).
 
 A later, separately authorized owner can invoke:
 
@@ -241,11 +262,12 @@ and raw output are withheld. An unexpected client error is reported as
 `internal-error`. A malformed request id is `invalid-request-id`; a reused one is
 `duplicate-request`.
 Framing failures still exit 2 with `event: "failed"` and `reason: "invalid-frame"`.
-Their new metadata-only `detail` distinguishes:
+Their metadata-only `source` is the fixed value `provider` or `coordinator`, for
+the stream that failed. Their `detail` distinguishes:
 
-- `frame-too-large`, with `byte_count` and `limit`. The count includes the
-  newline when present and reports bytes observed before refusal (at most
-  limit plus one), not the unread remainder of an oversized frame.
+- `frame-too-large`, with `byte_count` and `limit`. `byte_count` is always
+  `limit` plus one: the client refuses at the first byte past the limit and
+  reads no further, so the count never gives an oversized frame's full size.
 - `frame-malformed-json`, for invalid JSON/encoding or a non-object frame.
 - `frame-duplicate-key`, without copying the duplicate key.
 - `frame-truncated-eof`, with `byte_count` for buffered bytes lacking a newline
@@ -254,26 +276,30 @@ Their new metadata-only `detail` distinguishes:
 For example, an oversized provider frame produces only:
 
 ```json
-{"event":"failed","reason":"invalid-frame","detail":"frame-too-large","byte_count":4194305,"limit":4194304}
+{"event":"failed","reason":"invalid-frame","detail":"frame-too-large","source":"provider","byte_count":4194305,"limit":4194304}
 ```
 
 No frame content, transcript, file contents or parser exception text is added.
 Stream I/O failures retain the generic `invalid-frame` reason. The old receipt
 for Grok run `ded6cc77` (GROK-S3) cannot prove which framing cause occurred.
-The most likely cause is a valid update larger than 64 KiB; this remains a
-hypothesis, not a recovered or reproduced provider frame.
+That frame is unavailable. A plausible cause is a valid update larger than
+64 KiB; this remains a hypothesis, not a recovered or reproduced provider frame.
 
 The smoke checker (`scripts/cursor-acp-smoke-check.py`) accepts these
 enriched receipts only on `reason: "invalid-frame"`. It checks the `detail` kind
-against the four fixed kinds. `byte_count` is required for `frame-too-large`
+against the four fixed kinds; a non-string detail is refused, not a crash.
+`source` is optional, so receipts written before it still pass; when present
+it must be `provider` or `coordinator`, and it is allowed only beside `detail`.
+`byte_count` is required for `frame-too-large`
 and `frame-truncated-eof`, and forbidden otherwise. `limit` is required only
 for `frame-too-large`, where `byte_count` must exceed it. Every count is a
 positive integer up to 2^31. Any other field, or a detail on another reason,
-is still `unexpected-field`; a malformed detail is `invalid-failure-detail`.
-The verdict reports `helperFailureDetail` as kind and counts only. A test
-builds each receipt from the client's own `FrameRefusal`, the way `main()`
-does, and round-trips it through the checker. Successful receipt streams and
-generic failure receipts keep their existing checker behavior.
+is still `unexpected-field`; a malformed detail or source is
+`invalid-failure-detail`. The verdict reports `helperFailureDetail` as kind,
+source and counts only. One test builds each receipt from the client's own
+`FrameRefusal`, the way `main()` does. Another pipes the real receipt stream of
+each provider framing failure through the checker. Successful receipt streams
+and generic failure receipts keep their existing checker behavior.
 
 Coordinator receipt writes and provider input writes are nonblocking and share
 the same deadline. If the coordinator stops reading stdout, the failure receipt
@@ -288,6 +314,14 @@ task lifecycle.
 
 ```sh
 nice -n 19 python3 -I -B scripts/test_cursor_acp_session.py -v
+nice -n 19 python3 -I -B scripts/test_cursor_acp_smoke_check.py -v
+```
+
+CI runs both suites in one step, with assertions stripped (`-O`), so the tests
+use `unittest` assertions only:
+
+```sh
+nice -n 19 python3 -O -B -m unittest discover -s scripts -p 'test_cursor_acp_*.py' -v
 ```
 
 Tests use an injected fake transport and a fake CLI script only:
@@ -305,7 +339,13 @@ resource policy, and live communication acceptance remain later prerequisites.
 Frame qualification includes synthetic frames just below and at 4 MiB,
 refusal at 4 MiB plus one byte without draining, each framing detail,
 UTF-8 byte counts at truncated EOF, a 200 KiB tool update, coordinator input's
-unchanged 64 KiB bound, and provider cleanup on every framing failure.
+unchanged 64 KiB bound (65,536 bytes with the newline accepted, 65,537 refused),
+the `source` of each failure, and provider cleanup on every framing failure.
+The byte budget has two tests. With no consumer, a reader over three frames of
+just over half the budget queues exactly one, uses exactly that frame's bytes
+and stops short of the stream's end; each release admits the next one. Three
+such updates over the fake CLI complete, so the transport releases the budget
+after handling each frame.
 
 OP318 qualification also covers full/missing/malformed/oversized permission
 context, controls, secret values in title and raw input, unknown field dropping,
