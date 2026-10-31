@@ -39,6 +39,8 @@ type MaintenanceDecision struct {
 // included.
 type DelegateIdentity struct {
 	Form       int    `json:"form"`
+	PodName    string `json:"podName"`
+	HostID     string `json:"hostID,omitempty"`
 	PodUID     string `json:"podUID"`
 	Session    string `json:"session,omitempty"`
 	SessionUID string `json:"sessionUID,omitempty"`

@@ -58,7 +58,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
@@ -192,12 +191,6 @@ type Server struct {
 	// the default, leaves the route unregistered (404) and every other route
 	// and view as before.
 	GrantDelegates []string
-	// DelegateSessionEligible is S4's launch-eligibility check for a delegate
-	// session (form 2): it was launched as a named coordinator by a caller
-	// allowed to, and it is the account's one holder. The decision route calls
-	// it on the live session. Nil refuses every delegate session; S4 (#787)
-	// supplies it.
-	DelegateSessionEligible func(context.Context, *v1alpha1.AgentSession) error
 	// Asks serves /v1/asks and /v1/portal/asks (OpenProject Epic #254). Nil leaves both
 	// unregistered. v1 does not write an inbox message when an ask is answered.
 	Asks *asks.KubeStore

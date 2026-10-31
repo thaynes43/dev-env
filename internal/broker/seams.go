@@ -102,6 +102,13 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 			return err
 		}
 		if strings.HasPrefix(d.By, DelegateApprover) {
+			recorded, ok := parseDecision(&g)
+			if !ok || recorded.By != d.By || recorded.GrantUID != d.GrantUID || recorded.Digest != d.ScopeDigest || recorded.Ref != d.Ref || recorded.Approve != d.Approve || recorded.TTL != d.TTL {
+				return fmt.Errorf("%w: delegate decision annotation no longer matches", ErrRefused)
+			}
+			if err := b.delegateGrantHolds(ctx, &g, recorded); err != nil {
+				return err
+			}
 			// At apply time, from the API server: the named delegated policy
 			// still covers this grant.
 			if err := b.delegatedPolicyCovers(ctx, &g, d.Policy); err != nil {

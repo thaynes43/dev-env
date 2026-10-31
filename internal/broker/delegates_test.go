@@ -22,12 +22,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/grantattest"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 const (
@@ -84,7 +86,7 @@ func dgCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 		t.Fatal(err)
 	}
 	f := &dgFixture{t: t, key: client.ObjectKeyFromObject(g), clk: clocktesting.NewFakeClock(now)}
-	f.c = fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(&v1alpha1.AccessGrant{}).WithObjects(g, p, s, pod).Build()
+	f.c = fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(&v1alpha1.AccessGrant{}).WithObjects(g, p, s, pod, delegateHostPod()).Build()
 	f.b = &Broker{Client: f.c, APIReader: f.c, SessionNamespace: sessionNS, PolicyNamespace: systemNS, Clock: f.clk, GrantDelegates: []string{dgDelegate}}
 	return f
 }
@@ -123,7 +125,7 @@ func (f *dgFixture) grant() *v1alpha1.AccessGrant {
 func (f *dgFixture) decision(approve bool, edit ...func(*MaintenanceDecision)) MaintenanceDecision {
 	g := f.grant()
 	d := MaintenanceDecision{GrantUID: string(g.UID), Digest: grantattest.ScopeDigest(g), By: dgBy, Approve: approve, TTL: g.Spec.TTL.Duration,
-		At: f.clk.Now(), Ref: dgRef, Reason: "fits the frontend runbook", Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
+		At: f.clk.Now(), Ref: dgRef, Reason: "fits the frontend runbook", Delegate: &DelegateIdentity{Form: 1, PodName: "host", PodUID: "host-pod", HostID: "host-a"}}
 	for _, e := range edit {
 		e(&d)
 	}
@@ -313,7 +315,7 @@ func TestDelegateRemovedBeforeApplyNeverApproves(t *testing.T) {
 			f.step(1)
 			g := f.grant()
 			d := MaintenanceDecision{GrantUID: string(g.UID), Digest: grantattest.ScopeDigest(g), By: dgBy, Approve: true, TTL: g.Spec.TTL.Duration,
-				At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
+				At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodName: "host", PodUID: "host-pod", HostID: "host-a"}}
 			raw, _ := json.Marshal(d)
 			f.annotate(MaintenanceDecisionAnnotation, string(raw))
 			f.b.GrantDelegates = list
@@ -345,6 +347,9 @@ func TestDelegateRemovedBeforeApplyNeverApproves(t *testing.T) {
 // delegate host dgDelegate: inside its reach.
 func childOfDelegateHost(f *amFixture) {
 	f.t.Helper()
+	if err := f.c.Create(context.Background(), delegateHostPod()); err != nil {
+		f.t.Fatal(err)
+	}
 	var s v1alpha1.AgentSession
 	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(f.sess), &s); err != nil {
 		f.t.Fatal(err)
@@ -364,6 +369,17 @@ func TestDelegateReachIsTheDelegatesTree(t *testing.T) {
 		if err := f.c.Create(context.Background(), s); err != nil {
 			f.t.Fatal(err)
 		}
+		if name == "lead-s" {
+			s.Labels = map[string]string{templates.CoordinatorIdentityLabel: "dev-env-coordinator-lead", v1alpha1.LabelDepth: "0"}
+			s.Status.Phase = v1alpha1.PhaseRunning
+			if err := f.c.Update(context.Background(), s); err != nil {
+				f.t.Fatal(err)
+			}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: types.UID(name + "-pod"), OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(s, v1alpha1.GroupVersion.WithKind("AgentSession"))}}, Spec: corev1.PodSpec{ServiceAccountName: "dev-env-coordinator-lead"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+			if err := f.c.Create(context.Background(), pod); err != nil {
+				f.t.Fatal(err)
+			}
+		}
 		return s
 	}
 	reparent := func(f *dgFixture, parent string) {
@@ -379,7 +395,7 @@ func TestDelegateReachIsTheDelegatesTree(t *testing.T) {
 	session := func(name, uid string) func(*MaintenanceDecision) {
 		return func(d *MaintenanceDecision) {
 			d.By = DelegateApprover + lead
-			d.Delegate = &DelegateIdentity{Form: 2, PodUID: name + "-pod", Session: name, SessionUID: uid}
+			d.Delegate = &DelegateIdentity{Form: 2, PodName: name, PodUID: name + "-pod", Session: name, SessionUID: uid}
 		}
 	}
 	for name, tc := range map[string]struct {
@@ -387,8 +403,8 @@ func TestDelegateReachIsTheDelegatesTree(t *testing.T) {
 		decide  func(*MaintenanceDecision)
 		approve bool
 	}{
-		"a host's own child": {approve: true},
-		"another host's child": {setup: func(f *dgFixture) { reparent(f, "dev-env-system/codex-host-b") }},
+		"a host's own child":                {approve: true},
+		"another host's child":              {setup: func(f *dgFixture) { reparent(f, "dev-env-system/codex-host-b") }},
 		"a host for a session Tom launched": {setup: func(f *dgFixture) { reparent(f, "dev-env-system/dev-env-human") }},
 		"a lead's child": {setup: func(f *dgFixture) {
 			addSession(f, "lead-s", "dev-env-system/dev-env-human")
@@ -591,7 +607,7 @@ func TestDelegateDecisionDefaultOffIsANoOp(t *testing.T) {
 	m := amCase(t)
 	m.step(1)
 	gm := m.grant()
-	d := MaintenanceDecision{GrantUID: string(gm.UID), Digest: grantattest.ScopeDigest(gm), By: dgBy, Approve: true, TTL: gm.Spec.TTL.Duration, At: m.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
+	d := MaintenanceDecision{GrantUID: string(gm.UID), Digest: grantattest.ScopeDigest(gm), By: dgBy, Approve: true, TTL: gm.Spec.TTL.Duration, At: m.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodName: "host", PodUID: "host-pod", HostID: "host-a"}}
 	raw, _ := json.Marshal(d)
 	m.annotate(MaintenanceDecisionAnnotation, string(raw))
 	if _, err := m.b.Reconcile(context.Background(), ctrl.Request{NamespacedName: m.key}); !errors.Is(err, ErrRefused) {
@@ -658,7 +674,7 @@ func TestDelegateDecisionMaintenance(t *testing.T) {
 		f.t.Helper()
 		g := f.grant()
 		d := MaintenanceDecision{GrantUID: string(g.UID), Digest: grantattest.ScopeDigest(g), By: dgBy, Approve: true, TTL: g.Spec.TTL.Duration,
-			At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
+			At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodName: "host", PodUID: "host-pod", HostID: "host-a"}}
 		for _, e := range edit {
 			e(&d)
 		}
@@ -683,6 +699,14 @@ func TestDelegateDecisionMaintenance(t *testing.T) {
 		if !f.executorExists() {
 			t.Fatal("no executor after a delegate approval")
 		}
+	})
+	t.Run("extension is a fresh delegated lease", func(t *testing.T) {
+		f := setup(t, func(g *v1alpha1.AccessGrant, _ *v1alpha1.GrantPolicy) {
+			g.Spec.Maintenance.ExtensionOf = "grant-earlier"
+		})
+		decide(f)
+		f.step(1)
+		wantDelegateApproved(t, f.grant(), 10*time.Minute)
 	})
 	t.Run("rechecked before execution", func(t *testing.T) {
 		f := setup(t)
@@ -736,9 +760,6 @@ func TestDelegateDecisionMaintenance(t *testing.T) {
 				d.Delegate = &DelegateIdentity{PodUID: "host-pod", Session: "worker", SessionUID: "worker-uid"}
 			},
 		},
-		"an extension": {edit: func(g *v1alpha1.AccessGrant, _ *v1alpha1.GrantPolicy) {
-			g.Spec.Maintenance.ExtensionOf = "grant-earlier"
-		}},
 		// The delegate route binds ScopeDigest, never the human route's digest.
 		"the human route's digest": {decide: func(d *MaintenanceDecision, g *v1alpha1.AccessGrant) { d.Digest = MaintenanceDigest(g) }},
 	} {
@@ -825,4 +846,73 @@ func TestParseGrantDelegates(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+}
+
+// A configured host is a real live pod when its recorded decision is applied.
+func delegateHostPod() *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "host", Namespace: systemNS, UID: "host-pod", Annotations: map[string]string{v1alpha1.LabelPrefix + "coordinator-host": "host-a"}}, Spec: corev1.PodSpec{ServiceAccountName: "codex-host-a"}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+}
+
+// The grant cannot be issued or retained using a stale configured host, even
+// when its API decision was valid before the host changed.
+func TestDelegateIdentityRechecksHost(t *testing.T) {
+	for name, edit := range map[string]func(*corev1.Pod){
+		"replaced":             func(p *corev1.Pod) { p.UID = "replacement" },
+		"not Running":          func(p *corev1.Pod) { p.Status.Phase = corev1.PodPending },
+		"account changed":      func(p *corev1.Pod) { p.Spec.ServiceAccountName = "other" },
+		"host binding changed": func(p *corev1.Pod) { p.Annotations[v1alpha1.LabelPrefix+"coordinator-host"] = "host-b" },
+		"session controller acquired": func(p *corev1.Pod) {
+			p.OwnerReferences = []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(), Kind: "AgentSession", Name: "unexpected", UID: "unexpected", Controller: ptr.To(true)}}
+		},
+	} {
+		for _, active := range []bool{false, true} {
+			suffix := " before apply"
+			if active {
+				suffix = " while active"
+			}
+			t.Run(name+suffix, func(t *testing.T) {
+				f := dgCase(t)
+				if active {
+					wantDelegateApproved(t, f.pendingThenDecide(func() MaintenanceDecision { return f.decision(true) }), time.Hour)
+					f.mustStep(1)
+				} else {
+					f.mustStep(2)
+					f.record(f.decision(true))
+				}
+				var host corev1.Pod
+				if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: systemNS, Name: "host"}, &host); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.c.Delete(context.Background(), &host); err != nil {
+					t.Fatal(err)
+				}
+				host.ResourceVersion = ""
+				edit(&host)
+				if err := f.c.Create(context.Background(), &host); err != nil {
+					t.Fatal(err)
+				}
+				f.mustStep(2)
+				g := f.grant()
+				if active {
+					if g.Status.Phase != v1alpha1.GrantReleased {
+						t.Fatalf("retained stale actor lease: %+v", g.Status)
+					}
+				} else {
+					wantStillPending(t, g)
+				}
+			})
+		}
+	}
+	t.Run("a non-session controller is allowed", func(t *testing.T) {
+		f := dgCase(t)
+		var host corev1.Pod
+		if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: systemNS, Name: "host"}, &host); err != nil {
+			t.Fatal(err)
+		}
+		host.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "host", UID: "host-set", Controller: ptr.To(true)}}
+		if err := f.c.Update(context.Background(), &host); err != nil {
+			t.Fatal(err)
+		}
+		wantDelegateApproved(t, f.pendingThenDecide(func() MaintenanceDecision { return f.decision(true) }), time.Hour)
+	})
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 const (
@@ -64,7 +65,7 @@ func delegateFixture(t *testing.T) (*fixture, string, apiv1.Grant) {
 	f.srv.Policy.CoordinatorEnabled = true
 	f.srv.Policy.Coordinators = []CoordinatorHost{{ServiceAccount: coordinatorSA, PodName: host.Name, HostID: "host-a"}}
 	f.srv.GrantDelegates = []string{coordinatorSA, delegateSessionSA}
-	f.srv.DelegateSessionEligible = func(context.Context, *v1alpha1.AgentSession) error { return nil }
+	f.srv.Policy.NamedCoordinatorIdentities = true
 	f.h = f.srv.Handler()
 	tok := f.sessionPod("requester", "full", 0)
 	f.reparent("requester", coordinatorSA)
@@ -103,10 +104,12 @@ func decisionFor(g apiv1.Grant, approve bool) apiv1.GrantDecisionRequest {
 // S4's classification will hand the route.
 func (f *fixture) delegateSession(name, parent string, depth int) *caller {
 	f.t.Helper()
+	f.srv.Policy.NamedCoordinatorIdentities = true
 	ctx := context.Background()
 	s := &v1alpha1.AgentSession{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: uuid.NewUUID(), Labels: map[string]string{v1alpha1.LabelDepth: itoa(depth)},
-			Finalizers: []string{controller.Finalizer}},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sessionNS, UID: uuid.NewUUID(), Labels: map[string]string{v1alpha1.LabelDepth: itoa(depth), templates.CoordinatorIdentityLabel: leadSA},
+			Annotations: map[string]string{NamedCoordinatorLauncherAnnotation: string(LauncherHuman)},
+			Finalizers:  []string{controller.Finalizer}},
 		Spec: v1alpha1.AgentSessionSpec{Repo: "dev-env", Agent: "claude", Mode: "remote", Model: "claude-opus-5-5", Prompt: "p", Parent: parent},
 	}
 	if err := f.c.Create(ctx, s); err != nil {
@@ -266,24 +269,20 @@ func TestGrantDecisionDelegateSessionDecides(t *testing.T) {
 	if status, code := f.decideAs(lead, gg.Name, decisionFor(gg, true)); status != http.StatusAccepted {
 		t.Fatalf("a delegate may decide for its grandchild: %d %s", status, code)
 	}
-	// S4's check refuses: no decision.
-	f.srv.DelegateSessionEligible = func(context.Context, *v1alpha1.AgentSession) error { return errors.New("synthetic: not admitted") }
+	// S4's exported rule refuses a changed admission record, even when the
+	// caller was already classified before the change.
+	lead.session.Annotations[NamedCoordinatorLauncherAnnotation] = ""
+	f.mustUpdate(lead.session)
 	g3 := f.childGrant("lead-child-3", "coordinator-lead", 1)
 	if status, code := f.decideAs(lead, g3.Name, decisionFor(g3, true)); status != http.StatusForbidden || code != apiv1.CodeForbidden {
 		t.Fatalf("an ineligible delegate session: %d %s", status, code)
 	}
-	// No check configured (before S4 wires it): form 2 decides nothing.
-	f.srv.DelegateSessionEligible = nil
-	if status, code := f.decideAs(lead, g3.Name, decisionFor(g3, true)); status != http.StatusForbidden || code != apiv1.CodeForbidden {
-		t.Fatalf("form 2 without S4's check: %d %s", status, code)
-	}
-	// Until S4, resolveCaller does not classify a pod running as the delegate
-	// account as a session: form 2 is inert over HTTP.
-	tok := "tok-delegate-session"
+	// Turning off named identities refuses the real token route as well.
+	f.srv.Policy.NamedCoordinatorIdentities = false
 	id := saIdentity(delegateSessionSA)
 	id.PodName, id.PodUID = lead.pod.Name, string(lead.pod.UID)
-	f.auth[tok] = id
-	wantError(t, f.do(http.MethodPost, apiv1.GrantDecisionPath(g3.Name), tok, decisionFor(g3, true)), http.StatusForbidden, apiv1.CodeForbidden)
+	f.auth["tok-delegate-session"] = id
+	wantError(t, f.do(http.MethodPost, apiv1.GrantDecisionPath(g3.Name), "tok-delegate-session", decisionFor(g3, true)), http.StatusForbidden, apiv1.CodeForbidden)
 }
 
 // Every caller that is not a listed delegate is refused.
@@ -485,8 +484,9 @@ func TestGrantDecisionRefusesIneligibleDelegates(t *testing.T) {
 	}
 	for name, tc := range sessionCases {
 		t.Run("session "+name, func(t *testing.T) {
-			f, _, g := delegateFixture(t)
+			f, _, _ := delegateFixture(t)
 			c := f.delegateSession("eligible-lead", humanSA, 0)
+			g := f.childGrant("eligible-child", c.session.Name, 1)
 			tc.change(f, c)
 			status, ae := f.decideErr(c, g.Name, decisionFor(g, true))
 			if tc.why == "" {
@@ -562,7 +562,11 @@ func TestGrantDecisionRefusesIneligibleDelegates(t *testing.T) {
 // recorded and the other is a conflict. A replay is a conflict too.
 func TestGrantDecisionConcurrentDecisionsRecordOne(t *testing.T) {
 	f, _, g := delegateFixture(t)
-	other := f.delegateSession("second-lead", humanSA, 0)
+	host, err := f.srv.resolveCaller(context.Background(), f.auth[tokCoordinator])
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := host // The same delegate races through two operator replicas.
 	replica := func(c client.Client) *Server {
 		return &Server{Client: c, Live: f.c, Auth: f.auth, Policy: f.srv.Policy, GrantDelegates: f.srv.GrantDelegates,
 			Log: f.srv.Log, Now: f.srv.Now}
@@ -585,10 +589,6 @@ func TestGrantDecisionConcurrentDecisionsRecordOne(t *testing.T) {
 		}
 		return c.Patch(ctx, obj, patch, opts...)
 	}}))
-	host, err := f.srv.resolveCaller(context.Background(), f.auth[tokCoordinator])
-	if err != nil {
-		t.Fatal(err)
-	}
 	raw, _ := json.Marshal(decisionFor(g, true))
 	r := httptest.NewRequest(http.MethodPost, apiv1.GrantDecisionPath(g.Name), bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
@@ -602,7 +602,7 @@ func TestGrantDecisionConcurrentDecisionsRecordOne(t *testing.T) {
 		t.Fatalf("the losing replica: %v", firstErr)
 	}
 	d, ok := f.decisionAnnotation(g.Name)
-	if !ok || d.Approve || d.By != broker.DelegateRef(delegateSessionSA) {
+	if !ok || d.Approve || d.By != broker.DelegateRef(coordinatorSA) {
 		t.Fatalf("not exactly the winner's decision: %+v", d)
 	}
 	if status, code := f.decideAs(other, g.Name, decisionFor(g, false)); status != http.StatusConflict || code != apiv1.CodeConflict {
@@ -685,6 +685,7 @@ func TestGrantDecisionRefusesMaintenanceParticipants(t *testing.T) {
 	}
 	// Another delegate decides it, through ScopeDigest, never the human digest.
 	lead := f.delegateSession("maintenance-lead", humanSA, 0)
+	f.reparent("maintenance-parent", lead.session.Name)
 	human := decisionFor(g, true)
 	human.Digest = g.MaintenanceDigest
 	if status, _ := f.decideAs(lead, g.Name, human); status != http.StatusConflict {
@@ -788,6 +789,7 @@ func TestGrantDecisionCoordinatorReadsAndMaintenanceGate(t *testing.T) {
 	// pass the broker's bound, be accepted and never apply, so it is refused.
 	f.srv.GrantDelegates = []string{coordinatorSA, delegateSessionSA}
 	long := f.delegateSession(strings.Repeat("l", 63), humanSA, 0)
+	g = f.childGrant("long-lead-child", long.session.Name, 1)
 	big := decisionFor(g, true)
 	big.Ref, big.Reason = strings.Repeat("r", 128), strings.Repeat("<", maxDecisionReason)
 	if status, code := f.decideAs(long, g.Name, big); status != http.StatusUnprocessableEntity || code != apiv1.CodeInvalid {
@@ -881,5 +883,22 @@ func TestParseGrantDelegatesRefusesOtherClasses(t *testing.T) {
 	}
 	if got, err := ParseGrantDelegates("", p); got != nil || err != nil {
 		t.Fatalf("%q %v", got, err)
+	}
+}
+
+func TestGrantDecisionMaintenanceExtension(t *testing.T) {
+	f, parent, _, req := maintenanceAPI(t)
+	lead := f.delegateSession("extension-lead", humanSA, 0)
+	f.reparent("maintenance-parent", lead.session.Name)
+	f.srv.GrantDelegates = []string{delegateSessionSA}
+	f.h = f.srv.Handler()
+	req.Maintenance.ExtensionOf = "grant-earlier"
+	g := f.request(parent, req, http.StatusCreated)
+	id := saIdentity(delegateSessionSA)
+	id.PodName, id.PodUID = lead.pod.Name, string(lead.pod.UID)
+	f.auth["tok-extension-lead"] = id
+	w := f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), "tok-extension-lead", decisionFor(g, true))
+	if w.Code != http.StatusAccepted || decode[apiv1.Grant](t, w).Phase != apiv1.GrantPending {
+		t.Fatalf("fresh extension decision: %d %s", w.Code, w.Body.String())
 	}
 }

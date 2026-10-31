@@ -67,12 +67,6 @@ type CreateGrantRequest struct {
 	// Namespaces are where a namespaced role is bound, each named. The
 	// cluster-wide roles (nodes, break-glass) take none.
 	Namespaces []string `json:"namespaces,omitempty"`
-	// Secrets are the Secrets a dev-env-grant-namespace-operator grant will
-	// use, 1 to 16 Secret names (DNS-1123 subdomains), none twice; required
-	// for that role and refused for every other (DESIGN-042 5.1). They hold in
-	// each named namespace. The API stores them sorted, and the scope digest
-	// covers them.
-	Secrets []string `json:"secrets,omitempty"`
 	// FQDNs are DNS names, exact or with one leading "*.".
 	FQDNs []string `json:"fqdns,omitempty"`
 	// CIDRs are address ranges, such as 192.168.40.21/32.
@@ -134,7 +128,6 @@ type Grant struct {
 	Type       string          `json:"type"`
 	Role       string          `json:"role,omitempty"`
 	Namespaces []string        `json:"namespaces,omitempty"`
-	Secrets    []string        `json:"secrets,omitempty"` // exactly the names ScopeDigest covers
 	FQDNs      []string        `json:"fqdns,omitempty"`
 	CIDRs      []string        `json:"cidrs,omitempty"`
 	Endpoints  []GrantEndpoint `json:"endpoints,omitempty"`

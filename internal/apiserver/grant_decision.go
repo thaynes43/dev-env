@@ -14,7 +14,7 @@ package apiserver
 //     coordinator-host annotation);
 //  2. a session pod running as an allowlisted ServiceAccount, controlled by a
 //     Running AgentSession that S4's launch rules admitted
-//     (DelegateSessionEligible).
+//     (Policy.NamedCoordinatorSessionEligible).
 //
 // Reach is the delegate's own tree (lead ruling on #786): a coordinator host
 // decides only for its own child sessions, as childForCoordinator defines them,
@@ -23,11 +23,8 @@ package apiserver
 // A top-level session uses mode (a), attestation: its delegate is Tom, by
 // message. spec.delegated still caps the types and the scope.
 //
-// Form 2 activates with S4 (DESIGN-042 6.3), which lets resolveCaller classify
-// a pod running as a named coordinator ServiceAccount as a session. Until then
-// resolveCaller classifies only the shared session and workbench accounts as
-// sessions, and ParseGrantDelegates refuses both, so no session caller is a
-// delegate. delegateOf is the seam S4 reaches; it changes nothing in caller.go.
+// Form 2 uses S4's named coordinator caller classification and exported
+// launch-eligibility rule, plus a live check that this session is the sole holder.
 
 import (
 	"context"
@@ -49,6 +46,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/grantattest"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // maxDecisionReason bounds GrantDecisionRequest.Reason, in characters.
@@ -171,7 +169,7 @@ func (s *Server) podSession(ctx context.Context, pod *corev1.Pod) (*v1alpha1.Age
 // pod, or a requester running as the delegate's own account; a coordinator or
 // worker the maintenance envelope names; any requester outside the delegate's
 // own tree (delegateReach); and, for a delegate session, one S4's launch
-// rules did not admit (DelegateSessionEligible).
+// rules did not admit (Policy.NamedCoordinatorSessionEligible).
 func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant, d *grantDelegate) error {
 	rq := g.Spec.Requester
 	if owner := metav1.GetControllerOf(d.pod); owner != nil && owner.Kind == "AgentSession" &&
@@ -205,16 +203,11 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 		return err
 	}
 	if d.form == 2 {
-		// TODO(DESIGN-042 S4, #787): once #787 merges, call S4's exported
-		// launch-eligibility check here (who may launch a named coordinator
-		// session, and one Running holder per account). Until then no check
-		// is configured and form 2 is refused; resolveCaller classifies no
-		// such pod as a session before S4 anyway.
-		if s.DelegateSessionEligible == nil {
-			return forbidden("delegate sessions wait on S4's launch eligibility check")
+		if !s.Policy.NamedCoordinatorSessionEligible(d.session) || d.session.Labels[templates.CoordinatorIdentityLabel] != d.pod.Spec.ServiceAccountName {
+			return forbidden("delegate session %s is not launch-eligible", d.session.Name)
 		}
-		if err := s.DelegateSessionEligible(ctx, d.session); err != nil {
-			return forbidden("delegate session %s is not launch-eligible: %s", d.session.Name, err)
+		if err := s.namedCoordinatorFree(ctx, d.pod.Spec.ServiceAccountName, d.session.UID); err != nil {
+			return forbidden("delegate session %s is not the account's sole holder: %s", d.session.Name, err)
 		}
 	}
 	return nil
@@ -307,9 +300,6 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 		if err := broker.ValidateMaintenance(&g); err != nil {
 			return 0, nil, forbidden("%s", err)
 		}
-		if g.Spec.Maintenance.ExtensionOf != "" {
-			return 0, nil, forbidden("a maintenance extension needs the human route (ADR-012)")
-		}
 	default:
 		return 0, nil, forbidden("a delegate never decides a %s grant", g.Spec.Type)
 	}
@@ -339,7 +329,10 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 	rec := broker.MaintenanceDecision{
 		GrantUID: string(g.UID), Digest: req.Digest, By: broker.DelegateRef(d.ref), Approve: req.Approve, TTL: ttl,
 		At: s.now().UTC().Truncate(time.Second), Ref: req.Ref, Reason: req.Reason,
-		Delegate: &broker.DelegateIdentity{Form: d.form, PodUID: string(d.pod.UID)},
+		Delegate: &broker.DelegateIdentity{Form: d.form, PodName: d.pod.Name, PodUID: string(d.pod.UID)},
+	}
+	if d.form == 1 {
+		rec.Delegate.HostID = d.pod.Annotations[CoordinatorHostAnnotation]
 	}
 	if d.session != nil {
 		rec.Delegate.Session, rec.Delegate.SessionUID = d.session.Name, string(d.session.UID)

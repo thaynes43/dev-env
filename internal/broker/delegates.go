@@ -168,9 +168,8 @@ func delegateBinding(g *v1alpha1.AccessGrant, d MaintenanceDecision, delegates [
 // delegateSeparation checks again what the recorded identity lets the broker
 // check: the delegate is not the requesting session, not its current pod, not
 // a session running as the delegate's own account, and not a coordinator or
-// worker the maintenance envelope names. The ancestry walk and the launch rule
-// are the operator's alone (grant_decision.go), checked before it recorded the
-// decision.
+// worker the maintenance envelope names. The live ancestry and deciding
+// identity are rechecked at apply time and while the grant is active.
 func delegateSeparation(g *v1alpha1.AccessGrant, d *DelegateIdentity, by string, requesterPod *corev1.Pod) error {
 	rq := g.Spec.Requester
 	if d.Session != "" && (d.Session == rq.Session || types.UID(d.SessionUID) == rq.SessionUID) {
@@ -278,9 +277,6 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	}
 	dec.Policy = p.Name
 	if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
-		if g.Spec.Maintenance.ExtensionOf != "" {
-			return wait("an extension needs the human route", deadline.Sub(now.Time))
-		}
 		busy, err := b.maintenanceTargetBusy(ctx, g)
 		if err != nil {
 			return ctrl.Result{}, true, err
@@ -317,6 +313,12 @@ func (b *Broker) delegatedHolds(ctx context.Context, g *v1alpha1.AccessGrant) er
 	d, ok := parseDecision(g)
 	if !ok || !d.Approve || d.By != g.Status.ApprovedBy || d.GrantUID != string(g.UID) || d.Digest != grantattest.ScopeDigest(g) {
 		return permanent{errors.New("the delegate decision no longer binds this grant")}
+	}
+	if err := b.delegateGrantHolds(ctx, g, d); err != nil {
+		if errors.Is(err, ErrRefused) {
+			return permanent{err}
+		}
+		return err
 	}
 	var policies v1alpha1.GrantPolicyList
 	if err := b.APIReader.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
