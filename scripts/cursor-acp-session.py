@@ -398,10 +398,17 @@ def main(argv=None):
             prompt = raw.decode("utf-8")
         except UnicodeError:
             raise Refusal("invalid-prompt-encoding") from None
-        # A signal to the client must still reach the finally that stops the child group.
+        # A signal to the client must still reach the finally that stops the child
+        # group. While Popen runs, the child exists but is not owned yet, so only
+        # record the signal there and replay it once `process` is assigned.
+        pending = []
+        signal.signal(signal.SIGTERM, lambda signum, frame: pending.append(signum))
+        signal.signal(signal.SIGHUP, lambda signum, frame: pending.append(signum))
+        process = subprocess.Popen([str(client.resolve()), "--model", args.model, "acp"], cwd=str(cwd.resolve()), env=child_environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
         signal.signal(signal.SIGTERM, exit_on_signal)
         signal.signal(signal.SIGHUP, exit_on_signal)
-        process = subprocess.Popen([str(client.resolve()), "--model", args.model, "acp"], cwd=str(cwd.resolve()), env=child_environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+        if pending:
+            raise SystemExit(128 + pending[0])
         def send(value):
             raw = json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
             if len(raw) > MAX_FRAME:

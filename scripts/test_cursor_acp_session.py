@@ -442,6 +442,49 @@ class SubprocessTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
+    def test_signal_during_launch_still_stops_provider_group(self):
+        # The real Popen has created the child but has not returned, so the client
+        # does not own it yet; the signal must be replayed once it does.
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=signum.name), tempfile.TemporaryDirectory() as directory:
+                pidfile = Path(directory) / "launched.pid"
+                driver = (
+                    "import importlib.util,os,sys,time\n"
+                    "spec=importlib.util.spec_from_file_location('acp',sys.argv[1])\n"
+                    "m=importlib.util.module_from_spec(spec)\n"
+                    "spec.loader.exec_module(m)\n"
+                    "real=m.subprocess.Popen\n"
+                    "def launch(*a,**k):\n"
+                    " p=real(*a,**k)\n"
+                    f" open({str(pidfile)!r},'w').write(str(p.pid))\n"
+                    f" os.kill(os.getpid(),{int(signum)})\n"
+                    " time.sleep(0.2)\n"
+                    " return p\n"
+                    "m.subprocess.Popen=launch\n"
+                    "raise SystemExit(m.main(sys.argv[2:]))\n"
+                )
+                # This provider ignores end of input, so only the client's cleanup can stop it.
+                sleeper = Path(directory) / "sleeper"
+                sleeper.write_text(f"#!{sys.executable} -I\nimport time\ntime.sleep(60)\n")
+                sleeper.chmod(0o700)
+                process = self.launch(directory, "hang", 30, client_arg=str(sleeper), prefix=("-c", driver))
+                child = None
+                try:
+                    process.communicate(timeout=20)
+                    self.assertEqual(process.returncode, 128 + int(signum))
+                    child = int(pidfile.read_text())
+                    self.assertTrue(pid_gone(child), "provider launched during a signal survived")
+                    child = None
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                    if child is not None:
+                        try:
+                            os.killpg(child, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+
     def test_unexpected_exception_still_emits_fixed_failed_receipt(self):
         driver = "import importlib.util,sys\nspec=importlib.util.spec_from_file_location('acp',sys.argv[1])\nm=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\ndef boom(self,message): raise RuntimeError('PRIVATE_INTERNAL_DETAIL')\nm.Session.provider=boom\nraise SystemExit(m.main(sys.argv[2:]))\n"
         with tempfile.TemporaryDirectory() as directory:
