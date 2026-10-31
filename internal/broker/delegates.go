@@ -88,6 +88,8 @@ func delegateListed(by string, delegates []string) bool {
 // within this time even when nothing else wakes the grant.
 const delegateRecheck = time.Minute
 
+var errDelegateDecisionFuture = errors.New("the decision timestamp is ahead of the broker clock")
+
 // delegateMessage is the audit text of a delegate decision. It never says a
 // human decided.
 func delegateMessage(d Decision) string {
@@ -157,10 +159,12 @@ func delegateBinding(g *v1alpha1.AccessGrant, d MaintenanceDecision, delegates [
 		return errors.New("the decision carries no ref")
 	case d.Delegate == nil || d.Delegate.PodUID == "":
 		return errors.New("the decision does not name the delegate's pod")
-	case d.At.Before(g.CreationTimestamp.Time) || d.At.After(now.Add(grantattest.MaxClockSkew)) || !now.Before(d.At.Add(PendingTimeout)):
+	case d.At.Before(g.CreationTimestamp.Time) || !now.Before(d.At.Add(PendingTimeout)):
 		return errors.New("the decision is outside the grant's pending window")
 	case d.Approve && (d.TTL < MinTTL || d.TTL > g.Spec.TTL.Duration):
 		return errors.New("the decision's TTL is outside 10m to the requested TTL")
+	case d.At.After(now.Add(grantattest.MaxClockSkew)):
+		return errDelegateDecisionFuture
 	}
 	return nil
 }
@@ -259,6 +263,11 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return ctrl.Result{RequeueAfter: time.Second}, g.Spec.Type == v1alpha1.GrantMaintenance, nil
 	}
 	if err := delegateBinding(g, d, b.GrantDelegates, now.Time); err != nil {
+		if errors.Is(err, errDelegateDecisionFuture) {
+			// Clock skew can resolve without a new decision. Keep the record,
+			// but never wait beyond the grant's existing Pending deadline.
+			return ctrl.Result{RequeueAfter: min(d.At.Add(-grantattest.MaxClockSkew).Sub(now.Time), deadline.Sub(now.Time))}, true, nil
+		}
 		return refuse(err.Error())
 	}
 	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, sess, false)); err != nil {
@@ -276,9 +285,10 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	}
 	// A delegate decides, either way, only inside a scope Tom delegated: a
 	// denial outside every delegated policy would let one delegate end any
-	// agent's request.
+	// agent's request. Select live: a policy cache miss must never clear a
+	// decision that the API server's policy still covers.
 	var policies v1alpha1.GrantPolicyList
-	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
+	if err := b.APIReader.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
 		return ctrl.Result{}, true, fmt.Errorf("list the grant policies: %w", err)
 	}
 	p := MatchDelegated(g, policies.Items)

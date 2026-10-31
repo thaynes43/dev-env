@@ -117,7 +117,9 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 		}
 		if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
 			if err := CheckMaintenanceIdentities(ctx, b.APIReader, b.SessionNamespace, &g); err != nil {
-				return fmt.Errorf("%w: %w", ErrRefused, err)
+				// Only explicit permanent identity failures carry ErrRefused.
+				// Read failures must retry without clearing a delegate record.
+				return err
 			}
 		}
 		msg := ""
