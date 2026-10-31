@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.parse
 
 MAX_FRAME = 65536
 MAX_PROMPT = 16384
@@ -75,35 +76,80 @@ def bounded_text(value, maximum=2048):
 # Permission context is untrusted display data, never approval authority.
 TOOL_KINDS = frozenset({"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"})
 RAW_FIELDS = frozenset({"command", "args", "path", "paths", "query", "description"})
-SECRET_NAME = re.compile(r"token|key|secret|password|auth|cookie|credential", re.I)
+SECRET_NAME = re.compile(r"token|key|secret|passw(?:or)?d|passphrase|\bpass\b|pwd|pw|auth|cookie|credential|bearer|session|signature|private|jwt", re.I)
 SECRET_VALUE = re.compile(r"bearer\s|[A-Za-z0-9+/=_-]{32,}", re.I)
+# URL userinfo (scheme://user@ or scheme://user:password@) and bare user:password@.
+SECRET_USERINFO = re.compile(r"://[^/\s?#]*@|[^\s/:@]+:[^\s/@]*@")
+# -p<value> or -p <value>, and -u/-U/--user/--proxy-user user:password or user%password.
+# This deliberately also matches harmless forms such as `mkdir -p build`.
+SECRET_FLAG = re.compile(r"(?:^|[\s\"'=])(?:-p\s*\S|(?:-[uU]|--(?:proxy-)?user)(?:[=\s]+)?[\"']?[^\s:%\"']*[:%])")
+SECRET_PATTERNS = (SECRET_NAME, SECRET_VALUE, SECRET_USERINFO, SECRET_FLAG)
+# Rejected as controls: every C category, line/paragraph separators, and the
+# combining marks that remain after NFKC composition (Mn nonspacing, Me enclosing).
+REJECTED_CATEGORIES = ("C", "Zl", "Zp", "Mn", "Me")
 REDACTED = "[REDACTED]"
 MAX_CONTEXT = 2048
+MAX_PROBE = 8192
+
+
+class Redacted(Exception):
+    """A secret-like value anywhere fails the whole permission context closed."""
+
+
+def secret_probes(value):
+    """The value plus its percent-decoded and NFKC forms, closed under both, bounded."""
+    found, frontier = {value}, [value]
+    for _ in range(4):
+        following = []
+        for text in frontier:
+            for probe in (urllib.parse.unquote(text), unicodedata.normalize("NFKC", text)):
+                if len(probe) > MAX_PROBE:
+                    raise ValueError
+                if probe not in found:
+                    found.add(probe)
+                    following.append(probe)
+        if not following:
+            break
+        frontier = following
+    return found
+
+
+def secret_text(value):
+    return any(pattern.search(probe) for probe in secret_probes(value) for pattern in SECRET_PATTERNS)
+
+
+def rejected_character(value):
+    return any(unicodedata.category(c).startswith(REJECTED_CATEGORIES) for c in value)
 
 
 def context_string(value, path=False):
     if not isinstance(value, str) or not value or len(value) > 256:
         raise ValueError
-    # Reject control bytes, DEL, bidi/format controls and surrogate code points.
-    if any(unicodedata.category(c).startswith("C") for c in value):
+    # Reject control bytes, DEL, bidi/format controls, surrogate code points and
+    # line/paragraph separators. Display uses the NFKC form, so fullwidth or
+    # compatibility separators cannot hide parent fragments from path reduction.
+    if any(unicodedata.category(c).startswith(("C", "Zl", "Zp")) for c in value):
         raise ValueError
     if len(value.encode("utf-8")) > 256:
         raise ValueError
-    # Redact the whole value before reducing paths, so a secret in a parent
-    # directory, command flag or prose prefix cannot survive as a fragment.
-    if SECRET_NAME.search(value) or SECRET_VALUE.search(value):
-        return REDACTED
+    display = unicodedata.normalize("NFKC", value)
+    if not display or rejected_character(display) or len(display.encode("utf-8")) > 256:
+        raise ValueError
+    # Fail the whole context closed before reducing paths, so a secret in a parent
+    # directory, URL userinfo, command flag or prose prefix cannot survive as a fragment.
+    if secret_text(value):
+        raise Redacted
     # Free-form command/title/argument text cannot distinguish a spaced path
     # from prose or multiple arguments. Refuse rather than leak parent fragments.
     # Explicit path/paths fields can safely reduce the entire value.
-    if not path and ("/" in value or "\\" in value) and any(c.isspace() or c in "\"'<>" for c in value):
+    if not path and ("/" in display or "\\" in display) and any(c.isspace() or c in "\"'<>" for c in display):
         raise ValueError
     def basename(text):
         name = text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
         if name in {"", ".", ".."}:
             raise ValueError
         return name
-    return basename(value) if path or "/" in value or "\\" in value else value
+    return basename(display) if path or "/" in display or "\\" in display else display
 
 
 def context_input(value, depth=0, path=False):
@@ -119,9 +165,9 @@ def context_input(value, depth=0, path=False):
         if not 1 <= len(value) <= 8:
             raise ValueError
         # No arbitrary input key is copied. Even a secret-bearing KEY may itself
-        # contain a credential, so redact its containing object as a fixed value.
-        if any(SECRET_NAME.search(key) for key in value):
-            return REDACTED
+        # contain a credential, so it fails the whole context closed.
+        if any(secret_text(key) for key in value):
+            raise Redacted
         clean = {key: context_input(item, depth + 1, key in {"path", "paths"})
                  for key, item in value.items() if key in RAW_FIELDS}
         if not clean:
@@ -129,6 +175,22 @@ def context_input(value, depth=0, path=False):
         return clean
     # ACP permits arbitrary JSON; this display subset intentionally does not.
     raise ValueError
+
+
+def source_strings(value):
+    """Every source string value, in order, for one joined check across fields.
+
+    Keys are left out so they cannot separate a flag from its value; each key is
+    checked on its own in context_input.
+    """
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from source_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from source_strings(item)
 
 
 def permission_context(tool):
@@ -143,8 +205,7 @@ def permission_context(tool):
         if not label(tool.get("toolCallId")) or tool.get("kind") not in TOOL_KINDS:
             return insufficient
         title = context_string(tool.get("title"))
-        clean = {"state": "insufficient-context" if title == REDACTED else "available",
-                 "kind": tool["kind"], "title": title}
+        clean = {"state": "available", "kind": tool["kind"], "title": title}
         locations = tool.get("locations")
         if locations is not None:
             if not isinstance(locations, list) or len(locations) > 8:
@@ -163,9 +224,22 @@ def permission_context(tool):
             clean["locations"] = projected
         if tool.get("rawInput") is not None:
             clean["rawInput"] = context_input(tool["rawInput"])
+        # A flag and its value may sit in separate strings, list items or fields
+        # (`["-u", "user:password"]`), so the joined source text is checked too:
+        # title, then every raw input value in source order, then location paths.
+        joined = [tool["title"], *source_strings(tool.get("rawInput")), *(x["path"] for x in locations or ())]
+        if secret_text(" ".join(joined)):
+            raise Redacted
         if len(json.dumps(clean, ensure_ascii=True, separators=(",", ":"))) > MAX_CONTEXT:
             return insufficient
         return clean
+    except Redacted:
+        # Raised only after toolCallId and kind passed. Any redaction fails the
+        # whole context closed: no projected title, location or input survives.
+        redacted = {"state": "insufficient-context", "kind": tool["kind"], "title": REDACTED}
+        if tool.get("rawInput") is not None:
+            redacted["rawInput"] = REDACTED
+        return redacted
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return insufficient
 

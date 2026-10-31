@@ -208,9 +208,11 @@ class ProtocolTests(unittest.TestCase):
 
 VALID_CONTEXT = {
     "toolCallId": "fixture-call", "kind": "execute", "title": "Run fixture checks",
-    "locations": [{"path": "/private/project/check.py", "line": 12}],
-    "rawInput": {"command": "python3", "args": ["check.py"], "path": "/private/project/check.py"},
+    "locations": [{"path": "/fixture-parent/project/check.py", "line": 12}],
+    "rawInput": {"command": "python3", "args": ["check.py"], "path": "/fixture-parent/project/check.py"},
 }
+# Synthetic secret-shaped values; none is a real credential.
+URL_SECRET = "https://admin:S3cr3tVal@example.com"
 CONTEXT_FIXTURES = {
     "valid": VALID_CONTEXT,
     "missing": None,
@@ -242,7 +244,138 @@ CONTEXT_FIXTURES = {
     "hex-secret": dict(VALID_CONTEXT, rawInput={"command": "ab" * 32}),
     "base64-secret": dict(VALID_CONTEXT, rawInput={"command": "QWxhZGRpbjpvcGVuIHNlc2FtZUZpeHR1cmU="}),
     "unknown-fields": dict(VALID_CONTEXT, content="DO_NOT_EXPORT", rawOutput="DO_NOT_EXPORT", _meta={"command": "DO_NOT_EXPORT"}, rawInput={"command": "python3", "unknown": "DO_NOT_EXPORT"}),
+    # Review of 6b9ae3d7, finding 1: URL userinfo survived basename reduction.
+    "secret-url-args": dict(VALID_CONTEXT, rawInput={"command": "git", "args": ["clone", URL_SECRET]}),
+    "secret-url-slash-args": dict(VALID_CONTEXT, rawInput={"command": "git", "args": ["clone", URL_SECRET + "/"]}),
+    "secret-url-path": dict(VALID_CONTEXT, rawInput={"path": URL_SECRET}),
+    "secret-url-location": dict(VALID_CONTEXT, locations=[{"path": URL_SECRET + "/"}]),
+    "secret-url-title": dict(VALID_CONTEXT, title=URL_SECRET),
+    "secret-url-username": dict(VALID_CONTEXT, rawInput={"args": ["https://S3cr3tVal@example.com"]}),
+    "secret-bare-userinfo": dict(VALID_CONTEXT, rawInput={"args": ["admin:S3cr3tVal@example.com"]}),
+    # Finding 2: short secrets with no keyword.
+    "secret-passwd": dict(VALID_CONTEXT, rawInput={"args": ["--passwd=hunter2"]}),
+    "secret-attached-p": dict(VALID_CONTEXT, rawInput={"command": "mysql", "args": ["-pS3cr3tVal"]}),
+    "secret-curl-user-args": dict(VALID_CONTEXT, rawInput={"command": "curl", "args": ["-u", "admin:S3cr3tVal"]}),
+    "secret-curl-user-command": dict(VALID_CONTEXT, rawInput={"command": "curl -u admin:S3cr3tVal"}),
+    "secret-json-pw": dict(VALID_CONTEXT, rawInput={"command": 'curl -d \'{"pw":"hunter2"}\''}),
+    "secret-split-password": dict(VALID_CONTEXT, rawInput={"args": ["--password", "hunter2"]}),
+    # Optional hardening: percent-encoded and compatibility (fullwidth) forms.
+    "secret-percent-userinfo": dict(VALID_CONTEXT, rawInput={"args": ["https://admin%3AS3cr3tVal%40example.com"]}),
+    "secret-fullwidth-userinfo": dict(VALID_CONTEXT, rawInput={"args": ["https://admin\uff1aS3cr3tVal\uff20example.com"]}),
+    "secret-fullwidth-name": dict(VALID_CONTEXT, title="\uff50\uff41\uff53\uff53\uff57\uff4f\uff52\uff44 hunter2"),
+    "fullwidth-slash-args": dict(VALID_CONTEXT, rawInput={"args": ["/a/customer\uff0fb\uff0ff.py"]}),
+    "combining-mark": dict(VALID_CONTEXT, title="Run\u0336 fixture checks"),
+    "line-separator": dict(VALID_CONTEXT, title="Run\u2028fixture checks"),
+    "paragraph-separator": dict(VALID_CONTEXT, rawInput={"command": "run\u2029fixture"}),
 }
+
+
+
+def redacted_context(tool):
+    """The one fail-closed shape after any redaction: kind kept, no projected text."""
+    expected = {"state": "insufficient-context", "kind": tool["kind"], "title": "[REDACTED]"}
+    if tool.get("rawInput") is not None:
+        expected["rawInput"] = "[REDACTED]"
+    return expected
+
+
+class PermissionContextTests(unittest.TestCase):
+    """Direct projection checks for the independent review of 6b9ae3d7."""
+
+    def assertRedacted(self, tool, *secrets):
+        context = ACP.permission_context(tool)
+        self.assertEqual(context, redacted_context(tool))
+        for secret in secrets:
+            self.assertNotIn(secret, json.dumps(context, ensure_ascii=False))
+
+    def test_url_userinfo_redacted_before_path_reduction(self):
+        values = [URL_SECRET, URL_SECRET + "/", URL_SECRET + ":8443", "ssh://admin:S3cr3tVal@example.com/repo",
+                  "https://S3cr3tVal@example.com", "//admin:S3cr3tVal@example.com", "admin:S3cr3tVal@example.com",
+                  "https://admin:p@ss@example.com"]
+        for value in values:
+            for tool in [dict(VALID_CONTEXT, rawInput={"args": [value]}), dict(VALID_CONTEXT, rawInput={"path": value}),
+                         dict(VALID_CONTEXT, rawInput={"paths": [value]}), dict(VALID_CONTEXT, locations=[{"path": value}]),
+                         dict(VALID_CONTEXT, title=value)]:
+                with self.subTest(value=value, tool=tool):
+                    self.assertRedacted(tool, "S3cr3tVal", "p@ss")
+
+    def test_short_secrets_without_old_keywords_redacted(self):
+        arguments = [["--passwd=hunter2"], ["--passphrase", "hunter2"], ["--pass", "hunter2"], ["pwd=hunter2"],
+                     ['{"pw":"hunter2"}'], ["--session", "hunter2"], ["--signature=hunter2"], ["--private", "hunter2"],
+                     ["jwt=hunter2"], ["--bearer=hunter2"], ["--password", "hunter2"], ["-pS3cr3tVal"], ["-p", "hunter2"],
+                     ["-u", "admin:S3cr3tVal"], ["--user=admin:S3cr3tVal"], ["--user", "admin:S3cr3tVal"],
+                     ["--proxy-user", "admin:S3cr3tVal"], ["-U", "admin%S3cr3tVal"]]
+        for args in arguments:
+            with self.subTest(args=args):
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput={"command": "tool", "args": args}), "hunter2", "S3cr3tVal")
+        for command in ["curl -u admin:S3cr3tVal", "curl --user=admin:S3cr3tVal", "mysql -pS3cr3tVal", "sshpass -p hunter2 ssh",
+                        "curl -d '{\"pw\":\"hunter2\"}'", "tool --passwd hunter2"]:
+            with self.subTest(command=command):
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput={"command": command}), "hunter2", "S3cr3tVal")
+                self.assertRedacted(dict(VALID_CONTEXT, title=command), "hunter2", "S3cr3tVal")
+
+    def test_short_flag_redaction_prefers_false_positives(self):
+        # `-p` with any value is treated as a password argument, so harmless
+        # forms fail closed too. The coordinator can still reject.
+        for args in [["mkdir", "-p", "build"], ["patch", "-p1"]]:
+            with self.subTest(args=args):
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput={"args": args}))
+
+    def test_flag_and_value_split_across_strings_redacted(self):
+        for tool in [dict(VALID_CONTEXT, title="Run curl -u", rawInput={"args": ["admin:S3cr3tVal"]}),
+                     dict(VALID_CONTEXT, rawInput={"command": "curl -u", "args": ["admin:S3cr3tVal"]}),
+                     dict(VALID_CONTEXT, rawInput={"command": "sshpass", "description": "-p", "args": ["hunter2"]}),
+                     dict(VALID_CONTEXT, rawInput={"command": "curl", "args": ["-u", "admin:S3cr3tVal"]})]:
+            with self.subTest(tool=tool):
+                self.assertRedacted(tool, "hunter2", "S3cr3tVal")
+
+    def test_any_redaction_fails_whole_context_closed(self):
+        # Before the fix a redacted rawInput still reported "available" and the
+        # title, locations and other raw fields were still projected beside it.
+        for tool in [dict(VALID_CONTEXT, rawInput={"command": "python3", "args": ["--token=synthetic"]}),
+                     dict(VALID_CONTEXT, rawInput={"command": {"apiToken": "synthetic"}}),
+                     dict(VALID_CONTEXT, rawInput={"command": "python3", "args": ["ab" * 32]}),
+                     dict(VALID_CONTEXT, locations=[{"path": "/fixture/secret/check.py"}]),
+                     dict(VALID_CONTEXT, title="Use Bearer synthetic"),
+                     dict(VALID_CONTEXT, title="Use Bearer synthetic", rawInput=None)]:
+            with self.subTest(tool=tool):
+                context = ACP.permission_context(tool)
+                self.assertEqual(context, redacted_context(tool))
+                self.assertNotIn("locations", context)
+                self.assertNotIn("check.py", json.dumps(context))
+
+    def test_encoded_and_compatibility_forms_cannot_hide_secrets(self):
+        for value in ["https://admin%3AS3cr3tVal%40example.com", "https%3A%2F%2Fadmin%253AS3cr3tVal%2540example.com",
+                      "--pass%77ord=S3cr3tVal", "https://admin：S3cr3tVal＠example.com",
+                      "ｐａｓｓｗｏｒｄ=S3cr3tVal", "－ｐS3cr3tVal"]:
+            with self.subTest(value=value):
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput={"args": [value]}), "S3cr3tVal")
+                self.assertRedacted(dict(VALID_CONTEXT, title=value), "S3cr3tVal")
+
+    def test_compatibility_separators_cannot_keep_parent_fragments(self):
+        for raw in [{"args": ["/a/customer／b／f.py"]}, {"path": "/a/customer／b／f.py"}, {"paths": ["\\a\\customer＼b＼f.py"]}]:
+            with self.subTest(raw=raw):
+                context = ACP.permission_context(dict(VALID_CONTEXT, rawInput=raw))
+                self.assertEqual(context["state"], "available")
+                self.assertEqual(list(context["rawInput"].values()), [["f.py"]] if "path" not in raw else ["f.py"])
+                self.assertNotIn("customer", json.dumps(context, ensure_ascii=False))
+        context = ACP.permission_context(dict(VALID_CONTEXT, title="Café checks"))
+        self.assertEqual((context["state"], context["title"]), ("available", "Café checks"))
+
+    def test_combining_marks_and_line_separators_rejected(self):
+        for value in ["Run̶ fixture", "Run⃝ fixture", "é́", "Run fixture", "Run fixture"]:
+            for tool in [dict(VALID_CONTEXT, title=value), dict(VALID_CONTEXT, rawInput={"command": value}),
+                         dict(VALID_CONTEXT, locations=[{"path": "/fixture/" + value}])]:
+                with self.subTest(value=value, tool=tool):
+                    self.assertEqual(ACP.permission_context(tool), {"state": "insufficient-context"})
+
+    def test_benign_context_stays_available(self):
+        # No-false-positive guard for the new patterns; it passes before and after.
+        for raw in [{"command": "git", "args": ["push", "-u", "origin", "main"]}, {"command": "ssh", "args": ["git@github.com"]},
+                    {"command": "python3", "args": ["-m", "unittest"]}, {"query": "user@example.com"}]:
+            with self.subTest(raw=raw):
+                context = ACP.permission_context(dict(VALID_CONTEXT, rawInput=raw))
+                self.assertEqual((context["state"], context["rawInput"]), ("available", raw))
 
 
 FAKE = '''#!/usr/bin/env python3
@@ -323,7 +456,7 @@ def pid_gone(pid, limit=5.0):
 class SubprocessTests(unittest.TestCase):
     def fake(self, directory, mode):
         client = Path(directory) / "fake-cursor"
-        client.write_text(FAKE.replace("MODE", repr(mode)).replace("CONTEXT", repr(CONTEXT_FIXTURES.get(mode.removeprefix("context-")))))
+        client.write_text(FAKE.replace("MODE", repr(mode)).replace("CONTEXT", repr(CONTEXT_FIXTURES.get(mode.removeprefix("context-")))), encoding="utf-8")
         client.chmod(0o700)
         prompt = Path(directory) / "prompt.txt"
         prompt.write_text("Synthetic offline task")
@@ -406,7 +539,9 @@ class SubprocessTests(unittest.TestCase):
             self.assertNotIn("decision-sent", output)
 
     def test_permission_context_fixtures_over_fake_cli(self):
-        insufficient = {"quoted-path-args", "double-quoted-path-args", "angle-path-args", "spaced-path-args", "spaced-path-command", "spaced-path-title", "raw-oversized", "source-oversized", "raw-unknown", "raw-scalar", "location-control", "raw-control", "missing", "oversized", "total", "controls", "unicode-control", "malformed", "unknown-kind", "unknown-only", "title-secret"}
+        # Every redaction fails closed (review of 6b9ae3d7, finding 3).
+        insufficient = {"quoted-path-args", "double-quoted-path-args", "angle-path-args", "spaced-path-args", "spaced-path-command", "spaced-path-title", "raw-oversized", "source-oversized", "raw-unknown", "raw-scalar", "location-control", "raw-control", "missing", "oversized", "total", "controls", "unicode-control", "malformed", "unknown-kind", "unknown-only", "combining-mark", "line-separator", "paragraph-separator"}
+        insufficient |= {name for name in CONTEXT_FIXTURES if "secret" in name}
         for name in CONTEXT_FIXTURES:
             with self.subTest(fixture=name), tempfile.TemporaryDirectory() as directory:
                 process = self.launch(directory, "context-" + name)
@@ -434,6 +569,9 @@ class SubprocessTests(unittest.TestCase):
                         self.assertNotIn("customer", json.dumps(context))
                     if "secret" in name:
                         self.assertIn("[REDACTED]", json.dumps(context))
+                        self.assertEqual(context, redacted_context(CONTEXT_FIXTURES[name]))
+                    if name == "fullwidth-slash-args":
+                        self.assertEqual(context["rawInput"], {"args": ["f.py"]})
                     decision = {"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"}
                     process.stdin.write(json.dumps(decision) + "\n")
                     process.stdin.flush()
@@ -441,7 +579,7 @@ class SubprocessTests(unittest.TestCase):
                     observed.extend(json.loads(x) for x in stdout.splitlines())
                     self.assertEqual(process.returncode, 0, stderr)
                     output = json.dumps(observed) + stderr
-                    for private in ["synthetic-sensitive-value", "ab" * 32, "QWxhZGRpbjpvcGVuIHNlc2FtZUZpeHR1cmU=", "DO_NOT_EXPORT", "/private/project", "\x1b", "\u202e"]:
+                    for private in ["synthetic-sensitive-value", "ab" * 32, "QWxhZGRpbjpvcGVuIHNlc2FtZUZpeHR1cmU=", "DO_NOT_EXPORT", "/fixture-parent/project", "S3cr3tVal", "hunter2", "customer", "\x1b", "\u202e"]:
                         self.assertNotIn(private, output)
                     self.assertEqual(observed[-2]["event"], "decision-sent")
                     # OP314 intentionally refuses an unknown receipt extension.
