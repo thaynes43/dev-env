@@ -785,7 +785,11 @@ Reads a caller-supplied Alertmanager API v2 alert array or snapshot envelope
 from a file or stdin. This is a current snapshot, not notification or delivery
 history. Source and observation time are caller assertions; disposition and
 recurrence are Unknown. Unreadable or invalid input is Unavailable. It makes no
-network requests. See docs/alertmanager-pages-poc.md for limits and details.
+network requests. Optional --orders-from-file CM.json requires
+--orders-observed-at RFC3339 (caller-asserted capture time, five-minute maximum
+age). V1 orders have no explicit alert identity and remain Unjoined. The portal
+and operator readers stay Unconfigured. See docs/alertmanager-pages-poc.md for
+limits and details.
 `,
 	"fleet": `Usage: agent-run fleet [--resources] [-o json]
 

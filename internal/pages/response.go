@@ -76,6 +76,9 @@ type SourceObservation struct {
 type OrderObservation struct {
 	SourceObservation
 	Order *ResponderOrder
+	// RecordCondition optionally records Invalid or Unjoined without attributing
+	// an arbitrary order to this alert. Other nonempty values fail closed.
+	RecordCondition string
 }
 
 // ClaimObservation is one lookup; nil Claim means an observed absent claim.
@@ -85,7 +88,8 @@ type ClaimObservation struct {
 }
 
 // ResponderOrderSource reads one bounded snapshot for exact incident bindings.
-// Missing entries are unobserved (Unavailable); an observed nil Order is Empty.
+// Missing entries are unobserved (Unavailable); an observed nil Order without
+// a RecordCondition is Empty. Invalid/Unjoined can be reported without an order.
 // It must never derive an association from a reusable order key alone.
 type ResponderOrderSource interface {
 	FindOrders(context.Context, []AlertIdentity) (map[AlertIdentity]OrderObservation, error)
@@ -103,7 +107,7 @@ type CanonicalClaimSource interface {
 	FindClaims(context.Context, []ClaimLookup) (map[ClaimLookup]ClaimObservation, error)
 }
 
-// ResponseSources has no production adapters. Zero values are unconfigured.
+// ResponseSources selects caller-authorized adapters. Zero values are unconfigured.
 // MaxAge must be positive; it bounds observation age, not incident duration.
 type ResponseSources struct {
 	Orders ResponderOrderSource
@@ -224,6 +228,15 @@ func projectResponse(identity AlertIdentity, sources ResponseSources, at time.Ti
 		return out
 	}
 	out.OrderSource, out.OrderObservedAt = order.Source, responseTime(order.ObservedAt)
+	if order.RecordCondition != "" {
+		switch order.RecordCondition {
+		case "Invalid", "Unjoined":
+			out.OrderCondition = order.RecordCondition
+		default:
+			out.OrderCondition = "Invalid"
+		}
+		return out
+	}
 	if order.Order == nil {
 		out.OrderCondition = "Empty"
 		return out

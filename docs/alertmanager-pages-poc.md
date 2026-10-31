@@ -11,3 +11,51 @@ Limits: 2 MiB input, 1,000 alerts, 8,192 bytes per string or key, 1,000 object m
 ## Authenticated portal source (source-only)
 
 The default-off portal route `/portal/projects/dev-env/environments/internal/pages` performs a fresh bounded Alertmanager read only after current session authentication and existing current group-based metadata authorization. It rechecks session and authorization before release. The private optional `config/pages-alertmanager.json` requires exactly `source_url`, which must equal `http://alertmanager-operated.observability.svc.cluster.local:9093/api/v2/alerts`. Absence disables the source and shows “Pages not enabled”. Enabling access to alert labels and bodies for the currently authorized group requires a separate owner decision. The client makes one GET per authorized view, with five-second timeout, no proxy or redirects, and the same 2 MiB input limit. Errors render Unavailable without cached data. The page uses a server observation time and cannot establish notification history, delivery, disposition or recurrence. Source merge and test do not establish runtime access or installation; portal network authorization and deployment remain separate owner decisions.
+
+## Offline V1 responder orders (2026-10-31, OP324)
+
+Supply a separate snapshot with existing ConfigMap read access:
+
+```sh
+# Record the actual capture time; preserve it when reusing this file.
+orders_observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+kubectl get cm -n upgrade-agent upgrade-work-orders -o json > orders.json
+agent-run pages list --source alertmanager --from-file snapshot.json \
+  --orders-from-file orders.json --orders-observed-at "$orders_observed_at" -o json
+```
+
+`pages show FINGERPRINT` accepts the same flags. Alert input can still use stdin;
+the orders flag requires a separate file. Capture time is a caller assertion,
+not verified provenance. Never replace an old capture time with the time of
+reading the file. The CLI evaluates freshness against its clock with a five-minute
+maximum age. It makes no network request. Omit the orders flag to leave the
+response source Unconfigured.
+
+Each alert carries the shared response projection in JSON, text and HTML.
+The production V1 source retains only actual responder data keys and status,
+created/updated Unix-second strings. The source includes ConfigMap
+resourceVersion when present. Unrelated work lanes and digest bookkeeping do
+not supply responder evidence. No order reason, note, diagnosis, alert context
+or signature reaches the output. The producer scripts and one read-only live
+shape inspection found no explicit alert fingerprint/start identity or incident
+hash. All current responder records therefore remain Unjoined; a valid empty
+responder store is Empty. Neither a reused key nor a refire inherits an old
+attempt. Lookalike identity fields are ignored pending an actual producer
+contract. Order/owner/state remain literal Unknown without verified joins.
+
+Missing/unreadable order files yield Unavailable; malformed files yield Invalid.
+Both return a failure exit while keeping the alert snapshot. Stale capture time
+is Stale, future/invalid observation time is Invalid; none means resolution.
+Syntax errors in flags return a usage error. Limits: 2 MiB total ConfigMap JSON,
+1,000 data keys, 64 KiB per encoded order/string, 16 nesting levels and 1,000
+members/elements per object/array. Duplicate JSON members, case aliases of
+consumed fields, invalid types/status/timestamps or order events after capture
+are refused as a whole; errors do not echo input. Synthetic fixtures match the
+real mixed store shape; real order contents are never committed.
+
+Before any real join can succeed, the V1 producer must write an explicit alert
+identity into order JSON. That haynes-ops responder change is proposed only;
+this slice does not make it. A portal or operator reader would need read access
+to `upgrade-agent` ConfigMaps, which requires a separate approved access decision.
+Those readers remain Unconfigured. No RBAC, activation or runtime acceptance
+follows from this offline adapter; canonical claim wiring also remains open.
