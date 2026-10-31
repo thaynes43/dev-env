@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -78,6 +79,16 @@ func (s *Server) recordHardwareIntent(ctx context.Context, w http.ResponseWriter
 	if err := lease.CheckHardwareIntentLease(ctx, &g, c.identity.PodUID, now); err != nil {
 		return 0, nil, forbidden("hardware intent lease validation: %s", err)
 	}
+	// The pure helper checks audit semantics using the authenticated session
+	// owner UID; the live projected Pod and keeper receipt were checked above.
+	if _, err := grantattest.EvaluateReservedHardware(grantattest.HardwareInput{
+		Classes: classes, Actor: grantattest.Actor{UID: string(session.UID), Session: session.Name, SessionUID: string(session.UID)},
+		Lease:  grantattest.LeaseView{Class: grantattest.LeaseClassC4, UID: string(g.UID), OwnerUID: string(g.Spec.Requester.SessionUID), Phase: string(g.Status.Phase), ExpiresAt: g.Status.ExpiresAt.Time.UTC().Truncate(time.Second)},
+		Intent: grantattest.HardwareIntent{Operation: req.Operation, Host: req.Host, Device: req.Device, Firmware: req.Firmware, TomRef: req.TomRef},
+		At:     now.UTC().Truncate(time.Second), Now: now.UTC().Truncate(time.Second), BoundsRevision: grantattest.BoundsRevision, RequesterUID: string(session.UID),
+	}); err != nil {
+		return 0, nil, invalid(fieldError("hardwareIntent", "%s", err))
+	}
 	receipt := apiv1.HardwareIntentReceipt{HardwareIntentRequest: req, SessionUID: string(session.UID), PodUID: string(pod.UID), RecordedAt: now.UTC(),
 		Notice: "Audit intent only; agent assertion, not verified human consent. Credential authority and keeper policy approval are unchanged; no command or target enforcement."}
 	raw, err := json.Marshal(receipt)
@@ -97,4 +108,8 @@ func (s *Server) recordHardwareIntent(ctx context.Context, w http.ResponseWriter
 	}
 	s.Log.Info("hardware audit intent recorded (agent assertion, not verified human consent)", "grant", g.Name, "grantUID", g.UID, "caller", c.String(), "tomRef", req.TomRef)
 	return http.StatusCreated, receipt, nil
+}
+
+func (s *Server) hardwareIntent(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	return s.recordHardwareIntent(ctx, w, r, c, s.ReservedDecisionClasses)
 }

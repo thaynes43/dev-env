@@ -17,7 +17,8 @@ import (
 // admission packet protects it. It is not agent attestation, and a delegate
 // decision is not a human decision.
 type MaintenanceDecision struct {
-	GrantUID string `json:"grantUID"`
+	Reserved *v1alpha1.ReservedDecisionBinding `json:"reserved,omitempty"`
+	GrantUID string                            `json:"grantUID"`
 	// Digest is MaintenanceDigest for a human decision and
 	// grantattest.ScopeDigest for a delegate decision.
 	Digest  string        `json:"digest"`
@@ -50,12 +51,20 @@ type DelegateIdentity struct {
 
 // MaxDecisionBytes bounds the annotation value; the broker reads no longer one.
 const MaxDecisionBytes = 2048
+const MaxReservedDecisionBytes = 16384
+
+func DecisionLimit(d MaintenanceDecision) int {
+	if d.Reserved != nil {
+		return MaxReservedDecisionBytes
+	}
+	return MaxDecisionBytes
+}
 
 // parseDecision reads the decision annotation, or reports none.
 func parseDecision(g *v1alpha1.AccessGrant) (MaintenanceDecision, bool) {
 	var d MaintenanceDecision
 	raw := g.Annotations[MaintenanceDecisionAnnotation]
-	if raw == "" || len(raw) > MaxDecisionBytes || json.Unmarshal([]byte(raw), &d) != nil {
+	if raw == "" || len(raw) > MaxReservedDecisionBytes || json.Unmarshal([]byte(raw), &d) != nil || len(raw) > DecisionLimit(d) {
 		return d, false
 	}
 	return d, true

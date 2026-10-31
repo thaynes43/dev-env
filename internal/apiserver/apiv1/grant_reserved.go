@@ -9,13 +9,37 @@ import (
 
 var (
 	reservedRefPattern   = regexp.MustCompile(`^[A-Za-z0-9_.:/#-]{1,128}$`)
-	reservedExactPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/@+\-]{0,127}$`)
+	reservedExactPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}$`)
 	reservedUIDPattern   = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 )
 
 // GrantStorageTarget is the exact immutable target of an RD4 storage request.
 type GrantStorageTarget struct {
 	Kind string `json:"kind"`
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+}
+
+// ReservedDecisionBinding is the retained S7 audit, never human provenance.
+type ReservedDecisionBinding struct {
+	Case               string              `json:"case"`
+	BoundsRevision     string              `json:"boundsRevision"`
+	GrantUID           string              `json:"grantUID"`
+	RequesterUID       string              `json:"requesterUID"`
+	RequesterPodUID    string              `json:"requesterPodUID"`
+	ActorUID           string              `json:"actorUID"`
+	ActorSessionUID    string              `json:"actorSessionUID,omitempty"`
+	ScopeDigest        string              `json:"scopeDigest"`
+	EffectiveDigest    string              `json:"effectiveDigest"`
+	TomRef             string              `json:"tomRef"`
+	Ref                string              `json:"ref"`
+	TTL                string              `json:"ttl"`
+	DecidedAt          time.Time           `json:"decidedAt"`
+	Namespaces         []ReservedNamespace `json:"namespaces,omitempty"`
+	ExcludedNamespaces []string            `json:"excludedNamespaces"`
+}
+
+type ReservedNamespace struct {
 	Name string `json:"name"`
 	UID  string `json:"uid"`
 }

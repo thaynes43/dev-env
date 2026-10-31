@@ -58,6 +58,9 @@ func MatchAttested(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy, att
 // matches a standing policy either: only an attested (ADR-013) or delegated
 // (DESIGN-042) policy approves it.
 func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
+	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0) {
+		return false
+	}
 	if p.Spec.Attested != nil || p.Spec.Delegated != nil {
 		return false // an attested or delegated policy never approves as a standing one
 	}
@@ -72,6 +75,9 @@ func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 // attestation, which the caller must verify. A policy without spec.attested
 // does not match here.
 func MatchesAttested(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
+	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0) {
+		return false
+	}
 	a := p.Spec.Attested
 	if a == nil || len(p.Spec.Profiles) != 0 || len(p.Spec.Repos) != 0 || len(p.Spec.Agents) != 0 {
 		return false // a mixed policy is malformed: approve nothing
@@ -102,6 +108,9 @@ func MatchDelegated(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy) *v
 // also sets the top-level requesters, credential type or a refused role,
 // does not match.
 func MatchesDelegated(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
+	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0) {
+		return false
+	}
 	d := p.Spec.Delegated
 	if d == nil || len(p.Spec.Profiles) != 0 || len(p.Spec.Repos) != 0 || len(p.Spec.Agents) != 0 {
 		return false // a mixed policy is malformed: approve nothing

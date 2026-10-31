@@ -171,14 +171,17 @@ func ScopeDigest(g *v1alpha1.AccessGrant) string {
 		Protocol string `json:"protocol"`
 	}
 	doc := struct {
-		Type       string     `json:"type"`
-		Credential string     `json:"credential,omitempty"`
-		Role       string     `json:"role,omitempty"`
-		Namespaces []string   `json:"namespaces,omitempty"`
-		FQDNs      []string   `json:"fqdns,omitempty"`
-		CIDRs      []string   `json:"cidrs,omitempty"`
-		Endpoints  []endpoint `json:"endpoints,omitempty"`
-		Ports      []port     `json:"ports,omitempty"`
+		Reserved       bool                          `json:"reserved,omitempty"`
+		AllNamespaces  bool                          `json:"allNamespaces,omitempty"`
+		StorageTargets []v1alpha1.GrantStorageTarget `json:"storageTargets,omitempty"`
+		Type           string                        `json:"type"`
+		Credential     string                        `json:"credential,omitempty"`
+		Role           string                        `json:"role,omitempty"`
+		Namespaces     []string                      `json:"namespaces,omitempty"`
+		FQDNs          []string                      `json:"fqdns,omitempty"`
+		CIDRs          []string                      `json:"cidrs,omitempty"`
+		Endpoints      []endpoint                    `json:"endpoints,omitempty"`
+		Ports          []port                        `json:"ports,omitempty"`
 		// Maintenance is omitted when absent, so other grants keep their digest.
 		Maintenance *v1alpha1.MaintenanceTask `json:"maintenance,omitempty"`
 		TTL         string                    `json:"ttl"`
@@ -192,6 +195,18 @@ func ScopeDigest(g *v1alpha1.AccessGrant) string {
 		doc.Maintenance = canonicalMaintenance(m)
 	}
 	if k := g.Spec.Kube; k != nil {
+		doc.Reserved = k.Reserved
+		doc.AllNamespaces = k.AllNamespaces
+		doc.StorageTargets = slices.Clone(k.StorageTargets)
+		slices.SortFunc(doc.StorageTargets, func(a, b v1alpha1.GrantStorageTarget) int {
+			if a.Kind != b.Kind {
+				return strings.Compare(a.Kind, b.Kind)
+			}
+			if a.Name != b.Name {
+				return strings.Compare(a.Name, b.Name)
+			}
+			return strings.Compare(a.UID, b.UID)
+		})
 		doc.Role = k.Role
 		doc.Namespaces = sorted(k.Namespaces)
 	}

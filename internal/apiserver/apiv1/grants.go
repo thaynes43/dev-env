@@ -58,6 +58,7 @@ const (
 // role and namespaces; egress takes fqdns, cidrs, endpoints and ports;
 // credential takes credential.
 type CreateGrantRequest struct {
+	Reserved bool `json:"reserved,omitempty"`
 	// AllNamespaces is reserved RD3b, Secret-read role only, default false.
 	AllNamespaces bool `json:"allNamespaces,omitempty"`
 	// StorageTargets are exact RD4 storage kind/name/UIDs in one namespace.
@@ -111,8 +112,10 @@ const GrantTaskClaimsV1 = "v1"
 // Grant is one grant as the API shows it: GET /v1/grants/{name}, the items of
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
-	AllNamespaces  bool                 `json:"allNamespaces,omitempty"`
-	StorageTargets []GrantStorageTarget `json:"storageTargets,omitempty"`
+	ReservedDecision *ReservedDecisionBinding `json:"reservedDecision,omitempty"`
+	Reserved         bool                     `json:"reserved,omitempty"`
+	AllNamespaces    bool                     `json:"allNamespaces,omitempty"`
+	StorageTargets   []GrantStorageTarget     `json:"storageTargets,omitempty"`
 	// HardwareIntent is an audit receipt, never permission or proof of use.
 	HardwareIntent *HardwareIntentReceipt `json:"hardwareIntent,omitempty"`
 	// TaskClaims is a read-only requester observation, not approval or transfer.

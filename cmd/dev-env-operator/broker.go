@@ -6,33 +6,37 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
 // brokerOptions are the flags of `dev-env-operator broker` (D-61).
 type brokerOptions struct {
-	sessionNamespace     string
-	policyNamespace      string
-	leaderElect          bool
-	enableProxmoxGrants  bool
-	enableHWSSHGrants    bool
-	enableAttested       bool
-	enableMaintenance    bool
-	enableAttestedMaint  bool
-	maintenanceHuman     string
-	grantDelegates       []string
-	grantPolicyDelegates []string
-	legacyGrantDelegates []broker.LegacyDelegateBinding
-	metricsAddr          string
-	probeAddr            string
-	attestedCreators     []string
+	sessionNamespace           string
+	policyNamespace            string
+	leaderElect                bool
+	enableProxmoxGrants        bool
+	enableHWSSHGrants          bool
+	enableAttested             bool
+	enableMaintenance          bool
+	enableAttestedMaint        bool
+	maintenanceHuman           string
+	reservedDecisionClasses    []string
+	reservedExcludedNamespaces []string
+	grantDelegates             []string
+	grantPolicyDelegates       []string
+	legacyGrantDelegates       []broker.LegacyDelegateBinding
+	metricsAddr                string
+	probeAddr                  string
+	attestedCreators           []string
 }
 
 func parseBrokerFlags(args []string) (brokerOptions, error) {
@@ -52,6 +56,8 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.StringVar(&o.maintenanceHuman, "maintenance-human-service-account", "dev-env-system/dev-env-human", "must match operator --human-service-account for authenticated maintenance decisions")
 	fs.BoolVar(&o.enableMaintenance, "enable-maintenance-grants", false, "HELD: enable isolated bounded maintenance leases after policy review")
 	fs.BoolVar(&o.enableAttestedMaint, "enable-attested-maintenance", false, "HELD (ADR-013): also approve a maintenance grant through an attested GrantPolicy whose maintenance scope matches its envelope exactly, when its requesting session recorded an agent attestation (a claim, not verified human identity). Needs --enable-attested-grants and --enable-maintenance-grants; the human decision route is checked first and is unchanged. Off, maintenance is approved by the human route only, or by a listed --grant-delegates delegate through a GrantPolicy with spec.delegated")
+	reservedClasses := fs.String("reserved-decision-classes", "", "HELD SOURCE ONLY: explicit S7 classes rd2,rd3a,rd3b,rd4-storage,rd4-hardware; empty disables reserved decisions and hardware audit. Must match operator/broker; Tom message references are agent assertions, never verified human consent")
+	reservedExcluded := fs.String("reserved-excluded-namespaces", strings.Join(grantattest.ReservedDefaultExclusions(), ","), "HELD: exact reviewed namespace exclusion bounds for S7 namespaced cases; proposed defaults are not permanent human-only restrictions. Explicit empty changes the bound; no implicit fallback. Must match operator/broker and requires the held activation review")
 	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, whose recorded delegate decisions the broker applies through a GrantPolicy with spec.delegated (approvedBy delegate/<namespace>/<name>; not a human decision). Must match the operator's --grant-delegates. Empty applies none")
 	policyDelegates := fs.String("grant-policy-delegates", "", "HELD (DESIGN-042 6.6): default-empty subset of --grant-delegates allowed exact live delegated-policy reach outside their tree. Must match both services")
 	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
@@ -89,6 +95,14 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	refused := []string{o.maintenanceHuman, o.sessionNamespace + "/" + templates.WorkbenchServiceAccount, "dev-agents/dev-env-v2-portal"}
 	if len(o.legacyGrantDelegates) == 0 {
 		refused = append(refused, o.sessionNamespace+"/"+controller.ServiceAccountName)
+	}
+	o.reservedDecisionClasses, err = grantattest.ParseReservedClasses(*reservedClasses)
+	if err != nil {
+		return o, err
+	}
+	o.reservedExcludedNamespaces, err = grantattest.ParseReservedExclusions(*reservedExcluded)
+	if err != nil {
+		return o, err
 	}
 	o.grantDelegates, err = broker.ParseGrantDelegates(*delegates, refused...)
 	if err != nil {
@@ -133,6 +147,8 @@ func runBroker(args []string) error {
 		EnableAttestedMaintenance:      o.enableAttestedMaint,
 		MaintenanceHumanServiceAccount: o.maintenanceHuman,
 		GrantDelegates:                 o.grantDelegates,
+		ReservedDecisionClasses:        o.reservedDecisionClasses,
+		ReservedExcludedNamespaces:     o.reservedExcludedNamespaces,
 		GrantPolicyDelegates:           o.grantPolicyDelegates,
 		LegacyGrantDelegates:           o.legacyGrantDelegates,
 		LeaderElect:                    o.leaderElect,

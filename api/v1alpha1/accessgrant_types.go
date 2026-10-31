@@ -148,7 +148,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || ((self.type == 'breakglass') == (self.kube.role == 'dev-env-grant-breakglass'))",message="type breakglass and role dev-env-grant-breakglass go together (D-27)"
 // +kubebuilder:validation:XValidation:rule="duration(self.ttl) >= duration('10m') && duration(self.ttl) <= duration('8h')",message="ttl runs from 10m to 8h"
-// +kubebuilder:validation:XValidation:rule="!has(self.kube) || (!(has(self.kube.allNamespaces) && self.kube.allNamespaces) && (!has(self.kube.storageTargets) || size(self.kube.storageTargets) == 0)) || duration(self.ttl) <= duration('1h')",message="reserved namespace snapshots and exact storage targets have a maximum TTL of 1h"
+// +kubebuilder:validation:XValidation:rule="!has(self.kube) || (!(has(self.kube.reserved) && self.kube.reserved) && !(has(self.kube.allNamespaces) && self.kube.allNamespaces) && (!has(self.kube.storageTargets) || size(self.kube.storageTargets) == 0)) || duration(self.ttl) <= duration('1h')",message="reserved namespace snapshots and exact storage targets have a maximum TTL of 1h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.ttl) <= duration('4h')",message="a credential grant lasts at most 4h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' || duration(self.ttl) <= duration('1h')",message="break-glass lasts at most 1h (D-27)"
 // +kubebuilder:validation:XValidation:rule="has(self.kube) == has(oldSelf.kube) && has(self.egress) == has(oldSelf.egress) && has(self.credential) == has(oldSelf.credential) && has(self.maintenance) == has(oldSelf.maintenance)",message="immutable after create; only release may change"
@@ -254,7 +254,14 @@ type GrantRequester struct {
 // +kubebuilder:validation:XValidation:rule="has(self.allNamespaces) && self.allNamespaces ? (self.role == 'dev-env-grant-secrets-read' && (!has(self.namespaces) || size(self.namespaces) == 0)) : ((self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass') == (!has(self.namespaces) || size(self.namespaces) == 0))",message="allNamespaces is reserved Secret read only; otherwise cluster-wide roles take no namespaces and namespaced roles name at least one"
 // +kubebuilder:validation:XValidation:rule="!has(self.storageTargets) || size(self.storageTargets) == 0 || (self.role == 'dev-env-grant-storage' && has(self.namespaces) && size(self.namespaces) == 1)",message="storage targets require the storage role in exactly one namespace"
 // +kubebuilder:validation:XValidation:rule="!has(self.storageTargets) || self.storageTargets.all(t, self.storageTargets.filter(o, o.uid == t.uid).size() == 1)",message="storage target UIDs must be unique"
+// +kubebuilder:validation:XValidation:rule="!has(self.namespaces) || (has(self.reserved) && self.reserved && self.role in ['dev-env-grant-secrets-read','dev-env-grant-storage']) || self.namespaces.all(n, !(n in ['dev-env-system','dev-agents','dev-tools']))",message="no grant reaches the dev-env namespaces without explicit reserved scope and configured reviewed bounds (DESIGN-001 6.12)"
+// +kubebuilder:validation:XValidation:rule="!has(self.reserved) || !self.reserved || self.role in ['dev-env-grant-breakglass','dev-env-grant-secrets-read','dev-env-grant-storage']",message="reserved scope is one of the S7 catalog cases"
 type KubeGrant struct {
+	// Reserved marks an immutable S7 request, including a bounded configured
+	// namespace exception. It grants no authority and defaults false.
+	// +optional
+	Reserved bool `json:"reserved,omitempty"`
+
 	// AllNamespaces requests RD3b: the approved namespace UID snapshot is
 	// materialized as individual RoleBindings. It never means a cluster binding.
 	// +optional
@@ -277,7 +284,6 @@ type KubeGrant struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:items:MaxLength=63
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	// +kubebuilder:validation:items:XValidation:rule="!(self in ['dev-env-system', 'dev-agents', 'dev-tools'])",message="no grant reaches the dev-env namespaces (DESIGN-001 6.12)"
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`
 }

@@ -66,9 +66,18 @@ type ReservedDecisionBinding struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_.:/#-]{1,128}$`
-	TomRef    string          `json:"tomRef"`
-	TTL       metav1.Duration `json:"ttl"`
-	DecidedAt metav1.Time     `json:"decidedAt"`
+	TomRef string `json:"tomRef"`
+	// Ref retains request/reply correlation separately from the Tom assertion.
+	// +kubebuilder:validation:MaxLength=128
+	Ref string `json:"ref"`
+	// ExcludedNamespaces is the exact reviewed configuration at decision time.
+	// Empty is explicit configuration, never a lookup-failure fallback.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=63
+	ExcludedNamespaces []string        `json:"excludedNamespaces"`
+	TTL                metav1.Duration `json:"ttl"`
+	DecidedAt          metav1.Time     `json:"decidedAt"`
 	// Namespaces is frozen at approval for RD3b, excluding Never namespaces.
 	// Future namespaces are excluded. The finite storage bound fails closed
 	// rather than widening to a ClusterRoleBinding.

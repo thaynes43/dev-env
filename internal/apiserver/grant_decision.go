@@ -322,6 +322,12 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 	if err := s.Live.Get(ctx, key, &g); err != nil {
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
+	if req.Reserved {
+		return s.decideReservedGrant(ctx, w, r, c, d, &g, req)
+	}
+	if req.TomRef != "" {
+		return 0, nil, invalid(fieldError("tomRef", "requires reserved true"))
+	}
 	switch g.Spec.Type {
 	case v1alpha1.GrantKube:
 		if g.Spec.Kube == nil || broker.DelegateRefusedRole(g.Spec.Kube.Role) {
@@ -396,14 +402,21 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 			return 0, nil, fromKubeError(err, "verify delegated reach")
 		}
 	}
+	return s.recordDelegateDecision(ctx, c, &g, rec)
+}
+
+// recordDelegateDecision is the existing set-once optimistic write shared by
+// ordinary and explicitly validated reserved decisions.
+func (s *Server) recordDelegateDecision(ctx context.Context, c *caller, g *v1alpha1.AccessGrant, rec broker.MaintenanceDecision) (int, any, error) {
+	key := client.ObjectKeyFromObject(g)
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		return 0, nil, err
 	}
 	// The broker reads no record over its bound, and the slot is set once:
 	// refuse here rather than record a decision nobody can apply.
-	if len(raw) > broker.MaxDecisionBytes {
-		return 0, nil, invalid(fieldError("reason", "the recorded decision would exceed %d bytes; shorten the reason", broker.MaxDecisionBytes))
+	if len(raw) > broker.DecisionLimit(rec) {
+		return 0, nil, invalid(fieldError("reason", "the recorded decision would exceed %d bytes; shorten the reason", broker.DecisionLimit(rec)))
 	}
 	orig := g.DeepCopy()
 	if g.Annotations == nil {
@@ -413,7 +426,7 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 	// The slot is set once, and every replica serves this route: the patch
 	// carries the resourceVersion the checks above read, so of two concurrent
 	// decisions exactly one lands and the other is a conflict.
-	if err := s.Client.Patch(ctx, &g, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+	if err := s.Client.Patch(ctx, g, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
 		if apierrors.IsConflict(err) {
 			var now v1alpha1.AccessGrant
 			if s.Live.Get(ctx, key, &now) == nil && now.Annotations[broker.MaintenanceDecisionAnnotation] != "" {
@@ -425,7 +438,7 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 	}
 	s.Log.Info("delegate decision recorded ("+broker.DelegateWording+")", "grant", g.Name, "caller", c.String(), "by", rec.By,
 		"approve", rec.Approve, "ref", rec.Ref, "type", g.Spec.Type)
-	return http.StatusAccepted, s.grantView(&g), nil
+	return http.StatusAccepted, s.grantView(g), nil
 }
 
 // grantRole is a kube grant's role, for messages.

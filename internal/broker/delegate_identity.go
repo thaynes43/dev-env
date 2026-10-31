@@ -129,6 +129,15 @@ func (b *Broker) delegateGrantHolds(ctx context.Context, g *v1alpha1.AccessGrant
 	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, &requester, false)); err != nil {
 		return fmt.Errorf("%w: %w", ErrRefused, err)
 	}
+	if d.Reserved != nil {
+		if err := b.reservedNamespaceHolds(ctx, g, d); err != nil {
+			return err
+		}
+		if d.Reach == nil || d.Reach.RequesterPodUID != d.Reserved.RequesterPodUID {
+			return fmt.Errorf("%w: reserved requester pod binding changed", ErrRefused)
+		}
+		return CheckReservedDelegateReach(ctx, b.APIReader, b.SessionNamespace, g, d, b.GrantPolicyDelegates, ReservedAuthority(d.Reserved))
+	}
 	if d.Reach != nil {
 		return CheckDelegateReach(ctx, b.APIReader, b.SessionNamespace, b.PolicyNamespace, g, d, b.GrantPolicyDelegates)
 	}

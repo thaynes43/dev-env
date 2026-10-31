@@ -70,9 +70,18 @@ func (b *Broker) ensure(ctx context.Context, g *v1alpha1.AccessGrant) ([]string,
 		}
 		return made, nil
 	}
-	for _, ns := range k.Namespaces {
+	for _, ns := range bindingNamespaces(g) {
+		if uid := snapshotNamespaceUID(g, ns); uid != "" {
+			var live corev1.Namespace
+			if err := b.APIReader.Get(ctx, client.ObjectKey{Name: ns}, &live); err != nil {
+				return made, err
+			}
+			if string(live.UID) != uid || !live.DeletionTimestamp.IsZero() {
+				return made, permanent{fmt.Errorf("reserved namespace UID changed")}
+			}
+		}
 		rb := &rbacv1.RoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: g.Name, Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: g.Name, Labels: bindingLabels(g, ns, labels)},
 			RoleRef:    roleRef,
 			Subjects:   subjects,
 		}
@@ -100,6 +109,9 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 		case err == nil:
 			if have.GetLabels()[v1alpha1.LabelGrant] != g.Name {
 				return false, permanent{fmt.Errorf("%s %s exists and the broker did not make it for this grant", kind, describe(want))}
+			}
+			if g.Status.Reserved != nil && (have.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) || (want.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != "" && have.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != want.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"])) {
+				return false, permanent{fmt.Errorf("reserved resource ownership differs from exact grant/namespace UID")}
 			}
 			if !have.GetDeletionTimestamp().IsZero() {
 				return false, fmt.Errorf("%s %s is still being deleted", kind, describe(want))
@@ -163,7 +175,7 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 		if v1alpha1.ClusterWideRole(k.Role) {
 			del(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: g.Name}})
 		} else {
-			for _, ns := range k.Namespaces {
+			for _, ns := range bindingNamespaces(g) {
 				del(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: g.Name}})
 			}
 		}
@@ -217,6 +229,23 @@ func (b *Broker) deleteOwn(ctx context.Context, g *v1alpha1.AccessGrant, o clien
 			return true, nil
 		}
 		return false, fmt.Errorf("read %s %s: %w", kindOf(o), describe(o), err)
+	}
+	if g.Status.Reserved != nil {
+		if o.GetLabels()[v1alpha1.LabelPrefix+"grant-uid"] != string(g.UID) {
+			return false, nil
+		}
+		if uid := snapshotNamespaceUID(g, o.GetNamespace()); uid != "" {
+			var live corev1.Namespace
+			if err := b.APIReader.Get(ctx, client.ObjectKey{Name: o.GetNamespace()}, &live); err != nil {
+				if apierrors.IsNotFound(err) {
+					return true, nil
+				}
+				return false, err
+			}
+			if string(live.UID) != uid || o.GetLabels()[v1alpha1.LabelPrefix+"grant-namespace-uid"] != uid {
+				return false, nil
+			}
+		}
 	}
 	if o.GetLabels()[v1alpha1.LabelGrant] != g.Name {
 		log.FromContext(ctx).Info("left alone: not made for this grant", "grant", g.Name, "kind", kindOf(o), "object", describe(o))
