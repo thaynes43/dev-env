@@ -177,6 +177,10 @@ func delegateSeparation(g *v1alpha1.AccessGrant, d *DelegateIdentity, requesterP
 // exact envelope, the human route's identity checks and one lease per
 // target), and Decide records it as delegate/<namespace>/<name>. A decision
 // that cannot apply leaves the grant waiting; the 30-minute timeout ends it.
+// For a kube or egress grant such a wait reports handled false, so the caller
+// still tells Tom once, as for any grant no policy approves. A maintenance
+// grant reports handled true: the human route would refuse the delegate's
+// annotation, and maintenance grants notify no one.
 func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (res ctrl.Result, handled bool, err error) {
 	d, ok := parseDecision(g)
 	if !ok || !b.isDelegateDecision(d) {
@@ -186,7 +190,7 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	wait := func(why string, after time.Duration) (ctrl.Result, bool, error) {
 		log.FromContext(ctx).Info("a delegate decision waits", append(grantFields(g), "by", d.By, "reason", why)...)
 		b.event(g, corev1.EventTypeWarning, "Decide", "DelegateDecisionWaits", d.By+" decided, but: "+why)
-		return ctrl.Result{RequeueAfter: min(after, deadline.Sub(now.Time))}, true, nil
+		return ctrl.Result{RequeueAfter: min(after, deadline.Sub(now.Time))}, g.Spec.Type == v1alpha1.GrantMaintenance, nil
 	}
 	if err := delegateBinding(g, d, b.GrantDelegates, now.Time); err != nil {
 		return wait(err.Error(), deadline.Sub(now.Time))

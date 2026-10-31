@@ -264,7 +264,8 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 		return ctrl.Result{}, err
 	}
 	// No policy approves it at once: a recorded delegate decision, when
-	// delegates are configured (DESIGN-042 6.2), comes before Tom is told.
+	// delegates are configured (DESIGN-042 6.2), comes before Tom is told. One
+	// that cannot apply falls through, so Tom is still told once.
 	if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
 		return res, err
 	}

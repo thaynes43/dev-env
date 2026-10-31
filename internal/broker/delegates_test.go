@@ -290,6 +290,46 @@ func TestDelegateDecisionRefusalsWait(t *testing.T) {
 	}
 }
 
+// A delegate decision that cannot apply never silences Tom: a kube grant
+// still notifies once, whether the decision came before the broker's first
+// Pending pass or after it.
+func TestDelegateDecisionThatWaitsStillNotifies(t *testing.T) {
+	for name, early := range map[string]bool{"before the first pending pass": true, "after it": false} {
+		t.Run(name, func(t *testing.T) {
+			f := dgCase(t, func(_ *v1alpha1.AccessGrant, p *v1alpha1.GrantPolicy) {
+				p.Spec.Delegated.Profiles = []string{"workbench"}
+			})
+			n := &notes{}
+			f.b.Notifier = n
+			if early {
+				f.record(f.decision(true))
+				f.mustStep(3)
+			} else {
+				f.mustStep(2)
+				if n.count(f.key.Name) != 1 {
+					t.Fatalf("not notified before the decision: %d", n.count(f.key.Name))
+				}
+				f.record(f.decision(true))
+				f.mustStep(2)
+			}
+			g := f.grant()
+			wantStillPending(t, g)
+			if n.count(f.key.Name) != 1 || g.Status.NotifiedAt == nil {
+				t.Fatalf("notified %d times, notifiedAt %v", n.count(f.key.Name), g.Status.NotifiedAt)
+			}
+		})
+	}
+	// A decision that applies needs no notification.
+	f := dgCase(t)
+	n := &notes{}
+	f.b.Notifier = n
+	f.record(f.decision(true))
+	f.mustStep(3)
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantActive || n.count(f.key.Name) != 0 {
+		t.Fatalf("phase %s, notified %d times", g.Status.Phase, n.count(f.key.Name))
+	}
+}
+
 // Decide itself refuses what a delegate may never decide, whoever calls it:
 // credential and break-glass grants, the refused roles, a delegate not on the
 // list, an unbound decision and an approval naming no policy.

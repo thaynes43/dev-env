@@ -4212,7 +4212,13 @@ grants. It is not a human decision and not an agent attestation.
   now on kube and egress grants too, with `by: delegate/<ns>/<sa>`, the ref and
   the delegate's pod and session. It never writes a status. haynes-ops P3
   must extend the annotation guard before this works on kube and egress
-  grants.
+  grants. The slot is set-once and shared with the human maintenance route,
+  whose behaviour is unchanged: a delegate decision on a maintenance grant
+  that the broker cannot apply (no covering delegated policy, a busy target)
+  leaves Tom's route answering 409 until the 30-minute timeout, and the
+  requester then asks again. The operator cannot read GrantPolicies, so the
+  route does not check coverage first. A kube or egress grant whose delegate
+  decision cannot apply is still notified to Tom once.
 - **Refused:** a caller off the list; the requester, a pod its session
   controls or its current pod; a delegate whose session descends from the
   requester through any parent link, or whose ancestry cannot be read; a form
