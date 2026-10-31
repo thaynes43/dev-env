@@ -41,7 +41,9 @@ const Name = "dev-env-broker"
 // Options configure NewManager.
 type Options struct {
 	// SessionNamespace holds the sessions, their pods and the grants (D-54).
-	SessionNamespace string
+	SessionNamespace     string
+	EnableAdminLeases    bool
+	AdminIssuerNamespace string
 	// PolicyNamespace holds the GrantPolicies and the Lease.
 	PolicyNamespace string
 	// EnableProxmoxGrants is false until keeper/node trust and acceptance pass.
@@ -159,6 +161,8 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		Client:                         mgr.GetClient(),
 		APIReader:                      mgr.GetAPIReader(),
 		SessionNamespace:               o.SessionNamespace,
+		EnableAdminLeases:              o.EnableAdminLeases,
+		AdminIssuerNamespace:           o.AdminIssuerNamespace,
 		PolicyNamespace:                o.PolicyNamespace,
 		EnableProxmoxGrants:            o.EnableProxmoxGrants,
 		EnableHWSSHGrants:              o.EnableHWSSHGrants,

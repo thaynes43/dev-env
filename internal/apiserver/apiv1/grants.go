@@ -219,8 +219,9 @@ type GrantDecisionRequest struct {
 	// Reserved explicitly selects an enabled S7 case. Default false preserves
 	// the ordinary delegated-policy decision. Missing policy never selects S7.
 	Reserved bool `json:"reserved,omitempty"`
-	// TomRef is a mandatory nonsecret fresh-message reference for S7. It is
-	// an agent assertion alongside the authenticated actor, not human provenance.
+	// TomRef is a required nonsecret decision reference for S7 (for example,
+	// Tom's message or the configured delegated-authority reference); agent
+	// assertion, not verified human consent.
 	TomRef string `json:"tomRef,omitempty"`
 	// GrantUID is the Grant.UID the delegate reviewed.
 	GrantUID string `json:"grantUID"`

@@ -466,11 +466,17 @@ type AccessGrantStatus struct {
 	// +optional
 	NotifiedAt *metav1.Time `json:"notifiedAt,omitempty"`
 
-	// ServiceAccount is the grant's identity in dev-agents, for kube and
-	// breakglass grants.
+	// ServiceAccount is the kube/breakglass identity name. Reusable admin
+	// credentials retain their namespace in AdminCredential; other identities
+	// live in the session namespace.
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	ServiceAccount string `json:"serviceAccount,omitempty"`
+
+	// AdminCredential freezes the original issuer identity before minting. It is
+	// retained for cleanup even when broker configuration changes.
+	// +optional
+	AdminCredential *AdminCredentialStatus `json:"adminCredential,omitempty"`
 
 	// InstalledPodUID is the session pod the grant was last installed in. A new
 	// pod (a resume, a drain) gets it installed again.
@@ -481,6 +487,26 @@ type AccessGrantStatus struct {
 	// InstalledAt is when it was installed there.
 	// +optional
 	InstalledAt *metav1.Time `json:"installedAt,omitempty"`
+}
+
+// AdminCredentialStatus is a lifecycle fence, not UID-based Kubernetes RBAC.
+type AdminCredentialStatus struct {
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name"`
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	ServiceAccountUID string `json:"serviceAccountUID,omitempty"`
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	BindingUID string `json:"bindingUID,omitempty"`
+	// CleanupStarted permanently prevents further issuance for this lease.
+	// +optional
+	CleanupStarted bool `json:"cleanupStarted,omitempty"`
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	CleanupError string `json:"cleanupError,omitempty"`
 }
 
 // AccessGrant is one time-boxed grant of more than the baseline for one

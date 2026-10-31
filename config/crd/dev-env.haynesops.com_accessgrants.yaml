@@ -593,6 +593,34 @@ spec:
               AccessGrantStatus is the broker's record of the grant. Only the broker
               writes it (accessgrants/status); the operator's API reads it.
             properties:
+              adminCredential:
+                description: |-
+                  AdminCredential freezes the original issuer identity before minting. It is
+                  retained for cleanup even when broker configuration changes.
+                properties:
+                  bindingUID:
+                    maxLength: 64
+                    type: string
+                  cleanupError:
+                    maxLength: 1024
+                    type: string
+                  cleanupStarted:
+                    description: CleanupStarted permanently prevents further issuance
+                      for this lease.
+                    type: boolean
+                  name:
+                    maxLength: 63
+                    type: string
+                  namespace:
+                    maxLength: 63
+                    type: string
+                  serviceAccountUID:
+                    maxLength: 64
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
               approvedAt:
                 description: ApprovedAt is when it was approved.
                 format: date-time
@@ -868,8 +896,9 @@ spec:
                 type: object
               serviceAccount:
                 description: |-
-                  ServiceAccount is the grant's identity in dev-agents, for kube and
-                  breakglass grants.
+                  ServiceAccount is the kube/breakglass identity name. Reusable admin
+                  credentials retain their namespace in AdminCredential; other identities
+                  live in the session namespace.
                 maxLength: 253
                 type: string
             type: object

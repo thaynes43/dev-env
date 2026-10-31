@@ -101,7 +101,7 @@ func validateReservedDecisionExtras(req apiv1.GrantDecisionRequest) error {
 	}
 	digest, err := base64.RawURLEncoding.DecodeString(req.Digest)
 	if !validGrantDecisionRef(req.TomRef) || !reservedClientUID.MatchString(req.GrantUID) || err != nil || len(digest) != 32 {
-		return usageError("reserved decisions require the exact grant UID/digest and --tom-ref <fresh nonsecret message>; agent assertion, not verified human consent")
+		return usageError("reserved decisions require the exact grant UID/digest and --tom-ref <nonsecret decision reference, for example Tom's message or the configured delegated-authority reference>; agent assertion, not verified human consent")
 	}
 	if req.TTL != "" {
 		ttl, err := time.ParseDuration(req.TTL)

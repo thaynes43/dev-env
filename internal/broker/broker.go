@@ -100,6 +100,10 @@ type Broker struct {
 	// SessionNamespace holds the sessions, their pods, the grants and the grant
 	// ServiceAccounts (D-54).
 	SessionNamespace string
+	// EnableAdminLeases selects the reusable issuer path. Default off.
+	EnableAdminLeases bool
+	// AdminIssuerNamespace must be the once-approved dedicated namespace.
+	AdminIssuerNamespace string
 	// PolicyNamespace holds the GrantPolicies and the broker's Lease.
 	PolicyNamespace string
 	// EnableProxmoxGrants permits new PVE execution requests. Existing jobs
@@ -326,6 +330,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	if g.Spec.Release {
 		return b.end(ctx, g, v1alpha1.GrantReleased, "", "released by its session", now)
 	}
+	if g.Status.AdminCredential != nil && g.Status.AdminCredential.CleanupStarted {
+		return b.end(ctx, g, v1alpha1.GrantFailed, "", "admin credential cleanup started", now)
+	}
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
 		return b.activeMaintenance(ctx, g, now)
 	}
@@ -363,7 +370,7 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		log.FromContext(ctx).Info("made the grant", append(grantFields(g), "made", made)...)
 		b.event(g, corev1.EventTypeNormal, "Make", "Made", "made "+strings.Join(made, ", "))
 	}
-	if g.Spec.Type == v1alpha1.GrantEgress && !b.Clock.Now().Before(expires) {
+	if (g.Spec.Type == v1alpha1.GrantEgress || b.adminLease(g)) && !b.Clock.Now().Before(expires) {
 		// Materialization can cross expiry if the API server was slow. Revoke
 		// immediately rather than schedule from the time before the create.
 		return b.end(ctx, g, v1alpha1.GrantExpired, "", "", b.now())
@@ -551,6 +558,9 @@ func (b *Broker) sessionPod(ctx context.Context, s *v1alpha1.AgentSession, runni
 // of the grant at once: the API server checks the ServiceAccount's UID on each
 // request (D-61).
 func (b *Broker) mint(ctx context.Context, g *v1alpha1.AccessGrant, now metav1.Time) (string, time.Time, error) {
+	if b.adminLease(g) {
+		return b.mintAdmin(ctx, g)
+	}
 	secs := tokenSeconds(g.Status.ExpiresAt.Sub(now.Time))
 	tr := &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &secs}}
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: b.SessionNamespace, Name: g.Name}}
