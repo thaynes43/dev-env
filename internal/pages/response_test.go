@@ -17,9 +17,13 @@ type fakeResponderOrders struct {
 	lookups     []AlertIdentity
 }
 
-func (f *fakeResponderOrders) FindOrder(_ context.Context, id AlertIdentity) (OrderObservation, error) {
-	f.lookups = append(f.lookups, id)
-	return f.observation, f.err
+func (f *fakeResponderOrders) FindOrders(_ context.Context, ids []AlertIdentity) (map[AlertIdentity]OrderObservation, error) {
+	f.lookups = append(f.lookups, ids...)
+	out := make(map[AlertIdentity]OrderObservation, len(ids))
+	for _, id := range ids {
+		out[id] = f.observation
+	}
+	return out, f.err
 }
 
 type fakeCanonicalClaims struct {
@@ -28,10 +32,16 @@ type fakeCanonicalClaims struct {
 	lookups     []OrderReference
 }
 
-func (f *fakeCanonicalClaims) FindClaim(_ context.Context, _ AlertIdentity, order OrderReference) (ClaimObservation, error) {
-	f.lookups = append(f.lookups, order)
-	return f.observation, f.err
+func (f *fakeCanonicalClaims) FindClaims(_ context.Context, lookups []ClaimLookup) (map[ClaimLookup]ClaimObservation, error) {
+	out := make(map[ClaimLookup]ClaimObservation, len(lookups))
+	for _, lookup := range lookups {
+		f.lookups = append(f.lookups, lookup.Order)
+		out[lookup] = f.observation
+	}
+	return out, f.err
 }
+
+var testEvidenceOrigins = []string{"https://example.test", "https://openproject.example.test", "https://github.com", "https://xn--bcher-kva.example"}
 
 func responseFixture() (AlertIdentity, ResponseSources, time.Time, *fakeResponderOrders, *fakeCanonicalClaims) {
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
@@ -45,7 +55,7 @@ func responseFixture() (AlertIdentity, ResponseSources, time.Time, *fakeResponde
 		SourceObservation: SourceObservation{Available: true, Source: "Canonical synthetic claim", ObservedAt: at},
 		Claim:             &ClaimEvidence{Identity: id, Order: ref, Reference: CanonicalClaimReference{Kind: "OpenProject", ID: "313"}, Owner: "synthetic-owner", State: "claimed", StateAt: at.Add(-time.Minute), EvidenceURL: "https://example.test/work_packages/313"},
 	}}
-	return id, ResponseSources{Orders: orders, Claims: claims, MaxAge: 5 * time.Minute}, at, orders, claims
+	return id, ResponseSources{Orders: orders, Claims: claims, MaxAge: 5 * time.Minute, EvidenceOrigins: testEvidenceOrigins}, at, orders, claims
 }
 
 func TestResponseExplicitStates(t *testing.T) {
@@ -242,7 +252,7 @@ func TestResponseUnsafeEvidence(t *testing.T) {
 		"https://example.test:443/a", "https://example.test:8443/a", "https://localhost/a", "https://app.localhost/a", "https://intranet/a", "https://Example.test/a", "https://example.test./a", "https://-bad.test/a", "https://bad-.test/a", "https://ex_ample.test/a", "https://" + strings.Repeat("a", 64) + ".test/a",
 	} {
 		t.Run(url, func(t *testing.T) {
-			if safeResponseURL(url) {
+			if safeResponseURL(url, testEvidenceOrigins) {
 				t.Fatalf("accepted unsafe evidence URL %q", url)
 			}
 			id, sources, at, _, claims := responseFixture()
@@ -258,7 +268,7 @@ func TestResponseUnsafeEvidence(t *testing.T) {
 		"https://github.com/thaynes43/dev-env/pull/746", "https://xn--bcher-kva.example/a", "https://example.test/a/b~c_d.e-f", "https://example.test/a:b@c,d;e=f!g$h*i", "https://example.test/a%2Fb", "https://example.test/%7e",
 	} {
 		t.Run("accept "+url, func(t *testing.T) {
-			if !safeResponseURL(url) {
+			if !safeResponseURL(url, testEvidenceOrigins) {
 				t.Fatalf("rejected safe evidence URL %q", url)
 			}
 			id, sources, at, _, claims := responseFixture()
@@ -345,5 +355,16 @@ func TestResponseInvalidIdentityLeavesClaimsNotChecked(t *testing.T) {
 	got := ProjectResponse(context.Background(), AlertIdentity{Fingerprint: "", StartsAt: "not-a-time"}, sources, at)
 	if got.OrderCondition != "Invalid" || got.ClaimCondition != "NotChecked" || got.Owner != "Unknown" || got.State != "Unknown" {
 		t.Fatalf("invalid identity: %+v", got)
+	}
+}
+
+// Before OP316, any syntactically safe HTTPS host could be linked even when
+// the caller had configured no trusted evidence origins.
+func TestResponseDefaultDeniesEvidence(t *testing.T) {
+	id, sources, at, _, _ := responseFixture()
+	sources.EvidenceOrigins = nil
+	got := ProjectResponse(context.Background(), id, sources, at)
+	if got.EvidenceURL != "Unknown" || got.State != "Unknown" || got.ClaimCondition != "Invalid" {
+		t.Fatalf("unconfigured origin policy released evidence: %+v", got)
 	}
 }

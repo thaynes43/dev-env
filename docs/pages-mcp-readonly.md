@@ -27,7 +27,21 @@ withholds its owner and reference. It has no create or execution method.
 Production has no order or claim adapters or configuration to enable them:
 joined fields stay `Unknown`, and controls remain disconnected. Only synthetic
 fixtures exercise joined states. Each Unconfigured response adds about 455
-bytes per alert. Before a real adapter, sources need a batch or snapshot
-interface (today each alert costs an order and a claim lookup per call) and
-evidence links need a fixed-origin allowlist ([DESIGN-031 13](../.agents/sagas/distributed-dev-env/designs/031-pages-lookup.md)).
+bytes per alert. OP316 (2026-10-31) adds shared snapshot projection: each
+portal render or MCP call makes at most one order batch lookup and one claim
+batch lookup, before filtering or limiting. Exact fingerprint/start identities
+are deduplicated; claims are requested only for joined key/created attempts.
+A missing batch result is Unavailable; an observed nil record is Empty. An
+unjoined identity stays NotChecked even when other identities join. Empty or
+invalid snapshots/policy do not trigger lookups.
+
+The source-only `ResponseSources.EvidenceOrigins` config lists exact HTTPS
+origins (no path or trailing slash). Empty denies all evidence links and leaves
+the claim fields Unknown/Invalid. Membership is exact, with no wildcard,
+subdomain, prefix or case normalization. Existing canonical lowercase-host and
+no-port syntax checks remain: uppercase hosts/schemes and explicit ports
+(including `:443`) are rejected even if listed. Unsafe or non-allowlisted links
+are never rendered or returned. This config is not a tool argument or a new
+`--source-config` key; production still has no configured response sources.
+See [DESIGN-031 13](../.agents/sagas/distributed-dev-env/designs/031-pages-lookup.md).
 Gatus checks are unchanged.

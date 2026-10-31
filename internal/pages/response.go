@@ -2,8 +2,10 @@ package pages
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -73,15 +75,23 @@ type ClaimObservation struct {
 	Claim *ClaimEvidence
 }
 
-// ResponderOrderSource reads an existing order by an exact incident binding.
+// ResponderOrderSource reads one bounded snapshot for exact incident bindings.
+// Missing entries are unobserved (Unavailable); an observed nil Order is Empty.
 // It must never derive an association from a reusable order key alone.
 type ResponderOrderSource interface {
-	FindOrder(context.Context, AlertIdentity) (OrderObservation, error)
+	FindOrders(context.Context, []AlertIdentity) (map[AlertIdentity]OrderObservation, error)
 }
 
-// CanonicalClaimSource reads existing canonical ownership and workflow evidence.
+// ClaimLookup preserves both incident identity and the existing order attempt.
+type ClaimLookup struct {
+	Identity AlertIdentity
+	Order    OrderReference
+}
+
+// CanonicalClaimSource reads one bounded snapshot of canonical evidence for
+// joined attempts. Missing entries are Unavailable; an observed nil Claim is Empty.
 type CanonicalClaimSource interface {
-	FindClaim(context.Context, AlertIdentity, OrderReference) (ClaimObservation, error)
+	FindClaims(context.Context, []ClaimLookup) (map[ClaimLookup]ClaimObservation, error)
 }
 
 // ResponseSources has no production adapters. Zero values are unconfigured.
@@ -90,6 +100,9 @@ type ResponseSources struct {
 	Orders ResponderOrderSource
 	Claims CanonicalClaimSource
 	MaxAge time.Duration
+	// EvidenceOrigins lists exact HTTPS origins, without paths or trailing
+	// slashes. Empty denies all links. Existing URL syntax checks still apply.
+	EvidenceOrigins []string
 }
 
 // ResponseProjection is the shared portal/MCP answer. Conditions explain why a
@@ -114,9 +127,65 @@ type ResponseProjection struct {
 	ClaimObservedAt string                  `json:"claimObservedAt"`
 }
 
-// ProjectResponse reads at most one order and one claim. There is no write,
-// dispatch, retry, inferred owner, inferred resolution or wall-clock read.
+// ProjectResponse is the single-identity convenience wrapper. Snapshot callers
+// must use ProjectResponses so source reads do not multiply with alert count.
 func ProjectResponse(ctx context.Context, identity AlertIdentity, sources ResponseSources, at time.Time) ResponseProjection {
+	return ProjectResponses(ctx, []AlertIdentity{identity}, sources, at)[identity]
+}
+
+// MaxResponseBatch bounds one snapshot's lookups independently of callers; the
+// Alertmanager parser already refuses larger snapshots.
+const MaxResponseBatch = 1000
+
+var errResponseBatchTooLarge = errors.New("response batch exceeds MaxResponseBatch")
+
+// ProjectResponses reads at most one order batch and one claim batch per
+// snapshot. There is no write, dispatch, retry or wall-clock read. Results are
+// indexed by the original identity, including for invalid identities. A batch
+// over MaxResponseBatch makes no lookup and every requested alert is Unavailable.
+// Adapters receive copies, so one cannot rewrite the keys results are read by.
+func ProjectResponses(ctx context.Context, identities []AlertIdentity, sources ResponseSources, at time.Time) map[AlertIdentity]ResponseProjection {
+	out := make(map[AlertIdentity]ResponseProjection, len(identities))
+	requests := make([]AlertIdentity, 0, len(identities))
+	for _, identity := range identities {
+		if _, seen := out[identity]; seen {
+			continue
+		}
+		out[identity] = projectResponse(identity, sources, at, OrderObservation{}, nil, ClaimObservation{}, nil)
+		if validResponseIdentity(identity) && knownResponseTime(at) && sources.MaxAge > 0 {
+			requests = append(requests, identity)
+		}
+	}
+	if sources.Orders == nil || len(requests) == 0 {
+		return out
+	}
+	if len(requests) > MaxResponseBatch {
+		for _, identity := range requests {
+			out[identity] = projectResponse(identity, sources, at, OrderObservation{}, errResponseBatchTooLarge, ClaimObservation{}, nil)
+		}
+		return out
+	}
+	orders, orderErr := sources.Orders.FindOrders(ctx, slices.Clone(requests))
+	lookups := make([]ClaimLookup, 0, len(requests))
+	for _, identity := range requests {
+		response := projectResponse(identity, sources, at, orders[identity], orderErr, ClaimObservation{}, nil)
+		out[identity] = response
+		if response.OrderCondition == "Available" && sources.Claims != nil {
+			lookups = append(lookups, ClaimLookup{Identity: identity, Order: response.Order})
+		}
+	}
+	if len(lookups) == 0 {
+		return out
+	}
+	claims, claimErr := sources.Claims.FindClaims(ctx, slices.Clone(lookups))
+	for _, lookup := range lookups {
+		out[lookup.Identity] = projectResponse(lookup.Identity, sources, at, orders[lookup.Identity], orderErr, claims[lookup], claimErr)
+	}
+	return out
+}
+
+// projectResponse validates only supplied observations; it performs no I/O.
+func projectResponse(identity AlertIdentity, sources ResponseSources, at time.Time, order OrderObservation, orderErr error, claim ClaimObservation, claimErr error) ResponseProjection {
 	out := unknownResponse(identity)
 	if sources.Claims != nil {
 		// Claims are looked up only after the order joins; until then say so
@@ -140,8 +209,7 @@ func ProjectResponse(ctx context.Context, identity AlertIdentity, sources Respon
 		out.OrderCondition = "Invalid"
 		return out
 	}
-	order, err := sources.Orders.FindOrder(ctx, identity)
-	out.OrderCondition = observationCondition(order.SourceObservation, err, at, sources.MaxAge)
+	out.OrderCondition = observationCondition(order.SourceObservation, orderErr, at, sources.MaxAge)
 	if out.OrderCondition != "Available" {
 		return out
 	}
@@ -165,8 +233,7 @@ func ProjectResponse(ctx context.Context, identity AlertIdentity, sources Respon
 	if sources.Claims == nil {
 		return out
 	}
-	claim, err := sources.Claims.FindClaim(ctx, identity, o.Order)
-	out.ClaimCondition = observationCondition(claim.SourceObservation, err, at, sources.MaxAge)
+	out.ClaimCondition = observationCondition(claim.SourceObservation, claimErr, at, sources.MaxAge)
 	if out.ClaimCondition != "Available" {
 		return out
 	}
@@ -180,7 +247,7 @@ func ProjectResponse(ctx context.Context, identity AlertIdentity, sources Respon
 		out.ClaimCondition = "Unjoined"
 		return out
 	}
-	if !validClaimReference(c.Reference) || !responseText(c.Owner) || !validResponseState(c.State) || !knownResponseTime(c.StateAt) || c.StateAt.Before(created) || c.StateAt.After(claim.ObservedAt) || !safeResponseURL(c.EvidenceURL) {
+	if !validClaimReference(c.Reference) || !responseText(c.Owner) || !validResponseState(c.State) || !knownResponseTime(c.StateAt) || c.StateAt.Before(created) || c.StateAt.After(claim.ObservedAt) || !safeResponseURL(c.EvidenceURL, sources.EvidenceOrigins) {
 		out.ClaimCondition = "Invalid"
 		return out
 	}
@@ -307,14 +374,14 @@ func knownResponseTime(stamp time.Time) bool {
 // Go's canonical form. The host must be a DNS name whose last label starts
 // with a letter, which excludes IPv4 literals in every form a browser parses
 // (127.1, 0x7f.1, 2130706433), IPv6 literals (no brackets), ports,
-// single-label and .localhost names. This is not an origin allowlist; DESIGN-031
-// 13 requires one before any real adapter lands.
+// single-label and .localhost names. The exact-origin allowlist is an additional
+// gate; an empty list denies every evidence link.
 var (
 	evidenceURLChars = regexp.MustCompile(`^https://[A-Za-z0-9._~/%:@,;=!$*-]+$`)
 	evidenceHost     = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
-func safeResponseURL(value string) bool {
+func safeResponseURL(value string, origins []string) bool {
 	if len(value) > 512 || !evidenceURLChars.MatchString(value) || RedactURL(value) != value || RedactText(value) != value {
 		return false
 	}
@@ -323,6 +390,16 @@ func safeResponseURL(value string) bool {
 		return false
 	}
 	if len(u.Host) > 253 || !evidenceHost.MatchString(u.Host) || strings.HasSuffix(u.Host, ".localhost") {
+		return false
+	}
+	allowed := false
+	for _, origin := range origins {
+		if origin == "https://"+u.Host {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
 		return false
 	}
 	// Percent escapes must not decode into what the raw form excludes, and a
