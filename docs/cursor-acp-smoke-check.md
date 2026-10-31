@@ -17,6 +17,9 @@ not see the provider process. Two origins sit behind those client lines:
 - `question-required` is a provider request. The client projects the structured
   question id, prompt, options, and `allowMultiple` flag. The checker validates
   that shape, then drops the prompt and option labels.
+- `permission-required` is a provider permission request. The client projects
+  its option ids and kinds and, since dev-env #758, a bounded `context` object.
+  The checker validates both, then drops all context text.
 - `decision-sent` is a coordinator decision. The client emits it only after
   writing the decision frame. The receipt carries `requestID`, `sessionID`, and
   `kind`. It does not carry the selected option ids. The checker cannot recover
@@ -54,10 +57,77 @@ Other tokens, when present:
 - `permission-decision-sent`. A permission request and a matching
   `decision-sent` with `kind` `permission`. This is not a question/reply and
   not an approval. `permissionApproval` is `not-inferred`. The checker grants
-  nothing.
+  nothing. See "Question reply, permission rejection and approval" below.
 - `helper-failed`. The client emitted `failed` with a fixed reason code.
 
 `autonomousQuestionReply` is false on every verdict. There is no true value.
+
+## Permission context
+
+A `permission-required` receipt may carry one optional `context` key, added by
+dev-env #758. A receipt without it (before #758) is still accepted. When the key
+is present, `validate_permission_context()` checks it against the bounds the
+session applies in `permission_context()` and refuses anything else with the fixed
+reason `invalid-permission-context`. The accepted shapes are:
+
+- `{"state":"insufficient-context"}`, the session's fail-closed state;
+- the redaction form of that state: `state` `insufficient-context`, a known
+  `kind`, `title` exactly `[REDACTED]` and, optionally, `rawInput` exactly
+  `[REDACTED]`. The session emits it when a secret-like value fails the whole
+  context closed;
+- `{"state":"available","kind":K,"title":T}` with optional `locations` and
+  `rawInput`, and no other key.
+
+The bounds: `kind` is one of the session's tool kinds; every string is at most
+256 characters and 256 UTF-8 bytes, nonempty, printable ASCII, with no control,
+format, surrogate or line-separator character; `locations` has at most 8
+entries, each `{path}` or `{path,line}` with `line` an integer from 0 to
+2147483647; `rawInput` is a string, a list of 1 to 8 items or a map of 1 to 8
+entries, nested at most 3 edges deep, and a map may use only the keys `command`,
+`args`, `path`, `paths`, `query` and `description`; and the whole context is at
+most 2048 bytes as compact ASCII JSON. The session reduces every path-like string
+to its basename, so a string containing `/` or `\` is refused anywhere in a
+context. `.` and `..` are refused only in path fields (location paths and
+`rawInput` `path`/`paths`), as the session does; elsewhere, such as an argument,
+they are valid. The constants (tool kinds, raw keys, size, redaction
+marker) are copied from the session, and a test pins them to its values.
+
+The checker does not repeat the session's secret screening and does not claim a
+context is safe. `available` means the shape is in bounds, not that the action is
+harmless and not that anyone approved it.
+
+The verdict records one state per permission request, in receipt order, and never
+the text:
+
+```json
+"permissionContexts":[{"requestID":41,"permissionContext":"available"}]
+```
+
+`permissionContext` is `available`, `insufficient` (both insufficient shapes) or
+`absent` (no `context` key). The key appears only when the stream has a
+permission request, answered or not. The title, locations and raw input are not
+copied into the verdict or into a refusal.
+
+## Question reply, permission rejection and approval
+
+Three different things can appear in a stream. The verdict keeps them apart.
+
+| Receipts | What the verdict says | Counts as question/reply evidence |
+| --- | --- | --- |
+| `question-required` then `decision-sent` with `kind` `question` | `correlated-question-decision-sent`, `questionRequestIDs`, `questionDecisionSent` true | The only thing that does. Still transport-only; `autonomousQuestionReply` stays false |
+| `permission-required` then `decision-sent` with `kind` `permission` | `permission-decision-sent`, `permissionRequestIDs`, `permissionDecisionMeaning` `client-reject-once-only-not-approval`, `permissionCountedAsQuestionReply` false | No |
+| An approve kind (`allow_once`, `allow_always`) chosen | Not representable. A `decision-sent` has no option field, and one that names an option is refused as `unexpected-field` | No, and refused |
+
+The session never approves. It sends only `reject_once` and refuses every other
+option (its own tests cover that). The `decision-sent` receipt does not carry the
+chosen option id, so the checker cannot see it. It reports the client's
+contract, not an observed option, and it never infers an approval
+(`permissionApproval` stays `not-inferred`). A permission decision cannot stand in
+for a question's decision: a `kind` that does not match the pending request is
+refused as `decision-kind-mismatch`, and a permission decision never produces
+`prompt-complete-after-decision`, `questionRequestIDs` or `questionOrigin`.
+The offered options may include approve kinds, because that is what the provider
+asks; that is a request, not a decision.
 
 ## A finished prompt is not a question/reply
 
@@ -82,9 +152,10 @@ Exit 2 and one line, `{"event":"refused","reason":"..."}`, for malformed JSON,
 duplicate fields, unexpected or missing fields, a served-model value other than
 `Unknown`, duplicate lifecycle events, duplicate request ids, a stale or
 already spent decision, a kind that does not match the pending request, a
-cross-session id, a prompt completion while a request is still pending, events
+cross-session id, an invalid `context` object on a permission request, a
+prompt completion while a request is still pending, events
 after `prompt-complete` or `failed`, and streams past the helper's bounds.
-Reason codes are fixed words. Question text, option labels, tool arguments,
+Reason codes are fixed words. Question text, option labels, permission context text, tool arguments,
 assistant text, and claimed costs are not copied into the refusal.
 
 A partial stream that ends without `prompt-complete` or `failed` is classified
