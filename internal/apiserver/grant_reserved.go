@@ -32,7 +32,7 @@ func (s *Server) decideReservedGrant(ctx context.Context, _ http.ResponseWriter,
 	if req.TTL != "" {
 		parsed, err := time.ParseDuration(req.TTL)
 		if err != nil || parsed < broker.MinTTL || parsed > ttl || parsed > time.Hour {
-			return 0, nil, invalid(fieldError("ttl", "reserved TTL is10m to the requested TTL, maximum1h"))
+			return 0, nil, invalid(fieldError("ttl", "reserved TTL is 10m to the requested TTL, maximum 1h"))
 		}
 		ttl = parsed
 	}

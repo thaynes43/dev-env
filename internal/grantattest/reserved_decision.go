@@ -1190,7 +1190,7 @@ func ValidateReservedShape(in Input) error {
 		return err
 	}
 	if in.Grant.TTL < MinTTL || in.Grant.TTL > ReservedMaxTTL {
-		return refused("reserved scope TTL is10m to1h")
+		return refused("reserved scope TTL is 10m to 1h")
 	}
 	switch in.Request.Class {
 	case ClassRD2:
