@@ -56,8 +56,16 @@ with a rollback.
    - one bound storage delete;
    - recording a hardware operation.
 
-   A delegate cannot decide its own, an ancestor's or a sibling's request (S2). The
-   Claude lead becomes a delegate only after P6, which waits on the template hold.
+   **Reach = tree.** A delegate decides only grants whose requester is a strict
+   descendant of the delegate's own session. A coordinator-host delegate reaches only
+   its own child sessions. Every other request is refused: its own, an ancestor's, a
+   sibling's, or an unrelated session's. The policy's `spec.delegated` caps the types
+   and scope. Top-level sessions, such as the GPU session `haynes-ops-1029-223503`,
+   use mode (a): Tom messages that agent, and it attests. Fleet-wide delegate reach is
+   not in this activation; it is optional future work.
+
+   The Claude lead becomes a delegate only after P6, which waits on the template
+   hold.
    **Trust assumption:** the trusted roots below can launch the lead and exec into
    its pod, so they can act as the lead. Compromising a trusted root therefore
    compromises its delegates.
@@ -88,7 +96,7 @@ with a rollback.
 | # | Repo | Change | Status | Rollback |
 |---|---|---|---|---|
 | S1 | dev-env | Attested maintenance (ADR-013), flag `--enable-attested-maintenance` | **merged** as `2984528d` (#781); default off | flag false |
-| S2 | dev-env | Delegate decisions (6.3): `--grant-delegates`; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `delegate/<ns>/<sa>`; self, ancestor, sibling and no-ref decisions refused; covers maintenance extensions | new; default off | empty the list |
+| S2 | dev-env | Delegate decisions (6.3): `--grant-delegates`; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `delegate/<ns>/<sa>`; reach = tree, so only strict descendants of the delegate's session; no-ref decisions refused; covers maintenance extensions | new; default off | empty the list |
 | S3 | dev-env | `agent-run grant decide` and an MCP tool; `secrets`, `targets` and `allNamespaces` on requests; a "no policy covers this" notice | new, small | revert |
 | S4 | dev-env | Named coordinator identity (6.4): templates accept a `dev-env-coordinator-<name>` SA; the pod stays a session caller; launched only by human or client callers or a depth-0 workbench session; one Running session per SA | **in review at #787**, fix round in progress | revert |
 | S5 | dev-env | Named Secrets (5.1): `KubeGrant.secrets` in `ScopeDigest`; role `dev-env-grant-namespace-operator`; policy `kube.secretDenyList`; the broker writes a per-grant Role holding `use` on exactly the named Secrets | **PR #785, open.** Its param-only guard must change to the fail-closed check in 5.1. | revert |
@@ -150,7 +158,8 @@ What stays closed is elevation by ordinary sessions:
 - an ordinary session cannot launch or become a delegate;
 - at most one Running session holds each coordinator SA;
 - stale grants and bindings never authorize;
-- self, ancestor and sibling decisions are refused.
+- a delegate decides only for strict descendants of its own session: never itself, an
+  ancestor, a sibling or an unrelated session.
 
 **The decision left for Tom:**
 
@@ -435,7 +444,7 @@ Both modes approve only inside a policy Tom approved, or through an S7 reserved 
 | Who records it | the requesting session (`agent-run grant attest`) | a different allowlisted identity (`agent-run grant decide`) |
 | Provenance | **agent assertion** that `user` or `coordinator:<ref>` approved; it does not authenticate the approver | the delegate is an **authenticated actor**. Tom's consent, when the delegate relays it, is an **agent assertion**. |
 | Binding | grant UID, session UID, pod UID, scope digest, TTL; one statement per grant; 30 min | grant UID, scope digest, TTL; a set-once annotation; a ref is required; 30 min |
-| Separation | none | not the requester, its pod or session, its descendant, or its sibling in the same session tree. Not a maintenance coordinator or worker. |
+| Separation | none | the requester must be a strict descendant of the delegate's session: never the delegate itself, an ancestor, a sibling or an unrelated session. Not a maintenance coordinator or worker. |
 | Policy block | `spec.attested` | `spec.delegated` |
 | Recorded as | `policy/<name>`, with "agent attestation, not verified human identity" | `delegate/<ns>/<sa>`, with the ref and "not a human decision" |
 | Types | kube, egress, credential; maintenance with S1 and S6 (no extensions) | kube, egress, maintenance including extensions, and the S7 reserved cases. Not credential, because keeper execution re-checks a `policy/` approver (`credentials.go:71`). |
@@ -502,7 +511,8 @@ What stays closed is elevation by ordinary sessions:
 - an ordinary session cannot launch or become a delegate;
 - at most one Running session holds each coordinator SA;
 - stale grants and bindings never authorize;
-- self, ancestor and sibling decisions are refused.
+- a delegate decides only for strict descendants of its own session: never itself, an
+  ancestor, a sibling or an unrelated session.
 
 - **Allowlist.** `--grant-delegates=<ns>/<sa>,...` is set on both operator and broker,
   and the two must match. Two delegate forms are accepted, both
@@ -513,11 +523,21 @@ What stays closed is elevation by ordinary sessions:
 - **Route.** `POST /v1/grants/{name}/decision` takes the grant UID, the digest, approve
   or deny, the TTL, a required ref, and the optional `reserved` and `tomRef` fields. It
   writes the set-once decision annotation, which P3 allows.
+- **Reach = tree.** The delegate decides only grants whose requester is a strict
+  descendant of the delegate's own session. The operator walks the requester's
+  recorded parent chain from the token-recorded `spec.requester.parent` and the
+  sessions' parents. A coordinator-host delegate reaches only its own child sessions,
+  which matches today's coordinator scope ("limited to its direct task children",
+  `coordinator.go:61-62`). `spec.delegated` caps the grant types and the scope.
+  - **Top-level sessions use mode (a).** A session such as `haynes-ops-1029-223503`
+    has no delegate ancestor. Tom messages that agent, and it attests.
+  - **Not in this activation:** fleet-wide delegate reach, meaning decisions on
+    unrelated sessions. It is optional future work.
 - **Refusals.** The route refuses:
   - a caller not on the allowlist;
-  - the requester itself: the same pod, or a pod controlled by its session;
-  - a descendant of the requester;
-  - a sibling of the requester within the same session tree;
+  - a requester that is not a strict descendant of the delegate. That covers the
+    delegate itself (the same pod, or a pod controlled by its session), its ancestors,
+    its siblings and unrelated sessions;
   - a maintenance coordinator or worker;
   - a grant that is not Pending, is over 30 minutes old, or is already decided;
   - a digest mismatch;
@@ -544,12 +564,16 @@ What stays closed is elevation by ordinary sessions:
     SAs.
   - `resolveCaller` (`caller.go:121-124`) and `sessionPodAccount` (`caller.go:160`)
     treat such a session-controlled pod as a session, as they do the workbench.
-  - The operator admits the `coordinator` profile from three launchers only: the human
-    caller, a client caller (the workbench SA as a client, or the v1 pod's
-    `dev/dev-env`), and a **depth-0 workbench session**. The last is a valid machine
-    route.
-  - A lead launched from a depth-1 workbench child sits at depth 2 and cannot start
-    children. Launch it from the depth-0 workbench session.
+  - **Admitted launch shapes.** S4 admits exactly two:
+    1. the human caller or a client caller (the workbench SA as a client, or the v1
+       pod's `dev/dev-env`) launches the lead at depth 0;
+    2. a depth-0 workbench session launches the lead as its child, at depth 1. This is
+       a valid machine route, with no Mac or client step.
+
+    A lead launched from a depth-1 workbench child would sit at depth 2 and could not
+    start children, so S4 refuses that shape.
+  - **One eligibility function.** S2's decision-time delegate eligibility calls the
+    same S4 function as launch admission, so the two cannot drift.
   - At most one Running session may use each coordinator SA.
   - **Trust.** Each trusted root can exec into the lead's pod and act with its token
     (6.3).
@@ -753,18 +777,24 @@ Steps:
 4. Release. Expect the stop proof, then the Pod and NetworkPolicy gone and the grant
    `Released`.
 5. **Mode (b)**, after S2:
-   - A delegate decides an identical request. Expect phase Active and
-     `delegate/<ns>/<sa>`.
-   - Expect a refusal when the delegate is the requester, a descendant or sibling of it, or uses
-     a wrong digest.
+   - A child worker of the delegate requests the identical envelope, and the delegate
+     decides it. Expect phase Active and `delegate/<ns>/<sa>`. The top-level session
+     `haynes-ops-1029-223503` itself stays on mode (a).
+   - Expect a refusal when the requester is the delegate itself, its ancestor, its
+     sibling or an unrelated session, and when the digest is wrong.
    - **Disclosure:** the Claude lead can be the delegate only after P6, which waits on
      the template hold.
-   - **T1 acceptance, the actual lead.** After approval, a depth-0 workbench session
-     launches the lead on the `coordinator` profile, with no manual Mac or client step
-     by Tom. Expect:
-     - the lead runs under its own SA;
-     - it decides a worker's grant;
-     - it is refused on a sibling's or an ancestor's grant;
+   - **T1 acceptance, the actual lead (combined path).** After approval, with no
+     manual Mac or client step by Tom:
+     1. A depth-0 workbench session launches the lead on the `coordinator` profile.
+     2. The lead's token resolves as a session caller running under its own SA, and is
+        eligible as a delegate.
+     3. The lead starts a child worker. The worker requests a grant, and the lead's
+        decision returns **202**, leaving the grant Active.
+     4. The lead's decision on a sibling's, an ancestor's or an unrelated session's
+        request is refused.
+
+     Also expect:
      - an ordinary session's attempt to launch the `coordinator` profile is refused;
      - a second Running session on the same coordinator SA is refused.
 
