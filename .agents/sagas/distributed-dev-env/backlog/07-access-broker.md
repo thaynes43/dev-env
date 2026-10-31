@@ -8,7 +8,21 @@ authority path. The audit below is a migration inventory, not blanket authorizat
 or a universal pilot gate. No permission change follows from this docs correction.
 
 **Status:** docs-only approval spike complete, Q-18's earlier premise withdrawn under D-70; no route selected (2026-10-08, [R-03](../research/R-03-claude-code-approvals.md)). Plan 02's corrected in-cluster acceptance passed; no laptop setup blocks progress (README decisions 44 and 45, Q-17). Steps 1 to 5 are built; H2 is deployed and verified. The v1 parity audit is complete ([R-04](../research/R-04-v1-capability-parity.md)); the twenty-row inventory below records historical composite migration checks. Baseline references and the rescue-mount fix are deployed (#108, haynes-ops #3584/#3583); a fresh full fixture passed presence/permission and read-only Omni/API checks. P-11/P-12 remain open for their complete service/network evidence. Finish keeper activation and acceptance (step 8/H5, Q-15 A, D-69). D-70 corrects the effective Headlamp baseline; no human approval route or blanket direct admin grant is selected. The earlier route prompt does not block parity or keeper provisioning. A possible management UI changes neither Q-16 nor this priority order. [Issue #91](https://github.com/thaynes43/dev-env/issues/91) tracks the spike. Draft branches `agent/plan07-approvals-round3` (dev-env) and `agent/plan07-catalog-round3` (haynes-ops) retain reusable pieces; #90 and haynes-ops #3550 remain closed.
-**Agent attestation (D-88, 2026-10-27):** built default-off: `GrantPolicy.spec.attested`, `POST /v1/grants/{name}/attestation`, `agent-run grant attest`, broker `--enable-attested-grants`, operator `--enable-grant-attestation`. A claim by the requesting agent, not verified human identity. Kube and egress execution still never read `approvedBy` (follow-up). **Maintenance ([ADR-013 source](https://github.com/thaynes43/dev-env/blob/2984528d78e54f3dfd77cf12755f2f389a075dff/.agents/sagas/distributed-dev-env/adrs/013-attested-maintenance-approval.md), 2026-10-31):** source only: an attested policy with an exact `spec.maintenance` scope can approve a top-level session's maintenance grant (one lease per target, no extensions), behind broker `--enable-attested-maintenance`, false in code (the other broker and operator flags it needs are already on live); the human decision route runs first and wins while the grant is Pending; no attested maintenance policy exists. Delegate approval (ADR-013 path b) is a follow-up.
+**Agent attestation (D-88, 2026-10-27):** built default-off:
+`GrantPolicy.spec.attested`, `POST /v1/grants/{name}/attestation`,
+`agent-run grant attest`, broker `--enable-attested-grants`, operator
+`--enable-grant-attestation`. This is the requesting agent's assertion, not verified
+human identity. Kube and egress execution still never read `approvedBy` (follow-up).
+**Maintenance source (2026-10-31):**
+[ADR-013](https://github.com/thaynes43/dev-env/blob/2984528d78e54f3dfd77cf12755f2f389a075dff/.agents/sagas/distributed-dev-env/adrs/013-attested-maintenance-approval.md)
+adds exact-envelope attested maintenance. Merged S6 / PR #790 narrows eligibility
+to a session with depth label exactly `0` and immediate creator SA listed in
+`--attested-maintenance-creators`; missing parent/depth and children fail closed.
+Removing the creator ends approval and requires executor termination proof before
+cleanup. No extension is self-attested. `--enable-attested-maintenance` remains
+false in code; source merge does not enable it. S2's independent delegated route
+and its remaining source correction are described below.
+
 **DESIGN-042 integration (2026-10-31, source preparation only):**
 [The activation proposal](../designs/042-homelab-operator-access.md) and OP233 /
 [integration story #333](https://work.haynesnetwork.com/work_packages/333) preserve
