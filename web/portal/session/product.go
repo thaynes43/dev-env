@@ -121,6 +121,9 @@ func sessionGet(ctx context.Context, client *http.Client, rawURL, token string) 
 	}
 	req.Header.Set("Accept", mediaJSON)
 	req.Header.Set("Authorization", "Bearer "+token)
+	// This reader accepts a task's retained outcome in its activity. An older
+	// operator ignores the header and sends none.
+	req.Header.Set(apiv1.TaskOutcomeHeader, apiv1.TaskOutcomeV1)
 	response, err := client.Do(req)
 	if err != nil {
 		return nil, sessionTransportFailure(ctx, err)
@@ -138,11 +141,11 @@ func sessionGet(ctx context.Context, client *http.Client, rawURL, token string) 
 	if err != nil || media != mediaJSON {
 		return nil, readFailure("response_contract")
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, (256<<10)+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, apiv1.PortalSessionPageMaxBytes+1))
 	if err != nil {
 		return nil, sessionTransportFailure(ctx, err)
 	}
-	if len(body) > 256<<10 {
+	if len(body) > apiv1.PortalSessionPageMaxBytes {
 		return nil, readFailure("response_contract")
 	}
 	return body, nil
@@ -519,6 +522,10 @@ func decodeSessionRow(raw json.RawMessage, now time.Time) (row apiv1.PortalSessi
 		activity, err := decodeSessionActivity(rawActivity, now)
 		if err != nil {
 			return apiv1.PortalSessionSummary{}, err
+		}
+		// A retained outcome belongs to the session that wrote it.
+		if activity.TaskOutcome != nil && activity.TaskOutcome.SessionUID != uid {
+			return apiv1.PortalSessionSummary{}, portal.ErrUnavailable
 		}
 		row.Activity = &activity
 	}

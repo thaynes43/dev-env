@@ -491,6 +491,15 @@ stats. No new credential, adapter or policy.
   a heartbeat never dates a task's end. A failure with neither time is not
   recent. The operator omits a `spec.parent` outside
   `apiv1.PortalLauncherPattern`, so one odd value cannot fail the read.
+- **Task outcome (2026-10-31, OP326).** A task's retained `status.taskOutcome`
+  (OP320) is sent in the activity view only when the portal asks with
+  `X-Dev-Env-Task-Outcome: v1`, and only bound to the row's own Session UID. The
+  detail shows it as its own Task outcome panel in every phase, including
+  after compute reclaim; a missing record is Unknown, never success. The task
+  result is relabelled Process exit, and a `Succeeded` badge reads Exited 0: an
+  exit code is not the work's outcome. Allowlisted pull request URLs are the
+  one imported link. The per-page read bound rose to 512 KiB for the worst case.
+  Details: [portal read boundary](../../../../docs/portal-read-boundary.md).
 - **How sessions run.** Interactive is `remote` or `local` (a person drives
   it); Headless is `task` (often launched by a coordinator, shown as "launched
   by"). Each session and the Usage view show it.

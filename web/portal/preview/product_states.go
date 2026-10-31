@@ -238,7 +238,67 @@ func writeAttentionStates(dir string) error {
 			return err
 		}
 	}
-	return nil
+	return writeOutcomeStates(dir)
+}
+
+// writeOutcomeStates renders finished tasks through the same strict decoder
+// and page builder as the live read. A reclaimed task is Suspended with its
+// pod gone; its outcome comes from Session status alone. The links name a
+// synthetic repository.
+func writeOutcomeStates(dir string) error {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	at := now.Add(-40 * time.Minute)
+	unknown := protocol.TokenObservation{State: protocol.UsageUnknown}
+	record := func(uid, summary string) *protocol.TaskOutcome {
+		return &protocol.TaskOutcome{SessionUID: uid, PodUID: "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b", Record: protocol.TaskOutcomeRecord{
+			PRURLs:   []string{"https://github.com/thaynes43/fixture-repo/pull/101", "https://github.com/thaynes43/fixture-ops/pull/202"},
+			HeadSHAs: []string{"0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c", "a1b2c3d4e5f60718293a4b5c6d7e8f9001122334"}, Summary: summary}}
+	}
+	task := func(name, phase, state, result string, outcome *protocol.TaskOutcome) apiv1.PortalSessionSummary {
+		a := &apiv1.PortalSessionActivity{Mode: "task", Provider: "claude", AgentState: state, TaskResult: result, TaskOutcome: outcome, RequestedModel: "claude-opus-5-5", LastActivity: &at, LaunchedBy: "synthetic-lead",
+			Usage: apiv1.PortalSessionUsage{Scope: protocol.UsageUnknown, ResultState: protocol.UsageUnknown, ServedModels: []string{}, InputTokens: unknown, OutputTokens: unknown, CacheReadInputTokens: unknown, CacheCreationInputTokens: unknown, Cost: protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown}}}
+		return apiv1.PortalSessionSummary{Name: name, UID: "uid-" + name, Repo: "fixture-repo", Phase: phase, Freshness: "stale", ObservedAt: at, Activity: a}
+	}
+	for _, f := range []struct {
+		name     string
+		sessions []apiv1.PortalSessionSummary
+	}{
+		{"recorded", []apiv1.PortalSessionSummary{task("synthetic-outcome", "Suspended", protocol.AgentExited, "Succeeded", record("uid-synthetic-outcome", "Opened PR 101 and PR 202; both wait for lead review."))}},
+		{"none", []apiv1.PortalSessionSummary{task("synthetic-no-outcome", "Suspended", protocol.AgentExited, "Succeeded", nil)}},
+		{"hostile", []apiv1.PortalSessionSummary{task("synthetic-hostile", "Archived", protocol.AgentExited, "Succeeded", record("uid-synthetic-hostile", `<script>alert("x")</script> & <img src=x onerror=alert(1)> stays text`))}},
+		{"list", []apiv1.PortalSessionSummary{
+			task("synthetic-outcome", "Suspended", protocol.AgentExited, "Succeeded", record("uid-synthetic-outcome", "Opened PR 101 and PR 202; both wait for lead review.")),
+			task("synthetic-no-outcome", "Suspended", protocol.AgentExited, "Succeeded", nil),
+			task("synthetic-running", "Running", protocol.AgentBusy, protocol.UsageUnknown, nil),
+		}},
+	} {
+		page := apiv1.PortalSessionPage{Limit: 50, Complete: true, Freshness: "stale", ObservedAt: now, Sessions: f.sessions}
+		source, err := json.Marshal(map[string]any{"version": 1, "now": now, "body": page})
+		if err != nil {
+			return err
+		}
+		body, err := session.RenderSessionsFixture(bytes.NewReader(source))
+		if err != nil {
+			return err
+		}
+		if err = os.WriteFile(filepath.Join(dir, "outcome-"+f.name+".html"), body, 0600); err != nil {
+			return err
+		}
+	}
+	// The strict decoder refuses a link outside the allowlist, so this page is
+	// built directly: the renderer shows such a value as text, not a link.
+	var fields []portal.ProductField
+	for _, href := range []string{"https://github.com/thaynes43/fixture-repo/pull/101", "javascript:alert(1)", "https://github.com.example/thaynes43/fixture-repo/pull/1", "https://github.com/someone-else/fixture-repo/pull/1"} {
+		fields = append(fields, portal.ProductField{Label: "Pull request", Value: href, Href: href})
+	}
+	page := portal.ProductPage{Title: "Sessions", Connected: true, Complete: true, Preview: true, ObservedAt: now.Format(time.RFC3339), ReadCompletedAt: now.Format(time.RFC3339),
+		Groups: []portal.ProductGroup{{Title: "Stopped", Rows: []portal.ProductRow{{ID: "s1", Title: "synthetic-hostile-links", MonoTitle: true, Kicker: "fixture-repo", Status: portal.ProductStatus{Text: "Exited 0", Tone: "muted"},
+			Sections: []portal.ProductSection{{Title: "Task outcome", Fields: fields, Note: "Only the first value is an allowlisted pull request link. The others show as text."}}}}}}}
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "outcome-hostile-links.html"), body, 0600)
 }
 
 // allowanceListRows gives the allowance Sessions previews a list long enough

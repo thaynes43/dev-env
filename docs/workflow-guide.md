@@ -722,7 +722,11 @@ operator validates it again and stores the first record immutably at
 `status.taskOutcome`. Repeated heartbeats, later edits and other pods cannot
 replace it. `agent-run show` prints its summary, PR URLs and heads in every
 phase; JSON output includes `taskOutcome`. No file means no outcome row.
-The portal's separately versioned strict reader is unchanged in this slice.
+The portal's Sessions detail shows the same record in a **Task outcome** panel
+in every phase, including after the pod is reclaimed, with its pull requests as
+links and Process exit kept as a separate row. It asks for the field with
+`X-Dev-Env-Task-Outcome: v1`, so an older portal is unaffected; a missing record
+reads "No outcome recorded" (see [the portal read boundary](portal-read-boundary.md)).
 
 Rollout: this change adds a CRD field and runs `make generate`. Copy the generated
 AgentSession CRD to haynes-ops **before** pinning the new operator; install the

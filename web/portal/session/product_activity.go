@@ -17,19 +17,20 @@ import (
 )
 
 // decodeSessionActivity accepts exactly the operator's view=activity object.
-// lastActivity, provider, launchedBy, taskResult, remoteControl and
-// conversationUsage are optional (an operator before 2026-10-27 sends none of the
-// last four, and one without --portal-conversation-usage sends no conversationUsage); a null, an unknown key or a
+// lastActivity, provider, launchedBy, taskResult, remoteControl,
+// conversationUsage and taskOutcome are optional (an operator before 2026-10-27 sends none of the
+// middle four, one without --portal-conversation-usage sends no conversationUsage, and one before
+// 2026-10-31 sends no taskOutcome); a null, an unknown key or a
 // word outside its fixed set makes the whole read unavailable. Usage covers
 // task sessions only, so any other mode must carry an Unknown usage scope,
-// which in turn carries no reported value, and no task result.
+// which in turn carries no reported value, no task result and no task outcome.
 func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSessionActivity, error) {
 	var a apiv1.PortalSessionActivity
 	obj, err := jsonObject(raw)
 	if err != nil {
 		return a, err
 	}
-	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl", "conversationUsage") {
+	if !exactKeys(obj, []string{"mode", "agentState", "requestedModel", "usage"}, "lastActivity", "provider", "launchedBy", "taskResult", "remoteControl", "conversationUsage", "taskOutcome") {
 		return a, portal.ErrUnavailable
 	}
 	a.Provider = protocol.UsageUnknown
@@ -47,6 +48,13 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 		if a.TaskResult, ok = jsonString(raw); !ok || !oneOf(a.TaskResult, "Succeeded", "Failed", "TimedOut", protocol.UsageUnknown) {
 			return a, portal.ErrUnavailable
 		}
+	}
+	if raw, ok := obj["taskOutcome"]; ok {
+		o, err := decodeTaskOutcome(raw)
+		if err != nil {
+			return a, err
+		}
+		a.TaskOutcome = o
 	}
 	if raw, ok := obj["remoteControl"]; ok {
 		rc, err := decodeRemoteControl(raw)
@@ -84,7 +92,7 @@ func decodeSessionActivity(raw json.RawMessage, now time.Time) (apiv1.PortalSess
 	if err != nil {
 		return a, err
 	}
-	if mode != "task" && (usage.Scope != protocol.UsageUnknown || a.TaskResult != "") {
+	if mode != "task" && (usage.Scope != protocol.UsageUnknown || a.TaskResult != "" || a.TaskOutcome != nil) {
 		return a, portal.ErrUnavailable
 	}
 	a.Mode, a.AgentState, a.RequestedModel, a.Usage = mode, state, model, usage
@@ -176,6 +184,53 @@ func decodeRemoteControl(raw json.RawMessage) (*apiv1.PortalRemoteControl, error
 		}
 	}
 	return rc, nil
+}
+
+// decodeTaskOutcome accepts exactly {sessionUID, podUID, record{summary,
+// prURLs?, headSHAs?}} that passes the operator's own check: pull requests on
+// github.com/thaynes43 only, 40-hex heads, one printable summary line. Like the
+// other optional keys, anything else makes the whole read unavailable rather
+// than being shown.
+func decodeTaskOutcome(raw json.RawMessage) (*protocol.TaskOutcome, error) {
+	obj, err := jsonObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !exactKeys(obj, []string{"sessionUID", "podUID", "record"}) {
+		return nil, portal.ErrUnavailable
+	}
+	sessionUID, ok1 := jsonString(obj["sessionUID"])
+	podUID, ok2 := jsonString(obj["podUID"])
+	record, err := jsonObject(obj["record"])
+	if err != nil || !ok1 || !ok2 || !exactKeys(record, []string{"summary"}, "prURLs", "headSHAs") {
+		return nil, portal.ErrUnavailable
+	}
+	summary, ok := jsonString(record["summary"])
+	if !ok {
+		return nil, portal.ErrUnavailable
+	}
+	o := &protocol.TaskOutcome{SessionUID: sessionUID, PodUID: podUID, Record: protocol.TaskOutcomeRecord{Summary: summary}}
+	for key, list := range map[string]*[]string{"prURLs": &o.Record.PRURLs, "headSHAs": &o.Record.HeadSHAs} {
+		raw, present := record[key]
+		if !present {
+			continue
+		}
+		items, ok := jsonArray(raw)
+		if !ok || len(items) > 3 {
+			return nil, portal.ErrUnavailable
+		}
+		for _, item := range items {
+			text, ok := jsonString(item)
+			if !ok {
+				return nil, portal.ErrUnavailable
+			}
+			*list = append(*list, text)
+		}
+	}
+	if o.Validate() != nil {
+		return nil, portal.ErrUnavailable
+	}
+	return o, nil
 }
 
 // decodeSessionUsage keeps Unknown distinct from an explicit zero. An Unknown
@@ -858,8 +913,8 @@ func activityOrUnknown(a *apiv1.PortalSessionActivity) *apiv1.PortalSessionActiv
 }
 
 // sessionRow renders one summary as a list item and its detail: its project,
-// how it runs (interactive or headless), who launched it and a task's own
-// result. Requested and served models stay separate, each counter keeps
+// how it runs (interactive or headless), who launched it, and a task's process
+// exit and retained outcome, kept apart. Requested and served models stay separate, each counter keeps
 // Unknown apart from zero, and nothing is summed. A row without activity
 // renders every activity field Unknown.
 func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow {
@@ -918,14 +973,20 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 		{Label: "Phase", Value: shown(row.Phase)},
 		{Label: "Freshness", Value: shown(row.Freshness)},
 	}
+	// Process exit is how the task's process ended. It is never the task's
+	// outcome, which has its own panel.
 	if a.TaskResult != "" {
-		activity = append([]portal.ProductField{{Label: "Task result", Value: shown(a.TaskResult)}}, activity...)
+		activity = append([]portal.ProductField{{Label: "Process exit", Value: processExitText(a.TaskResult)}}, activity...)
 	}
 	out.Sections = []portal.ProductSection{{Title: "Activity", Fields: activity}}
 	// Only a task session's first invocation is measured. Others get no
 	// Usage panel rather than a panel of Unknowns.
 	if u.Scope == protocol.UsageInitial {
 		out.Sections = append([]portal.ProductSection{usage}, out.Sections...)
+	}
+	// A task's retained outcome leads its detail, in every phase.
+	if section, ok := taskOutcomeSection(a); ok {
+		out.Sections = append([]portal.ProductSection{section}, out.Sections...)
 	}
 	// An interactive session's measured conversation usage is its own panel,
 	// apart from a task's initial invocation, which it never shares a session with.
@@ -959,12 +1020,13 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 	return out
 }
 
-// sessionStatus shows a task's own result first, then a stopped or failed
-// phase, then agentd's state word, then the phase.
+// sessionStatus shows how a task's process ended first, then a stopped or
+// failed phase, then agentd's state word, then the phase. A clean exit reads
+// Exited 0, not success: only the task's outcome says what it did.
 func sessionStatus(phase string, a *apiv1.PortalSessionActivity) portal.ProductStatus {
 	switch a.TaskResult {
 	case "Succeeded":
-		return portal.ProductStatus{Text: "Succeeded", Tone: "muted"}
+		return portal.ProductStatus{Text: "Exited 0", Tone: "muted"}
 	case "Failed":
 		return portal.ProductStatus{Text: "Task failed", Tone: "bad"}
 	case "TimedOut":

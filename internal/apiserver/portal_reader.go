@@ -86,6 +86,9 @@ func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, 
 	if cursor != nil && list.ResourceVersion != cursor.RV {
 		return 0, nil, badRequest("the portal session snapshot changed")
 	}
+	// A retained task outcome goes only to a portal that asks for it: an older
+	// portal refuses the unknown activity key and would lose the whole read.
+	outcome := r.Header.Get(apiv1.TaskOutcomeHeader) == apiv1.TaskOutcomeV1
 	now := s.now()
 	page := apiv1.PortalSessionPage{Sessions: []apiv1.PortalSessionSummary{}, Limit: limit, ObservedAt: now.UTC(), Freshness: "observed"}
 	for i := range list.Items {
@@ -100,6 +103,9 @@ func (s *Server) listPortalSessions(ctx context.Context, r *http.Request) (int, 
 			summary.Activity = portalActivity(item, now)
 			if s.PortalConversationUsage {
 				summary.Activity.ConversationUsage = portalConversationUsage(item, now)
+			}
+			if outcome {
+				summary.Activity.TaskOutcome = sessionTaskOutcome(item)
 			}
 		}
 		if freshnessRank(summary.Freshness) > freshnessRank(page.Freshness) {

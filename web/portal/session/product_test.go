@@ -19,6 +19,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
@@ -829,7 +830,7 @@ func TestSessionReadFailureReasons(t *testing.T) {
 		{name: "refused", reason: "operator_refused", status: 403, body: "SECRET-ERROR"},
 		{name: "redirect", reason: "operator_refused", status: 302, body: "SECRET-REDIRECT"},
 		{name: "media", reason: "response_contract", status: 200, media: "text/plain", body: good},
-		{name: "oversize", reason: "response_contract", status: 200, body: strings.Repeat("x", 256<<10+1)},
+		{name: "oversize", reason: "response_contract", status: 200, body: strings.Repeat("x", apiv1.PortalSessionPageMaxBytes+1)},
 		{name: "envelope", reason: "response_contract", status: 200, body: `{"secret":"SECRET-ENVELOPE"}`},
 		{name: "row", reason: "response_contract", status: 200, body: activityPage(badRow)},
 		{name: "clock ahead", reason: "clock_ahead", status: 200, body: strings.ReplaceAll(good, "2026-10-25T11:59:00Z", now.Add(3*time.Second).Format(time.RFC3339Nano))},

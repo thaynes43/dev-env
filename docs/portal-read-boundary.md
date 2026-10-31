@@ -75,9 +75,42 @@ a null, a word outside its set, an `Unknown` scope that carries a reported value
 or a mode other than `task` whose usage scope is not `Unknown`. The Usage view
 below states the same coverage.
 
+**Retained task outcome (OP326, 2026-10-31).** The portal sends
+`X-Dev-Env-Task-Outcome: v1` on every session page read. Only then does the
+operator add `activity.taskOutcome`, the task's own record at its first exit
+(OP320): `sessionUID`, `podUID` and `record` with `summary`, up to three
+`prURLs` and up to three `headSHAs`. The operator sends it only for a task whose
+retained record names that same Session UID and passes the record's own check.
+A portal without the header gets no key, so an older strict portal keeps
+reading. An older operator ignores the header and sends no key; the newer portal
+then shows "No outcome recorded". The portal accepts exactly those keys and the
+same check: a `github.com/thaynes43/<repo>/pull/<n>` URL, a 40-hex head, one
+printable summary line of at most 200 characters, and a `sessionUID` equal to the
+row's `uid`. An outcome on a non-task session, a null, an unknown key or any
+invalid value fails the whole read, like the other activity keys. The record
+comes from Session status, so it reads the same after the task's pod is
+reclaimed (phase Suspended) or its HOME expires (Archived). No HOME, transcript
+or live pod is read. A worst-case page of 50 task sessions with outcomes is
+287,101 bytes (194,401 without), so the portal's per-page read bound is
+`apiv1.PortalSessionPageMaxBytes`, 512 KiB (it was 256 KiB).
+
+The session detail shows a **Task outcome** panel for every task: the summary,
+each pull request as `owner/repo#n`, each head as 7 characters, and the
+original session and pod UIDs, shortened. A pull request URL is the one imported
+URL that becomes a link: the renderer links a field only when it matches that
+exact pattern (`protocol.TaskOutcomePRURLPattern`), opens it in a new tab with
+`noopener noreferrer`, and shows any other value as text. Without a record the
+panel reads **Unknown: No outcome recorded**, never success. `taskResult` is
+labelled **Process exit** in the Activity panel, and its list badge for
+`Succeeded` reads **Exited 0**: it says how the process ended, not whether the
+work is done. The record is the task's claim; the portal does not verify it.
+Claim and waiting evidence from OP322 are not joined here yet.
+
 Task outcome, worker liveness, review, authority and release are displayed
 separately. Canonical links are constructed from validated numeric work-package
-IDs at one fixed HTTPS origin; no imported URL becomes a link.
+IDs at one fixed HTTPS origin; no imported URL becomes a link. (The Sessions
+view's retained task outcome above is the one exception: an allowlisted pull
+request URL.)
 
 Missing or future timestamps, or verification older than the source update,
 mean Unknown. Evidence beyond the explicitly configured window is Stale. Only
