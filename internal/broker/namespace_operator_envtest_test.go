@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	clocktesting "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -134,7 +135,8 @@ func strayBinding(t *testing.T, g *v1alpha1.AccessGrant, ns string) {
 }
 
 // secretJob is a one-shot Job in ns whose container takes each named Secret
-// one way: an env key, envFrom, a volume or a projected volume, in turn.
+// one way: an env key, envFrom, a volume or a projected volume, in turn. It
+// sets a 30-minute activeDeadlineSeconds, as the policy requires.
 func secretJob(ns string, secrets ...string) *batchv1.Job {
 	c := corev1.Container{Name: "op", Image: "synthetic"}
 	var vols []corev1.Volume
@@ -156,7 +158,7 @@ func secretJob(ns string, secrets ...string) *batchv1.Job {
 	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name("s5-job")},
-		Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		Spec: batchv1.JobSpec{ActiveDeadlineSeconds: ptr.To[int64](1800), Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever, Containers: []corev1.Container{c}, Volumes: vols,
 		}}},
 	}
@@ -323,6 +325,32 @@ func TestEnvtestGrantSecretNames(t *testing.T) {
 		_, wl := grantIdentity(t, v1alpha1.KubeGrant{Role: v1alpha1.RoleWorkloads, Namespaces: []string{in}})
 		wantRefused(t, wl, job(in, named), named)
 		wantAdmitted(t, wl, job(in))
+	})
+
+	// Release and expiry do not stop a running pod, so a grant identity's Job
+	// or Pod must carry a deadline of at most an hour.
+	t.Run("a Job or Pod must set activeDeadlineSeconds, at most 3600", func(t *testing.T) {
+		deadline := func(d *int64, secrets ...string) func() client.Object {
+			return func() client.Object {
+				j := secretJob(in, secrets...)
+				j.Spec.ActiveDeadlineSeconds = d
+				return j
+			}
+		}
+		wantRefused(t, opClient, deadline(nil, named), "activeDeadlineSeconds")
+		wantRefused(t, opClient, deadline(nil), "activeDeadlineSeconds")
+		wantRefused(t, opClient, deadline(ptr.To[int64](3601), named), "activeDeadlineSeconds")
+		wantAdmitted(t, opClient, deadline(ptr.To[int64](3600), named))
+		_, wl := grantIdentity(t, v1alpha1.KubeGrant{Role: v1alpha1.RoleWorkloads, Namespaces: []string{in}})
+		pod := func(d *int64) func() client.Object {
+			return func() client.Object {
+				return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: in, Name: name("s5-pod")}, Spec: corev1.PodSpec{
+					ActiveDeadlineSeconds: d, RestartPolicy: corev1.RestartPolicyNever, Containers: []corev1.Container{{Name: "op", Image: "synthetic"}},
+				}}
+			}
+		}
+		wantRefused(t, wl, pod(nil), "activeDeadlineSeconds")
+		wantAdmitted(t, wl, pod(ptr.To[int64](600)))
 	})
 
 	t.Run("sixteen named Secrets in one Job fit the cost budget", func(t *testing.T) {

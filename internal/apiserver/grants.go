@@ -106,14 +106,15 @@ func (s *Server) createGrant(ctx context.Context, w http.ResponseWriter, r *http
 			return 0, nil, fromGrantKubeError(err, "create grant")
 		}
 		role, cred := "", ""
+		var secrets []string // names, never values
 		if g.Spec.Kube != nil {
-			role = g.Spec.Kube.Role
+			role, secrets = g.Spec.Kube.Role, g.Spec.Kube.Secrets
 		}
 		if g.Spec.Credential != nil {
 			cred = string(g.Spec.Credential.Name)
 		}
 		s.Log.Info("grant requested", "grant", g.Name, "caller", c.String(), "type", g.Spec.Type,
-			"role", role, "credential", cred, "ttl", g.Spec.TTL.Duration.String())
+			"role", role, "secrets", secrets, "credential", cred, "ttl", g.Spec.TTL.Duration.String())
 		w.Header().Set("Location", apiv1.GrantPath(g.Name))
 		return http.StatusCreated, s.grantView(g), nil
 	}
@@ -129,7 +130,7 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	var fields []apiv1.FieldError
 	add := func(field, format string, args ...any) { fields = append(fields, fieldError(field, format, args...)) }
 	notFor := func(kind string, set map[string]bool) {
-		for _, f := range []string{"role", "namespaces", "fqdns", "cidrs", "endpoints", "ports", "credential", "maintenance"} {
+		for _, f := range []string{"role", "namespaces", "secrets", "fqdns", "cidrs", "endpoints", "ports", "credential", "maintenance"} {
 			if set[f] {
 				add(f, "not for type %s", kind)
 			}
@@ -138,6 +139,7 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 	set := map[string]bool{
 		"role":        req.Role != "",
 		"namespaces":  len(req.Namespaces) > 0,
+		"secrets":     len(req.Secrets) > 0,
 		"fqdns":       len(req.FQDNs) > 0,
 		"cidrs":       len(req.CIDRs) > 0,
 		"endpoints":   len(req.Endpoints) > 0,
@@ -185,8 +187,10 @@ func (s *Server) newGrant(req apiv1.CreateGrantRequest, c *caller) (*v1alpha1.Ac
 		if req.Role == "" {
 			add("role", "required for type kube: a role from the grant catalog, such as %s", v1alpha1.RoleWorkloads)
 		}
-		spec.Kube = &v1alpha1.KubeGrant{Role: req.Role, Namespaces: req.Namespaces}
-		notFor(req.Type, others("role", "namespaces"))
+		secrets, bad := grantSecrets(req.Role, req.Secrets)
+		fields = append(fields, bad...)
+		spec.Kube = &v1alpha1.KubeGrant{Role: req.Role, Namespaces: req.Namespaces, Secrets: secrets}
+		notFor(req.Type, others("role", "namespaces", "secrets"))
 	case v1alpha1.GrantBreakglass:
 		if req.Role != "" && req.Role != v1alpha1.RoleBreakglass {
 			add("role", "break-glass is always %s (D-27); leave role empty", v1alpha1.RoleBreakglass)
@@ -328,6 +332,7 @@ type grantScope struct {
 	Type       string   `json:"type"`
 	Role       string   `json:"role,omitempty"`
 	Namespaces []string `json:"namespaces,omitempty"`
+	Secrets    []string `json:"secrets,omitempty"`
 	FQDNs      []string `json:"fqdns,omitempty"`
 	CIDRs      []string `json:"cidrs,omitempty"`
 	Endpoints  []string `json:"endpoints,omitempty"`
@@ -342,7 +347,7 @@ func scopeKey(spec *v1alpha1.AccessGrantSpec) string {
 	}
 	k := grantScope{Type: string(spec.Type)}
 	if kg := spec.Kube; kg != nil {
-		k.Role, k.Namespaces = kg.Role, sortedSet(kg.Namespaces)
+		k.Role, k.Namespaces, k.Secrets = kg.Role, sortedSet(kg.Namespaces), sortedSet(kg.Secrets)
 	}
 	if e := spec.Egress; e != nil {
 		k.FQDNs, k.CIDRs = sortedSet(e.FQDNs), sortedSet(e.CIDRs)
@@ -578,7 +583,7 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 		}
 	}
 	if kg := g.Spec.Kube; kg != nil {
-		v.Role, v.Namespaces = kg.Role, kg.Namespaces
+		v.Role, v.Namespaces, v.Secrets = kg.Role, kg.Namespaces, kg.Secrets
 	}
 	if e := g.Spec.Egress; e != nil {
 		v.FQDNs, v.CIDRs = e.FQDNs, e.CIDRs

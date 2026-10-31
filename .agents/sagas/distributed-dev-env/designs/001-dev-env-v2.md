@@ -3633,6 +3633,22 @@ the coordinator's review of PR #785).* A kube grant may now name Secrets.
   An earlier draft took every AccessGrant as a param. That fails open: the API server
   refuses only when one param's evaluation fails, and a paramRef cannot select the
   requester's own grant.
+- **The API.** `POST /v1/grants` takes `secrets` only for type kube with this role, and
+  answers 422 otherwise. It refuses a duplicate, more than 16 names, or a name that is
+  not a Secret name. It stores the names sorted. The grant view (show and list) returns
+  exactly the names the scope digest covers, so an approver sees what it binds. A
+  request that differs only in its names never merges into another grant. A decision
+  bound to another list's digest gets 409.
+- **What release or expiry stops.** Release or expiry deletes the grant's RoleBindings
+  and its ServiceAccount, so a new API call fails at once. Three things outlive it:
+  - An exec stream already open was authorized at connect, and may run until it
+    closes.
+  - A Job or Pod the grant created keeps running unless it is bounded. So
+    `dev-env-grant-secret-names` requires every grant identity's Job and Pod to set
+    `activeDeadlineSeconds`, at most 3600, on create, and an update may not lift or
+    raise it. The policy cannot see the grant's TTL, so the cap is a fixed hour,
+    DESIGN-042's longest TTL for this class. It also bounds app-operator (C1) Jobs.
+  - A Secret value already printed or copied cannot be recalled.
 - **What "added" means.** A reference is added when its Secret becomes newly visible
   to the containers (env, envFrom, a secret or projected volume), or is newly referenced
   at all. The second case covers a source only the kubelet uses, such as
@@ -3644,7 +3660,7 @@ the coordinator's review of PR #785).* A kube grant may now name Secrets.
   The broker's envtest suite proves them on the 1.35 API server, with identities that
   the broker's own `ensure` and `revoke` make and end.
 - **Inert.** No GrantPolicy names the role, and the live CRD's role enum refuses it
-  until the CRD copy (R1). The haynes-ops pieces are P4 and P5:
+  until the CRD copy (R1), so a request for it fails at create. The haynes-ops pieces are P4 and P5:
   - P4: the ClusterRole; the broker's `bind` on it; create, get and delete on Roles;
     `use` on secrets; and the broker-guard entries for `<grant>-secret-use`.
   - P5: the policy, and an identity-guard rule 4 clause that leaves a grant identity's
