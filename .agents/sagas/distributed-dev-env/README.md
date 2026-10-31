@@ -3,7 +3,7 @@
 **2026-10-31 source preparation, Epic #112 / OP233:**
 [DESIGN-042](designs/042-homelab-operator-access.md) proposes one exact activation
 packet for Tom's review. It retains requester attestation and authenticated
-message decisions. S4 is merged; S2 PR791/S6 PR790 replace stale drafts786/789;
+message decisions. S4 and S6 PR790 are merged; draft S2 PR791 replaces stale draft786;
 S3 PR792 stays draft pending S5 wire integration. Existing top-level sessions need
 the explicit policy-reach follow-up; current tree-only source is insufficient.
 S2's unauthorized decision-slot lockout must be fixed and tested. S7 reserved

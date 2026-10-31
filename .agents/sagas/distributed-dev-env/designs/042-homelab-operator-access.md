@@ -138,7 +138,7 @@ requirements context. This proposal does not replace them or create another queu
 
 ## 2. Exact source and evidence inventory
 
-Snapshot: 2026-10-31 integration pickup. Reverify moving heads before delivery;
+Snapshot: 2026-10-31; source-head refresh at 17:22Z. Reverify moving heads before delivery;
 never carry an approval from one SHA to another. The private handoff retains the
 latest read-back. A passed local test is not hosted integration or deployment.
 
@@ -146,12 +146,16 @@ latest read-back. A passed local test is not hosted integration or deployment.
 |---|---|---|
 | S1 attested maintenance | PR781 merged `2984528d78e54f3dfd77cf12755f2f389a075dff` | Default-off source; no A1 utility acceptance. |
 | S4 named coordinator | PR787 reviewed `a62bf62e32fe466453de6c41a5ca23ec3970cdab`, merged `b82e3b2954d08a22abc6ed9d61039a40f3cbd1e2` | Independent review approved; required CI green. P6 still held; merge provisions no identity. |
-| S2 / owner 163602 | PR791 `83103c69f41a389d26d2d2d8df1abecd7f1b08c6`, branch `agent/dev-env-1031-163602`; replaces released draft786 `0678aee` | Full local API PASS 68.267s; real TokenRequest/TokenReview envtest PASS 7.419s, with synthetic Pod materialization. Broker 25.860s, operator 0.097s, schema 8.157s passed. Independent Claude review **REQUEST CHANGES** for decision-slot lockout; exact-head final CI/review and correction required. Tree-only source. |
-| S6 / owner 163602 | PR790 `aa55b7a63843d17fb9eb50dacfb20a01d9b84881`, branch `agent/dev-env-1031-163602-s6`; replaces draft789 `40ae62e0ef2d8826e7da536fb853ccdc76ad84a4` | Independent Claude review APPROVE at this head; broker/operator and creator-removal mutation passed. Hosted Test pending at pickup. No activation. |
+| S2 / owner 163602 | Draft PR791 current `78e6b3feccd95515a0405b7415d19b3c56743b8f` (includes S6 merge `1195633`); independently reviewed earlier `83103c69f41a389d26d2d2d8df1abecd7f1b08c6`, branch `agent/dev-env-1031-163602`; replaces released draft786 `0678aee` | Full local API PASS 68.267s; real TokenRequest/TokenReview envtest PASS 7.419s, with synthetic Pod materialization. Broker 25.860s, operator 0.097s, schema 8.157s passed. Independent Claude review of `83103c6` **REQUEST CHANGES** for decision-slot lockout; current `78e6b3f` still documents it rather than correcting it. Combined local API 68.239s / broker 26.280s / operator 0.099s passed per owner receipt. Exact-head final CI/review and source correction required. Tree-only source. |
+| S6 / owner 163602 | PR790 reviewed `aa55b7a63843d17fb9eb50dacfb20a01d9b84881`, merged `119563303ea42b33963b19953c5b264a6b92aac9` at 17:14:39Z; branch `agent/dev-env-1031-163602-s6`; replaces draft789 `40ae62e0ef2d8826e7da536fb853ccdc76ad84a4` | Independent Claude review APPROVE at this head; broker/operator and creator-removal mutation passed. Hosted required CI including Test passed; merged source only. No activation. |
 | S3 / Grok primary, Codex 165730 support | Draft PR792 `3e1f1d39de6442460e20a1b38f0387449d437079`; supplied base `68c398b9c12cc9b93df658d72b68aedf1f067180`; Grok source `49dc659` | Local package/vet/static CLI build and six meaningful mutants PASS. Hosted merge-result Build/Lint fail because moving S2 lacks S5 `CreateGrantRequest.Secrets`/`Grant.Secrets`. Keep draft; integrate after S2/S5, rerun hosted CI and exact-head review. |
 | S5 / separate Grok writer | PR785 `fe3b62fcbcf5d8f7ae8f288d9e3fe52f09a166cd`; local-only correction ACP `ef4f0d17-c002-42e5-9d12-7dc52e6b9e31`, workbench workspace | Existing source green, but not integrated with S2. Local patch corrects same-object digest nonmutation test and discloses any-SA Job exposure. Patch SHA256 `992378f1cfa009828cacb785e96a545ad2bae0880f3bef31179d49cd2fa372d1`; no integrated/tested/pushed-head claim. |
 | S2 reach follow-up (6.6) | **Absent** from PR791 and merged S4; request to existing S2 owner after disjoint follow-up custody | Source design only. No default/flag/schema exists for policy reach today. |
 | S7 reserved classes | **Absent** | No reserved flag, `tomRef`, `targets` or `allNamespaces` server implementation is claimed. S3 must extend its contract after S7; PR792 is not S7 proof. |
+
+The current S2 head's author/native source review reports no blockers, but the
+independent Claude slot-lockout finding remains unresolved by that documentation
+change. Do not treat either review as permission to bypass the acceptance defect.
 
 Source links: [S2](https://github.com/thaynes43/dev-env/pull/791),
 [S6](https://github.com/thaynes43/dev-env/pull/790),
@@ -297,7 +301,9 @@ The operator needs policy-namespace configuration and get/list GrantPolicy RBAC 
 haynes-ops, held until the approved packet. The broker still independently rechecks
 coverage and live identities before apply, on each retry and while Active. Policy
 removal/narrowing, allowlist removal, actor replacement and loss of reach must end
-a lease; transient read failures must not be reported as successful checks. The
+a lease. Current S2 normally rechecks Active delegated leases every minute;
+cleanup/stop has its own latency, and API failure is not an immediate-revocation
+guarantee. Transient read failures must not be reported as successful checks. The
 independent review also requests assessment of Forbidden reads during Active and
 coordinator-host grant read scope. No fix is claimed until a tested reviewed SHA.
 
@@ -575,7 +581,7 @@ for these internal caller tests.
 
 ### A4: decision slot, revocation and dependency regressions
 
-Before annotation, uncovered approve **and deny**, policy-read Forbidden, busy or
+Before annotation, uncovered approve **and deny**, policy-read Forbidden, an
 invalid maintenance target, and other unauthorized decisions must leave no record.
 Then prove an otherwise authorized decision can succeed without release/re-request
 or timeout. Existing authorized conservative target-reservation behavior needs its

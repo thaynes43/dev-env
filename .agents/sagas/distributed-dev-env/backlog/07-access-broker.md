@@ -13,7 +13,7 @@ or a universal pilot gate. No permission change follows from this docs correctio
 [The activation proposal](../designs/042-homelab-operator-access.md) and OP233 /
 [integration story333](https://work.haynesnetwork.com/work_packages/333) preserve
 agent-executable access as acceptance, including existing top-level sessions.
-S4 is merged; S2 PR791 and S6 PR790 replace stale drafts786/789; S3 PR792 stays draft
+S4 and S6 PR790 are merged; draft S2 PR791 replaces stale draft786; S3 PR792 stays draft
 until the S5 wire fields are integrated. Tree-only delegation does not cover
 existing top-level C2/infra/maintenance extensions/reserved work. The proposed
 explicit policy-reach subset is missing source, requested from the existing S2
