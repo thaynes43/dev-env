@@ -78,6 +78,7 @@ func TestDesignatedHostRetainsOwnChildReadWithoutPolicy(t *testing.T) {
 	for _, mode := range []string{"policy absent", "uncovered", "stopped requester"} {
 		t.Run(mode, func(t *testing.T) {
 			f, _, g := delegateFixture(t)
+			reachRunning(t, f, "requester")
 			f.srv.GrantPolicyDelegates = []string{coordinatorSA}
 			var list v1alpha1.GrantPolicyList
 			if err := f.c.List(context.Background(), &list); err != nil {
