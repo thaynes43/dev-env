@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -12,43 +11,6 @@ import (
 	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/grantattest"
 )
-
-// A designated host must be able to read the scope its client then decides.
-// This is metadata-only, using the same actor/reach seam and explicit scope
-// union; a failed ordinary policy lookup never becomes reserved authority.
-func (s *Server) designatedGrantRead(ctx context.Context, g *v1alpha1.AccessGrant, c *caller) error {
-	d, err := s.delegateOf(ctx, c)
-	if err != nil {
-		return err
-	}
-	if err := s.delegateSeparation(ctx, g, d); err != nil {
-		return err
-	}
-	actor := &broker.DelegateIdentity{Form: d.form, PodName: d.pod.Name, PodUID: string(d.pod.UID)}
-	if d.form == 1 {
-		actor.HostID = d.pod.Annotations[CoordinatorHostAnnotation]
-	}
-	if d.session != nil {
-		actor.Session = d.session.Name
-		actor.SessionUID = string(d.session.UID)
-	}
-	class := broker.ReservedClass(g)
-	if class != "" && slices.Contains(s.ReservedDecisionClasses, class) {
-		if err := broker.ValidateReservedRequestShape(g, s.ReservedDecisionClasses, s.ReservedExcludedNamespaces); err != nil {
-			return forbidden("%s", err)
-		}
-		_, err = broker.NewDelegateReachIdentity(ctx, s.Live, s.Policy.SessionNamespace, g, actor, broker.DelegateRef(d.ref), s.GrantPolicyDelegates)
-	} else {
-		_, err = broker.NewDelegateReach(ctx, s.Live, s.Policy.SessionNamespace, s.PolicyNamespace, g, actor, broker.DelegateRef(d.ref), s.GrantPolicyDelegates)
-	}
-	if err != nil {
-		if errors.Is(err, broker.ErrRefused) {
-			return forbidden("%s", err)
-		}
-		return fromKubeError(err, "verify designated grant read scope")
-	}
-	return nil
-}
 
 // This branch is selected ONLY by reserved:true, never by a failed policy
 // lookup. The actor was authenticated by the same delegateOf as ordinary S2.

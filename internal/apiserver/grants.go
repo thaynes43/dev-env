@@ -510,7 +510,7 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	}
 	if c.kind == kindCoordinator {
 		if slices.Contains(s.GrantPolicyDelegates, c.identity.serviceAccountRef()) {
-			if err := s.designatedGrantRead(ctx, &g, c); err != nil {
+			if err := s.policyDelegateGrantRead(ctx, &g, c); err != nil {
 				return 0, nil, err
 			}
 			return http.StatusOK, s.grantView(&g), nil
