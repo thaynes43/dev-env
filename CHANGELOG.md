@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.77.0](https://github.com/thaynes43/dev-env/compare/v2.76.0...v2.77.0) (2026-10-31)
+
+
+### Features
+
+* **grants:** join maintenance grants to requester task claims ([#777](https://github.com/thaynes43/dev-env/issues/777)) ([c6606fc](https://github.com/thaynes43/dev-env/commit/c6606fc96803f94f21283dcc75fd945b7da36f80))
+
+
+### Bug Fixes
+
+* **pages:** OP324 fix round for [#768](https://github.com/thaynes43/dev-env/issues/768) (watchdog key, Invalid before Stale, skew) ([#770](https://github.com/thaynes43/dev-env/issues/770)) ([9a8fac1](https://github.com/thaynes43/dev-env/commit/9a8fac11578375116742c531b185e7fd5cc707c6))
+* **pages:** OP324 join fix round (supersedes [#774](https://github.com/thaynes43/dev-env/issues/774)) ([#776](https://github.com/thaynes43/dev-env/issues/776)) ([bc89962](https://github.com/thaynes43/dev-env/commit/bc899627f63659c6e06749f754117fda942b972d))
+* **pages:** resolve explicit promotion lineage (OP324) ([#778](https://github.com/thaynes43/dev-env/issues/778)) ([01f5417](https://github.com/thaynes43/dev-env/commit/01f5417bc02132cce6e5a72fed35523b33948de5))
+
+
+### Performance Improvements
+
+* **inbox:** metadata-only reply index, no reply text held per list (OP321 D1/D2) ([#771](https://github.com/thaynes43/dev-env/issues/771)) ([602f349](https://github.com/thaynes43/dev-env/commit/602f349d16b32dcba49994851b65df1e37d10bd0))
+
 ## [2.76.0](https://github.com/thaynes43/dev-env/compare/v2.75.0...v2.76.0) (2026-10-31)
 
 
