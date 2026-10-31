@@ -92,6 +92,9 @@ func rcServe(h *harness, createStatus int, view func(int) apiv1.Session, message
 			v.IdempotencyKey = req.IdempotencyKey
 			writeTestJSON(w, createStatus, v)
 		case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath("remote-268"):
+			if r.Header.Get(apiv1.SessionTaskClaimsHeader) != "" {
+				h.t.Error("rc loop requested task claims")
+			}
 			polls++
 			writeTestJSON(w, http.StatusOK, view(polls))
 		case r.Method == http.MethodPost && r.URL.Path == apiv1.SessionMessagesPath("remote-268"):

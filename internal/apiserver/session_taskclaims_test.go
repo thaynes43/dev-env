@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/pages"
 	"github.com/thaynes43/dev-env/internal/taskclaim"
@@ -55,7 +56,7 @@ func (s *claimJoinSnapshot) FindClaims(_ context.Context, lookups []pages.ClaimL
 	s.claimCalls++
 	out := map[pages.ClaimLookup]pages.ClaimObservation{}
 	for _, lookup := range lookups {
-		out[lookup] = pages.ClaimObservation{SourceObservation: pages.SourceObservation{Available: true, Source: "Synthetic claim evidence", ObservedAt: s.at}, Claim: &pages.ClaimEvidence{Identity: s.id, Order: s.order, Reference: pages.CanonicalClaimReference{Kind: "TaskClaim", ID: "dev-env-system/" + s.claim.Name + "/" + s.claim.UID}, ClaimOwner: s.claim.Owner, Owner: "Synthetic responder", State: "claimed", StateAt: s.at, EvidenceURL: "https://example.test/evidence"}}
+		out[lookup] = pages.ClaimObservation{SourceObservation: pages.SourceObservation{Available: true, Source: "Synthetic claim evidence", ObservedAt: s.at}, Claim: &pages.ClaimEvidence{Identity: s.id, Order: s.order, Reference: pages.CanonicalClaimReference{Kind: "TaskClaim", ID: "dev-env-system/" + s.claim.Name + "/" + s.claim.UID}, ClaimOwner: pages.ClaimOwner(s.claim.Owner), Owner: "Synthetic responder", State: "claimed", StateAt: s.at, EvidenceURL: "https://example.test/evidence"}}
 	}
 	return out, nil
 }
@@ -87,6 +88,15 @@ func TestSessionTaskClaimsCanonicalPageJoinAndContenders(t *testing.T) {
 	}
 
 	lists, gets := 0, 0
+	// The live caller fence reads one Pod and one AgentSession.
+	liveGets, sessionGets := 0, 0
+	f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		liveGets++
+		if _, ok := obj.(*v1alpha1.AgentSession); ok {
+			sessionGets++
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
 	f.srv.TaskClaims.Live = interceptor.NewClient(f.c, interceptor.Funcs{
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if _, ok := list.(*coord.TaskClaimList); ok {
@@ -110,19 +120,20 @@ func TestSessionTaskClaimsCanonicalPageJoinAndContenders(t *testing.T) {
 		byUID[item.UID] = item
 	}
 	joined := byUID[claim.UID]
-	if owned.State != "Available" || len(owned.Items) != 2 || !reflect.DeepEqual(joined, claim) || lists != 1 || gets != 0 {
-		t.Fatalf("single uncached join lost immutable metadata: %+v, lists=%d gets=%d", owned, lists, gets)
+	if owned.State != "Available" || len(owned.Items) != 2 || !reflect.DeepEqual(joined, claim) || lists != 1 || gets != 0 || liveGets != 2 || sessionGets != 1 {
+		t.Fatalf("single uncached join lost immutable metadata: %+v, lists=%d gets=%d liveGets=%d sessionGets=%d", owned, lists, gets, liveGets, sessionGets)
 	}
+	liveGets, sessionGets = 0, 0
 	lost := sessionClaimsRead(t, f, "claim-contender", b).TaskClaims
-	if lost.State != "Unknown" || len(lost.Items) != 0 || lists != 2 || gets != 0 {
-		t.Fatal("contender gained custody", lost, lists, gets)
+	if lost.State != "Unknown" || len(lost.Items) != 0 || lists != 2 || gets != 0 || liveGets != 2 || sessionGets != 1 {
+		t.Fatal("contender gained custody", lost, lists, gets, liveGets, sessionGets)
 	}
 	snapshot := &claimJoinSnapshot{id: pages.AlertIdentity{Fingerprint: "synthetic", StartsAt: f.now.Add(-time.Minute).Format(time.RFC3339)}, order: pages.OrderReference{Key: "rem-responder-0123abcd", Created: strconv.FormatInt(f.now.Add(-time.Minute).Unix(), 10)}, claim: claim, at: f.now}
 	refire := snapshot.id
 	refire.StartsAt = f.now.Format(time.RFC3339)
 	projected := pages.ProjectResponses(context.Background(), []pages.AlertIdentity{snapshot.id, refire}, pages.ResponseSources{Orders: snapshot, Claims: snapshot, MaxAge: time.Minute, EvidenceOrigins: []string{"https://example.test"}}, f.now)
 	page := projected[snapshot.id]
-	if page.Claim.ID != "dev-env-system/"+joined.Name+"/"+joined.UID || page.ClaimOwner != joined.Owner || page.ClaimCondition != "Available" || snapshot.claimCalls != 1 {
+	if page.Claim.ID != "dev-env-system/"+joined.Name+"/"+joined.UID || page.ClaimOwner != pages.ClaimOwner(joined.Owner) || page.ClaimCondition != "Available" || snapshot.claimCalls != 1 {
 		t.Fatal("Page/session canonical claim identity or single batch drift", page, owned, snapshot.claimCalls)
 	}
 	if projected[refire].Claim.ID != "Unknown" || projected[refire].ClaimOwner.UID != "Unknown" {
@@ -136,9 +147,10 @@ func TestSessionTaskClaimsCanonicalPageJoinAndContenders(t *testing.T) {
 	if err := f.c.Status().Update(context.Background(), suspended); err != nil {
 		t.Fatal(err)
 	}
+	liveGets, sessionGets = 0, 0
 	retained := sessionClaimsRead(t, f, "claim-owner", a).TaskClaims
-	if retained.State != "Available" || len(retained.Items) != 2 || lists != 3 || gets != 0 {
-		t.Fatal("stopped custody lost or fanned out", retained, lists, gets)
+	if retained.State != "Available" || len(retained.Items) != 2 || lists != 3 || gets != 0 || liveGets != 2 || sessionGets != 1 {
+		t.Fatal("stopped custody lost or fanned out", retained, lists, gets, liveGets, sessionGets)
 	}
 	for _, item := range retained.Items {
 		if item.OwnerState != "Suspended" || item.StopState != "Unknown" || item.Provenance.ReportedHead != strings.Repeat("a", 40) || item.Provenance.InitialPinState != "Unknown" {
@@ -160,16 +172,31 @@ func TestSessionTaskClaimsUnknownAndNoPartialResults(t *testing.T) {
 			bindCatalogFixture(t, f)
 			enableClaims(f)
 			token := claimSession(t, f, "unknown-claims", humanSA)
+			created := f.do(http.MethodPost, apiv1.TaskClaimsPath, token, claimRequest("issue:322"))
+			if created.Code != http.StatusCreated {
+				t.Fatal(created.Code, created.Body.String())
+			}
 			calls := 0
-			f.srv.TaskClaims.Live = interceptor.NewClient(f.c, interceptor.Funcs{List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {
+			f.srv.TaskClaims.Live = interceptor.NewClient(f.c, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				calls++
+				if err := c.List(ctx, list, opts...); err != nil {
+					return err
+				}
 				switch mode {
 				case "unreadable":
 					return errors.New("private backend error")
 				case "truncated":
 					list.(*coord.TaskClaimList).Continue = "more"
 				case "oversize":
-					list.(*coord.TaskClaimList).Items = make([]coord.TaskClaim, 4097)
+					claims := list.(*coord.TaskClaimList)
+					if len(claims.Items) != 1 {
+						t.Fatal("missing valid owned claim")
+					}
+					valid := claims.Items[0]
+					claims.Items = make([]coord.TaskClaim, int(taskclaim.DefaultLimits.PerProject)+1)
+					for i := range claims.Items {
+						claims.Items[i] = *valid.DeepCopy()
+					}
 				case "invalid":
 					list.(*coord.TaskClaimList).Items = []coord.TaskClaim{{}}
 				}
@@ -193,6 +220,16 @@ func TestSessionTaskClaimsUnknownAndNoPartialResults(t *testing.T) {
 			wantCalls := 0
 			if mode == "unreadable" || mode == "truncated" || mode == "oversize" || mode == "invalid" {
 				wantCalls = 1
+			}
+			wantReason := "ScopeUnconfirmed"
+			switch mode {
+			case "missing store", "no scope":
+				wantReason = "Unconfigured"
+			case "unreadable", "truncated", "oversize", "invalid":
+				wantReason = "Unavailable"
+			}
+			if got.Reason != wantReason {
+				t.Fatalf("reason=%q, want %q", got.Reason, wantReason)
 			}
 			if got.State != "Unknown" || len(got.Items) != 0 || strings.Contains(got.Reason, "private") || calls != wantCalls {
 				t.Fatalf("failed read became empty/partial claims or leaked errors: %+v, calls=%d", got, calls)

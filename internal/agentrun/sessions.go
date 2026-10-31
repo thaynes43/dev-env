@@ -148,9 +148,9 @@ func (a *app) show(ctx context.Context, args []string) error {
 	if once {
 		return a.showOnce(ctx, c, pos[0])
 	}
-	callCtx := ctx
+	callCtx := withSessionTaskClaims(ctx)
 	if captured {
-		callCtx = withUsageCapture(ctx)
+		callCtx = withUsageCapture(callCtx)
 	}
 	var s apiv1.Session
 	if _, err := a.call(callCtx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {

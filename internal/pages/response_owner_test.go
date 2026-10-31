@@ -4,12 +4,10 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 func TestResponseTaskClaimOwnerBoundToJoinedSnapshot(t *testing.T) {
-	owner := apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: "original-session", UID: "original-uid"}
+	owner := ClaimOwner{Namespace: "dev-agents", Name: "original-session", UID: "original-uid"}
 	for _, mode := range []string{"joined", "missing owner", "invalid namespace", "invalid name", "invalid name labels", "invalid uid", "unknown uid", "redacted name", "OpenProject", "stale", "refire", "wrong attempt", "mismatched", "unreadable"} {
 		t.Run(mode, func(t *testing.T) {
 			id, sources, at, _, claims := responseFixture()
@@ -17,7 +15,7 @@ func TestResponseTaskClaimOwnerBoundToJoinedSnapshot(t *testing.T) {
 			claims.observation.Claim.ClaimOwner = owner
 			switch mode {
 			case "missing owner":
-				claims.observation.Claim.ClaimOwner = apiv1.TaskClaimOwner{}
+				claims.observation.Claim.ClaimOwner = ClaimOwner{}
 			case "invalid namespace":
 				claims.observation.Claim.ClaimOwner.Namespace = "../other"
 			case "invalid name":
@@ -44,7 +42,7 @@ func TestResponseTaskClaimOwnerBoundToJoinedSnapshot(t *testing.T) {
 				claims.observation.Available = false
 			}
 			got := ProjectResponses(context.Background(), []AlertIdentity{id, id}, sources, at)[id]
-			want := apiv1.TaskClaimOwner{Namespace: "Unknown", Name: "Unknown", UID: "Unknown"}
+			want := ClaimOwner{Namespace: "Unknown", Name: "Unknown", UID: "Unknown"}
 			if mode == "joined" {
 				want = owner
 			}

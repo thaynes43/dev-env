@@ -334,13 +334,13 @@ func (s KubeStore) List(ctx context.Context, project string, limit int64, cursor
 // A continued/oversized list is unknown, never a partial set of owned claims.
 // This is metadata only: it neither resolves owners nor changes custody.
 func (s KubeStore) ListOwned(ctx context.Context, project, ownerUID string) ([]coord.TaskClaim, error) {
-	const maxScan = 4096
+	maxScan := DefaultLimits.PerProject
 	if !s.ready() || !projectcatalog.ValidName(project) || !uidPattern.MatchString(ownerUID) {
 		return nil, ErrUnavailable
 	}
 	var list coord.TaskClaimList
 	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels{ProjectLabel: project}, client.Limit(maxScan)) != nil ||
-		len(list.Items) > maxScan || list.Continue != "" {
+		int64(len(list.Items)) > maxScan || list.Continue != "" {
 		return nil, ErrUnavailable
 	}
 	owned := make([]coord.TaskClaim, 0)

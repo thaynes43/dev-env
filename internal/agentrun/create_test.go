@@ -34,6 +34,9 @@ func serveCreate(h *harness, states ...apiv1.Session) {
 			w.Header().Set("Location", apiv1.SessionPath(name))
 			writeTestJSON(w, http.StatusCreated, s)
 		case r.Method == http.MethodGet && r.URL.Path == apiv1.SessionPath(name):
+			if r.Header.Get(apiv1.SessionTaskClaimsHeader) != "" {
+				h.t.Error("waitForPod requested task claims")
+			}
 			i := int(gets.Add(1)) - 1
 			if i >= len(states) {
 				i = len(states) - 1

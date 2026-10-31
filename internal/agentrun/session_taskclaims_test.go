@@ -54,7 +54,7 @@ func TestPagesMCPTaskClaimOwner(t *testing.T) {
 	sources := responseSourcesFor(at, id, "claimed", "claimed", "https://example.test/work_packages/313")
 	claimSource := sources.Claims.(parityClaims)
 	claimSource.observation.Claim.Reference = pages.CanonicalClaimReference{Kind: "TaskClaim", ID: "dev-env-system/synthetic-claim/canonical-uid"}
-	owner := apiv1.TaskClaimOwner{Namespace: "dev-agents", Name: "claimed-session", UID: "original-session-uid"}
+	owner := pages.ClaimOwner{Namespace: "dev-agents", Name: "claimed-session", UID: "original-session-uid"}
 	claimSource.observation.Claim.ClaimOwner = owner
 	sources.Claims = claimSource
 	mcp := &pagesMCPSession{config: pagesMCPConfig{Alertmanager: true}, backend: &fakePagesBackend{raw: []byte(responseAlertFixture)}, responses: sources, now: func() time.Time { return at }}
@@ -82,5 +82,24 @@ func TestShowSessionTaskClaimsJSONUnknownOnOlderOperator(t *testing.T) {
 	var got apiv1.Session
 	if err := json.Unmarshal(h.stdout.Bytes(), &got); err != nil || got.TaskClaims == nil || got.TaskClaims.State != "Unknown" || len(got.TaskClaims.Items) != 0 {
 		t.Fatal("old operator omission is not Unknown in JSON", err, h.stdout.String())
+	}
+}
+
+func TestShowSessionTaskClaimsNegotiationModes(t *testing.T) {
+	for _, flags := range [][]string{{"--json"}, {"--json", "--once"}, {"--json", "--captured-usage"}} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			h := newHarness(t)
+			s := testSession("claims-negotiation", "Running")
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.Header.Get(apiv1.SessionTaskClaimsHeader) != apiv1.SessionTaskClaimsV1 {
+					t.Error("show mode omitted claim negotiation")
+				}
+				writeTestJSON(w, http.StatusOK, s)
+			}
+			h.mustRun(ExitOK, append([]string{"show", s.Name}, flags...)...)
+			if len(h.api.requests()) != 1 {
+				t.Fatal("show fanned out")
+			}
+		})
 	}
 }

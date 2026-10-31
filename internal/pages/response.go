@@ -11,8 +11,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 // AlertIdentity preserves startsAt exactly as supplied by Alertmanager. V1's
@@ -45,11 +43,18 @@ type CanonicalClaimReference struct {
 	ID   string `json:"id"`
 }
 
+// ClaimOwner identifies the original session from a joined canonical claim.
+type ClaimOwner struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	UID       string `json:"uid"`
+}
+
 // ClaimEvidence requires explicit workflow evidence. A TaskClaim's existence
 // alone is insufficient to establish responding, needs-user or resolved.
 type ClaimEvidence struct {
 	// ClaimOwner is copied from the joined TaskClaim, never inferred from Owner.
-	ClaimOwner  apiv1.TaskClaimOwner
+	ClaimOwner  ClaimOwner
 	Identity    AlertIdentity
 	Order       OrderReference
 	Reference   CanonicalClaimReference
@@ -116,7 +121,7 @@ type ResponseSources struct {
 // Every Unknown field is the literal "Unknown", so an Unconfigured projection
 // costs about 513 bytes per alert in MCP JSON, guarded at 520 (DESIGN-031 13).
 type ResponseProjection struct {
-	ClaimOwner      apiv1.TaskClaimOwner    `json:"claimOwner"`
+	ClaimOwner      ClaimOwner              `json:"claimOwner"`
 	Identity        AlertIdentity           `json:"identity"`
 	Order           OrderReference          `json:"order"`
 	Claim           CanonicalClaimReference `json:"claim"`
@@ -272,7 +277,7 @@ func projectResponse(identity AlertIdentity, sources ResponseSources, at time.Ti
 
 func unknownResponse(identity AlertIdentity) ResponseProjection {
 	return ResponseProjection{
-		ClaimOwner: apiv1.TaskClaimOwner{Namespace: timeUnknown, Name: timeUnknown, UID: timeUnknown},
+		ClaimOwner: ClaimOwner{Namespace: timeUnknown, Name: timeUnknown, UID: timeUnknown},
 		Identity:   identity, Order: OrderReference{Key: timeUnknown, Created: timeUnknown},
 		Claim: CanonicalClaimReference{Kind: timeUnknown, ID: timeUnknown},
 		Owner: timeUnknown, State: timeUnknown, StateAt: timeUnknown, EvidenceURL: timeUnknown,
@@ -281,7 +286,7 @@ func unknownResponse(identity AlertIdentity) ResponseProjection {
 	}
 }
 
-func validClaimOwner(owner apiv1.TaskClaimOwner) bool {
+func validClaimOwner(owner ClaimOwner) bool {
 	if !claimNamespace.MatchString(owner.Namespace) || !claimName.MatchString(owner.Name) || !claimUID.MatchString(owner.UID) ||
 		!responseText(owner.Namespace) || !responseText(owner.Name) || !responseText(owner.UID) {
 		return false

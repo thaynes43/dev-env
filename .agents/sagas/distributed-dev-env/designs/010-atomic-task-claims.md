@@ -171,13 +171,34 @@ PR #223.
 
 ## Paths and acceptance
 
-### Read-only session and Page join (OP322, 2026-10-31)
+- `api/coordination/v1alpha1/`: GroupVersion, TaskClaim/List, bounded immutable
+  schema and deepcopy; generated CRD under `config/crd/`.
+- `internal/taskclaim/`: strict identity/provenance, atomic Create and uncached
+  confirmation/read/list and bounded `ListOwned`.
+- `internal/apiserver/session_taskclaims.go`: negotiated detail projection.
+- `internal/apiserver/taskclaims.go`, API wire types/routes and dedicated ACL;
+  operator scheme/settings/store wiring and focused tests.
+- Later GitOps schema and namespaced Role promotion in a separate PR.
+
+Prove contention through two API instances yields one owner; same-owner retry
+and lost acknowledgement recover only that owner; operator reconstruction and
+deleting/absent owners preserve the claim; replacement Session UID, foreign
+objects and unauthorized create/read fail closed; full identity and bounded
+provenance are immutable; and responses expose no prompt/rule/auth bodies.
+Use focused fake-client and necessary real API schema checks, sequentially at
+`nice -n 19`, `GOMAXPROCS=2`, `go test -p 2`. No burners, stress, wide/looped
+tests, local image build or runtime trial. Required CI and native independent
+review govern merge; Claude reviews are optional and currently unavailable.
+
+## Read-only session and Page join (OP322, 2026-10-31)
 
 The first OP322 slice projects the existing immutable TaskClaim; it adds no
 registry, CRD, writer or access grant. GET session detail opts in with
 `X-Dev-Env-Session-Task-Claims: v1`, following #759's strict-reader negotiation.
 Unnegotiated detail, list and mutation responses keep their old shape. The CLI
-opts in for `show` and prints Unknown when an older operator omits the field.
+opts in only for `show` (including `show --once`), through a per-call
+context marker; startup and Remote Control polling do not request claims. It
+prints Unknown when an older operator omits the field.
 
 The existing explicit project claim-read authorization still applies, including
 the live caller fence. An unreadable/unconfigured store, unconfirmed project or
@@ -201,24 +222,6 @@ namespace/name/UID claim reference and a structured `claimOwner` copied from
 the same claim batch. It makes no additional owner reads. API/MCP preserve the
 same claim UID. Production Pages readers remain unconfigured. Portal rendering,
 activation and installed acceptance are outside this slice.
-
-- `api/coordination/v1alpha1/`: GroupVersion, TaskClaim/List, bounded immutable
-  schema and deepcopy; generated CRD under `config/crd/`.
-- `internal/taskclaim/`: strict identity/provenance, atomic Create and uncached
-  confirmation/read/list.
-- `internal/apiserver/taskclaims.go`, API wire types/routes and dedicated ACL;
-  operator scheme/settings/store wiring and focused tests.
-- Later GitOps schema and namespaced Role promotion in a separate PR.
-
-Prove contention through two API instances yields one owner; same-owner retry
-and lost acknowledgement recover only that owner; operator reconstruction and
-deleting/absent owners preserve the claim; replacement Session UID, foreign
-objects and unauthorized create/read fail closed; full identity and bounded
-provenance are immutable; and responses expose no prompt/rule/auth bodies.
-Use focused fake-client and necessary real API schema checks, sequentially at
-`nice -n 19`, `GOMAXPROCS=2`, `go test -p 2`. No burners, stress, wide/looped
-tests, local image build or runtime trial. Required CI and native independent
-review govern merge; Claude reviews are optional and currently unavailable.
 
 ## Remaining acceptance
 
