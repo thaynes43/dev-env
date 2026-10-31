@@ -24,9 +24,9 @@ import (
 //   - type breakglass goes with role dev-env-grant-breakglass, and only there;
 //   - the namespaced catalog roles name their namespaces one by one; the
 //     cluster-wide ones (nodes, break-glass) take none;
-//   - only role dev-env-grant-namespace-operator names Secrets, each one by
-//     name, and only an attested policy that names them approves it
-//     (DESIGN-042 5.1);
+//   - only role dev-env-grant-namespace-operator names Secrets, one to 16, each
+//     by name; no standing policy approves it, and an attested one only when it
+//     opts in with attested.allowSecretUse (DESIGN-042 5.1);
 //   - no policy approves break-glass, role dev-env-grant-breakglass or
 //     dev-env-grant-secrets-read, or profile ops;
 //   - no standing policy approves maintenance: only an attested policy with an
@@ -77,9 +77,11 @@ const (
 	RoleBreakglass = "dev-env-grant-breakglass"
 	// RoleNamespaceOperator execs into pods, restarts workloads, and runs Jobs
 	// that use the Secrets its grant names, in the granted namespaces
-	// (DESIGN-042 5.1, class C2). It never gets or lists a Secret, but a
-	// command run in a pod that holds one can print it. Only an attested policy
-	// that names the Secrets approves it.
+	// (DESIGN-042 5.1, class C2). It has no Secret get or list, which does not
+	// mean it cannot read Secrets: exec reaches every Secret the namespace's
+	// pods already hold, and their ServiceAccounts' tokens, and a command run
+	// in a Job that uses a named Secret can print it. No standing policy
+	// approves it; an attested one only with attested.allowSecretUse.
 	RoleNamespaceOperator = "dev-env-grant-namespace-operator"
 )
 
@@ -260,7 +262,7 @@ type GrantRequester struct {
 // cluster-wide roles.
 //
 // +kubebuilder:validation:XValidation:rule="(self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass') == (!has(self.namespaces) || size(self.namespaces) == 0)",message="dev-env-grant-nodes and dev-env-grant-breakglass are cluster-wide and take no namespaces; the other roles name at least one"
-// +kubebuilder:validation:XValidation:rule="!has(self.secrets) || size(self.secrets) == 0 || self.role == 'dev-env-grant-namespace-operator'",message="only role dev-env-grant-namespace-operator names secrets (DESIGN-042 5.1)"
+// +kubebuilder:validation:XValidation:rule="(self.role == 'dev-env-grant-namespace-operator') == (has(self.secrets) && size(self.secrets) > 0)",message="dev-env-grant-namespace-operator names the Secrets it will use, one to 16, and only that role takes secrets (DESIGN-042 5.1)"
 type KubeGrant struct {
 	// Role is a ClusterRole from the grant role catalog.
 	// +kubebuilder:validation:Enum=dev-env-grant-workloads;dev-env-grant-storage;dev-env-grant-secrets-read;dev-env-grant-nodes;dev-env-grant-breakglass;dev-env-grant-namespace-operator
@@ -269,10 +271,11 @@ type KubeGrant struct {
 
 	// Secrets are the Secrets that the new pods and Jobs of a
 	// dev-env-grant-namespace-operator grant may reference, each by name: no
-	// wildcard, no pattern (DESIGN-042 5.1). They hold in every namespace the
-	// grant names. No other role takes them. The role never gets or lists a
-	// Secret, but a command run in a pod that holds one can print it, so naming
-	// a Secret lets the agent read it.
+	// wildcard, no pattern (DESIGN-042 5.1). A grant of that role names one to
+	// 16; no other role takes them. They hold in every namespace the grant
+	// names. The approver decides this exact list: the scope digest covers it.
+	// A command run in a pod that uses a Secret can print it, so naming a
+	// Secret lets the agent read it.
 	// +listType=set
 	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:items:MaxLength=253
@@ -491,6 +494,7 @@ type AccessGrantList struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || duration(self.maxTTL) <= duration('1h')",message="a maintenance grant lasts at most 1h"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube') == has(self.kube)",message="kube is set for type kube, and only there"
 // +kubebuilder:validation:XValidation:rule="!has(self.kube) || !self.kube.roles.exists(r, r == 'dev-env-grant-namespace-operator') || has(self.attested)",message="no standing policy approves dev-env-grant-namespace-operator: only an attested policy may (DESIGN-042 5.1)"
+// +kubebuilder:validation:XValidation:rule="!has(self.attested) || !has(self.attested.allowSecretUse) || !self.attested.allowSecretUse || (has(self.kube) && self.kube.roles.exists(r, r == 'dev-env-grant-namespace-operator'))",message="attested.allowSecretUse is only for a policy that names dev-env-grant-namespace-operator (DESIGN-042 5.1)"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
 // +kubebuilder:validation:XValidation:rule="has(self.attested) ? ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) == 0 && (has(self.agents) ? size(self.agents) : 0) == 0 && (has(self.attested.profiles) ? size(self.attested.profiles) : 0) + (has(self.attested.repos) ? size(self.attested.repos) : 0) > 0) : ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) > 0)",message="name the requesters: profiles, repos or both; an attested policy names them only under attested and leaves profiles, repos and agents empty, so a broker that predates attestation matches nobody"
@@ -594,12 +598,20 @@ type AttestedRequesters struct {
 	// +kubebuilder:validation:MaxItems=3
 	// +optional
 	Agents []AgentKind `json:"agents,omitempty"`
+
+	// AllowSecretUse lets this attested policy approve a
+	// dev-env-grant-namespace-operator grant on the requester's own
+	// attestation (mode (a), DESIGN-042 5.1). Without it, the policy approves
+	// that role only through a delegate decision (mode (b)). The requester then
+	// both names the Secrets and attests that someone approved them.
+	// +optional
+	AllowSecretUse bool `json:"allowSecretUse,omitempty"`
 }
 
 // KubePolicy is the catalog roles a policy approves, in the namespaces it names.
 //
 // +kubebuilder:validation:XValidation:rule="self.roles.all(r, r == 'dev-env-grant-nodes') || (has(self.namespaces) && size(self.namespaces) > 0)",message="name the namespaces, one by one, for a namespaced role"
-// +kubebuilder:validation:XValidation:rule="self.roles.exists(r, r == 'dev-env-grant-namespace-operator') == (has(self.secrets) && size(self.secrets) > 0)",message="a policy for dev-env-grant-namespace-operator names the Secrets it allows, one by one, and only that role takes secrets (DESIGN-042 5.1)"
+// +kubebuilder:validation:XValidation:rule="!has(self.deniedSecrets) || size(self.deniedSecrets) == 0 || self.roles.exists(r, r == 'dev-env-grant-namespace-operator')",message="only a policy for dev-env-grant-namespace-operator takes deniedSecrets (DESIGN-042 5.1)"
 type KubePolicy struct {
 	// Roles are catalog roles. No policy approves dev-env-grant-breakglass or
 	// dev-env-grant-secrets-read.
@@ -611,16 +623,18 @@ type KubePolicy struct {
 	// +required
 	Roles []string `json:"roles"`
 
-	// Secrets are the Secrets a dev-env-grant-namespace-operator grant may
-	// name, each by name: no wildcard, no pattern (DESIGN-042 5.1). A grant
-	// matches only when every Secret it names is here. A policy that names that
-	// role names at least one; no other role takes them.
+	// DeniedSecrets are Secrets no dev-env-grant-namespace-operator grant
+	// under this policy may name, in any of its namespaces: an exact name, or
+	// a prefix ending in "*" such as "sh.helm.release.*" (DESIGN-042 5.1). The
+	// policy does not list the Secrets it allows: each grant names its own,
+	// and its approver decides them. So within the policy's namespaces an
+	// approver may let an agent use any Secret not denied here.
 	// +listType=set
 	// +kubebuilder:validation:MaxItems=32
 	// +kubebuilder:validation:items:MaxLength=253
-	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +kubebuilder:validation:items:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*|[a-z0-9][-a-z0-9.]*\*)$`
 	// +optional
-	Secrets []string `json:"secrets,omitempty"`
+	DeniedSecrets []string `json:"deniedSecrets,omitempty"`
 
 	// Namespaces are named one by one: no wildcard, no pattern (DESIGN-001
 	// 6.12).

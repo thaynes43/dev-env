@@ -80,6 +80,9 @@ func MatchesAttested(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 	if a == nil || len(p.Spec.Profiles) != 0 || len(p.Spec.Repos) != 0 || len(p.Spec.Agents) != 0 {
 		return false // a mixed policy is malformed: approve nothing
 	}
+	if !attestedAllowsSecretUse(p, g) {
+		return false // mode (a) for the namespace operator is opt-in (DESIGN-042 5.1)
+	}
 	return matches(p, g, a.Profiles, a.Repos, a.Agents)
 }
 
@@ -159,7 +162,7 @@ func maintenanceInside(g *v1alpha1.MaintenanceTask, p *v1alpha1.MaintenancePolic
 
 // kubeInside: the role is one of the policy's, and every granted namespace is
 // one the policy names. A cluster-wide role takes no namespaces. A
-// namespace-operator grant's Secrets are all ones the policy names
+// namespace-operator grant names one to 16 Secrets, none the policy denies
 // (DESIGN-042 5.1); any other grant names none.
 func kubeInside(g *v1alpha1.KubeGrant, p *v1alpha1.KubePolicy) bool {
 	if g == nil || p == nil || !slices.Contains(p.Roles, g.Role) {

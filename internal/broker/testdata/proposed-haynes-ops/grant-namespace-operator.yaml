@@ -8,14 +8,17 @@
 #
 # dev-env-grant-namespace-operator, bound per namespace by RoleBinding (class C2): exec
 # into pods, restart workloads, and run one-shot Jobs that use the Secrets the grant
-# names. It has no Secret get, list or watch. The custom verb `use` on secrets is what
-# the identity guard's P5 clause checks with the authorizer before a grant identity may
-# add a Secret reference; dev-env-grant-secret-names then holds the reference to the
-# grant's named Secrets in the grant's namespaces.
+# names. It has no Secret rule at all: the `use` of each named Secret comes from the
+# grant's own Role, <grant>-secret-use, which the broker makes per grant with
+# resourceNames, and which dev-env-grant-secret-names checks per reference.
 #
-# Honest risk: a command the agent chooses, in a pod that holds a Secret, can print it.
-# That covers exec into an app pod and a Job the agent writes. The grant bounds which
-# Secrets a new pod may mount; it does not stop the agent reading one it can reach.
+# Exposure, plainly. "No Secret get or list" does not mean "cannot read Secrets":
+#   - exec reaches every Secret the namespace's pods already hold in their env or
+#     volumes, such as Prowlarr's own API key, and each pod's ServiceAccount token, so
+#     the grant also acts as those workloads' ServiceAccounts;
+#   - a command the agent chooses, in a Job that uses a named Secret, can print it.
+# So the class effectively grants read of every Secret mounted in the namespace's pods,
+# plus the named ones. The named-Secret guard bounds only what a new pod may add.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -33,7 +36,7 @@ rules:
     resources: [pods/log]
     verbs: [get]
   # patch is for kubectl rollout restart. Other spec patches are possible too; Flux
-  # reverts them, and a new Secret reference meets both guards.
+  # reverts them, and an added Secret reference meets dev-env-grant-secret-names.
   - apiGroups: [apps]
     resources: [deployments, statefulsets]
     verbs: [get, list, watch, patch]
@@ -43,7 +46,3 @@ rules:
   - apiGroups: [""]
     resources: [configmaps, events]
     verbs: [get, list, watch]
-  # The custom verb only: never get, list or watch.
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [use]
