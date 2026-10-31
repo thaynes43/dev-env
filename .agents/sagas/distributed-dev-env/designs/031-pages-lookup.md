@@ -404,9 +404,17 @@ claim. No extra list/get or production reader activation follows.
 
 Maintenance is the second consumer slice (2026-10-31): negotiated grant detail
 reuses the authenticated requester session UID and existing claim scope/list, as
-specified in DESIGN-010. It does not infer an envelope claim or approval.
+specified in DESIGN-010. It does not infer an envelope claim or approval. It is
+narrower than a per-grant binding: grant show lists EVERY claim the requester
+owns. Nothing links a claim to this particular grant.
 
-The remaining OP322 consumers have two bounded follow-up slices:
+The remaining OP322 consumers have three bounded follow-up slices:
+
+0. Maintenance per-grant binding: bind one maintenance grant to the exact
+   canonical claim (identity and UID) of the work it serves. That needs an
+   explicit claim-reference field in the maintenance task envelope, which is a
+   CRD change with its own authorization. Until then, grant show lists every
+   claim the requester owns, and nothing is inferred.
 
 1. Upgrade/Renovate: define the explicit binding from repository/PR/exact head
    and existing upgrade order attempt to TaskClaim UID, then add a read-only
