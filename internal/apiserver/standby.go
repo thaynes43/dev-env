@@ -8,6 +8,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // StandbyParent is the spec.parent of the standby session: the operator's own
@@ -27,13 +28,15 @@ func (s *Server) CreateStandby(ctx context.Context, req apiv1.CreateSessionReque
 	if err != nil {
 		return "", err
 	}
+	// The standby never runs as a named coordinator identity (DESIGN-042 6.4):
+	// the operator recreates it on its own, and the lead is launched by Tom.
+	if sess.Labels[templates.CoordinatorIdentityLabel] != "" {
+		return "", forbidden("the standby's profile %s runs as a named coordinator identity; the standby never does", sess.Spec.Profile)
+	}
 	sess.Labels[v1alpha1.LabelStandby] = "true"
 
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
-	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
-		return "", err
-	}
 	base := generatedName(sess.Spec.Repo, s.now())
 	for i := 1; i <= nameAttempts; i++ {
 		sess.Name = base

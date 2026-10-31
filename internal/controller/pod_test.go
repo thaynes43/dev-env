@@ -680,9 +680,9 @@ func TestDecisionPodFeatureCannotBeEnabledByTemplateOrPrivateTask(t *testing.T) 
 // A profile that names a named coordinator identity (DESIGN-042 6.4, S4) runs
 // a session as it only when the API's admission label names that same account,
 // and never with the workbench's exec cue. A session that reached the profile
-// without the label (kubectl, the standby, a create while the templates could
-// not be read) or with a label for another account runs as dev-env-agent, and a
-// hold pod never uses the identity.
+// without the label (a kubectl create, or a create while the templates could not
+// be read) or with a label for another account runs as dev-env-agent, and a hold
+// pod never uses the identity.
 func TestCoordinatorProfilePodRunsAsItsIdentityOnlyWhenAdmitted(t *testing.T) {
 	const lead = "dev-env-coordinator-lead"
 	tmpl := exampleTemplates(t)

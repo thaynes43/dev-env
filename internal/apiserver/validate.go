@@ -298,7 +298,10 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	identity := s.profileIdentity(ctx, spec.Profile)
 	if identity != "" {
 		if !s.mayLaunchNamedCoordinator(c) {
-			return nil, forbidden("profile %s runs as a named coordinator identity; only Tom, a client or the workbench launches it (DESIGN-042 6.4)", spec.Profile)
+			return nil, forbidden("profile %s runs as a named coordinator identity; only Tom, a client or a top-level workbench session launches it (DESIGN-042 6.4)", spec.Profile)
+		}
+		if spec.Agent != v1alpha1.AgentClaude {
+			return nil, forbidden("profile %s runs as a named coordinator identity, which serves the Claude lead; a %s session may not run on it (DESIGN-042 6.4)", spec.Profile, spec.Agent)
 		}
 	}
 
@@ -309,15 +312,21 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		},
 		Spec: spec,
 	}
-	if identity != "" {
-		// The admission record the controller requires before it runs the pod
-		// as the account (controller.buildPod). Every create path checks that
-		// no other session holds it (admitNamedCoordinator) under the create
-		// lock, after an idempotent repeat has had its answer.
-		sess.Labels[templates.CoordinatorIdentityLabel] = identity
-	}
 	if len(snapshot) != 0 {
 		sess.Annotations = map[string]string{v1alpha1.AnnotationProjectSnapshot: string(snapshot)}
+	}
+	if identity != "" {
+		// The admission record the controller requires before it runs the pod
+		// as the account (controller.buildPod), and the launcher the shared
+		// launch rule reads back (NamedCoordinatorSessionEligible). Every create
+		// path rechecks both and that no other session holds the account
+		// (admitNamedCoordinator) under the create lock, after an idempotent
+		// repeat has had its answer.
+		sess.Labels[templates.CoordinatorIdentityLabel] = identity
+		if sess.Annotations == nil {
+			sess.Annotations = map[string]string{}
+		}
+		sess.Annotations[NamedCoordinatorLauncherAnnotation] = string(s.namedCoordinatorLauncher(c))
 	}
 	if req.IdempotencyKey != "" {
 		sess.Labels[v1alpha1.LabelIdempotencyKey] = req.IdempotencyKey

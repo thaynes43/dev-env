@@ -196,11 +196,14 @@ func (s *Server) namedCoordinatorIdentity(id Identity) bool {
 
 // resolveNamedCoordinatorSession finds the session a named coordinator
 // identity's token speaks for. It is resolveSession, the rule a workbench
-// session's pod meets, plus one check: the live Pod runs as the token's own
-// account. So the token speaks only for a session whose pod the operator built
-// on a profile that names that account (controller.buildPod), and never for an
-// ordinary session's pod. There is no client fallback: a token bound to no pod,
-// or to a pod no session controls, is refused.
+// session's pod meets, plus two checks: the live Pod runs as the token's own
+// account, and the session carries the API's admission record for that account
+// (templates.CoordinatorIdentityLabel). So the token speaks only for a session
+// the API admitted and whose pod the operator built as that account
+// (controller.buildPod), never for an ordinary session's pod. There is no client
+// fallback: a token bound to no pod, or to a pod no session controls, is refused.
+// No phase is checked, as for every session: heartbeats go on while it is
+// Pending, Idle or Draining.
 func (s *Server) resolveNamedCoordinatorSession(ctx context.Context, id Identity) (*caller, error) {
 	c, err := s.resolveSession(ctx, id)
 	if err != nil {
@@ -208,6 +211,9 @@ func (s *Server) resolveNamedCoordinatorSession(ctx context.Context, id Identity
 	}
 	if c.pod.Spec.ServiceAccountName != id.ServiceAccount {
 		return nil, forbidden("pod %s does not run as %s", c.pod.Name, id.serviceAccountRef())
+	}
+	if c.session.Labels[templates.CoordinatorIdentityLabel] != id.ServiceAccount {
+		return nil, forbidden("session %s was not admitted to run as %s", c.session.Name, id.serviceAccountRef())
 	}
 	return c, nil
 }

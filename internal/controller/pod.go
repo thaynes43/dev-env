@@ -281,8 +281,8 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	// volume, never does. A named coordinator identity also needs the API's
 	// admission record (DESIGN-042 6.4, S4): the API alone enforces who may launch
 	// one and that one session holds each account. A session that reached such a
-	// profile any other way (kubectl, the standby, a create while the templates
-	// could not be read) runs as dev-env-agent.
+	// profile any other way (a kubectl create without the label, or a create while
+	// the templates could not be read) runs as dev-env-agent.
 	serviceAccount := ServiceAccountName
 	switch {
 	case hold:

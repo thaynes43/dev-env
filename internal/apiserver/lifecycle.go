@@ -12,6 +12,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/homeguard"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // Suspend and resume (DESIGN-001 3.4, D-60). Each sets spec.operatingMode, the
@@ -83,10 +84,15 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 		if cur == mode && (binding == nil || sess.Annotations[homeguard.Annotation] == binding.String()) {
 			return http.StatusOK, view(&sess, false), nil
 		}
-		if mode == v1alpha1.OperatingModeRunning {
-			// A resume starts a pod: a named coordinator identity's session
-			// waits until no other session holds the account (DESIGN-042 6.4).
+		// A resume of a named coordinator identity's session starts a pod that
+		// runs as the account (DESIGN-042 6.4). Its holder check and its patch
+		// run under the create lock, as a create's check and Create do, so a
+		// resume and a create on this replica cannot both pass.
+		identity := mode == v1alpha1.OperatingModeRunning && sess.Labels[templates.CoordinatorIdentityLabel] != ""
+		if identity {
+			s.createMu.Lock()
 			if err := s.admitNamedCoordinator(ctx, &sess); err != nil {
+				s.createMu.Unlock()
 				return 0, nil, err
 			}
 		}
@@ -111,6 +117,9 @@ func (s *Server) setOperatingMode(ctx context.Context, r *http.Request, c *calle
 			sess.Annotations[v1alpha1.AnnotationResumedAt] = s.now().UTC().Format(time.RFC3339)
 		}
 		err := s.Client.Patch(ctx, &sess, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+		if identity {
+			s.createMu.Unlock()
+		}
 		if apierrors.IsConflict(err) {
 			continue
 		}

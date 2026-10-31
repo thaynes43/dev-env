@@ -23,11 +23,17 @@ import (
 // dev-env-coordinator-<name>. Every name below is synthetic.
 const leadSA = "dev-env-coordinator-lead"
 
-// namedCoordinatorPod adds a session and its pod, as the reconciler builds it on
-// a profile that names account, and returns a token bound to that pod.
+// namedCoordinatorPod adds a session the API admitted to run as account, and its
+// pod, as the reconciler builds it on a profile that names account, and returns
+// a token bound to that pod.
 func namedCoordinatorPod(t *testing.T, f *fixture, name, account string, depth int) string {
 	t.Helper()
 	f.sessionPod(name, "coordinator", depth)
+	sess := f.session(name)
+	sess.Labels[templates.CoordinatorIdentityLabel] = account
+	if err := f.c.Update(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
 	var pod corev1.Pod
 	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: name}, &pod); err != nil {
 		t.Fatal(err)
@@ -101,12 +107,14 @@ func TestNamedCoordinatorSessionPodIsTheSession(t *testing.T) {
 }
 
 // A named coordinator identity's token speaks only for a session that controls
-// the pod it is bound to, and that pod must run as the token's own account.
-// There is no client fallback.
+// the pod it is bound to, that pod must run as the token's own account, and the
+// session must carry the API's admission record for it. There is no client
+// fallback.
 func TestNamedCoordinatorTokenWithoutItsSessionIsRefused(t *testing.T) {
 	for _, kind := range []string{
 		"unbound", "no-pod-uid", "pod-gone", "earlier-pod", "no-controller", "foreign-controller",
 		"session-gone", "earlier-session", "ordinary-session-pod", "other-coordinator-pod",
+		"unadmitted-session", "admitted-for-another",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixture(t)
@@ -173,6 +181,18 @@ func TestNamedCoordinatorTokenWithoutItsSessionIsRefused(t *testing.T) {
 					t.Fatal(err)
 				}
 				id.PodName, id.PodUID = o.Name, string(o.UID)
+			case "unadmitted-session", "admitted-for-another":
+				// The pod runs as the account, but the session lacks the API's
+				// admission record for it.
+				sess := f.session(name)
+				if kind == "unadmitted-session" {
+					delete(sess.Labels, templates.CoordinatorIdentityLabel)
+				} else {
+					sess.Labels[templates.CoordinatorIdentityLabel] = "dev-env-coordinator-other"
+				}
+				if err := f.c.Update(ctx, sess); err != nil {
+					t.Fatal(err)
+				}
 			}
 			c, err := f.srv.resolveCaller(ctx, id)
 			if err == nil {
@@ -185,6 +205,10 @@ func TestNamedCoordinatorTokenWithoutItsSessionIsRefused(t *testing.T) {
 			// These two pass every resolveSession check: only the pod-account
 			// check refuses them.
 			if (kind == "ordinary-session-pod" || kind == "other-coordinator-pod") && !strings.Contains(err.Error(), "does not run as") {
+				t.Fatalf("refused for another reason: %v", err)
+			}
+			// These pass every other check: only the admission record refuses them.
+			if (kind == "unadmitted-session" || kind == "admitted-for-another") && !strings.Contains(err.Error(), "was not admitted") {
 				t.Fatalf("refused for another reason: %v", err)
 			}
 		})
@@ -368,6 +392,11 @@ func TestNamedCoordinatorSessionUsesCoordinationRoutes(t *testing.T) {
 	f.srv.Policy.NamedCoordinatorIdentities = true
 	const name = "leadsender"
 	claimSession(t, f, name, humanSA)
+	sess := f.session(name)
+	sess.Labels[templates.CoordinatorIdentityLabel] = leadSA
+	if err := f.c.Update(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
 	var pod corev1.Pod
 	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: name}, &pod); err != nil {
 		t.Fatal(err)
