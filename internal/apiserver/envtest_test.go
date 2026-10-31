@@ -84,6 +84,10 @@ type live struct {
 }
 
 func startLive(t *testing.T) *live {
+	return startLiveWith(t, nil)
+}
+
+func startLiveWith(t *testing.T, configure func(*Server)) *live {
 	t.Helper()
 	cfg := envConfig(t)
 	ctx := context.Background()
@@ -138,6 +142,9 @@ func startLive(t *testing.T) *live {
 		},
 		Templates: TemplatesFrom(mgr.GetClient(), tkey),
 		Log:       logr.Discard(),
+	}
+	if configure != nil {
+		configure(api)
 	}
 	dir := t.TempDir()
 	pool := writeCert(t, dir)
