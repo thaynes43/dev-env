@@ -115,7 +115,7 @@ func (b *Broker) delegateGrantHolds(ctx context.Context, g *v1alpha1.AccessGrant
 		return fmt.Errorf("%w: requester session was replaced", ErrRefused)
 	}
 	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, &requester, false)); err != nil {
-		return fmt.Errorf("%w: %s", ErrRefused, err)
+		return fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	if err := b.delegateReach(ctx, d, &requester); err != nil {
 		return err
