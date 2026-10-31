@@ -252,3 +252,121 @@ normalization and content revisions; it does not record notification history,
 register a parent connector, or grant access. The current parent cannot consume
 arbitrary local stdio. Remote transport, authentication, source access and live
 acceptance require separate decisions. See [the source contract](../../../../docs/pages-mcp-readonly.md).
+
+## 13. Existing order and canonical claim join (2026-10-30, OP313)
+
+OP223 journal 3558 defines this source-only increment. A shared response
+projection in `internal/pages` joins the exact alert fingerprint and original
+`startsAt` string to an existing V1 order attempt, then to an existing TaskClaim
+or OpenProject work package. Portal detail and MCP list/get carry that same
+projection. Source interfaces only read; they cannot create claims, dispatch,
+retry or execute. Two readers obtain the same existing order and owner.
+
+The read-only source reference is haynes-ops at
+`0cfb60c2d55a4c13b7ca72f2dc78685ec7ff464b`:
+`.agents/runbooks/alert-responder.md`, `.agents/runbooks/agentic-remediation.md`,
+`kubernetes/main/apps/upgrade-agent/health-gate/app/resources/remediate.sh`, and
+`dev-env-ops/app/resources/{work-order-watch,order-status}.sh` under that same
+`upgrade-agent` directory. No runtime store was read.
+
+V1 uses two different keys. The diagnosis incident hash is the first 12 hex
+characters of SHA-256 of `fingerprint|startsAt`. The work-order ConfigMap
+`upgrade-agent/upgrade-work-orders` has a data key such as
+`rem-responder-<sig8>` whose value is a single JSON-encoded object. Only `status`,
+`created` and `updated` (Unix seconds stored as strings) are needed here, along
+with the actual data key. That order key can be reused and overwritten after a
+terminal attempt. It is not the incident hash. This projection never synthesizes
+an order key from labels or a fingerprint. Its source must evidence the exact
+alert-to-order association and the order's `created` value. A later reader must
+establish that association explicitly; the current store alone does not provide
+a universal fingerprint/start join. Missing association stays Unknown.
+Direct `esc-responder-<sig8>` and promoted `esc-rem-<sig8>` keys use the same
+order subset (`health-gate/app/resources/escalate.sh`); they are accepted only
+with an explicit incident binding too.
+
+`ResponderOrderSource` supplies a bounded order observation and its explicit
+alert identity binding. `CanonicalClaimSource` supplies the matching order key
+and creation timestamp, canonical reference (kind plus stable ID), owner and
+explicit state evidence with a timestamp and safe HTTPS evidence link. Each
+observation includes source attribution and observation time. TaskClaim has no
+lifecycle status: its mere existence cannot establish responding or resolution.
+Adapters must supply explicit workflow evidence; arbitrary order notes are not
+parsed into state. Neither adapter has a production implementation in this slice.
+
+The caller supplies an evaluation time and a positive maximum observation age.
+Unconfigured, unavailable, empty, stale, invalid, unjoined and mismatched
+observations remain distinct reasons for Unknown. No wall clock or cached
+fallback is used. Fresh observations must cover their event timestamps, claim
+state evidence must not predate the order attempt's `created` time, and both
+bindings must agree.
+
+V1 records only the order statuses `pending`, `claimed`, `done`, `failed` and
+`escalated` (haynes-ops `kubernetes/main/apps/upgrade-agent/dev-env-ops/app/resources/work-order-watch.sh` status
+flow and `order-status.sh`). `order-status.sh <key> working` is a heartbeat: it
+bumps `updated` and keeps the recorded status, so `working` is never a status.
+An order with any other status, empty included, is Invalid. A configured claim
+source is looked up only after the order joins; until then its condition is
+NotChecked, shown as "Not checked (order not joined)", never Unconfigured.
+Claimed/responding require explicit canonical evidence and a V1 `claimed`
+order. Needs-user requires explicit canonical evidence and an `escalated` or
+`failed` order. Resolved requires explicit canonical evidence and a `done`
+order. A claim state outside claimed, responding, needs-user and resolved is
+Invalid. A supported claim state that disagrees with the order status is
+Mismatched (fix of 2026-10-31): the projection withholds the owner and claim
+reference with the state, because a contradicted claim confirms neither. The
+portal shows "Mismatched (claim and order disagree)". Pending, failed,
+escalated, missing current alerts and old terminal records alone never mean
+resolved. A refire has a different start identity even if its order key is
+reused. Unknown fields are literal `Unknown`; unsafe evidence is never linked.
+
+The projected state is the responder's recorded workflow state, labelled
+"Response state" in the portal and `responseState`/`responseStateAt` in MCP. It
+is never the alert's own status. The current snapshot lists only active,
+suppressed and unprocessed alerts, so a `resolved` response state beside a
+listed alert means the responder recorded a resolution while Alertmanager still
+lists the alert. The projection does not hide it: it cannot observe the alert's
+end (an absent alert is not a historical absence), so gating on that would mean
+`resolved` never shows. The two fields stay side by side instead.
+
+Evidence links are rendered as the portal `href` and returned as the MCP
+`evidenceURL`, byte for byte. They require `https://`, Go's canonical form
+(`url.Parse(v).String() == v`), no credentials, port, query or fragment, and a
+character set that html/template neither escapes nor normalizes in an `href`:
+letters, digits and `-._~/%:@,;=!$*`. So spaces, quotes, angle brackets,
+backticks, backslashes, `&`, `+` and parentheses are rejected raw. A
+percent-decoded path also rejects spaces, quotes, angle brackets, backticks,
+backslashes, control and invisible formatting characters and `.`/`..` segments
+(an encoded `&` or `+` stays inert in the link). The
+host must be a lowercase DNS name with at least two labels whose last label
+starts with a letter: that rejects every IP literal a browser would parse
+(dotted, short, hex, octal or decimal IPv4 and bracketed IPv6), single-label
+names and `.localhost`. The existing redaction guard still applies. This is not
+an origin allowlist.
+
+The MCP content revision hashes the normalized items without the capture time
+or the response's `orderObservedAt` and `claimObservedAt`. A re-observing
+adapter therefore keeps the revision while the evidence is unchanged;
+conditions, sources and event times still count as content.
+
+Every Unknown field stays the literal `Unknown` rather than being omitted, so an
+Unconfigured response keeps UI/MCP parity and costs about 455 bytes per alert in
+MCP JSON (443 for the object, measured with a 16-hex fingerprint and a
+nanosecond start; `TestUnconfiguredResponseSize` bounds it at 448). Against the
+2 MiB normalized `all` bound that is the whole budget at about 4,600 alerts; a
+snapshot over the bound fails closed as Unavailable and is never truncated. A
+listed page of at most 100 items adds about 45 KB. This slice documents the
+cost and does not trim.
+
+Before any real order or claim adapter lands, two prerequisites must be met.
+First, evidence links need a fixed-origin allowlist (for example the canonical
+OpenProject and GitHub origins); the syntax checks above are not enough to keep
+a LAN or attacker host out. Second, sources need a batch or snapshot interface:
+the current per-alert interfaces make two lookups for every alert on every
+portal render and every `pages_list`/`pages_get`.
+
+Production entry points continue to use unconfigured response sources,
+`UnconfiguredStore` and `DisconnectedPagesControls`. No reader, endpoint, CRD,
+claim registry, access path, control or automation is activated. Synthetic table
+tests cover all states and failure distinctions, reused order attempts, refires,
+two callers, evidence sanitation and portal/MCP parity. Source and tested are
+separate from installed or accepted; this story claims only the former two.

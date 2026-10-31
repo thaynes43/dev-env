@@ -167,11 +167,23 @@ func servePages(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 // PagesWorkspace builds the read-only Pages document from the current snapshot.
 // Group bounds come from AggregateAlerts. Controls stay disconnected. This does not save, mute, or escalate.
 func PagesWorkspace(snapshot pages.AlertmanagerSnapshot, disabled bool) portal.PagesWorkspace {
+	return PagesWorkspaceWithResponses(context.Background(), snapshot, disabled, pages.ResponseSources{}, time.Time{})
+}
+
+// PagesWorkspaceWithResponses is the source-only assembly seam for existing
+// order/claim observations. Production calls PagesWorkspace, unconfigured.
+// It never connects controls or saves preferences.
+func PagesWorkspaceWithResponses(ctx context.Context, snapshot pages.AlertmanagerSnapshot, disabled bool, sources pages.ResponseSources, at time.Time) portal.PagesWorkspace {
 	agg, aggErr := pages.AggregateAlerts(snapshot)
 	condition := pagesCondition(agg, aggErr, disabled)
 	groups := []portal.PagesGroup{}
 	if condition == "available" {
-		groups = buildPagesGroups(snapshot, agg.Groups)
+		responses := make(map[pages.AlertIdentity]pages.ResponseProjection, len(snapshot.Alerts))
+		for _, alert := range snapshot.Alerts {
+			identity := pages.AlertIdentity{Fingerprint: alert.Fingerprint, StartsAt: alert.StartsAt}
+			responses[identity] = pages.ProjectResponse(ctx, identity, sources, at)
+		}
+		groups = buildPagesGroups(snapshot, agg.Groups, responses)
 	}
 	return portal.PagesWorkspace{
 		CallerCoverage: snapshot.Coverage,
@@ -202,7 +214,7 @@ func pagesCondition(agg pages.AlertAggregate, aggErr error, disabled bool) strin
 	}
 }
 
-func buildPagesGroups(snapshot pages.AlertmanagerSnapshot, groups []pages.AlertGroup) []portal.PagesGroup {
+func buildPagesGroups(snapshot pages.AlertmanagerSnapshot, groups []pages.AlertGroup, responses map[pages.AlertIdentity]pages.ResponseProjection) []portal.PagesGroup {
 	out := make([]portal.PagesGroup, 0, len(groups))
 	for i, group := range groups {
 		nameDisplay, nameEmpty := presentLabel(group.AlertName, group.AlertNameKnown)
@@ -220,7 +232,7 @@ func buildPagesGroups(snapshot pages.AlertmanagerSnapshot, groups []pages.AlertG
 			Count:            group.Count,
 			EarliestStart:    group.EarliestStart,
 			LatestUpdate:     group.LatestUpdate,
-			Alerts:           alertsInGroup(snapshot.Alerts, group),
+			Alerts:           alertsInGroup(snapshot.Alerts, group, responses),
 		})
 	}
 	markSelectedGroup(out, snapshot.Selection)
@@ -244,7 +256,7 @@ func markSelectedGroup(groups []portal.PagesGroup, selection string) {
 	groups[chosen].Default = true
 }
 
-func alertsInGroup(alerts []pages.AlertmanagerAlert, group pages.AlertGroup) []portal.PagesAlert {
+func alertsInGroup(alerts []pages.AlertmanagerAlert, group pages.AlertGroup, responses map[pages.AlertIdentity]pages.ResponseProjection) []portal.PagesAlert {
 	out := []portal.PagesAlert{}
 	for _, alert := range alerts {
 		if !samePagesGroup(alert, group) {
@@ -252,7 +264,9 @@ func alertsInGroup(alerts []pages.AlertmanagerAlert, group pages.AlertGroup) []p
 		}
 		name, nameOK := labelState(alert.Labels, "alertname")
 		display, empty := presentLabel(name, nameOK)
+		response := responses[pages.AlertIdentity{Fingerprint: alert.Fingerprint, StartsAt: alert.StartsAt}]
 		out = append(out, portal.PagesAlert{
+			Response:     &response,
 			Fingerprint:  alert.Fingerprint,
 			Name:         name,
 			NameKnown:    nameOK,

@@ -133,6 +133,7 @@ type PagesGroup struct {
 
 // PagesAlert is one current alert in the selected group's detail.
 type PagesAlert struct {
+	Response                    *pages.ResponseProjection
 	Fingerprint                 string
 	Name                        string
 	NameKnown                   bool
