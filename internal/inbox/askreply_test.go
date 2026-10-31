@@ -126,10 +126,10 @@ func TestInboxReplyIndexSelectsOnePartyBounded(t *testing.T) {
 	q, r := questionAndReply(t, s)
 	for _, tc := range []struct{ from, to *coord.SessionIdentity }{{&q.Spec.Recipient, nil}, {nil, &q.Spec.Sender}, {nil, nil}} {
 		got, err := s.ReplyIndex(ctx, "sample", tc.from, tc.to)
-		if err != nil || len(got) != 1 || got[0].UID != r.UID {
+		if err != nil || len(got) != 1 || got[0].UID != r.UID || got[0].Name != r.Name {
 			t.Fatal("reply index", err, got)
 		}
-		replies, err := RepliesOf(q, got)
+		replies, err := s.RepliesIn(ctx, q, got)
 		if err != nil || len(replies) != 1 || replies[0].UID != r.UID {
 			t.Fatal("replies of", err, replies)
 		}

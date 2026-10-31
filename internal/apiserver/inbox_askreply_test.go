@@ -574,14 +574,16 @@ func TestInboxAnsweredWaitsOnlyOnALiveAsker(t *testing.T) {
 	}
 }
 
-// countingLists counts InboxMessage list calls through the store.
+// countingLists counts InboxMessage list calls through the store, full or
+// metadata-only (the reply index).
 type countingLists struct {
 	client.Reader
 	n *int
 }
 
 func (r countingLists) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	if _, ok := list.(*coord.InboxMessageList); ok {
+	switch list.(type) {
+	case *coord.InboxMessageList, *metav1.PartialObjectMetadataList:
 		*r.n++
 	}
 	return r.Reader.List(ctx, list, opts...)

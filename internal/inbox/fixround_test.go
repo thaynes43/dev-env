@@ -103,17 +103,29 @@ func pagedFake(s KubeStore) KubeStore {
 		if err := c.List(ctx, list, &client.ListOptions{Namespace: o.Namespace, LabelSelector: o.LabelSelector}); err != nil {
 			return err
 		}
-		l, ok := list.(*coord.InboxMessageList)
-		if !ok || o.Limit == 0 {
+		var page func(start, end int)
+		var total int
+		var contp *string
+		switch l := list.(type) {
+		case *coord.InboxMessageList:
+			total, contp = len(l.Items), &l.Continue
+			page = func(start, end int) { l.Items = l.Items[start:end] }
+		case *metav1.PartialObjectMetadataList:
+			total, contp = len(l.Items), &l.Continue
+			page = func(start, end int) { l.Items = l.Items[start:end] }
+		default:
+			return nil
+		}
+		if o.Limit == 0 {
 			return nil
 		}
 		start, _ := strconv.Atoi(o.Continue)
-		end := min(start+int(o.Limit), len(l.Items))
-		l.Continue = ""
-		if end < len(l.Items) {
-			l.Continue = strconv.Itoa(end)
+		end := min(start+int(o.Limit), total)
+		*contp = ""
+		if end < total {
+			*contp = strconv.Itoa(end)
 		}
-		l.Items = l.Items[start:end]
+		page(start, end)
 		return nil
 	}})
 	return s

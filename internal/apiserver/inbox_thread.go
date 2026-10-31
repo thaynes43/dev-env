@@ -237,7 +237,7 @@ type repliesLookup func(context.Context, *coord.InboxMessage) ([]coord.InboxMess
 // box, or every reply in the project for a coordinator host. A failed or
 // oversized scan leaves each question on the page Unknown.
 func (s *Server) pageReplies(project string, caller *coord.SessionIdentity, sent bool) repliesLookup {
-	var index []coord.InboxMessage
+	var index []inbox.ReplyEntry
 	var err error
 	scanned := false
 	return func(ctx context.Context, q *coord.InboxMessage) ([]coord.InboxMessage, error) {
@@ -254,7 +254,7 @@ func (s *Server) pageReplies(project string, caller *coord.SessionIdentity, sent
 		if err != nil {
 			return nil, err
 		}
-		return inbox.RepliesOf(q, index)
+		return s.Inbox.RepliesIn(ctx, q, index)
 	}
 }
 
