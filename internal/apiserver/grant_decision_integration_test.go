@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -206,5 +207,40 @@ func TestGrantDecisionCombinedRechecksDelegate(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGrantDecisionCombinedTransientReadRetainsLease(t *testing.T) {
+	f, _, tok, lead, g := combinedDelegateFixture(t)
+	w := f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tok, decisionFor(g, true))
+	if w.Code != http.StatusAccepted {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	b := combinedBroker(f)
+	reconcileCombined(t, f, b, g.Name, 3)
+	if st := f.grant(g.Name).Status; st.Phase != v1alpha1.GrantActive {
+		t.Fatalf("not active before fault: %+v", st)
+	}
+	transient := errors.New("synthetic live ancestry read failure")
+	reads := 0
+	b.APIReader = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if key.Namespace == sessionNS && key.Name == lead {
+			reads++
+			if reads == 2 {
+				return transient
+			}
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	_, err := b.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: sessionNS, Name: g.Name}})
+	if !errors.Is(err, transient) {
+		t.Fatalf("want retryable ancestry failure, got %v (reads %d)", err, reads)
+	}
+	if st := f.grant(g.Name).Status; st.Phase != v1alpha1.GrantActive {
+		t.Fatalf("transient read revoked lease: %+v", st)
+	}
+	reconcileCombined(t, f, b, g.Name, 1)
+	if st := f.grant(g.Name).Status; st.Phase != v1alpha1.GrantActive {
+		t.Fatalf("did not recover: %+v", st)
 	}
 }
