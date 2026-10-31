@@ -1,10 +1,10 @@
 # ADR-016: Refuse uncovered delegate decisions and recover invalid Pending slots
 
-- **Status:** Proposed source correction, 2026-10-31; OP335 lead review held. Activation held.
+- **Status:** Accepted 2026-10-31 for source preparation only. Activation held.
 - **Amends:** ADR-015's treatment of the shared decision slot and Forbidden identity reads. ADR-015 remains unchanged as the historical accepted record.
 - **Tracking:** OpenProject #335, origin #233; supersedes the held S2 source in PR #791.
-- **Authority:** OP335's bounded continuation work order permits source preparation and one replacement draft PR, with no ready action, merge or activation.
-- **Merge prerequisite:** Tom or Meatball must accept ADR-016 before merge, alongside the held lead source re-review. This writer leaves the ADR Proposed and the PR draft.
+- **Authority:** Lead ruling (dev-env-1029-132039, OP335) under the coordinator's direction for routine source-design decisions. This records source behavior, not activation consent; the PROPOSED RBAC and admission changes are not accepted.
+- **Merge prerequisite:** Satisfied by the lead ruling above for source merge; the activation bundle remains held.
 
 An authenticated, eligible delegate must have live delegated GrantPolicy coverage
 before recording either an approval or denial. The API lists policies through its
