@@ -189,3 +189,33 @@ func TestInboxThreadOutputIsCheckedAndOlderAPIsAreNamed(t *testing.T) {
 		}
 	}
 }
+
+// An API with --enable-inbox-questions off refuses view=thread and box=sent.
+// Plain list and read must keep working against it, as before the flag.
+func TestInboxListAndReadFallBackWhenQuestionsAreOff(t *testing.T) {
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.URL.Query().Get(apiv1.InboxViewQuery) != "" || r.URL.Query().Get(apiv1.InboxBoxQuery) != "" {
+			writeTestJSON(w, http.StatusBadRequest, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeBadRequest, Message: "PRIVATE_BODY"}})
+			return
+		}
+		switch r.URL.Path {
+		case apiv1.InboxPath:
+			writeTestJSON(w, 200, apiv1.InboxList{Items: []apiv1.InboxMetadata{{Name: askQuestion, UID: "q-uid", Project: "p"}}})
+		default:
+			writeTestJSON(w, 200, apiv1.InboxMessage{InboxMetadata: apiv1.InboxMetadata{Name: askQuestion, UID: "q-uid", Project: "p"}, Text: "plain text"})
+		}
+	}
+	h.mustRun(ExitOK, "inbox", "list", "--project", "p")
+	if !strings.Contains(h.stdout.String(), askQuestion) || !strings.Contains(h.stderr.String(), "no thread view") {
+		t.Fatalf("plain list: %q %q", h.stdout.String(), h.stderr.String())
+	}
+	h.mustRun(ExitOK, "inbox", "read", askQuestion, "--project", "p")
+	if h.stdout.String() != "plain text" {
+		t.Fatalf("plain read: %q", h.stdout.String())
+	}
+	h.mustRun(ExitFailed, "inbox", "list", "--project", "p", "--sent")
+	if !strings.Contains(h.stderr.String(), "does not list sent messages") || strings.Contains(h.stderr.String(), "PRIVATE_BODY") {
+		t.Fatalf("--sent refusal: %q", h.stderr.String())
+	}
+}

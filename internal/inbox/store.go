@@ -18,6 +18,8 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -43,8 +45,8 @@ const (
 	// MaxReplies bounds one reply lookup. The API refuses a second distinct
 	// reply, so more than one only follows a race between two replies.
 	MaxReplies = 8
-	// MaxReplyPages bounds a thread list's one reply index, 100 per page.
-	MaxReplyPages = 10
+	// replyPageSize is the page size of a thread list's one reply index.
+	replyPageSize = 100
 )
 
 // ErrLimit means a new message would exceed its sender's or its project's
@@ -56,10 +58,14 @@ var DefaultLimits = taskclaim.Limits{PerSession: 512, PerProject: 4096}
 
 var (
 	ErrUnavailable = errors.New("inbox observation is unconfirmed")
-	ErrNotFound    = errors.New("inbox record not found")
-	keyPattern     = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
-	uidPattern     = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
-	modelPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$`)
+	// ErrSchemaNotUpgraded means the cluster's InboxMessage schema prunes the
+	// kind or inReplyTo of a question or reply, so storing it would leave a
+	// record that stays invalid. Nothing was written.
+	ErrSchemaNotUpgraded = errors.New("inbox schema not upgraded")
+	ErrNotFound          = errors.New("inbox record not found")
+	keyPattern           = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
+	uidPattern           = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+	modelPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$`)
 )
 
 func digest(v any) string {
@@ -238,6 +244,11 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 			}
 			return nil, false, ErrUnavailable
 		}
+		if spec.Kind != "" {
+			if err := s.checkSchema(ctx, spec); err != nil {
+				return nil, false, err
+			}
+		}
 	} else if err != nil {
 		return nil, false, ErrUnavailable
 	}
@@ -257,6 +268,35 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 		return nil, false, ErrUnavailable
 	}
 	return observed, false, nil
+}
+
+// checkSchema dry-runs the create of a question or reply and compares what the
+// API server would store. A CRD from before kind and inReplyTo prunes both
+// without an error, and the stored record would fail every later read. The
+// dry-run uses the create permission the real create already needs. Its answer
+// is read into an unstructured object, which a response replaces whole, so a
+// pruned field cannot survive from the request.
+func (s KubeStore) checkSchema(ctx context.Context, spec coord.InboxMessageSpec) error {
+	probe := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageName(spec.Sender, spec.Key), Labels: messageLabels(spec)}, Spec: spec}
+	fields, err := runtime.DefaultUnstructuredConverter.ToUnstructured(probe)
+	if err != nil {
+		return ErrUnavailable
+	}
+	u := &unstructured.Unstructured{Object: fields}
+	u.SetGroupVersionKind(coord.GroupVersion.WithKind("InboxMessage"))
+	switch err := s.Client.Create(ctx, u, client.DryRunAll); {
+	case apierrors.IsAlreadyExists(err):
+		// A concurrent create of the same intent; the real create confirms it.
+		return nil
+	case err != nil:
+		return ErrUnavailable
+	}
+	kind, _, _ := unstructured.NestedString(u.Object, "spec", "kind")
+	_, hasReplyTo, _ := unstructured.NestedMap(u.Object, "spec", "inReplyTo")
+	if kind != spec.Kind || hasReplyTo != (spec.InReplyTo != nil) {
+		return ErrSchemaNotUpgraded
+	}
+	return nil
 }
 func (s KubeStore) ReadAck(ctx context.Context, m *coord.InboxMessage) (*coord.InboxReadAck, error) {
 	if !s.ready() || !s.validMessage(m) {
@@ -387,10 +427,12 @@ func RepliesOf(q *coord.InboxMessage, candidates []coord.InboxMessage) ([]coord.
 	return out, nil
 }
 
-// ReplyIndex lists, in at most MaxReplyPages pages, the live replies in
-// project sent by from or addressed to to (either may be nil), so one thread
-// list page needs one bounded scan instead of one per question. More than the
-// bound is ErrUnavailable.
+// ReplyIndex lists, in pages of 100 up to the project's message limit, the
+// live replies in project sent by from or addressed to to (either may be nil),
+// so one thread list page needs one bounded scan instead of one per question.
+// Replies are messages, so the project limit bounds them; the scan covers it
+// whole, and a limit raised after the fact leaves a longer index ErrUnavailable
+// (state Unknown) rather than a guess.
 func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coord.SessionIdentity) ([]coord.InboxMessage, error) {
 	if !s.ready() || !projectcatalog.ValidName(project) || (from != nil && !ValidSession(*from)) || (to != nil && !ValidSession(*to)) {
 		return nil, ErrUnavailable
@@ -404,9 +446,10 @@ func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coo
 	}
 	var out []coord.InboxMessage
 	cursor := ""
-	for page := 0; page < MaxReplyPages; page++ {
+	pages := (s.Limits.Effective(DefaultLimits).PerProject + replyPageSize - 1) / replyPageSize
+	for page := int64(0); page < pages; page++ {
 		var list coord.InboxMessageList
-		if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(100), client.Continue(cursor)) != nil || len(list.Items) > 100 || len(list.Continue) > 4096 {
+		if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(replyPageSize), client.Continue(cursor)) != nil || len(list.Items) > replyPageSize || len(list.Continue) > 4096 {
 			return nil, ErrUnavailable
 		}
 		for i := range list.Items {

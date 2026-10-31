@@ -29,6 +29,21 @@ func inboxHidden() error { return notFound("inbox record not found") }
 func inboxUnknown() error {
 	return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "inbox outcome Unknown; retry the same intent and key")
 }
+
+const inboxQuestionsOff = "inbox questions and replies are not enabled"
+
+// inboxQueryGated reads the optional thread view and sent box. Both belong to
+// questions and replies, so --enable-inbox-questions gates them as it gates
+// publishing: with it off they are refused, not ignored.
+func (s *Server) inboxQueryGated(q url.Values) (thread, sent bool, err error) {
+	if thread, sent, err = inboxQuery(q); err != nil {
+		return false, false, err
+	}
+	if (thread || sent) && !s.InboxQuestions {
+		return false, false, badRequest("%s; nothing was listed", inboxQuestionsOff)
+	}
+	return thread, sent, nil
+}
 func (s *Server) inboxAvailable() error {
 	if s.Inbox == nil || s.Live == nil || s.Projects == nil || len(s.InboxProjects) == 0 {
 		return newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "durable inbox is not enabled")
@@ -152,7 +167,7 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 		return 0, nil, badRequest("a plain message names its recipient exactly, a question names a recipient Session or its parent, and a reply names its question only")
 	}
 	if req.Kind != "" && !s.InboxQuestions {
-		return 0, nil, badRequest("inbox questions and replies are not enabled; nothing was sent")
+		return 0, nil, badRequest("%s; nothing was sent", inboxQuestionsOff)
 	}
 	if c.kind != kindSession || !slices.Contains(s.InboxProjects, req.Project) {
 		return 0, nil, inboxHidden()
@@ -225,6 +240,9 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	if errors.Is(err, inbox.ErrLimit) {
 		return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded, "inbox message limit reached for this sender Session or project; nothing was sent")
 	}
+	if errors.Is(err, inbox.ErrSchemaNotUpgraded) {
+		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "inbox schema not upgraded; nothing was sent")
+	}
 	if err != nil {
 		return 0, nil, inboxUnknown()
 	}
@@ -292,7 +310,7 @@ func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller
 	return m, nil, nil
 }
 func (s *Server) readInbox(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
-	thread, sent, err := inboxQuery(r.URL.Query())
+	thread, sent, err := s.inboxQueryGated(r.URL.Query())
 	if err != nil {
 		return 0, nil, err
 	}
@@ -325,7 +343,7 @@ func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if err := s.inboxAvailable(); err != nil {
 		return 0, nil, err
 	}
-	thread, sent, err := inboxQuery(r.URL.Query())
+	thread, sent, err := s.inboxQueryGated(r.URL.Query())
 	if err != nil {
 		return 0, nil, err
 	}

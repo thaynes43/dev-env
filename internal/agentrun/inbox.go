@@ -164,6 +164,14 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 	case "list":
 		var result apiv1.InboxList
 		status, callErr := a.callWith(ctx, &one, method, path, q, nil, &result, false)
+		if status == http.StatusBadRequest && sent {
+			return fail(ExitFailed, "inbox list --sent was refused (400): this API does not list sent messages (not enabled, or older)")
+		}
+		if status == http.StatusBadRequest {
+			// An API with questions off refuses the thread view; the plain list is read-only and safe to ask again.
+			q.Del(apiv1.InboxViewQuery)
+			status, callErr = a.callWith(ctx, &one, method, path, q, nil, &result, false)
+		}
 		if callErr != nil {
 			return inboxSafeError(status, callErr)
 		}
@@ -186,6 +194,11 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 	case "read":
 		var result apiv1.InboxMessage
 		status, callErr := a.callWith(ctx, &one, method, path, q, nil, &result, false)
+		if status == http.StatusBadRequest {
+			// An API with questions off refuses the thread view; the plain read is safe to ask again.
+			q.Del(apiv1.InboxViewQuery)
+			status, callErr = a.callWith(ctx, &one, method, path, q, nil, &result, false)
+		}
 		if callErr != nil {
 			return inboxSafeError(status, callErr)
 		}

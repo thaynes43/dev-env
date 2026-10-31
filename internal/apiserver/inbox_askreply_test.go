@@ -13,7 +13,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -443,9 +445,34 @@ func TestInboxQuestionsAreOffByDefault(t *testing.T) {
 	if n := countMessages(t, f); n != 2 {
 		t.Fatal("a refused question or reply was written", n)
 	}
-	// Reads still work; a plain item shows kind plain and no thread.
-	item := itemNamed(t, threadList(t, f, lead, ""), plain.Name)
-	if item.Kind != apiv1.InboxKindPlain || item.Thread != nil || item.InReplyTo != nil {
+	// The flag gates every question path: the thread view of a list and of a
+	// read, and the sent box, are refused too, not ignored.
+	for _, tc := range []struct{ name, path, tok string }{
+		{"list thread view", apiv1.InboxPath + "?project=sample&view=thread", lead},
+		{"list thread view with sent box", apiv1.InboxPath + "?project=sample&view=thread&box=sent", child},
+		{"list sent box", apiv1.InboxPath + "?project=sample&box=sent", child},
+		{"read thread view", apiv1.InboxPath + "/" + plain.Name + "?project=sample&view=thread", lead},
+		{"read of a question, thread view", apiv1.InboxPath + "/" + q.Name + "?project=sample&view=thread", lead},
+	} {
+		w := f.do(http.MethodGet, tc.path, tc.tok, nil)
+		wantError(t, w, http.StatusBadRequest, apiv1.CodeBadRequest)
+		if !strings.Contains(w.Body.String(), "not enabled") {
+			t.Fatalf("%s: refusal does not say why: %s", tc.name, w.Body.String())
+		}
+	}
+	// Plain reads keep the older shape: no kind, no thread.
+	w := f.do(http.MethodGet, apiv1.InboxPath+"?project=sample", lead, nil)
+	list := decode[apiv1.InboxList](t, w)
+	item := itemNamed(t, list, plain.Name)
+	if w.Code != http.StatusOK || list.View != "" || list.Box != "" || item.Kind != "" || item.Thread != nil || item.InReplyTo != nil {
+		t.Fatal("plain list changed shape with the flag off", w.Code, w.Body.String())
+	}
+	if w := f.do(http.MethodGet, apiv1.InboxPath+"/"+plain.Name+"?project=sample", lead, nil); w.Code != http.StatusOK {
+		t.Fatal("plain read with the flag off", w.Code, w.Body.String())
+	}
+	// On again, the same paths work.
+	f.srv.InboxQuestions = true
+	if item := itemNamed(t, threadList(t, f, lead, ""), plain.Name); item.Kind != apiv1.InboxKindPlain || item.Thread != nil || item.InReplyTo != nil {
 		t.Fatal("plain item in the thread view", item)
 	}
 }
@@ -631,4 +658,100 @@ func TestInboxThreadReadsFenceTheCallerAfterward(t *testing.T) {
 		f.srv.Inbox.Live = podLossDuringReplyLookup{f.c, f, "lead"}
 		wantError(t, f.do(http.MethodGet, path(q), lead, nil), http.StatusNotFound, apiv1.CodeNotFound)
 	}
+}
+
+// A named question and a parent-addressed one are different intents, even
+// when the named recipient happens to be, or is not, the recorded parent.
+func TestInboxParentRetryOfANamedQuestionIsAConflict(t *testing.T) {
+	f, _, child, _ := askReplyFixture(t)
+	named := askParent("q-n", "Which base?")
+	named.ToParent, named.Recipient = false, apiv1.TaskClaimOwner{Name: "bystander"}
+	publish(t, f, child, named, http.StatusCreated)
+	// The same key and text, now asking for the parent: the stored recipient
+	// is the bystander, not the parent, so it must not be bound to this intent.
+	publish(t, f, child, askParent("q-n", "Which base?"), http.StatusConflict)
+	publish(t, f, child, named, http.StatusOK)
+	if n := countMessages(t, f); n != 1 {
+		t.Fatal("a conflicting retry wrote a record", n)
+	}
+}
+
+// The recorded usage parent UID binds a parent-addressed retry as it binds a
+// new ask: a question stored for the parent by name is not confirmed as an
+// ask for a parent whose recorded UID differs.
+func TestInboxParentRetryKeepsTheUsageParentUID(t *testing.T) {
+	f, _, child, _ := askReplyFixture(t)
+	named := askParent("q-u", "Which base?")
+	named.ToParent, named.Recipient = false, apiv1.TaskClaimOwner{Name: "lead"}
+	publish(t, f, child, named, http.StatusCreated)
+	// While the recorded UID is unset, the same intent asked of the parent is confirmed.
+	publish(t, f, child, askParent("q-u", "Which base?"), http.StatusOK)
+	s := f.session("child")
+	s.Spec.UsageCaptureParentUID = "earlier-parent-uid"
+	if err := f.c.Update(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	publish(t, f, child, askParent("q-u", "Which base?"), http.StatusConflict)
+}
+
+// A question whose recipient was archived or failed can never be answered.
+func TestInboxArchivedOrFailedRecipientEnded(t *testing.T) {
+	for _, phase := range []v1alpha1.SessionPhase{v1alpha1.PhaseArchived, v1alpha1.PhaseFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			f, _, child, _ := askReplyFixture(t)
+			q := publish(t, f, child, apiv1.PublishInboxRequest{Project: "sample", Key: "q-e", Text: "x", Kind: apiv1.InboxKindQuestion, Recipient: apiv1.TaskClaimOwner{Name: "bystander"}}, http.StatusCreated)
+			if got := itemNamed(t, threadList(t, f, child, "&box=sent"), q.Name).Thread; got.State != apiv1.InboxStateUnanswered {
+				t.Fatal("a live recipient", got)
+			}
+			b := f.session("bystander")
+			b.Status.Phase = phase
+			if err := f.c.Status().Update(context.Background(), b); err != nil {
+				t.Fatal(err)
+			}
+			if got := itemNamed(t, threadList(t, f, child, "&box=sent"), q.Name).Thread; got.State != apiv1.InboxStateRecipientEnded || got.WaitingOn != nil {
+				t.Fatalf("%s recipient: %+v", phase, got)
+			}
+		})
+	}
+}
+
+// Enabling the flag against a CRD from before kind and inReplyTo would store a
+// record that stays invalid. The API refuses with 503 and writes nothing.
+func TestInboxQuestionsRefuseAnOldSchema(t *testing.T) {
+	f, lead, child, _ := askReplyFixture(t)
+	q := publish(t, f, child, askParent("q-ok", "x"), http.StatusCreated)
+	inner := f.srv.Inbox.Client
+	real := 0
+	f.srv.Inbox.Client = interceptor.NewClient(inner.(client.WithWatch), interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		var o client.CreateOptions
+		o.ApplyOptions(opts)
+		if len(o.DryRun) == 0 {
+			real++
+			return c.Create(ctx, obj, opts...)
+		}
+		if err := c.Create(ctx, obj, opts...); err != nil {
+			return err
+		}
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			unstructured.RemoveNestedField(u.Object, "spec", "kind")
+			unstructured.RemoveNestedField(u.Object, "spec", "inReplyTo")
+		}
+		return nil
+	}})
+	before := countMessages(t, f)
+	for _, tc := range []struct {
+		name, tok string
+		req       apiv1.PublishInboxRequest
+	}{{"ask", child, askParent("q-old", "x")}, {"reply", lead, replyTo(q, "r-old", "x")}} {
+		w := f.do(http.MethodPost, apiv1.InboxPath, tc.tok, tc.req)
+		wantError(t, w, http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+		if !strings.Contains(w.Body.String(), "inbox schema not upgraded") || strings.Contains(w.Body.String(), "retry the same intent") {
+			t.Fatalf("%s: the reason is not the fixed schema reason: %s", tc.name, w.Body.String())
+		}
+	}
+	if n := countMessages(t, f); n != before || real != 0 {
+		t.Fatal("an old schema let a question or reply through", n, before, real)
+	}
+	// Plain messages are unaffected.
+	publish(t, f, child, apiv1.PublishInboxRequest{Project: "sample", Recipient: owner(f, "lead"), Key: "plain-old", Text: "fyi"}, http.StatusCreated)
 }

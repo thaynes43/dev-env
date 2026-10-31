@@ -257,7 +257,13 @@ func TestInboxCLIRunRetainsSenderAttribution(t *testing.T) {
 		if len(args) > 1 && args[1] == "ack" {
 			wantAck++
 		}
-		if !strings.Contains(errOut, "inbox record or authorized scope was not found (404)") || strings.Contains(combined, "not an API error") || inboxDigest(t, f) != kept || requests.Load() != beforeReq+1 || publishPosts.Load() != wantPublish || ackPosts.Load() != wantAck {
+		// This fixture keeps questions off, so a read first asks for the thread
+		// view, is refused (400), and asks again for the plain message.
+		wantReq := int32(1)
+		if len(args) > 1 && args[1] == "read" {
+			wantReq = 2
+		}
+		if !strings.Contains(errOut, "inbox record or authorized scope was not found (404)") || strings.Contains(combined, "not an API error") || inboxDigest(t, f) != kept || requests.Load() != beforeReq+wantReq || publishPosts.Load() != wantPublish || ackPosts.Load() != wantAck {
 			t.Fatalf("%s classification or store: requests %d publish %d ack %d\n%s", name, requests.Load()-beforeReq, publishPosts.Load(), ackPosts.Load(), combined)
 		}
 		for _, secret := range []string{claudeText, codexText, token, claudeTok, codexTok, recipientTok, legacyTok, unboundTok} {
