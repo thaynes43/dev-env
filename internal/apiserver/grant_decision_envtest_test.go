@@ -41,6 +41,7 @@ func TestEnvtestGrantDecisionNamedCoordinatorLaunch(t *testing.T) {
 		s.Policy.WorkbenchServiceAccount = templates.WorkbenchServiceAccount
 		s.Policy.Clients = append(s.Policy.Clients, sessionNS+"/"+templates.WorkbenchServiceAccount)
 		s.GrantDelegates = []string{delegateSessionSA}
+		s.PolicyNamespace = "dev-env-system"
 		s.Templates = func(context.Context) (*templates.Templates, error) { return tmpl, nil }
 	})
 	for _, account := range []string{templates.WorkbenchServiceAccount, leadSA} {
@@ -104,13 +105,24 @@ func TestEnvtestGrantDecisionNamedCoordinatorLaunch(t *testing.T) {
 	bad := decisionFor(g, true)
 	bad.Digest = "stale"
 	l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), leadTok, bad, http.StatusConflict)
-	got := unmarshal[apiv1.Grant](t, l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), leadTok, decisionFor(g, true), http.StatusAccepted))
-	if got.Phase != apiv1.GrantPending {
-		t.Fatalf("202 must not claim Active: %+v", got)
+	// No policy yet: neither an approval nor a denial may consume the slot.
+	for _, approve := range []bool{true, false} {
+		l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), leadTok, decisionFor(g, approve), http.StatusForbidden)
+	}
+	var undecided v1alpha1.AccessGrant
+	if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: g.Name}, &undecided); err != nil {
+		t.Fatal(err)
+	}
+	if undecided.Annotations[broker.MaintenanceDecisionAnnotation] != "" {
+		t.Fatal("uncovered real-token decision consumed the slot")
 	}
 	p := &v1alpha1.GrantPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-env-system", Name: "combined-real-token"}, Spec: v1alpha1.GrantPolicySpec{Description: "offline fixture", Type: v1alpha1.GrantKube, Delegated: &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}, Kube: &v1alpha1.KubePolicy{Roles: []string{v1alpha1.RoleWorkloads}, Namespaces: []string{"frontend"}}, MaxTTL: metav1.Duration{Duration: time.Hour}}}
 	if err := l.k8s.Create(ctx, p); err != nil {
 		t.Fatal(err)
+	}
+	got := unmarshal[apiv1.Grant](t, l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), leadTok, decisionFor(g, true), http.StatusAccepted))
+	if got.Phase != apiv1.GrantPending {
+		t.Fatalf("202 must not claim Active: %+v", got)
 	}
 	b := &broker.Broker{Client: l.k8s, APIReader: l.k8s, SessionNamespace: sessionNS, PolicyNamespace: "dev-env-system", GrantDelegates: []string{delegateSessionSA}, Clock: clock.RealClock{}}
 	key := types.NamespacedName{Namespace: sessionNS, Name: g.Name}

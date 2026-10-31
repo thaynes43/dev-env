@@ -39,3 +39,22 @@ func TestGrantDelegatesFlag(t *testing.T) {
 		})
 	}
 }
+
+func TestDelegatePolicyNamespaceFlag(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "operator-system")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{want: "operator-system"},
+		{args: []string{"--policy-namespace=grant-policies"}, want: "grant-policies"},
+	} {
+		o, err := parseFlags(tc.args)
+		if err != nil || o.policyNamespace != tc.want {
+			t.Fatalf("policy namespace=%q error=%v, want %q", o.policyNamespace, err, tc.want)
+		}
+	}
+	if _, err := parseFlags([]string{"--policy-namespace="}); err == nil {
+		t.Fatal("empty policy namespace accepted")
+	}
+}

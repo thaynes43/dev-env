@@ -13,11 +13,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -64,6 +66,7 @@ func delegateFixture(t *testing.T) (*fixture, string, apiv1.Grant) {
 	f.srv.Policy.CoordinatorEnabled = true
 	f.srv.Policy.Coordinators = []CoordinatorHost{{ServiceAccount: coordinatorSA, PodName: host.Name, HostID: "host-a"}}
 	f.srv.GrantDelegates = []string{coordinatorSA, delegateSessionSA}
+	f.srv.PolicyNamespace = "dev-env-system"
 	f.srv.Policy.NamedCoordinatorIdentities = true
 	f.h = f.srv.Handler()
 	tok := f.sessionPod("requester", "full", 0)
@@ -72,6 +75,7 @@ func delegateFixture(t *testing.T) (*fixture, string, apiv1.Grant) {
 	if g.UID == "" || g.ScopeDigest == "" {
 		t.Fatalf("the grant view lacks what a delegate echoes: %+v", g)
 	}
+	f.addDelegatedPolicy(f.grant(g.Name))
 	return f, tok, g
 }
 
@@ -222,12 +226,6 @@ func TestGrantDecisionCoordinatorHostApproves(t *testing.T) {
 	}
 	wantError(t, f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tokCoordinator, decisionFor(g, true)), http.StatusConflict, apiv1.CodeConflict)
 
-	p := &v1alpha1.GrantPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-env-system", Name: "kube-workloads"},
-		Spec: v1alpha1.GrantPolicySpec{Description: "test", Type: v1alpha1.GrantKube, Delegated: &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}},
-			Kube: &v1alpha1.KubePolicy{Roles: []string{v1alpha1.RoleWorkloads}, Namespaces: []string{"frontend"}}, MaxTTL: metav1.Duration{Duration: 3 * time.Hour}}}
-	if err := f.c.Create(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
 	var pod corev1.Pod
 	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "requester"}, &pod); err != nil {
 		t.Fatal(err)
@@ -568,7 +566,7 @@ func TestGrantDecisionConcurrentDecisionsRecordOne(t *testing.T) {
 	other := host // The same delegate races through two operator replicas.
 	replica := func(c client.Client) *Server {
 		return &Server{Client: c, Live: f.c, Auth: f.auth, Policy: f.srv.Policy, GrantDelegates: f.srv.GrantDelegates,
-			Log: f.srv.Log, Now: f.srv.Now}
+			PolicyNamespace: f.srv.PolicyNamespace, Log: f.srv.Log, Now: f.srv.Now}
 	}
 	b := replica(f.c)
 	var second struct {
@@ -682,6 +680,7 @@ func TestGrantDecisionRefusesMaintenanceParticipants(t *testing.T) {
 	if status != http.StatusForbidden || ae == nil || !strings.Contains(ae.body.Message, "named in the maintenance envelope") {
 		t.Fatalf("a named worker decided: %d %v", status, ae)
 	}
+	f.addDelegatedPolicy(f.grant(got.Name))
 	// Another delegate decides it, through ScopeDigest, never the human digest.
 	lead := f.delegateSession("maintenance-lead", humanSA, 0)
 	f.reparent("maintenance-parent", lead.session.Name)
@@ -893,11 +892,169 @@ func TestGrantDecisionMaintenanceExtension(t *testing.T) {
 	f.h = f.srv.Handler()
 	req.Maintenance.ExtensionOf = "grant-earlier"
 	g := f.request(parent, req, http.StatusCreated)
+	f.addDelegatedPolicy(f.grant(g.Name))
 	id := saIdentity(delegateSessionSA)
 	id.PodName, id.PodUID = lead.pod.Name, string(lead.pod.UID)
 	f.auth["tok-extension-lead"] = id
 	w := f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), "tok-extension-lead", decisionFor(g, true))
 	if w.Code != http.StatusAccepted || decode[apiv1.Grant](t, w).Phase != apiv1.GrantPending {
 		t.Fatalf("fresh extension decision: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// addDelegatedPolicy supplies explicit coverage before a fixture decides.
+func (f *fixture) addDelegatedPolicy(g *v1alpha1.AccessGrant) *v1alpha1.GrantPolicy {
+	f.t.Helper()
+	f.srv.PolicyNamespace = "dev-env-system"
+	p := &v1alpha1.GrantPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: f.srv.PolicyNamespace, Name: "delegate-fixture-" + g.Name},
+		Spec: v1alpha1.GrantPolicySpec{Description: "offline fixture", Type: g.Spec.Type,
+			Delegated: &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}},
+			MaxTTL:    metav1.Duration{Duration: 3 * time.Hour}}}
+	if g.Spec.Kube != nil {
+		p.Spec.Kube = &v1alpha1.KubePolicy{Roles: []string{g.Spec.Kube.Role}, Namespaces: g.Spec.Kube.Namespaces}
+	}
+	if m := g.Spec.Maintenance; m != nil {
+		p.Spec.Maintenance = &v1alpha1.MaintenancePolicy{Node: m.Node, NodeUID: m.NodeUID, Resource: m.Resource, RuntimeProfile: m.RuntimeProfile,
+			Capabilities: m.Capabilities, Image: m.Image, MaxCPUMillis: m.CPUMillis, MaxMemoryMiB: m.MemoryMiB, Workers: m.Workers, Devices: m.Devices, ReadOnlyMounts: m.ReadOnlyMounts}
+	}
+	if err := f.c.Create(context.Background(), p); err != nil {
+		f.t.Fatal(err)
+	}
+	return p
+}
+
+func TestGrantDecisionUncoveredLeavesHumanSlot(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(strconv.FormatBool(approve), func(t *testing.T) {
+			f, parent, _, req := maintenanceAPI(t)
+			lead := f.delegateSession("slot-lead", humanSA, 0)
+			f.reparent("maintenance-parent", lead.session.Name)
+			f.srv.GrantDelegates = []string{delegateSessionSA}
+			f.srv.PolicyNamespace = "dev-env-system"
+			f.h = f.srv.Handler()
+			g := f.request(parent, req, http.StatusCreated)
+			if status, code := f.decideAs(lead, g.Name, decisionFor(g, approve)); status != http.StatusForbidden || code != apiv1.CodeForbidden {
+				t.Fatalf("uncovered decision: %d %s", status, code)
+			}
+			if raw := f.grant(g.Name).Annotations[broker.MaintenanceDecisionAnnotation]; raw != "" {
+				t.Fatal("uncovered decision consumed the slot")
+			}
+			w := f.do(http.MethodPost, apiv1.GrantPath(g.Name)+"/maintenance-decision", tokHuman,
+				apiv1.MaintenanceDecisionRequest{GrantUID: g.UID, Digest: g.MaintenanceDigest, Approve: true})
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("human decision after refusal: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestGrantDecisionInvalidatedMaintenanceSlotAcceptsHuman(t *testing.T) {
+	f, parent, _, req := maintenanceAPI(t)
+	lead := f.delegateSession("slot-lead", humanSA, 0)
+	f.reparent("maintenance-parent", lead.session.Name)
+	f.srv.GrantDelegates = []string{delegateSessionSA}
+	f.h = f.srv.Handler()
+	g := f.request(parent, req, http.StatusCreated)
+	p := f.addDelegatedPolicy(f.grant(g.Name))
+	if status, code := f.decideAs(lead, g.Name, decisionFor(g, true)); status != http.StatusAccepted {
+		t.Fatalf("covered delegate decision: %d %s", status, code)
+	}
+	if err := f.c.Delete(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	b := combinedBroker(f)
+	b.EnableMaintenanceGrants = true
+	reconcileCombined(t, f, b, g.Name, 2)
+	if stored := f.grant(g.Name); stored.Status.Phase != v1alpha1.GrantPending || stored.Annotations[broker.MaintenanceDecisionAnnotation] != "" {
+		t.Fatalf("refused slot: %+v", stored)
+	}
+	w := f.do(http.MethodPost, apiv1.GrantPath(g.Name)+"/maintenance-decision", tokHuman,
+		apiv1.MaintenanceDecisionRequest{GrantUID: g.UID, Digest: g.MaintenanceDigest, Approve: true})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("human decision after broker refusal: %d %s", w.Code, w.Body.String())
+	}
+	before := f.grant(g.Name).Annotations[broker.MaintenanceDecisionAnnotation]
+	reconcileCombined(t, f, b, g.Name, 1)
+	stored := f.grant(g.Name)
+	if stored.Status.Phase != v1alpha1.GrantActive || stored.Status.ApprovedBy != "human/"+humanSA || stored.Annotations[broker.MaintenanceDecisionAnnotation] != before {
+		t.Fatalf("human decision was not preserved and applied: %+v", stored)
+	}
+}
+
+func TestGrantDecisionPolicyReadsAreLiveAndFailClosed(t *testing.T) {
+	for name, readErr := range map[string]error{
+		"absent from live reader": nil,
+		"forbidden":               apierrors.NewForbidden(v1alpha1.GroupVersion.WithResource("grantpolicies").GroupResource(), "", errors.New("fixture")),
+		"unavailable":             errors.New("fixture API unavailable"),
+	} {
+		for _, approve := range []bool{true, false} {
+			t.Run(name+strconv.FormatBool(approve), func(t *testing.T) {
+				f, _, g := delegateFixture(t) // the cached client has coverage
+				reads := 0
+				f.srv.Live = interceptor.NewClient(f.c, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if p, ok := list.(*v1alpha1.GrantPolicyList); ok {
+						reads++
+						if ns := (&client.ListOptions{}).ApplyOptions(opts).Namespace; ns != f.srv.PolicyNamespace {
+							t.Fatalf("policy namespace = %q", ns)
+						}
+						p.Items = nil
+						return readErr
+					}
+					return c.List(ctx, list, opts...)
+				}})
+				w := f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tokCoordinator, decisionFor(g, approve))
+				if reads != 1 || w.Code >= 200 && w.Code < 300 {
+					t.Fatalf("policy reads=%d response=%d %s", reads, w.Code, w.Body.String())
+				}
+				if readErr == nil && w.Code != http.StatusForbidden {
+					t.Fatalf("uncovered response=%d", w.Code)
+				}
+				if raw := f.grant(g.Name).Annotations[broker.MaintenanceDecisionAnnotation]; raw != "" {
+					t.Fatal("failed policy read consumed the slot")
+				}
+			})
+		}
+	}
+}
+
+func TestGrantDecisionPolicyScopeAndNamespace(t *testing.T) {
+	for name, change := range map[string]func(*fixture, *v1alpha1.GrantPolicy){
+		"not delegated":     func(_ *fixture, p *v1alpha1.GrantPolicy) { p.Spec.Delegated = nil },
+		"foreign profile":   func(_ *fixture, p *v1alpha1.GrantPolicy) { p.Spec.Delegated.Profiles = []string{"workbench"} },
+		"foreign scope":     func(_ *fixture, p *v1alpha1.GrantPolicy) { p.Spec.Kube.Namespaces = []string{"database"} },
+		"foreign namespace": func(f *fixture, _ *v1alpha1.GrantPolicy) { f.srv.PolicyNamespace = "other-system" },
+		"unset namespace":   func(f *fixture, _ *v1alpha1.GrantPolicy) { f.srv.PolicyNamespace = "" },
+	} {
+		for _, approve := range []bool{true, false} {
+			t.Run(name+strconv.FormatBool(approve), func(t *testing.T) {
+				f, _, g := delegateFixture(t)
+				var p v1alpha1.GrantPolicy
+				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: f.srv.PolicyNamespace, Name: "delegate-fixture-" + g.Name}, &p); err != nil {
+					t.Fatal(err)
+				}
+				change(f, &p)
+				f.mustUpdate(&p)
+				wantError(t, f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tokCoordinator, decisionFor(g, approve)), http.StatusForbidden, apiv1.CodeForbidden)
+				if f.grant(g.Name).Annotations[broker.MaintenanceDecisionAnnotation] != "" {
+					t.Fatal("uncovered decision consumed the slot")
+				}
+			})
+		}
+	}
+}
+
+func TestGrantDecisionCoordinatorGetRequiresDirectChild(t *testing.T) {
+	f, _, own := delegateFixture(t)
+	w := f.do(http.MethodGet, apiv1.GrantPath(own.Name), tokCoordinator, nil)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, g := range []apiv1.Grant{
+		f.childGrant("foreign-child", "dev-env-system/other-host", 0),
+		f.childGrant("grandchild", "requester", 1),
+		f.putGrant("requester", func(g *v1alpha1.AccessGrant) { g.Spec.Requester.SessionUID = "replaced" }),
+		f.putGrant("requester", func(g *v1alpha1.AccessGrant) { g.Spec.Requester.SessionUID = "" }),
+	} {
+		wantError(t, f.do(http.MethodGet, apiv1.GrantPath(g.Name), tokCoordinator, nil), http.StatusForbidden, apiv1.CodeForbidden)
 	}
 }

@@ -237,34 +237,38 @@ func (b *Broker) delegateReach(ctx context.Context, d MaintenanceDecision, sess 
 // denial, needs a policy whose spec.delegated covers the scope and the
 // requester (for maintenance, #781's exact envelope; an approval also needs
 // the human route's identity checks and one lease per target), and Decide
-// records it as delegate/<namespace>/<name>. A decision
-// that cannot apply leaves the grant waiting; the 30-minute timeout ends it.
-// For a kube or egress grant such a wait reports handled false, so the caller
-// still tells Tom once, as for any grant no policy approves. A maintenance
-// grant reports handled true: the human route would refuse the delegate's
-// annotation, and maintenance grants notify no one.
+// records it as delegate/<namespace>/<name>. A permanently refused record is
+// cleared with a live comparison and resourceVersion CAS so a new decision can
+// use the shared slot. Human records and replacements are never cleared. Read
+// failures and busy maintenance targets retain the record for a later retry.
 func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1alpha1.AgentSession, now metav1.Time) (res ctrl.Result, handled bool, err error) {
 	d, ok := parseDecision(g)
 	if !ok || !b.isDelegateDecision(d) {
 		return ctrl.Result{}, false, nil
 	}
 	deadline := g.CreationTimestamp.Add(PendingTimeout)
-	wait := func(why string, after time.Duration) (ctrl.Result, bool, error) {
-		log.FromContext(ctx).Info("a delegate decision waits", append(grantFields(g), "by", d.By, "reason", why)...)
-		b.event(g, corev1.EventTypeWarning, "Decide", "DelegateDecisionWaits", d.By+" decided, but: "+why)
-		return ctrl.Result{RequeueAfter: min(after, deadline.Sub(now.Time))}, g.Spec.Type == v1alpha1.GrantMaintenance, nil
+	refuse := func(why string) (ctrl.Result, bool, error) {
+		cleared, err := b.clearRefusedDelegateDecision(ctx, g)
+		if err != nil || !cleared {
+			return ctrl.Result{RequeueAfter: time.Second}, true, err
+		}
+		log.FromContext(ctx).Info("a refused delegate decision was cleared", append(grantFields(g), "by", d.By, "reason", why)...)
+		b.event(g, corev1.EventTypeWarning, "Decide", "DelegateDecisionRefused", d.By+" decided, but: "+why)
+		// Kube/egress still notify Tom in this pass. Maintenance waits for a
+		// new authenticated decision; it never falls through with the old record.
+		return ctrl.Result{RequeueAfter: time.Second}, g.Spec.Type == v1alpha1.GrantMaintenance, nil
 	}
 	if err := delegateBinding(g, d, b.GrantDelegates, now.Time); err != nil {
-		return wait(err.Error(), deadline.Sub(now.Time))
+		return refuse(err.Error())
 	}
 	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, sess, false)); err != nil {
-		return wait(err.Error(), deadline.Sub(now.Time))
+		return refuse(err.Error())
 	}
 	if err := b.delegateReach(ctx, d, sess); err != nil {
 		if !errors.Is(err, ErrRefused) {
 			return ctrl.Result{}, true, err
 		}
-		return wait(err.Error(), deadline.Sub(now.Time))
+		return refuse(err.Error())
 	}
 	dec := Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, Reason: d.Reason, GrantUID: d.GrantUID, ScopeDigest: d.Digest, Ref: d.Ref}
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
@@ -279,7 +283,7 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	}
 	p := MatchDelegated(g, policies.Items)
 	if p == nil {
-		return wait("no policy with spec.delegated covers this grant's scope and requester", deadline.Sub(now.Time))
+		return refuse("no policy with spec.delegated covers this grant's scope and requester")
 	}
 	dec.Policy = p.Name
 	if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
@@ -297,10 +301,43 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	case errors.Is(err, ErrNotPending):
 		return ctrl.Result{}, true, nil
 	case errors.Is(err, ErrRefused):
-		return wait(err.Error(), deadline.Sub(now.Time))
+		return refuse(err.Error())
 	default:
 		return ctrl.Result{}, true, err
 	}
+}
+
+// clearRefusedDelegateDecision removes only the exact delegate record refused
+// above, on the same still-Pending grant. The live read avoids stale cache state;
+// the optimistic lock fences any status, scope or decision change after it.
+// A conflict is left for the next reconcile, never retried against a replacement.
+func (b *Broker) clearRefusedDelegateDecision(ctx context.Context, g *v1alpha1.AccessGrant) (bool, error) {
+	d, ok := parseDecision(g)
+	if !ok || !b.isDelegateDecision(d) {
+		return false, nil
+	}
+	var fresh v1alpha1.AccessGrant
+	if err := b.APIReader.Get(ctx, client.ObjectKeyFromObject(g), &fresh); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read refused delegate decision: %w", err)
+	}
+	if fresh.UID != g.UID || fresh.Status.Phase != v1alpha1.GrantPending ||
+		!fresh.DeletionTimestamp.IsZero() || fresh.Spec.Release ||
+		fresh.Annotations[MaintenanceDecisionAnnotation] != g.Annotations[MaintenanceDecisionAnnotation] {
+		return false, nil
+	}
+	orig := fresh.DeepCopy()
+	delete(fresh.Annotations, MaintenanceDecisionAnnotation)
+	if err := b.Client.Patch(ctx, &fresh, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("clear refused delegate decision: %w", err)
+	}
+	*g = fresh
+	return true, nil
 }
 
 // delegatedHolds re-checks an Active grant that a delegate approved, on every

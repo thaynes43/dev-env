@@ -489,6 +489,14 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	if err := s.Live.Get(ctx, key, &g); err != nil {
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
+	if c.kind == kindCoordinator {
+		if g.Spec.Requester.SessionUID == "" {
+			return 0, nil, coordinatorDenied()
+		}
+		if _, err := s.childForCoordinator(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: g.Spec.Requester.Session}, c, g.Spec.Requester.SessionUID); err != nil {
+			return 0, nil, err
+		}
+	}
 	v := s.grantView(&g)
 	if c.kind != kindCoordinator && g.Spec.Type == v1alpha1.GrantMaintenance && r.Header.Get(apiv1.GrantTaskClaimsHeader) == apiv1.GrantTaskClaimsV1 {
 		v.TaskClaims = s.grantTaskClaims(ctx, &g, c)

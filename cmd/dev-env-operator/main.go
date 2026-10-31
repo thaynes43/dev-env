@@ -117,6 +117,7 @@ type options struct {
 	assignedTaskBudgets           map[string]string
 	sessionNamespace              string
 	templatesNamespace            string
+	policyNamespace               string
 	templatesName                 string
 	leaderElect                   bool
 	metricsAddr                   string
@@ -187,6 +188,7 @@ func parseFlags(args []string) (options, error) {
 		return err
 	})
 	fs.StringVar(&o.sessionNamespace, "session-namespace", "dev-agents", "namespace of the AgentSessions and their pods and volumes (D-02)")
+	fs.StringVar(&o.policyNamespace, "policy-namespace", ownNamespace, "namespace of delegated GrantPolicies read live before recording a delegate decision; must match the broker")
 	fs.StringVar(&o.templatesNamespace, "templates-namespace", ownNamespace, "namespace of the templates ConfigMap; the leader-election Lease lives there too")
 	fs.StringVar(&o.templatesName, "templates-name", templates.DefaultName, "name of the templates ConfigMap (D-04)")
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "elect one leader among the replicas; only the leader reconciles")
@@ -275,8 +277,8 @@ func parseFlags(args []string) (options, error) {
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
-	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" {
-		return o, errors.New("--session-namespace, --templates-namespace and --templates-name must not be empty")
+	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" || o.policyNamespace == "" {
+		return o, errors.New("--session-namespace, --templates-namespace, --templates-name and --policy-namespace must not be empty")
 	}
 	if o.originalHome != nil && o.originalHome.Namespace != o.sessionNamespace {
 		return o, errors.New("--original-home-binding namespace must match --session-namespace")
@@ -873,6 +875,7 @@ func run(args []string) error {
 			GrantAttestation:         o.grantAttestation,
 			MaintenanceEnabled:       o.maintenanceEnabled,
 			GrantDelegates:           o.grantDelegates,
+			PolicyNamespace:          o.policyNamespace,
 			Asks:                     askStore,
 		}
 		// The standby session is default off. It is made through the API's own

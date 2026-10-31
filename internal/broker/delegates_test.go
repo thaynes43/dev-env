@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,6 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/grantattest"
@@ -42,7 +44,7 @@ const (
 type dgFixture struct {
 	t   *testing.T
 	b   *Broker
-	c   client.Client
+	c   client.WithWatch
 	clk *clocktesting.FakeClock
 	key types.NamespacedName
 }
@@ -915,4 +917,147 @@ func TestDelegateIdentityRechecksHost(t *testing.T) {
 		}
 		wantDelegateApproved(t, f.pendingThenDecide(func() MaintenanceDecision { return f.decision(true) }), time.Hour)
 	})
+}
+
+func TestDelegateRefusedPendingRecordReleasesSlot(t *testing.T) {
+	for name, change := range map[string]func(*dgFixture){
+		"policy removed": func(f *dgFixture) {
+			if err := f.c.Delete(context.Background(), f.policy()); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"delegate removed": func(f *dgFixture) { f.b.GrantDelegates = []string{"dev-env-system/other"} },
+		"pod removed": func(f *dgFixture) {
+			if err := f.c.Delete(context.Background(), delegateHostPod()); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"scope changed": func(f *dgFixture) {
+			g := f.grant()
+			g.Spec.TTL.Duration = 30 * time.Minute
+			if err := f.c.Update(context.Background(), g); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := dgCase(t)
+			f.mustStep(2)
+			f.record(f.decision(true))
+			change(f)
+			f.mustStep(1)
+			g := f.grant()
+			wantStillPending(t, g)
+			if g.Annotations[MaintenanceDecisionAnnotation] != "" {
+				t.Fatal("permanently invalid decision still monopolizes the slot")
+			}
+		})
+	}
+}
+
+func TestDelegateDecisionCleanupPreservesHumanAndConcurrentChanges(t *testing.T) {
+	for _, when := range []string{"before live read", "after live read"} {
+		for _, replacement := range []string{"human", "delegate", "active", "replaced grant"} {
+			t.Run(when+"/"+replacement, func(t *testing.T) {
+				f := dgCase(t)
+				f.mustStep(2)
+				f.record(f.decision(true))
+				observed := f.grant()
+				change := func() {
+					switch replacement {
+					case "human", "delegate":
+						d := f.decision(false)
+						if replacement == "human" {
+							d.By = "human/dev-env-system/dev-env-human"
+						}
+						f.record(d)
+					case "active":
+						g := f.grant()
+						g.Status.Phase = v1alpha1.GrantActive
+						if err := f.c.Status().Update(context.Background(), g); err != nil {
+							t.Fatal(err)
+						}
+					case "replaced grant":
+						g := f.grant()
+						g.Finalizers = nil
+						if err := f.c.Update(context.Background(), g); err != nil {
+							t.Fatal(err)
+						}
+						if err := f.c.Delete(context.Background(), g); err != nil {
+							t.Fatal(err)
+						}
+						g.UID, g.ResourceVersion = "replacement-uid", ""
+						if err := f.c.Create(context.Background(), g); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if when == "before live read" {
+					change()
+				} else {
+					f.b.Client = interceptor.NewClient(f.c, interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+						change()
+						return c.Patch(ctx, obj, patch, opts...)
+					}})
+				}
+				cleared, err := f.b.clearRefusedDelegateDecision(context.Background(), observed)
+				if err != nil || cleared || f.grant().Annotations[MaintenanceDecisionAnnotation] == "" {
+					t.Fatalf("replacement erased: cleared=%t error=%v", cleared, err)
+				}
+			})
+		}
+	}
+	t.Run("human record is never eligible for cleanup", func(t *testing.T) {
+		f := dgCase(t)
+		f.mustStep(2)
+		f.record(f.decision(true, func(d *MaintenanceDecision) { d.By = "human/dev-env-system/dev-env-human" }))
+		if cleared, err := f.b.clearRefusedDelegateDecision(context.Background(), f.grant()); cleared || err != nil {
+			t.Fatalf("human cleanup: %t %v", cleared, err)
+		}
+		if f.grant().Annotations[MaintenanceDecisionAnnotation] == "" {
+			t.Fatal("human record erased")
+		}
+	})
+}
+
+func TestDelegateForbiddenPodReadRevokesActive(t *testing.T) {
+	f := dgCase(t)
+	wantDelegateApproved(t, f.pendingThenDecide(func() MaintenanceDecision { return f.decision(true) }), time.Hour)
+	f.mustStep(1)
+	f.b.APIReader = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Pod); ok && key.Namespace == systemNS && key.Name == "host" {
+			return apierrors.NewForbidden(corev1.Resource("pods"), key.Name, errors.New("fixture"))
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	f.mustStep(2)
+	if st := f.grant().Status; st.Phase != v1alpha1.GrantReleased {
+		t.Fatalf("Forbidden delegate read retained lease: %+v", st)
+	}
+	var sa corev1.ServiceAccount
+	if err := f.c.Get(context.Background(), f.key, &sa); !apierrors.IsNotFound(err) {
+		t.Fatalf("revoked grant identity remains: %v", err)
+	}
+}
+
+func TestDelegateTemporaryReadErrorKeepsPendingRecord(t *testing.T) {
+	f := dgCase(t)
+	f.mustStep(2)
+	f.record(f.decision(true))
+	before := f.grant().Annotations[MaintenanceDecisionAnnotation]
+	f.b.APIReader = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Pod); ok && key.Namespace == systemNS && key.Name == "host" {
+			return errors.New("temporary fixture read failure")
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	if _, err := f.step(1); err == nil {
+		t.Fatal("temporary read error was hidden")
+	}
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantPending || g.Annotations[MaintenanceDecisionAnnotation] != before {
+		t.Fatal("temporary read failure changed the decision")
+	}
+	f.b.APIReader = f.c
+	f.mustStep(1)
+	wantDelegateApproved(t, f.grant(), time.Hour)
 }

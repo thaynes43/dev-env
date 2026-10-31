@@ -28,8 +28,8 @@ func (b *Broker) delegateIdentityHolds(ctx context.Context, d MaintenanceDecisio
 	}
 	var live corev1.Pod
 	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: ns, Name: d.Delegate.PodName}, &live); err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("%w: delegate pod is absent", ErrRefused)
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			return fmt.Errorf("%w: delegate pod is absent or forbidden: %w", ErrRefused, err)
 		}
 		return fmt.Errorf("read delegate pod: %w", err)
 	}
@@ -53,8 +53,8 @@ func (b *Broker) delegateIdentityHolds(ctx context.Context, d MaintenanceDecisio
 	}
 	var sess v1alpha1.AgentSession
 	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: ns, Name: id.Session}, &sess); err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("%w: delegate session is absent", ErrRefused)
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			return fmt.Errorf("%w: delegate session is absent or forbidden: %w", ErrRefused, err)
 		}
 		return fmt.Errorf("read delegate session: %w", err)
 	}
@@ -85,6 +85,9 @@ func (b *Broker) delegateIdentityHolds(ctx context.Context, d MaintenanceDecisio
 			err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: ns, Name: o.Name}, &p)
 			if apierrors.IsNotFound(err) {
 				continue
+			}
+			if apierrors.IsForbidden(err) {
+				return fmt.Errorf("%w: read other delegate holder pod: %w", ErrRefused, err)
 			}
 			if err != nil {
 				return fmt.Errorf("read other delegate holder pod: %w", err)

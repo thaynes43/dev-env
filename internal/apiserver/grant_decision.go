@@ -326,6 +326,18 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 			return 0, nil, forbidden("%s", err)
 		}
 	}
+	// Both approvals and denials consume the shared decision slot. Read live:
+	// an uncovered delegate must leave it available for a legitimate decision.
+	if s.PolicyNamespace == "" {
+		return 0, nil, forbidden("delegate decisions need a configured policy namespace")
+	}
+	var policies v1alpha1.GrantPolicyList
+	if err := s.Live.List(ctx, &policies, client.InNamespace(s.PolicyNamespace)); err != nil {
+		return 0, nil, fromKubeError(err, "read delegated grant policies")
+	}
+	if broker.MatchDelegated(&g, policies.Items) == nil {
+		return 0, nil, forbidden("no policy with spec.delegated covers this grant's scope and requester")
+	}
 	rec := broker.MaintenanceDecision{
 		GrantUID: string(g.UID), Digest: req.Digest, By: broker.DelegateRef(d.ref), Approve: req.Approve, TTL: ttl,
 		At: s.now().UTC().Truncate(time.Second), Ref: req.Ref, Reason: req.Reason,

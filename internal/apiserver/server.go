@@ -191,6 +191,8 @@ type Server struct {
 	// the default, leaves the route unregistered (404) and every other route
 	// and view as before.
 	GrantDelegates []string
+	// PolicyNamespace holds delegated GrantPolicies, read through Live before a decision.
+	PolicyNamespace string
 	// Asks serves /v1/asks and /v1/portal/asks (OpenProject Epic #254). Nil leaves both
 	// unregistered. v1 does not write an inbox message when an ask is answered.
 	Asks *asks.KubeStore

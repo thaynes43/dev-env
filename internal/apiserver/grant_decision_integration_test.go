@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -62,6 +64,7 @@ func combinedDelegateFixture(t *testing.T) (*fixture, string, string, string, ap
 	withCoordinatorProfile(f)
 	wb := workbenchSessionToken(t, f, "workbench-root")
 	f.srv.GrantDelegates = []string{delegateSessionSA}
+	f.srv.PolicyNamespace = "dev-env-system"
 	f.h = f.srv.Handler()
 	plain := f.sessionPod("ordinary-root", "full", 0)
 	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, plain, coordinatorProfileTask()), http.StatusForbidden, apiv1.CodeForbidden)
@@ -139,6 +142,43 @@ func TestGrantDecisionCombinedNamedCoordinator(t *testing.T) {
 	var sa corev1.ServiceAccount
 	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: g.Name}, &sa); err == nil {
 		t.Fatal("revoked grant identity remains")
+	}
+}
+
+// Coverage may disappear after the API's live check. Force deletion precisely
+// at the broker's apply-time GET, after its cached policy selection succeeded.
+func TestGrantDecisionCombinedPolicyRemovedBeforeApply(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(strconv.FormatBool(approve), func(t *testing.T) {
+			f, _, tok, _, g := combinedDelegateFixture(t)
+			w := f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tok, decisionFor(g, approve))
+			if w.Code != http.StatusAccepted {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			b := combinedBroker(f)
+			removed := false
+			b.APIReader = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*v1alpha1.GrantPolicy); ok && !removed {
+					removed = true
+					if err := c.Delete(ctx, &v1alpha1.GrantPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}); err != nil {
+						return err
+					}
+				}
+				return c.Get(ctx, key, obj, opts...)
+			}})
+			reconcileCombined(t, f, b, g.Name, 3)
+			stored := f.grant(g.Name)
+			if !removed || stored.Status.Phase != v1alpha1.GrantPending || stored.Status.ApprovedBy != "" || stored.Status.DeniedBy != "" {
+				t.Fatalf("removed=%t status=%+v", removed, stored.Status)
+			}
+			if stored.Annotations[broker.MaintenanceDecisionAnnotation] != "" {
+				t.Fatal("permanently refused decision retained the shared slot")
+			}
+			var sa corev1.ServiceAccount
+			if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(stored), &sa); !apierrors.IsNotFound(err) {
+				t.Fatalf("refused grant identity exists: %v", err)
+			}
+		})
 	}
 }
 
