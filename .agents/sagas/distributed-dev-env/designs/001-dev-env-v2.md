@@ -3585,7 +3585,7 @@ every granted namespace. What each role allows, plainly:
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
 | `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
 | `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list; a CI check regenerates it when the cluster gains an API group. The identity guard applies on top. |
-| `dev-env-grant-namespace-operator` (DESIGN-042 5.1) | exec into pods; get, list and delete pods; patch Deployments and StatefulSets (rollout restart); create and delete Jobs; read ConfigMaps and events. No Secret rule: each grant's own Role allows `use` on exactly the Secrets it names | New pods and Jobs may reference only the grant's named Secrets. **"No Secret get or list" does not mean "cannot read Secrets"**: exec reaches every Secret the namespace's pods already hold, and their ServiceAccount tokens, and a command in a Job that uses a named Secret can print it. No standing policy approves the role. The ClusterRole is haynes-ops P4 and not yet in git. |
+| `dev-env-grant-namespace-operator` (DESIGN-042 5.1) | exec into pods; get, list and delete pods; patch Deployments and StatefulSets (rollout restart); create and delete Jobs; read ConfigMaps and events. No Secret rule: each grant's own Role allows `use` on exactly the Secrets it names | New pods and Jobs may reference only the grant's named Secrets. **"No Secret get or list" does not mean "cannot read Secrets"**: exec reaches every Secret the namespace's pods already hold, and their ServiceAccount tokens, and a command in a Job that uses a named Secret can print it. A created Job can select **any ServiceAccount in the granted namespace**, including one no running pod uses, and inherit its permissions. Restricting or accepting that authority remains open. No standing policy approves the role. The ClusterRole is haynes-ops P4 and not yet in git. |
 
 *Amendment 2026-10-31 ([DESIGN-042](042-homelab-operator-access.md) S5, source only;
 DESIGN-042 is proposed in PR #782; revised the same day by the lead's decision Q1 and
@@ -3665,6 +3665,13 @@ the coordinator's review of PR #785).* A kube grant may now name Secrets.
     `use` on secrets; and the broker-guard entries for `<grant>-secret-use`.
   - P5: the policy, and an identity-guard rule 4 clause that leaves a grant identity's
     added references to the policy and caps Job deadlines at 3600 seconds.
+
+  **Open HIGH exposure:** a created Job can select any ServiceAccount in the
+  granted namespace, including one no running pod uses, and inherit its RBAC
+  (possibly Secret get/list). The named-Secret guard only bounds direct Secret
+  references. This source records the exposure; it neither accepts the risk nor
+  changes the ServiceAccount selection guard. The activation proposal and user
+  risk review remain separate.
 
   Until P4, a namespace-operator grant that somehow got approved would fail when the
   broker creates its Role.

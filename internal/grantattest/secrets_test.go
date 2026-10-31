@@ -54,16 +54,15 @@ func TestScopeDigestNamedSecretsPinned(t *testing.T) {
 // and adding, dropping or renaming one does. The digest does not sort the
 // grant's own list.
 func TestScopeDigestCoversNamedSecrets(t *testing.T) {
-	d := ScopeDigest(namespaceOperatorGrant())
+	g := namespaceOperatorGrant()
+	d := ScopeDigest(g)
+	if got := g.Spec.Kube.Secrets; len(got) != 2 || got[0] != "prowlarr-secret" || got[1] != "myanonamouse-secret" {
+		t.Fatalf("the digest sorted the grant's own list: %v", got)
+	}
 	reordered := namespaceOperatorGrant()
 	reordered.Spec.Kube.Secrets = []string{"myanonamouse-secret", "prowlarr-secret"}
 	if ScopeDigest(reordered) != d {
 		t.Fatal("Secret order changed the digest")
-	}
-	unsorted := namespaceOperatorGrant()
-	_ = ScopeDigest(unsorted)
-	if got := unsorted.Spec.Kube.Secrets[0]; got != "prowlarr-secret" {
-		t.Fatalf("the digest sorted the grant's own list: %s", got)
 	}
 	for name, edit := range map[string]func(*v1alpha1.KubeGrant){
 		"add":    func(k *v1alpha1.KubeGrant) { k.Secrets = append(k.Secrets, "qbittorrent-secret") },

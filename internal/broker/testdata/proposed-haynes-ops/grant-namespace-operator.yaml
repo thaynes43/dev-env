@@ -16,9 +16,15 @@
 #   - exec reaches every Secret the namespace's pods already hold in their env or
 #     volumes, such as Prowlarr's own API key, and each pod's ServiceAccount token, so
 #     the grant also acts as those workloads' ServiceAccounts;
-#   - a command the agent chooses, in a Job that uses a named Secret, can print it.
+#   - a command the agent chooses, in a Job that uses a named Secret, can print it;
+#   - a created Job can select any ServiceAccount in the granted namespace, including
+#     an account that no running pod mounts. Restricting that selection, or accepting
+#     it, remains open.
 # So the class effectively grants read of every Secret mounted in the namespace's pods,
-# plus the named ones. The named-Secret guard bounds only what a new pod may add.
+# plus the named ones, and the permissions of any selectable ServiceAccount in the
+# granted namespace. The named-Secret guard constrains direct new-pod references, not
+# all reachable data or inherited ServiceAccount authority. Risk acceptance or a guard
+# change remains open, not approved.
 #
 # Release or expiry deletes the grant's bindings and ServiceAccount, so new API calls
 # fail at once. An exec stream already open runs until it closes. A Job keeps running
