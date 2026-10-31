@@ -709,7 +709,7 @@ grant waits for Tom); one attestation per grant.
 
 grant decide records one allowlisted delegate's decision on another agent's
 pending grant. The caller must be an allowlisted delegate. It cannot decide
-its own or a requester-ancestor's grant. Tree reach is the default. Only an
+its own or an ancestor's request. Tree reach is the default. Only an
 explicitly configured designated delegate can reach eligible unrelated requesters;
 requester descendants and maintenance participants remain refused. The operator
 rechecks the live actor and exact policy or reserved bounds.

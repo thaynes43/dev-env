@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -345,5 +346,53 @@ func TestReservedSnapshotNeverRecreatesAfterMaterialization(t *testing.T) {
 	}
 	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(rb), rb); !apierrors.IsNotFound(err) {
 		t.Fatal("snapshot gained fresh authority", err)
+	}
+}
+
+type reservedMintFenceClient struct {
+	client.Client
+	t     *testing.T
+	mints int
+}
+
+type reservedMintFenceSubresource struct {
+	client.SubResourceClient
+	owner *reservedMintFenceClient
+	name  string
+}
+
+func (c *reservedMintFenceClient) SubResource(name string) client.SubResourceClient {
+	return &reservedMintFenceSubresource{SubResourceClient: c.Client.SubResource(name), owner: c, name: name}
+}
+
+func (s *reservedMintFenceSubresource) Create(ctx context.Context, obj, sub client.Object, opts ...client.SubResourceCreateOption) error {
+	if s.name != "token" {
+		return s.SubResourceClient.Create(ctx, obj, sub, opts...)
+	}
+	var live v1alpha1.AccessGrant
+	if err := s.owner.Get(ctx, client.ObjectKey{Namespace: sessionNS, Name: obj.GetName()}, &live); err != nil {
+		return err
+	}
+	if live.Status.ServiceAccount != live.Name {
+		s.owner.t.Fatal("token minted before durable materialization fence")
+	}
+	s.owner.mints++
+	tr := sub.(*authenticationv1.TokenRequest)
+	tr.Status.Token = "synthetic-not-a-production-token"
+	tr.Status.ExpirationTimestamp = *live.Status.ExpiresAt
+	return nil
+}
+
+func TestReservedSnapshotPersistsFenceBeforeTokenMint(t *testing.T) {
+	f, d := reservedBrokerCase(t, grantattest.ClassRD3b)
+	f.record(d)
+	mint := &reservedMintFenceClient{Client: f.c, t: t}
+	f.b.Client = mint
+	f.b.Installer = &recorder{}
+	if _, err := f.step(3); err != nil {
+		t.Fatal(err)
+	}
+	if mint.mints != 1 || f.grant().Status.InstalledPodUID == "" {
+		t.Fatal("snapshot installation not exercised")
 	}
 }

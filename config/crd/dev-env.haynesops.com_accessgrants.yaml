@@ -289,7 +289,7 @@ spec:
                 - message: immutable after create; only release may change
                   rule: self == oldSelf
                 - message: allNamespaces is reserved Secret read only; otherwise cluster-wide
-                    roles take no namespaces and namespaced roles name at least one
+                    roles take no namespaces and the other roles name at least one
                   rule: 'has(self.allNamespaces) && self.allNamespaces ? (self.role
                     == ''dev-env-grant-secrets-read'' && (!has(self.namespaces) ||
                     size(self.namespaces) == 0)) : ((self.role == ''dev-env-grant-nodes''

@@ -412,7 +412,7 @@ func accessTools() []map[string]any {
 		if tool["name"] == "decide_grant" {
 			props["reserved"] = map[string]any{"type": "boolean"}
 			props["tomRef"] = map[string]any{"type": "string", "maxLength": 128}
-			tool["description"] = "Record an authenticated separate delegate decision. Default tree reach or explicitly configured designated reach; self/requester-descendant/maintenance participant refuse. reserved:true requires an enabled exact S7 class and fresh tomRef, an agent assertion, not verified human consent. No standing or attested reserved approval.202 accepts the record; poll for Active. Credential grants use separate hardware_intent audit, never this decision path."
+			tool["description"] = "Allowlisted delegates only: record an authenticated agent decision, not a human decision. Default tree reach or explicitly configured designated reach; self/requester-descendant/maintenance participant refuse. reserved:true requires an enabled exact S7 class and fresh tomRef, an agent assertion, not verified human consent. No standing or attested reserved approval. HTTP 202 accepts the record; poll for Active. Credential grants use separate hardware_intent audit, never this decision path."
 		}
 	}
 	return append(tools, hardwareIntentTool())
