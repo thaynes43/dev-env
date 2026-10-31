@@ -25,6 +25,8 @@ import (
 // placement setting. Changing it requires new security fixtures and approval.
 const AdminIssuanceNamespace = "dev-env-admin-issuance"
 
+var errAdminTokenMinimum = errors.New("admin lease has less than the minimum token lifetime remaining")
+
 func (b *Broker) adminLease(g *v1alpha1.AccessGrant) bool {
 	return g.Status.AdminCredential != nil || (b.EnableAdminLeases && g.Spec.Type == v1alpha1.GrantBreakglass)
 }
@@ -180,7 +182,7 @@ func (b *Broker) mintAdmin(ctx context.Context, g *v1alpha1.AccessGrant) (string
 	// Never let TokenRequest's 600-second minimum extend the fixed approval.
 	secs := int64(live.Status.ExpiresAt.Sub(b.Clock.Now()) / time.Second)
 	if secs < MinTokenSeconds {
-		return "", time.Time{}, errors.New("admin lease has less than the minimum token lifetime remaining")
+		return "", time.Time{}, errAdminTokenMinimum
 	}
 	tr := &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: &secs}}
 	a := live.Status.AdminCredential

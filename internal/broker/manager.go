@@ -117,9 +117,6 @@ func CacheOptions(sessionNamespace, policyNamespace string) cache.Options {
 // bindings and unstructured CiliumNetworkPolicies are read through the API
 // server only, never cached or listed. The Broker is returned for Decide.
 func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
-	if o.EnableAdminLeases && (o.AdminIssuerNamespace != AdminIssuanceNamespace || o.AdminIssuerNamespace == o.SessionNamespace) {
-		return nil, nil, errors.New("admin leases require the approved dedicated issuer namespace")
-	}
 	if o.SessionNamespace == "" || o.PolicyNamespace == "" {
 		return nil, nil, errors.New("the session and policy namespaces must be set")
 	}

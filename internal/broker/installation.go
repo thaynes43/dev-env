@@ -73,6 +73,12 @@ func (b *Broker) install(ctx context.Context, g *v1alpha1.AccessGrant, pod *core
 	token, tokenExpires, err := b.mint(ctx, g, now)
 	if err != nil {
 		if b.adminLease(g) {
+			// mintAdmin returns this sentinel only AFTER rechecking the live
+			// approval and original objects. Keep a same-Pod valid token when
+			// a normal late refresh cannot fit the API minimum; no extension.
+			if errors.Is(err, errAdminTokenMinimum) && g.Status.InstalledPodUID == string(pod.UID) && s.PodUID == string(pod.UID) && s.TokenExpires != nil && b.Clock.Now().Before(s.TokenExpires.Time) && !s.TokenExpires.After(expires) {
+				return ctrl.Result{RequeueAfter: expires.Sub(b.Clock.Now())}, false, nil
+			}
 			res, cleanupErr := b.end(ctx, g, v1alpha1.GrantFailed, "", "admin token issuance refused: "+err.Error(), b.now())
 			return res, false, cleanupErr
 		}

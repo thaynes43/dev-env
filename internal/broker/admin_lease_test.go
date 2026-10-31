@@ -117,7 +117,7 @@ func adminCase(t *testing.T) (*dgFixture, MaintenanceDecision, *adminUnitClient)
 	return f, d, c
 }
 func TestAdminLeaseOriginalIssuerAndReleaseExpiry(t *testing.T) {
-	for _, mode := range []string{"release", "expiry", "config-change"} {
+	for _, mode := range []string{"release", "expiry", "config-change", "issuer-change", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			f, d, c := adminCase(t)
 			f.record(d)
@@ -139,6 +139,10 @@ func TestAdminLeaseOriginalIssuerAndReleaseExpiry(t *testing.T) {
 				if err := f.c.Update(context.Background(), g); err != nil {
 					t.Fatal(err)
 				}
+			case "issuer-change":
+				f.b.AdminIssuerNamespace = "changed-issuer"
+			case "disabled":
+				f.b.EnableAdminLeases = false
 			case "config-change":
 				f.b.SessionNamespace = "changed-sessions"
 				f.b.AdminIssuerNamespace = "changed-issuer"
@@ -159,12 +163,14 @@ func TestAdminLeaseOriginalIssuerAndReleaseExpiry(t *testing.T) {
 	}
 }
 func TestAdminLeaseNoIssuanceWithoutAuthority(t *testing.T) {
-	for _, mode := range []string{"pending", "unconfigured", "missing-namespace", "wrong-grant", "wrong-requester", "wrong-decision", "self", "ordinary-approval", "wrong-ttl"} {
+	for _, mode := range []string{"pending", "unconfigured", "wrong-issuer", "missing-namespace", "wrong-grant", "wrong-requester", "wrong-decision", "self", "ordinary-approval", "wrong-ttl"} {
 		t.Run(mode, func(t *testing.T) {
 			f, d, c := adminCase(t)
 			switch mode {
 			case "unconfigured":
 				f.b.AdminIssuerNamespace = ""
+			case "wrong-issuer":
+				f.b.AdminIssuerNamespace = "other"
 			case "missing-namespace":
 				c.failCreate = true
 			case "wrong-grant":
@@ -374,6 +380,134 @@ func TestAdminTokenOverrunRevokesOriginalAuthority(t *testing.T) {
 			}
 			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: AdminIssuanceNamespace, Name: g.Name}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
 				t.Fatal("overrun retained minted identity", err)
+			}
+		})
+	}
+}
+
+func TestAdminLateRefreshKeepsOnlyValidOriginalLease(t *testing.T) {
+	for _, mode := range []string{"same-pod", "requester-pod", "sa-uid", "binding-subject", "approval"} {
+		t.Run(mode, func(t *testing.T) {
+			f, d, c := adminCase(t)
+			c.expiryOffset = -time.Minute
+			f.record(d)
+			f.mustStep(3)
+			// Server shortened the first token to29m; the normal refresh at28m
+			// now has less than600s left in the fixed30m lease. No real sleep.
+			f.clk.Step(28*time.Minute + 30*time.Second)
+			g := f.grant()
+			switch mode {
+			case "requester-pod":
+				var p corev1.Pod
+				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: g.Spec.Requester.Session}, &p); err != nil {
+					t.Fatal(err)
+				}
+				p.UID = "changed-requester-pod"
+				if err := f.c.Update(context.Background(), &p); err != nil {
+					t.Fatal(err)
+				}
+			case "sa-uid":
+				var sa corev1.ServiceAccount
+				if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: AdminIssuanceNamespace, Name: g.Name}, &sa); err != nil {
+					t.Fatal(err)
+				}
+				sa.UID = "replacement"
+				if err := f.c.Update(context.Background(), &sa); err != nil {
+					t.Fatal(err)
+				}
+			case "binding-subject":
+				var crb rbacv1.ClusterRoleBinding
+				if err := f.c.Get(context.Background(), client.ObjectKey{Name: g.Name}, &crb); err != nil {
+					t.Fatal(err)
+				}
+				crb.Subjects[0].Namespace = "other"
+				if err := f.c.Update(context.Background(), &crb); err != nil {
+					t.Fatal(err)
+				}
+			case "approval":
+				g.Annotations[MaintenanceDecisionAnnotation] = "{}"
+				if err := f.c.Update(context.Background(), g); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := f.step(1)
+			g = f.grant()
+			if mode == "same-pod" {
+				if err != nil || g.Status.Phase != v1alpha1.GrantActive || g.Status.AdminCredential.CleanupStarted || c.mints != 1 || len(c.deletes) != 0 {
+					t.Fatal("normal late refresh revoked or reminted valid lease", err, g.Status)
+				}
+				f.clk.Step(90 * time.Second)
+				f.mustStep(1)
+				if f.grant().Status.Phase != v1alpha1.GrantExpired || c.mints != 1 {
+					t.Fatal("fixed deadline was extended")
+				}
+			} else {
+				if c.mints != 1 {
+					t.Fatal("changed identity acquired a refresh token")
+				}
+				if err := f.c.Get(context.Background(), client.ObjectKey{Name: g.Name}, &rbacv1.ClusterRoleBinding{}); !apierrors.IsNotFound(err) {
+					t.Fatal("late refresh preserved mismatched root authority", err)
+				}
+				if !g.Status.AdminCredential.CleanupStarted {
+					t.Fatal("mismatched lease did not start cleanup")
+				}
+			}
+		})
+	}
+}
+
+func TestAdminFlagLeavesOrdinaryGrantInSessionNamespace(t *testing.T) {
+	b, g, _, _, mints := installationFixture(t, &recorder{}, 0)
+	b.EnableAdminLeases = true
+	b.AdminIssuerNamespace = AdminIssuanceNamespace
+	reconcileInstallation(t, b, g)
+	if *mints != 1 || g.Status.AdminCredential != nil {
+		t.Fatal("ordinary class entered admin issuance")
+	}
+	if err := b.APIReader.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: g.Name}, &corev1.ServiceAccount{}); err != nil {
+		t.Fatal("ordinary identity left session namespace", err)
+	}
+	if err := b.APIReader.Get(context.Background(), client.ObjectKey{Namespace: AdminIssuanceNamespace, Name: g.Name}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatal("ordinary grant created issuer account", err)
+	}
+	if err := b.APIReader.Get(context.Background(), client.ObjectKey{Name: g.Name}, &rbacv1.ClusterRoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Fatal("ordinary grant gained cluster authority", err)
+	}
+}
+
+func TestAdminLeaseRejectsForeignOrIncorrectPreexistingObjects(t *testing.T) {
+	for _, mode := range []string{"foreign-sa", "foreign-binding", "wrong-subject", "wrong-role"} {
+		t.Run(mode, func(t *testing.T) {
+			f, d, c := adminCase(t)
+			g := f.grant()
+			labels := map[string]string{v1alpha1.LabelGrant: g.Name, v1alpha1.LabelPrefix + "grant-uid": string(g.UID), v1alpha1.LabelManagedBy: ManagedBy}
+			var o client.Object
+			if mode == "foreign-sa" {
+				labels[v1alpha1.LabelPrefix+"grant-uid"] = "foreign-grant"
+				o = &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: AdminIssuanceNamespace, Name: g.Name, UID: "foreign", Labels: labels}}
+			} else {
+				crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: g.Name, UID: "foreign", Labels: labels}, RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: v1alpha1.RoleBreakglass}, Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Namespace: AdminIssuanceNamespace, Name: g.Name}}}
+				switch mode {
+				case "foreign-binding":
+					labels[v1alpha1.LabelPrefix+"grant-uid"] = "foreign-grant"
+				case "wrong-subject":
+					crb.Subjects[0].Namespace = "other"
+				case "wrong-role":
+					crb.RoleRef.Name = v1alpha1.RoleNodes
+				}
+				o = crb
+			}
+			if err := f.c.Create(context.Background(), o); err != nil {
+				t.Fatal(err)
+			}
+			f.record(d)
+			_, _ = f.step(3)
+			if c.mints != 0 {
+				t.Fatal("incorrect preexisting object authorized token mint")
+			}
+			a := f.grant().Status.AdminCredential
+			if a == nil || a.ServiceAccountUID == "foreign" || a.BindingUID == "foreign" {
+				t.Fatal("adopted incorrect original identity", a)
 			}
 		})
 	}

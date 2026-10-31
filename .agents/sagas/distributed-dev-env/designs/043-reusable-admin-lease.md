@@ -47,8 +47,9 @@ namespace creation, impersonation or new broker workload/exec rights are added.
 The once-only operational bundle must also install the generated AccessGrant CRD,
 the reviewed binary and existing approved decision dependencies, then configure
 `--enable-admin-leases --admin-issuer-namespace=dev-env-admin-issuance` on the broker.
-Both default off/unconfigured. Invalid enabled issuer config refuses startup;
-missing namespace refuses creation before mint. Existing reserved class lists and
+Both default off/unconfigured. Invalid or unconfigured issuer settings refuse creation/mint, while the broker
+continues running to clean original credentials. Missing namespace refuses
+creation before mint. Existing reserved class lists and
 actor designation must enable only the intended approved path. This is not
 permission to enable RD3, storage, hardware, S7 extras or any standing GrantPolicy.
 
@@ -95,7 +96,9 @@ Mint rereads the grant, original SA and binding from the API. Remaining TTL is
 rounded down; less than600s refuses instead of applying the old600s floor. The
 actual returned expiry must be future and no later than the fixed approval end.
 A late API response or concurrent release/identity change prevents delivery. A
-mint refusal enters cleanup. Installation uses the existing requester Pod UID
+mint refusal enters cleanup, except a normal same-Pod late refresh at the600s
+floor may retain its still-valid installed token after live authority/UID checks.
+It requeues at the fixed deadline and never extends actual JWT expiry. Installation uses the existing requester Pod UID
 fence and records actual token expiry. No token is logged, stored in Kubernetes
 Secrets or published in source artifacts. A copied token is usable elsewhere while
 valid: TokenRequest cannot bind it to a Pod running under a different SA.
@@ -159,3 +162,52 @@ contains the identical dev-agents caller condition with Fail/Deny. The platform
 selector is `.../dev-env-system/network/app/session-platform.yaml:24`, and its
 API ports are lines73/75. These are source checks plus the supplied requester
 preflight, not fresh live admission or connectivity acceptance.
+
+
+Client qualification is separate from controller readiness. Both target sessions
+report agentd2.45.0 at86cef5bb; its entire protocol/grants.go is byte-identical to
+this source. The broker's grant-install/remove argv, stdin token and Pod-UID fence
+are unchanged; no issuer namespace enters that wire. The final pinned Linux
+agent-run helper is published only as an artifact in the existing shared handoff's
+`clients/agent-run-linux-amd64`; `CLIENT-COMPATIBILITY.md` records its exact source,
+SHA256, version/help checks and the protocol comparison. It is available to these
+two sessions without changing their default client, MCP configuration, HOME,
+pairing or Pod. Artifact availability is not proof of live installation or use.
+The historical side-by-side2.74 helper predates this new reserved API/CLI path.
+
+For the first separately approved READ-ONLY qualification, recommend this path's
+30m default. An exact10m lease loses time before TokenRequest and would be under
+the600s floor; neither10m nor15m usability is promised. No expiry is extended.
+Read-only Kubernetes metadata/discovery and, within the approved task, exec into
+an already-admitted GPU Pod do not require creating a privileged Pod. Creating
+one remains subject to standard PSA; no new PSA exemption is proposed. Agent
+commands remain chosen within the approved task, without per-command approvals.
+Real locally expired-JWT rejection, simulated broker expiry, no-mint unit tests,
+and original-SA token invalidation are distinct receipts. Actual live use and
+cessation/cleanup require the later authorized test; no30m wall-clock trial has
+run here.
+
+
+Early-review disposition: the calibrated late-refresh defect is fixed and tested
+through install/reconcile. Same-Pod valid authority survives minimum refusal;
+requester Pod, SA UID, binding-subject and approval mismatches revoke immediately.
+The suggestion to admit legacy dev-agents root subjects is not adopted. Read-only
+metadata at2026-10-31 22:28Z found zero catalog root CRBs and zero breakglass leases.
+Refresh that observation before rollout. Install target namespace protection and
+issuer-only root-subject guard while issuance is off, then issuer/RBAC/unbound
+role, compatible schema/binary and finally approved configuration. During this
+interval legacy dev-agents root binding creation intentionally refuses; ordinary
+non-root grants keep their subjects and behavior. A later legacy root lease is a
+rollout hold for its authorized cleanup, not a reason to broaden the guard.
+
+
+Dependency reconciliation: PR800's exact reviewed8260e7b tree is byte-identical to
+its actual main merge a290233b3e45b587c151ee0e027d6d3ed529cd86. The native
+source review approves8260 conditional on its exact CI; the merged source and
+final-green receipts are retained by owner214008 under the existing S7 handoff.
+This branch rebases only its own issuer change onto that actual merge. The
+provenance-label follow-up remains API/CLI/wire comments/help and documentation:
+`internal/apiserver/grant_reserved.go`, `internal/agentrun/{help,grant_reserved,mcp,mcp_reserved}.go`,
+`internal/apiserver/apiv1/{grant_reserved,grants}.go`, and `docs/reserved-grants.md`.
+It is a wording correction under existing delegated authority, not a fresh-human
+or eligibility requirement. Those separate owned files are unchanged here.

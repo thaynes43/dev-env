@@ -89,9 +89,6 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	} else if c, cerr := broker.ParseAttestedMaintenanceCreators(o.maintenanceHuman); cerr == nil && len(c) == 1 {
 		o.attestedCreators = c
 	}
-	if o.enableAdminLeases && (o.adminIssuerNamespace != broker.AdminIssuanceNamespace || o.adminIssuerNamespace == o.sessionNamespace) {
-		return o, errors.New("--enable-admin-leases requires the approved dedicated --admin-issuer-namespace")
-	}
 	if o.sessionNamespace == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace and --policy-namespace must not be empty")
 	}

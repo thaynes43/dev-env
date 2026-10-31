@@ -115,7 +115,7 @@ func adminEnvCase(t *testing.T) (*Broker, *v1alpha1.AccessGrant, *recorder) {
 		t.Fatal(err)
 	}
 	inst := &recorder{}
-	b := &Broker{Client: bc, APIReader: bc, Clock: clock.RealClock{}, SessionNamespace: sessionNS, PolicyNamespace: systemNS, EnableAdminLeases: true, AdminIssuerNamespace: AdminIssuanceNamespace, GrantDelegates: []string{actorRef}, ReservedDecisionClasses: []string{grantattest.ClassRD2}, Installer: inst}
+	b := &Broker{Client: bc, APIReader: bc, Clock: clock.RealClock{}, SessionNamespace: sessionNS, PolicyNamespace: systemNS, EnableAdminLeases: true, AdminIssuerNamespace: AdminIssuanceNamespace, GrantDelegates: []string{actorRef}, ReservedDecisionClasses: []string{grantattest.ClassRD2}, Installer: adminNamespaceInstaller{Installer: inst, t: t}}
 	step := func() {
 		t.Helper()
 		if _, err := b.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(g)}); err != nil {
@@ -469,4 +469,22 @@ func ordinaryRootFixture(t *testing.T, account string) client.Client {
 		t.Fatal(err)
 	}
 	return c
+}
+
+type adminNamespaceInstaller struct {
+	Installer
+	t *testing.T
+}
+
+func (i adminNamespaceInstaller) Install(ctx context.Context, pod *corev1.Pod, g *v1alpha1.AccessGrant, token string, expires time.Time) error {
+	if pod.Namespace != g.Namespace || pod.Namespace == AdminIssuanceNamespace {
+		i.t.Fatal("admin token delivered into issuer or changed namespace")
+	}
+	return i.Installer.Install(ctx, pod, g, token, expires)
+}
+func (i adminNamespaceInstaller) Remove(ctx context.Context, pod *corev1.Pod, g *v1alpha1.AccessGrant) error {
+	if pod.Namespace != g.Namespace || pod.Namespace == AdminIssuanceNamespace {
+		i.t.Fatal("admin token removed from issuer or changed namespace")
+	}
+	return i.Installer.Remove(ctx, pod, g)
 }
