@@ -165,6 +165,12 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	default:
 		return nil, "Source is not a provider measurement"
 	}
+	// A current conflict refuses the item even without a matching measure.
+	for _, current := range item.CurrentMeasures {
+		if current.State == providerallowance.CurrentConflict {
+			return nil, "Conflicting allowance values"
+		}
+	}
 	if len(o.Measures) == 0 {
 		return nil, "No allowance windows reported"
 	}
@@ -177,16 +183,23 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	}
 	var windows []portal.ProductAllowanceWindow
 	for _, m := range o.Measures {
-		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
-			continue
-		}
 		current, ok := currents[m.ID]
-		if current.State == providerallowance.CurrentConflict {
+		measureFits := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal)
+		currentFits := current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
+		validDecimals := measureFits && currentFits
+		// Differing decimals refuse when both fit the percent grammar or neither
+		// does; exactly one out-of-grammar side shows Unknown on its row instead.
+		// The comparison is textual, so 62 and 62.00 refuse: the safe direction.
+		if m.Value.Decimal != nil && current.Value.Decimal != nil && measureFits == currentFits && *m.Value.Decimal != *current.Value.Decimal {
 			return nil, "Conflicting allowance values"
 		}
-		validDecimals := m.Value.Decimal != nil && allowancePercent.MatchString(*m.Value.Decimal) && current.Value.Decimal != nil && allowancePercent.MatchString(*current.Value.Decimal)
-		if validDecimals && *m.Value.Decimal != *current.Value.Decimal {
-			return nil, "Conflicting allowance values"
+		if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
+			// A measure that is never shown has no Unknown fallback, so any
+			// differing decimals refuse, whatever their size or sign.
+			if m.Value.Decimal != nil && current.Value.Decimal != nil && *m.Value.Decimal != *current.Value.Decimal {
+				return nil, "Conflicting allowance values"
+			}
+			continue
 		}
 		suffix := ""
 		switch m.Direction {

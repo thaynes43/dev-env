@@ -388,6 +388,38 @@ func TestMapProductAllowanceMixedMeasureStates(t *testing.T) {
 		{"rate-limit", func(i *pa.ReadItem) { i.Observation.Measures[1].Category = pa.CategoryRateLimit }, 2, false},
 		{"current-conflict", func(i *pa.ReadItem) { i.CurrentMeasures[1].State = pa.CurrentConflict }, 0, true},
 		{"disagreement", func(i *pa.ReadItem) { i.CurrentMeasures[1].Value.Decimal = allowanceString("4") }, 0, true},
+		{"F1-ignored-unit-conflict", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.CurrentMeasures[1].State = pa.CurrentConflict
+		}, 0, true},
+		{"F1-ignored-category-conflict", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Category = pa.CategorySpend
+			i.CurrentMeasures[1].State = pa.CurrentConflict
+		}, 0, true},
+		{"F1-unmatched-current-conflict", func(i *pa.ReadItem) {
+			i.CurrentMeasures[1].MeasureID = "unmatched"
+			i.CurrentMeasures[1].State = pa.CurrentConflict
+		}, 0, true},
+		{"F1-money-decimal-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.CurrentMeasures[1].Value.Decimal = allowanceString("4")
+		}, 0, true},
+		// Money values outside the displayed percent grammar still conflict.
+		{"F1-large-money-decimal-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.Observation.Measures[1].Value.Decimal = allowanceString("1500000.25")
+			i.CurrentMeasures[1].Value.Decimal = allowanceString("1499999.75")
+		}, 0, true},
+		// A displayed window whose two values are both outside the grammar still conflicts.
+		{"F1-displayed-both-out-of-grammar-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[0].Value.Decimal = allowanceString("1000000")
+			i.CurrentMeasures[0].Value.Decimal = allowanceString("2000000")
+		}, 0, true},
+		{"F1-negative-money-decimal-disagreement", func(i *pa.ReadItem) {
+			i.Observation.Measures[1].Unit = pa.UnitMoney
+			i.Observation.Measures[1].Value.Decimal = allowanceString("-2.5")
+			i.CurrentMeasures[1].Value.Decimal = allowanceString("-3")
+		}, 0, true},
 		{"duplicate-measure", func(i *pa.ReadItem) { i.Observation.Measures[1].ID = "weekly" }, 0, true},
 		{"duplicate-current", func(i *pa.ReadItem) { i.CurrentMeasures[1].MeasureID = "weekly" }, 0, true},
 		{"missing-current", func(i *pa.ReadItem) { i.CurrentMeasures = i.CurrentMeasures[:1] }, 2, false},
@@ -422,7 +454,7 @@ func TestMapProductAllowanceMixedMeasureStates(t *testing.T) {
 				item.Freshness.State = fresh
 				got := MapProductAllowance(doc)[0]
 				if tc.refuse {
-					if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 || !strings.Contains(got.Reason, "Conflicting") {
+					if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 || got.Reason != "Conflicting allowance values" {
 						t.Fatalf("conflict did not refuse provider: %+v", got)
 					}
 					continue
