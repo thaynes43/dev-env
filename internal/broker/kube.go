@@ -32,6 +32,9 @@ import (
 // that binds something else, is a permanent error: the grant fails and the
 // object is left alone.
 func (b *Broker) ensure(ctx context.Context, g *v1alpha1.AccessGrant) ([]string, error) {
+	if b.adminLease(g) {
+		return b.ensureAdmin(ctx, g)
+	}
 	if g.Spec.Type == v1alpha1.GrantEgress {
 		return b.ensureEgress(ctx, g)
 	}
@@ -175,6 +178,9 @@ func (b *Broker) ensureOne(ctx context.Context, g *v1alpha1.AccessGrant, want, h
 // success, so it can run again. Deleting the ServiceAccount ends every token
 // of the grant at once.
 func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string) error {
+	if g.Status.AdminCredential != nil {
+		return b.revokeAdmin(ctx, g)
+	}
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
 		return b.stopMaintenance(ctx, g)
 	}

@@ -72,6 +72,10 @@ func (b *Broker) install(ctx context.Context, g *v1alpha1.AccessGrant, pod *core
 	}
 	token, tokenExpires, err := b.mint(ctx, g, now)
 	if err != nil {
+		if b.adminLease(g) {
+			res, cleanupErr := b.end(ctx, g, v1alpha1.GrantFailed, "", "admin token issuance refused: "+err.Error(), b.now())
+			return res, false, cleanupErr
+		}
 		return ctrl.Result{}, false, err
 	}
 	if token == "" || tokenExpires.IsZero() || !now.Time.Before(tokenExpires) {

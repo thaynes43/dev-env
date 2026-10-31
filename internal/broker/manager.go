@@ -41,7 +41,9 @@ const Name = "dev-env-broker"
 // Options configure NewManager.
 type Options struct {
 	// SessionNamespace holds the sessions, their pods and the grants (D-54).
-	SessionNamespace string
+	SessionNamespace     string
+	EnableAdminLeases    bool
+	AdminIssuerNamespace string
 	// PolicyNamespace holds the GrantPolicies and the Lease.
 	PolicyNamespace string
 	// EnableProxmoxGrants is false until keeper/node trust and acceptance pass.
@@ -115,6 +117,9 @@ func CacheOptions(sessionNamespace, policyNamespace string) cache.Options {
 // bindings and unstructured CiliumNetworkPolicies are read through the API
 // server only, never cached or listed. The Broker is returned for Decide.
 func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
+	if o.EnableAdminLeases && (o.AdminIssuerNamespace != AdminIssuanceNamespace || o.AdminIssuerNamespace == o.SessionNamespace) {
+		return nil, nil, errors.New("admin leases require the approved dedicated issuer namespace")
+	}
 	if o.SessionNamespace == "" || o.PolicyNamespace == "" {
 		return nil, nil, errors.New("the session and policy namespaces must be set")
 	}
@@ -159,6 +164,8 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		Client:                         mgr.GetClient(),
 		APIReader:                      mgr.GetAPIReader(),
 		SessionNamespace:               o.SessionNamespace,
+		EnableAdminLeases:              o.EnableAdminLeases,
+		AdminIssuerNamespace:           o.AdminIssuerNamespace,
 		PolicyNamespace:                o.PolicyNamespace,
 		EnableProxmoxGrants:            o.EnableProxmoxGrants,
 		EnableHWSSHGrants:              o.EnableHWSSHGrants,

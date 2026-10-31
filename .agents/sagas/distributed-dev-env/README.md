@@ -517,3 +517,5 @@ ONE final focused correction with the three failed preparations preserved;
 Q-24 routing remains pending. Claude reviews remain optional while unavailable.
 *(Historical: Q-26's correction is complete and Ops #3824 was accepted; see
 decision 59.)*
+
+Proposed reusable RD2 source boundary (OP233): [DESIGN-043](designs/043-reusable-admin-lease.md). Default off; source, tests and live activation remain separate.

@@ -21,6 +21,8 @@ import (
 // brokerOptions are the flags of `dev-env-operator broker` (D-61).
 type brokerOptions struct {
 	sessionNamespace           string
+	enableAdminLeases          bool
+	adminIssuerNamespace       string
 	policyNamespace            string
 	leaderElect                bool
 	enableProxmoxGrants        bool
@@ -46,8 +48,11 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 		ownNamespace = "dev-env-system"
 	}
 	var o brokerOptions
+	// The issuer is deliberately not derived from SessionNamespace.
 	fs := flag.NewFlagSet(binaryName+" broker", flag.ContinueOnError)
 	fs.StringVar(&o.sessionNamespace, "session-namespace", "dev-agents", "namespace of the AgentSessions, their pods, the AccessGrants and the grant ServiceAccounts (D-54)")
+	fs.BoolVar(&o.enableAdminLeases, "enable-admin-leases", false, "HELD: reusable reserved RD2 admin issuance; requires the once-approved dedicated namespace and security bundle")
+	fs.StringVar(&o.adminIssuerNamespace, "admin-issuer-namespace", "", "HELD: dedicated admin credential namespace; separate from session-namespace, default unconfigured")
 	fs.StringVar(&o.policyNamespace, "policy-namespace", ownNamespace, "namespace of the GrantPolicies; the broker's leader-election Lease lives there too")
 	fs.BoolVar(&o.leaderElect, "leader-elect", true, "elect one leader among the replicas; only the leader reconciles")
 	fs.BoolVar(&o.enableProxmoxGrants, "enable-proxmox-grants", false, "enable keeper-backed Proxmox grants after node trust and acceptance are configured")
@@ -83,6 +88,9 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 		o.attestedCreators = c
 	} else if c, cerr := broker.ParseAttestedMaintenanceCreators(o.maintenanceHuman); cerr == nil && len(c) == 1 {
 		o.attestedCreators = c
+	}
+	if o.enableAdminLeases && (o.adminIssuerNamespace != broker.AdminIssuanceNamespace || o.adminIssuerNamespace == o.sessionNamespace) {
+		return o, errors.New("--enable-admin-leases requires the approved dedicated --admin-issuer-namespace")
 	}
 	if o.sessionNamespace == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace and --policy-namespace must not be empty")
@@ -138,6 +146,8 @@ func runBroker(args []string) error {
 	}
 	mgr, _, err := broker.NewManager(cfg, broker.Options{
 		SessionNamespace:               o.sessionNamespace,
+		EnableAdminLeases:              o.enableAdminLeases,
+		AdminIssuerNamespace:           o.adminIssuerNamespace,
 		PolicyNamespace:                o.policyNamespace,
 		EnableProxmoxGrants:            o.enableProxmoxGrants,
 		EnableHWSSHGrants:              o.enableHWSSHGrants,
