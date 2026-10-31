@@ -1,5 +1,10 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**2026-10-31 design-only #321:** [DESIGN-040](designs/040-cursor-grok-inbox-actor.md)
+compares three ways to give a Cursor/Grok agent a truthful identity on the
+platform inbox and recommends a gated v2 agent kind. Q-321-01 is pending for
+Tom; no credential, ACL change or activation follows from it.
+
 **2026-10-30 design-only #269:** [DESIGN-039](designs/039-access-policy-change-guard.md)
 compares guards against agent-authored access widening through GitOps, with
 automatic routine deployment and an approved admin path. All enforcement and

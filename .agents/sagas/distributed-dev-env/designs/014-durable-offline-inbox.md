@@ -330,7 +330,10 @@ question's replies.
 
 **Not in this unit.** Headless tasks are not interrupted: a task polls its
 inbox and is not woken by a reply, and a TUI coordinator is not notified.
-Session-less native hosts can neither ask nor be asked. The cross-provider
+Session-less native hosts can neither ask nor be asked. No Cursor/Grok actor
+can either: the stored provider is a Session's `claude`, `codex` or `opencode`,
+and only a Session sends. [DESIGN-040](040-cursor-grok-inbox-actor.md)
+(Proposed) compares the ways to add one truthfully. The cross-provider
 live question, reply and acknowledgement proof, the portal view (#326) and
 session detail (#322) stay open under #321. Tests:
 `internal/inbox/askreply_test.go`, `internal/inbox/replyindex_test.go`, `internal/apiserver/inbox_askreply_test.go`,
