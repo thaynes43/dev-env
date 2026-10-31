@@ -259,7 +259,9 @@ const (
 	maxDNS1123Name  = 63
 )
 
-// validateGrantSecretNames applies the server bounds on the client. An empty
+// validateGrantSecretNames applies the bounded client contract. The client
+// deliberately limits names to 63 characters; the server accepts longer
+// DNS-1123 subdomains. An empty
 // list is the ordinary request. Any name with another type or role is a usage
 // error, so nothing is sent. Names are DNS-1123 subdomains of at most 63
 // characters, at most 16, none repeated. The values of those Secrets are never

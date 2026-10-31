@@ -140,7 +140,10 @@ func TestDecideGrantMCPApproveAndErrors(t *testing.T) {
 			} else {
 				contains(t, "MCP", h.stdout.String(), `"isError":true`)
 				if status == http.StatusServiceUnavailable {
-					contains(t, "MCP", h.stdout.String(), "delegate decisions are not enabled")
+					contains(t, "MCP", h.stdout.String(), "unavailable", message)
+					if strings.Contains(h.stdout.String(), "not enabled") {
+						t.Fatal("outage reported as disabled")
+					}
 				} else {
 					contains(t, "MCP", h.stdout.String(), message)
 				}
@@ -177,5 +180,84 @@ func TestRequestAccessMCPSecretBounds(t *testing.T) {
 	req, err := accessRequest(accessToolArgs{Type: "kube", Role: namespaceOperatorRole, Reason: "rotate", Secrets: names[:16]})
 	if err != nil || !reflect.DeepEqual(req.Secrets, names[:16]) {
 		t.Fatalf("16 names rejected or changed: %+v %v", req, err)
+	}
+}
+
+func TestGrantDecidePreflightRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		exit   int
+		want   string
+	}{
+		{"disabled UID", http.StatusOK, `{"name":"grant-abc","phase":"Pending","scopeDigest":"digest-1","secrets":["db-password"]}`, ExitNotFound, "delegate decisions are not enabled on this operator: it shows no grant UID"},
+		{"missing grant", http.StatusNotFound, `{"error":{"code":"not_found","message":"grant grant-abc: not found"}}`, ExitNotFound, "grant grant-abc: not found"},
+		{"forbidden read", http.StatusForbidden, `{"error":{"code":"forbidden","message":"coordinator access is limited to its direct task children"}}`, ExitAuth, "coordinator access is limited to its direct task children"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			serveRaw(h, map[string]func(*http.Request) (int, string){
+				apiv1.GrantPath(decideGrantName): func(*http.Request) (int, string) { return tc.status, tc.body },
+				apiv1.GrantDecisionPath(decideGrantName): func(*http.Request) (int, string) {
+					t.Error("POST after refused preflight")
+					return http.StatusAccepted, decideGrantJSON(apiv1.GrantPending)
+				},
+			})
+			h.mustRun(tc.exit, "grant", "decide", decideGrantName, "--grant-uid", decideUID, "--digest", decideDigest, "--ref", decideRef)
+			contains(t, "stderr", h.stderr.String(), tc.want)
+			if len(h.api.requests()) != 1 || len(decisionPosts(t, h)) != 0 {
+				t.Fatalf("requests %+v", h.api.requests())
+			}
+			if strings.Contains(h.stdout.String(), "binding scope digest") {
+				t.Fatal("printed binding after preflight refusal")
+			}
+			if tc.name == "missing grant" && strings.Contains(h.stderr.String(), "not enabled") {
+				t.Fatal("missing grant reported as disabled")
+			}
+		})
+	}
+}
+
+func TestGrantDecisionRetryConflictIsUnconfirmed(t *testing.T) {
+	for _, first := range []string{"503", "lost reply", "plain conflict"} {
+		t.Run(first, func(t *testing.T) {
+			h := newHarness(t)
+			calls := 0
+			serveRaw(h, map[string]func(*http.Request) (int, string){
+				apiv1.GrantPath(decideGrantName): func(*http.Request) (int, string) { return http.StatusOK, decideGrantJSON(apiv1.GrantPending) },
+				apiv1.GrantDecisionPath(decideGrantName): func(*http.Request) (int, string) {
+					calls++
+					if calls == 1 {
+						switch first {
+						case "503":
+							return http.StatusServiceUnavailable, `{"error":{"code":"unavailable","message":"Kubernetes timeout"}}`
+						case "lost reply":
+							panic(http.ErrAbortHandler)
+						}
+					}
+					return http.StatusConflict, `{"error":{"code":"conflict","message":"already decided"}}`
+				},
+			})
+			exit := ExitUnconfirmed
+			if first == "plain conflict" {
+				exit = ExitFailed
+			}
+			h.mustRun(exit, "grant", "decide", decideGrantName, "--grant-uid", decideUID, "--digest", decideDigest, "--ref", decideRef)
+			if first == "plain conflict" {
+				if calls != 1 || strings.Contains(h.stderr.String(), "may already have been recorded") {
+					t.Fatalf("ordinary conflict: calls=%d %s", calls, h.stderr.String())
+				}
+				contains(t, "stderr", h.stderr.String(), "conflict")
+			} else {
+				if calls != 2 {
+					t.Fatalf("retry count %d", calls)
+				}
+				contains(t, "stderr", h.stderr.String(), "may already have been recorded", "agent-run grant show "+decideGrantName)
+				if strings.Contains(h.stderr.String(), "not enabled") || strings.Contains(h.stderr.String(), "(409 conflict)") {
+					t.Fatalf("misleading diagnostic: %s", h.stderr.String())
+				}
+			}
+		})
 	}
 }

@@ -103,7 +103,8 @@ Exit codes:
   4  no such session
   5  try again later: a limit was reached (429), or the API was unavailable
   6  unconfirmed: a one-shot request (msg, canary create or a --once read) was
-     sent, got no confirmed answer and was not repeated. A message or create
+     sent, got no confirmed answer and was not repeated; also a retried grant
+     decision ending in 409 after an uncertain earlier attempt. A message or create
      may have taken effect: observe it, do not repeat it. A one-shot request
      exits 5 only when nothing was sent
   7  rc accepted/pending, timed out with a handle, or owner action required
@@ -708,16 +709,18 @@ grant waits for Tom); one attestation per grant.
 
 grant decide records one allowlisted delegate's decision on another agent's
 pending grant. The caller must be an allowlisted delegate. It cannot decide
-its own or an ancestor's request. The digest is Grant.ScopeDigest from
+its own or an ancestor's request. It decides only for its own descendants
+(a coordinator host: its own child sessions); the operator checks reach and policy.
+The digest is Grant.ScopeDigest from
 grant show -o json. A delegate decision is not a human decision. Omit
 --approve to deny. The command prints the scope digest and secret names it is
 binding, then posts the decision. HTTP 202 means the decision was accepted; it
 does not mean the grant is Active.
-  --grant-uid <uid>  the grant's UID
+  --grant-uid <uid>  the grant's UID (may be absent when delegate decisions are disabled)
   --digest <digest>  Grant.ScopeDigest the delegate reviewed
   --ref <ref>        required; the message being answered (letters, digits and . _ : / # -)
   --approve          approve; omit to deny
-  --ttl <duration>   optional Go duration of at least 10m
+  --ttl <duration>   optional Go duration, at least 10m and at most the requested TTL
   --reason <text>    optional; at most 256 characters, no control or format characters
 
 grant use runs agentd ctl grant-use. The name is grant-<id> or default.

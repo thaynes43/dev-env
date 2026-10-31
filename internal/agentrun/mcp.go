@@ -342,7 +342,7 @@ func accessTools() []map[string]any {
 		},
 		{
 			"name":        "decide_grant",
-			"description": "Record an allowlisted delegate's decision on another agent's pending grant. For delegates only: the caller cannot decide its own or an ancestor's request. digest is Grant.ScopeDigest. A delegate decision is not a human decision. approve false denies. HTTP 202 means the decision was accepted, not that the grant is Active. This does not install a grant.",
+			"description": "Record an allowlisted delegate's decision on another agent's pending grant. For delegates only: the caller cannot decide its own or an ancestor's request. It decides only for its own descendants (a coordinator host: its own child sessions); the operator checks reach, TTL and policy. digest is Grant.ScopeDigest. A delegate decision is not a human decision. approve false denies. HTTP 202 means the decision was accepted, not that the grant is Active. This does not install a grant.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
