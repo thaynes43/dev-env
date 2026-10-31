@@ -91,7 +91,7 @@ func ValidText(text string) bool {
 	return len(text) > 0 && len(text) <= MaxTextBytes && utf8.ValidString(text)
 }
 func recipientLabel(s coord.SessionIdentity) string { return digest(s)[:63] }
-func inReplyToLabel(r coord.InboxMessageRef) string  { return digest(r)[:63] }
+func inReplyToLabel(r coord.InboxMessageRef) string { return digest(r)[:63] }
 
 func ValidMessage(s coord.InboxMessageSpec) bool {
 	return validMessageSpec(s, false)

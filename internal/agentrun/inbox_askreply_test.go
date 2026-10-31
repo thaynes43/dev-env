@@ -122,14 +122,14 @@ func TestInboxListAndReadShowThreadState(t *testing.T) {
 		if r.URL.Query().Get(apiv1.InboxViewQuery) != apiv1.InboxViewThread {
 			t.Error("list and read must ask for the thread view")
 		}
-		switch {
-		case r.URL.Path == apiv1.InboxPath:
+		switch r.URL.Path {
+		case apiv1.InboxPath:
 			list := apiv1.InboxList{Items: []apiv1.InboxMetadata{{Name: askQuestion, UID: "q-uid", Project: "p", Kind: apiv1.InboxKindQuestion, Thread: thread}}, View: apiv1.InboxViewThread}
 			if r.URL.Query().Get(apiv1.InboxBoxQuery) == apiv1.InboxBoxSent && echoBox {
 				list.Box = apiv1.InboxBoxSent
 			}
 			writeTestJSON(w, 200, list)
-		case r.URL.Path == apiv1.InboxPath+"/"+askReply:
+		case apiv1.InboxPath + "/" + askReply:
 			writeTestJSON(w, 200, apiv1.InboxMessage{InboxMetadata: apiv1.InboxMetadata{Name: askReply, UID: "r-uid", Project: "p", Kind: apiv1.InboxKindReply, InReplyTo: &thread.Question, Thread: thread}, Text: "exact reply text"})
 		default:
 			t.Error("unexpected request", r.URL)

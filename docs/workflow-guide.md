@@ -426,6 +426,12 @@ A same-parent idempotency key does not prevent two unrelated coordinators from
 starting the same objective. Use explicit task/issue identity for atomic claims;
 the platform cannot reliably infer all duplicates from free-form prompts.
 
+To ask your coordinator a routine question and see its reply, use
+`agent-run inbox ask` and `agent-run inbox reply` on the durable inbox: see
+[How to ask your coordinator](ask-your-coordinator.md) (source, 2026-10-31).
+A reply is information, not an approval, and a running task sees it only when
+it reads its inbox.
+
 A task may use multiple sessions or pods. Its budget, prior failures and context
 follow the task. Peer messages are attributed data, not new owner authority.
 The management client should show uncertainty and the observation time when

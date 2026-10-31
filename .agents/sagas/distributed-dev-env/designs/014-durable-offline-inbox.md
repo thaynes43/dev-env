@@ -183,3 +183,98 @@ returns the original message once. TLS non-redirect and token-file rules remain
 the existing client tests. This is source qualification only. It does not
 install the client, publish a live inbox, or close the post-deploy trial in
 Remaining acceptance.
+
+## Ask and reply (2026-10-31, OpenProject #321)
+
+An agent asks its coordinator a routine question on this inbox, and the
+coordinator replies to that exact question. Both are ordinary immutable
+`InboxMessage` records; there is no second store, board or consumer. The
+provider-neutral usage page is
+[How to ask your coordinator](../../../../docs/ask-your-coordinator.md).
+
+**Record.** `InboxMessageSpec` gains two optional fields. `kind` is `question`
+or `reply`; absent is a plain message, as before. `inReplyTo` names one exact
+question by full-digest name and UID. A schema rule requires `inReplyTo` on
+every reply and on nothing else, and the spec stays immutable as a whole. New
+questions and replies carry a `kind` label, and a reply an `in-reply-to` label
+(a digest of the question reference), beside the project, recipient and source
+labels; the store accepts a question or reply only with that full label set.
+Plain messages keep their labels. A reply is information, never an approval:
+grants, held actions and the Asks board (#254) are untouched, and a
+tool-permission request does not become a question.
+
+**Publish.** The request still carries intent only; the server derives every
+attribution field, as above.
+
+- A plain message names its recipient exactly, unchanged.
+- A question names a recipient Session by name (namespace and UID optional,
+  checked when given), or sets `toParent`. Then the server resolves the
+  sender's immutable `spec.parent`, which the API set from the creating
+  caller's token (D-05). A parent that is not a Session name gets 422. A parent
+  created after the sender, or whose UID differs from a recorded
+  `usageCaptureParentUID`, is a replacement and reads as not found.
+- A reply names its question only. The server reads the live question and
+  sends the reply to the question's sender. A missing question, a question in
+  another project, a question not addressed to the replier, or a stale UID all
+  read as the uniform 404, so a reply discloses nothing about messages the
+  replier did not receive. A reply to a reply or to a plain message gets 422.
+  A second, different reply to one question gets 409; two replies racing past
+  that check can both land, and the derived state then names the oldest and
+  counts them.
+- Identity stays sender UID plus key. An identical retry returns the stored
+  record with 200 even after the recipient, parent or question has gone: the
+  server binds the derived recipient and question from the stored record when
+  the request's own fields agree with it, then compares intent as before. A
+  changed text, kind, recipient or question under the same key is 409.
+
+**Derived state.** A list or read with `view=thread` adds `kind` (`plain`,
+`question` or `reply`), `inReplyTo` and, for a question or reply, a `thread`.
+The state is computed on each read and never stored: `Unanswered` (no reply,
+recipient live), `Stale` (no reply for more than `StaleAfter`, a fixed 30
+minutes), `Answered` (a reply exists, named), `Acknowledged` (the asker acked
+the reply), `RecipientEnded` (no reply and the recipient is gone, replaced,
+deleting, Archived or Failed, or a task whose agent exited, failed or was
+interrupted; Suspended is not ended) and `Unknown` (any lookup unconfirmed;
+never a guessed `Unanswered`). `waitingOn` names the Session that owes the next
+step. Thirty minutes sits below the 45-minute timeout cap on managed
+common-rules tasks, so a task can still see `Stale` and act on its work order.
+It is a display bound: nothing expires, is resent or escalates. Archived
+messages show their correlation with state `Unknown`. After retention releases
+an acknowledged reply whose sender has ended (section above), the question can
+read `RecipientEnded`.
+
+**Both sides.** The coordinator sees a question's state in its own inbox. The
+asker sees it with `box=sent`, a list of the caller's own sent messages by
+the source label, behind the same original-Session proof as its inbox. It wrote
+every one of them, so this is no new disclosure. A configured coordinator host
+reads project threads but has no sent box and still cannot publish or ack.
+
+**Compatibility.** Without `view=thread` the list and read responses keep the
+older shape byte for byte, so an older strict client still decodes them. A
+plain publish receipt is unchanged; question and reply receipts carry the
+correlation. The list echoes `view` and `box`. An older API ignores those
+queries, so the new CLI refuses `--sent` when the echo is missing rather than
+show the caller's inbox as its sent box. An older API refuses ask and reply
+requests as unknown fields (400).
+
+**Rollout.** haynes-ops must install the regenerated
+`inboxmessages` CRD before any operator pin that carries this code. An operator
+writing `kind` against the older CRD would have the field pruned: the store
+then reports 503 Unknown, and a retry conflicts against a plain record. The
+older operator is unaffected by the newer CRD. No RBAC, credential or network
+change follows: the operator already lists and reads these resources.
+
+**Bounds.** The existing per-Session and per-project limits count questions
+and replies. A reply lookup reads at most 8 replies, and more is Unknown. A
+thread view costs a reply list and an ack read per question, plus one memoized
+Session read per recipient.
+
+**Not in this unit.** Headless tasks are not interrupted: a task polls its
+inbox and is not woken by a reply, and a TUI coordinator is not notified.
+Session-less native hosts can neither ask nor be asked. The cross-provider
+live question, reply and acknowledgement proof, the portal view (#326) and
+session detail (#322) stay open under #321. Tests:
+`internal/inbox/askreply_test.go`, `internal/apiserver/inbox_askreply_test.go`,
+`internal/apiserver/inbox_askreply_cli_test.go` (real `agentrun.Run` over TLS),
+`internal/agentrun/inbox_askreply_test.go` and the envtest schema case in
+`api/coordination/v1alpha1/inbox_validation_test.go`.

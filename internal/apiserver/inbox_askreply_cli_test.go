@@ -41,7 +41,9 @@ func TestInboxCLIAskReplyAckRoundTrip(t *testing.T) {
 		env.Getenv = func(string) string { return "" }
 		env.SessionTokenFile, env.ServiceAccountDir = filepath.Join(dir, "absent-session"), filepath.Join(dir, "absent-sa")
 		env.LookPath = func(string) (string, error) { return "", errors.New("synthetic: no host command") }
-		env.Run = func(context.Context, []string, io.Reader) (int, error) { return 0, errors.New("synthetic host process refused") }
+		env.Run = func(context.Context, []string, io.Reader) (int, error) {
+			return 0, errors.New("synthetic host process refused")
+		}
 		env.Sleep = func(context.Context, time.Duration) error {
 			t.Errorf("inbox client retried")
 			return errors.New("synthetic retry refused")
