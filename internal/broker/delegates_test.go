@@ -73,7 +73,7 @@ func dgCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 		e(g, p)
 	}
 	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "req", UID: g.Spec.Requester.SessionUID, Labels: map[string]string{v1alpha1.LabelDepth: "0"}}}
-	s.Spec.Parent = "dev-env-system/dev-env-human"
+	s.Spec.Parent = dgDelegate // a child of the delegate host
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "req", UID: "req-pod", Labels: map[string]string{v1alpha1.LabelSession: "req"},
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(s, v1alpha1.GroupVersion.WithKind("AgentSession"))}},
@@ -123,7 +123,7 @@ func (f *dgFixture) grant() *v1alpha1.AccessGrant {
 func (f *dgFixture) decision(approve bool, edit ...func(*MaintenanceDecision)) MaintenanceDecision {
 	g := f.grant()
 	d := MaintenanceDecision{GrantUID: string(g.UID), Digest: grantattest.ScopeDigest(g), By: dgBy, Approve: approve, TTL: g.Spec.TTL.Duration,
-		At: f.clk.Now(), Ref: dgRef, Reason: "fits the frontend runbook", Delegate: &DelegateIdentity{PodUID: "host-pod"}}
+		At: f.clk.Now(), Ref: dgRef, Reason: "fits the frontend runbook", Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
 	for _, e := range edit {
 		e(&d)
 	}
@@ -309,10 +309,11 @@ func TestDelegateRemovedBeforeApplyNeverApproves(t *testing.T) {
 				p.Spec.Attested, p.Spec.Delegated = nil, &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
 			})
 			f.b.EnableAttestedGrants, f.b.EnableAttestedMaintenance = false, false
+			childOfDelegateHost(f)
 			f.step(1)
 			g := f.grant()
 			d := MaintenanceDecision{GrantUID: string(g.UID), Digest: grantattest.ScopeDigest(g), By: dgBy, Approve: true, TTL: g.Spec.TTL.Duration,
-				At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{PodUID: "host-pod"}}
+				At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
 			raw, _ := json.Marshal(d)
 			f.annotate(MaintenanceDecisionAnnotation, string(raw))
 			f.b.GrantDelegates = list
@@ -337,6 +338,105 @@ func TestDelegateRemovedBeforeApplyNeverApproves(t *testing.T) {
 		if err := delegateBinding(g, bad, []string{dgDelegate}, f.clk.Now()); err == nil {
 			t.Errorf("%s: bound", name)
 		}
+	}
+}
+
+// childOfDelegateHost makes amCase's coordinator a child session of the
+// delegate host dgDelegate: inside its reach.
+func childOfDelegateHost(f *amFixture) {
+	f.t.Helper()
+	var s v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(f.sess), &s); err != nil {
+		f.t.Fatal(err)
+	}
+	s.Spec.Parent = dgDelegate
+	f.update(&s)
+}
+
+// The broker checks the delegate's reach again (lead ruling on #786): a host
+// decides only for its own child sessions, a delegate session only for its
+// strict descendants; an unknown form decides nothing.
+func TestDelegateReachIsTheDelegatesTree(t *testing.T) {
+	const lead = sessionNS + "/dev-env-coordinator-lead"
+	addSession := func(f *dgFixture, name, parent string) *v1alpha1.AgentSession {
+		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name, UID: types.UID(name + "-uid")}}
+		s.Spec.Parent = parent
+		if err := f.c.Create(context.Background(), s); err != nil {
+			f.t.Fatal(err)
+		}
+		return s
+	}
+	reparent := func(f *dgFixture, parent string) {
+		var s v1alpha1.AgentSession
+		if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "req"}, &s); err != nil {
+			f.t.Fatal(err)
+		}
+		s.Spec.Parent = parent
+		if err := f.c.Update(context.Background(), &s); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	session := func(name, uid string) func(*MaintenanceDecision) {
+		return func(d *MaintenanceDecision) {
+			d.By = DelegateApprover + lead
+			d.Delegate = &DelegateIdentity{Form: 2, PodUID: name + "-pod", Session: name, SessionUID: uid}
+		}
+	}
+	for name, tc := range map[string]struct {
+		setup   func(*dgFixture)
+		decide  func(*MaintenanceDecision)
+		approve bool
+	}{
+		"a host's own child": {approve: true},
+		"another host's child": {setup: func(f *dgFixture) { reparent(f, "dev-env-system/codex-host-b") }},
+		"a host for a session Tom launched": {setup: func(f *dgFixture) { reparent(f, "dev-env-system/dev-env-human") }},
+		"a lead's child": {setup: func(f *dgFixture) {
+			addSession(f, "lead-s", "dev-env-system/dev-env-human")
+			reparent(f, "lead-s")
+		}, decide: session("lead-s", "lead-s-uid"), approve: true},
+		"a lead's grandchild": {setup: func(f *dgFixture) {
+			addSession(f, "lead-s", "dev-env-system/dev-env-human")
+			addSession(f, "worker-s", "lead-s")
+			reparent(f, "worker-s")
+		}, decide: session("lead-s", "lead-s-uid"), approve: true},
+		"a lead's sibling": {setup: func(f *dgFixture) {
+			addSession(f, "root-s", "dev-env-system/dev-env-human")
+			addSession(f, "lead-s", "root-s")
+			reparent(f, "root-s")
+		}, decide: session("lead-s", "lead-s-uid")},
+		"a lead's parent": {setup: func(f *dgFixture) {
+			addSession(f, "lead-s", "req")
+			reparent(f, "dev-env-system/dev-env-human")
+		}, decide: session("lead-s", "lead-s-uid")},
+		"an unrelated session": {setup: func(f *dgFixture) {
+			addSession(f, "lead-s", "dev-env-system/dev-env-human")
+			reparent(f, "dev-env-system/dev-env-human")
+		}, decide: session("lead-s", "lead-s-uid")},
+		"a replaced lead of the same name": {setup: func(f *dgFixture) {
+			addSession(f, "lead-s", "dev-env-system/dev-env-human")
+			reparent(f, "lead-s")
+		}, decide: session("lead-s", "earlier-uid")},
+		"an unknown form": {decide: func(d *MaintenanceDecision) { d.Delegate.Form = 0 }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := dgCase(t)
+			f.b.GrantDelegates = []string{dgDelegate, lead}
+			if tc.setup != nil {
+				tc.setup(f)
+			}
+			var edits []func(*MaintenanceDecision)
+			if tc.decide != nil {
+				edits = append(edits, tc.decide)
+			}
+			g := f.pendingThenDecide(func() MaintenanceDecision { return f.decision(true, edits...) })
+			if tc.approve {
+				if g.Status.Phase != v1alpha1.GrantActive {
+					t.Fatalf("not approved inside the delegate's tree: %+v", g.Status)
+				}
+				return
+			}
+			wantStillPending(t, g)
+		})
 	}
 }
 
@@ -491,7 +591,7 @@ func TestDelegateDecisionDefaultOffIsANoOp(t *testing.T) {
 	m := amCase(t)
 	m.step(1)
 	gm := m.grant()
-	d := MaintenanceDecision{GrantUID: string(gm.UID), Digest: grantattest.ScopeDigest(gm), By: dgBy, Approve: true, TTL: gm.Spec.TTL.Duration, At: m.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{PodUID: "host-pod"}}
+	d := MaintenanceDecision{GrantUID: string(gm.UID), Digest: grantattest.ScopeDigest(gm), By: dgBy, Approve: true, TTL: gm.Spec.TTL.Duration, At: m.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
 	raw, _ := json.Marshal(d)
 	m.annotate(MaintenanceDecisionAnnotation, string(raw))
 	if _, err := m.b.Reconcile(context.Background(), ctrl.Request{NamespacedName: m.key}); !errors.Is(err, ErrRefused) {
@@ -558,7 +658,7 @@ func TestDelegateDecisionMaintenance(t *testing.T) {
 		f.t.Helper()
 		g := f.grant()
 		d := MaintenanceDecision{GrantUID: string(g.UID), Digest: grantattest.ScopeDigest(g), By: dgBy, Approve: true, TTL: g.Spec.TTL.Duration,
-			At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{PodUID: "host-pod"}}
+			At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{Form: 1, PodUID: "host-pod"}}
 		for _, e := range edit {
 			e(&d)
 		}
@@ -567,6 +667,7 @@ func TestDelegateDecisionMaintenance(t *testing.T) {
 	}
 	setup := func(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPolicy)) *amFixture {
 		f := amCase(t, append([]func(*v1alpha1.AccessGrant, *v1alpha1.GrantPolicy){delegated}, edit...)...)
+		childOfDelegateHost(f)
 		f.b.GrantDelegates = []string{dgDelegate}
 		f.b.EnableAttestedGrants, f.b.EnableAttestedMaintenance = false, false
 		f.step(1)

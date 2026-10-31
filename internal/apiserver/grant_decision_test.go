@@ -39,8 +39,10 @@ const (
 )
 
 // delegateFixture is a fixture whose coordinator host and coordinator-lead
-// ServiceAccount are delegates, with a top-level full session that requested a
-// kube grant. It returns the fixture, the requester's token and the grant.
+// ServiceAccount are delegates, with a full session the host launched (its
+// child, inside its reach) that requested a kube grant. Delegate sessions are
+// launch-eligible (S4's check stands in). It returns the fixture, the
+// requester's token and the grant.
 func delegateFixture(t *testing.T) (*fixture, string, apiv1.Grant) {
 	t.Helper()
 	f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
@@ -62,13 +64,34 @@ func delegateFixture(t *testing.T) (*fixture, string, apiv1.Grant) {
 	f.srv.Policy.CoordinatorEnabled = true
 	f.srv.Policy.Coordinators = []CoordinatorHost{{ServiceAccount: coordinatorSA, PodName: host.Name, HostID: "host-a"}}
 	f.srv.GrantDelegates = []string{coordinatorSA, delegateSessionSA}
+	f.srv.DelegateSessionEligible = func(context.Context, *v1alpha1.AgentSession) error { return nil }
 	f.h = f.srv.Handler()
 	tok := f.sessionPod("requester", "full", 0)
+	f.reparent("requester", coordinatorSA)
 	g := f.request(tok, apiv1.CreateGrantRequest{Type: "kube", Role: v1alpha1.RoleWorkloads, Namespaces: []string{"frontend"}, TTL: "1h", Reason: "restart frontend"}, http.StatusCreated)
 	if g.UID == "" || g.ScopeDigest == "" {
 		t.Fatalf("the grant view lacks what a delegate echoes: %+v", g)
 	}
 	return f, tok, g
+}
+
+// reparent sets a session's parent, as its creator would have recorded it.
+func (f *fixture) reparent(name, parent string) {
+	f.t.Helper()
+	s := f.session(name)
+	s.Spec.Parent = parent
+	if err := f.c.Update(context.Background(), s); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// childGrant adds a full session whose parent is parent, at depth, and a kube
+// grant it requested.
+func (f *fixture) childGrant(name, parent string, depth int) apiv1.Grant {
+	f.t.Helper()
+	f.sessionPod(name, "full", depth)
+	f.reparent(name, parent)
+	return f.putGrant(name, nil)
 }
 
 func decisionFor(g apiv1.Grant, approve bool) apiv1.GrantDecisionRequest {
@@ -224,29 +247,35 @@ func TestGrantDecisionCoordinatorHostApproves(t *testing.T) {
 	}
 }
 
-// A form 2 delegate, a Running top-level session Tom launched whose pod runs
-// as a listed delegate account, decides for another session, its own child
-// included, and its session is recorded.
+// A form 2 delegate, a Running session whose pod runs as a listed delegate
+// account, decides for its child and its grandchild, and its session and form
+// are recorded. Without S4's launch-eligibility check, it decides nothing.
 func TestGrantDecisionDelegateSessionDecides(t *testing.T) {
-	f, _, g := delegateFixture(t)
+	f, _, _ := delegateFixture(t)
 	lead := f.delegateSession("coordinator-lead", humanSA, 0)
-	if status, code := f.decideAs(lead, g.Name, decisionFor(g, false)); status != http.StatusAccepted {
+	cg := f.childGrant("lead-child", "coordinator-lead", 1)
+	if status, code := f.decideAs(lead, cg.Name, decisionFor(cg, false)); status != http.StatusAccepted {
 		t.Fatal(status, code)
 	}
-	d, ok := f.decisionAnnotation(g.Name)
-	if !ok || d.Approve || d.By != broker.DelegateRef(delegateSessionSA) || d.Delegate == nil || d.Delegate.Session != "coordinator-lead" ||
+	d, ok := f.decisionAnnotation(cg.Name)
+	if !ok || d.Approve || d.By != broker.DelegateRef(delegateSessionSA) || d.Delegate == nil || d.Delegate.Form != 2 || d.Delegate.Session != "coordinator-lead" ||
 		d.Delegate.SessionUID != string(lead.session.UID) || d.Delegate.PodUID != string(lead.pod.UID) || d.Reason != "fits the frontend runbook" {
 		t.Fatalf("annotation %+v", d)
 	}
-	f.sessionPod("lead-child", "full", 1)
-	child := f.session("lead-child")
-	child.Spec.Parent = "coordinator-lead"
-	if err := f.c.Update(context.Background(), child); err != nil {
-		t.Fatal(err)
+	gg := f.childGrant("lead-grandchild", "lead-child", 2)
+	if status, code := f.decideAs(lead, gg.Name, decisionFor(gg, true)); status != http.StatusAccepted {
+		t.Fatalf("a delegate may decide for its grandchild: %d %s", status, code)
 	}
-	cg := f.putGrant("lead-child", nil)
-	if status, code := f.decideAs(lead, cg.Name, decisionFor(cg, true)); status != http.StatusAccepted {
-		t.Fatalf("a delegate may decide for its own child: %d %s", status, code)
+	// S4's check refuses: no decision.
+	f.srv.DelegateSessionEligible = func(context.Context, *v1alpha1.AgentSession) error { return errors.New("synthetic: not admitted") }
+	g3 := f.childGrant("lead-child-3", "coordinator-lead", 1)
+	if status, code := f.decideAs(lead, g3.Name, decisionFor(g3, true)); status != http.StatusForbidden || code != apiv1.CodeForbidden {
+		t.Fatalf("an ineligible delegate session: %d %s", status, code)
+	}
+	// No check configured (before S4 wires it): form 2 decides nothing.
+	f.srv.DelegateSessionEligible = nil
+	if status, code := f.decideAs(lead, g3.Name, decisionFor(g3, true)); status != http.StatusForbidden || code != apiv1.CodeForbidden {
+		t.Fatalf("form 2 without S4's check: %d %s", status, code)
 	}
 	// Until S4, resolveCaller does not classify a pod running as the delegate
 	// account as a session: form 2 is inert over HTTP.
@@ -254,7 +283,7 @@ func TestGrantDecisionDelegateSessionDecides(t *testing.T) {
 	id := saIdentity(delegateSessionSA)
 	id.PodName, id.PodUID = lead.pod.Name, string(lead.pod.UID)
 	f.auth[tok] = id
-	wantError(t, f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tok, decisionFor(g, true)), http.StatusForbidden, apiv1.CodeForbidden)
+	wantError(t, f.do(http.MethodPost, apiv1.GrantDecisionPath(g3.Name), tok, decisionFor(g3, true)), http.StatusForbidden, apiv1.CodeForbidden)
 }
 
 // Every caller that is not a listed delegate is refused.
@@ -277,11 +306,13 @@ func TestGrantDecisionRefusesCallersOffTheList(t *testing.T) {
 	}
 }
 
-// The requester, its descendants, the envelope's participants and a delegate
-// session Tom's callers did not launch never decide (DESIGN-042 6.2, c4638e6).
-func TestGrantDecisionRefusesSelfAndAncestry(t *testing.T) {
-	f, _, _ := delegateFixture(t)
-	const self, ancestor, unverified, launched = "its own session's grant", "its parent or another ancestor", "cannot be verified", "Tom's human or a client caller launched"
+// A delegate decides only inside its own tree (lead ruling on #786): a host
+// for its own child sessions, a delegate session for its strict descendants.
+// Its own grants, an ancestor's, a sibling's, a cousin's and an unrelated
+// session's are refused, as are a requester on its account and its own pod.
+func TestGrantDecisionReachIsTheDelegatesTree(t *testing.T) {
+	f, _, g := delegateFixture(t)
+	const self, outside, unverified = "its own session's grant", "only for its own descendants", "cannot be verified"
 	forbiddenFor := func(t *testing.T, c *caller, g apiv1.Grant, why string) {
 		t.Helper()
 		status, ae := f.decideErr(c, g.Name, decisionFor(g, true))
@@ -292,14 +323,79 @@ func TestGrantDecisionRefusesSelfAndAncestry(t *testing.T) {
 			t.Fatal("recorded")
 		}
 	}
-	t.Run("the requester itself", func(t *testing.T) {
-		lead := f.delegateSession("self-lead", humanSA, 0)
-		forbiddenFor(t, lead, f.putGrant("self-lead", nil), self)
+	allowedFor := func(t *testing.T, c *caller, g apiv1.Grant) {
+		t.Helper()
+		if status, ae := f.decideErr(c, g.Name, decisionFor(g, true)); status != http.StatusAccepted {
+			t.Fatalf("inside the delegate's tree: %d %v", status, ae)
+		}
+	}
+	// A delegate session, a lead that Tom launched, with a child and a
+	// grandchild; Tom's other top-level session; and a launching session with
+	// two children, one of them a lead.
+	lead := f.delegateSession("tree-lead", humanSA, 0)
+	child := f.childGrant("tree-child", "tree-lead", 1)
+	grandchild := f.childGrant("tree-grandchild", "tree-child", 2)
+
+	t.Run("the lead's child", func(t *testing.T) { allowedFor(t, lead, child) })
+	t.Run("the lead's grandchild", func(t *testing.T) { allowedFor(t, lead, grandchild) })
+	t.Run("the lead's own grant", func(t *testing.T) {
+		forbiddenFor(t, lead, f.putGrant("tree-lead", nil), self)
+	})
+	t.Run("the lead's parent", func(t *testing.T) {
+		f.sessionPod("tree-parent", "full", 0)
+		under := f.delegateSession("lead-under-parent", "tree-parent", 1)
+		forbiddenFor(t, under, f.putGrant("tree-parent", nil), outside)
+	})
+	t.Run("the lead's grandparent", func(t *testing.T) {
+		f.sessionPod("tree-grandparent", "full", 0)
+		f.childGrant("tree-mid", "tree-grandparent", 1)
+		deep := f.delegateSession("lead-under-mid", "tree-mid", 2)
+		forbiddenFor(t, deep, f.putGrant("tree-grandparent", nil), outside)
+	})
+	t.Run("the lead's sibling", func(t *testing.T) {
+		f.sessionPod("tree-root", "full", 0)
+		sibling := f.childGrant("tree-sibling", "tree-root", 1)
+		siblingLead := f.delegateSession("tree-sibling-lead", "tree-root", 1)
+		forbiddenFor(t, siblingLead, sibling, outside)
+	})
+	t.Run("the lead's cousin", func(t *testing.T) {
+		f.sessionPod("cousin-root", "full", 0)
+		f.childGrant("cousin-uncle", "cousin-root", 1)
+		cousin := f.childGrant("cousin-a", "cousin-uncle", 2)
+		f.childGrant("cousin-parent", "cousin-root", 1)
+		cousinLead := f.delegateSession("cousin-lead", "cousin-parent", 2)
+		forbiddenFor(t, cousinLead, cousin, outside)
+	})
+	t.Run("an unrelated session's grant", func(t *testing.T) {
+		f.sessionPod("unrelated-root", "full", 0)
+		forbiddenFor(t, lead, f.putGrant("unrelated-root", nil), outside)
+	})
+	t.Run("an unverifiable chain", func(t *testing.T) {
+		orphan := f.childGrant("orphan", "gone-parent", 1)
+		forbiddenFor(t, lead, orphan, unverified)
 	})
 	t.Run("a requester on the delegate's own account", func(t *testing.T) {
 		f.delegateSession("same-account-a", humanSA, 0)
 		other := f.delegateSession("same-account-b", humanSA, 0)
 		forbiddenFor(t, other, f.putGrant("same-account-a", nil), "runs as its own delegate account")
+	})
+	// Form 1: a host decides for its own child sessions only.
+	host, err := f.srv.resolveCaller(context.Background(), f.auth[tokCoordinator])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("a host's own child", func(t *testing.T) { allowedFor(t, host, g) })
+	t.Run("a host for Tom's session", func(t *testing.T) {
+		f.sessionPod("toms-session", "full", 0)
+		forbiddenFor(t, host, f.putGrant("toms-session", nil), outside)
+	})
+	t.Run("a host for another host's child", func(t *testing.T) {
+		forbiddenFor(t, host, f.childGrant("other-hosts-child", "dev-env-system/codex-host-b", 0), outside)
+	})
+	t.Run("a host for its child's child", func(t *testing.T) {
+		f.sessionPod("host-child", "full", 0)
+		f.reparent("host-child", coordinatorSA)
+		forbiddenFor(t, host, f.childGrant("host-grandchild", "host-child", 1), outside)
 	})
 	t.Run("the requester's current pod", func(t *testing.T) {
 		// A host pod that is the pod named after the requesting session.
@@ -309,33 +405,6 @@ func TestGrantDecisionRefusesSelfAndAncestry(t *testing.T) {
 			t.Fatal(err)
 		}
 		forbiddenFor(t, f.hostPod("host-x", sessionNS, nil), f.putGrant("host-x", nil), self)
-	})
-	t.Run("a child of the requester", func(t *testing.T) {
-		f.sessionPod("parent-a", "full", 0)
-		child := f.delegateSession("child-of-a", "parent-a", 1)
-		forbiddenFor(t, child, f.putGrant("parent-a", nil), ancestor)
-	})
-	t.Run("a grandchild of the requester", func(t *testing.T) {
-		f.sessionPod("parent-b", "full", 0)
-		f.delegateSession("child-of-b", "parent-b", 1)
-		grandchild := f.delegateSession("grandchild-of-b", "child-of-b", 2)
-		forbiddenFor(t, grandchild, f.putGrant("parent-b", nil), ancestor)
-	})
-	t.Run("an ancestry that cannot be verified", func(t *testing.T) {
-		f.sessionPod("parent-c", "full", 0)
-		orphan := f.delegateSession("orphan-of-c", "gone-parent", 1)
-		forbiddenFor(t, orphan, f.putGrant("parent-c", nil), unverified)
-	})
-	t.Run("a delegate a session launched, for an unrelated grant", func(t *testing.T) {
-		f.sessionPod("parent-d", "full", 0)
-		f.sessionPod("unrelated-d1", "full", 0)
-		launchedBySession := f.delegateSession("lead-of-d", "parent-d", 1)
-		forbiddenFor(t, launchedBySession, f.putGrant("unrelated-d1", nil), launched)
-	})
-	t.Run("a session the portal launched", func(t *testing.T) {
-		f.sessionPod("parent-e", "full", 0)
-		portal := f.delegateSession("portal-lead", "portal/tom", 1)
-		forbiddenFor(t, portal, f.putGrant("parent-e", nil), launched)
 	})
 	t.Run("a coordinator host pod the requester controls", func(t *testing.T) {
 		f.sessionPod("parent-f", "full", 0)
@@ -350,27 +419,6 @@ func TestGrantDecisionRefusesSelfAndAncestry(t *testing.T) {
 		f.sessionPod("parent-h", "full", 0)
 		// An owner in another namespace is never this pod's controller.
 		forbiddenFor(t, f.hostPod("host-z", "dev-env-system", f.session("parent-h")), f.putGrant("parent-h", nil), unverified)
-	})
-	t.Run("siblings under one launching session", func(t *testing.T) {
-		// A delegate that the requester's own parent session launched: the
-		// launching session could route its children's grants through it.
-		f.sessionPod("tree-root", "full", 0)
-		f.sessionPod("tree-worker", "full", 1)
-		w := f.session("tree-worker")
-		w.Spec.Parent = "tree-root"
-		if err := f.c.Update(context.Background(), w); err != nil {
-			t.Fatal(err)
-		}
-		sibling := f.delegateSession("tree-lead", "tree-root", 1)
-		forbiddenFor(t, sibling, f.putGrant("tree-worker", nil), "shares a launching session")
-	})
-	t.Run("an unrelated session's grant", func(t *testing.T) {
-		f.sessionPod("unrelated-root", "full", 0)
-		lead := f.delegateSession("unrelated-lead", humanSA, 0)
-		g := f.putGrant("unrelated-root", nil)
-		if status, code := f.decideAs(lead, g.Name, decisionFor(g, true)); status != http.StatusAccepted {
-			t.Fatalf("an unrelated grant: %d %s", status, code)
-		}
 	})
 }
 

@@ -33,10 +33,12 @@ type MaintenanceDecision struct {
 }
 
 // DelegateIdentity is the delegate's pod-bound identity as the operator
-// authenticated it: its pod, and the AgentSession that controls that pod, when
-// one does (a coordinator host has none). The broker checks it against the
-// requester again before it decides.
+// authenticated it: its form (1, a coordinator host; 2, a delegate session),
+// its pod, and the AgentSession that controls that pod, when one does. The
+// broker checks it against the requester again before it decides, its reach
+// included.
 type DelegateIdentity struct {
+	Form       int    `json:"form"`
 	PodUID     string `json:"podUID"`
 	Session    string `json:"session,omitempty"`
 	SessionUID string `json:"sessionUID,omitempty"`

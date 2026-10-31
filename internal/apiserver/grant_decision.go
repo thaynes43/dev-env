@@ -13,7 +13,15 @@ package apiserver
 //     ServiceAccount, its configured pod name, a live pod UID and the
 //     coordinator-host annotation);
 //  2. a session pod running as an allowlisted ServiceAccount, controlled by a
-//     Running AgentSession that Tom's human or a client caller launched.
+//     Running AgentSession that S4's launch rules admitted
+//     (DelegateSessionEligible).
+//
+// Reach is the delegate's own tree (lead ruling on #786): a coordinator host
+// decides only for its own child sessions, as childForCoordinator defines them,
+// and a delegate session only for its strict descendants. Its own grants, an
+// ancestor's, a sibling's, a cousin's and an unrelated session's are refused.
+// A top-level session uses mode (a), attestation: its delegate is Tom, by
+// message. spec.delegated still caps the types and the scope.
 //
 // Form 2 activates with S4 (DESIGN-042 6.3), which lets resolveCaller classify
 // a pod running as a named coordinator ServiceAccount as a session. Until then
@@ -161,13 +169,9 @@ func (s *Server) podSession(ctx context.Context, pod *corev1.Pod) (*v1alpha1.Age
 // delegateSeparation refuses a delegate that is the requester or speaks for
 // it (DESIGN-042 6.2): the requesting session, a pod it controls, its current
 // pod, or a requester running as the delegate's own account; a coordinator or
-// worker the maintenance envelope names; a session that descends from the
-// requester through any parent link; a session that shares a launching
-// session with the requester (siblings and cousins); and, for a delegate
-// session, one that Tom's human or a client caller did not launch. The last
-// rule is S4's launch rule checked again at decision time: a session may not
-// launch its own delegate. A delegate deciding for its own children stays
-// allowed.
+// worker the maintenance envelope names; any requester outside the delegate's
+// own tree (delegateReach); and, for a delegate session, one S4's launch
+// rules did not admit (DelegateSessionEligible).
 func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant, d *grantDelegate) error {
 	rq := g.Spec.Requester
 	if owner := metav1.GetControllerOf(d.pod); owner != nil && owner.Kind == "AgentSession" &&
@@ -197,59 +201,63 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 			}
 		}
 	}
-	if d.session == nil {
-		return nil
+	if err := s.delegateReach(ctx, g, d); err != nil {
+		return err
 	}
-	// The delegate's launching sessions: none may be the requester.
-	ancestors := map[string]bool{}
-	parent := d.session.Spec.Parent
-	for i := 0; parent != "" && !strings.Contains(parent, "/"); i++ {
-		if parent == rq.Session {
-			return forbidden("a delegate never decides a grant of its parent or another ancestor")
+	if d.form == 2 {
+		// TODO(DESIGN-042 S4, #787): once #787 merges, call S4's exported
+		// launch-eligibility check here (who may launch a named coordinator
+		// session, and one Running holder per account). Until then no check
+		// is configured and form 2 is refused; resolveCaller classifies no
+		// such pod as a session before S4 anyway.
+		if s.DelegateSessionEligible == nil {
+			return forbidden("delegate sessions wait on S4's launch eligibility check")
 		}
-		if i >= maxDelegateAncestry {
-			return forbidden("the delegate's ancestry is deeper than sessions may sit")
+		if err := s.DelegateSessionEligible(ctx, d.session); err != nil {
+			return forbidden("delegate session %s is not launch-eligible: %s", d.session.Name, err)
 		}
-		var a v1alpha1.AgentSession
-		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: d.session.Namespace, Name: parent}, &a); err != nil {
-			return forbidden("the delegate's ancestry cannot be verified")
-		}
-		if a.UID == rq.SessionUID {
-			return forbidden("a delegate never decides a grant of its parent or another ancestor")
-		}
-		ancestors[a.Name] = true
-		parent = a.Spec.Parent
-	}
-	// Siblings and cousins: a delegate and the requester that share a
-	// launching session (anything but a human or client ServiceAccount,
-	// which names no session) are one tree, and that session could route
-	// its own children's grants through a delegate it launched. A delegate's
-	// own descendants share no ancestor with it, so it still decides for them.
-	if len(ancestors) > 0 {
-		var r v1alpha1.AgentSession
-		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: rq.Session}, &r); err != nil || r.UID != rq.SessionUID {
-			return forbidden("the requesting session's ancestry cannot be verified")
-		}
-		parent := r.Spec.Parent
-		for i := 0; parent != "" && !strings.Contains(parent, "/"); i++ {
-			if ancestors[parent] {
-				return forbidden("a delegate never decides a grant of a session it shares a launching session with")
-			}
-			if i >= maxDelegateAncestry {
-				return forbidden("the requesting session's ancestry is deeper than sessions may sit")
-			}
-			var a v1alpha1.AgentSession
-			if err := s.Live.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: parent}, &a); err != nil {
-				return forbidden("the requesting session's ancestry cannot be verified")
-			}
-			parent = a.Spec.Parent
-		}
-	}
-	if launcher := d.session.Spec.Parent; d.form == 2 &&
-		(sessionDepth(d.session) != 0 || (launcher != s.Policy.Human && !slices.Contains(s.Policy.Clients, launcher))) {
-		return forbidden("a delegate session is one Tom's human or a client caller launched")
 	}
 	return nil
+}
+
+// delegateReach refuses a grant outside the delegate's own tree (lead ruling on
+// #786). A coordinator host reaches only its own child sessions, the sessions
+// whose parent is its ServiceAccount (childForCoordinator). A delegate session
+// reaches only its strict descendants: the requester's chain of session parents,
+// read live, must reach the delegate's session by name and UID within the depth
+// limit. So its own grants, an ancestor's, a sibling's, a cousin's and an
+// unrelated session's are refused; a top-level session's delegate is Tom.
+func (s *Server) delegateReach(ctx context.Context, g *v1alpha1.AccessGrant, d *grantDelegate) error {
+	rq := g.Spec.Requester
+	const outside = "a delegate decides only for its own descendants: this requester is not one"
+	var r v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: rq.Session}, &r); err != nil || r.UID != rq.SessionUID {
+		return forbidden("the requesting session cannot be verified")
+	}
+	if d.form == 1 {
+		if r.Spec.Parent != d.ref {
+			return forbidden("%s", outside)
+		}
+		return nil
+	}
+	if d.session == nil {
+		return forbidden("%s", outside)
+	}
+	parent := r.Spec.Parent
+	for i := 0; parent != "" && !strings.Contains(parent, "/"); i++ {
+		if i >= maxDelegateAncestry {
+			return forbidden("the requesting session's ancestry is deeper than sessions may sit")
+		}
+		var a v1alpha1.AgentSession
+		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: parent}, &a); err != nil {
+			return forbidden("the requesting session's ancestry cannot be verified")
+		}
+		if a.Name == d.session.Name && a.UID == d.session.UID {
+			return nil
+		}
+		parent = a.Spec.Parent
+	}
+	return forbidden("%s", outside)
 }
 
 // validDecisionReason: at most maxDecisionReason characters of valid UTF-8,
@@ -331,7 +339,7 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 	rec := broker.MaintenanceDecision{
 		GrantUID: string(g.UID), Digest: req.Digest, By: broker.DelegateRef(d.ref), Approve: req.Approve, TTL: ttl,
 		At: s.now().UTC().Truncate(time.Second), Ref: req.Ref, Reason: req.Reason,
-		Delegate: &broker.DelegateIdentity{PodUID: string(d.pod.UID)},
+		Delegate: &broker.DelegateIdentity{Form: d.form, PodUID: string(d.pod.UID)},
 	}
 	if d.session != nil {
 		rec.Delegate.Session, rec.Delegate.SessionUID = d.session.Name, string(d.session.UID)

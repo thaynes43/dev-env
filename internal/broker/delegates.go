@@ -192,6 +192,42 @@ func delegateSeparation(g *v1alpha1.AccessGrant, d *DelegateIdentity, by string,
 	return nil
 }
 
+// maxReachDepth bounds the walk up the requester's session parents: sessions
+// sit at most two levels deep.
+const maxReachDepth = 4
+
+// delegateReach checks the delegate's reach again (lead ruling on #786): a
+// coordinator host (form 1) decides only for its own child sessions, whose
+// parent is its ServiceAccount; a delegate session (form 2) only for its strict
+// descendants, by name and UID, read from the API server. Anything else, an
+// unknown form included, is outside its tree.
+func (b *Broker) delegateReach(ctx context.Context, d MaintenanceDecision, sess *v1alpha1.AgentSession) error {
+	outside := errors.New("the requester is not in the delegate's own tree")
+	if sess == nil || d.Delegate == nil {
+		return outside
+	}
+	switch d.Delegate.Form {
+	case 1:
+		if sess.Spec.Parent != strings.TrimPrefix(d.By, DelegateApprover) {
+			return outside
+		}
+		return nil
+	case 2:
+		parent := sess.Spec.Parent
+		for i := 0; parent != "" && !strings.Contains(parent, "/") && i < maxReachDepth; i++ {
+			var a v1alpha1.AgentSession
+			if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: parent}, &a); err != nil {
+				return errors.New("the requester's ancestry cannot be read")
+			}
+			if a.Name == d.Delegate.Session && string(a.UID) == d.Delegate.SessionUID {
+				return nil
+			}
+			parent = a.Spec.Parent
+		}
+	}
+	return outside
+}
+
 // delegateDecision applies a pending grant's recorded delegate decision
 // (DESIGN-042 6.2). handled is false when no delegate is configured or the
 // grant carries no delegate decision: the caller goes on as before. Otherwise
@@ -220,6 +256,9 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return wait(err.Error(), deadline.Sub(now.Time))
 	}
 	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, sess, false)); err != nil {
+		return wait(err.Error(), deadline.Sub(now.Time))
+	}
+	if err := b.delegateReach(ctx, d, sess); err != nil {
 		return wait(err.Error(), deadline.Sub(now.Time))
 	}
 	dec := Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, Reason: d.Reason, GrantUID: d.GrantUID, ScopeDigest: d.Digest, Ref: d.Ref}
