@@ -436,8 +436,11 @@ func (a *app) grantShow(ctx context.Context, args []string) error {
 		return err
 	}
 	var out apiv1.Grant
-	if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(pos[0]), nil, nil, &out); err != nil {
+	if _, err := a.call(context.WithValue(ctx, grantTaskClaimsHeader{}, true), c, http.MethodGet, apiv1.GrantPath(pos[0]), nil, nil, &out); err != nil {
 		return err
+	}
+	if out.Type == "maintenance" {
+		out.TaskClaims = sessionTaskClaimsOrUnknown(out.TaskClaims)
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(out)
@@ -462,6 +465,12 @@ func noticeFor(text string, grants ...apiv1.Grant) string {
 }
 
 func (a *app) printGrant(out apiv1.Grant) error {
+	if out.Type == "maintenance" && out.TaskClaims != nil {
+		a.outf("Requester claims: identity is not approval or transfer permission; no TTL inference\n")
+		printSessionTaskClaims(out.TaskClaims, func(label, format string, args ...any) {
+			a.outf("%s: "+format+"\n", append([]any{label}, args...)...)
+		})
+	}
 	if out.Maintenance != nil {
 		a.outf("maintenance node: %s (%s) resource: %s operation: %s\n", out.Maintenance.Node, out.Maintenance.NodeUID, out.Maintenance.Resource, out.Maintenance.Operation)
 		a.outf("maintenance grant UID: %s digest: %s\n", out.UID, out.MaintenanceDigest)

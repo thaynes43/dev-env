@@ -402,7 +402,11 @@ can be compared directly with the negotiated session detail (DESIGN-010).
 Stale, unjoined and mismatched evidence withholds the owner along with the
 claim. No extra list/get or production reader activation follows.
 
-The remaining OP322 consumers have three bounded follow-up slices, in order:
+Maintenance is the second consumer slice (2026-10-31): negotiated grant detail
+reuses the authenticated requester session UID and existing claim scope/list, as
+specified in DESIGN-010. It does not infer an envelope claim or approval.
+
+The remaining OP322 consumers have two bounded follow-up slices:
 
 1. Upgrade/Renovate: define the explicit binding from repository/PR/exact head
    and existing upgrade order attempt to TaskClaim UID, then add a read-only
@@ -410,11 +414,7 @@ The remaining OP322 consumers have three bounded follow-up slices, in order:
    evidence. Keep canonical work identity stable across head changes; an old
    head's evidence cannot confirm the new head. Do not infer success from
    process exit or activate an executor.
-2. Maintenance: bind an existing maintenance work item and attempt to that same
-   canonical identity/UID and expose its recorded waiting/evidence/resolution.
-   Test reused work keys and stale custody without TTL transfer. Reuse the
-   bounded batch source; add no claim registry or write path.
-3. Portal UI: consume the negotiated session projection and Page claim owner,
+2. Portal UI: consume the negotiated session projection and Page claim owner,
    display exact identities and Unknown/stale custody, and link by UID only
    within existing read authority. Coordinate with OP326's session detail;
    test presentation parity and old-operator omission. No `web/portal` edits

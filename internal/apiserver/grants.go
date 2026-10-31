@@ -474,7 +474,7 @@ func (s *Server) grantKey(r *http.Request) (types.NamespacedName, error) {
 }
 
 // getGrant serves GET /v1/grants/{name}.
-func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Request, _ *caller) (int, any, error) {
+func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	key, err := s.grantKey(r)
 	if err != nil {
 		return 0, nil, err
@@ -483,7 +483,11 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 	if err := s.Live.Get(ctx, key, &g); err != nil {
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
-	return http.StatusOK, s.grantView(&g), nil
+	v := s.grantView(&g)
+	if g.Spec.Type == v1alpha1.GrantMaintenance && r.Header.Get(apiv1.GrantTaskClaimsHeader) == apiv1.GrantTaskClaimsV1 {
+		v.TaskClaims = s.grantTaskClaims(ctx, &g, c)
+	}
+	return http.StatusOK, v, nil
 }
 
 // releaseGrant serves DELETE /v1/grants/{name}: it sets spec.release, and the

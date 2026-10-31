@@ -35,6 +35,9 @@ type fleetResourcesHeader struct{}
 // sessionTaskClaimsHeader opts only explicit show reads into the claim join.
 type sessionTaskClaimsHeader struct{}
 
+// grantTaskClaimsHeader is scoped to the explicit grant show request.
+type grantTaskClaimsHeader struct{}
+
 func withSessionTaskClaims(ctx context.Context) context.Context {
 	return context.WithValue(ctx, sessionTaskClaimsHeader{}, true)
 }
@@ -204,6 +207,9 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	// an older operator ignores the header.
 	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
 	req.Header.Set(apiv1.TaskOutcomeHeader, apiv1.TaskOutcomeV1)
+	if ctx.Value(grantTaskClaimsHeader{}) != nil {
+		req.Header.Set(apiv1.GrantTaskClaimsHeader, apiv1.GrantTaskClaimsV1)
+	}
 	if ctx.Value(sessionTaskClaimsHeader{}) != nil {
 		req.Header.Set(apiv1.SessionTaskClaimsHeader, apiv1.SessionTaskClaimsV1)
 	}

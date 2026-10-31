@@ -15,6 +15,9 @@ func TestGrantListFiltersAndTable(t *testing.T) {
 	body := `{"items":[{"name":"grant-abc","phase":"Active","type":"kube","session":"task-1","ttl":"30m","expiresAt":"2026-10-17T18:00:00Z","reason":"read pods"}]}`
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			if r.Method != http.MethodGet {
 				t.Errorf("method %s", r.Method)
 			}
@@ -41,6 +44,9 @@ func TestGrantRequestPostsTheAsk(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			if r.Method != http.MethodPost {
 				t.Errorf("method %s", r.Method)
 			}
@@ -77,9 +83,15 @@ func TestGrantRequestWaitsForTheAnswer(t *testing.T) {
 	gets := 0
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			return http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"kube","session":"task-1","ttl":"30m","reason":"read pods","approvalURL":"https://broker.example/g"}`
 		},
 		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			gets++
 			if gets == 1 {
 				return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","session":"task-1","ttl":"30m","reason":"read pods","approvalURL":"https://broker.example/g"}`
@@ -98,9 +110,15 @@ func TestGrantRequestReportsARefusal(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			return http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"30m","reason":"read pods"}`
 		},
 		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			return http.StatusOK, `{"name":"grant-abc","phase":"Denied","type":"kube","ttl":"30m","reason":"read pods"}`
 		},
 	})
@@ -113,9 +131,15 @@ func TestGrantRequestStopsAtThirtyMinutes(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			return http.StatusCreated, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"30m","reason":"read pods"}`
 		},
 		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","ttl":"30m","reason":"read pods"}`
 		},
 	})
@@ -130,6 +154,9 @@ func TestGrantReleaseAsksTheBroker(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			if r.Method != http.MethodDelete {
 				t.Errorf("method %s", r.Method)
 			}
@@ -152,6 +179,9 @@ func TestGrantReleaseTextFollowsTheRecord(t *testing.T) {
 	call := 0
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			call++
 			if call == 1 {
 				return http.StatusOK, `{"name":"grant-abc","phase":"Denied","type":"kube","session":"task-1","ttl":"30m","reason":"read pods"}`
@@ -191,6 +221,9 @@ func TestBreakglassPostsTheAsk(t *testing.T) {
 	h := newHarness(t)
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			if r.Method != http.MethodPost {
 				t.Errorf("method %s", r.Method)
 			}
@@ -255,12 +288,18 @@ func attestRoutes(t *testing.T, h *harness, postStatus int, postBody string, see
 	t.Helper()
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			if r.Method != http.MethodGet {
 				t.Errorf("method %s on the grant", r.Method)
 			}
 			return http.StatusOK, `{"name":"grant-abc","phase":"Pending","type":"kube","role":"dev-env-grant-workloads","namespaces":["frontend","database"],"ttl":"1h0m0s","reason":"patch","scopeDigest":"DIGEST0123456789012345678901234567890123456"}`
 		},
 		apiv1.GrantAttestationPath("grant-abc"): func(r *http.Request) (int, string) {
+			if r.Header.Get("X-Dev-Env-Grant-Task-Claims") != "" {
+				t.Error("non-show route negotiated claims")
+			}
 			if r.Method != http.MethodPost {
 				t.Errorf("method %s on the attestation", r.Method)
 			}

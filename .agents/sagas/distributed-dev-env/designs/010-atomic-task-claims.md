@@ -223,6 +223,31 @@ the same claim batch. It makes no additional owner reads. API/MCP preserve the
 same claim UID. Production Pages readers remain unconfigured. Portal rendering,
 activation and installed acceptance are outside this slice.
 
+### Maintenance consumer (OP322, 2026-10-31)
+
+Maintenance is the second consumer slice. `agent-run grant show` opts into
+`X-Dev-Env-Grant-Task-Claims: v1` on its single detail GET only. A maintenance
+grant then carries `taskClaims` with the same fields and Unknown reasons as
+session show. The API reads the requester session live, verifies its exact
+`requester.sessionUID`, and reuses its saved project snapshot, `claimReadScope`
+and `ListOwned`. Missing/replaced requester identity is Unknown
+(`IdentityUnconfirmed`); an unreadable requester is Unknown (`Unavailable`).
+No caller claim scope means Unknown (`ScopeUnconfirmed`). No per-claim reads,
+new registry, ownership transfer or TTL inference are introduced. A claim is
+not an approval; grant approval remains separate.
+
+Unnegotiated grant responses remain byte-identical, including for strict older
+clients. Lists, mutation responses and non-maintenance grants are unchanged.
+Older operators produce Unknown (`NotReported`) on maintenance grant show.
+The current maintenance envelope has no explicit claim/task reference field:
+operation, resource and reason text are not parsed or matched as references.
+Thus this observation lists requester-owned claims, without asserting that the
+envelope names any one of them. No CRD change or installed acceptance is claimed.
+
+Remaining consumers are upgrade/Renovate (exact PR/head-bound observation) and
+the portal UI (render existing authorized observations); see DESIGN-031 section
+13 for their finite follow-up scope.
+
 ## Remaining acceptance
 
 This establishes explicit atomic ownership, not an automatic launch gate or
