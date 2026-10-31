@@ -151,6 +151,9 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	if !validInboxAddressing(req) {
 		return 0, nil, badRequest("a plain message names its recipient exactly, a question names a recipient Session or its parent, and a reply names its question only")
 	}
+	if req.Kind != "" && !s.InboxQuestions {
+		return 0, nil, badRequest("inbox questions and replies are not enabled; nothing was sent")
+	}
 	if c.kind != kindSession || !slices.Contains(s.InboxProjects, req.Project) {
 		return 0, nil, inboxHidden()
 	}
@@ -177,7 +180,9 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 		if fenceErr != nil || !sameSessionBinding(fresh, sender) {
 			return 0, nil, inboxHidden()
 		}
-		s.bindInboxRetry(&spec, existing.Spec, req, newCoordSender(sender))
+		if err := s.bindInboxRetry(ctx, &spec, existing.Spec, req, newCoordSender(sender)); err != nil {
+			return 0, nil, err
+		}
 		return inboxPublishResult(existing, false, spec)
 	}
 	if !errors.Is(err, inbox.ErrNotFound) {
@@ -304,7 +309,15 @@ func (s *Server) readInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 	}
 	if thread {
 		view = withInboxCorrelation(view, m)
-		view.Thread = s.inboxThread(ctx, m, archivedAt != nil, map[coord.SessionIdentity]inboxEnded{})
+		view.Thread = s.inboxThread(ctx, m, archivedAt != nil, s.Inbox.Replies, map[coord.SessionIdentity]inboxEnded{})
+		// Fence the caller again after the thread's reads, as every route does.
+		var original *coord.SessionIdentity
+		if c.kind == kindSession {
+			original = &m.Spec.Recipient
+		}
+		if err := s.inboxReadFence(ctx, c, m.Spec.Project, original); err != nil {
+			return 0, nil, err
+		}
 	}
 	return http.StatusOK, apiv1.InboxMessage{InboxMetadata: view, Text: m.Spec.Text}, nil
 }
@@ -366,18 +379,19 @@ func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if err != nil {
 		return 0, nil, inboxUnknown()
 	}
-	if err := s.inboxReadFence(ctx, c, project, recipient); err != nil {
-		return 0, nil, err
-	}
 	views := make([]apiv1.InboxMetadata, 0, len(items))
 	memo := map[coord.SessionIdentity]inboxEnded{}
+	replies := s.pageReplies(project, recipient, sent)
 	for i := range items {
 		view := inboxMetadata(&items[i])
 		if thread {
 			view = withInboxCorrelation(view, &items[i])
-			view.Thread = s.inboxThread(ctx, &items[i], false, memo)
+			view.Thread = s.inboxThread(ctx, &items[i], false, replies, memo)
 		}
 		views = append(views, view)
+	}
+	if err := s.inboxReadFence(ctx, c, project, recipient); err != nil {
+		return 0, nil, err
 	}
 	list := apiv1.InboxList{Items: views, Continue: next}
 	if thread {

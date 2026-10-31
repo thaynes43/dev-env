@@ -174,6 +174,9 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 			// An older API ignores box=sent and would answer with the caller's inbox.
 			return fail(ExitFailed, "the inbox API does not support --sent; nothing was listed")
 		}
+		if result.View != apiv1.InboxViewThread {
+			_, _ = fmt.Fprintln(a.env.Stderr, "inbox: this API returned no thread view; kinds and question states are not shown")
+		}
 		for _, item := range result.Items {
 			if item.Project != project || !inboxMessagePattern.MatchString(item.Name) || item.UID == "" {
 				return fail(ExitFailed, "inbox list returned an unconfirmed identity or project")
@@ -231,20 +234,29 @@ func inboxReceiptMatches(m apiv1.InboxMetadata, req apiv1.PublishInboxRequest) b
 	return m.Recipient == req.Recipient
 }
 
-// inboxThreadLine summarizes a question or reply for a text read.
+// inboxThreadLine summarizes a question or reply for a text read. It prints
+// only values of the expected shape; anything else reads as unconfirmed.
 func inboxThreadLine(m apiv1.InboxMetadata) string {
-	if m.Thread == nil || (m.Kind != apiv1.InboxKindQuestion && m.Kind != apiv1.InboxKindReply) {
+	if m.Kind != apiv1.InboxKindQuestion && m.Kind != apiv1.InboxKindReply {
 		return ""
 	}
-	line := "inbox: " + m.Kind + " " + m.Thread.Question.Name + " state=" + m.Thread.State
-	if m.Thread.Reply != nil {
-		line += " reply=" + m.Thread.Reply.Name
+	t := m.Thread
+	if t == nil || !inboxThreadStates[t.State] || !inboxMessagePattern.MatchString(t.Question.Name) ||
+		(t.Reply != nil && !inboxMessagePattern.MatchString(t.Reply.Name)) || (t.WaitingOn != nil && !inboxDNSName(t.WaitingOn.Name)) {
+		return "inbox: " + m.Kind + " state could not be confirmed"
 	}
-	if w := m.Thread.WaitingOn; w != nil {
-		line += " waiting-on=" + w.Name
+	line := "inbox: " + m.Kind + " " + t.Question.Name + " state=" + t.State
+	if t.Reply != nil {
+		line += " reply=" + t.Reply.Name
+	}
+	if t.WaitingOn != nil {
+		line += " waiting-on=" + t.WaitingOn.Name
 	}
 	return line
 }
+
+var inboxThreadStates = map[string]bool{apiv1.InboxStateUnanswered: true, apiv1.InboxStateAnswered: true, apiv1.InboxStateAcknowledged: true,
+	apiv1.InboxStateStale: true, apiv1.InboxStateRecipientEnded: true, apiv1.InboxStateUnknown: true}
 
 // inboxPublishError makes the ask and reply refusals specific without echoing
 // the API's body.
@@ -255,14 +267,16 @@ func inboxPublishError(verb string, status int, err error) error {
 		code = ee.code
 	}
 	switch {
+	case verb != "send" && status == http.StatusBadRequest:
+		return fail(code, "inbox %s was refused (400): this API does not accept questions and replies (not enabled, or older), or the arguments are invalid", verb)
 	case verb == "ask" && status == http.StatusUnprocessableEntity:
 		return fail(code, "inbox ask was refused (422): this Session has no recorded parent Session; name the recipient with --to")
 	case verb == "ask" && status == http.StatusNotFound:
-		return fail(code, "inbox ask was refused (404): the recipient Session (or the recorded parent) was not found in this project")
+		return fail(code, "inbox ask was refused (404): the recipient Session or recorded parent was not found in this project, or this Session's project scope was refused")
 	case verb == "reply" && status == http.StatusUnprocessableEntity:
 		return fail(code, "inbox reply was refused (422): only a question takes a reply; this message is a reply or a plain message")
 	case verb == "reply" && status == http.StatusNotFound:
-		return fail(code, "inbox reply was refused (404): no question with that name in this project is addressed to this Session, or its asker has ended")
+		return fail(code, "inbox reply was refused (404): no question with that name in this project is addressed to this Session, its asker has ended, or this Session's project scope was refused")
 	}
 	return inboxMutationError(status, err)
 }

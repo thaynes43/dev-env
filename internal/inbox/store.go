@@ -43,6 +43,8 @@ const (
 	// MaxReplies bounds one reply lookup. The API refuses a second distinct
 	// reply, so more than one only follows a race between two replies.
 	MaxReplies = 8
+	// MaxReplyPages bounds a thread list's one reply index, 100 per page.
+	MaxReplyPages = 10
 )
 
 // ErrLimit means a new message would exceed its sender's or its project's
@@ -129,8 +131,11 @@ func validCorrelation(s coord.InboxMessageSpec) bool {
 
 // ValidRef reports whether r names one message by full-digest name and UID.
 func ValidRef(r coord.InboxMessageRef) bool {
-	return ValidMessageName(r.Name) && uidPattern.MatchString(r.UID)
+	return ValidMessageName(r.Name) && ValidUID(r.UID)
 }
+
+// ValidUID reports whether uid has the Kubernetes UID shape the inbox stores.
+func ValidUID(uid string) bool { return uidPattern.MatchString(uid) }
 
 // Ref names m exactly.
 func Ref(m *coord.InboxMessage) coord.InboxMessageRef {
@@ -341,23 +346,79 @@ func (s KubeStore) Replies(ctx context.Context, q *coord.InboxMessage) ([]coord.
 	if !s.ready() || !s.validMessage(q) || q.Spec.Kind != KindQuestion {
 		return nil, ErrUnavailable
 	}
-	ref := Ref(q)
-	labels := map[string]string{taskclaim.ProjectLabel: q.Spec.Project, KindLabel: KindReply, InReplyToLabel: inReplyToLabel(ref)}
+	labels := map[string]string{taskclaim.ProjectLabel: q.Spec.Project, KindLabel: KindReply, InReplyToLabel: inReplyToLabel(Ref(q))}
 	var list coord.InboxMessageList
-	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(MaxReplies+1)) != nil || len(list.Items) > MaxReplies || list.Continue != "" {
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(MaxReplies+1)) != nil || list.Continue != "" {
 		return nil, ErrUnavailable
 	}
 	for i := range list.Items {
-		r := &list.Items[i]
-		if !s.validMessage(r) || r.Spec.Kind != KindReply || *r.Spec.InReplyTo != ref || r.Spec.Project != q.Spec.Project || r.Spec.Sender != q.Spec.Recipient || r.Spec.Recipient != q.Spec.Sender {
+		if !s.validMessage(&list.Items[i]) {
 			return nil, ErrUnavailable
 		}
 	}
-	slices.SortFunc(list.Items, func(a, b coord.InboxMessage) int {
+	return RepliesOf(q, list.Items)
+}
+
+// RepliesOf picks question q's replies out of candidates, oldest first, with
+// Replies' checks. A candidate that names q from the wrong party, or more than
+// MaxReplies, is ErrUnavailable.
+func RepliesOf(q *coord.InboxMessage, candidates []coord.InboxMessage) ([]coord.InboxMessage, error) {
+	ref := Ref(q)
+	var out []coord.InboxMessage
+	for i := range candidates {
+		r := &candidates[i]
+		if r.Spec.InReplyTo == nil || *r.Spec.InReplyTo != ref {
+			continue
+		}
+		if r.Spec.Kind != KindReply || r.Spec.Project != q.Spec.Project || r.Spec.Sender != q.Spec.Recipient || r.Spec.Recipient != q.Spec.Sender {
+			return nil, ErrUnavailable
+		}
+		out = append(out, *r)
+	}
+	if len(out) > MaxReplies {
+		return nil, ErrUnavailable
+	}
+	slices.SortFunc(out, func(a, b coord.InboxMessage) int {
 		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
 			return c
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
-	return list.Items, nil
+	return out, nil
+}
+
+// ReplyIndex lists, in at most MaxReplyPages pages, the live replies in
+// project sent by from or addressed to to (either may be nil), so one thread
+// list page needs one bounded scan instead of one per question. More than the
+// bound is ErrUnavailable.
+func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coord.SessionIdentity) ([]coord.InboxMessage, error) {
+	if !s.ready() || !projectcatalog.ValidName(project) || (from != nil && !ValidSession(*from)) || (to != nil && !ValidSession(*to)) {
+		return nil, ErrUnavailable
+	}
+	labels := map[string]string{taskclaim.ProjectLabel: project, KindLabel: KindReply}
+	if from != nil {
+		labels[taskclaim.SourceLabel] = taskclaim.SessionLabel(*from)
+	}
+	if to != nil {
+		labels[RecipientLabel] = recipientLabel(*to)
+	}
+	var out []coord.InboxMessage
+	cursor := ""
+	for page := 0; page < MaxReplyPages; page++ {
+		var list coord.InboxMessageList
+		if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(100), client.Continue(cursor)) != nil || len(list.Items) > 100 || len(list.Continue) > 4096 {
+			return nil, ErrUnavailable
+		}
+		for i := range list.Items {
+			r := &list.Items[i]
+			if !s.validMessage(r) || r.Spec.Kind != KindReply || r.Spec.Project != project || (from != nil && r.Spec.Sender != *from) || (to != nil && r.Spec.Recipient != *to) {
+				return nil, ErrUnavailable
+			}
+		}
+		out = append(out, list.Items...)
+		if cursor = list.Continue; cursor == "" {
+			return out, nil
+		}
+	}
+	return nil, ErrUnavailable
 }

@@ -41,10 +41,10 @@ func validInboxAddressing(req apiv1.PublishInboxRequest) bool {
 		}
 		return len(validation.IsDNS1123Subdomain(r.Name)) == 0 &&
 			(r.Namespace == "" || len(validation.IsDNS1123Label(r.Namespace)) == 0) &&
-			(r.UID == "" || inbox.ValidSession(coord.SessionIdentity{Namespace: "x", Name: "x", UID: r.UID}))
+			(r.UID == "" || inbox.ValidUID(r.UID))
 	case inbox.KindReply:
 		return !req.ToParent && r == apiv1.TaskClaimOwner{} && req.InReplyTo != nil && inbox.ValidMessageName(req.InReplyTo.Name) &&
-			(req.InReplyTo.UID == "" || inbox.ValidRef(coord.InboxMessageRef{Name: req.InReplyTo.Name, UID: req.InReplyTo.UID}))
+			(req.InReplyTo.UID == "" || inbox.ValidUID(req.InReplyTo.UID))
 	}
 	return false
 }
@@ -52,16 +52,27 @@ func validInboxAddressing(req apiv1.PublishInboxRequest) bool {
 // bindInboxRetry fills the server-derived fields of a retried question or
 // reply from the stored record, but only where the request's own fields agree
 // with it. The stored intent then decides 200 or 409 as for any message, even
-// if the recipient, parent or question has since gone.
-func (s *Server) bindInboxRetry(spec *coord.InboxMessageSpec, stored coord.InboxMessageSpec, req apiv1.PublishInboxRequest, sender *coordSender) {
+// if the recipient, parent or question has since gone. A parent-addressed
+// retry binds only a stored recipient that passes the parent fences.
+func (s *Server) bindInboxRetry(ctx context.Context, spec *coord.InboxMessageSpec, stored coord.InboxMessageSpec, req apiv1.PublishInboxRequest, sender *coordSender) error {
 	switch req.Kind {
 	case inbox.KindQuestion:
 		r := stored.Recipient
 		if req.ToParent {
-			if r.Namespace == s.Policy.SessionNamespace && r.Name == sender.parent {
-				spec.Recipient = r
+			if r.Namespace != s.Policy.SessionNamespace || r.Name != sender.parent || (sender.usageUID != "" && r.UID != sender.usageUID) {
+				return nil
 			}
-			return
+			var sess v1alpha1.AgentSession
+			err := s.Live.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: r.Name}, &sess)
+			switch {
+			case apierrors.IsNotFound(err):
+			case err != nil:
+				return inboxUnknown()
+			case string(sess.UID) == r.UID && sess.CreationTimestamp.After(sender.created):
+				return nil
+			}
+			spec.Recipient = r
+			return nil
 		}
 		ns := req.Recipient.Namespace
 		if ns == "" {
@@ -76,18 +87,18 @@ func (s *Server) bindInboxRetry(spec *coord.InboxMessageSpec, stored coord.Inbox
 			spec.InReplyTo, spec.Recipient = &ref, stored.Recipient
 		}
 	}
+	return nil
 }
 
 // coordSender is what resolution needs from the authenticated sender Session.
 type coordSender struct {
-	identity coord.SessionIdentity
 	parent   string
 	created  time.Time
 	usageUID string
 }
 
 func newCoordSender(s *v1alpha1.AgentSession) *coordSender {
-	return &coordSender{identity: sessionIdentity(s), parent: s.Spec.Parent, created: s.CreationTimestamp.Time, usageUID: s.Spec.UsageCaptureParentUID}
+	return &coordSender{parent: s.Spec.Parent, created: s.CreationTimestamp.Time, usageUID: s.Spec.UsageCaptureParentUID}
 }
 
 // resolveInboxQuestionRecipient finds a new question's recipient Session. The
@@ -218,10 +229,39 @@ func (s *Server) inboxRecipientState(ctx context.Context, id coord.SessionIdenti
 	return answer
 }
 
+// repliesLookup finds a question's live replies, oldest first.
+type repliesLookup func(context.Context, *coord.InboxMessage) ([]coord.InboxMessage, error)
+
+// pageReplies scans the replies a thread list page can hold once, on first
+// use: replies sent by the caller for its inbox, addressed to it for its sent
+// box, or every reply in the project for a coordinator host. A failed or
+// oversized scan leaves each question on the page Unknown.
+func (s *Server) pageReplies(project string, caller *coord.SessionIdentity, sent bool) repliesLookup {
+	var index []coord.InboxMessage
+	var err error
+	scanned := false
+	return func(ctx context.Context, q *coord.InboxMessage) ([]coord.InboxMessage, error) {
+		if !scanned {
+			scanned = true
+			var from, to *coord.SessionIdentity
+			if caller != nil && sent {
+				to = caller
+			} else if caller != nil {
+				from = caller
+			}
+			index, err = s.Inbox.ReplyIndex(ctx, project, from, to)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return inbox.RepliesOf(q, index)
+	}
+}
+
 // inboxThread derives a question's state, or a reply's view of it. Plain
 // messages have none. Any lookup it cannot confirm leaves the state Unknown;
-// it never guesses Unanswered.
-func (s *Server) inboxThread(ctx context.Context, m *coord.InboxMessage, archived bool, memo map[coord.SessionIdentity]inboxEnded) *apiv1.InboxThread {
+// it never guesses Unanswered. WaitingOn names only a Session confirmed live.
+func (s *Server) inboxThread(ctx context.Context, m *coord.InboxMessage, archived bool, lookup repliesLookup, memo map[coord.SessionIdentity]inboxEnded) *apiv1.InboxThread {
 	now := s.now()
 	t := &apiv1.InboxThread{State: apiv1.InboxStateUnknown, StaleAfterSeconds: int64(inbox.StaleAfter / time.Second), ObservedAt: now.UTC()}
 	var reply *coord.InboxMessage
@@ -234,7 +274,7 @@ func (s *Server) inboxThread(ctx context.Context, m *coord.InboxMessage, archive
 		if archived {
 			return t
 		}
-		replies, err := s.Inbox.Replies(ctx, m)
+		replies, err := lookup(ctx, m)
 		if err != nil {
 			return t
 		}
@@ -269,8 +309,10 @@ func (s *Server) inboxThread(ctx context.Context, m *coord.InboxMessage, archive
 		t.State = apiv1.InboxStateAcknowledged
 	case errors.Is(err, inbox.ErrNotFound):
 		t.State = apiv1.InboxStateAnswered
-		owner := inboxOwner(reply.Spec.Recipient)
-		t.WaitingOn = &owner
+		if s.inboxRecipientState(ctx, reply.Spec.Recipient, memo) == inboxRecipientLive {
+			owner := inboxOwner(reply.Spec.Recipient)
+			t.WaitingOn = &owner
+		}
 	}
 	return t
 }

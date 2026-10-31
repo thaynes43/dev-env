@@ -97,6 +97,7 @@ type options struct {
 	contextsEnabled               bool
 	contextReadProjects           []string
 	inboxEnabled                  bool
+	inboxQuestions                bool
 	inboxProjects                 []string
 	inboxCoordinatorReadProjects  []string
 	taskClaimsEnabled             bool
@@ -249,6 +250,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.inboxEnabled, "enable-durable-inbox", false, "enable immutable API inbox messages and explicit read acknowledgements")
 	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
 	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
+	fs.BoolVar(&o.inboxQuestions, "enable-inbox-questions", false, "accept inbox ask and reply publications; requires enable-durable-inbox and the InboxMessage CRD with kind and inReplyTo")
 	fs.StringVar(&o.ownedRootPolicy, "owned-root-policy", "", "explicit operator-owned finite root policy ConfigMap in dev-env-system")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
@@ -465,8 +467,8 @@ func parseFlags(args []string) (options, error) {
 				return o, errors.New("inbox coordinator content scope requires an enabled configured coordinator and enabled project")
 			}
 		}
-	} else if len(o.inboxProjects) != 0 || len(o.inboxCoordinatorReadProjects) != 0 {
-		return o, errors.New("inbox scopes require explicit enable-durable-inbox")
+	} else if len(o.inboxProjects) != 0 || len(o.inboxCoordinatorReadProjects) != 0 || o.inboxQuestions {
+		return o, errors.New("inbox scopes and questions require explicit enable-durable-inbox")
 	}
 
 	if o.privateProjectCanaries.OutputCaptureEnabled() && !o.contextsEnabled {
@@ -818,7 +820,7 @@ func run(args []string) error {
 			PortalConversationTargets: o.portalConversationTargets,
 			SessionDirectory:          directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
-			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects,
+			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects, InboxQuestions: o.inboxQuestions,
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
 			Client:      mgr.GetClient(),
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
