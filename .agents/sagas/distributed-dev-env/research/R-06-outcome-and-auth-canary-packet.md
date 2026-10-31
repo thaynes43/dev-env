@@ -335,8 +335,8 @@ Claude task on 2.75 waits for the template move.
 | B2 | The lead creates one ordinary Claude remote session (`agent-run --interactive`) with that key and `--archive-after 720h`. | Session name and UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. Neither projection warning line appears, and the first turn is answered. | Wrong image. Or "Claude authentication requires a current keeper projection" or "pod holds its own login" persists. Then suspend (B5) and stop. |
 | B3 | One short ordinary turn per hour, through `agent-run msg`. | The lead reads each reply. Keeper `state=refreshed` log lines give each natural refresh time. The first turn after each refresh is answered. `conversationUsage.turns` is weak corroboration only. | A turn gets no answer and no recovery follows. Suspend (B5) and stop. |
 | B4 | The window ends: two natural refreshes after B2, or 24 hours, whichever comes first. Save only the fixed agentd lines from the container log (the two projection warnings, `projection applied` if a recovery happened, `continued after the login was renewed`, `continue ... was not confirmed`). Also save the Session `conversationUsage`. | A receipt with those lines and counts. These container log lines are lost when the pod stops, so this step comes first. Loki may also hold them; its retention is Unknown. | Not applicable. |
-| B5 | `agent-run suspend <canary>`. | Phase Suspended, `suspendedAt` set, rescue result recorded, PVC Bound. | The rescue fails. The volume is then kept for a human; record it. |
-| B6 | Revert the B1 PR. That restores `usage-pilot-1` on 2.52.0 exactly. | The args equal the pre-B1 baseline. Session pods are unchanged. | Not applicable. |
+| B5 | `agent-run suspend <canary>`, then verify that the canary's pod and provider have actually exited, not just that the spec or phase says Suspended. | Phase Suspended, `suspendedAt` set, rescue result recorded, PVC Bound. The canary pod is NotFound (`kubectl get pod -n dev-agents <canary>`), and `agent-run show` reports the agent exited. | The rescue fails, or the pod or provider is still running. Record it and stop before B6. Do not delete the HOME, force-delete the pod or replay any work; the volume is kept for a human. |
+| B6 | Only after B5 shows the pod and provider exited: revert the B1 PR. That restores `usage-pilot-1` on 2.52.0 exactly. | The args equal the pre-B1 baseline. Session pods are unchanged. | Not applicable. |
 
 **Budget:** at most 24 hours elapsed. About 24 short Claude turns (Max usage
 Unknown, but small). One canary session. Two operator rollouts (B1 and its
@@ -351,7 +351,11 @@ revert).
   `archiveAfter`. The templates' default is 168 hours (`templates.yaml:49`
   `lifecycle.archiveAfter`). A session can override it at creation with
   `agent-run --archive-after` (`internal/controller/reconciler.go:844-879`). This
-  proposal uses 720 hours, so the HOME stays 30 days after B5.
+  proposal uses 720 hours, so the HOME stays 30 days after B5. **At that expiry
+  the existing archive deletes the canary's HOME** after a verified rescue (next
+  bullet). This is not indefinite history preservation. It is a proposed
+  retention consequence for this one canary, which Tom reviews in section 6. It
+  is not a change to any live or global retention policy.
 - **What archive deletes:** the HOME volume, after a verified rescue
   (`reconciler.go:885-960`; `guard.go:314-340`). The rescue bundle holds git refs
   and tracked or untracked worktree files only. Gitignored files, the
@@ -385,8 +389,13 @@ revert).
 - Stage B, after Stage A: one fresh Claude remote canary on the same signed
   2.75.0 image through the existing generic selector. The window is two natural
   keeper refreshes or 24 hours, whichever comes first. One short turn per hour.
-  It ends with suspend and a selector revert. The HOME is kept 720 hours after
-  the suspend.
+  It ends with suspend, a check that the pod and provider exited, and then a
+  selector revert. **Retention consequence for this one canary:** its HOME is kept
+  for 720 hours after the suspend. At that expiry the existing archive DELETES it,
+  after a verified rescue that keeps git content only. A remote session has no
+  history export. Approving Stage B approves this consequence for this canary
+  only. It is not a live or global retention-policy change, and the deletion is not
+  approved unless Tom approves Stage B.
 
 Options:
 
