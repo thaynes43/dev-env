@@ -349,12 +349,13 @@ adapter therefore keeps the revision while the evidence is unchanged;
 conditions, sources and event times still count as content.
 
 Every Unknown field stays the literal `Unknown` rather than being omitted, so an
-Unconfigured response keeps UI/MCP parity and costs about 455 bytes per alert in
-MCP JSON (443 for the object, measured with a 16-hex fingerprint and a
-nanosecond start; `TestUnconfiguredResponseSize` bounds it at 448). Against the
-2 MiB normalized `all` bound that is the whole budget at about 4,600 alerts; a
+Unconfigured response keeps UI/MCP parity and costs about 525 bytes per alert in
+MCP JSON (513 for the object including OP322's claimOwner, measured with a
+16-hex fingerprint and a nanosecond start; `TestUnconfiguredResponseSize` bounds
+it at 520). Against the 2 MiB normalized `all` bound that is the whole budget at
+about 3,990 alerts; a
 snapshot over the bound fails closed as Unavailable and is never truncated. A
-listed page of at most 100 items adds about 45 KB. This slice documents the
+listed page of at most 100 items adds about 52 KB. This slice documents the
 cost and does not trim.
 
 The source-only OP316 prerequisites (2026-10-31) replace the per-alert
@@ -386,6 +387,35 @@ assembly config, not an MCP argument or extension to `--source-config`.
 These two prerequisites are implemented and synthetically tested, not production
 adapter acceptance. A real adapter still needs separately authorized read-only
 wiring and evidence of usable behavior.
+
+OP322 adds `claimOwner {namespace,name,uid}` to the response projection and to
+the canonical batch evidence input. After the existing exact incident/order/
+claim/evidence checks pass, a TaskClaim owner is copied from that same batch.
+It is never parsed from the free-text owner, inferred from TTL, or resolved by
+name. Non-TaskClaim, absent or invalid owner metadata stays literal Unknown in
+all three fields. The claim reference retains namespace/name/UID, so its UID
+can be compared directly with the negotiated session detail (DESIGN-010).
+Stale, unjoined and mismatched evidence withholds the owner along with the
+claim. No extra list/get or production reader activation follows.
+
+The remaining OP322 consumers have three bounded follow-up slices, in order:
+
+1. Upgrade/Renovate: define the explicit binding from repository/PR/exact head
+   and existing upgrade order attempt to TaskClaim UID, then add a read-only
+   projection. Test contenders, changed heads, blocked outcomes and Unknown
+   evidence. Keep canonical work identity stable across head changes; an old
+   head's evidence cannot confirm the new head. Do not infer success from
+   process exit or activate an executor.
+2. Maintenance: bind an existing maintenance work item and attempt to that same
+   canonical identity/UID and expose its recorded waiting/evidence/resolution.
+   Test reused work keys and stale custody without TTL transfer. Reuse the
+   bounded batch source; add no claim registry or write path.
+3. Portal UI: consume the negotiated session projection and Page claim owner,
+   display exact identities and Unknown/stale custody, and link by UID only
+   within existing read authority. Coordinate with OP326's session detail;
+   test presentation parity and old-operator omission. No `web/portal` edits
+   are included in this slice. Reader activation and installed/end-to-end
+   acceptance require their own authorized rollout and evidence afterward.
 
 Production entry points continue to use unconfigured response sources,
 `UnconfiguredStore` and `DisconnectedPagesControls`. No reader, endpoint, CRD,

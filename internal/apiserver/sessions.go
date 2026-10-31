@@ -459,13 +459,13 @@ func (s *Server) getSession(ctx context.Context, _ http.ResponseWriter, r *http.
 		if err != nil {
 			return 0, nil, err
 		}
-		return http.StatusOK, s.withUsageRollup(ctx, sess, c, opted), nil
+		return http.StatusOK, s.sessionDetail(ctx, sess, c, r, opted), nil
 	}
 	var sess v1alpha1.AgentSession
 	if err := s.get(ctx, key, &sess); err != nil {
 		return 0, nil, fromKubeError(err, "session "+key.Name)
 	}
-	return http.StatusOK, s.withUsageRollup(ctx, &sess, c, opted), nil
+	return http.StatusOK, s.sessionDetail(ctx, &sess, c, r, opted), nil
 }
 
 // withUsageRollup is a single Session's view with its retained descendants'

@@ -43,9 +43,18 @@ type CanonicalClaimReference struct {
 	ID   string `json:"id"`
 }
 
+// ClaimOwner identifies the original session from a joined canonical claim.
+type ClaimOwner struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	UID       string `json:"uid"`
+}
+
 // ClaimEvidence requires explicit workflow evidence. A TaskClaim's existence
 // alone is insufficient to establish responding, needs-user or resolved.
 type ClaimEvidence struct {
+	// ClaimOwner is copied from the joined TaskClaim, never inferred from Owner.
+	ClaimOwner  ClaimOwner
 	Identity    AlertIdentity
 	Order       OrderReference
 	Reference   CanonicalClaimReference
@@ -110,8 +119,9 @@ type ResponseSources struct {
 // State is the responder's recorded workflow state (JSON responseState), never
 // the alert's own status: "resolved" can sit beside an alert still listed.
 // Every Unknown field is the literal "Unknown", so an Unconfigured projection
-// costs about 443 bytes per alert in MCP JSON, guarded at 448 (DESIGN-031 13).
+// costs about 513 bytes per alert in MCP JSON, guarded at 520 (DESIGN-031 13).
 type ResponseProjection struct {
+	ClaimOwner      ClaimOwner              `json:"claimOwner"`
 	Identity        AlertIdentity           `json:"identity"`
 	Order           OrderReference          `json:"order"`
 	Claim           CanonicalClaimReference `json:"claim"`
@@ -258,18 +268,35 @@ func projectResponse(identity AlertIdentity, sources ResponseSources, at time.Ti
 		return out
 	}
 	out.Claim, out.Owner = c.Reference, c.Owner
+	if c.Reference.Kind == "TaskClaim" && validClaimOwner(c.ClaimOwner) {
+		out.ClaimOwner = c.ClaimOwner
+	}
 	out.State, out.StateAt, out.EvidenceURL = c.State, responseTime(c.StateAt), c.EvidenceURL
 	return out
 }
 
 func unknownResponse(identity AlertIdentity) ResponseProjection {
 	return ResponseProjection{
-		Identity: identity, Order: OrderReference{Key: timeUnknown, Created: timeUnknown},
+		ClaimOwner: ClaimOwner{Namespace: timeUnknown, Name: timeUnknown, UID: timeUnknown},
+		Identity:   identity, Order: OrderReference{Key: timeUnknown, Created: timeUnknown},
 		Claim: CanonicalClaimReference{Kind: timeUnknown, ID: timeUnknown},
 		Owner: timeUnknown, State: timeUnknown, StateAt: timeUnknown, EvidenceURL: timeUnknown,
 		OrderCondition: "Unconfigured", ClaimCondition: "Unconfigured",
 		OrderSource: timeUnknown, ClaimSource: timeUnknown, OrderObservedAt: timeUnknown, ClaimObservedAt: timeUnknown,
 	}
+}
+
+func validClaimOwner(owner ClaimOwner) bool {
+	if !claimNamespace.MatchString(owner.Namespace) || !claimName.MatchString(owner.Name) || !claimUID.MatchString(owner.UID) ||
+		!responseText(owner.Namespace) || !responseText(owner.Name) || !responseText(owner.UID) {
+		return false
+	}
+	for _, label := range strings.Split(owner.Name, ".") {
+		if !claimNamespace.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 func observationCondition(obs SourceObservation, err error, at time.Time, maxAge time.Duration) string {

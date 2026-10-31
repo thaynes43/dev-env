@@ -25,7 +25,7 @@ func (a *app) showOnce(ctx context.Context, c *conn, name string) error {
 	one.http = &hc
 	one.rejectOversizeResponse = true
 	var raw json.RawMessage
-	status, err := a.callWith(ctx, &one, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &raw, false)
+	status, err := a.callWith(withSessionTaskClaims(ctx), &one, http.MethodGet, apiv1.SessionPath(url.PathEscape(name)), nil, nil, &raw, false)
 	if err != nil {
 		return err
 	}

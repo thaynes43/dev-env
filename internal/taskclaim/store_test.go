@@ -3,6 +3,7 @@ package taskclaim
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,5 +148,93 @@ func TestTaskClaimSameWorkLookupRefusesUnreadPage(t *testing.T) {
 	var stored coord.TaskClaimList
 	if err := backend.List(context.Background(), &stored); err != nil || len(stored.Items) != 0 {
 		t.Fatal("unconfirmed same-work lookup stored a claim", err, len(stored.Items))
+	}
+}
+
+// ListOwned must reject incomplete snapshots even when every returned record is
+// a valid owned claim. Invalid padding would hide a missing size/Continue guard.
+func TestListOwnedCompleteSnapshot(t *testing.T) {
+	for _, mode := range []string{"complete", "truncated", "oversize", "unreadable", "invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			s := storeFixture(t)
+			ctx := context.Background()
+			first, _, err := s.Create(ctx, validSpec())
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy := first.DeepCopy()
+			legacy.Labels = map[string]string{ProjectLabel: "sample"}
+			if err := s.Client.Update(ctx, legacy); err != nil {
+				t.Fatal(err)
+			}
+			spec := validSpec()
+			spec.Identity.TaskKey = "issue:176"
+			second, _, err := s.Create(ctx, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec.Identity.TaskKey = "issue:177"
+			spec.Owner.UID = "different-owner-uid"
+			if _, _, err := s.Create(ctx, spec); err != nil {
+				t.Fatal(err)
+			}
+			lists := 0
+			s.Live = interceptor.NewClient(s.Client.(client.WithWatch), interceptor.Funcs{
+				Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+					t.Error("ListOwned performed a Get")
+					return errors.New("unexpected Get")
+				},
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					lists++
+					o := &client.ListOptions{}
+					o.ApplyOptions(opts)
+					if o.Limit != DefaultLimits.PerProject || o.Namespace != s.Namespace || o.Continue != "" || o.LabelSelector.String() != ProjectLabel+"=sample" {
+						t.Fatal("wrong list bounds", o)
+					}
+					if err := c.List(ctx, list, opts...); err != nil {
+						return err
+					}
+					claims := list.(*coord.TaskClaimList)
+					slices.Reverse(claims.Items) // Backend order is not the output contract.
+					switch mode {
+					case "truncated":
+						claims.Continue = "more"
+					case "oversize":
+						claims.Items = make([]coord.TaskClaim, int(DefaultLimits.PerProject)+1)
+						for i := range claims.Items {
+							claims.Items[i] = *first.DeepCopy()
+						}
+					case "unreadable":
+						return errors.New("unavailable")
+					case "invalid":
+						claims.Items = append(claims.Items, coord.TaskClaim{})
+					}
+					return nil
+				},
+			})
+			// The cached client must never be used by this read.
+			s.Client = interceptor.NewClient(s.Client.(client.WithWatch), interceptor.Funcs{List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+				t.Error("cached list")
+				return errors.New("cached")
+			}})
+			got, err := s.ListOwned(ctx, "sample", first.Spec.Owner.UID)
+			if lists != 1 {
+				t.Fatal("list fan-out", lists)
+			}
+			if mode != "complete" {
+				if !errors.Is(err, ErrUnavailable) || got != nil {
+					t.Fatalf("partial snapshot accepted: count=%d err=%v", len(got), err)
+				}
+				return
+			}
+			if err != nil || len(got) != 2 {
+				t.Fatal("missing valid/legacy owner", len(got), err)
+			}
+			want := []string{first.Name, second.Name}
+			slices.Sort(want)
+			if got[0].Name != want[0] || got[1].Name != want[1] {
+				t.Fatal("unstable sort or foreign owner", got)
+			}
+		})
 	}
 }

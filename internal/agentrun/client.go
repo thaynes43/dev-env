@@ -32,6 +32,13 @@ const maxResponse = 8 << 20
 // The value is only the presence of the key. Other calls leave it unset.
 type fleetResourcesHeader struct{}
 
+// sessionTaskClaimsHeader opts only explicit show reads into the claim join.
+type sessionTaskClaimsHeader struct{}
+
+func withSessionTaskClaims(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sessionTaskClaimsHeader{}, true)
+}
+
 func withFleetResources(ctx context.Context) context.Context {
 	return context.WithValue(ctx, fleetResourcesHeader{}, true)
 }
@@ -197,6 +204,9 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	// an older operator ignores the header.
 	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
 	req.Header.Set(apiv1.TaskOutcomeHeader, apiv1.TaskOutcomeV1)
+	if ctx.Value(sessionTaskClaimsHeader{}) != nil {
+		req.Header.Set(apiv1.SessionTaskClaimsHeader, apiv1.SessionTaskClaimsV1)
+	}
 	if ctx.Value(fleetResourcesHeader{}) != nil {
 		req.Header.Set(apiv1.FleetHeader, apiv1.FleetResourcesV1)
 	}
