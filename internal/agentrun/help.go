@@ -45,6 +45,8 @@ Usage:
   agent-run grant release <grant-id>              ask the broker to end one grant
   agent-run grant attest <grant-id> --approved-by user|coordinator:<ref> --ref <id>
                                                   record your claim that you obtained approval
+  agent-run grant decide <grant-id> --grant-uid <uid> --digest <digest> --ref <ref> [--approve] [--ttl 10m] [--reason TEXT]
+                                                  an allowlisted delegate's decision; not a human decision
   agent-run grant use <grant-id>|default         select that kube context in this pod
   agent-run budget create <task-uid> --success "RESULT" [flags]
                                                   create the host's assigned finite campaign
@@ -652,12 +654,14 @@ Usage: agent-run grant list [--session <name>] [--phase <phase>] [--mine] [-o js
        agent-run grant request --type <type> --reason <why> [--no-wait] [type flags] [-o json]
        agent-run grant release <grant-id> [-o json]
        agent-run grant attest <grant-id> --approved-by user|coordinator:<ref> --ref <nonsecret> [-o json]
+       agent-run grant decide <grant-id> --grant-uid <uid> --digest <digest> --ref <ref> [--approve] [--ttl 10m] [--reason TEXT] [-o json]
        agent-run grant use <grant-id>|default
 
 Read, request, release and use access grants (DESIGN-001 6.12). This is part
 of plan 07 step 7. Request posts the ask. Release asks the broker to end the
-grant. Use selects an installed kube context in this pod. None of these
-commands approve a grant or install one. The in-pod tools are agent-run mcp.
+grant. Use selects an installed kube context in this pod. Request, release,
+attest and use do not approve a grant or install one. grant decide posts one
+delegate decision and does not install a grant. The in-pod tools are agent-run mcp.
 
 grant list prints name, phase, type, session, TTL and expiry, newest first.
   --session <name>   only that session's grants
@@ -674,6 +678,9 @@ the grant the session already holds.
   --reason <why>     required; Tom reads it on the approval page
   --role <role>      kube catalog role
   --namespace <ns>   repeatable, for kube or breakglass
+  --secret <name>    repeatable Secret name for role dev-env-grant-namespace-operator only.
+                     DNS-1123, at most 63 characters, at most 16 names. Refused for every
+                     other type or role. Names only; secret values are never read or sent
   --fqdn <name>      repeatable egress destination
   --cidr <cidr>      repeatable egress destination
   --endpoint <ns>    NAMESPACE or NAMESPACE:key=value,key=value
@@ -699,6 +706,20 @@ grant waits for Tom); one attestation per grant.
   --approved-by <who>  user, or coordinator:<ref> (the reference is not verified)
   --ref <id>           nonsecret message or journal id of the approval
 
+grant decide records one allowlisted delegate's decision on another agent's
+pending grant. The caller must be an allowlisted delegate. It cannot decide
+its own or an ancestor's request. The digest is Grant.ScopeDigest from
+grant show -o json. A delegate decision is not a human decision. Omit
+--approve to deny. The command prints the scope digest and secret names it is
+binding, then posts the decision. HTTP 202 means the decision was accepted; it
+does not mean the grant is Active.
+  --grant-uid <uid>  the grant's UID
+  --digest <digest>  Grant.ScopeDigest the delegate reviewed
+  --ref <ref>        required; the message being answered (letters, digits and . _ : / # -)
+  --approve          approve; omit to deny
+  --ttl <duration>   optional Go duration of at least 10m
+  --reason <text>    optional; at most 256 characters, no control characters
+
 grant use runs agentd ctl grant-use. The name is grant-<id> or default.
 It does not call the API.
 `,
@@ -711,9 +732,11 @@ approves it. This command does not approve the grant or install it.
 	"mcp": `Usage: agent-run mcp
 
 Serve the dev-env access tools on stdin and stdout (MCP). The tools are
-request_access, grant_status and release_access. They call /v1/grants.
-request_access asks; Tom still approves. release_access asks the broker to
-end one grant. grant_status reads. None of them approve or install a grant.
+request_access, grant_status, release_access and decide_grant. They call
+/v1/grants. request_access asks; Tom still approves. release_access asks the
+broker to end one grant. grant_status reads. decide_grant is for an
+allowlisted delegate only and is not a human decision. None of them install
+a grant.
 
 The asks tools need an operator running with --enable-asks:
   ask          create an info or approval ask; returns its Ask JSON immediately
