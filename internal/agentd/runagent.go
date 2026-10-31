@@ -34,6 +34,7 @@ type taskResult struct {
 	BootID           string                     `json:"bootId"`
 	Usage            *protocol.Usage            `json:"usage,omitempty"`
 	UsageObservation *protocol.UsageObservation `json:"usageObservation,omitempty"`
+	TaskOutcome      *protocol.TaskOutcome      `json:"taskOutcome,omitempty"`
 }
 
 // agentPid is ~/.agentd/agent.pid: the agent CLI's pid and its start time, so
@@ -458,6 +459,9 @@ func writeResult(stateDir string, l Launch, started time.Time, code int, timedOu
 	if res.Seen {
 		u := res.Usage
 		tr.Usage = &u
+	}
+	if waited {
+		tr.TaskOutcome = readTaskOutcome(stateDir, l)
 	}
 	tr.UsageObservation = retainInitialUsage(l, stateDir, res, tr.FinishedAt, code != 0 || timedOut)
 	if l.UsageSource != nil {

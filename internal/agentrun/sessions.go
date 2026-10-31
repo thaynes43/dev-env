@@ -281,6 +281,15 @@ func (a *app) printSession(s apiv1.Session) {
 			}
 		}
 	}
+	if o := s.TaskOutcome; o != nil && o.Validate() == nil {
+		row("Task outcome", "%s", o.Record.Summary)
+		for _, p := range o.Record.PRURLs {
+			row("  PR", "%s", p)
+		}
+		for _, h := range o.Record.HeadSHAs {
+			row("  head", "%s", h)
+		}
+	}
 	u := s.UsageObservation
 	if u != nil && u.Validate() != nil {
 		u = nil
