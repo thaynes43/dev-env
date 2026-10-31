@@ -5,7 +5,9 @@ this change. The commands work once three things are true: the operator runs
 with the durable inbox enabled for your project, it also runs with
 `--enable-inbox-questions` (installed after its CRD), and the agent image
 carries the matching `agent-run`. Until then `ask` and `reply` are refused with
-400 and nothing is sent. The contract is
+400 and nothing is sent. `list --sent` and the thread view are refused the same
+way: `list` and `read` then show plain messages only, and `--sent` says the API
+does not list sent messages. The contract is
 [DESIGN-014, "Ask and reply"](../.agents/sagas/distributed-dev-env/designs/014-durable-offline-inbox.md#ask-and-reply-2026-10-31-openproject-321).
 
 Use this route for a routine question to the Session that started you: which
@@ -100,6 +102,12 @@ The reply goes to the question's sender; you do not name a recipient. A
 question takes one reply: a second, different reply is refused with 409. You
 can reply only to a question addressed to you in the same project (404
 otherwise), and only to a question, not to a reply or a plain message (422).
+
+## From agentd
+
+`agentd inbox-publish` forwards a question or reply like any other message: it
+takes the intent as JSON on stdin (`kind`, `toParent`, `inReplyTo` included)
+and sends it unchanged. The server enforces every rule above; agentd adds none.
 
 ## Limits
 

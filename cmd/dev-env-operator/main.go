@@ -250,7 +250,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.inboxEnabled, "enable-durable-inbox", false, "enable immutable API inbox messages and explicit read acknowledgements")
 	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
 	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
-	fs.BoolVar(&o.inboxQuestions, "enable-inbox-questions", false, "accept inbox ask and reply publications; requires enable-durable-inbox and the InboxMessage CRD with kind and inReplyTo")
+	fs.BoolVar(&o.inboxQuestions, "enable-inbox-questions", false, "accept inbox ask and reply publications and serve the thread view and sent box; requires enable-durable-inbox and the InboxMessage CRD with kind and inReplyTo")
 	fs.StringVar(&o.ownedRootPolicy, "owned-root-policy", "", "explicit operator-owned finite root policy ConfigMap in dev-env-system")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")

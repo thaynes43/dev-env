@@ -205,9 +205,14 @@ tool-permission request does not become a question.
 
 **Switch.** The operator accepts questions and replies only with
 `--enable-inbox-questions`, default off, which requires
-`--enable-durable-inbox`. Off, an ask or reply is refused with 400 before any
-lookup or write, exactly as an older API refuses the unknown fields. Plain
-messages and every read, including the thread view, work either way.
+`--enable-durable-inbox`. The switch gates every new path: an ask, a reply,
+`view=thread` on a list or read, and `box=sent`. Off, each is refused with 400
+before any lookup or write (the reads say "not enabled; nothing was listed"),
+as an older API refuses the unknown fields. Plain messages and plain lists and
+reads work either way. The CLI's `list` and `read` always ask for the thread
+view; on that 400 they ask again without it, so they keep working against an
+API with the switch off, and `list --sent` reports that the API does not list
+sent messages.
 
 **Publish.** The request still carries intent only; the server derives every
 attribution field, as above.
@@ -269,17 +274,29 @@ plain publish receipt is unchanged; question and reply receipts carry the
 correlation. The list echoes `view` and `box`. An older API ignores those
 queries, so the new CLI refuses `--sent` when the echo is missing rather than
 show the caller's inbox as its sent box. An older API refuses ask and reply
-requests as unknown fields (400).
+requests as unknown fields (400). `agentd inbox-publish` forwards a question or
+reply as it forwards a plain message: it reads the whole intent from stdin,
+including `kind`, `toParent` and `inReplyTo`, and the server enforces every
+check above; agentd adds none of its own.
 
 **Rollout and rollback floor.** haynes-ops installs the regenerated
 `inboxmessages` CRD first, then pins this operator, and only then sets
 `--enable-inbox-questions`. The order matters both ways:
 
-- With the switch on against the older CRD, the API server prunes `kind` and
-  `inReplyTo` but keeps their labels. The store refuses that record, so its
-  publish answers 503 Unknown, a retry stays 503, and every list page, sent box
-  and read that includes it answers 503 until the record is removed by the
-  DESIGN-010 manual recovery.
+- With the switch on against the older CRD, the API server would prune `kind`
+  and `inReplyTo` but keep their labels, and the store would refuse that
+  record on every read. So before it creates a question or reply, the store
+  dry-runs the create (`DryRunAll`, which the existing create permission
+  covers) and compares what the API server would keep. If `kind` or `inReplyTo`
+  is missing, the publish answers 503 with the fixed reason "inbox schema not
+  upgraded" and writes nothing. A plain message and a retry of a stored one
+  need no check. A dry-run that itself fails is an ordinary 503 Unknown.
+- Do not revert the `inboxmessages` CRD below this schema once any question or
+  reply exists. The older schema would strip `kind` and `inReplyTo` when the
+  records are read, so each stored question and reply would fail the store's
+  check and answer 503 on every list page, sent box and read that includes
+  it, until the records are removed by the DESIGN-010 manual recovery. The
+  dry-run guard stops new records, not this.
 - Once any question or reply exists, an operator older than this change reads
   it as an invalid record (its labels match neither older label set), with the
   same 503s. Do not roll the operator back below this change after enabling
@@ -293,8 +310,11 @@ reads these resources.
 and replies. One question reads at most 8 replies; more is Unknown. A thread
 list page scans its possible replies once, not per question: replies sent by
 the caller for its inbox, replies addressed to it for its sent box, or all of
-the project's replies for a coordinator host, in at most 10 pages of 100 (more
-is Unknown for the page). It then reads one ack per answered question by name
+the project's replies for a coordinator host. It lists in pages of 100 up to the
+project's message limit (4096 by default, 41 pages): replies are messages, so
+the limit already bounds them, and the scan needs no separate smaller cap. A
+project limit configured higher than the scan was sized for leaves a longer
+index Unknown for the page, never a guess. It then reads one ack per answered question by name
 and each distinct Session once. A thread read of one question lists only that
 question's replies.
 
