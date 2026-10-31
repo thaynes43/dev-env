@@ -71,13 +71,23 @@ func installAdminProposal(t *testing.T) {
 		if err := admin.Update(ctx, &current); err != nil {
 			t.Error(err)
 		}
+		for _, o := range []client.Object{
+			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "dev-env-operator-legacy-actor-read"}},
+			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "dev-env-operator-legacy-actor-read"}},
+			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: AdminIssuanceNamespace, Name: "dev-env-broker-admin-issuer"}},
+			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: AdminIssuanceNamespace, Name: "dev-env-broker-admin-issuer"}},
+		} {
+			if err := admin.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
+				t.Error(err)
+			}
+		}
 		for _, o := range []client.Object{&admissionv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: "dev-env-identity-guard"}}, &admissionv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: "dev-env-identity-guard"}}, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.RoleBreakglass}}} {
 			if err := admin.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
 				t.Error(err)
 			}
 		}
 	})
-	for _, file := range []string{filepath.Join(dir, "issuer.yaml"), filepath.Join(dir, "identity-guard.yaml"), filepath.Join("testdata", "grant-breakglass-RESERVED-PROPOSAL.yaml")} {
+	for _, file := range []string{filepath.Join(dir, "issuer.yaml"), filepath.Join(dir, "legacy-actor-read.yaml"), filepath.Join(dir, "identity-guard.yaml"), filepath.Join("testdata", "grant-breakglass-RESERVED-PROPOSAL.yaml")} {
 		if err := apply(ctx, file); err != nil {
 			t.Fatal(err)
 		}
@@ -174,6 +184,14 @@ func TestEnvtestReusableAdminIssuer(t *testing.T) {
 		err := bc.Create(ctx, o, client.DryRunAll)
 		return apierrors.IsForbidden(err) && strings.Contains(err.Error(), "dev-env-broker-guard:"), fmt.Sprint(err)
 	})
+	if !allowed(t, operatorUser, authorizationv1.ResourceAttributes{Namespace: sessionNS, Resource: "serviceaccounts", Name: "dev-env-agent", Verb: "get"}) {
+		t.Fatal("operator cannot perform exact legacy actor SA UID recheck")
+	}
+	for _, a := range []authorizationv1.ResourceAttributes{{Namespace: sessionNS, Resource: "serviceaccounts", Name: "other", Verb: "get"}, {Namespace: sessionNS, Resource: "serviceaccounts", Name: "dev-env-agent", Verb: "delete"}, {Namespace: AdminIssuanceNamespace, Resource: "serviceaccounts", Subresource: "token", Name: "grant-unapproved", Verb: "create"}} {
+		if allowed(t, operatorUser, a) {
+			t.Fatal("legacy metadata read broadened operator authority", a)
+		}
+	}
 	// Broker RBAC remains unable to mutate the guard and create issuer Pods.
 	for _, a := range []authorizationv1.ResourceAttributes{{Group: "admissionregistration.k8s.io", Resource: "validatingadmissionpolicies", Verb: "update"}, {Namespace: AdminIssuanceNamespace, Resource: "pods", Verb: "create"}} {
 		if allowed(t, brokerUser, a) {

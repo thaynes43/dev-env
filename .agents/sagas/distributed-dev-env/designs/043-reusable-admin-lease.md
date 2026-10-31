@@ -32,6 +32,11 @@ The exact proposed source fixtures are:
   namespace with PSA `enforce: restricted`, no exemption; Role with only
   `serviceaccounts` get/create/delete and `serviceaccounts/token` create; one
   RoleBinding to `dev-env-system/dev-env-broker`.
+- `.../admin-lease/legacy-actor-read.yaml`: the existing PR799 legacy checker
+  calls Get on the actor SA to compare its original UID. The pinned operator
+  RBAC snapshot lacks that read. A namespaced Role/RoleBinding adds only get on
+  dev-agents/dev-env-agent to dev-env-system/dev-env-operator; no other account,
+  TokenRequest or mutation. Broker already has that read in its session Role.
 - `.../admin-lease/identity-guard.yaml`: native target namespace protection above.
   The installed snapshot remains byte unchanged in `testdata/identity-guard/`.
 - `.../admin-lease/broker-guard.yaml`: grant-* SAs/TokenRequests may live in the
@@ -74,10 +79,12 @@ At PR800 d13f2782, `internal/apiserver/grant_reserved.go:18` checks only
 `internal/agentrun/grant_reserved.go:103` likewise checks only syntax. The pure
 core checks reference syntax, not human identity, message age or a new phone
 approval. This is a provenance-label/documentation correction, not a policy delta.
-The wire name `tomRef` stays for compatibility. PR800's owner owns that correction
-and its regression coverage; this branch does not change those files. Final
-qualification must reconcile the actual reviewed dependency head. No current live
-policy is broadened by this documentation.
+The wire name `tomRef` stays for compatibility. After PR800 merged and its owner
+exited, ADDENDUM14 assigns this narrow correction to PR802. A separate wording
+commit corrects the eight API/CLI/MCP/help/comment/docs surfaces and adds tree and
+legacy regressions: an eligible non-human delegate using persistent authority is
+accepted; absent/invalid references and an unauthorized actor refuse. JSON shape,
+error codes and authority algorithms are unchanged. No live policy is broadened.
 
 The new path requires an Active, unreleased, undeleted RD2 reserved decision with
 approved TTL exactly30m and `expiresAt == approvedAt +30m`. Existing live actor and
@@ -206,8 +213,9 @@ its actual main merge a290233b3e45b587c151ee0e027d6d3ed529cd86. The native
 source review approves8260 conditional on its exact CI; the merged source and
 final-green receipts are retained by owner214008 under the existing S7 handoff.
 This branch rebases only its own issuer change onto that actual merge. The
-provenance-label follow-up remains API/CLI/wire comments/help and documentation:
+provenance-label correction now covers API/CLI/wire comments/help and documentation:
 `internal/apiserver/grant_reserved.go`, `internal/agentrun/{help,grant_reserved,mcp,mcp_reserved}.go`,
 `internal/apiserver/apiv1/{grant_reserved,grants}.go`, and `docs/reserved-grants.md`.
 It is a wording correction under existing delegated authority, not a fresh-human
-or eligibility requirement. Those separate owned files are unchanged here.
+or eligibility requirement. After800 custody ended, ADDENDUM14 assigns those wording-only files to this
+separate802 commit. No authorization predicate or wire shape changes.
