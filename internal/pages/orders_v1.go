@@ -24,13 +24,14 @@ var errV1Orders = errors.New("invalid or over-limit V1 work-order ConfigMap snap
 var v1ConfigMapDataKey = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
 
 // V1ResponderOrders is an immutable, caller-supplied offline snapshot. The real
-// producers have no explicit alert identity field, so it cannot join any alert.
+// producer contract optionally supplies an exact alertIdentity binding.
 // It holds only the allowed order subset, never order text or label signatures.
 type V1ResponderOrders struct {
-	observation SourceObservation
-	orders      map[string]ResponderOrder
-	invalid     bool
-	ignored     int
+	observation         SourceObservation
+	orders              map[string]ResponderOrder
+	invalid             bool
+	ignored             int
+	malformedIdentities int
 }
 
 // ParseV1ResponderOrders reads kubectl's ConfigMap JSON, with an explicit caller
@@ -110,7 +111,18 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 		if !statusOK || !createdOK || !updatedOK || !validOrderStatus(status) || !cok || !uok || ut.Before(ct) || ut.After(observedAt.Add(orderClockSkew)) {
 			return fail()
 		}
-		orders[key] = ResponderOrder{Order: OrderReference{Key: key, Created: created}, Status: status, Updated: updated}
+		identity := AlertIdentity{}
+		if value, present := entry["alertIdentity"]; present {
+			obj, ok := value.(map[string]any)
+			fingerprint, fingerprintOK := obj["fingerprint"].(string)
+			startsAt, startsAtOK := obj["startsAt"].(string)
+			if !ok || len(obj) != 2 || !fingerprintOK || !startsAtOK {
+				s.malformedIdentities++
+				continue
+			}
+			identity = AlertIdentity{Fingerprint: fingerprint, StartsAt: startsAt}
+		}
+		orders[key] = ResponderOrder{Identity: identity, Order: OrderReference{Key: key, Created: created}, Status: status, Updated: updated}
 	}
 	s.orders, s.invalid = orders, false
 	return s, nil
@@ -120,8 +132,12 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 // responder order key grammar. They contribute nothing to the snapshot.
 func (s *V1ResponderOrders) IgnoredKeys() int { return s.ignored }
 
-// Observations returns independent copies keyed by the actual ConfigMap data
-// key. An identity is intentionally absent; these are not alert associations.
+// MalformedIdentities counts orders excluded for an unusable alertIdentity.
+// Absence is legacy data, not malformed. Existing whole-store bounds still apply.
+func (s *V1ResponderOrders) MalformedIdentities() int { return s.malformedIdentities }
+
+// Observations returns independent copies of the safe subset keyed by data key.
+// A stored identity is not itself proof that the order can join an episode.
 func (s *V1ResponderOrders) Observations() map[string]OrderObservation {
 	out := make(map[string]OrderObservation, len(s.orders))
 	for key, order := range s.orders {
@@ -131,9 +147,9 @@ func (s *V1ResponderOrders) Observations() map[string]OrderObservation {
 	return out
 }
 
-// FindOrders reads one bounded in-memory batch. No current V1 field supplies an
-// exact fingerprint/start association. Even supplied lookalike fields are not a
-// supported producer contract; parsing free text or inventing a join is unsafe.
+// FindOrders reads one bounded in-memory batch. Only decoded string equality
+// on both alertIdentity fields binds an order. Duplicate identities and attempts
+// created before the episode (allowing clock skew) remain unjoined.
 func (s *V1ResponderOrders) FindOrders(ctx context.Context, identities []AlertIdentity) (map[AlertIdentity]OrderObservation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -144,12 +160,35 @@ func (s *V1ResponderOrders) FindOrders(ctx context.Context, identities []AlertId
 	condition := ""
 	if s.invalid {
 		condition = "Invalid"
-	} else if len(s.orders) > 0 {
+	} else if len(s.orders) > 0 || s.ignored > 0 || s.malformedIdentities > 0 {
 		condition = "Unjoined"
+	}
+	// Count every identity assertion before checking creation time: even an old
+	// or unusable attempt conflicts with another order claiming the same identity.
+	byIdentity := make(map[AlertIdentity]ResponderOrder, len(s.orders))
+	counts := make(map[AlertIdentity]int, len(s.orders))
+	if !s.invalid {
+		for _, order := range s.orders {
+			if !validResponseIdentity(order.Identity) {
+				continue
+			}
+			counts[order.Identity]++
+			byIdentity[order.Identity] = order
+		}
 	}
 	out := make(map[AlertIdentity]OrderObservation, len(identities))
 	for _, id := range identities {
-		out[id] = OrderObservation{SourceObservation: s.observation, RecordCondition: condition}
+		observation := OrderObservation{SourceObservation: s.observation, RecordCondition: condition}
+		if counts[id] == 1 {
+			order := byIdentity[id]
+			created, _ := orderTime(order.Order.Created)
+			start, known := SnapshotTime(id.StartsAt)
+			if known && !created.Before(start.Add(-orderClockSkew)) {
+				observation.Order = &order
+				observation.RecordCondition = ""
+			}
+		}
+		out[id] = observation
 	}
 	return out, nil
 }
