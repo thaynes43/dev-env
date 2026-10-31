@@ -160,16 +160,16 @@ func serviceAccountRef(ref string) bool {
 // created it (DESIGN-042 6.2, S6). All of these must hold:
 //
 //   - s is top-level (topLevelSession);
-//   - its depth label, when present, is "0";
+//   - its depth label is exactly "0";
 //   - its spec.parent is a ServiceAccount ref and exactly one of creators.
 //
-// A missing, empty or unparseable parent fails, and so does a child, whose
-// parent is a session name with no slash. An empty list admits no one.
+// A missing, empty or unparseable parent or depth fails, and so does a child,
+// whose parent is a session name with no slash. An empty list admits no one.
 func listedCreator(s *v1alpha1.AgentSession, creators []string) bool {
 	if !topLevelSession(s) {
 		return false
 	}
-	if d, ok := s.Labels[v1alpha1.LabelDepth]; ok && d != "0" {
+	if s.Labels[v1alpha1.LabelDepth] != "0" {
 		return false
 	}
 	return serviceAccountRef(s.Spec.Parent) && slices.Contains(creators, s.Spec.Parent)

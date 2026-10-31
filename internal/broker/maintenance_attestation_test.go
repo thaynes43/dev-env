@@ -95,7 +95,7 @@ func amCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 	for _, e := range edit {
 		e(g, p)
 	}
-	// An edit may rename the coordinator (liveRequester).
+	// An edit may rename the coordinator and requester together.
 	coord = g.Spec.Maintenance.Coordinator
 	objects := []client.Object{g, p, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: amNode, UID: amNodeUID}}}
 	f := &amFixture{t: t, key: client.ObjectKeyFromObject(g)}
@@ -165,6 +165,19 @@ func (f *amFixture) update(obj client.Object) {
 	if err := f.c.Update(context.Background(), obj); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// liveRequester changes the stored requester, so approval and execution tests
+// exercise the broker's live read rather than an obsolete fixture copy.
+func (f *amFixture) liveRequester(edit func(*v1alpha1.AgentSession)) {
+	f.t.Helper()
+	var s v1alpha1.AgentSession
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(f.sess), &s); err != nil {
+		f.t.Fatal(err)
+	}
+	edit(&s)
+	f.update(&s)
+	f.sess = &s
 }
 
 func (f *amFixture) policy() *v1alpha1.GrantPolicy {
