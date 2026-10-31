@@ -76,30 +76,52 @@ def bounded_text(value, maximum=2048):
 # Permission context is untrusted display data, never approval authority.
 TOOL_KINDS = frozenset({"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"})
 RAW_FIELDS = frozenset({"command", "args", "path", "paths", "query", "description"})
-SECRET_NAME = re.compile(r"token|key|secret|passw(?:or)?d|passphrase|\bpass\b|pwd|pw|auth|cookie|credential|bearer|session|signature|private|jwt", re.I)
+# Short names are unanchored substrings, so `_`-joined forms (DB_PW, API_KEY) match.
+# `pass` alone needs no adjacent letter (DB_PASS, --pass, PASS1, not compass or
+# bypass), or a camelCase capital after a lowercase letter (dbPass).
+SECRET_NAME = re.compile(r"token|key|secret|passw(?:or)?d|passphrase|(?<![a-z])pass(?![a-z])|(?-i:(?<=[a-z])Pass)(?![a-z])"
+                         r"|pwd|pw|auth|cookie|credential|bearer|session|signature|private|jwt", re.I)
 SECRET_VALUE = re.compile(r"bearer\s|[A-Za-z0-9+/=_-]{32,}", re.I)
-# URL userinfo (scheme://user@ or scheme://user:password@) and bare user:password@.
-SECRET_USERINFO = re.compile(r"://[^/\s?#]*@|[^\s/:@]+:[^\s/@]*@")
-# -p<value> or -p <value>, and -u/-U/--user/--proxy-user user:password or user%password.
-# This deliberately also matches harmless forms such as `mkdir -p build`.
-SECRET_FLAG = re.compile(r"(?:^|[\s\"'=])(?:-p\s*\S|(?:-[uU]|--(?:proxy-)?user)(?:[=\s]+)?[\"']?[^\s:%\"']*[:%])")
+# URL userinfo: any `@` after `://` in the same token, so a password holding `/`,
+# `?` or `#` still matches (a query `@` fails closed too); and bare user:password@.
+# Possessive runs and the run-start lookbehind remove backtracking; a 4096-byte
+# adversarial source stays far below the 100 ms budget recorded in the doc.
+SECRET_USERINFO = re.compile(r"://[^\s@]*+@|(?<![^\s/:@])[^\s/:@]++:[^\s/@]*+@")
+# -p/-P<value> or -p/-P <value>; -k, -K or -a then a spaced value that is not a
+# flag (openssl enc, redis-cli); and -u/-U/--user/--proxy-user user:password or
+# user%password. This deliberately also matches harmless forms such as
+# `mkdir -p build`, `grep -P x` or `curl -k https://...`.
+SECRET_FLAG = re.compile(r"(?:^|[\s\"'=])(?:-[pP]\s*\S|-[kKa]\s+[^\s-]|(?:-[uU]|--(?:proxy-)?user)(?:[=\s]+)?[\"']?[^\s:%\"']*[:%])")
 SECRET_PATTERNS = (SECRET_NAME, SECRET_VALUE, SECRET_USERINFO, SECRET_FLAG)
-# Rejected as controls: every C category, line/paragraph separators, and the
-# combining marks that remain after NFKC composition (Mn nonspacing, Me enclosing).
-REJECTED_CATEGORIES = ("C", "Zl", "Zp", "Mn", "Me")
+# Fields concatenated with no separator rebuild a name or userinfo split across them.
+# A base64/hex-like run is not checked there: gluing words and paths makes long runs.
+GLUED_PATTERNS = (SECRET_NAME, SECRET_USERINFO, SECRET_FLAG)
+# Displayed and checked text must be printable ASCII after NFKC. This rejects
+# controls, separators, combining marks, homoglyphs (Cyrillic, Hangul fillers) and
+# every other non-ASCII form the ASCII patterns above cannot see through.
+PRINTABLE_ASCII = re.compile(r"[ -~]*")
 REDACTED = "[REDACTED]"
 MAX_CONTEXT = 2048
 MAX_PROBE = 8192
+PROBE_ROUNDS = 4
 
 
 class Redacted(Exception):
     """A secret-like value anywhere fails the whole permission context closed."""
 
 
+def printable_ascii(value):
+    return PRINTABLE_ASCII.fullmatch(value) is not None
+
+
 def secret_probes(value):
-    """The value plus its percent-decoded and NFKC forms, closed under both, bounded."""
+    """The value plus its percent-decoded and NFKC forms, closed under both, bounded.
+
+    Text still changing after the last round has deeper layers left undecoded, so
+    it fails closed (ValueError) instead of being checked only in part.
+    """
     found, frontier = {value}, [value]
-    for _ in range(4):
+    for _ in range(PROBE_ROUNDS):
         following = []
         for text in frontier:
             for probe in (urllib.parse.unquote(text), unicodedata.normalize("NFKC", text)):
@@ -109,17 +131,18 @@ def secret_probes(value):
                     found.add(probe)
                     following.append(probe)
         if not following:
-            break
+            return found
         frontier = following
-    return found
+    raise ValueError
 
 
-def secret_text(value):
-    return any(pattern.search(probe) for probe in secret_probes(value) for pattern in SECRET_PATTERNS)
-
-
-def rejected_character(value):
-    return any(unicodedata.category(c).startswith(REJECTED_CATEGORIES) for c in value)
+def secret_text(value, patterns=SECRET_PATTERNS):
+    probes = secret_probes(value)
+    # A decoded form that is not printable ASCII after NFKC, such as percent-encoded
+    # Cyrillic, cannot be checked by the ASCII patterns, so it fails closed.
+    if not all(printable_ascii(unicodedata.normalize("NFKC", probe)) for probe in probes):
+        raise ValueError
+    return any(pattern.search(probe) for probe in probes for pattern in patterns)
 
 
 def context_string(value, path=False):
@@ -132,8 +155,10 @@ def context_string(value, path=False):
         raise ValueError
     if len(value.encode("utf-8")) > 256:
         raise ValueError
+    # Non-ASCII context fails closed by design: the NFKC display form must be
+    # printable ASCII, so homoglyphs and combining marks cannot disguise a name.
     display = unicodedata.normalize("NFKC", value)
-    if not display or rejected_character(display) or len(display.encode("utf-8")) > 256:
+    if not display or not printable_ascii(display) or len(display) > 256:
         raise ValueError
     # Fail the whole context closed before reducing paths, so a secret in a parent
     # directory, URL userinfo, command flag or prose prefix cannot survive as a fragment.
@@ -227,8 +252,10 @@ def permission_context(tool):
         # A flag and its value may sit in separate strings, list items or fields
         # (`["-u", "user:password"]`), so the joined source text is checked too:
         # title, then every raw input value in source order, then location paths.
+        # Concatenated without a separator, it also catches a name or userinfo
+        # split across fields (`["--pa", "ssword=value"]`).
         joined = [tool["title"], *source_strings(tool.get("rawInput")), *(x["path"] for x in locations or ())]
-        if secret_text(" ".join(joined)):
+        if secret_text(" ".join(joined)) or secret_text("".join(joined), GLUED_PATTERNS):
             raise Redacted
         if len(json.dumps(clean, ensure_ascii=True, separators=(",", ":"))) > MAX_CONTEXT:
             return insufficient

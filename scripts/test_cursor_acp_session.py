@@ -267,6 +267,20 @@ CONTEXT_FIXTURES = {
     "combining-mark": dict(VALID_CONTEXT, title="Run\u0336 fixture checks"),
     "line-separator": dict(VALID_CONTEXT, title="Run\u2028fixture checks"),
     "paragraph-separator": dict(VALID_CONTEXT, rawInput={"command": "run\u2029fixture"}),
+    # Re-review of 5792587b: underscore-joined names, short value flags, names split
+    # across fields, and userinfo whose password holds a path character.
+    "secret-db-pass": dict(VALID_CONTEXT, rawInput={"command": "env", "args": ["DB_PASS=hunter2"]}),
+    "secret-zip-p": dict(VALID_CONTEXT, rawInput={"command": "zip", "args": ["-P", "hunter2", "out.zip"]}),
+    "secret-openssl-k": dict(VALID_CONTEXT, rawInput={"command": "openssl enc -aes-256-cbc -k hunter2"}),
+    "secret-redis-a": dict(VALID_CONTEXT, rawInput={"command": "redis-cli", "args": ["-a", "hunter2"]}),
+    "secret-glued-name": dict(VALID_CONTEXT, rawInput={"command": "tool", "args": ["--pa", "ssword=hunter2"]}),
+    "secret-url-slash-password": dict(VALID_CONTEXT, rawInput={"args": ["https://admin:hun/ter2@example.com"]}),
+    # Unsettled percent-encoding and non-ASCII text fail closed without a redacted shape.
+    "deep-percent-name": dict(VALID_CONTEXT, rawInput={"args": ["%252525252570assword=hunter2"]}),
+    "deep-percent-userinfo": dict(VALID_CONTEXT, rawInput={"args": ["alice:hunter2%2525252540example.com"]}),
+    "homoglyph-cyrillic": dict(VALID_CONTEXT, rawInput={"args": ["\u0440\u0430ssword=hunter2"]}),
+    "homoglyph-filler": dict(VALID_CONTEXT, rawInput={"args": ["pass\u3164word=hunter2"]}),
+    "non-ascii-title": dict(VALID_CONTEXT, title="Caf\u00e9 checks"),
 }
 
 
@@ -359,8 +373,9 @@ class PermissionContextTests(unittest.TestCase):
                 self.assertEqual(context["state"], "available")
                 self.assertEqual(list(context["rawInput"].values()), [["f.py"]] if "path" not in raw else ["f.py"])
                 self.assertNotIn("customer", json.dumps(context, ensure_ascii=False))
-        context = ACP.permission_context(dict(VALID_CONTEXT, title="Café checks"))
-        self.assertEqual((context["state"], context["title"]), ("available", "Café checks"))
+        # Non-ASCII display text fails closed by design, even with no secret: the
+        # decomposed accent composes under NFKC and is still not printable ASCII.
+        self.assertEqual(ACP.permission_context(dict(VALID_CONTEXT, title="Cafe\u0301 checks")), {"state": "insufficient-context"})
 
     def test_combining_marks_and_line_separators_rejected(self):
         for value in ["Run̶ fixture", "Run⃝ fixture", "é́", "Run fixture", "Run fixture"]:
@@ -376,6 +391,113 @@ class PermissionContextTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 context = ACP.permission_context(dict(VALID_CONTEXT, rawInput=raw))
                 self.assertEqual((context["state"], context["rawInput"]), ("available", raw))
+
+    def assertClosed(self, tool, *secrets):
+        """Any insufficient-context outcome, redacted shape or not, with no secret text."""
+        context = ACP.permission_context(tool)
+        self.assertIn(context, [{"state": "insufficient-context"}, redacted_context(tool)])
+        for secret in secrets:
+            self.assertNotIn(secret, json.dumps(context, ensure_ascii=False))
+
+    def placements(self, value):
+        return [dict(VALID_CONTEXT, rawInput={"command": "tool", "args": [value]}), dict(VALID_CONTEXT, rawInput={"command": value}),
+                dict(VALID_CONTEXT, rawInput={"path": value}), dict(VALID_CONTEXT, locations=[{"path": value}]),
+                dict(VALID_CONTEXT, title=value)]
+
+    def test_underscore_and_camel_joined_short_names_redacted(self):
+        # Re-review of 5792587b, gap 1: `\bpass\b` treated `_` as a word character.
+        # The other short names were already unanchored substrings; they stay so.
+        for value in ["DB_PASS=hunter2", "SMTP_PASS=hunter2", "PASS_DB=hunter2", "PASS1=hunter2", "--db-pass=hunter2",
+                      "dbPass=hunter2", '{"smtpPass":"hunter2"}', "DB_PW=hunter2", "X_PWD=hunter2", "API_KEY=hunter2",
+                      "GH_TOKEN=hunter2", "MY_AUTH=hunter2", "apiKey=hunter2", "apiToken=hunter2", "OLD_SECRET=hunter2"]:
+            for tool in self.placements(value):
+                with self.subTest(value=value, tool=tool):
+                    self.assertRedacted(tool, "hunter2")
+
+    def test_pass_inside_words_stays_available(self):
+        for value in ["compass", "bypass", "BYPASS", "Compass", "passport", "passenger.py", "overpass"]:
+            with self.subTest(value=value):
+                context = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"command": "tool", "args": [value]}))
+                self.assertEqual((context["state"], context["rawInput"]), ("available", {"command": "tool", "args": [value]}))
+
+    def test_unsettled_percent_encoding_fails_closed(self):
+        # Gap 2: four rounds left deeper layers undecoded but the context "available".
+        for value in ["%252525252570assword=hunter2", "alice:hunter2%2525252540example.com", "%25252570assword=hunter2"]:
+            for tool in self.placements(value):
+                with self.subTest(value=value, tool=tool):
+                    self.assertEqual(ACP.permission_context(tool), {"state": "insufficient-context"})
+        # Three layers still settle within the bound and are redacted by name.
+        self.assertRedacted(dict(VALID_CONTEXT, rawInput={"args": ["%252570assword=hunter2"]}), "hunter2")
+
+    def test_non_ascii_context_fails_closed(self):
+        # Gap 3: homoglyphs (Cyrillic, Hangul filler U+3164) and any other text that
+        # is not printable ASCII after NFKC fail closed, with or without a secret.
+        for value in ["\u0440\u0430ssword=hunter2", "pass\u3164word=hunter2", "\u0440ass=hunter2", "Caf\u00e9 hunter2",
+                      "%D1%80assword=hunter2", "pass%E3%85%A4word=hunter2", "caf%C3%A9=hunter2"]:
+            for tool in self.placements(value):
+                with self.subTest(value=value, tool=tool):
+                    self.assertClosed(tool, "hunter2")
+        # Non-ASCII in a dropped field or an object key fails the whole context closed.
+        for raw in [{"command": "tool", "note": "\u0440\u0430ssword", "args": ["hunter2"]},
+                    {"command": "tool", "\u0440\u0430ss": "x", "args": ["hunter2"]}]:
+            with self.subTest(raw=raw):
+                self.assertClosed(dict(VALID_CONTEXT, rawInput=raw), "hunter2")
+
+    def test_short_value_flags_redacted(self):
+        # Gap 4: zip -P, openssl enc -k/-K and redis-cli -a take a password value.
+        for args in [["zip", "-P", "hunter2", "out.zip"], ["zip", "-Phunter2", "out.zip"],
+                     ["openssl", "enc", "-aes-256-cbc", "-k", "hunter2"], ["openssl", "enc", "-K", "00ff00ff"],
+                     ["redis-cli", "-h", "cache", "-a", "hunter2"], ["redis-cli", "-a", '"hunter2"']]:
+            with self.subTest(args=args):
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput={"args": args}), "hunter2", "00ff00ff")
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput={"command": " ".join(args)}), "hunter2", "00ff00ff")
+        self.assertRedacted(dict(VALID_CONTEXT, title="Run redis-cli -a", rawInput={"args": ["hunter2"]}), "hunter2")
+        # Conservative: a spaced value after -k, -K or -a fails closed even when harmless.
+        for command in ["curl -k https://example.com", "ls -a build", "grep -P x"]:
+            with self.subTest(command=command):
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput={"command": command}))
+        # Attached flag clusters and a following flag stay available.
+        for command in ["ls -al", "curl -kL example.com", "git commit -a -m fixture"]:
+            with self.subTest(command=command):
+                self.assertEqual(ACP.permission_context(dict(VALID_CONTEXT, rawInput={"command": command}))["state"], "available")
+
+    def test_names_and_userinfo_split_across_fields_redacted(self):
+        # Optional finding 5: the fields are also checked concatenated with no separator.
+        for raw in [{"command": "tool", "args": ["--pa", "ssword=hunter2"]}, {"command": "tool", "args": ["DB_PA", "SS=hunter2"]},
+                    {"command": "curl", "args": ["https://admin:", "hunter2@example.com"]}]:
+            with self.subTest(raw=raw):
+                self.assertRedacted(dict(VALID_CONTEXT, rawInput=raw), "hunter2")
+        # Conservative: gluing can also form a short name by accident (`cp` + `www`).
+        self.assertRedacted(dict(VALID_CONTEXT, rawInput={"command": "cp", "args": ["www", "out"]}))
+
+    def test_url_userinfo_with_path_characters_redacted(self):
+        # Optional finding 6: a password holding `/`, `?` or `#` kept its tail visible.
+        for value in ["https://admin:hun/ter2@example.com", "https://admin:hun?ter2@example.com",
+                      "https://admin:hun#ter2@example.com", "https://hun/ter2@example.com"]:
+            for tool in self.placements(value):
+                with self.subTest(value=value, tool=tool):
+                    self.assertRedacted(tool, "ter2")
+        # Conservative: any `@` after `://` in the same token fails closed.
+        self.assertRedacted(dict(VALID_CONTEXT, rawInput={"query": "https://example.com/a?mail=a@example.com"}))
+
+    def test_adversarial_source_is_bounded_in_time(self):
+        # A guard against quadratic patterns on a 4096-byte source, with 10x headroom
+        # over the recorded 100 ms budget so a loaded worker does not flake it.
+        def filled(unit):
+            tool = dict(VALID_CONTEXT, rawInput={"command": "python3", "args": ["check.py"], "note": ""})
+            room = 4096 - len(json.dumps(tool, ensure_ascii=True, separators=(",", ":")))
+            tool["rawInput"]["note"] = (unit * room)[:room]
+            self.assertEqual(len(json.dumps(tool, ensure_ascii=True, separators=(",", ":"))), 4096)
+            return tool
+        for unit in [":a", "a:", "a::", "a:.", "://", "://.", "=-u.", " -a.", ".", "%25.", "a" * 31 + "."]:
+            tool = filled(unit)
+            with self.subTest(unit=unit):
+                self.assertLess(min(self.timed(tool) for _ in range(3)), 1.0)
+
+    def timed(self, tool):
+        start = time.perf_counter()
+        ACP.permission_context(tool)
+        return time.perf_counter() - start
 
 
 FAKE = '''#!/usr/bin/env python3
@@ -540,7 +662,8 @@ class SubprocessTests(unittest.TestCase):
 
     def test_permission_context_fixtures_over_fake_cli(self):
         # Every redaction fails closed (review of 6b9ae3d7, finding 3).
-        insufficient = {"quoted-path-args", "double-quoted-path-args", "angle-path-args", "spaced-path-args", "spaced-path-command", "spaced-path-title", "raw-oversized", "source-oversized", "raw-unknown", "raw-scalar", "location-control", "raw-control", "missing", "oversized", "total", "controls", "unicode-control", "malformed", "unknown-kind", "unknown-only", "combining-mark", "line-separator", "paragraph-separator"}
+        insufficient = {"quoted-path-args", "double-quoted-path-args", "angle-path-args", "spaced-path-args", "spaced-path-command", "spaced-path-title", "raw-oversized", "source-oversized", "raw-unknown", "raw-scalar", "location-control", "raw-control", "missing", "oversized", "total", "controls", "unicode-control", "malformed", "unknown-kind", "unknown-only", "combining-mark", "line-separator", "paragraph-separator",
+                        "deep-percent-name", "deep-percent-userinfo", "homoglyph-cyrillic", "homoglyph-filler", "non-ascii-title"}
         insufficient |= {name for name in CONTEXT_FIXTURES if "secret" in name}
         for name in CONTEXT_FIXTURES:
             with self.subTest(fixture=name), tempfile.TemporaryDirectory() as directory:
