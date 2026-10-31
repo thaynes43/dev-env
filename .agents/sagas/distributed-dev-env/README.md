@@ -1,15 +1,17 @@
 # Saga: distributed-dev-env (dev-env v2)
 
-**2026-10-31 design-only, Epic #112:** [DESIGN-042](designs/042-homelab-operator-access.md)
-proposes one homelab operator access bundle that Tom approves once. It has five
-task grant classes, including a fail-closed namespace operator with named Secret
-use. It has two approval modes: requester attestation under a Tom-approved
-policy, and an authenticated delegate decision. Work lands in independent
-tracks. S7 adds break-glass, Secret read and storage routes; bounds changes
-already run through the delivery workflow. GPU, MAM and reserved-class
-acceptance are pending. Q-042-01 (the bundle) and Q-042-02 (a template-hold
-exception for the coordinator profile only) are pending for Tom; no grant,
-policy or guard changes.
+**2026-10-31 source preparation, Epic #112 / OP233:**
+[DESIGN-042 section 0](designs/042-homelab-operator-access.md#0-one-recommended-proposal-for-toms-exact-review)
+proposes one access activation packet for Tom's exact review. Existing top-level
+sessions need a separate agent approver whose reach is explicitly enabled; that
+source is still missing. S4 and S6 are merged; S2 needs its decision-slot correction,
+S3 waits on S5 integration, and reserved-class source remains absent. The proposal
+states the full powers of namespace Jobs, workbench identities and break-glass,
+without treating those risks as accepted. GPU, MAM grant-path and reserved-case
+acceptance remain pending. Q-042-01/02 form one pending decision; the template hold
+and active-session continuity remain in force. [Story #333](https://work.haynesnetwork.com/work_packages/333)
+records integration custody and evidence. No live access change or auto-review
+prerequisite follows.
 
 **2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md)
 proposes Session-owned upgrade attempt claims and exact PR/head joins.
