@@ -312,9 +312,19 @@ list page scans its possible replies once, not per question: replies sent by
 the caller for its inbox, replies addressed to it for its sent box, or all of
 the project's replies for a coordinator host. It lists in pages of 100 up to the
 project's message limit (4096 by default, 41 pages): replies are messages, so
-the limit already bounds them, and the scan needs no separate smaller cap. If
-live replies exceed the configured project limit (for example after the limit
-was lowered), the index reads Unknown for the page, never a guess. It then reads one ack per answered question by name
+the limit already bounds them, and the scan needs no separate smaller cap. The
+scan is metadata-only (a `PartialObjectMetadataList` through the same uncached
+reader and `list` permission, so no RBAC change): each index entry is the
+reply's name, UID and in-reply-to label, a fixed few hundred bytes, never its
+text, which would otherwise be up to 16 KiB per reply (about 64 MiB at the
+default limit) held for one request. The in-reply-to label is the digest of the
+question's exact reference, so the index can match a reply to its question
+without reading the spec. A question's lookup then reads only its matched
+replies, by name, with the full validation. An entry whose metadata is not a
+valid reply's (shape or exact label set) makes the index Unknown. A matched
+reply whose spec is wrong is Unknown for its question only, not for the page.
+If live replies exceed the configured project limit (for example after the
+limit was lowered), the index reads Unknown for the page, never a guess. It then reads one ack per answered question by name
 and each distinct Session once. A thread read of one question lists only that
 question's replies.
 
@@ -323,7 +333,7 @@ inbox and is not woken by a reply, and a TUI coordinator is not notified.
 Session-less native hosts can neither ask nor be asked. The cross-provider
 live question, reply and acknowledgement proof, the portal view (#326) and
 session detail (#322) stay open under #321. Tests:
-`internal/inbox/askreply_test.go`, `internal/apiserver/inbox_askreply_test.go`,
+`internal/inbox/askreply_test.go`, `internal/inbox/replyindex_test.go`, `internal/apiserver/inbox_askreply_test.go`,
 `internal/apiserver/inbox_askreply_cli_test.go` (real `agentrun.Run` over TLS),
 `internal/agentrun/inbox_askreply_test.go`, the operator flag case in
 `cmd/dev-env-operator/inbox_test.go` and the envtest schema case in

@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -427,13 +428,28 @@ func RepliesOf(q *coord.InboxMessage, candidates []coord.InboxMessage) ([]coord.
 	return out, nil
 }
 
+// ReplyEntry is one reply in a thread list's index. It is cut from the reply's
+// metadata alone, so it holds no text and no spec: a fixed-size record per
+// reply, whatever the replies weigh. The reply itself is read by Name only for
+// a question that matches it.
+type ReplyEntry struct {
+	Name string
+	UID  types.UID
+	// InReplyTo is the reply's in-reply-to label, the digest of its question's
+	// exact reference.
+	InReplyTo string
+}
+
 // ReplyIndex lists, in pages of 100 up to the project's message limit, the
 // live replies in project sent by from or addressed to to (either may be nil),
 // so one thread list page needs one bounded scan instead of one per question.
-// Replies are messages, so the project limit bounds them; the scan covers it
-// whole. If live replies exceed the configured limit (for example after it was
-// lowered), the index is ErrUnavailable (state Unknown) rather than a guess.
-func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coord.SessionIdentity) ([]coord.InboxMessage, error) {
+// The scan lists metadata only (object meta and labels), through the same
+// uncached reader and list permission, so it never holds a reply's text;
+// RepliesIn reads the matched ones. Replies are messages, so the project limit
+// bounds them; the scan covers it whole. If live replies exceed the configured
+// limit (for example after it was lowered), or an entry's metadata is not that
+// of a valid reply, the index is ErrUnavailable (state Unknown), not a guess.
+func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coord.SessionIdentity) ([]ReplyEntry, error) {
 	if !s.ready() || !projectcatalog.ValidName(project) || (from != nil && !ValidSession(*from)) || (to != nil && !ValidSession(*to)) {
 		return nil, ErrUnavailable
 	}
@@ -444,24 +460,67 @@ func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coo
 	if to != nil {
 		labels[RecipientLabel] = recipientLabel(*to)
 	}
-	var out []coord.InboxMessage
+	var out []ReplyEntry
 	cursor := ""
 	pages := (s.Limits.Effective(DefaultLimits).PerProject + replyPageSize - 1) / replyPageSize
 	for page := int64(0); page < pages; page++ {
-		var list coord.InboxMessageList
-		if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(replyPageSize), client.Continue(cursor)) != nil || len(list.Items) > replyPageSize || len(list.Continue) > 4096 {
+		list := &metav1.PartialObjectMetadataList{}
+		list.SetGroupVersionKind(coord.GroupVersion.WithKind("InboxMessageList"))
+		if s.Live.List(ctx, list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(replyPageSize), client.Continue(cursor)) != nil || len(list.Items) > replyPageSize || len(list.Continue) > 4096 {
 			return nil, ErrUnavailable
 		}
 		for i := range list.Items {
 			r := &list.Items[i]
-			if !s.validMessage(r) || r.Spec.Kind != KindReply || r.Spec.Project != project || (from != nil && r.Spec.Sender != *from) || (to != nil && r.Spec.Recipient != *to) {
+			if !s.validReplyMetadata(r, project, from, to) {
 				return nil, ErrUnavailable
 			}
+			out = append(out, ReplyEntry{Name: r.Name, UID: r.UID, InReplyTo: r.Labels[InReplyToLabel]})
 		}
-		out = append(out, list.Items...)
 		if cursor = list.Continue; cursor == "" {
 			return out, nil
 		}
 	}
 	return nil, ErrUnavailable
+}
+
+// validReplyMetadata is validObject for a metadata-only reply: the object
+// shape and the exact label set a reply carries, matching the selected parties.
+// The spec-level checks run when RepliesIn reads a matched reply.
+func (s KubeStore) validReplyMetadata(m *metav1.PartialObjectMetadata, project string, from, to *coord.SessionIdentity) bool {
+	l := m.Labels
+	return ValidMessageName(m.Name) && m.Namespace == s.Namespace && m.UID != "" && m.ResourceVersion != "" && !m.CreationTimestamp.IsZero() && m.DeletionTimestamp.IsZero() &&
+		len(m.OwnerReferences) == 0 && len(m.Finalizers) == 0 && len(m.Annotations) == 0 &&
+		len(l) == 5 && l[taskclaim.ProjectLabel] == project && l[KindLabel] == KindReply &&
+		len(l[RecipientLabel]) == 63 && len(l[taskclaim.SourceLabel]) == 63 && len(l[InReplyToLabel]) == 63 &&
+		(from == nil || l[taskclaim.SourceLabel] == taskclaim.SessionLabel(*from)) && (to == nil || l[RecipientLabel] == recipientLabel(*to))
+}
+
+// RepliesIn picks question q's live replies out of a ReplyIndex, oldest first,
+// reading only the ones the index matches to q, by name, with Replies' checks:
+// each must come from q's recipient, go to q's sender and name q exactly.
+// More than MaxReplies matches, or a matched reply that is not what its index
+// entry said, is ErrUnavailable.
+func (s KubeStore) RepliesIn(ctx context.Context, q *coord.InboxMessage, index []ReplyEntry) ([]coord.InboxMessage, error) {
+	if !s.ready() || !s.validMessage(q) || q.Spec.Kind != KindQuestion {
+		return nil, ErrUnavailable
+	}
+	want := inReplyToLabel(Ref(q))
+	var matched []ReplyEntry
+	for _, e := range index {
+		if e.InReplyTo == want {
+			matched = append(matched, e)
+		}
+	}
+	if len(matched) > MaxReplies {
+		return nil, ErrUnavailable
+	}
+	got := make([]coord.InboxMessage, 0, len(matched))
+	for _, e := range matched {
+		r, err := s.Get(ctx, e.Name)
+		if err != nil || r.UID != e.UID {
+			return nil, ErrUnavailable
+		}
+		got = append(got, *r)
+	}
+	return RepliesOf(q, got)
 }
