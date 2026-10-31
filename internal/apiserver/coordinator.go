@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 const CoordinatorHostAnnotation = "dev-env.haynesops.com/coordinator-host"
@@ -50,6 +51,8 @@ func ParseCoordinatorHosts(raw string, policy Policy) ([]CoordinatorHost, error)
 			len(validation.IsDNS1123Subdomain(h.PodName)) != 0 || len(validation.IsDNS1123Label(h.HostID)) != 0 ||
 			h.ServiceAccount == policy.Human || slices.Contains(policy.Clients, h.ServiceAccount) ||
 			h.ServiceAccount == policy.SessionNamespace+"/"+policy.SessionServiceAccount ||
+			// A named coordinator identity is a session's (DESIGN-042 6.4), never a host's.
+			(policy.NamedCoordinatorIdentities && ns == policy.SessionNamespace && templates.IsCoordinatorServiceAccount(name)) ||
 			seenSA[h.ServiceAccount] || seenHost[h.HostID] || seenPod[ns+"/"+h.PodName] {
 			return nil, errors.New("coordinator configuration has an invalid, overlapping or repeated identity")
 		}

@@ -98,12 +98,45 @@ var ReservedEnv = []string{
 	WorkspaceIDEnv,
 }
 
-// WorkbenchServiceAccount is the one non-default identity a profile may name
+// WorkbenchServiceAccount is a non-default identity a profile may name
 // (DESIGN-001 6.11, D-46): the trusted client the operator already knows, exempt from
 // the identity guard, and held by haynes-ops' RBAC to pods get/list and pods/exec
-// create in dev-agents. Nothing else may be named, so a template cannot run a
-// session as the operator, the broker or any other account.
+// create in dev-agents. Besides it, a profile may name only a named coordinator
+// identity (IsCoordinatorServiceAccount), so a template cannot run a session as the
+// operator, the broker or any other account.
 const WorkbenchServiceAccount = "dev-env-workbench"
+
+// CoordinatorServiceAccountPrefix begins a named coordinator identity
+// (DESIGN-042 6.4, S4): dev-env-coordinator-<name>, the other kind of account a
+// profile may name. It is a session's identity, not a coordinator host's and not
+// a client's: the operator's API treats a token bound to such a session's pod as
+// that session (apiserver.Policy.NamedCoordinatorIdentities) and refuses every
+// other token of it. haynes-ops gives the account exactly dev-env-agent's
+// bindings (DESIGN-042 P6). A name gives a later delegate allowlist one identity
+// to name; nothing in this source grants it more than a session has.
+const CoordinatorServiceAccountPrefix = "dev-env-coordinator-"
+
+// MaxCoordinatorNameLength bounds the <name> of a named coordinator identity, so
+// the whole account is a DNS-1123 label.
+const MaxCoordinatorNameLength = validation.DNS1123LabelMaxLength - len(CoordinatorServiceAccountPrefix)
+
+// IsCoordinatorServiceAccount reports whether sa is a named coordinator identity:
+// CoordinatorServiceAccountPrefix and a <name> that is a DNS-1123 label of at most
+// MaxCoordinatorNameLength characters. It reads a name only, never a namespace.
+func IsCoordinatorServiceAccount(sa string) bool {
+	name, ok := strings.CutPrefix(sa, CoordinatorServiceAccountPrefix)
+	return ok && len(name) <= MaxCoordinatorNameLength && len(validation.IsDNS1123Label(name)) == 0
+}
+
+// CoordinatorIdentityLabel is the operator API's admission record on an
+// AgentSession it let run as a named coordinator identity: the value is the
+// account. Only the API sets it, after its launch rules (DESIGN-042 6.4: only Tom,
+// a client or the workbench launches such a profile, and one session at a time
+// holds each account). controller.buildPod runs a session as the account only
+// when this label names its profile's account, so a session that reached such a
+// profile any other way runs as dev-env-agent. The value is a label value because
+// IsCoordinatorServiceAccount bounds the account to 63 characters.
+const CoordinatorIdentityLabel = v1alpha1.LabelPrefix + "coordinator-identity"
 
 // WorkbenchEnv is "1" in a workbench session's pod and empty in every other.
 const WorkbenchEnv = "DEV_ENV_WORKBENCH"
@@ -268,8 +301,11 @@ type Profile struct {
 	// policies to select on.
 	Labels map[string]string `json:"labels,omitempty"`
 	// ServiceAccount runs the profile's pods as that account instead of the
-	// agents' dev-env-agent. Empty, or WorkbenchServiceAccount: Validate refuses
-	// any other name. The rescue and hold pods never use it.
+	// agents' dev-env-agent. Empty, WorkbenchServiceAccount, or a named
+	// coordinator identity (IsCoordinatorServiceAccount): Validate refuses any
+	// other name, and the default profile may not name a coordinator identity.
+	// The rescue and hold pods never use it. A session runs as a coordinator
+	// identity only with the API's CoordinatorIdentityLabel (controller.buildPod).
 	ServiceAccount string `json:"serviceAccount,omitempty"`
 }
 
@@ -488,8 +524,14 @@ func (t *Templates) Validate() error {
 				add("%s.envFrom[%d] needs exactly one of secretRef and configMapRef", where, i)
 			}
 		}
-		if p.ServiceAccount != "" && p.ServiceAccount != WorkbenchServiceAccount {
-			add("%s.serviceAccount: only %q may be named, not %q", where, WorkbenchServiceAccount, p.ServiceAccount)
+		if p.ServiceAccount != "" && p.ServiceAccount != WorkbenchServiceAccount && !IsCoordinatorServiceAccount(p.ServiceAccount) {
+			add("%s.serviceAccount: only %q may be named, or %s<name> with <name> a DNS-1123 label of at most %d characters, not %q",
+				where, WorkbenchServiceAccount, CoordinatorServiceAccountPrefix, MaxCoordinatorNameLength, p.ServiceAccount)
+		}
+		if name == t.DefaultProfile && IsCoordinatorServiceAccount(p.ServiceAccount) {
+			// A create that names no profile, a coordinator session's child
+			// among them, must never land on a named coordinator identity.
+			add("%s.serviceAccount: the default profile may not name a coordinator identity", where)
 		}
 		pNames := maps.Clone(names)
 		errs = append(errs, validateMounts(where+".mounts", p.Mounts, pNames)...)

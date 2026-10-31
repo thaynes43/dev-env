@@ -395,6 +395,11 @@ call, what a create checks, and how a reap and a heartbeat reach the objects.**
     (the projected token). The API server has checked that the pod exists with that
     UID; the API also checks that the pod's controller is an `AgentSession` of the
     same UID. That session is the caller;
+    *(2026-10-31, DESIGN-042 S4, source only: a named coordinator identity,
+    `dev-agents/dev-env-coordinator-<name>`, is another account a session pod may
+    run as. Its token is this class only when it is bound to a pod that runs as it
+    and that its session controls; otherwise it is refused. See "D-19, named
+    coordinator identity".)*
   - anyone else: 403. Summoning callers get theirs with `CallerPolicy` (plan 10).
 
   In plan 01 the three classes have the same verbs, as D-05 says ("all
@@ -3331,6 +3336,75 @@ impossible is not met. A fence around `dev-env-system` (review F2) would reduce
 today's parity rights; it is held for Tom's decision and is not a cutover
 prerequisite.
 
+**D-19, named coordinator identity (2026-10-31, DESIGN-042 6.4, S4; source only,
+inert).** A profile's `serviceAccount` may also name `dev-env-coordinator-<name>`,
+where `<name>` is a DNS-1123 label of at most 43 characters, so the account is one
+too (`templates.IsCoordinatorServiceAccount`). No new profile field is needed. The
+default profile may not name one. What the source does with such a profile:
+
+- **Launch.** Only a Claude session may run on that profile, and only one of
+  exactly three launch shapes. The shape is the recorded launcher, `spec.parent`
+  and the depth label:
+  1. launcher `human`: the parent is the human ServiceAccount, at depth 0;
+  2. launcher `client`: the parent is a configured client ServiceAccount, the
+     workbench's client token among them, at depth 0;
+  3. launcher `workbench-session`: the parent is a depth-0 workbench session (Tom's
+     terminal, or the standby his phone drives), so the launch sits at depth 1.
+
+  The rule is one function, `apiserver.Policy.NamedCoordinatorLaunchAllowed`.
+  Admission applies it to the caller. Its sibling,
+  `Policy.NamedCoordinatorSessionEligible`, applies it to an existing session's
+  record, and every create path and resume rechecks the session with it. The
+  delegate decision route (S2) is to call the same sibling, so admission and
+  decision cannot drift. The API records the launcher in the annotation
+  `dev-env.haynesops.com/coordinator-launcher`. No ordinary session, named
+  coordinator session, coordinator host or deeper workbench session launches its
+  own delegate, and the portal and the operator's standby never launch one.
+- **One holder.** At most one session holds each account. A session holds it from
+  its create until it is Archived or Failed. A Suspended session releases it only
+  when its operating mode is Suspended too and a live read finds no pod it
+  controls that has not ended. That covers a resume the reconciler has not acted on
+  yet, and a private-history session that reports Suspended while its pod still
+  runs. A second create, or a resume, gets a 409 while another session holds it.
+  An idempotent repeat of the holder's own create still gets the holder back.
+- **Where the check runs.** Every create and every resume of such a session runs
+  the check and its write under the replica's create lock, so on one replica they
+  cannot interleave. Two racing through two API replicas can both pass; the
+  delegate decision route (S2) must recheck that one session holds the account.
+- **Admission record.** The API labels an admitted session
+  `dev-env.haynesops.com/coordinator-identity: <account>`. The operator runs the pod
+  as the account only when that label names the profile's account. Any other
+  session on the profile (a kubectl create without the label, or a create while
+  the templates could not be read) runs as `dev-env-agent`. Hold pods never use the
+  account, and the workbench cue `DEV_ENV_WORKBENCH` stays empty.
+- **No inheritance.** A child of a session on such a profile runs on the default
+  profile and may not name a profile. With the templates as live on 2026-10-31,
+  that is `full`, which is the `coordinator` profile P6 plans without the account.
+- **API.** A token of the account is a `session` caller only when it is bound to a
+  pod that runs as that account, that its `AgentSession` controls, and whose
+  session carries the admission label for that account. This is the workbench
+  session-pod rule plus those two checks, and it has no client fallback: a token
+  bound to no pod, or to a pod no session controls, gets a 403. No phase is
+  checked, as for every session, so heartbeats go on while it is Pending, Idle or
+  Draining.
+- **Not a coordinator.** The caller keeps every session route: heartbeat,
+  coordination, grants and inbox. It is never a client or a coordinator host, and
+  it gains no authority a `dev-env-agent` session lacks.
+- **Disjoint configuration.** `--coordinator-hosts`, `--human-service-account` and
+  `--client-service-accounts` refuse such an account in the session namespace.
+
+The operator turns these rules on unconditionally, as it does for the workbench
+account; there is no flag. They stay inert because nothing in the cluster uses the
+account: none existed live on 2026-10-31, and no template names one. Activation is
+haynes-ops P6, under the global template hold:
+
+1. the ServiceAccount `dev-agents/dev-env-coordinator-lead`, with exactly
+   `dev-env-agent`'s bindings;
+2. `dev-env-agent-guard`'s match extended to that username;
+3. a `coordinator` profile in `dev-env-templates`.
+
+Delegate decisions are a separate story, DESIGN-042 S2.
+
 **D-19 as built, and S-12 (2026-10-07, KICKOFF 8.4; haynes-ops #3477, #3479).**
 haynes-ops `apps/dev-env-system/rbac/` holds the ServiceAccounts, the Roles of the
 table below and three ValidatingAdmissionPolicies; `apps/kyverno/policies/app/` holds
@@ -3407,7 +3481,8 @@ the Kyverno exec rule.
 | `dev-env-system/dev-env-keeper` | Role in `dev-agents`: Secrets get, update and patch on `resourceNames` `dev-env-gh-token`, `dev-env-ops-gh-token`, `dev-env-claude-live`, `dev-env-codex-live` only; for credential grants (Q-07), also `pods/exec` in `dev-agents` and read on `AccessGrant`. ClusterRole: `tokenreviews` create. Leases (get, create, update) and Events (create, patch) in its own namespace (D-52). Plan 01 grants the Secrets `patch` only (D-52). | The four Secrets are created empty by GitOps, so no `create` is needed. |
 | `dev-env-system/dev-env-gpu-guard` (DaemonSet on GPU nodes) | Role in `dev-tools`: pods get, list; `pods/eviction` create. Read on the budgeter's Lease in `dev-env-system`. | Evicts agent GPU pods only; works when the operator is down (8.2). |
 | `upgrade-agent/<caller>` (alert-responder, upgrade-shepherd, triage, health-gate, the curation CronJob) | No new Kubernetes rights. Their projected token for the `dev-env-operator` audience lets them call the API, within their `CallerPolicy` (3.7). | They no longer need write on the `upgrade-work-orders` ConfigMap once plan 10 moves them. |
-| `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE. Also the one account a profile may run sessions as (`serviceAccount: dev-env-workbench`, Story110 T24): a session in it has the Role above and nothing cluster-wide, so it can run `agent-run login`, `pair` and `attach` (`DEV_ENV_WORKBENCH=1` lifts agent-run's own refusal; RBAC is the real gate). The operator treats a token bound to such a session's pod as that session, so it heartbeats; an unbound token is the client's. Hold pods never use it. *(Since 2026-10-20, haynes-ops #4141, it also holds v1's OPERATOR tier cluster-wide; see "D-19, workbench operator tier".)* |
+| `dev-agents/dev-env-workbench` | Role in `dev-agents`: pods get, list; `pods/exec` create. | Tom's IDE. Also the one account a profile may run sessions as (`serviceAccount: dev-env-workbench`, Story110 T24; since 2026-10-31 a named coordinator identity, the row below, may be named too): a session in it has the Role above and nothing cluster-wide, so it can run `agent-run login`, `pair` and `attach` (`DEV_ENV_WORKBENCH=1` lifts agent-run's own refusal; RBAC is the real gate). The operator treats a token bound to such a session's pod as that session, so it heartbeats; an unbound token is the client's. Hold pods never use it. *(Since 2026-10-20, haynes-ops #4141, it also holds v1's OPERATOR tier cluster-wide; see "D-19, workbench operator tier".)* |
+| `dev-agents/dev-env-coordinator-<name>` (not provisioned) | Planned by DESIGN-042 P6: exactly `dev-env-agent`'s bindings, under `dev-env-agent-guard`. | A named coordinator identity (2026-10-31, S4, source only): a profile other than the default may run its sessions as it. Only Tom, a client or a top-level workbench session launches such a session, only a Claude one, one at a time per account, and its children run on the default profile. A token bound to such a session's pod is that session; any other token of it gets a 403. It is never a client or a coordinator host. See "D-19, named coordinator identity". |
 | `dev-env-system/dev-env-human` | none (token audience only) | Exists so Tom's laptop can mint an API token (D-05). |
 | tool pods (`dev-tools`) | none: no ServiceAccount token is mounted | As blender-authoring and audio-authoring today. |
 
@@ -3423,6 +3498,8 @@ namespace with its own Roles. Same words, different things; the ClusterRole keep
 its name because a ClusterRoleBinding's `roleRef` cannot change.
 
 ### 6.12 Access: no prompts in the pod, control at the platform
+
+**S6 source amendment, 2026-10-31 (ADR-014).** Attested maintenance requires the live requester's explicit depth label `0` and a creator in `--attested-maintenance-creators`; an unset list follows the configured maintenance human ServiceAccount, and an explicitly empty list admits none. Children, missing parents and missing or malformed depth fail closed. Approval, executor creation and active rechecks share this eligibility rule. Creator removal ends the approval and uses the termination-proof cleanup tail. This grants no runtime activation and does not require a human approval actor. See [ADR-014](../adrs/014-attested-maintenance-creators.md).
 
 Tom (2026-10-06): agents should skip permission prompts for their own vendor's tools,
 as `--dangerously-skip-permissions` does now, while he keeps control over cluster

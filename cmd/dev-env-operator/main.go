@@ -322,7 +322,7 @@ func parseFlags(args []string) (options, error) {
 			}
 		}
 	}
-	policy := apiserver.Policy{Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace, SessionServiceAccount: controller.ServiceAccountName, WorkbenchServiceAccount: templates.WorkbenchServiceAccount}
+	policy := apiserver.Policy{Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace, SessionServiceAccount: controller.ServiceAccountName, WorkbenchServiceAccount: templates.WorkbenchServiceAccount, NamedCoordinatorIdentities: true}
 	var err error
 	o.coordinatorHosts, err = apiserver.ParseCoordinatorHosts(*hosts, policy)
 	if err != nil {
@@ -331,8 +331,13 @@ func parseFlags(args []string) (options, error) {
 	if err := apiserver.ValidatePortalCaller(apiserver.Policy{
 		Human: o.humanSA, Clients: o.clientSAs, SessionNamespace: o.sessionNamespace,
 		SessionServiceAccount: controller.ServiceAccountName, WorkbenchServiceAccount: templates.WorkbenchServiceAccount,
-		Coordinators: o.coordinatorHosts,
+		NamedCoordinatorIdentities: true, Coordinators: o.coordinatorHosts,
 	}); err != nil {
+		return o, err
+	}
+	// A named coordinator identity is a session's account (DESIGN-042 6.4):
+	// --human-service-account and --client-service-accounts may not name one.
+	if err := apiserver.ValidateNamedCoordinatorPolicy(policy); err != nil {
 		return o, err
 	}
 	if *catalog != "" || *cloneOwner != "" {
@@ -834,7 +839,10 @@ func run(args []string) error {
 				SessionNamespace:        o.sessionNamespace,
 				SessionServiceAccount:   controller.ServiceAccountName,
 				WorkbenchServiceAccount: templates.WorkbenchServiceAccount,
-				CoordinatorEnabled:      o.coordinatorEnabled, Coordinators: o.coordinatorHosts,
+				// A session pod may run as dev-env-coordinator-<name> only when
+				// a profile names it (DESIGN-042 6.4, S4); none does until P6.
+				NamedCoordinatorIdentities: true,
+				CoordinatorEnabled:         o.coordinatorEnabled, Coordinators: o.coordinatorHosts,
 				PortalReaderEnabled: o.portalReaderEnabled,
 				// declare-activity's declarations live beside the operator
 				// (D-66).

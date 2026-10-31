@@ -273,6 +273,73 @@ class CheckerTests(unittest.TestCase):
         self.assertIs(after_start["transportEstablished"], False)
         self.assertEqual(after_start["helperFailed"], "provider-error-initialize")
 
+    def test_enriched_frame_failure_round_trip_from_the_session_client(self):
+        # Build each receipt exactly as cursor-acp-session.py's main() does, from its own FrameRefusal.
+        cases = [
+            (ACP.FrameRefusal("frame-too-large", source="provider", byte_count=ACP.MAX_PROVIDER_FRAME + 1, limit=ACP.MAX_PROVIDER_FRAME),
+             {"detail": "frame-too-large", "source": "provider", "byteCount": ACP.MAX_PROVIDER_FRAME + 1, "limit": ACP.MAX_PROVIDER_FRAME}),
+            (ACP.FrameRefusal("frame-too-large", source="coordinator", byte_count=ACP.MAX_FRAME + 1, limit=ACP.MAX_FRAME),
+             {"detail": "frame-too-large", "source": "coordinator", "byteCount": ACP.MAX_FRAME + 1, "limit": ACP.MAX_FRAME}),
+            (ACP.FrameRefusal("frame-truncated-eof", source="provider", byte_count=17),
+             {"detail": "frame-truncated-eof", "source": "provider", "byteCount": 17}),
+            (ACP.FrameRefusal("frame-malformed-json", source="coordinator"), {"detail": "frame-malformed-json", "source": "coordinator"}),
+            (ACP.FrameRefusal("frame-duplicate-key", source="provider"), {"detail": "frame-duplicate-key", "source": "provider"}),
+        ]
+        for error, expected in cases:
+            with self.subTest(detail=expected["detail"], source=expected["source"]):
+                event = {"event": "failed", "reason": str(error)}
+                event.update(error.metadata)
+                out = self.classify(receipt(starting(), event))
+                self.assertEqual(out["stages"], ["helper-failed"])
+                self.assertEqual(out["helperFailed"], "invalid-frame")
+                self.assertEqual(out["helperFailureDetail"], expected)
+                self.assertIs(out["transportEstablished"], False)
+        self.assertEqual(set(ACP.FRAME_SOURCES.values()), CHK.FRAME_SOURCES)
+        plain = self.classify(line({"event": "failed", "reason": "invalid-frame"}))
+        self.assertNotIn("helperFailureDetail", plain)
+        # source is optional: a receipt written before it existed still passes.
+        before = self.classify(line({"event": "failed", "reason": "invalid-frame", "detail": "frame-malformed-json"}))
+        self.assertEqual(before["helperFailureDetail"], {"detail": "frame-malformed-json"})
+
+    def test_enriched_frame_failure_refusals(self):
+        too_large = {"event": "failed", "reason": "invalid-frame", "detail": "frame-too-large", "byte_count": 70000, "limit": 65536}
+        cases = [
+            ("unknown-field", dict(too_large, frame="PRIVATE_FRAME"), "unexpected-field"),
+            ("detail-on-other-reason", {"event": "failed", "reason": "invalid-input", "detail": "frame-too-large"}, "unexpected-field"),
+            ("count-without-detail", {"event": "failed", "reason": "invalid-frame", "byte_count": 5}, "unexpected-field"),
+            ("unknown-detail", dict(too_large, detail="PRIVATE detail"), "invalid-failure-detail"),
+            ("bool-count", dict(too_large, byte_count=True), "invalid-failure-detail"),
+            ("string-count", dict(too_large, byte_count="70000"), "invalid-failure-detail"),
+            ("zero-count", {"event": "failed", "reason": "invalid-frame", "detail": "frame-truncated-eof", "byte_count": 0}, "invalid-failure-detail"),
+            ("huge-count", dict(too_large, byte_count=(1 << 31) + 1), "invalid-failure-detail"),
+            ("too-large-without-limit", {"event": "failed", "reason": "invalid-frame", "detail": "frame-too-large", "byte_count": 70000}, "invalid-failure-detail"),
+            ("not-over-limit", dict(too_large, byte_count=65536), "invalid-failure-detail"),
+            ("limit-on-eof", {"event": "failed", "reason": "invalid-frame", "detail": "frame-truncated-eof", "byte_count": 9, "limit": 65536}, "invalid-failure-detail"),
+            ("eof-without-count", {"event": "failed", "reason": "invalid-frame", "detail": "frame-truncated-eof"}, "invalid-failure-detail"),
+            ("count-on-malformed", {"event": "failed", "reason": "invalid-frame", "detail": "frame-malformed-json", "byte_count": 9}, "invalid-failure-detail"),
+            # Unhashable kinds were a TypeError crash before the type check.
+            ("detail-list", dict(too_large, detail=[]), "invalid-failure-detail"),
+            ("detail-object", dict(too_large, detail={}), "invalid-failure-detail"),
+            ("detail-null", dict(too_large, detail=None), "invalid-failure-detail"),
+            ("source-unknown", dict(too_large, source="PRIVATE source"), "invalid-failure-detail"),
+            ("source-internal-name", dict(too_large, source="decision"), "invalid-failure-detail"),
+            ("source-list", dict(too_large, source=["provider"]), "invalid-failure-detail"),
+            ("source-object", dict(too_large, source={}), "invalid-failure-detail"),
+            ("source-null", dict(too_large, source=None), "invalid-failure-detail"),
+            ("source-without-detail", {"event": "failed", "reason": "invalid-frame", "source": "provider"}, "unexpected-field"),
+            ("source-on-other-reason", {"event": "failed", "reason": "invalid-input", "source": "provider"}, "unexpected-field"),
+        ]
+        for name, event, expected in cases:
+            with self.subTest(case=name):
+                self.assertEqual(self.reason(line(event)), expected)
+        for name in ("detail-list", "detail-object", "source-list", "source-object"):
+            event = next(event for case, event, _ in cases if case == name)
+            with self.subTest(cli=name):
+                code, output = run_main(["-"], stdin=line(event).encode())
+                self.assertEqual(code, 2)
+                self.assertEqual(output, '{"event":"refused","reason":"invalid-failure-detail"}\n')
+                self.assertNotIn("Traceback", output)
+
     def test_refusals_for_malformed_duplicate_stale_and_cross_session(self):
         cases = [
             ("empty", "", "empty-input"),

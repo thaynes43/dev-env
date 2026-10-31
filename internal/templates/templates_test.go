@@ -305,6 +305,89 @@ func TestLifecycle(t *testing.T) {
 	}
 }
 
+// A profile may also name a named coordinator identity (DESIGN-042 6.4, S4):
+// dev-env-coordinator-<name>, <name> a DNS-1123 label short enough that the
+// account is one too. Every other spelling is refused.
+func TestProfileMayNameACoordinatorIdentity(t *testing.T) {
+	longest := CoordinatorServiceAccountPrefix + strings.Repeat("a", MaxCoordinatorNameLength)
+	if len(longest) != validation.DNS1123LabelMaxLength {
+		t.Fatalf("the longest account is %d characters", len(longest))
+	}
+	for _, sa := range []string{"dev-env-coordinator-lead", "dev-env-coordinator-l", "dev-env-coordinator-lead-2", longest} {
+		doc := strings.Replace(example(t), "  dev:\n    envFrom:", "  dev:\n    serviceAccount: "+sa+"\n    envFrom:", 1)
+		tm, err := parse(t, doc)
+		if err != nil {
+			t.Fatalf("%s: %v", sa, err)
+		}
+		if _, p, err := tm.Profile("dev"); err != nil || p.ServiceAccount != sa {
+			t.Errorf("dev: %+v %v", p, err)
+		}
+		if _, p, err := tm.Profile("full"); err != nil || p.ServiceAccount != "" {
+			t.Errorf("full: %+v %v", p, err)
+		}
+	}
+	for _, sa := range []string{
+		"dev-env-coordinator-",
+		"dev-env-coordinator",
+		"dev-env-coordinatorlead",
+		"dev-env-coordinator-Lead",
+		"dev-env-coordinator--lead",
+		"dev-env-coordinator-lead-",
+		"dev-env-coordinator-lead.x",
+		"dev-env-coordinator-lead_x",
+		"x-dev-env-coordinator-lead",
+		"dev-agents/dev-env-coordinator-lead",
+		"dev-env-agent",
+		longest + "a",
+	} {
+		doc := strings.Replace(example(t), "  dev:\n    envFrom:", "  dev:\n    serviceAccount: \""+sa+"\"\n    envFrom:", 1)
+		_, err := parse(t, doc)
+		if err == nil || !strings.Contains(err.Error(), "profiles.dev.serviceAccount: only") {
+			t.Errorf("%q: want a refusal, got %v", sa, err)
+		}
+	}
+}
+
+// The default profile may not name a coordinator identity: a create that names no
+// profile, a coordinator session's child among them, must never launch one.
+func TestDefaultProfileMayNotNameACoordinatorIdentity(t *testing.T) {
+	doc := strings.Replace(example(t), "  full:\n", "  full:\n    serviceAccount: dev-env-coordinator-lead\n", 1)
+	if !strings.Contains(doc, "defaultProfile: full") || !strings.Contains(doc, "serviceAccount: dev-env-coordinator-lead") {
+		t.Fatal("the example changed shape")
+	}
+	if _, err := parse(t, doc); err == nil || !strings.Contains(err.Error(), "profiles.full.serviceAccount: the default profile may not name a coordinator identity") {
+		t.Fatalf("want a refusal, got %v", err)
+	}
+	// The workbench account stays allowed there, as before.
+	doc = strings.Replace(example(t), "  full:\n", "  full:\n    serviceAccount: dev-env-workbench\n", 1)
+	if _, err := parse(t, doc); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIsCoordinatorServiceAccount(t *testing.T) {
+	for sa, want := range map[string]bool{
+		"dev-env-coordinator-lead":            true,
+		"dev-env-coordinator-a1":              true,
+		"dev-env-coordinator-":                false,
+		"dev-env-coordinator-1-":              false,
+		"dev-env-coordinator-UP":              false,
+		"Dev-env-coordinator-lead":            false,
+		" dev-env-coordinator-lead":           false,
+		"dev-env-coordinator-lead ":           false,
+		"dev-env-coordinator-a.b":             false,
+		"dev-env-workbench":                   false,
+		"dev-agents:dev-env-coordinator-lead": false,
+		"":                                    false,
+		CoordinatorServiceAccountPrefix + strings.Repeat("b", MaxCoordinatorNameLength):   true,
+		CoordinatorServiceAccountPrefix + strings.Repeat("b", MaxCoordinatorNameLength+1): false,
+	} {
+		if got := IsCoordinatorServiceAccount(sa); got != want {
+			t.Errorf("IsCoordinatorServiceAccount(%q) = %v, want %v", sa, got, want)
+		}
+	}
+}
+
 // A profile may name the workbench account, and no other (D-46).
 func TestProfileMayNameTheWorkbenchAccount(t *testing.T) {
 	doc := strings.Replace(example(t), "  dev:\n    envFrom:", "  dev:\n    serviceAccount: dev-env-workbench\n    envFrom:", 1)

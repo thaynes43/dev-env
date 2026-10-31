@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/templates"
 )
 
 // callerKind is the class a caller's identity falls in (D-46). The class decides
@@ -66,6 +67,13 @@ type Policy struct {
 	// It is also a trusted client: a token bound to a session's pod speaks for that
 	// session, any other token of it speaks for the client. Empty: no such pod.
 	WorkbenchServiceAccount string
+	// NamedCoordinatorIdentities lets a session pod also run as a named
+	// coordinator identity, dev-env-coordinator-<name> in SessionNamespace
+	// (templates.IsCoordinatorServiceAccount; DESIGN-042 6.4, S4). A token of such
+	// an account is a session caller only when it is bound to a pod that runs as
+	// it and that its session controls. It is never a client or a coordinator
+	// host, and any other token of it is refused. Off: no such account calls.
+	NamedCoordinatorIdentities bool
 	// ActivityNamespace holds the Activity declarations (dev-env-system, D-66).
 	// Empty answers /v1/activities with 503.
 	ActivityNamespace string
@@ -129,6 +137,11 @@ func (s *Server) resolveCaller(ctx context.Context, id Identity) (*caller, error
 		return &caller{kind: kindClient, identity: id, parent: ref}, nil
 	case id.Namespace == s.Policy.SessionNamespace && id.ServiceAccount == s.Policy.SessionServiceAccount:
 		return s.resolveSession(ctx, id)
+	case s.namedCoordinatorIdentity(id):
+		// After the clients, so a configured client keeps its class, and
+		// before the coordinator hosts, which may not name such an account
+		// (ParseCoordinatorHosts). It is a session or nothing.
+		return s.resolveNamedCoordinatorSession(ctx, id)
 	}
 	if s.Policy.CoordinatorEnabled {
 		for _, host := range s.Policy.Coordinators {
@@ -158,16 +171,51 @@ func ValidatePortalCaller(p Policy) error {
 }
 
 // sessionPodAccount reports whether a session pod may run as the named
-// ServiceAccount: the ordinary session account, or the workbench account when the
-// policy names it. The coordination routes recheck the live Pod with it, so a
-// workbench session is the session it is there too, exactly as it is for the
+// ServiceAccount: the ordinary session account, the workbench account when the
+// policy names it, or a named coordinator identity when the policy allows them.
+// The coordination routes recheck the live Pod with it, so a workbench or named
+// coordinator session is the session it is there too, exactly as it is for the
 // heartbeat (resolveCaller). The Pod's account must also be the one the token
 // carries, so the fence stays self-contained. The account alone grants nothing:
 // the live Pod must still be controlled by the caller's own AgentSession.
 func (s *Server) sessionPodAccount(name string, c *caller) bool {
 	return name == c.identity.ServiceAccount &&
 		(name == s.Policy.SessionServiceAccount ||
-			(s.Policy.WorkbenchServiceAccount != "" && name == s.Policy.WorkbenchServiceAccount))
+			(s.Policy.WorkbenchServiceAccount != "" && name == s.Policy.WorkbenchServiceAccount) ||
+			(s.Policy.NamedCoordinatorIdentities && templates.IsCoordinatorServiceAccount(name)))
+}
+
+// namedCoordinatorIdentity reports whether id is a named coordinator identity's
+// token (DESIGN-042 6.4, S4): the policy allows them, and the account is
+// dev-env-coordinator-<name> in the session namespace. Any other namespace, and
+// any name that is not exactly that shape, is not one.
+func (s *Server) namedCoordinatorIdentity(id Identity) bool {
+	return s.Policy.NamedCoordinatorIdentities && s.Policy.SessionNamespace != "" &&
+		id.Namespace == s.Policy.SessionNamespace && templates.IsCoordinatorServiceAccount(id.ServiceAccount)
+}
+
+// resolveNamedCoordinatorSession finds the session a named coordinator
+// identity's token speaks for. It is resolveSession, the rule a workbench
+// session's pod meets, plus two checks: the live Pod runs as the token's own
+// account, and the session carries the API's admission record for that account
+// (templates.CoordinatorIdentityLabel). So the token speaks only for a session
+// the API admitted and whose pod the operator built as that account
+// (controller.buildPod), never for an ordinary session's pod. There is no client
+// fallback: a token bound to no pod, or to a pod no session controls, is refused.
+// No phase is checked, as for every session: heartbeats go on while it is
+// Pending, Idle or Draining.
+func (s *Server) resolveNamedCoordinatorSession(ctx context.Context, id Identity) (*caller, error) {
+	c, err := s.resolveSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if c.pod.Spec.ServiceAccountName != id.ServiceAccount {
+		return nil, forbidden("pod %s does not run as %s", c.pod.Name, id.serviceAccountRef())
+	}
+	if c.session.Labels[templates.CoordinatorIdentityLabel] != id.ServiceAccount {
+		return nil, forbidden("session %s was not admitted to run as %s", c.session.Name, id.serviceAccountRef())
+	}
+	return c, nil
 }
 
 // isWorkbenchSession reports whether c is a session whose pod runs as the

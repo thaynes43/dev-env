@@ -516,3 +516,6 @@ ONE final focused correction with the three failed preparations preserved;
 Q-24 routing remains pending. Claude reviews remain optional while unavailable.
 *(Historical: Q-26's correction is complete and Ops #3824 was accepted; see
 decision 59.)*
+
+
+**Decision 93 — 2026-10-31, S6 source only.** [ADR-014](adrs/014-attested-maintenance-creators.md) restricts self-attested maintenance to a live, explicit depth-0 session launched by a listed creator. Unset follows the configured maintenance human SA; empty admits none. Removal revokes through the existing stop-proof tail. Human and delegate decisions remain separate. Source tests cover the exact 223503 shape and refusals; installation and usable acceptance remain held (OpenProject #330 / #233).
