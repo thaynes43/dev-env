@@ -273,6 +273,48 @@ class CheckerTests(unittest.TestCase):
         self.assertIs(after_start["transportEstablished"], False)
         self.assertEqual(after_start["helperFailed"], "provider-error-initialize")
 
+    def test_enriched_frame_failure_round_trip_from_the_session_client(self):
+        # Build each receipt exactly as cursor-acp-session.py's main() does, from its own FrameRefusal.
+        cases = [
+            (ACP.FrameRefusal("frame-too-large", byte_count=ACP.MAX_PROVIDER_FRAME + 1, limit=ACP.MAX_PROVIDER_FRAME),
+             {"detail": "frame-too-large", "byteCount": ACP.MAX_PROVIDER_FRAME + 1, "limit": ACP.MAX_PROVIDER_FRAME}),
+            (ACP.FrameRefusal("frame-truncated-eof", byte_count=17), {"detail": "frame-truncated-eof", "byteCount": 17}),
+            (ACP.FrameRefusal("frame-malformed-json"), {"detail": "frame-malformed-json"}),
+            (ACP.FrameRefusal("frame-duplicate-key"), {"detail": "frame-duplicate-key"}),
+        ]
+        for error, expected in cases:
+            with self.subTest(detail=expected["detail"]):
+                event = {"event": "failed", "reason": str(error)}
+                event.update(error.metadata)
+                out = self.classify(receipt(starting(), event))
+                self.assertEqual(out["stages"], ["helper-failed"])
+                self.assertEqual(out["helperFailed"], "invalid-frame")
+                self.assertEqual(out["helperFailureDetail"], expected)
+                self.assertIs(out["transportEstablished"], False)
+        plain = self.classify(line({"event": "failed", "reason": "invalid-frame"}))
+        self.assertNotIn("helperFailureDetail", plain)
+
+    def test_enriched_frame_failure_refusals(self):
+        too_large = {"event": "failed", "reason": "invalid-frame", "detail": "frame-too-large", "byte_count": 70000, "limit": 65536}
+        cases = [
+            ("unknown-field", dict(too_large, frame="PRIVATE_FRAME"), "unexpected-field"),
+            ("detail-on-other-reason", {"event": "failed", "reason": "invalid-input", "detail": "frame-too-large"}, "unexpected-field"),
+            ("count-without-detail", {"event": "failed", "reason": "invalid-frame", "byte_count": 5}, "unexpected-field"),
+            ("unknown-detail", dict(too_large, detail="PRIVATE detail"), "invalid-failure-detail"),
+            ("bool-count", dict(too_large, byte_count=True), "invalid-failure-detail"),
+            ("string-count", dict(too_large, byte_count="70000"), "invalid-failure-detail"),
+            ("zero-count", {"event": "failed", "reason": "invalid-frame", "detail": "frame-truncated-eof", "byte_count": 0}, "invalid-failure-detail"),
+            ("huge-count", dict(too_large, byte_count=(1 << 31) + 1), "invalid-failure-detail"),
+            ("too-large-without-limit", {"event": "failed", "reason": "invalid-frame", "detail": "frame-too-large", "byte_count": 70000}, "invalid-failure-detail"),
+            ("not-over-limit", dict(too_large, byte_count=65536), "invalid-failure-detail"),
+            ("limit-on-eof", {"event": "failed", "reason": "invalid-frame", "detail": "frame-truncated-eof", "byte_count": 9, "limit": 65536}, "invalid-failure-detail"),
+            ("eof-without-count", {"event": "failed", "reason": "invalid-frame", "detail": "frame-truncated-eof"}, "invalid-failure-detail"),
+            ("count-on-malformed", {"event": "failed", "reason": "invalid-frame", "detail": "frame-malformed-json", "byte_count": 9}, "invalid-failure-detail"),
+        ]
+        for name, event, expected in cases:
+            with self.subTest(case=name):
+                self.assertEqual(self.reason(line(event)), expected)
+
     def test_refusals_for_malformed_duplicate_stale_and_cross_session(self):
         cases = [
             ("empty", "", "empty-input"),

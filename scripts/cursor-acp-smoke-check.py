@@ -19,6 +19,9 @@ MAX_UNSUPPORTED = 256
 LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REASON = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+# Framing detail on an "invalid-frame" failure: fixed kinds and byte counts only.
+FRAME_DETAILS = frozenset({"frame-too-large", "frame-malformed-json", "frame-duplicate-key", "frame-truncated-eof"})
+MAX_FRAME_COUNT = 1 << 31
 PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
 DECISION_KINDS = frozenset({"question", "permission"})
 # Mirrors cursor-acp-session.py permission_context(); a test pins these to its constants.
@@ -63,6 +66,26 @@ def bounded_text(value, maximum):
     except UnicodeError:
         return False
     return 0 < size <= maximum
+
+
+def frame_detail(event):
+    """Validate an invalid-frame detail: a fixed kind plus bounded byte counts, never text."""
+    detail = event["detail"]
+    if detail not in FRAME_DETAILS:
+        raise Refusal("invalid-failure-detail")
+    counted = detail in ("frame-too-large", "frame-truncated-eof")
+    if ("byte_count" in event) != counted or ("limit" in event) != (detail == "frame-too-large"):
+        raise Refusal("invalid-failure-detail")
+    out = {"detail": detail}
+    for key, name in (("byte_count", "byteCount"), ("limit", "limit")):
+        if key in event:
+            value = event[key]
+            if type(value) is not int or not 0 < value <= MAX_FRAME_COUNT:
+                raise Refusal("invalid-failure-detail")
+            out[name] = value
+    if detail == "frame-too-large" and out["byteCount"] <= out["limit"]:
+        raise Refusal("invalid-failure-detail")
+    return out
 
 
 def exact(event, keys):
@@ -303,6 +326,7 @@ class Checker:
         self.unsupported = 0
         self.stop_reason = None
         self.helper_failed = None
+        self.helper_failure_detail = None
         self.prompt_after = False
         self.prompt_without = False
 
@@ -441,10 +465,15 @@ class Checker:
             self.prompt_without = True
 
     def on_failed(self, event):
-        exact(event, ("event", "reason"))
+        keys = ("event", "reason")
+        if event.get("reason") == "invalid-frame" and "detail" in event:
+            keys += ("detail",) + tuple(k for k in ("byte_count", "limit") if k in event)
+        exact(event, keys)
         reason = event["reason"]
         if not isinstance(reason, str) or REASON.fullmatch(reason) is None:
             raise Refusal("invalid-reason")
+        if "detail" in event:
+            self.helper_failure_detail = frame_detail(event)
         self.helper_failed = reason
         self.terminal = True
 
@@ -491,6 +520,8 @@ class Checker:
             out["stopReason"] = self.stop_reason
         if self.helper_failed is not None:
             out["helperFailed"] = self.helper_failed
+        if self.helper_failure_detail is not None:
+            out["helperFailureDetail"] = self.helper_failure_detail
         if self.questions_seen:
             out["questionOrigin"] = "provider-request"
         if self.decisions_seen:

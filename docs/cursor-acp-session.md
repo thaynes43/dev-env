@@ -263,11 +263,17 @@ for Grok run `ded6cc77` (GROK-S3) cannot prove which framing cause occurred.
 The most likely cause is a valid update larger than 64 KiB; this remains a
 hypothesis, not a recovered or reproduced provider frame.
 
-The existing smoke checker accepts only `event` and `reason` on a `failed`
-receipt. It rejects these enriched framing failure receipts with
-`unexpected-field`; updating that checker is outside this bounded fix.
-Successful receipt streams and generic failure receipts keep their existing
-checker behavior.
+The smoke checker (`scripts/cursor-acp-smoke-check.py`) accepts these
+enriched receipts only on `reason: "invalid-frame"`. It checks the `detail` kind
+against the four fixed kinds. `byte_count` is required for `frame-too-large`
+and `frame-truncated-eof`, and forbidden otherwise. `limit` is required only
+for `frame-too-large`, where `byte_count` must exceed it. Every count is a
+positive integer up to 2^31. Any other field, or a detail on another reason,
+is still `unexpected-field`; a malformed detail is `invalid-failure-detail`.
+The verdict reports `helperFailureDetail` as kind and counts only. A test
+builds each receipt from the client's own `FrameRefusal`, the way `main()`
+does, and round-trips it through the checker. Successful receipt streams and
+generic failure receipts keep their existing checker behavior.
 
 Coordinator receipt writes and provider input writes are nonblocking and share
 the same deadline. If the coordinator stops reading stdout, the failure receipt
