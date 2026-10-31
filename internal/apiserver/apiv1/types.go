@@ -253,13 +253,14 @@ type Session struct {
 	Node     string `json:"node,omitempty"`
 	Revision string `json:"revision,omitempty"`
 	// Outdated is set when the pod runs an older template revision.
-	Outdated         bool              `json:"outdated,omitempty"`
-	AgentStatus      *AgentStatus      `json:"agentStatus,omitempty"`
-	RemoteControl    *RemoteControl    `json:"remoteControl,omitempty"`
-	Outcome          *Outcome          `json:"outcome,omitempty"`
-	Usage            *Usage            `json:"usage,omitempty"`
-	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
-	UsageConflict    *UsageConflict    `json:"usageConflict,omitempty"`
+	Outdated         bool                  `json:"outdated,omitempty"`
+	AgentStatus      *AgentStatus          `json:"agentStatus,omitempty"`
+	RemoteControl    *RemoteControl        `json:"remoteControl,omitempty"`
+	Outcome          *Outcome              `json:"outcome,omitempty"`
+	Usage            *Usage                `json:"usage,omitempty"`
+	UsageObservation *UsageObservation     `json:"usageObservation,omitempty"`
+	TaskOutcome      *protocol.TaskOutcome `json:"taskOutcome,omitempty"`
+	UsageConflict    *UsageConflict        `json:"usageConflict,omitempty"`
 	// CapturedUsage is set only for Dev-Env-Usage-Capture: direct-v1. It is not
 	// a usage total. Nil means this response did not carry the receipt view.
 	CapturedUsage *CapturedUsage `json:"capturedUsage,omitempty"`

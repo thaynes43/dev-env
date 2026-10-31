@@ -265,6 +265,20 @@ and `make check-layout` (run in CI beside `check-generated`) fails without one.
 
 ## How work happens here
 
+For a headless task on an image with outcome retention, write
+`~/work/<session>.outcome.json` before returning. Use only `prURLs` (up to three
+`https://github.com/thaynes43/<repo>/pull/<number>` URLs), `headSHAs` (up to three
+40-hex heads), and `summary` (1–200 printable characters, one line, none above
+U+FFFF; Python: `json.dumps(..., ensure_ascii=False)`).
+The entire regular file must be at most 2048 bytes; PR URLs are capped at 256
+bytes. Write a temporary file in the same directory and rename it into place.
+Missing or invalid files publish nothing. The first initial-task exit snapshot
+is retained immutably in Session status and shown by `agent-run show` after pod
+reclaim; no later edit or replacement pod can update it. Keep secrets, prompts
+and transcripts out. See [the format and example](docs/workflow-guide.md#retain-a-tasks-pr-and-handoff-after-pod-reclaim).
+This is source guidance; installation requires the matching agent/operator and
+AgentSession CRD rollout.
+
 - **Docs first.** A change in behaviour starts in the saga: ADR for the decision,
   design for the how, a backlog plan for the steps, then code. Docs change in the same
   PR as the behaviour they describe. An Accepted ADR is never edited; a new ADR

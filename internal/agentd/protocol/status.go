@@ -99,6 +99,7 @@ type Status struct {
 	Agent            AgentState        `json:"agent"`
 	Usage            *Usage            `json:"usage,omitempty"`
 	UsageObservation *UsageObservation `json:"usageObservation,omitempty"`
+	TaskOutcome      *TaskOutcome      `json:"taskOutcome,omitempty"`
 	// ConversationUsage is the registered interactive conversation's cumulative
 	// usage (DESIGN-029). It is absent for a task session, for an agentd that does
 	// not measure it, and whenever the measurement is Unknown. An operator that

@@ -559,6 +559,10 @@ type AgentSessionStatus struct {
 	// +optional
 	Usage *UsageStatus `json:"usage,omitempty"`
 
+	// TaskOutcome is the immutable task-authored exit snapshot.
+	// +optional
+	TaskOutcome *TaskOutcomeStatus `json:"taskOutcome,omitempty"`
+
 	// UsageObservation retains one explicitly attributed initial CLI snapshot.
 	// +optional
 	UsageObservation *UsageObservationStatus `json:"usageObservation,omitempty"`
@@ -1654,6 +1658,7 @@ type RescuedRef struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.privateHistory) || (has(self.status) && has(self.status.privateHistory))",message="private history retention cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.capturedUsage) || (has(self.status) && has(self.status.capturedUsage))",message="captured usage ledger cannot be erased with status"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.usageObservation) || (has(self.status) && has(self.status.usageObservation))",message="original usage observation cannot be erased"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.taskOutcome) || (has(self.status) && has(self.status.taskOutcome))",message="original task outcome cannot be erased"
 type AgentSession struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

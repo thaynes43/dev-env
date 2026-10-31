@@ -60,6 +60,9 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	launched := readJSONFile(s.statePath(launchFile), &first) == nil
 	var res taskResult
 	finished := readJSONFile(s.statePath(resultFile), &res) == nil
+	if finished && launched && sess.Mode == protocol.ModeTask && res.TaskOutcome != nil && res.TaskOutcome.Validate() == nil && res.TaskOutcome.SessionUID == sess.SessionUID && res.TaskOutcome.PodUID == s.PodUID {
+		st.TaskOutcome = res.TaskOutcome
+	}
 	// Before the agent step completes, missing credentials and previous process
 	// state say nothing about this boot's agent. The keeper's Claude projection
 	// is applied by startAgent, not by rendering.

@@ -677,6 +677,61 @@ result event. Phase still counts it as Failed: `agent-run list --state Failed`
 and the `dev_env_sessions{phase="Failed"}` metric include a canary that
 succeeded. Read the task result, not those counts, for the outcome. See [the task result rule](../.agents/sagas/distributed-dev-env/designs/021-canary-cli.md#the-task-result-of-an-ended-session--2026-10-12-history-04-174).
 
+### Retain a task's PR and handoff after pod reclaim
+
+On images with task outcome retention (#320), a headless task can leave a small
+result that `agent-run show NAME` reads from Session status after its pod has
+been reclaimed or suspended. It requires no running pod or HOME access.
+Before returning, atomically write `~/work/<session>.outcome.json`:
+
+```sh
+# Replace example-session and the example refs with this task's actual values.
+cat > ~/work/example-session.outcome.json.tmp <<'JSON'
+{"prURLs":["https://github.com/thaynes43/dev-env/pull/123"],"headSHAs":["0123456789abcdef0123456789abcdef01234567"],"summary":"Ready for lead review; focused tests passed"}
+JSON
+mv ~/work/example-session.outcome.json.tmp ~/work/example-session.outcome.json
+```
+
+The file must be a regular file, at most 2048 bytes, containing exactly one JSON
+object with only these fields:
+
+- `prURLs`: optional array of at most three URLs matching
+  `^https://github\.com/thaynes43/(?:\.?[A-Za-z0-9_-][A-Za-z0-9._-]*|\.\.[A-Za-z0-9._-]+)/pull/[0-9]{1,6}$`,
+  each at most 256 bytes. No off-org links, `.` or `..` repository segments,
+  queries, fragments or trailing paths.
+- `headSHAs`: optional array of at most three 40-character hexadecimal commit SHAs.
+- `summary`: required nonempty line of at most 200 printable characters from the
+  Basic Multilingual Plane that Unicode 15.0 already assigned. Emoji and other
+  characters above U+FFFF are refused: the Kubernetes API server checks this
+  field with older Unicode tables than the operator, so the operator accepts
+  only characters both agree on.
+
+A Python writer should use `json.dumps(record, ensure_ascii=False)`, so each
+non-ASCII character takes its 2 or 3 UTF-8 bytes rather than a 6-byte `\uXXXX`
+escape and a 200-character summary stays inside 2048 bytes.
+
+Agentd validates the complete file at the initial task's exit and retains that
+snapshot with the original Session/Pod identity. Missing, malformed, oversized,
+unknown-field or otherwise invalid files publish nothing; no partial text is
+copied. Symlinks and special files are refused. Never put prompts, transcripts
+or secrets in this record. Outcomes are task-authored claims, not merge,
+deployment or acceptance evidence.
+
+The original pod sends the snapshot through the authenticated heartbeat. The
+operator validates it again and stores the first record immutably at
+`status.taskOutcome`. Repeated heartbeats, later edits and other pods cannot
+replace it. `agent-run show` prints its summary, PR URLs and heads in every
+phase; JSON output includes `taskOutcome`. No file means no outcome row.
+The portal's separately versioned strict reader is unchanged in this slice.
+
+Rollout: this change adds a CRD field and runs `make generate`. Copy the generated
+AgentSession CRD to haynes-ops **before** pinning the new operator; install the
+matching agent and CLI to publish/read outcomes. Source tests do not prove an
+installed rollout or runtime acceptance. Roll back with care, as for
+`usageObservation`: once any Session holds `status.taskOutcome`, an older
+operator that writes the whole status without that field is refused by the
+CRD's erasure rule for that Session.
+
 ### Read a fixed probe's retained result
 
 For a separately reviewed read, after accepting the original HTTP201 receipt,

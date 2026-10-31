@@ -132,6 +132,11 @@ func (s *Server) heartbeat(ctx context.Context, w http.ResponseWriter, r *http.R
 	if err := s.captureChildUsage(ctx, &sess, c.pod, st.UsageObservation); err != nil {
 		s.Log.Error(err, "capture child usage", "session", key.Name)
 	}
+	// The task outcome comes last and is best-effort too: liveness and child
+	// usage never wait on it, and agentd offers the same snapshot next beat.
+	if err := s.recordTaskOutcome(ctx, &sess, c.pod, st); err != nil {
+		s.Log.Error(err, "record task outcome", "session", key.Name)
+	}
 	return http.StatusNoContent, nil, nil
 }
 

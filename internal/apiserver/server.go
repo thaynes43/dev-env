@@ -390,6 +390,9 @@ func (s *Server) serve(rt route) http.Handler {
 			if !providerAttribution(r) {
 				body = legacyUsageShape(body)
 			}
+			if r.Header.Get(apiv1.TaskOutcomeHeader) != apiv1.TaskOutcomeV1 {
+				body = withoutTaskOutcome(body)
+			}
 			if body == nil {
 				w.WriteHeader(status)
 			} else {

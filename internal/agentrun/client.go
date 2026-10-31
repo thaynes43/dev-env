@@ -196,6 +196,7 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	// This client reads provider-reported usage and attribution (DESIGN-018);
 	// an older operator ignores the header.
 	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
+	req.Header.Set(apiv1.TaskOutcomeHeader, apiv1.TaskOutcomeV1)
 	if ctx.Value(fleetResourcesHeader{}) != nil {
 		req.Header.Set(apiv1.FleetHeader, apiv1.FleetResourcesV1)
 	}
