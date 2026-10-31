@@ -718,7 +718,7 @@ does not mean the grant is Active.
   --ref <ref>        required; the message being answered (letters, digits and . _ : / # -)
   --approve          approve; omit to deny
   --ttl <duration>   optional Go duration of at least 10m
-  --reason <text>    optional; at most 256 characters, no control characters
+  --reason <text>    optional; at most 256 characters, no control or format characters
 
 grant use runs agentd ctl grant-use. The name is grant-<id> or default.
 It does not call the API.

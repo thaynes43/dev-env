@@ -209,7 +209,7 @@ func TestGrantDecideJSONOutput(t *testing.T) {
 }
 
 func TestGrantDecideHelp(t *testing.T) {
-	text := commandHelp["grant"]
+	text := strings.Join(strings.Fields(commandHelp["grant"]), " ")
 	for _, phrase := range []string{
 		"allowlisted delegate",
 		"cannot decide its own or an ancestor's request",
@@ -229,15 +229,24 @@ func TestGrantDecideHelp(t *testing.T) {
 
 func TestGrantRequestSecrets(t *testing.T) {
 	h := newHarness(t)
+	longName := "a" + strings.Repeat("b", 62)
 	serveRaw(h, map[string]func(*http.Request) (int, string){
 		apiv1.GrantsPath: func(r *http.Request) (int, string) {
 			if r.Method != http.MethodPost {
 				t.Errorf("method %s", r.Method)
 			}
-			return http.StatusCreated, decideGrantJSON(apiv1.GrantPending)
+			var out apiv1.Grant
+			if err := json.Unmarshal([]byte(decideGrantJSON(apiv1.GrantPending)), &out); err != nil {
+				t.Fatal(err)
+			}
+			out.Secrets = append(out.Secrets, longName)
+			body, err := json.Marshal(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return http.StatusCreated, string(body)
 		},
 	})
-	longName := "a" + strings.Repeat("b", 62)
 	h.mustRun(ExitOK, "grant", "request", "--no-wait", "--type", "kube", "--role", namespaceOperatorRole,
 		"--namespace", "dev", "--secret", "db-password", "--secret", "api.token", "--secret", longName, "--reason", "rotate")
 	want, err := json.Marshal(apiv1.CreateGrantRequest{
@@ -368,12 +377,14 @@ func TestDecideGrantMCPSchemaAndCall(t *testing.T) {
 	}
 	props, _ := tool.Schema["properties"].(map[string]any)
 	for _, key := range []string{"name", "grantUID", "digest", "approve", "ttl", "ref", "reason"} {
-		if props[key] == nil {
-			t.Errorf("missing property %s", key)
+		property, ok := props[key].(map[string]any)
+		wantType := "string"
+		if key == "approve" {
+			wantType = "boolean"
 		}
-	}
-	if props["approve"].(map[string]any)["type"] != "boolean" {
-		t.Fatalf("approve schema %v", props["approve"])
+		if !ok || property["type"] != wantType {
+			t.Errorf("property %s: %v; want %s", key, props[key], wantType)
+		}
 	}
 	if !reflect.DeepEqual(tool.Schema["required"], []any{"name", "grantUID", "digest", "ref"}) {
 		t.Fatalf("required %v", tool.Schema["required"])
@@ -432,8 +443,39 @@ func TestMCPRequestAndStatusRoundTripSecrets(t *testing.T) {
 	if string(post.body) != string(want) {
 		t.Fatalf("body %s\nwant %s", post.body, want)
 	}
-	if !strings.Contains(h.stdout.String(), "db-password") || !strings.Contains(h.stdout.String(), "api.token") {
-		t.Fatalf("stdout %s", h.stdout.String())
+	frames := decodeMCPFrames(t, h.stdout.String())
+	if len(frames) != 2 {
+		t.Fatalf("request/status frames %d", len(frames))
+	}
+	for i, frame := range frames {
+		var response struct {
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(frame), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Result.IsError || len(response.Result.Content) != 1 {
+			t.Fatalf("frame %d: %s", i, frame)
+		}
+		var grant apiv1.Grant
+		if err := json.Unmarshal([]byte(response.Result.Content[0].Text), &grant); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(grant.Secrets, []string{"db-password", "api.token"}) {
+			t.Fatalf("frame %d lost names: %+v", i, grant)
+		}
+		wantPhase := apiv1.GrantPending
+		if i == 1 {
+			wantPhase = apiv1.GrantActive
+		}
+		if grant.Phase != wantPhase {
+			t.Fatalf("frame %d phase %s", i, grant.Phase)
+		}
 	}
 	before := len(h.api.requests())
 	h.env.Stdin = strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request_access","arguments":{"type":"egress","reason":"x","secrets":["db-password"]}}}` + "\n")
