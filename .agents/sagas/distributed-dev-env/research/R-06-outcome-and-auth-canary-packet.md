@@ -361,13 +361,59 @@ Claude task on 2.75 waits for the template move.
 
 | Step | Action | Evidence | Stop if |
 |---|---|---|---|
-| B0 | Run after Stage A, because both stages edit `helmrelease.yaml`. Take a baseline snapshot. Check that zero sessions carry the key. | The baseline. | The usage coordinator objects (see custody). |
+| B0 | Run after Stage A, because both stages edit `helmrelease.yaml`. Take a baseline snapshot. Check that zero sessions carry the key. Check that the keeper's shared Claude login is usable (`agent-run auth status`, which reports state and expiry only). | The baseline. The keeper login state. | The usage coordinator objects (see custody). The keeper login is not usable: that is Tom's separate `agent-run keeper-login`, not part of this canary. |
 | B1 | One haynes-ops PR. It changes exactly two operator args: `--pilot-agent-image=ghcr.io/thaynes43/dev-env:2.75.0@sha256:15dc76a6…` and `--pilot-agent-session=dev-env-1029-132039/auth310-2730-canary-20261031`. Final PR review, guard, merge. | Args diff is 2 lines. The operator is 2/2 ready. Every session pod is unchanged, including `dev-env-1028-031951` (same UID, still 2.52.0). | Anything else differs, or any session pod changed. |
-| B2 | The lead session `dev-env-1029-132039` itself (the selector's parent) creates one ordinary Claude remote session (`agent-run --interactive`) with that key and `--archive-after <T>`, where T is the timer Tom approved in section 6, line 3. | Session name and UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. Neither projection warning line appears, and the first turn is answered. | Wrong image. Or "Claude authentication requires a current keeper projection" or "pod holds its own login" persists. Then suspend (B5) and stop. |
+| B2 | The lead session `dev-env-1029-132039` itself (the selector's parent) runs exactly: `agent-run dev-env --interactive --agent claude --model claude-opus-5-5 --effort low --size S --idempotency-key auth310-2730-canary-20261031 --idle-suspend-after 2h --archive-after <T>`, where T is the timer Tom approved in section 6, line 3. The first argument `dev-env` is the repo; the selector needs repo `dev-env` and agent `claude`. No `agent-run login` is needed (see "Login" below). Then check `kubectl get agentsession -n dev-agents <n> -o jsonpath='{.spec.repo} {.spec.agent} {.spec.mode} {.spec.parent} {.spec.profile}'` reads `dev-env claude remote dev-env-1029-132039 full`. | Session name and UID. The spec check above. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. Neither projection warning line appears, and the first turn is answered. | The spec or the image is wrong. The key is then spent: suspend (B5), record it, and do not reuse the key, because any later session with it would match too. Or "Claude authentication requires a current keeper projection" or "pod holds its own login" persists. Then suspend (B5) and stop. |
 | B3 | One short ordinary turn per hour, through `agent-run msg`. | The lead reads each reply. Keeper `state=refreshed` log lines give each natural refresh time. The first turn after each refresh is answered. `conversationUsage.turns` is weak corroboration only. | A turn gets no answer and no recovery follows. Suspend (B5) and stop. |
 | B4 | The window ends: two natural refreshes after B2, or 24 hours, whichever comes first. Save only the fixed agentd lines from the container log (the two projection warnings, `projection applied` if a recovery happened, `continued after the login was renewed`, `continue ... was not confirmed`). Also save the Session `conversationUsage`. | A receipt with those lines and counts. These container log lines are lost when the pod stops, so this step comes first. Loki may also hold them; its retention is Unknown. | Not applicable. |
 | B5 | `agent-run suspend <canary>`, then verify that the canary's pod and provider have actually exited, not just that the spec or phase says Suspended. | Phase Suspended, `suspendedAt` set, rescue result recorded, PVC Bound. The canary pod is NotFound (`kubectl get pod -n dev-agents <canary>`), and `agent-run show` reports the agent exited. | The rescue fails, or the pod or provider is still running. Record it and stop before B6. Do not delete the HOME, force-delete the pod or replay any work; the volume is kept for a human. |
 | B6 | Only after B5 shows the pod and provider exited: revert the B1 PR. That restores `usage-pilot-1` on 2.52.0 exactly. | The args equal the pre-B1 baseline. Session pods are unchanged. | Not applicable. |
+
+**The B2 command, checked against v2.75.0 source:**
+
+- Every flag exists in `internal/agentrun/create.go:69-89` and is documented in
+  `help.go:274-339`. Flags and the repo may come in any order
+  (`internal/agentrun/flags.go:46-50`). The repo is the first argument, as in
+  `agent-run [--repo] <repo> --interactive` (`help.go:277`; `create.go:129-130`).
+- `--interactive` gives mode `remote` (`create.go:149-153`). `--project` cannot
+  be combined with it (`create.go:108-109`), so a plain repo is the only form.
+- `claude-opus-5-5` takes the full effort set, so `low` is accepted
+  (`internal/apiserver/apiv1/effort.go:15-46`). Model and effort do not change
+  the recovery path; `low` keeps the hourly turns cheap.
+- The canary runs on its parent's profile. The lead's profile is `full` (live
+  read), which sets `AGENTD_CLAUDE_LIVE_FILE` (`templates.yaml:114-117`).
+- `--idle-suspend-after 2h` is a backstop. If the lead stops sending the hourly
+  turns, the operator suspends the idle canary within about 2 hours. It does not
+  fire during the window, because a turn arrives every hour. This relies on the
+  idle rule (agent idle, no client attached), which I did not exercise.
+- The 2.45.0 `agent-run` in the lead's pod has the same flags
+  (`v2.45.0 internal/agentrun/create.go:74-86`).
+
+**Login: no Tom step is needed.** A new Claude `--interactive` session in profile
+`full` starts on the keeper's access projection by itself.
+
+- With `AGENTD_CLAUDE_LIVE_FILE` set, agentd applies the keeper's projection
+  "before anything starts" (`internal/agentd/daemon.go:312-318`). With no
+  credentials file yet, it builds one from the projection's access fields only
+  (`claude_auth.go:66-76, 83-143`; `internal/claudeauth/access.go:140-165`).
+- The remote start check then uses the projected login, usable until its access
+  expiry (`internal/agentd/remote.go:107-110, 329-331`; `claude_auth.go:189-209`).
+- In projection mode, `agent-run login url` and `code` are refused: "this pod
+  follows the keeper's Claude login; no login is run here"
+  (`claude_auth.go:35`; `remote.go:204-206, 261-263`).
+- Live: the keeper runs with `--enable-claude-auth=true`. 13 Running session pods
+  mount the Secret `dev-env-claude-live` as a non-optional volume; the newest
+  started at 2026-10-31T06:02:50Z, so the Secret existed then (read by name
+  through pod specs; Secret reads are not permitted and were not tried). The lead
+  pod has `AGENTD_CLAUDE_LIVE_FILE` and that mount, and no static token.
+- **Stale help text:** `help.go:284-285` ("its Claude login lives in its own pod,
+  and agent-run login sets it up"), `help.go:304` ("claude: needs agent-run
+  login") and the `login` help (`help.go:476-491`) describe the pre-projection
+  path. They still hold only for a profile without `AGENTD_CLAUDE_LIVE_FILE`.
+- **What remains:** the keeper's own login must be usable (B0). If it is not,
+  the canary pod waits for a projection, and the fix is Tom's existing
+  `agent-run keeper-login`, not a canary step. CLAUDE.md records that the
+  keeper's Claude login lapses 2026-11-16 17:51Z.
 
 **Budget:** at most 24 hours elapsed. About 24 short Claude turns (Max usage
 Unknown, but small). One canary session. Two operator rollouts (B1 and its
@@ -467,6 +513,10 @@ the same signed 2.75.0 image through the existing generic selector. The window
 is two natural keeper refreshes or 24 hours, whichever comes first. One short
 turn per hour. It ends with suspend, a check that the pod and provider exited,
 and then a selector revert. Line 2 counts only together with a yes on line 3.
+The launch is the exact B2 command. **No Tom login step is needed:** in profile
+`full` the canary starts on the keeper's access projection, and a pod login is
+refused there (section 5, "Login"). The only login dependency is the keeper's
+existing shared login, checked in B0.
 
 **Line 3. Stage B retention: required if line 2 is yes.**
 
@@ -567,6 +617,16 @@ Notes on a yes:
 - OP326's release version and timing are Unknown. Its operator change means one
   more operator pin before Tom's portal view.
 - `helmrelease.yaml:200` has a stale comment (section 4).
+- `agent-run` help is stale about Claude remote logins (`help.go:284-285, 304,
+  476-491`): in profile `full` no `agent-run login` is needed or accepted.
+- Stage B depends on the keeper's shared Claude login being usable at B0. That
+  login lapses 2026-11-16 17:51Z (CLAUDE.md); renewing it is Tom's existing
+  keeper-login step, outside this canary.
+- The `--idle-suspend-after 2h` backstop relies on the idle rule (agent idle, no
+  client attached); I did not exercise it for a remote session.
+- A wrong repo or agent in B2 spends the one-use key on a 2.71.0 pod. The B2 spec
+  check catches it after creation; there is no server dry run for remote
+  sessions (`--dry-run=server` needs `--project`, `create.go:99-101`).
 
 ## Evidence index
 
@@ -592,7 +652,13 @@ Notes on a yes:
   `internal/keeper/claude_worker.go:108-117, 236`;
   `internal/apiserver/task_outcome.go:18-78`;
   `internal/agentrun/client.go:199`; `sessions.go:284-291`;
-  `help.go:31-33, 330-372, 615-623`;
+  `help.go:31-33, 274-339, 330-372, 476-491, 615-623`;
+  `internal/agentrun/create.go:69-89, 99-101, 108-109, 129-130, 149-153`;
+  `internal/agentrun/flags.go:46-50`; `internal/apiserver/apiv1/effort.go:15-46`;
+  `internal/agentd/daemon.go:312-318`; `internal/agentd/remote.go:107-110,
+  204-206, 261-263, 329-331`; `internal/agentd/claude_auth.go:35, 66-76, 83-143,
+  189-209`; `internal/claudeauth/access.go:140-165`; v2.45.0
+  `internal/agentrun/create.go:74-86`;
   `api/v1alpha1/agentsession_types.go:465-484, 1379-1420`;
   `docs/portal-session-runtime.md:283-330, 571`;
   `docs/workflow-guide.md:683-706`.
@@ -609,5 +675,10 @@ Notes on a yes:
   `gasha01-rbd` reclaim policy `Delete`. Operator generation 142 on
   `sha-fac30c8`. haynes-ops templates and operator files unchanged from d20f3971
   to a036fda0.
+- Cluster reads at 06:19Z: keeper Deployment arg `--enable-claude-auth=true`.
+  13 Running session pods mount Secret `dev-env-claude-live` (non-optional), the
+  newest started 06:02:50Z. The lead session `dev-env-1029-132039` has profile
+  `full`; its pod has `AGENTD_CLAUDE_LIVE_FILE` and no `CLAUDE_CODE_OAUTH_TOKEN`.
+  `kubectl auth can-i get secrets -n dev-agents` is no; no Secret was read.
 - Signing: `gh release view v2.75.0`. publish-agent run 41169349678, job
   124443724051, log lines for push (04:42:14Z) and verification (04:42:21Z).
