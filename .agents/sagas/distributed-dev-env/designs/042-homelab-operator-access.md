@@ -62,8 +62,9 @@ and each has a one-step rollback.
 
    Release removes the files but cannot recall a copy.
 6. **GPU.** A message may approve SYS_ADMIN maintenance on Card C, within #781's
-   exact-envelope policy. Under mode (a), the requester may self-approve only if its
-   session was created by a listed creator (S6). By default the only creator is Tom's
+   exact-envelope policy. Under mode (a), the requester may self-approve only if a
+   listed creator launched its session directly (S6). Child sessions never
+   self-approve. By default the only creator is Tom's
    human SA. #781 as written admits any top-level session, including headless tasks
    from the v1-pod client, the workbench client or the coordinator-host fixture.
 
@@ -78,7 +79,7 @@ The reserved decisions (section 7) stay with Tom.
 | S3 | dev-env | `agent-run grant decide` and an MCP tool; `secrets` on grant requests; CLI and MCP say when no policy covers a request | new, small | revert |
 | S4 | dev-env | Named coordinator identity (6.4): templates accept a `dev-env-coordinator-<name>` SA; such a session pod stays a session caller, as the workbench does; only human or client callers launch that profile, one Running session per SA | new, small | revert; no profile names it |
 | S5 | dev-env | Named Secrets (5.1): `KubeGrant.secrets`; role `dev-env-grant-namespace-operator` in the enums and the broker catalog; `ScopeDigest` covers `secrets` | new, small | revert; no policy names the role |
-| S6 | dev-env | Attested maintenance creators (6.2): broker flag `--attested-maintenance-creators=<ns>/<sa>,...`, default `dev-env-system/dev-env-human`. Mode (a) approves a maintenance grant only when the requesting session's root creator is listed. | new, small; default human only; **required before P2 sets `--enable-attested-maintenance`** | reset to the default |
+| S6 | dev-env | Attested maintenance creators (6.2): broker flag `--attested-maintenance-creators=<ns>/<sa>,...`, default `dev-env-system/dev-env-human`. Mode (a) approves a maintenance grant only when the requesting session's own recorded parent is listed (depth 1; children never qualify; a missing parent fails closed). | new, small; default human only; **required before P2 sets `--enable-attested-maintenance`** | reset to the default |
 | R1 | haynes-ops | CRD copy from the release that carries S1 to S6 | routine | remove delegated-only, maintenance and namespace-operator policies first, then revert |
 | R2 | haynes-ops | Operator and broker pins to that release | routine | pin back |
 | P1 | haynes-ops | Ten GrantPolicies (9.1) | **activation** | delete a policy; matching stops and active grants run out |
@@ -452,9 +453,13 @@ approve its own SYS_ADMIN lease.
 - **Flag:** the broker gains `--attested-maintenance-creators=<ns>/<sa>,...`. Its
   default is `dev-env-system/dev-env-human`, Tom's human SA, and nothing else.
 - **Rule:** the broker approves a maintenance grant through an attested policy only
-  when the requester's root creator is on that list. The root creator is the SA
-  recorded as `spec.requester.parent`. For a child session, it is the parent recorded
-  on that child's top-level ancestor.
+  when the requester's own `spec.requester.parent` is a listed SA. That is depth 1: a
+  top-level session that a listed creator launched directly.
+- **Children:** a child session records its parent session's name (`caller.go:242`).
+  So a child never qualifies, even when its root is Tom's. That covers the lead's
+  workers. A child gets maintenance through mode (b), or by asking its top-level
+  parent to request it.
+- **Fail closed:** a missing, empty or unparseable parent never qualifies.
 - **Recording:** the operator records the parent from the token at session creation,
   never from the request body.
 - **Other routes:** mode (b) and the human decision route are unaffected. Kube, egress
