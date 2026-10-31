@@ -24,7 +24,7 @@ func TestPolicyDelegateSubset(t *testing.T) {
 			t.Fatalf("accepted %q", raw)
 		}
 	}
-	if got, err := ParseGrantPolicyDelegates("", nil); err != nil || got != nil {
+	if got, err := ParseGrantPolicyDelegates("", []string{"a/b"}); err != nil || got != nil {
 		t.Fatalf("empty: %v %v", got, err)
 	}
 	if got, err := ParseGrantPolicyDelegates(" b/c, a/b ", []string{"a/b", "b/c"}); err != nil || !reflect.DeepEqual(got, []string{"a/b", "b/c"}) {

@@ -163,6 +163,7 @@ func TestLegacyExactActorRefusals(t *testing.T) {
 		},
 		"other baseline session": func(f *fixture, tok *string, g apiv1.Grant) {
 			*tok = f.sessionPod("other-baseline", "full", 1)
+			f.reparent("other-baseline", "legacy-parent")
 			reachRunning(f.t, f, "other-baseline")
 			id := f.auth[*tok]
 			id.ServiceAccountUID = f.srv.LegacyGrantDelegates[0].ServiceAccountUID
