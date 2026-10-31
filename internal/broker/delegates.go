@@ -21,6 +21,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -93,7 +94,7 @@ func delegateMessage(d Decision) string {
 	if d.Approve {
 		return fmt.Sprintf("approved by %s under policy/%s (ref %s): %s", d.By, d.Policy, d.Ref, DelegateWording)
 	}
-	msg := fmt.Sprintf("denied by %s (ref %s): %s", d.By, d.Ref, DelegateWording)
+	msg := fmt.Sprintf("denied by %s under policy/%s (ref %s): %s", d.By, d.Policy, d.Ref, DelegateWording)
 	if d.Reason != "" {
 		msg += ": " + d.Reason
 	}
@@ -103,7 +104,8 @@ func delegateMessage(d Decision) string {
 // delegateDecisionAllowed is Decide's check of a delegate decision: the
 // delegate is listed, the decision is bound to this grant's UID and scope
 // digest and carries a ref, the grant is of a type and role a delegate may
-// decide, and an approval names its delegated policy.
+// decide, and the decision, approval or denial, names the delegated policy
+// that covers it: a delegate decides only inside the scopes Tom delegated.
 func (b *Broker) delegateDecisionAllowed(g *v1alpha1.AccessGrant, d Decision) error {
 	switch {
 	case !delegateListed(d.By, b.GrantDelegates):
@@ -116,8 +118,25 @@ func (b *Broker) delegateDecisionAllowed(g *v1alpha1.AccessGrant, d Decision) er
 		return fmt.Errorf("%w: a delegate never decides a %s grant", ErrRefused, g.Spec.Type)
 	case g.Spec.Kube != nil && DelegateRefusedRole(g.Spec.Kube.Role):
 		return fmt.Errorf("%w: a delegate never decides role %s", ErrRefused, g.Spec.Kube.Role)
-	case d.Approve && d.Policy == "":
-		return fmt.Errorf("%w: a delegate approval names the delegated policy that covers it", ErrRefused)
+	case d.Policy == "":
+		return fmt.Errorf("%w: a delegate decision names the delegated policy that covers it", ErrRefused)
+	}
+	return nil
+}
+
+// delegatedPolicyCovers reads the named policy from the API server and checks
+// that its spec.delegated still covers g. A missing, deleting or narrowed
+// policy refuses the decision; a failed read is retried.
+func (b *Broker) delegatedPolicyCovers(ctx context.Context, g *v1alpha1.AccessGrant, name string) error {
+	var p v1alpha1.GrantPolicy
+	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.PolicyNamespace, Name: name}, &p); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: delegated policy %s is absent", ErrRefused, name)
+		}
+		return fmt.Errorf("read delegated policy %s: %w", name, err)
+	}
+	if !p.DeletionTimestamp.IsZero() || !MatchesDelegated(&p, g) {
+		return fmt.Errorf("%w: delegated policy %s no longer covers the grant", ErrRefused, name)
 	}
 	return nil
 }
@@ -146,18 +165,22 @@ func delegateBinding(g *v1alpha1.AccessGrant, d MaintenanceDecision, delegates [
 	return nil
 }
 
-// delegateSeparation checks again, from the recorded identity, that the
-// delegate is not the requester: not its session, not a pod it controls, not
-// its current pod, and not a coordinator or worker the maintenance envelope
-// names. The operator checked these and the delegate's ancestry before it
-// recorded the decision; the broker does not trust that it ran.
-func delegateSeparation(g *v1alpha1.AccessGrant, d *DelegateIdentity, requesterPod *corev1.Pod) error {
+// delegateSeparation checks again what the recorded identity lets the broker
+// check: the delegate is not the requesting session, not its current pod, not
+// a session running as the delegate's own account, and not a coordinator or
+// worker the maintenance envelope names. The ancestry walk and the launch rule
+// are the operator's alone (grant_decision.go), checked before it recorded the
+// decision.
+func delegateSeparation(g *v1alpha1.AccessGrant, d *DelegateIdentity, by string, requesterPod *corev1.Pod) error {
 	rq := g.Spec.Requester
 	if d.Session != "" && (d.Session == rq.Session || types.UID(d.SessionUID) == rq.SessionUID) {
 		return errors.New("the delegate is the requesting session")
 	}
 	if requesterPod != nil && string(requesterPod.UID) == d.PodUID {
 		return errors.New("the delegate is the requesting session's pod")
+	}
+	if requesterPod != nil && DelegateRef(requesterPod.Namespace+"/"+requesterPod.Spec.ServiceAccountName) == by {
+		return errors.New("the requesting session runs as the delegate's own account")
 	}
 	if m := g.Spec.Maintenance; m != nil {
 		for _, id := range append([]v1alpha1.MaintenanceIdentity{m.Coordinator}, m.Workers...) {
@@ -172,10 +195,11 @@ func delegateSeparation(g *v1alpha1.AccessGrant, d *DelegateIdentity, requesterP
 // delegateDecision applies a pending grant's recorded delegate decision
 // (DESIGN-042 6.2). handled is false when no delegate is configured or the
 // grant carries no delegate decision: the caller goes on as before. Otherwise
-// the binding and the separation are checked, an approval needs a policy whose
-// spec.delegated covers the scope and the requester (for maintenance, #781's
-// exact envelope, the human route's identity checks and one lease per
-// target), and Decide records it as delegate/<namespace>/<name>. A decision
+// the binding and the separation are checked, the decision, approval or
+// denial, needs a policy whose spec.delegated covers the scope and the
+// requester (for maintenance, #781's exact envelope; an approval also needs
+// the human route's identity checks and one lease per target), and Decide
+// records it as delegate/<namespace>/<name>. A decision
 // that cannot apply leaves the grant waiting; the 30-minute timeout ends it.
 // For a kube or egress grant such a wait reports handled false, so the caller
 // still tells Tom once, as for any grant no policy approves. A maintenance
@@ -195,35 +219,38 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	if err := delegateBinding(g, d, b.GrantDelegates, now.Time); err != nil {
 		return wait(err.Error(), deadline.Sub(now.Time))
 	}
-	if err := delegateSeparation(g, d.Delegate, b.sessionPod(ctx, sess, false)); err != nil {
+	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, sess, false)); err != nil {
 		return wait(err.Error(), deadline.Sub(now.Time))
 	}
 	dec := Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, Reason: d.Reason, GrantUID: d.GrantUID, ScopeDigest: d.Digest, Ref: d.Ref}
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
 		dec.MaintenanceUID, dec.MaintenanceDigest = string(g.UID), MaintenanceDigest(g)
 	}
-	if d.Approve {
-		var policies v1alpha1.GrantPolicyList
-		if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
-			return ctrl.Result{}, true, fmt.Errorf("list the grant policies: %w", err)
+	// A delegate decides, either way, only inside a scope Tom delegated: a
+	// denial outside every delegated policy would let one delegate end any
+	// agent's request.
+	var policies v1alpha1.GrantPolicyList
+	if err := b.Client.List(ctx, &policies, client.InNamespace(b.PolicyNamespace)); err != nil {
+		return ctrl.Result{}, true, fmt.Errorf("list the grant policies: %w", err)
+	}
+	p := MatchDelegated(g, policies.Items)
+	if p == nil {
+		return wait("no policy with spec.delegated covers this grant's scope and requester", deadline.Sub(now.Time))
+	}
+	dec.Policy = p.Name
+	if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
+		if g.Spec.Maintenance.ExtensionOf != "" {
+			return wait("an extension needs the human route", deadline.Sub(now.Time))
 		}
-		p := MatchDelegated(g, policies.Items)
-		if p == nil {
-			return wait("no policy with spec.delegated covers this grant's scope and requester", deadline.Sub(now.Time))
+		busy, err := b.maintenanceTargetBusy(ctx, g)
+		if err != nil {
+			return ctrl.Result{}, true, err
 		}
-		if g.Spec.Type == v1alpha1.GrantMaintenance {
-			if g.Spec.Maintenance.ExtensionOf != "" {
-				return wait("an extension needs the human route", deadline.Sub(now.Time))
-			}
-			busy, err := b.maintenanceTargetBusy(ctx, g)
-			if err != nil {
-				return ctrl.Result{}, true, err
-			}
-			if busy {
-				return wait("another maintenance lease holds this target", 5*time.Second)
-			}
+		if busy {
+			// Transient: logged quietly, checked again in 5 seconds.
+			log.FromContext(ctx).V(1).Info("a delegate decision waits", append(grantFields(g), "by", d.By, "reason", "another maintenance lease holds this target")...)
+			return ctrl.Result{RequeueAfter: min(5*time.Second, deadline.Sub(now.Time))}, true, nil
 		}
-		dec.Policy = p.Name
 	}
 	switch err := b.Decide(ctx, g.Name, dec); {
 	case errors.Is(err, ErrNotPending):

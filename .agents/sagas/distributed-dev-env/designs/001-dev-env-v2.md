@@ -4218,9 +4218,30 @@ grants. It is not a human decision and not an agent attestation.
   leaves Tom's route answering 409 until the 30-minute timeout, and the
   requester then asks again. The operator cannot read GrantPolicies, so the
   route does not check coverage first. A kube or egress grant whose delegate
-  decision cannot apply is still notified to Tom once.
+  decision cannot apply is still notified to Tom once. A record over the
+  broker's 2048-byte bound is refused (422) rather than written. With
+  delegates configured, a listed coordinator host may also read one grant
+  (`GET /v1/grants/{name}`) to review the scope it decides; it may not list
+  or release grants, and an unlisted host reads none.
+- **Live and eligible at decision time.** Classification is unchanged, and a
+  session keeps its ordinary routes in every phase. Only this route then
+  re-reads the delegate from the API server, never the cache: its pod is the
+  token's pod UID, Running, not terminating, on the classified account, and
+  still bound as classified (a coordinator host's name and host annotation;
+  a session pod's controlling session); a session that controls the pod is
+  Running, not asked to suspend, not draining, suspended, archived or being
+  reaped.
+- **One record.** Every operator replica serves the route. The annotation
+  patch carries the resourceVersion the checks read, so of two concurrent
+  decisions exactly one is recorded; the other, and any replay, is 409.
 - **Refused:** a caller off the list; the requester, a pod its session
-  controls or its current pod; a delegate whose session descends from the
+  controls, its current pod, or a requester whose pod runs as the delegate's
+  own account (until S4 allows one Running session per coordinator account);
+  a maintenance grant while the maintenance API is off; a delegate that
+  shares a launching session with the requester (siblings and cousins: the
+  shared session could route its own children's grants through a delegate it
+  launched; a human or client ServiceAccount names no session and is not
+  shared); a delegate whose session descends from the
   requester through any parent link, or whose ancestry cannot be read; a form
   (2) session Tom's callers did not launch, which closes the sibling path
   even before S4's launch rule exists; a coordinator or worker the maintenance
@@ -4232,13 +4253,23 @@ grants. It is not a human decision and not an agent attestation.
   children is allowed.
 - **Broker.** It reads a delegate decision only when its own list is not
   empty. It checks the binding (listed delegate, UID, `ScopeDigest`, ref,
-  pending window, TTL) and the separation again from the recorded identity.
-  An approval also needs a GrantPolicy whose new `spec.delegated` covers the
-  scope and the requester; for maintenance that is #781's exact envelope,
+  pending window, TTL) and the separation again from the recorded identity
+  (requester session, pod and account, envelope participants; the ancestry
+  walk and the launch rule are the operator's). Every decision, approval or
+  denial, needs a GrantPolicy whose new `spec.delegated` covers the scope and
+  the requester, so a delegate decides only inside scopes Tom delegated; for
+  maintenance that is #781's exact envelope, and an approval also needs
   `CheckMaintenanceIdentities` and one lease per target. It then calls
   `Decide` with `delegate/<ns>/<sa>` and records the ref, the policy and "not
-  a human decision" in the status message and the Event. A denial needs no
-  policy. A decision that cannot apply leaves the grant to time out. While
+  a human decision" in the status message and the Event. `Decide` checks
+  again at apply time, on a fresh read: the delegate is still listed, the
+  annotation still binds the grant's UID and `ScopeDigest`, and the named
+  delegated policy, read from the API server, still covers the grant. A
+  delegate removed from the list between the record and the broker's pass
+  approves nothing. Within those
+  policies a delegate's reach is the fleet, not its own session tree, as
+  DESIGN-042 6.2 states. A decision that cannot apply leaves the grant to
+  time out. While
   the grant is Active, every pass, and at least every minute, re-checks the
   delegate, the binding and a covering delegated policy, and ends the grant
   Released when one fails. This closes, for delegated grants only, the known
@@ -4249,6 +4280,17 @@ grants. It is not a human decision and not an agent attestation.
   `dev-env-grant-storage`. An older broker ignores `delegated`; an older CRD
   prunes it and the requester rule then refuses the policy, so remove
   delegated-only policies before reverting the CRD.
+- **Known exposure, not fixed in S2; an activation risk for mode (b).**
+  - The workbench ServiceAccount has `pods/exec` in `dev-agents` (haynes-ops
+    `rbac/app/workbench.yaml`). It can therefore read a named delegate
+    session's projected API token from that pod and decide as the delegate.
+  - The `dev/dev-env` client (the v1 pod) is a client caller, so it may
+    launch the lead's delegate session under S4's launch rule, and a delegate
+    session it launches passes this route's launch check.
+  - Two sessions launched as top-level by the same client caller share no
+    session ancestor, so the sibling rule does not separate them.
+  These belong in DESIGN-042's activation risks (section 0) before Tom
+  approves P2.
 - **Default off.** With no delegates the route is not registered (404), the
   broker reads no delegate decision, the grant view is unchanged, and the
   human maintenance route writes the same annotation as before. With

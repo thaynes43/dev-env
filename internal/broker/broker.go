@@ -231,12 +231,13 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
 		// A delegate decision (DESIGN-042 6.2) shares the set-once annotation
-		// with the human route; only a configured broker reads it as one.
+		// with the human route; only a configured broker reads it as one, so
+		// without delegates this step does nothing.
 		if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
 			return res, err
 		}
-		// The authenticated human route comes first, unchanged: a bound human
-		// decision, valid or not, is handled before any policy is read.
+		// The authenticated human route, unchanged: a bound human decision,
+		// valid or not, is handled before any attested policy is read.
 		if handled, err := b.maintenanceDecision(ctx, g); handled {
 			return ctrl.Result{RequeueAfter: time.Second}, err
 		}

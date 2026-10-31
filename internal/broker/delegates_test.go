@@ -290,6 +290,86 @@ func TestDelegateDecisionRefusalsWait(t *testing.T) {
 	}
 }
 
+// The broker re-checks at apply time: a delegate removed from its list
+// between the operator's record and the broker's pass approves nothing, for
+// kube and maintenance grants alike, and the binding itself is checked on its
+// own (delegateBinding), apart from Decide's check.
+func TestDelegateRemovedBeforeApplyNeverApproves(t *testing.T) {
+	for name, list := range map[string][]string{"emptied": nil, "replaced": {"dev-env-system/other-host"}} {
+		t.Run("kube, list "+name, func(t *testing.T) {
+			f := dgCase(t)
+			f.mustStep(2)
+			f.record(f.decision(true)) // recorded while dgDelegate was listed
+			f.b.GrantDelegates = list
+			f.mustStep(2)
+			wantStillPending(t, f.grant())
+		})
+		t.Run("maintenance, list "+name, func(t *testing.T) {
+			f := amCase(t, func(_ *v1alpha1.AccessGrant, p *v1alpha1.GrantPolicy) {
+				p.Spec.Attested, p.Spec.Delegated = nil, &v1alpha1.DelegatedRequesters{Profiles: []string{"full"}}
+			})
+			f.b.EnableAttestedGrants, f.b.EnableAttestedMaintenance = false, false
+			f.step(1)
+			g := f.grant()
+			d := MaintenanceDecision{GrantUID: string(g.UID), Digest: grantattest.ScopeDigest(g), By: dgBy, Approve: true, TTL: g.Spec.TTL.Duration,
+				At: f.clk.Now(), Ref: dgRef, Delegate: &DelegateIdentity{PodUID: "host-pod"}}
+			raw, _ := json.Marshal(d)
+			f.annotate(MaintenanceDecisionAnnotation, string(raw))
+			f.b.GrantDelegates = list
+			_, _ = f.b.Reconcile(context.Background(), ctrl.Request{NamespacedName: f.key})
+			if got := f.grant(); got.Status.Phase != v1alpha1.GrantPending || got.Status.ApprovedBy != "" || f.executorExists() {
+				t.Fatalf("approved after the delegate left the list: %+v", got.Status)
+			}
+		})
+	}
+	f := dgCase(t)
+	g := f.grant()
+	ok := f.decision(true)
+	if err := delegateBinding(g, ok, []string{dgDelegate}, f.clk.Now()); err != nil {
+		t.Fatalf("a good binding: %v", err)
+	}
+	for name, edit := range map[string]func(*MaintenanceDecision){
+		"not listed":    func(d *MaintenanceDecision) { d.By = DelegateApprover + "dev-env-system/other-host" },
+		"another grant": func(d *MaintenanceDecision) { d.GrantUID = "grant-uid-other" },
+		"another scope": func(d *MaintenanceDecision) { d.Digest = "other" },
+	} {
+		bad := f.decision(true, edit)
+		if err := delegateBinding(g, bad, []string{dgDelegate}, f.clk.Now()); err == nil {
+			t.Errorf("%s: bound", name)
+		}
+	}
+}
+
+// A delegate denies only inside a delegated scope too, and never for a
+// requester running as its own delegate account.
+func TestDelegateDenialAndSameAccountWait(t *testing.T) {
+	t.Run("a denial outside every delegated policy", func(t *testing.T) {
+		f := dgCase(t, func(_ *v1alpha1.AccessGrant, p *v1alpha1.GrantPolicy) {
+			p.Spec.Delegated.Profiles = []string{"workbench"}
+		})
+		wantStillPending(t, f.pendingThenDecide(func() MaintenanceDecision { return f.decision(false) }))
+	})
+	t.Run("a requester on the delegate's own account", func(t *testing.T) {
+		f := dgCase(t)
+		const lead = sessionNS + "/dev-env-coordinator-lead"
+		f.b.GrantDelegates = []string{lead}
+		var pod corev1.Pod
+		if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "req"}, &pod); err != nil {
+			t.Fatal(err)
+		}
+		pod.Spec.ServiceAccountName = "dev-env-coordinator-lead"
+		if err := f.c.Update(context.Background(), &pod); err != nil {
+			t.Fatal(err)
+		}
+		wantStillPending(t, f.pendingThenDecide(func() MaintenanceDecision {
+			return f.decision(true, func(d *MaintenanceDecision) {
+				d.By = DelegateApprover + lead
+				d.Delegate = &DelegateIdentity{PodUID: "other-lead-pod", Session: "other-lead", SessionUID: "22222222-2222-2222-2222-222222222222"}
+			})
+		}))
+	})
+}
+
 // A delegate decision that cannot apply never silences Tom: a kube grant
 // still notifies once, whether the decision came before the broker's first
 // Pending pass or after it.
@@ -346,12 +426,17 @@ func TestDecideRefusesDelegateOutsideItsBounds(t *testing.T) {
 		"breakglass": {edit: func(g *v1alpha1.AccessGrant) {
 			g.Spec.Type, g.Spec.Kube = v1alpha1.GrantBreakglass, &v1alpha1.KubeGrant{Role: v1alpha1.RoleBreakglass}
 		}},
-		"storage":      {edit: func(g *v1alpha1.AccessGrant) { g.Spec.Kube.Role = v1alpha1.RoleStorage }},
-		"secrets-read": {edit: func(g *v1alpha1.AccessGrant) { g.Spec.Kube.Role = v1alpha1.RoleSecretsRead }},
-		"not listed":   {dec: func(d *Decision) { d.By = DelegateApprover + "dev-env-system/nobody" }},
-		"unbound":      {dec: func(d *Decision) { d.ScopeDigest = "other" }},
-		"no ref":       {dec: func(d *Decision) { d.Ref = "" }},
-		"no policy":    {dec: func(d *Decision) { d.Policy = "" }},
+		"storage":                   {edit: func(g *v1alpha1.AccessGrant) { g.Spec.Kube.Role = v1alpha1.RoleStorage }},
+		"secrets-read":              {edit: func(g *v1alpha1.AccessGrant) { g.Spec.Kube.Role = v1alpha1.RoleSecretsRead }},
+		"not listed":                {dec: func(d *Decision) { d.By = DelegateApprover + "dev-env-system/nobody" }},
+		"unbound":                   {dec: func(d *Decision) { d.ScopeDigest = "other" }},
+		"no ref":                    {dec: func(d *Decision) { d.Ref = "" }},
+		"no policy":                 {dec: func(d *Decision) { d.Policy = "" }},
+		"a denial naming no policy": {dec: func(d *Decision) { d.Approve, d.Policy = false, "" }},
+		"an absent policy":          {dec: func(d *Decision) { d.Policy = "deleted-policy" }},
+		"a policy that does not cover it": {edit: func(g *v1alpha1.AccessGrant) {
+			g.Spec.Kube.Namespaces = []string{"frontend", "media"}
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var edits []func(*v1alpha1.AccessGrant, *v1alpha1.GrantPolicy)

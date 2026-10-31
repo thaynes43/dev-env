@@ -55,8 +55,8 @@ func MatchAttested(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy, att
 // Break-glass never matches, nor do the roles dev-env-grant-breakglass and
 // dev-env-grant-secrets-read, whatever p says: the schema refuses such a policy,
 // and the broker does not trust that it ran (D-27, D-54). Maintenance never
-// matches a standing policy either: only an attested policy approves it
-// (ADR-013).
+// matches a standing policy either: only an attested (ADR-013) or delegated
+// (DESIGN-042) policy approves it.
 func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 	if p.Spec.Attested != nil || p.Spec.Delegated != nil {
 		return false // an attested or delegated policy never approves as a standing one

@@ -101,6 +101,13 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 		if err != nil {
 			return err
 		}
+		if strings.HasPrefix(d.By, DelegateApprover) {
+			// At apply time, from the API server: the named delegated policy
+			// still covers this grant.
+			if err := b.delegatedPolicyCovers(ctx, &g, d.Policy); err != nil {
+				return err
+			}
+		}
 		if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
 			if err := CheckMaintenanceIdentities(ctx, b.APIReader, b.SessionNamespace, &g); err != nil {
 				return fmt.Errorf("%w: %w", ErrRefused, err)
@@ -164,7 +171,10 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
 		human := d.By == b.maintenanceHumanApprover() && d.MaintenanceUID == string(g.UID) && d.MaintenanceDigest == MaintenanceDigest(g)
 		if !b.EnableMaintenanceGrants || (!human && !delegate) {
-			return 0, fmt.Errorf("%w: maintenance requires a bound decision from %s or a listed delegate", ErrRefused, b.maintenanceHumanApprover())
+			if len(b.GrantDelegates) > 0 {
+				return 0, fmt.Errorf("%w: maintenance requires a bound decision from %s or a listed delegate", ErrRefused, b.maintenanceHumanApprover())
+			}
+			return 0, fmt.Errorf("%w: maintenance requires a bound decision from %s", ErrRefused, b.maintenanceHumanApprover())
 		}
 	}
 	if !d.Approve {

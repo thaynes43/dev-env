@@ -42,14 +42,14 @@ type DelegateIdentity struct {
 	SessionUID string `json:"sessionUID,omitempty"`
 }
 
-// maxDecisionBytes bounds the annotation value.
-const maxDecisionBytes = 2048
+// MaxDecisionBytes bounds the annotation value; the broker reads no longer one.
+const MaxDecisionBytes = 2048
 
 // parseDecision reads the decision annotation, or reports none.
 func parseDecision(g *v1alpha1.AccessGrant) (MaintenanceDecision, bool) {
 	var d MaintenanceDecision
 	raw := g.Annotations[MaintenanceDecisionAnnotation]
-	if raw == "" || len(raw) > maxDecisionBytes || json.Unmarshal([]byte(raw), &d) != nil {
+	if raw == "" || len(raw) > MaxDecisionBytes || json.Unmarshal([]byte(raw), &d) != nil {
 		return d, false
 	}
 	return d, true
@@ -61,7 +61,7 @@ func (b *Broker) maintenanceDecision(ctx context.Context, g *v1alpha1.AccessGran
 		return false, nil
 	}
 	var d MaintenanceDecision
-	if len(raw) > maxDecisionBytes || json.Unmarshal([]byte(raw), &d) != nil || d.GrantUID != string(g.UID) || d.Digest != MaintenanceDigest(g) || d.By != b.maintenanceHumanApprover() || d.At.Before(g.CreationTimestamp.Time) || d.At.After(b.now().Time) || !b.now().Time.Before(d.At.Add(PendingTimeout)) {
+	if len(raw) > MaxDecisionBytes || json.Unmarshal([]byte(raw), &d) != nil || d.GrantUID != string(g.UID) || d.Digest != MaintenanceDigest(g) || d.By != b.maintenanceHumanApprover() || d.At.Before(g.CreationTimestamp.Time) || d.At.After(b.now().Time) || !b.now().Time.Before(d.At.Add(PendingTimeout)) {
 		return true, fmt.Errorf("%w: invalid maintenance decision binding", ErrRefused)
 	}
 	err := b.Decide(ctx, g.Name, Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, MaintenanceUID: d.GrantUID, MaintenanceDigest: d.Digest})

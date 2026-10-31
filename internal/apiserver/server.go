@@ -296,7 +296,9 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:  s.listGrants,
 		http.MethodPost: s.createGrant,
 	}}))
-	mux.Handle(apiv1.GrantsPath+"/{name}", s.serve(route{methods: map[string]handler{
+	// With delegates configured, a listed coordinator host may read the one
+	// grant it decides (getGrant checks the list); it never releases one.
+	mux.Handle(apiv1.GrantsPath+"/{name}", s.serve(route{coordinator: len(s.GrantDelegates) > 0, methods: map[string]handler{
 		http.MethodGet:    s.getGrant,
 		http.MethodDelete: s.releaseGrant,
 	}}))

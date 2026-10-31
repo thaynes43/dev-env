@@ -77,37 +77,70 @@ type grantDelegate struct {
 
 // delegateOf returns the delegate caller c is, or refuses it. The class comes
 // from resolveCaller; the list from GrantDelegates; nothing from the body.
+//
+// Identity classification is unchanged: resolveCaller still serves a session
+// in any phase on its ordinary routes. Only this route then asks whether the
+// delegate is live and eligible now, from fresh API server reads, never the
+// cache: its pod is the token's pod UID, Running and not terminating, and
+// still bound as it was classified (a coordinator host's name, account and
+// host annotation; a session pod's account and controlling session); and
+// any session that controls the pod is Running, not suspended or asked to
+// suspend, not draining, archived or being reaped.
 func (s *Server) delegateOf(ctx context.Context, c *caller) (*grantDelegate, error) {
 	ref := c.identity.serviceAccountRef()
 	if ref == "" || !slices.Contains(s.GrantDelegates, ref) {
 		return nil, forbidden("%s is not a grant delegate (--grant-delegates)", c)
 	}
+	if s.Live == nil {
+		return nil, forbidden("delegate decisions need live reads")
+	}
+	form := 0
 	switch c.kind {
 	case kindCoordinator:
-		// Form 1. resolveCoordinator read the pod live and checked its name,
-		// UID, ServiceAccount and host annotation.
-		if c.pod == nil || string(c.pod.UID) != c.identity.PodUID {
-			return nil, forbidden("a delegate decides from its own live pod")
-		}
-		sess, err := s.podSession(ctx, c.pod)
-		if err != nil {
-			return nil, err
-		}
-		return &grantDelegate{ref: ref, form: 1, pod: c.pod, session: sess}, nil
+		form = 1
 	case kindSession:
-		// Form 2 (S4). resolveSession checked that the token is bound to this
-		// pod and that the pod's controller is this session.
-		if c.session == nil || c.pod == nil || string(c.pod.UID) != c.identity.PodUID ||
-			c.pod.Namespace != c.identity.Namespace || c.pod.Spec.ServiceAccountName != c.identity.ServiceAccount ||
-			!metav1.IsControlledBy(c.pod, c.session) || !c.pod.DeletionTimestamp.IsZero() {
-			return nil, forbidden("a delegate session decides from its own pod, running as its delegate ServiceAccount")
-		}
-		if !c.session.DeletionTimestamp.IsZero() || c.session.Status.Phase != v1alpha1.PhaseRunning {
-			return nil, forbidden("delegate session %s is not Running", c.session.Name)
-		}
-		return &grantDelegate{ref: ref, form: 2, pod: c.pod, session: c.session}, nil
+		form = 2
+	default:
+		return nil, forbidden("%s is not a grant delegate: a delegate is a coordinator host or a session pod", c)
 	}
-	return nil, forbidden("%s is not a grant delegate: a delegate is a coordinator host or a session pod", c)
+	id := c.identity
+	var pod corev1.Pod
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: id.Namespace, Name: id.PodName}, &pod); err != nil {
+		return nil, forbidden("the delegate's pod cannot be read live")
+	}
+	if id.PodUID == "" || string(pod.UID) != id.PodUID || !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning ||
+		pod.Spec.ServiceAccountName != id.ServiceAccount {
+		return nil, forbidden("a delegate decides from its own live, Running pod, never a replaced or terminating one")
+	}
+	if form == 1 {
+		// Form 1: the host binding, as resolveCoordinator checks it.
+		bound := false
+		for _, h := range s.Policy.Coordinators {
+			if h.ServiceAccount == ref && h.PodName == pod.Name && pod.Annotations[CoordinatorHostAnnotation] == h.HostID {
+				bound = true
+			}
+		}
+		if !s.Policy.CoordinatorEnabled || !bound {
+			return nil, forbidden("the delegate's coordinator host binding changed")
+		}
+	}
+	sess, err := s.podSession(ctx, &pod)
+	if err != nil {
+		return nil, err
+	}
+	if form == 2 && (sess == nil || c.session == nil || sess.UID != c.session.UID) {
+		// Form 2 (S4): the pod is still controlled by the session it was
+		// classified as.
+		return nil, forbidden("a delegate session decides from its own pod, controlled by its own session")
+	}
+	if sess != nil {
+		mode := sess.Spec.OperatingMode
+		if !sess.DeletionTimestamp.IsZero() || sess.Status.Phase != v1alpha1.PhaseRunning || sess.Status.ArchivedAt != nil ||
+			(mode != "" && mode != v1alpha1.OperatingModeRunning) {
+			return nil, forbidden("delegate session %s is not Running and eligible: suspended, draining, archived or being reaped", sess.Name)
+		}
+	}
+	return &grantDelegate{ref: ref, form: form, pod: &pod, session: sess}, nil
 }
 
 // podSession returns the AgentSession that controls pod, read live, or nil when
@@ -118,7 +151,8 @@ func (s *Server) podSession(ctx context.Context, pod *corev1.Pod) (*v1alpha1.Age
 		return nil, nil
 	}
 	var sess v1alpha1.AgentSession
-	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: owner.Name}, &sess); err != nil || sess.UID != owner.UID {
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: owner.Name}, &sess); err != nil || sess.UID != owner.UID ||
+		owner.APIVersion != v1alpha1.GroupVersion.String() {
 		return nil, forbidden("the delegate's pod belongs to a session that cannot be verified")
 	}
 	return &sess, nil
@@ -142,9 +176,16 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 		return forbidden("a delegate never decides its own session's grant")
 	}
 	var rp corev1.Pod
-	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: rq.Session}, &rp); err == nil && rp.UID == d.pod.UID {
-		return forbidden("a delegate never decides its own session's grant")
-	} else if err != nil && !apierrors.IsNotFound(err) {
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: rq.Session}, &rp); err == nil {
+		if rp.UID == d.pod.UID {
+			return forbidden("a delegate never decides its own session's grant")
+		}
+		// Two sessions on one delegate account would decide for each other
+		// until S4 allows one Running session per coordinator account.
+		if rp.Namespace+"/"+rp.Spec.ServiceAccountName == d.ref {
+			return forbidden("a delegate never decides a grant whose requester runs as its own delegate account")
+		}
+	} else if !apierrors.IsNotFound(err) {
 		return fromKubeError(err, "the requesting session's pod")
 	}
 	if m := g.Spec.Maintenance; m != nil {
@@ -157,6 +198,8 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 	if d.session == nil {
 		return nil
 	}
+	// The delegate's launching sessions: none may be the requester.
+	ancestors := map[string]bool{}
 	parent := d.session.Spec.Parent
 	for i := 0; parent != "" && !strings.Contains(parent, "/"); i++ {
 		if parent == rq.Session {
@@ -172,7 +215,33 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 		if a.UID == rq.SessionUID {
 			return forbidden("a delegate never decides a grant of its parent or another ancestor")
 		}
+		ancestors[a.Name] = true
 		parent = a.Spec.Parent
+	}
+	// Siblings and cousins: a delegate and the requester that share a
+	// launching session (anything but a human or client ServiceAccount,
+	// which names no session) are one tree, and that session could route
+	// its own children's grants through a delegate it launched. A delegate's
+	// own descendants share no ancestor with it, so it still decides for them.
+	if len(ancestors) > 0 {
+		var r v1alpha1.AgentSession
+		if err := s.Live.Get(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: rq.Session}, &r); err != nil || r.UID != rq.SessionUID {
+			return forbidden("the requesting session's ancestry cannot be verified")
+		}
+		parent := r.Spec.Parent
+		for i := 0; parent != "" && !strings.Contains(parent, "/"); i++ {
+			if ancestors[parent] {
+				return forbidden("a delegate never decides a grant of a session it shares a launching session with")
+			}
+			if i >= maxDelegateAncestry {
+				return forbidden("the requesting session's ancestry is deeper than sessions may sit")
+			}
+			var a v1alpha1.AgentSession
+			if err := s.Live.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: parent}, &a); err != nil {
+				return forbidden("the requesting session's ancestry cannot be verified")
+			}
+			parent = a.Spec.Parent
+		}
 	}
 	if launcher := d.session.Spec.Parent; d.form == 2 &&
 		(sessionDepth(d.session) != 0 || (launcher != s.Policy.Human && !slices.Contains(s.Policy.Clients, launcher))) {
@@ -182,9 +251,11 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 }
 
 // validDecisionReason: at most maxDecisionReason characters of valid UTF-8,
-// no control characters.
+// no control or format characters (so no bidirectional overrides in the
+// status message, the Event or the CLI).
 func validDecisionReason(r string) bool {
-	return utf8.ValidString(r) && utf8.RuneCountInString(r) <= maxDecisionReason && !strings.ContainsFunc(r, unicode.IsControl)
+	return utf8.ValidString(r) && utf8.RuneCountInString(r) <= maxDecisionReason &&
+		!strings.ContainsFunc(r, func(c rune) bool { return unicode.In(c, unicode.Cc, unicode.Cf) })
 }
 
 // decideGrant serves POST /v1/grants/{name}/decision (DESIGN-042 6.2), default
@@ -220,6 +291,9 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 		}
 	case v1alpha1.GrantEgress:
 	case v1alpha1.GrantMaintenance:
+		if !s.MaintenanceEnabled {
+			return 0, nil, forbidden("maintenance decisions need the maintenance API (--enable-maintenance-api)")
+		}
 		if err := broker.ValidateMaintenance(&g); err != nil {
 			return 0, nil, forbidden("%s", err)
 		}
@@ -264,12 +338,27 @@ func (s *Server) decideGrant(ctx context.Context, w http.ResponseWriter, r *http
 	if err != nil {
 		return 0, nil, err
 	}
+	// The broker reads no record over its bound, and the slot is set once:
+	// refuse here rather than record a decision nobody can apply.
+	if len(raw) > broker.MaxDecisionBytes {
+		return 0, nil, invalid(fieldError("reason", "the recorded decision would exceed %d bytes; shorten the reason", broker.MaxDecisionBytes))
+	}
 	orig := g.DeepCopy()
 	if g.Annotations == nil {
 		g.Annotations = map[string]string{}
 	}
 	g.Annotations[broker.MaintenanceDecisionAnnotation] = string(raw)
+	// The slot is set once, and every replica serves this route: the patch
+	// carries the resourceVersion the checks above read, so of two concurrent
+	// decisions exactly one lands and the other is a conflict.
 	if err := s.Client.Patch(ctx, &g, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+		if apierrors.IsConflict(err) {
+			var now v1alpha1.AccessGrant
+			if s.Live.Get(ctx, key, &now) == nil && now.Annotations[broker.MaintenanceDecisionAnnotation] != "" {
+				return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "grant %s was decided by another request", key.Name)
+			}
+			return 0, nil, newError(http.StatusConflict, apiv1.CodeConflict, "grant %s changed while it was decided: read it again", key.Name)
+		}
 		return 0, nil, fromGrantKubeError(err, "record the delegate decision")
 	}
 	s.Log.Info("delegate decision recorded ("+broker.DelegateWording+")", "grant", g.Name, "caller", c.String(), "by", rec.By,
