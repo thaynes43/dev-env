@@ -83,7 +83,8 @@ operator add `activity.taskOutcome`, the task's own record at its first exit
 retained record names that same Session UID and passes the record's own check.
 A portal without the header gets no key, so an older strict portal keeps
 reading. An older operator ignores the header and sends no key; the newer portal
-then shows "No outcome recorded". The portal accepts exactly those keys and the
+then shows "No outcome recorded" for every task, so roll the operator out
+first for an accurate panel; the older portal never asks. The portal accepts exactly those keys and the
 same check: a `github.com/thaynes43/<repo>/pull/<n>` URL, a 40-hex head, one
 printable summary line of at most 200 characters, and a `sessionUID` equal to the
 row's `uid`. An outcome on a non-task session, a null, an unknown key or any
@@ -96,9 +97,10 @@ or live pod is read. A worst-case page of 50 task sessions with outcomes is
 
 The session detail shows a **Task outcome** panel for every task: the summary,
 each pull request as `owner/repo#n`, each head as 7 characters, and the
-original session and pod UIDs, shortened. A pull request URL is the one imported
-URL that becomes a link: the renderer links a field only when it matches that
-exact pattern (`protocol.TaskOutcomePRURLPattern`), opens it in a new tab with
+original session and pod UIDs, shortened. Besides the Remote Control link
+(exact `claude.ai` shape), a pull request URL is the only imported URL that
+becomes a link: the renderer links a field only when it matches that exact
+pattern (`protocol.TaskOutcomePRURLPattern`), opens it in a new tab with
 `noopener noreferrer`, and shows any other value as text. Without a record the
 panel reads **Unknown: No outcome recorded**, never success. `taskResult` is
 labelled **Process exit** in the Activity panel, and its list badge for
@@ -109,8 +111,8 @@ Claim and waiting evidence from OP322 are not joined here yet.
 Task outcome, worker liveness, review, authority and release are displayed
 separately. Canonical links are constructed from validated numeric work-package
 IDs at one fixed HTTPS origin; no imported URL becomes a link. (The Sessions
-view's retained task outcome above is the one exception: an allowlisted pull
-request URL.)
+view links two allowlisted imported URLs: the Remote Control link and a
+retained task outcome's pull request URL, both described above.)
 
 Missing or future timestamps, or verification older than the source update,
 mean Unknown. Evidence beyond the explicitly configured window is Stale. Only

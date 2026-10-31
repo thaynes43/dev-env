@@ -751,17 +751,25 @@ func sectionTones(sections []ProductSection) []ProductSection {
 			}
 			s.States = states
 		}
-		if len(s.Fields) > 0 {
-			fields := make([]ProductField, len(s.Fields))
-			for j, f := range s.Fields {
-				if f.Href != "" && (len(f.Href) > 256 || !productPullRequestURL.MatchString(f.Href)) {
-					f.Href = ""
-				}
-				fields[j] = f
-			}
-			s.Fields = fields
-		}
+		s.Metrics, s.Fields = fieldLinks(s.Metrics), fieldLinks(s.Fields)
 		out[i] = s
+	}
+	return out
+}
+
+// fieldLinks returns fields with any Href outside the pull request allowlist
+// dropped. Every ProductField slice passes through it, whichever template
+// renders it. It copies what it changes.
+func fieldLinks(fields []ProductField) []ProductField {
+	if len(fields) == 0 {
+		return fields
+	}
+	out := make([]ProductField, len(fields))
+	for i, f := range fields {
+		if f.Href != "" && (len(f.Href) > 256 || !productPullRequestURL.MatchString(f.Href)) {
+			f.Href = ""
+		}
+		out[i] = f
 	}
 	return out
 }
@@ -980,7 +988,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 					continue
 				}
 				row.Status.Tone = productTone(row.Status.Tone)
-				row.Sections = sectionTones(row.Sections)
+				row.Sections, row.Context = sectionTones(row.Sections), fieldLinks(row.Context)
 				// A header link leaves the portal: https only, or none.
 				if !strings.HasPrefix(row.Link, "https://") {
 					row.Link, row.LinkLabel = "", ""

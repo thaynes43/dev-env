@@ -164,6 +164,8 @@ func TestTaskOutcomeInvalidIsRefused(t *testing.T) {
 		{"query", outcomeRow("done", "Suspended", "Succeeded", swap(outcomePR, outcomePR+"?x=1"))},
 		{"dot-dot repository", outcomeRow("done", "Suspended", "Succeeded", swap(outcomePR, "https://github.com/thaynes43/../pull/759"))},
 		{"four links", outcomeRow("done", "Suspended", "Succeeded", swap(`"prURLs":["`, `"prURLs":["`+outcomePR+`","`+outcomePR+`","`))},
+		{"links empty", outcomeRow("done", "Suspended", "Succeeded", swap(`"prURLs":["`+outcomePR+`","`+outcomeOpsPR+`"]`, `"prURLs":[]`))},
+		{"heads empty", outcomeRow("done", "Suspended", "Succeeded", swap(`"headSHAs":["`+outcomeHead+`"]`, `"headSHAs":[]`))},
 		{"links null", outcomeRow("done", "Suspended", "Succeeded", swap(`"prURLs":["`+outcomePR+`","`+outcomeOpsPR+`"]`, `"prURLs":null`))},
 		{"links not a list", outcomeRow("done", "Suspended", "Succeeded", swap(`"prURLs":["`+outcomePR+`","`+outcomeOpsPR+`"]`, `"prURLs":"`+outcomePR+`"`))},
 		{"link not a string", outcomeRow("done", "Suspended", "Succeeded", swap(`"prURLs":["`, `"prURLs":[759,"`))},

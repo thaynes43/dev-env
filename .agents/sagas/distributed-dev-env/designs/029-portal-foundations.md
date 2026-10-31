@@ -497,8 +497,8 @@ stats. No new credential, adapter or policy.
   detail shows it as its own Task outcome panel in every phase, including
   after compute reclaim; a missing record is Unknown, never success. The task
   result is relabelled Process exit, and a `Succeeded` badge reads Exited 0: an
-  exit code is not the work's outcome. Allowlisted pull request URLs are the
-  one imported link. The per-page read bound rose to 512 KiB for the worst case.
+  exit code is not the work's outcome. Allowlisted pull request URLs join the
+  Remote Control link as the only imported links. The per-page read bound rose to 512 KiB for the worst case.
   Details: [portal read boundary](../../../../docs/portal-read-boundary.md).
 - **How sessions run.** Interactive is `remote` or `local` (a person drives
   it); Headless is `task` (often launched by a coordinator, shown as "launched

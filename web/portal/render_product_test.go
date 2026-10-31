@@ -1334,3 +1334,36 @@ func TestReadFailureRetryKeepsFilterAndSelection(t *testing.T) {
 		}
 	}
 }
+
+// Every ProductField slice of a row passes the pull request link allowlist,
+// whichever template renders it, and the caller's page is left as it was.
+func TestProductFieldLinksAreAllowlistedEverywhere(t *testing.T) {
+	good := "https://github.com/thaynes43/dev-env/pull/759"
+	bad := []string{"javascript:alert(1)", "https://github.com.example/thaynes43/dev-env/pull/1", "https://claude.ai/code/session_fixture-247", "/portal/projects/dev-env/environments/internal/sessions"}
+	var fields []ProductField
+	for _, href := range append(append([]string{}, bad...), good) {
+		fields = append(fields, ProductField{Label: "Link", Value: href, Href: href})
+	}
+	check := func(where string, got []ProductField) {
+		t.Helper()
+		if len(got) != len(fields) {
+			t.Fatalf("%s lost fields", where)
+		}
+		for i, f := range got {
+			want := ""
+			if fields[i].Href == good {
+				want = good
+			}
+			if f.Href != want || f.Value != fields[i].Value {
+				t.Fatalf("%s kept %q as a link", where, f.Href)
+			}
+		}
+	}
+	sections := sectionTones([]ProductSection{{Title: "s", Metrics: fields, Fields: fields}})
+	check("metrics", sections[0].Metrics)
+	check("fields", sections[0].Fields)
+	check("context", fieldLinks(fields))
+	if fields[0].Href != bad[0] {
+		t.Fatal("the caller's fields changed")
+	}
+}

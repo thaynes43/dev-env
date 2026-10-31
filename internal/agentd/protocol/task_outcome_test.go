@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -119,5 +121,17 @@ func TestTaskOutcomeIdentityMatchesSchema(t *testing.T) {
 	}
 	if err := (TaskOutcome{SessionUID: "0b3c6a54-2f8e-4c51-9d55-6a3c1f1e2b7d", PodUID: "pod.uid_1", Record: record}).Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The portal links a pull request URL only when it matches this pattern, so it
+// must stay the one the generated CRD enforces.
+func TestTaskOutcomePRURLPatternMatchesTheCRD(t *testing.T) {
+	crd, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "crd", "dev-env.haynesops.com_agentsessions.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(crd), "pattern: "+TaskOutcomePRURLPattern+"\n") {
+		t.Fatal("the CRD's prURLs pattern differs from TaskOutcomePRURLPattern")
 	}
 }

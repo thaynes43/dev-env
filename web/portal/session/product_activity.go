@@ -215,8 +215,9 @@ func decodeTaskOutcome(raw json.RawMessage) (*protocol.TaskOutcome, error) {
 		if !present {
 			continue
 		}
+		// The operator omits an empty list, so an empty one is refused too.
 		items, ok := jsonArray(raw)
-		if !ok || len(items) > 3 {
+		if !ok || len(items) == 0 || len(items) > 3 {
 			return nil, portal.ErrUnavailable
 		}
 		for _, item := range items {

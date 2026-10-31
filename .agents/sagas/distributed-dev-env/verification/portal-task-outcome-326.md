@@ -68,6 +68,10 @@ New tests, each shown failing with its fix removed through
 | `TestPortalReaderWorstOutcomePageFitsThePortalReadBound` | bound back at 256 KiB | `287101 bytes, over the portal's 262144-byte read bound` |
 | `TestTaskOutcomeStatePreviews` | outcome previews not written | `outcome-recorded.html: no such file` |
 
+| `TestTaskOutcomeInvalidIsRefused` (review fix) | empty `prURLs`/`headSHAs` lists accepted | empty lists accepted |
+| `TestProductFieldLinksAreAllowlistedEverywhere` (review fix) | Metrics not scrubbed | `metrics kept "javascript:alert(1)" as a link` |
+| `TestTaskOutcomePRURLPatternMatchesTheCRD` (review fix) | Go pattern drifts from the CRD | `the CRD's prURLs pattern differs` |
+
 Escaping comes from `html/template` and cannot be removed without replacing
 the renderer; its test is a regression guard. `TestSessionsPageStaysUnderTheResponseBound`
 now includes a worst-case outcome on every row and still renders within 7/8 of
@@ -75,6 +79,26 @@ the 1 MiB response bound.
 
 Runs used Go 1.27.3 from the official archive (SHA-256 matched go.dev) with
 `GOTOOLCHAIN=local GOMAXPROCS=2 GOFLAGS=-p=1 nice -n 19`, one package at a time.
+
+## Independent review
+
+A native read-only review (opus-worker, `claude-opus-5-5`) of `2165fab` found
+no XSS, link-allowlist, provenance or negotiation bug. Dispositions:
+
+- Fixed: the operator image named for installed acceptance (2.75.0 lacks the
+  portal reader part); rollout order (operator first, or a new portal shows "No
+  outcome recorded" until it is updated); docs now list the Remote Control link
+  beside pull request URLs as allowlisted imported links; empty lists refused;
+  every `ProductField` slice of a row (Metrics, Fields, Context) has its links
+  scrubbed, not only section fields; a test pins the pattern to the CRD.
+- Not changed, with reasons: raw invalid UTF-8 or lone-surrogate escapes become
+  U+FFFD in `jsonString`, as for every other activity string (the operator's
+  encoder never emits either); "Task failed" stays, because a non-zero exit or
+  error result is a real failure signal and the requirement is that exit 0 not
+  read as success; the panel keeps the work order's title "Task outcome"; a
+  summary of only spaces shows "Unknown", the portal's word for blank text;
+  an operator echo header to tell "no record" from "not sent" is left out in
+  favour of the operator-first rollout order.
 
 ## Preview
 
@@ -87,9 +111,11 @@ are in the PR.
 
 ## Delivery state
 
-Source and tests only. Installed acceptance needs the 2.75.0 CRD and operator,
-a portal image pin, task pods on agent 2.75 (the global-template hold applies),
-and real before/after-reclaim UI evidence. Rollout order: either image may go
-first. A new portal against an old operator shows "No outcome recorded"; an old
-portal against a new operator never asks for the key. The lead,
+Source and tests only. Installed acceptance needs the 2.75.0 CRD (it already
+carries `status.taskOutcome`), an operator image built from this change (2.75.0
+lacks the portal reader part), a portal image built from it, task pods on agent
+2.75 or later (the global-template hold applies), and real before/after-reclaim
+UI evidence. Roll the operator out first: an old portal never asks for the key,
+while a new portal against an old operator shows "No outcome recorded" for every
+task until the operator is updated. The lead,
 dev-env-1029-132039, owns review, merge and rollout.
