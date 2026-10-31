@@ -27,7 +27,7 @@ const hardwareIntentAnnotation = v1alpha1.LabelPrefix + "hardware-intent"
 // This path cannot approve, issue, extend or use credentials.
 func (s *Server) recordHardwareIntent(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller, classes []string) (int, any, error) {
 	if !slices.Contains(classes, "rd4-hardware") {
-		return 0, nil, forbidden("RD4hardware audit intent is disabled (--reserved-decision-classes)")
+		return 0, nil, forbidden("RD4 hardware audit intent is disabled (--reserved-decision-classes)")
 	}
 	if c.kind != kindSession || c.session == nil || c.pod == nil || c.identity.PodUID == "" {
 		return 0, nil, forbidden("hardware intent is recorded only by the authenticated requester on its own C4 lease")

@@ -30,7 +30,7 @@ func parseStorageTarget(raw string) (apiv1.GrantStorageTarget, error) {
 
 func validateStorageTargets(targets []apiv1.GrantStorageTarget) error {
 	if len(targets) > 8 {
-		return usageError("reserved storage names at most8 exact kind/name/UID targets")
+		return usageError("reserved storage names at most 8 exact kind/name/UID targets")
 	}
 	names, uids := map[string]bool{}, map[string]bool{}
 	for _, target := range targets {
@@ -70,11 +70,11 @@ func validateReservedRequest(req apiv1.CreateGrantRequest) error {
 		}
 	case req.Role == "dev-env-grant-secrets-read":
 		if len(req.StorageTargets) > 0 || (req.AllNamespaces && len(req.Namespaces) > 0) || (!req.AllNamespaces && (len(req.Namespaces) < 1 || len(req.Namespaces) > 16)) {
-			return usageError("RD3 reads1–16 exact namespaces or an approval-time allNamespaces UID snapshot, never both")
+			return usageError("RD3 reads 1–16 exact namespaces or an approval-time allNamespaces UID snapshot, never both")
 		}
 	case req.Role == "dev-env-grant-storage":
 		if req.AllNamespaces || len(req.Namespaces) != 1 || len(req.StorageTargets) < 1 {
-			return usageError("RD4 storage requires one namespace and1–8 exact kind/name/UID targets")
+			return usageError("RD4 storage requires one namespace and 1–8 exact kind/name/UID targets")
 		}
 		if err := validateStorageTargets(req.StorageTargets); err != nil {
 			return err
