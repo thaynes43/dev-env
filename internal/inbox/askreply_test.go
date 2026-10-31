@@ -119,3 +119,32 @@ type failingList struct{ client.Reader }
 func (failingList) List(context.Context, client.ObjectList, ...client.ListOption) error {
 	return errors.New("synthetic list failure")
 }
+
+func TestInboxReplyIndexSelectsOnePartyBounded(t *testing.T) {
+	ctx := context.Background()
+	s := storeFixture(t)
+	q, r := questionAndReply(t, s)
+	for _, tc := range []struct{ from, to *coord.SessionIdentity }{{&q.Spec.Recipient, nil}, {nil, &q.Spec.Sender}, {nil, nil}} {
+		got, err := s.ReplyIndex(ctx, "sample", tc.from, tc.to)
+		if err != nil || len(got) != 1 || got[0].UID != r.UID {
+			t.Fatal("reply index", err, got)
+		}
+		replies, err := RepliesOf(q, got)
+		if err != nil || len(replies) != 1 || replies[0].UID != r.UID {
+			t.Fatal("replies of", err, replies)
+		}
+	}
+	if got, err := s.ReplyIndex(ctx, "sample", &q.Spec.Sender, nil); err != nil || len(got) != 0 {
+		t.Fatal("the asker sent no reply", err, got)
+	}
+	failing := s
+	failing.Live = failingList{s.Live}
+	if _, err := failing.ReplyIndex(ctx, "sample", nil, nil); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("list failure was not Unknown", err)
+	}
+	wrong := *r.DeepCopy()
+	wrong.Spec.Sender = coord.SessionIdentity{Namespace: "dev-agents", Name: "bystander", UID: "bystander-uid"}
+	if _, err := RepliesOf(q, []coord.InboxMessage{wrong}); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("a reply from the wrong party was accepted", err)
+	}
+}

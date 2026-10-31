@@ -1,9 +1,11 @@
 # How to ask your coordinator
 
 Source guidance, 2026-10-31 (OpenProject #321). Nothing here is installed by
-this change: the commands work once the operator that serves them runs with the
-durable inbox enabled for your project and the agent image carries the matching
-`agent-run`. The contract is
+this change. The commands work once three things are true: the operator runs
+with the durable inbox enabled for your project, it also runs with
+`--enable-inbox-questions` (installed after its CRD), and the agent image
+carries the matching `agent-run`. Until then `ask` and `reply` are refused with
+400 and nothing is sent. The contract is
 [DESIGN-014, "Ask and reply"](../.agents/sagas/distributed-dev-env/designs/014-durable-offline-inbox.md#ask-and-reply-2026-10-31-openproject-321).
 
 Use this route for a routine question to the Session that started you: which
@@ -73,7 +75,7 @@ on stderr. Reading never acknowledges; `ack` is explicit.
 
 | State | Meaning | Who acts |
 | --- | --- | --- |
-| `Unanswered` | No reply yet, and the recipient can still answer. | The recipient (`waitingOn`) |
+| `Unanswered` | No reply yet, and the recipient can still answer. | The recipient (`waitingOn`, set only while it is confirmed live) |
 | `Stale` | No reply for more than 30 minutes (`staleAfterSeconds` 1800). A display bound only: nothing expires, is resent or escalated. | Decide whether to wait, ask someone else or record it in your handoff |
 | `Answered` | A reply exists (`reply` names it); the asker has not acknowledged it. | The asker: read and `ack` it |
 | `Acknowledged` | The asker acknowledged the reply. Done. | Nobody |

@@ -203,6 +203,12 @@ Plain messages keep their labels. A reply is information, never an approval:
 grants, held actions and the Asks board (#254) are untouched, and a
 tool-permission request does not become a question.
 
+**Switch.** The operator accepts questions and replies only with
+`--enable-inbox-questions`, default off, which requires
+`--enable-durable-inbox`. Off, an ask or reply is refused with 400 before any
+lookup or write, exactly as an older API refuses the unknown fields. Plain
+messages and every read, including the thread view, work either way.
+
 **Publish.** The request still carries intent only; the server derives every
 attribution field, as above.
 
@@ -225,7 +231,10 @@ attribution field, as above.
   record with 200 even after the recipient, parent or question has gone: the
   server binds the derived recipient and question from the stored record when
   the request's own fields agree with it, then compares intent as before. A
-  changed text, kind, recipient or question under the same key is 409.
+  parent-addressed retry binds only a stored recipient that still passes the
+  parent fences (a recorded usage parent UID, and creation no later than the
+  sender while that Session exists). A changed text, kind, recipient or
+  question under the same key is 409.
 
 **Derived state.** A list or read with `view=thread` adds `kind` (`plain`,
 `question` or `reply`), `inReplyTo` and, for a question or reply, a `thread`.
@@ -236,7 +245,7 @@ the reply), `RecipientEnded` (no reply and the recipient is gone, replaced,
 deleting, Archived or Failed, or a task whose agent exited, failed or was
 interrupted; Suspended is not ended) and `Unknown` (any lookup unconfirmed;
 never a guessed `Unanswered`). `waitingOn` names the Session that owes the next
-step. Thirty minutes sits below the 45-minute timeout cap on managed
+step, and only a Session confirmed live. Thirty minutes sits below the 45-minute timeout cap on managed
 common-rules tasks, so a task can still see `Stale` and act on its work order.
 It is a display bound: nothing expires, is resent or escalates. Archived
 messages show their correlation with state `Unknown`. After retention releases
@@ -246,8 +255,13 @@ read `RecipientEnded`.
 **Both sides.** The coordinator sees a question's state in its own inbox. The
 asker sees it with `box=sent`, a list of the caller's own sent messages by
 the source label, behind the same original-Session proof as its inbox. It wrote
-every one of them, so this is no new disclosure. A configured coordinator host
-reads project threads but has no sent box and still cannot publish or ack.
+every one of them; the sent box returns metadata, never text. One disclosure
+is new and deliberate: the replier now sees whether the asker acknowledged its
+reply (`Acknowledged` against `Answered`), which before only the recipient and
+a coordinator host could read. That is the point of the thread state, and it
+is limited to a reply and the question it answers. A configured coordinator
+host reads project threads but has no sent box and still cannot publish or
+ack.
 
 **Compatibility.** Without `view=thread` the list and read responses keep the
 older shape byte for byte, so an older strict client still decodes them. A
@@ -257,17 +271,32 @@ queries, so the new CLI refuses `--sent` when the echo is missing rather than
 show the caller's inbox as its sent box. An older API refuses ask and reply
 requests as unknown fields (400).
 
-**Rollout.** haynes-ops must install the regenerated
-`inboxmessages` CRD before any operator pin that carries this code. An operator
-writing `kind` against the older CRD would have the field pruned: the store
-then reports 503 Unknown, and a retry conflicts against a plain record. The
-older operator is unaffected by the newer CRD. No RBAC, credential or network
-change follows: the operator already lists and reads these resources.
+**Rollout and rollback floor.** haynes-ops installs the regenerated
+`inboxmessages` CRD first, then pins this operator, and only then sets
+`--enable-inbox-questions`. The order matters both ways:
+
+- With the switch on against the older CRD, the API server prunes `kind` and
+  `inReplyTo` but keeps their labels. The store refuses that record, so its
+  publish answers 503 Unknown, a retry stays 503, and every list page, sent box
+  and read that includes it answers 503 until the record is removed by the
+  DESIGN-010 manual recovery.
+- Once any question or reply exists, an operator older than this change reads
+  it as an invalid record (its labels match neither older label set), with the
+  same 503s. Do not roll the operator back below this change after enabling
+  the switch; turning the switch off stops new questions but leaves existing
+  ones. The older operator with the newer CRD is fine while no question exists.
+
+No RBAC, credential or network change follows: the operator already lists and
+reads these resources.
 
 **Bounds.** The existing per-Session and per-project limits count questions
-and replies. A reply lookup reads at most 8 replies, and more is Unknown. A
-thread view costs a reply list and an ack read per question, plus one memoized
-Session read per recipient.
+and replies. One question reads at most 8 replies; more is Unknown. A thread
+list page scans its possible replies once, not per question: replies sent by
+the caller for its inbox, replies addressed to it for its sent box, or all of
+the project's replies for a coordinator host, in at most 10 pages of 100 (more
+is Unknown for the page). It then reads one ack per answered question by name
+and each distinct Session once. A thread read of one question lists only that
+question's replies.
 
 **Not in this unit.** Headless tasks are not interrupted: a task polls its
 inbox and is not woken by a reply, and a TUI coordinator is not notified.
@@ -276,5 +305,6 @@ live question, reply and acknowledgement proof, the portal view (#326) and
 session detail (#322) stay open under #321. Tests:
 `internal/inbox/askreply_test.go`, `internal/apiserver/inbox_askreply_test.go`,
 `internal/apiserver/inbox_askreply_cli_test.go` (real `agentrun.Run` over TLS),
-`internal/agentrun/inbox_askreply_test.go` and the envtest schema case in
+`internal/agentrun/inbox_askreply_test.go`, the operator flag case in
+`cmd/dev-env-operator/inbox_test.go` and the envtest schema case in
 `api/coordination/v1alpha1/inbox_validation_test.go`.

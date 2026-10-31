@@ -156,3 +156,36 @@ func TestInboxListAndReadShowThreadState(t *testing.T) {
 		t.Fatalf("read did not report the thread on stderr: %q", h.stderr.String())
 	}
 }
+
+func TestInboxThreadOutputIsCheckedAndOlderAPIsAreNamed(t *testing.T) {
+	h := newHarness(t)
+	state := "Answered\x1b[2J"
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		switch {
+		case r.Method == http.MethodPost:
+			// An older or question-disabled API refuses ask and reply as unknown intent.
+			writeTestJSON(w, http.StatusBadRequest, apiv1.ErrorResponse{Error: apiv1.Error{Code: apiv1.CodeBadRequest, Message: "PRIVATE_BODY"}})
+		case r.URL.Path == apiv1.InboxPath:
+			// An older API ignores view=thread.
+			writeTestJSON(w, 200, apiv1.InboxList{Items: []apiv1.InboxMetadata{{Name: askQuestion, UID: "q-uid", Project: "p"}}})
+		default:
+			thread := &apiv1.InboxThread{State: state, Question: apiv1.InboxMessageRef{Name: askQuestion}}
+			writeTestJSON(w, 200, apiv1.InboxMessage{InboxMetadata: apiv1.InboxMetadata{Name: askReply, UID: "r-uid", Project: "p", Kind: apiv1.InboxKindReply, Thread: thread}, Text: "text"})
+		}
+	}
+	h.mustRun(ExitOK, "inbox", "read", askReply, "--project", "p")
+	if strings.Contains(h.stderr.String(), "\x1b") || !strings.Contains(h.stderr.String(), "inbox: reply state could not be confirmed") || h.stdout.String() != "text" {
+		t.Fatalf("unchecked thread output: %q", h.stderr.String())
+	}
+	h.mustRun(ExitOK, "inbox", "list", "--project", "p")
+	if !strings.Contains(h.stderr.String(), "no thread view") {
+		t.Fatalf("missing thread view was not named: %q", h.stderr.String())
+	}
+	for _, args := range [][]string{{"ask", "--key", "q-1"}, {"reply", askQuestion, "--key", "r-1"}} {
+		h.env.Stdin = strings.NewReader("x")
+		h.mustRun(ExitFailed, append(append([]string{"inbox"}, args...), "--project", "p")...)
+		if !strings.Contains(h.stderr.String(), "does not accept questions and replies") || strings.Contains(h.stderr.String(), "PRIVATE_BODY") {
+			t.Fatalf("400 refusal: %q", h.stderr.String())
+		}
+	}
+}

@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
@@ -17,6 +20,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/inbox"
+	"github.com/thaynes43/dev-env/internal/shelf"
 )
 
 // askReplyFixture has a coordinator Session "lead", its child "child" (whose
@@ -27,6 +31,7 @@ func askReplyFixture(t *testing.T) (f *fixture, lead, child, bystander string) {
 	bindCatalogFixture(t, f)
 	enableInbox(f)
 	f.srv.InboxCoordinatorReadProjects = []string{"sample"}
+	f.srv.InboxQuestions = true
 	lead = claimSession(t, f, "lead", humanSA)
 	child = claimSession(t, f, "child", "lead")
 	bystander = claimSession(t, f, "bystander", humanSA)
@@ -312,12 +317,12 @@ func TestInboxThreadUnknownWhenRecipientUnreadable(t *testing.T) {
 	}
 }
 
-// failingReplyLookup fails only the reply lookup by its label selector.
+// failingReplyLookup fails only reply lookups, by their kind=reply selector.
 type failingReplyLookup struct{ client.Reader }
 
 func (r failingReplyLookup) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	for _, o := range opts {
-		if l, ok := o.(client.MatchingLabels); ok && l[inbox.InReplyToLabel] != "" {
+		if l, ok := o.(client.MatchingLabels); ok && l[inbox.KindLabel] == inbox.KindReply {
 			return context.DeadlineExceeded
 		}
 	}
@@ -425,4 +430,176 @@ func TestInboxSentBoxAndQueryBounds(t *testing.T) {
 		t.Fatal("coordinator host thread view", item)
 	}
 	wantError(t, f.do(http.MethodPost, apiv1.InboxPath, tokCoordinator, replyTo(q, "r-host", "x")), http.StatusNotFound, apiv1.CodeNotFound)
+}
+
+func TestInboxQuestionsAreOffByDefault(t *testing.T) {
+	f, lead, child, _ := askReplyFixture(t)
+	q := publish(t, f, child, askParent("q-on", "x"), http.StatusCreated)
+	f.srv.InboxQuestions = false
+	// Off refuses ask and reply as an older API does, before any lookup or write.
+	wantError(t, f.do(http.MethodPost, apiv1.InboxPath, child, askParent("q-off", "x")), http.StatusBadRequest, apiv1.CodeBadRequest)
+	wantError(t, f.do(http.MethodPost, apiv1.InboxPath, lead, replyTo(q, "r-off", "x")), http.StatusBadRequest, apiv1.CodeBadRequest)
+	plain := publish(t, f, child, apiv1.PublishInboxRequest{Project: "sample", Recipient: owner(f, "lead"), Key: "plain-1", Text: "fyi"}, http.StatusCreated)
+	if n := countMessages(t, f); n != 2 {
+		t.Fatal("a refused question or reply was written", n)
+	}
+	// Reads still work; a plain item shows kind plain and no thread.
+	item := itemNamed(t, threadList(t, f, lead, ""), plain.Name)
+	if item.Kind != apiv1.InboxKindPlain || item.Thread != nil || item.InReplyTo != nil {
+		t.Fatal("plain item in the thread view", item)
+	}
+}
+
+func TestInboxParentRetryKeepsTheParentFences(t *testing.T) {
+	f, _, child, _ := askReplyFixture(t)
+	// The parent is replaced by a later Session with the same name.
+	removeInboxSession(t, f, "lead")
+	if err := f.c.Delete(context.Background(), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "lead"}}); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(time.Hour)
+	claimSession(t, f, "lead", humanSA)
+	wantError(t, f.do(http.MethodPost, apiv1.InboxPath, child, askParent("q-1", "Which base?")), http.StatusNotFound, apiv1.CodeNotFound)
+	explicit := askParent("q-1", "Which base?")
+	explicit.ToParent, explicit.Recipient = false, apiv1.TaskClaimOwner{Name: "lead"}
+	publish(t, f, child, explicit, http.StatusCreated)
+	// A parent-addressed retry of that key does not confirm the replacement.
+	publish(t, f, child, askParent("q-1", "Which base?"), http.StatusConflict)
+}
+
+func TestInboxReplyRetryAfterQuestionGone(t *testing.T) {
+	f, lead, child, _ := askReplyFixture(t)
+	q := publish(t, f, child, askParent("q-1", "x"), http.StatusCreated)
+	r := publish(t, f, lead, replyTo(q, "r-1", "main"), http.StatusCreated)
+	stored, err := f.srv.Inbox.Get(context.Background(), q.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.Delete(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+	if again := publish(t, f, lead, replyTo(q, "r-1", "main"), http.StatusOK); again.UID != r.UID {
+		t.Fatal("reply retry after the question was released")
+	}
+	wantError(t, f.do(http.MethodPost, apiv1.InboxPath, lead, replyTo(q, "r-2", "main")), http.StatusNotFound, apiv1.CodeNotFound)
+}
+
+func TestInboxRacedRepliesAreCountedAndBounded(t *testing.T) {
+	f, lead, child, _ := askReplyFixture(t)
+	q := publish(t, f, child, askParent("q-1", "x"), http.StatusCreated)
+	r := publish(t, f, lead, replyTo(q, "r-1", "main"), http.StatusCreated)
+	stored, err := f.srv.Inbox.Get(context.Background(), r.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A reply that raced past the one-reply check lands a second later.
+	raced := func(n int) {
+		f.now = f.now.Add(time.Second)
+		spec := stored.Spec
+		spec.Key = fmt.Sprintf("raced-%d", n)
+		if _, _, err := f.srv.Inbox.Create(context.Background(), spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raced(0)
+	for _, got := range []*apiv1.InboxThread{
+		itemNamed(t, threadList(t, f, lead, ""), q.Name).Thread,
+		decode[apiv1.InboxMessage](t, f.do(http.MethodGet, inboxPath(q)+"&view=thread", lead, nil)).Thread,
+	} {
+		if got.State != apiv1.InboxStateAnswered || got.Replies != 2 || got.Reply.Name != r.Name {
+			t.Fatal("raced replies", got)
+		}
+	}
+	for n := 1; n < inbox.MaxReplies; n++ {
+		raced(n)
+	}
+	for _, got := range []*apiv1.InboxThread{
+		itemNamed(t, threadList(t, f, lead, ""), q.Name).Thread,
+		decode[apiv1.InboxMessage](t, f.do(http.MethodGet, inboxPath(q)+"&view=thread", lead, nil)).Thread,
+	} {
+		if got.State != apiv1.InboxStateUnknown || got.Reply != nil {
+			t.Fatal("more than MaxReplies was not Unknown", got)
+		}
+	}
+}
+
+func TestInboxAskRefusesHostsAndOtherScopes(t *testing.T) {
+	f, _, child, _ := askReplyFixture(t)
+	wantError(t, f.do(http.MethodPost, apiv1.InboxPath, tokCoordinator, askParent("q-host", "x")), http.StatusNotFound, apiv1.CodeNotFound)
+	f.sessionPod("unscoped", "dev", 0)
+	for _, to := range []apiv1.TaskClaimOwner{{Namespace: "dev-env-system", Name: "lead"}, {Name: "unscoped"}, {Name: "nobody"}} {
+		req := askParent("q-"+to.Name, "x")
+		req.ToParent, req.Recipient = false, to
+		wantError(t, f.do(http.MethodPost, apiv1.InboxPath, child, req), http.StatusNotFound, apiv1.CodeNotFound)
+	}
+}
+
+func TestInboxAnsweredWaitsOnlyOnALiveAsker(t *testing.T) {
+	f, lead, child, _ := askReplyFixture(t)
+	q := publish(t, f, child, askParent("q-1", "x"), http.StatusCreated)
+	publish(t, f, lead, replyTo(q, "r-1", "main"), http.StatusCreated)
+	if got := itemNamed(t, threadList(t, f, lead, ""), q.Name).Thread; got.State != apiv1.InboxStateAnswered || got.WaitingOn == nil || got.WaitingOn.Name != "child" {
+		t.Fatal("answered", got)
+	}
+	removeInboxSession(t, f, "child")
+	if got := itemNamed(t, threadList(t, f, lead, ""), q.Name).Thread; got.State != apiv1.InboxStateAnswered || got.WaitingOn != nil {
+		t.Fatal("waiting on an ended asker", got)
+	}
+}
+
+// countingLists counts InboxMessage list calls through the store.
+type countingLists struct {
+	client.Reader
+	n *int
+}
+
+func (r countingLists) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*coord.InboxMessageList); ok {
+		*r.n++
+	}
+	return r.Reader.List(ctx, list, opts...)
+}
+
+func TestInboxThreadPageScansRepliesOnce(t *testing.T) {
+	f, lead, child, _ := askReplyFixture(t)
+	for n := range 5 {
+		q := publish(t, f, child, askParent(fmt.Sprintf("q-%d", n), "x"), http.StatusCreated)
+		if n%2 == 0 {
+			publish(t, f, lead, replyTo(q, fmt.Sprintf("r-%d", n), "y"), http.StatusCreated)
+		}
+	}
+	var lists int
+	f.srv.Inbox.Live = countingLists{f.c, &lists}
+	for _, tc := range []struct{ tok, extra string }{{lead, ""}, {child, "&box=sent"}, {tokCoordinator, ""}} {
+		lists = 0
+		list := threadList(t, f, tc.tok, tc.extra)
+		answered := 0
+		for _, item := range list.Items {
+			if item.Kind == apiv1.InboxKindQuestion && item.Thread.State == apiv1.InboxStateAnswered {
+				answered++
+			}
+		}
+		if answered != 3 || lists != 2 {
+			t.Fatalf("%s%s: %d answered, %d InboxMessage lists; want 3 and 2 (the page and one reply index)", tc.tok, tc.extra, answered, lists)
+		}
+	}
+}
+
+func TestInboxArchivedThreadReadIsUnknown(t *testing.T) {
+	f, lead, child, _ := askReplyFixture(t)
+	q := publish(t, f, child, askParent("q-1", "x"), http.StatusCreated)
+	m, err := f.srv.Inbox.Get(context.Background(), q.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := &inboxArchiveGetFake{result: archivedInboxGetResult(t, m.DeepCopy())}
+	f.srv.CoordinationArchiveReads, f.srv.CoordinationArchive, f.srv.ShelfSlots = true, archive, shelf.NewExecSlots(2)
+	if err := f.c.Delete(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(http.MethodGet, inboxPath(q)+"&view=thread", lead, nil)
+	got := decode[apiv1.InboxMessage](t, w)
+	if w.Code != http.StatusOK || !got.Archived || got.Kind != apiv1.InboxKindQuestion || got.Thread == nil || got.Thread.State != apiv1.InboxStateUnknown || got.Thread.Question.Name != q.Name {
+		t.Fatal("archived thread read", w.Code, w.Body.String())
+	}
 }
