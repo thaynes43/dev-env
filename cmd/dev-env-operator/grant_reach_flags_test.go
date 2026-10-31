@@ -12,6 +12,7 @@ func TestPolicyReachLegacyFlags(t *testing.T) {
 		bad  bool
 	}{
 		{name: "default"},
+		{name: "named tree only", args: []string{"--grant-delegates=dev-agents/dev-env-coordinator-lead"}},
 		{name: "named", args: []string{"--grant-delegates=dev-agents/dev-env-coordinator-lead", "--grant-policy-delegates=dev-agents/dev-env-coordinator-lead"}},
 		{name: "not subset", args: []string{"--grant-policy-delegates=dev-agents/dev-env-coordinator-lead"}, bad: true},
 		{name: "legacy exact", args: []string{"--grant-legacy-delegates=" + legacyFlagFixture, "--grant-delegates=dev-agents/dev-env-agent", "--grant-policy-delegates=dev-agents/dev-env-agent"}},
@@ -32,6 +33,9 @@ func TestPolicyReachLegacyFlags(t *testing.T) {
 			}
 			if tc.name == "default" && (len(op.grantPolicyDelegates) != 0 || len(op.legacyGrantDelegates) != 0 || len(br.grantPolicyDelegates) != 0 || len(br.legacyGrantDelegates) != 0) {
 				t.Fatal("new paths enabled by default")
+			}
+			if tc.name == "named tree only" && (len(op.grantPolicyDelegates) != 0 || len(br.grantPolicyDelegates) != 0) {
+				t.Fatal("configured tree delegate gained policy designation by default")
 			}
 			if tc.name == "legacy exact" && (len(op.legacyGrantDelegates) != 1 || len(br.legacyGrantDelegates) != 1) {
 				t.Fatal("exact actor not retained")

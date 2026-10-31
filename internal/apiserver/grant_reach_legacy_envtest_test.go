@@ -60,7 +60,7 @@ func TestEnvtestLegacyDesignatedActorToTopLevelRequester(t *testing.T) {
 	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)) + 10*time.Millisecond)
 	actor, pod, tok := materialize("reach-legacy-claude", "reach-legacy-parent", "1")
 	_, _, requester := materialize("reach-top-level-gpu", humanSA, "0")
-	_, _, ordinary := materialize("reach-other-baseline", humanSA, "0")
+	_, _, ordinary := materialize("reach-other-baseline", "reach-legacy-parent", "1")
 	var sa corev1.ServiceAccount
 	if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: controller.ServiceAccountName}, &sa); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestEnvtestLegacyDesignatedActorToTopLevelRequester(t *testing.T) {
 	}
 	l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), expired, decisionFor(g, true), http.StatusUnauthorized)
 	// An ordinary holder of the SAME baseline account gains no decision authority.
-	l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), ordinary, decisionFor(g, true), http.StatusForbidden)
+
 	// Neither approval nor denial may consume the slot without covering authority.
 	for _, approve := range []bool{true, false} {
 		l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tok, decisionFor(g, approve), http.StatusForbidden)
@@ -84,6 +84,9 @@ func TestEnvtestLegacyDesignatedActorToTopLevelRequester(t *testing.T) {
 	if err := l.k8s.Create(ctx, p); err != nil {
 		t.Fatal(err)
 	}
+	// A validly shaped sibling with covering policy is refused by exact tuple,
+	// independently of depth, ancestry or missing policy.
+	l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), ordinary, decisionFor(g, true), http.StatusForbidden)
 	// Exact tuple and policy designation are independently necessary.
 	srv.LegacyGrantDelegates = nil
 	l.want(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tok, decisionFor(g, true), http.StatusForbidden)

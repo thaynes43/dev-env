@@ -29,6 +29,9 @@ Running controlled Pod. TokenReview supplies the authenticated account UID and
 Pod UID; both services also read the live ServiceAccount UID. Other holders of
 that shared account receive no delegate eligibility, including other actor forms.
 Caller classification, session profile and runtime identity are unchanged.
+Designation applies to every covering `spec.delegated` policy in the configured
+policy namespace, for approvals and denials; no per-policy delegate binding or
+reach opt-in is added. The activation packet must enumerate those policies.
 
 **Explicit proposed amendment:** for form3 only, exact session/Pod/SA separation
 replaces S2's broad same-account requester refusal. Otherwise the required two
@@ -38,8 +41,12 @@ The exception is never applied to host/named-session forms. Removing/replacing
 the tuple or either list revokes the grant. This is a source proposal, not an
 assertion that the old same-account invariant stayed unchanged.
 
-A root able to exec into the actor Pod or mint its bound token can act as that
-actor. Pod-bound authentication does not establish human identity, verify a
+Every process in the actor Pod holds its authority, including native subagents
+and in-pod MCP servers; prompt injection affecting them can record decisions.
+Any principal with create on serviceaccounts/token for the shared baseline SA
+can mint a token bound to the actor Pod that passes these identity checks. The
+activation packet must enumerate those principals. A root able to exec into the
+actor Pod or mint its bound token can act as that actor. Pod-bound authentication does not establish human identity, verify a
 message author or constrain such roots. The new broker/API ServiceAccount UID
 reads require separate reviewed runtime RBAC; no permission is applied here.
 
