@@ -294,17 +294,72 @@ Adapters must supply explicit workflow evidence; arbitrary order notes are not
 parsed into state. Neither adapter has a production implementation in this slice.
 
 The caller supplies an evaluation time and a positive maximum observation age.
-Unconfigured, unavailable, empty, stale, invalid and unjoined observations remain
-distinct reasons for Unknown. No wall clock or cached fallback is used. Fresh
-observations must cover their event timestamps, and both bindings must agree.
-Claimed/responding require explicit canonical evidence and a V1 claimed/working
-order. Needs-user requires explicit canonical evidence and an escalated or failed
-order. Resolved requires explicit canonical evidence and a done order. Pending,
-failed, escalated, missing current alerts and old terminal records alone never
-mean resolved. A refire has a different start identity even if its order key is
+Unconfigured, unavailable, empty, stale, invalid, unjoined and mismatched
+observations remain distinct reasons for Unknown. No wall clock or cached
+fallback is used. Fresh observations must cover their event timestamps, claim
+state evidence must not predate the order attempt's `created` time, and both
+bindings must agree.
+
+V1 records only the order statuses `pending`, `claimed`, `done`, `failed` and
+`escalated` (haynes-ops `dev-env-ops/app/resources/work-order-watch.sh` status
+flow and `order-status.sh`). `order-status.sh <key> working` is a heartbeat: it
+bumps `updated` and keeps the recorded status, so `working` is never a status.
+Claimed/responding require explicit canonical evidence and a V1 `claimed`
+order. Needs-user requires explicit canonical evidence and an `escalated` or
+`failed` order. Resolved requires explicit canonical evidence and a `done`
+order. A claim state outside claimed, responding, needs-user and resolved is
+Invalid. A supported claim state that disagrees with the order status is
+Mismatched (fix of 2026-10-31): the projection withholds the owner and claim
+reference with the state, because a contradicted claim confirms neither. The
+portal shows "Mismatched (claim and order disagree)". Pending, failed,
+escalated, missing current alerts and old terminal records alone never mean
+resolved. A refire has a different start identity even if its order key is
 reused. Unknown fields are literal `Unknown`; unsafe evidence is never linked.
-Evidence links require HTTPS without credentials, query or fragment, with the
-existing redaction guard and no control or invisible formatting characters.
+
+The projected state is the responder's recorded workflow state, labelled
+"Response state" in the portal and `responseState`/`responseStateAt` in MCP. It
+is never the alert's own status. The current snapshot lists only active,
+suppressed and unprocessed alerts, so a `resolved` response state beside a
+listed alert means the responder recorded a resolution while Alertmanager still
+lists the alert. The projection does not hide it: it cannot observe the alert's
+end (an absent alert is not a historical absence), so gating on that would mean
+`resolved` never shows. The two fields stay side by side instead.
+
+Evidence links are rendered as the portal `href` and returned as the MCP
+`evidenceURL`, byte for byte. They require `https://`, Go's canonical form
+(`url.Parse(v).String() == v`), no credentials, port, query or fragment, and a
+character set that html/template neither escapes nor normalizes in an `href`:
+letters, digits and `-._~/%:@,;=!$*`. So spaces, quotes, angle brackets,
+backticks, backslashes, `&`, `+` and parentheses are rejected raw. A
+percent-decoded path also rejects spaces, quotes, angle brackets, backticks,
+backslashes, control and invisible formatting characters and `.`/`..` segments
+(an encoded `&` or `+` stays inert in the link). The
+host must be a lowercase DNS name with at least two labels whose last label
+starts with a letter: that rejects every IP literal a browser would parse
+(dotted, short, hex, octal or decimal IPv4 and bracketed IPv6), single-label
+names and `.localhost`. The existing redaction guard still applies. This is not
+an origin allowlist.
+
+The MCP content revision hashes the normalized items without the capture time
+or the response's `orderObservedAt` and `claimObservedAt`. A re-observing
+adapter therefore keeps the revision while the evidence is unchanged;
+conditions, sources and event times still count as content.
+
+Every Unknown field stays the literal `Unknown` rather than being omitted, so an
+Unconfigured response keeps UI/MCP parity and costs about 455 bytes per alert in
+MCP JSON (443 for the object, measured with a 16-hex fingerprint and a
+nanosecond start; `TestUnconfiguredResponseSize` bounds it at 448). Against the
+2 MiB normalized `all` bound that is the whole budget at about 4,600 alerts; a
+snapshot over the bound fails closed as Unavailable and is never truncated. A
+listed page of at most 100 items adds about 45 KB. This slice documents the
+cost and does not trim.
+
+Before any real order or claim adapter lands, two prerequisites must be met.
+First, evidence links need a fixed-origin allowlist (for example the canonical
+OpenProject and GitHub origins); the syntax checks above are not enough to keep
+a LAN or attacker host out. Second, sources need a batch or snapshot interface:
+the current per-alert interfaces make two lookups for every alert on every
+portal render and every `pages_list`/`pages_get`.
 
 Production entry points continue to use unconfigured response sources,
 `UnconfiguredStore` and `DisconnectedPagesControls`. No reader, endpoint, CRD,

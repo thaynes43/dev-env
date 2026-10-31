@@ -368,8 +368,10 @@ func (s *pagesMCPSession) call(raw json.RawMessage) map[string]any {
 	if err != nil || len(all) > pages.AlertmanagerMaxBytes {
 		return mcpToolError("Unavailable: current snapshot")
 	}
-	sum := sha256.Sum256(all)
-	current := "sha256:" + hex.EncodeToString(sum[:])
+	current, err := pagesRevision(items)
+	if err != nil {
+		return mcpToolError("Unavailable: current snapshot")
+	}
 	out := pagesMCPResult{Availability: "Available", Source: source, CapturedAt: at.Format(time.RFC3339Nano), Revision: current, Coverage: coverage, State: "CurrentSnapshot", Items: []pagesMCPItem{}}
 	for _, item := range items {
 		if name == "pages_get" && item.Key != key {
@@ -396,6 +398,27 @@ func (s *pagesMCPSession) call(raw json.RawMessage) map[string]any {
 		return mcpToolError("Unavailable: response exceeds bounds")
 	}
 	return map[string]any{"content": []map[string]string{{"type": "text", "text": string(text)}}, "isError": false}
+}
+
+// pagesRevision hashes the normalized items without capture or response
+// observation times, so an adapter re-observing unchanged evidence keeps the
+// revision. Conditions, sources and event times still count as content.
+func pagesRevision(items []pagesMCPItem) (string, error) {
+	stable := make([]pagesMCPItem, len(items))
+	copy(stable, items)
+	for i := range stable {
+		if stable[i].Response != nil {
+			response := *stable[i].Response
+			response.OrderObservedAt, response.ClaimObservedAt = "", ""
+			stable[i].Response = &response
+		}
+	}
+	raw, err := json.Marshal(stable)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 func normalizePagesMCP(source string, raw []byte, at time.Time) ([]pagesMCPItem, string, error) {
 	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '[' {

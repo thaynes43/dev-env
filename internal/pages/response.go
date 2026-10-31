@@ -94,13 +94,17 @@ type ResponseSources struct {
 
 // ResponseProjection is the shared portal/MCP answer. Conditions explain why a
 // field is Unknown without turning empty, failed or stale into resolution.
+// State is the responder's recorded workflow state (JSON responseState), never
+// the alert's own status: "resolved" can sit beside an alert still listed.
+// Every Unknown field is the literal "Unknown", so an Unconfigured projection
+// costs about 455 bytes per alert in MCP JSON (DESIGN-031 13).
 type ResponseProjection struct {
 	Identity        AlertIdentity           `json:"identity"`
 	Order           OrderReference          `json:"order"`
 	Claim           CanonicalClaimReference `json:"claim"`
 	Owner           string                  `json:"owner"`
-	State           string                  `json:"state"`
-	StateAt         string                  `json:"stateAt"`
+	State           string                  `json:"responseState"`
+	StateAt         string                  `json:"responseStateAt"`
 	EvidenceURL     string                  `json:"evidenceURL"`
 	OrderCondition  string                  `json:"orderCondition"`
 	ClaimCondition  string                  `json:"claimCondition"`
@@ -171,16 +175,17 @@ func ProjectResponse(ctx context.Context, identity AlertIdentity, sources Respon
 		out.ClaimCondition = "Unjoined"
 		return out
 	}
-	if !validClaimReference(c.Reference) || !responseText(c.Owner) || !knownResponseTime(c.StateAt) || c.StateAt.Before(created) || c.StateAt.After(claim.ObservedAt) || !safeResponseURL(c.EvidenceURL) {
+	if !validClaimReference(c.Reference) || !responseText(c.Owner) || !validResponseState(c.State) || !knownResponseTime(c.StateAt) || c.StateAt.Before(created) || c.StateAt.After(claim.ObservedAt) || !safeResponseURL(c.EvidenceURL) {
 		out.ClaimCondition = "Invalid"
 		return out
 	}
-	out.Claim, out.Owner = c.Reference, c.Owner
-	// Ownership can be evidenced even when no supported workflow state is.
+	// A claim whose state disagrees with the order status confirms nothing, so
+	// its owner and reference are withheld with the state, not shown unconfirmed.
 	if !responseStateMatches(c.State, o.Status) {
-		out.ClaimCondition = "Unjoined"
+		out.ClaimCondition = "Mismatched"
 		return out
 	}
+	out.Claim, out.Owner = c.Reference, c.Owner
 	out.State, out.StateAt, out.EvidenceURL = c.State, responseTime(c.StateAt), c.EvidenceURL
 	return out
 }
@@ -208,10 +213,21 @@ func observationCondition(obs SourceObservation, err error, at time.Time, maxAge
 	return "Available"
 }
 
+func validResponseState(state string) bool {
+	switch state {
+	case "claimed", "responding", "needs-user", "resolved":
+		return true
+	}
+	return false
+}
+
+// responseStateMatches compares against the statuses V1 records: pending,
+// claimed, done, failed and escalated. `order-status.sh working` is a
+// heartbeat that bumps only `updated`, so "working" is never a status.
 func responseStateMatches(state, status string) bool {
 	switch state {
 	case "claimed", "responding":
-		return status == "claimed" || status == "working"
+		return status == "claimed"
 	case "needs-user":
 		return status == "escalated" || status == "failed"
 	case "resolved":
@@ -269,14 +285,39 @@ func knownResponseTime(stamp time.Time) bool {
 	return known
 }
 
+// Evidence links are rendered as a portal href and returned as MCP
+// evidenceURL; both must carry the same bytes. The character set excludes
+// everything html/template would escape or normalize in an href (quotes,
+// angle brackets, space, '&', '+', parentheses), and the input must already be
+// Go's canonical form. The host must be a DNS name whose last label starts
+// with a letter, which excludes IPv4 literals in every form a browser parses
+// (127.1, 0x7f.1, 2130706433), IPv6 literals (no brackets), ports,
+// single-label and .localhost names. This is not an origin allowlist; DESIGN-031
+// 13 requires one before any real adapter lands.
+var (
+	evidenceURLChars = regexp.MustCompile(`^https://[A-Za-z0-9._~/%:@,;=!$*-]+$`)
+	evidenceHost     = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
+)
+
 func safeResponseURL(value string) bool {
-	if value == "" || value == timeUnknown || len(value) > 512 || !utf8.ValidString(value) || RedactURL(value) != value || RedactText(value) != value {
+	if len(value) > 512 || !evidenceURLChars.MatchString(value) || RedactURL(value) != value || RedactText(value) != value {
 		return false
 	}
 	u, err := url.Parse(value)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(value, "#") {
+	if err != nil || u.String() != value || u.Scheme != "https" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return false
 	}
-	decoded := u.Host + u.Path
-	return utf8.ValidString(decoded) && !strings.ContainsFunc(value+decoded, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) })
+	if len(u.Host) > 253 || !evidenceHost.MatchString(u.Host) || strings.HasSuffix(u.Host, ".localhost") {
+		return false
+	}
+	// Percent escapes must not decode into what the raw form excludes, and a
+	// browser would resolve dot segments (including %2e) to a different path.
+	for _, segment := range strings.Split(u.Path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return utf8.ValidString(u.Path) && !strings.ContainsFunc(u.Path, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) || strings.ContainsRune("\"'<>`\\", r)
+	})
 }
