@@ -110,3 +110,40 @@ not automatically actionable in the existing registry. Provider-observed time,
 freshness and account binding remain Unknown. Legacy and keyed bucket views
 remain separate; this helper does not infer account allowance, reset, cost,
 task attribution or permission. Synthetic tests do not establish a live read.
+
+## Retained usage after terminal compute reclaim (OP315)
+
+Task compute reclaim removes the pod and keeps its Session, HOME and history.
+`Suspended` with `TaskComputeReclaimed` does not remove or reset
+`status.usageObservation`. A private reap request likewise keeps usage while
+the Session's history finalizer protects it. The API and `agent-run show` read
+this retained observation; descendant rollups count each retained descendant
+Session UID once, excluding the root's own invocation. Reaped, reclaimed and
+archived Sessions count while their objects exist. No task-pod read is needed.
+
+The portal Usage and Sessions views read retained initial task observations
+and interactive `status.conversationUsage` separately. Conversation counters
+are cumulative to the last measurement, with stale/partial coverage explicit;
+they are never added to an initial invocation. Lifecycle freshness does not
+turn a retained receipt into zero. Requested models remain separate from
+provider-reported served models. Missing observations, served models, costs
+and quota stay Unknown. Token totals do not establish account allowance; the
+allowance reader stays Not connected.
+
+The pure projector accepts these retained initial observations without pod or
+phase inputs. Identical replays still produce one row, with no aggregate total.
+The on-demand export also deduplicates a child's direct observation and its
+parent's existing captured receipt through that projector.
+
+Actual deletion of a Session object is a separate boundary: ordinary portal
+inventory and descendant rollups exclude it. Existing opt-in captured
+parent receipts can survive a child's deletion and be exported explicitly;
+they are never added to a retained-descendant rollup. Without such retained
+evidence, deleted historical usage is Unknown. This source/test contract does
+not enable capture, connect an allowance reader or activate a deployment.
+
+The portal also validates Session identity across the entire paginated read.
+A repeated UID or name on a later page makes the read unavailable and drops
+partial rows and totals. It cannot add a second snapshot of the same retained
+Session or choose between conflicting identities. This matches the existing
+within-page duplicate refusal; a failed read reports its page and row index.

@@ -149,7 +149,8 @@ const maxRollupSessions = 64
 // (DESIGN-018). Descendants are found by spec.parent name among the Sessions
 // that still exist, created no earlier than their parent (an older Session
 // names an earlier holder of the name), and walked once each by UID. A reaped
-// descendant is not in all and is not counted; the scope says so. Each
+// descendant whose Session was deleted is not in all and is not counted.
+// Reaping and compute-reclaimed Sessions still retained in all are counted. Each
 // contributes at most its own observation, keyed by its Session UID and
 // observation ID, so no invocation is counted twice. It returns nil when root
 // has no retained descendants: an empty sum is not a zero.

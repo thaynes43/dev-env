@@ -55,7 +55,7 @@ func TestUsageShowProviderReportedModelsBillingAndRollup(t *testing.T) {
 		"Initial task cost:", "0.75 USD (CLI equivalent estimate)",
 		"claude-haiku-4-5: input 10, output Unknown, cache read Unknown, cache create Unknown, cost 0.05 USD (CLI equivalent estimate)",
 		"claude-opus-5-5: input 20, output 5, cache read Unknown, cache create Unknown, cost Unknown",
-		"Descendant usage:", "Complete over 2 retained descendant Sessions, 2 invocations counted once each; reaped descendants are not counted",
+		"Descendant usage:", "Complete over 2 retained descendant Sessions, 2 invocations counted once each; retained reaped/reclaimed Sessions included; deleted Sessions excluded",
 		"input tokens:", "111", "cost:", "0.6 USD (CLI equivalent estimate)", "models:", "claude-haiku-4-5, claude-opus-5-5 (provider reported)")
 	if strings.Contains(out, "$") {
 		t.Fatal("unqualified dollars", out)
@@ -72,7 +72,7 @@ func TestUsageShowPartialRollupStaysUnknown(t *testing.T) {
 	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, s) }
 	h.mustRun(ExitOK, "show", s.Name)
 	out := h.stdout.String()
-	contains(t, "partial rollup", out, "Partial over 3 retained descendant Sessions, 0 invocations counted once each; walk stopped at the bound; reaped descendants are not counted")
+	contains(t, "partial rollup", out, "Partial over 3 retained descendant Sessions, 0 invocations counted once each; walk stopped at the bound; retained reaped/reclaimed Sessions included; deleted Sessions excluded")
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "input tokens:") || strings.HasPrefix(strings.TrimSpace(line), "cost:") {
 			if !strings.HasSuffix(strings.TrimSpace(line), "Unknown") {
@@ -190,4 +190,30 @@ func TestCanaryResultProviderAttribution(t *testing.T) {
 	h = newHarness(t)
 	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { _, _ = w.Write([]byte(nullModels)) }
 	h.mustRun(ExitFailed, canaryResultArgs(p)...)
+}
+
+func TestUsageShowRetainedReapedDescendants(t *testing.T) {
+	for _, phase := range []string{"Running", "Suspended"} {
+		t.Run(phase, func(t *testing.T) {
+			h := newHarness(t)
+			s := providerSession()
+			s.Phase, s.Reaping = phase, phase == "Suspended"
+			if phase == "Suspended" {
+				s.Conditions = []apiv1.Condition{{Type: "PrivateHistoryRetained", Status: "True", Reason: "TaskComputeReclaimed"}}
+			}
+			h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, s) }
+			h.mustRun(ExitOK, "show", s.Name)
+			out := h.stdout.String()
+			contains(t, "retained usage", out, "2 invocations counted once each", "111", "222", "Subscription quota:", "Unknown")
+			if phase == "Suspended" {
+				contains(t, "reclaim condition", out, "TaskComputeReclaimed")
+			}
+			if strings.Contains(out, "reaped descendants are not counted") {
+				t.Fatal("retained reaped descendants are counted; CLI claims otherwise")
+			}
+			if len(h.api.requests()) != 1 || len(h.ran) != 0 {
+				t.Fatal("show requires more than one retained API read")
+			}
+		})
+	}
 }

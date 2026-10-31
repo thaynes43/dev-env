@@ -235,6 +235,7 @@ func (s *SessionSource) read(ctx context.Context, filter portal.ProductFilter, r
 		return page, readFailure("credential_unavailable")
 	}
 	cursor, complete, freshness := "", false, "observed"
+	names, uids := map[string]struct{}{}, map[string]struct{}{}
 	var sessions []apiv1.PortalSessionSummary
 	for n := 0; n < sessionPageCap; n++ {
 		stats.page = 0
@@ -257,6 +258,20 @@ func (s *SessionSource) read(ctx context.Context, filter portal.ProductFilter, r
 		stats.decode += time.Since(step)
 		if decodeErr != nil {
 			return page, decodeErr
+		}
+		// A Session contributes once across the entire inventory snapshot.
+		// Per-page decoding cannot catch a repeated or replaced identity on
+		// a later page. Refuse the read before projecting duplicate totals.
+		for i, row := range decoded.Sessions {
+			_, nameSeen := names[row.Name]
+			_, uidSeen := uids[row.UID]
+			if nameSeen || uidSeen {
+				failure := readFailure("response_contract")
+				failure.RowIndex = i
+				return page, failure
+			}
+			names[row.Name] = struct{}{}
+			uids[row.UID] = struct{}{}
 		}
 		freshness = worstFreshness(freshness, decoded.Freshness)
 		sessions = append(sessions, decoded.Sessions...)

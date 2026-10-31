@@ -321,7 +321,7 @@ func (a *app) printSession(s apiv1.Session) {
 		if r.Truncated {
 			coverage += "; walk stopped at the bound"
 		}
-		coverage += "; reaped descendants are not counted"
+		coverage += "; retained reaped/reclaimed Sessions included; deleted Sessions excluded"
 		row("Descendant usage", "%s", coverage)
 		row("  input tokens", "%s", usageTokenText(r.InputTokens))
 		row("  output tokens", "%s", usageTokenText(r.OutputTokens))
