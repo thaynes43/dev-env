@@ -67,6 +67,12 @@ type CreateGrantRequest struct {
 	// Namespaces are where a namespaced role is bound, each named. The
 	// cluster-wide roles (nodes, break-glass) take none.
 	Namespaces []string `json:"namespaces,omitempty"`
+	// Secrets are the Secrets a dev-env-grant-namespace-operator grant will
+	// use, 1 to 16 Secret names (DNS-1123 subdomains), none twice; required
+	// for that role and refused for every other (DESIGN-042 5.1). They hold in
+	// each named namespace. The API stores them sorted, and the scope digest
+	// covers them.
+	Secrets []string `json:"secrets,omitempty"`
 	// FQDNs are DNS names, exact or with one leading "*.".
 	FQDNs []string `json:"fqdns,omitempty"`
 	// CIDRs are address ranges, such as 192.168.40.21/32.
@@ -108,7 +114,9 @@ const GrantTaskClaimsV1 = "v1"
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
 	// TaskClaims is a read-only requester observation, not approval or transfer.
-	TaskClaims        *SessionTaskClaims `json:"taskClaims,omitempty"`
+	TaskClaims *SessionTaskClaims `json:"taskClaims,omitempty"`
+	// UID is the grant's UID: set for a maintenance grant, and for every grant
+	// while the operator serves delegate decisions (GrantDecisionRequest).
 	UID               string             `json:"uid,omitempty"`
 	Maintenance       *MaintenanceTask   `json:"maintenance,omitempty"`
 	MaintenanceStatus *MaintenanceStatus `json:"maintenanceStatus,omitempty"`
@@ -126,6 +134,7 @@ type Grant struct {
 	Type       string          `json:"type"`
 	Role       string          `json:"role,omitempty"`
 	Namespaces []string        `json:"namespaces,omitempty"`
+	Secrets    []string        `json:"secrets,omitempty"` // exactly the names ScopeDigest covers
 	FQDNs      []string        `json:"fqdns,omitempty"`
 	CIDRs      []string        `json:"cidrs,omitempty"`
 	Endpoints  []GrantEndpoint `json:"endpoints,omitempty"`
@@ -179,3 +188,38 @@ const (
 	// Released or Failed.
 	FilterPhase = "phase"
 )
+
+// GrantDecisionPath is the route of a delegate decision on a grant (DESIGN-042
+// 6.2, default off): POST /v1/grants/{name}/decision.
+func GrantDecisionPath(name string) string { return GrantPath(name) + "/decision" }
+
+// GrantDecisionRequest is the body of POST /v1/grants/{name}/decision. Only an
+// allowlisted delegate identity (the operator's --grant-delegates) may send it,
+// and never for a grant of its own session or of one of its ancestors. The
+// delegate is taken from the caller's token, never from this body. The answer
+// is the Grant with 202 Accepted: the operator records the decision and the
+// broker applies it. A delegate decision is not a human decision.
+//
+// Unknown fields are refused. The error codes are those of the maintenance
+// decision route: forbidden for the caller or the grant, conflict for a stale,
+// replayed, mismatched or already decided request, invalid for a bad TTL, ref
+// or reason, and not_found for a grant that does not exist.
+type GrantDecisionRequest struct {
+	// GrantUID is the Grant.UID the delegate reviewed.
+	GrantUID string `json:"grantUID"`
+	// Digest is the Grant.ScopeDigest the delegate reviewed. A different
+	// digest is a conflict.
+	Digest string `json:"digest"`
+	// Approve approves the grant; false denies it.
+	Approve bool `json:"approve"`
+	// TTL approves for less time than the grant asked, a Go duration of at
+	// least 10m. Empty means the requested TTL.
+	TTL string `json:"ttl,omitempty"`
+	// Ref is a required nonsecret reference to the request message the
+	// delegate answered, or to Tom's message it relays: 1 to 128 letters,
+	// digits and . _ : / # -.
+	Ref string `json:"ref"`
+	// Reason is why, in the delegate's words: at most 256 characters, no
+	// control characters. A denial shows it in the grant's message.
+	Reason string `json:"reason,omitempty"`
+}
