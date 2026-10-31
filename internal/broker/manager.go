@@ -52,6 +52,10 @@ type Options struct {
 	EnableAttestedGrants           bool
 	EnableMaintenanceGrants        bool
 	MaintenanceHumanServiceAccount string
+	// EnableAttestedMaintenance turns on approval of maintenance grants
+	// through attested policies with a maintenance scope (ADR-013). It needs
+	// EnableAttestedGrants and EnableMaintenanceGrants too. Default off.
+	EnableAttestedMaintenance bool
 	// LeaderElect elects one leader among the replicas; only it reconciles.
 	LeaderElect bool
 	// LeaseDuration, RenewDeadline and RetryPeriod tune leader election; zero
@@ -145,6 +149,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		EnableHWSSHGrants:              o.EnableHWSSHGrants,
 		EnableAttestedGrants:           o.EnableAttestedGrants,
 		EnableMaintenanceGrants:        o.EnableMaintenanceGrants,
+		EnableAttestedMaintenance:      o.EnableAttestedMaintenance,
 		MaintenanceHumanServiceAccount: o.MaintenanceHumanServiceAccount,
 		Clock:                          clk,
 		Notifier:                       o.Notifier,

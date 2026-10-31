@@ -211,3 +211,55 @@ context-file resources with KUBECONFIG=/dev/null, and enables neither cluster no
 registry access. The script's `--archive` option reuses the same verified archive
 without downloading it. Production denials must be explicit Fail results with no
 engine errors; compilation or evaluation errors never count as a denial pass.
+
+## Amendment 2026-10-31: approval by message to the requesting agent (ADR-013)
+
+Tom, 2026-10-31, relayed by lead dev-env-1029-132039 in the OP233 work order:
+"I or an agent can approve with a message to the agent requesting the grant."
+[ADR-013](../../adrs/013-attested-maintenance-approval.md) records the ruling and
+amends ADR-012's "independent of unverified agent attestation" clause. This
+section is the source design. It authorizes no live policy, grant, flag or pilot.
+
+What changes:
+
+- A maintenance grant may also be approved by a verified agent attestation
+  (DESIGN-001 D-88), through an attested GrantPolicy (`spec.attested`) with a
+  `spec.maintenance` scope. The grant matches only when its node, node UID,
+  resource (the GPU UUID), runtime profile and digest-pinned image equal the
+  policy's; its capabilities are a subset of the policy's; `cpuMillis` and
+  `memoryMiB` are at or below `maxCPUMillis` and `maxMemoryMiB`; every worker,
+  device file and read-only mount it names is one the policy names exactly
+  (workers by name, session UID and pod UID); and its TTL is at most the
+  policy's `maxTTL`. The operation and restore text stay audit intent.
+- The schema accepts a maintenance policy only with `spec.attested`, and caps
+  its `maxTTL` at 1 hour. `Matches`, the standing-policy test, is false for
+  every maintenance grant and policy, whatever the schema did.
+- The human route is unchanged and runs first. `maintenanceDecision` handles a
+  grant that carries a human decision annotation, valid or not, before any
+  policy is read.
+- Otherwise, and only with `--enable-maintenance-grants`,
+  `--enable-attested-grants` and `--enable-attested-maintenance` all on, the
+  broker evaluates attested policies with the existing `verifyAttestation`
+  checks: the statement's grant UID, the requesting session UID, the
+  session's current Running pod, and the scope digest. It also requires the
+  attesting pod to be the envelope's coordinator pod, and runs
+  `CheckMaintenanceIdentities`, as `Decide` does for the human route. It
+  records `approvedBy policy/<name>` and the D-88 message "agent attestation,
+  not verified human identity".
+- `grantattest.ScopeDigest` now includes the whole maintenance envelope
+  (sets sorted). Digests of kube, egress and credential grants are unchanged.
+  A statement made for one envelope does not verify for another.
+- `activeMaintenance` re-checks a policy approval on every pass, before the
+  network policy and the executor exist and while they run: the flags, the
+  approving policy (read from the API server) and the statement in its
+  execution form. A failure ends the lease through the existing stop path.
+
+What does not change: the envelope, its bounds and immutability; the executor
+and its network isolation; expiry, release and restore; the held admission
+packet; and the activation hold above. An attested maintenance approval is a
+claim by the requesting agent, not verified human identity.
+
+Activation needs, beyond the existing holds: the three broker flags, the
+operator's `--enable-maintenance-api` and `--enable-grant-attestation`, and a
+separate attested GrantPolicy in haynes-ops that Tom approves. A proposal for
+one exists only in the source PR body; nothing is staged.

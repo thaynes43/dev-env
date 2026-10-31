@@ -392,6 +392,25 @@ func printerPolicy() *v1alpha1.GrantPolicy {
 	return p
 }
 
+// maintenancePolicy is ADR-013's shape: an attested policy with an exact
+// maintenance scope, Card C on talosw01 as the proposal names it.
+func maintenancePolicy() *v1alpha1.GrantPolicy {
+	p := workloadsPolicy()
+	p.Spec.Description = "agent-attested Card C power-limit maintenance"
+	p.Spec.Repos = nil
+	p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}, Repos: []string{"haynes-ops"}}
+	p.Spec.Type = v1alpha1.GrantMaintenance
+	p.Spec.Kube = nil
+	p.Spec.Maintenance = &v1alpha1.MaintenancePolicy{
+		Node: "talosw01", NodeUID: "b7ef4b0a-524b-411b-9b47-79e3c37e7269", Resource: "GPU-d8a856f1-f955-f683-bc24-654561496774",
+		RuntimeProfile: "nvidia-utility", Capabilities: []string{"SYS_ADMIN"},
+		Image:        "ghcr.io/thaynes43/comfyui:0.39.0-2@sha256:991867f5dafc1eddc9ed70b307d8bf1d2d91c50f53a428a6315e8fd7dbe1a61b",
+		MaxCPUMillis: 100, MaxMemoryMiB: 128,
+	}
+	p.Spec.MaxTTL = ttl(10 * time.Minute)
+	return p
+}
+
 func TestGrantPolicyAccepts(t *testing.T) {
 	cases := []struct {
 		title  string
@@ -414,6 +433,16 @@ func TestGrantPolicyAccepts(t *testing.T) {
 			p.Spec.Kube = nil
 			p.Spec.Credential = &v1alpha1.CredentialPolicy{Names: []v1alpha1.CredentialName{v1alpha1.CredentialProxmox}}
 			p.Spec.MaxTTL = ttl(4 * time.Hour)
+		}},
+		{"attested maintenance for Card C (ADR-013)", maintenancePolicy, nil},
+		{"attested maintenance on the generic path with exact lists, 1h", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			m := p.Spec.Maintenance
+			m.RuntimeProfile, m.Resource = "", "fixture-device"
+			m.Devices = []string{"/dev/nvidia0", "/dev/nvidiactl"}
+			m.ReadOnlyMounts = []string{"/var/lib/maintenance-inputs/limit"}
+			m.Workers = []v1alpha1.MaintenanceIdentity{{Name: "worker", UID: "worker-uid", PodUID: "worker-pod"}}
+			m.Capabilities = []string{"SYS_ADMIN", "SYS_RAWIO"}
+			p.Spec.MaxTTL = ttl(time.Hour)
 		}},
 	}
 	for _, tc := range cases {
@@ -438,7 +467,61 @@ func TestGrantPolicyRejects(t *testing.T) {
 	}{
 		{"break-glass", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Type = v1alpha1.GrantBreakglass
-		}, "no standing policy approves break-glass or maintenance: authenticated human approval is required"},
+		}, "no policy approves break-glass: authenticated human approval is required"},
+		{"attested break-glass", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Repos = nil
+			p.Spec.Attested = &v1alpha1.AttestedRequesters{Profiles: []string{"full"}}
+			p.Spec.Type = v1alpha1.GrantBreakglass
+		}, "no policy approves break-glass: authenticated human approval is required"},
+		{"a standing maintenance policy", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Attested = nil
+			p.Spec.Repos = []string{"haynes-ops"}
+		}, "no standing policy approves maintenance: only an attested policy may name a maintenance scope"},
+		{"maintenance without a scope", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance = nil
+		}, "maintenance is set for type maintenance, and only there"},
+		{"a maintenance scope on a kube policy", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance = maintenancePolicy().Spec.Maintenance
+		}, "maintenance is set for type maintenance, and only there"},
+		{"a 2h maintenance maxTTL", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.MaxTTL = ttl(2 * time.Hour)
+		}, "a maintenance grant lasts at most 1h"},
+		{"a tag-only maintenance image", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.Image = "ghcr.io/thaynes43/comfyui:0.39.0-2"
+		}, "spec.maintenance.image"},
+		{"nvidia-utility without a GPU UUID", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.Resource = "fixture-device"
+		}, "nvidia-utility requires an exact GPU UUID and no explicit devices"},
+		{"nvidia-utility with a device file", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.Devices = []string{"/dev/nvidia0"}
+		}, "nvidia-utility requires an exact GPU UUID and no explicit devices"},
+		{"an unknown runtime profile", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.RuntimeProfile = "nvidia-compute"
+		}, "spec.maintenance.runtimeProfile"},
+		{"a maintenance capability outside support", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.Capabilities = []string{"SYS_PTRACE"}
+		}, "spec.maintenance.capabilities[0]"},
+		{"a maintenance CPU cap over 2000m", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.MaxCPUMillis = 2001
+		}, "spec.maintenance.maxCPUMillis"},
+		{"a maintenance memory cap over 4096Mi", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.MaxMemoryMiB = 4097
+		}, "spec.maintenance.maxMemoryMiB"},
+		{"no maintenance node UID", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.NodeUID = ""
+		}, "spec.maintenance.nodeUID"},
+		{"a maintenance device directory", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.RuntimeProfile = ""
+			p.Spec.Maintenance.Devices = []string{"/dev"}
+		}, "spec.maintenance.devices[0]"},
+		{"a host mount outside maintenance-inputs", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			p.Spec.Maintenance.ReadOnlyMounts = []string{"/var/lib/kubelet/config"}
+		}, "spec.maintenance.readOnlyMounts[0]"},
+		{"nine maintenance workers", maintenancePolicy, func(p *v1alpha1.GrantPolicy) {
+			for i := range 9 {
+				p.Spec.Maintenance.Workers = append(p.Spec.Maintenance.Workers, v1alpha1.MaintenanceIdentity{Name: fmt.Sprintf("w%d", i), UID: "u", PodUID: "p"})
+			}
+		}, "spec.maintenance.workers"},
 		{"the break-glass role", workloadsPolicy, func(p *v1alpha1.GrantPolicy) {
 			p.Spec.Kube.Roles = []string{v1alpha1.RoleBreakglass}
 		}, "no policy approves dev-env-grant-breakglass or dev-env-grant-secrets-read"},
