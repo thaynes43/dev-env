@@ -46,6 +46,9 @@ func (a *app) grantDecide(ctx context.Context, args []string) error {
 	if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(pos[0]), nil, nil, &current); err != nil {
 		return err
 	}
+	if current.UID == "" {
+		return fail(ExitNotFound, "delegate decisions are not enabled on this operator: it shows no grant UID")
+	}
 	if current.UID != uid || current.ScopeDigest != digest {
 		return fail(ExitFailed, "grant decide: grant UID or scope digest changed; read grant show -o json and review the current scope before deciding")
 	}
@@ -136,8 +139,16 @@ func validGrantDecisionRef(ref string) bool {
 // postGrantDecision is the one decision route, shared by the CLI and decide_grant.
 func (a *app) postGrantDecision(ctx context.Context, c *conn, name string, req apiv1.GrantDecisionRequest) (apiv1.Grant, error) {
 	var out apiv1.Grant
-	status, err := a.call(ctx, c, http.MethodPost, apiv1.GrantDecisionPath(name), nil, req, &out)
+	retriedUncertain := false
+	status, err := a.callWithRetryObserver(ctx, c, http.MethodPost, apiv1.GrantDecisionPath(name), nil, req, &out, true, func(status int, err error) {
+		if err != nil || status == http.StatusServiceUnavailable {
+			retriedUncertain = true
+		}
+	})
 	if err != nil {
+		if status == http.StatusConflict && retriedUncertain {
+			return out, fail(ExitUnconfirmed, "the decision may already have been recorded by an earlier attempt; inspect agent-run grant show %s before deciding again", name)
+		}
 		return out, grantDecisionError(status, err)
 	}
 	return out, nil
@@ -146,22 +157,19 @@ func (a *app) postGrantDecision(ctx context.Context, c *conn, name string, req a
 // grantDecisionError keeps the structured API error from refusal, except where
 // the decision route is off. A typed 404 not_found is a missing grant. The
 // operator's unregistered-route body ("no route METHOD PATH"), a 404 that is
-// not an API error, and a 503 mean delegate decisions are not enabled.
+// not an API error mean delegate decisions are not enabled. An unavailable
+// response retains the server diagnostic; it does not establish route absence.
 func grantDecisionError(status int, err error) error {
 	if err == nil {
 		return nil
 	}
-	if status == http.StatusServiceUnavailable || (status == http.StatusNotFound && decisionRouteDisabled(err)) {
-		code := ExitRetry
-		if status == http.StatusNotFound {
-			code = ExitNotFound
-		}
-		return fail(code, "delegate decisions are not enabled on this operator")
+	if status == http.StatusNotFound && decisionRouteDisabled(err) {
+		return fail(ExitNotFound, "delegate decisions are not enabled on this operator")
 	}
 	return err
 }
 
 func decisionRouteDisabled(err error) bool {
 	msg := err.Error()
-	return strings.Contains(msg, "no route ") || strings.Contains(msg, "not an API error")
+	return strings.HasPrefix(msg, "no route POST "+apiv1.GrantsPath+"/") || strings.Contains(msg, "not an API error")
 }

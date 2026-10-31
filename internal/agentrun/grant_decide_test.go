@@ -165,9 +165,10 @@ func TestGrantDecideMapsErrorStatuses(t *testing.T) {
 		{"conflict", http.StatusConflict, errBody(apiv1.CodeConflict, "stale, replayed, mismatched or already decided"), ExitFailed, "conflict", "not enabled"},
 		{"invalid", http.StatusUnprocessableEntity, errBody(apiv1.CodeInvalid, "ttl is too short"), ExitFailed, "invalid", "not enabled"},
 		{"typed not_found is a missing grant", http.StatusNotFound, errBody(apiv1.CodeNotFound, "grant grant-abc: not found"), ExitNotFound, "grant grant-abc: not found", "not enabled"},
+		{"typed missing with route words", http.StatusNotFound, errBody(apiv1.CodeNotFound, "grant not found: no route information"), ExitNotFound, "grant not found: no route information", "not enabled"},
 		{"unregistered route", http.StatusNotFound, errBody(apiv1.CodeNotFound, "no route POST /v1/grants/grant-abc/decision"), ExitNotFound, "delegate decisions are not enabled on this operator", "grant grant-abc: not found"},
 		{"plain 404 is an unregistered route", http.StatusNotFound, "404 page not found", ExitNotFound, "delegate decisions are not enabled on this operator", "not_found"},
-		{"unavailable", http.StatusServiceUnavailable, errBody(apiv1.CodeUnavailable, "delegate decisions are off"), ExitRetry, "delegate decisions are not enabled on this operator", "try again shortly"},
+		{"unavailable", http.StatusServiceUnavailable, errBody(apiv1.CodeUnavailable, "the Kubernetes API is busy"), ExitRetry, "the Kubernetes API is busy", "not enabled"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

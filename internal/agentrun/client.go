@@ -114,6 +114,13 @@ func oneShotRefusal(c *conn, method, path string, status int, raw []byte) error 
 }
 
 func (a *app) callWith(ctx context.Context, c *conn, method, path string, query url.Values, body, out any, retry bool) (int, error) {
+	return a.callWithRetryObserver(ctx, c, method, path, query, body, out, retry, nil)
+}
+
+// callWithRetryObserver preserves callWith's retry policy and reports only
+// retries that actually occur. Delegate decisions use this to explain a 409
+// after an earlier attempt whose result may have been lost.
+func (a *app) callWithRetryObserver(ctx context.Context, c *conn, method, path string, query url.Values, body, out any, retry bool, onRetry func(int, error)) (int, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -147,6 +154,9 @@ func (a *app) callWith(ctx context.Context, c *conn, method, path string, query 
 		}
 		retryable := err != nil || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
 		if retry && retryable && attempt < len(retryDelays) && ctx.Err() == nil && a.env.Sleep(ctx, retryDelays[attempt]) == nil {
+			if onRetry != nil {
+				onRetry(status, err)
+			}
 			continue
 		}
 		if err != nil {
