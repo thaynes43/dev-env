@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One fresh Cursor ACP conversation; no terminal capture or permission approval."""
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -16,7 +17,9 @@ import time
 import unicodedata
 import urllib.parse
 
+# Wire-frame limits include the terminating newline.
 MAX_FRAME = 65536
+MAX_PROVIDER_FRAME = 4 * 1024 * 1024
 MAX_PROMPT = 16384
 LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
@@ -30,13 +33,28 @@ class Refusal(Exception):
     pass
 
 
+# The receipt names which stream failed framing with a fixed value, never its text.
+FRAME_SOURCES = {"provider": "provider", "decision": "coordinator"}
+
+
+class FrameRefusal(Refusal):
+    """Fixed framing category; receipt metadata never includes source text."""
+    def __init__(self, detail, *, source, byte_count=None, limit=None):
+        super().__init__("invalid-frame")
+        self.metadata = {"detail": detail, "source": source}
+        if byte_count is not None:
+            self.metadata["byte_count"] = byte_count
+        if limit is not None:
+            self.metadata["limit"] = limit
+
+
 class Arguments(argparse.ArgumentParser):
     """Bad arguments get a fixed-reason receipt, not usage text on stderr."""
     def error(self, message):
         raise Refusal("invalid-arguments")
 
 
-def strict_object(raw):
+def strict_object(raw, maximum=MAX_FRAME):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -44,7 +62,7 @@ def strict_object(raw):
                 raise Refusal("duplicate-field")
             result[key] = value
         return result
-    if len(raw) > MAX_FRAME:
+    if len(raw) > maximum:
         raise Refusal("frame-too-large")
     try:
         value = json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
@@ -453,29 +471,72 @@ def write_bounded(descriptor, raw, deadline, clock=time.monotonic):
         os.set_blocking(descriptor, previous)
 
 
-def read_frames(stream, events, source):
+class ByteBudget:
+    """Wire bytes of provider frames from parse start until handled, released FIFO.
+
+    A reader waiting here stops reading its pipe, so the provider blocks on its
+    own writes. Nothing outstanding always admits one frame, and no admitted frame
+    exceeds the limit, so a single frame at the limit never waits forever.
+    """
+    def __init__(self, limit):
+        self.limit = limit
+        self.used = 0
+        self.waiting = 0
+        self.sizes = collections.deque()
+        self.condition = threading.Condition()
+
+    def acquire(self, count):
+        with self.condition:
+            self.waiting += 1
+            try:
+                while self.used and self.used + count > self.limit:
+                    self.condition.wait()
+            finally:
+                self.waiting -= 1
+            self.used += count
+            self.sizes.append(count)
+
+    def release_next(self):
+        with self.condition:
+            self.used -= self.sizes.popleft()
+            self.condition.notify_all()
+
+
+def read_frames(stream, events, source, budget=None):
     # Do not hold a BufferedReader lock on sys.stdin while the process exits.
     # A coordinator may leave its input pipe open after the total deadline.
     buffer = b""
+    limit = MAX_PROVIDER_FRAME if source == "provider" else MAX_FRAME
+    origin = FRAME_SOURCES[source]
     try:
         descriptor = stream.fileno()
         while True:
             readable, _, _ = select.select([descriptor], [], [], 0.25)
             if not readable:
                 continue
-            raw = os.read(descriptor, min(4096, MAX_FRAME + 1 - len(buffer)))
+            raw = os.read(descriptor, min(4096, limit + 1 - len(buffer)))
             if not raw:
-                events.put(("failure", "invalid-frame") if buffer else (source + "-closed", None))
+                if buffer:
+                    raise FrameRefusal("frame-truncated-eof", source=origin, byte_count=len(buffer))
+                events.put((source + "-closed", None))
                 return
             buffer += raw
             while b"\n" in buffer:
                 frame, buffer = buffer.split(b"\n", 1)
-                if len(frame) + 1 > MAX_FRAME:
-                    raise Refusal("invalid-frame")
-                events.put((source, strict_object(frame)))
-            if len(buffer) >= MAX_FRAME:
-                raise Refusal("invalid-frame")
-    except (OSError, ValueError, Refusal):
+                if len(frame) + 1 > limit:
+                    raise FrameRefusal("frame-too-large", source=origin, byte_count=len(frame) + 1, limit=limit)
+                if budget is not None:
+                    # Before parsing: parsed objects can be many times the wire size.
+                    budget.acquire(len(frame) + 1)
+                events.put((source, strict_object(frame, maximum=limit)))
+            if len(buffer) > limit:
+                raise FrameRefusal("frame-too-large", source=origin, byte_count=len(buffer), limit=limit)
+    except FrameRefusal as error:
+        events.put(("failure", error))
+    except Refusal as error:
+        detail = "frame-duplicate-key" if str(error) == "duplicate-field" else "frame-malformed-json"
+        events.put(("failure", FrameRefusal(detail, source=origin)))
+    except (OSError, ValueError):
         events.put(("failure", "invalid-frame"))
     except Exception:
         events.put(("failure", "internal-error"))
@@ -483,8 +544,10 @@ def read_frames(stream, events, source):
 
 def run_transport(process, coordinator_input, session, timeout, clock=time.monotonic, deadline=None):
     events = queue.Queue(maxsize=128)
-    for stream, source in [(process.stdout, "provider"), (coordinator_input, "decision")]:
-        threading.Thread(target=read_frames, args=(stream, events, source), daemon=True).start()
+    # Only provider frames take the byte budget; coordinator frames keep the 64 KiB bound.
+    budget = ByteBudget(MAX_PROVIDER_FRAME)
+    for stream, source, frames in [(process.stdout, "provider", budget), (coordinator_input, "decision", None)]:
+        threading.Thread(target=read_frames, args=(stream, events, source, frames), daemon=True).start()
     deadline = clock() + timeout if deadline is None else deadline
     session.start()
     input_closed = False
@@ -498,6 +561,8 @@ def run_transport(process, coordinator_input, session, timeout, clock=time.monot
             continue
         if source == "provider":
             session.provider(value)
+            value = None  # Drop the parsed frame before its bytes return to the budget.
+            budget.release_next()
         elif source == "decision":
             session.decision(value)
         elif source == "decision-closed":
@@ -505,6 +570,8 @@ def run_transport(process, coordinator_input, session, timeout, clock=time.monot
         elif source == "provider-closed":
             raise Refusal("provider-ended-before-result")
         else:
+            if isinstance(value, Refusal):
+                raise value
             raise Refusal(value)
         if input_closed and session.pending:
             raise Refusal("decision-input-closed")
@@ -621,7 +688,10 @@ def main(argv=None):
         # Reason codes only: never an exception message, provider text or traceback.
         reason = str(error) if isinstance(error, Refusal) else "process-io-failed" if isinstance(error, OSError) else "internal-error"
         try:
-            emit({"event": "failed", "reason": reason}, best_effort=True)
+            receipt = {"event": "failed", "reason": reason}
+            if isinstance(error, FrameRefusal):
+                receipt.update(error.metadata)
+            emit(receipt, best_effort=True)
         except Exception:
             pass  # A blocked coordinator output must never postpone child cleanup.
         return 2

@@ -2,10 +2,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import queue
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -204,6 +206,138 @@ class ProtocolTests(unittest.TestCase):
         for raw in [b'{"id":1,"id":2}', b"[]", b"x" * (ACP.MAX_FRAME + 1), b"\xff", b'{"id":NaN}', ("[" * 2000 + "]" * 2000).encode()]:
             with self.assertRaises(ACP.Refusal):
                 ACP.strict_object(raw)
+
+
+def json_frame(size, name="synthetic"):
+    """One valid JSON object frame of exactly `size` bytes, newline included."""
+    prefix, suffix = ('{"' + name + '":"').encode(), b'"}\n'
+    return prefix + b"x" * (size - len(prefix) - len(suffix)) + suffix
+
+
+class FrameReaderTests(unittest.TestCase):
+    LIMIT = 4 * 1024 * 1024
+    COORDINATOR_LIMIT = 64 * 1024
+
+    def read(self, raw, source="provider", budget=None):
+        events = queue.Queue()
+        with tempfile.TemporaryFile() as stream:
+            stream.write(raw)
+            stream.seek(0)
+            ACP.read_frames(stream, events, source, budget)
+            consumed = stream.tell()
+        return list(events.queue), consumed
+
+    def assertFailure(self, raw, detail, source="provider", **metadata):
+        events, consumed = self.read(raw, source)
+        self.assertEqual(len(events), 1)
+        kind, error = events[0]
+        self.assertEqual(kind, "failure")
+        self.assertIsInstance(error, ACP.Refusal)
+        self.assertEqual(str(error), "invalid-frame")
+        origin = "provider" if source == "provider" else "coordinator"
+        self.assertEqual(error.metadata, dict(detail=detail, source=origin, **metadata))
+        return consumed
+
+    def test_valid_provider_frame_just_under_and_at_new_bound(self):
+        for size in [self.LIMIT - 1, self.LIMIT]:
+            with self.subTest(size=size):
+                # With nothing outstanding, a frame at the limit is admitted, never held.
+                budget = ACP.ByteBudget(self.LIMIT)
+                events, consumed = self.read(json_frame(size), budget=budget)
+                self.assertEqual([source for source, _ in events], ["provider", "provider-closed"])
+                self.assertEqual(len(events[0][1]["synthetic"]), size - len(b'{"synthetic":""}\n'))
+                self.assertEqual(consumed, size)
+                self.assertEqual(budget.used, size)
+
+    def test_provider_frame_bound_plus_one_is_counted_without_draining(self):
+        for ending in [b"\n", b"x", b"x" * 4096]:
+            with self.subTest(ending_size=len(ending)):
+                consumed = self.assertFailure(b"x" * self.LIMIT + ending, "frame-too-large",
+                                             byte_count=self.LIMIT + 1, limit=self.LIMIT)
+                self.assertEqual(consumed, self.LIMIT + 1)
+
+    def test_malformed_json_has_metadata_only_detail(self):
+        for raw in [b'{"PRIVATE_FRAME":}\n', b'\xff\n', b'{"n":NaN}\n', b'[]\n',
+                    ("[" * 2000 + "]" * 2000 + "\n").encode()]:
+            with self.subTest(size=len(raw)):
+                self.assertFailure(raw, "frame-malformed-json")
+
+    def test_duplicate_key_has_metadata_only_detail(self):
+        self.assertFailure(b'{"nested":{"PRIVATE_KEY":1,"PRIVATE_KEY":2}}\n', "frame-duplicate-key")
+
+    def test_truncated_eof_counts_bytes_without_frame_content(self):
+        for raw in [b'{"PRIVATE_FRAME":', '{"synthetic":"\u00e9"}'.encode(), b"x" * self.LIMIT]:
+            with self.subTest(size=len(raw)):
+                self.assertFailure(raw, "frame-truncated-eof", byte_count=len(raw))
+
+    def test_coordinator_frame_bound_is_64_kib_including_newline(self):
+        limit = self.COORDINATOR_LIMIT
+        self.assertEqual(ACP.MAX_FRAME, limit)
+        events, consumed = self.read(json_frame(limit), "decision")
+        self.assertEqual([source for source, _ in events], ["decision", "decision-closed"])
+        self.assertEqual(consumed, limit)
+        # Valid JSON one byte over: refused for size alone, and nothing past it is read.
+        consumed = self.assertFailure(json_frame(limit + 1) + json_frame(limit), "frame-too-large", "decision",
+                                      byte_count=limit + 1, limit=limit)
+        self.assertEqual(consumed, limit + 1)
+        for raw, detail, metadata in [(b'{"PRIVATE_FRAME":}\n', "frame-malformed-json", {}),
+                                      (b'{"PRIVATE_FRAME":', "frame-truncated-eof", {"byte_count": 17})]:
+            with self.subTest(detail=detail):
+                self.assertFailure(raw, detail, "decision", **metadata)
+
+    def test_provider_budget_holds_reader_until_frames_are_handled(self):
+        # Any two of these frames exceed the budget, so each waits for the one before.
+        size = self.LIMIT // 2 + 1
+        raw = b"".join(json_frame(size, name) for name in "abc")
+        events, budget = queue.Queue(), ACP.ByteBudget(self.LIMIT)
+
+        def held():
+            """Wait until one frame is admitted and the reader waits for budget."""
+            end = time.monotonic() + 10
+            while time.monotonic() < end:
+                with budget.condition:
+                    if budget.waiting and budget.used:
+                        return budget.used
+                time.sleep(0.01)
+            self.fail("reader never waited for budget")
+
+        def handle():
+            source, value = events.get_nowait()
+            budget.release_next()
+            return source, list(value)
+
+        with tempfile.TemporaryFile() as stream:
+            stream.write(raw)
+            stream.seek(0)
+            reader = threading.Thread(target=ACP.read_frames, args=(stream, events, "provider", budget), daemon=True)
+            reader.start()
+            try:
+                # No consumer: after a short wait exactly one parsed frame is queued,
+                # and the reader has stopped short of the rest of the stream.
+                self.assertEqual(held(), size)
+                time.sleep(0.2)
+                self.assertEqual(events.qsize(), 1)
+                self.assertEqual(budget.used, size)
+                read = os.lseek(stream.fileno(), 0, os.SEEK_CUR)
+                self.assertLess(read, len(raw))
+                self.assertLessEqual(read, 2 * size + 4096)
+                self.assertEqual(handle(), ("provider", ["a"]))
+                # Handling the first admits the second; the third waits, so EOF is unseen.
+                self.assertEqual(held(), size)
+                time.sleep(0.2)
+                self.assertEqual(events.qsize(), 1)
+                self.assertEqual(handle(), ("provider", ["b"]))
+                reader.join(timeout=10)
+                self.assertFalse(reader.is_alive())
+                self.assertEqual([(source, list(value or ())) for source, value in events.queue],
+                                 [("provider", ["c"]), ("provider-closed", [])])
+                self.assertEqual(budget.used, size)
+                self.assertEqual(os.lseek(stream.fileno(), 0, os.SEEK_CUR), len(raw))
+            finally:
+                with budget.condition:
+                    budget.limit = float("inf")  # A failed assertion must not strand the reader.
+                    budget.condition.notify_all()
+                reader.join(timeout=10)
 
 
 VALID_CONTEXT = {
@@ -528,10 +662,31 @@ for line in sys.stdin:
  if method=="initialize":
   if mode=="hang": time.sleep(60)
   if mode=="oversize": print("x"*70000,flush=True); continue
+  if mode.startswith("frame-"):
+   Path("fake-provider.pid").write_text(str(os.getpid()))
+   frames={"frame-too-large":b"x"*(4*1024*1024)+b"\\n",
+           "frame-malformed-json":b'{"PRIVATE_FRAME":}\\n',
+           "frame-duplicate-key":b'{"PRIVATE_KEY":1,"PRIVATE_KEY":2}\\n',
+           "frame-truncated-eof":b'{"PRIVATE_FRAME":'}
+   sys.stdout.buffer.write(frames[mode]); sys.stdout.buffer.flush()
+   os.close(sys.stdout.fileno())
+   time.sleep(60)
   write({"jsonrpc":"2.0","id":msg["id"],"result":{"protocolVersion":1}})
  elif method=="session/new":
   write({"jsonrpc":"2.0","id":msg["id"],"result":{"sessionId":"fixture-session"}})
  elif method=="session/prompt":
+  if mode=="large-update":
+   write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call_update","content":[{"type":"content","content":{"type":"text","text":"PRIVATE_LARGE_UPDATE"+"x"*(200*1024)}}]}}})
+   write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
+   continue
+  if mode=="budget-updates":
+   for n in range(3):
+    update={"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call_update","content":[{"type":"content","content":{"type":"text","text":"PRIVATE_BUDGET_UPDATE"}}]}}}
+    room=2*1024*1024+1-len(json.dumps(update))-1
+    update["params"]["update"]["content"][0]["content"]["text"]+="x"*room
+    write(update)
+   write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
+   continue
   if mode=="flood":
    Path("fake-provider.pid").write_text(str(os.getpid()))
    for n in range(5):
@@ -764,6 +919,67 @@ class SubprocessTests(unittest.TestCase):
             self.assertEqual(process.returncode, 2)
             self.assertEqual(observed[-1], {"event": "failed", "reason": "provider-ended-before-result"})
 
+    def checked(self, observed):
+        """The real receipt stream through the smoke checker; its verdict."""
+        checked = subprocess.run([sys.executable, "-I", "-B", str(CLIENT.with_name("cursor-acp-smoke-check.py")), "-"], input="".join(json.dumps(x) + "\n" for x in observed), text=True, capture_output=True, timeout=5)
+        self.assertEqual(checked.returncode, 0, checked.stdout)
+        return json.loads(checked.stdout)
+
+    def test_frame_failure_receipts_and_provider_cleanup(self):
+        for detail, metadata in [
+            ("frame-too-large", {"byte_count": 4194305, "limit": 4194304}),
+            ("frame-malformed-json", {}),
+            ("frame-duplicate-key", {}),
+            ("frame-truncated-eof", {"byte_count": len(b'{"PRIVATE_FRAME":')}),
+        ]:
+            with self.subTest(detail=detail), tempfile.TemporaryDirectory() as directory:
+                process = self.launch(directory, detail)
+                observed, output = self.finish(process)
+                self.assertEqual(process.returncode, 2)
+                self.assertEqual(observed[-1], dict(event="failed", reason="invalid-frame", detail=detail, source="provider", **metadata))
+                self.assertNotIn("PRIVATE", output)
+                self.assertNotIn("Traceback", output)
+                self.assertTrue(pid_gone(int((Path(directory) / "fake-provider.pid").read_text())))
+                verdict = self.checked(observed)
+                self.assertEqual(verdict["helperFailed"], "invalid-frame")
+                counts = {{"byte_count": "byteCount"}.get(key, key): value for key, value in metadata.items()}
+                self.assertEqual(verdict["helperFailureDetail"], dict(detail=detail, source="provider", **counts))
+                self.assertNotIn("PRIVATE", json.dumps(verdict))
+
+    def test_coordinator_frame_bound_and_failure_receipts(self):
+        for raw, detail, metadata in [
+            (b"x" * 65536 + b"\n", "frame-too-large", {"byte_count": 65537, "limit": 65536}),
+            (b'{"PRIVATE_FRAME":}\n', "frame-malformed-json", {}),
+            (b'{"PRIVATE_KEY":1,"PRIVATE_KEY":2}\n', "frame-duplicate-key", {}),
+            (b'{"PRIVATE_FRAME":', "frame-truncated-eof", {"byte_count": len(b'{"PRIVATE_FRAME":')}),
+        ]:
+            with self.subTest(detail=detail), tempfile.TemporaryDirectory() as directory:
+                process = self.launch(directory, "hang")
+                stdout, stderr = process.communicate(raw.decode(), timeout=15)
+                self.assertEqual(process.returncode, 2)
+                observed = [json.loads(x) for x in stdout.splitlines()]
+                self.assertEqual(observed[-1], dict(event="failed", reason="invalid-frame", detail=detail, source="coordinator", **metadata))
+                self.assertNotIn("PRIVATE", stdout + stderr)
+                self.assertEqual(self.checked(observed)["helperFailureDetail"]["source"], "coordinator")
+
+    def test_provider_updates_past_the_byte_budget_complete(self):
+        # Three updates of just over half the budget: each must be handled and its
+        # bytes released before the next is parsed, or the run stalls to its deadline.
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "budget-updates", 30)
+            observed, output = self.finish(process, timeout=40)
+            self.assertEqual(process.returncode, 0, output)
+            self.assertEqual([x["event"] for x in observed], ["starting", "session-created", "prompt-complete"])
+            self.assertNotIn("PRIVATE_BUDGET_UPDATE", output)
+
+    def test_large_valid_session_update_completes_without_content_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "large-update")
+            observed, output = self.finish(process)
+            self.assertEqual(process.returncode, 0, output)
+            self.assertEqual([x["event"] for x in observed], ["starting", "session-created", "prompt-complete"])
+            self.assertNotIn("PRIVATE_LARGE_UPDATE", output)
+
     def test_bad_inputs_never_start_the_provider(self):
         cases = [
             ("relative-client", dict(client_arg="fake-cursor"), "invalid-input"),
@@ -914,7 +1130,11 @@ class SubprocessTests(unittest.TestCase):
                 process = self.launch(directory, mode, 5)
                 stdout, stderr = process.communicate(timeout=20)
                 self.assertEqual(process.returncode, 2)
-                self.assertEqual(json.loads(stdout.splitlines()[-1]), {"event": "failed", "reason": reason})
+                expected = {"event": "failed", "reason": reason}
+                if mode == "oversize":
+                    # Above the old 64 KiB limit, now parsed and refused as malformed JSON.
+                    expected.update(detail="frame-malformed-json", source="provider")
+                self.assertEqual(json.loads(stdout.splitlines()[-1]), expected)
                 self.assertNotIn("PRIVATE_PROVIDER_ERROR", stdout + stderr)
 
     def test_undrained_stdout_does_not_extend_provider_lifetime(self):
