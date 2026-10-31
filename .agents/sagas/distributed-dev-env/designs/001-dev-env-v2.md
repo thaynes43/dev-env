@@ -4192,6 +4192,64 @@ not installed (ADR-013, "Live state"). This is path (a), the requester's
 self-attestation. Path (b), authenticated delegate approval, is a planned
 follow-up.
 
+*Amendment 2026-10-31 (DESIGN-042 S2, source only, default off).* Path (b) is
+built as DESIGN-042 6.2's delegate decision, for kube, egress and maintenance
+grants. It is not a human decision and not an agent attestation.
+
+- **Who.** A ServiceAccount on `--grant-delegates`, which the operator and the
+  broker both take, default empty; the two lists must match, as the human
+  ServiceAccount pair does. The list never names the human, a client, the
+  shared session, the workbench or the portal account. Two pod-bound forms
+  qualify: a configured coordinator host (as `resolveCoordinator` verifies it),
+  or a session pod running as a listed account, controlled by a Running
+  session that Tom's human or a client caller launched. The second form
+  activates with S4 (DESIGN-042 6.3), which makes `resolveCaller` treat such a
+  pod as a session; until then only coordinator hosts can be delegates.
+- **Route.** `POST /v1/grants/{name}/decision` (`apiv1.GrantDecisionRequest`:
+  grant UID, `ScopeDigest`, approve or deny, an optional shorter TTL, a
+  required ref and an optional reason) answers 202 with the Grant. It writes
+  the set-once decision annotation that the human maintenance route writes,
+  now on kube and egress grants too, with `by: delegate/<ns>/<sa>`, the ref and
+  the delegate's pod and session. It never writes a status. haynes-ops P3
+  must extend the annotation guard before this works on kube and egress
+  grants.
+- **Refused:** a caller off the list; the requester, a pod its session
+  controls or its current pod; a delegate whose session descends from the
+  requester through any parent link, or whose ancestry cannot be read; a form
+  (2) session Tom's callers did not launch, which closes the sibling path
+  even before S4's launch rule exists; a coordinator or worker the maintenance
+  envelope names; no ref; a grant that is not Pending, is past 30 minutes,
+  was released or already decided; a UID or digest mismatch; credential and
+  break-glass grants; the roles `dev-env-grant-secrets-read`,
+  `dev-env-grant-breakglass` and `dev-env-grant-storage`; a maintenance
+  extension (the human route, ADR-012). A delegate deciding for its own
+  children is allowed.
+- **Broker.** It reads a delegate decision only when its own list is not
+  empty. It checks the binding (listed delegate, UID, `ScopeDigest`, ref,
+  pending window, TTL) and the separation again from the recorded identity.
+  An approval also needs a GrantPolicy whose new `spec.delegated` covers the
+  scope and the requester; for maintenance that is #781's exact envelope,
+  `CheckMaintenanceIdentities` and one lease per target. It then calls
+  `Decide` with `delegate/<ns>/<sa>` and records the ref, the policy and "not
+  a human decision" in the status message and the Event. A denial needs no
+  policy. A decision that cannot apply leaves the grant to time out. While
+  the grant is Active, every pass, and at least every minute, re-checks the
+  delegate, the binding and a covering delegated policy, and ends the grant
+  Released when one fails. This closes, for delegated grants only, the known
+  gap that kube and egress execution never re-read `approvedBy`.
+- **Schema.** A GrantPolicy may carry `attested`, `delegated` or both; the
+  top-level `profiles`, `repos` and `agents` stay empty, and each block names
+  its requesters. A delegated policy may not be a credential policy or name
+  `dev-env-grant-storage`. An older broker ignores `delegated`; an older CRD
+  prunes it and the requester rule then refuses the policy, so remove
+  delegated-only policies before reverting the CRD.
+- **Default off.** With no delegates the route is not registered (404), the
+  broker reads no delegate decision, the grant view is unchanged, and the
+  human maintenance route writes the same annotation as before. With
+  delegates the view also shows every grant's UID, for the delegate to echo.
+  Activation is DESIGN-042's bundle (P1 to P3) and needs Tom's approval
+  (Q-042-01); ADR-014 records the two approval modes when he gives it.
+
 **D-89 (Accepted 2026-10-28 America/New_York, Tom 01:37:41Z). hw-ssh credential grants lease
 the existing static shared key, not an SSH certificate.** (Numbering notes. Both numbers of the two entries are reused. "D-88" was first used on
 2026-10-12 for "closed-set reason codes for private catalog bootstrap": README row 67 and the

@@ -52,8 +52,10 @@ type Decision struct {
 	MaintenanceUID, MaintenanceDigest string
 	// Approve approves the grant; false denies it.
 	Approve bool
-	// By is who decided: "authentik/<username>". A policy approves only
-	// through the broker's own match, never through Decide.
+	// By is who decided: "authentik/<username>", the human maintenance
+	// route's "human/<ns>/<sa>", or a listed delegate's
+	// "delegate/<ns>/<sa>". A policy approves only through the broker's own
+	// match, never through Decide.
 	By string
 	// TTL approves for less time than the grant asked: zero means spec.ttl.
 	// Approvals only.

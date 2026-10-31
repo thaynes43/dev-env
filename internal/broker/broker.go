@@ -9,7 +9,10 @@
 //
 //   - "" -> Pending on first sight, after the finalizer goes on.
 //   - Pending -> Active when a GrantPolicy matches (approvedBy policy/<name>), or
-//     when Tom approves (Decide); -> Denied when Tom denies, when the broker's
+//     when Tom approves (Decide), or when a listed delegate's recorded decision
+//     falls under a GrantPolicy with spec.delegated (approvedBy
+//     delegate/<ns>/<sa>, DESIGN-042 6.2, delegates.go; not a human
+//     decision); -> Denied when Tom or a delegate denies, when the broker's
 //     checks fail, when the session ended, or after 30 minutes unanswered
 //     (deniedBy timeout); -> Released when the session gives it back.
 //   - Active -> Expired at expiresAt, Released on spec.release or when the
