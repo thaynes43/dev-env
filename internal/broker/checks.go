@@ -27,7 +27,7 @@ var DevEnvNamespaces = []string{"dev-env-system", "dev-agents", "dev-tools"}
 // catalog is the grant role catalog: the only roles the broker binds.
 var catalog = []string{
 	v1alpha1.RoleWorkloads, v1alpha1.RoleStorage, v1alpha1.RoleSecretsRead,
-	v1alpha1.RoleNodes, v1alpha1.RoleBreakglass,
+	v1alpha1.RoleNodes, v1alpha1.RoleBreakglass, v1alpha1.RoleNamespaceOperator,
 }
 
 // errNotBuilt marks a grant type this broker cannot make yet.
@@ -102,6 +102,9 @@ func checkCapabilities(g *v1alpha1.AccessGrant, proxmox, hwssh bool, reserved ..
 			if slices.Contains(forbidden, ns) {
 				return fmt.Errorf("no grant reaches namespace %s (DESIGN-001 6.12)", ns)
 			}
+		}
+		if err := checkSecrets(k); err != nil {
+			return err
 		}
 	}
 	if e := s.Egress; e != nil {

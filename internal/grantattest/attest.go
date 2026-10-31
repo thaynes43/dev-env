@@ -159,8 +159,9 @@ func SameClaim(a, b Statement) bool {
 // maintenance envelope (ADR-013), its TTL, and the requesting session. Lists are
 // sorted and defaults made explicit, so equal requests give equal digests and
 // any change in scope or TTL changes it. A grant without a maintenance envelope
-// digests exactly as before the envelope was added. It is 43 base64url
-// characters.
+// digests exactly as before the envelope was added. A kube grant's named
+// Secrets (DESIGN-042 5.1) are in it too, sorted; a grant that names none
+// digests exactly as before they were added. It is 43 base64url characters.
 func ScopeDigest(g *v1alpha1.AccessGrant) string {
 	type endpoint struct {
 		Namespace string   `json:"namespace"`
@@ -178,6 +179,7 @@ func ScopeDigest(g *v1alpha1.AccessGrant) string {
 		Credential     string                        `json:"credential,omitempty"`
 		Role           string                        `json:"role,omitempty"`
 		Namespaces     []string                      `json:"namespaces,omitempty"`
+		Secrets        []string                      `json:"secrets,omitempty"`
 		FQDNs          []string                      `json:"fqdns,omitempty"`
 		CIDRs          []string                      `json:"cidrs,omitempty"`
 		Endpoints      []endpoint                    `json:"endpoints,omitempty"`
@@ -209,6 +211,7 @@ func ScopeDigest(g *v1alpha1.AccessGrant) string {
 		})
 		doc.Role = k.Role
 		doc.Namespaces = sorted(k.Namespaces)
+		doc.Secrets = sorted(k.Secrets)
 	}
 	if e := g.Spec.Egress; e != nil {
 		doc.FQDNs, doc.CIDRs = sorted(e.FQDNs), sorted(e.CIDRs)

@@ -95,6 +95,11 @@ func (b *Broker) ensure(ctx context.Context, g *v1alpha1.AccessGrant) ([]string,
 		if created {
 			made = append(made, "rolebinding "+ns+"/"+g.Name)
 		}
+		use, err := b.ensureSecretUse(ctx, g, ns)
+		made = append(made, use...)
+		if err != nil {
+			return made, err
+		}
 	}
 	return made, nil
 }
@@ -176,6 +181,9 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 			del(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: g.Name}})
 		} else {
 			for _, ns := range bindingNamespaces(g) {
+				for _, o := range secretUseObjects(g, ns) {
+					del(o)
+				}
 				del(&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: g.Name}})
 			}
 		}
@@ -221,7 +229,7 @@ func (b *Broker) revoke(ctx context.Context, g *v1alpha1.AccessGrant, why string
 // conditional on the UID that was read, so it never removes a newer object of
 // the same name.
 func (b *Broker) deleteOwn(ctx context.Context, g *v1alpha1.AccessGrant, o client.Object) (gone bool, err error) {
-	if o.GetName() != g.Name {
+	if o.GetName() != g.Name && o.GetName() != secretUseName(g) {
 		return false, nil
 	}
 	if err := b.APIReader.Get(ctx, client.ObjectKeyFromObject(o), o); err != nil {
@@ -280,6 +288,8 @@ func kindOf(o client.Object) string {
 		return "serviceaccount"
 	case *rbacv1.RoleBinding:
 		return "rolebinding"
+	case *rbacv1.Role:
+		return "role"
 	case *rbacv1.ClusterRoleBinding:
 		return "clusterrolebinding"
 	case *unstructured.Unstructured:
