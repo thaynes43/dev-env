@@ -621,10 +621,13 @@ conversation view; no supported route serves the history yet.
   view (`?session=<uid>`, no `#sN`: row IDs are positions, so a fragment could
   open another session once the list moves), and only the selected session's
   conversation is read, with a 5-second bound. Without a source, the selected
-  session states the gap and no links render. Past the 150-row listing cap the
+  session states the gap and its Messages panel has no conversation links (list
+  items still link to their selection). Past the 150-row listing cap the
   selected session takes the last listed row's place, so it is listed and read;
   totals, breakdowns and an incomplete-read warning still cover the whole read.
-  `TasksPath?task=<work package number>` selects one task the same way.
+  `TasksPath?task=<work package number>` selects one task. Tasks has no
+  listing-cap substitution: a task outside the read gets the notice instead.
+  A selection cannot be combined with `view=usage`.
 - **Selected item** (OP #312, 2026-10-30). Every list item whose row has a valid
   key links to its own selection (`?session=<uid>` or `?task=<n>`) and keeps
   the active `show` or `project` filter beside it. The server marks the
@@ -632,8 +635,12 @@ conversation view; no supported route serves the history yet.
   title, so colour is not the only cue. A fragment cannot carry this: the
   server never sees it, and CSS cannot set `aria-current`. Each selection is
   therefore a page load, and the selected session's conversation is read.
-  A row without a valid key keeps its `#sN` or `#tN` fragment link and is never
-  marked current.
+  A row without a valid key keeps its `#sN` or `#tN` fragment link. It cannot
+  be selected, because a selection only matches keys that were already
+  validated, so it is never marked current in production. After a selection
+  the list starts at the top again: an anchor on a stable key (UID or work
+  package number), not the position-based `#sN`/`#tN`, is a possible
+  follow-up (OP #312 j3719).
 - **Seam.** `SessionSource.UseConversations(ConversationSource)`;
   `ReadConversation(ctx, name, uid)` returns `Conversation` (state, reason
   code, turns). A read error, an `unavailable` state or an unknown state shows
