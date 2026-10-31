@@ -3585,6 +3585,100 @@ every granted namespace. What each role allows, plainly:
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
 | `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
 | `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list; a CI check regenerates it when the cluster gains an API group. The identity guard applies on top. |
+| `dev-env-grant-namespace-operator` (DESIGN-042 5.1) | exec into pods; get, list and delete pods; patch Deployments and StatefulSets (rollout restart); create and delete Jobs; read ConfigMaps and events. No Secret rule: each grant's own Role allows `use` on exactly the Secrets it names | New pods and Jobs may reference only the grant's named Secrets. **"No Secret get or list" does not mean "cannot read Secrets"**: exec reaches every Secret the namespace's pods already hold, and their ServiceAccount tokens, and a command in a Job that uses a named Secret can print it. For grant identities, rule 3 of the installed `dev-env-identity-guard` (not `dev-env-agent-guard`) limits created Jobs to the namespace's **default ServiceAccount**. The residual authority is that account's RBAC plus the existing exec reach. No standing policy approves the role. The ClusterRole is haynes-ops P4 and not yet in git. |
+
+*Amendment 2026-10-31 ([DESIGN-042](042-homelab-operator-access.md) S5, source only;
+DESIGN-042 is proposed in PR #782; revised the same day by the lead's decision Q1 and
+the coordinator's review of PR #785).* A kube grant may now name Secrets.
+
+- **The grant names them.** `KubeGrant.secrets` holds 1 to 16 Secret names, each a
+  DNS-1123 subdomain, so there is no wildcard and no pattern. A
+  `dev-env-grant-namespace-operator` grant must name at least one, and no other role
+  takes any. The names hold in every namespace the grant names. The scope digest covers
+  them, sorted, so an attestation or a delegate decision binds the exact list. A grant
+  that names none digests byte for byte as before.
+- **The policy does not.** A policy for the role names its namespaces and may deny
+  Secrets (`KubePolicy.deniedSecrets`: up to 32 exact names, or prefixes ending in
+  `*`). It does not list the Secrets it allows, so a new Secret needs no policy change.
+  No standing policy approves the role: the schema requires `spec.attested` for a
+  policy that names it, and the broker's standing match approves nothing through such a
+  policy or for such a grant.
+- **Who approves the list.** Mode (a), the requester's own attestation, applies only
+  when the policy opts in with `attested.allowSecretUse: true`. The policy may
+  instead carry only `delegated`, or both blocks; delegated Secret use does not
+  enable the attested path without that opt-in. The schema allows that field only
+  on a policy that names the role. Mode (b), a delegate decision, arrives
+  with S2. Tom's own decision (`Decide`) needs no policy. **Activation-review risk for
+  Tom:** within a policy's namespaces, an approver may authorize the use of any Secret
+  the deny list does not name.
+- **Exposure, plainly.** "No Secret get or list" must not be read as "cannot read
+  Secrets." Exec into a namespace's pods reaches every Secret they already hold in their
+  env or volumes, such as Prowlarr's own API key, and each pod's ServiceAccount token,
+  so the grant can also act as those workloads' ServiceAccounts. A command the agent
+  chooses, in a Job that uses a named Secret, can print it. So the class effectively
+  grants read of every Secret mounted in the namespace's pods, plus the named ones. The
+  named-Secret guard bounds only what a new pod may add. The baseline `dev-env-agent`
+  already has the same exec, outside the guarded namespaces.
+- **Use is RBAC, checked per reference.** For each granted namespace, the broker gives
+  the grant's ServiceAccount the catalog RoleBinding `<grant>` plus a Role and a
+  RoleBinding named `<grant>-secret-use`. Their one rule is the custom verb `use` on
+  `secrets`, with `resourceNames` set to the grant's Secrets. Revoke deletes the
+  secret-use binding and Role first, then the catalog binding, then the ServiceAccount.
+  P5's new ValidatingAdmissionPolicy `dev-env-grant-secret-names` matches pod-bearing
+  requests from `dev-agents/grant-*`. For each added reference, up to 16, it asks the
+  authorizer whether the requester may `use` that Secret, by name, in that namespace. It
+  takes no params, so it fails closed:
+  - without the caller's own binding, nothing is allowed;
+  - another grant's Role never helps;
+  - an ended grant authorizes nothing.
+
+  An earlier draft took every AccessGrant as a param. That fails open: the API server
+  refuses only when one param's evaluation fails, and a paramRef cannot select the
+  requester's own grant.
+- **The API.** `POST /v1/grants` takes `secrets` only for type kube with this role, and
+  answers 422 otherwise. It refuses a duplicate, more than 16 names, or a name that is
+  not a Secret name. It stores the names sorted. The grant view (show and list) returns
+  exactly the names the scope digest covers, so an approver sees what it binds. A
+  request that differs only in its names never merges into another grant. A decision
+  bound to another list's digest gets 409.
+- **What release or expiry stops.** Release or expiry deletes the grant's RoleBindings
+  and its ServiceAccount, so a new API call fails at once. Three things outlive it:
+  - An exec stream already open was authorized at connect, and may run until it
+    closes.
+  - A Job or Pod the grant created keeps running unless it is bounded. So
+    `dev-env-grant-secret-names` requires every grant identity's Job and Pod to set
+    `activeDeadlineSeconds`, at most 3600, on create, and an update may not lift or
+    raise it. The policy cannot see the grant's TTL, so the cap is a fixed hour,
+    DESIGN-042's longest TTL for this class. It also bounds app-operator (C1) Jobs.
+  - A Secret value already printed or copied cannot be recalled.
+- **What "added" means.** A reference is added when its Secret becomes newly visible
+  to the containers (env, envFrom, a secret or projected volume), or is newly referenced
+  at all. The second case covers a source only the kubelet uses, such as
+  `csi.nodePublishSecretRef`. The volsync short list (`*-volsync-aws-secret`) stays
+  exempt, as in the identity guard. Widening a reference to the same Secret, such as one
+  key to a whole `envFrom`, is not an added reference: that is a residual risk.
+- **Where the proposals live.** The ClusterRole and the policy are proposed in
+  `internal/broker/testdata/proposed-haynes-ops/`. They are not copies of haynes-ops.
+  The broker's envtest suite proves them on the 1.35 API server, with identities that
+  the broker's own `ensure` and `revoke` make and end.
+- **Inert.** No GrantPolicy names the role, and the live CRD's role enum refuses it
+  until the CRD copy (R1), so a request for it fails at create. The haynes-ops pieces are P4 and P5:
+  - P4: the ClusterRole; the broker's `bind` on it; create, get and delete on Roles;
+    `use` on secrets; and the broker-guard entries for `<grant>-secret-use`.
+  - P5: the policy, and an identity-guard rule 4 clause that leaves a grant identity's
+    added references to the policy and caps Job deadlines at 3600 seconds.
+
+  **Any-ServiceAccount Job HIGH — premise refuted:** rule 3 of the installed
+  `dev-env-identity-guard` (not `dev-env-agent-guard`) applies to grant identities
+  and limits created Jobs to the granted namespace's default ServiceAccount.
+  The residual authority is that account's RBAC plus exec reach into existing
+  pods, including their Secrets and ServiceAccount tokens. The named-Secret
+  guard only bounds direct Secret references. This is a factual correction,
+  not risk acceptance or new hardening. The activation proposal and user risk
+  review remain separate.
+
+  Until P4, a namespace-operator grant that somehow got approved would fail when the
+  broker creates its Role.
 
 **Draining a node with sessions on it.** `agent-run fleet evacuate <node>` (API `POST
 /v1/fleet/nodes/{node}/evacuate`) asks the operator to move that node's sessions:

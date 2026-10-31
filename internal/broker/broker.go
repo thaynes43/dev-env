@@ -595,6 +595,9 @@ func grantFields(g *v1alpha1.AccessGrant) []any {
 	f := []any{"grant", g.Name, "session", g.Spec.Requester.Session, "type", g.Spec.Type, "phase", g.Status.Phase}
 	if k := g.Spec.Kube; k != nil {
 		f = append(f, "role", k.Role, "namespaces", k.Namespaces)
+		if len(k.Secrets) > 0 {
+			f = append(f, "secrets", k.Secrets) // names, never values
+		}
 	}
 	if g.Status.ApprovedBy != "" {
 		f = append(f, "approvedBy", g.Status.ApprovedBy)

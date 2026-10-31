@@ -56,13 +56,17 @@ func MatchAttested(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy, att
 // dev-env-grant-secrets-read, whatever p says: the schema refuses such a policy,
 // and the broker does not trust that it ran (D-27, D-54). Maintenance never
 // matches a standing policy either: only an attested (ADR-013) or delegated
-// (DESIGN-042) policy approves it.
+// (DESIGN-042) policy approves it. Nor does the namespace operator, or a policy
+// that names it (DESIGN-042 5.1).
 func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 	if p.Spec.Attested != nil || p.Spec.Delegated != nil {
 		return false // an attested or delegated policy never approves as a standing one
 	}
 	if p.Spec.Type == v1alpha1.GrantMaintenance || g.Spec.Type == v1alpha1.GrantMaintenance || p.Spec.Maintenance != nil {
 		return false // no standing auto-approval for maintenance
+	}
+	if namesNamespaceOperator(p, g) {
+		return false // nor for the namespace operator (DESIGN-042 5.1)
 	}
 	return matches(p, g, p.Spec.Profiles, p.Spec.Repos, p.Spec.Agents)
 }
@@ -75,6 +79,9 @@ func MatchesAttested(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 	a := p.Spec.Attested
 	if a == nil || len(p.Spec.Profiles) != 0 || len(p.Spec.Repos) != 0 || len(p.Spec.Agents) != 0 {
 		return false // a mixed policy is malformed: approve nothing
+	}
+	if !attestedAllowsSecretUse(p, g) {
+		return false // mode (a) for the namespace operator is opt-in (DESIGN-042 5.1)
 	}
 	return matches(p, g, a.Profiles, a.Repos, a.Agents)
 }
@@ -208,12 +215,17 @@ func maintenanceInside(g *v1alpha1.MaintenanceTask, p *v1alpha1.MaintenancePolic
 }
 
 // kubeInside: the role is one of the policy's, and every granted namespace is
-// one the policy names. A cluster-wide role takes no namespaces.
+// one the policy names. A cluster-wide role takes no namespaces. A
+// namespace-operator grant names one to 16 Secrets, none the policy denies
+// (DESIGN-042 5.1); any other grant names none.
 func kubeInside(g *v1alpha1.KubeGrant, p *v1alpha1.KubePolicy) bool {
 	if g == nil || p == nil || !slices.Contains(p.Roles, g.Role) {
 		return false
 	}
 	if g.Role == v1alpha1.RoleBreakglass || g.Role == v1alpha1.RoleSecretsRead {
+		return false
+	}
+	if !secretsInside(g, p) {
 		return false
 	}
 	if v1alpha1.ClusterWideRole(g.Role) {
