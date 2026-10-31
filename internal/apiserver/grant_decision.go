@@ -184,8 +184,8 @@ func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant
 		if rp.UID == d.pod.UID {
 			return forbidden("a delegate never decides its own session's grant")
 		}
-		// Two sessions on one delegate account would decide for each other
-		// until S4 allows one Running session per coordinator account.
+		// Refuse same-account decisions independently of S4's sole-holder
+		// check, including a cross-replica launch race.
 		if rp.Namespace+"/"+rp.Spec.ServiceAccountName == d.ref {
 			return forbidden("a delegate never decides a grant whose requester runs as its own delegate account")
 		}

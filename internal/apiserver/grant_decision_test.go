@@ -1,10 +1,9 @@
 package apiserver
 
 // Delegate decision route tests (DESIGN-042 6.2): POST /v1/grants/{name}/decision.
-// A delegate decision is not a human decision. Form 1 (a configured coordinator
-// host) runs end to end over HTTP; form 2 (a session pod running as a delegate
-// ServiceAccount) is called on the handler with the caller resolveSession builds,
-// because resolveCaller classifies such a pod as a session only once S4 lands.
+// A delegate decision is not a human decision. Handler fixtures isolate reach
+// and refusal cases; grant_decision_integration_test.go exercises the combined
+// HTTP route, and grant_decision_envtest_test.go uses real TokenRequest/TokenReview.
 
 import (
 	"bytes"
@@ -42,7 +41,7 @@ const (
 // delegateFixture is a fixture whose coordinator host and coordinator-lead
 // ServiceAccount are delegates, with a full session the host launched (its
 // child, inside its reach) that requested a kube grant. Delegate sessions are
-// launch-eligible (S4's check stands in). It returns the fixture, the
+// launch-eligible under S4's real exported rule. It returns the fixture, the
 // requester's token and the grant.
 func delegateFixture(t *testing.T) (*fixture, string, apiv1.Grant) {
 	t.Helper()
