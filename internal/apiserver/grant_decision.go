@@ -159,13 +159,15 @@ func (s *Server) podSession(ctx context.Context, pod *corev1.Pod) (*v1alpha1.Age
 }
 
 // delegateSeparation refuses a delegate that is the requester or speaks for
-// it (DESIGN-042 6.2): the requesting session, a pod it controls or its
-// current pod; a coordinator or worker the maintenance envelope names; a
-// session that descends from the requester through any parent link; and, for
-// a delegate session, one that Tom's human or a client caller did not launch.
-// The last rule is S4's launch rule checked again at decision time: a session
-// may not launch its own delegate, so neither it nor a sibling can approve
-// for it. A delegate deciding for its own children stays allowed.
+// it (DESIGN-042 6.2): the requesting session, a pod it controls, its current
+// pod, or a requester running as the delegate's own account; a coordinator or
+// worker the maintenance envelope names; a session that descends from the
+// requester through any parent link; a session that shares a launching
+// session with the requester (siblings and cousins); and, for a delegate
+// session, one that Tom's human or a client caller did not launch. The last
+// rule is S4's launch rule checked again at decision time: a session may not
+// launch its own delegate. A delegate deciding for its own children stays
+// allowed.
 func (s *Server) delegateSeparation(ctx context.Context, g *v1alpha1.AccessGrant, d *grantDelegate) error {
 	rq := g.Spec.Requester
 	if owner := metav1.GetControllerOf(d.pod); owner != nil && owner.Kind == "AgentSession" &&
