@@ -1,9 +1,10 @@
 package grantattest
 
 import (
-	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"slices"
 	"testing"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
 
 func TestReservedScopeDigestBindsMarkerSnapshotAndObjectUIDs(t *testing.T) {

@@ -3,13 +3,14 @@ package apiserver
 import (
 	"context"
 	"errors"
+	"net/http"
+	"slices"
+	"time"
+
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/grantattest"
-	"net/http"
-	"slices"
-	"time"
 )
 
 // A designated host must be able to read the scope its client then decides.

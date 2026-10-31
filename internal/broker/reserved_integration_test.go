@@ -288,11 +288,11 @@ type reservedNamespaceRaceClient struct {
 func (c *reservedNamespaceRaceClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
 	if _, ok := obj.(*rbacv1.RoleBinding); ok && obj.GetNamespace() == "frontend" && !c.replaced {
 		var ns corev1.Namespace
-		if err := c.Client.Get(ctx, client.ObjectKey{Name: "frontend"}, &ns); err != nil {
+		if err := c.Get(ctx, client.ObjectKey{Name: "frontend"}, &ns); err != nil {
 			return err
 		}
 		ns.UID = "replacement-during-create"
-		if err := c.Client.Update(ctx, &ns); err != nil {
+		if err := c.Update(ctx, &ns); err != nil {
 			return err
 		}
 		c.replaced = true
