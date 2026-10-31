@@ -63,3 +63,45 @@ func TestInboxRealSchemaUTF8ByteBoundAndImmutability(t *testing.T) {
 		t.Fatal("schema allowed synthetic coordinator sender", err)
 	}
 }
+
+func TestInboxQuestionReplySchemaIsExactAndImmutable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	question := schemaMessage("question-1", "Which base?")
+	question.Spec.Kind = "question"
+	if err := kube.Create(ctx, question); err != nil {
+		t.Fatal("question refused", err)
+	}
+	ref := coord.InboxMessageRef{Name: question.Name, UID: string(question.UID)}
+	reply := schemaMessage("reply-1", "main")
+	reply.Spec.Kind, reply.Spec.InReplyTo = "reply", &ref
+	if err := kube.Create(ctx, reply); err != nil {
+		t.Fatal("reply refused", err)
+	}
+	for _, mutate := range []func(*coord.InboxMessage){
+		func(m *coord.InboxMessage) { m.Spec.Kind = "question"; m.Spec.InReplyTo = nil },
+		func(m *coord.InboxMessage) { m.Spec.InReplyTo.UID = "other-question" },
+	} {
+		bad := reply.DeepCopy()
+		mutate(bad)
+		if err := kube.Update(ctx, bad); !apierrors.IsInvalid(err) {
+			t.Fatal("reply correlation mutated", err)
+		}
+	}
+	for n, mutate := range []func(*coord.InboxMessageSpec){
+		func(s *coord.InboxMessageSpec) { s.Kind = "reply" },
+		func(s *coord.InboxMessageSpec) { s.Kind = "question"; s.InReplyTo = &ref },
+		func(s *coord.InboxMessageSpec) { s.InReplyTo = &ref },
+		func(s *coord.InboxMessageSpec) { s.Kind = "approval" },
+		func(s *coord.InboxMessageSpec) {
+			s.Kind, s.InReplyTo = "reply", &coord.InboxMessageRef{Name: "message.short", UID: ref.UID}
+		},
+		func(s *coord.InboxMessageSpec) { s.Kind, s.InReplyTo = "reply", &coord.InboxMessageRef{Name: ref.Name} },
+	} {
+		m := schemaMessage(fmt.Sprintf("bad-correlation-%d", n), "x")
+		mutate(&m.Spec)
+		if err := kube.Create(ctx, m); !apierrors.IsInvalid(err) {
+			t.Fatal("schema accepted an inexact correlation", n, err)
+		}
+	}
+}
