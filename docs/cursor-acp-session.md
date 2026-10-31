@@ -38,6 +38,14 @@ current doc or a live run:
 
 None of this is live acceptance.
 
+Provider-to-client JSON frames are bounded by `MAX_PROVIDER_FRAME`: 4 MiB
+(4,194,304 bytes), including the terminating newline. This allows file contents
+and tool output in `session/update` frames above the former 64 KiB bound.
+Coordinator input, client-to-provider frames and receipts retain the 64 KiB
+`MAX_FRAME` bound. Reads remain in chunks of at most 4096 bytes; an incomplete
+frame buffer holds at most its limit plus one byte, and the event queue remains
+bounded to 128 entries. Oversized input is refused without draining it.
+
 A later, separately authorized owner can invoke:
 
 ```sh
@@ -232,6 +240,35 @@ that tools did useful work, or that durable dev-env inbox/claim state changed.
 and raw output are withheld. An unexpected client error is reported as
 `internal-error`. A malformed request id is `invalid-request-id`; a reused one is
 `duplicate-request`.
+Framing failures still exit 2 with `event: "failed"` and `reason: "invalid-frame"`.
+Their new metadata-only `detail` distinguishes:
+
+- `frame-too-large`, with `byte_count` and `limit`. The count includes the
+  newline when present and reports bytes observed before refusal (at most
+  limit plus one), not the unread remainder of an oversized frame.
+- `frame-malformed-json`, for invalid JSON/encoding or a non-object frame.
+- `frame-duplicate-key`, without copying the duplicate key.
+- `frame-truncated-eof`, with `byte_count` for buffered bytes lacking a newline
+  when EOF arrives.
+
+For example, an oversized provider frame produces only:
+
+```json
+{"event":"failed","reason":"invalid-frame","detail":"frame-too-large","byte_count":4194305,"limit":4194304}
+```
+
+No frame content, transcript, file contents or parser exception text is added.
+Stream I/O failures retain the generic `invalid-frame` reason. The old receipt
+for Grok run `ded6cc77` (GROK-S3) cannot prove which framing cause occurred.
+The most likely cause is a valid update larger than 64 KiB; this remains a
+hypothesis, not a recovered or reproduced provider frame.
+
+The existing smoke checker accepts only `event` and `reason` on a `failed`
+receipt. It rejects these enriched framing failure receipts with
+`unexpected-field`; updating that checker is outside this bounded fix.
+Successful receipt streams and generic failure receipts keep their existing
+checker behavior.
+
 Coordinator receipt writes and provider input writes are nonblocking and share
 the same deadline. If the coordinator stops reading stdout, the failure receipt
 may be absent or partial, but the client still terminates its child.
@@ -258,6 +295,11 @@ ignores SIGTERM. They neither start a provider nor touch credentials, existing
 conversations, or live panes. Actual
 provider compatibility, startup/version/trust, allowed identity and workspace,
 resource policy, and live communication acceptance remain later prerequisites.
+
+Frame qualification includes synthetic frames just below and at 4 MiB,
+refusal at 4 MiB plus one byte without draining, each framing detail,
+UTF-8 byte counts at truncated EOF, a 200 KiB tool update, coordinator input's
+unchanged 64 KiB bound, and provider cleanup on every framing failure.
 
 OP318 qualification also covers full/missing/malformed/oversized permission
 context, controls, secret values in title and raw input, unknown field dropping,
