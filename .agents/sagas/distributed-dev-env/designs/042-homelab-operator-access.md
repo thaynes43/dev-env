@@ -1,883 +1,609 @@
 # DESIGN-042: Homelab operator access activation bundle
 
-- **Status:** Proposed, 2026-10-31. Revised four times that day after reviews by the
-  lead, the coordinator, the advisory reviewer and an independent Codex reviewer.
-  Design only. Nothing is granted, activated or changed by this document: no policy,
-  guard, role, flag, template or cluster object.
-- **Tracking:** OpenProject OP233 (#233). Epic
-  [#112](https://work.haynesnetwork.com/work_packages/112), Saga #85. Related: #214,
-  #219, #304 (optional agent auto-review, a separate layer), #319 (MAM), #113. Lead
-  `dev-env-1029-132039` reviews PR #782. Do not merge it in this story.
-- **Inputs:**
-  - Tom's four corrections of 2026-10-31 (section 1) and his #214 words of 2026-10-26;
-  - lead and coordinator reviews, including the S5 decisions on PR #785;
-  - the Codex review at `~/.shared/handoffs/op233-codex-review/findings.md`
-    (CODEX-REVIEW-DESIGN-042, verdict REQUEST CHANGES).
-- **Source examined:**
-  - dev-env `34624a4dd7ecc2a19edb2d76db96c22fd71e2b33` and main
-    `2984528d78e54f3dfd77cf12755f2f389a075dff` (#781 merged); PR #785 head;
-  - haynes-ops `09614e825a5ab102cca0a9d18bd6259b91c6e0ec`, plus #4501 and #4502;
-  - live objects, read on 2026-10-31 between 13:50 and 14:23Z with the session's
-    read-only identity.
-- **ADR bookkeeping (decided):** ADR-013 (#781) amends ADR-012 for attested
-  maintenance. When Tom approves this bundle, ADR-014 records:
-  - the two approval modes;
-  - the reserved-decision cases;
-  - the namespace-operator class.
+- **Status:** Proposed, 2026-10-31. Source preparation only. No activation approval,
+  policy, flag, template, grant, credential provisioning or security/network change.
+- **Canonical work:** OpenProject [OP233](https://work.haynesnetwork.com/work_packages/233),
+  Epic [112](https://work.haynesnetwork.com/work_packages/112), Saga 85.
+  Integration story [333](https://work.haynesnetwork.com/work_packages/333) owns this
+  correction; it creates no competing queue. OP304 auto-review is deferred and is
+  not a prerequisite.
+- **Custody:** Codex `dev-env-1031-171057` integrates the released design from
+  [PR782](https://github.com/thaynes43/dev-env/pull/782) at
+  `e11aaaa48188902116f2f3742f1bb0bb6d4899ee`. Claude `dev-env-1029-132039` is
+  review-only. S2/S6 belong to `dev-env-1031-163602`; S3 to Grok with Codex
+  `dev-env-1031-165730`; S5 to its separate Grok writer. No source-branch takeover.
+- **Evidence:** section 2 pins the actual source heads and their limits. Earlier
+  live observations in PR782 were made at 13:50–14:23Z on October 31; they are
+  dated observations, not a current runtime acceptance claim.
+- **ADR bookkeeping:** ADR-013 is Accepted and unchanged. S6 adds ADR-014; S2 adds
+  ADR-015. A later accepted decision records the reach/reserved-class changes
+  proposed here; do not reuse those numbers or amend an Accepted ADR.
 
-  No Accepted ADR is edited.
+`DES/` means haynes-ops `kubernetes/main/apps/dev-env-system/`. D001 means
+[DESIGN-001](001-dev-env-v2.md). An **authenticated actor** records its own
+TokenReview-verified decision. An **agent assertion** reports someone else's
+consent; a message reference does not authenticate that person.
 
-`DES/` below means haynes-ops `kubernetes/main/apps/dev-env-system/`. `D001` means
-[DESIGN-001](001-dev-env-v2.md). "Authenticated actor" means a TokenReview-verified
-identity recording its own decision. "Agent assertion" means an agent's unverified
-statement that someone else approved.
+## 0. One recommended proposal for Tom's exact review
 
-## 0. Recommended activation scope
+Approve one concrete activation packet after its missing source and rendered
+configuration have been independently reviewed. Q-042-01 and Q-042-02 are one
+consolidated decision, not separate partial approvals. This document does not
+submit or consume that decision. New security/access scope remains held for Tom.
+Tracks below are delivery dependencies inside that packet, not permission to
+activate a convenient subset before the complete proposal is reviewed.
 
-Tom approves **one bundle, once** (Q-042-01). Until its flags, roles and policies land,
-it changes nothing at runtime. Every item is either default-off source or GitOps data
-with a rollback.
+The recommendation retains the existing grant framework, agent-chosen commands,
+message approvals, per-grant identities, TTL, release and audit. It adds no service,
+per-command gate or OP304 dependency. The complete deliverable must serve existing
+sessions, including top-level ones; current code restrictions are not product intent.
 
-**The risks Tom accepts by approving it:**
+1. **Eligibility:** `full`, `workbench` and future `coordinator` sessions in any repo
+   may request the classes in section 5, within the approved policy scope.
+2. **Mode (a):** a requester records its own attestation under a policy Tom approved.
+   This is an agent assertion, with no independent approver authentication.
+3. **Mode (b):** a separate allowlisted, live pod-bound delegate records its own
+   decision, labelled `delegate/<namespace>/<serviceaccount>`, never `human/`.
+   Tree reach stays the default. The proposed explicit policy-reach subset in 6.6
+   lets a designated delegate serve existing top-level sessions within the same
+   policies or enabled reserved cases. **That subset is missing source.** It is a
+   necessary prerequisite, not an accepted limitation or a PR791 feature.
+4. **C2 namespace operator:** permit exec, restart and Jobs in the named app
+   namespaces plus `network`, with a per-grant list of named Secrets for new mounts.
+   **Proposed retained exposure, requiring Tom's review:** exec can read existing
+   workload Secrets/tokens; a created Job can select **any ServiceAccount in that
+   namespace**, including one with no running pod. Its authority may extend outside
+   the namespace. The current source does not enforce the example's `default` SA.
+   Keeping that behavior is proposed, not accepted. Restricting it would require an
+   explicit revised proposal and source, not a silent permission reduction.
+5. **Hardware:** C4 leases the existing hw-ssh key and Proxmox operator credential
+   for at most 1h. Their effective powers include root/root-equivalent operations.
+   File removal cannot recall a copy, stop a process or undo an external operation.
+6. **GPU:** S6 restricts mode (a) maintenance to an explicit depth-0 session whose
+   immediate creator SA is listed. Mode (b), including extensions, needs a separate
+   delegate and the exact maintenance envelope. No fixed command list is introduced.
+7. **Reserved cases:** after Tom's fresh message, S7 lets an agent execute RD2–RD4.
+   **P7 as proposed is root-equivalent**, not a confined namespace grant. Every verb
+   on every API resource allows impersonation, privileged-SA TokenRequests and
+   Secret get/list in Never namespaces. Admission does not intercept reads, and
+   impersonated identities bypass a guard keyed to `grant-*`. This is a proposed
+   exceptional scope for Tom's explicit decision, **not accepted risk**. Its original
+   identity's TTL does not revoke credentials or identities obtained through it.
+   Sections 7.1 and A3 state the resulting limits rather than promise containment.
 
-1. **Eligibility.** Every `full` and `workbench` session, in any repo, may get the
-   class grants of section 5 once an approval is recorded. Today only `full` sessions
-   in `haynes-ops` can, and only for single hosts.
-2. **Mode (a)** is the requester's own attestation. It is an agent assertion: a claim,
-   not authentication of the approver. A session that lies gets no more than the
-   matching policy allows, for its TTL.
-3. **Mode (b) and reserved decisions.** Listed delegates may decide other agents'
-   grants through the authenticated API. A delegate is an authenticated actor. When a
-   delegate relays Tom's answer, Tom's consent is still an agent assertion. With S7, a
-   delegate who cites Tom's message may also execute these reserved cases (RD1, bounds
-   changes, already runs through the existing delivery workflow):
-   - break-glass;
-   - Secret read;
-   - one bound storage delete;
-   - recording a hardware operation.
+### Trust roots and the actual lead
 
-   **Reach = tree.** A delegate decides only grants whose requester is a strict
-   descendant of the delegate's own session. A coordinator-host delegate reaches only
-   its own child sessions. Every other request is refused: its own, an ancestor's, a
-   sibling's, or an unrelated session's. The policy's `spec.delegated` caps the types
-   and scope. Top-level sessions, such as the GPU session `haynes-ops-1029-223503`,
-   use mode (a): Tom messages that agent, and it attests. Fleet-wide delegate reach is
-   not in this activation; it is optional future work.
+The trust boundary follows identities, not session depth: **every pod using the
+workbench SA** has its bound exec rights, including workbench children. The human
+SA and configured client identities (including legacy `dev/dev-env`) also have
+bootstrap authority. A depth-0 workbench session is a supported S4 launch route;
+it is not the only workbench pod able to use SA-level exec rights. Such roots can
+exec into a delegate pod and act with its token. Separation checks therefore
+constrain ordinary callers, not a compromised root. Bare-pod/TokenRequest authority
+must be inventoried too; counting AgentSessions is not a bound on all token holders.
 
-   The Claude lead becomes a delegate only after P6, which waits on the template
-   hold.
-   **Trust assumption:** the trusted roots below can launch the lead and exec into
-   its pod, so they can act as the lead. Compromising a trusted root therefore
-   compromises its delegates.
-4. **Namespace operator.** A grant in named app namespaces may exec into pods, restart
-   workloads, and run Jobs that mount the Secrets that grant names.
-   - **Wider than it looks:** a delegate may approve any Secret name in those
-     namespaces that is not on the policy's deny list.
-   - **Exposure:** exec reaches every Secret already mounted in that namespace's pods,
-     and whatever those pods' SAs can read. So the class effectively grants read of
-     those Secrets. "No Secret get or list" does not mean "cannot read Secrets".
-5. **Hardware.** Eligible sessions may lease two credentials for 1h:
-   - the shared hw-ssh key, which is root on PiKVM and HaynesTower and sudo-allowlisted
-     on the PVE nodes;
-   - a Proxmox operator token, which is root-equivalent.
+This is disclosed residual scope pending Tom's review. Narrowing workbench exec
+only into coordinator pods is technically compatible with general app exec. It is
+not ruled out by Tom's requirements. The proposal defers it to preserve the existing
+workbench management path and keep this source increment bounded; that is an
+operational/scope recommendation, not a manufactured user ruling.
 
-   Release removes the files. It does not recall a copy or stop a running process.
-   Destructive hardware operations remain a convention, not a broker-enforced
-   boundary.
-6. **GPU.** A message may approve SYS_ADMIN maintenance on Card C, within #781's
-   exact-envelope policy.
-   - Under mode (a), only a session that a listed creator launched directly may
-     self-approve (S6). Child sessions never do.
-   - #781 as merged admits any top-level session: headless tasks from the v1-pod
-     client, the workbench client or the coordinator-host fixture.
+Actual Claude `132039` remains a full legacy session, not a provisioned named
+coordinator. Actual GPU `haynes-ops-1029-223503` has parent
+`dev-env-system/dev-env-human`, depth **0**. Neither is reparented or restarted.
+P6 remains held. A new named approval session after an approved P6 is a proposed
+identity/template route, not a description of the running Claude session.
 
-**Persistent deltas** (grouped into tracks below):
+### Delivery dependencies inside the packet
 
-| # | Repo | Change | Status | Rollback |
-|---|---|---|---|---|
-| S1 | dev-env | Attested maintenance (ADR-013), flag `--enable-attested-maintenance` | **merged** as `2984528d` (#781); default off | flag false |
-| S2 | dev-env | Delegate decisions (6.3): `--grant-delegates`; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `delegate/<ns>/<sa>`; reach = tree, so only strict descendants of the delegate's session; no-ref decisions refused; covers maintenance extensions | new; default off | empty the list |
-| S3 | dev-env | `agent-run grant decide` and an MCP tool; `secrets`, `targets` and `allNamespaces` on requests; a "no policy covers this" notice | new, small | revert |
-| S4 | dev-env | Named coordinator identity (6.4): templates accept a `dev-env-coordinator-<name>` SA; the pod stays a session caller; launched only by human or client callers or a depth-0 workbench session; one Running session per SA | **in review at #787**, fix round in progress | revert |
-| S5 | dev-env | Named Secrets (5.1): `KubeGrant.secrets` in `ScopeDigest`; role `dev-env-grant-namespace-operator`; policy `kube.secretDenyList`; the broker writes a per-grant Role holding `use` on exactly the named Secrets | **PR #785, open.** Its param-only guard must change to the fail-closed check in 5.1. | revert |
-| S6 | dev-env | Attested maintenance creators (6.2): broker flag `--attested-maintenance-creators`, default `dev-env-system/dev-env-human`; depth 1 | new, small; **required before P2 sets `--enable-attested-maintenance`** | reset to the default |
-| S7 | dev-env | Reserved-decision cases (7.1) in the S2 route: RD2, RD3 (named and cluster-wide), RD4 storage, and RD4 hardware as audit intent only. Each binds grant UID, exact scope or target, TTL and a mandatory Tom-message ref. Flag `--reserved-decision-classes`, default empty. | new | empty the flag |
-| R1 | haynes-ops | CRD copy from each release that carries S2 to S7 | routine | remove the new-field policies first, then revert |
-| R2 | haynes-ops | Operator and broker pins | routine | pin back |
-| P1 | haynes-ops | Ten GrantPolicies (9.1) | **activation** | delete a policy |
-| P2 | haynes-ops | Broker `--enable-attested-maintenance=true` (after S6); `--grant-delegates=<list>` on operator and broker; `--reserved-decision-classes=rd2,rd3,rd4` | **activation** | false; empty |
-| P3 | haynes-ops | `dev-env-maintenance-annotations` also allows the operator's set-once decision annotation on kube and egress grants | **activation** | revert |
-| P4 | haynes-ops | ClusterRole `dev-env-grant-namespace-operator`. The broker may create per-grant Roles `grant-<id>` that hold only `use` on named Secrets; the broker guard pins their shape. Bind and catalog entries. | **activation** | revert; per-grant Roles go at release |
-| P5 | haynes-ops | Identity guard: per-name `use` checks (fail closed). VAP `dev-env-grant-scope`: target UIDs for storage deletes. | **activation** | revert; references and deletes refused again |
-| P6 | haynes-ops | SA `dev-agents/dev-env-coordinator-lead` with exactly `dev-env-agent`'s bindings; agent-guard match extended to it; a `coordinator` profile in `dev-env-templates` | **blocked by the global template hold** | revert |
-| P7 | haynes-ops | ClusterRole `dev-env-grant-breakglass` (7.1, RD2) | **activation** | delete it; RD2 is refused again |
-
-**Independent tracks inside the one approval.** Tom's single approval covers every
-track. Each track lands on its own prerequisites, and no track waits on an unrelated
-one. Every track ships as a held haynes-ops PR for Tom's review, after its own R1 and
-R2.
-
-| Track | What it delivers | Deltas | Prerequisites | When it activates |
-|---|---|---|---|---|
-| **T0** Policies on live machinery | mode (a) class grants for C1 (app namespaces), C3 and C4; the widened `kube-nodes-attested` | the attested-only P1 policies: `kube-workloads`, `egress-cluster-services`, `kube-nodes-attested`, `lan-ssh`, `lan-pve-api`, `credential-hw-ssh-attested`, `credential-proxmox-attested` | none: D-88 is live | **at once**, with its PR |
-| **T1** A real Claude coordinator | the lead runs under its own SA, bootstrapped from a depth-0 workbench session | S4 (#787), P6 | S4 source; Q-042-02 | when S4 is pinned and the exception is granted |
-| **T2** Delegated message approval | mode (b) for kube, egress and maintenance | S2, S3; P2 `--grant-delegates`; P3; `delegated` blocks; `kube-workloads-infra` | S2 and S3 source | when S2 and S3 are pinned. It serves coordinator hosts at once, and the lead after T1. |
-| **T3** Pod exec and named Secrets | C2 | S5 (PR #785, with the fail-closed change), P4, P5, `kube-namespace-operator` | S5 source; T2, because the policy is delegated-only | when S5 is pinned and T2 is live |
-| **T4** GPU maintenance | C5 under mode (a) | S1 (merged), S6; `maintenance-card-c`; P2 `--enable-attested-maintenance` | S6 source | when S6 is pinned. Mode (b) for GPU follows T2. |
-| **T5** Reserved cases | RD2, RD3, RD4 storage, and RD4 hardware as audit only | S7, P7, P2 `--reserved-decision-classes` | S7 source; T2 | last; it blocks none of T0 to T4 |
-
-RD1 (bounds changes) is in no track. It already runs through the existing delivery
-workflow (7.2). This bundle's own PRs use that workflow, approved by Tom's answer to
-Q-042-01.
-
-**Already live** (args read at 13:50Z):
-
-- broker: `--enable-attested-grants=true`, `--enable-maintenance-grants=true`;
-- operator: `--enable-grant-attestation=true`, `--enable-maintenance-api=true`.
-
-**Existing human-only gate.** The maintenance decision route (`kindHuman`, recorded as
-`human/<sa>`) stays as a fallback. S1 and S2 remove the dependence on it once they are
-activated.
-
-**Not in scope:** refusing a ref reused across digests; OP304 auto-review.
-
-**Who is trusted to bootstrap and manage delegate identities.** Three trusted roots
-exist:
-
-- Tom's human SA;
-- the client callers: the workbench SA and the v1 pod's `dev/dev-env`;
-- the depth-0 workbench session.
-
-They are the intentionally privileged bootstrap operator and factory, not ordinary
-sessions. Each can create a named-coordinator delegate and exec into its pod.
-Through that pod's token, each can act as the delegate. This is a trust assumption,
-not a defect.
-
-What stays closed is elevation by ordinary sessions:
-
-- an ordinary session cannot launch or become a delegate;
-- at most one Running session holds each coordinator SA;
-- stale grants and bindings never authorize;
-- a delegate decides only for strict descendants of its own session: never itself, an
-  ancestor, a sibling or an unrelated session.
-
-**The decision left for Tom:**
-
-- **Q-042-01:** approve this bundle, with the six risks and the tracks above. Its
-  residual risk: compromising a trusted root (Tom's human SA, a client caller, or the
-  depth-0 workbench session) equals compromising its delegates.
-- **Q-042-02:** grant a template-hold exception for the `coordinator` profile only,
-  with no restart of active sessions.
-
-Nothing else is asked.
-
-## 1. Outcome and Tom's correction
-
-Tom, 2026-10-31:
-
-1. "Nothing we do should be human only what the actual fuck do you think we are
-   building an AGENTIC OS for?"
-2. "We can't be playing wack a mole I explained already that agents will need access
-   to everything it's a home lab!"
-3. "I do not approve on the mac I or an agent can approve with a message to the agent
-   requesting the grant."
-4. "Agents typically do the prowlarr side for me. This was a standard procedure in
-   dev-env v1 so it should be no trouble since you made v2 parity".
-
-On #214 (2026-10-26): "I want a streamlined way agents can ask either their
-coordinator ... or a user ... for access to anything they need in cluster AND online
-and the coordinator or user can gauge the risk and approve or deny - user must be able
-to do this from mobile".
-
-These correct implementation drift. They do not remove safety. Decision authority over
-reserved classes stays with Tom. No internal class may remain executable only through a
-human actor once Tom has approved by message. The bundle reuses scoped grants,
-per-grant identities, TTL, release, audit and D-88.
-
-It adds:
-
-- one authenticated decision route, with reserved cases;
-- one reusable namespace role;
-- named Secrets and targets.
-
-The acceptance tests are GPU (A1), MAM through a grant (A2), and the reserved-class
-matrix (A3).
-
-## 2. Inventory: what exists today
-
-### 2.1 Approval paths by grant type
-
-| Grant type | Standing policy | Attested policy (D-88) | Other decision | Live policies (13:50Z) |
-|---|---|---|---|---|
-| kube | yes | yes | none. Only `internal/broker/maintenance_decision.go:32` calls `Decide`. | `kube-nodes-attested` |
-| egress | yes | yes | none | `lan-ceph-mgr-metrics`, `lan-internal-ingress`, `lan-pve-api-lb`, `lan-pve-api-nodes`, `lan-ssh-tier`, `egress-haynesintelligence-ssh-attested`, `egress-pikvm-ssh-attested` |
-| credential | yes | yes | refused (`seams.go:151`) | `credential-proxmox`, `credential-hw-ssh-attested` |
-| maintenance | refused | on main `2984528d`, attested only and default off; extensions still need the human route (`maintenance_attestation.go:59-60` on main) | only `dev-env-system/dev-env-human` (`internal/apiserver/maintenance.go:36`; `seams.go:143`) | none |
-| breakglass | refused (`match.go:79`; CRD `:463`) | refused | none; the role is not in git | none |
-
-- Roles `dev-env-grant-breakglass` and `dev-env-grant-secrets-read` never match
-  (`match.go:120`; CRD `accessgrant_types.go:573`). Profile `ops` never matches
-  (`match.go:83`).
-- `KubeGrant` holds only `role` and 1 to 16 `namespaces` (`accessgrant_types.go:248-266`).
-  The Secret-read role is namespaced and bound by RoleBindings (`kube.go:55-79`), so no
-  grant can read Secrets cluster-wide.
-- `Broker.Decide` is an internal seam, not a public approval service. For
-  non-maintenance grants it refuses empty and `policy/` approvers, but it does not
-  require a `human/` prefix (`seams.go:127-167`).
-- `dev-env-human` is the token Tom mints on his laptop (`D001:340-342`). A grant that
-  no policy matches waits 30 minutes, then is denied by `timeout` (`broker.go:65`).
-
-### 2.2 Human-only gates and caller classes
-
-| Route | Gate | Cite |
+| Track | Concrete change | Required source and configuration before activation |
 |---|---|---|
-| `POST /v1/grants/{name}/maintenance-decision` | `kindHuman` only: the one concrete human-only route in scope | `maintenance.go:36` |
-| task budget `extend`, `continue`; native control | `kindHuman` (out of scope) | `taskbudgets.go:207, 347`; `native_control.go:41` |
+| T0 | C1 app, C3, C4 and widened node policies under mode (a) | Attested-only P1 shapes, using already installed D-88 machinery; no `delegated` fields. No S2 CRD assumption and no automatic activation from this document. |
+| T1 | A new named approval session, launched by the existing workbench route | Merged S4 plus reviewed P6, template-hold exception and proof no active session restarts. Existing `132039` keeps its current identity. |
+| T2 | Delegated kube/egress/maintenance and infra C1, including existing top-level callers | Corrected S2, S3, missing 6.6 source, a separately provisioned delegate, matching operator/broker lists, P3, operator policy-read RBAC. Add P1 `delegated` blocks **only after** S2's CRD copy is installed. |
+| T3 | C2 exec, Jobs and named Secrets | Integrated S5 after S2; T2; P4/P5; explicit review of any-SA exposure; `kube-namespace-operator` delegated-only. |
+| T4 | Exact-envelope GPU mode (a) | S1 plus S6 released/pinned, reviewed creator list, `maintenance-card-c`, attested-maintenance flag. Mode (b)/extensions require T2. |
+| T5 | RD2–RD4 message execution | Missing S7, T2 with 6.6, reserved bounds and flags, P7 root exception, RD3 expansion and RD4 UID guard. |
 
-- **How callers are classified.** `resolveCaller` (`caller.go:121-139`) checks, in
-  order: Tom's human SA, workbench session pods, clients, the shared session SA
-  `dev-agents/dev-env-agent`, then coordinator hosts.
-- **Coordinator hosts.** A coordinator host needs its own SA, a pod with that exact
-  name, a live UID and the `coordinator-host` annotation (`coordinator.go:64-76`).
-  Live, there is one: `dev-agents/dev-env-owned-native-fixture`, a Codex fixture.
-- **No Claude coordinator exists.** Every Claude session runs as the shared SA, so none
-  can call as a coordinator. A coordinator-classified pod is also never a session
-  caller.
-- **No coordinator decides grants today.**
+T0 has no new R1/R2 dependency if it uses only installed attested fields. All other
+tracks copy the CRD and pin the binaries that implement their fields before applying
+policies that use them. No older CRD is expected to accept `delegated`. A rollback
+removes dependent policy fields and disables issuance before downgrading the CRD or
+binary. Do not roll back past S6 with attested maintenance enabled.
 
-### 2.3 Attestation as built (D-88)
+## 1. Outcome and controlling requirements
 
-- Only the requesting session may attest (`grant_attestation.go:24`). It binds:
-  - the grant UID, scope digest and TTL;
-  - the attestor's session, session UID and pod UID, taken from the token
-    (`attest.go:81-90`).
-- Each grant takes one statement, within 30 minutes. The ref is checked for syntax
-  only (`attest.go:52-54, 93-102`).
-- `ScopeDigest` (`attest.go:162`) covers type, credential, role, namespaces, egress
-  targets, TTL and session. #781 adds the whole maintenance envelope.
-- The broker re-verifies the statement against the live session and pod
-  (`attestation.go:48`). It writes `approvedBy policy/<name>` (`broker.go:222`) and an
-  Event (`broker.go:533-536`). An approved grant is phase **Active** (`broker.go:253-259`).
-- Known gap (`D001:4163`): kube and egress execution never re-read `approvedBy`.
+Tom's October 31 corrections require agent-executable internal capabilities, broad
+homelab utility, approval by messages to the requester, and normal Prowlarr work.
+His October 26 OP214 requirement is a streamlined route for agents to ask a
+coordinator or user for cluster/online access, with mobile user approval.
 
-### 2.4 Grant identities, catalog and guards
+Acceptance is the required workflow, not today's implementation restriction:
 
-| Piece | What it does | Cite |
+- No internal class is human-only or requires Tom's Mac/token after valid message
+  approval. Agents choose commands within the approved capability envelope.
+- Ordinary delegated authority can be approved by an appropriately scoped agent.
+  Reserved cases still cite Tom's exact message.
+- Reuse standing/attested policies where they cover the work; do not add a gate to
+  existing routine access merely because a new source path exists.
+- Preserve scope, identity, expiry, release and refusal proof. Keep provider refresh
+  ownership with the keeper and keep credentials out of transcripts and artifacts.
+- Preserve active GPU/Haynesnetwork sessions. Source, tested, installed and usable
+  acceptance are distinct. The successful emergency MAM GitOps repair is not
+  namespace-grant parity.
+
+[Plan 07](../backlog/07-access-broker.md), Q-16/D-70 and
+[ADR-003](../adrs/003-session-coordination-private-repositories.md) remain the
+requirements context. This proposal does not replace them or create another queue.
+
+## 2. Exact source and evidence inventory
+
+Snapshot: 2026-10-31 integration pickup. Reverify moving heads before delivery;
+never carry an approval from one SHA to another. The private handoff retains the
+latest read-back. A passed local test is not hosted integration or deployment.
+
+| Component and owner | Exact source/dependency | Evidence and remaining gate |
 |---|---|---|
-| Kube grant identity | SA `dev-agents/grant-<id>` with no automount; catalog roles bound by RoleBinding or ClusterRoleBinding; token minted and installed in the pod's tmpfs. Revoke deletes the bindings, then the SA. | `kube.go:34-90, 137-175`; `installer.go:52-64`; `broker.go:266-287, 482-496` |
-| `dev-env-grant-workloads` | Namespaced. CRUD on workloads, Jobs, pods, services and configmaps. No Secrets, no exec. | `DES/rbac/app/grant-catalog.yaml:24-51` |
-| `dev-env-grant-storage` | Namespaced. Create and delete PVCs and VolumeSnapshots; delete StatefulSets. | `grant-catalog.yaml:56-74` |
-| `dev-env-grant-secrets-read` | Namespaced. Secret get and list. | `grant-catalog.yaml:79-88` |
-| `dev-env-grant-nodes` | Cluster-wide. Node patch and pod eviction. | `grant-catalog.yaml:93-114` |
-| `dev-env-grant-breakglass` | Named but **not in git and not live** | live NotFound |
-| `dev-env-agent-guard` | Matches only `dev-agents/dev-env-agent`. Jobs run as `default` and mount only `*-volsync-aws-secret`. Workloads: restart only. | `agent-guard.yaml:57-60, 67-68, 175-182` |
-| `dev-env-identity-guard` | Matches every `dev-agents` SA except the workbench. No writes in the dev-env namespaces; protected objects (RBAC, webhooks, CRDs, dev-env objects) locked; pods run as `default`; **no new Secret reference**. | `identity-guard.yaml:50-54, 176, 254, 267-296` |
-| `dev-env-broker-guard` | The broker touches only `grant-*` objects and binds only catalog roles. | `broker-guard.yaml:52-56, 78-119` |
-| `dev-env-maintenance-annotations` | Only the operator sets the decision annotation, once, and only on maintenance grants. | `maintenance-annotations.yaml:16-35` |
-| Maintenance executor | A bare Pod pinned to the node UID, with no token, only the named capabilities, and deny-all network. Control-plane nodes are refused. | `maintenance_executor.go:27-96`; `maintenance_scope.go:142-151` |
-| Egress grants | CNP `grant-<id>`: FQDNs, CIDRs or in-cluster endpoints, up to 16 ports | `internal/egress/policy.go:37-93` |
-| Templates | A profile may name an SA, but only `dev-env-workbench` is accepted | `templates.go:270-273, 491-492` |
+| S1 attested maintenance | PR781 merged `2984528d78e54f3dfd77cf12755f2f389a075dff` | Default-off source; no A1 utility acceptance. |
+| S4 named coordinator | PR787 reviewed `a62bf62e32fe466453de6c41a5ca23ec3970cdab`, merged `b82e3b2954d08a22abc6ed9d61039a40f3cbd1e2` | Independent review approved; required CI green. P6 still held; merge provisions no identity. |
+| S2 / owner 163602 | PR791 `83103c69f41a389d26d2d2d8df1abecd7f1b08c6`, branch `agent/dev-env-1031-163602`; replaces released draft786 `0678aee` | Full local API PASS 68.267s; real TokenRequest/TokenReview envtest PASS 7.419s, with synthetic Pod materialization. Broker 25.860s, operator 0.097s, schema 8.157s passed. Independent Claude review **REQUEST CHANGES** for decision-slot lockout; exact-head final CI/review and correction required. Tree-only source. |
+| S6 / owner 163602 | PR790 `aa55b7a63843d17fb9eb50dacfb20a01d9b84881`, branch `agent/dev-env-1031-163602-s6`; replaces draft789 `40ae62e0ef2d8826e7da536fb853ccdc76ad84a4` | Independent Claude review APPROVE at this head; broker/operator and creator-removal mutation passed. Hosted Test pending at pickup. No activation. |
+| S3 / Grok primary, Codex 165730 support | Draft PR792 `3e1f1d39de6442460e20a1b38f0387449d437079`; supplied base `68c398b9c12cc9b93df658d72b68aedf1f067180`; Grok source `49dc659` | Local package/vet/static CLI build and six meaningful mutants PASS. Hosted merge-result Build/Lint fail because moving S2 lacks S5 `CreateGrantRequest.Secrets`/`Grant.Secrets`. Keep draft; integrate after S2/S5, rerun hosted CI and exact-head review. |
+| S5 / separate Grok writer | PR785 `fe3b62fcbcf5d8f7ae8f288d9e3fe52f09a166cd`; local-only correction ACP `ef4f0d17-c002-42e5-9d12-7dc52e6b9e31`, workbench workspace | Existing source green, but not integrated with S2. Local patch corrects same-object digest nonmutation test and discloses any-SA Job exposure. Patch SHA256 `992378f1cfa009828cacb785e96a545ad2bae0880f3bef31179d49cd2fa372d1`; no integrated/tested/pushed-head claim. |
+| S2 reach follow-up (6.6) | **Absent** from PR791 and merged S4; request to existing S2 owner after disjoint follow-up custody | Source design only. No default/flag/schema exists for policy reach today. |
+| S7 reserved classes | **Absent** | No reserved flag, `tomRef`, `targets` or `allNamespaces` server implementation is claimed. S3 must extend its contract after S7; PR792 is not S7 proof. |
 
-The baseline `dev-env-agent` role has these verbs:
+Source links: [S2](https://github.com/thaynes43/dev-env/pull/791),
+[S6](https://github.com/thaynes43/dev-env/pull/790),
+[S3](https://github.com/thaynes43/dev-env/pull/792),
+[S5](https://github.com/thaynes43/dev-env/pull/785).
+The S2 owner's local combined S2/S6 work is not substituted for a remote head.
 
-- cluster-wide `pods/exec`, `services/proxy` and `pods/proxy`;
-- Job create and delete;
-- pod delete;
-- restart and reconcile patches.
+## 3. Existing machinery and workflow limits
 
-It has no Secret read (`agent.yaml:78-118`). Exec is refused in the dev-env and
-controller namespaces, and into pods whose SAs are on the Kyverno exec guard's
-privileged list. Prowlarr is on neither list, so the baseline may already exec into
-it. This design does not use that route.
+- D-88 attestation binds grant UID, requesting session UID, Pod UID, scope digest
+  and TTL. The broker checks live identity and records `policy/<name>`; it is an
+  agent assertion. A policy-less request waits for timeout, not automatic approval.
+- S2 adds the authenticated decision route and broker checks. HTTP **202** records a
+  Pending decision; broker reconciliation later produces **Active**. Neither a 202
+  nor a TokenReview test proves an installed executor or useful app operation.
+- S4's exported `NamedCoordinatorLaunchAllowed` / `NamedCoordinatorSessionEligible`
+  admits a human/configured-client depth-0 launch, or a depth-0 workbench session
+  launching a named coordinator at depth 1. Ordinary callers cannot launch it.
+  Holder checks include reserved/live sessions and resume safety; they are broader
+  than the old phrase “one Running session.” Cross-replica launch races still need
+  their recorded acceptance evidence; a process-local mutex alone proves nothing.
+- The current maintenance human route remains a fallback, not the selected required
+  route. S1/S6 cover only creator-eligible initial leases. They do not cover every
+  top-level session, C2, infra C1, extensions or reserved cases.
+- Current tree-only S2 serves descendants, not unrelated existing top-level sessions.
+  Launching a new child under a delegate is useful for new bounded work, but does
+  not grant the original GPU session an extension or migrate an active session's
+  identity. It is not the complete answer to the reach gap.
 
-### 2.5 Live evidence of the drift
+## 4. Boundaries retained and corrected
 
-| Object (13:50 to 13:56Z) | What happened |
-|---|---|
-| `grant-1031-033915-fc19`, `grant-1031-132422-84ca` (maintenance, Card C, SYS_ADMIN, 10m) | Both Denied by `timeout`: "no answer in 30 minutes" |
-| `grant-1031-033808-7327` (same, without SYS_ADMIN) | Released before an answer |
-| `grant-1030-122127-d7d9`, `grant-1030-130136-9897` (kube nodes, workbench) | Denied by `timeout`. `kube-nodes-attested` names only `full` and `haynes-ops`. That is the whack-a-mole. |
+D-19 runtime guards and GitOps remain. RD1 uses existing bot PR, review, delivery
+receipt, squash merge and Flux. An agent-written message ref is not machine-verified
+Tom consent. DESIGN-039's pending stronger consent mechanism and OP304 auto-review
+are not prerequisites or substitutes for Tom's exact scope review here.
 
-## 3. v1 baseline against v2 today
-
-v1's role `dev-env-operator` (haynes-ops `kubernetes/main/apps/dev/dev-env/app/rbac.yaml:16-136`)
-is the template for `dev-env-agent`. D-70 also counts Headlamp's `cluster-admin`
-(`D001:3947-3960`).
-
-| # | Capability | v1 | v2 today | Gap and fix |
-|---|---|---|---|---|
-| — | Reads without Secrets; exec into app pods; proxy; pod delete; restart; reconcile; suspend; force-sync | yes | yes, guarded (D-19) | none |
-| G1 | A Job that mounts an app Secret | yes: no admission policy matched `dev/dev-env` except the token guard (live read) | refused | **gap**: C2 (S5, P4, P5); R-04 P-05 |
-| G2 | Runtime workload spec changes | patch | restart only | deliberate (D-19) |
-| G3 | Capability pods on a node (GPU) | via Headlamp `cluster-admin` | human route only | **approval gap**: S1, S2, S6 |
-| G4 | Hardware: 8 SSH hosts, PVE API, Proxmox operator token | mounted; CNP open (`networkpolicy.yaml:441-487`) | workbench: standing policies. full: two attested hosts, haynes-ops only. | **gap**: P1 |
-| G5 | Omni | Admin key | Admin key in `full` and `workbench` | none |
-| G6 | In-cluster app APIs | a fixed list plus internal ingress | platform tier plus `lan-internal-ingress` | small: P1 |
-| G7 | Approval outside a standing policy | not needed | narrow attested policies; human route for maintenance; everything else times out | **main gap**: S2, P1, P6 |
-| G8 | Break-glass, Secret API read, destructive storage | via Headlamp `cluster-admin` | **no executable path for anyone** | **gap**: S7 (section 7). Bounds changes are not a gap: they already run through the delivery workflow. |
-
-The v1 MAM route is **Unknown**: no runbook describes it. `MAM_ID_PROWLARR` is
-mounted in no pod (`kubernetes/main/apps/downloads/qbittorrent/app/helmrelease.yaml:165-169`),
-so exec alone cannot reach it. The likely v1 route was G1.
-
-## 4. Prior records: drift or deliberate
-
-| Record | Restriction | Verdict | Action |
-|---|---|---|---|
-| Q-16 ruling, `D001:5338` | "Standing grants cover parity"; "Human approval gates only capabilities beyond today's" | Governs | This bundle |
-| D-70, `D001:3947` | "Do not add a new approval gate to an existing capability" | Governs | Same |
-| `D001:348` | "only Tom (on the console) can approve a grant" | Drift | Superseded; modes (a) and (b) |
-| D-26, D-27 | Tom approves on a page | Superseded (Q-16, D-70) | S7 gives D-27's restricted break-glass a message route |
-| D-54, D-61: breakglass and secrets-read refused by schema and match | Beyond OPERATOR | Deliberate for policies | Keep. S7 adds per-decision cases, not policies. |
-| CRD `:463` refuses maintenance policies | Human-only GPU | Drift | S1 (merged) |
-| ADR-012 | Human identity decides maintenance | Corrected by quote 3 | ADR-013, then ADR-014 |
-| D-88 policies scoped to one repo and one host | One scope at a time | Drift: whack-a-mole | P1 |
-| D-19 baseline guards | Runtime writes go through git | Deliberate | Keep |
-| Volsync-only Secret allowlist | Blocks R-04 P-05 and MAM | Drift | C2 |
-| Templates accept only the workbench SA | One non-default identity | Blocks the lead's mode (b) | S4, P6 |
-| Workbench-only LAN policies (Q-110-08) | Hardware only in workbench | Drift now | P1 |
-| [DESIGN-034](034-agent-asks-and-approvals-board.md) | Only a portal human answers an Ask | Deliberate for Asks | Grants never wait on the board |
-| [DESIGN-039](039-access-policy-change-guard.md) | Consent for authority changes; D-88 and relays are not machine-verifiable consent (G039:212-230); Q-269-03 pending | Deliberate, pending | Note only: machine-verifiable consent for authority changes remains DESIGN-039's open Q-269-03. It is not a prerequisite of this bundle. |
+Never-list exclusions apply to ordinary namespaced grants and RD3. They do **not**
+confine P7's proposed effective root authority, existing workbench exec, compromised
+workload SAs, node operations, or GitOps changes. A NoExecute taint can reach storage
+workloads and bypass PDBs. Do not label storage isolation “enforced” on that basis.
 
 ## 5. Capability classes
 
-| Class | Mechanism | Runtime identity | The request names | Max TTL | Status |
-|---|---|---|---|---|---|
-| **C1 App operator** | kube, `dev-env-grant-workloads` | `grant-<id>` | role, namespaces | 3h; 8h for infrastructure | policy new |
-| **C2 Namespace operator** | kube, `dev-env-grant-namespace-operator`, named Secrets | `grant-<id>`; Jobs run as `default` | role, namespaces, `secrets` (≤16) | 1h | S5, P4, P5 |
-| **C3 Cluster service API** | egress endpoints and ports | session pods | namespace, labels, ports | 3h | policy new |
-| **C4 LAN and host** | egress, plus credential `hw-ssh` or `proxmox` | session pods; keeper installs the credential | hosts, ports, credential | egress 3h, SSH 1h, credentials 1h | policies widened |
-| **C5 Node maintenance** | maintenance | broker executor Pod | the full envelope | 1h | S1, S2, S6 |
+| Class | Mechanism and requested scope | Maximum TTL | Approval |
+|---|---|---|---|
+| C1 app | kube `dev-env-grant-workloads`; explicit app namespaces | 3h | (a) or (b) |
+| C1 infrastructure | same role; explicit infrastructure namespaces | 8h | (b) only |
+| C2 namespace operator | kube `dev-env-grant-namespace-operator`; namespaces and 1–16 named Secrets | 1h | (b) initially |
+| C3 cluster API | egress endpoints/labels and explicit ports | 3h | (a) or (b) |
+| C4 LAN/host | egress destinations/ports, plus hw-ssh or Proxmox credential | egress 3h; SSH and credentials 1h | egress (a)/(b); credentials (a) |
+| C5 maintenance | node UID, GPU identity, image digest, runtime, capabilities, resources and executor identities | 1h | initial (a) with S6, or (b); extensions (b) |
 
-Shared tail for every class: release or expiry deletes the bindings and the SA (or the
-CNP or credential files). The AccessGrant is kept 90 days (`broker.go:68`), with
-`approvedBy`, the attestation or decision annotation, and Events. None of this undoes
-external effects or recalls a value already read.
+### 5.1 C2: named Secret use and effective powers
 
-### 5.1 C2: exec and named Secret use, fail closed
+S5's role has pods get/list/watch/delete, exec create, logs get; deployments and
+StatefulSets get/list/watch/patch; Jobs get/list/watch/create/delete; configmaps and
+Events get/list/watch. It has no direct Secret get/list rule.
 
-**Role.** `dev-env-grant-namespace-operator` is a namespaced ClusterRole (P4) with these
-rules:
+Each grant's `secrets` list is in ScopeDigest. Policies enumerate namespaces and
+an optional deny list, not every allowed Secret name. The broker uses `kubeInside`
+for delegated matching too. S5 must restore its server request/view fields, extend
+the standing-policy validation to `has(self.delegated)`, regenerate CRDs, and test
+against corrected S2 before S3 is rebased.
 
-| Resource | Verbs |
-|---|---|
-| `pods` | get, list, watch, delete |
-| `pods/exec` | create |
-| `pods/log` | get |
-| `deployments`, `statefulsets` | get, list, watch, patch |
-| `jobs` | get, list, watch, create, delete |
-| `configmaps`, `events` | get, list, watch |
+The broker creates a per-grant `<grant>-secret-use` Role with `use` on exactly the
+named Secrets and binds it only to that grant SA. Kubernetes does not check Secret
+use during Pod creation. Admission must therefore run the per-name authorizer check
+for each reference using the **requesting grant identity**, fail closed if no own
+Role exists, and stay within CEL cost limits for all 16 names. Missing grant,
+ended grant, another grant's names, an unlisted name and a denied name must refuse.
+A param-only VAP that matches no own object cannot provide that guarantee.
 
-It has no rule on Secrets.
+Jobs/Pods created by grant identities carry `activeDeadlineSeconds` at most 3600;
+Job cleanup uses `ttlSecondsAfterFinished` at most 3600. The current fixed cap also
+binds C1 Jobs. Per-grant expiry removes bindings, SA and Secret-use Roles; the
+workload deadline bounds continuing workloads. An open exec stream, a running
+command's effects, printed/copied values and borrowed workload tokens are not
+recalled by deleting a RoleBinding.
 
-**Named Secrets.**
+**Residual authority:** named Secret use bounds new direct references, not every
+Secret an agent can obtain. Exec sees existing env/mounts and SA tokens. A created
+Job can choose any SA in the granted namespace, including an unused privileged SA;
+that SA's effective cluster scope is part of Tom's C2 review. The A2 example uses
+`default` voluntarily. No namespace-only containment or default-SA enforcement is
+claimed. Do not log values while proving access.
 
-- **Grant side.** Each grant carries its own `secrets` list of up to 16 names. The list
-  is in `ScopeDigest`, so an approval binds the exact names.
-- **Policy side.** The policy names namespaces and an optional `kube.secretDenyList`.
-  It never enumerates allowed names. The broker refuses a grant whose names hit the
-  deny list.
-- **Who approves.** The list is approved per grant by mode (b), an authenticated
-  delegate. Mode (a) applies only when the policy explicitly opts in with an `attested`
-  block. `kube-namespace-operator` does not opt in.
+## 6. Approval and identity contract
 
-**How it is enforced.**
-
-- Kubernetes has no "use Secret" permission. Creating a pod or Job that references a
-  Secret needs no right on the Secret, so only admission can stop it.
-- On approval, the broker writes a per-grant Role `grant-<id>` in each granted
-  namespace. The Role holds the rule string `use` on exactly the granted names, and is
-  bound to the grant's SA. RBAC stores the string, but no API request ever exercises
-  it, so the Role grants nothing by itself.
-- The identity guard's rule 4 (`identity-guard.yaml:254`) refuses every new Secret
-  reference from a `grant-*` identity, unless every referenced name `n` passes
-  `authorizer.group('').resource('secrets').namespace(request.namespace).name(n).check('use').allowed()`.
-  - That check is answered by the caller's own per-grant Role, found through the
-    caller's identity.
-  - Each name gets its own validation. Each check costs 350000 of the 1000000
-    per-expression budget, so the check cannot sit inside one list filter.
-  - The same clause caps `activeDeadlineSeconds` and `ttlSecondsAfterFinished` at 3600.
-- To create those Roles, the broker holds the same harmless `use` rule string, so the
-  RBAC escalation check passes. The broker guard pins each Role's name and its single
-  rule.
-
-**Fail closed (lead decision Q4).**
-
-| Case | Result |
-|---|---|
-| The caller's grant is missing | no Role, so **deny** |
-| Another session's grants | they bind other SAs and never authorize this one |
-| The caller's grant has ended | the broker deletes the Role with the bindings, so **deny** |
-| A Secret the grant does not name | no matching resource name, so **deny** |
-
-PR #785's param VAP cannot express "deny when the caller's own param is missing",
-because admission policies can only deny. It must move to this RBAC-backed check, or
-keep the VAP only as defence in depth. Before activation, a server dry-run must
-confirm the custom rule string, the per-name checks, and the total cost for 16 names.
-
-**Exposure, stated plainly.** The named-Secret guard limits what a *new* pod may mount.
-It does not bound:
-
-- Secrets already reachable through exec into existing pods: their env and mounted
-  files;
-- anything a workload SA in that namespace can read, through that pod's token.
-
-An agent-chosen command can print any of them. So the class effectively grants read of
-every Secret mounted in that namespace's pods. "No Secret get or list" does not mean
-"cannot read Secrets".
-
-The controls are:
-
-- the session rule: secrets never go into transcripts, PRs or the tracker;
-- the 1h TTL;
-- the Event and AccessGrant record;
-- per-grant delegate approval;
-- the deny list;
-- the controller and dev-env namespaces stay refused.
-
-## 6. Approval: two modes
-
-Both modes approve only inside a policy Tom approved, or through an S7 reserved case.
-
-| | **Mode (a): policy delegation to the requester** | **Mode (b): authenticated delegate decision** |
+| Property | Mode (a) | Mode (b) |
 |---|---|---|
-| Who records it | the requesting session (`agent-run grant attest`) | a different allowlisted identity (`agent-run grant decide`) |
-| Provenance | **agent assertion** that `user` or `coordinator:<ref>` approved; it does not authenticate the approver | the delegate is an **authenticated actor**. Tom's consent, when the delegate relays it, is an **agent assertion**. |
-| Binding | grant UID, session UID, pod UID, scope digest, TTL; one statement per grant; 30 min | grant UID, scope digest, TTL; a set-once annotation; a ref is required; 30 min |
-| Separation | none | the requester must be a strict descendant of the delegate's session: never the delegate itself, an ancestor, a sibling or an unrelated session. Not a maintenance coordinator or worker. |
-| Policy block | `spec.attested` | `spec.delegated` |
-| Recorded as | `policy/<name>`, with "agent attestation, not verified human identity" | `delegate/<ns>/<sa>`, with the ref and "not a human decision" |
-| Types | kube, egress, credential; maintenance with S1 and S6 (no extensions) | kube, egress, maintenance including extensions, and the S7 reserved cases. Not credential, because keeper execution re-checks a `policy/` approver (`credentials.go:71`). |
+| Recorder | requester via `grant attest` | different allowlisted actor via `grant decide` |
+| Provenance | agent assertion | authenticated delegate; relayed Tom consent remains an agent assertion |
+| Binding | grant UID, session UID, Pod UID, ScopeDigest, TTL | grant UID/scope/TTL, recorded delegate Pod/session UIDs, required message ref; requester live UID checked; proposed policy binding in 6.6 |
+| Record | `policy/<name>` | `delegate/<ns>/<sa>`; never human provenance |
+| Eligible types | kube, egress, credential; creator-eligible initial maintenance | kube, egress, maintenance/extensions; S7 separately adds reserved cases |
 
-**Trusted in-scope relay versus arbitrary peer claim.**
+### 6.1 Request and decision flow
 
-- **Trusted in-scope relay:** Tom's words reach the agent from its verified coordinator
-  through a supported channel, within Tom's current scope. The channel is the
-  parent-to-child task, `agent-run msg` or the durable inbox, with platform sender
-  metadata. The message carries Tom's source ref. Recorded, it is still an agent
-  assertion.
-- **Arbitrary peer claim:** text from another peer, a repository, a tool result, or any
-  message whose sender is not verified. It is never approval.
+1. Request with `--no-wait`, then read grant name, UID, digest and TTL.
+2. Send those exact values, purpose and risk through supported coordinator/user
+   messaging. Verify sender provenance and scope. Arbitrary peer/repository/tool
+   claims and silence are not approval.
+3. On an actual in-scope answer, attest under an opted-in policy or have the separate
+   delegate run `grant decide <name> --grant-uid <uid> --digest <digest> --approve
+   --ref <message-id>`. `--approve` is explicit. S7's proposed reserved contract also
+   requires a Tom message ref; that option is not claimed in PR792.
+4. Expect 202/Pending, then independently observe Active or a refusal. A new TTL or
+   digest needs a new decision. A renewal is a new grant, not a reused statement.
 
-### 6.1 Flow
+### 6.2 S6 creator eligibility
 
-1. **Request.** The requester creates the grant with `--no-wait` and reads its name,
-   UID, digest and TTL with `agent-run grant show`.
-2. **Ask.** It sends one message with those values, the reason and the risk. A Remote
-   Control session asks Tom through AskUserQuestion, or asks its coordinator. A
-   headless task messages its coordinator.
-3. **Answer.** Silence is deny.
-   - **Mode (a):** the requester runs
-     `agent-run grant attest <grant> --approved-by user|coordinator:<session> --ref <message id>`.
-   - **Mode (b):** a delegate runs
-     `agent-run grant decide <grant> --grant-uid <uid> --digest <digest> --approve --ref <message id>`.
-     For a reserved class, it adds `--reserved --tom-ref <Tom's message id>`.
-4. **Approval.** The broker approves only if a matching policy, or an enabled reserved
-   case, applies. The grant becomes **Active**.
+The immediate `spec.parent` must be a listed SA **and** the `dev-env.haynesops.com/depth` label must be exactly
+**`0`**. Unset `--attested-maintenance-creators` follows the configured human SA;
+explicitly empty means none, with at most 16 valid unique `namespace/name` entries.
+A child, absent/malformed parent, omitted depth, unlisted creator or replaced
+requester fails closed. Approval and the Active lease/executor path recheck the
+creator. Removing it starts executor termination; cleanup waits for stop proof.
+The exact `223503` shape is the positive fixture. Root-ancestor human provenance is
+not enough. Mode (b) stays separate.
 
-Standing policies (`lan-*`, `credential-proxmox`) approve without any ref, as today.
+### 6.3 S2 current tree route and required slot correction
 
-### 6.2 Attested maintenance creators (S6)
+Refer to section 0 for the single trust-root statement. Both operator and broker
+must have the same `--grant-delegates` list. A coordinator host must retain its exact
+configured host/pod/SA binding. A session delegate must retain S4 launch eligibility,
+controller/session UID, admission label, live Running Pod UID and sole holder.
 
-#781's mode (a) admits any top-level session. S6 adds the broker flag
-`--attested-maintenance-creators`, whose default is `dev-env-system/dev-env-human`.
+Tree reach walks the requester's recorded session ancestry; a host reaches only
+its direct task children. Self, ancestor, sibling and unrelated grants refuse in
+this default mode. SA-ref parents do not establish a delegate ancestor merely
+because two top-level sessions have the same creator.
 
-- **Rule.** A maintenance grant passes only when the requester's own
-  `spec.requester.parent` is on that list (depth 1).
-- **Children never qualify.** A child records its parent session's name
-  (`caller.go:242`), so it cannot match. Session names contain no `/`.
-- **Fail closed.** A missing, empty or unparseable parent fails.
-- **Scope.** This is eligibility, not a runtime approval gate. Mode (b) and the human
-  route are unaffected.
-- **Ordering.** S6 must be pinned before P2 enables attested maintenance. Never roll
-  the broker back past S6 while that flag is on.
+**Blocking source acceptance:** before writing the set-once annotation, S2 must
+live-read policies in the configured policy namespace and require coverage for
+**approvals and denials**. An uncovered or otherwise unauthorized decision must
+return 403 with no annotation/status mutation, leaving a subsequent authorized
+human or delegate decision usable. PR791 at `83103c6` does not do this: the broker
+refuses later while the annotation locks the decision slot until timeout. Merely
+documenting that behavior is not completion. The real-token envtest must create
+its policy **before** the decision and test this refusal/recovery path.
 
-### 6.3 Delegate decisions (S2)
+The operator needs policy-namespace configuration and get/list GrantPolicy RBAC in
+haynes-ops, held until the approved packet. The broker still independently rechecks
+coverage and live identities before apply, on each retry and while Active. Policy
+removal/narrowing, allowlist removal, actor replacement and loss of reach must end
+a lease; transient read failures must not be reported as successful checks. The
+independent review also requests assessment of Forbidden reads during Active and
+coordinator-host grant read scope. No fix is claimed until a tested reviewed SHA.
 
-**Who is trusted to bootstrap and manage delegate identities.** Three trusted roots
-exist:
+### 6.4 P6: proposed new delegate identity, no active migration
 
-- Tom's human SA;
-- the client callers: the workbench SA and the v1 pod's `dev/dev-env`;
-- the depth-0 workbench session.
+Recommend a new `dev-agents/dev-env-coordinator-access` session identity with the
+existing `coordinator` profile shape (`full` plus named SA), existing agent bindings
+and guard coverage. It is an approval session, separate from actual `132039` and
+`223503`. A depth-0 workbench session can launch it through S4's real handler;
+TokenReview then classifies its own projected pod-bound token. This serves the
+unrelated existing GPU and legacy Claude sessions. It cannot approve the launching
+workbench session's grant, because it is that requester's descendant. For that
+factory's requests, select a separate non-descendant delegate launched through an
+**existing configured nonhuman client** (S4's depth-0 client shape), or another
+independent depth-0 workbench factory. The final packet must identify and prove
+that actual agent-operated launcher route; a supported source branch is not proof
+of available credentials. If neither exists, nonhuman bootstrap is an explicit
+activation prerequisite, not a reason to use Tom's token or exempt the descendant
+refusal. No credential provisioning is authorized here. No Tom Mac step, borrowed
+human token or active-session restart counts as satisfying this route.
 
-They are the intentionally privileged bootstrap operator and factory, not ordinary
-sessions. Each can create a named-coordinator delegate and exec into its pod.
-Through that pod's token, each can act as the delegate. This is a trust assumption,
-not a defect.
+P6 remains a held haynes-ops proposal: SA/bindings, agent-guard match, templates and
+exact delegate flags all require Tom's review. Inventory every subject that can
+exec, create bare Pods as that SA or create TokenRequests. Those subjects are trust
+roots even if S4 admits only one session holder. If a delegate itself needs a
+mode-(b)-only grant, the workbench factory must launch a **different** named delegate
+with separately approved allowlist entry; no self-decision exception is introduced.
+Do not provision a second identity automatically or mislabel legacy `132039` as one.
 
-What stays closed is elevation by ordinary sessions:
+### 6.5 Scope escalation
 
-- an ordinary session cannot launch or become a delegate;
-- at most one Running session holds each coordinator SA;
-- stale grants and bindings never authorize;
-- a delegate decides only for strict descendants of its own session: never itself, an
-  ancestor, a sibling or an unrelated session.
+A missing policy/case must report a concrete refusal, not wait as if approval were
+possible. S3 notices are client evidence, not a complete server policy oracle.
+Standing scope changes use RD1. Routine in-policy decisions stay with the scoped
+delegate; reserved decisions cite Tom. Source readiness is not access approval.
 
-- **Allowlist.** `--grant-delegates=<ns>/<sa>,...` is set on both operator and broker,
-  and the two must match. Two delegate forms are accepted, both
-  TokenReview-authenticated and pod-bound:
-  - a configured coordinator host, as checked at `coordinator.go:64-76`;
-  - a session pod running as an allowlisted delegate SA (S4), controlled by a Running
-    AgentSession, as the workbench rule checks (`caller.go:189-200`).
-- **Route.** `POST /v1/grants/{name}/decision` takes the grant UID, the digest, approve
-  or deny, the TTL, a required ref, and the optional `reserved` and `tomRef` fields. It
-  writes the set-once decision annotation, which P3 allows.
-- **Reach = tree.** The delegate decides only grants whose requester is a strict
-  descendant of the delegate's own session. The operator walks the requester's
-  recorded parent chain from the token-recorded `spec.requester.parent` and the
-  sessions' parents. A coordinator-host delegate reaches only its own child sessions,
-  which matches today's coordinator scope ("limited to its direct task children",
-  `coordinator.go:61-62`). `spec.delegated` caps the grant types and the scope.
-  - **Top-level sessions use mode (a).** A session such as `haynes-ops-1029-223503`
-    has no delegate ancestor. Tom messages that agent, and it attests.
-  - **Not in this activation:** fleet-wide delegate reach, meaning decisions on
-    unrelated sessions. It is optional future work.
-- **Refusals.** The route refuses:
-  - a caller not on the allowlist;
-  - a requester that is not a strict descendant of the delegate. That covers the
-    delegate itself (the same pod, or a pod controlled by its session), its ancestors,
-    its siblings and unrelated sessions;
-  - a maintenance coordinator or worker;
-  - a grant that is not Pending, is over 30 minutes old, or is already decided;
-  - a digest mismatch;
-  - a missing ref;
-  - a credential grant;
-  - a reserved class without an enabled S7 case.
-- **Broker.**
-  1. It verifies the annotation.
-  2. It requires either a `spec.delegated` policy covering the scope, or an S7 case.
-     For maintenance, the policy match is #781's exact envelope. Extensions use this
-     route, so they no longer need the human route.
-  3. It calls `Decide` with `delegate/<ns>/<sa>`.
-- **Schema.**
-  - A policy may carry `attested`, `delegated`, or both, with its top-level
-    requesters empty.
-  - The requester rule at `accessgrant_types.go:467` accepts either block.
-  - An older broker ignores `delegated` and matches nothing. An older CRD refuses it
-    loudly.
+### 6.6 Minimal missing source: designated policy reach
 
-### 6.4 A named coordinator identity for the Claude lead (S4, P6)
+**Proposed, absent, default off.** Add `--grant-policy-delegates=<ns>/<sa>,...` to
+operator and broker as a subset of `--grant-delegates`, using its existing bounded
+parser. Empty preserves S2 tree-only behavior. It creates no new resource, policy
+framework, requester identity or endpoint. This is new access scope pending Tom's
+exact review, not permission to configure it now.
 
-- **S4:**
-  - `templates.Validate` (`templates.go:491`) accepts `dev-env-coordinator-<name>`
-    SAs.
-  - `resolveCaller` (`caller.go:121-124`) and `sessionPodAccount` (`caller.go:160`)
-    treat such a session-controlled pod as a session, as they do the workbench.
-  - **Admitted launch shapes.** S4 admits exactly two:
-    1. the human caller or a client caller (the workbench SA as a client, or the v1
-       pod's `dev/dev-env`) launches the lead at depth 0;
-    2. a depth-0 workbench session launches the lead as its child, at depth 1. This is
-       a valid machine route, with no Mac or client step.
+For a designated identity, replace only the tree-membership requirement with
+existing exact delegated-policy coverage (or an enabled S7 case). Preserve all
+other actor, scope, TTL and live-state checks. This permits the separate approval
+session to decide requests from existing top-level `223503`, legacy `132039`, and
+workbench/v1-created sessions; it does not reparent or migrate them. A sibling or
+unrelated requester is eligible **only** for that explicit subset and covering
+scope. Default tree delegates continue to refuse both.
 
-    A lead launched from a depth-1 workbench child would sit at depth 2 and could not
-    start children, so S4 refuses that shape.
-  - **One eligibility function.** S2's decision-time delegate eligibility calls the
-    same S4 function as launch admission, so the two cannot drift.
-  - At most one Running session may use each coordinator SA.
-  - **Trust.** Each trusted root can exec into the lead's pod and act with its token
-    (6.3).
-  - **Optional future narrowing, not a prerequisite:** an exec guard rule that refuses
-    workbench exec into coordinator-SA pods. Tom requires agents to be able to exec
-    pods, so this is not part of the bundle.
-- **P6:**
-  - SA `dev-agents/dev-env-coordinator-lead`, added as a subject to ClusterRoleBinding
-    `dev-env-agent` and to RoleBinding `dev-env-agent-cnpg-remediation`.
-  - `dev-env-agent-guard`'s match (`agent-guard.yaml:57-60`) extended to that SA.
-  - A `coordinator` profile in `dev-env-templates`: `full` plus that SA, with the same
-    labels.
-  - `--grant-delegates` names that SA.
-  - No credential is shared. Authority stays as it is today.
-- **Blocking prerequisite:** `dev-env-templates` is under the global template hold.
-  Until P6 lands, mode (b) serves only coordinator hosts. A pod's SA cannot change in
-  place, so the lead moves at its next launch or resume.
+In both modes refuse the requester's own session/Pod/account, a delegate that is a
+**descendant of the requester**, and an actor named as maintenance coordinator or
+worker. Walk ancestry with verified live objects; missing/replaced/ambiguous
+ancestry fails closed. A new child cannot approve its parent's grant. Trust roots
+able to take another actor's token remain the residual exposure in section 0.
 
-### 6.5 Escalation
+Perform identical reach and policy checks before the operator writes the decision,
+at broker apply/retry and while Active. Bind the recorded decision to the reviewed
+policy name/UID and effective scope digest as well as the grant/actor UIDs and TTL;
+for S7 bind its exact reserved case/bounds revision instead. Removing the policy,
+replacing its UID, narrowing it, removing either delegate-list entry or changing
+actor/requester identity revokes the lease through its normal cleanup/stop path.
+No implicit widening on a policy lookup failure or broker downgrade is allowed.
 
-When no policy and no reserved case covers a request, S3 says so before the agent
-waits. The agent asks its coordinator, then Tom. A standing widening is an RD1 change
-(7.2).
+**Handoff request:** existing S2 owner 163602 owns feasibility/implementation after
+its current correction, on a separately declared follow-up branch/story. Integration
+owner changes no S2 source. This request is not acknowledgement or proof that the
+source exists. S7 must reuse this reach seam rather than silently invent a second
+actor route. See section 9.3 for paths, permissions and required evidence.
 
-## 7. Reserved decisions and external constraints
+## 7. Reserved decisions and external controls
 
-Tom keeps decision authority over four classes. Reserved does not mean human-executed.
-Once Tom approves by message, an agent records and executes the decision.
+### 7.1 S7 reserved cases: absent source
 
-**Current state, stated plainly.**
+Reuse `POST /v1/grants/{name}/decision`, `reserved: true`, a mandatory nonsecret
+`tomRef`, and default-empty `--reserved-decision-classes`. These names specify the
+proposed contract; they are not existing flags/fields. Each decision binds grant
+UID, requester/actor UIDs, exact scope and TTL; storage additionally binds object
+UIDs. No standing or attested policy approves a reserved case. Tom's message is
+recorded as an agent assertion alongside the authenticated delegate identity.
 
-- **RD1** is executable today, through the delivery workflow (7.2).
-- **RD2, RD3 and RD4 storage** have no executable path for anyone until S7 ships. They
-  are the genuine missing API actor gates.
-- **RD4 hardware** is audit intent only. The platform records the decision, but it does
-  not enforce the target or the hardware semantics. The credential lease is the actual
-  control.
+| Case | Concrete proposed scope | Execution and honest limit |
+|---|---|---|
+| RD2 | P7 `dev-env-grant-breakglass`: every API resource/verb, cluster-wide, TTL ≤1h; per-grant SA/ClusterRoleBinding | Root-equivalent exception. `impersonate`, `serviceaccounts/token`, Secret get/list, bind/escalate bypass the claimed identity confinement. Never namespace exclusion is **not** an effective RD2 guarantee. Kyverno/admission may reject some original-identity writes; they do not contain all alternate identities. |
+| RD3a | Secret get/list in 1–16 explicitly named namespaces outside Never, TTL ≤1h | Namespaced RoleBindings, not cluster-wide binding. Values read cannot be recalled. |
+| RD3b | `kube.allNamespaces: true`, reserved Secret-read role only, TTL ≤1h | Broker snapshots all namespaces except Never at approval and records the list; one RoleBinding per namespace. Future namespaces excluded. Recheck snapshot/ownership on retries; never fall back to a ClusterRoleBinding. |
+| RD4 storage | one namespace, `dev-env-grant-storage`, up to 8 exact kind/name/UID targets | P5 deletion guard uses the caller's own Active grant and exact object UID, fail closed when missing. Same-name replacements refuse. Deletion is irreversible. |
+| RD4 hardware | operation plus exact host/device/firmware target and `tomRef`, recorded on the C4 lease | Audit intent only, not target/command enforcement. Existing credential is the actual authority. S7 needs a separate audit path because S2 rejects credential decisions; keeper still requires its policy approval. |
 
-### 7.1 Reserved-decision cases (S7)
+P7's original ClusterRoleBinding and SA are removed on expiry/release. That stops
+new requests using the original identity; it does **not** revoke impersonated
+sessions, tokens minted for other SAs, copied Never-namespace credentials or
+persistent objects it created. No bounded-revocation claim covers those derived
+powers. Tom must see this exact scope and decide whether to approve it or require a
+bounded catalog instead. The recommendation here preserves the broad homelab
+break-glass capability with that explicit exception; the decision is pending.
+A bounded alternative would need a separately reviewed explicit API/verb catalog,
+exclude identity minting/escalation and all-namespace Secret reads, and prove its
+indirect workload/proxy/node powers too. It is not silently substituted here.
 
-Each case is a mode (b) decision with `reserved: true` and a mandatory `tomRef`. Each
-binds the grant UID, the exact scope or target, and the TTL.
+### 7.2 RD1 uses the existing delivery workflow
 
-- **Provenance.** It is recorded as the delegate (authenticated actor) plus Tom's
-  consent (agent assertion, citing `tomRef`).
-- **Never mode (a).** Mode (a) never approves a reserved class.
-- **Tom's own token.** Tom's `dev-env-human` token may also decide; that is recorded
-  as `human/<sa>`.
-- **No policy approves these.** The schema refusals stay. Bounds are in code, behind
-  `--reserved-decision-classes`.
-- **Shared tail.** Each case reuses the per-grant SA, bindings, per-grant Role and
-  revoke tail.
+Bot PR → review and required checks → pinned delivery guard/receipt → squash merge
+→ Flux. Record Tom's authority-change message ref against the **exact** PR head and
+rendered authority diff. Closing before merge cancels; a revert narrows after merge
+but does not undo effects. GitHub admin/rulesets remain external constraints, not
+RD2–RD4 caller tests. DESIGN-039 stronger consent and OP304 are deferred.
 
-| Class | Scope and binding | Execution | Release and limits |
+### 7.3 External ceremonies and remaining limits
+
+Provider browser consent, third-party 2FA/captcha, GitHub admin/App/ruleset changes
+and password-manager item creation/rotation need their existing external actors.
+They are not justification for making internal grant classes human-only. The
+keeper remains the only provider-token refresher. Control-plane maintenance and
+profile `ops` remain outside this packet. Existing baseline CNPG re-clone scope is
+unchanged. No new credential ceremony is executed by this design story.
+
+## 8. Issuance, expiry and revocation
+
+A request names its role/destinations/ports, namespaces, Secret names or immutable
+maintenance/storage targets, exact TTL, purpose and restoration plan. None are
+inferred from an app/node name or old approval. On release/expiry remove the grant's
+bindings/SA, Secret-use Roles, CNP or installed credential files, as appropriate.
+Maintenance cleanup waits for executor termination proof. Keep the audit record;
+do not put secret values in proof. Open exec streams, external effects, copied
+keys/tokens and P7-derived powers have the explicit limits above.
+
+Concurrency recommendations (not current general broker enforcement): C1/C3 two;
+C2 one per namespace; C4 one per credential; C5 one per target; reserved one per
+class. A safe refusal is not progress acceptance. Competing Pending maintenance
+reservations and the unauthorized set-once slot are different problems; the latter
+is a required S2 correction, not closed by an availability follow-up.
+
+## 9. Exact prerequisite and implementation matrix
+
+### 9.1 P1 policy shapes
+
+All requester blocks use `[full, workbench, coordinator]`, no repo restriction.
+At T0 use **attested only**, omitting delegated fields entirely. After T2's CRD,
+binaries and reach source are installed, add the delegated blocks shown below.
+
+| Policy | Final blocks | Scope | maxTTL |
 |---|---|---|---|
-| **RD2 break-glass** | `dev-env-grant-breakglass` (P7): every resource and verb, cluster-wide, by ClusterRoleBinding; TTL at most 1h (CRD `:150`) | `grant-<id>`, still under the identity guard (no dev-env namespaces; no RBAC, admission, CRD or dev-env object writes; no new Secret references) and the Kyverno exec guard. This is D-27's restricted break-glass. | Release deletes the binding and the SA. Changes already made stay. |
-| **RD3a Secret read, named** | `dev-env-grant-secrets-read` in 1 to 16 named namespaces, excluding the Never list (9.2); TTL at most 1h | RoleBindings, as today | Release deletes them. Values already read cannot be recalled. |
-| **RD3b Secret read, cluster-wide** | new `kube.allNamespaces: true`, accepted only for this role and only in a reserved case. At approval the broker expands it to every namespace except the Never list, and records the list in status. Namespaces created later are not covered. TTL at most 1h. | one RoleBinding per listed namespace. It is not a ClusterRoleBinding, which could not exclude the protected namespaces. | as RD3a |
-| **RD4 storage** | `dev-env-grant-storage` in one namespace, plus new `kube.targets` (up to 8 entries of kind, name and UID). VAP `dev-env-grant-scope` (P5) admits a grant identity's DELETE only when the object's UID is in its own Active grant's targets. The RoleBinding exists only while that grant is Active. | the agent deletes each named target | Before the delete: release cancels. After it: destroyed data cannot be reversed. |
-| **RD4 hardware** | **Audit intent only.** The decision is recorded on the C4 credential grant. It names the operation, the target (host plus device serial, or firmware component) and `tomRef`. The platform does not check either. | the agent, with the C4 lease, which is the actual control | Release removes the key file. It does not stop a running process, recall a copied key, or reverse a wipe or flash. |
+| `kube-workloads` | attested, delegated | workloads role, app namespaces | 3h |
+| `kube-workloads-infra` | delegated only | workloads role, infrastructure namespaces | 8h |
+| `kube-namespace-operator` | delegated only | namespace-operator role, app namespaces and `network`; explicit deny list | 1h |
+| `egress-cluster-services` | attested, delegated | explicit app endpoint selectors and up to 16 explicit ports | 3h |
+| `kube-nodes-attested` | attested, delegated | nodes role, cluster-wide including storage reach | 3h |
+| `lan-ssh` | attested, delegated | current eight `lan-ssh-tier` hosts plus existing PiKVM CIDR, port 22 | 1h |
+| `lan-pve-api` | attested, delegated | existing pvedash and five node hosts, ports 443/8006 | 3h |
+| `credential-hw-ssh-attested` | attested | existing `hw-ssh` credential | 1h |
+| `credential-proxmox-attested` | attested | existing `proxmox` credential | 1h |
+| `maintenance-card-c` | attested, delegated | exact #781 envelope, node UID/Card C/image digest/runtime/capabilities/resource bounds | 1h |
 
-### 7.2 RD1: the existing delivery route
+Before Tom's exact review, freeze the rendered endpoint labels/ports (including
+empty-selector semantics), literal existing host/CIDR list, Secret deny list, full
+image digest, live node UID, delegate identities and all policy/RBAC diffs. These
+are configuration prerequisites, not permission to guess or apply values. A packet
+with those values unresolved is not activation-ready.
 
-RD1 covers changes to policies, the catalog, guards, the delegate list, RBAC and flags.
-Agents already execute them, through the delivery workflow:
+### 9.2 Namespace bands
 
-1. a bot PR;
-2. the delivery guard, with its evidence and receipt (`scripts/delivery/`);
-3. review and the advisory;
-4. a squash merge;
-5. Flux applies it.
-
-#4501 and #4502 are recent examples, executed on Tom's approval. No internal gate
-blocks this route, so nothing new is built for it.
-
-- **Recording.** Tom's message ref goes into the PR body and onto the tracker. It is an
-  agent assertion. The review and receipt artifacts are the audit.
-- **Cancellation.** Closing the PR before merge cancels. After merge, a revert PR
-  narrows back. Actions taken under the widened authority stay.
-- **DESIGN-039.** Machine-verifiable consent for authority changes remains DESIGN-039's
-  open Q-269-03. It is not a prerequisite of this bundle.
-- **Optional future hardening, not required:** a delivery grant bound to the repo, PR,
-  head and authority-diff digest. Earlier revisions named it S8.
-
-### 7.3 Other limits
-
-- **`kube-nodes-attested` reaches storage.** It already reaches storage pods and
-  nodes, and a NoExecute taint bypasses PDBs. The bundle only widens who may request
-  it.
-- **The CNPG re-clone delete stays.** The baseline's narrow `database` PVC delete is
-  unchanged.
-- **Refused by code for everyone:**
-  - control-plane maintenance (`maintenance_scope.go:142-151`);
-  - grants in the dev-env namespaces;
-  - profile `ops`.
-
-**External constraints.** These are not platform policy. Each needs an authenticated
-actor outside the platform:
-
-- Provider logins, including the Claude Max and Codex OAuth ceremony. The account
-  owner's browser consent is required, and the keeper is the only refresher
-  (2026-08-29).
-- Third-party site confirmations: a new MAM session, email or 2FA prompts, captchas.
-- GitHub admin: org and repo settings, rulesets, App installs and repo secrets. The
-  bot has no admin rights.
-- Creating or rotating password-manager items.
-- GitHub branch protection and rulesets on the repositories.
-- Host-side provenance checks on relays by the auto-review.
-
-## 8. Issuance rules
-
-- **Who.** A session, for its own pod (`grants.go:45`), on profile `full`, `workbench`
-  or `coordinator`, in any repo. Children get no wider profile. `ops` never matches.
-- **What.** The class's scope fields, an exact TTL, and a reason that says what changes
-  and how to restore it. C2 names Secrets. RD4 names targets.
-- **Never inferred:**
-  - approval from silence, from an arbitrary peer claim, from a different digest, or
-    from an old approval for a new TTL;
-  - a namespace from an app name;
-  - a Secret name;
-  - a GPU from its node;
-  - a delegate's identity from message text.
-
-  A trusted in-scope relay may be recorded, labelled as an agent assertion. A renewal
-  is a new grant.
-
-| Class | Mode (a) or (b) | Mode (b) only | Concurrency (a rule; the broker enforces none) |
-|---|---|---|---|
-| C1 | 3h, app namespaces | 8h, infrastructure namespaces | 2 |
-| C2 | only if the policy opts in (not initially) | 1h, app namespaces and `network` | 1 per namespace |
-| C3 | 3h | — | 2 |
-| C4 | egress 3h, SSH 1h; credentials 1h (mode (a) only) | — | 1 per credential |
-| C5 | 1h, #781 envelope; S6 creators | 1h; extensions | 1 per GPU |
-| RD2 to RD4 | never | reserved case, 1h | 1 per class |
-
-## 9. Policy and namespace detail
-
-### 9.1 The ten GrantPolicies (P1)
-
-Requesters: `profiles: [full, workbench, coordinator]`, with no repo restriction.
-
-| Policy | Type | Blocks | Scope | maxTTL |
-|---|---|---|---|---|
-| `kube-workloads` | kube | attested, delegated | `dev-env-grant-workloads`; app namespaces | 3h |
-| `kube-workloads-infra` | kube | delegated | the same role; infrastructure namespaces | 8h |
-| `kube-namespace-operator` | kube | **delegated only** | `dev-env-grant-namespace-operator`; app namespaces and `network`; `secretDenyList` set in the PR (may be empty) | 1h |
-| `egress-cluster-services` | egress | attested, delegated | app namespace endpoints; ports up to 16. Unknown until enumerated: the ports, and whether an empty `matchLabels` admits any pod. | 3h |
-| `kube-nodes-attested` (widen) | kube | attested, delegated | `dev-env-grant-nodes` | 3h |
-| `lan-ssh` | egress | attested, delegated | the eight `lan-ssh-tier` FQDNs and the PiKVM CIDR of `egress-pikvm-ssh-attested`; port 22 | 1h |
-| `lan-pve-api` | egress | attested, delegated | pvedash and the five node FQDNs; ports 443 and 8006 | 3h |
-| `credential-hw-ssh-attested` (widen) | credential | attested | `hw-ssh` | 1h |
-| `credential-proxmox-attested` | credential | attested | `proxmox` | 1h |
-| `maintenance-card-c` | maintenance | attested, delegated | #781's exact envelope: talosw01 and its node UID, Card C, `nvidia-utility`, the pinned image, `SYS_ADMIN`, the caps | 1h |
-
-### 9.2 Namespaces (33 live)
-
-- **App** (C1, C2 and C3): `ai`, `downloads`, `frontend`, `home-automation`, `media`,
-  `observability`, `office`, `photos`.
+- **App:** `ai`, `downloads`, `frontend`, `home-automation`, `media`, `observability`,
+  `office`, `photos`.
 - **Infrastructure:** `arc-runners`, `arc-systems`, `cert-manager`, `k8tz`, `network`,
-  `upgrade-agent`. C1 may reach them only under mode (b). C2 may reach `network` only.
-- **Storage and data** (RD4 only): `ceph-csi`, `database`, `openebs-system`,
-  `rook-ceph`, `storage-util`, `volsync-system`.
-- **Never** (also excluded from RD3): `dev-env-system`, `dev-agents`, `dev-tools`,
-  `dev-env-budgets`, `dev`, `default`, `flux-system`, `kyverno`, `external-secrets`,
-  `kube-system`, `kube-public`, `kube-node-lease`, `cilium-secrets`.
+  `upgrade-agent`; C1 delegated-only, C2 only `network`.
+- **Storage/data:** `ceph-csi`, `database`, `openebs-system`, `rook-ceph`,
+  `storage-util`, `volsync-system`; RD4 for new storage grant deletes.
+- **Never for ordinary namespaced grants and RD3:** `dev-env-system`, `dev-agents`,
+  `dev-tools`, `dev-env-budgets`, `dev`, `default`, `flux-system`, `kyverno`,
+  `external-secrets`, `kube-system`, `kube-public`, `kube-node-lease`, `cilium-secrets`.
 
-## 10. Acceptance
+P7 effective root, inherited workload SA powers, workbench exec, node operations
+and the GitOps authority route are the explicit exceptions/limits, not promises of
+namespace isolation.
 
-Fixture checks give source evidence. Installed and usable evidence comes later, in
-separately authorized stories.
+### 9.3 Owned source and permission dependencies
 
-### A1: GPU maintenance on Card C (pending)
-
-Preconditions:
-
-- S1 (merged) and S6 are released and pinned.
-- `maintenance-card-c` is applied, with `--enable-attested-maintenance=true`.
-- The requester's creator is listed: `haynes-ops-1029-223503` records parent
-  `dev-env-system/dev-env-human`.
-- The ADR-012 admission policies are present. The annotation guard is live. The live
-  state of the Kyverno executor policy is Unknown, because this identity cannot read
-  it.
-
-Steps:
-
-1. Request the grant with
-   `agent-run grant maintenance-request --task-json <task> --reason <r> --ttl 10m`.
-   The task uses the same envelope as `grant-1031-132422-84ca`:
-   - node `talosw01`, node UID `b7ef4b0a-524b-411b-9b47-79e3c37e7269`;
-   - GPU `GPU-d8a856f1-f955-f683-bc24-654561496774`;
-   - capability `[SYS_ADMIN]`, runtime profile `nvidia-utility`;
-   - image `ghcr.io/thaynes43/comfyui:0.39.0-2@sha256:991867f5…`;
-   - 100m CPU, 128Mi memory;
-   - the read-only operation and restore text.
-2. **Mode (a):** the approver replies, and the requester attests with the message
-   ref. Expect phase **Active** with `approvedBy policy/maintenance-card-c`. Then wait
-   for a Running executor bound to talosw01, with RuntimeClass `nvidia`, Card C only,
-   `SYS_ADMIN` only, and deny-all network.
-3. Run read-only `nvidia-smi` through `agent-run grant maintenance-exec`. Expect only
-   Card C visible, at 350 W.
-4. Release. Expect the stop proof, then the Pod and NetworkPolicy gone and the grant
-   `Released`.
-5. **Mode (b)**, after S2:
-   - A child worker of the delegate requests the identical envelope, and the delegate
-     decides it. Expect phase Active and `delegate/<ns>/<sa>`. The top-level session
-     `haynes-ops-1029-223503` itself stays on mode (a).
-   - Expect a refusal when the requester is the delegate itself, its ancestor, its
-     sibling or an unrelated session, and when the digest is wrong.
-   - **Disclosure:** the Claude lead can be the delegate only after P6, which waits on
-     the template hold.
-   - **T1 acceptance, the actual lead (combined path).** After approval, with no
-     manual Mac or client step by Tom:
-     1. A depth-0 workbench session launches the lead on the `coordinator` profile.
-     2. The lead's token resolves as a session caller running under its own SA, and is
-        eligible as a delegate.
-     3. The lead starts a child worker. The worker requests a grant, and the lead's
-        decision returns **202**, leaving the grant Active.
-     4. The lead's decision on a sibling's, an ancestor's or an unrelated session's
-        request is refused.
-
-     Also expect:
-     - an ordinary session's attempt to launch the `coordinator` profile is refused;
-     - a second Running session on the same coordinator SA is refused.
-
-Negatives: `SYS_RAWIO`, another GPU, a control-plane node, a TTL over 1h, or a child
-session self-attesting.
-
-Evidence: the grant status, annotations and Events, the Pod spec, the query output,
-the cleanup proof, and power readings before and after.
-
-### A2: MAM cookie through the namespace-operator grant (pending)
-
-Preconditions: S5 (with the fail-closed check), P4, P5 and `kube-namespace-operator`
-are applied, and a delegate is available. Before P6 that delegate is a coordinator
-host. After P6 it can be the lead.
-
-1. Request a grant: kube `dev-env-grant-namespace-operator`, namespaces `[downloads]`,
-   secrets `[myanonamouse-secret, prowlarr-secret]`, TTL 30m.
-2. A delegate decides it, citing the request message. Expect phase **Active** and a
-   per-grant Role in `downloads` naming the two Secrets. Then run
-   `agent-run grant use <grant>`.
-3. Create the same one-shot Job as #4501, with no GitOps PR:
-   - default SA, with `activeDeadlineSeconds` and `ttlSecondsAfterFinished` at most
-     3600;
-   - `MAM_ID` from `myanonamouse-secret` key `MAM_ID_PROWLARR`;
-   - `API_KEY` from `prowlarr-secret` key `PROWLARR__AUTH__APIKEY`;
-   - GET then PUT `/api/v1/indexer/17` on
-     `prowlarr.downloads.svc.cluster.local:9696`, changing only `mamId`;
-   - status-only output.
-4. Negatives (Q4). Each of these must be refused:
-   - a Secret the grant does not name;
-   - another namespace;
-   - the same Job from `dev-env-agent`;
-   - the same Job from a C1 identity;
-   - the same Job from a grant identity whose grant has ended;
-   - a Job referencing a Secret named only in *another* session's grant.
-5. Release. Expect the SA, RoleBindings and per-grant Role to be gone.
-
-Run A2 at the next real cookie apply, or as an idempotent re-apply. Do not run the
-indexer test solely for acceptance, because MAM rotates `mam_id` on use
-(`kubernetes/main/apps/downloads/qbittorrent/app/externalsecret.yaml:3-6`).
-
-**Correction, 2026-10-31, after 14:15Z.** The first revision, written from reads
-between 13:50 and 14:05Z, called #4501 a held option with a key-name defect. Those
-timestamps are kept. Since then:
-
-- The key was fixed at `e09c4d1d`. The live key is `PROWLARR__AUTH__APIKEY`, not
-  `PROWLARR_API_KEY`.
-- #4501 merged as `e6f80c51` at 14:10:25Z.
-- The lead reports that the Job logged `indexer enabled=False` and
-  `PUT indexer 17: HTTP 202` (stored). The log was not re-read here; the Job is
-  pruned.
-- Cleanup #4502 merged as `01706241` at 14:15:28Z, and Flux pruned all four objects.
-  None remained at 14:23Z.
-- Governor validation is pending its next tick.
-
-That was an **emergency GitOps repair, not grant-path parity**. The earlier "done"
-claim (revision `a5e7555`) is withdrawn.
-
-### A3: Reserved-class matrix (pending S7; RD1 exists)
-
-| Class | Provenance recorded | Positive execution | Forbidden caller | Forbidden scope | Expiry, release, cleanup |
-|---|---|---|---|---|---|
-| RD1 (existing) | Tom's message ref in the PR body and tracker (agent assertion); delivery-guard receipt; review record | a bot PR through the delivery guard, review, squash merge and Flux; #4501 and #4502 are recent examples | governed by the external GitHub controls (7.3) | the PR diff is the scope | a revert PR; actions taken meanwhile stay |
-| RD2 | delegate (authenticated actor) and `tomRef` (agent assertion), on the grant | `grant-<id>` writes a synthetic object in an app namespace | as RD1 | dev-env namespaces; RBAC, CRD or admission writes; a TTL over 1h | the ClusterRoleBinding and SA are gone; later writes are refused |
-| RD3a | as RD2 | reads a synthetic Secret in one named namespace | as RD1 | a Never namespace; an unnamed namespace | the RoleBinding is gone; later reads are refused |
-| RD3b | as RD2, plus the expanded namespace list in status | reads a synthetic Secret in a listed namespace | as RD1 | a Never namespace; a namespace created after approval | every RoleBinding is gone |
-| RD4 storage | as RD2, plus target UIDs | deletes one synthetic PVC by UID | as RD1 | a same-name PVC with a new UID; another PVC | release before the delete cancels; the binding is gone |
-| RD4 hardware | the decision recorded on the C4 lease | none: a record only | — | — | the key file is removed; the running-process and data limits are stated |
-
-## 11. Decisions for Tom
-
-| ID | Question | Recommended answer |
+| Item | Exact source or GitOps work | Owner/request and proof needed |
 |---|---|---|
-| Q-042-01 | Approve the activation bundle in section 0, with the six risks and the tracks stated there? | Approve. **Residual risk for Tom's review:** compromising a trusted root (Tom's human SA, a client caller, or the depth-0 workbench session) equals compromising its delegates. Narrowing workbench exec is optional future work, not a prerequisite. To narrow the bundle, drop a single row. For example, keep hardware (risk 5) on today's haynes-ops-only policies, or start mode (b) with an empty delegate list. |
-| Q-042-02 | Grant a template-hold exception for the `coordinator` profile (P6) only, with no restart of active sessions? | Yes, provided the change drains or restarts no running session. Whether a new templates revision drains idle sessions is Unknown, so that is checked first. **Disclosure:** until it lands, mode (b) cannot serve the Claude lead, which keeps approving through mode (a). |
+| S2 slot correction | `internal/apiserver/grant_decision.go`, Server/operator policy-namespace wiring; shared broker matcher; real-token fixtures | Existing owner 163602, PR791. Live policy coverage before annotation for approve/deny; 403/no mutation then authorized decision succeeds; two-replica CAS still yields one record; broker rechecks retained. |
+| S2 reach follow-up | API/broker reach helpers and decision binding, `cmd/dev-env-operator` subset flag parsing; API/broker tests | Request to 163602 for separate disjoint custody after current fix. Tree default, policy subset validation, self/descendant/participant refusals, UID/digest binding and active revocation. No source-ready claim. |
+| S6 | PR790 creator rule and integration with S2 pending path | 163602; preserve delegate → human → attested order plus S6 creator check. Reverify final combined head and actual TokenRequest/TokenReview envtest. |
+| S5 | server/view `secrets`, digest, schema, `kubeInside` delegated matching, per-grant use Role; local Grok correction | Existing Grok owner. Rebase after corrected S2; generated schema, all five fail-closed cases, same-object nonmutation mutant, any-SA residual exposure and required CI. |
+| S3 | PR792 client commits on final S2/S5 contract | Grok/Codex165730; retarget/rebase after dependencies. Local six-mutant proof retained; hosted Build/Lint/Test and exact-head review required. S7 fields need later explicit client work. |
+| S7 | AccessGrant/decision wire/schema/digest; API reserved gate; broker materialize/revoke; RD3 expansion; RD4 target guard and hardware audit | **Unassigned missing source**, feasibility request to existing S2/S5 owners through coordinator before custody. Separate bounded follow-up(s), no duplicate writer or invented source readiness. |
+| R1/R2 | CRD copies before new-field policies; released operator/broker/client pins | Held haynes-ops delivery after source/CI/review. CRD acceptance and binary versions recorded independently. |
+| P2/P3 | matching operator/broker delegate and policy-reach lists, S6 creators, reserved flags; set-once annotation guard for kube/egress/maintenance | Held security/access review. Verify exact subjects and list equality, no annotation forge/overwrite; flags absent/empty fail closed. |
+| Policy reads | operator get/list GrantPolicies only in configured policy namespace | New permission needed by slot correction; held haynes-ops RBAC diff. Broker keeps its independent live reads. Forbidden read must not consume a slot or silently authorize. |
+| Delegate host reads | broker named-Pod get in a configured host namespace outside `dev-agents` | Only if such a host is selected. Explicit named-resource permission and reviewed binding; no cluster-wide Pod-read assumption. New P6 session in `dev-agents` avoids that extra dependency. |
+| P4/P5 | namespace role/catalog and broker bind/use/Role shape guard; identity guard per-name Secret use/deadline; storage own-Active-grant UID DELETE guard | Held haynes-ops source after S5/S7. Test RBAC escalation constraints and absence of own params/Role. Secret-use is not a native Pod permission. |
+| P6 | new named approval SA, bindings/guard/profile; supported workbench launch; no restart/drain of active sessions | Template hold unchanged. Tom's exact exception plus rendered-diff/continuity proof; do not retrofit actual `132039`. |
+| P7 | explicit root ClusterRole/catalog/broker binding path and admission compatibility | Missing held GitOps source. Tom must review root/credential/expiry residuals, not a false identity-guard guarantee. |
 
-The lead decides everything else here: the ADR bookkeeping, the namespace split and
-the TTLs.
+These are requests and prerequisites, not a new backlog. Canonical progress stays
+on OP233 and its linked owned stories. Native review is mandatory; automated Claude
+advisory is optional, and every emitted finding must be fixed or answered.
 
-## 12. Non-goals
+## 10. Acceptance: source, installed and usable remain separate
 
-- No new approval service, page, per-command gate or Asks dependency.
-- No second access framework. C2 and S7 reuse the kube grant machinery.
-- No change to the task budget or native control human gates.
-- No OP304 auto-review.
-- No live change, grant, policy, template or flag from this document.
+Run CPU-bounded suites, at most two workers/packages and one suite at a time. No
+load/stress loops. Source-only fixtures use synthetic Secrets/targets and no live
+credential reads. Runtime proof requires a later authorized execution story.
+
+### A1: GPU and top-level message route
+
+Source proof: exact `223503` parent SA/depth-0 positive; child, missing parent/depth,
+unlisted creator, stale requester and creator-removal negatives; executor stop proof.
+The real-token path mints actual API-server TokenRequest tokens and validates
+TokenReview for workbench launch → new named delegate → child grant → 202/Pending
+→ broker Active → release. Synthetic Pod materialization is explicitly disclosed.
+Test the duplicate-holder/two-replica launch race, ordinary launch refusal and S4
+eligibility seam independently from decision CAS.
+
+After 6.6, additionally use an existing top-level-shaped requester with no delegate
+ancestor: C2, infra C1, exact GPU maintenance/extension and enabled reserved cases
+must work through a separate policy-reach delegate. Same digest without that subset
+must refuse. The delegate's own grant and a requester-created descendant delegate
+must refuse even with policy reach. No human credential fallback counts as this pass.
+
+Installed/usable proof later: preserve original session/Pod UIDs and restart counts;
+request the exact Card C/node UID/full image/runtime/capabilities/resources envelope,
+receive a real in-scope message, attest or delegate as eligible, observe Active and
+a bounded executor, run read-only `nvidia-smi`, then release and prove termination,
+Pod/CNP cleanup and later refusal. No load or power-write probe follows from this
+proposal. Existing observed 350 W is not permission to write it.
+
+### A2: namespace-operator MAM workflow
+
+Source preconditions: corrected S2 plus reach source, integrated S5/P4/P5, separate
+new named delegate, and exact `kube-namespace-operator` policy. The requester may be
+an existing top-level session; it need not become a descendant or restart.
+
+Request downloads namespace, Secrets `myanonamouse-secret` and `prowlarr-secret`,
+TTL 30m. Delegate approves the exact UID/digest/ref; observe Active and the per-name
+Role, then `grant use`. The example Job voluntarily selects `default`, caps runtime
+and cleanup at 3600s, gets `MAM_ID_PROWLARR` and `PROWLARR__AUTH__APIKEY` by references,
+and makes the same status-only Prowlarr GET/PUT operation as the emergency repair.
+Never print either value.
+
+Refuse unlisted/denied Secret, another namespace, baseline/C1 caller, missing own
+grant, ended grant, or a Secret allowed only by another grant. Confirm all 16 names
+fit admission cost. Test direct references separately from exec/any-SA exposure;
+a synthetic privileged unused SA demonstrates that exposure without touching a real
+credential. Open exec/borrowed-token limitations remain disclosed. Release removes
+the SA, RoleBindings and Secret-use Roles; later requests fail.
+
+Run real MAM acceptance only on the next authorized cookie apply/idempotent repair,
+not an indexer test solely for proof (MAM can rotate the cookie on use). Emergency
+haynes-ops #4501 merged `e6f80c51` and cleanup #4502 `01706241` succeeded through
+GitOps; OP319 closure does not satisfy this grant path.
+
+### A3: reserved callers, scopes and cleanup
+
+For **every RD2–RD4 recorded decision**, independently test: mode (a) refused;
+unlisted caller refused; requester itself refused; requester's descendant as
+delegate refused; missing `tomRef` refused. Also test wrong grant UID/digest/TTL,
+expired decision, replay, missing enabled case and removed delegate. Default-tree
+sibling/unrelated request refuses; designated policy reach may admit those within
+bounds. An SA-ref creator shared by top-level sessions is not tree reach.
+RD4 hardware audit requires those caller checks too; its underlying C4 attestation
+alone never counts as the reserved record. No external GitHub control substitutes
+for these internal caller tests.
+
+| Case | Positive proof | Scope/refusal and expiry proof |
+|---|---|---|
+| RD1 | exact-head bot PR, message ref, delivery receipt, review, merge/Flux | external repo rules plus exact diff review; close/revert semantics. This is a different route from the reserved API tests. |
+| RD2 | synthetic app write through root grant; envtest/SAR verifies effective impersonate, TokenRequest and Never Secret-read permissions without reading real Secrets | malformed/unbound reserved record and TTL >1h refuse. Do **not** expect identity guard to block all alternate identities/reads. Original SA/binding gone on release; derived-identity/persistent-effect limits explicitly demonstrated with synthetic fixtures, not claimed revoked. |
+| RD3a | synthetic Secret read in one named allowed namespace | Never/unnamed namespace refused; binding removed and later reads refuse. |
+| RD3b | synthetic Secret read in frozen expanded list | Never/future namespace refused, no all-namespace binding, all owned bindings removed. |
+| RD4 storage | one synthetic UID-bound delete | new UID at same name, other object/namespace, absent or ended own grant refuse; release before delete cancels; binding cleanup proven. |
+| RD4 hardware | authenticated delegate audit record on valid C4 lease with exact operation/target/Tom ref | record checks tested; target/command enforcement is **absent**. Credential file cleanup proven; copied key/process/external effects remain. |
+
+### A4: decision slot, revocation and dependency regressions
+
+Before annotation, uncovered approve **and deny**, policy-read Forbidden, busy or
+invalid maintenance target, and other unauthorized decisions must leave no record.
+Then prove an otherwise authorized decision can succeed without release/re-request
+or timeout. Existing authorized conservative target-reservation behavior needs its
+own progress test; OP332 is not proof that the unauthorized-slot defect is fixed.
+
+After a valid decision, test policy removal/narrowing/replacement UID, reach-list
+removal, actor Pod/session replacement, requester UID change, suspended/reaped
+actor and stale digest at apply and while Active. Ensure transient reads retry,
+permanent lost authority ends access, and maintenance waits for termination proof.
+Two-replica decisions give one record and one 409. Rebase S3 on actual S5 wire fields
+and rerun hosted CI; its standalone local PASS does not waive the merge-result fail.
+
+## 11. One pending decision packet
+
+Q-042-01 asks Tom to review the **exact final rendered packet and reviewed source
+heads**, including designated policy reach for existing sessions, creator scope,
+C2 any-SA/cross-namespace exposure, workbench trust-root access, hardware powers,
+and RD2 root/derived-credential residuals. None is labelled accepted. Q-042-02 asks
+for only the P6 template exception, with verified continuity of active sessions.
+They are delivered together through the coordinator once the concrete prerequisites
+are resolved. There is no default approval, one-time approval reuse or human-token
+workaround. Missing source/evidence and unresolved exact configuration remain
+explicitly pending; do not solicit an abstract risk waiver in place of that packet.
+
+## 12. Non-goals and stop boundary
+
+No new access framework, approval service, per-command gates, bulk tracker/history
+inspection, OP304 prerequisite, live activation, credentials, session migration,
+GPU load/power changes or security/network writes. This source-preparation story
+ends with a reviewed proposal, exact dependency handoff and canonical checkpoint.
+It does not automatically start the missing-source stories or activate any track.

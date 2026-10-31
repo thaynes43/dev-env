@@ -1,15 +1,18 @@
 # Saga: distributed-dev-env (dev-env v2)
 
-**2026-10-31 design-only, Epic #112:** [DESIGN-042](designs/042-homelab-operator-access.md)
-proposes one homelab operator access bundle that Tom approves once. It has five
-task grant classes, including a fail-closed namespace operator with named Secret
-use. It has two approval modes: requester attestation under a Tom-approved
-policy, and an authenticated delegate decision. Work lands in independent
-tracks. S7 adds break-glass, Secret read and storage routes; bounds changes
-already run through the delivery workflow. GPU, MAM and reserved-class
-acceptance are pending. Q-042-01 (the bundle) and Q-042-02 (a template-hold
-exception for the coordinator profile only) are pending for Tom; no grant,
-policy or guard changes.
+**2026-10-31 source preparation, Epic #112 / OP233:**
+[DESIGN-042](designs/042-homelab-operator-access.md) proposes one exact activation
+packet for Tom's review. It retains requester attestation and authenticated
+message decisions. S4 is merged; S2 PR791/S6 PR790 replace stale drafts786/789;
+S3 PR792 stays draft pending S5 wire integration. Existing top-level sessions need
+the explicit policy-reach follow-up; current tree-only source is insufficient.
+S2's unauthorized decision-slot lockout must be fixed and tested. S7 reserved
+source is absent. C2 any-SA exposure, workbench trust roots and P7 effective root
+powers are explicit proposed scope, not accepted risk or identity-guard confinement.
+GPU, MAM-grant and reserved-class acceptance remain pending. Q-042-01/02 remain
+one consolidated decision; P6 is held and active sessions must not restart.
+[Integration story333](https://work.haynesnetwork.com/work_packages/333) records
+source/evidence custody. No live authority change or OP304 prerequisite follows.
 
 **2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md)
 proposes Session-owned upgrade attempt claims and exact PR/head joins.
@@ -462,6 +465,7 @@ explicit approval in phase 5.
 | 89 | Agent attestation for grants a policy names (DESIGN-001 entry numbered "D-88"; the number was already row 67's) | **RECORDED** 2026-10-27 (Tom, 23:27:01Z, Sentinel_df0db56dd3088191bab31733860248ce) | "No just accept what the agent says add guidance for the agent to seek coordinator or user approval first". Recorded in DESIGN-001 as the grant-attestation entry, which reused the number D-88 after row 67 (catalog reason codes, 2026-10-12) had it first. A GrantPolicy with `spec.attested` approves only when the requesting session also records its claim that the user or a coordinator approved: an agent attestation, not verified human identity. Default off. The numbering collision, and renumbering as a follow-up, are noted in DESIGN-001's hw-ssh entry. |
 | 90 | hw-ssh lease production scope (DESIGN-001 entry numbered "D-89"; the number was already row 70's) | **RECORDED** 2026-10-28 (Tom, 01:37:41Z, Sentinel_fd1573472fec819197c80e8b20ab7143) | "Approved." Recorded in DESIGN-001 as the hw-ssh entry, which reused D-89 after row 70 (Q-35) had it first. **Amends row 12** (Q-07, 2026-10-06: the root-equivalent credentials move behind the broker as short-lived credential grants, with a CA certificate for hw-ssh): for hw-ssh, a lease of the existing static shared key is now approved for full-profile haynes-ops sessions, up to one hour per grant, under the agent-attested model (row 89), with the keeper's `get` on the one hw-ssh Secret and a first pilot to HaynesIntelligence on SSH port 22. The CA certificate stays the stronger follow-up. Row 12 is unchanged. |
 | 91 | Opt-in Claude statusline producer bridge | **RECORDED** 2026-10-29 (source-only; review, CI, and merge stay with Root) | Install-ready `claude-statusline-usage` accepts one bounded native callback and an explicit private cache path, projects it through the fixed `/usr/local/bin/agent-run usage -o json --claude-statusline` consumer, and can stream the original bytes to an explicit display argv when capture stops. It installs no hook and does not change Render, settings, or provider freshness. [DESIGN-030](designs/030-provider-allowance-contract.md). |
+| 92 | Maintenance approval by message to the requesting agent | **RECORDED** 2026-10-31 (Tom, relayed by lead dev-env-1029-132039 in the OP233 work order; original timestamp not in this record) | "I or an agent can approve with a message to the agent requesting the grant." [ADR-013](adrs/013-attested-maintenance-approval.md) amends [ADR-012](adrs/012-bounded-maintenance-task-grants.md): a maintenance grant may also be approved by an agent attestation whose binding the broker verifies (not verified human identity; D-88), through an attested GrantPolicy whose `spec.maintenance` matches the envelope exactly, from a top-level requesting session, one lease per target, never an extension. The human route is unchanged, runs first and wins while the grant is Pending; no standing policy approves maintenance. Source only: the new broker flag `--enable-attested-maintenance` is false in code. Live, `--enable-attested-grants`, `--enable-maintenance-grants` and the operator's attestation and maintenance API flags are already on, so activation needs the CRD copy, a release and pin, the new flag and one attested GrantPolicy Tom approves. Delegate approval (path b) is a planned follow-up. An agent attestation is a claim, not verified human identity. |
 
 The full options, consequences and rulings for Q-01 to Q-16, and the premise
 corrections withdrawing Q-17 and Q-18, plus Q-19's first owner CA provisioning
