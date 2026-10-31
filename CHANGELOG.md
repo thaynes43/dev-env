@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.78.0](https://github.com/thaynes43/dev-env/compare/v2.77.0...v2.78.0) (2026-10-31)
+
+
+### Features
+
+* **apiserver:** named coordinator identity for a session (DESIGN-042 S4) ([#787](https://github.com/thaynes43/dev-env/issues/787)) ([b82e3b2](https://github.com/thaynes43/dev-env/commit/b82e3b2954d08a22abc6ed9d61039a40f3cbd1e2))
+* **grants:** approve maintenance through attested policies (ADR-013) ([#781](https://github.com/thaynes43/dev-env/issues/781)) ([2984528](https://github.com/thaynes43/dev-env/commit/2984528d78e54f3dfd77cf12755f2f389a075dff))
+* **grants:** finish attested maintenance creator eligibility (S6) ([#790](https://github.com/thaynes43/dev-env/issues/790)) ([1195633](https://github.com/thaynes43/dev-env/commit/119563303ea42b33963b19953c5b264a6b92aac9))
+* **grants:** integrate delegate decisions with source-only ADR acceptance ([#797](https://github.com/thaynes43/dev-env/issues/797)) ([e3576ac](https://github.com/thaynes43/dev-env/commit/e3576ac0ed27f472baea298f723d230df22cf08e))
+
+
+### Bug Fixes
+
+* **cursor-acp:** distinguish frame failures and allow bounded large updates ([#788](https://github.com/thaynes43/dev-env/issues/788)) ([e6b9808](https://github.com/thaynes43/dev-env/commit/e6b9808e561606a3f77b44ef9e598106e445aa98))
+
 ## [2.77.0](https://github.com/thaynes43/dev-env/compare/v2.76.0...v2.77.0) (2026-10-31)
 
 
