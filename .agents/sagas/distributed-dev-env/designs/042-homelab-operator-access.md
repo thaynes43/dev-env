@@ -62,7 +62,10 @@ and each has a one-step rollback.
 
    Release removes the files but cannot recall a copy.
 6. **GPU.** A message may approve SYS_ADMIN maintenance on Card C, within #781's
-   exact-envelope policy.
+   exact-envelope policy. Under mode (a), the requester may self-approve only if its
+   session was created by a listed creator (S6). By default the only creator is Tom's
+   human SA. #781 as written admits any top-level session, including headless tasks
+   from the v1-pod client, the workbench client or the coordinator-host fixture.
 
 The reserved decisions (section 7) stay with Tom.
 
@@ -71,11 +74,12 @@ The reserved decisions (section 7) stay with Tom.
 | # | Repo | Change | Status | Rollback |
 |---|---|---|---|---|
 | S1 | dev-env | Attested maintenance (ADR-013): an attested GrantPolicy with an exact maintenance envelope; flag `--enable-attested-maintenance` | PR #781, open; default off | flag false |
-| S2 | dev-env | Delegate decisions (6.2): flag `--grant-delegates` on operator and broker; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `Decide` accepts `delegate/<ns>/<sa>`; self-decision refused | new; default off (empty list) | empty the list |
+| S2 | dev-env | Delegate decisions (6.3): flag `--grant-delegates` on operator and broker; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `Decide` accepts `delegate/<ns>/<sa>`; self-decision refused | new; default off (empty list) | empty the list |
 | S3 | dev-env | `agent-run grant decide` and an MCP tool; `secrets` on grant requests; CLI and MCP say when no policy covers a request | new, small | revert |
-| S4 | dev-env | Named coordinator identity (6.3): templates accept a `dev-env-coordinator-<name>` SA; such a session pod stays a session caller, as the workbench does; only human or client callers launch that profile, one Running session per SA | new, small | revert; no profile names it |
+| S4 | dev-env | Named coordinator identity (6.4): templates accept a `dev-env-coordinator-<name>` SA; such a session pod stays a session caller, as the workbench does; only human or client callers launch that profile, one Running session per SA | new, small | revert; no profile names it |
 | S5 | dev-env | Named Secrets (5.1): `KubeGrant.secrets`; role `dev-env-grant-namespace-operator` in the enums and the broker catalog; `ScopeDigest` covers `secrets` | new, small | revert; no policy names the role |
-| R1 | haynes-ops | CRD copy from the release that carries S1 to S5 | routine | remove delegated-only, maintenance and namespace-operator policies first, then revert |
+| S6 | dev-env | Attested maintenance creators (6.2): broker flag `--attested-maintenance-creators=<ns>/<sa>,...`, default `dev-env-system/dev-env-human`. Mode (a) approves a maintenance grant only when the requesting session's root creator is listed. | new, small; default human only; **required before P2 sets `--enable-attested-maintenance`** | reset to the default |
+| R1 | haynes-ops | CRD copy from the release that carries S1 to S6 | routine | remove delegated-only, maintenance and namespace-operator policies first, then revert |
 | R2 | haynes-ops | Operator and broker pins to that release | routine | pin back |
 | P1 | haynes-ops | Ten GrantPolicies (9.1) | **activation** | delete a policy; matching stops and active grants run out |
 | P2 | haynes-ops | Broker `--enable-attested-maintenance=true`; operator and broker `--grant-delegates=<list>` | **activation** | false; empty list |
@@ -86,7 +90,7 @@ The reserved decisions (section 7) stay with Tom.
 
 Order:
 
-1. Merge S1 to S5 and release.
+1. Merge S1 to S6 and release. S6 ships no later than S1's activation.
 2. Land R1, then R2.
 3. Open one held haynes-ops PR with P1 to P5. **That PR is the single approval.**
 4. Land P6 when the template hold allows it.
@@ -404,7 +408,7 @@ who records the decision.
 | Separation | none: the requester and the attestor are the same session | the delegate may not be the requester, the requester's pod or session, or a coordinator or worker named in a maintenance envelope |
 | Policy block | `spec.attested` (exists) | `spec.delegated` (new, S2) |
 | Recorded as | `approvedBy policy/<name>`, with "agent attestation, not verified human identity" | `approvedBy delegate/<ns>/<sa>`, with the ref and "not a human decision" |
-| Grant types | kube, egress, credential; maintenance with S1 | kube, egress, maintenance. Credential is not built, because keeper execution re-checks a `policy/` approver (`credentials.go:71`). |
+| Grant types | kube, egress, credential; maintenance with S1, limited by S6 | kube, egress, maintenance. Credential is not built, because keeper execution re-checks a `policy/` approver (`credentials.go:71`). |
 
 Neither mode is verified human authority. An attested `user` claim is never described
 as one.
@@ -438,7 +442,29 @@ A grant under an attested or delegated policy is never approved without a statem
 decision that cites its ref. Standing policies such as `lan-*` and `credential-proxmox`
 approve without one, as they do today.
 
-### 6.2 Delegate decisions (S2)
+### 6.2 Attested maintenance creators (S6)
+
+#781's final security re-review found a gap. Its mode (a) path for maintenance admits
+any top-level session. That includes headless tasks created by the v1-pod client, by
+the workbench client, or by the coordinator-host fixture. Any of them can attest and
+approve its own SYS_ADMIN lease.
+
+- **Flag:** the broker gains `--attested-maintenance-creators=<ns>/<sa>,...`. Its
+  default is `dev-env-system/dev-env-human`, Tom's human SA, and nothing else.
+- **Rule:** the broker approves a maintenance grant through an attested policy only
+  when the requester's root creator is on that list. The root creator is the SA
+  recorded as `spec.requester.parent`. For a child session, it is the parent recorded
+  on that child's top-level ancestor.
+- **Recording:** the operator records the parent from the token at session creation,
+  never from the request body.
+- **Other routes:** mode (b) and the human decision route are unaffected. Kube, egress
+  and credential attestations are unaffected.
+- **Order:** S6 must be released and pinned before P2 sets
+  `--enable-attested-maintenance=true`.
+- **Fail-closed rollback:** an older broker without S6 runs #781 as written. So never
+  roll the broker back while that flag is on. Turn the flag off first.
+
+### 6.3 Delegate decisions (S2)
 
 - **Allowlist:** `--grant-delegates=<ns>/<sa>,...`, set on both the operator and the
   broker. The two lists must match, as the human SA pair already does.
@@ -486,7 +512,7 @@ approve without one, as they do today.
     apply fails loudly.
   - So remove delegated-only policies before reverting the CRD.
 
-### 6.3 A named coordinator identity for the Claude lead (S4, P6)
+### 6.4 A named coordinator identity for the Claude lead (S4, P6)
 
 This is the smallest change that lets mode (b) serve the actual lead. It shares no
 credentials and keeps current authority as it is.
@@ -518,7 +544,7 @@ credentials and keeps current authority as it is.
 - A pod's SA cannot change in place. The lead moves to the profile at its next launch
   or resume. Running sessions are not touched.
 
-### 6.4 Escalation
+### 6.5 Escalation
 
 A request that no policy covers matches nothing. Today it times out silently. S3 makes
 the CLI and MCP say so before the agent waits. The agent then asks its coordinator, or
@@ -634,7 +660,8 @@ of one policy per target.
 
 Preconditions:
 
-- S1 is released and pinned.
+- S1 and S6 are released and pinned. The requester's creator is listed:
+  `haynes-ops-1029-223503` records parent `dev-env-system/dev-env-human` on its grants.
 - `maintenance-card-c` and `--enable-attested-maintenance=true` are applied.
 - The ADR-012 admission policies are present. The annotation guard is live. The
   Kyverno executor policy's live state is Unknown, because this identity cannot read
