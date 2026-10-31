@@ -1,5 +1,11 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**2026-10-31 design-only, Epic #112:** [DESIGN-042](designs/042-homelab-operator-access.md)
+proposes one homelab operator access bundle for a single review by Tom: five
+task grant classes, approval by message through D-88 attestation, and a short
+Tom-only list. GPU maintenance and the MAM cookie apply are its acceptance tests.
+Q-042-01 to Q-042-06 are pending for Tom; no grant, policy or guard changes.
+
 **2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md)
 proposes Session-owned upgrade attempt claims and exact PR/head joins.
 Q-325-01 and Q-325-02 are pending for Tom; no writer or activation follows.
