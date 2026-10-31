@@ -98,9 +98,17 @@ type GrantPort struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
+// GrantTaskClaimsHeader opts maintenance grant detail into requester-owned claims.
+// Other grant routes and grant types keep their original shape.
+const GrantTaskClaimsHeader = "X-Dev-Env-Grant-Task-Claims"
+
+const GrantTaskClaimsV1 = "v1"
+
 // Grant is one grant as the API shows it: GET /v1/grants/{name}, the items of
 // GET /v1/grants, and the answer to a request or a release.
 type Grant struct {
+	// TaskClaims is a read-only requester observation, not approval or transfer.
+	TaskClaims        *SessionTaskClaims `json:"taskClaims,omitempty"`
 	UID               string             `json:"uid,omitempty"`
 	Maintenance       *MaintenanceTask   `json:"maintenance,omitempty"`
 	MaintenanceStatus *MaintenanceStatus `json:"maintenanceStatus,omitempty"`
