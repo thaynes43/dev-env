@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.74.0](https://github.com/thaynes43/dev-env/compare/v2.73.1...v2.74.0) (2026-10-31)
+
+
+### Features
+
+* add source-only structured Cursor ACP client ([#747](https://github.com/thaynes43/dev-env/issues/747)) ([989c37e](https://github.com/thaynes43/dev-env/commit/989c37eb9a1f1de3423d4f8f6693d38b51fd5ef0))
+* **pages:** join existing responder order and canonical claim evidence ([#746](https://github.com/thaynes43/dev-env/issues/746)) ([db73659](https://github.com/thaynes43/dev-env/commit/db7365981d72f7a2616eb76e7e7f14303d093c51))
+
+
+### Bug Fixes
+
+* **portal:** mark the selected Sessions or Tasks item ([#312](https://github.com/thaynes43/dev-env/issues/312)) ([#748](https://github.com/thaynes43/dev-env/issues/748)) ([2e2e405](https://github.com/thaynes43/dev-env/commit/2e2e4051e7e4dccc38939dcebfd8ce707d02b323))
+* **portal:** refuse allowance conflicts before row filtering ([#309](https://github.com/thaynes43/dev-env/issues/309)) ([#745](https://github.com/thaynes43/dev-env/issues/745)) ([9a737b8](https://github.com/thaynes43/dev-env/commit/9a737b86d5f3e9aa56e63c0b05a31d04d3e585d2))
+
 ## [2.73.1](https://github.com/thaynes43/dev-env/compare/v2.73.0...v2.73.1) (2026-10-30)
 
 
