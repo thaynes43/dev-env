@@ -19,8 +19,9 @@ type UsageConflict struct {
 
 // UsageRollup sums the initial invocations of a Session's retained
 // descendants (DESIGN-018): the descendant Sessions that still exist when it is
-// read. A reaped descendant is gone and is not counted, so Scope is
-// RetainedDescendants and Coverage describes those Sessions only. A child's
+// read. Reaped and compute-reclaimed Sessions count while retained. A deleted
+// Session is not counted, so Scope is RetainedDescendants and Coverage describes
+// those Sessions only. A child's
 // usage stays on the child; the Session's own observation is not part of it.
 // Each invocation is counted once, keyed by its Session UID and observation ID.
 // A metric is Reported only when coverage is Complete, every counted

@@ -271,8 +271,9 @@ separate Session is a separate CLI process, so the sum counts nothing twice.
 Work a CLI delegates inside its own process is in that CLI's own report and is
 never added again.
 
-A reaped descendant is deleted, so it is not walked and its usage is not in the
-rollup. `coverage: Complete` means every retained descendant reported, not every
+A descendant whose Session object is deleted is not walked and its usage is
+not in the rollup. A reap request that retains a protected private Session
+does not remove its usage. `coverage: Complete` means every retained descendant reported, not every
 descendant the Session ever had; coordinators reap finished children routinely,
 so the rollup usually undercounts the whole tree. A per-parent ledger that
 survives a reap is a separate decision (#248).
@@ -284,7 +285,7 @@ caller may read any Session and gets the keys.
 
 `agent-run show` prints the served models, provenance, billing basis, each
 model's counters and cost, and the retained descendants' rollup, saying that
-reaped descendants are not counted.
+deleted Session objects are excluded, and so are descendants reachable only through a deleted Session (the walk follows parent names); retained reaped/reclaimed Sessions count.
 
 **Out of scope.** Pricing from tokens, subscription quota, API billing, local
 inference, TUI/resume/native coverage, the SessionDirectory usage fields and
@@ -359,3 +360,49 @@ capture header does not include the ledger. The client checks the whole view
 before printing it. A malformed or oversized view is unavailable, with no
 partial receipt list. Observation versions 1 and 2, a reported zero, and
 Unknown stay as they were captured.
+
+## Compute reclaim and retained reap read contract (2026-10-31, OP315)
+
+A reap request is distinct from actual removal of a Session object. Private history protection keeps a
+reap-requested Session and its usage while the finalizer remains. Terminal task
+compute reclaim (#729/#738, DESIGN-025 section 24) removes its pod, retains
+HOME/history and the Session, and reports `Suspended` with
+`TaskComputeReclaimed`. Neither transition changes usage identity or counters.
+
+The API's own observation and descendant walk read retained Session status.
+The walk visits each descendant UID once and excludes the root's observation.
+It includes retained reaping, suspended and archived Sessions. It never adds
+`capturedUsage` to these observations: that would count a retained child twice.
+The CLI's text now names retained reaped/reclaimed Sessions as included and
+deleted Sessions as excluded. API wire scopes and capture permissions do not
+change.
+
+The portal reads the same validated initial observation through its activity
+allowlist. Interactive cumulative `status.conversationUsage` stays separate;
+its last receipt remains visible after stop, with its measured time and stale
+marker. The Usage breakdowns and Sessions panels retain counters independently
+of lifecycle freshness. Missing receipts remain Unknown, and the requested
+model is never promoted to a served-model observation.
+
+OP315 fixtures cover root/child/grandchild reads before and after pod removal,
+a finalizer-protected descendant reap, unchanged exact totals and identities,
+explicit zero/Unknown counters, served/requested model separation, and missing
+evidence. Replayed API observations passed to the pure consolidation projector
+produce one row per invocation. Portal fixtures retain separate task and
+conversation counts across stopped phases. These prove source behavior only;
+they do not execute reclaim, connect a reader, or establish runtime acceptance.
+
+If a Session object has already been deleted, the ordinary rollup and portal
+inventory cannot reconstruct it from HOME or a missing pod. Existing optional
+parent receipts may preserve its initial invocation for explicit capture/export
+reads; they remain a separate `CaptureOnly` view, not an all-history total.
+Without a retained observation or receipt, that historical usage is outside the retained-descendant scope: it is absent from a total that can still read Complete.
+No live-pod read, provider-account call, allowance connection, capture enabling
+or activation is part of this contract. Tokens remain usage, never quota.
+
+The OP315 trace also hardened the portal read contract (a conformant operator pages one consistent snapshot, so this cannot occur today): identity uniqueness was
+checked within each page, but a repeated Session on a later page contributed
+again to the Usage breakdowns. The read must reject duplicate Session names or
+UIDs across pages before projection, preserving the existing response-contract
+failure behavior (page/row diagnostics, no partial rows or totals). Both task
+initial receipts and cumulative conversation snapshots follow this rule.
