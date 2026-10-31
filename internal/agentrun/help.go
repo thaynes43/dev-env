@@ -725,7 +725,8 @@ does not mean the grant is Active.
   --ttl <duration>   optional Go duration, at least 10m and at most the requested TTL
   --reason <text>    optional; at most 256 characters, no control or format characters
   --reserved         explicit default-off S7 case, no standing/attested approval
-  --tom-ref <ref>     required with --reserved; fresh nonsecret Tom-message reference
+  --tom-ref <ref>     required with --reserved; nonsecret decision reference
+                     (Tom message or configured delegated-authority reference); agent assertion, not verified human consent
 
 The Tom reference is an agent assertion, not verified human consent. Reserved TTL
 is at most 1h; maintenance keeps its 30m default. Use grant request --reserved with

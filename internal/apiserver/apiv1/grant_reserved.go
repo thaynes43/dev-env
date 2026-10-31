@@ -50,7 +50,8 @@ type ReservedNamespace struct {
 func GrantHardwareIntentPath(name string) string { return GrantPath(name) + "/hardware-intent" }
 
 // HardwareIntentRequest contains no actor fields: TokenReview supplies them.
-// TomRef is an agent's assertion about a fresh Tom message, not human identity.
+// TomRef is a required nonsecret decision reference (for example, Tom's message
+// or a configured delegated-authority reference); agent assertion, not verified human consent.
 type HardwareIntentRequest struct {
 	GrantUID  string `json:"grantUID"`
 	Digest    string `json:"digest"`

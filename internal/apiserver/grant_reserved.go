@@ -16,7 +16,7 @@ import (
 // lookup. The actor was authenticated by the same delegateOf as ordinary S2.
 func (s *Server) decideReservedGrant(ctx context.Context, _ http.ResponseWriter, _ *http.Request, c *caller, d *grantDelegate, g *v1alpha1.AccessGrant, req apiv1.GrantDecisionRequest) (int, any, error) {
 	if !grantattest.ValidRef(req.TomRef) {
-		return 0, nil, invalid(fieldError("tomRef", "required nonsecret reference to a fresh Tom message; agent assertion, not verified human consent"))
+		return 0, nil, invalid(fieldError("tomRef", "required nonsecret decision reference (for example, Tom's message or the configured delegated-authority reference); agent assertion, not verified human consent"))
 	}
 	if err := broker.ValidateReservedRequestShape(g, s.ReservedDecisionClasses, s.ReservedExcludedNamespaces); err != nil {
 		return 0, nil, forbidden("%s", err)

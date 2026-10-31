@@ -9,7 +9,11 @@ held. The existing grant API and broker remain the authority path.
 `grant request --reserved` marks an immutable S7 request; `--all-namespaces`
 selects the snapshot case, and repeated `--storage-target Kind/name@UID` names
 exact storage targets. `grant decide --reserved --tom-ref <message>` uses the
-existing decision route. `tomRef` is mandatory and names a fresh message the delegate claims came from Tom.
+existing decision route. `tomRef` is a required nonsecret decision reference
+(for example, Tom's message or the configured delegated-authority reference).
+An eligible non-human delegate can act under Tom's persistent configured authority
+without a fresh human message or per-lease phone approval. The decision itself
+remains fresh and bound to the grant; no authorization algorithm or wire field changes.
 `ref` retains the request/reply correlation. The token supplies the actor identity.
 The record says **agent assertion, not verified human consent**. It never creates
 human provenance or a self-grant exception. Ordinary policy lookup failure never
