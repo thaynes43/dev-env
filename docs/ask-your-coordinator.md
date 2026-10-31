@@ -40,10 +40,11 @@ Session must have no workspace. `spec.project` alone is not what is checked.
   with `--to`, or have the coordinator start as a project task.
 - Session depth is limited to two levels (DESIGN-001 3.4). A Session at depth 2
   cannot start children, so it cannot coordinate workers it would start itself.
-- Proven on 2026-10-31 (OpenProject #321, journal 3999): two project-bound
-  sibling Sessions completed ask with `--to`, then reply and ack, through the
-  live operator. The default-to-parent form had not yet been exercised against a
-  project-bound parent.
+- Proven on 2026-10-31 through the live operator (OpenProject #321):
+  - ask with `--to`, then reply and ack, between project-bound siblings: Claude
+    to Claude (journal 3999) and Codex to Claude (journal 4013);
+  - the default-to-parent form, with no `--to`, from a depth-2 Session to its
+    project-bound depth-1 parent: Codex to Codex (journal 4031).
 
 ## Ask
 
