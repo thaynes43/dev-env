@@ -509,17 +509,18 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
 	if c.kind == kindCoordinator {
-		if slices.Contains(s.GrantPolicyDelegates, c.identity.serviceAccountRef()) {
-			if err := s.policyDelegateGrantRead(ctx, &g, c); err != nil {
-				return 0, nil, err
-			}
-			return http.StatusOK, s.grantView(&g), nil
-		}
 		if g.Spec.Requester.SessionUID == "" {
 			return 0, nil, coordinatorDenied()
 		}
 		if _, err := s.childForCoordinator(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: g.Spec.Requester.Session}, c, g.Spec.Requester.SessionUID); err != nil {
-			return 0, nil, err
+			// Preserve existing tree reads. Only extra out-of-tree reads use
+			// the explicit policy/reserved union and the shared live actor seam.
+			if !slices.Contains(s.GrantPolicyDelegates, c.identity.serviceAccountRef()) {
+				return 0, nil, err
+			}
+			if err := s.policyDelegateGrantRead(ctx, &g, c); err != nil {
+				return 0, nil, err
+			}
 		}
 	}
 	v := s.grantView(&g)
