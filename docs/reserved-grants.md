@@ -40,12 +40,22 @@ a bounded exception; the canonical exclusion list is bound into each decision, a
 a configuration change requires a new decision. No empty/error/lookup fallback
 widens a bound. RD2 remains the explicit root exception.
 
-Every reserved grant decision binds grant UID, requester session and Pod UIDs,
+Every reserved grant decision binds the approval or denial outcome, grant UID, requester session and Pod UIDs,
 authenticated actor Pod and session UIDs, scope digest, approved TTL, case, bounds
 revision, decision time and message reference. The effective digest also binds the
 canonical namespace snapshot or storage targets. Grant UID, scope, TTL and actor
 replacement require a new decision. Hardware intent uses its own set-once audit
 record and cannot decide or extend the credential lease.
+
+RD3b initial creation checks each namespace UID before and after the binding
+write. Before minting any grant token, the broker persists a materialization
+marker. A missing snapshot binding after that marker ends the grant instead of
+creating new authority. Cleanup can remove its exact labelled object even if the
+namespace was replaced, using the binding object's UID as a delete precondition.
+This requires the held admission/RBAC packet to protect those labels and status,
+and to keep grant token minting exclusive to the broker. Offline tests cover a
+replacement during Create and recovery with a missing binding; they do not prove
+live namespace-controller/admission behavior or contain a separate root actor.
 
 Maintenance keeps its **30m default**. The reserved **1h maximum** is a separate
 bound. Neither a decision freshness window nor an audit intent extends a grant.

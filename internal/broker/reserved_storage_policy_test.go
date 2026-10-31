@@ -110,7 +110,7 @@ func storagePolicyObjects(t *testing.T) (map[string]any, map[string]any, map[str
  {"metadata":{"name":"grant-storage","namespace":"dev-agents","uid":"grant-uid"},
   "spec":{"type":"kube","requester":{"sessionUID":"requester-uid"},"kube":{"role":"dev-env-grant-storage","namespaces":["database"],"storageTargets":[{"kind":"PersistentVolumeClaim","name":"data","uid":"object-uid"}]}},
   "status":{"phase":"Active","serviceAccount":"grant-storage","approvedBy":"delegate/dev-env-system/actor","expiresAt":"2026-10-31T20:00:00Z",
-   "reserved":{"case":"rd4-storage","boundsRevision":"1","grantUID":"grant-uid","requesterUID":"requester-uid","requesterPodUID":"requester-pod","actorUID":"actor-pod","tomRef":"msg-tom-1","scopeDigest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","effectiveDigest":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","ttl":"30m","decidedAt":"2026-10-31T19:00:00Z"}}},
+   "reserved":{"approve":true,"case":"rd4-storage","boundsRevision":"1","grantUID":"grant-uid","requesterUID":"requester-uid","requesterPodUID":"requester-pod","actorUID":"actor-pod","tomRef":"msg-tom-1","scopeDigest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","effectiveDigest":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","ttl":"30m","decidedAt":"2026-10-31T19:00:00Z"}}},
  {"metadata":{"name":"grant-storage","namespace":"dev-agents","uid":"sa-uid","labels":{"dev-env.haynesops.com/grant":"grant-storage","dev-env.haynesops.com/grant-uid":"grant-uid"}}},
  {"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"name":"data","namespace":"database","uid":"object-uid"}}
 ]`), &objects); err != nil {

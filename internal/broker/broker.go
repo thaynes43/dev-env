@@ -350,6 +350,15 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 		}
 		return ctrl.Result{}, err
 	}
+	if g.Status.Reserved != nil && g.Spec.Kube != nil && g.Spec.Kube.AllNamespaces && g.Status.ServiceAccount == "" {
+		// Commit a durable no-recreation fence before mint/install can expose
+		// any token. A crash after installation cannot reopen creation.
+		g.Status.ServiceAccount = g.Name
+		written, err := b.writeStatus(ctx, g)
+		if err != nil || !written {
+			return ctrl.Result{}, err
+		}
+	}
 	if len(made) > 0 {
 		log.FromContext(ctx).Info("made the grant", append(grantFields(g), "made", made)...)
 		b.event(g, corev1.EventTypeNormal, "Make", "Made", "made "+strings.Join(made, ", "))

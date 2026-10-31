@@ -69,7 +69,7 @@ spec:
         variables.decision.approve && variables.decision.by == variables.grant.status.approvedBy &&
         variables.decision.grantUID == variables.grant.metadata.uid &&
         variables.decision.reserved == variables.bounds &&
-        variables.bounds.case == 'rd4-storage' && variables.bounds.boundsRevision == '1' &&
+        variables.bounds.approve && variables.bounds.case == 'rd4-storage' && variables.bounds.boundsRevision == '1' &&
         variables.bounds.grantUID == variables.grant.metadata.uid &&
         variables.bounds.requesterUID == variables.grant.spec.requester.sessionUID &&
         variables.bounds.actorUID != '' && variables.bounds.actorUID != variables.bounds.requesterPodUID &&

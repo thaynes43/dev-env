@@ -34,6 +34,8 @@ type GrantStorageTarget struct {
 // attested authority. Live actor, reach, case configuration and scope checks are
 // required before application and for the lifetime of the original lease.
 type ReservedDecisionBinding struct {
+	// Approve binds the asserted outcome, including a retained denial.
+	Approve bool `json:"approve"`
 	// +kubebuilder:validation:Enum=rd2;rd3a;rd3b;rd4-storage
 	Case string `json:"case"`
 	// +kubebuilder:validation:MinLength=1

@@ -2,9 +2,10 @@ package v1alpha1_test
 
 import (
 	"context"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"testing"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )

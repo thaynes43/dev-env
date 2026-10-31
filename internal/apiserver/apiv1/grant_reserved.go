@@ -22,6 +22,7 @@ type GrantStorageTarget struct {
 
 // ReservedDecisionBinding is the retained S7 audit, never human provenance.
 type ReservedDecisionBinding struct {
+	Approve            bool                `json:"approve"`
 	Case               string              `json:"case"`
 	BoundsRevision     string              `json:"boundsRevision"`
 	GrantUID           string              `json:"grantUID"`

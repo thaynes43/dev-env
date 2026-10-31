@@ -7,14 +7,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/thaynes43/dev-env/api/v1alpha1"
-	"github.com/thaynes43/dev-env/internal/grantattest"
+	"slices"
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"slices"
-	"time"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
 // ReservedClass classifies exact S7 scope. Legacy untargeted storage cannot
@@ -47,7 +49,7 @@ func ReservedClass(g *v1alpha1.AccessGrant) string {
 func reservedInput(g *v1alpha1.AccessGrant, d MaintenanceDecision, exclusions []string, snapshot []v1alpha1.ReservedNamespace, now time.Time) grantattest.Input {
 	k := g.Spec.Kube
 	in := grantattest.Input{Classes: []string{ReservedClass(g)}, Exclusions: exclusions, Now: now.UTC().Truncate(time.Second),
-		Grant:   grantattest.GrantView{Name: g.Name, UID: string(g.UID), Type: string(g.Spec.Type), TTL: g.Spec.TTL.Duration, RequesterSession: g.Spec.Requester.Session, RequesterUID: string(g.Spec.Requester.SessionUID), Phase: string(g.Status.Phase), Release: g.Spec.Release, Deleting: !g.DeletionTimestamp.IsZero(), ScopeDigest: grantattest.ScopeDigest(g), CreatedAt: g.CreationTimestamp.Time.UTC()},
+		Grant:   grantattest.GrantView{Name: g.Name, UID: string(g.UID), Type: string(g.Spec.Type), TTL: g.Spec.TTL.Duration, RequesterSession: g.Spec.Requester.Session, RequesterUID: string(g.Spec.Requester.SessionUID), Phase: string(g.Status.Phase), Release: g.Spec.Release, Deleting: !g.DeletionTimestamp.IsZero(), ScopeDigest: grantattest.ScopeDigest(g), CreatedAt: g.CreationTimestamp.UTC()},
 		Request: grantattest.Request{Reserved: true, Approve: d.Approve, Class: ReservedClass(g), BoundsRevision: grantattest.BoundsRevision, GrantUID: d.GrantUID, RequesterUID: string(g.Spec.Requester.SessionUID), Digest: d.Digest, At: d.At.UTC(), TTL: d.TTL}}
 	if k != nil {
 		in.Grant.Role = k.Role
@@ -167,7 +169,7 @@ func NewReservedBinding(ctx context.Context, r client.Reader, ns string, g *v1al
 	if d.Delegate == nil || requester.UID == "" {
 		return nil, fmt.Errorf("%w: missing reserved actor/requester binding", ErrRefused)
 	}
-	binding := &v1alpha1.ReservedDecisionBinding{Case: ReservedClass(g), BoundsRevision: "1", GrantUID: string(g.UID), RequesterUID: string(g.Spec.Requester.SessionUID), RequesterPodUID: string(requester.UID), ActorUID: d.Delegate.PodUID, ActorSessionUID: d.Delegate.SessionUID, ScopeDigest: grantattest.ScopeDigest(g), TomRef: tomRef, Ref: d.Ref, TTL: metav1.Duration{Duration: d.TTL}, DecidedAt: metav1.NewTime(d.At), Namespaces: snapshot, ExcludedNamespaces: excluded}
+	binding := &v1alpha1.ReservedDecisionBinding{Approve: d.Approve, Case: ReservedClass(g), BoundsRevision: "1", GrantUID: string(g.UID), RequesterUID: string(g.Spec.Requester.SessionUID), RequesterPodUID: string(requester.UID), ActorUID: d.Delegate.PodUID, ActorSessionUID: d.Delegate.SessionUID, ScopeDigest: grantattest.ScopeDigest(g), TomRef: tomRef, Ref: d.Ref, TTL: metav1.Duration{Duration: d.TTL}, DecidedAt: metav1.NewTime(d.At), Namespaces: snapshot, ExcludedNamespaces: excluded}
 	d.Reserved = binding
 	if _, err := grantattest.EvaluateReserved(reservedInput(g, d, excluded, snapshot, d.At)); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrRefused, err)
@@ -181,7 +183,7 @@ func NewReservedBinding(ctx context.Context, r client.Reader, ns string, g *v1al
 func (b *Broker) checkReservedBinding(g *v1alpha1.AccessGrant, d MaintenanceDecision, now time.Time) (grantattest.Record, error) {
 	r := d.Reserved
 	if r == nil || d.Delegate == nil || !delegateListed(d.By, b.GrantDelegates) || r.Case != ReservedClass(g) || !slices.Contains(b.ReservedDecisionClasses, r.Case) || r.BoundsRevision != "1" ||
-		r.GrantUID != string(g.UID) || r.RequesterUID != string(g.Spec.Requester.SessionUID) || r.RequesterPodUID == "" || r.ActorUID != d.Delegate.PodUID || r.ActorSessionUID != d.Delegate.SessionUID ||
+		r.Approve != d.Approve || r.GrantUID != string(g.UID) || r.RequesterUID != string(g.Spec.Requester.SessionUID) || r.RequesterPodUID == "" || r.ActorUID != d.Delegate.PodUID || r.ActorSessionUID != d.Delegate.SessionUID ||
 		r.ScopeDigest != grantattest.ScopeDigest(g) || r.ScopeDigest != d.Digest || r.Ref != d.Ref || !grantattest.ValidRef(r.Ref) || r.TTL.Duration != d.TTL || !r.DecidedAt.Time.Equal(d.At) || r.EffectiveDigest != reservedDigest(r) {
 		return grantattest.Record{}, fmt.Errorf("%w: reserved decision binding or enabled case differs", ErrRefused)
 	}

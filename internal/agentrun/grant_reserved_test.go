@@ -2,10 +2,11 @@ package agentrun
 
 import (
 	"encoding/json"
-	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 const reservedTestUID = "11111111-1111-1111-1111-111111111111"
@@ -52,7 +53,7 @@ func reservedClientGrant() apiv1.Grant {
 }
 
 func TestReservedDecisionClientRetainsAuthenticationAndExactReply(t *testing.T) {
-	for _, mode := range []string{"valid", "deny", "wrong-ref", "wrong-tom-ref", "wrong-uid", "wrong-digest", "wrong-ttl", "wrong-case", "no-audit", "missing-actor", "unavailable", "accepted-wrong-status"} {
+	for _, mode := range []string{"valid", "deny", "wrong-ref", "wrong-tom-ref", "wrong-uid", "wrong-digest", "wrong-ttl", "wrong-default-ttl", "opposite-decision", "wrong-case", "no-audit", "missing-actor", "unavailable", "accepted-wrong-status"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			current := reservedClientGrant()
@@ -73,7 +74,7 @@ func TestReservedDecisionClientRetainsAuthenticationAndExactReply(t *testing.T) 
 						t.Fatal("request correlation lost", req)
 					}
 					out := current
-					out.ReservedDecision = &apiv1.ReservedDecisionBinding{Case: "rd2", BoundsRevision: "1", GrantUID: req.GrantUID, RequesterUID: "requester", RequesterPodUID: "requester-pod", ActorUID: "actor-pod", ScopeDigest: req.Digest, EffectiveDigest: strings.Repeat("A", 43), TomRef: req.TomRef, Ref: req.Ref, TTL: "30m", DecidedAt: testNow}
+					out.ReservedDecision = &apiv1.ReservedDecisionBinding{Approve: req.Approve, Case: "rd2", BoundsRevision: "1", GrantUID: req.GrantUID, RequesterUID: "requester", RequesterPodUID: "requester-pod", ActorUID: "actor-pod", ScopeDigest: req.Digest, EffectiveDigest: strings.Repeat("A", 43), TomRef: req.TomRef, Ref: req.Ref, TTL: "30m", DecidedAt: testNow}
 					status := http.StatusAccepted
 					switch mode {
 					case "wrong-ref":
@@ -86,6 +87,11 @@ func TestReservedDecisionClientRetainsAuthenticationAndExactReply(t *testing.T) 
 						out.ScopeDigest = strings.Repeat("B", 43)
 					case "wrong-ttl":
 						out.ReservedDecision.TTL = "1h"
+					case "wrong-default-ttl":
+						out.TTL = "1h"
+						out.ReservedDecision.TTL = "1h"
+					case "opposite-decision":
+						out.ReservedDecision.Approve = !req.Approve
 					case "wrong-case":
 						out.ReservedDecision.Case = "rd3a"
 					case "no-audit":

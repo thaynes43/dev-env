@@ -1,9 +1,10 @@
 package main
 
 import (
-	"github.com/thaynes43/dev-env/internal/grantattest"
 	"slices"
 	"testing"
+
+	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
 func TestReservedDecisionFlagsDefaultOffAndMatch(t *testing.T) {

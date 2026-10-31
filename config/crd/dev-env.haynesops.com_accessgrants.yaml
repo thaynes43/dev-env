@@ -760,6 +760,10 @@ spec:
                     maxLength: 36
                     minLength: 1
                     type: string
+                  approve:
+                    description: Approve binds the asserted outcome, including a retained
+                      denial.
+                    type: boolean
                   boundsRevision:
                     maxLength: 64
                     minLength: 1
@@ -848,6 +852,7 @@ spec:
                     type: string
                 required:
                 - actorUID
+                - approve
                 - boundsRevision
                 - case
                 - decidedAt

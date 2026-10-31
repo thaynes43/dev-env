@@ -3,11 +3,12 @@ package agentrun
 import (
 	"context"
 	"encoding/base64"
-	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 var reservedClientUID = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
@@ -136,13 +137,13 @@ func (a *app) postReservedDecision(ctx context.Context, c *conn, name string, re
 	audit := out.ReservedDecision
 	ttl := req.TTL
 	if ttl == "" {
-		ttl = out.TTL
+		ttl = expected[0].TTL
 	}
 	expectedTTL, ttlErr := time.ParseDuration(ttl)
 	valid := status == http.StatusAccepted && out.Name == name && out.UID == req.GrantUID && out.ScopeDigest == req.Digest && audit != nil && ttlErr == nil
 	if valid {
 		actual, err := time.ParseDuration(audit.TTL)
-		valid = err == nil && actual == expectedTTL && audit.GrantUID == req.GrantUID && audit.ScopeDigest == req.Digest && audit.TomRef == req.TomRef && audit.Ref == req.Ref && audit.BoundsRevision == "1" && audit.Case == expectedClass && reservedClientClass(out) == expectedClass && audit.ActorUID != "" && audit.RequesterUID != "" && audit.RequesterPodUID != "" && !audit.DecidedAt.IsZero() && audit.EffectiveDigest != ""
+		valid = err == nil && actual == expectedTTL && audit.Approve == req.Approve && audit.GrantUID == req.GrantUID && audit.ScopeDigest == req.Digest && audit.TomRef == req.TomRef && audit.Ref == req.Ref && audit.BoundsRevision == "1" && audit.Case == expectedClass && reservedClientClass(out) == expectedClass && audit.ActorUID != "" && audit.RequesterUID != "" && audit.RequesterPodUID != "" && !audit.DecidedAt.IsZero() && audit.EffectiveDigest != ""
 	}
 	if !valid {
 		return out, unconfirmed(http.MethodPost, apiv1.GrantDecisionPath(name), "reserved decision reply lost its exact UID/scope/TTL/ref/bounds correlation; inspect the grant")

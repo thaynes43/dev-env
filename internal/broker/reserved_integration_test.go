@@ -2,17 +2,19 @@ package broker
 
 import (
 	"context"
-	"github.com/thaynes43/dev-env/api/v1alpha1"
-	"github.com/thaynes43/dev-env/internal/grantattest"
+	"strings"
+	"testing"
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
-	"testing"
-	"time"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/grantattest"
 )
 
 func reservedBrokerCase(t *testing.T, class string) (*dgFixture, MaintenanceDecision) {
@@ -250,6 +252,15 @@ func TestReservedDenialsRetainExactAuditAndMakeNoBindings(t *testing.T) {
 		t.Run(class, func(t *testing.T) {
 			f, d := reservedBrokerCase(t, class)
 			d.Approve = false
+			var err error
+			d.Reserved, err = NewReservedBinding(context.Background(), f.c, sessionNS, f.grant(), d, f.b.ReservedDecisionClasses, nil, "msg-tom-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Reach, err = NewReservedDelegateReach(context.Background(), f.c, sessionNS, f.grant(), d.Delegate, d.By, nil, ReservedAuthority(d.Reserved))
+			if err != nil {
+				t.Fatal(err)
+			}
 			f.record(d)
 			if _, err := f.step(3); err != nil {
 				t.Fatal(err)
@@ -263,5 +274,76 @@ func TestReservedDenialsRetainExactAuditAndMakeNoBindings(t *testing.T) {
 				t.Fatal("denial created authority", err)
 			}
 		})
+	}
+}
+
+// Replace the Namespace in the precise gap between its pre-read and the
+// RoleBinding Create. UID replacement uses a fake client only; no live deletion.
+type reservedNamespaceRaceClient struct {
+	client.Client
+	replaced bool
+}
+
+func (c *reservedNamespaceRaceClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*rbacv1.RoleBinding); ok && obj.GetNamespace() == "frontend" && !c.replaced {
+		var ns corev1.Namespace
+		if err := c.Client.Get(ctx, client.ObjectKey{Name: "frontend"}, &ns); err != nil {
+			return err
+		}
+		ns.UID = "replacement-during-create"
+		if err := c.Client.Update(ctx, &ns); err != nil {
+			return err
+		}
+		c.replaced = true
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+func TestReservedSnapshotReplacementDuringCreateCleansOwnBinding(t *testing.T) {
+	f, d := reservedBrokerCase(t, grantattest.ClassRD3b)
+	f.record(d)
+	race := &reservedNamespaceRaceClient{Client: f.c}
+	f.b.Client = race
+	if _, err := f.step(3); err != nil {
+		t.Fatal(err)
+	}
+	g := f.grant()
+	if !race.replaced || g.Status.Phase != v1alpha1.GrantFailed || g.Status.InstalledPodUID != "" {
+		t.Fatal("namespace creation race escaped fence", g.Status)
+	}
+	var bindings rbacv1.RoleBindingList
+	if err := f.c.List(context.Background(), &bindings); err != nil || len(bindings.Items) != 0 {
+		t.Fatal("replacement retained own raced binding", err, bindings.Items)
+	}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: g.Name}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatal("creation race left the grant token identity", err)
+	}
+}
+
+func TestReservedSnapshotNeverRecreatesAfterMaterialization(t *testing.T) {
+	f, d := reservedBrokerCase(t, grantattest.ClassRD3b)
+	f.record(d)
+	if _, err := f.step(3); err != nil {
+		t.Fatal(err)
+	}
+	g := f.grant()
+	if g.Status.ServiceAccount != g.Name {
+		t.Fatal("no durable pre-token fence")
+	}
+	// A missing binding and empty installed status also model a crash after
+	// mint/install but before the installation receipt. The earlier materialized
+	// marker must still prevent any new namespace binding.
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: "frontend", Name: g.Name}}
+	if err := f.c.Delete(context.Background(), rb); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.step(1); err != nil {
+		t.Fatal(err)
+	}
+	if f.grant().Status.Phase != v1alpha1.GrantFailed {
+		t.Fatal("missing snapshot binding was recreated")
+	}
+	if err := f.c.Get(context.Background(), client.ObjectKeyFromObject(rb), rb); !apierrors.IsNotFound(err) {
+		t.Fatal("snapshot gained fresh authority", err)
 	}
 }
