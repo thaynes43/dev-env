@@ -11,6 +11,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/thaynes43/dev-env/internal/broker"
+	"github.com/thaynes43/dev-env/internal/controller"
+	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
@@ -25,6 +27,7 @@ type brokerOptions struct {
 	enableMaintenance   bool
 	enableAttestedMaint bool
 	maintenanceHuman    string
+	grantDelegates      []string
 	metricsAddr         string
 	probeAddr           string
 }
@@ -46,6 +49,7 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.StringVar(&o.maintenanceHuman, "maintenance-human-service-account", "dev-env-system/dev-env-human", "must match operator --human-service-account for authenticated maintenance decisions")
 	fs.BoolVar(&o.enableMaintenance, "enable-maintenance-grants", false, "HELD: enable isolated bounded maintenance leases after policy review")
 	fs.BoolVar(&o.enableAttestedMaint, "enable-attested-maintenance", false, "HELD (ADR-013): also approve a maintenance grant through an attested GrantPolicy whose maintenance scope matches its envelope exactly, when its requesting session recorded an agent attestation (a claim, not verified human identity). Needs --enable-attested-grants and --enable-maintenance-grants; the human decision route is checked first and is unchanged. Off, maintenance is approved by the human route only")
+	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, whose recorded delegate decisions the broker applies through a GrantPolicy with spec.delegated (approvedBy delegate/<namespace>/<name>; not a human decision). Must match the operator's --grant-delegates. Empty applies none")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
 	if err := fs.Parse(args); err != nil {
@@ -56,6 +60,12 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	}
 	if o.sessionNamespace == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace and --policy-namespace must not be empty")
+	}
+	var err error
+	o.grantDelegates, err = broker.ParseGrantDelegates(*delegates, o.maintenanceHuman,
+		o.sessionNamespace+"/"+controller.ServiceAccountName, o.sessionNamespace+"/"+templates.WorkbenchServiceAccount)
+	if err != nil {
+		return o, err
 	}
 	return o, nil
 }
@@ -88,6 +98,7 @@ func runBroker(args []string) error {
 		EnableMaintenanceGrants:        o.enableMaintenance,
 		EnableAttestedMaintenance:      o.enableAttestedMaint,
 		MaintenanceHumanServiceAccount: o.maintenanceHuman,
+		GrantDelegates:                 o.grantDelegates,
 		LeaderElect:                    o.leaderElect,
 		MetricsAddr:                    o.metricsAddr,
 		ProbeAddr:                      o.probeAddr,

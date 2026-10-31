@@ -128,6 +128,7 @@ type options struct {
 	clientSAs                     []string
 	grantApprovalURL              string
 	grantAttestation              bool
+	grantDelegates                []string
 	maintenanceEnabled            bool
 	asksEnabled                   bool
 	coordinatorEnabled            bool
@@ -198,6 +199,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.maintenanceEnabled, "enable-maintenance-api", false, "HELD: authenticated bounded maintenance API after policy review")
 	fs.BoolVar(&o.grantAttestation, "enable-grant-attestation", false, "serve POST /v1/grants/{name}/attestation, where a grant's requesting session records its claim that the user or a coordinator approved it (agent attestation, not verified human identity); off, the route does not exist")
+	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, that may decide other agents' grants on POST /v1/grants/{name}/decision: a configured coordinator host, or a session pod running as that account. Never the human, a client, the shared session or the workbench account. Must match the broker's --grant-delegates. Empty, the route does not exist")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.childUsageCapture, "enable-child-usage-capture", false, "copy an accepted direct child's initial usage observation onto its parent Session; default off (OpenProject #109)")
@@ -326,6 +328,9 @@ func parseFlags(args []string) (options, error) {
 	var err error
 	o.coordinatorHosts, err = apiserver.ParseCoordinatorHosts(*hosts, policy)
 	if err != nil {
+		return o, err
+	}
+	if o.grantDelegates, err = apiserver.ParseGrantDelegates(*delegates, policy); err != nil {
 		return o, err
 	}
 	if err := apiserver.ValidatePortalCaller(apiserver.Policy{
@@ -859,6 +864,7 @@ func run(args []string) error {
 			GrantApprovalURL:         o.grantApprovalURL,
 			GrantAttestation:         o.grantAttestation,
 			MaintenanceEnabled:       o.maintenanceEnabled,
+			GrantDelegates:           o.grantDelegates,
 			Asks:                     askStore,
 		}
 		// The standby session is default off. It is made through the API's own

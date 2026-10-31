@@ -119,6 +119,11 @@ type Broker struct {
 	EnableAttestedMaintenance bool
 	// MaintenanceHumanServiceAccount must match the operator human identity.
 	MaintenanceHumanServiceAccount string
+	// GrantDelegates are the delegate ServiceAccounts, "<namespace>/<name>",
+	// whose recorded decisions the broker applies through a GrantPolicy with
+	// spec.delegated (DESIGN-042 6.2). It must match the operator's
+	// --grant-delegates. Empty, the default, reads no delegate decision.
+	GrantDelegates []string
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.
