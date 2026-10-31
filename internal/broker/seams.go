@@ -52,14 +52,23 @@ type Decision struct {
 	MaintenanceUID, MaintenanceDigest string
 	// Approve approves the grant; false denies it.
 	Approve bool
-	// By is who decided: "authentik/<username>". A policy approves only
-	// through the broker's own match, never through Decide.
+	// By is who decided: "authentik/<username>", the human maintenance
+	// route's "human/<ns>/<sa>", or a listed delegate's
+	// "delegate/<ns>/<sa>". A policy approves only through the broker's own
+	// match, never through Decide.
 	By string
 	// TTL approves for less time than the grant asked: zero means spec.ttl.
 	// Approvals only.
 	TTL time.Duration
 	// Reason is why it was denied, shown in status.message. Denials only.
 	Reason string
+
+	// A delegate decision (By "delegate/<namespace>/<name>", DESIGN-042 6.2)
+	// is bound to the grant's UID and grantattest.ScopeDigest, carries the
+	// delegate's ref, and an approval names the delegated policy that covers
+	// it. Only the broker's delegateDecision sets them. Not a human decision.
+	GrantUID, ScopeDigest string
+	Ref, Policy           string
 }
 
 // Errors Decide returns, for the approval page to show.
@@ -92,19 +101,42 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 		if err != nil {
 			return err
 		}
+		if strings.HasPrefix(d.By, DelegateApprover) {
+			recorded, ok := parseDecision(&g)
+			if !ok || recorded.By != d.By || recorded.GrantUID != d.GrantUID || recorded.Digest != d.ScopeDigest || recorded.Ref != d.Ref || recorded.Approve != d.Approve || recorded.TTL != d.TTL {
+				return fmt.Errorf("%w: delegate decision annotation no longer matches", ErrRefused)
+			}
+			if err := b.delegateGrantHolds(ctx, &g, recorded); err != nil {
+				return err
+			}
+			// At apply time, from the API server: the named delegated policy
+			// still covers this grant.
+			if err := b.delegatedPolicyCovers(ctx, &g, d.Policy); err != nil {
+				return err
+			}
+		}
 		if d.Approve && g.Spec.Type == v1alpha1.GrantMaintenance {
 			if err := CheckMaintenanceIdentities(ctx, b.APIReader, b.SessionNamespace, &g); err != nil {
-				return fmt.Errorf("%w: %w", ErrRefused, err)
+				// Only explicit permanent identity failures carry ErrRefused.
+				// Read failures must retry without clearing a delegate record.
+				return err
 			}
 		}
 		msg := ""
+		delegate := strings.HasPrefix(d.By, DelegateApprover)
 		if d.Approve {
 			approve(&g, d.By, ttl, now)
+			if delegate {
+				msg = delegateMessage(d)
+				g.Status.Message = truncate(msg)
+			}
 		} else {
 			g.Status.Phase = v1alpha1.GrantDenied
 			g.Status.DeniedBy = d.By
 			msg = d.Reason
-			if msg == "" {
+			if delegate {
+				msg = delegateMessage(d)
+			} else if msg == "" {
 				msg = "denied by " + d.By
 			}
 			g.Status.Message = truncate(msg)
@@ -139,8 +171,18 @@ func (b *Broker) decisionAllowed(g *v1alpha1.AccessGrant, d Decision, now time.T
 	case strings.HasPrefix(d.By, PolicyApprover):
 		return 0, fmt.Errorf("%w: %s is a policy; Tom decides on the page, and break-glass only ever by him (D-27)", ErrRefused, d.By)
 	}
+	delegate := strings.HasPrefix(d.By, DelegateApprover)
+	if delegate {
+		if err := b.delegateDecisionAllowed(g, d); err != nil {
+			return 0, err
+		}
+	}
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
-		if !b.EnableMaintenanceGrants || d.MaintenanceUID != string(g.UID) || d.MaintenanceDigest != MaintenanceDigest(g) || d.By != b.maintenanceHumanApprover() {
+		human := d.By == b.maintenanceHumanApprover() && d.MaintenanceUID == string(g.UID) && d.MaintenanceDigest == MaintenanceDigest(g)
+		if !b.EnableMaintenanceGrants || (!human && !delegate) {
+			if len(b.GrantDelegates) > 0 {
+				return 0, fmt.Errorf("%w: maintenance requires a bound decision from %s or a listed delegate", ErrRefused, b.maintenanceHumanApprover())
+			}
 			return 0, fmt.Errorf("%w: maintenance requires a bound decision from %s", ErrRefused, b.maintenanceHumanApprover())
 		}
 	}

@@ -61,6 +61,10 @@ type Options struct {
 	// through attested policies with a maintenance scope (ADR-013). It needs
 	// EnableAttestedGrants and EnableMaintenanceGrants too. Default off.
 	EnableAttestedMaintenance bool
+	// GrantDelegates are the delegate ServiceAccounts, "<namespace>/<name>",
+	// whose decisions the broker applies (DESIGN-042 6.2). It must match the
+	// operator's --grant-delegates. Empty, the default, applies none.
+	GrantDelegates []string
 	// LeaderElect elects one leader among the replicas; only it reconciles.
 	LeaderElect bool
 	// LeaseDuration, RenewDeadline and RetryPeriod tune leader election; zero
@@ -157,6 +161,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		EnableMaintenanceGrants:        o.EnableMaintenanceGrants,
 		EnableAttestedMaintenance:      o.EnableAttestedMaintenance,
 		MaintenanceHumanServiceAccount: o.MaintenanceHumanServiceAccount,
+		GrantDelegates:                 o.GrantDelegates,
 		Clock:                          clk,
 		Notifier:                       o.Notifier,
 		Installer:                      o.Installer,

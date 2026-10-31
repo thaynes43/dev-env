@@ -15,6 +15,17 @@ func TestParseBrokerFlags(t *testing.T) {
 	if !reflect.DeepEqual(o, want) {
 		t.Errorf("defaults %+v, want %+v", o, want)
 	}
+	// DESIGN-042 6.2: no delegate by default; the list is parsed like the
+	// operator's, sorted, and never names the human, session or workbench SA.
+	if o, err := parseBrokerFlags([]string{"--grant-delegates=dev-agents/dev-env-coordinator-lead, dev-env-system/codex-host-a"}); err != nil ||
+		!reflect.DeepEqual(o.grantDelegates, []string{"dev-agents/dev-env-coordinator-lead", "dev-env-system/codex-host-a"}) {
+		t.Fatalf("delegates: %+v %v", o.grantDelegates, err)
+	}
+	for _, bad := range []string{"dev-env-system/dev-env-human", "dev-agents/dev-env-agent", "dev-agents/dev-env-workbench", "no-slash", "a/b,a/b", "Bad/x"} {
+		if _, err := parseBrokerFlags([]string{"--grant-delegates=" + bad}); err == nil {
+			t.Errorf("delegate %q accepted", bad)
+		}
+	}
 	if o, err := parseBrokerFlags([]string{"--enable-proxmox-grants"}); err != nil || !o.enableProxmoxGrants {
 		t.Fatalf("explicit Proxmox enable: %+v %v", o, err)
 	}

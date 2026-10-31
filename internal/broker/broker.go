@@ -9,7 +9,10 @@
 //
 //   - "" -> Pending on first sight, after the finalizer goes on.
 //   - Pending -> Active when a GrantPolicy matches (approvedBy policy/<name>), or
-//     when Tom approves (Decide); -> Denied when Tom denies, when the broker's
+//     when Tom approves (Decide), or when a listed delegate's recorded decision
+//     falls under a GrantPolicy with spec.delegated (approvedBy
+//     delegate/<ns>/<sa>, DESIGN-042 6.2, delegates.go; not a human
+//     decision); -> Denied when Tom or a delegate denies, when the broker's
 //     checks fail, when the session ended, or after 30 minutes unanswered
 //     (deniedBy timeout); -> Released when the session gives it back.
 //   - Active -> Expired at expiresAt, Released on spec.release or when the
@@ -125,6 +128,11 @@ type Broker struct {
 	AttestedMaintenanceCreators []string
 	// MaintenanceHumanServiceAccount must match the operator human identity.
 	MaintenanceHumanServiceAccount string
+	// GrantDelegates are the delegate ServiceAccounts, "<namespace>/<name>",
+	// whose recorded decisions the broker applies through a GrantPolicy with
+	// spec.delegated (DESIGN-042 6.2). It must match the operator's
+	// --grant-delegates. Empty, the default, reads no delegate decision.
+	GrantDelegates []string
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.
@@ -203,7 +211,15 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	case v1alpha1.GrantPending:
 		return b.pending(ctx, &g, sess, now)
 	case v1alpha1.GrantActive:
-		return b.active(ctx, &g, sess, now)
+		res, err := b.active(ctx, &g, sess, now)
+		// A delegate approval is checked again at least every minute while
+		// it lasts (delegatedHolds), so emptying --grant-delegates or removing
+		// the delegated policy ends it without another event.
+		if err == nil && g.Status.Phase == v1alpha1.GrantActive && strings.HasPrefix(g.Status.ApprovedBy, DelegateApprover) &&
+			(res.RequeueAfter <= 0 || res.RequeueAfter > delegateRecheck) {
+			res.RequeueAfter = delegateRecheck
+		}
+		return res, err
 	}
 	return ctrl.Result{}, nil
 }
@@ -220,8 +236,14 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 	}
 
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
-		// The authenticated human route comes first, unchanged: a bound human
-		// decision, valid or not, is handled before any policy is read.
+		// A delegate decision (DESIGN-042 6.2) shares the set-once annotation
+		// with the human route; only a configured broker reads it as one, so
+		// without delegates this step does nothing.
+		if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
+			return res, err
+		}
+		// The authenticated human route, unchanged: a bound human decision,
+		// valid or not, is handled before any attested policy is read.
 		if handled, err := b.maintenanceDecision(ctx, g); handled {
 			return ctrl.Result{RequeueAfter: time.Second}, err
 		}
@@ -247,6 +269,12 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 			b.decided(ctx, g, msg)
 		}
 		return ctrl.Result{}, err
+	}
+	// No policy approves it at once: a recorded delegate decision, when
+	// delegates are configured (DESIGN-042 6.2), comes before Tom is told. One
+	// that cannot apply falls through, so Tom is still told once.
+	if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
+		return res, err
 	}
 
 	wait := ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}
@@ -297,6 +325,13 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	}
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)
+	}
+	// A delegate approval (DESIGN-042 6.2) is authority only while it holds.
+	if err := b.delegatedHolds(ctx, g); err != nil {
+		if p := (permanent{}); errors.As(err, &p) {
+			return b.end(ctx, g, v1alpha1.GrantReleased, "", "the delegate approval no longer holds: "+err.Error(), now)
+		}
+		return ctrl.Result{}, err
 	}
 
 	made, err := b.ensure(ctx, g)

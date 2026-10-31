@@ -21,6 +21,7 @@
 //	GET    /v1/grants/{name}               one grant
 //	DELETE /v1/grants/{name}               release: set spec.release for the broker
 //	POST   /v1/grants/{name}/attestation  (default off) the requesting session's claim that the user or a coordinator approved the grant; not verified human identity
+//	POST   /v1/grants/{name}/decision     (default off) an allowlisted delegate's decision on another agent's grant (DESIGN-042 6.2); not a human decision
 //	GET    /v1/history                     archived provider history of one project (DESIGN-025 8)
 //	GET    /v1/history/{session}           one archived history's manifest, in pages
 //	GET    /v1/history/{session}/file      one page of one archived file
@@ -184,6 +185,14 @@ type Server struct {
 	GrantAttestation bool
 	// MaintenanceEnabled is held default off; new routes are absent until enabled.
 	MaintenanceEnabled bool
+	// GrantDelegates are the delegate ServiceAccounts, "<namespace>/<name>",
+	// that may decide other agents' grants on POST /v1/grants/{name}/decision
+	// (DESIGN-042 6.2). It must match the broker's --grant-delegates. Empty,
+	// the default, leaves the route unregistered (404) and every other route
+	// and view as before.
+	GrantDelegates []string
+	// PolicyNamespace holds delegated GrantPolicies, read through Live before a decision.
+	PolicyNamespace string
 	// Asks serves /v1/asks and /v1/portal/asks (OpenProject Epic #254). Nil leaves both
 	// unregistered. v1 does not write an inbox message when an ask is answered.
 	Asks *asks.KubeStore
@@ -289,7 +298,9 @@ func (s *Server) Handler() http.Handler {
 		http.MethodGet:  s.listGrants,
 		http.MethodPost: s.createGrant,
 	}}))
-	mux.Handle(apiv1.GrantsPath+"/{name}", s.serve(route{methods: map[string]handler{
+	// With delegates configured, a listed coordinator host may read the one
+	// grant it decides (getGrant checks the list); it never releases one.
+	mux.Handle(apiv1.GrantsPath+"/{name}", s.serve(route{coordinator: len(s.GrantDelegates) > 0, methods: map[string]handler{
 		http.MethodGet:    s.getGrant,
 		http.MethodDelete: s.releaseGrant,
 	}}))
@@ -299,6 +310,11 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.GrantAttestation {
 		mux.Handle(apiv1.GrantsPath+"/{name}/attestation", s.serve(route{methods: map[string]handler{http.MethodPost: s.attestGrant}}))
+	}
+	if len(s.GrantDelegates) > 0 {
+		// A configured coordinator host is one delegate form, so the route
+		// admits coordinator callers; the handler admits listed delegates only.
+		mux.Handle(apiv1.GrantsPath+"/{name}/decision", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.decideGrant}}))
 	}
 	mux.Handle(apiv1.ActivitiesPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet:  s.listActivities,

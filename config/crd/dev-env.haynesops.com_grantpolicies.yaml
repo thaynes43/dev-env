@@ -135,6 +135,56 @@ spec:
                 required:
                 - names
                 type: object
+              delegated:
+                description: |-
+                  Delegated makes this a delegated policy (DESIGN-042 6.2): it approves a
+                  request only when an allowlisted delegate identity, authenticated by the
+                  operator and never the requester or one of its ancestors, recorded a
+                  decision bound to exactly this grant. A delegate decision is not a human
+                  decision. The requesters are named here, as under attested, and the
+                  top-level lists stay empty, so a broker that predates delegation matches
+                  nobody. A policy may carry attested, delegated or both. A delegated
+                  policy approves kube, egress or maintenance grants, never a credential or
+                  dev-env-grant-storage. A broker approves through it only for a delegate
+                  on its --grant-delegates.
+                properties:
+                  agents:
+                    description: Agents are the requester agent CLIs it matches; empty
+                      means any.
+                    items:
+                      description: AgentKind is the agent CLI a session runs.
+                      enum:
+                      - claude
+                      - codex
+                      - opencode
+                      type: string
+                    maxItems: 3
+                    type: array
+                    x-kubernetes-list-type: set
+                  profiles:
+                    description: |-
+                      Profiles are the requester profiles it matches. Profile ops never
+                      matches (D-18).
+                    items:
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                      x-kubernetes-validations:
+                      - message: no policy matches profile ops (D-18)
+                        rule: self != 'ops'
+                    maxItems: 8
+                    type: array
+                    x-kubernetes-list-type: set
+                  repos:
+                    description: Repos are the requester repos it matches.
+                    items:
+                      maxLength: 100
+                      pattern: ^[A-Za-z0-9_.-]+$
+                      type: string
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-type: set
+                type: object
               description:
                 description: |-
                   Description says what Tom accepts by this policy, for example that an
@@ -299,9 +349,10 @@ spec:
               maintenance:
                 description: |-
                   Maintenance is the one bounded maintenance envelope it approves
-                  (ADR-013). Only an attested policy carries it: no standing policy
-                  approves maintenance. A broker approves through it only with
-                  --enable-attested-grants and --enable-attested-maintenance.
+                  (ADR-013). Only an attested or delegated policy carries it: no standing
+                  policy approves maintenance. A broker approves through its attested block
+                  only with --enable-attested-grants and --enable-attested-maintenance,
+                  and through its delegated block only for a listed delegate (DESIGN-042).
                 properties:
                   capabilities:
                     description: |-
@@ -464,8 +515,15 @@ spec:
                 is required (D-27)'
               rule: self.type != 'breakglass'
             - message: 'no standing policy approves maintenance: only an attested
-                policy may name a maintenance scope (ADR-013)'
-              rule: self.type != 'maintenance' || has(self.attested)
+                or delegated policy may name a maintenance scope (ADR-013, DESIGN-042)'
+              rule: self.type != 'maintenance' || has(self.attested) || has(self.delegated)
+            - message: 'no delegated policy approves a credential: credential execution
+                re-checks a policy approver (DESIGN-042 6.2)'
+              rule: '!has(self.delegated) || self.type != ''credential'''
+            - message: 'no delegated policy approves dev-env-grant-storage: destructive
+                storage stays Tom''s decision (DESIGN-042 RD4)'
+              rule: '!has(self.delegated) || !has(self.kube) || !self.kube.roles.exists(r,
+                r == ''dev-env-grant-storage'')'
             - message: maintenance is set for type maintenance, and only there
               rule: (self.type == 'maintenance') == has(self.maintenance)
             - message: a maintenance grant lasts at most 1h
@@ -477,13 +535,17 @@ spec:
             - message: credential is set for type credential, and only there
               rule: (self.type == 'credential') == has(self.credential)
             - message: 'name the requesters: profiles, repos or both; an attested
-                policy names them only under attested and leaves profiles, repos and
-                agents empty, so a broker that predates attestation matches nobody'
-              rule: 'has(self.attested) ? ((has(self.profiles) ? size(self.profiles)
-                : 0) + (has(self.repos) ? size(self.repos) : 0) == 0 && (has(self.agents)
-                ? size(self.agents) : 0) == 0 && (has(self.attested.profiles) ? size(self.attested.profiles)
-                : 0) + (has(self.attested.repos) ? size(self.attested.repos) : 0)
-                > 0) : ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos)
+                or delegated policy names them only under attested or delegated, in
+                each block it carries, and leaves profiles, repos and agents empty,
+                so a broker that predates either block matches nobody'
+              rule: '(has(self.attested) || has(self.delegated)) ? ((has(self.profiles)
+                ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) :
+                0) == 0 && (has(self.agents) ? size(self.agents) : 0) == 0 && (!has(self.attested)
+                || (has(self.attested.profiles) ? size(self.attested.profiles) : 0)
+                + (has(self.attested.repos) ? size(self.attested.repos) : 0) > 0)
+                && (!has(self.delegated) || (has(self.delegated.profiles) ? size(self.delegated.profiles)
+                : 0) + (has(self.delegated.repos) ? size(self.delegated.repos) : 0)
+                > 0)) : ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos)
                 ? size(self.repos) : 0) > 0)'
             - message: maxTTL runs from 10m to 8h
               rule: duration(self.maxTTL) >= duration('10m') && duration(self.maxTTL)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -107,49 +108,58 @@ func validMaintenanceIdentity(id v1alpha1.MaintenanceIdentity) bool {
 
 // CheckMaintenanceIdentities uses authoritative sessions and pod ownership; names
 // or a coordinator:string attestation do not establish delegation authority.
+// Only invalid envelopes, identity/eligibility mismatches and definitive NotFound
+// reads wrap ErrRefused. All other read errors remain retryable.
 func CheckMaintenanceIdentities(ctx context.Context, r client.Reader, namespace string, g *v1alpha1.AccessGrant) error {
 	if err := ValidateMaintenance(g); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	m := g.Spec.Maintenance
 	for _, id := range append([]v1alpha1.MaintenanceIdentity{m.Coordinator}, m.Workers...) {
 		var sess v1alpha1.AgentSession
 		if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: id.Name}, &sess); err != nil {
-			return err
+			return maintenanceIdentityReadError(err)
 		}
 		if string(sess.UID) != id.UID || !sess.DeletionTimestamp.IsZero() {
-			return errors.New("maintenance session missing or replaced")
+			return fmt.Errorf("%w: maintenance session missing or replaced", ErrRefused)
 		}
 		if id.Name != m.Coordinator.Name && sess.Spec.Parent != m.Coordinator.Name {
-			return errors.New("maintenance worker is not an authoritative direct child")
+			return fmt.Errorf("%w: maintenance worker is not an authoritative direct child", ErrRefused)
 		}
 		var pod corev1.Pod
 		if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: id.Name}, &pod); err != nil {
-			return err
+			return maintenanceIdentityReadError(err)
 		}
 		owner := metav1.GetControllerOf(&pod)
 		if string(pod.UID) != id.PodUID || !pod.DeletionTimestamp.IsZero() || pod.Status.Phase != corev1.PodRunning || owner == nil || owner.UID != sess.UID || owner.Name != sess.Name || owner.Kind != "AgentSession" || owner.APIVersion != v1alpha1.GroupVersion.String() {
-			return errors.New("maintenance original session pod unavailable or replaced")
+			return fmt.Errorf("%w: maintenance original session pod unavailable or replaced", ErrRefused)
 		}
 	}
 	var node corev1.Node
 	if err := r.Get(ctx, types.NamespacedName{Name: m.Node}, &node); err != nil {
-		return err
+		return maintenanceIdentityReadError(err)
 	}
 	if string(node.UID) != m.NodeUID || !node.DeletionTimestamp.IsZero() {
-		return errors.New("maintenance target node replaced")
+		return fmt.Errorf("%w: maintenance target node replaced", ErrRefused)
 	}
 	for key := range node.Labels {
 		if key == "node-role.kubernetes.io/control-plane" || key == "node-role.kubernetes.io/master" {
-			return errors.New("maintenance may not target control-plane nodes")
+			return fmt.Errorf("%w: maintenance may not target control-plane nodes", ErrRefused)
 		}
 	}
 	for _, taint := range node.Spec.Taints {
 		if taint.Key == "node-role.kubernetes.io/control-plane" || taint.Key == "node-role.kubernetes.io/master" {
-			return errors.New("maintenance may not target control-plane nodes")
+			return fmt.Errorf("%w: maintenance may not target control-plane nodes", ErrRefused)
 		}
 	}
 	return nil
+}
+
+func maintenanceIdentityReadError(err error) error {
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	return err
 }
 
 // MaintenanceActor permits exactly the coordinator and explicitly approved workers
