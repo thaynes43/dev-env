@@ -2,7 +2,8 @@
 
 Draft for Tom, morning of 2026-10-31 (OpenProject #310, #320, #326). Research only. Nothing in this packet was
 run, changed, merged or launched. Cluster reads are from 2026-10-31T05:01Z. The
-selector-session and lifecycle reads are from 05:21Z.
+selector-session and lifecycle reads are from 05:21Z. The haynes-ops re-read is
+from 05:40Z, and the private-history and StorageClass reads are from 05:41Z.
 
 ## Bottom line
 
@@ -10,7 +11,8 @@ selector-session and lifecycle reads are from 05:21Z.
   different session modes. The auth recovery code runs only in a Claude
   remote/local TUI. The task outcome is written only by a task, and only tasks are
   reclaimed. One session cannot be both.
-- A Claude task cannot be put on 2.75.0 today without the global template move.
+- A Claude task cannot be put on 2.75.0 today without the global template move or
+  new source.
   No existing selector matches a Claude task. The one task selector matches Codex
   tasks only.
 - **Recommendation: approve one staged pair, run in order, on one signed image
@@ -287,7 +289,7 @@ view still reads the same record.
 | Step | Action | Evidence | Stop if |
 |---|---|---|---|
 | A1 | One haynes-ops PR. It changes exactly two operator args: `--task-pilot-agent-image=ghcr.io/thaynes43/dev-env:2.75.0@sha256:15dc76a6…` and `--task-pilot-agent-session=dev-env-1029-132039/outcome-canary-2750-20261031-01`. Final PR review, guard, merge. Flux rolls the operator. | Args diff is 2 lines. Deployment generation goes up and is 2/2 ready. Every session pod UID and restart count is unchanged from the baseline. | Anything else differs, or any session pod changed. |
-| A2 | The lead runs exactly one task: `agent-run --project dev-env --agent codex --model gpt-6.1-sol --effort low --size S --idempotency-key outcome-canary-2750-20261031-01 -p "<fixed prompt>"`. The prompt says: write `~/work/<session>.outcome.json` atomically with `prURLs` [dev-env PR 759], `headSHAs` [`942ed6b808f6619f70c543e7afda24f90fd5d4bc`] and a fixed summary such as "Outcome canary: retained record test, no code change". Change no repository. Open no PR. | Session name and UID. Pod UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. | The image is not that digest. Record it; launch nothing more. |
+| A2 | The lead session `dev-env-1029-132039` runs exactly one task itself (the selector matches the authenticated caller as parent, so any other caller gets a template pod): `agent-run --project dev-env --agent codex --model gpt-6.1-sol --effort low --size S --idempotency-key outcome-canary-2750-20261031-01 -p "<fixed prompt>"`. The prompt says: write `~/work/<session>.outcome.json` atomically with `prURLs` [`https://github.com/thaynes43/dev-env/pull/759`], `headSHAs` [`942ed6b808f6619f70c543e7afda24f90fd5d4bc`] and a fixed summary such as "Outcome canary: retained record test, no code change". Change no repository. Open no PR. | Session name and UID. Pod UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. | The image is not that digest. Record it; launch nothing more. |
 | A3 | The task exits, in minutes. Read during the 10-minute grace. | **API:** `kubectl get agentsession <n> -o jsonpath='{.status.taskOutcome}'` shows the record, with sessionUID and podUID equal to the Session and Pod. **CLI:** `agent-run show <n>` (2.75.0) prints "Task outcome", the PR and the head (`internal/agentrun/sessions.go:284-291`). `agent-run show` (2.45.0) is expected to print none, which would confirm the negotiation. The condition is `TerminalTaskPodReclaim=Grace` with `dueAt`. **Browser proof before reclaim: unverified** (see the optional extra below). | No outcome appears within 2 minutes of exit. Record "No outcome recorded". Do **not** relaunch with the same key, because a second session would match too. |
 | A4 | The operator reclaims at `dueAt`. | Conditions `TaskComputeReclaimed` / `Reclaimed`. The pod is NotFound. The PVC is kept. | No reclaim by `dueAt` + 5 minutes. Record the reason (for example `ProofUnknown`). Delete nothing by hand. |
 | A5 | Read again after reclaim. | **API:** the sha256 of the `taskOutcome` JSON is identical before and after. **CLI:** `agent-run show` (2.75.0) prints it in the Reclaimed phase. | The record changed. That would be a defect: stop and report. |
@@ -361,7 +363,7 @@ Claude task on 2.75 waits for the template move.
 |---|---|---|---|
 | B0 | Run after Stage A, because both stages edit `helmrelease.yaml`. Take a baseline snapshot. Check that zero sessions carry the key. | The baseline. | The usage coordinator objects (see custody). |
 | B1 | One haynes-ops PR. It changes exactly two operator args: `--pilot-agent-image=ghcr.io/thaynes43/dev-env:2.75.0@sha256:15dc76a6…` and `--pilot-agent-session=dev-env-1029-132039/auth310-2730-canary-20261031`. Final PR review, guard, merge. | Args diff is 2 lines. The operator is 2/2 ready. Every session pod is unchanged, including `dev-env-1028-031951` (same UID, still 2.52.0). | Anything else differs, or any session pod changed. |
-| B2 | The lead creates one ordinary Claude remote session (`agent-run --interactive`) with that key and `--archive-after <T>`, where T is the timer Tom approved in section 6, line 3. | Session name and UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. Neither projection warning line appears, and the first turn is answered. | Wrong image. Or "Claude authentication requires a current keeper projection" or "pod holds its own login" persists. Then suspend (B5) and stop. |
+| B2 | The lead session `dev-env-1029-132039` itself (the selector's parent) creates one ordinary Claude remote session (`agent-run --interactive`) with that key and `--archive-after <T>`, where T is the timer Tom approved in section 6, line 3. | Session name and UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. Neither projection warning line appears, and the first turn is answered. | Wrong image. Or "Claude authentication requires a current keeper projection" or "pod holds its own login" persists. Then suspend (B5) and stop. |
 | B3 | One short ordinary turn per hour, through `agent-run msg`. | The lead reads each reply. Keeper `state=refreshed` log lines give each natural refresh time. The first turn after each refresh is answered. `conversationUsage.turns` is weak corroboration only. | A turn gets no answer and no recovery follows. Suspend (B5) and stop. |
 | B4 | The window ends: two natural refreshes after B2, or 24 hours, whichever comes first. Save only the fixed agentd lines from the container log (the two projection warnings, `projection applied` if a recovery happened, `continued after the login was renewed`, `continue ... was not confirmed`). Also save the Session `conversationUsage`. | A receipt with those lines and counts. These container log lines are lost when the pod stops, so this step comes first. Loki may also hold them; its retention is Unknown. | Not applicable. |
 | B5 | `agent-run suspend <canary>`, then verify that the canary's pod and provider have actually exited, not just that the spec or phase says Suspended. | Phase Suspended, `suspendedAt` set, rescue result recorded, PVC Bound. The canary pod is NotFound (`kubectl get pod -n dev-agents <canary>`), and `agent-run show` reports the agent exited. | The rescue fails, or the pod or provider is still running. Record it and stop before B6. Do not delete the HOME, force-delete the pod or replay any work; the volume is kept for a human. |
