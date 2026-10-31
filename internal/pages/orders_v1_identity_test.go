@@ -193,3 +193,73 @@ func TestV1IdentityAbsentAndIgnored(t *testing.T) {
 		})
 	}
 }
+
+// A malformed identity with readable strings is still an assertion: a valid
+// order with the same strings must not join alone. It never joins itself.
+func TestV1IdentityMalformedReadableStringsStillCount(t *testing.T) {
+	id, policy, at, _, _ := responseFixture()
+	valid, _ := json.Marshal(id)
+	extra := strings.TrimSuffix(string(valid), "}") + `,"extra":true}`
+	other := id
+	other.Fingerprint = "other"
+	otherRaw, _ := json.Marshal(other)
+	otherExtra := strings.TrimSuffix(string(otherRaw), "}") + `,"extra":true}`
+	for _, tc := range []struct {
+		name  string
+		data  map[string]string
+		query AlertIdentity
+		want  string
+	}{
+		{"valid plus extra-key twin", map[string]string{"rem-responder-0123abcd": identityOrder(string(valid)), "esc-responder-0123abcd": identityOrder(extra)}, id, "Unjoined"},
+		{"extra-key twin alone", map[string]string{"esc-responder-0123abcd": identityOrder(extra)}, id, "Unjoined"},
+		{"extra-key twin of another identity", map[string]string{"rem-responder-0123abcd": identityOrder(string(valid)), "esc-responder-0123abcd": identityOrder(otherExtra)}, id, "Available"},
+		{"unreadable twin", map[string]string{"rem-responder-0123abcd": identityOrder(string(valid)), "esc-responder-0123abcd": identityOrder(`{"fingerprint":1,"startsAt":"2026-10-30T11:00:00Z","extra":true}`)}, id, "Available"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := ParseV1ResponderOrders(v1Fixture(t, tc.data), at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy.Orders = s
+			claims := &snapshotClaims{}
+			policy.Claims = claims
+			got := ProjectResponse(context.Background(), tc.query, policy, at)
+			if got.OrderCondition != tc.want {
+				t.Fatalf("%+v", got)
+			}
+			if tc.want != "Available" && (got.State != "Unknown" || got.Order.Key != "Unknown" || len(claims.calls) != 0) {
+				t.Fatalf("unsafe join: %+v", got)
+			}
+		})
+	}
+}
+
+// The normal promotion path (haynes-ops #4489) copies a parent's alertIdentity
+// into its esc-rem child while the parent stays. The pair is a duplicate
+// assertion: the Page is Unjoined, with no arbitrary pick and no claim lookup.
+func TestV1IdentityEscalatedPromotionPairIsUnjoined(t *testing.T) {
+	id, policy, at, _, _ := responseFixture()
+	raw, _ := json.Marshal(id)
+	parent := identityOrder(string(raw))
+	child := strings.Replace(parent, "1793358000", "1793358120", 1)
+	child = strings.Replace(child, "1793358060", "1793358180", 1)
+	child = strings.Replace(child, `"source":"responder"`, `"source":"escalation"`, 1)
+	for name, data := range map[string]map[string]string{
+		"parent and child":                 {"rem-responder-0123abcd": parent, "esc-rem-0123abcd": child},
+		"parent still pending, child done": {"rem-responder-0123abcd": strings.Replace(parent, `"status":"done"`, `"status":"escalated"`, 1), "esc-rem-0123abcd": child},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, err := ParseV1ResponderOrders(v1Fixture(t, data), at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy.Orders = s
+			claims := &snapshotClaims{}
+			policy.Claims = claims
+			got := ProjectResponse(context.Background(), id, policy, at)
+			if got.OrderCondition != "Unjoined" || got.State != "Unknown" || got.Order.Key != "Unknown" || len(claims.calls) != 0 {
+				t.Fatalf("promotion pair joined: %+v", got)
+			}
+		})
+	}
+}

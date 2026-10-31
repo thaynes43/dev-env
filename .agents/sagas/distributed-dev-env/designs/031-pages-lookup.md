@@ -516,17 +516,38 @@ creation time. No arbitrary winner is selected. Missing identity (legacy,
 storm, aggregate or watchdog orders) stays Unjoined/Unknown. A present identity
 must be an object with exactly two string fields, `fingerprint` and `startsAt`.
 Nonobjects, missing fields, wrong types and extra keys exclude that order and
-increment `MalformedIdentities`; they do not invalidate other orders. Existing
+increment `MalformedIdentities`; they do not invalidate other orders. A
+malformed identity whose `fingerprint` and `startsAt` are still readable strings
+(for example one with an extra key) never joins, but it still counts as an
+assertion of those strings: a valid order with the same strings does not join
+alone. A malformed identity with an unreadable field asserts nothing. Existing
 JSON syntax, duplicate-member, depth and size bounds still invalidate the store.
 Unusable string values cannot join an eligible Page. Unknown responder-prefixed
 keys also make the store Unjoined when no recognized orders remain; Empty is
 reserved for an observed store with no responder evidence. All these Unjoined
 cases keep response state Unknown and skip claim lookup.
 
+**Escalated remediations do not join (known design gap).** The held producer
+change (haynes-ops #4489) copies a parent's `alertIdentity` into its `esc-rem-*`
+child on every promotion: escalate, failed remediation, the orphan sweep and
+session close-out. The parent `rem-responder-<sig8>` stays until reap or
+retention, so the normal promotion path always yields two orders asserting one
+identity. Under the duplicate rule above the pair is Unjoined, and an
+escalated incident stays Unjoined (state Unknown) until the producer supplies a
+lineage field. Not picking one of the pair is correct under the contract. A
+test pins this exact parent plus child shape.
+
+**Follow-up (lead or Tom decision, not part of this change).** An explicit
+lineage field from the producer, for example the child's parent key, would let
+the reader resolve a promotion pair without picking. Today the only link is the
+child's `run_ref` text, which the contract forbids the reader to interpret. No
+such field is specified, and none is implied here.
+
 Synthetic fixtures cover exact and escape-different decoded equality,
 single-character differences, timestamp spelling, refires, terminal key reuse,
-creation/skew boundaries, duplicate identities, malformed identity isolation,
-absent identity, ignored keys and absence of order text in output.
+creation/skew boundaries, duplicate identities, malformed identity isolation
+(including a malformed twin with readable strings), the escalated promotion
+pair, absent identity, ignored keys and absence of order text in output.
 
 **Real joins require haynes-ops #4489 MERGED and installed.** That PR is a held
 draft and its activation is Tom's decision; this change does not lift the hold.

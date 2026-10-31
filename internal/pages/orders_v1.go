@@ -32,6 +32,9 @@ type V1ResponderOrders struct {
 	invalid             bool
 	ignored             int
 	malformedIdentities int
+	// malformedClaims counts malformed identities whose fingerprint and startsAt
+	// are still readable strings. They never join, but they are assertions.
+	malformedClaims map[AlertIdentity]int
 }
 
 // ParseV1ResponderOrders reads kubectl's ConfigMap JSON, with an explicit caller
@@ -118,6 +121,14 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 			startsAt, startsAtOK := obj["startsAt"].(string)
 			if !ok || len(obj) != 2 || !fingerprintOK || !startsAtOK {
 				s.malformedIdentities++
+				// An extra key makes the identity unusable, not unasserted: another
+				// order with the same strings must not join alone.
+				if ok && fingerprintOK && startsAtOK {
+					if s.malformedClaims == nil {
+						s.malformedClaims = map[AlertIdentity]int{}
+					}
+					s.malformedClaims[AlertIdentity{Fingerprint: fingerprint, StartsAt: startsAt}]++
+				}
 				continue
 			}
 			identity = AlertIdentity{Fingerprint: fingerprint, StartsAt: startsAt}
@@ -149,7 +160,9 @@ func (s *V1ResponderOrders) Observations() map[string]OrderObservation {
 
 // FindOrders reads one bounded in-memory batch. Only decoded string equality
 // on both alertIdentity fields binds an order. Duplicate identities and attempts
-// created before the episode (allowing clock skew) remain unjoined.
+// created before the episode (allowing clock skew) remain unjoined. A malformed
+// identity with readable fingerprint and startsAt strings still counts as an
+// assertion for duplicates, though it can never join.
 func (s *V1ResponderOrders) FindOrders(ctx context.Context, identities []AlertIdentity) (map[AlertIdentity]OrderObservation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -174,6 +187,9 @@ func (s *V1ResponderOrders) FindOrders(ctx context.Context, identities []AlertId
 			}
 			counts[order.Identity]++
 			byIdentity[order.Identity] = order
+		}
+		for id, n := range s.malformedClaims {
+			counts[id] += n
 		}
 	}
 	out := make(map[AlertIdentity]OrderObservation, len(identities))

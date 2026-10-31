@@ -805,7 +805,12 @@ recurrence are Unknown. Unreadable or invalid input is Unavailable. It makes no
 network requests. Optional --orders-from-file CM.json requires
 --orders-observed-at RFC3339 (caller-asserted capture time, five-minute maximum
 age; take it after the read). A malformed file or a future capture time is Invalid
-and exits 1. V1 orders have no explicit alert identity and remain Unjoined. The portal
+and exits 1. An order joins an alert only when its alertIdentity (fingerprint and
+startsAt) equals the alert's by exact decoded string equality, it was created no
+earlier than startsAt minus 30 seconds, and no other order asserts the same
+identity; a joined order shows only its key and creation time. Otherwise it is
+Unjoined (this includes escalated remediations). Real joins need haynes-ops #4489
+merged and installed. The portal
 and operator readers stay Unconfigured. See docs/alertmanager-pages-poc.md for
 limits and details.
 `,
