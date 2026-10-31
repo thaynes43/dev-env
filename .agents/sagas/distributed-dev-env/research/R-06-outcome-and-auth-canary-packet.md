@@ -68,8 +68,9 @@ on 2.52.0, with 0 restarts.
 
 **What it can prove about auth recovery:**
 
-- A signed #741 agentd boots in a fresh remote pod on the keeper's access
-  projection. The pod image digest is the evidence.
+- A signed #741 agentd boots in a fresh remote pod. The pod image digest shows
+  the image. That it runs on the keeper's access projection is shown by the
+  projection-sync log lines in the next bullet.
 - agentd follows each natural keeper generation. Evidence: the projection-sync
   log lines through `agent-run log`. Known-target agentd logs are the permitted
   evidence (OP310).
@@ -111,10 +112,10 @@ on 2.52.0, with 0 restarts.
 | agent-run ≥2.75 for `show` | **Missing in this pod.** `/usr/local/bin/agent-run` is v2.45.0. The shared copy `~/.shared/handoffs/agent-run-v2.74.0` is 2.74.0. Neither sends `X-Dev-Env-Task-Outcome: v1` (`internal/agentrun/client.go:199`, new in 2.75), so the API strips the field (`task_outcome.go:71-72`). | `agent-run version` |
 | CRD with `status.taskOutcome` | **Live.** CRD generation 21, Established, field present. Immutable (`agentsessions.yaml:2709`) and cannot be erased (`:3248-3250`). | `kubectl get crd`. OP326 journal 3870 |
 | Portal display (OP326) | **In progress.** Worker `dev-env-1031-043708` has uncommitted code (journal 3878). No PR yet. The change touches the **operator's** portal reader as well as the portal. So it needs a release, **another operator pin** and a portal pin. The v2.75.0 portal (haynes-ops #4485, merged 04:59:50Z) does not show outcomes. | OP326 journals 3861, 3878 |
-| Real before- and after-reclaim UI and API evidence | **None exists.** 0 of 326 AgentSessions have a `taskOutcome`. | `kubectl get agentsessions -n dev-agents -o json` |
+| Real before- and after-reclaim UI and API evidence | **None exists.** 0 of 326 AgentSessions had a `taskOutcome` at 05:01Z (snapshot). | `kubectl get agentsessions -n dev-agents -o json` |
 
-Reclaim itself is proven in production. `dev-env-1031-033520` and three other
-Codex tasks show `TaskComputeReclaimed`. A Claude task, `haynes-ops-1031-045309`,
+Reclaim has been observed in production on four Codex tasks as of 05:01Z:
+`dev-env-1031-033520` and three others show `TaskComputeReclaimed`. A Claude task, `haynes-ops-1031-045309`,
 was in `Grace` until 05:09:30Z.
 
 ## 3. Version compatibility
@@ -186,10 +187,12 @@ conditions:**
 1. **Recovery is TUI-only.** `continueAfterRenewal` returns at once in task
    mode and needs a TUI launch (`claude_continue.go:198-199, :222`). The #741
    doc says: "task mode or pod-owned mode never sends."
-2. **A Claude task does not use the rotating login.** The operator gives Claude
-   task and local pods the static token. Only remote pods run on the keeper's
-   access token (`pod.go:482-488`; `templates.yaml:89-92`). A task never sees a
-   keeper rotation.
+2. **A Claude task authenticates with the static token.** The operator gives
+   Claude task and local pods `CLAUDE_CODE_OAUTH_TOKEN` (`pod.go:485-488`, set at
+   `:300`). That takes precedence over the keeper's access projection, which
+   full-profile pods also sync (`templates.yaml:117`; `daemon.go:536-545` gates on
+   agent, not mode). Either way, the recovery code above is gated off in task
+   mode, so a task cannot exercise it.
 3. **Only a task writes an outcome and is reclaimed.** The API records an outcome
    only for `mode: task` (`internal/apiserver/task_outcome.go:27`). Reclaim scope
    is task-only (`internal/controller/terminal_task_reclaim.go:195-198`). Remote
@@ -223,7 +226,7 @@ read back.
 |---|---|---|---|
 | A1 | One haynes-ops PR. It changes exactly two operator args: `--task-pilot-agent-image=ghcr.io/thaynes43/dev-env:2.75.0@sha256:15dc76a6…` and `--task-pilot-agent-session=dev-env-1029-132039/outcome-canary-2750-20261031-01`. Review, guard, merge. Flux rolls the operator. | Args diff is 2 lines. Deployment generation goes up and is 2/2 ready. Every session pod UID and restart count is unchanged from the baseline. | Anything else differs, or any session pod changed. |
 | A2 | The lead runs exactly one task: `agent-run --project dev-env --agent codex --model gpt-6.1-sol --effort low --size S --idempotency-key outcome-canary-2750-20261031-01 -p "<fixed prompt>"`. The prompt says: write `~/work/<session>.outcome.json` atomically with `prURLs` [dev-env PR 759], `headSHAs` [`942ed6b808f6619f70c543e7afda24f90fd5d4bc`] and a fixed summary such as "Outcome canary: retained record test, no code change". Change no repository. Open no PR. | Session name and UID. Pod UID. Pod image and imageID are `2.75.0@sha256:15dc76a6…`. | The image is not that digest. Record it; launch nothing more. |
-| A3 | The task exits, in minutes. Read inside the 10-minute grace. | `kubectl get agentsession <n> -o jsonpath='{.status.taskOutcome}'` shows the record, with sessionUID and podUID equal to the Session and Pod. `agent-run show <n>` (2.75.0) prints "Task outcome", the PR and the head (`internal/agentrun/sessions.go:284-291`). `agent-run show` (2.45.0) prints none: the negotiation works. The portal session detail shows it in Tom's authenticated view. The condition is `TerminalTaskPodReclaim=Grace` with `dueAt`. | No outcome appears within 2 minutes of exit. Record "No outcome recorded". Do **not** relaunch with the same key, because a second session would match too. |
+| A3 | The task exits, in minutes. Read inside the 10-minute grace. | `kubectl get agentsession <n> -o jsonpath='{.status.taskOutcome}'` shows the record, with sessionUID and podUID equal to the Session and Pod. `agent-run show <n>` (2.75.0) prints "Task outcome", the PR and the head (`internal/agentrun/sessions.go:284-291`). `agent-run show` (2.45.0) is expected to print none, which would confirm the negotiation. The portal session detail shows it in Tom's authenticated view. The condition is `TerminalTaskPodReclaim=Grace` with `dueAt`. | No outcome appears within 2 minutes of exit. Record "No outcome recorded". Do **not** relaunch with the same key, because a second session would match too. |
 | A4 | The operator reclaims at `dueAt`. | Conditions `TaskComputeReclaimed` / `Reclaimed`. The pod is NotFound. The PVC is kept. | No reclaim by `dueAt` + 5 minutes. Record the reason (for example `ProofUnknown`). Delete nothing by hand. |
 | A5 | Read again after reclaim. | The sha256 of the `taskOutcome` JSON is identical before and after. `agent-run show` (2.75.0) prints it in the Reclaimed phase. The portal shows it (authenticated view). | The record changed. That would be a defect: stop and report. |
 | A6 | Close. Record the evidence on OP320 and OP326. Remove both task-selector lines, in the next routine operator PR or on their own, as Tom prefers. | The haynes-ops diff. | Not applicable. |
@@ -245,7 +248,7 @@ session at a time. One or two operator rollouts.
 - The canary session stays Suspended/Reclaimed. Its HOME follows normal
   retention. No reap is needed.
 
-**Guarantees, with evidence:**
+**Expected properties (A1 verifies them against the baseline):**
 
 - No template change. `templates.yaml` is not edited, so the revision does not
   change.
@@ -348,7 +351,8 @@ the 10-minute grace after the task exits. Agents have no portal login.
   `internal/agentrun/client.go:199`; `sessions.go:284-291`;
   `docs/portal-session-runtime.md:283-330, 571`;
   `docs/workflow-guide.md:683-706`.
-- Cluster reads at 05:01Z: 326 AgentSessions, 0 with a `taskOutcome`. 25 pods in
+- Cluster reads at 05:01Z (a snapshot; the fact-check later counted 327): 326
+  AgentSessions, 0 with a `taskOutcome`. 25 pods in
   dev-agents. Operator image `sha-fac30c8@f73bb749…`, 46 args. ConfigMap
   `dev-env-templates` image 2.71.0@a9421cd1.
 - Signing: `gh release view v2.75.0`. publish-agent run 41169349678, job
