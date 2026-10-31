@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,7 +51,7 @@ func writeProductStates(dir string) error {
 		fixturePage := page
 		fixturePage.Filter = portal.ProductFilter{}
 		fixturePage.Allowance = allowances
-		fixturePage.Groups = []portal.ProductGroup{{Title: "In progress", Rows: []portal.ProductRow{{ID: "s1", Title: "synthetic-agent", Status: portal.ProductStatus{Text: "Idle", Tone: "muted"}}}}}
+		fixturePage.Groups = []portal.ProductGroup{{Title: "In progress", Rows: allowanceListRows()}}
 		body, err := portal.RenderProduct(fixturePage)
 		if err != nil {
 			return err
@@ -238,6 +239,17 @@ func writeAttentionStates(dir string) error {
 		}
 	}
 	return nil
+}
+
+// allowanceListRows gives the allowance Sessions previews a list long enough
+// to scroll, so a short window shows whether the strip leaves room for rows.
+func allowanceListRows() []portal.ProductRow {
+	rows := []portal.ProductRow{{ID: "s1", Title: "synthetic-agent", Status: portal.ProductStatus{Text: "Idle", Tone: "muted"}}}
+	for i, status := range []portal.ProductStatus{{Text: "Working", Tone: "busy"}, {Text: "Waiting", Tone: "wait"}, {Text: "Idle", Tone: "muted"}, {Text: "Working", Tone: "busy"}, {Text: "Idle", Tone: "muted"}} {
+		n := strconv.Itoa(i + 2)
+		rows = append(rows, portal.ProductRow{ID: "s" + n, Title: "synthetic-agent-" + n, Kicker: "fixture-repo", Meta: "claude-opus-5-5", Age: n + " min", Status: status})
+	}
+	return rows
 }
 
 // allowancePreview uses an explicitly synthetic document shaped like a provider

@@ -934,7 +934,7 @@ and copy are below, under "Interface".
 Sessions regains an account allowance display, which the 2026-10-27 "Stubs removed"
 entry above took out as an all-Unknown bar. The later OP239 request (2026-10-29)
 asks for plan remaining on this surface with window, reset, freshness and provenance.
-While nothing is connected it stays small: one link and one line. Usage's block is
+While nothing is connected it stays small: one link and one line. On a window wider than 700px and at most 760px tall the provider lines fold behind a closed "By provider" disclosure beside the link, so a connected strip cannot squeeze the session list (OP307, 2026-10-31). Usage's block is
 now typed and also appears on an empty read. Behaviour and states are in
 [docs/portal-read-boundary.md](../../../../docs/portal-read-boundary.md#account-allowance).
 A deployed reader remains separate work; this adds none.

@@ -378,8 +378,8 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .allowance-strip { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .allowance-link { display: flex; align-items: center; min-height: 24px; width: fit-content; max-width: 100%; }
 .allowance-provider + .allowance-provider { margin-top: 4px; }
-.allowance-strip > ul:not(:has(.allowance-windows)) { display: flex; flex-wrap: wrap; gap: 0 14px; }
-.allowance-strip > ul:not(:has(.allowance-windows)) .allowance-provider + .allowance-provider { margin-top: 0; }
+.allowance-detail > ul:not(:has(.allowance-windows)) { display: flex; flex-wrap: wrap; gap: 0 14px; }
+.allowance-detail > ul:not(:has(.allowance-windows)) .allowance-provider + .allowance-provider { margin-top: 0; }
 .allowance-provider-head { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 8px; }
 .allowance-name { white-space: nowrap; }
 .allowance-provider-head > span:last-child, .allowance-windows li { min-width: 0; overflow-wrap: anywhere; }
@@ -394,3 +394,17 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .allowance-account td { white-space: normal; overflow-wrap: anywhere; }
 .allowance-account table { table-layout: fixed; }
 .allowance-account td::before { flex-shrink: 0; }
+.allowance-toggle { display: flex; align-items: center; gap: 7px; width: fit-content; min-height: 24px; margin-left: auto; color: var(--accent); cursor: pointer; }
+.allowance-toggle::after { content: ""; width: 5px; height: 5px; margin-top: -3px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.allowance-detail[open] > .allowance-toggle::after { margin-top: 3px; transform: rotate(-135deg); }
+@supports selector(::details-content) {
+  .allowance-toggle { display: none; }
+  .allowance-detail::details-content { display: block; content-visibility: visible; }
+}
+@media (width > 700px) and (height <= 760px) {
+  .allowance-strip { display: flow-root; }
+  .allowance-strip > .allowance-link { float: left; margin-right: 12px; }
+  .allowance-toggle { display: flex; }
+  .allowance-detail:not([open])::details-content { content-visibility: hidden; }
+  .allowance-detail > ul { clear: left; }
+}
