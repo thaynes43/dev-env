@@ -32,6 +32,9 @@ type V1ResponderOrders struct {
 	invalid             bool
 	ignored             int
 	malformedIdentities int
+	malformedLineages   int
+	parents             map[string]OrderReference
+	unusableLineage     map[string]bool
 	// malformedClaims counts malformed identities whose fingerprint and startsAt
 	// are still readable strings. They never join, but they are assertions.
 	malformedClaims map[AlertIdentity]int
@@ -80,6 +83,8 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 		return fail()
 	}
 	orders := make(map[string]ResponderOrder)
+	s.parents = map[string]OrderReference{}
+	s.unusableLineage = map[string]bool{}
 	for key, value := range data {
 		text, ok := value.(string)
 		if !ok || len(text) > V1OrdersMaxOrderBytes || !v1ConfigMapDataKey.MatchString(key) {
@@ -114,6 +119,17 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 		if !statusOK || !createdOK || !updatedOK || !validOrderStatus(status) || !cok || !uok || ut.Before(ct) || ut.After(observedAt.Add(orderClockSkew)) {
 			return fail()
 		}
+		if value, present := entry["parentOrder"]; present {
+			obj, ok := value.(map[string]any)
+			parentKey, keyOK := obj["key"].(string)
+			created, createdOK := obj["created"].(string)
+			if !ok || len(obj) != 2 || !keyOK || !createdOK {
+				s.malformedLineages++
+				s.unusableLineage[key] = true
+			} else {
+				s.parents[key] = OrderReference{Key: parentKey, Created: created}
+			}
+		}
 		identity := AlertIdentity{}
 		if value, present := entry["alertIdentity"]; present {
 			obj, ok := value.(map[string]any)
@@ -147,6 +163,10 @@ func (s *V1ResponderOrders) IgnoredKeys() int { return s.ignored }
 // Absence is legacy data, not malformed. Existing whole-store bounds still apply.
 func (s *V1ResponderOrders) MalformedIdentities() int { return s.malformedIdentities }
 
+// MalformedLineages counts present parentOrder fields that are not exactly
+// an object containing string key and created fields. Absence is not malformed.
+func (s *V1ResponderOrders) MalformedLineages() int { return s.malformedLineages }
+
 // Observations returns independent copies of the safe subset keyed by data key.
 // A stored identity is not itself proof that the order can join an episode.
 func (s *V1ResponderOrders) Observations() map[string]OrderObservation {
@@ -159,9 +179,9 @@ func (s *V1ResponderOrders) Observations() map[string]OrderObservation {
 }
 
 // FindOrders reads one bounded in-memory batch. Only decoded string equality
-// on both alertIdentity fields binds an order. Duplicate identities and attempts
-// created before the episode (allowing clock skew) remain unjoined. A malformed
-// identity with readable fingerprint and startsAt strings still counts as an
+// on both alertIdentity fields binds an order. Multiple assertions must form
+// one explicit parentOrder chain. Attempts created before the episode remain
+// unjoined. A malformed identity with readable strings still counts as an
 // assertion for duplicates, though it can never join.
 func (s *V1ResponderOrders) FindOrders(ctx context.Context, identities []AlertIdentity) (map[AlertIdentity]OrderObservation, error) {
 	if err := ctx.Err(); err != nil {
@@ -176,37 +196,79 @@ func (s *V1ResponderOrders) FindOrders(ctx context.Context, identities []AlertId
 	} else if len(s.orders) > 0 || s.ignored > 0 || s.malformedIdentities > 0 {
 		condition = "Unjoined"
 	}
-	// Count every identity assertion before checking creation time: even an old
-	// or unusable attempt conflicts with another order claiming the same identity.
-	byIdentity := make(map[AlertIdentity]ResponderOrder, len(s.orders))
-	counts := make(map[AlertIdentity]int, len(s.orders))
+	// Group before checking eligibility: old or malformed assertions must never
+	// disappear and leave an apparent lone winner.
+	byIdentity := make(map[AlertIdentity][]ResponderOrder, len(s.orders))
 	if !s.invalid {
 		for _, order := range s.orders {
-			if !validResponseIdentity(order.Identity) {
-				continue
+			if validResponseIdentity(order.Identity) {
+				byIdentity[order.Identity] = append(byIdentity[order.Identity], order)
 			}
-			counts[order.Identity]++
-			byIdentity[order.Identity] = order
-		}
-		for id, n := range s.malformedClaims {
-			counts[id] += n
 		}
 	}
 	out := make(map[AlertIdentity]OrderObservation, len(identities))
 	for _, id := range identities {
 		observation := OrderObservation{SourceObservation: s.observation, RecordCondition: condition}
-		if counts[id] == 1 {
-			order := byIdentity[id]
-			created, _ := orderTime(order.Order.Created)
-			start, known := SnapshotTime(id.StartsAt)
-			if known && !created.Before(start.Add(-orderClockSkew)) {
+		if !s.invalid && s.malformedClaims[id] == 0 {
+			if order, chain, ok := s.lineageLeaf(id, byIdentity[id]); ok {
 				observation.Order = &order
+				observation.OrderChain = chain
 				observation.RecordCondition = ""
 			}
 		}
 		out[id] = observation
 	}
 	return out, nil
+}
+
+// lineageLeaf accepts exactly one connected path covering every assertion.
+// Traversal follows explicit references only; event times never rank orders.
+func (s *V1ResponderOrders) lineageLeaf(id AlertIdentity, orders []ResponderOrder) (ResponderOrder, []string, bool) {
+	reject := func() (ResponderOrder, []string, bool) { return ResponderOrder{}, nil, false }
+	start, known := SnapshotTime(id.StartsAt)
+	if !known || len(orders) == 0 {
+		return reject()
+	}
+	members := make(map[string]ResponderOrder, len(orders))
+	for _, order := range orders {
+		created, _ := orderTime(order.Order.Created)
+		if s.unusableLineage[order.Order.Key] || created.Before(start.Add(-orderClockSkew)) {
+			return reject()
+		}
+		members[order.Order.Key] = order
+	}
+	children := make(map[string]string, len(orders))
+	root := ""
+	for _, order := range orders {
+		key := order.Order.Key
+		parent, present := s.parents[key]
+		if !present {
+			if root != "" {
+				return reject()
+			}
+			root = key
+			continue
+		}
+		p, found := members[parent.Key]
+		if !found || p.Order.Created != parent.Created || children[parent.Key] != "" {
+			return reject()
+		}
+		children[parent.Key] = key
+	}
+	if root == "" {
+		return reject()
+	}
+	chain := make([]string, 0, len(orders))
+	for key := root; key != ""; key = children[key] {
+		if len(chain) >= len(orders) {
+			return reject()
+		}
+		chain = append(chain, key)
+	}
+	if len(chain) != len(orders) {
+		return reject()
+	}
+	return members[chain[len(chain)-1]], chain, true
 }
 
 // Consumed fields are case-sensitive. Unknown fields are bounded and ignored;

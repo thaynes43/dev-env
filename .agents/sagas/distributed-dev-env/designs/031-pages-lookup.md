@@ -519,8 +519,10 @@ which cannot inherit the prior order. A reused terminal key can join only the
 new persisted identity and creation attempt; canonical claim lookup continues
 to bind both identity and order key/created.
 
-Two orders asserting the same identity are Unjoined, even if one has an old
-creation time. No arbitrary winner is selected. Missing identity (legacy,
+Multiple orders asserting the same identity are Unjoined unless they form the
+explicit promotion chain below. No arbitrary winner is selected; an old or
+unusable assertion cannot be dropped to leave an apparent lone winner. Missing
+identity (legacy,
 storm, aggregate or watchdog orders) stays Unjoined/Unknown. A present identity
 must be an object with exactly two string fields, `fingerprint` and `startsAt`.
 Nonobjects, missing fields, wrong types and extra keys exclude that order and
@@ -535,33 +537,59 @@ keys also make the store Unjoined when no recognized orders remain; Empty is
 reserved for an observed store with no responder evidence. All these Unjoined
 cases keep response state Unknown and skip claim lookup.
 
-**Escalated remediations do not join (known design gap).** The held producer
-change (haynes-ops #4489) copies a parent's `alertIdentity` into its `esc-rem-*`
-child on every promotion: escalate, failed remediation, the orphan sweep and
-session close-out. The parent `rem-responder-<sig8>` stays until reap or
-retention, so the normal promotion path always yields two orders asserting one
-identity. Under the duplicate rule above the pair is Unjoined, and an
-escalated incident stays Unjoined (state Unknown) until the producer supplies a
-lineage field. Not picking one of the pair is correct under the contract. A
-test pins this exact parent plus child shape.
+**Explicit promotion lineage (OP324 j4034, 2026-10-31).** The lead's
+[lineage decision](https://work.haynesnetwork.com/work_packages/324/activities)
+specifies an immutable optional child field
+`parentOrder: {"key":"<parent data key>","created":"<parent created string>"}`.
+The producer copies both values exactly from the parent when creating an
+`esc-rem-*` promotion child; non-promotion and legacy orders omit it. The
+producer is haynes-ops held draft #4497, which supersedes the closed draft
+#4489 and carries both `alertIdentity` and `parentOrder`.
 
-**Follow-up (lead or Tom decision, not part of this change).** An explicit
-lineage field from the producer, for example the child's parent key, would let
-the reader resolve a promotion pair without picking. Today the only link is the
-child's `run_ref` text, which the contract forbids the reader to interpret. No
-such field is specified, and none is implied here.
+The reader accepts several matching identity assertions only when they form
+one explicit chain covering the entire set. There must be exactly one root
+with no `parentOrder`. Every other member must name a present member of the
+same identity set, with `parentOrder.created` exactly equal to that parent's
+stored `created` string. Each parent may have only one child. Traversal from
+the root must reach every member exactly once. The leaf is the newest
+**descendant by lineage**, never a winner chosen by timestamps or text.
+All members retain the existing episode creation/skew check. Even a lone
+order with an absent referenced parent remains Unjoined.
+
+The shared projection joins the leaf's key/created and reports `orderChain`
+as keys from root to leaf (oldest ancestor first); singleton joins report one
+key. Claim lookup uses only the leaf's exact attempt. JSON and text expose the
+same projection, and offline HTML lists the chain. Missing parents, exact
+creation mismatches, forks, cycles, disconnected members and legacy duplicate
+pairs remain Unjoined/Unknown with no claim lookup. Claim mismatch handling
+is unchanged. The reader never reads `run_ref` or infers lineage from keys,
+times, statuses or order text.
+
+A present `parentOrder` must be an object containing exactly the string fields
+`key` and `created`. Nonobjects, missing fields, non-string values or extra keys
+make that order's lineage unusable and increment `MalformedLineages`. Its
+identity assertion remains in the set, so it cannot be dropped to enable a
+join. Other identities remain independently usable. Existing strict JSON
+syntax, duplicate-member and size/depth bounds continue to invalidate the
+whole store. Empty or otherwise unusable reference strings cannot match a
+present valid parent. Absence is legacy data, not malformed.
 
 Synthetic fixtures cover exact and escape-different decoded equality,
 single-character differences, timestamp spelling, refires, terminal key reuse,
 creation/skew boundaries, duplicate identities, malformed identity isolation
 (including a malformed twin with readable strings), the escalated promotion
-pair, absent identity, ignored keys and absence of order text in output.
+pair without lineage, two- and three-level chains, missing parents, exact
+creation mismatch, forks, cycles, disconnected duplicates, malformed lineage,
+absent identity, ignored keys and absence of order text in output.
 
-**Real joins require haynes-ops #4489 MERGED and installed.** That PR is a held
-draft and its activation is Tom's decision; this change does not lift the hold.
+**Real joins require the producer draft MERGED and installed.** Held draft
+#4497 (identity and lineage; #4489 is closed as superseded) stays held;
+activation is Tom's decision.
+This change does not lift the hold.
 Until that producer change is merged and installed, every real alert stays
-Unjoined. The draft was inspected read-only at
-`7cf25b1c37ad2851fdb231b1c942fdd3f4572ee0`. This PR changes no haynes-ops files,
+Unjoined. The reader was checked against #4497 read-only at
+`2643f3d3eecd11c6db72d44aefcf6790acb1995e`; its `parentOrder {key, created}`
+shape matches this reader. This PR changes no haynes-ops files,
 reader access, CRD, RBAC, network, portal, inbox or claims implementation and
 activates nothing. Source/tests are separate from installed and accepted;
 OP324 runtime acceptance and canonical claim source wiring remain open.

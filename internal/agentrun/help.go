@@ -807,10 +807,10 @@ network requests. Optional --orders-from-file CM.json requires
 age; take it after the read). A malformed file or a future capture time is Invalid
 and exits 1. An order joins an alert only when its alertIdentity (fingerprint and
 startsAt) equals the alert's by exact decoded string equality, it was created no
-earlier than startsAt minus 30 seconds, and no other order asserts the same
-identity; a joined order shows only its key and creation time. Otherwise it is
-Unjoined (this includes escalated remediations). Real joins need haynes-ops #4489
-merged and installed. The portal
+earlier than startsAt minus 30 seconds. Multiple assertions require one explicit
+parentOrder chain; its leaf joins and orderChain lists keys from root to leaf.
+Broken, malformed or duplicate lineage remains Unjoined. Real joins need the held
+producer drafts merged and installed. The portal
 and operator readers stay Unconfigured. See docs/alertmanager-pages-poc.md for
 limits and details.
 `,

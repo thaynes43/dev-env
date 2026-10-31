@@ -245,8 +245,8 @@ func TestV1IdentityEscalatedPromotionPairIsUnjoined(t *testing.T) {
 	child = strings.Replace(child, "1793358060", "1793358180", 1)
 	child = strings.Replace(child, `"source":"responder"`, `"source":"escalation"`, 1)
 	for name, data := range map[string]map[string]string{
-		"parent and child":                 {"rem-responder-0123abcd": parent, "esc-rem-0123abcd": child},
-		"parent still pending, child done": {"rem-responder-0123abcd": strings.Replace(parent, `"status":"done"`, `"status":"escalated"`, 1), "esc-rem-0123abcd": child},
+		"parent and child":             {"rem-responder-0123abcd": parent, "esc-rem-0123abcd": child},
+		"parent escalated, child done": {"rem-responder-0123abcd": strings.Replace(parent, `"status":"done"`, `"status":"escalated"`, 1), "esc-rem-0123abcd": child},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, err := ParseV1ResponderOrders(v1Fixture(t, data), at)

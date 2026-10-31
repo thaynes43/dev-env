@@ -49,16 +49,18 @@ An order joins an alert only when its optional `alertIdentity` object
 (`fingerprint` and `startsAt`, exactly two string fields) equals the alert's
 Alertmanager fingerprint and `startsAt` by decoded string equality, no
 normalization. It also needs a creation time not earlier than `startsAt`
-minus 30 seconds, and no other order asserting the same identity (a malformed
-twin with readable strings counts). A joined order shows only its order key
-and creation time; the state, owner and claim stay Unknown until the canonical
-claim source is wired. Everything else is Unjoined: legacy, storm, aggregate and
-watchdog orders with no identity, malformed identities, duplicates, refires and
-reused keys, and escalated remediations (the promotion path copies a parent's
-identity into its `esc-rem-*` child, so the pair is a duplicate). A valid empty
-responder store is Empty. Lookalike fields other than `alertIdentity` are
-ignored. Real joins need haynes-ops #4489 merged and installed; until then
-every real alert stays Unjoined. See DESIGN-031 section 15.
+minus 30 seconds. Multiple assertions join only if every member forms one
+explicit `parentOrder: {key, created}` chain: each reference must exactly match
+a present parent's key and creation string, with no fork, cycle or disconnected
+member. The leaf joins; `orderChain` reports keys from root to leaf. Missing or
+malformed lineage and legacy duplicate pairs remain Unjoined. Malformed
+`parentOrder` values increment `MalformedLineages`; their assertions still
+block a join. A malformed identity twin with readable strings also blocks it.
+State, owner and claim stay Unknown until the canonical claim source is wired.
+Legacy, storm, aggregate and watchdog orders with no identity remain Unjoined.
+A valid empty responder store is Empty. Real joins require the held producer
+draft #4497 (identity and lineage; it supersedes #4489) merged and installed,
+which is Tom's activation decision. See DESIGN-031 section 15.
 
 Missing/unreadable order files yield Unavailable; malformed files yield Invalid,
 however old their capture time (Invalid is decided before freshness). Both return
@@ -74,7 +76,7 @@ are refused as a whole; errors do not echo input. Synthetic fixtures match the
 real mixed store shape; real order contents are never committed.
 
 Before any real join can succeed, the V1 producer must write the `alertIdentity`
-field into order JSON. That haynes-ops change (#4489) is a held draft, not
+field into order JSON. That haynes-ops change (#4497) is a held draft, not
 merged or installed; this slice does not make it. A portal or operator reader would need read access
 to `upgrade-agent` ConfigMaps, which requires a separate approved access decision.
 Those readers remain Unconfigured. No RBAC, activation or runtime acceptance

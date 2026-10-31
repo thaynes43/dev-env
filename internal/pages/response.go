@@ -76,6 +76,8 @@ type SourceObservation struct {
 type OrderObservation struct {
 	SourceObservation
 	Order *ResponderOrder
+	// OrderChain lists explicitly linked order keys from root to joined leaf.
+	OrderChain []string
 	// RecordCondition optionally records Invalid or Unjoined without attributing
 	// an arbitrary order to this alert. Other nonempty values fail closed.
 	RecordCondition string
@@ -125,6 +127,7 @@ type ResponseSources struct {
 // Every Unknown field is the literal "Unknown", so an Unconfigured projection
 // costs about 513 bytes per alert in MCP JSON, guarded at 520 (DESIGN-031 13).
 type ResponseProjection struct {
+	OrderChain      []string                `json:"orderChain,omitempty"`
 	ClaimOwner      ClaimOwner              `json:"claimOwner"`
 	Identity        AlertIdentity           `json:"identity"`
 	Order           OrderReference          `json:"order"`
@@ -257,7 +260,12 @@ func projectResponse(identity AlertIdentity, sources ResponseSources, at time.Ti
 		out.OrderCondition = "Unjoined"
 		return out
 	}
+	if !validOrderChain(order.OrderChain, o.Order.Key) {
+		out.OrderCondition = "Invalid"
+		return out
+	}
 	out.Order = o.Order
+	out.OrderChain = slices.Clone(order.OrderChain)
 	if sources.Claims == nil {
 		return out
 	}
@@ -302,6 +310,25 @@ func unknownResponse(identity AlertIdentity) ResponseProjection {
 		OrderCondition: "Unconfigured", ClaimCondition: "Unconfigured",
 		OrderSource: timeUnknown, ClaimSource: timeUnknown, OrderObservedAt: timeUnknown, ClaimObservedAt: timeUnknown,
 	}
+}
+
+// Other adapters may omit lineage. A supplied chain must be bounded safe keys
+// ending at the joined leaf; the V1 adapter proves the references themselves.
+func validOrderChain(chain []string, leaf string) bool {
+	if len(chain) == 0 {
+		return true
+	}
+	if len(chain) > MaxResponseBatch || chain[len(chain)-1] != leaf {
+		return false
+	}
+	seen := make(map[string]bool, len(chain))
+	for _, key := range chain {
+		if !validOrderKey(key) || seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }
 
 func validClaimOwner(owner ClaimOwner) bool {

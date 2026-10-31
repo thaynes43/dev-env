@@ -24,9 +24,10 @@ network requests are made. Optional V1 orders require a caller-asserted capture
 time, taken after the read; observations older than five minutes are Stale. A
 malformed orders file or a future capture time is Invalid and exits 1. An order joins
 only on exact decoded equality of its alertIdentity fingerprint and startsAt with
-the alert's, created no earlier than startsAt minus 30 seconds and not duplicated;
-a joined order shows only its key and creation time. Otherwise it is Unjoined,
-and real joins need haynes-ops #4489 merged and installed. See docs/alertmanager-pages-poc.md.
+the alert's, created no earlier than startsAt minus 30 seconds. Multiple orders
+require one explicit parentOrder chain; the leaf joins and orderChain lists its
+keys from root to leaf. Broken, malformed or duplicate lineage is Unjoined.
+Real joins need the held producer drafts merged and installed. See docs/alertmanager-pages-poc.md.
 `
 
 func isAlertmanagerSource(args []string) bool {
