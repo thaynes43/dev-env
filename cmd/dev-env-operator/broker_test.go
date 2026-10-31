@@ -18,6 +18,10 @@ func TestParseBrokerFlags(t *testing.T) {
 	if o, err := parseBrokerFlags([]string{"--enable-hw-ssh-grants"}); err != nil || !o.enableHWSSHGrants || o.enableProxmoxGrants {
 		t.Fatalf("explicit hw-ssh enable must not enable proxmox: %+v %v", o, err)
 	}
+	// ADR-013: its own flag, default off, which turns on neither prerequisite.
+	if o, err := parseBrokerFlags([]string{"--enable-attested-maintenance"}); err != nil || !o.enableAttestedMaint || o.enableAttested || o.enableMaintenance {
+		t.Fatalf("explicit attested maintenance enable: %+v %v", o, err)
+	}
 	t.Setenv("POD_NAMESPACE", "")
 	if o, err := parseBrokerFlags([]string{"--leader-elect=false", "--session-namespace=agents"}); err != nil || o.leaderElect || o.sessionNamespace != "agents" || o.policyNamespace != "dev-env-system" {
 		t.Errorf("%+v %v", o, err)

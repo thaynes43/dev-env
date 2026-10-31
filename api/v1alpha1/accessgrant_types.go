@@ -26,6 +26,8 @@ import (
 //     cluster-wide ones (nodes, break-glass) take none;
 //   - no policy approves break-glass, role dev-env-grant-breakglass or
 //     dev-env-grant-secrets-read, or profile ops;
+//   - no standing policy approves maintenance: only an attested policy with an
+//     exact maintenance scope may (ADR-013);
 //   - a grant's spec is immutable after create, except release, which only ever
 //     goes from false to true.
 //
@@ -460,7 +462,10 @@ type AccessGrantList struct {
 // the policy's type, its requester matches every requester list the policy sets,
 // its scope lies inside the policy's scope, and its TTL is at most maxTTL.
 //
-// +kubebuilder:validation:XValidation:rule="self.type != 'breakglass' && self.type != 'maintenance'",message="no standing policy approves break-glass or maintenance: authenticated human approval is required"
+// +kubebuilder:validation:XValidation:rule="self.type != 'breakglass'",message="no policy approves break-glass: authenticated human approval is required (D-27)"
+// +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || has(self.attested)",message="no standing policy approves maintenance: only an attested policy may name a maintenance scope (ADR-013)"
+// +kubebuilder:validation:XValidation:rule="(self.type == 'maintenance') == has(self.maintenance)",message="maintenance is set for type maintenance, and only there"
+// +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || duration(self.maxTTL) <= duration('1h')",message="a maintenance grant lasts at most 1h"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube') == has(self.kube)",message="kube is set for type kube, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
@@ -525,6 +530,13 @@ type GrantPolicySpec struct {
 	// Credential is the credentials it approves.
 	// +optional
 	Credential *CredentialPolicy `json:"credential,omitempty"`
+
+	// Maintenance is the one bounded maintenance envelope it approves
+	// (ADR-013). Only an attested policy carries it: no standing policy
+	// approves maintenance. A broker approves through it only with
+	// --enable-attested-grants and --enable-attested-maintenance.
+	// +optional
+	Maintenance *MaintenancePolicy `json:"maintenance,omitempty"`
 
 	// MaxTTL is the longest TTL it approves. A longer request goes to Tom.
 	// +required
@@ -631,6 +643,91 @@ type CredentialPolicy struct {
 	// +kubebuilder:validation:MaxItems=2
 	// +required
 	Names []CredentialName `json:"names"`
+}
+
+// MaintenancePolicy is the maintenance envelope an attested policy approves
+// (ADR-013). A grant's envelope matches only when its node, node UID,
+// resource, runtime profile and image equal the policy's; its capabilities are
+// a subset of the policy's; its CPU and memory are at or below the caps; and
+// every worker, device file and read-only mount it names is one the policy
+// names exactly. Operation and restore stay the grant's audit intent: the
+// policy does not approve command content.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.runtimeProfile) || (self.resource.matches('^GPU-[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$') && (!has(self.devices) || size(self.devices) == 0))",message="nvidia-utility requires an exact GPU UUID and no explicit devices"
+type MaintenancePolicy struct {
+	// Node is the exact target node name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +required
+	Node string `json:"node"`
+
+	// NodeUID is the exact target node UID: a replaced node matches nothing.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +required
+	NodeUID string `json:"nodeUID"`
+
+	// Resource is the exact device or resource identity, such as a GPU UUID.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +required
+	Resource string `json:"resource"`
+
+	// RuntimeProfile is the grant's exact runtime profile; empty matches only
+	// a grant without one.
+	// +kubebuilder:validation:Enum=nvidia-utility
+	// +optional
+	RuntimeProfile string `json:"runtimeProfile,omitempty"`
+
+	// Capabilities are the capabilities a grant may ask for: a grant's must be
+	// a subset.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=2
+	// +kubebuilder:validation:items:Enum=SYS_ADMIN;SYS_RAWIO
+	// +optional
+	Capabilities []string `json:"capabilities,omitempty"`
+
+	// Image is the exact digest-pinned executor image.
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$`
+	// +required
+	Image string `json:"image"`
+
+	// MaxCPUMillis caps the grant's cpuMillis.
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=2000
+	// +required
+	MaxCPUMillis int64 `json:"maxCPUMillis"`
+
+	// MaxMemoryMiB caps the grant's memoryMiB.
+	// +kubebuilder:validation:Minimum=16
+	// +kubebuilder:validation:Maximum=4096
+	// +required
+	MaxMemoryMiB int64 `json:"maxMemoryMiB"`
+
+	// Workers are the delegated direct children a grant may name, each by
+	// name, session UID and pod UID. Empty means a grant may name none.
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	Workers []MaintenanceIdentity `json:"workers,omitempty"`
+
+	// Devices are the exact device files a grant may name. Empty means none.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^/dev/(nvidia[0-9]+|nvidiactl|nvidia-uvm|nvidia-uvm-tools|dri/renderD[0-9]+)$`
+	// +optional
+	Devices []string `json:"devices,omitempty"`
+
+	// ReadOnlyMounts are the exact maintenance-inputs files a grant may name.
+	// Empty means none.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^/var/lib/maintenance-inputs/[^/]`
+	// +optional
+	ReadOnlyMounts []string `json:"readOnlyMounts,omitempty"`
 }
 
 // GrantPolicy is a standing approval, written in haynes-ops and applied by Flux

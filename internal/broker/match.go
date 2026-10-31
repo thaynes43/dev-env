@@ -54,10 +54,15 @@ func MatchAttested(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy, att
 // not ops; the TTL is at most p's maxTTL; and the grant's scope lies inside p's.
 // Break-glass never matches, nor do the roles dev-env-grant-breakglass and
 // dev-env-grant-secrets-read, whatever p says: the schema refuses such a policy,
-// and the broker does not trust that it ran (D-27, D-54).
+// and the broker does not trust that it ran (D-27, D-54). Maintenance never
+// matches a standing policy either: only an attested policy approves it
+// (ADR-013).
 func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 	if p.Spec.Attested != nil {
 		return false // an attested policy never approves as a standing one
+	}
+	if p.Spec.Type == v1alpha1.GrantMaintenance || g.Spec.Type == v1alpha1.GrantMaintenance || p.Spec.Maintenance != nil {
+		return false // no standing auto-approval for maintenance
 	}
 	return matches(p, g, p.Spec.Profiles, p.Spec.Repos, p.Spec.Agents)
 }
@@ -107,8 +112,45 @@ func matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant, profiles, repos [
 		return egressInside(gs.Egress, ps.Egress)
 	case v1alpha1.GrantCredential:
 		return gs.Credential != nil && ps.Credential != nil && slices.Contains(ps.Credential.Names, gs.Credential.Name)
+	case v1alpha1.GrantMaintenance:
+		// Attested only: Matches refuses maintenance before it gets here.
+		return ps.Attested != nil && gs.TTL.Duration <= MaintenanceMaxTTL && maintenanceInside(gs.Maintenance, ps.Maintenance)
 	}
 	return false
+}
+
+// maintenanceInside: the grant's envelope is the policy's exactly (ADR-013).
+// Node, node UID, resource, runtime profile and image are equal; the
+// capabilities are a subset; CPU and memory are at or below the caps; and
+// every worker, device file and read-only mount the grant names is one the
+// policy names exactly, so a policy that names none admits none. Operation,
+// restore and extensionOf are audit intent and are not compared; the
+// coordinator is the requester (ValidateMaintenance), which the policy's
+// attested requesters and the attestation bind. The broker repeats the
+// envelope's own bounds (ValidateMaintenance) before it decides.
+func maintenanceInside(g *v1alpha1.MaintenanceTask, p *v1alpha1.MaintenancePolicy) bool {
+	if g == nil || p == nil || !digestImage.MatchString(p.Image) {
+		return false
+	}
+	if g.Node != p.Node || g.NodeUID != p.NodeUID || g.Resource != p.Resource || g.RuntimeProfile != p.RuntimeProfile || g.Image != p.Image {
+		return false
+	}
+	if g.CPUMillis <= 0 || g.CPUMillis > p.MaxCPUMillis || g.MemoryMiB <= 0 || g.MemoryMiB > p.MaxMemoryMiB {
+		return false
+	}
+	for _, pair := range [][2][]string{{g.Capabilities, p.Capabilities}, {g.Devices, p.Devices}, {g.ReadOnlyMounts, p.ReadOnlyMounts}} {
+		for _, v := range pair[0] {
+			if !slices.Contains(pair[1], v) {
+				return false
+			}
+		}
+	}
+	for _, w := range g.Workers {
+		if !slices.Contains(p.Workers, w) {
+			return false
+		}
+	}
+	return true
 }
 
 // kubeInside: the role is one of the policy's, and every granted namespace is

@@ -23,6 +23,7 @@ type brokerOptions struct {
 	enableHWSSHGrants   bool
 	enableAttested      bool
 	enableMaintenance   bool
+	enableAttestedMaint bool
 	maintenanceHuman    string
 	metricsAddr         string
 	probeAddr           string
@@ -44,6 +45,7 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	fs.BoolVar(&o.enableAttested, "enable-attested-grants", false, "approve a request through a GrantPolicy with spec.attested when its requesting session recorded an agent attestation (a claim that the user or a coordinator approved; not verified human identity). Off, attested policies approve nothing")
 	fs.StringVar(&o.maintenanceHuman, "maintenance-human-service-account", "dev-env-system/dev-env-human", "must match operator --human-service-account for authenticated maintenance decisions")
 	fs.BoolVar(&o.enableMaintenance, "enable-maintenance-grants", false, "HELD: enable isolated bounded maintenance leases after policy review")
+	fs.BoolVar(&o.enableAttestedMaint, "enable-attested-maintenance", false, "HELD (ADR-013): also approve a maintenance grant through an attested GrantPolicy whose maintenance scope matches its envelope exactly, when its requesting session recorded an agent attestation (a claim, not verified human identity). Needs --enable-attested-grants and --enable-maintenance-grants; the human decision route is checked first and is unchanged. Off, maintenance is approved by the human route only")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
 	if err := fs.Parse(args); err != nil {
@@ -84,6 +86,7 @@ func runBroker(args []string) error {
 		EnableHWSSHGrants:              o.enableHWSSHGrants,
 		EnableAttestedGrants:           o.enableAttested,
 		EnableMaintenanceGrants:        o.enableMaintenance,
+		EnableAttestedMaintenance:      o.enableAttestedMaint,
 		MaintenanceHumanServiceAccount: o.maintenanceHuman,
 		LeaderElect:                    o.leaderElect,
 		MetricsAddr:                    o.metricsAddr,

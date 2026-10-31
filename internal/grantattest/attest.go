@@ -155,10 +155,12 @@ func SameClaim(a, b Statement) bool {
 }
 
 // ScopeDigest is the digest of what the grant asks for: its type, its credential
-// or role and namespaces or egress destinations and ports, its TTL, and the
-// requesting session. Lists are sorted and defaults made explicit, so equal
-// requests give equal digests and any change in scope or TTL changes it. It is
-// 43 base64url characters.
+// or role and namespaces or egress destinations and ports, or its whole
+// maintenance envelope (ADR-013), its TTL, and the requesting session. Lists are
+// sorted and defaults made explicit, so equal requests give equal digests and
+// any change in scope or TTL changes it. A grant without a maintenance envelope
+// digests exactly as before the envelope was added. It is 43 base64url
+// characters.
 func ScopeDigest(g *v1alpha1.AccessGrant) string {
 	type endpoint struct {
 		Namespace string   `json:"namespace"`
@@ -177,12 +179,17 @@ func ScopeDigest(g *v1alpha1.AccessGrant) string {
 		CIDRs      []string   `json:"cidrs,omitempty"`
 		Endpoints  []endpoint `json:"endpoints,omitempty"`
 		Ports      []port     `json:"ports,omitempty"`
-		TTL        string     `json:"ttl"`
-		Session    string     `json:"session"`
-		SessionUID string     `json:"sessionUID"`
+		// Maintenance is omitted when absent, so other grants keep their digest.
+		Maintenance *v1alpha1.MaintenanceTask `json:"maintenance,omitempty"`
+		TTL         string                    `json:"ttl"`
+		Session     string                    `json:"session"`
+		SessionUID  string                    `json:"sessionUID"`
 	}{Type: string(g.Spec.Type), TTL: g.Spec.TTL.Duration.String(), Session: g.Spec.Requester.Session, SessionUID: string(g.Spec.Requester.SessionUID)}
 	if c := g.Spec.Credential; c != nil {
 		doc.Credential = string(c.Name)
+	}
+	if m := g.Spec.Maintenance; m != nil {
+		doc.Maintenance = canonicalMaintenance(m)
 	}
 	if k := g.Spec.Kube; k != nil {
 		doc.Role = k.Role
@@ -222,6 +229,24 @@ func ScopeDigest(g *v1alpha1.AccessGrant) string {
 	b, _ := json.Marshal(doc) // plain strings and numbers: Marshal cannot fail
 	sum := sha256.Sum256(b)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// canonicalMaintenance is a copy of the envelope with its sets sorted, so the
+// order in which a request named them does not change the digest.
+func canonicalMaintenance(m *v1alpha1.MaintenanceTask) *v1alpha1.MaintenanceTask {
+	c := m.DeepCopy()
+	c.Capabilities, c.Devices, c.ReadOnlyMounts = sorted(c.Capabilities), sorted(c.Devices), sorted(c.ReadOnlyMounts)
+	sort.Slice(c.Workers, func(i, j int) bool {
+		a, b := c.Workers[i], c.Workers[j]
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		if a.UID != b.UID {
+			return a.UID < b.UID
+		}
+		return a.PodUID < b.PodUID
+	})
+	return c
 }
 
 func sorted(in []string) []string {

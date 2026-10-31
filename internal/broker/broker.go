@@ -112,6 +112,11 @@ type Broker struct {
 	EnableAttestedGrants bool
 	// EnableMaintenanceGrants is held default off; cleanup remains enabled.
 	EnableMaintenanceGrants bool
+	// EnableAttestedMaintenance lets an attested policy with a maintenance
+	// scope approve a maintenance grant (ADR-013). It takes effect only with
+	// EnableAttestedGrants and EnableMaintenanceGrants as well. Off, a
+	// maintenance grant is approved by the authenticated human route only.
+	EnableAttestedMaintenance bool
 	// MaintenanceHumanServiceAccount must match the operator human identity.
 	MaintenanceHumanServiceAccount string
 	// Clock is the broker's time; tests step a fake one.
@@ -209,8 +214,15 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 	}
 
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
+		// The authenticated human route comes first, unchanged: a bound human
+		// decision, valid or not, is handled before any policy is read.
 		if handled, err := b.maintenanceDecision(ctx, g); handled {
 			return ctrl.Result{RequeueAfter: time.Second}, err
+		}
+		if b.EnableAttestedGrants && b.EnableAttestedMaintenance {
+			if approved, err := b.attestedMaintenanceApproval(ctx, g, sess, now); approved || err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{RequeueAfter: min(5*time.Second, deadline.Sub(now.Time))}, nil
 	}
