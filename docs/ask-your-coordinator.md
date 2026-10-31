@@ -56,8 +56,9 @@ The key is your stable name for one question: lowercase letters, digits, `.`,
   was repeated. Run the same command again with the same key and the same
   text. You get the one stored question back, never a second one.
 - Exit 1 with "conflicts": the key already holds a different question. Do not
-  change the key to force it through; read what you sent with
-  `agent-run inbox list --project <p> --sent`.
+  change the key to force it through. `agent-run inbox list --project <p> --sent`
+  shows the stored question's name, key, recipient and state. It shows metadata
+  only, not the text: `read` is for the recipient.
 
 A new question gets a new key. The same rules hold for `reply`.
 

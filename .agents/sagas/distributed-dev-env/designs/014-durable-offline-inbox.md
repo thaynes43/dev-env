@@ -312,9 +312,9 @@ list page scans its possible replies once, not per question: replies sent by
 the caller for its inbox, replies addressed to it for its sent box, or all of
 the project's replies for a coordinator host. It lists in pages of 100 up to the
 project's message limit (4096 by default, 41 pages): replies are messages, so
-the limit already bounds them, and the scan needs no separate smaller cap. A
-project limit configured higher than the scan was sized for leaves a longer
-index Unknown for the page, never a guess. It then reads one ack per answered question by name
+the limit already bounds them, and the scan needs no separate smaller cap. If
+live replies exceed the configured project limit (for example after the limit
+was lowered), the index reads Unknown for the page, never a guess. It then reads one ack per answered question by name
 and each distinct Session once. A thread read of one question lists only that
 question's replies.
 

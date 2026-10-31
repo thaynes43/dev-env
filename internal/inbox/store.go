@@ -431,8 +431,8 @@ func RepliesOf(q *coord.InboxMessage, candidates []coord.InboxMessage) ([]coord.
 // live replies in project sent by from or addressed to to (either may be nil),
 // so one thread list page needs one bounded scan instead of one per question.
 // Replies are messages, so the project limit bounds them; the scan covers it
-// whole, and a limit raised after the fact leaves a longer index ErrUnavailable
-// (state Unknown) rather than a guess.
+// whole. If live replies exceed the configured limit (for example after it was
+// lowered), the index is ErrUnavailable (state Unknown) rather than a guess.
 func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coord.SessionIdentity) ([]coord.InboxMessage, error) {
 	if !s.ready() || !projectcatalog.ValidName(project) || (from != nil && !ValidSession(*from)) || (to != nil && !ValidSession(*to)) {
 		return nil, ErrUnavailable
