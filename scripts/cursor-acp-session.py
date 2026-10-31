@@ -13,6 +13,8 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
+import urllib.parse
 
 MAX_FRAME = 65536
 MAX_PROMPT = 16384
@@ -69,6 +71,204 @@ def bounded_text(value, maximum=2048):
     except UnicodeError:
         return False
     return 0 < size <= maximum and not any(ord(c) < 32 and c not in "\n\t" for c in value)
+
+
+# Permission context is untrusted display data, never approval authority.
+TOOL_KINDS = frozenset({"read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"})
+RAW_FIELDS = frozenset({"command", "args", "path", "paths", "query", "description"})
+# Short names are unanchored substrings, so `_`-joined forms (DB_PW, API_KEY) match.
+# `pass` alone needs no adjacent letter (DB_PASS, --pass, PASS1, not compass or
+# bypass), or a camelCase capital after a lowercase letter (dbPass).
+SECRET_NAME = re.compile(r"token|key|secret|passw(?:or)?d|passphrase|(?<![a-z])pass(?![a-z])|(?-i:(?<=[a-z])Pass)(?![a-z])"
+                         r"|pwd|pw|auth|cookie|credential|bearer|session|signature|private|jwt", re.I)
+SECRET_VALUE = re.compile(r"bearer\s|[A-Za-z0-9+/=_-]{32,}", re.I)
+# URL userinfo: any `@` after `://` in the same token, so a password holding `/`,
+# `?` or `#` still matches (a query `@` fails closed too); and bare user:password@.
+# Possessive runs and the run-start lookbehind remove backtracking; a 4096-byte
+# adversarial source stays far below the 100 ms budget recorded in the doc.
+SECRET_USERINFO = re.compile(r"://[^\s@]*+@|(?<![^\s/:@])[^\s/:@]++:[^\s/@]*+@")
+# -p/-P<value> or -p/-P <value>; -k, -K or -a then a spaced value that is not a
+# flag (openssl enc, redis-cli); and -u/-U/--user/--proxy-user user:password or
+# user%password. This deliberately also matches harmless forms such as
+# `mkdir -p build`, `grep -P x` or `curl -k https://...`.
+SECRET_FLAG = re.compile(r"(?:^|[\s\"'=])(?:-[pP]\s*\S|-[kKa]\s+[^\s-]|(?:-[uU]|--(?:proxy-)?user)(?:[=\s]+)?[\"']?[^\s:%\"']*[:%])")
+SECRET_PATTERNS = (SECRET_NAME, SECRET_VALUE, SECRET_USERINFO, SECRET_FLAG)
+# Fields concatenated with no separator rebuild a name or userinfo split across them.
+# A base64/hex-like run is not checked there: gluing words and paths makes long runs.
+GLUED_PATTERNS = (SECRET_NAME, SECRET_USERINFO, SECRET_FLAG)
+# Displayed and checked text must be printable ASCII after NFKC. This rejects
+# controls, separators, combining marks, homoglyphs (Cyrillic, Hangul fillers) and
+# every other non-ASCII form the ASCII patterns above cannot see through.
+PRINTABLE_ASCII = re.compile(r"[ -~]*")
+REDACTED = "[REDACTED]"
+MAX_CONTEXT = 2048
+MAX_PROBE = 8192
+PROBE_ROUNDS = 4
+
+
+class Redacted(Exception):
+    """A secret-like value anywhere fails the whole permission context closed."""
+
+
+def printable_ascii(value):
+    return PRINTABLE_ASCII.fullmatch(value) is not None
+
+
+def secret_probes(value):
+    """The value plus its percent-decoded and NFKC forms, closed under both, bounded.
+
+    Text still changing after the last round has deeper layers left undecoded, so
+    it fails closed (ValueError) instead of being checked only in part.
+    """
+    found, frontier = {value}, [value]
+    for _ in range(PROBE_ROUNDS):
+        following = []
+        for text in frontier:
+            for probe in (urllib.parse.unquote(text), unicodedata.normalize("NFKC", text)):
+                if len(probe) > MAX_PROBE:
+                    raise ValueError
+                if probe not in found:
+                    found.add(probe)
+                    following.append(probe)
+        if not following:
+            return found
+        frontier = following
+    raise ValueError
+
+
+def secret_text(value, patterns=SECRET_PATTERNS):
+    probes = secret_probes(value)
+    # A decoded form that is not printable ASCII after NFKC, such as percent-encoded
+    # Cyrillic, cannot be checked by the ASCII patterns, so it fails closed.
+    if not all(printable_ascii(unicodedata.normalize("NFKC", probe)) for probe in probes):
+        raise ValueError
+    return any(pattern.search(probe) for probe in probes for pattern in patterns)
+
+
+def context_string(value, path=False):
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise ValueError
+    # Reject control bytes, DEL, bidi/format controls, surrogate code points and
+    # line/paragraph separators. Display uses the NFKC form, so fullwidth or
+    # compatibility separators cannot hide parent fragments from path reduction.
+    if any(unicodedata.category(c).startswith(("C", "Zl", "Zp")) for c in value):
+        raise ValueError
+    if len(value.encode("utf-8")) > 256:
+        raise ValueError
+    # Non-ASCII context fails closed by design: the NFKC display form must be
+    # printable ASCII, so homoglyphs and combining marks cannot disguise a name.
+    display = unicodedata.normalize("NFKC", value)
+    if not display or not printable_ascii(display) or len(display) > 256:
+        raise ValueError
+    # Fail the whole context closed before reducing paths, so a secret in a parent
+    # directory, URL userinfo, command flag or prose prefix cannot survive as a fragment.
+    if secret_text(value):
+        raise Redacted
+    # Free-form command/title/argument text cannot distinguish a spaced path
+    # from prose or multiple arguments. Refuse rather than leak parent fragments.
+    # Explicit path/paths fields can safely reduce the entire value.
+    if not path and ("/" in display or "\\" in display) and any(c.isspace() or c in "\"'<>" for c in display):
+        raise ValueError
+    def basename(text):
+        name = text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        if name in {"", ".", ".."}:
+            raise ValueError
+        return name
+    return basename(display) if path or "/" in display or "\\" in display else display
+
+
+def context_input(value, depth=0, path=False):
+    if depth > 3:
+        raise ValueError
+    if isinstance(value, str):
+        return context_string(value, path)
+    if isinstance(value, list):
+        if not 1 <= len(value) <= 8:
+            raise ValueError
+        return [context_input(item, depth + 1, path) for item in value]
+    if isinstance(value, dict):
+        if not 1 <= len(value) <= 8:
+            raise ValueError
+        # No arbitrary input key is copied. Even a secret-bearing KEY may itself
+        # contain a credential, so it fails the whole context closed.
+        if any(secret_text(key) for key in value):
+            raise Redacted
+        clean = {key: context_input(item, depth + 1, key in {"path", "paths"})
+                 for key, item in value.items() if key in RAW_FIELDS}
+        if not clean:
+            raise ValueError
+        return clean
+    # ACP permits arbitrary JSON; this display subset intentionally does not.
+    raise ValueError
+
+
+def source_strings(value):
+    """Every source string value, in order, for one joined check across fields.
+
+    Keys are left out so they cannot separate a flag from its value; each key is
+    checked on its own in context_input.
+    """
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from source_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from source_strings(item)
+
+
+def permission_context(tool):
+    """Project ONLY this request's supported toolCall fields; never recover history."""
+    insufficient = {"state": "insufficient-context"}
+    try:
+        if not isinstance(tool, dict):
+            return insufficient
+        # Bound the source as well as the output, including discarded fields.
+        if len(json.dumps(tool, ensure_ascii=True, separators=(",", ":"))) > 4096:
+            return insufficient
+        if not label(tool.get("toolCallId")) or tool.get("kind") not in TOOL_KINDS:
+            return insufficient
+        title = context_string(tool.get("title"))
+        clean = {"state": "available", "kind": tool["kind"], "title": title}
+        locations = tool.get("locations")
+        if locations is not None:
+            if not isinstance(locations, list) or len(locations) > 8:
+                return insufficient
+            projected = []
+            for location in locations:
+                if not isinstance(location, dict):
+                    return insufficient
+                entry = {"path": context_string(location.get("path"), path=True)}
+                line = location.get("line")
+                if line is not None:
+                    if type(line) is not int or not 0 <= line <= 2147483647:
+                        return insufficient
+                    entry["line"] = line
+                projected.append(entry)
+            clean["locations"] = projected
+        if tool.get("rawInput") is not None:
+            clean["rawInput"] = context_input(tool["rawInput"])
+        # A flag and its value may sit in separate strings, list items or fields
+        # (`["-u", "user:password"]`), so the joined source text is checked too:
+        # title, then every raw input value in source order, then location paths.
+        # Concatenated without a separator, it also catches a name or userinfo
+        # split across fields (`["--pa", "ssword=value"]`).
+        joined = [tool["title"], *source_strings(tool.get("rawInput")), *(x["path"] for x in locations or ())]
+        if secret_text(" ".join(joined)) or secret_text("".join(joined), GLUED_PATTERNS):
+            raise Redacted
+        if len(json.dumps(clean, ensure_ascii=True, separators=(",", ":"))) > MAX_CONTEXT:
+            return insufficient
+        return clean
+    except Redacted:
+        # Raised only after toolCallId and kind passed. Any redaction fails the
+        # whole context closed: no projected title, location or input survives.
+        redacted = {"state": "insufficient-context", "kind": tool["kind"], "title": REDACTED}
+        if tool.get("rawInput") is not None:
+            redacted["rawInput"] = REDACTED
+        return redacted
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return insufficient
 
 
 class Session:
@@ -162,7 +362,7 @@ class Session:
                     raise Refusal("duplicate-permission-option")
                 projected.append({"optionID": item["optionId"], "kind": item["kind"]})
             self.pending[(type(ident), ident)] = ("permission", projected)
-            self.emit({"event": "permission-required", "requestID": ident, "sessionID": self.session_id, "options": projected})
+            self.emit({"event": "permission-required", "requestID": ident, "sessionID": self.session_id, "options": projected, "context": permission_context(params.get("toolCall"))})
         elif method == "cursor/ask_question":
             if "sessionId" in params and params["sessionId"] != self.session_id:
                 raise Refusal("cross-session-question")
