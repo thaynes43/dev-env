@@ -223,7 +223,23 @@ spec:
                     - dev-env-grant-secrets-read
                     - dev-env-grant-nodes
                     - dev-env-grant-breakglass
+                    - dev-env-grant-namespace-operator
                     type: string
+                  secrets:
+                    description: |-
+                      Secrets are the Secrets that the new pods and Jobs of a
+                      dev-env-grant-namespace-operator grant may reference, each by name: no
+                      wildcard, no pattern (DESIGN-042 5.1). They hold in every namespace the
+                      grant names. No other role takes them. The role never gets or lists a
+                      Secret, but a command run in a pod that holds one can print it, so naming
+                      a Secret lets the agent read it.
+                    items:
+                      maxLength: 253
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
+                    maxItems: 16
+                    type: array
+                    x-kubernetes-list-type: set
                 required:
                 - role
                 type: object
@@ -234,6 +250,10 @@ spec:
                     and take no namespaces; the other roles name at least one
                   rule: (self.role == 'dev-env-grant-nodes' || self.role == 'dev-env-grant-breakglass')
                     == (!has(self.namespaces) || size(self.namespaces) == 0)
+                - message: only role dev-env-grant-namespace-operator names secrets
+                    (DESIGN-042 5.1)
+                  rule: '!has(self.secrets) || size(self.secrets) == 0 || self.role
+                    == ''dev-env-grant-namespace-operator'''
               maintenance:
                 description: Maintenance is an immutable task envelope.
                 properties:
