@@ -51,6 +51,8 @@ type amFixture struct {
 	key  types.NamespacedName
 	sess *v1alpha1.AgentSession
 	pod  *corev1.Pod
+	// failPolicyGet injects a server error into GrantPolicy reads by name.
+	failPolicyGet bool
 }
 
 // amCase builds a Card C shaped maintenance grant, an attested policy that
@@ -112,11 +114,17 @@ func amCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 		t.Fatal(err)
 	}
 	// The fake client assigns no UIDs; the executor's stop patch tests one.
+	// failPolicyGet makes a read of a GrantPolicy by name a server error.
 	assignUID := interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 		if obj.GetUID() == "" {
 			obj.SetUID(types.UID("uid-" + obj.GetName()))
 		}
 		return c.Create(ctx, obj, opts...)
+	}, Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*v1alpha1.GrantPolicy); ok && f.failPolicyGet {
+			return apierrors.NewInternalError(errors.New("injected"))
+		}
+		return c.Get(ctx, key, obj, opts...)
 	}}
 	f.c = fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(&v1alpha1.AccessGrant{}, &corev1.Pod{}).WithObjects(objects...).WithInterceptorFuncs(assignUID).Build()
 	f.clk = clocktesting.NewFakeClock(now)
@@ -629,6 +637,13 @@ func TestAttestedMaintenanceExecutionRecheck(t *testing.T) {
 			delete(g.Annotations, grantattest.Annotation)
 			f.update(g)
 		}, true},
+		"approval names no policy": {func(f *amFixture) {
+			g := f.grant()
+			g.Status.ApprovedBy = PolicyApprover
+			if err := f.c.Status().Update(ctx, g); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
 		"attested maintenance off": {func(f *amFixture) { f.b.EnableAttestedMaintenance = false }, true},
 		"attested grants off":      {func(f *amFixture) { f.b.EnableAttestedGrants = false }, true},
 	} {
@@ -669,5 +684,81 @@ func TestAttestedMaintenanceExecutionRecheck(t *testing.T) {
 	g := f.grant()
 	if g.Status.Phase != v1alpha1.GrantActive || g.Status.Maintenance == nil || g.Status.Maintenance.Executor != "StopPending" {
 		t.Fatalf("running executor not asked to stop: %+v", g.Status)
+	}
+}
+
+// This route approves one lease per node UID and resource at a time: a second
+// matching grant waits while the first is Active and approves once it ended.
+// Another resource on the same node is not held.
+func TestAttestedMaintenanceOneLeasePerTarget(t *testing.T) {
+	ctx := context.Background()
+	f := amCase(t)
+	wantPolicyApproved(t, f.pendingThenAttest())
+	first := f.key
+	clone := func(name, resource string) types.NamespacedName {
+		var g v1alpha1.AccessGrant
+		if err := f.c.Get(ctx, first, &g); err != nil {
+			t.Fatal(err)
+		}
+		n := &v1alpha1.AccessGrant{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name, UID: types.UID(name + "-uid"), CreationTimestamp: metav1.NewTime(f.clk.Now())}, Spec: *g.Spec.DeepCopy()}
+		n.Spec.Maintenance.Resource = resource
+		if err := f.c.Create(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		return client.ObjectKeyFromObject(n)
+	}
+
+	same := clone("grant-maintenance-c2", amGPU)
+	f.key = same
+	f.step(1)
+	f.attest(f.statement())
+	wantWaiting(t, f)
+	wantWaiting(t, f)
+
+	other := f.policy().DeepCopy()
+	other.ObjectMeta = metav1.ObjectMeta{Namespace: systemNS, Name: amPolicy + "-b"}
+	other.Spec.Maintenance.Resource = amOtherGP
+	if err := f.c.Create(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	f.key = clone("grant-maintenance-c3", amOtherGP)
+	if g := f.pendingThenAttest(); g.Status.Phase != v1alpha1.GrantActive || g.Status.ApprovedBy != PolicyApprover+other.Name {
+		t.Fatalf("another resource was held: %+v", g.Status)
+	}
+
+	f.key = first
+	g := f.grant()
+	g.Spec.Release = true
+	f.update(g)
+	f.step(1)
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantReleased {
+		t.Fatalf("first lease not released: %+v", g.Status)
+	}
+	f.key = same
+	f.step(1)
+	wantPolicyApproved(t, f.grant())
+}
+
+// A server error reading the approving policy is retried: the lease neither ends
+// nor goes on to make an executor, and proceeds once the read succeeds.
+func TestAttestedMaintenanceRecheckRetriesReadErrors(t *testing.T) {
+	ctx := context.Background()
+	f := amCase(t)
+	wantPolicyApproved(t, f.pendingThenAttest())
+	f.failPolicyGet = true
+	if _, err := f.b.Reconcile(ctx, ctrl.Request{NamespacedName: f.key}); err == nil {
+		t.Fatal("a failed policy read was not reported")
+	}
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantActive || f.executorExists() {
+		t.Fatalf("a read error ended the lease or made an executor: %+v", g.Status)
+	}
+	var np networkingv1.NetworkPolicy
+	if err := f.c.Get(ctx, f.key, &np); !apierrors.IsNotFound(err) {
+		t.Fatalf("network policy made before the re-check passed: %v", err)
+	}
+	f.failPolicyGet = false
+	f.step(1)
+	if !f.executorExists() {
+		t.Fatal("no executor once the read succeeded")
 	}
 }

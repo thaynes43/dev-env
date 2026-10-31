@@ -47,7 +47,11 @@ requesting the grant."
    policy auto-approves maintenance. The schema refuses one, and the broker
    does not trust that the schema ran.
 3. The human route is unchanged and is checked first. A bound human
-   decision, approve or deny, wins over any attestation.
+   decision, approve or deny, recorded before the broker approves wins over
+   any attestation. Once the broker has approved through a policy, the grant
+   is no longer pending and the human decision route refuses it. Then the
+   stop is to release the grant, or to delete or narrow the policy or turn
+   a flag off: the next broker pass (about 5 seconds) ends the lease.
 4. Before it approves, the broker checks what it checks for every attested
    approval: the statement is for this grant's UID, it comes from the
    grant's requesting session UID and that session's current Running pod,
@@ -61,7 +65,10 @@ requesting the grant."
    executor exists, and on every later pass, the broker re-checks that the
    approving policy still matches and that the statement still verifies. If
    not, it ends the lease through the existing stop path.
-6. Default off. The broker approves this way only with
+6. This route approves one lease per node UID and resource at a time. A
+   second matching grant waits while another maintenance lease on that
+   target is Active, however that lease was approved.
+7. Default off. The broker approves this way only with
    `--enable-maintenance-grants`, `--enable-attested-grants` and the new
    `--enable-attested-maintenance` all on. The operator needs
    `--enable-maintenance-api` for the request and
@@ -74,10 +81,19 @@ requesting the grant."
 - The agent attestation is a claim, not verified human identity. A session
   that lies about an approval can obtain a lease inside a policy Tom
   already approved in git. The policy is the bound on that risk: it names
-  one node, one resource, one image and the caps.
+  one node, one resource, one image and the caps, per lease. It does not
+  bound how many leases follow one another: each new request, extensions
+  included, needs its own attestation, and each attestation is the same
+  unverified claim.
+- The operator's exec route checks the lease, not its approver. Between
+  broker passes, and while the broker is down, commands run until the
+  broker ends the lease or it expires (at most the policy's `maxTTL`).
 - A rollback to a broker that predates this ADR approves nothing through a
   maintenance policy: an attested policy leaves `profiles`, `repos` and
   `agents` empty, and older brokers never read policies for maintenance.
+  An older broker also does not re-check a lease this route already
+  approved. Before rolling back, turn `--enable-attested-maintenance` off
+  and wait until no policy-approved maintenance lease is Active.
 - A pod roll of the coordinator before approval voids the attestation, as
   for other attested grants. The envelope also pins the coordinator's pod,
   so the coordinator must request again anyway.

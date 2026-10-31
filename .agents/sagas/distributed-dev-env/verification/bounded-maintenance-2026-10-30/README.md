@@ -230,13 +230,19 @@ What changes:
   `memoryMiB` are at or below `maxCPUMillis` and `maxMemoryMiB`; every worker,
   device file and read-only mount it names is one the policy names exactly
   (workers by name, session UID and pod UID); and its TTL is at most the
-  policy's `maxTTL`. The operation and restore text stay audit intent.
+  policy's `maxTTL`. The operation, restore and `extensionOf` text stay audit
+  intent; the coordinator is the requester, which the attestation binds.
 - The schema accepts a maintenance policy only with `spec.attested`, and caps
   its `maxTTL` at 1 hour. `Matches`, the standing-policy test, is false for
   every maintenance grant and policy, whatever the schema did.
 - The human route is unchanged and runs first. `maintenanceDecision` handles a
   grant that carries a human decision annotation, valid or not, before any
-  policy is read.
+  policy is read. A human decision wins only while the grant is pending. After
+  a policy approval, the stop is release, a policy deletion or narrowing, or a
+  flag turned off, each of which ends the lease at the next broker pass.
+- The route approves one lease per node UID and resource at a time. It reads
+  the grants from the API server and waits while another maintenance lease on
+  that target is Active.
 - Otherwise, and only with `--enable-maintenance-grants`,
   `--enable-attested-grants` and `--enable-attested-maintenance` all on, the
   broker evaluates attested policies with the existing `verifyAttestation`
@@ -252,7 +258,12 @@ What changes:
 - `activeMaintenance` re-checks a policy approval on every pass, before the
   network policy and the executor exist and while they run: the flags, the
   approving policy (read from the API server) and the statement in its
-  execution form. A failure ends the lease through the existing stop path.
+  execution form. A refusal ends the lease through the existing stop path. A
+  read error is retried and makes nothing. The operator's exec route checks the
+  lease, not the approver, so commands run until the broker's pass ends it.
+  Before rolling back to a broker without this route, turn
+  `--enable-attested-maintenance` off and wait until no policy-approved lease is
+  Active: an older broker does not re-check one.
 
 What does not change: the envelope, its bounds and immutability; the executor
 and its network isolation; expiry, release and restore; the held admission

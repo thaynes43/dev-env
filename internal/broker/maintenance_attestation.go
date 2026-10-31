@@ -57,12 +57,41 @@ func (b *Broker) attestedMaintenanceApproval(ctx context.Context, g *v1alpha1.Ac
 		log.FromContext(ctx).V(1).Info("attested maintenance: identity or target check failed; the grant waits", append(grantFields(g), "reason", err.Error())...)
 		return false, nil
 	}
+	// A policy bounds each lease, not how many run at once: this route approves
+	// one lease per node UID and resource at a time.
+	if busy, err := b.maintenanceTargetBusy(ctx, g); err != nil || busy {
+		if busy {
+			log.FromContext(ctx).V(1).Info("attested maintenance: another lease holds this target; the grant waits", grantFields(g)...)
+		}
+		return false, err
+	}
 	approve(g, PolicyApprover+p.Name, g.Spec.TTL.Duration, now)
 	written, err := b.writeStatus(ctx, g)
 	if written {
 		b.decided(ctx, g, grantattest.Message(p.Name, *st))
 	}
 	return true, err
+}
+
+// maintenanceTargetBusy reports whether another Active maintenance grant, however
+// it was approved, holds g's node UID and resource. It reads the API server, not
+// the cache, so a lease approved a moment ago counts.
+func (b *Broker) maintenanceTargetBusy(ctx context.Context, g *v1alpha1.AccessGrant) (bool, error) {
+	var grants v1alpha1.AccessGrantList
+	if err := b.APIReader.List(ctx, &grants, client.InNamespace(b.SessionNamespace)); err != nil {
+		return false, fmt.Errorf("list the grants: %w", err)
+	}
+	m := g.Spec.Maintenance
+	for i := range grants.Items {
+		o := &grants.Items[i]
+		if o.UID == g.UID || o.Spec.Type != v1alpha1.GrantMaintenance || o.Spec.Maintenance == nil || o.Status.Phase != v1alpha1.GrantActive {
+			continue
+		}
+		if o.Spec.Maintenance.NodeUID == m.NodeUID && o.Spec.Maintenance.Resource == m.Resource {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // attestedMaintenanceHolds re-checks an Active maintenance grant that a policy
@@ -76,6 +105,9 @@ func (b *Broker) attestedMaintenanceHolds(ctx context.Context, g *v1alpha1.Acces
 	name, ok := strings.CutPrefix(g.Status.ApprovedBy, PolicyApprover)
 	if !ok {
 		return nil
+	}
+	if name == "" {
+		return permanent{errors.New("the approval names no policy")}
 	}
 	if !b.EnableAttestedGrants || !b.EnableAttestedMaintenance {
 		return permanent{errors.New("attested maintenance approvals are disabled")}

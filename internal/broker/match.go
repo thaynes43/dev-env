@@ -123,8 +123,10 @@ func matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant, profiles, repos [
 // Node, node UID, resource, runtime profile and image are equal; the
 // capabilities are a subset; CPU and memory are at or below the caps; and
 // every worker, device file and read-only mount the grant names is one the
-// policy names exactly, so a policy that names none admits none. Operation and
-// restore are audit intent and are not compared. The broker repeats the
+// policy names exactly, so a policy that names none admits none. Operation,
+// restore and extensionOf are audit intent and are not compared; the
+// coordinator is the requester (ValidateMaintenance), which the policy's
+// attested requesters and the attestation bind. The broker repeats the
 // envelope's own bounds (ValidateMaintenance) before it decides.
 func maintenanceInside(g *v1alpha1.MaintenanceTask, p *v1alpha1.MaintenancePolicy) bool {
 	if g == nil || p == nil || !digestImage.MatchString(p.Image) {

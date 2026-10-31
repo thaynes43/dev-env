@@ -51,6 +51,15 @@ func TestScopeDigestUnchangedWithoutMaintenance(t *testing.T) {
 	}
 }
 
+// A maintenance digest is pinned too: a renamed or newly required field of the
+// envelope's JSON would void every attestation already recorded, so it must be
+// a deliberate change.
+func TestScopeDigestMaintenancePinned(t *testing.T) {
+	if got, want := ScopeDigest(maintenanceGrant()), "h0HTRVZJUOqQNexGFDMcVrhtHAHbcUxuEyE9uTItlOM"; got != want {
+		t.Fatalf("maintenance grant digest %q, want %q", got, want)
+	}
+}
+
 func maintenanceGrant() *v1alpha1.AccessGrant {
 	return &v1alpha1.AccessGrant{Spec: v1alpha1.AccessGrantSpec{
 		Requester: v1alpha1.GrantRequester{Session: "s1", SessionUID: "11111111-1111-1111-1111-111111111111"},

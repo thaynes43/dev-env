@@ -4173,8 +4173,10 @@ scope that matches the envelope exactly (node, node UID, resource, runtime
 profile and image equal; capabilities a subset; CPU and memory at or below the
 caps; workers, devices and read-only mounts only when the policy names each
 one exactly; `maxTTL` at most 1 hour). No standing policy approves
-maintenance. The human decision route runs first and is unchanged. The broker
-approves this way only with `--enable-maintenance-grants`,
+maintenance. The human decision route runs first and is unchanged; it wins
+while the grant is pending. The route approves one lease per node UID and
+resource at a time. The broker approves this way only with
+`--enable-maintenance-grants`,
 `--enable-attested-grants` and the new `--enable-attested-maintenance`, all
 default off; it runs the same identity checks as the human route, and
 `activeMaintenance` re-checks the approving policy and the statement on every
