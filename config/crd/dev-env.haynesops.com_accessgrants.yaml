@@ -578,6 +578,80 @@ spec:
                   ApprovedTTL is the TTL it was approved for: spec.ttl, or less when Tom
                   chose "approve for less time".
                 type: string
+              delegateReach:
+                description: DelegateReach records the reviewed policy and identity
+                  binding (DESIGN-042 6.6).
+                properties:
+                  actorAncestryDigest:
+                    maxLength: 64
+                    type: string
+                  authorityKind:
+                    description: AuthorityKind is an explicit union, never inferred
+                      from policy failure.
+                    enum:
+                    - delegatedPolicy
+                    - reserved
+                    type: string
+                  boundsDigest:
+                    maxLength: 64
+                    type: string
+                  boundsRevision:
+                    maxLength: 128
+                    type: string
+                  designated:
+                    description: Designated retains explicit subset membership even
+                      for in-tree decisions.
+                    type: boolean
+                  mode:
+                    enum:
+                    - tree
+                    - policy
+                    type: string
+                  policyDigest:
+                    maxLength: 64
+                    type: string
+                  policyName:
+                    maxLength: 253
+                    type: string
+                  policyUID:
+                    maxLength: 128
+                    type: string
+                  requesterAncestryDigest:
+                    maxLength: 64
+                    type: string
+                  requesterPodUID:
+                    maxLength: 128
+                    type: string
+                  requesterUID:
+                    maxLength: 128
+                    type: string
+                  reservedCase:
+                    description: Reserved fields are usable only after S7 validates
+                      enabled exact bounds.
+                    maxLength: 32
+                    type: string
+                required:
+                - actorAncestryDigest
+                - authorityKind
+                - designated
+                - mode
+                - policyDigest
+                - policyName
+                - policyUID
+                - requesterAncestryDigest
+                - requesterPodUID
+                - requesterUID
+                type: object
+                x-kubernetes-validations:
+                - message: policy reach requires exact policy name UID and digest
+                  rule: self.authorityKind != 'delegatedPolicy' || (size(self.policyName)
+                    > 0 && size(self.policyUID) > 0 && size(self.policyDigest) ==
+                    64)
+                - message: reserved reach requires explicit case revision and digest
+                  rule: self.authorityKind != 'reserved' || (has(self.reservedCase)
+                    && has(self.boundsRevision) && has(self.boundsDigest) && size(self.reservedCase)
+                    > 0 && size(self.boundsRevision) > 0 && size(self.boundsDigest)
+                    == 64)
               deniedBy:
                 description: |-
                   DeniedBy is "authentik/<username>", "broker" (a check failed) or

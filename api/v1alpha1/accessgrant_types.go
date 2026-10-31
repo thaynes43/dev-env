@@ -376,6 +376,10 @@ type AccessGrantStatus struct {
 	// delegate's agent assertion, never verified human consent.
 	// +optional
 	Reserved *ReservedDecisionBinding `json:"reserved,omitempty"`
+	// DelegateReach records the reviewed policy and identity binding (DESIGN-042 6.6).
+	// +optional
+	DelegateReach *DelegateReachBinding `json:"delegateReach,omitempty"`
+
 	// Maintenance keeps executor termination and restore evidence separate.
 	// +optional
 	Maintenance *MaintenanceStatus `json:"maintenance,omitempty"`

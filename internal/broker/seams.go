@@ -111,6 +111,9 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 			}
 			// At apply time, from the API server: the named delegated policy
 			// still covers this grant.
+			if recorded.Reach != nil && recorded.Reach.PolicyName != d.Policy {
+				return fmt.Errorf("%w: decision names another reach policy", ErrRefused)
+			}
 			if err := b.delegatedPolicyCovers(ctx, &g, d.Policy); err != nil {
 				return err
 			}
@@ -124,6 +127,11 @@ func (b *Broker) Decide(ctx context.Context, grantName string, d Decision) error
 		}
 		msg := ""
 		delegate := strings.HasPrefix(d.By, DelegateApprover)
+		if delegate {
+			if recorded, ok := parseDecision(&g); ok {
+				g.Status.DelegateReach = recorded.Reach
+			}
+		}
 		if d.Approve {
 			approve(&g, d.By, ttl, now)
 			if delegate {

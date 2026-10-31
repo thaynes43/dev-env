@@ -133,6 +133,9 @@ type Broker struct {
 	// spec.delegated (DESIGN-042 6.2). It must match the operator's
 	// --grant-delegates. Empty, the default, reads no delegate decision.
 	GrantDelegates []string
+	// GrantPolicyDelegates is the default-empty subset allowed exact policy reach.
+	GrantPolicyDelegates []string
+	LegacyGrantDelegates []LegacyDelegateBinding
 	// Clock is the broker's time; tests step a fake one.
 	Clock clock.PassiveClock
 	// Notifier tells Tom a grant waits for him; nil tells no one.

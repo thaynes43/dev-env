@@ -27,9 +27,10 @@ type MaintenanceDecision struct {
 	At      time.Time     `json:"at"`
 	// Ref, Reason and Delegate are set by the delegate route only, so a human
 	// decision encodes exactly as before.
-	Ref      string            `json:"ref,omitempty"`
-	Reason   string            `json:"reason,omitempty"`
-	Delegate *DelegateIdentity `json:"delegate,omitempty"`
+	Ref      string                         `json:"ref,omitempty"`
+	Reason   string                         `json:"reason,omitempty"`
+	Delegate *DelegateIdentity              `json:"delegate,omitempty"`
+	Reach    *v1alpha1.DelegateReachBinding `json:"reach,omitempty"`
 }
 
 // DelegateIdentity is the delegate's pod-bound identity as the operator
@@ -38,12 +39,13 @@ type MaintenanceDecision struct {
 // broker checks it against the requester again before it decides, its reach
 // included.
 type DelegateIdentity struct {
-	Form       int    `json:"form"`
-	PodName    string `json:"podName"`
-	HostID     string `json:"hostID,omitempty"`
-	PodUID     string `json:"podUID"`
-	Session    string `json:"session,omitempty"`
-	SessionUID string `json:"sessionUID,omitempty"`
+	ServiceAccountUID string `json:"serviceAccountUID,omitempty"`
+	Form              int    `json:"form"`
+	PodName           string `json:"podName"`
+	HostID            string `json:"hostID,omitempty"`
+	PodUID            string `json:"podUID"`
+	Session           string `json:"session,omitempty"`
+	SessionUID        string `json:"sessionUID,omitempty"`
 }
 
 // MaxDecisionBytes bounds the annotation value; the broker reads no longer one.

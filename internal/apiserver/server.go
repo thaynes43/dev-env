@@ -60,6 +60,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
+	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/homeguard"
 	"github.com/thaynes43/dev-env/internal/inbox"
@@ -191,6 +192,9 @@ type Server struct {
 	// the default, leaves the route unregistered (404) and every other route
 	// and view as before.
 	GrantDelegates []string
+	// GrantPolicyDelegates is the default-empty subset allowed exact policy reach.
+	GrantPolicyDelegates []string
+	LegacyGrantDelegates []broker.LegacyDelegateBinding
 	// PolicyNamespace holds delegated GrantPolicies, read through Live before a decision.
 	PolicyNamespace string
 	// Asks serves /v1/asks and /v1/portal/asks (OpenProject Epic #254). Nil leaves both

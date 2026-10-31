@@ -27,6 +27,9 @@ const serviceAccountPrefix = "system:serviceaccount:"
 
 // Identity is who the API server says a token belongs to.
 type Identity struct {
+	// ServiceAccountUID is the authenticated TokenReview user UID.
+	ServiceAccountUID string
+
 	// Username is the user name, for a ServiceAccount
 	// system:serviceaccount:<namespace>:<name>.
 	Username string
@@ -85,7 +88,7 @@ func (t TokenReviewer) Authenticate(ctx context.Context, token string) (Identity
 }
 
 func identityFrom(u authenticationv1.UserInfo) Identity {
-	id := Identity{Username: u.Username}
+	id := Identity{Username: u.Username, ServiceAccountUID: u.UID}
 	if rest, ok := strings.CutPrefix(u.Username, serviceAccountPrefix); ok {
 		if ns, name, ok := strings.Cut(rest, ":"); ok && ns != "" && name != "" && !strings.Contains(name, ":") {
 			id.Namespace, id.ServiceAccount = ns, name
