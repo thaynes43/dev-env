@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseBrokerFlags(t *testing.T) {
 	t.Setenv("POD_NAMESPACE", "dev-env-system")
@@ -8,8 +11,8 @@ func TestParseBrokerFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := brokerOptions{sessionNamespace: "dev-agents", policyNamespace: "dev-env-system", maintenanceHuman: "dev-env-system/dev-env-human", leaderElect: true, metricsAddr: ":8080", probeAddr: ":8081"}
-	if o != want {
+	want := brokerOptions{sessionNamespace: "dev-agents", policyNamespace: "dev-env-system", maintenanceHuman: "dev-env-system/dev-env-human", leaderElect: true, metricsAddr: ":8080", probeAddr: ":8081", attestedCreators: []string{"dev-env-system/dev-env-human"}}
+	if !reflect.DeepEqual(o, want) {
 		t.Errorf("defaults %+v, want %+v", o, want)
 	}
 	if o, err := parseBrokerFlags([]string{"--enable-proxmox-grants"}); err != nil || !o.enableProxmoxGrants {

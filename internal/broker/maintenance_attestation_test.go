@@ -41,6 +41,9 @@ const (
 	amPolicy  = "maintenance-card-c-attested"
 	amHuman   = "human/dev-env-system/dev-env-human"
 	amOther   = "99999999-9999-9999-9999-999999999999"
+	// amCreator is the human ServiceAccount, the default and only attested
+	// maintenance creator (DESIGN-042 S6).
+	amCreator = "dev-env-system/dev-env-human"
 )
 
 type amFixture struct {
@@ -92,13 +95,15 @@ func amCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 	for _, e := range edit {
 		e(g, p)
 	}
+	// An edit may rename the coordinator (liveRequester).
+	coord = g.Spec.Maintenance.Coordinator
 	objects := []client.Object{g, p, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: amNode, UID: amNodeUID}}}
 	f := &amFixture{t: t, key: client.ObjectKeyFromObject(g)}
 	for _, id := range []v1alpha1.MaintenanceIdentity{coord, {Name: "worker", UID: "worker-uid", PodUID: "worker-pod"}} {
 		// The coordinator is top-level, as a session Tom's caller class made;
 		// the worker is its child.
 		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: id.Name, UID: types.UID(id.UID), Labels: map[string]string{v1alpha1.LabelDepth: "0"}}}
-		s.Spec.Parent = "dev-env-system/dev-env-human"
+		s.Spec.Parent = amCreator
 		if id.Name == "worker" {
 			s.Spec.Parent, s.Labels[v1alpha1.LabelDepth] = coord.Name, "1"
 		}
@@ -132,7 +137,8 @@ func amCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 	f.c = fake.NewClientBuilder().WithScheme(sc).WithStatusSubresource(&v1alpha1.AccessGrant{}, &corev1.Pod{}).WithObjects(objects...).WithInterceptorFuncs(assignUID).Build()
 	f.clk = clocktesting.NewFakeClock(now)
 	f.b = &Broker{Client: f.c, APIReader: f.c, SessionNamespace: sessionNS, PolicyNamespace: systemNS, Clock: f.clk,
-		EnableMaintenanceGrants: true, EnableAttestedGrants: true, EnableAttestedMaintenance: true}
+		EnableMaintenanceGrants: true, EnableAttestedGrants: true, EnableAttestedMaintenance: true,
+		AttestedMaintenanceCreators: []string{amCreator}}
 	return f
 }
 
@@ -786,7 +792,11 @@ func TestAttestedMaintenanceRecheckRetriesReadErrors(t *testing.T) {
 }
 
 // Only a top-level requesting session approves maintenance for itself: a child
-// task session waits for the human route, which still approves it.
+// task session waits for the human route, which still approves it. Both caller
+// ServiceAccounts are listed creators here, so this tests the top-level rule;
+// TestAttestedMaintenanceCreatorsRefuse tests the list (DESIGN-042 S6). A
+// session with no parent, which only kubectl makes, is top-level but has no
+// creator, so it waits.
 func TestAttestedMaintenanceRequesterMustBeTopLevel(t *testing.T) {
 	ctx := context.Background()
 	relabel := func(f *amFixture, parent, depth string) {
@@ -808,7 +818,7 @@ func TestAttestedMaintenanceRequesterMustBeTopLevel(t *testing.T) {
 	}{
 		"made by the human caller":        {"dev-env-system/dev-env-human", "0", true},
 		"made by a client caller":         {"dev-env-system/dev-env-workbench-client", "0", true},
-		"made with kubectl":               {"", "", true},
+		"made with kubectl":               {"", "", false},
 		"a child task session":            {"haynes-ops-1029-223503", "1", false},
 		"a grandchild task session":       {"child-session", "2", false},
 		"a child without a depth label":   {"haynes-ops-1029-223503", "", false},
@@ -818,6 +828,7 @@ func TestAttestedMaintenanceRequesterMustBeTopLevel(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := amCase(t)
+			f.b.AttestedMaintenanceCreators = []string{amCreator, "dev-env-system/dev-env-workbench-client"}
 			relabel(f, tc.parent, tc.depth)
 			if !tc.approves {
 				f.pendingThenAttest()
