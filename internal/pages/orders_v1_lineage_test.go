@@ -22,6 +22,10 @@ func TestV1Lineage(t *testing.T) {
 		return string(b)
 	}
 	withParent := func(raw string) string { return strings.TrimSuffix(base, "}") + `,"parentOrder":` + raw + `}` }
+	// startsAt is 1793358000; members created before 1793357970 predate the episode.
+	createdAt := func(order, created string) string {
+		return strings.ReplaceAll(order, `"created":"1793358000"`, `"created":"`+created+`"`)
+	}
 	cases := []struct {
 		name      string
 		data      map[string]string
@@ -42,6 +46,9 @@ func TestV1Lineage(t *testing.T) {
 		{"cycle", map[string]string{root: withParent(parent(child, "1793358000")), child: withParent(parent(root, "1793358000"))}, nil, 0},
 		{"disconnected cycle", map[string]string{root: base, child: withParent(parent(leaf, "1793358000")), leaf: withParent(parent(child, "1793358000"))}, nil, 0},
 		{"unrelated duplicate", map[string]string{root: base, child: withParent(parent(root, "1793358000")), leaf: base}, nil, 0},
+		{"root at skew bound", map[string]string{root: createdAt(base, "1793357970"), child: withParent(parent(root, "1793357970"))}, []string{root, child}, 0},
+		{"early root", map[string]string{root: createdAt(base, "1793357969"), child: withParent(parent(root, "1793357969"))}, nil, 0},
+		{"early middle", map[string]string{root: base, child: strings.TrimSuffix(createdAt(base, "1793357969"), "}") + `,"parentOrder":` + parent(root, "1793358000") + `}`, leaf: withParent(parent(child, "1793357969"))}, nil, 0},
 	}
 	for name, bad := range map[string]string{
 		"null": "null", "array": "[]", "string": `"x"`, "number": "1",

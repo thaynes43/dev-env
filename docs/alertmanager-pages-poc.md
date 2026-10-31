@@ -59,8 +59,8 @@ block a join. A malformed identity twin with readable strings also blocks it.
 State, owner and claim stay Unknown until the canonical claim source is wired.
 Legacy, storm, aggregate and watchdog orders with no identity remain Unjoined.
 A valid empty responder store is Empty. Real joins require the held producer
-identity draft #4489 and lineage extension merged and installed, which is Tom's
-activation decision. See DESIGN-031 section 15.
+draft #4497 (identity and lineage; it supersedes #4489) merged and installed,
+which is Tom's activation decision. See DESIGN-031 section 15.
 
 Missing/unreadable order files yield Unavailable; malformed files yield Invalid,
 however old their capture time (Invalid is decided before freshness). Both return
@@ -76,7 +76,7 @@ are refused as a whole; errors do not echo input. Synthetic fixtures match the
 real mixed store shape; real order contents are never committed.
 
 Before any real join can succeed, the V1 producer must write the `alertIdentity`
-field into order JSON. That haynes-ops change (#4489) is a held draft, not
+field into order JSON. That haynes-ops change (#4497) is a held draft, not
 merged or installed; this slice does not make it. A portal or operator reader would need read access
 to `upgrade-agent` ConfigMaps, which requires a separate approved access decision.
 Those readers remain Unconfigured. No RBAC, activation or runtime acceptance

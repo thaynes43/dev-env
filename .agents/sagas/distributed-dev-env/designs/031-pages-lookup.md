@@ -535,7 +535,8 @@ specifies an immutable optional child field
 `parentOrder: {"key":"<parent data key>","created":"<parent created string>"}`.
 The producer copies both values exactly from the parent when creating an
 `esc-rem-*` promotion child; non-promotion and legacy orders omit it. The
-producer work is a separate held draft extending/superseding haynes-ops #4489.
+producer is haynes-ops held draft #4497, which supersedes the closed draft
+#4489 and carries both `alertIdentity` and `parentOrder`.
 
 The reader accepts several matching identity assertions only when they form
 one explicit chain covering the entire set. There must be exactly one root
@@ -573,12 +574,14 @@ pair without lineage, two- and three-level chains, missing parents, exact
 creation mismatch, forks, cycles, disconnected duplicates, malformed lineage,
 absent identity, ignored keys and absence of order text in output.
 
-**Real joins require the producer drafts MERGED and installed.** The identity
-draft #4489 and its lineage extension are held; activation is Tom's decision.
+**Real joins require the producer draft MERGED and installed.** Held draft
+#4497 (identity and lineage; #4489 is closed as superseded) stays held;
+activation is Tom's decision.
 This change does not lift the hold.
 Until that producer change is merged and installed, every real alert stays
-Unjoined. The draft was inspected read-only at
-`7cf25b1c37ad2851fdb231b1c942fdd3f4572ee0`. This PR changes no haynes-ops files,
+Unjoined. The reader was checked against #4497 read-only at
+`2643f3d3eecd11c6db72d44aefcf6790acb1995e`; its `parentOrder {key, created}`
+shape matches this reader. This PR changes no haynes-ops files,
 reader access, CRD, RBAC, network, portal, inbox or claims implementation and
 activates nothing. Source/tests are separate from installed and accepted;
 OP324 runtime acceptance and canonical claim source wiring remain open.
