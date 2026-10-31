@@ -688,6 +688,9 @@ class CheckerTests(unittest.TestCase):
             ("control-title", dict(good, title="Run\x1b[31m fixture"), "insufficient"),
             ("secret-title", dict(good, title="Use Bearer synthetic-sensitive-value"), "insufficient"),
             ("secret-raw-input", dict(good, rawInput={"command": "run", "args": ["--password=synthetic-sensitive-value"]}), "insufficient"),
+            ("dot-argument", dict(good, rawInput={"command": "rg", "args": ["TODO", "."]}), "available"),
+            ("dot-title", dict(good, title=".."), "available"),
+            ("dot-command", dict(good, rawInput={"command": "."}), "available"),
         ]
         for name, tool, expected in cases:
             with self.subTest(case=name):
@@ -695,6 +698,8 @@ class CheckerTests(unittest.TestCase):
                 raw = receipt(*events)
                 emitted = [e for e in events if e["event"] == "permission-required"][0]
                 self.assertIn("context", emitted)
+                # The checker must record exactly the state the session emitted.
+                self.assertEqual(expected, {"available": "available", "insufficient-context": "insufficient"}[emitted["context"]["state"]])
                 verdict = CHK.classify(raw)
                 self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": expected}])
                 self.assertIs(verdict["permissionDecisionSent"], True)
@@ -715,7 +720,8 @@ class CheckerTests(unittest.TestCase):
                 events = self.session_events(tool)
                 verdict = CHK.classify(receipt(*events))
                 state = verdict["permissionContexts"][0]["permissionContext"]
-                self.assertIn(state, {"available", "insufficient"})
+                emitted = [e for e in events if e["event"] == "permission-required"][0]["context"]["state"]
+                self.assertEqual(state, {"available": "available", "insufficient-context": "insufficient"}[emitted])
                 self.assert_omits(verdict, "DO_NOT_EXPORT", "customer")
 
 

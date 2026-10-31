@@ -86,8 +86,10 @@ entries, each `{path}` or `{path,line}` with `line` an integer from 0 to
 entries, nested at most 3 edges deep, and a map may use only the keys `command`,
 `args`, `path`, `paths`, `query` and `description`; and the whole context is at
 most 2048 bytes as compact ASCII JSON. The session reduces every path-like string
-to its basename, so a string containing `/` or `\`, or equal to `.` or `..`, is
-refused anywhere in a context. The constants (tool kinds, raw keys, size, redaction
+to its basename, so a string containing `/` or `\` is refused anywhere in a
+context. `.` and `..` are refused only in path fields (location paths and
+`rawInput` `path`/`paths`), as the session does; elsewhere, such as an argument,
+they are valid. The constants (tool kinds, raw keys, size, redaction
 marker) are copied from the session, and a test pins them to its values.
 
 The checker does not repeat the session's secret screening and does not claim a

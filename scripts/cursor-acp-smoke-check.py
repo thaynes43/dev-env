@@ -191,7 +191,7 @@ def validate_permission_options(options):
         seen.add(option["optionID"])
 
 
-def context_string_ok(value):
+def context_string_ok(value, path=False):
     """One receipt string: the session's display form, so ASCII with no path separator."""
     if not isinstance(value, str) or not value or len(value) > CONTEXT_STRING_MAX:
         return False
@@ -204,22 +204,24 @@ def context_string_ok(value):
         return False
     if PRINTABLE_ASCII.fullmatch(unicodedata.normalize("NFKC", value)) is None or PRINTABLE_ASCII.fullmatch(value) is None:
         return False
-    # The session reduces every path-like string to its basename before emitting it.
-    return "/" not in value and "\\" not in value and value not in {".", ".."}
+    # The session reduces every path-like string to its basename before emitting it,
+    # and refuses "." and ".." only in path fields, so a non-path "." (for example
+    # an argument) is valid output.
+    return "/" not in value and "\\" not in value and not (path and value in {".", ".."})
 
 
-def context_input_ok(value, depth=0):
+def context_input_ok(value, depth=0, path=False):
     if depth > CONTEXT_DEPTH_MAX:
         return False
     if isinstance(value, str):
-        return context_string_ok(value)
+        return context_string_ok(value, path)
     if isinstance(value, list):
-        return 1 <= len(value) <= CONTEXT_ENTRIES_MAX and all(context_input_ok(item, depth + 1) for item in value)
+        return 1 <= len(value) <= CONTEXT_ENTRIES_MAX and all(context_input_ok(item, depth + 1, path) for item in value)
     if type(value) is dict:
         return (
             1 <= len(value) <= CONTEXT_ENTRIES_MAX
             and set(value) <= RAW_FIELDS
-            and all(context_input_ok(item, depth + 1) for item in value.values())
+            and all(context_input_ok(item, depth + 1, key in {"path", "paths"}) for key, item in value.items())
         )
     return False
 
@@ -230,7 +232,7 @@ def context_locations_ok(locations):
     for location in locations:
         if type(location) is not dict or "path" not in location or set(location) - {"path", "line"}:
             return False
-        if not context_string_ok(location["path"]):
+        if not context_string_ok(location["path"], True):
             return False
         if "line" in location and not (type(location["line"]) is int and 0 <= location["line"] <= 2147483647):
             return False
