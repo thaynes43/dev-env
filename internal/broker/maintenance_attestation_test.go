@@ -78,7 +78,7 @@ func amCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 		},
 	}
 	p := &v1alpha1.GrantPolicy{
-		ObjectMeta: metav1.ObjectMeta{Namespace: systemNS, Name: amPolicy},
+		ObjectMeta: metav1.ObjectMeta{Namespace: systemNS, Name: amPolicy, UID: "policy-uid-c"},
 		Spec: v1alpha1.GrantPolicySpec{
 			Description: "test", Type: v1alpha1.GrantMaintenance,
 			Attested: &v1alpha1.AttestedRequesters{Profiles: []string{"full"}, Repos: []string{"haynes-ops"}},
@@ -95,9 +95,12 @@ func amCase(t *testing.T, edit ...func(*v1alpha1.AccessGrant, *v1alpha1.GrantPol
 	objects := []client.Object{g, p, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: amNode, UID: amNodeUID}}}
 	f := &amFixture{t: t, key: client.ObjectKeyFromObject(g)}
 	for _, id := range []v1alpha1.MaintenanceIdentity{coord, {Name: "worker", UID: "worker-uid", PodUID: "worker-pod"}} {
-		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: id.Name, UID: types.UID(id.UID)}}
+		// The coordinator is top-level, as a session Tom's caller class made;
+		// the worker is its child.
+		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: id.Name, UID: types.UID(id.UID), Labels: map[string]string{v1alpha1.LabelDepth: "0"}}}
+		s.Spec.Parent = "dev-env-system/dev-env-human"
 		if id.Name == "worker" {
-			s.Spec.Parent = coord.Name
+			s.Spec.Parent, s.Labels[v1alpha1.LabelDepth] = coord.Name, "1"
 		}
 		pod := &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: id.Name, UID: types.UID(id.PodUID), Labels: map[string]string{v1alpha1.LabelSession: id.Name},
@@ -612,40 +615,59 @@ func TestAttestedMaintenanceHumanRouteFirst(t *testing.T) {
 // longer fits, the statement no longer verifies, or a flag is off.
 func TestAttestedMaintenanceExecutionRecheck(t *testing.T) {
 	ctx := context.Background()
+	const holds, identity = "maintenance approval no longer holds", "maintenance identity or target no longer valid"
 	for name, tc := range map[string]struct {
 		change func(*amFixture)
-		ends   bool
+		ends   string // the message an ended lease carries; empty: it proceeds
 	}{
-		"unchanged": {func(*amFixture) {}, false},
+		"unchanged": {func(*amFixture) {}, ""},
 		"policy deleted": {func(f *amFixture) {
 			if err := f.c.Delete(ctx, f.policy()); err != nil {
 				t.Fatal(err)
 			}
-		}, true},
+		}, holds},
 		"policy narrowed": {func(f *amFixture) {
 			p := f.policy()
 			p.Spec.Maintenance.MaxMemoryMiB = 64
 			f.update(p)
-		}, true},
+		}, holds},
 		"policy made standing": {func(f *amFixture) {
 			p := f.policy()
 			p.Spec.Profiles, p.Spec.Attested = []string{"full"}, nil
 			f.update(p)
-		}, true},
+		}, holds},
 		"attestation removed": {func(f *amFixture) {
 			g := f.grant()
 			delete(g.Annotations, grantattest.Annotation)
 			f.update(g)
-		}, true},
+		}, holds},
 		"approval names no policy": {func(f *amFixture) {
 			g := f.grant()
 			g.Status.ApprovedBy = PolicyApprover
 			if err := f.c.Status().Update(ctx, g); err != nil {
 				t.Fatal(err)
 			}
-		}, true},
-		"attested maintenance off": {func(f *amFixture) { f.b.EnableAttestedMaintenance = false }, true},
-		"attested grants off":      {func(f *amFixture) { f.b.EnableAttestedGrants = false }, true},
+		}, holds},
+		"requester relabelled as a child": {func(f *amFixture) {
+			var s v1alpha1.AgentSession
+			if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.sess), &s); err != nil {
+				t.Fatal(err)
+			}
+			s.Labels[v1alpha1.LabelDepth] = "1"
+			f.update(&s)
+		}, "the requesting session is a child session"},
+		"coordinator pod changed": {func(f *amFixture) {
+			if err := f.c.Delete(ctx, f.pod); err != nil {
+				t.Fatal(err)
+			}
+			rolled := f.pod.DeepCopy()
+			rolled.ResourceVersion, rolled.UID = "", "coord-pod-2"
+			if err := f.c.Create(ctx, rolled); err != nil {
+				t.Fatal(err)
+			}
+		}, identity},
+		"attested maintenance off": {func(f *amFixture) { f.b.EnableAttestedMaintenance = false }, holds},
+		"attested grants off":      {func(f *amFixture) { f.b.EnableAttestedGrants = false }, holds},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := amCase(t)
@@ -653,9 +675,9 @@ func TestAttestedMaintenanceExecutionRecheck(t *testing.T) {
 			tc.change(f)
 			f.step(1)
 			g := f.grant()
-			if tc.ends {
-				if g.Status.Phase != v1alpha1.GrantReleased || !strings.Contains(g.Status.Message, "maintenance approval no longer holds") || f.executorExists() {
-					t.Fatalf("lease not ended before execution: %+v executor %v", g.Status, f.executorExists())
+			if tc.ends != "" {
+				if g.Status.Phase != v1alpha1.GrantReleased || !strings.Contains(g.Status.Message, tc.ends) || f.executorExists() {
+					t.Fatalf("lease not ended before execution with %q: %+v executor %v", tc.ends, g.Status, f.executorExists())
 				}
 				var np networkingv1.NetworkPolicy
 				if err := f.c.Get(ctx, f.key, &np); !apierrors.IsNotFound(err) {
@@ -760,5 +782,157 @@ func TestAttestedMaintenanceRecheckRetriesReadErrors(t *testing.T) {
 	f.step(1)
 	if !f.executorExists() {
 		t.Fatal("no executor once the read succeeded")
+	}
+}
+
+// Only a top-level requesting session approves maintenance for itself: a child
+// task session waits for the human route, which still approves it.
+func TestAttestedMaintenanceRequesterMustBeTopLevel(t *testing.T) {
+	ctx := context.Background()
+	relabel := func(f *amFixture, parent, depth string) {
+		var s v1alpha1.AgentSession
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.sess), &s); err != nil {
+			t.Fatal(err)
+		}
+		s.Spec.Parent = parent
+		if depth == "" {
+			delete(s.Labels, v1alpha1.LabelDepth)
+		} else {
+			s.Labels[v1alpha1.LabelDepth] = depth
+		}
+		f.update(&s)
+	}
+	for name, tc := range map[string]struct {
+		parent, depth string
+		approves      bool
+	}{
+		"made by the human caller":        {"dev-env-system/dev-env-human", "0", true},
+		"made by a client caller":         {"dev-env-system/dev-env-workbench-client", "0", true},
+		"made with kubectl":               {"", "", true},
+		"a child task session":            {"haynes-ops-1029-223503", "1", false},
+		"a grandchild task session":       {"child-session", "2", false},
+		"a child without a depth label":   {"haynes-ops-1029-223503", "", false},
+		"a portal launch":                 {"portal/tom", "1", false},
+		"a session parent with depth 0":   {"haynes-ops-1029-223503", "0", false},
+		"a ServiceAccount with depth one": {"dev-env-system/dev-env-human", "1", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := amCase(t)
+			relabel(f, tc.parent, tc.depth)
+			if !tc.approves {
+				f.pendingThenAttest()
+				wantWaiting(t, f)
+				f.human(true)
+				f.step(1)
+				if g := f.grant(); g.Status.Phase != v1alpha1.GrantActive || g.Status.ApprovedBy != amHuman {
+					t.Fatalf("the human route did not approve a child requester: %+v", g.Status)
+				}
+				return
+			}
+			wantPolicyApproved(t, f.pendingThenAttest())
+		})
+	}
+}
+
+// An extension (extensionOf) needs the human route; the attested route leaves it
+// waiting, and the human route still approves it.
+func TestAttestedMaintenanceExtensionNeedsHuman(t *testing.T) {
+	f := amCase(t, func(g *v1alpha1.AccessGrant, _ *v1alpha1.GrantPolicy) {
+		g.Spec.Maintenance.ExtensionOf = "grant-earlier"
+	})
+	f.pendingThenAttest()
+	wantWaiting(t, f)
+	f.human(true)
+	f.step(1)
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantActive || g.Status.ApprovedBy != amHuman {
+		t.Fatalf("the human route did not approve the extension: %+v", g.Status)
+	}
+	wantPolicyApproved(t, amCase(t).pendingThenAttest())
+}
+
+// A lease on the same target holds it while it has not ended, however it was
+// approved; an ended one, a waiting one without approval, or one on another
+// target does not. The human route ignores the guard, as before.
+func TestAttestedMaintenanceTargetHeldByOtherGrants(t *testing.T) {
+	ctx := context.Background()
+	decision := func(approve bool) string {
+		raw, _ := json.Marshal(MaintenanceDecision{GrantUID: "other-uid", By: amHuman, Approve: approve})
+		return string(raw)
+	}
+	for name, tc := range map[string]struct {
+		edit func(*v1alpha1.AccessGrant)
+		held bool
+	}{
+		"active": {func(o *v1alpha1.AccessGrant) { o.Status.Phase = v1alpha1.GrantActive }, true},
+		"active and stopping": {func(o *v1alpha1.AccessGrant) {
+			o.Status.Phase, o.Status.Maintenance = v1alpha1.GrantActive, &v1alpha1.MaintenanceStatus{Executor: "StopPending"}
+		}, true},
+		"pending with a human approval": {func(o *v1alpha1.AccessGrant) {
+			o.Status.Phase, o.Annotations = v1alpha1.GrantPending, map[string]string{MaintenanceDecisionAnnotation: decision(true)}
+		}, true},
+		"ended with an unknown executor": {func(o *v1alpha1.AccessGrant) {
+			o.Status.Phase, o.Status.Maintenance = v1alpha1.GrantFailed, &v1alpha1.MaintenanceStatus{Executor: "Unknown"}
+		}, true},
+		"pending without an approval": {func(o *v1alpha1.AccessGrant) { o.Status.Phase = v1alpha1.GrantPending }, false},
+		"pending with a human denial": {func(o *v1alpha1.AccessGrant) {
+			o.Status.Phase, o.Annotations = v1alpha1.GrantPending, map[string]string{MaintenanceDecisionAnnotation: decision(false)}
+		}, false},
+		"released and stopped": {func(o *v1alpha1.AccessGrant) {
+			o.Status.Phase, o.Status.Maintenance = v1alpha1.GrantReleased, &v1alpha1.MaintenanceStatus{Executor: "Terminated"}
+		}, false},
+		"active on another resource": {func(o *v1alpha1.AccessGrant) {
+			o.Status.Phase, o.Spec.Maintenance.Resource = v1alpha1.GrantActive, amOtherGP
+		}, false},
+		"active on another node": {func(o *v1alpha1.AccessGrant) {
+			o.Status.Phase, o.Spec.Maintenance.NodeUID = v1alpha1.GrantActive, amOther
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := amCase(t)
+			o := f.grant().DeepCopy()
+			o.ObjectMeta = metav1.ObjectMeta{Namespace: sessionNS, Name: "grant-maintenance-other", UID: "other-uid", CreationTimestamp: metav1.NewTime(f.clk.Now())}
+			tc.edit(o)
+			st := o.Status
+			if err := f.c.Create(ctx, o); err != nil {
+				t.Fatal(err)
+			}
+			o.Status = st
+			if err := f.c.Status().Update(ctx, o); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.held {
+				wantPolicyApproved(t, f.pendingThenAttest())
+				return
+			}
+			f.pendingThenAttest()
+			wantWaiting(t, f)
+			f.human(true)
+			f.step(1)
+			if g := f.grant(); g.Status.Phase != v1alpha1.GrantActive || g.Status.ApprovedBy != amHuman {
+				t.Fatalf("the human route was held by the guard: %+v", g.Status)
+			}
+		})
+	}
+}
+
+func TestAttestorIsCoordinator(t *testing.T) {
+	m := &v1alpha1.MaintenanceTask{Coordinator: v1alpha1.MaintenanceIdentity{Name: "coord", UID: "coord-uid", PodUID: "coord-pod"}}
+	ok := grantattest.Statement{Attestor: grantattest.Attestor{Session: "coord", SessionUID: "coord-uid", PodUID: "coord-pod"}}
+	if !attestorIsCoordinator(ok, m) {
+		t.Fatal("the coordinator's own statement refused")
+	}
+	for name, edit := range map[string]func(*grantattest.Statement){
+		"other session":     func(s *grantattest.Statement) { s.Attestor.Session = "worker" },
+		"other session UID": func(s *grantattest.Statement) { s.Attestor.SessionUID = "other" },
+		"other pod":         func(s *grantattest.Statement) { s.Attestor.PodUID = "other" },
+	} {
+		st := ok
+		edit(&st)
+		if attestorIsCoordinator(st, m) {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	if attestorIsCoordinator(ok, nil) {
+		t.Error("no envelope accepted")
 	}
 }

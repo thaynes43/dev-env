@@ -4173,17 +4173,24 @@ scope that matches the envelope exactly (node, node UID, resource, runtime
 profile and image equal; capabilities a subset; CPU and memory at or below the
 caps; workers, devices and read-only mounts only when the policy names each
 one exactly; `maxTTL` at most 1 hour). No standing policy approves
-maintenance. The human decision route runs first and is unchanged; it wins
-while the grant is pending. The route approves one lease per node UID and
-resource at a time. The broker approves this way only with
-`--enable-maintenance-grants`,
-`--enable-attested-grants` and the new `--enable-attested-maintenance`, all
-default off; it runs the same identity checks as the human route, and
-`activeMaintenance` re-checks the approving policy and the statement on every
-pass. The scope digest above now also covers the whole maintenance envelope,
-with its sets sorted; the digests of kube, egress and credential grants are
-unchanged. Activation needs a separate attested GrantPolicy in haynes-ops that
-Tom approves.
+maintenance. The human decision route runs first and is unchanged. It wins
+only while the grant is Pending; after a policy approval, revocation is by
+release, policy removal or a flag. The route needs a top-level requesting
+session (no parent session), never approves an extension, and approves one
+lease per node UID and resource at a time. `activeMaintenance` re-checks the
+policy by name, and the statement, on every pass; recording the policy's UID is
+a follow-up. The scope digest above now
+also covers the whole maintenance envelope, with its sets sorted; the digests of
+kube, egress and credential grants are unchanged. Code defaults: the broker
+needs `--enable-maintenance-grants`, `--enable-attested-grants` and the new
+`--enable-attested-maintenance`, and all three are false in code. Live on
+2026-10-31, the first two broker flags and the operator's
+`--enable-grant-attestation` and `--enable-maintenance-api` are already true.
+What remains is the CRD copy, a release and pin, the new flag, and one attested
+maintenance GrantPolicy that Tom approves. ADR-012's executor-shape admission is
+not installed (ADR-013, "Live state"). This is path (a), the requester's
+self-attestation. Path (b), authenticated delegate approval, is a planned
+follow-up.
 
 **D-89 (Accepted 2026-10-28 America/New_York, Tom 01:37:41Z). hw-ssh credential grants lease
 the existing static shared key, not an SSH certificate.** (Numbering notes. Both numbers of the two entries are reused. "D-88" was first used on
@@ -5457,5 +5464,5 @@ blocks only the step it names.
 | D-85 | Owner scope correction: rules/context/coordination shared; repos/worktrees per pod; five outcomes and bounded pilot before full migration. Supersedes mandatory shared Git/RWX and trials; no runtime authority change. | ADR-003, plan 11 |
 | D-86 | `agent-run` exit `6` (unconfirmed), amending D-50's codes 0 to 5: a one-shot request (`msg`, `canary create`, a `--once` read) that was sent and got no confirmed answer exits `6` and is not repeated; it exits `5` only when nothing was sent; a 429 to one exits `1` | 3.5 |
 | D-87 | ADR-006 corrects ADR-005 (Q-31) after its review: the operator stops a private executor only for a Reaping Session with no owner hold, after a confirmed stop intent, never at the suspended-archive deadline; the archives are not private against v1's OPERATOR tier, the broker or the keeper, so H7 adds an archive guard; the terminal record sits beside `lastExecutor` (`executorTerminal`, with a once-only `executorMissed`); a fifth guard exception, `expiryHoldRemovalAllowed`; every HOME delete attempt re-verifies; copies of user files and unclassified agentd names are not exported | 4.4, 4.5, 5.1 |
-| D-88 | Tom 2026-10-27 23:27Z: grants may be approved on the requesting agent's attestation that it obtained user or coordinator approval, only through a GrantPolicy that names `spec.attested`, behind two default-off flags; an unverified claim, not human identity; fail closed on a broker rollback. Amended 2026-10-31 (ADR-013): also maintenance grants, through an attested policy with an exact `spec.maintenance` scope, behind a third default-off flag; the human route runs first | 6.12 |
+| D-88 | Tom 2026-10-27 23:27Z: grants may be approved on the requesting agent's attestation that it obtained user or coordinator approval, only through a GrantPolicy that names `spec.attested`, behind two default-off flags; an unverified claim, not human identity; fail closed on a broker rollback. Amended 2026-10-31 (ADR-013): also maintenance grants from a top-level requester, through an attested policy with an exact `spec.maintenance` scope, behind a third flag that is false in code; the human route runs first and wins while the grant is Pending | 6.12 |
 | D-89 | ACCEPTED 2026-10-28 (Tom 01:37:41Z, "Approved."; departs from Q-07's CA certificate; installed in v2.52.0, pilot passed; also cited in README for Q-35): hw-ssh credential grants lease the existing static shared key into the pod, default off, keeper exec of a fixed script into a tmpfs lease dir; Revoked means only "lease removed from the pod"; not revocable, not contained; no entry in the shared proxmox journal; CA certificates are the follow-up | 6.12 |
