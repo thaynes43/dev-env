@@ -499,7 +499,15 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 			return 0, nil, coordinatorDenied()
 		}
 		if _, err := s.childForCoordinator(ctx, types.NamespacedName{Namespace: s.Policy.SessionNamespace, Name: g.Spec.Requester.Session}, c, g.Spec.Requester.SessionUID); err != nil {
-			return 0, nil, err
+			// S3 reads the grant before posting its UID/digest-bound decision. The
+			// explicit designated subset may review an out-of-tree grant only through
+			// the SAME live actor, separation and exact delegated-policy coverage.
+			if !slices.Contains(s.GrantPolicyDelegates, c.identity.serviceAccountRef()) {
+				return 0, nil, err
+			}
+			if err := s.policyDelegateGrantRead(ctx, &g, c); err != nil {
+				return 0, nil, err
+			}
 		}
 	}
 	v := s.grantView(&g)

@@ -26,6 +26,9 @@ func (b *Broker) delegateIdentityHolds(ctx context.Context, d MaintenanceDecisio
 	if !ok || d.Delegate == nil || (d.Delegate.PodUID == "" || d.Delegate.PodName == "") {
 		return fmt.Errorf("%w: missing delegate identity", ErrRefused)
 	}
+	if ref == b.SessionNamespace+"/dev-env-agent" && d.Delegate.Form != 3 {
+		return fmt.Errorf("%w: shared session account requires exact legacy form", ErrRefused)
+	}
 	var live corev1.Pod
 	if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: ns, Name: d.Delegate.PodName}, &live); err != nil {
 		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
@@ -42,7 +45,7 @@ func (b *Broker) delegateIdentityHolds(ctx context.Context, d MaintenanceDecisio
 	}
 	owner := metav1.GetControllerOf(pod)
 	id := d.Delegate
-	if id.Form != 1 && id.Form != 2 {
+	if id.Form != 1 && id.Form != 2 && id.Form != 3 {
 		return fmt.Errorf("%w: unknown delegate form", ErrRefused)
 	}
 	if id.Session == "" {
@@ -65,6 +68,12 @@ func (b *Broker) delegateIdentityHolds(ctx context.Context, d MaintenanceDecisio
 	}
 	if id.Form == 1 {
 		return nil
+	}
+	if id.Form == 3 {
+		if !delegateListed(d.By, b.GrantPolicyDelegates) {
+			return fmt.Errorf("%w: legacy actor no longer designated", ErrRefused)
+		}
+		return CheckLegacyDelegate(ctx, b.APIReader, b.LegacyGrantDelegates, d.By, id, &sess, pod)
 	}
 	if ns != b.SessionNamespace || !templates.IsCoordinatorServiceAccount(account) || sess.Labels[templates.CoordinatorIdentityLabel] != account {
 		return fmt.Errorf("%w: delegate session admission no longer names its account", ErrRefused)
@@ -119,6 +128,9 @@ func (b *Broker) delegateGrantHolds(ctx context.Context, g *v1alpha1.AccessGrant
 	}
 	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, &requester, false)); err != nil {
 		return fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	if d.Reach != nil {
+		return CheckDelegateReach(ctx, b.APIReader, b.SessionNamespace, b.PolicyNamespace, g, d, b.GrantPolicyDelegates)
 	}
 	if err := b.delegateReach(ctx, d, &requester); err != nil {
 		return err

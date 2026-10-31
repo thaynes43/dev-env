@@ -46,6 +46,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
+	"github.com/thaynes43/dev-env/internal/broker"
 	"github.com/thaynes43/dev-env/internal/contextpublication"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/coordretention"
@@ -130,6 +131,8 @@ type options struct {
 	grantApprovalURL              string
 	grantAttestation              bool
 	grantDelegates                []string
+	grantPolicyDelegates          []string
+	legacyGrantDelegates          []broker.LegacyDelegateBinding
 	maintenanceEnabled            bool
 	asksEnabled                   bool
 	coordinatorEnabled            bool
@@ -201,7 +204,9 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.grantApprovalURL, "grant-approval-url", "", "base URL of the broker's approval page, such as https://dev-env.example.com/grants/; a pending grant's view links to it plus the grant's name (D-56). Empty links nothing")
 	fs.BoolVar(&o.maintenanceEnabled, "enable-maintenance-api", false, "HELD: authenticated bounded maintenance API after policy review")
 	fs.BoolVar(&o.grantAttestation, "enable-grant-attestation", false, "serve POST /v1/grants/{name}/attestation, where a grant's requesting session records its claim that the user or a coordinator approved it (agent attestation, not verified human identity); off, the route does not exist")
-	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, that may decide other agents' grants on POST /v1/grants/{name}/decision: a configured coordinator host, or a session pod running as that account. Never the human, a client, the shared session or the workbench account. Must match the broker's --grant-delegates. Empty, the route does not exist")
+	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, that may decide other agents' grants on POST /v1/grants/{name}/decision: a configured coordinator host, or a session pod running as that account. Never the human, a client, workbench or portal account. The shared baseline account requires an exact --grant-legacy-delegates binding and policy designation. Must match the broker's --grant-delegates. Empty, the route does not exist")
+	policyDelegates := fs.String("grant-policy-delegates", "", "HELD (DESIGN-042 6.6): default-empty subset of --grant-delegates allowed exact live delegated-policy reach outside their tree. Must match both services")
+	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
 	fs.BoolVar(&o.childUsageCapture, "enable-child-usage-capture", false, "copy an accepted direct child's initial usage observation onto its parent Session; default off (OpenProject #109)")
@@ -332,7 +337,16 @@ func parseFlags(args []string) (options, error) {
 	if err != nil {
 		return o, err
 	}
-	if o.grantDelegates, err = apiserver.ParseGrantDelegates(*delegates, policy); err != nil {
+	if o.legacyGrantDelegates, err = broker.ParseLegacyGrantDelegates(*legacyDelegates, o.sessionNamespace, controller.ServiceAccountName); err != nil {
+		return o, err
+	}
+	if o.grantDelegates, err = apiserver.ParseGrantDelegatesWithLegacy(*delegates, policy, o.legacyGrantDelegates); err != nil {
+		return o, err
+	}
+	if o.grantPolicyDelegates, err = broker.ParseGrantPolicyDelegates(*policyDelegates, o.grantDelegates); err != nil {
+		return o, err
+	}
+	if err = broker.ValidateLegacyDelegateLists(o.legacyGrantDelegates, o.grantDelegates, o.grantPolicyDelegates); err != nil {
 		return o, err
 	}
 	if err := apiserver.ValidatePortalCaller(apiserver.Policy{
@@ -875,6 +889,8 @@ func run(args []string) error {
 			GrantAttestation:         o.grantAttestation,
 			MaintenanceEnabled:       o.maintenanceEnabled,
 			GrantDelegates:           o.grantDelegates,
+			GrantPolicyDelegates:     o.grantPolicyDelegates,
+			LegacyGrantDelegates:     o.legacyGrantDelegates,
 			PolicyNamespace:          o.policyNamespace,
 			Asks:                     askStore,
 		}

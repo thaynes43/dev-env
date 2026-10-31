@@ -182,7 +182,7 @@ func delegateSeparation(g *v1alpha1.AccessGrant, d *DelegateIdentity, by string,
 	if requesterPod != nil && string(requesterPod.UID) == d.PodUID {
 		return errors.New("the delegate is the requesting session's pod")
 	}
-	if requesterPod != nil && DelegateRef(requesterPod.Namespace+"/"+requesterPod.Spec.ServiceAccountName) == by {
+	if d.Form != 3 && requesterPod != nil && DelegateRef(requesterPod.Namespace+"/"+requesterPod.Spec.ServiceAccountName) == by {
 		return errors.New("the requesting session runs as the delegate's own account")
 	}
 	if m := g.Spec.Maintenance; m != nil {
@@ -273,8 +273,8 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 	if err := delegateSeparation(g, d.Delegate, d.By, b.sessionPod(ctx, sess, false)); err != nil {
 		return refuse(err.Error())
 	}
-	if err := b.delegateReach(ctx, d, sess); err != nil {
-		if !errors.Is(err, ErrRefused) {
+	if err := b.delegateGrantHolds(ctx, g, d); err != nil {
+		if !errors.Is(err, ErrRefused) || apierrors.IsForbidden(err) {
 			return ctrl.Result{}, true, err
 		}
 		return refuse(err.Error())
@@ -292,6 +292,16 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return ctrl.Result{}, true, fmt.Errorf("list the grant policies: %w", err)
 	}
 	p := MatchDelegated(g, policies.Items)
+	if d.Reach != nil {
+		p = nil
+		for i := range policies.Items {
+			candidate := &policies.Items[i]
+			if candidate.Name == d.Reach.PolicyName && string(candidate.UID) == d.Reach.PolicyUID && candidate.DeletionTimestamp.IsZero() && MatchesDelegated(candidate, g) && DelegatedPolicyDigest(candidate) == d.Reach.PolicyDigest {
+				p = candidate
+				break
+			}
+		}
+	}
 	if p == nil {
 		return refuse("no policy with spec.delegated covers this grant's scope and requester")
 	}
@@ -308,6 +318,8 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		}
 	}
 	switch err := b.Decide(ctx, g.Name, dec); {
+	case apierrors.IsForbidden(err):
+		return ctrl.Result{}, true, err
 	case errors.Is(err, ErrNotPending):
 		return ctrl.Result{}, true, nil
 	case errors.Is(err, ErrRefused):
@@ -366,6 +378,9 @@ func (b *Broker) delegatedHolds(ctx context.Context, g *v1alpha1.AccessGrant) er
 	d, ok := parseDecision(g)
 	if !ok || !d.Approve || d.By != g.Status.ApprovedBy || d.GrantUID != string(g.UID) || d.Digest != grantattest.ScopeDigest(g) {
 		return permanent{errors.New("the delegate decision no longer binds this grant")}
+	}
+	if g.Status.DelegateReach != nil && (d.Reach == nil || *g.Status.DelegateReach != *d.Reach) {
+		return permanent{errors.New("the recorded reach binding changed")}
 	}
 	if err := b.delegateGrantHolds(ctx, g, d); err != nil {
 		if errors.Is(err, ErrRefused) {
