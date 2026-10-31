@@ -219,3 +219,17 @@ provenance-label correction now covers API/CLI/wire comments/help and documentat
 It is a wording correction under existing delegated authority, not a fresh-human
 or eligibility requirement. After800 custody ended, ADDENDUM14 assigns those wording-only files to this
 separate802 commit. No authorization predicate or wire shape changes.
+
+
+Verified client artifact receipt (source preparation,2026-10-31 22:49Z):
+`/home/dev/.shared/handoffs/rd2-admin-proposal-20261031/clients/agent-run-linux-amd64`
+is15919679bytes, mode0555, SHA256
+`ac8411ee90641050320072329422b0fab9b66c18296aa726f162d53846ed3436`.
+It was built with Go1.27.3/CGO_ENABLED=0 from exact source
+b29d4939a47931aceaf02f16a0f6d30b8920601d. Version and offline grant help exit0;
+help contains the corrected configured-authority reference. The entire old/current
+protocol file comparison is equal. Both intended Pods mount the shared path.
+`CLIENT-COMPATIBILITY.md` retains the build/version/hash and metadata receipts.
+This unsigned source helper was not made the default or invoked against the live
+API; it grants no authority. Later use must verify the checksum. This documentation
+commit changes no linked CLI, broker, API, schema or policy fixture bytes fromb29d493.
