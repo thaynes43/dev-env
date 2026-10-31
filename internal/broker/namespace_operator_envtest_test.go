@@ -4,13 +4,17 @@ package broker
 // (DESIGN-042 5.1, P5) and the role it guards, dev-env-grant-namespace-operator
 // (P4). Neither is in haynes-ops yet: both are proposals, kept in
 // testdata/proposed-haynes-ops/ beside the verbatim copies of testdata/haynes-ops/.
-// The identity guard's `use` clause (P5's other delta) is not installed here, so
-// this proves the named-Secret rule on its own.
+// The identity guard is not installed here, so this proves the named-Secret
+// rule on its own.
 //
-// No broker runs in this case. The test makes each grant identity by hand, as the
-// broker would (a ServiceAccount named after the grant and RoleBindings to the
-// catalog role), sets the grant's phase, and sends every pod-bearing request as a
-// server-side dry run: admission runs and nothing is stored.
+// No broker runs. Each grant identity is made by the broker's own ensure, as
+// admin (the haynes-ops broker RBAC for secret-use Roles is P4), and ended by
+// its own revoke. Every pod-bearing request is a server-side dry run: admission
+// runs and nothing is stored.
+//
+// The proposed policy and ClusterRole stay installed for the rest of the
+// package's tests. They act only on pod-bearing requests from grant
+// identities, which no other test in the package makes.
 
 import (
 	"context"
@@ -29,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
@@ -67,16 +72,20 @@ func proposed(t *testing.T) {
 	}
 }
 
-// grantIdentity makes a grant as the broker would leave it: the AccessGrant in
-// phase, its ServiceAccount, and a RoleBinding to its role in each of bindIn
-// (which a test may make wider than the grant's own namespaces). It returns a
-// client that acts as that ServiceAccount.
-func grantIdentity(t *testing.T, kube v1alpha1.KubeGrant, phase v1alpha1.GrantPhase, bindIn ...string) (string, client.Client) {
+// adminBroker makes and revokes grant identities as the broker would, with
+// admin's rights.
+func adminBroker() *Broker {
+	return &Broker{Client: admin, APIReader: admin, SessionNamespace: sessionNS, PolicyNamespace: systemNS, Clock: clocktesting.NewFakeClock(time.Now())}
+}
+
+// grantIdentity makes a grant's identity with the broker's ensure: its
+// ServiceAccount, the catalog RoleBinding in each granted namespace and, for
+// the namespace operator, the secret-use Role and RoleBinding. It revokes it
+// when the test ends, and returns the grant and a client acting as it.
+func grantIdentity(t *testing.T, kube v1alpha1.KubeGrant) (*v1alpha1.AccessGrant, client.Client) {
 	t.Helper()
-	ctx := context.Background()
-	n := name("grant-s5")
 	g := &v1alpha1.AccessGrant{
-		ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: n},
+		ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name("grant-s5")},
 		Spec: v1alpha1.AccessGrantSpec{
 			Requester: v1alpha1.GrantRequester{Session: "s5-session", Repo: "haynes-ops", Profile: "full", Agent: v1alpha1.AgentClaude},
 			Type:      v1alpha1.GrantKube, Kube: &kube,
@@ -84,47 +93,44 @@ func grantIdentity(t *testing.T, kube v1alpha1.KubeGrant, phase v1alpha1.GrantPh
 			Reason: "DESIGN-042 S5 envtest",
 		},
 	}
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: n}}
-	objs := []client.Object{g, sa}
-	for _, ns := range bindIn {
-		objs = append(objs, &rbacv1.RoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: n},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: kube.Role},
-			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Namespace: sessionNS, Name: n}},
-		})
+	if err := check(g); err != nil {
+		t.Fatalf("the test grant fails the broker's checks: %v", err)
 	}
-	for _, o := range objs {
-		if err := admin.Create(ctx, o); err != nil {
-			t.Fatalf("create %T %s: %v", o, o.GetName(), err)
-		}
+	b := adminBroker()
+	if _, err := b.ensure(context.Background(), g); err != nil {
+		t.Fatalf("ensure %s: %v", g.Name, err)
 	}
 	t.Cleanup(func() {
-		for _, o := range objs {
-			if err := admin.Delete(context.Background(), o); err != nil && !apierrors.IsNotFound(err) {
-				t.Errorf("delete %T %s: %v", o, o.GetName(), err)
-			}
+		if err := b.revoke(context.Background(), g, "test end"); err != nil {
+			t.Errorf("revoke %s: %v", g.Name, err)
 		}
 	})
-	setPhase(t, n, phase)
 	cfg := rest.CopyConfig(adminCfg)
 	cfg.Impersonate = rest.ImpersonationConfig{
-		UserName: "system:serviceaccount:" + sessionNS + ":" + n,
+		UserName: "system:serviceaccount:" + sessionNS + ":" + g.Name,
 		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + sessionNS, "system:authenticated"},
 	}
 	c, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return n, c
+	return g, c
 }
 
-func setPhase(t *testing.T, n string, phase v1alpha1.GrantPhase) {
+// strayBinding binds the grant's catalog role in a namespace the grant does
+// not name, as a broken broker might: RBAC then allows the request, and only
+// the policy stands in the way.
+func strayBinding(t *testing.T, g *v1alpha1.AccessGrant, ns string) {
 	t.Helper()
-	g := grant(t, n)
-	g.Status.Phase = phase
-	if err := admin.Status().Update(context.Background(), g); err != nil {
-		t.Fatalf("set %s to %s: %v", n, phase, err)
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: g.Name},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: g.Spec.Kube.Role},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Namespace: sessionNS, Name: g.Name}},
 	}
+	if err := admin.Create(context.Background(), rb); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Delete(context.Background(), rb) })
 }
 
 // secretJob is a one-shot Job in ns whose container takes each named Secret
@@ -164,8 +170,8 @@ func refusedByPolicy(err error) bool {
 	return apierrors.IsForbidden(err) && strings.Contains(err.Error(), secretNamesPolicy+":")
 }
 
-// wantAdmitted waits until a dry-run create of o by c is admitted: the policy's
-// param cache sees grants a moment after they change.
+// wantAdmitted waits until a dry-run create of o by c is admitted: RBAC and
+// the policy see new objects a moment after they are made.
 func wantAdmitted(t *testing.T, c client.Client, o func() client.Object) {
 	t.Helper()
 	eventually(t, "admission of "+describeObject(o()), func() (bool, string) {
@@ -190,6 +196,10 @@ func wantRefused(t *testing.T, c client.Client, o func() client.Object, refused 
 	}
 }
 
+func job(ns string, secrets ...string) func() client.Object {
+	return func() client.Object { return secretJob(ns, secrets...) }
+}
+
 func TestEnvtestGrantSecretNames(t *testing.T) {
 	proposed(t)
 	ctx := context.Background()
@@ -197,26 +207,48 @@ func TestEnvtestGrantSecretNames(t *testing.T) {
 		in, also, stray  = "media", "home-automation", "frontend"
 		named, alsoNamed = "app-secret", "app-db-secret"
 	)
-	job := func(ns string, secrets ...string) func() client.Object {
-		return func() client.Object { return secretJob(ns, secrets...) }
+	op := func(secrets ...string) v1alpha1.KubeGrant {
+		return v1alpha1.KubeGrant{Role: v1alpha1.RoleNamespaceOperator, Namespaces: []string{in}, Secrets: secrets}
 	}
 
-	// The namespace operator in media and home-automation, naming two Secrets,
-	// with a stray binding in frontend that its grant does not name.
-	op, opClient := grantIdentity(t, v1alpha1.KubeGrant{
-		Role: v1alpha1.RoleNamespaceOperator, Namespaces: []string{in, also}, Secrets: []string{named, alsoNamed},
-	}, v1alpha1.GrantActive, in, also, stray)
+	// (iv) No grant anywhere may use a Secret: a namespace-operator identity
+	// whose secret-use objects are gone is refused, with nothing else around.
+	// It runs first, so it is also the barrier that the policy is enforced.
+	t.Run("(iv) no grant authorizes any Secret", func(t *testing.T) {
+		var roles rbacv1.RoleList
+		if err := admin.List(ctx, &roles, client.MatchingLabels{v1alpha1.LabelManagedBy: ManagedBy}); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range roles.Items {
+			if strings.HasSuffix(r.Name, secretUseSuffix) {
+				t.Fatalf("a secret-use Role is left over: %s/%s", r.Namespace, r.Name)
+			}
+		}
+		g, c := grantIdentity(t, op(named))
+		for _, o := range secretUseObjects(g, in) {
+			if err := admin.Delete(ctx, o); err != nil {
+				t.Fatal(err)
+			}
+		}
+		wantRefused(t, c, job(in, named), named)
+		wantAdmitted(t, c, job(in))
+	})
 
-	// First a refusal: it shows the policy is enforced and its param cache
-	// holds this grant, so the admissions after it are not vacuous.
-	t.Run("a Secret the grant does not name", func(t *testing.T) {
+	// The main grant: the namespace operator in two namespaces with two
+	// Secrets, and a stray catalog binding in a third.
+	g, opClient := grantIdentity(t, v1alpha1.KubeGrant{
+		Role: v1alpha1.RoleNamespaceOperator, Namespaces: []string{in, also}, Secrets: []string{named, alsoNamed},
+	})
+	strayBinding(t, g, stray)
+
+	t.Run("(ii) own grant, a Secret it does not name", func(t *testing.T) {
 		for i := range 4 { // each way of referencing one
 			secrets := []string{named, alsoNamed, named, alsoNamed}
 			secrets[i] = "other-secret"
 			wantRefused(t, opClient, job(in, secrets...), "other-secret")
 		}
 	})
-	t.Run("its named Secrets, each way a pod references one", func(t *testing.T) {
+	t.Run("(i) own grant, its named Secrets, each way a pod references one", func(t *testing.T) {
 		wantAdmitted(t, opClient, job(in, named))
 		wantAdmitted(t, opClient, job(in, named, alsoNamed, named, alsoNamed))
 		wantAdmitted(t, opClient, job(also, alsoNamed))
@@ -228,93 +260,97 @@ func TestEnvtestGrantSecretNames(t *testing.T) {
 	t.Run("a named Secret in a namespace the grant does not name", func(t *testing.T) {
 		wantRefused(t, opClient, job(stray, named), named)
 	})
+	t.Run("more than 16 references in one request", func(t *testing.T) {
+		many := make([]string, 17)
+		for i := range many {
+			many[i] = named
+		}
+		wantRefused(t, opClient, job(in, many...), "at most 16")
+	})
 
-	t.Run("a pod-spec update: restart passes, a new unnamed Secret does not", func(t *testing.T) {
+	t.Run("a pod-spec update: restart passes, an unnamed or newly visible Secret does not", func(t *testing.T) {
 		labels := map[string]string{"app": "s5"}
+		spec := secretJob(in, "app-old-secret").Spec.Template.Spec // a Secret the grant does not name
+		spec.RestartPolicy = corev1.RestartPolicyAlways
+		spec.Volumes = append(spec.Volumes, corev1.Volume{Name: "csi", VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{
+			Driver: "synthetic.csi", NodePublishSecretRef: &corev1.LocalObjectReference{Name: "csi-secret"},
+		}}})
 		dep := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Namespace: in, Name: name("s5-app")},
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: labels},
-				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{Labels: labels},
-					// It already mounts a Secret the grant does not name.
-					Spec: secretJob(in, "app-old-secret").Spec.Template.Spec,
-				},
+				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: spec},
 			},
 		}
-		dep.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyAlways
 		if err := admin.Create(ctx, dep); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = admin.Delete(context.Background(), dep) })
-		patch := func(spec string) error {
+		patch := func(body string) error {
 			return opClient.Patch(ctx, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: in, Name: dep.Name}},
-				client.RawPatch(types.StrategicMergePatchType, []byte(spec)), client.DryRunAll)
-		}
-		restart := `{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-10-31T15:00:00Z"}}}}}`
-		if err := patch(restart); err != nil {
-			t.Fatalf("restart refused: %v", err)
+				client.RawPatch(types.StrategicMergePatchType, []byte(body)), client.DryRunAll)
 		}
 		addEnv := func(secret string) string {
 			return fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"op","env":[{"name":"NEW","valueFrom":{"secretKeyRef":{"name":%q,"key":"k"}}}]}]}}}}`, secret)
 		}
-		if err := patch(addEnv(named)); err != nil {
-			t.Fatalf("adding a named Secret refused: %v", err)
-		}
-		if err := patch(addEnv("other-secret")); !refusedByPolicy(err) {
-			t.Fatalf("adding an unnamed Secret: %v, want the policy's refusal", err)
+		for _, c := range []struct {
+			what, body string
+			refused    string // "" is admitted
+		}{
+			{"a restart", `{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-10-31T15:00:00Z"}}}}}`, ""},
+			{"an image change", `{"spec":{"template":{"spec":{"containers":[{"name":"op","image":"synthetic:2"}]}}}}`, ""},
+			{"a named Secret added", addEnv(named), ""},
+			{"an unnamed Secret added", addEnv("other-secret"), "other-secret"},
+			{"a kubelet-only Secret made visible to the container", addEnv("csi-secret"), "csi-secret"},
+		} {
+			err := patch(c.body)
+			switch {
+			case c.refused == "" && err != nil:
+				t.Errorf("%s refused: %v", c.what, err)
+			case c.refused != "" && (!refusedByPolicy(err) || !strings.Contains(err.Error(), c.refused)):
+				t.Errorf("%s: %v, want the policy's refusal naming %s", c.what, err, c.refused)
+			}
 		}
 	})
 
-	t.Run("an app-operator (C1) identity, which names no Secret", func(t *testing.T) {
-		_, wl := grantIdentity(t, v1alpha1.KubeGrant{Role: v1alpha1.RoleWorkloads, Namespaces: []string{in}}, v1alpha1.GrantActive, in)
+	t.Run("(iii) no own authorization, unrelated grants that name the Secret", func(t *testing.T) {
+		for range 3 {
+			grantIdentity(t, op(named))
+		}
+		_, other := grantIdentity(t, op("other-secret"))
+		wantRefused(t, other, job(in, named), named)
+		wantAdmitted(t, other, job(in, "other-secret"))
+		_, wl := grantIdentity(t, v1alpha1.KubeGrant{Role: v1alpha1.RoleWorkloads, Namespaces: []string{in}})
 		wantRefused(t, wl, job(in, named), named)
 		wantAdmitted(t, wl, job(in))
 	})
-	t.Run("a namespace operator that names none, beside one that does", func(t *testing.T) {
-		_, none := grantIdentity(t, v1alpha1.KubeGrant{Role: v1alpha1.RoleNamespaceOperator, Namespaces: []string{in}}, v1alpha1.GrantActive, in)
-		wantRefused(t, none, job(in, named), named)
-		wantAdmitted(t, none, job(in))
-	})
-	t.Run("a grant that is not Active", func(t *testing.T) {
-		_, pending := grantIdentity(t, v1alpha1.KubeGrant{
-			Role: v1alpha1.RoleNamespaceOperator, Namespaces: []string{in}, Secrets: []string{named},
-		}, v1alpha1.GrantPending, in)
-		wantRefused(t, pending, job(in, named), named)
+
+	t.Run("sixteen named Secrets in one Job fit the cost budget", func(t *testing.T) {
+		sixteen := make([]string, 16)
+		for i := range sixteen {
+			sixteen[i] = fmt.Sprintf("app-%d-secret", i)
+		}
+		_, c := grantIdentity(t, op(sixteen...))
+		wantAdmitted(t, c, job(in, sixteen...))
 	})
 
-	// Last, as it ends the main grant: once it is Expired, its named Secrets
-	// are refused too (the broker deletes the identity as well).
-	t.Run("the main grant, once Expired", func(t *testing.T) {
-		setPhase(t, op, v1alpha1.GrantExpired)
+	// Last, as they end the main grant.
+	t.Run("(v) an ended grant authorizes nothing", func(t *testing.T) {
+		// Revoke deletes the secret-use binding first. A Role left without it
+		// allows nothing, though the catalog binding still stands.
+		rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: in, Name: secretUseName(g)}}
+		if err := admin.Delete(ctx, rb); err != nil {
+			t.Fatal(err)
+		}
 		wantRefused(t, opClient, job(in, named), named)
+		wantAdmitted(t, opClient, job(also, alsoNamed)) // the other namespace's binding still stands
+		// The full revoke: nothing of the grant is left.
+		if err := adminBroker().revoke(ctx, g, "ended"); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the revoked grant's refusal", func() (bool, string) {
+			err := opClient.Create(ctx, secretJob(also, alsoNamed), client.DryRunAll)
+			return apierrors.IsForbidden(err), fmt.Sprint(err)
+		})
 	})
-}
-
-// The policy's other params pass trivially, so other grants, however many and
-// whatever they name, neither allow nor refuse the caller's request: twenty
-// more namespace-operator grants naming other-secret change nothing.
-func TestEnvtestGrantSecretNamesIgnoresOtherGrants(t *testing.T) {
-	proposed(t)
-	const in = "media"
-	for range 20 {
-		grantIdentity(t, v1alpha1.KubeGrant{Role: v1alpha1.RoleNamespaceOperator, Namespaces: []string{in}, Secrets: []string{"other-secret"}}, v1alpha1.GrantActive)
-	}
-	_, c := grantIdentity(t, v1alpha1.KubeGrant{Role: v1alpha1.RoleNamespaceOperator, Namespaces: []string{in}, Secrets: []string{"app-secret"}}, v1alpha1.GrantActive, in)
-	job := func(secrets ...string) func() client.Object {
-		return func() client.Object { return secretJob(in, secrets...) }
-	}
-	wantRefused(t, c, job("other-secret"), "other-secret")
-	wantAdmitted(t, c, job("app-secret"))
-	if err := c.Create(context.Background(), secretJob(in, "app-secret"), client.DryRunAll); err != nil {
-		t.Fatalf("the named Secret, once admitted: %v", err)
-	}
-	var list v1alpha1.AccessGrantList
-	if err := admin.List(context.Background(), &list, client.InNamespace(sessionNS)); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("evaluated against %d retained grants", len(list.Items))
-	if len(list.Items) < 21 {
-		t.Fatalf("%d grants in %s, want at least 21", len(list.Items), sessionNS)
-	}
 }

@@ -92,6 +92,14 @@ spec:
                     maxItems: 3
                     type: array
                     x-kubernetes-list-type: set
+                  allowSecretUse:
+                    description: |-
+                      AllowSecretUse lets this attested policy approve a
+                      dev-env-grant-namespace-operator grant on the requester's own
+                      attestation (mode (a), DESIGN-042 5.1). Without it, the policy approves
+                      that role only through a delegate decision (mode (b)). The requester then
+                      both names the Secrets and attests that someone approved them.
+                    type: boolean
                   profiles:
                     description: |-
                       Profiles are the requester profiles it matches. Profile ops never
@@ -304,6 +312,21 @@ spec:
               kube:
                 description: Kube is the roles and namespaces it approves.
                 properties:
+                  deniedSecrets:
+                    description: |-
+                      DeniedSecrets are Secrets no dev-env-grant-namespace-operator grant
+                      under this policy may name, in any of its namespaces: an exact name, or
+                      a prefix ending in "*" such as "sh.helm.release.*" (DESIGN-042 5.1). The
+                      policy does not list the Secrets it allows: each grant names its own,
+                      and its approver decides them. So within the policy's namespaces an
+                      approver may let an agent use any Secret not denied here.
+                    items:
+                      maxLength: 253
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*|[a-z0-9][-a-z0-9.]*\*)$
+                      type: string
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-type: set
                   namespaces:
                     description: |-
                       Namespaces are named one by one: no wildcard, no pattern (DESIGN-001
@@ -340,19 +363,6 @@ spec:
                     minItems: 1
                     type: array
                     x-kubernetes-list-type: set
-                  secrets:
-                    description: |-
-                      Secrets are the Secrets a dev-env-grant-namespace-operator grant may
-                      name, each by name: no wildcard, no pattern (DESIGN-042 5.1). A grant
-                      matches only when every Secret it names is here. A policy that names that
-                      role names at least one; no other role takes them.
-                    items:
-                      maxLength: 253
-                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                      type: string
-                    maxItems: 32
-                    type: array
-                    x-kubernetes-list-type: set
                 required:
                 - roles
                 type: object
@@ -360,11 +370,10 @@ spec:
                 - message: name the namespaces, one by one, for a namespaced role
                   rule: self.roles.all(r, r == 'dev-env-grant-nodes') || (has(self.namespaces)
                     && size(self.namespaces) > 0)
-                - message: a policy for dev-env-grant-namespace-operator names the
-                    Secrets it allows, one by one, and only that role takes secrets
-                    (DESIGN-042 5.1)
-                  rule: self.roles.exists(r, r == 'dev-env-grant-namespace-operator')
-                    == (has(self.secrets) && size(self.secrets) > 0)
+                - message: only a policy for dev-env-grant-namespace-operator takes
+                    deniedSecrets (DESIGN-042 5.1)
+                  rule: '!has(self.deniedSecrets) || size(self.deniedSecrets) == 0
+                    || self.roles.exists(r, r == ''dev-env-grant-namespace-operator'')'
               maintenance:
                 description: |-
                   Maintenance is the one bounded maintenance envelope it approves
@@ -553,6 +562,11 @@ spec:
                 only an attested policy may (DESIGN-042 5.1)'
               rule: '!has(self.kube) || !self.kube.roles.exists(r, r == ''dev-env-grant-namespace-operator'')
                 || has(self.attested)'
+            - message: attested.allowSecretUse is only for a policy that names dev-env-grant-namespace-operator
+                (DESIGN-042 5.1)
+              rule: '!has(self.attested) || !has(self.attested.allowSecretUse) ||
+                !self.attested.allowSecretUse || (has(self.kube) && self.kube.roles.exists(r,
+                r == ''dev-env-grant-namespace-operator''))'
             - message: egress is set for type egress, and only there
               rule: (self.type == 'egress') == has(self.egress)
             - message: credential is set for type credential, and only there

@@ -60,7 +60,9 @@ func TestScopeDigestCoversNamedSecrets(t *testing.T) {
 	if ScopeDigest(reordered) != d {
 		t.Fatal("Secret order changed the digest")
 	}
-	if got := namespaceOperatorGrant().Spec.Kube.Secrets[0]; got != "prowlarr-secret" {
+	unsorted := namespaceOperatorGrant()
+	_ = ScopeDigest(unsorted)
+	if got := unsorted.Spec.Kube.Secrets[0]; got != "prowlarr-secret" {
 		t.Fatalf("the digest sorted the grant's own list: %s", got)
 	}
 	for name, edit := range map[string]func(*v1alpha1.KubeGrant){

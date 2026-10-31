@@ -1110,8 +1110,8 @@ func (in *KubePolicy) DeepCopyInto(out *KubePolicy) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
-	if in.Secrets != nil {
-		in, out := &in.Secrets, &out.Secrets
+	if in.DeniedSecrets != nil {
+		in, out := &in.DeniedSecrets, &out.DeniedSecrets
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
