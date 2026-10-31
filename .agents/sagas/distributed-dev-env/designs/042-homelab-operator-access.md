@@ -56,9 +56,19 @@ with a rollback.
    - one bound storage delete;
    - recording a hardware operation.
 
-   A delegate cannot decide its own or an ancestor's request. Only Tom's human or
-   client caller may launch a delegate session. The Claude lead becomes a delegate
-   only after P6, which waits on the template hold.
+   A delegate cannot decide its own, an ancestor's or a sibling's request (S2). The
+   Claude lead becomes a delegate only after P6, which waits on the template hold. From
+   the S4 security review:
+   - **(a) Workbench exec reaches the delegate's token.** The workbench SA holds
+     `pods/exec` in `dev-agents` (Role `dev-env-workbench`), and no guard covers it.
+     It can therefore read the delegate pod's projected API token, so whoever can exec
+     as the workbench can act as the delegate. A P-delta closes this before
+     activation: P8 refuses workbench exec into pods that run as a coordinator SA.
+     **Tom chooses inside Q-042-01:** add P8 first (recommended), or accept the risk.
+   - **(b) The v1 pod's client (`dev/dev-env`) can launch the lead**, as can Tom's
+     human token and a depth-0 workbench session.
+   - **(c) S2 refuses sibling decisions** within the same session tree, as well as
+     self and ancestor decisions.
 4. **Namespace operator.** A grant in named app namespaces may exec into pods, restart
    workloads, and run Jobs that mount the Secrets that grant names.
    - **Wider than it looks:** a delegate may approve any Secret name in those
@@ -86,9 +96,9 @@ with a rollback.
 | # | Repo | Change | Status | Rollback |
 |---|---|---|---|---|
 | S1 | dev-env | Attested maintenance (ADR-013), flag `--enable-attested-maintenance` | **merged** as `2984528d` (#781); default off | flag false |
-| S2 | dev-env | Delegate decisions (6.3): `--grant-delegates`; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `delegate/<ns>/<sa>`; self, ancestor and no-ref decisions refused; covers maintenance extensions | new; default off | empty the list |
+| S2 | dev-env | Delegate decisions (6.3): `--grant-delegates`; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `delegate/<ns>/<sa>`; self, ancestor, sibling and no-ref decisions refused; covers maintenance extensions | new; default off | empty the list |
 | S3 | dev-env | `agent-run grant decide` and an MCP tool; `secrets`, `targets` and `allNamespaces` on requests; a "no policy covers this" notice | new, small | revert |
-| S4 | dev-env | Named coordinator identity (6.4): templates accept a `dev-env-coordinator-<name>` SA; the pod stays a session caller; only human or client callers launch it; one Running session per SA | new, small | revert |
+| S4 | dev-env | Named coordinator identity (6.4): templates accept a `dev-env-coordinator-<name>` SA; the pod stays a session caller; launched only by human or client callers or a depth-0 workbench session; one Running session per SA | **in review at #787**, fix round in progress | revert |
 | S5 | dev-env | Named Secrets (5.1): `KubeGrant.secrets` in `ScopeDigest`; role `dev-env-grant-namespace-operator`; policy `kube.secretDenyList`; the broker writes a per-grant Role holding `use` on exactly the named Secrets | **PR #785, open.** Its param-only guard must change to the fail-closed check in 5.1. | revert |
 | S6 | dev-env | Attested maintenance creators (6.2): broker flag `--attested-maintenance-creators`, default `dev-env-system/dev-env-human`; depth 1 | new, small; **required before P2 sets `--enable-attested-maintenance`** | reset to the default |
 | S7 | dev-env | Reserved-decision cases (7.1) in the S2 route: RD2, RD3 (named and cluster-wide), RD4 storage, and RD4 hardware as audit intent only. Each binds grant UID, exact scope or target, TTL and a mandatory Tom-message ref. Flag `--reserved-decision-classes`, default empty. | new | empty the flag |
@@ -101,6 +111,7 @@ with a rollback.
 | P5 | haynes-ops | Identity guard: per-name `use` checks (fail closed). VAP `dev-env-grant-scope`: target UIDs for storage deletes. | **activation** | revert; references and deletes refused again |
 | P6 | haynes-ops | SA `dev-agents/dev-env-coordinator-lead` with exactly `dev-env-agent`'s bindings; agent-guard match extended to it; a `coordinator` profile in `dev-env-templates` | **blocked by the global template hold** | revert |
 | P7 | haynes-ops | ClusterRole `dev-env-grant-breakglass` (7.1, RD2) | **activation** | delete it; RD2 is refused again |
+| P8 | haynes-ops | Kyverno exec guard: refuse workbench exec into pods whose SA is `dev-env-coordinator-*` (risk 3a) | **activation**, recommended before T1 | revert; risk 3a returns |
 
 **Independent tracks inside the one approval.** Tom's single approval covers every
 track. Each track lands on its own prerequisites, and no track waits on an unrelated
@@ -110,7 +121,7 @@ R2.
 | Track | What it delivers | Deltas | Prerequisites | When it activates |
 |---|---|---|---|---|
 | **T0** Policies on live machinery | mode (a) class grants for C1 (app namespaces), C3 and C4; the widened `kube-nodes-attested` | the attested-only P1 policies: `kube-workloads`, `egress-cluster-services`, `kube-nodes-attested`, `lan-ssh`, `lan-pve-api`, `credential-hw-ssh-attested`, `credential-proxmox-attested` | none: D-88 is live | **at once**, with its PR |
-| **T1** A real Claude coordinator | the lead runs under its own SA | S4, P6 | S4 source; Q-042-02 | when S4 is pinned and the exception is granted |
+| **T1** A real Claude coordinator | the lead runs under its own SA, bootstrapped from a depth-0 workbench session | S4 (#787), P6, P8 if chosen | S4 source; Q-042-02 | when S4 is pinned and the exception is granted |
 | **T2** Delegated message approval | mode (b) for kube, egress and maintenance | S2, S3; P2 `--grant-delegates`; P3; `delegated` blocks; `kube-workloads-infra` | S2 and S3 source | when S2 and S3 are pinned. It serves coordinator hosts at once, and the lead after T1. |
 | **T3** Pod exec and named Secrets | C2 | S5 (PR #785, with the fail-closed change), P4, P5, `kube-namespace-operator` | S5 source; T2, because the policy is delegated-only | when S5 is pinned and T2 is live |
 | **T4** GPU maintenance | C5 under mode (a) | S1 (merged), S6; `maintenance-card-c`; P2 `--enable-attested-maintenance` | S6 source | when S6 is pinned. Mode (b) for GPU follows T2. |
@@ -133,7 +144,8 @@ activated.
 
 **The decision left for Tom:**
 
-- **Q-042-01:** approve this bundle, with the six risks and the tracks above.
+- **Q-042-01:** approve this bundle, with the six risks and the tracks above. It
+  includes one explicit choice: add P8 before T1 (recommended), or accept risk 3a.
 - **Q-042-02:** grant a template-hold exception for the `coordinator` profile only,
   with no restart of active sessions.
 
@@ -412,7 +424,7 @@ Both modes approve only inside a policy Tom approved, or through an S7 reserved 
 | Who records it | the requesting session (`agent-run grant attest`) | a different allowlisted identity (`agent-run grant decide`) |
 | Provenance | **agent assertion** that `user` or `coordinator:<ref>` approved; it does not authenticate the approver | the delegate is an **authenticated actor**. Tom's consent, when the delegate relays it, is an **agent assertion**. |
 | Binding | grant UID, session UID, pod UID, scope digest, TTL; one statement per grant; 30 min | grant UID, scope digest, TTL; a set-once annotation; a ref is required; 30 min |
-| Separation | none | not the requester, its pod or session, or its descendant. Not a maintenance coordinator or worker. |
+| Separation | none | not the requester, its pod or session, its descendant, or its sibling in the same session tree. Not a maintenance coordinator or worker. |
 | Policy block | `spec.attested` | `spec.delegated` |
 | Recorded as | `policy/<name>`, with "agent attestation, not verified human identity" | `delegate/<ns>/<sa>`, with the ref and "not a human decision" |
 | Types | kube, egress, credential; maintenance with S1 and S6 (no extensions) | kube, egress, maintenance including extensions, and the S7 reserved cases. Not credential, because keeper execution re-checks a `policy/` approver (`credentials.go:71`). |
@@ -475,6 +487,7 @@ Standing policies (`lan-*`, `credential-proxmox`) approve without any ref, as to
   - a caller not on the allowlist;
   - the requester itself: the same pod, or a pod controlled by its session;
   - a descendant of the requester;
+  - a sibling of the requester within the same session tree;
   - a maintenance coordinator or worker;
   - a grant that is not Pending, is over 30 minutes old, or is already decided;
   - a digest mismatch;
@@ -501,8 +514,15 @@ Standing policies (`lan-*`, `credential-proxmox`) approve without any ref, as to
     SAs.
   - `resolveCaller` (`caller.go:121-124`) and `sessionPodAccount` (`caller.go:160`)
     treat such a session-controlled pod as a session, as they do the workbench.
-  - The operator admits the `coordinator` profile only from human or client callers.
+  - The operator admits the `coordinator` profile from three launchers only: the human
+    caller, a client caller (the workbench SA as a client, or the v1 pod's
+    `dev/dev-env`), and a **depth-0 workbench session**. The last is a valid machine
+    route.
+  - A lead launched from a depth-1 workbench child sits at depth 2 and cannot start
+    children. Launch it from the depth-0 workbench session.
   - At most one Running session may use each coordinator SA.
+  - **Exposure.** The workbench SA can exec into the lead's pod and read its token
+    (risk 3a). P8 closes that.
 - **P6:**
   - SA `dev-agents/dev-env-coordinator-lead`, added as a subject to ClusterRoleBinding
     `dev-env-agent` and to RoleBinding `dev-env-agent-cnpg-remediation`.
@@ -702,10 +722,17 @@ Steps:
 5. **Mode (b)**, after S2:
    - A delegate decides an identical request. Expect phase Active and
      `delegate/<ns>/<sa>`.
-   - Expect a refusal when the delegate is the requester, a descendant of it, or uses
+   - Expect a refusal when the delegate is the requester, a descendant or sibling of it, or uses
      a wrong digest.
    - **Disclosure:** the Claude lead can be the delegate only after P6, which waits on
      the template hold.
+   - **T1 acceptance, the actual lead.** After approval, a depth-0 workbench session
+     launches the lead on the `coordinator` profile, with no manual Mac or client step
+     by Tom. Expect:
+     - the lead runs under its own SA;
+     - it decides a worker's grant;
+     - it is refused on a sibling's or an ancestor's grant;
+     - with P8, workbench exec into the lead's pod is refused.
 
 Negatives: `SYS_RAWIO`, another GPU, a control-plane node, a TTL over 1h, or a child
 session self-attesting.
@@ -777,7 +804,7 @@ claim (revision `a5e7555`) is withdrawn.
 
 | ID | Question | Recommended answer |
 |---|---|---|
-| Q-042-01 | Approve the activation bundle in section 0, with the six risks and the tracks stated there? | Approve. To narrow it, drop a single row. For example, keep hardware (risk 5) on today's haynes-ops-only policies, or start mode (b) with an empty delegate list. |
+| Q-042-01 | Approve the activation bundle in section 0, with the six risks and the tracks stated there? | Approve. **It includes one explicit risk choice:** for risk 3a, add P8 before T1 (recommended) or accept workbench exec into the delegate pod. To narrow the bundle, drop a single row. For example, keep hardware (risk 5) on today's haynes-ops-only policies, or start mode (b) with an empty delegate list. |
 | Q-042-02 | Grant a template-hold exception for the `coordinator` profile (P6) only, with no restart of active sessions? | Yes, provided the change drains or restarts no running session. Whether a new templates revision drains idle sessions is Unknown, so that is checked first. **Disclosure:** until it lands, mode (b) cannot serve the Claude lead, which keeps approving through mode (a). |
 
 The lead decides everything else here: the ADR bookkeeping, the namespace split and
