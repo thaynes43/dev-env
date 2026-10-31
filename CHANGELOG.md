@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.75.0](https://github.com/thaynes43/dev-env/compare/v2.74.0...v2.75.0) (2026-10-31)
+
+
+### Features
+
+* **pages:** allowlist evidence origins and batch snapshots (OP316) ([#757](https://github.com/thaynes43/dev-env/issues/757)) ([724d7b9](https://github.com/thaynes43/dev-env/commit/724d7b9d1718de1cc13d016762fc973bd00aa9bd))
+* **scripts:** add offline Cursor ACP smoke receipt checker (OP314) ([#751](https://github.com/thaynes43/dev-env/issues/751)) ([b60014c](https://github.com/thaynes43/dev-env/commit/b60014c9a9d3bcd7af6309a503f316f22a2935b4))
+* **sessions:** retain task outcomes after pod reclaim ([#759](https://github.com/thaynes43/dev-env/issues/759)) ([03db5f4](https://github.com/thaynes43/dev-env/commit/03db5f4ff8e2d3783e52f39e4c7b239e4ee166e1))
+
+
+### Bug Fixes
+
+* count retained session usage once across portal pages ([#756](https://github.com/thaynes43/dev-env/issues/756)) ([d4c5938](https://github.com/thaynes43/dev-env/commit/d4c593815e4699e5c98cf55a77262aa91cf5f3d0))
+* **cursor-acp:** expose bounded sanitized permission context ([#758](https://github.com/thaynes43/dev-env/issues/758)) ([97550f9](https://github.com/thaynes43/dev-env/commit/97550f915c0a5a38a4858c7998b00b01d5f9d256))
+* **deps:** update module github.com/go-jose/go-jose/v4 to v4.1.7 ([#753](https://github.com/thaynes43/dev-env/issues/753)) ([373cb7f](https://github.com/thaynes43/dev-env/commit/373cb7f4ce9a3b3b1efdd557e1814c04ae7193bc))
+* **deps:** update module github.com/google/cel-go to v0.30.0 ([#754](https://github.com/thaynes43/dev-env/issues/754)) ([80640cb](https://github.com/thaynes43/dev-env/commit/80640cb88d1fc18e3126ba6b1d1ca19cf332a4bb))
+* **deps:** update module github.com/jackc/pgx/v5 to v5.12.0 ([#755](https://github.com/thaynes43/dev-env/issues/755)) ([55ff477](https://github.com/thaynes43/dev-env/commit/55ff477e9f2f12afea9f4a18aaa025c9bb22fffc))
+* **portal:** fold the allowance strip on short windows ([#307](https://github.com/thaynes43/dev-env/issues/307)) ([#750](https://github.com/thaynes43/dev-env/issues/750)) ([30969a7](https://github.com/thaynes43/dev-env/commit/30969a7a642a1e5ca12c9b901158b27f56c556d1))
+
 ## [2.74.0](https://github.com/thaynes43/dev-env/compare/v2.73.1...v2.74.0) (2026-10-31)
 
 
