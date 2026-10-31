@@ -1,12 +1,14 @@
 # Saga: distributed-dev-env (dev-env v2)
 
 **2026-10-31 design-only, Epic #112:** [DESIGN-042](designs/042-homelab-operator-access.md)
-proposes one homelab operator access bundle that Tom approves once: five task
-grant classes, including a reusable namespace operator with named Secret use;
-two approval modes (requester attestation under a Tom-approved policy, and an
-authenticated delegate decision); and four reserved decisions. GPU and MAM
-acceptance are pending. Mode (b) for the Claude lead waits on the template hold.
-Q-042-01 and Q-042-02 are pending for Tom; no grant, policy or guard changes.
+proposes one homelab operator access bundle that Tom approves once. It has five
+task grant classes, including a fail-closed namespace operator with named Secret
+use. It has two approval modes: requester attestation under a Tom-approved
+policy, and an authenticated delegate decision. Each reserved class gets a
+route: S7 covers break-glass, Secret read and storage, and S8, a named
+prerequisite, covers RD1. GPU, MAM and reserved-class acceptance are pending.
+Mode (b) for the Claude lead waits on the template hold. Q-042-01 and Q-042-02
+are pending for Tom; no grant, policy or guard changes.
 
 **2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md)
 proposes Session-owned upgrade attempt claims and exact PR/head joins.
