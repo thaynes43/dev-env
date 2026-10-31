@@ -49,7 +49,8 @@ with a rollback.
 3. **Mode (b) and reserved decisions.** Listed delegates may decide other agents'
    grants through the authenticated API. A delegate is an authenticated actor. When a
    delegate relays Tom's answer, Tom's consent is still an agent assertion. With S7, a
-   delegate who cites Tom's message may also execute these reserved cases (RD1 waits on S8):
+   delegate who cites Tom's message may also execute these reserved cases (RD1, bounds
+   changes, already runs through the existing delivery workflow):
    - break-glass;
    - Secret read;
    - one bound storage delete;
@@ -80,7 +81,7 @@ with a rollback.
    - #781 as merged admits any top-level session: headless tasks from the v1-pod
      client, the workbench client or the coordinator-host fixture.
 
-**Persistent deltas, in activation order:**
+**Persistent deltas** (grouped into tracks below):
 
 | # | Repo | Change | Status | Rollback |
 |---|---|---|---|---|
@@ -90,30 +91,34 @@ with a rollback.
 | S4 | dev-env | Named coordinator identity (6.4): templates accept a `dev-env-coordinator-<name>` SA; the pod stays a session caller; only human or client callers launch it; one Running session per SA | new, small | revert |
 | S5 | dev-env | Named Secrets (5.1): `KubeGrant.secrets` in `ScopeDigest`; role `dev-env-grant-namespace-operator`; policy `kube.secretDenyList`; the broker writes a per-grant Role holding `use` on exactly the named Secrets | **PR #785, open.** Its param-only guard must change to the fail-closed check in 5.1. | revert |
 | S6 | dev-env | Attested maintenance creators (6.2): broker flag `--attested-maintenance-creators`, default `dev-env-system/dev-env-human`; depth 1 | new, small; **required before P2 sets `--enable-attested-maintenance`** | reset to the default |
-| S7 | dev-env | Reserved-decision cases (7.1) in the S2 route: RD2, RD3 (named and cluster-wide), RD4 storage, and RD4 hardware as a record. Each binds grant UID, exact scope or target, TTL and a mandatory Tom-message ref. Flag `--reserved-decision-classes`, default empty. | new | empty the flag |
-| S8 | dev-env | RD1 delivery adapter (7.2): grant type `delivery` bound to repository, PR, head and authority-diff digest. **A named activation prerequisite for RD1, reconciled with DESIGN-039.** | new, separate slice | do not enable |
-| R1 | haynes-ops | CRD copy from the release that carries S2 to S8 | routine | remove the new-field policies first, then revert |
+| S7 | dev-env | Reserved-decision cases (7.1) in the S2 route: RD2, RD3 (named and cluster-wide), RD4 storage, and RD4 hardware as audit intent only. Each binds grant UID, exact scope or target, TTL and a mandatory Tom-message ref. Flag `--reserved-decision-classes`, default empty. | new | empty the flag |
+| R1 | haynes-ops | CRD copy from each release that carries S2 to S7 | routine | remove the new-field policies first, then revert |
 | R2 | haynes-ops | Operator and broker pins | routine | pin back |
 | P1 | haynes-ops | Ten GrantPolicies (9.1) | **activation** | delete a policy |
 | P2 | haynes-ops | Broker `--enable-attested-maintenance=true` (after S6); `--grant-delegates=<list>` on operator and broker; `--reserved-decision-classes=rd2,rd3,rd4` | **activation** | false; empty |
-| P3 | haynes-ops | `dev-env-maintenance-annotations` also allows the operator's set-once decision annotation on kube, egress and delivery grants | **activation** | revert |
+| P3 | haynes-ops | `dev-env-maintenance-annotations` also allows the operator's set-once decision annotation on kube and egress grants | **activation** | revert |
 | P4 | haynes-ops | ClusterRole `dev-env-grant-namespace-operator`. The broker may create per-grant Roles `grant-<id>` that hold only `use` on named Secrets; the broker guard pins their shape. Bind and catalog entries. | **activation** | revert; per-grant Roles go at release |
 | P5 | haynes-ops | Identity guard: per-name `use` checks (fail closed). VAP `dev-env-grant-scope`: target UIDs for storage deletes. | **activation** | revert; references and deletes refused again |
 | P6 | haynes-ops | SA `dev-agents/dev-env-coordinator-lead` with exactly `dev-env-agent`'s bindings; agent-guard match extended to it; a `coordinator` profile in `dev-env-templates` | **blocked by the global template hold** | revert |
 | P7 | haynes-ops | ClusterRole `dev-env-grant-breakglass` (7.1, RD2) | **activation** | delete it; RD2 is refused again |
 
-Order:
+**Independent tracks inside the one approval.** Tom's single approval covers every
+track. Each track lands on its own prerequisites, and no track waits on an unrelated
+one. Every track ships as a held haynes-ops PR for Tom's review, after its own R1 and
+R2.
 
-1. Merge S2 to S7 and release them.
-2. Land R1, then R2.
-3. Open one held haynes-ops PR with P1 to P5 and P7. **That PR is the single
-   approval.**
-4. Land P6 when the template hold allows it.
-5. Ship S8 with DESIGN-039 before any agent-executed RD1 change counts as a route.
-6. Run the acceptance in section 10.
+| Track | What it delivers | Deltas | Prerequisites | When it activates |
+|---|---|---|---|---|
+| **T0** Policies on live machinery | mode (a) class grants for C1 (app namespaces), C3 and C4; the widened `kube-nodes-attested` | the attested-only P1 policies: `kube-workloads`, `egress-cluster-services`, `kube-nodes-attested`, `lan-ssh`, `lan-pve-api`, `credential-hw-ssh-attested`, `credential-proxmox-attested` | none: D-88 is live | **at once**, with its PR |
+| **T1** A real Claude coordinator | the lead runs under its own SA | S4, P6 | S4 source; Q-042-02 | when S4 is pinned and the exception is granted |
+| **T2** Delegated message approval | mode (b) for kube, egress and maintenance | S2, S3; P2 `--grant-delegates`; P3; `delegated` blocks; `kube-workloads-infra` | S2 and S3 source | when S2 and S3 are pinned. It serves coordinator hosts at once, and the lead after T1. |
+| **T3** Pod exec and named Secrets | C2 | S5 (PR #785, with the fail-closed change), P4, P5, `kube-namespace-operator` | S5 source; T2, because the policy is delegated-only | when S5 is pinned and T2 is live |
+| **T4** GPU maintenance | C5 under mode (a) | S1 (merged), S6; `maintenance-card-c`; P2 `--enable-attested-maintenance` | S6 source | when S6 is pinned. Mode (b) for GPU follows T2. |
+| **T5** Reserved cases | RD2, RD3, RD4 storage, and RD4 hardware as audit only | S7, P7, P2 `--reserved-decision-classes` | S7 source; T2 | last; it blocks none of T0 to T4 |
 
-The bundle's own activation PR is itself an RD1 change. Tom's direct answer to
-Q-042-01 approves it.
+RD1 (bounds changes) is in no track. It already runs through the existing delivery
+workflow (7.2). This bundle's own PRs use that workflow, approved by Tom's answer to
+Q-042-01.
 
 **Already live** (args read at 13:50Z):
 
@@ -125,6 +130,14 @@ Q-042-01 approves it.
 activated.
 
 **Not in scope:** refusing a ref reused across digests; OP304 auto-review.
+
+**The decision left for Tom:**
+
+- **Q-042-01:** approve this bundle, with the six risks and the tracks above.
+- **Q-042-02:** grant a template-hold exception for the `coordinator` profile only,
+  with no restart of active sessions.
+
+Nothing else is asked.
 
 ## 1. Outcome and Tom's correction
 
@@ -153,8 +166,7 @@ It adds:
 
 - one authenticated decision route, with reserved cases;
 - one reusable namespace role;
-- named Secrets and targets;
-- one delivery adapter.
+- named Secrets and targets.
 
 The acceptance tests are GPU (A1), MAM through a grant (A2), and the reserved-class
 matrix (A3).
@@ -270,7 +282,7 @@ is the template for `dev-env-agent`. D-70 also counts Headlamp's `cluster-admin`
 | G5 | Omni | Admin key | Admin key in `full` and `workbench` | none |
 | G6 | In-cluster app APIs | a fixed list plus internal ingress | platform tier plus `lan-internal-ingress` | small: P1 |
 | G7 | Approval outside a standing policy | not needed | narrow attested policies; human route for maintenance; everything else times out | **main gap**: S2, P1, P6 |
-| G8 | Break-glass, Secret read, destructive storage, bounds changes | via Headlamp `cluster-admin` and self-merge | **no executable path for anyone** | **gap**: S7, S8 (section 7) |
+| G8 | Break-glass, Secret API read, destructive storage | via Headlamp `cluster-admin` | **no executable path for anyone** | **gap**: S7 (section 7). Bounds changes are not a gap: they already run through the delivery workflow. |
 
 The v1 MAM route is **Unknown**: no runbook describes it. `MAM_ID_PROWLARR` is
 mounted in no pod (`kubernetes/main/apps/downloads/qbittorrent/app/helmrelease.yaml:165-169`),
@@ -293,7 +305,7 @@ so exec alone cannot reach it. The likely v1 route was G1.
 | Templates accept only the workbench SA | One non-default identity | Blocks the lead's mode (b) | S4, P6 |
 | Workbench-only LAN policies (Q-110-08) | Hardware only in workbench | Drift now | P1 |
 | [DESIGN-034](034-agent-asks-and-approvals-board.md) | Only a portal human answers an Ask | Deliberate for Asks | Grants never wait on the board |
-| [DESIGN-039](039-access-policy-change-guard.md) | Consent for authority changes; D-88 and relays are not machine-verifiable consent (G039:212-230); Q-269-03 pending | Deliberate, pending | S8 reconciles with it (7.2) |
+| [DESIGN-039](039-access-policy-change-guard.md) | Consent for authority changes; D-88 and relays are not machine-verifiable consent (G039:212-230); Q-269-03 pending | Deliberate, pending | Note only: machine-verifiable consent for authority changes remains DESIGN-039's open Q-269-03. It is not a prerequisite of this bundle. |
 
 ## 5. Capability classes
 
@@ -403,7 +415,7 @@ Both modes approve only inside a policy Tom approved, or through an S7 reserved 
 | Separation | none | not the requester, its pod or session, or its descendant. Not a maintenance coordinator or worker. |
 | Policy block | `spec.attested` | `spec.delegated` |
 | Recorded as | `policy/<name>`, with "agent attestation, not verified human identity" | `delegate/<ns>/<sa>`, with the ref and "not a human decision" |
-| Types | kube, egress, credential; maintenance with S1 and S6 (no extensions) | kube, egress, maintenance including extensions, delivery (S8), and the S7 reserved cases. Not credential, because keeper execution re-checks a `policy/` approver (`credentials.go:71`). |
+| Types | kube, egress, credential; maintenance with S1 and S6 (no extensions) | kube, egress, maintenance including extensions, and the S7 reserved cases. Not credential, because keeper execution re-checks a `policy/` approver (`credentials.go:71`). |
 
 **Trusted in-scope relay versus arbitrary peer claim.**
 
@@ -512,13 +524,16 @@ waits. The agent asks its coordinator, then Tom. A standing widening is an RD1 c
 ## 7. Reserved decisions and external constraints
 
 Tom keeps decision authority over four classes. Reserved does not mean human-executed.
-Once Tom approves by message, an agent records and executes the decision through S7 or
-S8.
+Once Tom approves by message, an agent records and executes the decision.
 
-**Current state, stated plainly.** Today none of RD1 to RD4 has an executable path for
-anyone. Each is designed but not built. The table below gives each class its
-smallest route. Until S7 and S8 ship, the promise in the first paragraph does not
-hold. RD4 hardware remains a convention even after they ship.
+**Current state, stated plainly.**
+
+- **RD1** is executable today, through the delivery workflow (7.2).
+- **RD2, RD3 and RD4 storage** have no executable path for anyone until S7 ships. They
+  are the genuine missing API actor gates.
+- **RD4 hardware** is audit intent only. The platform records the decision, but it does
+  not enforce the target or the hardware semantics. The credential lease is the actual
+  control.
 
 ### 7.1 Reserved-decision cases (S7)
 
@@ -541,33 +556,30 @@ binds the grant UID, the exact scope or target, and the TTL.
 | **RD3a Secret read, named** | `dev-env-grant-secrets-read` in 1 to 16 named namespaces, excluding the Never list (9.2); TTL at most 1h | RoleBindings, as today | Release deletes them. Values already read cannot be recalled. |
 | **RD3b Secret read, cluster-wide** | new `kube.allNamespaces: true`, accepted only for this role and only in a reserved case. At approval the broker expands it to every namespace except the Never list, and records the list in status. Namespaces created later are not covered. TTL at most 1h. | one RoleBinding per listed namespace. It is not a ClusterRoleBinding, which could not exclude the protected namespaces. | as RD3a |
 | **RD4 storage** | `dev-env-grant-storage` in one namespace, plus new `kube.targets` (up to 8 entries of kind, name and UID). VAP `dev-env-grant-scope` (P5) admits a grant identity's DELETE only when the object's UID is in its own Active grant's targets. The RoleBinding exists only while that grant is Active. | the agent deletes each named target | Before the delete: release cancels. After it: destroyed data cannot be reversed. |
-| **RD4 hardware** | **A record, not enforcement.** The decision is attached to the C4 credential grant, naming the operation, the exact target (host plus device serial, or firmware component) and `tomRef`. | the agent, with the C4 lease | The broker cannot enforce the operation. Release removes the key file. It does not stop a running process, recall a copied key, or reverse a wipe or flash. The agent must stop its own process. |
+| **RD4 hardware** | **Audit intent only.** The decision is recorded on the C4 credential grant. It names the operation, the target (host plus device serial, or firmware component) and `tomRef`. The platform does not check either. | the agent, with the C4 lease, which is the actual control | Release removes the key file. It does not stop a running process, recall a copied key, or reverse a wipe or flash. |
 
-### 7.2 RD1 delivery adapter (S8)
+### 7.2 RD1: the existing delivery route
 
-S8 is a separate slice and a **named activation prerequisite**. RD1 (changes to
-policies, the catalog, guards, the delegate list, RBAC or flags) has no agent-executed
-route until S8 ships and DESIGN-039 accepts its record.
+RD1 covers changes to policies, the catalog, guards, the delegate list, RBAC and flags.
+Agents already execute them, through the delivery workflow:
 
-- **Record.** A new AccessGrant type `delivery`. It binds:
-  - the repository (`thaynes43/haynes-ops`);
-  - the PR number;
-  - the exact head SHA;
-  - `authorityDiffDigest`, a SHA-256 over the diff of the bounds paths;
-  - a TTL of at most 24h.
+1. a bot PR;
+2. the delivery guard, with its evidence and receipt (`scripts/delivery/`);
+3. review and the advisory;
+4. a squash merge;
+5. Flux applies it.
 
-  It is decided only by an S7-style reserved decision or Tom's token. Active means
-  consent is recorded.
-- **Execution identities.** `haynes-dev-bot` squash-merges that PR at that head.
-  Flux's kustomize-controller applies it. A different head or diff voids the grant.
-- **Cancellation.** Release before merge cancels. After merge, a revert that only
-  narrows back to the prior bounds needs no new decision. A revert does not undo
-  actions taken under the widened authority.
-- **DESIGN-039.** G039 refuses D-88 claims and relays as machine-verifiable consent
-  (G039:212-230). Its Q-269-03 is pending. The delivery record states its provenance:
-  an authenticated delegate, and Tom's consent as an agent assertion. G039 either
-  accepts that record as its receipt, or names a verified adapter. Until it does,
-  self-merge executes, but nothing enforces Tom's decision.
+#4501 and #4502 are recent examples, executed on Tom's approval. No internal gate
+blocks this route, so nothing new is built for it.
+
+- **Recording.** Tom's message ref goes into the PR body and onto the tracker. It is an
+  agent assertion. The review and receipt artifacts are the audit.
+- **Cancellation.** Closing the PR before merge cancels. After merge, a revert PR
+  narrows back. Actions taken under the widened authority stay.
+- **DESIGN-039.** Machine-verifiable consent for authority changes remains DESIGN-039's
+  open Q-269-03. It is not a prerequisite of this bundle.
+- **Optional future hardening, not required:** a delivery grant bound to the repo, PR,
+  head and authority-diff digest. Earlier revisions named it S8.
 
 ### 7.3 Other limits
 
@@ -591,6 +603,8 @@ actor outside the platform:
 - GitHub admin: org and repo settings, rulesets, App installs and repo secrets. The
   bot has no admin rights.
 - Creating or rotating password-manager items.
+- GitHub branch protection and rulesets on the repositories.
+- Host-side provenance checks on relays by the auto-review.
 
 ## 8. Issuance rules
 
@@ -748,12 +762,12 @@ timestamps are kept. Since then:
 That was an **emergency GitOps repair, not grant-path parity**. The earlier "done"
 claim (revision `a5e7555`) is withdrawn.
 
-### A3: Reserved-class matrix (pending S7 and S8)
+### A3: Reserved-class matrix (pending S7; RD1 exists)
 
 | Class | Provenance recorded | Positive execution | Forbidden caller | Forbidden scope | Expiry, release, cleanup |
 |---|---|---|---|---|---|
-| RD1 | delegate (authenticated actor); `tomRef` (agent assertion); repo, PR, head, diff digest | bot merges that exact head; Flux applies a synthetic fixture policy | the requester; a non-delegate; mode (a) | another head or diff; a non-bounds path | release before merge cancels; the revert narrows back |
-| RD2 | as RD1, on the grant | `grant-<id>` writes a synthetic object in an app namespace | as RD1 | dev-env namespaces; RBAC, CRD or admission writes; a TTL over 1h | the ClusterRoleBinding and SA are gone; later writes are refused |
+| RD1 (existing) | Tom's message ref in the PR body and tracker (agent assertion); delivery-guard receipt; review record | a bot PR through the delivery guard, review, squash merge and Flux; #4501 and #4502 are recent examples | governed by the external GitHub controls (7.3) | the PR diff is the scope | a revert PR; actions taken meanwhile stay |
+| RD2 | delegate (authenticated actor) and `tomRef` (agent assertion), on the grant | `grant-<id>` writes a synthetic object in an app namespace | as RD1 | dev-env namespaces; RBAC, CRD or admission writes; a TTL over 1h | the ClusterRoleBinding and SA are gone; later writes are refused |
 | RD3a | as RD2 | reads a synthetic Secret in one named namespace | as RD1 | a Never namespace; an unnamed namespace | the RoleBinding is gone; later reads are refused |
 | RD3b | as RD2, plus the expanded namespace list in status | reads a synthetic Secret in a listed namespace | as RD1 | a Never namespace; a namespace created after approval | every RoleBinding is gone |
 | RD4 storage | as RD2, plus target UIDs | deletes one synthetic PVC by UID | as RD1 | a same-name PVC with a new UID; another PVC | release before the delete cancels; the binding is gone |
@@ -763,8 +777,8 @@ claim (revision `a5e7555`) is withdrawn.
 
 | ID | Question | Recommended answer |
 |---|---|---|
-| Q-042-01 | Approve the activation bundle in section 0, with the six risks stated there? | Approve. To narrow it, drop a single row. For example, keep hardware (risk 5) on today's haynes-ops-only policies, or start mode (b) with an empty delegate list. |
-| Q-042-02 | Let the one `coordinator` profile (P6) through the global template hold? | Yes, once the hold's own exit criteria allow it. **Disclosure:** until it lands, mode (b) cannot serve the Claude lead, which keeps approving through mode (a). |
+| Q-042-01 | Approve the activation bundle in section 0, with the six risks and the tracks stated there? | Approve. To narrow it, drop a single row. For example, keep hardware (risk 5) on today's haynes-ops-only policies, or start mode (b) with an empty delegate list. |
+| Q-042-02 | Grant a template-hold exception for the `coordinator` profile (P6) only, with no restart of active sessions? | Yes, provided the change drains or restarts no running session. Whether a new templates revision drains idle sessions is Unknown, so that is checked first. **Disclosure:** until it lands, mode (b) cannot serve the Claude lead, which keeps approving through mode (a). |
 
 The lead decides everything else here: the ADR bookkeeping, the namespace split and
 the TTLs.
