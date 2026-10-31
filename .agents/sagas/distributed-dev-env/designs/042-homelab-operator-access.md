@@ -15,7 +15,7 @@
 - **Evidence:** section 2 pins the actual source heads and their limits. Earlier
   live observations in PR782 were made at 13:50–14:23Z on October 31; they are
   dated observations, not a current runtime acceptance claim.
-- **ADR bookkeeping:** ADR-013 is Accepted and unchanged. S6 adds ADR-014; S2 adds
+- **ADR bookkeeping:** [ADR-013](https://github.com/thaynes43/dev-env/blob/2984528d78e54f3dfd77cf12755f2f389a075dff/.agents/sagas/distributed-dev-env/adrs/013-attested-maintenance-approval.md) is Accepted and unchanged. S6 adds ADR-014; S2 adds
   ADR-015. A later accepted decision records the reach/reserved-class changes
   proposed here; do not reuse those numbers or amend an Accepted ADR.
 
@@ -111,6 +111,32 @@ policies that use them. No older CRD is expected to accept `delegated`. A rollba
 removes dependent policy fields and disables issuance before downgrading the CRD or
 binary. Do not roll back past S6 with attested maintenance enabled.
 
+### Rollback by persistent delta
+
+Disable new issuance first, release affected grants and prove cleanup/executor stop
+before removing their enforcement or downgrading source. Never restart active
+agent sessions as a rollback. Preserve audit objects and exact before/after pins.
+
+| Delta | Concrete rollback and limit |
+|---|---|
+| S1 | After maintenance executors stop, set `--enable-attested-maintenance=false`; restore the prior reviewed binary pin only after the remaining dependencies permit it. |
+| S2 | Empty `--grant-delegates` on operator/broker after affected leases end; remove delegated policy blocks before schema/binary downgrade. |
+| S2 policy reach | Empty the proposed `--grant-policy-delegates` subset on both services; verify Active grants that lose reach terminate. Tree-only behavior remains; revoke/clean leases before source rollback. |
+| S3 | Restore the previous CLI/MCP pin; this does not cancel recorded decisions or leases. |
+| S4 | Stop new named-coordinator admission through the held profile/list configuration. Wait for affected sessions to end safely before a classifier/template downgrade; preserve their heartbeat/rescue support and restart none. |
+| S5 | Remove the C2 issuing policy, release leases and remove owned Secret-use Roles/bindings; restore previous source/schema only after all Secret-field dependents are removed. Copies and workload tokens persist as disclosed. |
+| S6 | Disable attested maintenance and prove executor stop before resetting creators or downgrading past S6. Never restore broader creator eligibility while the flag remains enabled. |
+| S7 | Empty reserved-case flags, release original grants and verify owned cleanup before removing fields/source. P7-derived authority and hardware effects are not reversed. |
+| R1 CRDs | Remove policies/requests relying on new fields and disable their issuers before restoring the previous CRD; do not silently prune Active grant evidence. |
+| R2 pins | Restore recorded prior operator/broker/client image digests only after the dependent issuers and leases are stopped; never roll an active session pod. |
+| P1 policies | Delete each new policy or restore its exact previous shape; verify delegated lease recheck/cleanup. Widened node/credential effects already performed remain. |
+| P2 flags/lists | Restore exact prior flags and delegate/creator lists on API/broker after issuance is disabled; verify policy/list loss revocation and maintenance stop. |
+| P3 decision annotation guard | Disable delegated writes and finish pending/Active decisions before restoring the maintenance-only annotation guard; never open an unguarded write interval. |
+| P4 role/catalog/broker rights | Remove C2 issuance and leases, then remove owned use Roles/bindings and the namespace role/catalog entry; restore broker RBAC/shape guard together. |
+| P5 admission guards | After C2/storage leases end, restore the previous **fail-closed** identity/delete guard: new Secret references and storage deletes refuse again. Do not remove a guard while its grant role is still usable. |
+| P6 identity/template | Stop new admission; wait for the new approval session's safe end and remove only its proposed profile/SA/bindings/guard match. Restore exact previous template revision without draining/restarting existing sessions. |
+| P7 root catalog | Disable RD2 issuance, remove original grant bindings/SA, then remove catalog/broker bind rights and role. Copied Secrets, minted credentials, alternate identities and persistent effects require separately authorized containment; deleting P7 does not revoke them. |
+
 ## 1. Outcome and controlling requirements
 
 Tom's October 31 corrections require agent-executable internal capabilities, broad
@@ -146,7 +172,7 @@ latest read-back. A passed local test is not hosted integration or deployment.
 |---|---|---|
 | S1 attested maintenance | PR781 merged `2984528d78e54f3dfd77cf12755f2f389a075dff` | Default-off source; no A1 utility acceptance. |
 | S4 named coordinator | PR787 reviewed `a62bf62e32fe466453de6c41a5ca23ec3970cdab`, merged `b82e3b2954d08a22abc6ed9d61039a40f3cbd1e2` | Independent review approved; required CI green. P6 still held; merge provisions no identity. |
-| S2 / owner 163602 | Draft PR791 current `78e6b3feccd95515a0405b7415d19b3c56743b8f` (includes S6 merge `1195633`); independently reviewed earlier `83103c69f41a389d26d2d2d8df1abecd7f1b08c6`, branch `agent/dev-env-1031-163602`; replaces released draft786 `0678aee` | Full local API PASS 68.267s; real TokenRequest/TokenReview envtest PASS 7.419s, with synthetic Pod materialization. Broker 25.860s, operator 0.097s, schema 8.157s passed. Independent Claude review of `83103c6` **REQUEST CHANGES** for decision-slot lockout; current `78e6b3f` still documents it rather than correcting it. Combined local API 68.239s / broker 26.280s / operator 0.099s passed per owner receipt. Exact-head final CI/review and source correction required. Tree-only source. |
+| S2 / owner 163602 | Draft PR791 current `78e6b3feccd95515a0405b7415d19b3c56743b8f` (includes S6 merge `1195633`); independently reviewed earlier `83103c69f41a389d26d2d2d8df1abecd7f1b08c6`, branch `agent/dev-env-1031-163602`; replaces released draft #786 `0678aee` | Full local API PASS 68.267s; real TokenRequest/TokenReview envtest PASS 7.419s, with synthetic Pod materialization. Broker 25.860s, operator 0.097s, schema 8.157s passed. Independent Claude review of `83103c6` **REQUEST CHANGES** for decision-slot lockout; current `78e6b3f` still documents it rather than correcting it. Combined local API 68.239s / broker 26.280s / operator 0.099s passed per owner receipt. Exact-head final CI/review and source correction required. Tree-only source. |
 | S6 / owner 163602 | PR790 reviewed `aa55b7a63843d17fb9eb50dacfb20a01d9b84881`, merged `119563303ea42b33963b19953c5b264a6b92aac9` at 17:14:39Z; branch `agent/dev-env-1031-163602-s6`; replaces draft789 `40ae62e0ef2d8826e7da536fb853ccdc76ad84a4` | Independent Claude review APPROVE at this head; broker/operator and creator-removal mutation passed. Hosted required CI including Test passed; merged source only. No activation. |
 | S3 / Grok primary, Codex 165730 support | Draft PR792 `3e1f1d39de6442460e20a1b38f0387449d437079`; supplied base `68c398b9c12cc9b93df658d72b68aedf1f067180`; Grok source `49dc659` | Local package/vet/static CLI build and six meaningful mutants PASS. Hosted merge-result Build/Lint fail because moving S2 lacks S5 `CreateGrantRequest.Secrets`/`Grant.Secrets`. Keep draft; integrate after S2/S5, rerun hosted CI and exact-head review. |
 | S5 / separate Grok writer | PR785 `fe3b62fcbcf5d8f7ae8f288d9e3fe52f09a166cd`; local-only correction ACP `ef4f0d17-c002-42e5-9d12-7dc52e6b9e31`, workbench workspace | Existing source green, but not integrated with S2. Local patch corrects same-object digest nonmutation test and discloses any-SA Job exposure. Patch SHA256 `992378f1cfa009828cacb785e96a545ad2bae0880f3bef31179d49cd2fa372d1`; no integrated/tested/pushed-head claim. |
@@ -311,10 +337,12 @@ coordinator-host grant read scope. No fix is claimed until a tested reviewed SHA
 
 Recommend a new `dev-agents/dev-env-coordinator-access` session identity with the
 existing `coordinator` profile shape (`full` plus named SA), existing agent bindings
-and guard coverage. It is an approval session, separate from actual `132039` and
-`223503`. A depth-0 workbench session can launch it through S4's real handler;
-TokenReview then classifies its own projected pod-bound token. This serves the
-unrelated existing GPU and legacy Claude sessions. It cannot approve the launching
+and guard coverage. The name **replaces**, rather than supplements, the earlier proposed
+`dev-env-coordinator-lead`: it describes an approval session instead of implying
+that actual `132039` changes identity. Only the access identity is proposed for the
+initial P6 configuration. It is separate from actual `132039` and `223503`. A depth-0 workbench session can launch it through S4's real handler;
+TokenReview then classifies its own projected pod-bound token. With the **missing 6.6 policy-reach subset implemented and explicitly enabled**,
+this serves the unrelated existing GPU and legacy Claude sessions. It cannot approve the launching
 workbench session's grant, because it is that requester's descendant. For that
 factory's requests, select a separate non-descendant delegate launched through an
 **existing configured nonhuman client** (S4's depth-0 client shape), or another
@@ -490,7 +518,7 @@ namespace isolation.
 | S2 reach follow-up | API/broker reach helpers and decision binding, `cmd/dev-env-operator` subset flag parsing; API/broker tests | Request to 163602 for separate disjoint custody after current fix. Tree default, policy subset validation, self/descendant/participant refusals, UID/digest binding and active revocation. No source-ready claim. |
 | S6 | PR790 creator rule and integration with S2 pending path | 163602; preserve delegate → human → attested order plus S6 creator check. Reverify final combined head and actual TokenRequest/TokenReview envtest. |
 | S5 | server/view `secrets`, digest, schema, `kubeInside` delegated matching, per-grant use Role; local Grok correction | Existing Grok owner. Rebase after corrected S2; generated schema, all five fail-closed cases, same-object nonmutation mutant, any-SA residual exposure and required CI. |
-| S3 | PR792 client commits on final S2/S5 contract | Grok/Codex165730; retarget/rebase after dependencies. Local six-mutant proof retained; hosted Build/Lint/Test and exact-head review required. S7 fields need later explicit client work. |
+| S3 | PR792 client commits on final S2/S5 contract | Grok / Codex 165730; retarget/rebase after dependencies. Local six-mutant proof retained; hosted Build/Lint/Test and exact-head review required. S7 fields need later explicit client work. |
 | S7 | AccessGrant/decision wire/schema/digest; API reserved gate; broker materialize/revoke; RD3 expansion; RD4 target guard and hardware audit | **Unassigned missing source**, feasibility request to existing S2/S5 owners through coordinator before custody. Separate bounded follow-up(s), no duplicate writer or invented source readiness. |
 | R1/R2 | CRD copies before new-field policies; released operator/broker/client pins | Held haynes-ops delivery after source/CI/review. CRD acceptance and binary versions recorded independently. |
 | P2/P3 | matching operator/broker delegate and policy-reach lists, S6 creators, reserved flags; set-once annotation guard for kube/egress/maintenance | Held security/access review. Verify exact subjects and list equality, no annotation forge/overwrite; flags absent/empty fail closed. |
