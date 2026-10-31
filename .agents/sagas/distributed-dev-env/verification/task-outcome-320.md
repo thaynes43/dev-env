@@ -4,7 +4,8 @@ Source contract, 2026-10-31 (OVERNIGHT-OUTCOME-320): at the first managed task's
 exit, agentd reads exactly `~/work/<session>.outcome.json`, at most 2048 bytes.
 The JSON has only `prURLs` (up to three GitHub thaynes43 pull-request URLs,
 256 bytes each), `headSHAs` (up to three 40-hex heads), and `summary` (one
-nonempty printable Unicode line, at most 200 characters). Unknown fields,
+nonempty printable line, at most 200 characters, from the Basic Multilingual
+Plane that Unicode 15.0 already assigned). Unknown fields,
 trailing data, symlinks, non-regular files, missing files and any invalid field
 produce no outcome. No partial text, prompt or transcript is harvested.
 
@@ -92,3 +93,23 @@ Final required local checks passed: `make GO_PARALLELISM=1 lint check-layout
 check-generated` under the same local-toolchain/low-priority environment.
 Lint reported **0 issues**; layout and generated-file verification were clean.
 `make generate` ran explicitly and again through `check-generated`.
+
+## Review fixes, 2026-10-31
+
+An independent review of head `295b8ab6` found five items. Each new test below
+failed on `295b8ab6` and passes after the fix (focused `go test -count=1 -run
+TestTaskOutcome` per package, same low-priority environment, envtest 1.35.0).
+
+| Finding | Fix | New or extended test and its failure on `295b8ab6` |
+| --- | --- | --- |
+| M1: the operator (Go 1.27, Unicode 17.0) accepted summary runes the API server's schema (Kubernetes 1.35, Go 1.25.5, Unicode 15.0) refuses; the Invalid write failed every later heartbeat and skipped child usage capture | Summary runes must be printable, at most U+FFFF, and outside the 84 BMP code points assigned after Unicode 15.0 (derived by checking every rune under both toolchains). A schema refusal of the outcome write is logged as no record. The outcome is recorded after child usage capture, and its errors are logged without failing the heartbeat | `TestTaskOutcomeSummaryRefusesRunesTheSchemaCannot` (U+1FAE9, U+20C1 and others accepted); `TestTaskOutcomeHeartbeatRefusals/post-Unicode-15_rune` (outcome stored); `TestTaskOutcomeSchemaRefusalKeepsHeartbeatAndChildUsage` (heartbeat 422, no child usage receipt); `TestTaskOutcomeSchemaAcceptsEveryOperatorRune` (envtest refused U+088F and U+0897, which the operator accepted) |
+| m2: `.` and `..` repository segments passed both checks | Repository segment pattern refuses exactly `.` and `..`, in Go and the CRD; `.github` stays valid | `TestTaskOutcomePRURLRefusesDotSegments`; `TestTaskOutcomeHeartbeatRefusals/dot_segment`; `TestTaskOutcomeSchema/dot_segment` (both accepted) |
+| m3: identity check allowed `:`, the CRD did not | A dedicated identifier pattern equal to the CRD's; the task budget identifier is unchanged | `TestTaskOutcomeIdentityMatchesSchema` (`:` accepted) |
+| m5: Python byte budget | Guide and CLAUDE.md name `json.dumps(..., ensure_ascii=False)` | Docs only |
+| m4: rollback | Guide rollout note: an older full-status writer is refused by the erasure rule once outcomes exist | Docs only |
+
+`TestTaskOutcomeSchemaAcceptsEveryOperatorRune` dry-runs every operator-accepted
+rune against envtest's API server in 200-rune summaries. It is the tripwire for a
+future Go toolchain whose Unicode tables add Basic Multilingual Plane characters.
+The CRD's PR URL pattern changed; its summary pattern did not, because the
+operator's class is now a strict subset of it.

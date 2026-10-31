@@ -268,7 +268,8 @@ and `make check-layout` (run in CI beside `check-generated`) fails without one.
 For a headless task on an image with outcome retention, write
 `~/work/<session>.outcome.json` before returning. Use only `prURLs` (up to three
 `https://github.com/thaynes43/<repo>/pull/<number>` URLs), `headSHAs` (up to three
-40-hex heads), and `summary` (1–200 printable Unicode characters, one line).
+40-hex heads), and `summary` (1–200 printable characters, one line, none above
+U+FFFF; Python: `json.dumps(..., ensure_ascii=False)`).
 The entire regular file must be at most 2048 bytes; PR URLs are capped at 256
 bytes. Write a temporary file in the same directory and rename it into place.
 Missing or invalid files publish nothing. The first initial-task exit snapshot

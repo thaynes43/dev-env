@@ -696,10 +696,19 @@ The file must be a regular file, at most 2048 bytes, containing exactly one JSON
 object with only these fields:
 
 - `prURLs`: optional array of at most three URLs matching
-  `^https://github\.com/thaynes43/[A-Za-z0-9._-]+/pull/[0-9]{1,6}$`, each at most
-  256 bytes. No off-org links, queries, fragments or trailing paths.
+  `^https://github\.com/thaynes43/(?:\.?[A-Za-z0-9_-][A-Za-z0-9._-]*|\.\.[A-Za-z0-9._-]+)/pull/[0-9]{1,6}$`,
+  each at most 256 bytes. No off-org links, `.` or `..` repository segments,
+  queries, fragments or trailing paths.
 - `headSHAs`: optional array of at most three 40-character hexadecimal commit SHAs.
-- `summary`: required nonempty printable Unicode line, at most 200 characters.
+- `summary`: required nonempty line of at most 200 printable characters from the
+  Basic Multilingual Plane that Unicode 15.0 already assigned. Emoji and other
+  characters above U+FFFF are refused: the Kubernetes API server checks this
+  field with older Unicode tables than the operator, so the operator accepts
+  only characters both agree on.
+
+A Python writer should use `json.dumps(record, ensure_ascii=False)`, so each
+non-ASCII character takes its 2 or 3 UTF-8 bytes rather than a 6-byte `\uXXXX`
+escape and a 200-character summary stays inside 2048 bytes.
 
 Agentd validates the complete file at the initial task's exit and retains that
 snapshot with the original Session/Pod identity. Missing, malformed, oversized,
@@ -718,7 +727,10 @@ The portal's separately versioned strict reader is unchanged in this slice.
 Rollout: this change adds a CRD field and runs `make generate`. Copy the generated
 AgentSession CRD to haynes-ops **before** pinning the new operator; install the
 matching agent and CLI to publish/read outcomes. Source tests do not prove an
-installed rollout or runtime acceptance.
+installed rollout or runtime acceptance. Roll back with care, as for
+`usageObservation`: once any Session holds `status.taskOutcome`, an older
+operator that writes the whole status without that field is refused by the
+CRD's erasure rule for that Session.
 
 ### Read a fixed probe's retained result
 

@@ -19,7 +19,7 @@ type TaskOutcomeRecordStatus struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=3
 	// +kubebuilder:validation:items:MaxLength=256
-	// +kubebuilder:validation:items:Pattern=`^https://github\.com/thaynes43/[A-Za-z0-9._-]+/pull/[0-9]{1,6}$`
+	// +kubebuilder:validation:items:Pattern=`^https://github\.com/thaynes43/(?:\.?[A-Za-z0-9_-][A-Za-z0-9._-]*|\.\.[A-Za-z0-9._-]+)/pull/[0-9]{1,6}$`
 	PRURLs []string `json:"prURLs,omitempty"`
 	// +optional
 	// +kubebuilder:validation:MaxItems=3

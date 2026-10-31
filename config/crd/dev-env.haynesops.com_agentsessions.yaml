@@ -2683,7 +2683,7 @@ spec:
                       prURLs:
                         items:
                           maxLength: 256
-                          pattern: ^https://github\.com/thaynes43/[A-Za-z0-9._-]+/pull/[0-9]{1,6}$
+                          pattern: ^https://github\.com/thaynes43/(?:\.?[A-Za-z0-9_-][A-Za-z0-9._-]*|\.\.[A-Za-z0-9._-]+)/pull/[0-9]{1,6}$
                           type: string
                         maxItems: 3
                         type: array

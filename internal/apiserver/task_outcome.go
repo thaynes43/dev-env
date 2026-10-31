@@ -14,6 +14,7 @@ import (
 
 // recordTaskOutcome is independent of liveness. An optimistic lock fences two
 // simultaneous candidates; omission and replay can never clear the first record.
+// The heartbeat only logs its error: agentd offers the same snapshot each beat.
 func (s *Server) recordTaskOutcome(ctx context.Context, sess *v1alpha1.AgentSession, pod *corev1.Pod, st protocol.Status) error {
 	incoming := st.TaskOutcome
 	if incoming == nil || incoming.Validate() != nil || pod == nil {
@@ -41,7 +42,15 @@ func (s *Server) recordTaskOutcome(ctx context.Context, sess *v1alpha1.AgentSess
 	base := fresh.DeepCopy()
 	fresh.Status.TaskOutcome = &v1alpha1.TaskOutcomeStatus{SessionUID: incoming.SessionUID, PodUID: incoming.PodUID, Record: v1alpha1.TaskOutcomeRecordStatus{PRURLs: append([]string(nil), incoming.Record.PRURLs...), HeadSHAs: append([]string(nil), incoming.Record.HeadSHAs...), Summary: incoming.Record.Summary}}
 	err := s.Client.Status().Patch(ctx, &fresh, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
-	if apierrors.IsConflict(err) {
+	switch {
+	case apierrors.IsConflict(err):
+		// Another writer moved first; a first record, if any, stays.
+		return nil
+	case apierrors.IsInvalid(err):
+		// The schema refused a record this validator accepted, for example a
+		// rune the API server's older Unicode tables do not know. That is no
+		// record. The refused text is not logged.
+		s.Log.Info("task outcome refused by the AgentSession schema; not recorded", "session", sess.Name)
 		return nil
 	}
 	return err

@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -69,7 +73,7 @@ func TestTaskOutcomeHeartbeat(t *testing.T) {
 }
 
 func TestTaskOutcomeHeartbeatRefusals(t *testing.T) {
-	for _, kind := range []string{"off org", "invalid URL", "bad SHA", "oversized", "wrong pod", "wrong session", "busy", "unbound exit", "wrong attempt", "original executor", "non task"} {
+	for _, kind := range []string{"off org", "invalid URL", "bad SHA", "oversized", "wrong pod", "wrong session", "busy", "unbound exit", "wrong attempt", "original executor", "non task", "post-Unicode-15 rune", "dot segment"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixture(t)
 			name := "refused-outcome"
@@ -84,6 +88,10 @@ func TestTaskOutcomeHeartbeatRefusals(t *testing.T) {
 				st.TaskOutcome.Record.HeadSHAs[0] = "bad"
 			case "oversized":
 				st.TaskOutcome.Record.Summary = strings.Repeat("x", 201)
+			case "post-Unicode-15 rune":
+				st.TaskOutcome.Record.Summary = "tired \U0001FAE9"
+			case "dot segment":
+				st.TaskOutcome.Record.PRURLs[0] = "https://github.com/thaynes43/../pull/1"
 			case "wrong pod":
 				st.TaskOutcome.PodUID = "other-pod"
 			case "wrong session":
@@ -165,5 +173,48 @@ func TestTaskOutcomeNegotiatedRead(t *testing.T) {
 				t.Fatal("negotiated read", path, optIn, w.Code, w.Body.String())
 			}
 		}
+	}
+}
+
+// A schema refusal of the outcome write (for example a newer Unicode rune the
+// API server's older tables do not know) is "no record": the heartbeat still
+// succeeds and the child's usage is still captured for its parent.
+func TestTaskOutcomeSchemaRefusalKeepsHeartbeatAndChildUsage(t *testing.T) {
+	f := newFixture(t)
+	f.srv.ChildUsageCapture = true
+	parent := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "parent", Namespace: sessionNS, UID: "parent-uid"}, Spec: v1alpha1.AgentSessionSpec{Repo: "r", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p"}}
+	if err := f.c.Create(context.Background(), parent); err != nil {
+		t.Fatal(err)
+	}
+	name := "outcome-refused"
+	tok := f.sessionPod(name, "full", 0)
+	child := f.session(name)
+	child.Spec.Parent = "parent"
+	child.Spec.UsageCaptureParentUID = "parent-uid"
+	if err := f.c.Update(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	refusals := 0
+	f.srv.Client = interceptor.NewClient(f.c, interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		if x, ok := obj.(*v1alpha1.AgentSession); ok && x.Status.TaskOutcome != nil {
+			refusals++
+			return apierrors.NewInvalid(schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "AgentSession"}, x.Name,
+				field.ErrorList{field.Invalid(field.NewPath("status", "taskOutcome", "record", "summary"), "redacted", "should match pattern")})
+		}
+		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+	}})
+	st := outcomeHeartbeat(f, name, tok)
+	for beat := 1; beat <= 2; beat++ {
+		if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), tok, st); w.Code != http.StatusNoContent {
+			t.Fatalf("beat %d: schema refusal failed the heartbeat: %d %s", beat, w.Code, w.Body.String())
+		}
+	}
+	got := f.session(name)
+	if refusals != 2 || got.Status.TaskOutcome != nil || got.Status.Agent == nil || got.Status.UsageObservation == nil {
+		t.Fatal("outcome refusal not exercised, recorded, or liveness lost", refusals, got.Status.TaskOutcome)
+	}
+	p := f.session("parent")
+	if p.Status.CapturedUsage == nil || len(p.Status.CapturedUsage.Receipts) != 1 {
+		t.Fatalf("child usage not captured past the outcome refusal: %+v", p.Status.CapturedUsage)
 	}
 }
