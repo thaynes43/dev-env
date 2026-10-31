@@ -29,19 +29,20 @@ type AlertmanagerSnapshot struct {
 	Selection    string              `json:"selection"`
 }
 type AlertmanagerAlert struct {
-	Fingerprint  string            `json:"fingerprint"`
-	Name         string            `json:"name"`
-	Status       string            `json:"status"`
-	StartsAt     string            `json:"startsAt"`
-	EndsAt       string            `json:"endsAt"`
-	UpdatedAt    string            `json:"updatedAt"`
-	Labels       map[string]string `json:"labels"`
-	Summary      string            `json:"summary"`
-	Description  string            `json:"description"`
-	GeneratorURL string            `json:"generatorURL"`
-	RunbookURL   string            `json:"runbookURL"`
-	Disposition  string            `json:"disposition"`
-	Recurrence   string            `json:"recurrence"`
+	Response     *ResponseProjection `json:"response,omitempty"`
+	Fingerprint  string              `json:"fingerprint"`
+	Name         string              `json:"name"`
+	Status       string              `json:"status"`
+	StartsAt     string              `json:"startsAt"`
+	EndsAt       string              `json:"endsAt"`
+	UpdatedAt    string              `json:"updatedAt"`
+	Labels       map[string]string   `json:"labels"`
+	Summary      string              `json:"summary"`
+	Description  string              `json:"description"`
+	GeneratorURL string              `json:"generatorURL"`
+	RunbookURL   string              `json:"runbookURL"`
+	Disposition  string              `json:"disposition"`
+	Recurrence   string              `json:"recurrence"`
 }
 
 const alertCoverage = "Current alerts only; notification and delivery history, triage disposition and recurrence are Unknown. Source and observation time are caller supplied."
@@ -318,7 +319,7 @@ func safeAlertURL(s string) string {
 	return u.String()
 }
 
-var alertHTML = template.Must(template.New("alertmanager").Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:system-ui,sans-serif;max-width:72rem;margin:auto;padding:1rem;overflow-wrap:anywhere} article{border-top:1px solid #aaa;padding:1rem 0} p,dd{white-space:pre-wrap} dt{font-weight:bold}</style><title>Pages · Alertmanager</title></head><body><h1>Pages · Alertmanager</h1><p>{{.Banner}}</p><p>{{.Snapshot.Coverage}}</p><p>Selection: {{.Snapshot.Selection}} · Availability: {{.Snapshot.Availability}} · Observed at: {{.Snapshot.ObservedAt}} · Source: {{.Snapshot.Source}}</p>{{range .Snapshot.Alerts}}<article><h2>{{.Name}}</h2><p>Fingerprint: {{.Fingerprint}} · Status: {{.Status}}</p><p>Starts: {{.StartsAt}} · Ends: {{.EndsAt}} · Updated: {{.UpdatedAt}}</p><p>Disposition: {{.Disposition}} · Recurrence: {{.Recurrence}}</p><p>{{.Summary}}</p><p>{{.Description}}</p><dl>{{range $k,$v := .Labels}}<dt>{{$k}}</dt><dd>{{$v}}</dd>{{end}}</dl>{{if .GeneratorURL}}<a href="{{.GeneratorURL}}">Generator</a>{{else}}<span>Generator source link unavailable</span>{{end}} {{if .RunbookURL}}<a href="{{.RunbookURL}}">Runbook</a>{{else}}<span>Runbook source link unavailable</span>{{end}}</article>{{else}}<p>{{if eq .Snapshot.Availability "Available"}}No alerts in this result.{{else}}Unavailable.{{end}}</p>{{end}}</body></html>`))
+var alertHTML = template.Must(template.New("alertmanager").Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font-family:system-ui,sans-serif;max-width:72rem;margin:auto;padding:1rem;overflow-wrap:anywhere} article{border-top:1px solid #aaa;padding:1rem 0} p,dd{white-space:pre-wrap} dt{font-weight:bold}</style><title>Pages · Alertmanager</title></head><body><h1>Pages · Alertmanager</h1><p>{{.Banner}}</p><p>{{.Snapshot.Coverage}}</p><p>Selection: {{.Snapshot.Selection}} · Availability: {{.Snapshot.Availability}} · Observed at: {{.Snapshot.ObservedAt}} · Source: {{.Snapshot.Source}}</p>{{range .Snapshot.Alerts}}<article><h2>{{.Name}}</h2><p>Fingerprint: {{.Fingerprint}} · Status: {{.Status}}</p><p>Starts: {{.StartsAt}} · Ends: {{.EndsAt}} · Updated: {{.UpdatedAt}}</p><p>Disposition: {{.Disposition}} · Recurrence: {{.Recurrence}}</p>{{if .Response}}<p>Response state: {{.Response.State}} · Order condition: {{.Response.OrderCondition}} · Claim condition: {{.Response.ClaimCondition}}</p><p>Order: {{.Response.Order.Key}} · Created: {{.Response.Order.Created}} · Source: {{.Response.OrderSource}} · Observed at: {{.Response.OrderObservedAt}}</p>{{end}}<p>{{.Summary}}</p><p>{{.Description}}</p><dl>{{range $k,$v := .Labels}}<dt>{{$k}}</dt><dd>{{$v}}</dd>{{end}}</dl>{{if .GeneratorURL}}<a href="{{.GeneratorURL}}">Generator</a>{{else}}<span>Generator source link unavailable</span>{{end}} {{if .RunbookURL}}<a href="{{.RunbookURL}}">Runbook</a>{{else}}<span>Runbook source link unavailable</span>{{end}}</article>{{else}}<p>{{if eq .Snapshot.Availability "Available"}}No alerts in this result.{{else}}Unavailable.{{end}}</p>{{end}}</body></html>`))
 
 func RenderAlertmanagerHTML(w io.Writer, s AlertmanagerSnapshot) error {
 	return alertHTML.Execute(w, struct {

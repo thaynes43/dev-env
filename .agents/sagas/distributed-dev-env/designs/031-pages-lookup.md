@@ -267,7 +267,11 @@ The read-only source reference is haynes-ops at
 `.agents/runbooks/alert-responder.md`, `.agents/runbooks/agentic-remediation.md`,
 `kubernetes/main/apps/upgrade-agent/health-gate/app/resources/remediate.sh`, and
 `dev-env-ops/app/resources/{work-order-watch,order-status}.sh` under that same
-`upgrade-agent` directory. No runtime store was read.
+`upgrade-agent` directory. No runtime store was read. Fix round (2026-10-31) also
+read `alert-responder/app/resources/respond.sh` at haynes-ops
+`a036fda0c24b146c52ee199d1f9924d29006523e`: its `rem_watchdog` marks a stale
+`rem-*` order `failed` (setting `note` and `updated`) and calls `escalate.sh
+rem-watchdog`, which files `esc-rem-watchdog-<sig8>`.
 
 V1 uses two different keys. The diagnosis incident hash is the first 12 hex
 characters of SHA-256 of `fingerprint|startsAt`. The work-order ConfigMap
@@ -423,3 +427,68 @@ claim registry, access path, control or automation is activated. Synthetic table
 tests cover all states and failure distinctions, reused order attempts, refires,
 two callers, evidence sanitation and portal/MCP parity. Source and tested are
 separate from installed or accepted; this story claims only the former two.
+
+## 14. Offline V1 responder order adapter (2026-10-31, OP324 source slice)
+
+`ParseV1ResponderOrders` parses the actual `kubectl get cm -o json` shape for
+`upgrade-agent/upgrade-work-orders`. It retains only actual responder data keys
+and `status`, `created`, `updated`, with the ConfigMap resourceVersion as source
+attribution. `Observations` returns this safe subset keyed by the actual data
+key; no signature, labels, free text or derived key establishes an association.
+The batch `ResponderOrderSource` reports Unjoined for a nonempty responder store,
+Empty for an observed store with no responder records, Invalid for malformed
+input and Unavailable for a failed file read. Invalid is decided before freshness,
+so a malformed file reads Invalid however old its capture time. Otherwise
+observation freshness remains a separate Stale check. Existing claim mismatch checks remain unchanged.
+
+The producer scripts were inspected at haynes-ops main
+`a036fda0c24b146c52ee199d1f9924d29006523e`: health-gate's `remediate.sh` and
+`escalate.sh`, the alert-responder's `respond.sh`, and dev-env-ops'
+`work-order-watch.sh` and `order-status.sh`.
+One read-only live ConfigMap shape read on 2026-10-31 confirmed single-encoded
+JSON object strings, responder entries mixed with unrelated work orders and a
+digest bookkeeping entry. Neither those producers nor the observed JSON has
+an explicit fingerprint, startsAt or incident-hash identity field. The `alert`,
+`sig`, reason and notes are context, not identity evidence. No real order
+contents are committed. Synthetic fixtures include the unrelated entries;
+their needed-field types do not impose responder types on unrelated orders.
+No speculative future identity schema is accepted by this adapter.
+
+The offline Alertmanager `pages list|show` path accepts
+`--orders-from-file FILE --orders-observed-at RFC3339`. The file is the caller's
+ConfigMap snapshot; the capture time is an explicit caller assertion, never
+inferred from file mtime, order timestamps or the time of reading the file.
+The evaluation clock checks a five-minute maximum observation age. The orders
+file cannot share stdin with the alert snapshot. Omitting the flag leaves
+response sources Unconfigured. Text, JSON and HTML carry the same shared
+response projection. Malformed or unreadable order input returns a failure
+exit while preserving the alert snapshot and its Unknown response reason.
+Bounds are 2 MiB per ConfigMap JSON, 1,000 data keys, 64 KiB per encoded order,
+16 nesting levels and 1,000 members/elements per object/array; duplicate members,
+case aliases of consumed fields, non-string data, invalid status/times and
+future order event times are refused without echoing input. Reused keys and
+refires cannot inherit evidence: without a producer binding every alert remains
+Unknown, even beside a terminal order.
+
+Known responder keys are `rem-responder-<sig8>`, `esc-responder-<sig8>`,
+`esc-rem-<sig8>` and `esc-rem-watchdog-<sig8>` (respond.sh's watchdog escalation).
+Any other key under a responder prefix is unrelated: it is counted
+(`IgnoredKeys`) and ignored, never failing the store, though its value must still
+be bounded JSON. An order `updated` may be up to 30 seconds after the capture
+time (producer clock skew, or a write between the read and the capture); the
+documented recipe takes the capture time after the read. A future capture time
+is Invalid and the CLI exits 1, like a malformed file.
+
+Exact remaining dependencies:
+
+1. The V1 producer must write an explicit alert identity into the order JSON
+   before any real join can succeed. That is a haynes-ops responder change,
+   proposed only and not made here. Its exact identity schema and attempt
+   binding must be reviewed before this adapter can consume it.
+2. A portal or operator reader would need read access to `upgrade-agent`
+   ConfigMaps, which is a separate approved access decision.
+
+The portal and operator remain Unconfigured. This slice adds no network call,
+RBAC, CRD, reader activation or cluster mutation. Canonical claim source wiring
+and installed, usable/end-to-end acceptance remain open. Source and synthetic
+validation do not complete OP324's runtime acceptance.

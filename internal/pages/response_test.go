@@ -114,7 +114,7 @@ func TestResponseUnknownDistinctions(t *testing.T) {
 			o.observation.Order.Order.Created = ""
 		}, "Invalid", "NotChecked"},
 		{"updated after observation", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
-			o.observation.Order.Updated = strconv.FormatInt(o.observation.ObservedAt.Add(time.Second).Unix(), 10)
+			o.observation.Order.Updated = strconv.FormatInt(o.observation.ObservedAt.Add(orderClockSkew+time.Second).Unix(), 10)
 		}, "Invalid", "NotChecked"},
 		{"claim unconfigured", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { s.Claims = nil }, "Available", "Unconfigured"},
 		{"orders unconfigured", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { s.Orders = nil }, "Unconfigured", "NotChecked"},

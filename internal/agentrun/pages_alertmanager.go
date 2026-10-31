@@ -7,19 +7,23 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/pages"
 )
 
 const alertmanagerPagesHelp = `Pages · Alertmanager — current snapshot, not notification or delivery history
 
-Usage: agent-run pages list --source alertmanager [--search TEXT] [--status active|suppressed|unprocessed] [--from-file FILE|-] [-o json|html]
-       agent-run pages show FINGERPRINT --source alertmanager [--from-file FILE|-] [-o json|html]
+Usage: agent-run pages list --source alertmanager [--search TEXT] [--status active|suppressed|unprocessed] [--from-file FILE|-] [--orders-from-file CM.json --orders-observed-at RFC3339] [-o json|html]
+       agent-run pages show FINGERPRINT --source alertmanager [--from-file FILE|-] [--orders-from-file CM.json --orders-observed-at RFC3339] [-o json|html]
 
 Reads a caller-supplied Alertmanager API v2 alert array or snapshot envelope
 from a file or stdin. Source and observation time are caller assertions;
 disposition and recurrence are Unknown. Invalid input is Unavailable. No
-network requests are made. See docs/alertmanager-pages-poc.md for details.
+network requests are made. Optional V1 orders require a caller-asserted capture
+time, taken after the read; observations older than five minutes are Stale. A
+malformed orders file or a future capture time is Invalid and exits 1. V1 has no
+explicit alert identity, so current orders remain Unjoined. See docs/alertmanager-pages-poc.md.
 `
 
 func isAlertmanagerSource(args []string) bool {
@@ -46,7 +50,7 @@ func isAlertmanagerSource(args []string) bool {
 			continue
 		}
 		switch name {
-		case "from-file", "o", "output", "sender", "state", "since", "limit", "search", "status":
+		case "from-file", "orders-from-file", "orders-observed-at", "o", "output", "sender", "state", "since", "limit", "search", "status":
 			if !hasValue && i+1 < len(args) {
 				i++
 			}
@@ -64,9 +68,11 @@ func (a *app) pagesAlertmanager(ctx context.Context, args []string) error {
 	}
 	fs := flag.NewFlagSet("pages "+verb, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var source, from, output, search, status string
+	var source, from, output, search, status, ordersFrom, ordersObserved string
 	fs.StringVar(&source, "source", "", "")
 	fs.StringVar(&from, "from-file", "-", "")
+	fs.StringVar(&ordersFrom, "orders-from-file", "", "")
+	fs.StringVar(&ordersObserved, "orders-observed-at", "", "")
 	fs.StringVar(&output, "o", "", "")
 	fs.StringVar(&output, "output", "", "")
 	fs.StringVar(&search, "search", "", "")
@@ -95,6 +101,20 @@ func (a *app) pagesAlertmanager(ctx context.Context, args []string) error {
 	if source != "alertmanager" || (output != "" && output != "json" && output != "html") || (verb == "list" && len(pos) != 0) || (verb == "show" && len(pos) != 1) || (verb == "show" && (search != "" || status != "")) || (status != "" && status != "active" && status != "suppressed" && status != "unprocessed") {
 		return usageError("pages alertmanager: invalid arguments")
 	}
+	var ordersAt time.Time
+	if ordersFrom != "" || ordersObserved != "" {
+		var parseErr error
+		ordersAt, parseErr = time.Parse(time.RFC3339Nano, ordersObserved)
+		if ordersFrom == "" || ordersFrom == "-" || parseErr != nil {
+			return usageError("pages alertmanager: --orders-from-file needs a file and --orders-observed-at RFC3339 capture time")
+		}
+	}
+	now := a.now()
+	sources, ordersErr := readPagesOrderSource(ordersFrom, ordersAt)
+	if ordersErr == nil && ordersFrom != "" && ordersAt.After(now) {
+		// The projection reports Invalid; fail the exit like a malformed file.
+		ordersErr = errors.New("V1 work-order capture time is in the future")
+	}
 	snapshot := pages.UnavailableAlertmanager()
 	var r io.Reader
 	if from == "-" {
@@ -119,6 +139,15 @@ func (a *app) pagesAlertmanager(ctx context.Context, args []string) error {
 	if err != nil {
 		snapshot = pages.UnavailableAlertmanager()
 	} else {
+		identities := make([]pages.AlertIdentity, 0, len(snapshot.Alerts))
+		for _, alert := range snapshot.Alerts {
+			identities = append(identities, pages.AlertIdentity{Fingerprint: alert.Fingerprint, StartsAt: alert.StartsAt})
+		}
+		responses := pages.ProjectResponses(ctx, identities, sources, now)
+		for i, identity := range identities {
+			response := responses[identity]
+			snapshot.Alerts[i].Response = &response
+		}
 		filtered := make([]pages.AlertmanagerAlert, 0, len(snapshot.Alerts))
 		for _, alert := range snapshot.Alerts {
 			if verb == "show" && alert.Fingerprint != pos[0] {
@@ -158,11 +187,42 @@ func (a *app) pagesAlertmanager(ctx context.Context, args []string) error {
 			return e
 		}
 	}
-	if err != nil {
+	if err != nil || ordersErr != nil {
 		return &exitError{code: ExitFailed}
 	}
 	if verb == "show" && len(snapshot.Alerts) == 0 {
 		return &exitError{code: ExitNotFound}
 	}
 	return nil
+}
+
+// offlinePageOrders preserves failed file reads as Unavailable, distinct from
+// a supplied but invalid ConfigMap. Errors never echo file paths or contents.
+type offlinePageOrders struct {
+	err error
+}
+
+func (s offlinePageOrders) FindOrders(_ context.Context, _ []pages.AlertIdentity) (map[pages.AlertIdentity]pages.OrderObservation, error) {
+	return nil, s.err
+}
+
+func readPagesOrderSource(from string, observedAt time.Time) (pages.ResponseSources, error) {
+	if from == "" {
+		return pages.ResponseSources{}, nil
+	}
+	sources := pages.ResponseSources{MaxAge: 5 * time.Minute}
+	unavailable := errors.New("V1 work-order snapshot unavailable")
+	sources.Orders = offlinePageOrders{err: unavailable}
+	f, err := os.Open(from)
+	if err != nil {
+		return sources, unavailable
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(f, pages.V1OrdersMaxBytes+1))
+	if err != nil {
+		return sources, unavailable
+	}
+	snapshot, err := pages.ParseV1ResponderOrders(raw, observedAt)
+	sources.Orders = snapshot
+	return sources, err
 }
