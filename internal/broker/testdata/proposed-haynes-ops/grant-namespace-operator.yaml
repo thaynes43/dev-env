@@ -1,0 +1,60 @@
+---
+# PROPOSAL, not a copy: thaynes43/dev-env DESIGN-042 5.1 (P4). This file is NOT in
+# haynes-ops yet. It is what P4 would add to
+# kubernetes/main/apps/dev-env-system/rbac/app/grant-catalog.yaml, kept here so the
+# broker's envtest suite can prove dev-env-grant-secret-names (./grant-secret-names.yaml)
+# against the role it guards. When P4 lands, copy the haynes-ops version into
+# ../haynes-ops/ instead and delete this one.
+#
+# dev-env-grant-namespace-operator, bound per namespace by RoleBinding (class C2): exec
+# into pods, restart workloads, and run one-shot Jobs that use the Secrets the grant
+# names. It has no Secret rule at all: the `use` of each named Secret comes from the
+# grant's own Role, <grant>-secret-use, which the broker makes per grant with
+# resourceNames, and which dev-env-grant-secret-names checks per reference.
+#
+# Exposure, plainly. "No Secret get or list" does not mean "cannot read Secrets":
+#   - exec reaches every Secret the namespace's pods already hold in their env or
+#     volumes, such as Prowlarr's own API key, and each pod's ServiceAccount token, so
+#     the grant also acts as those workloads' ServiceAccounts;
+#   - a command the agent chooses, in a Job that uses a named Secret, can print it;
+#   - for grant identities, rule 3 of the installed dev-env-identity-guard (not
+#     dev-env-agent-guard) limits created Jobs to the namespace's default
+#     ServiceAccount. The residual authority is that account's RBAC plus the
+#     existing exec reach.
+# So the class effectively grants read of every Secret mounted in the namespace's pods,
+# plus the named ones, and the default ServiceAccount's RBAC. The named-Secret guard
+# constrains direct new-pod references, not all reachable data or inherited
+# ServiceAccount authority. The any-ServiceAccount Job premise is refuted; this is a
+# factual correction, not risk acceptance or new hardening.
+#
+# Release or expiry deletes the grant's bindings and ServiceAccount, so new API calls
+# fail at once. An exec stream already open runs until it closes. A Job keeps running
+# until its activeDeadlineSeconds, which dev-env-grant-secret-names caps at 3600. A
+# Secret value already printed or copied cannot be recalled.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dev-env-grant-namespace-operator
+  labels:
+    dev-env.haynesops.com/grant-role: "true"
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # patch is for kubectl rollout restart. Other spec patches are possible too; Flux
+  # reverts them, and an added Secret reference meets dev-env-grant-secret-names.
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [configmaps, events]
+    verbs: [get, list, watch]
