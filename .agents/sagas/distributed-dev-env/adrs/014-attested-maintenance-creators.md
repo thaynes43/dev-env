@@ -13,6 +13,6 @@ The same rule runs before approval, before creating the executor and while its l
 
 All other ADR-013 requirements remain: a bound requester attestation, exact policy envelope, identity checks, no overlapping maintenance lease and the existing expiry/release tail. The authenticated human fallback and independent delegate route remain separate. A child cannot self-attest maintenance, even when its parent was launched by an allowed creator.
 
-The concrete `haynes-ops-1029-223503` launch shape is depth **0**, parent `dev-env-system/dev-env-human`. DESIGN-042's earlier depth-1 wording is an indexing error; children of sessions have depth 1 or more.
+The concrete `haynes-ops-1029-223503` launch shape is depth **0**, parent `dev-env-system/dev-env-human`. [DESIGN-042 at PR #782](https://github.com/thaynes43/dev-env/blob/e11aaaa48188902116f2f3742f1bb0bb6d4899ee/.agents/sagas/distributed-dev-env/designs/042-homelab-operator-access.md)'s earlier depth-1 wording is an indexing error; children of sessions have depth 1 or more.
 
 Source tests exercise that launch shape, configurable creators, unlisted v1/workbench/coordinator creators, child and missing parents, empty lists, bad depth labels and revocation before and during execution. These are offline source checks. No flag, policy, template, grant or credential is activated by this ADR. S6 must be installed before enabling attested maintenance; do not roll back past it while that flag is enabled.
