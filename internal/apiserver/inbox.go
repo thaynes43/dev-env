@@ -148,6 +148,9 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	if !projectcatalog.ValidName(req.Project) || !inbox.ValidKey(req.Key) || !inbox.ValidText(req.Text) {
 		return 0, nil, badRequest("inbox intent requires explicit project, bounded key and 1 to 16384 UTF-8 bytes")
 	}
+	if !validInboxAddressing(req) {
+		return 0, nil, badRequest("a plain message names its recipient exactly, a question names a recipient Session or its parent, and a reply names its question only")
+	}
 	if c.kind != kindSession || !slices.Contains(s.InboxProjects, req.Project) {
 		return 0, nil, inboxHidden()
 	}
@@ -159,8 +162,12 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	if err != nil || snapshot.Project() != req.Project {
 		return 0, nil, inboxHidden()
 	}
-	spec := coord.InboxMessageSpec{Project: req.Project, Key: req.Key, Sender: sessionIdentity(sender), Recipient: coord.SessionIdentity{Namespace: req.Recipient.Namespace, Name: req.Recipient.Name, UID: req.Recipient.UID}, Actor: inboxActor(c), Provenance: inboxProvenance(snapshot), Repository: snapshot.Selected().Name, Provider: string(sender.Spec.Agent), RequestedModel: sender.Spec.Model, Text: req.Text}
-	if !inbox.ValidMessage(spec) {
+	spec := coord.InboxMessageSpec{Project: req.Project, Key: req.Key, Sender: sessionIdentity(sender), Recipient: coord.SessionIdentity{Namespace: req.Recipient.Namespace, Name: req.Recipient.Name, UID: req.Recipient.UID}, Actor: inboxActor(c), Provenance: inboxProvenance(snapshot), Repository: snapshot.Selected().Name, Provider: string(sender.Spec.Agent), RequestedModel: sender.Spec.Model, Text: req.Text, Kind: req.Kind}
+	if req.Kind != "" {
+		// The recipient and the question are derived below, or bound from a stored retry.
+		spec.Recipient = coord.SessionIdentity{}
+	}
+	if req.Kind == "" && !inbox.ValidMessage(spec) {
 		return 0, nil, badRequest("inbox intent or saved sender attribution is invalid")
 	}
 	// An accepted retry must survive recipient deletion and catalog updates.
@@ -170,10 +177,27 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 		if fenceErr != nil || !sameSessionBinding(fresh, sender) {
 			return 0, nil, inboxHidden()
 		}
+		s.bindInboxRetry(&spec, existing.Spec, req, newCoordSender(sender))
 		return inboxPublishResult(existing, false, spec)
 	}
 	if !errors.Is(err, inbox.ErrNotFound) {
 		return 0, nil, inboxUnknown()
+	}
+	switch req.Kind {
+	case inbox.KindQuestion:
+		if spec.Recipient, err = s.resolveInboxQuestionRecipient(ctx, req, newCoordSender(sender)); err != nil {
+			return 0, nil, err
+		}
+	case inbox.KindReply:
+		q, err := s.inboxQuestionFor(ctx, req, spec.Sender)
+		if err != nil {
+			return 0, nil, err
+		}
+		ref := inbox.Ref(q)
+		spec.Recipient, spec.InReplyTo = q.Spec.Sender, &ref
+	}
+	if !inbox.ValidMessage(spec) {
+		return 0, nil, badRequest("inbox intent or saved sender attribution is invalid")
 	}
 	recipient, err := s.newInboxRecipient(ctx, spec.Recipient, spec.Project)
 	if err != nil {
@@ -202,6 +226,8 @@ func (s *Server) publishInbox(ctx context.Context, _ http.ResponseWriter, r *htt
 	return inboxPublishResult(m, created, spec)
 }
 
+// A question or reply receipt carries its kind and correlation; a plain
+// receipt keeps the older shape.
 func inboxPublishResult(m *coord.InboxMessage, created bool, spec coord.InboxMessageSpec) (int, any, error) {
 	status, outcome := http.StatusOK, "Confirmed"
 	if !inbox.SameIntent(m.Spec, spec) {
@@ -209,7 +235,11 @@ func inboxPublishResult(m *coord.InboxMessage, created bool, spec coord.InboxMes
 	} else if created {
 		status, outcome = http.StatusCreated, "Created"
 	}
-	return status, apiv1.InboxResult{Outcome: outcome, Message: inboxMetadata(m)}, nil
+	view := inboxMetadata(m)
+	if spec.Kind != "" {
+		view = withInboxCorrelation(view, m)
+	}
+	return status, apiv1.InboxResult{Outcome: outcome, Message: view}, nil
 }
 
 // authorizedInbox permits archive fallback for reads and read-only ack retries,
@@ -257,6 +287,13 @@ func (s *Server) authorizedInbox(ctx context.Context, r *http.Request, c *caller
 	return m, nil, nil
 }
 func (s *Server) readInbox(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	thread, sent, err := inboxQuery(r.URL.Query())
+	if err != nil {
+		return 0, nil, err
+	}
+	if sent {
+		return 0, nil, badRequest("box=sent is a list view only")
+	}
 	m, archivedAt, err := s.authorizedInbox(ctx, r, c, true)
 	if err != nil {
 		return 0, nil, err
@@ -265,16 +302,27 @@ func (s *Server) readInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 	if archivedAt != nil {
 		view.Archived, view.ArchivedAt = true, archivedAt
 	}
+	if thread {
+		view = withInboxCorrelation(view, m)
+		view.Thread = s.inboxThread(ctx, m, archivedAt != nil, map[coord.SessionIdentity]inboxEnded{})
+	}
 	return http.StatusOK, apiv1.InboxMessage{InboxMetadata: view, Text: m.Spec.Text}, nil
 }
 func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	if err := s.inboxAvailable(); err != nil {
 		return 0, nil, err
 	}
+	thread, sent, err := inboxQuery(r.URL.Query())
+	if err != nil {
+		return 0, nil, err
+	}
 	project := r.URL.Query().Get("project")
 	recipient, err := s.inboxReadScope(ctx, c, project)
 	if err != nil {
 		return 0, nil, err
+	}
+	if sent && recipient == nil {
+		return 0, nil, badRequest("box=sent lists a Session's own sent messages; a coordinator host sends none")
 	}
 	archivedValues := r.URL.Query()["archived"]
 	if len(archivedValues) > 1 {
@@ -306,7 +354,15 @@ func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 		}
 		return s.listArchivedInbox(ctx, c, project, recipient, limit, r.URL.Query().Get("continue"))
 	}
-	items, next, err := s.Inbox.List(ctx, project, recipient, limit, r.URL.Query().Get("continue"))
+	var items []coord.InboxMessage
+	var next string
+	if sent {
+		// The caller's own sent messages, by the same original-Session proof
+		// that reads its inbox; it wrote every one of them.
+		items, next, err = s.Inbox.ListSent(ctx, project, *recipient, limit, r.URL.Query().Get("continue"))
+	} else {
+		items, next, err = s.Inbox.List(ctx, project, recipient, limit, r.URL.Query().Get("continue"))
+	}
 	if err != nil {
 		return 0, nil, inboxUnknown()
 	}
@@ -314,10 +370,23 @@ func (s *Server) listInbox(ctx context.Context, _ http.ResponseWriter, r *http.R
 		return 0, nil, err
 	}
 	views := make([]apiv1.InboxMetadata, 0, len(items))
+	memo := map[coord.SessionIdentity]inboxEnded{}
 	for i := range items {
-		views = append(views, inboxMetadata(&items[i]))
+		view := inboxMetadata(&items[i])
+		if thread {
+			view = withInboxCorrelation(view, &items[i])
+			view.Thread = s.inboxThread(ctx, &items[i], false, memo)
+		}
+		views = append(views, view)
 	}
-	return http.StatusOK, apiv1.InboxList{Items: views, Continue: next}, nil
+	list := apiv1.InboxList{Items: views, Continue: next}
+	if thread {
+		list.View = apiv1.InboxViewThread
+	}
+	if sent {
+		list.Box = apiv1.InboxBoxSent
+	}
+	return http.StatusOK, list, nil
 }
 func (s *Server) ackInbox(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
 	if c.kind != kindSession {
