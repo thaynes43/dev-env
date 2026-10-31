@@ -55,6 +55,9 @@ func TestEnvtestLegacyDesignatedActorToTopLevelRequester(t *testing.T) {
 		return s, pod, l.token(ref, []string{apiv1.TokenAudience}, pod)
 	}
 	materialize("reach-legacy-parent", "dev/dev-env", "0")
+	// Match the observed older legacy parent without fabricating server metadata.
+	// A same-second parent replacement is ambiguous and must fail closed.
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)) + 10*time.Millisecond)
 	actor, pod, tok := materialize("reach-legacy-claude", "reach-legacy-parent", "1")
 	_, _, requester := materialize("reach-top-level-gpu", humanSA, "0")
 	_, _, ordinary := materialize("reach-other-baseline", humanSA, "0")

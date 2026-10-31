@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -81,6 +82,11 @@ func legacyReachFixture(t *testing.T) (*fixture, string, apiv1.Grant) {
 	f, _, _ := delegateFixture(t)
 	f.sessionPod("legacy-parent", "full", 0)
 	f.reparent("legacy-parent", "dev/dev-env")
+	ancestor := f.session("legacy-parent")
+	ancestor.CreationTimestamp = metav1.NewTime(f.now.Add(-time.Hour))
+	if err := f.c.Update(ctx, ancestor); err != nil {
+		t.Fatal(err)
+	}
 	tok := f.sessionPod("legacy-claude", "full", 1)
 	f.reparent("legacy-claude", "legacy-parent")
 	requester := f.sessionPod("top-level-gpu", "full", 0)

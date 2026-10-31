@@ -75,7 +75,7 @@ func ancestry(ctx context.Context, r client.Reader, ns string, s *v1alpha1.Agent
 		if err := reachRead(ctx, r, types.NamespacedName{Namespace: ns, Name: parent}, &a); err != nil {
 			return nil, err
 		}
-		if a.UID == "" || !a.DeletionTimestamp.IsZero() || (!chain[len(chain)-1].CreationTimestamp.IsZero() && !a.CreationTimestamp.IsZero() && a.CreationTimestamp.After(chain[len(chain)-1].CreationTimestamp.Time)) {
+		if a.UID == "" || !a.DeletionTimestamp.IsZero() || (chain[len(chain)-1].CreationTimestamp.IsZero() || a.CreationTimestamp.IsZero() || !a.CreationTimestamp.Before(&chain[len(chain)-1].CreationTimestamp)) {
 			return nil, fmt.Errorf("%w: unbound or deleting ancestor", ErrRefused)
 		}
 		seen[parent] = true
