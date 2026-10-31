@@ -878,7 +878,7 @@ func TestTaskReadFailureHidesDataAndKeepsSafeDiagnostics(t *testing.T) {
 
 func allowanceBlock(t *testing.T, body []byte, usage bool) string {
 	t.Helper()
-	pattern := `(?s)<div class="allowance-strip">(.*?)</ul></details></div>`
+	pattern := `(?s)<div class="allowance-strip">(.*?)</ul>(?:</details>)?</div>`
 	if usage {
 		pattern = `(?s)<section class="allowance".*?</section>\s*<p class="note">Plan limits.*?</section>`
 	}
@@ -1177,8 +1177,8 @@ func TestAllowanceStripFoldsOnShortWindows(t *testing.T) {
 	open := ".allowance-detail::details-content { display: block; content-visibility: visible; }"
 	supports := "@supports selector(::details-content) {\n  .allowance-toggle { display: none; }\n  " + open + "\n}"
 	short := "@media (width > 700px) and (height <= 760px) {\n" +
-		"  .allowance-strip { display: flow-root; }\n" +
-		"  .allowance-strip > .allowance-link { float: left; margin-right: 12px; }\n" +
+		"  .allowance-strip:has(> .allowance-detail) { display: flow-root; }\n" +
+		"  .allowance-strip:has(> .allowance-detail) > .allowance-link { float: left; margin-right: 12px; }\n" +
 		"  .allowance-toggle { display: flex; }\n" +
 		"  .allowance-detail:not([open])::details-content { content-visibility: hidden; }\n" +
 		"  .allowance-detail > ul { clear: left; }\n}"
@@ -1194,6 +1194,29 @@ func TestAllowanceStripFoldsOnShortWindows(t *testing.T) {
 	}
 	if !strings.Contains(css, ".allowance-toggle { display: flex; align-items: center; gap: 7px; width: fit-content; min-height: 24px;") {
 		t.Fatal("the disclosure needs a 24px target when it shows")
+	}
+	if !strings.Contains(css, "list-style: none; }") || !strings.Contains(css, ".allowance-toggle::-webkit-details-marker { display: none; }") {
+		t.Fatal("older WebKit must not draw its own disclosure marker beside the chevron")
+	}
+}
+
+// A strip with no reported windows (production today: Not connected) has no
+// disclosure, so it never folds behind a click.
+func TestAllowanceStripWithoutWindowsNeverFolds(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Allowance: []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceNotConnected},
+		{Provider: "Codex", Value: AllowanceNotConnected},
+	}, Groups: []ProductGroup{{Title: "In progress", Rows: []ProductRow{{ID: "s1", Title: "synthetic-agent"}}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strip := allowanceBlock(t, body, false)
+	if strings.Contains(strip, "<details") || strings.Contains(strip, "allowance-toggle") || !strings.HasSuffix(strip, "</ul></div>") {
+		t.Fatalf("a strip without windows must not fold: %s", strip)
+	}
+	if strings.Count(strip, "Not connected") != 2 {
+		t.Fatalf("both providers must stay visible: %s", strip)
 	}
 }
 

@@ -394,7 +394,8 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .allowance-account td { white-space: normal; overflow-wrap: anywhere; }
 .allowance-account table { table-layout: fixed; }
 .allowance-account td::before { flex-shrink: 0; }
-.allowance-toggle { display: flex; align-items: center; gap: 7px; width: fit-content; min-height: 24px; margin-left: auto; color: var(--accent); cursor: pointer; }
+.allowance-toggle { display: flex; align-items: center; gap: 7px; width: fit-content; min-height: 24px; margin-left: auto; color: var(--accent); cursor: pointer; list-style: none; }
+.allowance-toggle::-webkit-details-marker { display: none; }
 .allowance-toggle::after { content: ""; width: 5px; height: 5px; margin-top: -3px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
 .allowance-detail[open] > .allowance-toggle::after { margin-top: 3px; transform: rotate(-135deg); }
 @supports selector(::details-content) {
@@ -402,8 +403,8 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .allowance-detail::details-content { display: block; content-visibility: visible; }
 }
 @media (width > 700px) and (height <= 760px) {
-  .allowance-strip { display: flow-root; }
-  .allowance-strip > .allowance-link { float: left; margin-right: 12px; }
+  .allowance-strip:has(> .allowance-detail) { display: flow-root; }
+  .allowance-strip:has(> .allowance-detail) > .allowance-link { float: left; margin-right: 12px; }
   .allowance-toggle { display: flex; }
   .allowance-detail:not([open])::details-content { content-visibility: hidden; }
   .allowance-detail > ul { clear: left; }
