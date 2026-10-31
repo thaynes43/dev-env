@@ -46,6 +46,9 @@ func (a *app) grantDecide(ctx context.Context, args []string) error {
 	if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(pos[0]), nil, nil, &current); err != nil {
 		return err
 	}
+	if current.UID != uid || current.ScopeDigest != digest {
+		return fail(ExitFailed, "grant decide: grant UID or scope digest changed; read grant show -o json and review the current scope before deciding")
+	}
 	req := grantDecisionRequest(uid, digest, ttl, ref, reason, approve)
 	binding := grantDecisionBinding(pos[0], uid, digest, current.Secrets, approve)
 	if cmd.c.output == outputJSON {
@@ -88,7 +91,7 @@ func grantDecisionBinding(name, uid, digest string, secrets []string, approve bo
 // validateGrantDecision checks the decision locally. A refusal returns before
 // any request. ref is 1 to 128 letters, digits and . _ : / # -. ttl, when set,
 // is a Go duration of at least 10m. reason, when set, is at most 256 characters
-// and has no control characters.
+// and has no control or format characters.
 func validateGrantDecision(name, uid, digest, ttl, ref, reason string) error {
 	if !validGrantCLIName(name) {
 		return usageError("grant decide: %q is not a grant-<id> name", name)
@@ -108,8 +111,8 @@ func validateGrantDecision(name, uid, digest, ttl, ref, reason string) error {
 			return usageError("grant decide: --ttl is a Go duration of at least 10m, not %q", ttl)
 		}
 	}
-	if reason != "" && (!utf8.ValidString(reason) || utf8.RuneCountInString(reason) > 256 || strings.ContainsFunc(reason, unicode.IsControl)) {
-		return usageError("grant decide: --reason is at most 256 characters and cannot contain control characters")
+	if reason != "" && (!utf8.ValidString(reason) || utf8.RuneCountInString(reason) > 256 || strings.ContainsFunc(reason, func(c rune) bool { return unicode.In(c, unicode.Cc, unicode.Cf) })) {
+		return usageError("grant decide: --reason is at most 256 characters and cannot contain control or format characters")
 	}
 	return nil
 }
