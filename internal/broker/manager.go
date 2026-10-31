@@ -65,6 +65,9 @@ type Options struct {
 	// whose decisions the broker applies (DESIGN-042 6.2). It must match the
 	// operator's --grant-delegates. Empty, the default, applies none.
 	GrantDelegates []string
+	// GrantPolicyDelegates is the default-empty subset allowed exact policy reach.
+	GrantPolicyDelegates []string
+	LegacyGrantDelegates []LegacyDelegateBinding
 	// LeaderElect elects one leader among the replicas; only it reconciles.
 	LeaderElect bool
 	// LeaseDuration, RenewDeadline and RetryPeriod tune leader election; zero
@@ -162,6 +165,8 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		EnableAttestedMaintenance:      o.EnableAttestedMaintenance,
 		MaintenanceHumanServiceAccount: o.MaintenanceHumanServiceAccount,
 		GrantDelegates:                 o.GrantDelegates,
+		GrantPolicyDelegates:           o.GrantPolicyDelegates,
+		LegacyGrantDelegates:           o.LegacyGrantDelegates,
 		Clock:                          clk,
 		Notifier:                       o.Notifier,
 		Installer:                      o.Installer,
