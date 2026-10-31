@@ -823,7 +823,7 @@ func taskRow(element halWorkPackage, now time.Time) (portal.ProductRow, error) {
 	}
 	context = append(context, portal.ProductField{Label: "Repositories", Value: repos})
 	return portal.ProductRow{
-		Title: shown(element.Subject), Kicker: kicker, Crumb: "#" + id,
+		Key: id, Title: shown(element.Subject), Kicker: kicker, Crumb: "#" + id,
 		Link: "https://work.haynesnetwork.com/work_packages/" + id, LinkLabel: "Open in OpenProject",
 		Status: portal.ProductStatus{Text: status, Tone: taskTone(status)}, Description: description, Meta: listOwner, Age: age,
 		Badges: badges, Sections: sections, ContextTitle: "Work package", Context: context,
@@ -986,7 +986,7 @@ func taskGroup(status string) int {
 // inside each group. A synthetic fixture is the last group and is left out of
 // Needs attention. Counts appear only for a complete read.
 func tasksPage(rows []portal.ProductRow, complete bool, filter portal.ProductFilter) portal.ProductPage {
-	page := portal.ProductPage{Title: "Tasks", ListTitle: "All tasks", Connected: true, Complete: complete, Filter: portal.ProductFilter{Attention: filter.Attention}}
+	page := portal.ProductPage{Title: "Tasks", ListTitle: "All tasks", Connected: true, Complete: complete, Filter: portal.ProductFilter{Attention: filter.Attention, Task: filter.Task}}
 	ordered := make([][]portal.ProductRow, len(taskGroups))
 	attention := 0
 	for _, row := range rows {
@@ -1021,13 +1021,23 @@ func tasksPage(rows []portal.ProductRow, complete bool, filter portal.ProductFil
 	}
 	page.Groups = make([]portal.ProductGroup, len(taskGroups))
 	copy(page.Groups, taskGroups)
-	n := 0
+	n, found := 0, false
 	for g := range ordered {
 		for _, row := range ordered[g] {
 			n++
 			row.ID = "t" + strconv.Itoa(n)
+			if filter.Task != "" && row.Key == filter.Task && !found {
+				row.Selected, found = true, true
+			}
 			page.Groups[g].Rows = append(page.Groups[g].Rows, row)
 		}
+	}
+	if filter.Task != "" && !found {
+		missing := "The selected task is not in this list."
+		if page.Notice != "" && !page.Quiet {
+			missing = page.Notice + " " + missing
+		}
+		page.Notice, page.Quiet = missing, false
 	}
 	return page
 }
@@ -1141,29 +1151,58 @@ func shownDate(value string) string {
 	return parsed.UTC().Format("2 Jan 2006, 15:04 UTC")
 }
 
-// productFilter reads a product page's one optional filter: show=attention on
-// either page, project=<repository> on Sessions, or session=<uid> on Sessions
-// to select one session's conversation. Any other query, a second key or
-// value, or a non-canonical spelling is refused. view=usage selects Usage on Sessions.
+// taskNumberQuery is a work package number as Tasks ?task= carries it.
+var taskNumberQuery = regexp.MustCompile(`^[1-9][0-9]{0,9}$`)
+
+// productFilter reads a product page's optional filter and selection. The
+// filter is one of show=attention on either page, project=<repository> on
+// Sessions, or view=usage on Sessions. The selection is session=<uid> on
+// Sessions or task=<work package number> on Tasks; it may join show or
+// project, never view. Any other query, a repeated key, or a non-canonical
+// spelling is refused.
 func productFilter(u *url.URL) (portal.ProductFilter, bool) {
+	var f portal.ProductFilter
 	if u.RawQuery == "" {
-		return portal.ProductFilter{}, true
+		return f, true
 	}
 	q, err := url.ParseQuery(u.RawQuery)
-	if err != nil || len(q) != 1 || q.Encode() != u.RawQuery {
-		return portal.ProductFilter{}, false
+	if err != nil || len(q) < 1 || len(q) > 2 || q.Encode() != u.RawQuery {
+		return f, false
+	}
+	for _, values := range q {
+		if len(values) != 1 {
+			return f, false
+		}
 	}
 	switch {
-	case len(q["show"]) == 1 && q.Get("show") == "attention":
-		return portal.ProductFilter{Attention: true}, true
-	case len(q["project"]) == 1 && u.Path == SessionsPath && validProject(q.Get("project")):
-		return portal.ProductFilter{Project: q.Get("project")}, true
-	case len(q["view"]) == 1 && u.Path == SessionsPath && q.Get("view") == "usage":
-		return portal.ProductFilter{View: "usage"}, true
-	case len(q["session"]) == 1 && u.Path == SessionsPath && sessionUIDQuery.MatchString(q.Get("session")):
-		return portal.ProductFilter{Session: q.Get("session")}, true
+	case q.Has("session"):
+		if u.Path != SessionsPath || !sessionUIDQuery.MatchString(q.Get("session")) {
+			return f, false
+		}
+		f.Session = q.Get("session")
+		q.Del("session")
+	case q.Has("task"):
+		if u.Path != TasksPath || !taskNumberQuery.MatchString(q.Get("task")) {
+			return f, false
+		}
+		f.Task = q.Get("task")
+		q.Del("task")
 	}
-	return portal.ProductFilter{}, false
+	if len(q) != 1 {
+		return f, len(q) == 0
+	}
+	selected := f.Session != "" || f.Task != ""
+	switch {
+	case q.Get("show") == "attention":
+		f.Attention = true
+	case q.Has("project") && u.Path == SessionsPath && validProject(q.Get("project")):
+		f.Project = q.Get("project")
+	case q.Get("view") == "usage" && u.Path == SessionsPath && !selected:
+		f.View = "usage"
+	default:
+		return portal.ProductFilter{}, false
+	}
+	return f, true
 }
 
 func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {

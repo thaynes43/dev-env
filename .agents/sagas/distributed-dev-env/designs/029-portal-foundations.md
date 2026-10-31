@@ -474,8 +474,9 @@ stats. No new credential, adapter or policy.
   unusually large; the breakdowns keep 19 groups and merge the rest into one
   Other row.
 - **Filters.** The rail and, on a phone, a chip row filter by query: `?show=attention`
-  on Sessions or Tasks, `?project=<repo>` on Sessions. Exactly one canonical key
-  is accepted; anything else is refused. Rail counts cover the whole read; the
+  on Sessions or Tasks, `?project=<repo>` on Sessions. One canonical filter key
+  is accepted, plus at most one selection key (below); anything else is
+  refused. Rail counts cover the whole read; the
   list and the Usage view cover the filtered sessions. The rail no longer
   repeats Tasks or Usage, which stay in the top bar.
 - **Task results.** The activity view adds `provider` (claude, codex,
@@ -620,9 +621,26 @@ conversation view; no supported route serves the history yet.
   view (`?session=<uid>`, no `#sN`: row IDs are positions, so a fragment could
   open another session once the list moves), and only the selected session's
   conversation is read, with a 5-second bound. Without a source, the selected
-  session states the gap and no links render. Past the 150-row listing cap the
+  session states the gap and its Messages panel has no conversation links (list
+  items still link to their selection). Past the 150-row listing cap the
   selected session takes the last listed row's place, so it is listed and read;
   totals, breakdowns and an incomplete-read warning still cover the whole read.
+  `TasksPath?task=<work package number>` selects one task. Tasks has no
+  listing-cap substitution: a task outside the read gets the notice instead.
+  A selection cannot be combined with `view=usage`.
+- **Selected item** (OP #312, 2026-10-30). Every list item whose row has a valid
+  key links to its own selection (`?session=<uid>` or `?task=<n>`) and keeps
+  the active `show` or `project` filter beside it. The server marks the
+  selected item `aria-current="page"`. It shows a left bar, a border and a bold
+  title, so colour is not the only cue. A fragment cannot carry this: the
+  server never sees it, and CSS cannot set `aria-current`. Each selection is
+  therefore a page load, and the selected session's conversation is read.
+  A row without a valid key keeps its `#sN` or `#tN` fragment link. It cannot
+  be selected, because a selection only matches keys that were already
+  validated, so it is never marked current in production. After a selection
+  the list starts at the top again: an anchor on a stable key (UID or work
+  package number), not the position-based `#sN`/`#tN`, is a possible
+  follow-up (OP #312 j3719).
 - **Seam.** `SessionSource.UseConversations(ConversationSource)`;
   `ReadConversation(ctx, name, uid)` returns `Conversation` (state, reason
   code, turns). A read error, an `unavailable` state or an unknown state shows

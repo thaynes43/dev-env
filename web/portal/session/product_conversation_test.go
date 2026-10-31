@@ -248,7 +248,8 @@ func TestSelectedSessionPastTheListingCapOpensFromAReceipt(t *testing.T) {
 	if first := detailSection(t, body, "s1"); !strings.HasPrefix(first, `<section class="detail" id="s1"`) {
 		t.Fatalf("the first row is still a default: %.80s", first)
 	}
-	if !strings.Contains(body, `<div class="shell selected">`) || strings.Count(body, `class="item default"`) != 1 || !strings.Contains(body, `<a class="item default" href="#`+id+`">`) {
+	if !strings.Contains(body, `<div class="shell selected">`) || strings.Count(body, `class="item default"`) != 1 || strings.Count(body, ` aria-current="page"><span class="item-top">`) != 1 ||
+		!strings.Contains(body, `<a class="item default" href="`+SessionsPath+`?session=uid-`+selected+`" aria-current="page">`) {
 		t.Fatal("the list does not mark the selected session, or the phone view would open the list")
 	}
 

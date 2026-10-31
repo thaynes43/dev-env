@@ -150,9 +150,14 @@ type ProductRow struct {
 	Messages                                  *ProductMessages
 	Attention                                 *ProductAttention
 	// Selected marks the one row the request selected by its Session UID
-	// (Sessions ?session=). It is the default detail on every viewport and
-	// is never trimmed. Only the first selected row counts.
+	// (Sessions ?session=) or work package number (Tasks ?task=). It is the
+	// default detail on every viewport, is never trimmed, and its list item
+	// is the current page. Only the first selected row counts.
 	Selected bool
+	// Key is the stable identity the row's list item selects: the Session
+	// UID on Sessions, the work package number on Tasks. Without a valid
+	// key the item opens its detail by fragment and cannot show as selected.
+	Key string
 	// Fixture marks a synthetic task. The list template renders a Fixture
 	// badge only when it is set; Sessions leave it false. The word cannot
 	// live only in Badges: that slice is the detail meta line, and an owner
@@ -555,6 +560,9 @@ type ProductFilter struct {
 	// Session selects one session by UID to load its conversation. It does
 	// not narrow the list.
 	Session string
+	// Task selects one work package by number on Tasks. It does not narrow
+	// the list.
+	Task string
 }
 
 // ProductCount is one rail entry's name and count. Count is empty when the
@@ -650,14 +658,23 @@ func productReadFailure(f *ProductReadFailure, filter ProductFilter, title strin
 		}
 		v.Reason += "."
 	}
+	q := url.Values{}
 	if filter.View == "usage" && title != "Tasks" {
-		v.RetryHref += "?view=usage"
-	} else if filter.Attention {
-		v.RetryHref += "?show=attention"
-	} else if filter.Project != "" && title != "Tasks" {
-		v.RetryHref += "?project=" + url.QueryEscape(filter.Project)
-	} else if filter.Session != "" && title != "Tasks" {
-		v.RetryHref += "?session=" + url.QueryEscape(filter.Session)
+		q.Set("view", "usage")
+	} else {
+		if filter.Attention {
+			q.Set("show", "attention")
+		} else if filter.Project != "" && title != "Tasks" {
+			q.Set("project", filter.Project)
+		}
+		if filter.Session != "" && title != "Tasks" {
+			q.Set("session", filter.Session)
+		} else if filter.Task != "" && title == "Tasks" {
+			q.Set("task", filter.Task)
+		}
+	}
+	if len(q) > 0 {
+		v.RetryHref += "?" + q.Encode()
 	}
 	label := func(raw string) (string, string) {
 		at, err := time.Parse(time.RFC3339Nano, raw)
@@ -702,6 +719,7 @@ var (
 	productRemoteControlURL = regexp.MustCompile(apiv1.PortalRemoteControlURLPattern)
 	productSessionUID       = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 	productID               = regexp.MustCompile(`^[st][0-9]{1,4}$`)
+	productTaskKey          = regexp.MustCompile(`^[1-9][0-9]{0,9}$`)
 )
 
 func productTone(tone string) string {
@@ -734,12 +752,37 @@ func sectionTones(sections []ProductSection) []ProductSection {
 
 type productGroupView struct {
 	ID, Title, Count string
-	Rows             []ProductRow
+	Rows             []productRowView
 }
 
 type productRowView struct {
 	ProductRow
 	Default bool
+	// Href is the list item's link; Current marks the selected item.
+	Href    string
+	Current bool
+}
+
+// itemHref is a list item's link. A row with a valid key selects itself on
+// the server, keeping the page's filter, so the reply can mark it current.
+// Any other row opens its detail by fragment.
+func itemHref(row ProductRow, current string, filter ProductFilter) string {
+	base, q := productSessionsHref, url.Values{}
+	switch {
+	case current == "sessions" && productSessionUID.MatchString(row.Key):
+		q.Set("session", row.Key)
+	case current == "tasks" && productTaskKey.MatchString(row.Key):
+		base = productTasksHref
+		q.Set("task", row.Key)
+	default:
+		return "#" + row.ID
+	}
+	if filter.Attention {
+		q.Set("show", "attention")
+	} else if filter.Project != "" && current == "sessions" {
+		q.Set("project", filter.Project)
+	}
+	return base + "?" + q.Encode()
 }
 
 // RenderProductWithin renders page in at most limit bytes. While it is too
@@ -957,7 +1000,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 				if row.Selected && !view.Selected {
 					view.Selected, view.DefaultID = true, row.ID
 				}
-				g.Rows = append(g.Rows, row)
+				g.Rows = append(g.Rows, productRowView{ProductRow: row, Href: itemHref(row, view.Current, page.Filter)})
 				view.Rows = append(view.Rows, productRowView{ProductRow: row})
 			}
 			if len(g.Rows) == 0 {
@@ -980,6 +1023,12 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	}
 	for i := range view.Rows {
 		view.Rows[i].Default = view.Rows[i].ID == view.DefaultID
+	}
+	for _, g := range view.Groups {
+		for i := range g.Rows {
+			g.Rows[i].Default = g.Rows[i].ID == view.DefaultID
+			g.Rows[i].Current = view.Selected && g.Rows[i].Default
+		}
 	}
 	view.Banner = view.HasRows && !view.Quiet && view.Notice != ""
 	var body bytes.Buffer
