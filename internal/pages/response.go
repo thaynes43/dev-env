@@ -118,6 +118,11 @@ type ResponseProjection struct {
 // dispatch, retry, inferred owner, inferred resolution or wall-clock read.
 func ProjectResponse(ctx context.Context, identity AlertIdentity, sources ResponseSources, at time.Time) ResponseProjection {
 	out := unknownResponse(identity)
+	if sources.Claims != nil {
+		// Claims are looked up only after the order joins; until then say so
+		// rather than calling a configured claim source Unconfigured.
+		out.ClaimCondition = "NotChecked"
+	}
 	if !validResponseIdentity(identity) {
 		if !responseText(identity.Fingerprint) {
 			out.Identity.Fingerprint = timeUnknown
@@ -148,7 +153,7 @@ func ProjectResponse(ctx context.Context, identity AlertIdentity, sources Respon
 	o := *order.Order
 	created, createdOK := orderTime(o.Order.Created)
 	updated, updatedOK := orderTime(o.Updated)
-	if !validOrderKey(o.Order.Key) || !createdOK || !updatedOK || updated.Before(created) || updated.After(order.ObservedAt) {
+	if !validOrderKey(o.Order.Key) || !validOrderStatus(o.Status) || !createdOK || !updatedOK || updated.Before(created) || updated.After(order.ObservedAt) {
 		out.OrderCondition = "Invalid"
 		return out
 	}
@@ -224,6 +229,16 @@ func validResponseState(state string) bool {
 // responseStateMatches compares against the statuses V1 records: pending,
 // claimed, done, failed and escalated. `order-status.sh working` is a
 // heartbeat that bumps only `updated`, so "working" is never a status.
+// validOrderStatus is V1's recorded order vocabulary; anything else, such as
+// "working" (order-status.sh working only bumps updated), is an invalid order.
+func validOrderStatus(status string) bool {
+	switch status {
+	case "pending", "claimed", "done", "failed", "escalated":
+		return true
+	}
+	return false
+}
+
 func responseStateMatches(state, status string) bool {
 	switch state {
 	case "claimed", "responding":

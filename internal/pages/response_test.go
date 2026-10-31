@@ -79,33 +79,33 @@ func TestResponseUnknownDistinctions(t *testing.T) {
 		{"unconfigured", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { *s = ResponseSources{} }, "Unconfigured", "Unconfigured"},
 		{"order unavailable", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.err = errors.New("PRIVATE diagnostic")
-		}, "Unavailable", "Unconfigured"},
+		}, "Unavailable", "NotChecked"},
 		{"order absent source", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.Available = false
-		}, "Unavailable", "Unconfigured"},
-		{"order empty", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) { o.observation.Order = nil }, "Empty", "Unconfigured"},
+		}, "Unavailable", "NotChecked"},
+		{"order empty", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) { o.observation.Order = nil }, "Empty", "NotChecked"},
 		{"order stale", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.ObservedAt = o.observation.ObservedAt.Add(-6 * time.Minute)
-		}, "Stale", "Unconfigured"},
+		}, "Stale", "NotChecked"},
 		{"order future", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.ObservedAt = o.observation.ObservedAt.Add(time.Second)
-		}, "Invalid", "Unconfigured"},
-		{"no age policy", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { s.MaxAge = 0 }, "Invalid", "Unconfigured"},
+		}, "Invalid", "NotChecked"},
+		{"no age policy", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { s.MaxAge = 0 }, "Invalid", "NotChecked"},
 		{"order identity mismatch", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.Order.Identity.Fingerprint = "different"
-		}, "Unjoined", "Unconfigured"},
+		}, "Unjoined", "NotChecked"},
 		{"bad V1 key", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.Order.Order.Key = "invented"
-		}, "Invalid", "Unconfigured"},
+		}, "Invalid", "NotChecked"},
 		{"missing updated", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.Order.Updated = ""
-		}, "Invalid", "Unconfigured"},
+		}, "Invalid", "NotChecked"},
 		{"missing created", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.Order.Order.Created = ""
-		}, "Invalid", "Unconfigured"},
+		}, "Invalid", "NotChecked"},
 		{"updated after observation", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
 			o.observation.Order.Updated = strconv.FormatInt(o.observation.ObservedAt.Add(time.Second).Unix(), 10)
-		}, "Invalid", "Unconfigured"},
+		}, "Invalid", "NotChecked"},
 		{"claim unconfigured", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { s.Claims = nil }, "Available", "Unconfigured"},
 		{"claim unavailable", func(_ *ResponseSources, _ *fakeResponderOrders, c *fakeCanonicalClaims) {
 			c.err = errors.New("PRIVATE claim diagnostic")
@@ -157,7 +157,10 @@ func TestResponseUnknownDistinctions(t *testing.T) {
 		{"working is not a V1 status", func(_ *ResponseSources, o *fakeResponderOrders, c *fakeCanonicalClaims) {
 			o.observation.Order.Status = "working"
 			c.observation.Claim.State = "responding"
-		}, "Available", "Mismatched"},
+		}, "Invalid", "NotChecked"},
+		{"empty order status", func(_ *ResponseSources, o *fakeResponderOrders, _ *fakeCanonicalClaims) {
+			o.observation.Order.Status = ""
+		}, "Invalid", "NotChecked"},
 		{"failed is not resolved", func(_ *ResponseSources, o *fakeResponderOrders, c *fakeCanonicalClaims) {
 			o.observation.Order.Status = "failed"
 			c.observation.Claim.State = "resolved"

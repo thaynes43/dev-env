@@ -17,7 +17,7 @@ changes that identity and the content revision. The legacy `key` still selects
 a fingerprint in the current snapshot, so callers must check the start identity
 and use `expectedRevision` to detect a changed observation. The projection has
 order/claim source conditions (`Unconfigured`, `Unavailable`, `Empty`, `Stale`,
-`Invalid`, `Unjoined`, `Available`, and for claims `Mismatched`) and timestamps,
+`Invalid`, `Unjoined`, `Available`, and for claims `Mismatched` and `NotChecked`, which means the claim source is configured but the order did not join, so no claim was looked up) and timestamps,
 an existing order attempt and canonical reference, owner, `responseState` and
 `responseStateAt`, and a safe `evidenceURL` identical to the portal link.
 `responseState` is the responder's recorded workflow state, not the alert's

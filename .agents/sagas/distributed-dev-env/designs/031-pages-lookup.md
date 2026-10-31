@@ -301,9 +301,12 @@ state evidence must not predate the order attempt's `created` time, and both
 bindings must agree.
 
 V1 records only the order statuses `pending`, `claimed`, `done`, `failed` and
-`escalated` (haynes-ops `dev-env-ops/app/resources/work-order-watch.sh` status
+`escalated` (haynes-ops `kubernetes/main/apps/upgrade-agent/dev-env-ops/app/resources/work-order-watch.sh` status
 flow and `order-status.sh`). `order-status.sh <key> working` is a heartbeat: it
 bumps `updated` and keeps the recorded status, so `working` is never a status.
+An order with any other status, empty included, is Invalid. A configured claim
+source is looked up only after the order joins; until then its condition is
+NotChecked, shown as "Not checked (order not joined)", never Unconfigured.
 Claimed/responding require explicit canonical evidence and a V1 `claimed`
 order. Needs-user requires explicit canonical evidence and an `escalated` or
 `failed` order. Resolved requires explicit canonical evidence and a `done`
