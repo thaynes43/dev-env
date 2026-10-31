@@ -263,3 +263,54 @@ func TestResponseSnapshotRefireAttempts(t *testing.T) {
 		t.Fatalf("refire attempt association lost: %+v, lookups=%v", got, claims.calls)
 	}
 }
+
+// The batch bound holds even if a caller skips the snapshot parser's limit.
+func TestResponseBatchOverLimitMakesNoLookup(t *testing.T) {
+	id, policy, at, _, _ := responseFixture()
+	orders := &snapshotOrders{}
+	claims := &snapshotClaims{}
+	sources := policy
+	sources.Orders, sources.Claims = orders, claims
+	start, err := time.Parse(time.RFC3339, id.StartsAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]AlertIdentity, 0, MaxResponseBatch+1)
+	for i := 0; i <= MaxResponseBatch; i++ {
+		ids = append(ids, AlertIdentity{Fingerprint: id.Fingerprint, StartsAt: start.Add(-time.Duration(i) * time.Second).Format(time.RFC3339)})
+	}
+	got := ProjectResponses(context.Background(), ids, sources, at)
+	if len(orders.calls) != 0 || len(claims.calls) != 0 {
+		t.Fatalf("an oversized batch made lookups: orders=%d claims=%d", len(orders.calls), len(claims.calls))
+	}
+	for _, identity := range ids {
+		if r := got[identity]; r.OrderCondition != "Unavailable" || r.Owner != "Unknown" {
+			t.Fatalf("oversized batch alert not Unavailable: %+v", r)
+		}
+	}
+}
+
+// An adapter that rewrites its request slice cannot move results to other keys.
+type mutatingOrders struct{ snapshotOrders }
+
+func (m *mutatingOrders) FindOrders(ctx context.Context, ids []AlertIdentity) (map[AlertIdentity]OrderObservation, error) {
+	got, err := m.snapshotOrders.FindOrders(ctx, ids)
+	for i := range ids {
+		ids[i] = AlertIdentity{Fingerprint: "rewritten", StartsAt: ids[i].StartsAt}
+	}
+	return got, err
+}
+
+func TestResponseAdaptersReceiveCopies(t *testing.T) {
+	id, policy, at, _, _ := responseFixture()
+	orders := &mutatingOrders{}
+	sources := policy
+	sources.Orders = orders
+	got := ProjectResponses(context.Background(), []AlertIdentity{id}, sources, at)
+	if _, ok := got[id]; !ok || len(got) != 1 {
+		t.Fatalf("results moved off the original identity: %v", got)
+	}
+	if _, ok := got[AlertIdentity{Fingerprint: "rewritten", StartsAt: id.StartsAt}]; ok {
+		t.Fatal("a rewritten request key leaked into the results")
+	}
+}

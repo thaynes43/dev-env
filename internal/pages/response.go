@@ -2,8 +2,10 @@ package pages
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,9 +133,17 @@ func ProjectResponse(ctx context.Context, identity AlertIdentity, sources Respon
 	return ProjectResponses(ctx, []AlertIdentity{identity}, sources, at)[identity]
 }
 
+// MaxResponseBatch bounds one snapshot's lookups independently of callers; the
+// Alertmanager parser already refuses larger snapshots.
+const MaxResponseBatch = 1000
+
+var errResponseBatchTooLarge = errors.New("response batch exceeds MaxResponseBatch")
+
 // ProjectResponses reads at most one order batch and one claim batch per
 // snapshot. There is no write, dispatch, retry or wall-clock read. Results are
-// indexed by the original identity, including for invalid identities.
+// indexed by the original identity, including for invalid identities. A batch
+// over MaxResponseBatch makes no lookup and every requested alert is Unavailable.
+// Adapters receive copies, so one cannot rewrite the keys results are read by.
 func ProjectResponses(ctx context.Context, identities []AlertIdentity, sources ResponseSources, at time.Time) map[AlertIdentity]ResponseProjection {
 	out := make(map[AlertIdentity]ResponseProjection, len(identities))
 	requests := make([]AlertIdentity, 0, len(identities))
@@ -149,7 +159,13 @@ func ProjectResponses(ctx context.Context, identities []AlertIdentity, sources R
 	if sources.Orders == nil || len(requests) == 0 {
 		return out
 	}
-	orders, orderErr := sources.Orders.FindOrders(ctx, requests)
+	if len(requests) > MaxResponseBatch {
+		for _, identity := range requests {
+			out[identity] = projectResponse(identity, sources, at, OrderObservation{}, errResponseBatchTooLarge, ClaimObservation{}, nil)
+		}
+		return out
+	}
+	orders, orderErr := sources.Orders.FindOrders(ctx, slices.Clone(requests))
 	lookups := make([]ClaimLookup, 0, len(requests))
 	for _, identity := range requests {
 		response := projectResponse(identity, sources, at, orders[identity], orderErr, ClaimObservation{}, nil)
@@ -161,7 +177,7 @@ func ProjectResponses(ctx context.Context, identities []AlertIdentity, sources R
 	if len(lookups) == 0 {
 		return out
 	}
-	claims, claimErr := sources.Claims.FindClaims(ctx, lookups)
+	claims, claimErr := sources.Claims.FindClaims(ctx, slices.Clone(lookups))
 	for _, lookup := range lookups {
 		out[lookup.Identity] = projectResponse(lookup.Identity, sources, at, orders[lookup.Identity], orderErr, claims[lookup], claimErr)
 	}
