@@ -280,6 +280,7 @@ spec:
                       - dev-env-grant-secrets-read
                       - dev-env-grant-nodes
                       - dev-env-grant-breakglass
+                      - dev-env-grant-namespace-operator
                       type: string
                       x-kubernetes-validations:
                       - message: 'no policy approves dev-env-grant-breakglass or dev-env-grant-secrets-read:
@@ -289,6 +290,19 @@ spec:
                     minItems: 1
                     type: array
                     x-kubernetes-list-type: set
+                  secrets:
+                    description: |-
+                      Secrets are the Secrets a dev-env-grant-namespace-operator grant may
+                      name, each by name: no wildcard, no pattern (DESIGN-042 5.1). A grant
+                      matches only when every Secret it names is here. A policy that names that
+                      role names at least one; no other role takes them.
+                    items:
+                      maxLength: 253
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-type: set
                 required:
                 - roles
                 type: object
@@ -296,6 +310,11 @@ spec:
                 - message: name the namespaces, one by one, for a namespaced role
                   rule: self.roles.all(r, r == 'dev-env-grant-nodes') || (has(self.namespaces)
                     && size(self.namespaces) > 0)
+                - message: a policy for dev-env-grant-namespace-operator names the
+                    Secrets it allows, one by one, and only that role takes secrets
+                    (DESIGN-042 5.1)
+                  rule: self.roles.exists(r, r == 'dev-env-grant-namespace-operator')
+                    == (has(self.secrets) && size(self.secrets) > 0)
               maintenance:
                 description: |-
                   Maintenance is the one bounded maintenance envelope it approves
@@ -472,6 +491,10 @@ spec:
               rule: self.type != 'maintenance' || duration(self.maxTTL) <= duration('1h')
             - message: kube is set for type kube, and only there
               rule: (self.type == 'kube') == has(self.kube)
+            - message: 'no standing policy approves dev-env-grant-namespace-operator:
+                only an attested policy may (DESIGN-042 5.1)'
+              rule: '!has(self.kube) || !self.kube.roles.exists(r, r == ''dev-env-grant-namespace-operator'')
+                || has(self.attested)'
             - message: egress is set for type egress, and only there
               rule: (self.type == 'egress') == has(self.egress)
             - message: credential is set for type credential, and only there
