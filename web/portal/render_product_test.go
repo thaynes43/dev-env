@@ -878,7 +878,7 @@ func TestTaskReadFailureHidesDataAndKeepsSafeDiagnostics(t *testing.T) {
 
 func allowanceBlock(t *testing.T, body []byte, usage bool) string {
 	t.Helper()
-	pattern := `(?s)<div class="allowance-strip">(.*?)</ul></div>`
+	pattern := `(?s)<div class="allowance-strip">(.*?)</ul>(?:</details>)?</div>`
 	if usage {
 		pattern = `(?s)<section class="allowance".*?</section>\s*<p class="note">Plan limits.*?</section>`
 	}
@@ -1114,7 +1114,7 @@ func TestAllowanceWindowListsStackAndLinksHaveProviderNames(t *testing.T) {
 		t.Fatal("stylesheet missing")
 	}
 	css := string(style[1])
-	if strings.Contains(css, `.allowance-strip ul:not(:has(.allowance-windows))`) || !strings.Contains(css, `.allowance-strip > ul:not(:has(.allowance-windows))`) {
+	if strings.Contains(css, `.allowance-detail ul:not(:has(.allowance-windows))`) || !strings.Contains(css, `.allowance-detail > ul:not(:has(.allowance-windows))`) {
 		t.Fatal("horizontal provider layout must target only the outer list")
 	}
 	if !strings.Contains(css, `.allowance-link { display: flex; align-items: center; min-height: 24px;`) {
@@ -1137,6 +1137,86 @@ func TestAllowanceWindowListsStackAndLinksHaveProviderNames(t *testing.T) {
 	}
 	if strings.Contains(section, "<caption") {
 		t.Fatal("allowance tables must use aria-label instead of offscreen captions")
+	}
+}
+
+// TestAllowanceStripFoldsOnShortWindows pins OP307: on a short window wider
+// than 700px the provider lines fold behind a native disclosure, so a
+// tall connected strip cannot squeeze the session list. Taller windows and
+// phones keep every line visible without a click.
+func TestAllowanceStripFoldsOnShortWindows(t *testing.T) {
+	windows := []ProductAllowanceWindow{{Percent: "62% left", Window: "7 days"}, {Percent: "62% left", Window: "5 hours"}, {Percent: "Unknown"}}
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Allowance: []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceMeasured, Windows: windows},
+		{Provider: "Codex", Value: AllowanceMeasured, Windows: windows},
+	}, Groups: []ProductGroup{{Title: "In progress", Rows: []ProductRow{{ID: "s1", Title: "synthetic-agent"}}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "<script") {
+		t.Fatal("the fold must be server-rendered without script")
+	}
+	strip := allowanceBlock(t, body, false)
+	usage := `<a class="allowance-link" href="?view=usage#usage-allowance">Account allowance</a>`
+	disclosure := `<details class="allowance-detail"><summary class="allowance-toggle">By provider</summary>`
+	if !strings.HasPrefix(strip, `<div class="allowance-strip">`+usage+"\n"+disclosure+"\n"+`<ul role="list" aria-label="Account allowance by provider">`) {
+		t.Fatalf("the Usage link must stay outside a closed disclosure that holds the provider list: %s", strip)
+	}
+	if strings.Count(strip, "<details") != 1 || strings.Contains(strip, "<details open") || strings.Contains(strip, " open>") {
+		t.Fatal("the disclosure must start closed so a short window starts folded")
+	}
+	if !strings.HasSuffix(strip, `</ul></details></div>`) || strings.Count(strip, `class="allowance-provider"`) != 2 {
+		t.Fatal("both providers must sit inside the disclosure")
+	}
+	style := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindSubmatch(body)
+	if style == nil {
+		t.Fatal("stylesheet missing")
+	}
+	css := string(style[1])
+	open := ".allowance-detail::details-content { display: block; content-visibility: visible; }"
+	supports := "@supports selector(::details-content) {\n  .allowance-toggle { display: none; }\n  " + open + "\n}"
+	short := "@media (width > 700px) and (height <= 760px) {\n" +
+		"  .allowance-strip:has(> .allowance-detail) { display: flow-root; }\n" +
+		"  .allowance-strip:has(> .allowance-detail) > .allowance-link { float: left; margin-right: 12px; }\n" +
+		"  .allowance-toggle { display: flex; }\n" +
+		"  .allowance-detail:not([open])::details-content { content-visibility: hidden; }\n" +
+		"  .allowance-detail > ul { clear: left; }\n}"
+	at, fold := strings.Index(css, supports), strings.Index(css, short)
+	if at < 0 || fold < 0 {
+		t.Fatalf("missing the always-open default or the short-window fold:\n%s", css)
+	}
+	if at > fold {
+		t.Fatal("the short-window fold must follow the always-open default so it wins the cascade")
+	}
+	if strings.Count(css, "::details-content") != 3 || strings.Count(css, "760px") != 1 {
+		t.Fatal("the details content may only be opened by default and folded on short windows")
+	}
+	if !strings.Contains(css, ".allowance-toggle { display: flex; align-items: center; gap: 7px; width: fit-content; min-height: 24px;") {
+		t.Fatal("the disclosure needs a 24px target when it shows")
+	}
+	if !strings.Contains(css, "list-style: none; }") || !strings.Contains(css, ".allowance-toggle::-webkit-details-marker { display: none; }") {
+		t.Fatal("older WebKit must not draw its own disclosure marker beside the chevron")
+	}
+}
+
+// A strip with no reported windows (production today: Not connected) has no
+// disclosure, so it never folds behind a click.
+func TestAllowanceStripWithoutWindowsNeverFolds(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Allowance: []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceNotConnected},
+		{Provider: "Codex", Value: AllowanceNotConnected},
+	}, Groups: []ProductGroup{{Title: "In progress", Rows: []ProductRow{{ID: "s1", Title: "synthetic-agent"}}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strip := allowanceBlock(t, body, false)
+	if strings.Contains(strip, "<details") || strings.Contains(strip, "allowance-toggle") || !strings.HasSuffix(strip, "</ul></div>") {
+		t.Fatalf("a strip without windows must not fold: %s", strip)
+	}
+	if strings.Count(strip, "Not connected") != 2 {
+		t.Fatalf("both providers must stay visible: %s", strip)
 	}
 }
 

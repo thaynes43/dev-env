@@ -149,6 +149,12 @@ A failed Sessions read shows no allowance.
 No allowance reader is deployed, so production shows Claude and Codex as
 `Not connected`, with no percent.
 
+When any provider reports usage windows, the provider lines sit in a "By provider"
+disclosure. On a window wider than 700px and at most 760px tall it starts closed beside
+the Account allowance link, so a connected strip cannot squeeze the session list
+(OP307, 2026-10-31). Elsewhere it stays open. A strip with no windows, such as
+today's `Not connected` line, has no disclosure and never folds.
+
 `MapProductAllowance` is the pure projection a later reader will use. It maps a
 decoded `providerallowance.read.v1` document ([DESIGN-030](../.agents/sagas/distributed-dev-env/designs/030-provider-allowance-contract.md))
 to four states. Only the preview fixtures call it today.

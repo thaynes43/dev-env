@@ -193,7 +193,7 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(body)
-		pattern := `(?s)<div class="allowance-strip">.*?</ul></div>`
+		pattern := `(?s)<div class="allowance-strip">.*?</ul>(?:</details>)?</div>`
 		if strings.HasPrefix(tc.name, "usage") {
 			pattern = `(?s)<section class="allowance".*?Plan limits.*?</section>`
 		}
@@ -244,7 +244,7 @@ func TestAllowancePreviewStatesAreUniformAndSeenVariesIsExplicit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block := regexp.MustCompile(`(?s)<div class="allowance-strip">.*?</ul></div>`).FindString(string(body))
+		block := regexp.MustCompile(`(?s)<div class="allowance-strip">.*?</ul>(?:</details>)?</div>`).FindString(string(body))
 		if block == "" {
 			t.Fatalf("%s: missing strip", state)
 		}
