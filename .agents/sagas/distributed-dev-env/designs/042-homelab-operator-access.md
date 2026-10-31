@@ -164,7 +164,7 @@ requirements context. This proposal does not replace them or create another queu
 
 ## 2. Exact source and evidence inventory
 
-Snapshot: 2026-10-31; source-head refresh at 17:22Z. Reverify moving heads before delivery;
+Snapshot: 2026-10-31; source-head refresh through 17:37Z. Reverify moving heads before delivery;
 never carry an approval from one SHA to another. The private handoff retains the
 latest read-back. A passed local test is not hosted integration or deployment.
 
@@ -174,7 +174,7 @@ latest read-back. A passed local test is not hosted integration or deployment.
 | S4 named coordinator | PR787 reviewed `a62bf62e32fe466453de6c41a5ca23ec3970cdab`, merged `b82e3b2954d08a22abc6ed9d61039a40f3cbd1e2` | Independent review approved; required CI green. P6 still held; merge provisions no identity. |
 | S2 / owner 163602 | Draft PR791 current `78e6b3feccd95515a0405b7415d19b3c56743b8f` (includes S6 merge `1195633`); independently reviewed earlier `83103c69f41a389d26d2d2d8df1abecd7f1b08c6`, branch `agent/dev-env-1031-163602`; replaces released draft #786 `0678aee` | Full local API PASS 68.267s; real TokenRequest/TokenReview envtest PASS 7.419s, with synthetic Pod materialization. Broker 25.860s, operator 0.097s, schema 8.157s passed. Independent Claude review of `83103c6` **REQUEST CHANGES** for decision-slot lockout; current `78e6b3f` still documents it rather than correcting it. Combined local API 68.239s / broker 26.280s / operator 0.099s passed per owner receipt. Exact-head final CI/review and source correction required. Tree-only source. |
 | S6 / owner 163602 | PR790 reviewed `aa55b7a63843d17fb9eb50dacfb20a01d9b84881`, merged `119563303ea42b33963b19953c5b264a6b92aac9` at 17:14:39Z; branch `agent/dev-env-1031-163602-s6`; replaces draft789 `40ae62e0ef2d8826e7da536fb853ccdc76ad84a4` | Independent Claude review APPROVE at this head; broker/operator and creator-removal mutation passed. Hosted required CI including Test passed; merged source only. No activation. |
-| S3 / Grok primary, Codex 165730 support | Draft PR792 `3e1f1d39de6442460e20a1b38f0387449d437079`; supplied base `68c398b9c12cc9b93df658d72b68aedf1f067180`; Grok source `49dc659` | Local package/vet/static CLI build and six meaningful mutants PASS. Hosted merge-result Build/Lint fail because moving S2 lacks S5 `CreateGrantRequest.Secrets`/`Grant.Secrets`. Keep draft; integrate after S2/S5, rerun hosted CI and exact-head review. |
+| S3 / Grok primary, Codex 165730 support | Draft PR792 current `a7bce697ad26ba47919ce83ae5fd0b05d1e62033`; earlier tested `3e1f1d39de6442460e20a1b38f0387449d437079`; supplied base `68c398b9c12cc9b93df658d72b68aedf1f067180`; Grok source `49dc659` | Earlier package/vet/static build and six meaningful mutants PASS retained. Final package 3.123s, vet/static build and nine assertion-killed mutants PASS; independent Opus review APPROVE **source only** at `a7bce69`, including package 3.246s and route-prefix mutation. Hosted merge-result Build/Lint remain blocked on missing S5 wire fields. Keep draft; replay only client commits `49dc659`, `3e1f1d3`, `a7bce69` on the final S2/S5 base, dropping temporary wire-base commit `68c398b`, then hosted CI/exact-head review. |
 | S5 / separate Grok writer | PR785 `fe3b62fcbcf5d8f7ae8f288d9e3fe52f09a166cd`; local-only correction ACP `ef4f0d17-c002-42e5-9d12-7dc52e6b9e31`, workbench workspace | Existing source green, but not integrated with S2. Local patch corrects same-object digest nonmutation test and discloses any-SA Job exposure. Patch SHA256 `992378f1cfa009828cacb785e96a545ad2bae0880f3bef31179d49cd2fa372d1`; no integrated/tested/pushed-head claim. |
 | S2 reach follow-up (6.6) | **Absent** from PR791 and merged S4; request to existing S2 owner after disjoint follow-up custody | Source design only. No default/flag/schema exists for policy reach today. |
 | S7 reserved classes | **Absent** | No reserved flag, `tomRef`, `targets` or `allNamespaces` server implementation is claimed. S3 must extend its contract after S7; PR792 is not S7 proof. |
@@ -188,6 +188,14 @@ Source links: [S2](https://github.com/thaynes43/dev-env/pull/791),
 [S3](https://github.com/thaynes43/dev-env/pull/792),
 [S5](https://github.com/thaynes43/dev-env/pull/785).
 The S2 owner's local combined S2/S6 work is not substituted for a remote head.
+
+Selected live metadata at 17:31:41Z confirms the distinction in section 0:
+GPU `223503` is Running, full profile, parent human SA, depth `0`; actual Claude
+`132039` is Running, full profile, depth `1`, parent legacy session
+`dev-env-1019-205125`. That parent's creator is `dev/dev-env`; parent and child both
+use the shared `dev-env-agent` SA, not a named delegate identity. Both GPU and
+Claude containers have zero restarts. Exact UIDs are retained privately in the
+integration handoff. No exec, migration or credential availability was inferred.
 
 ## 3. Existing machinery and workflow limits
 
