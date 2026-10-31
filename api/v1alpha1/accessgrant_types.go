@@ -80,7 +80,10 @@ const (
 	// (DESIGN-042 5.1, class C2). It has no Secret get or list, which does not
 	// mean it cannot read Secrets: exec reaches every Secret the namespace's
 	// pods already hold, and their ServiceAccounts' tokens, and a command run
-	// in a Job that uses a named Secret can print it. No standing policy
+	// in a Job that uses a named Secret can print it. A created Job can select
+	// any ServiceAccount in the granted namespace and inherit its permissions,
+	// even if no running pod uses it. Restricting or accepting that authority
+	// remains open; the named-Secret guard does not bound it. No standing policy
 	// approves it; an attested one only with attested.allowSecretUse.
 	RoleNamespaceOperator = "dev-env-grant-namespace-operator"
 )
