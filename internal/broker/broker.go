@@ -117,6 +117,12 @@ type Broker struct {
 	// EnableAttestedGrants and EnableMaintenanceGrants as well. Off, a
 	// maintenance grant is approved by the authenticated human route only.
 	EnableAttestedMaintenance bool
+	// AttestedMaintenanceCreators are the ServiceAccounts ("namespace/name")
+	// whose directly created, top-level sessions may approve maintenance for
+	// themselves through EnableAttestedMaintenance (DESIGN-042 6.2, S6): the
+	// requester's spec.parent must be exactly one of them. Empty, none may. The
+	// broker flag defaults it to the human ServiceAccount.
+	AttestedMaintenanceCreators []string
 	// MaintenanceHumanServiceAccount must match the operator human identity.
 	MaintenanceHumanServiceAccount string
 	// Clock is the broker's time; tests step a fake one.

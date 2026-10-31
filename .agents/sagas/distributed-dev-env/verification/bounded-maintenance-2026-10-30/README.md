@@ -329,3 +329,10 @@ What remains for this route:
 4. Add one attested maintenance GrantPolicy that Tom approves.
 
 A proposal for that policy exists only in the source PR body. Nothing is staged.
+
+
+## Amendment 2026-10-31: attested creator eligibility (ADR-014, S6)
+
+[ADR-014](../../adrs/014-attested-maintenance-creators.md) narrows mode (a) to a live top-level session with explicit depth `0` whose recorded creator is in `--attested-maintenance-creators`. Unset follows the configured maintenance human ServiceAccount; explicitly empty admits none. This is launch eligibility, not a human-only approval or execution requirement. The exact 223503 launch shape qualifies; children, missing parents, unlisted creators and missing or malformed depth do not.
+
+Approval and active rechecks use the same rule. Removing the creator ends the lease before execution, or requests a running executor stop and waits for termination proof before cleanup. Human decisions and the separate delegate route are unaffected. Creator parsing, positive/negative fixtures, pre-execution revocation and running-executor cleanup are covered in broker/operator source tests. Runtime installation and usable acceptance remain pending; all activation is held.

@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -52,6 +53,10 @@ type Options struct {
 	EnableAttestedGrants           bool
 	EnableMaintenanceGrants        bool
 	MaintenanceHumanServiceAccount string
+	// AttestedMaintenanceCreators lists the ServiceAccounts whose directly
+	// created sessions may approve maintenance for themselves (DESIGN-042 S6).
+	// Empty, none may; the broker flag defaults it to the human ServiceAccount.
+	AttestedMaintenanceCreators []string
 	// EnableAttestedMaintenance turns on approval of maintenance grants
 	// through attested policies with a maintenance scope (ADR-013). It needs
 	// EnableAttestedGrants and EnableMaintenanceGrants too. Default off.
@@ -148,6 +153,7 @@ func NewManager(cfg *rest.Config, o Options) (ctrl.Manager, *Broker, error) {
 		EnableProxmoxGrants:            o.EnableProxmoxGrants,
 		EnableHWSSHGrants:              o.EnableHWSSHGrants,
 		EnableAttestedGrants:           o.EnableAttestedGrants,
+		AttestedMaintenanceCreators:    slices.Clone(o.AttestedMaintenanceCreators),
 		EnableMaintenanceGrants:        o.EnableMaintenanceGrants,
 		EnableAttestedMaintenance:      o.EnableAttestedMaintenance,
 		MaintenanceHumanServiceAccount: o.MaintenanceHumanServiceAccount,

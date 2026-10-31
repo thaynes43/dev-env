@@ -3499,6 +3499,8 @@ its name because a ClusterRoleBinding's `roleRef` cannot change.
 
 ### 6.12 Access: no prompts in the pod, control at the platform
 
+**S6 source amendment, 2026-10-31 (ADR-014).** Attested maintenance requires the live requester's explicit depth label `0` and a creator in `--attested-maintenance-creators`; an unset list follows the configured maintenance human ServiceAccount, and an explicitly empty list admits none. Children, missing parents and missing or malformed depth fail closed. Approval, executor creation and active rechecks share this eligibility rule. Creator removal ends the approval and uses the termination-proof cleanup tail. This grants no runtime activation and does not require a human approval actor. See [ADR-014](../adrs/014-attested-maintenance-creators.md).
+
 Tom (2026-10-06): agents should skip permission prompts for their own vendor's tools,
 as `--dangerously-skip-permissions` does now, while he keeps control over cluster
 and external access, which an agent would have to request. Today agents hit
