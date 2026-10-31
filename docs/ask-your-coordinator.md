@@ -1,11 +1,13 @@
 # How to ask your coordinator
 
-Source guidance, 2026-10-31 (OpenProject #321). Nothing here is installed by
-this change. The commands work once three things are true: the operator runs
-with the durable inbox enabled for your project, it also runs with
-`--enable-inbox-questions` (installed after its CRD), and the agent image
-carries the matching `agent-run`. Until then `ask` and `reply` are refused with
-400 and nothing is sent. `list --sent` and the thread view are refused the same
+Guidance for OpenProject #321. **Installed 2026-10-31:** operator v2.76.0 runs with
+the durable inbox for `dev-env` and with `--enable-inbox-questions` (haynes-ops
+#4494, after the InboxMessage CRD #4490). Session pods still carry an older
+`agent-run`, because the agent image follows the held template. Until that
+moves, use the signed side-by-side copy at
+`~/.shared/handoffs/agent-run-v2.76.0/agent-run`, and check its sha256 against the
+`PROVENANCE.txt` next to it. If the operator flag were off, `ask` and `reply`
+would be refused with 400 and nothing sent. `list --sent` and the thread view are refused the same
 way: `list` and `read` then show plain messages only, and `--sent` says the API
 does not list sent messages. The contract is
 [DESIGN-014, "Ask and reply"](../.agents/sagas/distributed-dev-env/designs/014-durable-offline-inbox.md#ask-and-reply-2026-10-31-openproject-321).
@@ -22,6 +24,25 @@ It is not for:
   (`agent-run grant`, the access broker);
 - approval. A reply is information from your coordinator. It never approves a
   held action, a grant or a merge.
+
+## Who can ask whom
+
+Both ends must be **project-bound**: a Session started as a project task
+(`agent-run --project <p> ...`) carries an accepted project snapshot
+(the `dev-env.haynesops.com/project-snapshot` annotation). The server matches that
+snapshot's project to the request's `--project`, for the sender and for the
+recipient. `spec.project` alone is not what is checked.
+
+- A recipient without a matching snapshot is hidden: the ask gets **404**. For
+  example, an interactive or remote coordinator started without `--project`
+  cannot be asked, even by its own children. Ask a project-bound Session by name
+  with `--to`, or have the coordinator start as a project task.
+- Session depth is limited to two levels (DESIGN-001 3.4). A Session at depth 2
+  cannot start children, so it cannot coordinate workers it would start itself.
+- Proven on 2026-10-31 (OpenProject #321, journal 3999): two project-bound
+  sibling Sessions completed ask with `--to`, then reply and ack, through the
+  live operator. The default-to-parent form had not yet been exercised against a
+  project-bound parent.
 
 ## Ask
 
