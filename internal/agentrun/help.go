@@ -728,7 +728,7 @@ does not mean the grant is Active.
   --tom-ref <ref>     required with --reserved; fresh nonsecret Tom-message reference
 
 The Tom reference is an agent assertion, not verified human consent. Reserved TTL
-is at most1h; maintenance keeps its30m default. Use grant request --reserved with
+is at most 1h; maintenance keeps its 30m default. Use grant request --reserved with
 --all-namespaces for an approval-time Secret-read namespace UID snapshot, or repeat
 --storage-target Kind/name@UID (1–8) with one --namespace for exact storage deletes.
 The configured proposed namespace exclusions can have explicitly reviewed bounded

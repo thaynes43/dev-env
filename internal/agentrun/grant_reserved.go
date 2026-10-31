@@ -57,7 +57,7 @@ func validateReservedRequest(req apiv1.CreateGrantRequest) error {
 	if req.TTL != "" {
 		ttl, err := time.ParseDuration(req.TTL)
 		if err != nil || ttl < 10*time.Minute || ttl > time.Hour {
-			return usageError("reserved TTL is10m to1h; this maximum does not change the30m maintenance default")
+			return usageError("reserved TTL is 10m to 1h; this maximum does not change the 30m maintenance default")
 		}
 	}
 	if len(req.Secrets) > 0 {
@@ -106,7 +106,7 @@ func validateReservedDecisionExtras(req apiv1.GrantDecisionRequest) error {
 	if req.TTL != "" {
 		ttl, err := time.ParseDuration(req.TTL)
 		if err != nil || ttl < 10*time.Minute || ttl > time.Hour {
-			return usageError("reserved decision TTL is10m to1h")
+			return usageError("reserved decision TTL is 10m to 1h")
 		}
 	}
 	return nil
