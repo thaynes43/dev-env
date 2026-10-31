@@ -97,7 +97,7 @@ type ResponseSources struct {
 // State is the responder's recorded workflow state (JSON responseState), never
 // the alert's own status: "resolved" can sit beside an alert still listed.
 // Every Unknown field is the literal "Unknown", so an Unconfigured projection
-// costs about 455 bytes per alert in MCP JSON (DESIGN-031 13).
+// costs about 443 bytes per alert in MCP JSON, guarded at 448 (DESIGN-031 13).
 type ResponseProjection struct {
 	Identity        AlertIdentity           `json:"identity"`
 	Order           OrderReference          `json:"order"`
@@ -226,9 +226,6 @@ func validResponseState(state string) bool {
 	return false
 }
 
-// responseStateMatches compares against the statuses V1 records: pending,
-// claimed, done, failed and escalated. `order-status.sh working` is a
-// heartbeat that bumps only `updated`, so "working" is never a status.
 // validOrderStatus is V1's recorded order vocabulary; anything else, such as
 // "working" (order-status.sh working only bumps updated), is an invalid order.
 func validOrderStatus(status string) bool {
@@ -239,6 +236,9 @@ func validOrderStatus(status string) bool {
 	return false
 }
 
+// responseStateMatches compares against the statuses V1 records: pending,
+// claimed, done, failed and escalated. `order-status.sh working` is a
+// heartbeat that bumps only `updated`, so "working" is never a status.
 func responseStateMatches(state, status string) bool {
 	switch state {
 	case "claimed", "responding":

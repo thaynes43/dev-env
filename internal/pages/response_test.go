@@ -107,6 +107,7 @@ func TestResponseUnknownDistinctions(t *testing.T) {
 			o.observation.Order.Updated = strconv.FormatInt(o.observation.ObservedAt.Add(time.Second).Unix(), 10)
 		}, "Invalid", "NotChecked"},
 		{"claim unconfigured", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { s.Claims = nil }, "Available", "Unconfigured"},
+		{"orders unconfigured", func(s *ResponseSources, _ *fakeResponderOrders, _ *fakeCanonicalClaims) { s.Orders = nil }, "Unconfigured", "NotChecked"},
 		{"claim unavailable", func(_ *ResponseSources, _ *fakeResponderOrders, c *fakeCanonicalClaims) {
 			c.err = errors.New("PRIVATE claim diagnostic")
 		}, "Available", "Unavailable"},
@@ -335,5 +336,14 @@ func TestUnconfiguredResponseSize(t *testing.T) {
 	raw, err := json.Marshal(got)
 	if err != nil || len(raw) > 448 || got.OrderCondition != "Unconfigured" || got.ClaimCondition != "Unconfigured" {
 		t.Fatalf("Unconfigured projection is %d bytes, over the documented 448: %s", len(raw), raw)
+	}
+}
+
+// An invalid alert identity never reaches the claim source, and says so.
+func TestResponseInvalidIdentityLeavesClaimsNotChecked(t *testing.T) {
+	_, sources, at, _, _ := responseFixture()
+	got := ProjectResponse(context.Background(), AlertIdentity{Fingerprint: "", StartsAt: "not-a-time"}, sources, at)
+	if got.OrderCondition != "Invalid" || got.ClaimCondition != "NotChecked" || got.Owner != "Unknown" || got.State != "Unknown" {
+		t.Fatalf("invalid identity: %+v", got)
 	}
 }

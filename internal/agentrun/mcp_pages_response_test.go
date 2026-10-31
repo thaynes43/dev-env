@@ -258,3 +258,17 @@ func TestPagesMismatchedClaimWithholdsOwner(t *testing.T) {
 		t.Fatal("portal showed an unconfirmed owner or no mismatch reason")
 	}
 }
+
+// A configured claim source whose order did not join reads the same in UI
+// and MCP, and the portal says why no claim was looked up.
+func TestPagesClaimNotCheckedUntilOrderJoins(t *testing.T) {
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	sources := responseSourcesFor(at, pages.AlertIdentity{Fingerprint: "other-fingerprint", StartsAt: "2026-10-30T11:00:00Z"}, "claimed", "claimed", "https://example.test/work_packages/313")
+	ui, mcp, body := renderResponse(t, at, sources)
+	if !reflect.DeepEqual(ui, mcp) || mcp.OrderCondition != "Unjoined" || mcp.ClaimCondition != "NotChecked" || mcp.Owner != "Unknown" {
+		t.Fatalf("unjoined order: ui=%+v mcp=%+v", ui, mcp)
+	}
+	if !strings.Contains(body, "Not checked (order not joined)") || strings.Contains(body, "synthetic-owner") {
+		t.Fatal("portal did not say the claim was not checked")
+	}
+}
