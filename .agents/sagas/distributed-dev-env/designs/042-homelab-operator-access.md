@@ -47,9 +47,10 @@ and each has a one-step rollback.
    policy allows, for its TTL.
 3. **Mode (b).** Listed delegate identities may decide other agents' grants, GPU
    maintenance included, through the authenticated API. A delegate cannot decide its
-   own request. The Claude lead becomes a delegate only after it runs under its own
-   coordinator SA, which has the same authority as today. That step waits on the
-   template hold (P6).
+   own request, or a request from its own ancestor. Only Tom's human or client caller
+   may launch a delegate session. The Claude lead becomes a delegate only after it
+   runs under its own coordinator SA, which has the same authority as today. That step
+   waits on the template hold (P6).
 4. **Namespace operator.** A grant in named app namespaces may exec into pods, restart
    workloads, and run Jobs that mount the Secrets the grant names. It never gets
    Secret `get` or `list`. An agent-chosen command can still print a Secret it can
@@ -72,7 +73,7 @@ The reserved decisions (section 7) stay with Tom.
 | S1 | dev-env | Attested maintenance (ADR-013): an attested GrantPolicy with an exact maintenance envelope; flag `--enable-attested-maintenance` | PR #781, open; default off | flag false |
 | S2 | dev-env | Delegate decisions (6.2): flag `--grant-delegates` on operator and broker; `POST /v1/grants/{name}/decision`; GrantPolicy `spec.delegated`; `Decide` accepts `delegate/<ns>/<sa>`; self-decision refused | new; default off (empty list) | empty the list |
 | S3 | dev-env | `agent-run grant decide` and an MCP tool; `secrets` on grant requests; CLI and MCP say when no policy covers a request | new, small | revert |
-| S4 | dev-env | Named coordinator identity (6.3): templates accept a `dev-env-coordinator-<name>` SA; such a session pod stays a session caller, as the workbench does | new, small | revert; no profile names it |
+| S4 | dev-env | Named coordinator identity (6.3): templates accept a `dev-env-coordinator-<name>` SA; such a session pod stays a session caller, as the workbench does; only human or client callers launch that profile, one Running session per SA | new, small | revert; no profile names it |
 | S5 | dev-env | Named Secrets (5.1): `KubeGrant.secrets`; role `dev-env-grant-namespace-operator` in the enums and the broker catalog; `ScopeDigest` covers `secrets` | new, small | revert; no policy names the role |
 | R1 | haynes-ops | CRD copy from the release that carries S1 to S5 | routine | remove delegated-only, maintenance and namespace-operator policies first, then revert |
 | R2 | haynes-ops | Operator and broker pins to that release | routine | pin back |
@@ -423,8 +424,9 @@ as one.
    - **Mode (a):** the requester runs
      `agent-run grant attest <grant> --approved-by user|coordinator:<session> --ref <message id>`.
    - **Mode (b):** a delegate runs
-     `agent-run grant decide <grant> --grant-uid <uid> --digest <digest> --approve [--ref <message id>]`.
-     When the delegate relays Tom's answer, the ref names Tom's message.
+     `agent-run grant decide <grant> --grant-uid <uid> --digest <digest> --approve --ref <message id>`.
+     The ref is required. It names the request message the delegate answered, or Tom's
+     message when the delegate relays his answer.
 4. The broker approves only when all of these hold:
    - a matching policy carries the right block;
    - the mode's checks pass;
@@ -460,6 +462,10 @@ approve without one, as they do today.
   - a caller not on the list;
   - the requester itself: the same pod UID, or a pod controlled by the requester's
     session;
+  - a delegate whose session descends from the requester, through any parent link. A
+    child may never approve its parent's or another ancestor's grant. A delegate
+    deciding for its own children is the normal case and stays allowed;
+  - a decision without a ref;
   - a coordinator or worker named in a maintenance envelope;
   - a grant that is not Pending, is past 30 minutes, or was already decided;
   - a digest mismatch;
@@ -491,6 +497,10 @@ credentials and keeps current authority as it is.
   - `resolveCaller` treats a session-controlled pod running as such an SA as a
     session (`caller.go:121-124`), as it does for the workbench. `sessionPodAccount`
     (`caller.go:160`) accepts that SA.
+  - The operator admits the `coordinator` profile only from the human or client caller
+    classes: Tom's laptop token or the workbench. A session or coordinator caller
+    cannot launch it. At most one Running session may use each coordinator SA.
+    Without these rules, a session could launch its own delegate and approve itself.
 - **P6 (haynes-ops):**
   - SA `dev-agents/dev-env-coordinator-lead`, added as a subject to ClusterRoleBinding
     `dev-env-agent` and RoleBinding `dev-env-agent-cnpg-remediation`. Those are exactly
