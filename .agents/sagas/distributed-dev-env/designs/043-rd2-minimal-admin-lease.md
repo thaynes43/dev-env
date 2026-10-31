@@ -53,6 +53,12 @@ prove approved current authority.** The prototype checks the first five rows fro
 read objects; it relies on the caller's approved immutable record and does not
 validate the decision row. A nonempty `approvedBy` string is not proof of consent.
 
+The existing grant TokenRequest has no Pod `BoundObjectRef`. Requester session/Pod
+binding is broker issuance, installation and recheck state, **not** a cryptographic
+restriction on where the grant token is used. A copied original token can be used
+from another API-reachable client until it expires or the original SA is revoked.
+Admission sees its original SA UID, not the physical client pod's identity.
+
 **A delegate's or actor's assertion is NOT verified human identity.** An
 agent-written `tomRef` or `ref`, even syntactically valid, is provenance only.
 TokenReview authenticates the delegate; it does not authenticate the alleged human
