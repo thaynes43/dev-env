@@ -171,6 +171,37 @@ PR #223.
 
 ## Paths and acceptance
 
+### Read-only session and Page join (OP322, 2026-10-31)
+
+The first OP322 slice projects the existing immutable TaskClaim; it adds no
+registry, CRD, writer or access grant. GET session detail opts in with
+`X-Dev-Env-Session-Task-Claims: v1`, following #759's strict-reader negotiation.
+Unnegotiated detail, list and mutation responses keep their old shape. The CLI
+opts in for `show` and prints Unknown when an older operator omits the field.
+
+The existing explicit project claim-read authorization still applies, including
+the live caller fence. An unreadable/unconfigured store, unconfirmed project or
+denied metadata scope yields `taskClaims.state: Unknown`, never an empty claim
+assertion. An authorized read uses one uncached project-label list, bounded at
+4096 records, including legacy claims without source labels. Continuation,
+oversize or invalid records invalidate the whole observation; there is no page
+loop or per-claim owner lookup. Only exact Owner.uid matches are returned. Name
+reuse cannot inherit an old UID's custody. A complete read with no UID match
+also stays Unknown (`NoJoinedClaims`): missing correlation is not proof of no
+work. Available means at least one canonical claim joined.
+
+Each item reuses the claim metadata projection: identity
+(project/repository/taskKey), name/UID, creation time, actor and reported head
+with its source time. Observed Session phase is metadata; stop state stays
+Unknown. Neither TTL, exit zero, a missing owner nor claim identity establishes
+success, approval or transfer. Stopped/deleting owners keep their claims.
+
+DESIGN-031 section 13 carries the matching Page projection: its existing
+namespace/name/UID claim reference and a structured `claimOwner` copied from
+the same claim batch. It makes no additional owner reads. API/MCP preserve the
+same claim UID. Production Pages readers remain unconfigured. Portal rendering,
+activation and installed acceptance are outside this slice.
+
 - `api/coordination/v1alpha1/`: GroupVersion, TaskClaim/List, bounded immutable
   schema and deepcopy; generated CRD under `config/crd/`.
 - `internal/taskclaim/`: strict identity/provenance, atomic Create and uncached

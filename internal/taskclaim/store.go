@@ -11,6 +11,7 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -326,4 +327,32 @@ func (s KubeStore) List(ctx context.Context, project string, limit int64, cursor
 		}
 	}
 	return list.Items, list.Continue, nil
+}
+
+// ListOwned reads one complete, bounded project snapshot through Live and
+// selects the original owner UID. Project-only legacy labels remain readable.
+// A continued/oversized list is unknown, never a partial set of owned claims.
+// This is metadata only: it neither resolves owners nor changes custody.
+func (s KubeStore) ListOwned(ctx context.Context, project, ownerUID string) ([]coord.TaskClaim, error) {
+	const maxScan = 4096
+	if !s.ready() || !projectcatalog.ValidName(project) || !uidPattern.MatchString(ownerUID) {
+		return nil, ErrUnavailable
+	}
+	var list coord.TaskClaimList
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels{ProjectLabel: project}, client.Limit(maxScan)) != nil ||
+		len(list.Items) > maxScan || list.Continue != "" {
+		return nil, ErrUnavailable
+	}
+	owned := make([]coord.TaskClaim, 0)
+	for i := range list.Items {
+		c := &list.Items[i]
+		if !s.valid(c) || c.Spec.Identity.Project != project {
+			return nil, ErrUnavailable
+		}
+		if c.Spec.Owner.UID == ownerUID {
+			owned = append(owned, *c)
+		}
+	}
+	slices.SortFunc(owned, func(a, b coord.TaskClaim) int { return strings.Compare(a.Name, b.Name) })
+	return owned, nil
 }

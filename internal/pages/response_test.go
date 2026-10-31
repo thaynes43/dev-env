@@ -340,12 +340,12 @@ func TestResponseTimestampBounds(t *testing.T) {
 
 // DESIGN-031 13 keeps literal Unknown fields rather than trimming them, so an
 // Unconfigured projection has a fixed cost per alert against the 2 MiB bound.
-// This catches growth; the measured size is 443 bytes.
+// This catches growth; the measured size including claimOwner is 513 bytes.
 func TestUnconfiguredResponseSize(t *testing.T) {
 	got := ProjectResponse(context.Background(), AlertIdentity{Fingerprint: "0123456789abcdef", StartsAt: "2026-10-30T11:00:00.123456789Z"}, ResponseSources{}, time.Time{})
 	raw, err := json.Marshal(got)
-	if err != nil || len(raw) > 448 || got.OrderCondition != "Unconfigured" || got.ClaimCondition != "Unconfigured" {
-		t.Fatalf("Unconfigured projection is %d bytes, over the documented 448: %s", len(raw), raw)
+	if err != nil || len(raw) > 520 || got.OrderCondition != "Unconfigured" || got.ClaimCondition != "Unconfigured" {
+		t.Fatalf("Unconfigured projection is %d bytes, over the documented 520: %s", len(raw), raw)
 	}
 }
 

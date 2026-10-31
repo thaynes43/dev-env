@@ -156,6 +156,7 @@ func (a *app) show(ctx context.Context, args []string) error {
 	if _, err := a.call(callCtx, c, http.MethodGet, apiv1.SessionPath(url.PathEscape(pos[0])), nil, nil, &s); err != nil {
 		return err
 	}
+	s.TaskClaims = sessionTaskClaimsOrUnknown(s.TaskClaims)
 	if captured {
 		s.CapturedUsage = apiv1.NormalizeCapturedUsage(s.UID, s.CapturedUsage)
 	}
@@ -290,6 +291,7 @@ func (a *app) printSession(s apiv1.Session) {
 			row("  head", "%s", h)
 		}
 	}
+	printSessionTaskClaims(s.TaskClaims, row)
 	u := s.UsageObservation
 	if u != nil && u.Validate() != nil {
 		u = nil

@@ -211,6 +211,8 @@ type PilotPreflight struct {
 }
 
 type Session struct {
+	TaskClaims *SessionTaskClaims `json:"taskClaims,omitempty"`
+
 	UID            string          `json:"uid,omitempty"`
 	PrivateHistory *PrivateHistory `json:"privateHistory,omitempty"`
 	Name           string          `json:"name"`
