@@ -70,9 +70,10 @@ func rd2ProposalExemption(ctx context.Context, enableRD2AdminProposal bool, r cl
 	}
 	if g.Spec.Type != v1alpha1.GrantBreakglass || g.Spec.Kube == nil || g.Spec.Kube.Role != v1alpha1.RoleBreakglass || len(g.Spec.Kube.Namespaces) != 0 ||
 		g.Status.Phase != v1alpha1.GrantActive || g.Spec.Release || g.Status.EndedAt != nil || g.Status.ApprovedBy == "" ||
-		g.Status.ApprovedAt == nil || g.Status.ApprovedAt.Time.After(now) || g.Status.ExpiresAt == nil || !now.Before(g.Status.ExpiresAt.Time) ||
+		g.Status.ApprovedAt == nil || g.Status.ApprovedAt.After(now) || g.Status.ExpiresAt == nil || !now.Before(g.Status.ExpiresAt.Time) ||
 		g.Spec.TTL.Duration <= 0 || g.Spec.TTL.Duration > 30*time.Minute ||
-		g.Status.ExpiresAt.Time.After(g.Status.ApprovedAt.Add(30*time.Minute)) {
+		g.Status.ApprovedTTL == nil || g.Status.ApprovedTTL.Duration <= 0 || g.Status.ApprovedTTL.Duration > g.Spec.TTL.Duration ||
+		g.Status.ExpiresAt.After(g.Status.ApprovedAt.Add(g.Status.ApprovedTTL.Duration)) {
 		return "false", errors.New("RD2 proposal requires an approved Active, unexpired, unreleased lease of at most 30 minutes")
 	}
 	return fmt.Sprintf("request.userInfo.username == %q && request.userInfo.uid == %q", "system:serviceaccount:dev-agents:"+sa.Name, string(sa.UID)), nil

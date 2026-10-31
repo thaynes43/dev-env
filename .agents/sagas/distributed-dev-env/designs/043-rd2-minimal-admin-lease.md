@@ -91,6 +91,16 @@ part of this proposal. HTTP 202 records a decision; only reconciled Active state
 qualifies the original lease. An authenticated Tom message triggers that bounded
 process; it does not turn the delegate into a human principal.
 
+Within mode (b), S2 form 1 is a configured coordinator host with its own configured
+SA, Pod name/UID and host annotation; form 2 is an allowlisted S4-admitted named
+coordinator session, with its exact live controlling session/Pod and sole holder.
+The intended legacy actor is proposed form 3 from #799, using the exact shared-SA
+UID plus session/Pod UID tuple, not blanket shared-SA eligibility. Every form still
+requires configured authority, live identity, separation and permitted reach;
+reserved RD2 needs #800's explicit class decision rather than an ordinary standing
+GrantPolicy. Neither an arbitrary peer nor a requester claiming Tom approved can
+substitute for that authenticated actor.
+
 ## 3. Admission feasibility and failure semantics
 
 All choices must preserve existing validation for nonapproved users. All lookups
@@ -244,7 +254,9 @@ literals are synthetic. The existing verbatim live copy stays unchanged.
 
 Envtest runs a real kube-apiserver/etcd, loads the proposed native guard and admin
 role, and authenticates the positive case using a synthetic real TokenRequest
-whose SA UID matches the compiled snapshot. It checks admission of a privileged
+whose SA UID matches the compiled snapshot. That positive snapshot is read from
+real envtest AccessGrant/session/Pod/SA objects with exact generated UIDs; Active
+status is set by the test as a broker stand-in, not via a proven approval route. It checks admission of a privileged
 Job, Secret-referencing Pod, target-namespace RBAC create and dev-env namespace
 write; controller exec must reach the downstream upgrade handler. Negative users
 receive the same broad test RBAC, so their expected 403 must identify this guard.

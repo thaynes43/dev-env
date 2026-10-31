@@ -27,7 +27,7 @@ func rd2ProposalObjects(now time.Time) (rd2ProposalBinding, *v1alpha1.AccessGran
 	g := &v1alpha1.AccessGrant{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: b.GrantName, UID: b.GrantUID}, Spec: v1alpha1.AccessGrantSpec{
 		Requester: v1alpha1.GrantRequester{Session: b.Requester, SessionUID: b.RequesterUID}, Type: v1alpha1.GrantBreakglass,
 		Kube: &v1alpha1.KubeGrant{Role: v1alpha1.RoleBreakglass}, TTL: metav1.Duration{Duration: 30 * time.Minute},
-	}, Status: v1alpha1.AccessGrantStatus{Phase: v1alpha1.GrantActive, ServiceAccount: b.GrantName, InstalledPodUID: string(b.PodUID), ApprovedBy: "delegate/synthetic/actor", ApprovedAt: rd2Time(now), ExpiresAt: rd2Time(now.Add(30 * time.Minute))}}
+	}, Status: v1alpha1.AccessGrantStatus{Phase: v1alpha1.GrantActive, ServiceAccount: b.GrantName, InstalledPodUID: string(b.PodUID), ApprovedBy: "delegate/synthetic/actor", ApprovedAt: rd2Time(now), ApprovedTTL: &metav1.Duration{Duration: 30 * time.Minute}, ExpiresAt: rd2Time(now.Add(30 * time.Minute))}}
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: b.GrantName, UID: b.ServiceAccountUID, Labels: map[string]string{v1alpha1.LabelGrant: b.GrantName}}}
 	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: b.Requester, UID: b.RequesterUID}}
 	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: b.Requester, UID: b.PodUID, Labels: map[string]string{v1alpha1.LabelSession: b.Requester}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
@@ -81,6 +81,14 @@ func TestRD2ProposalCompiler(t *testing.T) {
 		}},
 		{"over thirty minutes", func(b rd2ProposalBinding, g *v1alpha1.AccessGrant, _ []client.Object) rd2ProposalBinding {
 			g.Status.ExpiresAt = rd2Time(now.Add(time.Hour))
+			return b
+		}},
+		{"beyond approved TTL", func(b rd2ProposalBinding, g *v1alpha1.AccessGrant, _ []client.Object) rd2ProposalBinding {
+			g.Status.ApprovedTTL = &metav1.Duration{Duration: 10 * time.Minute}
+			return b
+		}},
+		{"missing approved TTL", func(b rd2ProposalBinding, g *v1alpha1.AccessGrant, _ []client.Object) rd2ProposalBinding {
+			g.Status.ApprovedTTL = nil
 			return b
 		}},
 		{"missing binding", func(b rd2ProposalBinding, _ *v1alpha1.AccessGrant, _ []client.Object) rd2ProposalBinding {

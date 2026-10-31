@@ -52,8 +52,16 @@ func TestRD2ProposedIdentityGuard(t *testing.T) {
 	if err := admin.Get(ctx, client.ObjectKey{Name: "dev-env-identity-guard"}, policy); err != nil {
 		t.Fatal(err)
 	}
-	// Match the immutable compiled snapshot to this envtest's actual SA UID.
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name("grant-rd2")}}
+	// Use real envtest Grant, session, Pod and SA UIDs. Setting Active status
+	// is a synthetic broker stand-in, not proof of a delegate decision.
+	requester, requesterPod := newSession(t, repo("haynes-ops"))
+	g := grant(t, newGrant(t, requester, breakglass))
+	t.Cleanup(func() {
+		_ = admin.Delete(ctx, g)
+		_ = admin.Delete(ctx, requesterPod)
+		_ = admin.Delete(ctx, requester)
+	})
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: g.Name, Labels: map[string]string{v1alpha1.LabelGrant: g.Name}}}
 	if err := admin.Create(ctx, sa); err != nil {
 		t.Fatal(err)
 	}
@@ -90,21 +98,26 @@ func TestRD2ProposedIdentityGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The compiler reads a synthetic Active lease; this is explicitly not a
-	// broker activation, and it cannot stand in for S7 decision validation.
+	// The positive compiler read uses the real API, including an Active grant.
 	now := time.Now()
-	bound, g, objects := rd2ProposalObjects(now)
-	bound.GrantName = sa.Name
-	bound.ServiceAccountUID = sa.UID
-	g.Name = sa.Name
-	g.Status.ServiceAccount = sa.Name
-	objects[1].SetName(sa.Name)
-	objects[1].SetUID(sa.UID)
-	objects[1].SetLabels(map[string]string{v1alpha1.LabelGrant: sa.Name})
-	exemption, err := rd2ProposalExemption(ctx, true, rd2Fake(objects...), bound, now)
+	g.Status = v1alpha1.AccessGrantStatus{
+		Phase: v1alpha1.GrantActive, ServiceAccount: sa.Name, InstalledPodUID: string(requesterPod.UID),
+		ApprovedBy: "delegate/dev-agents/synthetic-reviewer", ApprovedAt: rd2Time(now),
+		ApprovedTTL: &metav1.Duration{Duration: 30 * time.Minute}, ExpiresAt: rd2Time(now.Add(30 * time.Minute)),
+	}
+	if err := admin.Status().Update(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	bound := rd2ProposalBinding{GrantName: g.Name, GrantUID: g.UID, ServiceAccountUID: sa.UID,
+		Requester: requester.Name, RequesterUID: requester.UID, PodUID: requesterPod.UID}
+	exemption, err := rd2ProposalExemption(ctx, true, admin, bound, now)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Negative snapshot variants do not mutate the actual lease or claim that
+	// static admission itself watches AccessGrants.
+	g = g.DeepCopy()
+	objects := []client.Object{g, sa.DeepCopy(), requester.DeepCopy(), requesterPod.DeepCopy()}
 	setExemption := func(expr string) {
 		t.Helper()
 		if err := admin.Get(ctx, client.ObjectKeyFromObject(policy), policy); err != nil {
