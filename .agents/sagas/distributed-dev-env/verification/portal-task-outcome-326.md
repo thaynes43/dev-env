@@ -67,7 +67,6 @@ New tests, each shown failing with its fix removed through
 | same | raw status sent without the binding and check | foreign, remote and invalid records sent |
 | `TestPortalReaderWorstOutcomePageFitsThePortalReadBound` | bound back at 256 KiB | `287101 bytes, over the portal's 262144-byte read bound` |
 | `TestTaskOutcomeStatePreviews` | outcome previews not written | `outcome-recorded.html: no such file` |
-
 | `TestTaskOutcomeInvalidIsRefused` (review fix) | empty `prURLs`/`headSHAs` lists accepted | empty lists accepted |
 | `TestProductFieldLinksAreAllowlistedEverywhere` (review fix) | Metrics not scrubbed | `metrics kept "javascript:alert(1)" as a link` |
 | `TestTaskOutcomePRURLPatternMatchesTheCRD` (review fix) | Go pattern drifts from the CRD | `the CRD's prURLs pattern differs` |
