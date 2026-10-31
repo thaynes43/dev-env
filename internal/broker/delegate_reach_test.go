@@ -8,7 +8,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -258,5 +260,52 @@ func TestPolicyReachDenialRetainsStatusBinding(t *testing.T) {
 	g := f.grant()
 	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DelegateReach == nil || *g.Status.DelegateReach != *d.Reach {
 		t.Fatalf("denial lost reviewed reach: %+v", g.Status)
+	}
+}
+
+func TestPolicyReachNoncanonicalOrReplacedAncestryRefused(t *testing.T) {
+	for _, test := range []string{"noncanonical depth", "ancestor newer than child"} {
+		t.Run(test, func(t *testing.T) {
+			f, d := policyReachCase(t)
+			var s v1alpha1.AgentSession
+			if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "req"}, &s); err != nil {
+				t.Fatal(err)
+			}
+			if test == "noncanonical depth" {
+				s.Labels[v1alpha1.LabelDepth] = "00"
+			} else {
+				s.Labels[v1alpha1.LabelDepth] = "1"
+				s.Spec.Parent = "replacement-parent"
+				s.CreationTimestamp = metav1.NewTime(f.clk.Now().Add(-time.Hour))
+				parent := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "replacement-parent", UID: "new-parent-uid", CreationTimestamp: metav1.NewTime(f.clk.Now()), Labels: map[string]string{v1alpha1.LabelDepth: "0"}}, Spec: v1alpha1.AgentSessionSpec{Parent: dgDelegate}}
+				if err := f.c.Create(context.Background(), parent); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := f.c.Update(context.Background(), &s); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewDelegateReach(context.Background(), f.c, sessionNS, systemNS, f.grant(), d.Delegate, d.By, f.b.GrantPolicyDelegates); !errors.Is(err, ErrRefused) {
+				t.Fatalf("ambiguous ancestry authorized: %v", err)
+			}
+		})
+	}
+}
+
+func TestPolicyReachForbiddenReadRetainsPending(t *testing.T) {
+	f, d := policyReachCase(t)
+	f.record(d)
+	before := f.grant().Annotations[MaintenanceDecisionAnnotation]
+	f.b.APIReader = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*v1alpha1.GrantPolicy); ok {
+			return apierrors.NewForbidden(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "grantpolicies"}, key.Name, errors.New("synthetic read denied"))
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	if _, err := f.step(1); err == nil || errors.Is(err, ErrRefused) {
+		t.Fatalf("unobservable policy became destructive refusal: %v", err)
+	}
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantPending || g.Annotations[MaintenanceDecisionAnnotation] != before {
+		t.Fatal("read denial cleared or applied decision")
 	}
 }

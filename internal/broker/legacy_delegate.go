@@ -84,7 +84,11 @@ func CheckLegacyDelegate(ctx context.Context, r client.Reader, bindings []Legacy
 			found = true
 		}
 	}
-	if !found || pod.Namespace+"/"+pod.Spec.ServiceAccountName != ref || sess.Spec.Agent != v1alpha1.AgentClaude || sess.Labels[v1alpha1.LabelDepth] != "1" || sess.Labels[templates.CoordinatorIdentityLabel] != "" || (pod.Labels[v1alpha1.LabelProfile] != "full" && !(pod.Labels[v1alpha1.LabelProfile] == "" && sess.Spec.Profile == "full")) {
+	profile := pod.Labels[v1alpha1.LabelProfile]
+	if profile == "" {
+		profile = sess.Spec.Profile
+	}
+	if !found || pod.Namespace+"/"+pod.Spec.ServiceAccountName != ref || sess.Spec.Agent != v1alpha1.AgentClaude || sess.Labels[v1alpha1.LabelDepth] != "1" || sess.Labels[templates.CoordinatorIdentityLabel] != "" || profile != "full" {
 		return fmt.Errorf("%w: legacy actor is not the configured full-profile depth1 Claude session", ErrRefused)
 	}
 	var sa corev1.ServiceAccount
