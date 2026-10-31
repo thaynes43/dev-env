@@ -545,6 +545,10 @@ func (s *Server) grantView(g *v1alpha1.AccessGrant) apiv1.Grant {
 		InstalledPodUID: st.InstalledPodUID,
 		InstalledAt:     timeOf(st.InstalledAt),
 	}
+	if len(s.GrantDelegates) > 0 {
+		// A delegate decision echoes the UID (DESIGN-042 6.2).
+		v.UID = string(g.UID)
+	}
 	if g.Spec.Maintenance != nil {
 		v.UID = string(g.UID)
 		v.Maintenance = maintenanceView(g.Spec.Maintenance)

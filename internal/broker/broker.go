@@ -202,7 +202,15 @@ func (b *Broker) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 	case v1alpha1.GrantPending:
 		return b.pending(ctx, &g, sess, now)
 	case v1alpha1.GrantActive:
-		return b.active(ctx, &g, sess, now)
+		res, err := b.active(ctx, &g, sess, now)
+		// A delegate approval is checked again at least every minute while
+		// it lasts (delegatedHolds), so emptying --grant-delegates or removing
+		// the delegated policy ends it without another event.
+		if err == nil && g.Status.Phase == v1alpha1.GrantActive && strings.HasPrefix(g.Status.ApprovedBy, DelegateApprover) &&
+			(res.RequeueAfter <= 0 || res.RequeueAfter > delegateRecheck) {
+			res.RequeueAfter = delegateRecheck
+		}
+		return res, err
 	}
 	return ctrl.Result{}, nil
 }
@@ -219,6 +227,11 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 	}
 
 	if g.Spec.Type == v1alpha1.GrantMaintenance {
+		// A delegate decision (DESIGN-042 6.2) shares the set-once annotation
+		// with the human route; only a configured broker reads it as one.
+		if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
+			return res, err
+		}
 		// The authenticated human route comes first, unchanged: a bound human
 		// decision, valid or not, is handled before any policy is read.
 		if handled, err := b.maintenanceDecision(ctx, g); handled {
@@ -246,6 +259,11 @@ func (b *Broker) pending(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1a
 			b.decided(ctx, g, msg)
 		}
 		return ctrl.Result{}, err
+	}
+	// No policy approves it at once: a recorded delegate decision, when
+	// delegates are configured (DESIGN-042 6.2), comes before Tom is told.
+	if res, handled, err := b.delegateDecision(ctx, g, sess, now); handled {
+		return res, err
 	}
 
 	wait := ctrl.Result{RequeueAfter: deadline.Sub(now.Time)}
@@ -296,6 +314,13 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	}
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)
+	}
+	// A delegate approval (DESIGN-042 6.2) is authority only while it holds.
+	if err := b.delegatedHolds(ctx, g); err != nil {
+		if p := (permanent{}); errors.As(err, &p) {
+			return b.end(ctx, g, v1alpha1.GrantReleased, "", "the delegate approval no longer holds: "+err.Error(), now)
+		}
+		return ctrl.Result{}, err
 	}
 
 	made, err := b.ensure(ctx, g)

@@ -58,8 +58,8 @@ func MatchAttested(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy, att
 // matches a standing policy either: only an attested policy approves it
 // (ADR-013).
 func Matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
-	if p.Spec.Attested != nil {
-		return false // an attested policy never approves as a standing one
+	if p.Spec.Attested != nil || p.Spec.Delegated != nil {
+		return false // an attested or delegated policy never approves as a standing one
 	}
 	if p.Spec.Type == v1alpha1.GrantMaintenance || g.Spec.Type == v1alpha1.GrantMaintenance || p.Spec.Maintenance != nil {
 		return false // no standing auto-approval for maintenance
@@ -77,6 +77,59 @@ func MatchesAttested(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
 		return false // a mixed policy is malformed: approve nothing
 	}
 	return matches(p, g, a.Profiles, a.Repos, a.Agents)
+}
+
+// MatchDelegated returns the first GrantPolicy, in name order, whose
+// spec.delegated covers g (MatchesDelegated), or nil. A policy being deleted
+// approves nothing. It says nothing about the delegate decision, which the
+// caller must verify (delegateDecision).
+func MatchDelegated(g *v1alpha1.AccessGrant, policies []v1alpha1.GrantPolicy) *v1alpha1.GrantPolicy {
+	var found *v1alpha1.GrantPolicy
+	for i := range policies {
+		p := &policies[i]
+		if p.DeletionTimestamp.IsZero() && MatchesDelegated(p, g) && (found == nil || p.Name < found.Name) {
+			found = p
+		}
+	}
+	return found
+}
+
+// MatchesDelegated reports whether delegated policy p covers grant g
+// (DESIGN-042 6.2): Matches with the requesters taken from spec.delegated,
+// for a kube, egress or maintenance grant only, never a role a delegate may
+// not decide (DelegateRefusedRole). A maintenance grant needs #781's exact
+// envelope (maintenanceInside). A policy without spec.delegated, or one that
+// also sets the top-level requesters, credential type or a refused role,
+// does not match.
+func MatchesDelegated(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant) bool {
+	d := p.Spec.Delegated
+	if d == nil || len(p.Spec.Profiles) != 0 || len(p.Spec.Repos) != 0 || len(p.Spec.Agents) != 0 {
+		return false // a mixed policy is malformed: approve nothing
+	}
+	if !DelegableType(g.Spec.Type) || !DelegableType(p.Spec.Type) {
+		return false
+	}
+	if g.Spec.Kube != nil && DelegateRefusedRole(g.Spec.Kube.Role) {
+		return false
+	}
+	if p.Spec.Kube != nil && slices.ContainsFunc(p.Spec.Kube.Roles, DelegateRefusedRole) {
+		return false // the schema refuses such a policy; do not trust that it ran
+	}
+	return matches(p, g, d.Profiles, d.Repos, d.Agents)
+}
+
+// DelegableType reports whether a delegate may decide a grant of type t:
+// kube, egress or maintenance. Never a credential (keeper execution re-checks
+// a policy approver) and never break-glass (D-27).
+func DelegableType(t v1alpha1.GrantType) bool {
+	return t == v1alpha1.GrantKube || t == v1alpha1.GrantEgress || t == v1alpha1.GrantMaintenance
+}
+
+// DelegateRefusedRole reports whether a delegate may never decide role: the
+// break-glass and secrets-read roles (RD2, RD3) and dev-env-grant-storage
+// (RD4, DESIGN-042 7).
+func DelegateRefusedRole(role string) bool {
+	return role == v1alpha1.RoleBreakglass || role == v1alpha1.RoleSecretsRead || role == v1alpha1.RoleStorage
 }
 
 func matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant, profiles, repos []string, agents []v1alpha1.AgentKind) bool {
@@ -113,8 +166,9 @@ func matches(p *v1alpha1.GrantPolicy, g *v1alpha1.AccessGrant, profiles, repos [
 	case v1alpha1.GrantCredential:
 		return gs.Credential != nil && ps.Credential != nil && slices.Contains(ps.Credential.Names, gs.Credential.Name)
 	case v1alpha1.GrantMaintenance:
-		// Attested only: Matches refuses maintenance before it gets here.
-		return ps.Attested != nil && gs.TTL.Duration <= MaintenanceMaxTTL && maintenanceInside(gs.Maintenance, ps.Maintenance)
+		// Attested or delegated only: Matches refuses maintenance before it
+		// gets here.
+		return (ps.Attested != nil || ps.Delegated != nil) && gs.TTL.Duration <= MaintenanceMaxTTL && maintenanceInside(gs.Maintenance, ps.Maintenance)
 	}
 	return false
 }
