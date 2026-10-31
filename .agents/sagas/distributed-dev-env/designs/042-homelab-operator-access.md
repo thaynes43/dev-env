@@ -336,13 +336,17 @@ coordinator-host grant read scope. No fix is claimed until a tested reviewed SHA
 ### 6.4 P6: proposed new delegate identity, no active migration
 
 Recommend a new `dev-agents/dev-env-coordinator-access` session identity with the
-existing `coordinator` profile shape (`full` plus named SA), existing agent bindings
-and guard coverage. The name **replaces**, rather than supplements, the earlier proposed
-`dev-env-coordinator-lead`: it describes an approval session instead of implying
-that actual `132039` changes identity. Only the access identity is proposed for the
-initial P6 configuration. It is separate from actual `132039` and `223503`. A depth-0 workbench session can launch it through S4's real handler;
-TokenReview then classifies its own projected pod-bound token. With the **missing 6.6 policy-reach subset implemented and explicitly enabled**,
-this serves the unrelated existing GPU and legacy Claude sessions. It cannot approve the launching
+**proposed P6 `coordinator` profile** (`full` plus named SA, Claude only under
+current S4), existing agent bindings and guard coverage. The name **replaces**,
+rather than supplements, the earlier proposed `dev-env-coordinator-lead`: it
+describes an approval session instead of implying that actual `132039` changes
+identity. Only the access identity is proposed for the initial P6 configuration.
+It is separate from actual `132039` and `223503`.
+
+A depth-0 workbench session can launch it through S4's real handler; TokenReview
+then classifies its own projected pod-bound token. **Only after the missing 6.6
+policy-reach subset is implemented and explicitly enabled** can it serve the
+unrelated existing GPU and legacy Claude sessions. It cannot approve the launching
 workbench session's grant, because it is that requester's descendant. For that
 factory's requests, select a separate non-descendant delegate launched through an
 **existing configured nonhuman client** (S4's depth-0 client shape), or another
