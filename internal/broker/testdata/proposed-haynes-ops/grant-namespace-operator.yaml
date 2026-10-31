@@ -1,0 +1,49 @@
+---
+# PROPOSAL, not a copy: thaynes43/dev-env DESIGN-042 5.1 (P4). This file is NOT in
+# haynes-ops yet. It is what P4 would add to
+# kubernetes/main/apps/dev-env-system/rbac/app/grant-catalog.yaml, kept here so the
+# broker's envtest suite can prove dev-env-grant-secret-names (./grant-secret-names.yaml)
+# against the role it guards. When P4 lands, copy the haynes-ops version into
+# ../haynes-ops/ instead and delete this one.
+#
+# dev-env-grant-namespace-operator, bound per namespace by RoleBinding (class C2): exec
+# into pods, restart workloads, and run one-shot Jobs that use the Secrets the grant
+# names. It has no Secret get, list or watch. The custom verb `use` on secrets is what
+# the identity guard's P5 clause checks with the authorizer before a grant identity may
+# add a Secret reference; dev-env-grant-secret-names then holds the reference to the
+# grant's named Secrets in the grant's namespaces.
+#
+# Honest risk: a command the agent chooses, in a pod that holds a Secret, can print it.
+# That covers exec into an app pod and a Job the agent writes. The grant bounds which
+# Secrets a new pod may mount; it does not stop the agent reading one it can reach.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dev-env-grant-namespace-operator
+  labels:
+    dev-env.haynesops.com/grant-role: "true"
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # patch is for kubectl rollout restart. Other spec patches are possible too; Flux
+  # reverts them, and a new Secret reference meets both guards.
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [configmaps, events]
+    verbs: [get, list, watch]
+  # The custom verb only: never get, list or watch.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [use]

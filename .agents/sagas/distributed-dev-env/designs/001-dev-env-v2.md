@@ -3585,6 +3585,31 @@ every granted namespace. What each role allows, plainly:
 | `dev-env-grant-secrets-read` | get, list Secrets | Always shown with its namespaces in red on the page. |
 | `dev-env-grant-nodes` (cluster-wide) | cordon, uncordon, drain (evictions), node labels and taints | The talosw01 drain of 2026-09-25 was a headlamp job. Its evictions in the dev-env namespaces stay refused: before a drain, `agent-run fleet evacuate <node>` has the operator move that node's sessions and tool instances (below). |
 | `dev-env-grant-breakglass` (cluster-wide) | every verb on every resource except Secrets, `serviceaccounts/token`, `nodes/proxy` (the kubelet API bypasses admission), `pods/ephemeralcontainers`, the verbs `bind`, `escalate` and `impersonate`, RBAC objects, CSR approval, admission policies and webhooks, Kyverno policies, CustomResourceDefinitions, APIServices, Flux objects, `external-secrets.io` objects, `CiliumClusterwideNetworkPolicy` and the `dev-env.haynesops.com` CRDs | Built from API discovery minus that list; a CI check regenerates it when the cluster gains an API group. The identity guard applies on top. |
+| `dev-env-grant-namespace-operator` (DESIGN-042 5.1) | exec into pods; get, list and delete pods; patch Deployments and StatefulSets (rollout restart); create and delete Jobs; read ConfigMaps and events; the custom verb `use` on Secrets, never get or list | Its new pods and Jobs may reference only the Secrets the grant names. **A command the agent runs in a pod that holds a Secret can print it**, so naming a Secret lets the agent read it. Only an attested policy that names the Secrets approves it. The ClusterRole is haynes-ops P4 and not yet in git. |
+
+*Amendment 2026-10-31 ([DESIGN-042](042-homelab-operator-access.md) S5, source only;
+DESIGN-042 is proposed in PR #782).* A kube grant may now name Secrets:
+`KubeGrant.secrets` holds up to 16 Secret names (DNS-1123 subdomains, so no wildcard
+or pattern), and the schema and the broker allow it only with the new catalog role
+`dev-env-grant-namespace-operator`. The names hold in every namespace the grant names.
+`KubePolicy.secrets` holds up to 32 names: a policy that names the role must name at
+least one, and no other role takes them. A grant matches only when its Secrets are all
+the policy's. No standing policy approves the role: the schema requires `spec.attested`
+for a policy that names it, and the broker's standing match approves nothing through a
+policy that names it, or for a grant that asks for it. The scope digest covers the
+names, sorted, so an attestation binds the exact Secrets; a grant that names none
+digests byte for byte as before. The broker's catalog holds the role; it binds it per
+namespace like the other namespaced roles. **Inert:** no GrantPolicy names the role, the
+live CRD's role enum refuses it until the CRD copy (R1), and the haynes-ops ClusterRole,
+the broker's `bind` and the broker guard's catalog entry are P4. Admission is P5 in
+haynes-ops: the identity guard's `use` clause, and the new ValidatingAdmissionPolicy
+`dev-env-grant-secret-names`, which takes every AccessGrant in `dev-agents` as a param
+and lets a grant identity add a Secret reference only for a Secret its own Active
+namespace-operator grant names, in a namespace that grant names. That policy, and the
+ClusterRole, are proposed as `internal/broker/testdata/proposed-haynes-ops/` and proved
+by the broker's envtest suite on the 1.35 API server; they are not copies of
+haynes-ops. The risk is unchanged by any of this: the grant bounds which Secrets a new
+pod may mount, and it does not stop the agent reading one it can reach.
 
 **Draining a node with sessions on it.** `agent-run fleet evacuate <node>` (API `POST
 /v1/fleet/nodes/{node}/evacuate`) asks the operator to move that node's sessions:
