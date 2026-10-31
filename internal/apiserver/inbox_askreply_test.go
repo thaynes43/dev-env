@@ -603,3 +603,32 @@ func TestInboxArchivedThreadReadIsUnknown(t *testing.T) {
 		t.Fatal("archived thread read", w.Code, w.Body.String())
 	}
 }
+
+// podLossDuringReplyLookup deletes the caller's pod when a reply lookup runs,
+// so only a fence after the thread's reads can notice.
+type podLossDuringReplyLookup struct {
+	client.Reader
+	f   *fixture
+	pod string
+}
+
+func (r podLossDuringReplyLookup) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	for _, o := range opts {
+		if l, ok := o.(client.MatchingLabels); ok && l[inbox.KindLabel] == inbox.KindReply {
+			_ = r.f.c.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: r.pod}})
+		}
+	}
+	return r.Reader.List(ctx, list, opts...)
+}
+
+func TestInboxThreadReadsFenceTheCallerAfterward(t *testing.T) {
+	for _, path := range []func(apiv1.InboxMetadata) string{
+		func(q apiv1.InboxMetadata) string { return inboxPath(q) + "&view=thread" },
+		func(apiv1.InboxMetadata) string { return apiv1.InboxPath + "?project=sample&view=thread" },
+	} {
+		f, lead, child, _ := askReplyFixture(t)
+		q := publish(t, f, child, askParent("q-1", "x"), http.StatusCreated)
+		f.srv.Inbox.Live = podLossDuringReplyLookup{f.c, f, "lead"}
+		wantError(t, f.do(http.MethodGet, path(q), lead, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	}
+}
