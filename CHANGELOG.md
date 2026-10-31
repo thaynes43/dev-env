@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.78.0](https://github.com/thaynes43/dev-env/compare/v2.77.0...v2.78.0) (2026-10-31)
+
+
+### Features
+
+* add default-off exact legacy delegate policy reach ([#799](https://github.com/thaynes43/dev-env/issues/799)) ([6c02ae8](https://github.com/thaynes43/dev-env/commit/6c02ae8ea61d3fe7fe0637d8c8f4a8bfbe0aa5ae))
+* **apiserver:** named coordinator identity for a session (DESIGN-042 S4) ([#787](https://github.com/thaynes43/dev-env/issues/787)) ([b82e3b2](https://github.com/thaynes43/dev-env/commit/b82e3b2954d08a22abc6ed9d61039a40f3cbd1e2))
+* **broker:** propose reusable 30-minute admin issuer ([#802](https://github.com/thaynes43/dev-env/issues/802)) ([bfd5143](https://github.com/thaynes43/dev-env/commit/bfd5143df7dd16fa2bde5f186c374af707fef5ef))
+* **grants:** approve maintenance through attested policies (ADR-013) ([#781](https://github.com/thaynes43/dev-env/issues/781)) ([2984528](https://github.com/thaynes43/dev-env/commit/2984528d78e54f3dfd77cf12755f2f389a075dff))
+* **grants:** finish attested maintenance creator eligibility (S6) ([#790](https://github.com/thaynes43/dev-env/issues/790)) ([1195633](https://github.com/thaynes43/dev-env/commit/119563303ea42b33963b19953c5b264a6b92aac9))
+* **grants:** implement default-off S7 reserved decision cases ([#800](https://github.com/thaynes43/dev-env/issues/800)) ([a290233](https://github.com/thaynes43/dev-env/commit/a290233b3e45b587c151ee0e027d6d3ed529cd86))
+* **grants:** integrate delegate decisions with source-only ADR acceptance ([#797](https://github.com/thaynes43/dev-env/issues/797)) ([e3576ac](https://github.com/thaynes43/dev-env/commit/e3576ac0ed27f472baea298f723d230df22cf08e))
+* **grants:** integrate named Secrets and delegate decision CLI on S2 ([#798](https://github.com/thaynes43/dev-env/issues/798)) ([480261c](https://github.com/thaynes43/dev-env/commit/480261cb434d2058ac6d2bd5d34a92ebe0050553))
+
+
+### Bug Fixes
+
+* **cursor-acp:** distinguish frame failures and allow bounded large updates ([#788](https://github.com/thaynes43/dev-env/issues/788)) ([e6b9808](https://github.com/thaynes43/dev-env/commit/e6b9808e561606a3f77b44ef9e598106e445aa98))
+
 ## [2.77.0](https://github.com/thaynes43/dev-env/compare/v2.76.0...v2.77.0) (2026-10-31)
 
 
