@@ -31,7 +31,8 @@ Both ends must be **project-bound**: a Session started as a project task
 (`agent-run --project <p> ...`) carries an accepted project snapshot
 (the `dev-env.haynesops.com/project-snapshot` annotation). The server matches that
 snapshot's project to the request's `--project`, for the sender and for the
-recipient. `spec.project` alone is not what is checked.
+recipient. The snapshot must also name the Session's own repository, and the
+Session must have no workspace. `spec.project` alone is not what is checked.
 
 - A recipient without a matching snapshot is hidden: the ask gets **404**. For
   example, an interactive or remote coordinator started without `--project`
