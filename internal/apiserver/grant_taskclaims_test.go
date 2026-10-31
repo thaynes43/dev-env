@@ -14,12 +14,13 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 const grantClaimsTestHeader = "X-Dev-Env-Grant-Task-Claims"
 
 func TestMaintenanceGrantTaskClaims(t *testing.T) {
-	for _, mode := range []string{"same UID", "peer caller", "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot", "no envelope reference", "non-maintenance", "legacy", "old header", "future header"} {
+	for _, mode := range []string{"same UID", "peer caller", "cross-project caller", "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot", "no envelope reference", "non-maintenance", "legacy", "old header", "future header"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newFixture(t)
 			bindCatalogFixture(t, f)
@@ -38,6 +39,9 @@ func TestMaintenanceGrantTaskClaims(t *testing.T) {
 			switch mode {
 			case "peer caller":
 				reader = claimSession(t, f, "maintenance-reader", clientSA)
+			case "cross-project caller":
+				reader = claimSession(t, f, "maintenance-reader", clientSA)
+				bindSecondProjectSnapshot(t, f, "maintenance-reader")
 			case "unauthorized":
 				reader = tokClient
 			case "missing requester":
@@ -111,9 +115,9 @@ func TestMaintenanceGrantTaskClaims(t *testing.T) {
 				if err := d.Decode(reflect.New(reflect.StructOf(fields)).Interface()); err != nil {
 					t.Fatal("strict older client", err)
 				}
-			case "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot":
+			case "unauthorized", "missing requester", "replaced requester", "missing UID", "missing snapshot", "cross-project caller":
 				reason := "IdentityUnconfirmed"
-				if mode == "unauthorized" || mode == "missing snapshot" {
+				if mode == "unauthorized" || mode == "missing snapshot" || mode == "cross-project caller" {
 					reason = "ScopeUnconfirmed"
 				}
 				if wire.TaskClaims == nil || wire.TaskClaims.State != "Unknown" || wire.TaskClaims.Reason != reason || len(wire.TaskClaims.Items) != 0 || lists != 0 {
@@ -131,5 +135,33 @@ func TestMaintenanceGrantTaskClaims(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// secondProjectCatalog names project "other" and selects the same alias
+// repository the package catalog uses for "sample". A live caller saved
+// with it is outside the requester session's project.
+const secondProjectCatalog = `{"version":1,"repositories":{"alias":{"github":"thaynes43/actual-source","defaultBranch":"stable"}},"projects":{"other":{"repositories":[{"name":"alias"}],"rules":"OTHER_PROJECT"}}}`
+
+// bindSecondProjectSnapshot saves project "other" on a live session. The
+// selected repository stays "alias", matching claimSession.
+func bindSecondProjectSnapshot(t *testing.T, f *fixture, name string) {
+	t.Helper()
+	catalog, err := projectcatalog.Parse([]byte(secondProjectCatalog))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.Snapshot("other", "alias")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := snapshot.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := f.session(name)
+	s.Annotations[v1alpha1.AnnotationProjectSnapshot] = string(data)
+	if err := f.c.Update(context.Background(), s); err != nil {
+		t.Fatal(err)
 	}
 }
