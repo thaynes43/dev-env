@@ -5,8 +5,10 @@
   Epic #173, Saga #85. Work order `OVERNIGHT-UPGRADECLAIM-325-DESIGN`;
   lead `dev-env-1029-132039` reviews the ready PR. Do not merge it in this story.
 - **Inputs:** #325 journals 4060, 4065, 4066, 4075 and 4076. Journal 4075
-  settles the identity below. It corrects the gap report's invalid key and
-  proposed Job owner. Journal 4076 records source merge, not runtime acceptance.
+  corrects the gap report's invalid key and proposed Job owner. The lead
+  revised its key in the review of this PR: the repository leaves the task
+  key so the store's rename guard applies (section 2). Journal 4076 records
+  source merge, not runtime acceptance.
 - **Source examined:** dev-env `6c7f344ada642a9d92b61075c35c393ff8a4aac1`;
   haynes-ops `073f0778b02806b313c261847429fe440a5ae2b4` (PR #4498).
 
@@ -41,34 +43,42 @@ Use this exact tuple:
 ```text
 project:    haynes-ops
 repository: <catalog repository name>
-taskKey:    task:upgrade.<repository>.pr<N>.<head40>
+taskKey:    task:upgrade.pr<N>.<head40>
 ```
 
 `repository` is the selected catalog name, such as `haynes-ops`, rather than
 `thaynes43/haynes-ops`. Resolve the GitHub name through that catalog identity
 when joining the PR record. `N` is the canonical positive decimal PR number,
 without leading zeros. `head40` is the full lowercase 40-hex PR head SHA.
+The repository is not repeated in the task key. The identity already carries
+it, and the store's rename guard (`sameWork`, `internal/taskclaim/store.go`)
+matches the same project, GitHub repository and task key under another
+repository key. A repository-specific task key would change on a catalog
+rename and let a second Session claim the same PR and head.
 
 For example, haynes-ops PR #4475 at its recorded head has this key:
 
 ```text
-task:upgrade.haynes-ops.pr4475.4a4ff22e9d83689c6de1d0318bbcbb0b68c1b6cc
+task:upgrade.pr4475.4a4ff22e9d83689c6de1d0318bbcbb0b68c1b6cc
 ```
 
 The CRD accepts task keys matching
 `^task:[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$` and limits the full key to
-133 characters. The catalog name uses lowercase letters, digits and hyphens.
-Dots, `pr`, decimal digits and the SHA fit the task-key character set.
-The body starts with `u` and ends with a hex digit. The key length is
-`57 + length(repository) + digits(N)`. The example is 71 characters.
-Validate the full length before claiming. At the maximum repository length
-of 63, at most 13 PR digits fit. Reject an overlong key; never shorten the
-repository, truncate the SHA or hash a different task key.
+133 characters. Dots, `pr`, decimal digits and the SHA fit the task-key
+character set. The body starts with `u` and ends with a hex digit. The key
+length is `56 + digits(N)`; the example is 60 characters, and up to 77 PR
+digits fit. Validate the full length before claiming. Reject an overlong
+key; never truncate the SHA or hash a different task key.
 
 A head change makes a new key and a new claim. Old claims, vet verdicts and
-other evidence remain bound to the old head and are never reused. A retry
-at the same head uses the same identity. A Job UID, timestamp or work-order
-key does not create a second claim for the same repository, PR and head.
+other evidence remain bound to the old head and are never reused. A Job UID,
+timestamp or work-order key does not create a second claim for the same
+repository, PR and head.
+
+Ownership is permanent. Claims are never released (`taskclaim_types.go`).
+A retry at the same head by the same Session gets Confirmed. Any other
+Session gets Conflict and must not act, even after the owner stops.
+Proceeding needs a new head or a path outside this design.
 
 ## 3. The Session must actually perform the attempt
 
@@ -85,8 +95,8 @@ Job or a `shepherd-vet` marker cannot supply one.
 
 The schema permits actor kinds `session` and `coordinator`, but every owner
 is still a `SessionIdentity`. A registered coordinator may create a claim
-only for its own verified child Session. The in-session producer here uses
-its own Session identity. Options (b) and (c) remain Tom's decision in section 6.
+only for its own verified child Session. The in-session producer here,
+option (a), uses its own Session identity. Options (b) and (c) remain Tom's decision in section 6.
 
 ## 4. Producer contract
 
@@ -107,13 +117,21 @@ this exact marker:
 The comment also records the owner namespace, name and UID from the receipt,
 so a consumer can compare owner attribution. Comment authorship and prose
 alone never establish ownership. The canonical read must confirm them.
+haynes-ops is public, so anyone can post a marker. Consumers consider only
+markers authored by the producing account, as #4498 filters vet comments by
+`VET_AUTHOR` (`pr-disposition.yml`). Authorship is a candidate filter, never
+proof. A marker from another author is ignored, not a conflict.
 The marker and receipt are immutable. Do not edit an older marker to a new
 head or substitute another claim UID. Same-owner confirmation reuses the
 existing marker instead of posting duplicates.
 
-On `Conflict` or `Unknown`, write no marker and do not act. Other refusals
-also stop the attempt. A lost acknowledgement is Unknown even if creation
-may have succeeded. It gives no permission to proceed or choose a new key.
+On Conflict (HTTP 409), or when ownership is Unknown, write no marker and do
+not act. The API returns only Created, Confirmed and Conflict. Unknown means a
+503 "task ownership is unconfirmed" (`taskclaims.go`), a reply the client
+rejects as unconfirmed, or a lost transport. A 429 LimitExceeded and other
+refusals also stop the attempt. A lost acknowledgement is Unknown even if
+creation may have succeeded. It gives no permission to proceed or choose a
+new key.
 
 Recheck the PR head before writing the marker and before any action. If it
 changed, stop the old attempt. Claim the new identity before proceeding.
@@ -131,12 +149,17 @@ metadata. Keep the vet reference and verdict separate from the claim.
 Do not parse `predictedOwner`, labels, a work-order status or Job output
 into ownership.
 
-A consumer uses only an existing authorized TaskClaim read. For an
-in-session reader, the existing exact read is
-`agentd task-claim-get --project haynes-ops --claim <claim> --uid <uid>`.
-This design gives the GitHub Actions classifier no new identity, token or
-TaskClaim access. If its consumer cannot make an authorized read, it keeps
-Unknown even when the PR has a marker.
+A consumer uses only an existing authorized TaskClaim read. Today no GitHub
+Actions classifier can read TaskClaims. #4498 runs on a GitHub-hosted runner
+with no in-cluster identity, and `claimReadScope` admits only a live Session
+whose saved snapshot selects the project, or a registered coordinator host.
+So #4498's `claim` stays Unknown, even with a current-head marker, until a
+read path is designed and approved separately. Q-325-01 does not create one.
+The in-session read
+`agentd task-claim-get --project haynes-ops --claim <claim> --uid <uid>`
+works only from a live haynes-ops project Session or a registered
+coordinator; a dev-env Session is refused. This design gives the classifier
+no new identity, token or TaskClaim access.
 
 | Observation | Claim state |
 | --- | --- |
@@ -179,6 +202,14 @@ this one allowlist change is the only additional claim-authority activation
 needed for option (a). No new principal, CRD, RBAC or coordinator registration
 is needed. A later writer implementation and runtime acceptance remain separate.
 
+The claim still needs a Session launched as a haynes-ops project task
+(`--project haynes-ops`) with no shared workspace; only that route writes the
+project snapshot that `claimSnapshot` requires. Some existing haynes-ops
+Sessions have no snapshot and cannot claim. It also needs room under the
+TaskClaim limits: 512 per owner Session and 4096 per project
+(`internal/taskclaim/store.go`), a 429 when exceeded. Each head uses one
+record, and with coordination retention off, nothing frees that room.
+
 Rollback is a reviewed GitOps revert to
 `--task-claims-read-projects=dev-env` in the same HelmRelease, preserving any
 other independently approved scopes if the baseline has changed. Removing
@@ -192,7 +223,7 @@ both alternatives undecided:
 | Option | Exact authority effect |
 | --- | --- |
 | (b) Add a new automation actor class. | Requires a separately designed schema and API authority change. A Job could act as itself only under a new authenticated automation contract. If the Job is also to own the attempt, the Session-only owner contract must change too. A new actor enum alone cannot make a Job a Session owner. No such write or ownership right exists today. |
-| (c) Register Shepherd's ServiceAccount as a coordinator host. | Widens the operator's `--coordinator-hosts` trust configuration. Existing host checks require a dedicated ServiceAccount, declared Pod name and host ID, matching live Pod UID and host annotation. Listing a ServiceAccount alone does not register arbitrary CronJob pods. The registered actor could create claims for its own verified child Sessions, never own claims itself or select a foreign Session. A real child must perform the attempt to meet this design's owner rule. This does not confer GitHub merge rights. |
+| (c) Register Shepherd's ServiceAccount as a coordinator host. | Widens the operator's `--coordinator-hosts` trust configuration. Existing host checks require a dedicated ServiceAccount, declared Pod name and host ID, matching live Pod UID and host annotation. Listing a ServiceAccount alone does not register arbitrary CronJob pods. The registered actor could create claims for its own verified child Sessions, never own claims itself or select a foreign Session. A real child must perform the attempt to meet this design's owner rule. This does not confer GitHub merge rights. Registration admits the whole coordinator class, not a claim-only right. The host may also create child task Sessions and read, message, suspend and resume them, use task budgets, and read in-scope directory, context, inbox and history metadata (coordinator routes in `internal/apiserver/server.go`). Today's binding needs a stable Pod name (`coordinator.go`), which CronJob Job pods never have. So (c) needs a stable-named host Pod or a separately designed host-binding change, not only a `--coordinator-hosts` entry. |
 
 Tom may choose either future design or keep natural runs without canonical
 ownership. This document chooses neither. Option (c) must account for changing

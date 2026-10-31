@@ -1,6 +1,8 @@
 # Saga: distributed-dev-env (dev-env v2)
 
-**2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md) proposes Session-owned upgrade attempt claims, exact PR/head joins and pending Tom decisions; no writer or activation.
+**2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md)
+proposes Session-owned upgrade attempt claims and exact PR/head joins.
+Q-325-01 and Q-325-02 are pending for Tom; no writer or activation follows.
 
 **2026-10-31 design-only #321:** [DESIGN-040](designs/040-cursor-grok-inbox-actor.md)
 compares three ways to give a Cursor/Grok agent a truthful identity on the
