@@ -75,10 +75,13 @@ other evidence remain bound to the old head and are never reused. A Job UID,
 timestamp or work-order key does not create a second claim for the same
 repository, PR and head.
 
-Ownership is permanent. Claims are never released (`taskclaim_types.go`).
-A retry at the same head by the same Session gets Confirmed. Any other
-Session gets Conflict and must not act, even after the owner stops.
-Proceeding needs a new head or a path outside this design.
+Stopping does not end ownership; there is no release or takeover
+(`taskclaim_types.go`). A retry at the same head by the same Session gets
+Confirmed. Any other Session gets Conflict and must not act, even after the
+owner stops. Only coordination retention, off in the live operator, can later
+archive and delete a claim whose owner has been absent at least 30 days; the
+same identity can then be claimed by a new owner (DESIGN-024). Otherwise
+proceeding needs a new head or a path outside this design.
 
 ## 3. The Session must actually perform the attempt
 
@@ -96,7 +99,8 @@ Job or a `shepherd-vet` marker cannot supply one.
 The schema permits actor kinds `session` and `coordinator`, but every owner
 is still a `SessionIdentity`. A registered coordinator may create a claim
 only for its own verified child Session. The in-session producer here,
-option (a), uses its own Session identity. Options (b) and (c) remain Tom's decision in section 6.
+option (a), uses its own Session identity.
+Options (b) and (c) remain Tom's decision in section 6.
 
 ## 4. Producer contract
 
@@ -126,7 +130,8 @@ head or substitute another claim UID. Same-owner confirmation reuses the
 existing marker instead of posting duplicates.
 
 On Conflict (HTTP 409), or when ownership is Unknown, write no marker and do
-not act. The API returns only Created, Confirmed and Conflict. Unknown means a
+not act. The API's outcome is only Created, Confirmed or Conflict; error
+replies carry no outcome. Unknown means a
 503 "task ownership is unconfirmed" (`taskclaims.go`), a reply the client
 rejects as unconfirmed, or a lost transport. A 429 LimitExceeded and other
 refusals also stop the attempt. A lost acknowledgement is Unknown even if
@@ -170,7 +175,8 @@ no new identity, token or TaskClaim access.
 Recheck the PR head after the join. A head race invalidates the current
 observation. Conflicting current-head markers are Unknown; do not choose
 one by comment order. An older-head marker may remain as Superseded while
-the current attempt is Unknown or has its own Available claim.
+the current attempt is Unknown or has its own Available claim. A read that
+returns `archived: true` is not Available; record it as Unknown.
 
 Available means the ownership join succeeded. Owner phase and stop state
 keep their existing uncertainty. It does not mean an owner is still running,
@@ -237,7 +243,7 @@ writer implementation is included. There is no claim creation, activation,
 cluster write, workflow trigger or upgrade attempt in this story.
 
 Acceptance for this work is one ready docs-only PR containing this Proposed
-design and one saga README line. The lead reviews authority claims against
+design and one saga README entry. The lead reviews authority claims against
 the named sources. No tests run. `make check-layout` checks Go package entries
 in CLAUDE.md; these two documentation changes do not touch its inputs.
 
