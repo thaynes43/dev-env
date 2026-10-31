@@ -463,13 +463,15 @@ type AccessGrantList struct {
 // its scope lies inside the policy's scope, and its TTL is at most maxTTL.
 //
 // +kubebuilder:validation:XValidation:rule="self.type != 'breakglass'",message="no policy approves break-glass: authenticated human approval is required (D-27)"
-// +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || has(self.attested)",message="no standing policy approves maintenance: only an attested policy may name a maintenance scope (ADR-013)"
+// +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || has(self.attested) || has(self.delegated)",message="no standing policy approves maintenance: only an attested or delegated policy may name a maintenance scope (ADR-013, DESIGN-042)"
+// +kubebuilder:validation:XValidation:rule="!has(self.delegated) || self.type != 'credential'",message="no delegated policy approves a credential: credential execution re-checks a policy approver (DESIGN-042 6.2)"
+// +kubebuilder:validation:XValidation:rule="!has(self.delegated) || !has(self.kube) || !self.kube.roles.exists(r, r == 'dev-env-grant-storage')",message="no delegated policy approves dev-env-grant-storage: destructive storage stays Tom's decision (DESIGN-042 RD4)"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'maintenance') == has(self.maintenance)",message="maintenance is set for type maintenance, and only there"
 // +kubebuilder:validation:XValidation:rule="self.type != 'maintenance' || duration(self.maxTTL) <= duration('1h')",message="a maintenance grant lasts at most 1h"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'kube') == has(self.kube)",message="kube is set for type kube, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'egress') == has(self.egress)",message="egress is set for type egress, and only there"
 // +kubebuilder:validation:XValidation:rule="(self.type == 'credential') == has(self.credential)",message="credential is set for type credential, and only there"
-// +kubebuilder:validation:XValidation:rule="has(self.attested) ? ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) == 0 && (has(self.agents) ? size(self.agents) : 0) == 0 && (has(self.attested.profiles) ? size(self.attested.profiles) : 0) + (has(self.attested.repos) ? size(self.attested.repos) : 0) > 0) : ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) > 0)",message="name the requesters: profiles, repos or both; an attested policy names them only under attested and leaves profiles, repos and agents empty, so a broker that predates attestation matches nobody"
+// +kubebuilder:validation:XValidation:rule="(has(self.attested) || has(self.delegated)) ? ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) == 0 && (has(self.agents) ? size(self.agents) : 0) == 0 && (!has(self.attested) || (has(self.attested.profiles) ? size(self.attested.profiles) : 0) + (has(self.attested.repos) ? size(self.attested.repos) : 0) > 0) && (!has(self.delegated) || (has(self.delegated.profiles) ? size(self.delegated.profiles) : 0) + (has(self.delegated.repos) ? size(self.delegated.repos) : 0) > 0)) : ((has(self.profiles) ? size(self.profiles) : 0) + (has(self.repos) ? size(self.repos) : 0) > 0)",message="name the requesters: profiles, repos or both; an attested or delegated policy names them only under attested or delegated, in each block it carries, and leaves profiles, repos and agents empty, so a broker that predates either block matches nobody"
 // +kubebuilder:validation:XValidation:rule="duration(self.maxTTL) >= duration('10m') && duration(self.maxTTL) <= duration('8h')",message="maxTTL runs from 10m to 8h"
 // +kubebuilder:validation:XValidation:rule="self.type != 'credential' || duration(self.maxTTL) <= duration('4h')",message="a credential grant lasts at most 4h"
 type GrantPolicySpec struct {
@@ -515,6 +517,19 @@ type GrantPolicySpec struct {
 	// +optional
 	Attested *AttestedRequesters `json:"attested,omitempty"`
 
+	// Delegated makes this a delegated policy (DESIGN-042 6.2): it approves a
+	// request only when an allowlisted delegate identity, authenticated by the
+	// operator and never the requester or one of its ancestors, recorded a
+	// decision bound to exactly this grant. A delegate decision is not a human
+	// decision. The requesters are named here, as under attested, and the
+	// top-level lists stay empty, so a broker that predates delegation matches
+	// nobody. A policy may carry attested, delegated or both. A delegated
+	// policy approves kube, egress or maintenance grants, never a credential or
+	// dev-env-grant-storage. A broker approves through it only for a delegate
+	// on its --grant-delegates.
+	// +optional
+	Delegated *DelegatedRequesters `json:"delegated,omitempty"`
+
 	// Type is the grant type it approves.
 	// +required
 	Type GrantType `json:"type"`
@@ -532,9 +547,10 @@ type GrantPolicySpec struct {
 	Credential *CredentialPolicy `json:"credential,omitempty"`
 
 	// Maintenance is the one bounded maintenance envelope it approves
-	// (ADR-013). Only an attested policy carries it: no standing policy
-	// approves maintenance. A broker approves through it only with
-	// --enable-attested-grants and --enable-attested-maintenance.
+	// (ADR-013). Only an attested or delegated policy carries it: no standing
+	// policy approves maintenance. A broker approves through its attested block
+	// only with --enable-attested-grants and --enable-attested-maintenance,
+	// and through its delegated block only for a listed delegate (DESIGN-042).
 	// +optional
 	Maintenance *MaintenancePolicy `json:"maintenance,omitempty"`
 
@@ -547,6 +563,36 @@ type GrantPolicySpec struct {
 // same meaning as the lists of GrantPolicySpec: the policy names its requesters
 // (profiles, repos or both), a repo list narrows, an empty agents list is any.
 type AttestedRequesters struct {
+	// Profiles are the requester profiles it matches. Profile ops never
+	// matches (D-18).
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:items:XValidation:rule="self != 'ops'",message="no policy matches profile ops (D-18)"
+	// +optional
+	Profiles []string `json:"profiles,omitempty"`
+
+	// Repos are the requester repos it matches.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=100
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_.-]+$`
+	// +optional
+	Repos []string `json:"repos,omitempty"`
+
+	// Agents are the requester agent CLIs it matches; empty means any.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=3
+	// +optional
+	Agents []AgentKind `json:"agents,omitempty"`
+}
+
+// DelegatedRequesters are the requesters a delegated policy matches (DESIGN-042
+// 6.2), with the same meaning as AttestedRequesters: the policy names its
+// requesters (profiles, repos or both), a repo list narrows, an empty agents
+// list is any.
+type DelegatedRequesters struct {
 	// Profiles are the requester profiles it matches. Profile ops never
 	// matches (D-18).
 	// +listType=set
