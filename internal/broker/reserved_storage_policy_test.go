@@ -20,7 +20,7 @@ import (
 // runtime/compiler/RBAC, admission installation or a real deletion.
 func reservedStoragePolicyAllowed(t *testing.T, grant, subject, target map[string]any, actor string, uid string, now time.Time) bool {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/proposed-haynes-ops/grant-storage-targets.yaml")
+	raw, err := os.ReadFile("testdata/grant-storage-targets-RESERVED-PROPOSAL.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

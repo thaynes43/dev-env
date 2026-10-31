@@ -173,3 +173,33 @@ func TestReservedConfiguredNamespaceExceptionAndNoAttestation(t *testing.T) {
 		t.Fatal("explicit bounded exception required broad root", w.Code, w.Body.String())
 	}
 }
+
+func TestReservedDesignatedHostCanReviewExactScopeBeforeDecision(t *testing.T) {
+	f, tok, g, req := reservedAPICase(t, grantattest.ClassRD3a, false)
+	f.reparent("requester", humanSA)
+	if w := f.do(http.MethodGet, apiv1.GrantPath(g.Name), tok, nil); w.Code != http.StatusForbidden {
+		t.Fatal("default tree read widened", w.Code)
+	}
+	f.srv.GrantPolicyDelegates = []string{coordinatorSA}
+	f.h = f.srv.Handler()
+	if w := f.do(http.MethodGet, apiv1.GrantPath(g.Name), tok, nil); w.Code != http.StatusOK {
+		t.Fatal("designated host cannot review exact reserved scope", w.Code, w.Body.String())
+	}
+	if f.grant(g.Name).Annotations[broker.MaintenanceDecisionAnnotation] != "" {
+		t.Fatal("metadata read wrote approval")
+	}
+	if w := f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tok, req); w.Code != http.StatusAccepted {
+		t.Fatal("reviewed scope decision failed", w.Code, w.Body.String())
+	}
+}
+
+func TestReservedLegacyRequesterDescendantCannotDecide(t *testing.T) {
+	f, tok, g, req := reservedAPICase(t, grantattest.ClassRD3a, true)
+	f.reparent("legacy-claude", "top-level-gpu")
+	if w := f.do(http.MethodPost, apiv1.GrantDecisionPath(g.Name), tok, req); w.Code != http.StatusForbidden {
+		t.Fatal("requester descendant acquired reserved authority", w.Code, w.Body.String())
+	}
+	if f.grant(g.Name).Annotations[broker.MaintenanceDecisionAnnotation] != "" {
+		t.Fatal("descendant consumed slot")
+	}
+}

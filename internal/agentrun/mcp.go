@@ -170,6 +170,15 @@ func (a *app) callAccessTool(ctx context.Context, c *conn, params json.RawMessag
 }
 
 type accessToolArgs struct {
+	Reserved       bool                       `json:"reserved"`
+	TomRef         string                     `json:"tomRef"`
+	AllNamespaces  bool                       `json:"allNamespaces"`
+	StorageTargets []apiv1.GrantStorageTarget `json:"storageTargets"`
+	Operation      string                     `json:"operation"`
+	Host           string                     `json:"host"`
+	Device         string                     `json:"device"`
+	Firmware       string                     `json:"firmware"`
+
 	Name       string                `json:"name"`
 	Type       string                `json:"type"`
 	Reason     string                `json:"reason"`
@@ -245,11 +254,38 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 		}
 		text, err := mcpJSON(out)
 		return noticeFor(text, out), err
+	case "hardware_intent":
+		req := apiv1.HardwareIntentRequest{GrantUID: args.GrantUID, Digest: args.Digest, Operation: args.Operation, Host: args.Host, Device: args.Device, Firmware: args.Firmware, TomRef: args.TomRef}
+		if !validGrantCLIName(args.Name) {
+			return "", usageError("hardware_intent requires a grant name")
+		}
+		if err := apiv1.ValidateHardwareIntentRequest(req); err != nil {
+			return "", err
+		}
+		out, err := a.callHardwareIntent(ctx, c, args.Name, req)
+		if err != nil {
+			return "", err
+		}
+		return mcpJSON(out)
 	case "decide_grant":
 		if err := validateGrantDecision(args.Name, args.GrantUID, args.Digest, args.TTL, args.Ref, args.Reason); err != nil {
 			return "", err
 		}
-		out, err := a.postGrantDecision(ctx, c, args.Name, grantDecisionRequest(args.GrantUID, args.Digest, args.TTL, args.Ref, args.Reason, args.Approve))
+		req := grantDecisionRequest(args.GrantUID, args.Digest, args.TTL, args.Ref, args.Reason, args.Approve)
+		req.Reserved = args.Reserved
+		req.TomRef = args.TomRef
+		if err := validateReservedDecisionExtras(req); err != nil {
+			return "", err
+		}
+		var expected []*apiv1.Grant
+		if req.Reserved {
+			var current apiv1.Grant
+			if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(args.Name), nil, nil, &current); err != nil {
+				return "", err
+			}
+			expected = []*apiv1.Grant{&current}
+		}
+		out, err := a.postGrantDecision(ctx, c, args.Name, req, expected...)
 		if err != nil {
 			return "", err
 		}
@@ -283,15 +319,22 @@ func accessRequest(args accessToolArgs) (apiv1.CreateGrantRequest, error) {
 		}
 		args.Ports[i].Protocol = strings.ToUpper(p.Protocol)
 	}
-	return apiv1.CreateGrantRequest{
+	req := apiv1.CreateGrantRequest{
 		Type: args.Type, Role: args.Role, Namespaces: args.Namespaces, Secrets: args.Secrets, FQDNs: args.FQDNs,
 		CIDRs: args.CIDRs, Endpoints: args.Endpoints, Ports: args.Ports,
 		Credential: args.Credential, TTL: args.TTL, Reason: args.Reason,
-	}, nil
+	}
+	req.Reserved = args.Reserved || args.AllNamespaces || len(args.StorageTargets) > 0
+	req.AllNamespaces = args.AllNamespaces
+	req.StorageTargets = args.StorageTargets
+	if err := validateReservedRequest(req); err != nil {
+		return apiv1.CreateGrantRequest{}, err
+	}
+	return req, nil
 }
 
 func accessTools() []map[string]any {
-	return []map[string]any{
+	tools := []map[string]any{
 		{
 			"name":        "request_access",
 			"description": "Ask for an access grant. Tom still approves it unless a deployed policy accepts an agent attestation: then, after you obtain your coordinator's approval (the user's, where the coordinator cannot approve), run `agent-run grant attest` (this tool returns at once; the CLI `grant request` blocks up to 30 minutes unless given --no-wait), then poll grant_status. That is your claim, not verified human identity. credential hw-ssh leases the one shared SSH key: anything in the pod can copy it while installed, and removing it later is neither containment nor revocation (the reply says so). The reply includes the approval page. This does not install a grant.",
@@ -358,6 +401,21 @@ func accessTools() []map[string]any {
 			},
 		},
 	}
+	for _, tool := range tools {
+		schema := tool["inputSchema"].(map[string]any)
+		props := schema["properties"].(map[string]any)
+		if tool["name"] == "request_access" {
+			props["reserved"] = map[string]any{"type": "boolean"}
+			props["allNamespaces"] = map[string]any{"type": "boolean"}
+			props["storageTargets"] = storageTargetSchema()
+		}
+		if tool["name"] == "decide_grant" {
+			props["reserved"] = map[string]any{"type": "boolean"}
+			props["tomRef"] = map[string]any{"type": "string", "maxLength": 128}
+			tool["description"] = "Record an authenticated separate delegate decision. Default tree reach or explicitly configured designated reach; self/requester-descendant/maintenance participant refuse. reserved:true requires an enabled exact S7 class and fresh tomRef, an agent assertion, not verified human consent. No standing or attested reserved approval.202 accepts the record; poll for Active. Credential grants use separate hardware_intent audit, never this decision path."
+		}
+	}
+	return append(tools, hardwareIntentTool())
 }
 
 func isAskTool(name string) bool {

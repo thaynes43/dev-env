@@ -6,7 +6,10 @@ usable acceptance are separate states. The combined activation proposal remains
 held. The existing grant API and broker remain the authority path.
 
 `POST /v1/grants/{name}/decision` selects S7 explicitly with `reserved: true`.
-`tomRef` is mandatory and names a fresh message the delegate claims came from Tom.
+`grant request --reserved` marks an immutable S7 request; `--all-namespaces`
+selects the snapshot case, and repeated `--storage-target Kind/name@UID` names
+exact storage targets. `grant decide --reserved --tom-ref <message>` uses the
+existing decision route. `tomRef` is mandatory and names a fresh message the delegate claims came from Tom.
 `ref` retains the request/reply correlation. The token supplies the actor identity.
 The record says **agent assertion, not verified human consent**. It never creates
 human provenance or a self-grant exception. Ordinary policy lookup failure never
@@ -27,11 +30,15 @@ cases; source fixtures do not establish usable access for those sessions.
 | `rd4-storage` | One namespace, 1–8 exact kind/name/UID targets | Proposed DELETE admission requires the caller's own Active, unexpired grant, its immutable UID, the authenticated ServiceAccount UID and the exact old object UID. Missing lookup, wrong reference, another grant, ended lease and same-name replacement refuse. Admission does not undo a deletion. |
 | `rd4-hardware` | Operation and exact host/device/firmware plus `tomRef`, on the authenticated caller's own installed Active C4 lease | Separate hardware-intent audit operation. Keeper credential approval remains required. Credential authority is unchanged; this record enforces no command or target, reads no key and calls no hardware. |
 
-The Never set for ordinary reserved namespaced scope and RD3 is:
+The proposed default exclusion set for reserved namespaced scope and RD3 is:
 `dev-env-system`, `dev-agents`, `dev-tools`, `dev-env-budgets`, `dev`, `default`,
 `flux-system`, `kyverno`, `external-secrets`, `kube-system`, `kube-public`,
-`kube-node-lease`, `cilium-secrets`. It is distinct from the older three-namespace
-broker identity fence. RD2 remains the explicit root exception.
+`kube-node-lease`, `cilium-secrets`. It is distinct from the older three-namespace broker identity fence. These are
+agent-proposed defaults, not authenticated Tom decisions or immutable human-only
+limits. Matching explicit `--reserved-excluded-namespaces` configuration can choose
+a bounded exception; the canonical exclusion list is bound into each decision, and
+a configuration change requires a new decision. No empty/error/lookup fallback
+widens a bound. RD2 remains the explicit root exception.
 
 Every reserved grant decision binds grant UID, requester session and Pod UIDs,
 authenticated actor Pod and session UIDs, scope digest, approved TTL, case, bounds
@@ -50,7 +57,7 @@ invented here.
 | Proposed change | Exact permission or configuration consequence |
 | --- | --- |
 | CRD delivery | Copy reviewed AccessGrant scope/status fields before enabling any binary or request that uses them; otherwise pruning loses binding evidence. |
-| Issuer flags | Explicit matching `--reserved-decision-classes` on operator and broker. Empty/absent stays off. Existing delegate lists, designated reach subset and any exact legacy binding must match the reviewed reach source. |
+| Issuer flags | Explicit matching `--reserved-decision-classes` and `--reserved-excluded-namespaces` on operator and broker. Empty/absent stays off. Existing delegate lists, designated reach subset and any exact legacy binding must match the reviewed reach source. |
 | Namespace metadata | Operator and broker need `get/list` on core `namespaces` for the frozen UID snapshot and repeat checks. No Secret values are read by this lookup. |
 | RD2 catalog | Proposed `dev-env-grant-breakglass` ClusterRole has API groups/resources/verbs `*`, bound only to the grant SA by the broker. Existing broker `bind` catalog and binding-shape admission must explicitly accommodate this root exception. This is a permission expansion, not Never containment. |
 | RD3 issuance | Broker namespace RoleBindings only for exact reviewed names or the frozen snapshot. Snapshot and per-grant ownership checks must remain enforced by source and admission. |
@@ -62,7 +69,7 @@ invented here.
 The proposed storage fixture reuses Kyverno's existing resource lookup, JSON and
 time libraries. Their interfaces are documented in the
 [Kyverno CEL libraries reference](https://kyverno.io/docs/policy-types/cel-libraries/).
-Offline CEL tests inject lookup results and time; they cannot prove webhook
+Offline CEL tests and the checksum-pinned Kyverno1.19.2 DELETE engine qualification use synthetic lookup results; they cannot prove webhook
 installation, lookup RBAC or live enforcement. Synthetic CLI/API tests similarly
 prove source behavior, not usable hardware or grant access.
 

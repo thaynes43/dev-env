@@ -7,7 +7,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
-const hardwareIntentNotice = "Audit intent only: credential authority and keeper approval are unchanged. This receipt does not enforce a command or target, prove human consent, or prove a hardware operation occurred. Copied credentials and persistent effects are not revoked by lease expiry."
+const hardwareIntentNotice = "Audit intent only: credential authority and keeper approval are unchanged. This receipt does not enforce a command or target, prove human consent, or prove a hardware operation occurred. Leased-file cleanup does not revoke a copied static hw-ssh key or undo persistent effects; provider credential expiry is unchanged."
 
 func (a *app) grantHardwareIntent(ctx context.Context, args []string) error {
 	cmd := newCommand("grant", outputJSON)
@@ -37,14 +37,22 @@ func (a *app) grantHardwareIntent(ctx context.Context, args []string) error {
 }
 
 func (a *app) postHardwareIntent(ctx context.Context, c *conn, name string, req apiv1.HardwareIntentRequest) error {
-	var out apiv1.HardwareIntentReceipt
-	status, err := a.callOnce(ctx, c, http.MethodPost, apiv1.GrantHardwareIntentPath(name), req, &out)
+	out, err := a.callHardwareIntent(ctx, c, name, req)
 	if err != nil {
 		return err
 	}
+	return a.printJSON(out)
+}
+
+func (a *app) callHardwareIntent(ctx context.Context, c *conn, name string, req apiv1.HardwareIntentRequest) (apiv1.HardwareIntentReceipt, error) {
+	var out apiv1.HardwareIntentReceipt
+	status, err := a.callOnce(ctx, c, http.MethodPost, apiv1.GrantHardwareIntentPath(name), req, &out)
+	if err != nil {
+		return out, err
+	}
 	if status != http.StatusCreated || out.HardwareIntentRequest != req || out.SessionUID == "" || out.PodUID == "" || out.RecordedAt.IsZero() {
-		return unconfirmed(http.MethodPost, apiv1.GrantHardwareIntentPath(name), "hardware intent receipt did not match the request; read the grant before taking another action")
+		return out, unconfirmed(http.MethodPost, apiv1.GrantHardwareIntentPath(name), "hardware intent receipt did not match the request; read the grant before taking another action")
 	}
 	out.Notice = hardwareIntentNotice
-	return a.printJSON(out)
+	return out, nil
 }

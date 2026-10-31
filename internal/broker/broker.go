@@ -332,6 +332,9 @@ func (b *Broker) active(ctx context.Context, g *v1alpha1.AccessGrant, sess *v1al
 	if g.Spec.Type == v1alpha1.GrantCredential {
 		return b.activeCredential(ctx, g, sess, now)
 	}
+	if g.Spec.Kube != nil && (g.Spec.Kube.Reserved || g.Spec.Kube.AllNamespaces || len(g.Spec.Kube.StorageTargets) > 0 || g.Status.Reserved != nil) && (g.Status.Reserved == nil || !strings.HasPrefix(g.Status.ApprovedBy, DelegateApprover)) {
+		return b.end(ctx, g, v1alpha1.GrantFailed, "", "reserved scope has no bound authenticated delegate approval", now)
+	}
 	// A delegate approval (DESIGN-042 6.2) is authority only while it holds.
 	if err := b.delegatedHolds(ctx, g); err != nil {
 		if p := (permanent{}); errors.As(err, &p) {

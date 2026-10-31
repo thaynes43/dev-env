@@ -509,6 +509,12 @@ func (s *Server) getGrant(ctx context.Context, _ http.ResponseWriter, r *http.Re
 		return 0, nil, fromGrantKubeError(err, "grant "+key.Name)
 	}
 	if c.kind == kindCoordinator {
+		if slices.Contains(s.GrantPolicyDelegates, c.identity.serviceAccountRef()) {
+			if err := s.designatedGrantRead(ctx, &g, c); err != nil {
+				return 0, nil, err
+			}
+			return http.StatusOK, s.grantView(&g), nil
+		}
 		if g.Spec.Requester.SessionUID == "" {
 			return 0, nil, coordinatorDenied()
 		}

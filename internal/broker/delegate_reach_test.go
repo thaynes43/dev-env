@@ -8,7 +8,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -258,5 +260,106 @@ func TestPolicyReachDenialRetainsStatusBinding(t *testing.T) {
 	g := f.grant()
 	if g.Status.Phase != v1alpha1.GrantDenied || g.Status.DelegateReach == nil || *g.Status.DelegateReach != *d.Reach {
 		t.Fatalf("denial lost reviewed reach: %+v", g.Status)
+	}
+}
+
+func TestPolicyReachNoncanonicalOrReplacedAncestryRefused(t *testing.T) {
+	for _, test := range []string{"noncanonical depth", "ancestor newer than child", "ancestor same creation second"} {
+		t.Run(test, func(t *testing.T) {
+			f, d := policyReachCase(t)
+			var s v1alpha1.AgentSession
+			if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "req"}, &s); err != nil {
+				t.Fatal(err)
+			}
+			if test == "noncanonical depth" {
+				s.Labels[v1alpha1.LabelDepth] = "00"
+			} else {
+				s.Labels[v1alpha1.LabelDepth] = "1"
+				s.Spec.Parent = "replacement-parent"
+				s.CreationTimestamp = metav1.NewTime(f.clk.Now().Add(-time.Hour))
+				parent := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: "replacement-parent", UID: "new-parent-uid", CreationTimestamp: metav1.NewTime(f.clk.Now()), Labels: map[string]string{v1alpha1.LabelDepth: "0"}}, Spec: v1alpha1.AgentSessionSpec{Parent: dgDelegate}}
+				if test == "ancestor same creation second" {
+					parent.CreationTimestamp = s.CreationTimestamp
+				}
+				if err := f.c.Create(context.Background(), parent); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := f.c.Update(context.Background(), &s); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewDelegateReach(context.Background(), f.c, sessionNS, systemNS, f.grant(), d.Delegate, d.By, f.b.GrantPolicyDelegates); !errors.Is(err, ErrRefused) {
+				t.Fatalf("ambiguous ancestry authorized: %v", err)
+			}
+		})
+	}
+}
+
+func TestPolicyReachForbiddenReadRetainsPending(t *testing.T) {
+	f, d := policyReachCase(t)
+	f.record(d)
+	before := f.grant().Annotations[MaintenanceDecisionAnnotation]
+	f.b.APIReader = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*v1alpha1.GrantPolicy); ok {
+			return apierrors.NewForbidden(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "grantpolicies"}, key.Name, errors.New("synthetic read denied"))
+		}
+		return c.Get(ctx, key, obj, opts...)
+	}})
+	if _, err := f.step(1); err == nil || errors.Is(err, ErrRefused) {
+		t.Fatalf("unobservable policy became destructive refusal: %v", err)
+	}
+	if g := f.grant(); g.Status.Phase != v1alpha1.GrantPending || g.Annotations[MaintenanceDecisionAnnotation] != before {
+		t.Fatal("read denial cleared or applied decision")
+	}
+}
+
+func TestDelegateForbiddenActorReadsRetainPending(t *testing.T) {
+	for _, target := range []string{"actor pod", "actor session", "apply actor pod"} {
+		t.Run(target, func(t *testing.T) {
+			f, d := policyReachCase(t)
+			if target == "actor session" {
+				// A controlled host exercises the shared actor Session read without S4.
+				var p corev1.Pod
+				if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: systemNS, Name: "host"}, &p); err != nil {
+					t.Fatal(err)
+				}
+				s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: systemNS, Name: "host-session", UID: "host-session-uid", Labels: map[string]string{v1alpha1.LabelDepth: "0"}}, Spec: v1alpha1.AgentSessionSpec{Parent: "dev-env-system/dev-env-human"}, Status: v1alpha1.AgentSessionStatus{Phase: v1alpha1.PhaseRunning}}
+				if err := f.c.Create(context.Background(), s); err != nil {
+					t.Fatal(err)
+				}
+				p.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(s, v1alpha1.GroupVersion.WithKind("AgentSession"))}
+				if err := f.c.Update(context.Background(), &p); err != nil {
+					t.Fatal(err)
+				}
+				d.Delegate.Session = s.Name
+				d.Delegate.SessionUID = string(s.UID)
+			}
+			f.record(d)
+			before := f.grant().Annotations[MaintenanceDecisionAnnotation]
+			reads := 0
+			f.b.APIReader = interceptor.NewClient(f.c, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				fail := false
+				if target == "actor session" {
+					_, ok := obj.(*v1alpha1.AgentSession)
+					fail = ok && key.Name == "host-session"
+				} else {
+					_, ok := obj.(*corev1.Pod)
+					if ok && key.Namespace == systemNS && key.Name == "host" {
+						reads++
+						fail = target != "apply actor pod" || reads > 1
+					}
+				}
+				if fail {
+					return apierrors.NewForbidden(schema.GroupResource{Resource: "synthetic-actor"}, key.Name, errors.New("synthetic identity read denied"))
+				}
+				return c.Get(ctx, key, obj, opts...)
+			}})
+			if _, err := f.step(1); err == nil {
+				t.Fatal("actor read denial was not retried")
+			}
+			if g := f.grant(); g.Status.Phase != v1alpha1.GrantPending || g.Annotations[MaintenanceDecisionAnnotation] != before || g.Status.ApprovedBy != "" {
+				t.Fatal("actor read denial consumed or applied decision")
+			}
+		})
 	}
 }

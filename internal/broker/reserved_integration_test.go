@@ -244,3 +244,24 @@ func TestReservedNewScopeNeverUsesStandingOrAttestedPolicies(t *testing.T) {
 		}
 	}
 }
+
+func TestReservedDenialsRetainExactAuditAndMakeNoBindings(t *testing.T) {
+	for _, class := range []string{grantattest.ClassRD2, grantattest.ClassRD3a, grantattest.ClassRD3b, grantattest.ClassRD4Storage} {
+		t.Run(class, func(t *testing.T) {
+			f, d := reservedBrokerCase(t, class)
+			d.Approve = false
+			f.record(d)
+			if _, err := f.step(3); err != nil {
+				t.Fatal(err)
+			}
+			g := f.grant()
+			if g.Status.Phase != v1alpha1.GrantDenied || g.Status.Reserved == nil || g.Status.DelegateReach == nil {
+				t.Fatal("reserved denial lost audit", g.Status)
+			}
+			var accounts corev1.ServiceAccountList
+			if err := f.c.List(context.Background(), &accounts); err != nil || len(accounts.Items) != 0 {
+				t.Fatal("denial created authority", err)
+			}
+		})
+	}
+}

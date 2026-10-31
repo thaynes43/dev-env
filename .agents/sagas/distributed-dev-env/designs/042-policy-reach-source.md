@@ -9,7 +9,10 @@ remain under their separate owners.
 actor may replace tree membership with a live delegated policy that covers the
 exact requester and grant scope. Self, requester-descendant and maintenance
 participant refusals remain. Verified bounded ancestry is retained by digest;
-missing, cyclic, excessive or replaced ancestry refuses authority.
+missing, cyclic, excessive or replaced ancestry refuses authority. Parent/child
+creation timestamps must prove a strictly older ancestor; equal-second or absent
+lineage timestamps fail closed rather than guess original parent identity. This
+can refuse a new same-second lineage; the default tree-only path is unchanged.
 
 The decision and broker status retain the selected policy name, UID and effective
 delegated specification digest, requester session and Pod UIDs, and ancestry

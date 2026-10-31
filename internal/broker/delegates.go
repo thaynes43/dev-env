@@ -285,7 +285,7 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return refuse(err.Error())
 	}
 	if err := b.delegateGrantHolds(ctx, g, d); err != nil {
-		if !errors.Is(err, ErrRefused) {
+		if !errors.Is(err, ErrRefused) || apierrors.IsForbidden(err) {
 			return ctrl.Result{}, true, err
 		}
 		return refuse(err.Error())
@@ -335,6 +335,8 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		}
 	}
 	switch err := b.Decide(ctx, g.Name, dec); {
+	case apierrors.IsForbidden(err):
+		return ctrl.Result{}, true, err
 	case errors.Is(err, ErrNotPending):
 		return ctrl.Result{}, true, nil
 	case errors.Is(err, ErrRefused):

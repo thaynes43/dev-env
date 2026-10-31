@@ -78,7 +78,7 @@ func reservedInput(g *v1alpha1.AccessGrant, d MaintenanceDecision, exclusions []
 
 // ValidateReservedRequestShape checks scope only, never actor or approval.
 func ValidateReservedRequestShape(g *v1alpha1.AccessGrant, classes, exclusions []string) error {
-	if g.Spec.Kube == nil || g.Spec.Egress != nil || g.Spec.Credential != nil || g.Spec.Maintenance != nil {
+	if g.Spec.Kube == nil || g.Spec.Egress != nil || g.Spec.Credential != nil || g.Spec.Maintenance != nil || len(g.Spec.Kube.Secrets) > 0 {
 		return fmt.Errorf("%w: reserved grant contains a different scope type", ErrRefused)
 	}
 	class := ReservedClass(g)
@@ -145,6 +145,9 @@ func NewReservedBinding(ctx context.Context, r client.Reader, ns string, g *v1al
 	if err != nil {
 		return nil, err
 	}
+	if ReservedClass(g) == grantattest.ClassRD2 {
+		excluded = []string{}
+	}
 	var snapshot []v1alpha1.ReservedNamespace
 	if ReservedClass(g) == grantattest.ClassRD3b {
 		all, err := ReadReservedNamespaces(ctx, r)
@@ -183,6 +186,9 @@ func (b *Broker) checkReservedBinding(g *v1alpha1.AccessGrant, d MaintenanceDeci
 		return grantattest.Record{}, fmt.Errorf("%w: reserved decision binding or enabled case differs", ErrRefused)
 	}
 	excluded, err := grantattest.NormalizeReservedExclusions(b.ReservedExcludedNamespaces)
+	if r.Case == grantattest.ClassRD2 {
+		excluded = []string{}
+	}
 	if err != nil || !slices.Equal(excluded, r.ExcludedNamespaces) {
 		return grantattest.Record{}, fmt.Errorf("%w: reserved namespace bounds changed", ErrRefused)
 	}
@@ -230,13 +236,6 @@ func (b *Broker) reservedNamespaceHolds(ctx context.Context, g *v1alpha1.AccessG
 		return fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	return nil
-}
-
-func (b *Broker) delegateReachForDecision(ctx context.Context, g *v1alpha1.AccessGrant, d MaintenanceDecision, sess *v1alpha1.AgentSession) error {
-	if d.Reserved != nil {
-		return b.delegateGrantHolds(ctx, g, d)
-	}
-	return b.delegateReach(ctx, d, sess)
 }
 
 func (b *Broker) checkReservedOrLegacyCapabilities(g *v1alpha1.AccessGrant) error {

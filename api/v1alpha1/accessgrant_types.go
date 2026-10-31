@@ -16,8 +16,9 @@ import (
 //
 // The schema refuses what no grant or policy may ever do, whoever writes it:
 //
-//   - no grant or policy targets dev-env-system, dev-agents or dev-tools (a
-//     namespace, an endpoint, or an in-cluster name);
+//   - ordinary grants and policies do not target dev-env-system, dev-agents or dev-tools (a
+//     namespace, an endpoint, or an in-cluster name); explicit S7 requests need
+//     separately enabled exact reviewed bounds and authenticated reserved decisions;
 //   - a grant's TTL runs from 10 minutes (the shortest token TokenRequest issues)
 //     to its type's longest: 8 h for kube and egress, 4 h for credential, 1 h for
 //     break-glass;
@@ -54,7 +55,8 @@ const (
 	// (Q-07).
 	GrantCredential GrantType = "credential"
 	// GrantBreakglass is a kube grant of dev-env-grant-breakglass cluster-wide,
-	// approved by Tom only (D-27).
+	// decided through the ordinary human route or an explicitly enabled bound S7
+	// delegate assertion; neither source publication nor a ref proves human consent.
 	GrantBreakglass GrantType = "breakglass"
 )
 
@@ -72,8 +74,9 @@ const (
 	RoleSecretsRead = "dev-env-grant-secrets-read"
 	// RoleNodes cordons, uncordons and drains nodes, cluster-wide.
 	RoleNodes = "dev-env-grant-nodes"
-	// RoleBreakglass is every verb on every resource minus the exclusions of
-	// D-27, cluster-wide. Type breakglass only.
+	// RoleBreakglass names the cluster-wide catalog role. S7 proposes every API
+	// resource/verb, root equivalent with derived-credential residuals, separately
+	// held for activation. This constant changes no live role. Type breakglass only.
 	RoleBreakglass = "dev-env-grant-breakglass"
 	// RoleNamespaceOperator execs into pods, restarts workloads, and runs Jobs
 	// that use the Secrets its grant names, in the granted namespaces

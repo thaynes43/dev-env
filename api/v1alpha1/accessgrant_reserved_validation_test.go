@@ -22,7 +22,13 @@ func reservedStorageGrant() *v1alpha1.AccessGrant {
 }
 
 func TestReservedGrantSchemaRoundTrip(t *testing.T) {
-	for _, create := range []func() *v1alpha1.AccessGrant{reservedSnapshotGrant, reservedStorageGrant} {
+	for _, create := range []func() *v1alpha1.AccessGrant{reservedSnapshotGrant, reservedStorageGrant, func() *v1alpha1.AccessGrant {
+		g := reservedSnapshotGrant()
+		g.Spec.Kube.AllNamespaces = false
+		g.Spec.Kube.Reserved = true
+		g.Spec.Kube.Namespaces = []string{"dev-env-system"}
+		return g
+	}} {
 		g := create()
 		if err := k8s.Create(context.Background(), g); err != nil {
 			t.Fatal(err)
@@ -31,7 +37,7 @@ func TestReservedGrantSchemaRoundTrip(t *testing.T) {
 		if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(g), &got); err != nil {
 			t.Fatal(err)
 		}
-		if got.Spec.Kube.AllNamespaces != g.Spec.Kube.AllNamespaces || len(got.Spec.Kube.StorageTargets) != len(g.Spec.Kube.StorageTargets) {
+		if got.Spec.Kube.Reserved != g.Spec.Kube.Reserved || got.Spec.Kube.AllNamespaces != g.Spec.Kube.AllNamespaces || len(got.Spec.Kube.StorageTargets) != len(g.Spec.Kube.StorageTargets) {
 			t.Fatal("reserved scope was pruned")
 		}
 	}

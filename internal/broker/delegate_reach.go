@@ -50,7 +50,7 @@ func DelegatedPolicyDigest(p *v1alpha1.GrantPolicy) string {
 
 func reachRead(ctx context.Context, r client.Reader, key types.NamespacedName, obj client.Object) error {
 	if err := r.Get(ctx, key, obj); err != nil {
-		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("%w: reach identity or policy unavailable: %w", ErrRefused, err)
 		}
 		return fmt.Errorf("read reach identity or policy: %w", err)
@@ -62,7 +62,7 @@ func reachRead(ctx context.Context, r client.Reader, key types.NamespacedName, o
 // ancestor may become authority. Names/UIDs/parents are hashed into the record.
 func ancestry(ctx context.Context, r client.Reader, ns string, s *v1alpha1.AgentSession) ([]v1alpha1.AgentSession, error) {
 	depth, err := strconv.Atoi(s.Labels[v1alpha1.LabelDepth])
-	if err != nil || depth < 0 || depth > 2 {
+	if err != nil || depth < 0 || depth > 2 || strconv.Itoa(depth) != s.Labels[v1alpha1.LabelDepth] {
 		return nil, fmt.Errorf("%w: ambiguous ancestry depth", ErrRefused)
 	}
 	chain := []v1alpha1.AgentSession{*s}
@@ -75,12 +75,12 @@ func ancestry(ctx context.Context, r client.Reader, ns string, s *v1alpha1.Agent
 		if err := reachRead(ctx, r, types.NamespacedName{Namespace: ns, Name: parent}, &a); err != nil {
 			return nil, err
 		}
-		if a.UID == "" || !a.DeletionTimestamp.IsZero() {
+		if a.UID == "" || !a.DeletionTimestamp.IsZero() || (chain[len(chain)-1].CreationTimestamp.IsZero() || a.CreationTimestamp.IsZero() || !a.CreationTimestamp.Before(&chain[len(chain)-1].CreationTimestamp)) {
 			return nil, fmt.Errorf("%w: unbound or deleting ancestor", ErrRefused)
 		}
 		seen[parent] = true
 		nextDepth, e := strconv.Atoi(a.Labels[v1alpha1.LabelDepth])
-		if e != nil || nextDepth != depth-1 {
+		if e != nil || nextDepth != depth-1 || strconv.Itoa(nextDepth) != a.Labels[v1alpha1.LabelDepth] {
 			return nil, fmt.Errorf("%w: inconsistent ancestry depth", ErrRefused)
 		}
 		depth = nextDepth
