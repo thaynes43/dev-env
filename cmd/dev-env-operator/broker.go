@@ -30,6 +30,7 @@ type brokerOptions struct {
 	grantDelegates      []string
 	metricsAddr         string
 	probeAddr           string
+	attestedCreators    []string
 }
 
 func parseBrokerFlags(args []string) (brokerOptions, error) {
@@ -52,11 +53,26 @@ func parseBrokerFlags(args []string) (brokerOptions, error) {
 	delegates := fs.String("grant-delegates", "", "HELD (DESIGN-042 6.2): comma-separated ServiceAccounts, <namespace>/<name>, whose recorded delegate decisions the broker applies through a GrantPolicy with spec.delegated (approvedBy delegate/<namespace>/<name>; not a human decision). Must match the operator's --grant-delegates. Empty applies none")
 	fs.StringVar(&o.metricsAddr, "metrics-bind-address", ":8080", "address of the Prometheus metrics endpoint; 0 turns it off")
 	fs.StringVar(&o.probeAddr, "health-probe-bind-address", ":8081", "address of /healthz and /readyz")
+	creators := fs.String("attested-maintenance-creators", "", "HELD (DESIGN-042 S6): comma-separated ServiceAccounts, <namespace>/<name>, at most 16. With --enable-attested-maintenance, only a top-level session whose spec.parent is exactly one of them (depth 0) may approve maintenance for itself; a child session never does. Unset: the --maintenance-human-service-account value. Set empty: no creator, so no session approves maintenance for itself")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
+	}
+	// DESIGN-042 S6. Set, the creators are exactly the list, and empty is none.
+	// Unset, they are the human ServiceAccount, or none when that is not one
+	// namespace/name: startup is unchanged either way.
+	creatorsSet := false
+	fs.Visit(func(f *flag.Flag) { creatorsSet = creatorsSet || f.Name == "attested-maintenance-creators" })
+	if creatorsSet {
+		c, cerr := broker.ParseAttestedMaintenanceCreators(*creators)
+		if cerr != nil {
+			return o, cerr
+		}
+		o.attestedCreators = c
+	} else if c, cerr := broker.ParseAttestedMaintenanceCreators(o.maintenanceHuman); cerr == nil && len(c) == 1 {
+		o.attestedCreators = c
 	}
 	if o.sessionNamespace == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace and --policy-namespace must not be empty")
@@ -95,6 +111,7 @@ func runBroker(args []string) error {
 		EnableProxmoxGrants:            o.enableProxmoxGrants,
 		EnableHWSSHGrants:              o.enableHWSSHGrants,
 		EnableAttestedGrants:           o.enableAttested,
+		AttestedMaintenanceCreators:    o.attestedCreators,
 		EnableMaintenanceGrants:        o.enableMaintenance,
 		EnableAttestedMaintenance:      o.enableAttestedMaint,
 		MaintenanceHumanServiceAccount: o.maintenanceHuman,

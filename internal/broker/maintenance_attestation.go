@@ -12,17 +12,23 @@ package broker
 // --enable-attested-grants and --enable-attested-maintenance; Reconcile has
 // already refused every new maintenance grant without
 // --enable-maintenance-grants. No standing policy approves maintenance (Matches).
+//
+// Only a session that a listed creator launched directly may approve for itself
+// (DESIGN-042 6.2, S6; ADR-014): --attested-maintenance-creators, whose default
+// is the human ServiceAccount. An empty list approves nothing.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -38,6 +44,8 @@ import (
 //
 //   - a top-level requesting session (topLevelSession): a child task session
 //     never approves SYS_ADMIN for itself;
+//   - a listed creator: the session's spec.parent is exactly one of
+//     AttestedMaintenanceCreators (listedCreator, DESIGN-042 S6);
 //   - no extensionOf: an extension needs the human route (ADR-012);
 //   - the identity, worker and node checks of the human route
 //     (CheckMaintenanceIdentities);
@@ -55,6 +63,9 @@ func (b *Broker) attestedMaintenanceApproval(ctx context.Context, g *v1alpha1.Ac
 	}
 	if !topLevelSession(sess) {
 		return wait("the requesting session is a child session")
+	}
+	if !listedCreator(sess, b.AttestedMaintenanceCreators) {
+		return wait(errUnlistedCreator.Error())
 	}
 	if g.Spec.Maintenance.ExtensionOf != "" {
 		return wait("an extension needs the human route")
@@ -102,6 +113,66 @@ func topLevelSession(s *v1alpha1.AgentSession) bool {
 		return false
 	}
 	return s.Spec.Parent == "" || strings.Contains(s.Spec.Parent, "/")
+}
+
+// MaxAttestedMaintenanceCreators bounds --attested-maintenance-creators.
+const MaxAttestedMaintenanceCreators = 16
+
+// errUnlistedCreator is why a top-level session whose creator is not listed
+// waits for the human route, or loses a lease it holds.
+var errUnlistedCreator = errors.New("the requesting session's creator is not on --attested-maintenance-creators")
+
+// ParseAttestedMaintenanceCreators parses --attested-maintenance-creators
+// (DESIGN-042 6.2, S6): comma-separated ServiceAccounts, "<namespace>/<name>",
+// at most MaxAttestedMaintenanceCreators, none repeated. The result is sorted,
+// so the same entries in any order parse alike. An empty value is nil: no
+// creator, so no session approves maintenance for itself.
+func ParseAttestedMaintenanceCreators(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var out []string
+	for _, ref := range strings.Split(raw, ",") {
+		ref = strings.TrimSpace(ref)
+		switch {
+		case !serviceAccountRef(ref):
+			return nil, fmt.Errorf("--attested-maintenance-creators: %q is not <namespace>/<serviceaccount>", ref)
+		case slices.Contains(out, ref):
+			return nil, fmt.Errorf("--attested-maintenance-creators: %s is named twice", ref)
+		}
+		out = append(out, ref)
+	}
+	if len(out) > MaxAttestedMaintenanceCreators {
+		return nil, fmt.Errorf("--attested-maintenance-creators: more than %d creators", MaxAttestedMaintenanceCreators)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// serviceAccountRef reports whether ref is "<namespace>/<name>": a DNS label,
+// one slash, and a DNS subdomain, which has no slash.
+func serviceAccountRef(ref string) bool {
+	ns, name, ok := strings.Cut(ref, "/")
+	return ok && len(validation.IsDNS1123Label(ns)) == 0 && len(validation.IsDNS1123Subdomain(name)) == 0
+}
+
+// listedCreator reports whether s may approve maintenance for itself by who
+// created it (DESIGN-042 6.2, S6). All of these must hold:
+//
+//   - s is top-level (topLevelSession);
+//   - its depth label is exactly "0";
+//   - its spec.parent is a ServiceAccount ref and exactly one of creators.
+//
+// A missing, empty or unparseable parent or depth fails, and so does a child,
+// whose parent is a session name with no slash. An empty list admits no one.
+func listedCreator(s *v1alpha1.AgentSession, creators []string) bool {
+	if !topLevelSession(s) {
+		return false
+	}
+	if s.Labels[v1alpha1.LabelDepth] != "0" {
+		return false
+	}
+	return serviceAccountRef(s.Spec.Parent) && slices.Contains(creators, s.Spec.Parent)
 }
 
 // attestorIsCoordinator reports whether the statement's attestor is the
@@ -166,7 +237,9 @@ func maintenanceLeaseHeld(o *v1alpha1.AccessGrant) bool {
 // executor exist, and while they run. The flags are on; the requesting session
 // is still top-level; the approving policy (read from the API server by name) is
 // attested and still fits the envelope; and the statement still verifies in its
-// execution form. A policy deleted and recreated under the same name is not told
+// execution form; and its creator is still listed (DESIGN-042 S6), so removing a
+// creator from --attested-maintenance-creators ends the leases its sessions
+// hold. A policy deleted and recreated under the same name is not told
 // apart (ADR-013 follow-up). A grant the human route
 // approved is not affected. A refusal is permanent: the caller ends the lease
 // through the existing stop path. Any other error is a read to retry.
@@ -197,6 +270,10 @@ func (b *Broker) attestedMaintenanceHolds(ctx context.Context, g *v1alpha1.Acces
 	}
 	if sess != nil && !topLevelSession(sess) {
 		return permanent{errors.New("the requesting session is a child session")}
+	}
+	// A gone session (nil) fails the statement check below.
+	if sess != nil && !listedCreator(sess, b.AttestedMaintenanceCreators) {
+		return permanent{errUnlistedCreator}
 	}
 	if _, err := verifyAttestation(g, sess, nil, attestAtExecution, b.Clock.Now()); err != nil {
 		return permanent{fmt.Errorf("agent attestation does not verify: %w", err)}
