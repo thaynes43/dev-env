@@ -118,7 +118,7 @@ func (b *Broker) delegateGrantHolds(ctx context.Context, g *v1alpha1.AccessGrant
 		return fmt.Errorf("%w: %s", ErrRefused, err)
 	}
 	if err := b.delegateReach(ctx, d, &requester); err != nil {
-		return fmt.Errorf("%w: %s", ErrRefused, err)
+		return err
 	}
 	return nil
 }

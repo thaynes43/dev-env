@@ -201,7 +201,7 @@ const maxReachDepth = 4
 // descendants, by name and UID, read from the API server. Anything else, an
 // unknown form included, is outside its tree.
 func (b *Broker) delegateReach(ctx context.Context, d MaintenanceDecision, sess *v1alpha1.AgentSession) error {
-	outside := errors.New("the requester is not in the delegate's own tree")
+	outside := fmt.Errorf("%w: the requester is not in the delegate's own tree", ErrRefused)
 	if sess == nil || d.Delegate == nil {
 		return outside
 	}
@@ -216,7 +216,10 @@ func (b *Broker) delegateReach(ctx context.Context, d MaintenanceDecision, sess 
 		for i := 0; parent != "" && !strings.Contains(parent, "/") && i < maxReachDepth; i++ {
 			var a v1alpha1.AgentSession
 			if err := b.APIReader.Get(ctx, types.NamespacedName{Namespace: b.SessionNamespace, Name: parent}, &a); err != nil {
-				return errors.New("the requester's ancestry cannot be read")
+				if apierrors.IsNotFound(err) {
+					return fmt.Errorf("%w: the requester's ancestry is absent", ErrRefused)
+				}
+				return fmt.Errorf("read requester ancestry: %w", err)
 			}
 			if a.Name == d.Delegate.Session && string(a.UID) == d.Delegate.SessionUID {
 				return nil
@@ -258,6 +261,9 @@ func (b *Broker) delegateDecision(ctx context.Context, g *v1alpha1.AccessGrant, 
 		return wait(err.Error(), deadline.Sub(now.Time))
 	}
 	if err := b.delegateReach(ctx, d, sess); err != nil {
+		if !errors.Is(err, ErrRefused) {
+			return ctrl.Result{}, true, err
+		}
 		return wait(err.Error(), deadline.Sub(now.Time))
 	}
 	dec := Decision{Approve: d.Approve, By: d.By, TTL: d.TTL, Reason: d.Reason, GrantUID: d.GrantUID, ScopeDigest: d.Digest, Ref: d.Ref}
