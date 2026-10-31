@@ -340,8 +340,8 @@ backslashes, control and invisible formatting characters and `.`/`..` segments
 host must be a lowercase DNS name with at least two labels whose last label
 starts with a letter: that rejects every IP literal a browser would parse
 (dotted, short, hex, octal or decimal IPv4 and bracketed IPv6), single-label
-names and `.localhost`. The existing redaction guard still applies. This is not
-an origin allowlist.
+names and `.localhost`. The existing redaction guard still applies. An
+additional exact-origin allowlist applies (OP316 below).
 
 The MCP content revision hashes the normalized items without the capture time
 or the response's `orderObservedAt` and `claimObservedAt`. A re-observing
@@ -357,12 +357,35 @@ snapshot over the bound fails closed as Unavailable and is never truncated. A
 listed page of at most 100 items adds about 45 KB. This slice documents the
 cost and does not trim.
 
-Before any real order or claim adapter lands, two prerequisites must be met.
-First, evidence links need a fixed-origin allowlist (for example the canonical
-OpenProject and GitHub origins); the syntax checks above are not enough to keep
-a LAN or attacker host out. Second, sources need a batch or snapshot interface:
-the current per-alert interfaces make two lookups for every alert on every
-portal render and every `pages_list`/`pages_get`.
+The source-only OP316 prerequisites (2026-10-31) replace the per-alert
+interfaces with `FindOrders(ctx, identities)` and `FindClaims(ctx, lookups)`.
+`ProjectResponses` deduplicates the exact fingerprint/start identities and makes
+at most one order batch call, then at most one claim batch call for joined
+order attempts. Each `ClaimLookup` includes the identity and key/created pair.
+Portal workspace renders and MCP `pages_list`/`pages_get` use this same snapshot
+projection before grouping, filtering or limiting. `ProjectResponse` is the
+single-identity wrapper. Invalid identities and invalid evaluation policy never
+reach a source. Empty snapshots make no calls; a snapshot with no joined orders
+makes no claim call. Conditions remain per identity: a missing batch-map entry
+is Unavailable (no observation), while an available observation with a nil
+record is Empty. A batch error makes that source Unavailable; neither errors
+nor extra map entries create associations. Claim evidence remains NotChecked
+for identities whose order did not join, including when other identities join.
+
+`ResponseSources.EvidenceOrigins` is the caller-controlled list of exact
+HTTPS origins, without a path or trailing slash. Nil/empty denies every link,
+keeping evidence and the unconfirmed claim fields Unknown (Invalid). Syntax,
+redaction and byte-identity checks above still apply alongside origin membership.
+Matching uses the literal `https://` plus host, never a prefix, suffix, wildcard
+or normalized form. Subdomains require their own entry. Existing lowercase DNS
+and no-port restrictions remain: uppercase hosts/schemes, explicit `:443` and
+other ports are rejected even if listed. Non-origin entries (paths, queries,
+fragments, credentials) cannot authorize a link. The allowlist is a source-only
+assembly config, not an MCP argument or extension to `--source-config`.
+
+These two prerequisites are implemented and synthetically tested, not production
+adapter acceptance. A real adapter still needs separately authorized read-only
+wiring and evidence of usable behavior.
 
 Production entry points continue to use unconfigured response sources,
 `UnconfiguredStore` and `DisconnectedPagesControls`. No reader, endpoint, CRD,

@@ -178,11 +178,12 @@ func PagesWorkspaceWithResponses(ctx context.Context, snapshot pages.Alertmanage
 	condition := pagesCondition(agg, aggErr, disabled)
 	groups := []portal.PagesGroup{}
 	if condition == "available" {
-		responses := make(map[pages.AlertIdentity]pages.ResponseProjection, len(snapshot.Alerts))
+		identities := make([]pages.AlertIdentity, 0, len(snapshot.Alerts))
 		for _, alert := range snapshot.Alerts {
 			identity := pages.AlertIdentity{Fingerprint: alert.Fingerprint, StartsAt: alert.StartsAt}
-			responses[identity] = pages.ProjectResponse(ctx, identity, sources, at)
+			identities = append(identities, identity)
 		}
+		responses := pages.ProjectResponses(ctx, identities, sources, at)
 		groups = buildPagesGroups(snapshot, agg.Groups, responses)
 	}
 	return portal.PagesWorkspace{

@@ -358,9 +358,13 @@ func (s *pagesMCPSession) call(raw json.RawMessage) map[string]any {
 		return mcpToolError("Unavailable: current snapshot")
 	}
 	if source == "alertmanager" {
+		identities := make([]pages.AlertIdentity, len(items))
 		for i := range items {
-			identity := pages.AlertIdentity{Fingerprint: items[i].Key, StartsAt: items[i].StartsAt}
-			response := pages.ProjectResponse(s.ctx, identity, s.responses, at)
+			identities[i] = pages.AlertIdentity{Fingerprint: items[i].Key, StartsAt: items[i].StartsAt}
+		}
+		responses := pages.ProjectResponses(s.ctx, identities, s.responses, at)
+		for i := range items {
+			response := responses[identities[i]]
 			items[i].Response = &response
 		}
 	}

@@ -17,14 +17,22 @@ import (
 
 type parityOrders struct{ observation pages.OrderObservation }
 
-func (f parityOrders) FindOrder(_ context.Context, _ pages.AlertIdentity) (pages.OrderObservation, error) {
-	return f.observation, nil
+func (f parityOrders) FindOrders(_ context.Context, ids []pages.AlertIdentity) (map[pages.AlertIdentity]pages.OrderObservation, error) {
+	out := make(map[pages.AlertIdentity]pages.OrderObservation, len(ids))
+	for _, id := range ids {
+		out[id] = f.observation
+	}
+	return out, nil
 }
 
 type parityClaims struct{ observation pages.ClaimObservation }
 
-func (f parityClaims) FindClaim(_ context.Context, _ pages.AlertIdentity, _ pages.OrderReference) (pages.ClaimObservation, error) {
-	return f.observation, nil
+func (f parityClaims) FindClaims(_ context.Context, lookups []pages.ClaimLookup) (map[pages.ClaimLookup]pages.ClaimObservation, error) {
+	out := make(map[pages.ClaimLookup]pages.ClaimObservation, len(lookups))
+	for _, lookup := range lookups {
+		out[lookup] = f.observation
+	}
+	return out, nil
 }
 
 const responseAlertFixture = `[{"fingerprint":"synthetic-fingerprint","labels":{"alertname":"Synthetic alert","severity":"warning"},"status":{"state":"active"},"startsAt":"2026-10-30T11:00:00Z"}]`
@@ -50,7 +58,8 @@ func TestPagesMCPPortalResponseParity(t *testing.T) {
 					SourceObservation: pages.SourceObservation{Available: true, Source: "Synthetic canonical claim", ObservedAt: at},
 					Claim:             &pages.ClaimEvidence{Identity: identity, Order: order, Reference: pages.CanonicalClaimReference{Kind: "OpenProject", ID: "313"}, Owner: "synthetic-owner", State: tc.state, StateAt: at.Add(-time.Minute), EvidenceURL: "https://example.test/work_packages/313"},
 				}},
-				MaxAge: 5 * time.Minute,
+				MaxAge:          5 * time.Minute,
+				EvidenceOrigins: []string{"https://example.test", "https://github.com"},
 			}
 			backend := &fakePagesBackend{raw: []byte(responseAlertFixture)}
 			mcp := &pagesMCPSession{ctx: context.Background(), config: pagesMCPConfig{Alertmanager: true}, backend: backend, responses: sources, now: func() time.Time { return at }}
@@ -155,7 +164,8 @@ func TestPagesMCPRevisionIgnoresObservationTimes(t *testing.T) {
 				SourceObservation: pages.SourceObservation{Available: true, Source: "Synthetic canonical claim", ObservedAt: observed},
 				Claim:             &pages.ClaimEvidence{Identity: identity, Order: order, Reference: pages.CanonicalClaimReference{Kind: "OpenProject", ID: "313"}, Owner: "synthetic-owner", State: "claimed", StateAt: at.Add(-2 * time.Minute), EvidenceURL: "https://example.test/work_packages/313"},
 			}},
-			MaxAge: 5 * time.Minute,
+			MaxAge:          5 * time.Minute,
+			EvidenceOrigins: []string{"https://example.test", "https://github.com"},
 		}
 	}
 	now := at
@@ -203,7 +213,8 @@ func responseSourcesFor(at time.Time, identity pages.AlertIdentity, status, stat
 			SourceObservation: pages.SourceObservation{Available: true, Source: "Synthetic canonical claim", ObservedAt: at},
 			Claim:             &pages.ClaimEvidence{Identity: identity, Order: order, Reference: pages.CanonicalClaimReference{Kind: "OpenProject", ID: "313"}, Owner: "synthetic-owner", State: state, StateAt: at.Add(-time.Minute), EvidenceURL: evidence},
 		}},
-		MaxAge: 5 * time.Minute,
+		MaxAge:          5 * time.Minute,
+		EvidenceOrigins: []string{"https://example.test", "https://github.com"},
 	}
 }
 
