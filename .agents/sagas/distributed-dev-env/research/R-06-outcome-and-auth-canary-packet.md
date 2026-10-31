@@ -1,6 +1,6 @@
 # R-06 Decision packet: auth canary and task-outcome acceptance (2026-10-31)
 
-Draft for Tom, morning of 2026-10-31. Research only. Nothing in this packet was
+Draft for Tom, morning of 2026-10-31 (OpenProject #310, #320, #326). Research only. Nothing in this packet was
 run, changed, merged or launched. Cluster reads are from 2026-10-31T05:01Z.
 
 ## Bottom line
