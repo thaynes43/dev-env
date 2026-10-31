@@ -103,6 +103,10 @@ type Server struct {
 	Inbox                        *inbox.KubeStore
 	InboxProjects                []string
 	InboxCoordinatorReadProjects []string
+	// InboxQuestions accepts ask and reply publications (DESIGN-014,
+	// 2026-10-31). Default off: enable it only after the InboxMessage CRD with
+	// kind and inReplyTo is installed.
+	InboxQuestions bool
 	// Nil leaves immutable coordination routes disabled. This store always reads Live.
 	TaskClaims            *taskclaim.KubeStore
 	TaskClaimReadProjects []string

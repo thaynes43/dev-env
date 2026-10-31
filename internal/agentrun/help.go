@@ -14,7 +14,7 @@ Usage:
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
-  agent-run inbox send|list|read|ack               durable inbox
+  agent-run inbox send|ask|reply|list|read|ack     durable inbox
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
@@ -216,17 +216,34 @@ It cannot extend an exhausted budget, recover a lost Pod or let a model resume
 itself. A lost mutation acknowledgement is not retried.
 `,
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
-       agent-run inbox list --project <project> [--limit N] [--continue <cursor>]
+       agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt
+       agent-run inbox reply <question> --project <project> --key <key> < reply.txt
+       agent-run inbox list --project <project> [--sent] [--limit N] [--continue <cursor>]
        agent-run inbox read <message> --project <project> [-o json]
        agent-run inbox ack <message> --project <project>
 
-Send reads 1..16384 UTF-8 bytes from stdin and requires a stable logical key.
-It sends once. If unconfirmed, explicitly retry only the identical intent with
-the same key; a changed intent conflicts. List prints a bounded metadata page;
-read prints text without acknowledging it. Ack is explicit and proves an API
-read acknowledgement, not provider consumption. The server authorizes all
-operations; a configured coordinator may read authorized project content but
-cannot send or acknowledge for a Session. Send, list and ack print JSON.
+Send, ask and reply read 1..16384 UTF-8 bytes from stdin and require a stable
+logical key. Each sends once. If unconfirmed, explicitly retry only the
+identical intent with the same key; a changed intent conflicts.
+
+Ask sends a routine question. With no --to it goes to this Session's recorded
+parent Session (its coordinator), which the server resolves; text never picks
+the recipient. Reply answers one question addressed to this Session and goes
+to the question's sender; a question takes one reply. A reply is information,
+not an approval.
+
+List prints a bounded metadata page of this Session's inbox, or with --sent
+the messages it sent. List and read show each message's kind (plain, question
+or reply), the question a reply answers, and the question's state:
+Unanswered, Answered (with the reply), Acknowledged (the asker acked the
+reply), Stale (unanswered for more than 30 minutes), RecipientEnded (the
+recipient Session is gone or finished without replying) or Unknown. Read
+prints text without acknowledging it; for a question or reply it also prints
+the state on stderr. Ack is explicit and proves an API read acknowledgement,
+not provider consumption. Nothing interrupts a running task: it sees a reply
+when it lists or reads its inbox. The server authorizes all operations; a
+configured coordinator may read authorized project content but cannot send or
+acknowledge for a Session. Send, ask, reply, list and ack print JSON.
 `,
 	"directory": `Usage: agent-run directory list --project <project> --once [flags]
 

@@ -30,3 +30,22 @@ func TestInboxFlagsDefaultOffAndSeparateContentScope(t *testing.T) {
 		t.Fatal("coordinator scope exceeded enabled projects")
 	}
 }
+
+func TestInboxQuestionsFlagDefaultOffAndNeedsInbox(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.inboxQuestions {
+		t.Fatal("inbox questions enabled by default", err)
+	}
+	if _, err := parseFlags([]string{"--enable-inbox-questions"}); err == nil {
+		t.Fatal("inbox questions accepted without the durable inbox")
+	}
+	bound := []string{"--enable-durable-inbox", "--inbox-projects=sample", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43"}
+	o, err = parseFlags(bound)
+	if err != nil || o.inboxQuestions {
+		t.Fatal("the durable inbox enabled questions", err)
+	}
+	o, err = parseFlags(append(slices.Clone(bound), "--enable-inbox-questions"))
+	if err != nil || !o.inboxQuestions || !slices.Equal(o.inboxProjects, []string{"sample"}) || len(o.inboxCoordinatorReadProjects) != 0 || o.coordinatorEnabled {
+		t.Fatal("inbox questions refused or widened other gates", err)
+	}
+}

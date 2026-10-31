@@ -13,10 +13,13 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -29,6 +32,21 @@ const (
 	MaxTextBytes    = 16 << 10
 	MaxRequestBytes = 6*MaxTextBytes + 4096
 	RecipientLabel  = "coordination.dev-env.haynesops.com/recipient"
+	// KindLabel and InReplyToLabel mark questions and replies (DESIGN-014,
+	// 2026-10-31); plain messages carry neither.
+	KindLabel      = "coordination.dev-env.haynesops.com/kind"
+	InReplyToLabel = "coordination.dev-env.haynesops.com/in-reply-to"
+
+	KindQuestion = "question"
+	KindReply    = "reply"
+	// StaleAfter is the fixed age past which an unanswered question reads
+	// Stale. It is a display bound, not an expiry: nothing is deleted or resent.
+	StaleAfter = 30 * time.Minute
+	// MaxReplies bounds one reply lookup. The API refuses a second distinct
+	// reply, so more than one only follows a race between two replies.
+	MaxReplies = 8
+	// replyPageSize is the page size of a thread list's one reply index.
+	replyPageSize = 100
 )
 
 // ErrLimit means a new message would exceed its sender's or its project's
@@ -40,10 +58,14 @@ var DefaultLimits = taskclaim.Limits{PerSession: 512, PerProject: 4096}
 
 var (
 	ErrUnavailable = errors.New("inbox observation is unconfirmed")
-	ErrNotFound    = errors.New("inbox record not found")
-	keyPattern     = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
-	uidPattern     = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
-	modelPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$`)
+	// ErrSchemaNotUpgraded means the cluster's InboxMessage schema prunes the
+	// kind or inReplyTo of a question or reply, so storing it would leave a
+	// record that stays invalid. Nothing was written.
+	ErrSchemaNotUpgraded = errors.New("inbox schema not upgraded")
+	ErrNotFound          = errors.New("inbox record not found")
+	keyPattern           = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$`)
+	uidPattern           = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+	modelPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$`)
 )
 
 func digest(v any) string {
@@ -77,6 +99,7 @@ func ValidText(text string) bool {
 	return len(text) > 0 && len(text) <= MaxTextBytes && utf8.ValidString(text)
 }
 func recipientLabel(s coord.SessionIdentity) string { return digest(s)[:63] }
+func inReplyToLabel(r coord.InboxMessageRef) string { return digest(r)[:63] }
 
 func ValidMessage(s coord.InboxMessageSpec) bool {
 	return validMessageSpec(s, false)
@@ -97,7 +120,32 @@ func validMessageSpec(s coord.InboxMessageSpec, archived bool) bool {
 		textOK = s.Text == ""
 	}
 	return taskclaim.ValidSpec(claim) && s.Actor.Kind == "session" && ValidSession(s.Recipient) && ValidKey(s.Key) && textOK &&
-		(s.Provider == "claude" || s.Provider == "codex" || s.Provider == "opencode") && modelPattern.MatchString(s.RequestedModel)
+		(s.Provider == "claude" || s.Provider == "codex" || s.Provider == "opencode") && modelPattern.MatchString(s.RequestedModel) && validCorrelation(s)
+}
+
+// validCorrelation mirrors the schema: every reply, and only a reply, names one
+// exact question. Which question a reply may name is the API's check.
+func validCorrelation(s coord.InboxMessageSpec) bool {
+	switch s.Kind {
+	case "", KindQuestion:
+		return s.InReplyTo == nil
+	case KindReply:
+		return s.InReplyTo != nil && ValidRef(*s.InReplyTo)
+	}
+	return false
+}
+
+// ValidRef reports whether r names one message by full-digest name and UID.
+func ValidRef(r coord.InboxMessageRef) bool {
+	return ValidMessageName(r.Name) && ValidUID(r.UID)
+}
+
+// ValidUID reports whether uid has the Kubernetes UID shape the inbox stores.
+func ValidUID(uid string) bool { return uidPattern.MatchString(uid) }
+
+// Ref names m exactly.
+func Ref(m *coord.InboxMessage) coord.InboxMessageRef {
+	return coord.InboxMessageRef{Name: m.Name, UID: string(m.UID)}
 }
 
 // SameIntent compares request intent and saved sender provenance. Resumed Pod
@@ -139,13 +187,27 @@ func recipientLabels(project string, recipient coord.SessionIdentity) map[string
 func messageLabels(spec coord.InboxMessageSpec) map[string]string {
 	l := recipientLabels(spec.Project, spec.Recipient)
 	l[taskclaim.SourceLabel] = taskclaim.SessionLabel(spec.Sender)
+	if spec.Kind != "" {
+		l[KindLabel] = spec.Kind
+	}
+	if spec.InReplyTo != nil {
+		l[InReplyToLabel] = inReplyToLabel(*spec.InReplyTo)
+	}
 	return l
 }
 
-// A message from before the sender's source label carries project and
-// recipient labels only; it stays valid.
+// A plain message from before the sender's source label carries project and
+// recipient labels only; it stays valid. Questions and replies are newer and
+// always carry their full label set, which their lookups select on.
 func (s KubeStore) validMessage(m *coord.InboxMessage) bool {
-	return m != nil && ValidMessage(m.Spec) && s.validObject(m, MessageName(m.Spec.Sender, m.Spec.Key), recipientLabels(m.Spec.Project, m.Spec.Recipient), messageLabels(m.Spec))
+	if m == nil || !ValidMessage(m.Spec) {
+		return false
+	}
+	name := MessageName(m.Spec.Sender, m.Spec.Key)
+	if m.Spec.Kind != "" {
+		return s.validObject(m, name, messageLabels(m.Spec))
+	}
+	return s.validObject(m, name, recipientLabels(m.Spec.Project, m.Spec.Recipient), messageLabels(m.Spec))
 }
 func (s KubeStore) validAck(a *coord.InboxReadAck) bool {
 	return ValidAck(a.Spec) && s.validObject(a, AckName(a.Spec.MessageUID, a.Spec.Recipient.UID), recipientLabels(a.Spec.Project, a.Spec.Recipient))
@@ -182,6 +244,11 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 			}
 			return nil, false, ErrUnavailable
 		}
+		if spec.Kind != "" {
+			if err := s.checkSchema(ctx, spec); err != nil {
+				return nil, false, err
+			}
+		}
 	} else if err != nil {
 		return nil, false, ErrUnavailable
 	}
@@ -201,6 +268,35 @@ func (s KubeStore) Create(ctx context.Context, spec coord.InboxMessageSpec) (*co
 		return nil, false, ErrUnavailable
 	}
 	return observed, false, nil
+}
+
+// checkSchema dry-runs the create of a question or reply and compares what the
+// API server would store. A CRD from before kind and inReplyTo prunes both
+// without an error, and the stored record would fail every later read. The
+// dry-run uses the create permission the real create already needs. Its answer
+// is read into an unstructured object, which a response replaces whole, so a
+// pruned field cannot survive from the request.
+func (s KubeStore) checkSchema(ctx context.Context, spec coord.InboxMessageSpec) error {
+	probe := &coord.InboxMessage{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: MessageName(spec.Sender, spec.Key), Labels: messageLabels(spec)}, Spec: spec}
+	fields, err := runtime.DefaultUnstructuredConverter.ToUnstructured(probe)
+	if err != nil {
+		return ErrUnavailable
+	}
+	u := &unstructured.Unstructured{Object: fields}
+	u.SetGroupVersionKind(coord.GroupVersion.WithKind("InboxMessage"))
+	switch err := s.Client.Create(ctx, u, client.DryRunAll); {
+	case apierrors.IsAlreadyExists(err):
+		// A concurrent create of the same intent; the real create confirms it.
+		return nil
+	case err != nil:
+		return ErrUnavailable
+	}
+	kind, _, _ := unstructured.NestedString(u.Object, "spec", "kind")
+	_, hasReplyTo, _ := unstructured.NestedMap(u.Object, "spec", "inReplyTo")
+	if kind != spec.Kind || hasReplyTo != (spec.InReplyTo != nil) {
+		return ErrSchemaNotUpgraded
+	}
+	return nil
 }
 func (s KubeStore) ReadAck(ctx context.Context, m *coord.InboxMessage) (*coord.InboxReadAck, error) {
 	if !s.ready() || !s.validMessage(m) {
@@ -261,4 +357,111 @@ func (s KubeStore) List(ctx context.Context, project string, recipient *coord.Se
 		}
 	}
 	return list.Items, list.Continue, nil
+}
+
+// ListSent pages the messages the sender Session published in project. Plain
+// messages from before the source label are not found here.
+func (s KubeStore) ListSent(ctx context.Context, project string, sender coord.SessionIdentity, limit int64, cursor string) ([]coord.InboxMessage, string, error) {
+	if !s.ready() || !projectcatalog.ValidName(project) || !ValidSession(sender) || limit < 1 || limit > 100 || len(cursor) > 4096 {
+		return nil, "", ErrUnavailable
+	}
+	labels := map[string]string{taskclaim.ProjectLabel: project, taskclaim.SourceLabel: taskclaim.SessionLabel(sender)}
+	var list coord.InboxMessageList
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(limit), client.Continue(cursor)) != nil || int64(len(list.Items)) > limit || len(list.Continue) > 4096 {
+		return nil, "", ErrUnavailable
+	}
+	for i := range list.Items {
+		m := &list.Items[i]
+		if !s.validMessage(m) || m.Spec.Project != project || m.Spec.Sender != sender {
+			return nil, "", ErrUnavailable
+		}
+	}
+	return list.Items, list.Continue, nil
+}
+
+// Replies returns the live replies to question q, oldest first. Each must come
+// from q's recipient, go to q's sender and name q exactly; anything else, or
+// more than MaxReplies, is ErrUnavailable rather than a guess.
+func (s KubeStore) Replies(ctx context.Context, q *coord.InboxMessage) ([]coord.InboxMessage, error) {
+	if !s.ready() || !s.validMessage(q) || q.Spec.Kind != KindQuestion {
+		return nil, ErrUnavailable
+	}
+	labels := map[string]string{taskclaim.ProjectLabel: q.Spec.Project, KindLabel: KindReply, InReplyToLabel: inReplyToLabel(Ref(q))}
+	var list coord.InboxMessageList
+	if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(MaxReplies+1)) != nil || list.Continue != "" {
+		return nil, ErrUnavailable
+	}
+	for i := range list.Items {
+		if !s.validMessage(&list.Items[i]) {
+			return nil, ErrUnavailable
+		}
+	}
+	return RepliesOf(q, list.Items)
+}
+
+// RepliesOf picks question q's replies out of candidates, oldest first, with
+// Replies' checks. A candidate that names q from the wrong party, or more than
+// MaxReplies, is ErrUnavailable.
+func RepliesOf(q *coord.InboxMessage, candidates []coord.InboxMessage) ([]coord.InboxMessage, error) {
+	ref := Ref(q)
+	var out []coord.InboxMessage
+	for i := range candidates {
+		r := &candidates[i]
+		if r.Spec.InReplyTo == nil || *r.Spec.InReplyTo != ref {
+			continue
+		}
+		if r.Spec.Kind != KindReply || r.Spec.Project != q.Spec.Project || r.Spec.Sender != q.Spec.Recipient || r.Spec.Recipient != q.Spec.Sender {
+			return nil, ErrUnavailable
+		}
+		out = append(out, *r)
+	}
+	if len(out) > MaxReplies {
+		return nil, ErrUnavailable
+	}
+	slices.SortFunc(out, func(a, b coord.InboxMessage) int {
+		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out, nil
+}
+
+// ReplyIndex lists, in pages of 100 up to the project's message limit, the
+// live replies in project sent by from or addressed to to (either may be nil),
+// so one thread list page needs one bounded scan instead of one per question.
+// Replies are messages, so the project limit bounds them; the scan covers it
+// whole. If live replies exceed the configured limit (for example after it was
+// lowered), the index is ErrUnavailable (state Unknown) rather than a guess.
+func (s KubeStore) ReplyIndex(ctx context.Context, project string, from, to *coord.SessionIdentity) ([]coord.InboxMessage, error) {
+	if !s.ready() || !projectcatalog.ValidName(project) || (from != nil && !ValidSession(*from)) || (to != nil && !ValidSession(*to)) {
+		return nil, ErrUnavailable
+	}
+	labels := map[string]string{taskclaim.ProjectLabel: project, KindLabel: KindReply}
+	if from != nil {
+		labels[taskclaim.SourceLabel] = taskclaim.SessionLabel(*from)
+	}
+	if to != nil {
+		labels[RecipientLabel] = recipientLabel(*to)
+	}
+	var out []coord.InboxMessage
+	cursor := ""
+	pages := (s.Limits.Effective(DefaultLimits).PerProject + replyPageSize - 1) / replyPageSize
+	for page := int64(0); page < pages; page++ {
+		var list coord.InboxMessageList
+		if s.Live.List(ctx, &list, client.InNamespace(s.Namespace), client.MatchingLabels(labels), client.Limit(replyPageSize), client.Continue(cursor)) != nil || len(list.Items) > replyPageSize || len(list.Continue) > 4096 {
+			return nil, ErrUnavailable
+		}
+		for i := range list.Items {
+			r := &list.Items[i]
+			if !s.validMessage(r) || r.Spec.Kind != KindReply || r.Spec.Project != project || (from != nil && r.Spec.Sender != *from) || (to != nil && r.Spec.Recipient != *to) {
+				return nil, ErrUnavailable
+			}
+		}
+		out = append(out, list.Items...)
+		if cursor = list.Continue; cursor == "" {
+			return out, nil
+		}
+	}
+	return nil, ErrUnavailable
 }

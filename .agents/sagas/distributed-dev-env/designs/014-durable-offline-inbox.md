@@ -183,3 +183,148 @@ returns the original message once. TLS non-redirect and token-file rules remain
 the existing client tests. This is source qualification only. It does not
 install the client, publish a live inbox, or close the post-deploy trial in
 Remaining acceptance.
+
+## Ask and reply (2026-10-31, OpenProject #321)
+
+An agent asks its coordinator a routine question on this inbox, and the
+coordinator replies to that exact question. Both are ordinary immutable
+`InboxMessage` records; there is no second store, board or consumer. The
+provider-neutral usage page is
+[How to ask your coordinator](../../../../docs/ask-your-coordinator.md).
+
+**Record.** `InboxMessageSpec` gains two optional fields. `kind` is `question`
+or `reply`; absent is a plain message, as before. `inReplyTo` names one exact
+question by full-digest name and UID. A schema rule requires `inReplyTo` on
+every reply and on nothing else, and the spec stays immutable as a whole. New
+questions and replies carry a `kind` label, and a reply an `in-reply-to` label
+(a digest of the question reference), beside the project, recipient and source
+labels; the store accepts a question or reply only with that full label set.
+Plain messages keep their labels. A reply is information, never an approval:
+grants, held actions and the Asks board (#254) are untouched, and a
+tool-permission request does not become a question.
+
+**Switch.** The operator accepts questions and replies only with
+`--enable-inbox-questions`, default off, which requires
+`--enable-durable-inbox`. The switch gates every new path: an ask, a reply,
+`view=thread` on a list or read, and `box=sent`. Off, each is refused with 400
+before any lookup or write (the reads say "not enabled; nothing was listed"),
+as an older API refuses the unknown fields. Plain messages and plain lists and
+reads work either way. The CLI's `list` and `read` always ask for the thread
+view; on that 400 they ask again without it, so they keep working against an
+API with the switch off, and `list --sent` reports that the API does not list
+sent messages.
+
+**Publish.** The request still carries intent only; the server derives every
+attribution field, as above.
+
+- A plain message names its recipient exactly, unchanged.
+- A question names a recipient Session by name (namespace and UID optional,
+  checked when given), or sets `toParent`. Then the server resolves the
+  sender's immutable `spec.parent`, which the API set from the creating
+  caller's token (D-05). A parent that is not a Session name gets 422. A parent
+  created after the sender, or whose UID differs from a recorded
+  `usageCaptureParentUID`, is a replacement and reads as not found.
+- A reply names its question only. The server reads the live question and
+  sends the reply to the question's sender. A missing question, a question in
+  another project, a question not addressed to the replier, or a stale UID all
+  read as the uniform 404, so a reply discloses nothing about messages the
+  replier did not receive. A reply to a reply or to a plain message gets 422.
+  A second, different reply to one question gets 409; two replies racing past
+  that check can both land, and the derived state then names the oldest and
+  counts them.
+- Identity stays sender UID plus key. An identical retry returns the stored
+  record with 200 even after the recipient, parent or question has gone: the
+  server binds the derived recipient and question from the stored record when
+  the request's own fields agree with it, then compares intent as before. A
+  parent-addressed retry binds only a stored recipient that still passes the
+  parent fences (a recorded usage parent UID, and creation no later than the
+  sender while that Session exists). A changed text, kind, recipient or
+  question under the same key is 409.
+
+**Derived state.** A list or read with `view=thread` adds `kind` (`plain`,
+`question` or `reply`), `inReplyTo` and, for a question or reply, a `thread`.
+The state is computed on each read and never stored: `Unanswered` (no reply,
+recipient live), `Stale` (no reply for more than `StaleAfter`, a fixed 30
+minutes), `Answered` (a reply exists, named), `Acknowledged` (the asker acked
+the reply), `RecipientEnded` (no reply and the recipient is gone, replaced,
+deleting, Archived or Failed, or a task whose agent exited, failed or was
+interrupted; Suspended is not ended) and `Unknown` (any lookup unconfirmed;
+never a guessed `Unanswered`). `waitingOn` names the Session that owes the next
+step, and only a Session confirmed live. Thirty minutes sits below the 45-minute timeout cap on managed
+common-rules tasks, so a task can still see `Stale` and act on its work order.
+It is a display bound: nothing expires, is resent or escalates. Archived
+messages show their correlation with state `Unknown`. After retention releases
+an acknowledged reply whose sender has ended (section above), the question can
+read `RecipientEnded`.
+
+**Both sides.** The coordinator sees a question's state in its own inbox. The
+asker sees it with `box=sent`, a list of the caller's own sent messages by
+the source label, behind the same original-Session proof as its inbox. It wrote
+every one of them; the sent box returns metadata, never text. One disclosure
+is new and deliberate: the replier now sees whether the asker acknowledged its
+reply (`Acknowledged` against `Answered`), which before only the recipient and
+a coordinator host could read. That is the point of the thread state, and it
+is limited to a reply and the question it answers. A configured coordinator
+host reads project threads but has no sent box and still cannot publish or
+ack.
+
+**Compatibility.** Without `view=thread` the list and read responses keep the
+older shape byte for byte, so an older strict client still decodes them. A
+plain publish receipt is unchanged; question and reply receipts carry the
+correlation. The list echoes `view` and `box`. An older API ignores those
+queries, so the new CLI refuses `--sent` when the echo is missing rather than
+show the caller's inbox as its sent box. An older API refuses ask and reply
+requests as unknown fields (400). `agentd inbox-publish` forwards a question or
+reply as it forwards a plain message: it reads the whole intent from stdin,
+including `kind`, `toParent` and `inReplyTo`, and the server enforces every
+check above; agentd adds none of its own.
+
+**Rollout and rollback floor.** haynes-ops installs the regenerated
+`inboxmessages` CRD first, then pins this operator, and only then sets
+`--enable-inbox-questions`. The order matters both ways:
+
+- With the switch on against the older CRD, the API server would prune `kind`
+  and `inReplyTo` but keep their labels, and the store would refuse that
+  record on every read. So before it creates a question or reply, the store
+  dry-runs the create (`DryRunAll`, which the existing create permission
+  covers) and compares what the API server would keep. If `kind` or `inReplyTo`
+  is missing, the publish answers 503 with the fixed reason "inbox schema not
+  upgraded" and writes nothing. A plain message and a retry of a stored one
+  need no check. A dry-run that itself fails is an ordinary 503 Unknown.
+- Do not revert the `inboxmessages` CRD below this schema once any question or
+  reply exists. The older schema would strip `kind` and `inReplyTo` when the
+  records are read, so each stored question and reply would fail the store's
+  check and answer 503 on every list page, sent box and read that includes
+  it, until the records are removed by the DESIGN-010 manual recovery. The
+  dry-run guard stops new records, not this.
+- Once any question or reply exists, an operator older than this change reads
+  it as an invalid record (its labels match neither older label set), with the
+  same 503s. Do not roll the operator back below this change after enabling
+  the switch; turning the switch off stops new questions but leaves existing
+  ones. The older operator with the newer CRD is fine while no question exists.
+
+No RBAC, credential or network change follows: the operator already lists and
+reads these resources.
+
+**Bounds.** The existing per-Session and per-project limits count questions
+and replies. One question reads at most 8 replies; more is Unknown. A thread
+list page scans its possible replies once, not per question: replies sent by
+the caller for its inbox, replies addressed to it for its sent box, or all of
+the project's replies for a coordinator host. It lists in pages of 100 up to the
+project's message limit (4096 by default, 41 pages): replies are messages, so
+the limit already bounds them, and the scan needs no separate smaller cap. If
+live replies exceed the configured project limit (for example after the limit
+was lowered), the index reads Unknown for the page, never a guess. It then reads one ack per answered question by name
+and each distinct Session once. A thread read of one question lists only that
+question's replies.
+
+**Not in this unit.** Headless tasks are not interrupted: a task polls its
+inbox and is not woken by a reply, and a TUI coordinator is not notified.
+Session-less native hosts can neither ask nor be asked. The cross-provider
+live question, reply and acknowledgement proof, the portal view (#326) and
+session detail (#322) stay open under #321. Tests:
+`internal/inbox/askreply_test.go`, `internal/apiserver/inbox_askreply_test.go`,
+`internal/apiserver/inbox_askreply_cli_test.go` (real `agentrun.Run` over TLS),
+`internal/agentrun/inbox_askreply_test.go`, the operator flag case in
+`cmd/dev-env-operator/inbox_test.go` and the envtest schema case in
+`api/coordination/v1alpha1/inbox_validation_test.go`.

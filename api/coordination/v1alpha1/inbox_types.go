@@ -21,6 +21,7 @@ type InboxMessageList struct {
 
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="message intent and original attribution are immutable"
 // +kubebuilder:validation:XValidation:rule="self.actor.kind == 'session'",message="only original Session senders publish"
+// +kubebuilder:validation:XValidation:rule="has(self.inReplyTo) == (has(self.kind) && self.kind == 'reply')",message="every reply, and only a reply, names the question it answers"
 type InboxMessageSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
@@ -46,6 +47,26 @@ type InboxMessageSpec struct {
 	// +kubebuilder:validation:MaxLength=16384
 	// +kubebuilder:validation:XValidation:rule="size(bytes(self)) <= 16384",message="message exceeds 16 KiB UTF-8"
 	Text string `json:"text"`
+	// Kind marks a routine question or its reply (DESIGN-014, 2026-10-31).
+	// Absent is a plain message, as before. A reply is not an approval.
+	// +kubebuilder:validation:Enum=question;reply
+	// +optional
+	Kind string `json:"kind,omitempty"`
+	// InReplyTo is the question a reply answers. The API binds it from the
+	// live question, whose sender is the reply's recipient.
+	// +optional
+	InReplyTo *InboxMessageRef `json:"inReplyTo,omitempty"`
+}
+
+// InboxMessageRef names one exact message: its full-digest name and UID.
+type InboxMessageRef struct {
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Pattern=`^message\.[a-f0-9]{32}\.[a-f0-9]{32}$`
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]+$`
+	UID string `json:"uid"`
 }
 
 // InboxReadAck records explicit API acknowledgement only. GET never creates it.
