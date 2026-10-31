@@ -318,7 +318,8 @@ because two top-level sessions have the same creator.
 live-read policies in the configured policy namespace and require coverage for
 **approvals and denials**. An uncovered or otherwise unauthorized decision must
 return 403 with no annotation/status mutation, leaving a subsequent authorized
-human or delegate decision usable. PR791 at `83103c6` does not do this: the broker
+human or delegate decision usable. PR791 at `83103c6`, and still current `78e6b3f`
+(documented, not corrected), does not do this: the broker
 refuses later while the annotation locks the decision slot until timeout. Merely
 documenting that behavior is not completion. The real-token envtest must create
 its policy **before** the decision and test this refusal/recovery path.
