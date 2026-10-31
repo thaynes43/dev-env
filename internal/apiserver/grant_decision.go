@@ -16,12 +16,13 @@ package apiserver
 //     Running AgentSession that S4's launch rules admitted
 //     (Policy.NamedCoordinatorSessionEligible).
 //
-// Reach is the delegate's own tree (lead ruling on #786): a coordinator host
+// With empty --grant-policy-delegates, reach is the delegate's own tree:
+// a coordinator host
 // decides only for its own child sessions, as childForCoordinator defines them,
 // and a delegate session only for its strict descendants. Its own grants, an
 // ancestor's, a sibling's, a cousin's and an unrelated session's are refused.
-// A top-level session uses mode (a), attestation: its delegate is Tom, by
-// message. spec.delegated still caps the types and the scope.
+// The explicit designated subset may serve unrelated/top-level requesters under
+// exact live delegated-policy coverage. spec.delegated caps type and scope.
 //
 // Form 3 is an explicitly configured exact legacy session/Pod/SA-UID tuple;
 // only it may use exact identity separation instead of broad same-SA refusal.
