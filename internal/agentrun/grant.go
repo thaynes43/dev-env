@@ -22,10 +22,12 @@ const grantAnswerWait = 30 * time.Minute
 // grantAnswerPoll is the gap between reads while a request is pending.
 const grantAnswerPoll = 5 * time.Second
 
-// grant list, show, request, release and use are the CLI slice of plan 07
-// step 7. List, show, request and release use /v1/grants. Use selects an
-// installed kube context in this pod. Nothing here approves a grant or
-// installs one. The in-pod tools are `agent-run mcp`.
+// grant list, show, request, release, attest, decide and use are the CLI
+// slice of plan 07 step 7. List, show, request and release use /v1/grants.
+// decide posts one delegate decision on another agent's pending grant.
+// Use selects an installed kube context in this pod. Request, release and
+// use do not approve a grant or install one. A delegate decision is not a
+// human decision. The in-pod tools are `agent-run mcp`.
 
 var grantPhases = []string{
 	apiv1.GrantPending, apiv1.GrantActive, apiv1.GrantDenied,
@@ -50,6 +52,8 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return a.grantRelease(ctx, args[1:])
 	case "attest":
 		return a.grantAttest(ctx, args[1:])
+	case "decide":
+		return a.grantDecide(ctx, args[1:])
 	case "use":
 		return a.grantUse(ctx, args[1:])
 	case "help", "-h", "--help":
@@ -57,7 +61,7 @@ func (a *app) grant(ctx context.Context, args []string) error {
 		return nil
 	}
 	_, _ = io.WriteString(a.env.Stderr, commandHelp["grant"])
-	return usageError("unknown grant command %q: it is list, show, request, release or use", args[0])
+	return usageError("unknown grant command %q: it is list, show, request, release, attest, decide or use", args[0])
 }
 
 func (a *app) grantList(ctx context.Context, args []string) error {
@@ -118,7 +122,7 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	cmd := newCommand("grant", outputJSON)
 	var typ, role, credential, ttl, reason string
 	var noWait bool
-	var namespaces, fqdns, cidrs, endpoints, ports stringList
+	var namespaces, fqdns, cidrs, endpoints, ports, secrets stringList
 	cmd.fs.StringVar(&typ, "type", "", "")
 	cmd.fs.StringVar(&role, "role", "", "")
 	cmd.fs.StringVar(&credential, "credential", "", "")
@@ -126,6 +130,7 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	cmd.fs.StringVar(&reason, "reason", "", "")
 	cmd.fs.BoolVar(&noWait, "no-wait", false, "")
 	cmd.fs.Var(&namespaces, "namespace", "")
+	cmd.fs.Var(&secrets, "secret", "")
 	cmd.fs.Var(&fqdns, "fqdn", "")
 	cmd.fs.Var(&cidrs, "cidr", "")
 	cmd.fs.Var(&endpoints, "endpoint", "")
@@ -137,7 +142,7 @@ func (a *app) grantRequest(ctx context.Context, args []string) error {
 	if len(pos) > 0 {
 		return usageError("grant request takes flags, not arguments; agent-run help grant")
 	}
-	req, err := grantRequestBody(typ, role, credential, ttl, reason, namespaces, fqdns, cidrs, endpoints, ports)
+	req, err := grantRequestBody(typ, role, credential, ttl, reason, namespaces, secrets, fqdns, cidrs, endpoints, ports)
 	if err != nil {
 		return err
 	}
@@ -212,11 +217,14 @@ func (a *app) finishGrantRequest(status int, out apiv1.Grant, format string) err
 	return a.printGrant(out)
 }
 
-func grantRequestBody(typ, role, credential, ttl, reason string, namespaces, fqdns, cidrs, endpoints, ports []string) (apiv1.CreateGrantRequest, error) {
+func grantRequestBody(typ, role, credential, ttl, reason string, namespaces, secrets, fqdns, cidrs, endpoints, ports []string) (apiv1.CreateGrantRequest, error) {
 	switch typ {
 	case apiv1.GrantTypeKube, apiv1.GrantTypeEgress, apiv1.GrantTypeCredential, apiv1.GrantTypeBreakglass:
 	default:
 		return apiv1.CreateGrantRequest{}, usageError("grant request: --type is kube, egress, credential or breakglass, not %q", typ)
+	}
+	if err := validateGrantSecretNames(typ, role, secrets); err != nil {
+		return apiv1.CreateGrantRequest{}, err
 	}
 	if strings.TrimSpace(reason) == "" {
 		return apiv1.CreateGrantRequest{}, usageError("grant request: --reason is required; Tom reads it on the approval page")
@@ -238,9 +246,76 @@ func grantRequestBody(typ, role, credential, ttl, reason string, namespaces, fqd
 		parsedPorts = append(parsedPorts, p)
 	}
 	return apiv1.CreateGrantRequest{
-		Type: typ, Role: role, Namespaces: namespaces, FQDNs: fqdns, CIDRs: cidrs,
+		Type: typ, Role: role, Namespaces: namespaces, Secrets: secrets, FQDNs: fqdns, CIDRs: cidrs,
 		Endpoints: eps, Ports: parsedPorts, Credential: credential, TTL: ttl, Reason: reason,
 	}, nil
+}
+
+// namespaceOperatorRole is the only role that may name Secrets (DESIGN-042 5.1).
+const namespaceOperatorRole = "dev-env-grant-namespace-operator"
+
+const (
+	maxGrantSecrets = 16
+	maxDNS1123Name  = 63
+)
+
+// validateGrantSecretNames applies the server bounds on the client. An empty
+// list is the ordinary request. Any name with another type or role is a usage
+// error, so nothing is sent. Names are DNS-1123 subdomains of at most 63
+// characters, at most 16, none repeated. The values of those Secrets are never
+// read or sent.
+func validateGrantSecretNames(typ, role string, secrets []string) error {
+	if len(secrets) == 0 {
+		return nil
+	}
+	if typ != apiv1.GrantTypeKube || role != namespaceOperatorRole {
+		return usageError("secrets are only for --type kube --role %s", namespaceOperatorRole)
+	}
+	if len(secrets) > maxGrantSecrets {
+		return usageError("at most %d secret names", maxGrantSecrets)
+	}
+	seen := make(map[string]struct{}, len(secrets))
+	for _, name := range secrets {
+		if !validDNS1123Name(name) {
+			return usageError("secret name %q is not a DNS-1123 name of at most %d characters", name, maxDNS1123Name)
+		}
+		if _, ok := seen[name]; ok {
+			return usageError("secret name %q is repeated", name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// validDNS1123Name reports a DNS-1123 subdomain of at most 63 characters:
+// lowercase letters, digits, '-' and '.', each label starting and ending with
+// a letter or digit.
+func validDNS1123Name(name string) bool {
+	if len(name) == 0 || len(name) > maxDNS1123Name {
+		return false
+	}
+	labelStart := true
+	last := byte(0)
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z' || c >= '0' && c <= '9':
+			labelStart = false
+		case c == '-':
+			if labelStart {
+				return false
+			}
+		case c == '.':
+			if labelStart || last == '-' {
+				return false
+			}
+			labelStart = true
+		default:
+			return false
+		}
+		last = c
+	}
+	return !labelStart && last != '-'
 }
 
 func parseGrantEndpoint(raw string) (apiv1.GrantEndpoint, error) {
@@ -484,6 +559,9 @@ func (a *app) printGrant(out apiv1.Grant) error {
 	}
 	a.outf("name: %s\nphase: %s\ntype: %s\nsession: %s\nttl: %s\nexpires: %s\nreason: %s\n",
 		out.Name, out.Phase, out.Type, firstOf(out.Session, "-"), out.TTL, expires, out.Reason)
+	if len(out.Secrets) > 0 {
+		a.outf("secrets: %s\n", strings.Join(out.Secrets, ", "))
+	}
 	if out.Message != "" {
 		a.outf("message: %s\n", out.Message)
 	}

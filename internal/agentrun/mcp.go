@@ -181,9 +181,14 @@ type accessToolArgs struct {
 	Ports      []apiv1.GrantPort     `json:"ports"`
 	Credential string                `json:"credential"`
 	TTL        string                `json:"ttl"`
+	Secrets    []string              `json:"secrets"`
 	Session    string                `json:"session"`
 	Phase      string                `json:"phase"`
 	Mine       bool                  `json:"mine"`
+	GrantUID   string                `json:"grantUID"`
+	Digest     string                `json:"digest"`
+	Approve    bool                  `json:"approve"`
+	Ref        string                `json:"ref"`
 }
 
 func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args accessToolArgs) (string, error) {
@@ -240,6 +245,16 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 		}
 		text, err := mcpJSON(out)
 		return noticeFor(text, out), err
+	case "decide_grant":
+		if err := validateGrantDecision(args.Name, args.GrantUID, args.Digest, args.TTL, args.Ref, args.Reason); err != nil {
+			return "", err
+		}
+		out, err := a.postGrantDecision(ctx, c, args.Name, grantDecisionRequest(args.GrantUID, args.Digest, args.TTL, args.Ref, args.Reason, args.Approve))
+		if err != nil {
+			return "", err
+		}
+		text, err := mcpJSON(out)
+		return noticeFor(text, out), err
 	default:
 		return "", usageError("unknown tool %q", name)
 	}
@@ -250,6 +265,9 @@ func accessRequest(args accessToolArgs) (apiv1.CreateGrantRequest, error) {
 	case apiv1.GrantTypeKube, apiv1.GrantTypeEgress, apiv1.GrantTypeCredential, apiv1.GrantTypeBreakglass:
 	default:
 		return apiv1.CreateGrantRequest{}, usageError("type is kube, egress, credential or breakglass, not %q", args.Type)
+	}
+	if err := validateGrantSecretNames(args.Type, args.Role, args.Secrets); err != nil {
+		return apiv1.CreateGrantRequest{}, err
 	}
 	if strings.TrimSpace(args.Reason) == "" {
 		return apiv1.CreateGrantRequest{}, usageError("reason is required; Tom reads it on the approval page")
@@ -266,7 +284,7 @@ func accessRequest(args accessToolArgs) (apiv1.CreateGrantRequest, error) {
 		args.Ports[i].Protocol = strings.ToUpper(p.Protocol)
 	}
 	return apiv1.CreateGrantRequest{
-		Type: args.Type, Role: args.Role, Namespaces: args.Namespaces, FQDNs: args.FQDNs,
+		Type: args.Type, Role: args.Role, Namespaces: args.Namespaces, Secrets: args.Secrets, FQDNs: args.FQDNs,
 		CIDRs: args.CIDRs, Endpoints: args.Endpoints, Ports: args.Ports,
 		Credential: args.Credential, TTL: args.TTL, Reason: args.Reason,
 	}, nil
@@ -290,6 +308,12 @@ func accessTools() []map[string]any {
 					"ports":      map[string]any{"type": "array"},
 					"credential": map[string]any{"type": "string"},
 					"ttl":        map[string]any{"type": "string"},
+					"secrets": map[string]any{
+						"type":        "array",
+						"maxItems":    maxGrantSecrets,
+						"description": "Secret names for role dev-env-grant-namespace-operator only. DNS-1123 names, at most 16. Names only; never values.",
+						"items":       map[string]any{"type": "string", "maxLength": maxDNS1123Name},
+					},
 				},
 				"required": []string{"type", "reason"},
 			},
@@ -314,6 +338,23 @@ func accessTools() []map[string]any {
 				"type":       "object",
 				"properties": map[string]any{"name": map[string]any{"type": "string"}},
 				"required":   []string{"name"},
+			},
+		},
+		{
+			"name":        "decide_grant",
+			"description": "Record an allowlisted delegate's decision on another agent's pending grant. For delegates only: the caller cannot decide its own or an ancestor's request. digest is Grant.ScopeDigest. A delegate decision is not a human decision. approve false denies. HTTP 202 means the decision was accepted, not that the grant is Active. This does not install a grant.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":     map[string]any{"type": "string"},
+					"grantUID": map[string]any{"type": "string"},
+					"digest":   map[string]any{"type": "string"},
+					"approve":  map[string]any{"type": "boolean"},
+					"ttl":      map[string]any{"type": "string"},
+					"ref":      map[string]any{"type": "string"},
+					"reason":   map[string]any{"type": "string"},
+				},
+				"required": []string{"name", "grantUID", "digest", "ref"},
 			},
 		},
 	}
