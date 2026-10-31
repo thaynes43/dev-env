@@ -23,13 +23,13 @@ const syntheticV1Order = `{"source":"responder","reason":"PRIVATE-ORDER-TEXT","r
 
 func TestV1OrdersRealShape(t *testing.T) {
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	data := map[string]string{"rem-responder-0123abcd": syntheticV1Order, "esc-responder-0123abcd": syntheticV1Order, "esc-rem-0123abcd": syntheticV1Order, "wo-example": `{"created":1793358000,"status":"done"}`, "digest.last": `{"last_flush":"1793358060"}`}
+	data := map[string]string{"rem-responder-0123abcd": syntheticV1Order, "esc-responder-0123abcd": syntheticV1Order, "esc-rem-0123abcd": syntheticV1Order, "esc-rem-watchdog-0123abcd": syntheticV1Order, "wo-example": `{"created":1793358000,"status":"done"}`, "digest.last": `{"last_flush":"1793358060"}`}
 	source, err := ParseV1ResponderOrders(v1Fixture(t, data), at)
 	if err != nil {
 		t.Fatal(err)
 	}
 	obs := source.Observations()
-	if len(obs) != 3 {
+	if len(obs) != 4 || obs["esc-rem-watchdog-0123abcd"].Order == nil || source.IgnoredKeys() != 0 {
 		t.Fatal(obs)
 	}
 	for key, o := range obs {
@@ -133,7 +133,7 @@ func TestV1OrdersBoundsAndEnvelope(t *testing.T) {
 		"duplicate":       []byte(strings.TrimSuffix(emptyCM, "}") + `,"kind":"ConfigMap"}`),
 		"trailing":        []byte(emptyCM + `{}`),
 		"bad unrelated":   v1Fixture(t, map[string]string{"digest.last": "{"}),
-		"bad key":         v1Fixture(t, map[string]string{"rem-responder-nothex": syntheticV1Order}),
+		"bad key":         v1Fixture(t, map[string]string{"rem-responder-0123abcd/x": syntheticV1Order}),
 		"illegal key":     v1Fixture(t, map[string]string{"illegal/key": `{}`}),
 		"bad version":     []byte(strings.Replace(emptyCM, `"resourceVersion":"12345"`, `"resourceVersion":12345`, 1)),
 		"array bound":     v1Fixture(t, map[string]string{"digest.last": `{"x":[` + strings.Repeat(`0,`, V1OrdersMaxKeys) + `0]}`}),
@@ -209,6 +209,81 @@ func TestV1OrdersRecordConditionFailsClosed(t *testing.T) {
 		r := ProjectResponse(context.Background(), id, sources, at)
 		if r.OrderCondition != want || r.Order.Key != "Unknown" || r.State != "Unknown" || len(claims.lookups) != 0 {
 			t.Fatal(r)
+		}
+	}
+}
+
+// A key under a responder prefix that is not a known producer key is counted
+// and ignored; it must never turn the rest of the store Invalid.
+func TestV1OrdersUnknownResponderKeyIgnored(t *testing.T) {
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	data := map[string]string{
+		"rem-responder-0123abcd": syntheticV1Order,
+		"rem-responder-zzzzzzzz": syntheticV1Order, "esc-rem-future-0123abcd": syntheticV1Order,
+		"esc-responder-0123ABCD": syntheticV1Order, "esc-rem-watchdog-0123abc": syntheticV1Order,
+	}
+	source, err := ParseV1ResponderOrders(v1Fixture(t, data), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := source.Observations()
+	if len(obs) != 1 || obs["rem-responder-0123abcd"].Order == nil || source.IgnoredKeys() != 4 {
+		t.Fatal(len(obs), source.IgnoredKeys())
+	}
+	r := ProjectResponse(context.Background(), AlertIdentity{"synthetic", "2026-10-30T11:00:00Z"}, ResponseSources{Orders: source, MaxAge: 5 * time.Minute}, at)
+	if r.OrderCondition != "Unjoined" {
+		t.Fatal(r)
+	}
+	// Only unknown keys leave an observed store with no responder orders.
+	only, err := ParseV1ResponderOrders(v1Fixture(t, map[string]string{"esc-rem-future-0123abcd": syntheticV1Order}), at)
+	if err != nil || len(only.Observations()) != 0 || only.IgnoredKeys() != 1 {
+		t.Fatal(err)
+	}
+	// An ignored value must still be bounded JSON.
+	if _, err := ParseV1ResponderOrders(v1Fixture(t, map[string]string{"esc-rem-future-0123abcd": "{"}), at); err == nil {
+		t.Fatal("accepted malformed ignored value")
+	}
+}
+
+// A malformed file reports Invalid however old its capture time is.
+func TestV1OrdersMalformedAndStaleIsInvalid(t *testing.T) {
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	bad, err := ParseV1ResponderOrders([]byte(`broken`), at.Add(-time.Hour))
+	if err == nil {
+		t.Fatal("accepted malformed file")
+	}
+	id := AlertIdentity{"synthetic", "2026-10-30T11:00:00Z"}
+	r := ProjectResponse(context.Background(), id, ResponseSources{Orders: bad, MaxAge: 5 * time.Minute}, at)
+	if r.OrderCondition != "Invalid" || r.State != "Unknown" {
+		t.Fatal(r)
+	}
+	good, _ := ParseV1ResponderOrders(v1Fixture(t, map[string]string{"rem-responder-0123abcd": syntheticV1Order}), at)
+	if r := ProjectResponse(context.Background(), id, ResponseSources{Orders: good, MaxAge: 5 * time.Minute}, at.Add(time.Hour)); r.OrderCondition != "Stale" {
+		t.Fatal(r)
+	}
+}
+
+// An order written after the capture instant (between a read and the capture,
+// or by a producer clock ahead of the caller) is tolerated up to a fixed skew.
+func TestV1OrdersClockSkew(t *testing.T) {
+	created := time.Date(2026, 10, 30, 11, 0, 0, 0, time.UTC)
+	capture := created.Add(time.Hour)
+	order := func(updated time.Time) string {
+		return fmt.Sprintf(`{"status":"done","created":"%d","updated":"%d"}`, created.Unix(), updated.Unix())
+	}
+	for _, tc := range []struct {
+		skew time.Duration
+		ok   bool
+	}{{0, true}, {30 * time.Second, true}, {31 * time.Second, false}} {
+		s, err := ParseV1ResponderOrders(v1Fixture(t, map[string]string{"rem-responder-0123abcd": order(capture.Add(tc.skew))}), capture)
+		if (err == nil) != tc.ok {
+			t.Fatal(tc.skew, err)
+		}
+		if tc.ok {
+			r := ProjectResponse(context.Background(), AlertIdentity{"synthetic", "2026-10-30T10:00:00Z"}, ResponseSources{Orders: s, MaxAge: 5 * time.Minute}, capture)
+			if r.OrderCondition != "Unjoined" {
+				t.Fatal(tc.skew, r)
+			}
 		}
 	}
 }

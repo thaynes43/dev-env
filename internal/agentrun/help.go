@@ -787,7 +787,8 @@ history. Source and observation time are caller assertions; disposition and
 recurrence are Unknown. Unreadable or invalid input is Unavailable. It makes no
 network requests. Optional --orders-from-file CM.json requires
 --orders-observed-at RFC3339 (caller-asserted capture time, five-minute maximum
-age). V1 orders have no explicit alert identity and remain Unjoined. The portal
+age; take it after the read). A malformed file or a future capture time is Invalid
+and exits 1. V1 orders have no explicit alert identity and remain Unjoined. The portal
 and operator readers stay Unconfigured. See docs/alertmanager-pages-poc.md for
 limits and details.
 `,

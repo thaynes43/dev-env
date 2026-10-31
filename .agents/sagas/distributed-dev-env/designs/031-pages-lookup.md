@@ -267,7 +267,11 @@ The read-only source reference is haynes-ops at
 `.agents/runbooks/alert-responder.md`, `.agents/runbooks/agentic-remediation.md`,
 `kubernetes/main/apps/upgrade-agent/health-gate/app/resources/remediate.sh`, and
 `dev-env-ops/app/resources/{work-order-watch,order-status}.sh` under that same
-`upgrade-agent` directory. No runtime store was read.
+`upgrade-agent` directory. No runtime store was read. Fix round (2026-10-31) also
+read `alert-responder/app/resources/respond.sh` at haynes-ops
+`a036fda0c24b146c52ee199d1f9924d29006523e`: its `rem_watchdog` marks a stale
+`rem-*` order `failed` (setting `note` and `updated`) and calls `escalate.sh
+rem-watchdog`, which files `esc-rem-watchdog-<sig8>`.
 
 V1 uses two different keys. The diagnosis incident hash is the first 12 hex
 characters of SHA-256 of `fingerprint|startsAt`. The work-order ConfigMap
@@ -433,12 +437,14 @@ attribution. `Observations` returns this safe subset keyed by the actual data
 key; no signature, labels, free text or derived key establishes an association.
 The batch `ResponderOrderSource` reports Unjoined for a nonempty responder store,
 Empty for an observed store with no responder records, Invalid for malformed
-input and Unavailable for a failed file read. Observation freshness remains a
-separate Stale check. Existing claim mismatch checks remain unchanged.
+input and Unavailable for a failed file read. Invalid is decided before freshness,
+so a malformed file reads Invalid however old its capture time. Otherwise
+observation freshness remains a separate Stale check. Existing claim mismatch checks remain unchanged.
 
 The producer scripts were inspected at haynes-ops main
 `a036fda0c24b146c52ee199d1f9924d29006523e`: health-gate's `remediate.sh` and
-`escalate.sh`, and dev-env-ops' `work-order-watch.sh` and `order-status.sh`.
+`escalate.sh`, the alert-responder's `respond.sh`, and dev-env-ops'
+`work-order-watch.sh` and `order-status.sh`.
 One read-only live ConfigMap shape read on 2026-10-31 confirmed single-encoded
 JSON object strings, responder entries mixed with unrelated work orders and a
 digest bookkeeping entry. Neither those producers nor the observed JSON has
@@ -463,6 +469,15 @@ case aliases of consumed fields, non-string data, invalid status/times and
 future order event times are refused without echoing input. Reused keys and
 refires cannot inherit evidence: without a producer binding every alert remains
 Unknown, even beside a terminal order.
+
+Known responder keys are `rem-responder-<sig8>`, `esc-responder-<sig8>`,
+`esc-rem-<sig8>` and `esc-rem-watchdog-<sig8>` (respond.sh's watchdog escalation).
+Any other key under a responder prefix is unrelated: it is counted
+(`IgnoredKeys`) and ignored, never failing the store, though its value must still
+be bounded JSON. An order `updated` may be up to 30 seconds after the capture
+time (producer clock skew, or a write between the read and the capture); the
+documented recipe takes the capture time after the read. A future capture time
+is Invalid and the CLI exits 1, like a malformed file.
 
 Exact remaining dependencies:
 

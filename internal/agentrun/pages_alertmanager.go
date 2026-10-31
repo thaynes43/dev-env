@@ -21,8 +21,9 @@ Reads a caller-supplied Alertmanager API v2 alert array or snapshot envelope
 from a file or stdin. Source and observation time are caller assertions;
 disposition and recurrence are Unknown. Invalid input is Unavailable. No
 network requests are made. Optional V1 orders require a caller-asserted capture
-time; observations older than five minutes are Stale. V1 has no explicit alert
-identity, so current orders remain Unjoined. See docs/alertmanager-pages-poc.md.
+time, taken after the read; observations older than five minutes are Stale. A
+malformed orders file or a future capture time is Invalid and exits 1. V1 has no
+explicit alert identity, so current orders remain Unjoined. See docs/alertmanager-pages-poc.md.
 `
 
 func isAlertmanagerSource(args []string) bool {
@@ -108,7 +109,12 @@ func (a *app) pagesAlertmanager(ctx context.Context, args []string) error {
 			return usageError("pages alertmanager: --orders-from-file needs a file and --orders-observed-at RFC3339 capture time")
 		}
 	}
+	now := a.now()
 	sources, ordersErr := readPagesOrderSource(ordersFrom, ordersAt)
+	if ordersErr == nil && ordersFrom != "" && ordersAt.After(now) {
+		// The projection reports Invalid; fail the exit like a malformed file.
+		ordersErr = errors.New("V1 work-order capture time is in the future")
+	}
 	snapshot := pages.UnavailableAlertmanager()
 	var r io.Reader
 	if from == "-" {
@@ -137,7 +143,7 @@ func (a *app) pagesAlertmanager(ctx context.Context, args []string) error {
 		for _, alert := range snapshot.Alerts {
 			identities = append(identities, pages.AlertIdentity{Fingerprint: alert.Fingerprint, StartsAt: alert.StartsAt})
 		}
-		responses := pages.ProjectResponses(ctx, identities, sources, a.now())
+		responses := pages.ProjectResponses(ctx, identities, sources, now)
 		for i, identity := range identities {
 			response := responses[identity]
 			snapshot.Alerts[i].Response = &response

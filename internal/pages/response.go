@@ -224,6 +224,11 @@ func projectResponse(identity AlertIdentity, sources ResponseSources, at time.Ti
 		return out
 	}
 	out.OrderCondition = observationCondition(order.SourceObservation, orderErr, at, sources.MaxAge)
+	if out.OrderCondition == "Stale" && orderErr == nil && order.RecordCondition == "Invalid" {
+		// A malformed snapshot is Invalid however old it is; fall through to the
+		// record check below.
+		out.OrderCondition = "Available"
+	}
 	if out.OrderCondition != "Available" {
 		return out
 	}
@@ -244,7 +249,7 @@ func projectResponse(identity AlertIdentity, sources ResponseSources, at time.Ti
 	o := *order.Order
 	created, createdOK := orderTime(o.Order.Created)
 	updated, updatedOK := orderTime(o.Updated)
-	if !validOrderKey(o.Order.Key) || !validOrderStatus(o.Status) || !createdOK || !updatedOK || updated.Before(created) || updated.After(order.ObservedAt) {
+	if !validOrderKey(o.Order.Key) || !validOrderStatus(o.Status) || !createdOK || !updatedOK || updated.Before(created) || updated.After(order.ObservedAt.Add(orderClockSkew)) {
 		out.OrderCondition = "Invalid"
 		return out
 	}
@@ -367,12 +372,16 @@ func responseText(value string) bool {
 	return value != timeUnknown && validToken(value, 512) && utf8.ValidString(value) && RedactText(value) == value && !strings.Contains(value, "://")
 }
 
+// orderClockSkew is the fixed tolerance for a producer clock ahead of the
+// caller's capture time, or an order written between a read and the capture.
+const orderClockSkew = 30 * time.Second
+
 func validOrderKey(key string) bool {
 	return responderOrderKey.MatchString(key)
 }
 
 var (
-	responderOrderKey = regexp.MustCompile(`^(rem-responder|esc-responder|esc-rem)-[a-f0-9]{8}$`)
+	responderOrderKey = regexp.MustCompile(`^(rem-responder|esc-responder|esc-rem|esc-rem-watchdog)-[a-f0-9]{8}$`)
 	claimNamespace    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	claimName         = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
 	claimUID          = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)

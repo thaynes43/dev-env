@@ -99,11 +99,13 @@ func TestAlertmanagerCLIOrdersSnapshot(t *testing.T) {
 	}{
 		{orders, "2026-10-30T11:50:00Z", "Stale", ExitOK},
 		{orders, "2026-10-30T11:55:00Z", "Unjoined", ExitOK},
-		{orders, "2026-10-30T12:01:00Z", "Invalid", ExitOK},
+		{orders, "2026-10-30T12:01:00Z", "Invalid", ExitFailed},
+		{h.write("watchdog-orders.json", `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"upgrade-work-orders","namespace":"upgrade-agent"},"data":{"esc-rem-watchdog-0123abcd":"{\"status\":\"pending\",\"created\":\"1793358000\",\"updated\":\"1793358000\"}","esc-rem-future-0123abcd":"{}"}}`), "2026-10-30T11:55:00Z", "Unjoined", ExitOK},
 		{h.write("empty-orders.json", `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"upgrade-work-orders","namespace":"upgrade-agent"},"data":{}}`), "2026-10-30T12:00:00Z", "Empty", ExitOK},
 		{h.write("huge-orders.json", strings.Repeat(" ", pages.V1OrdersMaxBytes+1)), "2026-10-30T12:00:00Z", "Invalid", ExitFailed},
 		{orders + "-missing", "2026-10-30T12:00:00Z", "Unavailable", ExitFailed},
 		{h.write("invalid-orders.json", `broken`), "2026-10-30T12:00:00Z", "Invalid", ExitFailed},
+		{h.write("invalid-stale-orders.json", `broken`), "2026-10-30T11:00:00Z", "Invalid", ExitFailed},
 	} {
 		h.env.Stdin = strings.NewReader(input)
 		h.mustRun(tc.code, "pages", "list", "--source", "alertmanager", "--orders-from-file", tc.file, "--orders-observed-at", tc.stamp, "-o", "json")

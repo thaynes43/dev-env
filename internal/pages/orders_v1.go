@@ -30,23 +30,26 @@ type V1ResponderOrders struct {
 	observation SourceObservation
 	orders      map[string]ResponderOrder
 	invalid     bool
+	ignored     int
 }
 
 // ParseV1ResponderOrders reads kubectl's ConfigMap JSON, with an explicit caller
 // assertion of capture time. On failure it returns an Invalid source and a safe
 // error, never a partially usable snapshot. No clock, file or network is read.
 func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrders, error) {
+	// A failed parse keeps Available with the caller's capture time; projection
+	// checks the record's Invalid condition before freshness.
 	s := &V1ResponderOrders{observation: SourceObservation{Available: true, Source: v1OrdersSource, ObservedAt: observedAt}, invalid: true}
 	fail := func() (*V1ResponderOrders, error) { return s, errV1Orders }
 	if len(raw) > V1OrdersMaxBytes || !knownResponseTime(observedAt) {
 		return fail()
 	}
 	top, err := v1OrderObject(raw)
-	if err != nil || !v1ExactFields(top, "apiVersion", "kind", "metadata", "data", "binaryData") || top["apiVersion"] != "v1" || top["kind"] != "ConfigMap" {
+	if err != nil || !v1RejectCaseAliases(top, "apiVersion", "kind", "metadata", "data", "binaryData") || top["apiVersion"] != "v1" || top["kind"] != "ConfigMap" {
 		return fail()
 	}
 	meta, ok := top["metadata"].(map[string]any)
-	if !ok || !v1ExactFields(meta, "name", "namespace", "resourceVersion") || meta["name"] != "upgrade-work-orders" || meta["namespace"] != "upgrade-agent" {
+	if !ok || !v1RejectCaseAliases(meta, "name", "namespace", "resourceVersion") || meta["name"] != "upgrade-work-orders" || meta["namespace"] != "upgrade-agent" {
 		return fail()
 	}
 	if rv, present := meta["resourceVersion"]; present {
@@ -84,15 +87,19 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 		}
 		// The store also contains other work lanes and digest bookkeeping. Validate
 		// their JSON shape but do not apply responder status/timestamp semantics.
+		// A key under a responder prefix that is not a known responder order key
+		// (for example a future producer's key) is unrelated: it is counted, never
+		// trusted, and cannot invalidate the other orders.
 		if !validOrderKey(key) {
 			for _, prefix := range []string{"rem-responder-", "esc-responder-", "esc-rem-"} {
 				if strings.HasPrefix(key, prefix) {
-					return fail()
+					s.ignored++
+					break
 				}
 			}
 			continue
 		}
-		if !v1ExactFields(entry, "status", "created", "updated") {
+		if !v1RejectCaseAliases(entry, "status", "created", "updated") {
 			return fail()
 		}
 		status, statusOK := entry["status"].(string)
@@ -100,7 +107,7 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 		updated, updatedOK := entry["updated"].(string)
 		ct, cok := orderTime(created)
 		ut, uok := orderTime(updated)
-		if !statusOK || !createdOK || !updatedOK || !validOrderStatus(status) || !cok || !uok || ut.Before(ct) || ut.After(observedAt) {
+		if !statusOK || !createdOK || !updatedOK || !validOrderStatus(status) || !cok || !uok || ut.Before(ct) || ut.After(observedAt.Add(orderClockSkew)) {
 			return fail()
 		}
 		orders[key] = ResponderOrder{Order: OrderReference{Key: key, Created: created}, Status: status, Updated: updated}
@@ -108,6 +115,10 @@ func ParseV1ResponderOrders(raw []byte, observedAt time.Time) (*V1ResponderOrder
 	s.orders, s.invalid = orders, false
 	return s, nil
 }
+
+// IgnoredKeys counts data keys under a responder prefix that matched no known
+// responder order key grammar. They contribute nothing to the snapshot.
+func (s *V1ResponderOrders) IgnoredKeys() int { return s.ignored }
 
 // Observations returns independent copies keyed by the actual ConfigMap data
 // key. An identity is intentionally absent; these are not alert associations.
@@ -144,8 +155,9 @@ func (s *V1ResponderOrders) FindOrders(ctx context.Context, identities []AlertId
 }
 
 // Consumed fields are case-sensitive. Unknown fields are bounded and ignored;
-// aliases must not be silently accepted by encoding/json's struct matching.
-func v1ExactFields(obj map[string]any, fields ...string) bool {
+// this only rejects case aliases of the consumed names, which must not be
+// silently accepted by encoding/json's struct matching.
+func v1RejectCaseAliases(obj map[string]any, fields ...string) bool {
 	for key := range obj {
 		for _, field := range fields {
 			if strings.EqualFold(key, field) && key != field {

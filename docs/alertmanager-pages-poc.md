@@ -17,9 +17,10 @@ The default-off portal route `/portal/projects/dev-env/environments/internal/pag
 Supply a separate snapshot with existing ConfigMap read access:
 
 ```sh
-# Record the actual capture time; preserve it when reusing this file.
-orders_observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# Take the capture time AFTER the read, so no order can be newer than it.
+# Preserve it when reusing this file.
 kubectl get cm -n upgrade-agent upgrade-work-orders -o json > orders.json
+orders_observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 agent-run pages list --source alertmanager --from-file snapshot.json \
   --orders-from-file orders.json --orders-observed-at "$orders_observed_at" -o json
 ```
@@ -27,15 +28,21 @@ agent-run pages list --source alertmanager --from-file snapshot.json \
 `pages show FINGERPRINT` accepts the same flags. Alert input can still use stdin;
 the orders flag requires a separate file. Capture time is a caller assertion,
 not verified provenance. Never replace an old capture time with the time of
-reading the file. The CLI evaluates freshness against its clock with a five-minute
+reading the file. An order `updated` up to 30 seconds after the capture time is
+accepted (producer clock skew); anything later makes the whole file Invalid.
+The CLI evaluates freshness against its clock with a five-minute
 maximum age. It makes no network request. Omit the orders flag to leave the
 response source Unconfigured.
 
 Each alert carries the shared response projection in JSON, text and HTML.
 The production V1 source retains only actual responder data keys and status,
 created/updated Unix-second strings. The source includes ConfigMap
-resourceVersion when present. Unrelated work lanes and digest bookkeeping do
-not supply responder evidence. No order reason, note, diagnosis, alert context
+resourceVersion when present. The known responder keys are `rem-responder-<sig8>`, `esc-responder-<sig8>`,
+`esc-rem-<sig8>` and the stale-lane watchdog's `esc-rem-watchdog-<sig8>`. Unrelated
+work lanes and digest bookkeeping do not supply responder evidence. Any other key
+under a responder prefix is counted as ignored (`IgnoredKeys`), never trusted,
+and cannot invalidate the other orders; its value must still be a bounded JSON
+object. No order reason, note, diagnosis, alert context
 or signature reaches the output. The producer scripts and one read-only live
 shape inspection found no explicit alert fingerprint/start identity or incident
 hash. All current responder records therefore remain Unjoined; a valid empty
@@ -43,9 +50,12 @@ responder store is Empty. Neither a reused key nor a refire inherits an old
 attempt. Lookalike identity fields are ignored pending an actual producer
 contract. Order/owner/state remain literal Unknown without verified joins.
 
-Missing/unreadable order files yield Unavailable; malformed files yield Invalid.
-Both return a failure exit while keeping the alert snapshot. Stale capture time
-is Stale, future/invalid observation time is Invalid; none means resolution.
+Missing/unreadable order files yield Unavailable; malformed files yield Invalid,
+however old their capture time (Invalid is decided before freshness). Both return
+a failure exit while keeping the alert snapshot. A capture time later than the
+CLI clock is Invalid and also returns the failure exit (not a usage error: the
+flag syntax is valid). An old capture time is Stale and exits 0. None means
+resolution.
 Syntax errors in flags return a usage error. Limits: 2 MiB total ConfigMap JSON,
 1,000 data keys, 64 KiB per encoded order/string, 16 nesting levels and 1,000
 members/elements per object/array. Duplicate JSON members, case aliases of
