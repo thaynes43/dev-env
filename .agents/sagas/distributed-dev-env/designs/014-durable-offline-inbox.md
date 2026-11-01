@@ -376,7 +376,7 @@ The receipt retains message name/UID, acknowledgement name/UID, recipient and
 authenticated actor as supplied by the API. The client checks the requested
 project/message and required receipt identifiers before printing success.
 A hidden or missing record is not proof that a message is unacknowledged:
-404 can also hide scope. No successful acknowledgement receipt was established.
+404 can also hide scope. Without a readable receipt, acknowledgement status remains Unknown.
 An API read acknowledgement proves neither provider consumption nor approval.
 
 This connected source read adds no API route, reader eligibility, ACL, body
