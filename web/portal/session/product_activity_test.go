@@ -1,6 +1,7 @@
 package session
 
 import (
+	stdhtml "html"
 	"math/big"
 	"regexp"
 	"strconv"
@@ -770,7 +771,7 @@ func TestUsageChartsUseExactSourceAmounts(t *testing.T) {
 	html := string(body)
 	chart, fold := strings.Index(html, `class="usage-chart"`), strings.Index(html, `<details class="usage-fold"`)
 	for _, want := range []string{"tiny: 0.0000001 USD", sumInput + " tokens", "Input follows each provider's own convention", "Cache reads are never added again"} {
-		if !strings.Contains(html, want) {
+		if !strings.Contains(html, stdhtml.EscapeString(want)) {
 			t.Errorf("rendered chart lacks %s", want)
 		}
 	}

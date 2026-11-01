@@ -340,8 +340,8 @@ func allowancePreview(state string) ([]portal.ProductAllowance, error) {
 		item := providerallowance.ReadItem{
 			Observation: providerallowance.Observation{Schema: providerallowance.SchemaObservation, ObservationID: "synthetic-" + provider, ProducerRef: "synthetic-preview", ProducerIncarnation: "fixture-1", Sequence: 1,
 				Provider: provider, Source: providerallowance.Source{Kind: providerallowance.SourceNativeRPC, Version: "synthetic-preview", CapabilityRef: "synthetic-only"},
-				Scope: providerallowance.Scope{BindingState: providerallowance.BindingVerified}, CapturedAt: doc.ServedAt, ProviderObservedAt: text("2026-10-29T13:59:00Z"), Availability: providerallowance.AvailabilityAvailable, Completeness: providerallowance.CompletenessComplete},
-			ReceivedAt: doc.ServedAt, Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationSourceFields}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingVerified},
+				Scope: providerallowance.Scope{BindingState: providerallowance.BindingVerified, AccountRef: text("synthetic-" + provider + "-account"), WorkspaceRef: text("synthetic-workspace")}, CapturedAt: doc.ServedAt, ProviderObservedAt: text("2026-10-29T13:59:00Z"), Availability: providerallowance.AvailabilityAvailable, Completeness: providerallowance.CompletenessComplete},
+			ReceivedAt: doc.ServedAt, Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationSourceFields}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingVerified, AccountRef: text("synthetic-" + provider + "-account"), WorkspaceRef: text("synthetic-workspace")},
 			Freshness: providerallowance.Freshness{State: providerallowance.FreshFresh, AsOf: doc.ServedAt, Basis: providerallowance.BasisProvider},
 		}
 		for i, window := range []string{"primary", "secondary", "additional"} {

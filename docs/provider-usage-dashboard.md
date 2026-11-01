@@ -20,8 +20,8 @@ unknown, not zero. A reported zero is the exact decimal `0`.
   the positive rational, so a tiny estimate is not drawn as zero.
 - Cache read and cache create stay in the table. They are not chart metrics,
   and they are never added to input. Input follows the provider's own
-  convention. Claude reports cache reads apart from input. Codex input already
-  includes them. The chart says that, and it does not add cache reads again.
+  convention. The chart does not assume uniform cache inclusion across
+  providers and does not add cache reads again.
 - A sum that skipped one or more Unknown reports sets `ChartPartial`. The
   missing reports are not counted as zero. A conversation row whose result is
   Partial is also a lower bound, so its bar is partial. Conversation charts
@@ -55,3 +55,39 @@ today because it does not call the mapper. Neither state invents a Cursor quota.
 
 The optional cached reader is a separate lane. This chart path does not
 collect, fetch, or inject allowance, and it does not claim a live allowance.
+
+## Minimum production wiring still needed
+
+The cached reader is implemented, but the portal assembly does not select a
+retained source or inject a reader. This release does not establish a current
+provider account or activate collection.
+
+The smallest next engineering change is a source-specific retained observation
+selector in the existing portal assembly, with an explicitly owned trusted
+configuration. That configuration must identify the selected producer and source,
+its incarnation and binding generation, selected current account scope, and the
+invalidation rule on source/account change. AccountRef is an opaque configured
+reference, not necessarily a provider account ID. A selected current source is
+weaker evidence than a verified stable account identity; the UI must retain that
+distinction instead of merging reports across accounts.
+
+A supported meter that omits provider updatedAt needs an explicit source-specific
+freshness policy distinguishing retrieval time from provider update time. Retrieval
+must not be labelled provider update time. Likewise an absent account ID must stay
+absent; a configured current-source selection must not silently become a verified
+provider identity. The present contract/validation needs a reviewed representation
+of those semantics before an unattributed report can become a bound allowance.
+
+Use a bounded sanitized retained document, a fixed maximum age, and the existing
+providerallowance.read.v1 validator and account registry. The portal consumer should
+read only that declared artifact, without provider calls or per-request commands.
+Retention must expire stale observations and invalidate changed binding generations.
+No source selector or trusted configuration has been provided for this release.
+
+Ordinary source work can add this assembly/configuration and its tests once the
+source-specific semantics and artifact are defined. Existing authorized metadata
+may support that design. A new private provider probe, credential, read boundary,
+or held observer activation is a separate exact decision; this document grants
+none. There is no evidence that a new credential or human-only step is inherently
+required merely because a meter lacks an account ID. Raw observations and fixture
+coverage are not live acceptance.

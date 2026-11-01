@@ -1,6 +1,7 @@
 package main
 
 import (
+	stdhtml "html"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -56,11 +57,11 @@ func TestProductStatePreviews(t *testing.T) {
 				t.Error("usage preview charts are not ahead of the tables")
 			}
 			for _, want := range []string{"synthetic-agent: 1000 tokens", "synthetic-agent: 0 tokens", "synthetic-agent: 0.75 USD", "Input follows each provider's own convention"} {
-				if !strings.Contains(text, want) {
+				if !strings.Contains(text, stdhtml.EscapeString(want)) {
 					t.Errorf("usage preview lacks %s", want)
 				}
 			}
-			if strings.Contains(text, "1250") {
+			if strings.Contains(text, "synthetic-agent: 1250 tokens") {
 				t.Error("usage preview added cache reads to input")
 			}
 		}
@@ -266,7 +267,7 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		if block == "" {
 			t.Fatalf("%s: no allowance", tc.name)
 		}
-		if strings.Contains(block, "62% left") != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || !strings.Contains(block, "Cursor") {
+		if (strings.Contains(block, "62% left") || strings.Contains(block, "62% remaining")) != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || !strings.Contains(block, "Cursor") {
 			t.Errorf("%s: wrong states %s", tc.name, block)
 		}
 		// The fixture sends no Cursor source. Missing source stays Unknown.

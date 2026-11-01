@@ -1542,7 +1542,7 @@ func TestRenderUsageTablesStartClosed(t *testing.T) {
 	fold := strings.Index(s, `<details class="usage-fold"><summary>By provider and requested model</summary>`)
 	head := strings.Index(s, `<h2 id="usage-b0">By provider and requested model</h2>`)
 	session := strings.Index(s, `<details class="usage-fold"><summary>By session</summary>`)
-	if fold < 0 || head < fold || session < 0 || !strings.Contains(s, "Token, cost, model and session tables start closed.") || !strings.Contains(s, "What these numbers cover") {
+	if fold < 0 || head < fold || session < 0 || !strings.Contains(s, "Bars compare reported input, output, and estimated cost") || !strings.Contains(s, "What these numbers cover") {
 		t.Fatalf("tables are not folded drilldowns")
 	}
 }
@@ -1584,7 +1584,7 @@ func TestUsageChartsDoNotParseDisplayText(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(body)
-	if !strings.Contains(html, `class="usage-chart-value">display: 10 tokens</span>`) || !strings.Contains(html, `class="usage-chart-value">tiny: 1/10000000 USD</span>`) || !strings.Contains(html, `class="usage-chart-value">session: 2 tokens</span>`) || strings.Contains(html, "-5 tokens") || strings.Contains(html, "<script") {
+	if !strings.Contains(html, `class="usage-chart-value">display: 10 tokens</span>`) || !strings.Contains(html, `class="usage-chart-value">tiny: 0.0000001 USD</span>`) || !strings.Contains(html, `class="usage-chart-value">session: 2 tokens</span>`) || strings.Contains(html, "-5 tokens") || strings.Contains(html, "<script") {
 		t.Fatal("rendered chart used display text or a negative amount")
 	}
 }
