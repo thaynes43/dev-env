@@ -35,8 +35,11 @@ func disconnectedAllowances() []portal.ProductAllowance {
 }
 
 func mappedAllowances() []portal.ProductAllowance {
-	out := disconnectedAllowances()
-	return append(out, portal.ProductAllowance{Provider: "Cursor", Value: portal.AllowanceNotConnected})
+	out := make([]portal.ProductAllowance, len(allowanceProviders))
+	for i, provider := range allowanceProviders {
+		out[i] = portal.ProductAllowance{Provider: provider.label, Value: portal.AllowanceNotConnected}
+	}
+	return out
 }
 
 // allowanceFacts is the typed window projection. Field names match the
