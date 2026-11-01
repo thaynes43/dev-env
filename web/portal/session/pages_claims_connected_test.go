@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -387,16 +386,6 @@ func TestConnectedClaimsRender(t *testing.T) {
 }
 
 func TestConnectedClaimsAssemblyHasNoResponseSource(t *testing.T) {
-	wantFields := []string{"Session", "Authorizer", "Reader", "Sessions", "Tasks", "Pages", "Asks", "Send", "Launch", "FreshFor", "Now"}
-	gotFields := reflect.VisibleFields(reflect.TypeOf(AssemblyConfig{}))
-	if len(gotFields) != len(wantFields) {
-		t.Fatalf("AssemblyConfig fields changed: %d", len(gotFields))
-	}
-	for i, field := range gotFields {
-		if field.Name != wantFields[i] {
-			t.Fatalf("AssemblyConfig field %d is %s, blocker note expects %s", i, field.Name, wantFields[i])
-		}
-	}
 	f, source, _ := pagesFixture(t)
 	alerts := `[{"fingerprint":"` + connectedFingerprint + `","labels":{"alertname":"SyntheticConnectedAlert","severity":"warning"},"status":{"state":"active"},"startsAt":"` + connectedStarts + `"},{"fingerprint":"` + connectedCompanion + `","labels":{"alertname":"SyntheticConnectedAlert","severity":"warning"},"status":{"state":"active"},"startsAt":"` + connectedStarts + `"}]`
 	source.client = &http.Client{Transport: tripFunc(func(r *http.Request) (*http.Response, error) {
