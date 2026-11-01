@@ -198,6 +198,15 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	return pod, nil
 }
 
+// Finite reviewed executors retain their full review identity for directory and
+// ownership proofs. They are already excluded from automatic revision drains.
+func sessionTemplateRevision(s *v1alpha1.AgentSession, t *templates.Templates) (string, error) {
+	if s.Spec.ProjectCanary != nil || projectcanary.IsPilot(s) {
+		return t.ReviewRevision()
+	}
+	return t.Revision(), nil
+}
+
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with
 // `agentd hold` in place of `agentd run`, the S class's requests and limits,
 // and no agent credentials: no static token, and no profile env or envFrom. It
@@ -245,7 +254,11 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 
 	labels := sessionLabels(s, profileName)
 	maps.Copy(labels, profile.Labels)
-	labels[v1alpha1.LabelRevision] = t.Revision()
+	revision, err := sessionTemplateRevision(s, t)
+	if err != nil {
+		return nil, err
+	}
+	labels[v1alpha1.LabelRevision] = revision
 	if hold {
 		labels[v1alpha1.LabelSize] = string(v1alpha1.SizeS)
 		labels[v1alpha1.LabelHold] = "true"

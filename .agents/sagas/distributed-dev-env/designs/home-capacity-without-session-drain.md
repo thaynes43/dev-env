@@ -18,6 +18,10 @@ Canary and pilot review pins continue using the full legacy hash through
 `ReviewRevision`, including the real HOME size. Their shared validation still
 refuses capacity drift; only pod revision comparisons ignore capacity. This
 preserves existing finite review bounds rather than narrowing the freeze.
+Finite canary/pilot pods retain that full revision label as well, so generated
+executors, immutable directory records and ownership proofs agree. They already
+cannot enter the ordinary automatic revision drain. Ordinary pod labels and
+their current/outdated comparison use the capacity-independent revision.
 
 This prevents a capacity-only template update from creating a new reason to
 drain sessions. It does not suppress drains caused by other template changes or

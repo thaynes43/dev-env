@@ -1315,7 +1315,7 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 	if err := r.create(ctx, "pod", pod); err != nil {
 		return err
 	}
-	log.FromContext(ctx).Info("created the session pod", "pod", pod.Name, "revision", t.Revision(), "image", pod.Spec.Containers[0].Image)
+	log.FromContext(ctx).Info("created the session pod", "pod", pod.Name, "revision", pod.Labels[v1alpha1.LabelRevision], "image", pod.Spec.Containers[0].Image)
 	obs.pod = owned[*corev1.Pod]{obj: pod}
 	return nil
 }
@@ -1482,12 +1482,16 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 	agentPod := hasPod && !isHoldPod(pod)
 	switch {
 	case agentPod && obs.templates != nil:
-		cur := obs.templates.Revision()
+		cur, revisionErr := sessionTemplateRevision(s, obs.templates)
 		c := metav1.Condition{Type: ConditionOutdated, Status: metav1.ConditionFalse, Reason: "CurrentRevision",
 			Message: "the pod runs the current template revision " + cur, ObservedGeneration: s.Generation}
 		if st.Revision != cur {
 			c.Status, c.Reason = metav1.ConditionTrue, "OlderRevision"
 			c.Message = fmt.Sprintf("the pod runs template revision %s; the current one is %s", st.Revision, cur)
+		}
+		if revisionErr != nil {
+			c.Status, c.Reason = metav1.ConditionUnknown, "TemplatesInvalid"
+			c.Message = "the current template revision could not be calculated"
 		}
 		meta.SetStatusCondition(&st.Conditions, c)
 	case agentPod:
