@@ -607,13 +607,29 @@ callback from stdin; its provider freshness and account binding are Unknown.
 original observation and served times preserved. It does not configure live
 acquisition or establish provider coverage, account binding or freshness.
 `,
-	"usage-source": `Usage: agent-run usage-source --codex-tool-report FILE|- --incarnation ID --generation N --max-age 30m -o json
+	"usage-source": `Usage: agent-run usage-source -o json --incarnation ID --generation N --max-age 30m (--codex-tool-report FILE|- | --codex-raw-tool-report FILE|- --observed-at RFC3339) [--publish]
 
-Sanitizes an explicitly supplied retained Codex tool observation into a selected
-source report. It makes no provider, operator, history, or credential request.
-Used percentage is reported; remaining is its derived complement. Retrieval time
-is preserved and does not establish provider update time or account identity.
-Output is an operational artifact, not a bound allowance or public fixture.
+Sanitizes one explicitly supplied retained Codex observation into a selected
+source report. --codex-tool-report is the flattened observation.
+--codex-raw-tool-report is the nested official tool envelope and requires
+--observed-at, the original retrieval time, copied as given. Observation time
+is never taken from the clock, a file time, or the reset instant. The two modes
+cannot be combined, and a duplicate flag is a usage error before any read.
+
+Used percentage is reported; remaining is its derived complement. The window is
+the supplied minute count, not a calendar week. Retrieval time is preserved,
+providerUpdatedAt stays null, and account limits stay unattributed. Automation
+ceilings, credit and reset receipts, and token totals are not allowance. Parsing
+does not authenticate an account or prove entitlement.
+
+The default is local formatting only: canonical JSON and a newline, with no
+operator or provider request. --publish is off unless set. It uses the configured
+operator client for one PUT /v1/provider-source-reports/codex-current-source.
+The body is the report's canonical JSON, with no added newline. Path and method
+are fixed. Redirects are not followed. Conflict, denial, absence, timeout, and
+any uncertain answer are not retried and are not echoed. Success prints only
+that the fixed slot was published. The server's session, pod, and ServiceAccount
+fence stays authoritative. This command does not grant or impersonate.
 `,
 	"usage-export": `Usage: agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>] [flags]
 

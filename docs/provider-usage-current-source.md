@@ -174,16 +174,17 @@ does not mean ingestion is complete.
 
 ## Local preparation
 
-The local command emits only the sanitized report:
+By default, the command emits only the sanitized report:
 
 ```sh
 agent-run usage-source --codex-tool-report /declared/retained-observation.json \
   --incarnation selected-source-1 --generation 1 --max-age 30m -o json
 ```
 
-`FILE|-` must be supplied explicitly. The command has no provider or operator
-connection and does not install a publisher. It refuses symlinks, non-regular
-file inputs and inputs over 16 KiB. The caller owns private artifact retention;
+`FILE|-` must be supplied explicitly. The default path reads only that input
+and makes no operator, provider or credential request. It refuses symlinks,
+non-regular file inputs and inputs over 16 KiB. The caller owns private artifact
+retention;
 stdout must not be committed as a real account fixture.
 
 `remainingPercentBasis` in the output is always
@@ -191,3 +192,46 @@ stdout must not be committed as a real account fixture.
 field name or the retained handoff's normalized name and refuses disagreement
 when both are supplied. A supplied remaining percentage or derivation marker
 must agree; omission of the upstream remaining percentage is supported.
+
+The pure `providerallowance.CodexRawToolReport` library adapter accepts the
+nested official-tool envelope separately. It requires an unattributed
+`accountId: null` and a primary Codex window. Preferred
+`rateLimitsByLimitId.codex` and legacy `rateLimits` must agree when both are
+present. A different limit, a secondary window, unknown or duplicate fields,
+and conflicting plan or credit metadata are refused. Plan and credit fields
+are discarded after comparison; they do not become allowance or entitlement.
+
+The caller supplies the original observation time. The adapter preserves it,
+converts Unix reset seconds to UTC RFC3339, and uses the existing builder to
+derive remaining percentage and validate freshness. It never authenticates
+the input, discovers an account, refreshes retrieval time, or infers a calendar
+week from the window duration. Provider update time stays null.
+
+The command accepts this nested envelope through
+`--codex-raw-tool-report FILE|- --observed-at RFC3339`. Raw and flattened modes
+are mutually exclusive. Raw input requires the original retrieval time; it is
+never replaced with the clock, file mtime or reset time. Both paths use the
+same selection and freshness checks. A manual first report does not establish
+automatic ingestion or other-provider coverage.
+
+### Explicit fixed-slot publication
+
+`--publish` is optional and defaults to false. After validating and sanitizing
+one report, it uses the existing configured operator client for one
+`PUT /v1/provider-source-reports/codex-current-source`. The request body is the
+canonical JSON without the formatting newline. Redirects are refused; failed
+or uncertain publication is not retried. A 204 prints only
+`published codex-current-source status=204`. Error output contains fixed
+status categories, without input, credentials, server bodies or locations.
+
+The command adds no endpoint or identity override. Existing client environment
+configuration and authentication discovery still apply when publication is
+requested; those may read a projected token or use the existing connection
+setup. The server still checks the selected live Session, owned Pod and
+ServiceAccount and the configured persistent store. This client cannot enable
+the route, create storage or grant publication rights.
+
+This is explicit input preparation and optional submission. It does not fetch
+a provider report, install a collector, schedule recurrence or bind an account.
+A first manual agent publish and continued ingestion need separate evidence.
+The source change does not activate the operator route or portal config.
