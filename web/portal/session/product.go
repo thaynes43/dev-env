@@ -297,11 +297,13 @@ func (s *SessionSource) read(ctx context.Context, filter portal.ProductFilter, r
 	step = time.Now()
 	page = withHistory(ctx, page, filter.Session, s.conversations, s.now())
 	stats.history = time.Since(step)
-	// Question audit uses its own short timeout. A panel failure leaves this page.
-	page = s.attachQuestionAudit(ctx, page, filter.Session)
+	// A deadline during history still fails this read. The question-audit panel
+	// runs only after that check, on the request context, and its own deadline
+	// leaves the inventory page in place.
 	if ctx.Err() != nil {
 		return page, sessionTransportFailure(ctx, ctx.Err())
 	}
+	page = s.attachQuestionAudit(ctx, page, filter.Session)
 	return page, nil
 }
 
