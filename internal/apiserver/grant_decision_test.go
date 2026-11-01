@@ -174,12 +174,14 @@ func (f *fixture) decideErr(c *caller, name string, req any) (int, *apiError) {
 
 // putGrant stores a grant directly, as the API would have made it for the
 // session named requester, edited first: for types and roles the request
-// route would not build.
+// route would not build. The synthetic name is the fixed prefix plus the
+// full generated UUID: 54 characters, a DNS label within 63. Production
+// grantName stays grant-<MMDD>-<HHMMSS>-<4 hex>.
 func (f *fixture) putGrant(requester string, edit func(*v1alpha1.AccessGrant)) apiv1.Grant {
 	f.t.Helper()
 	s := f.session(requester)
 	g := &v1alpha1.AccessGrant{
-		ObjectMeta: metav1.ObjectMeta{Name: "grant-1006-172226-" + string(uuid.NewUUID())[:4], Namespace: sessionNS,
+		ObjectMeta: metav1.ObjectMeta{Name: "grant-1006-172226-" + string(uuid.NewUUID()), Namespace: sessionNS,
 			Labels: map[string]string{v1alpha1.LabelSession: requester}},
 		Spec: v1alpha1.AccessGrantSpec{
 			Requester: v1alpha1.GrantRequester{Session: requester, SessionUID: s.UID, Repo: s.Spec.Repo, Profile: "full", Agent: v1alpha1.AgentClaude, Parent: s.Spec.Parent},
