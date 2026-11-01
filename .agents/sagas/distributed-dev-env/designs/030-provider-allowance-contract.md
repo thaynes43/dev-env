@@ -185,7 +185,10 @@ The portal's separate constructor projects a valid selected report as
 entitlements. Both compact and detailed views label derived remaining and
 separate retrieval from provider observation time. This is a selected report
 with a limited retrieval age, not an accepted account allowance. Production
-assembly does not inject it; missing source configuration remains disconnected.
+assembly leaves the connection nil unless `config/current-source.json` is
+present. An absent file performs no read. A present file copies one immutable
+selection onto the existing operator client and does not assign
+`SessionSource.allowance`.
 
 The fixed-slot handler and store exist in source but are not mounted by the
 central server. The store updates an existing ConfigMap only, preserving
@@ -193,13 +196,20 @@ metadata through live resourceVersion CAS; it never creates the object.
 This selected source refuses non-null `providerUpdatedAt`. Undecodable stored
 bytes block later writes. Invalid or expired reads suppress current values
 without changing stored retrieval time, and replay does not refresh them.
-These source rules do not install the object, grant access, enable a route,
-or connect a production portal reader.
+These source rules do not install the object, grant access, or enable a route.
+The portal consumer reads the fixed slot only after the current Authentik
+active and admin check, at most once per authorized Sessions request, and only
+when the optional config file is present. That selected path rejects a
+non-null `providerUpdatedAt` even though the generic reader still accepts one
+that `ValidateCurrentSource` accepts. Failure, staleness, redirect, oversize,
+and a passed reset stay on the allowance panel as Unknown and leave the
+session inventory in place. A bound report is not merged into the selected
+projection. No quota is inferred from session tokens.
 
 The linked document names the local publisher command, private retained
-artifact, fixed proposed operator slot, consumer configuration, retention and
-access review boundary. No new transport, portal ACL, credential, probe,
-collector or periodic acquisition is activated. The existing immutable
-PublishedContext contract remains unchanged. Synthetic sanitizer-to-renderer
-proof establishes source behavior only; authorized retained transport,
-installed ingestion and account entitlement acceptance remain separate.
+artifact, fixed operator slot, consumer configuration, retention and access
+review boundary. The consumer code stays default-off. No portal ACL,
+credential, probe, collector, periodic acquisition, ConfigMap, Role, or flag
+is activated. The existing immutable PublishedContext contract remains
+unchanged. Synthetic portal fixtures prove the connection in source only.
+Installed ingestion and account entitlement acceptance remain separate.

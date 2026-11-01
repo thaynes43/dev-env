@@ -177,6 +177,11 @@ func LoadProduction(root string) (Runtime, error) {
 		}
 		sessions.UseQuestionAudit(questionProject)
 	}
+	// Absent current-source config stays disconnected. A present file copies
+	// one immutable selection and does not assign the shared allowance reader.
+	if err := attachCurrentSourceConfig(root, sessions); err != nil {
+		return Runtime{}, errProductionConfig
+	}
 	asks, err := optionalAsksSource(root, operatorCA)
 	if err != nil {
 		return Runtime{}, errProductionConfig
