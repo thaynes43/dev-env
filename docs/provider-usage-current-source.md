@@ -60,10 +60,24 @@ A concrete proposed continuation is one named retained report slot in the
 existing operator service, `codex-current-source`, with an explicitly selected
 publisher session UID/incarnation and source generation. The proposed exact
 route is `/v1/provider-source-reports/codex-current-source`, with one authorized
-publisher write and portal read. These routes do not exist in this slice. Their
+publisher write and portal read. The fixed-slot handler and store now exist in
+source, but the central server does not mount them. Operator configuration and
+the portal consumer remain disconnected. Their
 authorization, persistence, bounded retention and exposure of private report
 data require review together before activation. A missing account ID or update
 time does not itself require a new credential or human login.
+
+The store updates one existing ConfigMap through a live resourceVersion CAS;
+it never creates the object. Updates preserve its metadata and unrelated data.
+The selected-source path refuses a non-null `providerUpdatedAt`, even when the
+generic report schema accepts it. Undecodable stored bytes block later writes
+rather than being repaired or replaced. Invalid or expired reads return no
+current value without deleting the stored report or changing retrieval time.
+An identical replay does not refresh the report. A lost update response is
+confirmed only by a live read of the same bytes at a changed resourceVersion.
+The handler remains disabled without all explicit source and caller fences;
+maximum age alone cannot register or enable the route. No ConfigMap, Role,
+binding, flag, or production reader is installed by this source preparation.
 
 Consumer configuration would live in the portal's existing configuration root
 and name that fixed slot, publisher identity, incarnation, generation and
