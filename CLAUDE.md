@@ -92,6 +92,7 @@ cmd/agentd/              the in-pod supervisor: `run`, `home-verify` (the origin
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63),
                          `ctl history-export|history-archive` (DESIGN-025 H4), `ctl coord-archive put [--mark]|mark|lookup|get` (DESIGN-024 R2; journal grace, recorded-time or pinned get)
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); main only, the commands are internal/agentrun
+cmd/home-retention-dry-run/  standalone bounded offline HOME policy report (DESIGN-044); no collector, runtime integration or deletion
 internal/version/        the build identity every binary's `version` prints
 internal/testenv/        starts envtest (kube-apiserver + etcd) with config/crd/ installed, for test suites
 internal/templates/      parses and checks dev-env-templates, the GitOps data pods are built from; its revision (D-44)
@@ -131,6 +132,7 @@ internal/broker/         the access broker (D-61): decides AccessGrants (GrantPo
                          suite runs it as dev-env-broker under haynes-ops' RBAC and broker guard, copied into testdata/
 internal/homeguard/testutil/  non-secret offline Root fixture and rendered Pod golden linking OP286 local stages
 internal/homeguard/     exact original HOME binding validation, metadata only; default-off OP252 lifecycle/start guard
+internal/homeretention/ pure two-tier HOME policy and signed preservation proof verifier (DESIGN-044); no I/O or deletion authority
 internal/grantattest/    pure reserved decision bounds/snapshot/storage/audit helpers (DESIGN-042 S7, no authority) and the agent attestation of a grant (DESIGN-001 D-88): one annotation, its bounds and the scope digest, shared by the operator's API and the broker; pure. A claim, not verified human identity
 internal/egress/         the scoped CiliumNetworkPolicy builder and ownership checks (D-64), shared by broker and operator
 internal/grantexpiry/    the operator's separate egress expiry backstop (D-64), watches grants, reads CNPs by name only,

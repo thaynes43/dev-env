@@ -1,5 +1,12 @@
 # Saga: distributed-dev-env (dev-env v2)
 
+**2026-11-01 HOME policy, OP350:** [ADR-018](adrs/018-two-tier-home-retention.md)
+and [DESIGN-044](designs/044-two-tier-home-retention.md) supersede the historical
+30-day HOME/universal archive contract: verified preserved completion can be an
+immediate candidate; recovery work gets seven days, warning and an explicit owner
+decision batch. The source verifier and offline dry-run enable no cleanup or
+deployment. Existing UID-bound destructive approval and unrelated holds remain.
+
 **2026-10-31 design-only #325:** [DESIGN-041](designs/041-upgrade-attempt-claims.md)
 proposes Session-owned upgrade attempt claims and exact PR/head joins.
 Q-325-01 and Q-325-02 are pending for Tom; no writer or activation follows.
