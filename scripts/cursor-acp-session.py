@@ -77,6 +77,24 @@ def label(value):
     return isinstance(value, str) and LABEL.fullmatch(value) is not None
 
 
+MAX_TOOL_ID_BYTES = 1024
+
+
+def tool_call_id(value):
+    """ACP v1 ToolCallId is an opaque string, not a display/filename label.
+
+    Keep exact equality in memory only (no trimming, normalization or output).
+    A local UTF-8 byte bound limits cache keys; all other identifier policies stay
+    unchanged. https://agentclientprotocol.com/protocol/v1/schema#toolcallid
+    """
+    if not isinstance(value, str) or len(value) > MAX_TOOL_ID_BYTES:
+        return False
+    try:
+        return len(value.encode("utf-8")) <= MAX_TOOL_ID_BYTES
+    except UnicodeError:
+        return False
+
+
 def request_id(value):
     return (type(value) is int and 0 <= value <= 2147483647) or label(value)
 
@@ -277,7 +295,7 @@ class StructuralDiagnostic:
 
     def ordinal(self, tool):
         ident = tool.get("toolCallId") if isinstance(tool, dict) else None
-        if not label(ident):
+        if not tool_call_id(ident):
             return None
         if ident not in self.ordinals and len(self.ordinals) < 64:
             self.ordinals[ident] = len(self.ordinals) + 1
@@ -285,12 +303,12 @@ class StructuralDiagnostic:
 
     def cache(self, session, tool):
         ident = tool.get("toolCallId") if isinstance(tool, dict) else None
-        entry = session.tool_cache.get(ident) if label(ident) else None
+        entry = session.tool_cache.get(ident) if tool_call_id(ident) else None
         states = {"open", "poison", "conflict", "closed", "expired", "foreign", "bound"}
         state = entry["state"] if entry and entry["state"] in states else "absent"
         return {"state": state, "fields": structural_shape(entry["fields"] if entry else {}),
                 "sameSession": bool(entry and entry.get("session") == session.session_id),
-                "dropped": bool(label(ident) and ident in session.tool_dropped),
+                "dropped": bool(tool_call_id(ident) and ident in session.tool_dropped),
                 "cacheClosed": session.tool_cache_closed,
                 "untrackedClosed": session.tool_untracked_closed,
                 "cacheCount": len(session.tool_cache), "cacheBytes": session.tool_cache_bytes}
@@ -305,6 +323,9 @@ class StructuralDiagnostic:
         record = {"diagnostic": "acp-structure-v1", "stage": stage,
                   "ordinal": self.ordinal(tool), "tool": structural_shape(tool),
                   "cache": self.cache(session, tool)}
+        ident = tool.get("toolCallId") if isinstance(tool, dict) else None
+        record["toolIdAccepted"] = tool_call_id(ident)
+        record["toolIdLabelAccepted"] = label(ident)
         raw_input = tool.get("rawInput") if isinstance(tool, dict) else None
         record["expectedSyntheticCommand"] = bool(isinstance(raw_input, dict) and (
             raw_input.get("command") == "touch OP318-DIAG-SENTINEL-2017" or (
@@ -492,7 +513,7 @@ def permission_context(tool):
         # Bound the source as well as the output, including discarded fields.
         if len(json.dumps(tool, ensure_ascii=True, separators=(",", ":"))) > 4096:
             return insufficient
-        if not label(tool.get("toolCallId")) or tool.get("kind") not in TOOL_KINDS:
+        if not tool_call_id(tool.get("toolCallId")) or tool.get("kind") not in TOOL_KINDS:
             return insufficient
         title = context_string(tool.get("title"))
         clean = {"state": "available", "kind": tool["kind"], "title": title}
@@ -745,7 +766,7 @@ class Session:
         self.tool_untracked_closed = True
 
     def _install_tool(self, tool_id, state, fields):
-        if self.tool_cache_closed or not label(tool_id):
+        if self.tool_cache_closed or not tool_call_id(tool_id):
             return
         if self.tool_untracked_closed and tool_id not in self.tool_cache:
             return
@@ -801,7 +822,7 @@ class Session:
         if update.get("sessionUpdate") not in {"tool_call", "tool_call_update"}:
             return
         tool_id = update.get("toolCallId")
-        if not label(tool_id):
+        if not tool_call_id(tool_id):
             return
         if tool_id not in self.tool_cache and (tool_id in self.tool_dropped or self.tool_untracked_closed):
             return
@@ -873,7 +894,7 @@ class Session:
             return permission_context(tool)
         tool_id = tool.get("toolCallId")
         explicit = [name for name in TOOL_TRACKED if tool.get(name) is not None]
-        if not label(tool_id):
+        if not tool_call_id(tool_id):
             return permission_context(tool)
         if self.tool_cache_closed:
             if not explicit:

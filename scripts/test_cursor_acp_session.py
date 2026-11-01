@@ -1091,6 +1091,46 @@ class ToolCacheTests(unittest.TestCase):
         follow = self.permit(42, {"toolCallId": "fixture_1"})
         self.assertEqual(follow["context"]["rawInput"], {"command": "python3", "args": ["check.py"]})
 
+    def test_opaque_tool_id_retains_command_through_status_and_permission_copy(self):
+        # Synthetic representative of the observed structural sequence. The real
+        # ID/title/content were never retained; no particular ID character is inferred.
+        self.ready()
+        tool_id = "fixture:opaque/tool id"
+        raw = {"command": "touch OP318-DIAG-SENTINEL-2017"}
+        self.announce(tool_id, raw=raw)
+        self.announce(tool_id, kind=None, title=None, status="in_progress", session_update="tool_call_update")
+        copy = {"toolCallId": tool_id, "kind": "execute", "title": "Run fixture checks", "status": "pending",
+                "content": [{"type": "content", "content": {"type": "text", "text": "PRIVATE_CONTENT"}}]}
+        context = self.permit(41, copy)["context"]
+        self.assertEqual(context["state"], "available")
+        self.assertEqual(context["rawInput"], raw)
+        self.assertNotIn(tool_id, json.dumps(self.events))
+        self.assertNotIn("PRIVATE_CONTENT", json.dumps(self.events))
+        self.assert_reject_only(41)
+        self.announce(tool_id, kind=None, title=None, status="completed", session_update="tool_call_update")
+        self.assertEqual(self.permit(42, copy)["context"]["reason"], "tool-call-closed")
+
+    def test_opaque_ids_correlate_exactly_without_normalization_or_cross_session(self):
+        self.ready()
+        for tool_id in ["fixture:opaque", " fixture:opaque", "fixture:opaque ", "", "fixture/雪", "fixture\u0000opaque"]:
+            self.announce(tool_id, raw={"command": "go", "args": ["test", "./..."]})
+        for ident, tool_id in enumerate(["fixture:opaque", " fixture:opaque", "fixture:opaque ", "", "fixture/雪", "fixture\u0000opaque"], 40):
+            self.assertEqual(self.permit(ident, {"toolCallId": tool_id})["context"]["state"], "available")
+            self.assert_reject_only(ident)
+        self.assertEqual(len(self.session.tool_cache), 6)
+        self.assertEqual(self.permit(50, {"toolCallId": "fixture:OPAQUE"})["context"]["reason"], "no-correlated-tool-call")
+
+    def test_tool_id_byte_bound_and_malformed_types_remain_fail_closed(self):
+        self.ready()
+        valid = ["x" * 1024, "雪" * 341 + "x"]
+        invalid = ["x" * 1025, "雪" * 342, "\ud800", None, True, 1, [], {}]
+        for tool_id in valid:
+            self.announce(tool_id)
+        for offset, tool_id in enumerate(valid + invalid, 60):
+            self.assertEqual(self.permit(offset, dict(VALID_CONTEXT, toolCallId=tool_id))["context"]["state"],
+                             "available" if tool_id in valid else "insufficient-context")
+        self.assertEqual(len(self.session.tool_cache), 2)
+
 
 FAKE = '''#!/usr/bin/env python3
 import json,os,sys,time
@@ -1153,6 +1193,12 @@ for line in sys.stdin:
   if mode=="error": write({"jsonrpc":"2.0","id":3,"error":{"message":"PRIVATE_PROVIDER_ERROR"}}); continue
   if mode=="exit": sys.exit(0)
   if mode in ("grandchild","env"): write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}); continue
+  if mode=="opaque-id":
+   tool_id="fixture:opaque/tool id"
+   write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call","toolCallId":tool_id,"title":"Run fixture checks","kind":"execute","status":"pending","rawInput":{"command":"touch OP318-DIAG-SENTINEL-2017"}}}})
+   write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call_update","toolCallId":tool_id,"status":"in_progress"}}})
+   write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":{"toolCallId":tool_id,"title":"Run fixture checks","kind":"execute","status":"pending","content":[{"type":"content","content":{"type":"text","text":"PRIVATE_OPAQUE_CONTENT"}}]},"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
+   continue
   if mode=="partial-id":
    write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call","toolCallId":"fixture_1","title":"Run fixture checks","kind":"execute","status":"pending","rawInput":{"command":"go","args":["test","./..."]}}}})
    write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":{"toolCallId":"fixture_1"},"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
@@ -1166,7 +1212,7 @@ for line in sys.stdin:
    write({"jsonrpc":"2.0","id":52,"method":"terminal/create","params":{"sessionId":"fixture-session","command":"PRIVATE_COMMAND"}})
    continue
   write({"jsonrpc":"2.0","id":40,"method":"cursor/ask_question","params":{"questions":[{"id":"q1","prompt":"Fixture choice?","options":[{"id":"a","label":"First"}]}]}})
- elif (mode=="permission" or mode=="partial-id" or mode.startswith("context-")) and msg.get("id")==41:
+ elif (mode in ("permission","partial-id","opaque-id") or mode.startswith("context-")) and msg.get("id")==41:
   if msg.get("result")=={"outcome":{"outcome":"selected","optionId":"deny"}}: write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
   else: write({"jsonrpc":"2.0","id":3,"error":{"message":"fixture expected rejection"}})
  elif mode=="callbacks" and msg.get("id") in (50,51,52):
@@ -1319,6 +1365,19 @@ class StructuralDiagnosticTests(unittest.TestCase):
         self.assertNotIn("OP318-DIAG-SENTINEL-2017", self.path.read_text())
         self.assertNotIn("OTHER-PRIVATE", self.path.read_text())
 
+    def test_opaque_tool_id_is_only_an_ordinal_and_never_displayed(self):
+        tool_id = "PRIVATE:opaque/id with\u0000control"
+        self.update(dict(VALID_CONTEXT, toolCallId=tool_id, sessionUpdate="tool_call", status="pending"))
+        self.permission({"toolCallId": tool_id})
+        records = self.records()
+        self.assertEqual({record["ordinal"] for record in records}, {1})
+        self.assertTrue(all(record["toolIdAccepted"] for record in records))
+        self.assertFalse(any(record["toolIdLabelAccepted"] for record in records))
+        self.assertTrue(records[-1]["available"])
+        self.assertEqual(records[-1]["cache"]["state"], "open")
+        self.assertNotIn("PRIVATE", self.path.read_text())
+        self.assertNotIn("control", self.path.read_text())
+
     def test_deep_wide_and_unknown_containers_have_bounded_shape_work(self):
         deep = {"command": "PRIVATE"}
         for _ in range(100):
@@ -1469,6 +1528,39 @@ class SubprocessTests(unittest.TestCase):
                     for forbidden in ["fixture_1", "fixture-session", "Run fixture checks", "./...", "go"]:
                         self.assertNotIn(forbidden, path.read_text())
         self.assertEqual(outputs[0], outputs[1])
+
+    def test_fake_opaque_id_wire_sequence_preserves_command_and_rejects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "opaque-id", diagnostic="shape.jsonl")
+            observed = []
+            try:
+                while True:
+                    line = process.stdout.readline()
+                    self.assertTrue(line, "helper ended before permission request")
+                    value = json.loads(line)
+                    observed.append(value)
+                    if value["event"] == "permission-required":
+                        break
+                self.assertEqual(value["context"]["rawInput"], {"command": "touch OP318-DIAG-SENTINEL-2017"})
+                self.assertEqual(value["context"]["state"], "available")
+                decision = {"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"}
+                stdout, stderr = process.communicate(json.dumps(decision) + "\n", timeout=15)
+                observed.extend(json.loads(line) for line in stdout.splitlines())
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(observed[-1]["stopReason"], "end_turn")
+                self.assertNotIn("PRIVATE_OPAQUE_CONTENT", json.dumps(observed))
+                self.assertNotIn("fixture:opaque/tool id", json.dumps(observed))
+                self.assertFalse((Path(directory) / "OP318-DIAG-SENTINEL-2017").exists())
+                records = [json.loads(line) for line in (Path(directory) / "shape.jsonl").read_bytes().splitlines()]
+                self.assertEqual(records[-1]["stage"], "capture-end")
+                self.assertTrue(records[-2]["available"])
+                self.assertTrue(records[0]["expectedSyntheticCommand"])
+                self.assertEqual({record["ordinal"] for record in records[:-1]}, {1})
+                self.assertNotIn("PRIVATE_OPAQUE_CONTENT", json.dumps(records))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
 
     def test_diagnostic_cli_framing_failures_do_not_persist_source(self):
         for mode in ["frame-too-large", "frame-malformed-json", "frame-duplicate-key", "frame-truncated-eof"]:
