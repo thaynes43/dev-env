@@ -35,8 +35,8 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		return a.help([]string{"inbox"})
 	}
-	if len(args) == 0 || (args[0] != "send" && args[0] != "ask" && args[0] != "reply" && args[0] != "list" && args[0] != "read" && args[0] != "ack") {
-		return usageError("inbox requires send, ask, reply, list, read or ack; see agent-run help inbox")
+	if len(args) == 0 || (args[0] != "send" && args[0] != "ask" && args[0] != "reply" && args[0] != "list" && args[0] != "read" && args[0] != "ack" && args[0] != "ack-status") {
+		return usageError("inbox requires send, ask, reply, list, read, ack or ack-status; see agent-run help inbox")
 	}
 	verb := args[0]
 	publish := verb == "send" || verb == "ask" || verb == "reply"
@@ -75,7 +75,7 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 	if len(project) > 63 || !directoryProjectName.MatchString(project) {
 		return usageError("inbox requires a valid --project")
 	}
-	onMessage := verb == "read" || verb == "ack" || verb == "reply"
+	onMessage := verb == "read" || verb == "ack" || verb == "ack-status" || verb == "reply"
 	if !onMessage && len(pos) != 0 || onMessage && (len(pos) != 1 || !inboxMessagePattern.MatchString(pos[0])) {
 		return usageError("inbox: invalid arguments; see agent-run help inbox")
 	}
@@ -130,13 +130,21 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 			q.Set(apiv1.InboxBoxQuery, apiv1.InboxBoxSent)
 		}
 	}
-	if verb == "read" || verb == "ack" {
+	if verb == "read" || verb == "ack" || verb == "ack-status" {
 		path += "/" + pos[0]
 	}
-	if verb == "ack" {
+	if verb == "ack" || verb == "ack-status" {
 		path += "/ack"
+	}
+	if verb == "ack" {
 		method = http.MethodPost
 		body = struct{}{}
+	}
+	if verb == "ack-status" {
+		// Project only: no thread view and no acknowledgement body.
+		method = http.MethodGet
+		body = nil
+		q = url.Values{"project": {project}}
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
@@ -223,7 +231,7 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 		}
 		_, err = fmt.Fprint(a.env.Stdout, result.Text)
 		return err
-	default:
+	case "ack":
 		var result apiv1.InboxAckResult
 		status, callErr := a.callWith(ctx, &one, method, path, q, body, &result, false)
 		if callErr != nil {
@@ -236,6 +244,21 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 			return fail(ExitUnconfirmed, "inbox ack returned an unconfirmed identity; retry only the same acknowledgement")
 		}
 		return a.printJSON(result)
+	case "ack-status":
+		// One GET of an existing acknowledgement. A 404 is a missing or hidden
+		// scope, not proof the message is unacknowledged, and the record is
+		// an API acknowledgement only.
+		var result apiv1.InboxReadAck
+		status, callErr := a.callWith(ctx, &one, method, path, q, body, &result, false)
+		if callErr != nil {
+			return inboxSafeError(status, callErr)
+		}
+		if status != http.StatusOK || result.Project != project || result.MessageName != pos[0] || result.Name == "" || result.UID == "" || result.MessageUID == "" {
+			return fail(ExitFailed, "inbox ack-status returned an unconfirmed acknowledgement")
+		}
+		return a.printJSON(result)
+	default:
+		return usageError("inbox requires send, ask, reply, list, read, ack or ack-status; see agent-run help inbox")
 	}
 }
 
