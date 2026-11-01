@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"html"
 	"math"
 	"reflect"
 	"regexp"
@@ -116,7 +117,7 @@ func allowanceWindow(t *testing.T, percent, window, reset, observed string, fiel
 
 func TestAllowanceDashboardEdgeMeterComplementAndRange(t *testing.T) {
 	if !allowanceTypedSurface() {
-		t.Skip("typed allowance methods pending integration")
+		t.Fatal("required typed allowance surface is missing")
 	}
 	cases := []struct {
 		name            string
@@ -190,7 +191,7 @@ func TestAllowanceDashboardEdgeMeterComplementAndRange(t *testing.T) {
 
 func TestAllowanceDashboardEdgeResetAndObservedInstants(t *testing.T) {
 	if !allowanceTypedSurface() {
-		t.Skip("typed allowance methods pending integration")
+		t.Fatal("required typed allowance surface is missing")
 	}
 	window := func(reset, observed string, fields map[string]any) ProductAllowanceWindow {
 		t.Helper()
@@ -198,6 +199,9 @@ func TestAllowanceDashboardEdgeResetAndObservedInstants(t *testing.T) {
 			fields = map[string]any{}
 		}
 		fields["ResetAt"] = reset
+		if reset != "" {
+			fields["ResetPrecision"] = "instant"
+		}
 		fields["ObservedAt"] = observed
 		return allowanceWindow(t, "62% left", "7 days", "2 Nov 14:00 UTC (display only)", "1 Jan 00:00 UTC", fields)
 	}
@@ -360,11 +364,11 @@ func TestAllowanceDashboardEdgeKeyboardMobileAndCSP(t *testing.T) {
 
 func TestAllowanceDashboardEdgeTypedCardDoesNotTrustDisplay(t *testing.T) {
 	if !allowanceTypedSurface() {
-		t.Skip("typed allowance methods pending integration")
+		t.Fatal("required typed allowance surface is missing")
 	}
 	claude := allowanceWindow(t, "0% left", "7 days", "2 Nov 14:00 UTC (display only)", "1 Jan 00:00 UTC", map[string]any{
 		"PercentKnown": true, "PercentValue": 62.0, "Direction": "remaining",
-		"ResetAt": "2099-06-01T12:00:00Z", "ObservedAt": "2020-01-01T00:00:00Z", "WindowKind": "",
+		"ResetAt": "2099-06-01T12:00:00Z", "ResetPrecision": "instant", "ObservedAt": "2020-01-01T00:00:00Z", "WindowKind": "",
 	})
 	codex := ProductAllowanceWindow{
 		Percent: "17% used", Window: "5 hours", Reset: "3 Nov 01:00 UTC",
@@ -380,7 +384,7 @@ func TestAllowanceDashboardEdgeTypedCardDoesNotTrustDisplay(t *testing.T) {
 	})
 	allowanceAssertPassive(t, body)
 	if !strings.Contains(body, "allowance-card") && !strings.Contains(body, "allowance-meter") {
-		t.Skip("allowance card markup pending integration")
+		t.Fatal("required allowance card markup is missing")
 	}
 	if strings.Count(body, `<rect class="meter-fill"`) != 1 || !strings.Contains(body, `width="38"`) {
 		t.Fatal("typed remaining 62 did not draw a single 38-wide bar")
@@ -428,7 +432,7 @@ func allowanceAssertPassive(t *testing.T, body string) {
 	if !strings.Contains(body, `name="viewport"`) || !strings.Contains(body, "width=device-width") || !strings.Contains(body, "viewport-fit=cover") {
 		t.Fatal("viewport meta is missing")
 	}
-	if !strings.Contains(body, "default-src 'none'") || !strings.Contains(body, `class="skip"`) {
+	if !strings.Contains(html.UnescapeString(body), "default-src 'none'") || !strings.Contains(body, `class="skip"`) {
 		t.Fatal("content policy or skip link is missing")
 	}
 	for _, match := range regexp.MustCompile(`tabindex="([^"]+)"`).FindAllStringSubmatch(body, -1) {
