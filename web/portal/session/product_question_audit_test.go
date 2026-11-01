@@ -320,7 +320,7 @@ func TestQuestionAuditPanelFailuresPreserveInventory(t *testing.T) {
 	}
 }
 
-func TestQuestionAuditEmptyMissingUnknownAndOlderOperator(t *testing.T) {
+func TestQuestionAuditEmptyMissingUnknownAndNeutralNotFound(t *testing.T) {
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	emptyInbox := auditPageBytes(t, apiv1.PortalQuestionBoxInbox, nil, false, "")
 	emptySent := auditPageBytes(t, apiv1.PortalQuestionBoxSent, nil, false, "")
@@ -332,7 +332,7 @@ func TestQuestionAuditEmptyMissingUnknownAndOlderOperator(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := questionAuditSectionOf(t, page, "agent")
-	if !questionAuditHasState(section, "Empty", "not a missing route") || questionAuditHasState(section, "Missing", "") {
+	if !questionAuditHasState(section, "Empty", "not a missing route") || questionAuditHasState(section, "Missing", "") || questionAuditHasState(section, "Empty", "not provided or not found") {
 		t.Fatalf("empty %+v", section.States)
 	}
 	unknownBody := auditPageBytes(t, apiv1.PortalQuestionBoxInbox, []apiv1.PortalQuestionAuditItem{auditQuestionItem(apiv1.InboxStateUnknown)}, false, "")
@@ -344,8 +344,13 @@ func TestQuestionAuditEmptyMissingUnknownAndOlderOperator(t *testing.T) {
 		t.Fatal(err)
 	}
 	section = questionAuditSectionOf(t, page, "agent")
-	if !questionAuditHasState(section, "Unknown", "not unanswered") || questionAuditHasState(section, "Empty", "Inbox") {
+	if !questionAuditHasState(section, "Unknown", "could not be confirmed") || !questionAuditHasState(section, "Unknown", "not unanswered") || questionAuditHasState(section, "Unknown", "not provided or not found") || questionAuditHasState(section, "Missing", "") || questionAuditHasState(section, "Empty", "Inbox") {
 		t.Fatalf("unknown %+v", section.States)
+	}
+	for _, state := range section.States {
+		if state.Status.Text == "Unknown" && state.Status.Tone != "wait" {
+			t.Fatalf("unknown tone %q", state.Status.Tone)
+		}
 	}
 	truncated := &questionAuditScript{inbox: auditPageBytes(t, apiv1.PortalQuestionBoxInbox, nil, true, "plain-page-cursor"), sent: emptySent}
 	src = questionAuditSource(t, now, truncated)
@@ -367,6 +372,12 @@ func TestQuestionAuditEmptyMissingUnknownAndOlderOperator(t *testing.T) {
 			t.Fatalf("consumer followed a cursor %s", raw)
 		}
 	}
+	baseline := questionAuditSource(t, now, &questionAuditScript{inbox: emptyInbox, sent: emptySent})
+	baseline.UseQuestionAudit("sample")
+	before, err := baseline.Read(t.Context(), portal.ProductFilter{Session: "uid-agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	missing := &questionAuditScript{inboxStatus: http.StatusNotFound}
 	src = questionAuditSource(t, now, missing)
 	src.UseQuestionAudit("sample")
@@ -375,11 +386,38 @@ func TestQuestionAuditEmptyMissingUnknownAndOlderOperator(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(missing.queries) != 1 {
-		t.Fatalf("older operator caused %d calls", len(missing.queries))
+		t.Fatalf("not-found response caused %d calls", len(missing.queries))
+	}
+	if questionAuditSignature(before) != questionAuditSignature(page) {
+		t.Fatalf("inventory changed\n%s\n%s", questionAuditSignature(before), questionAuditSignature(page))
 	}
 	section = questionAuditSectionOf(t, page, "agent")
-	if !questionAuditHasState(section, "Missing", "not an empty audit") || questionAuditHasState(section, "Empty", "") || questionAuditHasState(section, "Unavailable", "") {
-		t.Fatalf("missing %+v", section.States)
+	const neutral = "Question audit metadata not provided or not found for this session. That is not an empty audit."
+	if len(section.States) != 1 || section.States[0].Status.Text != "Missing" || section.States[0].Status.Tone != "muted" || section.States[0].Text != neutral || section.Note != "No question or reply is shown." || len(section.Fields) != 0 {
+		t.Fatalf("missing %+v", section)
+	}
+	if questionAuditHasState(section, "Empty", "") || questionAuditHasState(section, "Unavailable", "") || questionAuditHasState(section, "Unknown", "") {
+		t.Fatalf("missing gained another status %+v", section.States)
+	}
+	if questionAuditSectionCount(page, "other") != 0 {
+		t.Fatal("unselected row gained a question audit")
+	}
+	body, err = portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := string(body)
+	if !strings.Contains(rendered, "claude-opus-5-5") || !strings.Contains(rendered, "Requested model") {
+		t.Fatal("session detail dropped the requested model")
+	}
+	panel := questionAuditPanelHTML(t, rendered)
+	if !strings.Contains(panel, neutral) || !strings.Contains(panel, "No question or reply is shown.") || !strings.Contains(panel, `tone-muted">Missing</span>`) {
+		t.Fatalf("audit section lost neutral 404 wording: %s", panel)
+	}
+	for _, forbidden := range []string{"older operator", "did not provide", "This operator", "404", "approval", "Approval", "claude-opus-5-5", "Requested model", "servedModels", "SECRET_QUESTION_TEXT"} {
+		if strings.Contains(panel, forbidden) {
+			t.Fatalf("audit section included %s", forbidden)
+		}
 	}
 }
 

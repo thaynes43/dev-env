@@ -67,6 +67,9 @@ func (s *SessionSource) attachQuestionAudit(ctx context.Context, page portal.Pro
 	defer cancel()
 	inbox, err := s.readQuestionAudit(panelCtx, loc.name, loc.uid, apiv1.PortalQuestionBoxInbox)
 	if err != nil {
+		// Every inbox 404 uses one Missing panel. The producer returns 404 when
+		// the route is disabled, the project is outside the allowlist, or the
+		// stored session name or UID does not match. The panel names none of those.
 		if questionAuditIsMissing(err) {
 			return questionAuditApply(page, loc, questionAuditMissingSection())
 		}
@@ -325,8 +328,8 @@ func questionAuditUnavailable() portal.ProductSection {
 func questionAuditMissingSection() portal.ProductSection {
 	return portal.ProductSection{
 		Title:  "Question audit",
-		States: []portal.ProductState{{Status: portal.ProductStatus{Text: "Missing", Tone: "muted"}, Text: "This operator did not provide question audit metadata. That is not an empty audit."}},
-		Note:   "An older operator answers 404. No question or reply is shown.",
+		States: []portal.ProductState{{Status: portal.ProductStatus{Text: "Missing", Tone: "muted"}, Text: "Question audit metadata not provided or not found for this session. That is not an empty audit."}},
+		Note:   "No question or reply is shown.",
 	}
 }
 
