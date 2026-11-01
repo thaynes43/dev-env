@@ -1,6 +1,12 @@
 # OP323 publisher compatibility, 2026-11-01
 
-Source pin: `11f0152d534e6c33fca6bd87b4af3f2d2e1f3b84` (v2.84.1).
+Continuation base for the retained-current read:
+`f2dd20151c63b89e25bad20b035256328ec0d425`.
+This pin includes the completed compatibility record below. It overrides the
+`11f0152d534e6c33fca6bd87b4af3f2d2e1f3b84` sentence in that frozen audit.
+The audit itself stays the terminal record of the earlier inspection.
+
+Source pin in the frozen audit: `11f0152d534e6c33fca6bd87b4af3f2d2e1f3b84` (v2.84.1).
 Grok inspected the formatter, fixed-slot handler/store, operator configuration
 and existing tests. Sol verified the frozen two-file patch and file hashes
 before integration. No additional publisher test was justified.
@@ -59,3 +65,54 @@ signed-image extraction, installation in the publisher, or live acceptance.
 No provider/account request, actual report replay, live PUT, flag/config,
 ConfigMap/Role/Binding, collector, permission or runtime change occurred.
 Private receipts and original observation bytes remain outside Git.
+
+## Retained-current read
+
+Inspection of `f2dd20151c63b89e25bad20b035256328ec0d425` found the explicit
+GET seam undelivered. `usage-source` still only formats a caller-supplied
+report or, with `--publish`, PUTs it. `usage -o json` remains local preflight
+or `--from-file`. Neither command reads
+`/v1/provider-source-reports/codex-current-source`. This slice adds
+`usage-source --read-current` in source. It does not amend the frozen audit
+above and it does not replace the publisher tests.
+
+### Compatibility remedy
+
+The selected publisher session is `dev-env-1027-010058`. Its checked client is
+v2.45.0, commit `86cef5bb619bbde29610e3436299a3a4362b7a88`, built with Go
+1.27.2. That is the actual client. It is not an assumed 2.71 client. Do not
+treat a 2.71 label as this session's binary or as proof that the slot can be
+read.
+
+Fixed-slot publication is source from v2.84.0, PR #831, merge
+`dbc90034eb091b9c3767f61c399b5611fcc1e9d7`. The retained-current read is source
+on this continuation pin only. The installed v2.45.0 `usage-source --help`
+returned general launcher help and exit 0, which does not establish command
+support. Do not pass a report path, `--publish`, or `--read-current` to that
+installed executable: an unknown command can fall through to the session
+launcher.
+
+The remedy is an explicit path to a verified signed artifact that contains the
+v2.84.0 or later `agent-run`, after the required approval. Check that
+artifact's `version`, then that `help usage-source` starts with
+`Usage: agent-run usage-source` and names `--read-current`, before any retained
+read. Keep the running session image and its `/usr/local/bin/agent-run` in
+place. This record does not install, replace, or probe a binary.
+
+### Still absent
+
+Acquisition, cadence, and account attribution are not provided by v2.45.0, by
+an assumed 2.71 client, or by this read.
+
+- Acquisition stays with the caller. `--read-current` GETs the retained slot
+  once. It does not call a provider or collect a report.
+- Cadence is not `--max-age`. On this read the age must be greater than zero
+  and at most 30 minutes, and that ceiling is checked before connect. It is
+  not a schedule. The local formatter's 24 hour ceiling is unchanged.
+- Account attribution is unchanged. Publisher, incarnation, and generation
+  select a source. They do not name a provider account or an entitlement.
+  `providerUpdatedAt` must be null. The command does not infer a served model,
+  account usage, or a renewed reset.
+
+Operator flags, the ConfigMap, RBAC, the portal mount, and runtime activation
+remain separate and were not changed.

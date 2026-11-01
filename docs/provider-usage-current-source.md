@@ -250,7 +250,51 @@ setup. The server still checks the selected live Session, owned Pod and
 ServiceAccount and the configured persistent store. This client cannot enable
 the route, create storage or grant publication rights.
 
-This is explicit input preparation and optional submission. It does not fetch
-a provider report, install a collector, schedule recurrence or bind an account.
+The default remains that local preparation. It does not fetch a provider
+report, install a collector, schedule recurrence, or bind an account.
 A first manual agent publish and continued ingestion need separate evidence.
 The source change does not activate the operator route or portal config.
+
+### Explicit retained-current read
+
+`--read-current` is off unless set. It is not implied by `-o json`, by
+`agent-run usage`, or by a selected incarnation. It conflicts with
+`--codex-tool-report`, `--codex-raw-tool-report`, `--observed-at`, and
+`--publish`. A duplicate flag is a usage error before any read or connection.
+The local formatter and the optional PUT keep their existing behavior.
+
+The same selection flags are required: `--incarnation`, `--generation`,
+`--max-age`, and `-o json`. The publisher is the fixed
+`codex-get-usage-limits-observation-publisher`. Before any connection, the
+incarnation, positive generation, and maximum age must be a valid selected
+source, and the age must be greater than zero and at most 30 minutes
+(`30m` or `1800s`). A longer age, including the generic validator's 24 hour
+ceiling, does not connect. That generic ceiling is unchanged for local
+formatting.
+
+The read uses the existing configured operator client for one
+`GET /v1/provider-source-reports/codex-current-source`. There is no second
+client, store, registry, or credential. The request body is empty. Redirects
+are not followed. The call is not retried. A response above 16 KiB is refused.
+Error responses are fixed status categories. The server body, location, and
+credential are not copied into the output.
+
+An HTTP 200 body that is exactly `{"availability":"Unknown"}`, with at most
+the encoder's one trailing newline, prints that object and a newline. It does
+not add a percentage, a retrieval time, or a freshness claim. Extra fields, a
+duplicate key, another availability value, or trailing JSON fail closed.
+
+Any other HTTP 200 body must decode with `DecodeCurrentSource` and pass
+`ValidateCurrentSource` for the selected publisher, incarnation, generation,
+retrieval age, and reset. `providerUpdatedAt` must be null. Stdout is
+`json.Marshal` of that validated report plus a newline. A stale retrieval, a
+passed reset, a selection mismatch, a non-null provider update time, or a
+malformed body prints nothing from the body.
+
+401 and 403 are authentication refusals. 404 is absence. 409 is a conflict.
+Redirect statuses are refusals. Other statuses and transport failures are
+unavailable.
+
+This read does not collect a provider report, choose a cadence, or attribute
+an account. Maximum age is the freshness ceiling for this call. The operator
+route, its ConfigMap, and its RBAC stay at their existing defaults.
