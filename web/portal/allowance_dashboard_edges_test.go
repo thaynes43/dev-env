@@ -108,7 +108,7 @@ func allowanceInstantOf(t *testing.T, w ProductAllowanceWindow, method string) a
 
 func allowanceWindow(t *testing.T, percent, window, reset, observed string, fields map[string]any) ProductAllowanceWindow {
 	t.Helper()
-	w := ProductAllowanceWindow{Percent: percent, Window: window, Reset: reset, Observed: observed, Provenance: "Provider API"}
+	w := ProductAllowanceWindow{AsOf: time.Now().UTC(), Percent: percent, Window: window, Reset: reset, Observed: observed, Provenance: "Provider API"}
 	if len(fields) > 0 {
 		allowanceSet(t, &w, fields)
 	}
