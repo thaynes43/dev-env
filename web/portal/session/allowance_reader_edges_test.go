@@ -1,10 +1,11 @@
 package session
 
 import (
-	pa "github.com/thaynes43/dev-env/internal/providerallowance"
-	"github.com/thaynes43/dev-env/web/portal"
 	"testing"
 	"time"
+
+	pa "github.com/thaynes43/dev-env/internal/providerallowance"
+	"github.com/thaynes43/dev-env/web/portal"
 )
 
 func TestCachedAllowanceResetCannotEraseConflict(t *testing.T) {
