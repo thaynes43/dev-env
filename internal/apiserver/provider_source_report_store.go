@@ -78,8 +78,10 @@ func (s *ProviderSourceReportStore) ready() bool {
 }
 
 // Read returns the stored report when it still validates for now. Expiry, a
-// generation mismatch, and a digest mismatch suppress the value. They do not
-// delete the object, clear data, or mint a retrieval time.
+// generation mismatch, a digest mismatch, and a non-null providerUpdatedAt
+// suppress the value. They do not delete the object, clear data, or mint a
+// retrieval time. The generic schema may accept that timestamp; this slot
+// does not return it.
 func (s *ProviderSourceReportStore) Read(ctx context.Context, now time.Time) (ProviderSourceView, error) {
 	if !s.ready() {
 		return ProviderSourceView{}, ErrProviderSourceUnavailable
@@ -109,7 +111,10 @@ func (s *ProviderSourceReportStore) Read(ctx context.Context, now time.Time) (Pr
 // Put stores one newer canonical report, or leaves the object untouched.
 // An equal body is a replay and does not write. The same or an older
 // retrieval, a digest mismatch, a generation the selection does not name,
-// and a conflict all leave the stored bytes as they were.
+// a non-null providerUpdatedAt, and a conflict all leave the stored bytes
+// as they were. A non-null providerUpdatedAt is refused after the generic
+// validation and the canonical-byte check, and before any storage read or
+// write. The generic schema still allows that timestamp for other consumers.
 func (s *ProviderSourceReportStore) Put(ctx context.Context, raw []byte, now time.Time) error {
 	if s == nil {
 		return ErrProviderSourceUnavailable
@@ -125,6 +130,9 @@ func (s *ProviderSourceReportStore) Put(ctx context.Context, raw []byte, now tim
 	canonical, err := json.Marshal(report)
 	if err != nil || !bytes.Equal(raw, canonical) {
 		return ErrProviderSourceDigest
+	}
+	if report.ProviderUpdatedAt != nil {
+		return ErrProviderSourceRejected
 	}
 	if !s.ready() {
 		return ErrProviderSourceUnavailable
@@ -175,6 +183,9 @@ func (s *ProviderSourceReportStore) fresh(raw string, now time.Time) bool {
 	}
 	canonical, err := json.Marshal(report)
 	if err != nil || !bytes.Equal([]byte(raw), canonical) {
+		return false
+	}
+	if report.ProviderUpdatedAt != nil {
 		return false
 	}
 	return providerallowance.ValidateCurrentSource(report, s.Selection, now) == nil

@@ -22,7 +22,7 @@ Live packet identities are not constants. Tests use `synthetic-session-uid`, `sy
 
 `ProviderSourceReportStore` is a live GET plus resourceVersion `Update` of one precreated object. `objectUpdater` has `Update` only, so the store cannot create or delete. A missing object returns `ErrProviderSourceAbsent`. The object passed to `Update` is the object just read: labels, annotations, finalizers, owner references, and managedFields are not rebuilt. The field manager on that update is `dev-env-provider-source`. The report is one data key, `report.json`, holding the canonical JSON of the decoded `CurrentSourceReport`. A replay of those same bytes does not call `Update`. A stale resourceVersion returns `ErrProviderSourceConflict` and does not confirm a different body. A lost response is accepted only when a later live GET shows the same bytes at a newer resourceVersion.
 
-Reads do not write. A failed decode, a canonical-byte mismatch, a selection mismatch, or `ErrCurrentSourceExpired` suppresses the value and leaves the stored bytes in place. `providerUpdatedAt` is not minted. GET, restart, and replay do not change retrieval.
+Reads do not write. A failed decode, a canonical-byte mismatch, a selection mismatch, `ErrCurrentSourceExpired`, or a non-null `providerUpdatedAt` suppresses the value and leaves the stored bytes in place. The slot does not mint `providerUpdatedAt`. A canonical report that generic `ValidateCurrentSource` accepts, with `providerUpdatedAt` set, is refused by `Put` before the live read and before `Update`. GET, restart, and replay do not change retrieval.
 
 `ProviderSourceReports.Handle` is not mounted. `RouteEnabled` is false unless `Enabled` is set and the publisher, portal, and selection identity arguments are present. `Selection.MaxAge` is not an input to `RouteEnabled`. While disabled, exact GET and PUT return 404 and do not read the slot, including when the stored report is still inside max age. While enabled, a stale report returns `{"availability":"Unknown"}` and does not delete the object. A fresh GET returns the stored report bytes unchanged. That document is the current-source report, not a measured allowance.
 
@@ -70,6 +70,8 @@ The later portal join is not this patch. `web/portal/session/production.go` stay
 
 `TestProviderSourceStoreDecisions` uses an in-memory object. It covers metadata retention, replay, restart read, same-retrieval and older-retrieval refusal, generation mismatch and reset, reset time, digest mismatch, 16KiB, no repair of undecodable bytes, immutable and deleting objects, one conflict that does not mix, lost-response confirmation, expiry without deletion, generation replacement of the one slot, and a missing object that is not created.
 
+Two subtests record the native P2 repair. `non-null providerUpdatedAt is refused before a write` builds a canonical report whose `providerUpdatedAt` equals `retrievedAt` (`2026-01-08T12:00:00Z`, so the timestamp is not after retrieval). `ValidateCurrentSource` accepts it. `Put` returns `ErrProviderSourceRejected` and does not call the writer. Stored bytes, resourceVersion, and update count stay on the seeded null report. The same body through `ProviderSourceReports.Handle` PUT is HTTP 422 and still does not write. `stored non-null providerUpdatedAt is suppressed` plants that canonical report directly in the ConfigMap. `Read` returns found, suppressed, not fresh, and no raw bytes. It does not update. The stored `retrievedAt` and the non-null `providerUpdatedAt` stay. GET through the same handler returns `{"availability":"Unknown"}` and does not echo the report. The generic `CurrentSourceReport` schema is unchanged.
+
 `TestProviderSourceEnvtest` is the only SSA, real resourceVersion, and API-ownership evidence. It is not a live Flux reconcile and it was not executed here. Fake client is not used for that subtest. Subtests: metadata-only apply, operator update, second metadata-only apply, replica conflict, absent and deleted objects, expiry, generation replacement, handler GET/replay/disable, and a fixture prune of one ConfigMap, Role, and RoleBinding. A refused delete in that fixture returns an error and leaves the object; it is not reported as erased. `pruneSourceNames` exists only in the test.
 
 `TestProviderSourceCallerFence`, `TestProviderSourcePortalAndRoute`, `TestProviderSourceMaxAgeDoesNotRegisterRoute`, and `TestPortalProviderSourceGETDoesNotWiden` cover the live-current-executor predicates, portal PUT and foreign paths, disabled fresh bytes, and max age not registering the route.
@@ -81,6 +83,12 @@ nice -n 19 go test -count=1 -p 1 ./internal/apiserver/ -run 'TestProviderSource|
 ```
 
 `GOMAXPROCS=2`. This context did not run it. SSA survival is incomplete until `TestProviderSourceEnvtest/ssa` has been run against envtest and has passed. A failure there is unfinished integration evidence, not a claim that the bytes survive a real Flux manager.
+
+## Native finding and dormant integration
+
+Independent native exact-head review found P2 at the parent-verified base `d84b5a530149ad410f8dcf5db27da2887c27261e`: `Put` relied on generic `ValidateCurrentSource`, which accepts a non-null `providerUpdatedAt`, while the sealed selected-source contract requires null. The repair is only in `ProviderSourceReportStore` and the two subtests above. `internal/providerallowance` is not edited. `server.go`, `main.go`, and the portal product and production joins are not edited.
+
+This context did not run the focused test, did not format, and did not commit. A later exit 0 is not acceptance. The integration limit stays dormant: the route is not mounted, `Enabled` is not set by `main.go`, and no ConfigMap, Role, or RoleBinding is installed. `TestProviderSourceEnvtest/ssa` was not executed here. SSA survival against a real Flux manager remains unproven. Runtime stays disabled. The sealed packet was not staged or edited.
 
 ## Still not done
 

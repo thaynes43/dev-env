@@ -240,6 +240,62 @@ func TestProviderSourceStoreDecisions(t *testing.T) {
 			t.Fatalf("read %+v %v", view, readErr)
 		}
 	})
+
+	t.Run("non-null providerUpdatedAt is refused before a write", func(t *testing.T) {
+		mem, store, original := seededStore(t)
+		body := syntheticSourceWithProvider(t, sourceRetrieved)
+		report := mustReport(t, body)
+		providerAt, providerErr := time.Parse(time.RFC3339Nano, *report.ProviderUpdatedAt)
+		retrievedAt, retrievedErr := time.Parse(time.RFC3339Nano, report.RetrievedAt)
+		if providerErr != nil || retrievedErr != nil || providerAt.After(retrievedAt) {
+			t.Fatalf("fixture provider %q retrieved %q", *report.ProviderUpdatedAt, report.RetrievedAt)
+		}
+		if err := providerallowance.ValidateCurrentSource(report, store.Selection, sourceNow); err != nil {
+			t.Fatal(err)
+		}
+		rv := mem.cm.ResourceVersion
+		updates := mem.updates
+		err := store.Put(context.Background(), body, sourceNow)
+		if !errors.Is(err, ErrProviderSourceRejected) || errors.Is(err, ErrProviderSourceDigest) || errors.Is(err, ErrProviderSourceRetrieval) {
+			t.Fatal(err)
+		}
+		if strings.Contains(err.Error(), "usedPercent") || strings.Contains(err.Error(), "providerUpdatedAt") || strings.Contains(err.Error(), sourceRetrieved) {
+			t.Fatalf("error contains report: %v", err)
+		}
+		assertProviderSlotHeld(t, mem, original, rv, updates)
+		live, caller := sourceBase()
+		handler := sourceReports(store, live)
+		status, resp, callErr := callProviderSource(t, handler, "PUT", ProviderSourceReportPath, "", body, caller)
+		requireRefusal(t, status, resp, callErr, 422)
+		assertProviderSlotHeld(t, mem, original, rv, updates)
+	})
+
+	t.Run("stored non-null providerUpdatedAt is suppressed", func(t *testing.T) {
+		body := syntheticSourceWithProvider(t, sourceRetrieved)
+		mem := newSlotMem(string(body))
+		store := decisionStore(mem)
+		rv := mem.cm.ResourceVersion
+		updates := mem.updates
+		view, err := store.Read(context.Background(), sourceNow)
+		if err != nil || !view.Found || !view.Suppressed || view.Fresh || view.Raw != nil || view.ResourceVersion != rv {
+			t.Fatalf("view %+v %v", view, err)
+		}
+		assertProviderSlotHeld(t, mem, body, rv, updates)
+		if !strings.Contains(mem.cm.Data[ProviderSourceDataKey], `"retrievedAt":"`+sourceRetrieved+`"`) || !strings.Contains(mem.cm.Data[ProviderSourceDataKey], `"providerUpdatedAt":"`+sourceRetrieved+`"`) {
+			t.Fatalf("retrieval rewritten %#v", mem.cm.Data)
+		}
+		live, caller := sourceBase()
+		handler := sourceReports(store, live)
+		status, resp, callErr := callProviderSource(t, handler, "GET", ProviderSourceReportPath, "", nil, caller)
+		if callErr != nil || status != 200 || jsonString(t, resp) != `{"availability":"Unknown"}` {
+			t.Fatalf("status %d body %#v err %v", status, resp, callErr)
+		}
+		encoded := jsonString(t, resp)
+		if strings.Contains(encoded, "usedPercent") || strings.Contains(encoded, sourceRetrieved) || strings.Contains(encoded, "providerUpdatedAt") {
+			t.Fatal(encoded)
+		}
+		assertProviderSlotHeld(t, mem, body, rv, updates)
+	})
 }
 
 func TestProviderSourceEnvtest(t *testing.T) {
@@ -483,6 +539,44 @@ func syntheticSourceRaw(t *testing.T, used, remaining, retrieved, resets string,
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func syntheticSourceWithProvider(t *testing.T, providerAt string) []byte {
+	t.Helper()
+	updated := providerAt
+	raw, err := json.Marshal(providerallowance.CurrentSourceReport{
+		Schema:                providerallowance.CurrentSourceSchema,
+		PublisherRef:          providerallowance.CurrentSourcePublisher,
+		ProducerIncarnation:   sourceIncarnation,
+		SourceGeneration:      1,
+		RetrievedAt:           sourceRetrieved,
+		ProviderUpdatedAt:     &updated,
+		UsedPercent:           "40",
+		RemainingPercent:      "60",
+		WindowDurationMinutes: 10080,
+		ResetsAt:              sourceResets,
+		RemainingPercentBasis: providerallowance.CurrentSourceRemainingBasis,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := providerallowance.DecodeCurrentSource(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := json.Marshal(report)
+	if err != nil || !bytes.Equal(raw, canonical) || report.ProviderUpdatedAt == nil || *report.ProviderUpdatedAt != providerAt {
+		t.Fatalf("not canonical: %s", raw)
+	}
+	return raw
+}
+
+func assertProviderSlotHeld(t *testing.T, mem *slotMem, original []byte, rv string, updates int) {
+	t.Helper()
+	if mem.updates != updates || mem.cm.ResourceVersion != rv || mem.cm.Data[ProviderSourceDataKey] != string(original) || mem.cm.Data["keep"] != "yes" {
+		t.Fatalf("changed updates %d rv %s data %#v", mem.updates, mem.cm.ResourceVersion, mem.cm.Data)
+	}
+	assertSlotMeta(t, mem.cm)
 }
 
 func sourceSelection(generation int64) providerallowance.CurrentSourceSelection {
