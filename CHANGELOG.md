@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.79.0](https://github.com/thaynes43/dev-env/compare/v2.78.0...v2.79.0) (2026-11-01)
+
+
+### Features
+
+* **portal:** visualize provider allowance resets and reported usage ([#806](https://github.com/thaynes43/dev-env/issues/806)) ([c411ebb](https://github.com/thaynes43/dev-env/commit/c411ebb59b20ca9c4be520b0fe07c67b28ec36aa))
+
 ## [2.78.0](https://github.com/thaynes43/dev-env/compare/v2.77.0...v2.78.0) (2026-10-31)
 
 
