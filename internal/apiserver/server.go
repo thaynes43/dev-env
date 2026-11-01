@@ -203,6 +203,10 @@ type Server struct {
 	// Asks serves /v1/asks and /v1/portal/asks (OpenProject Epic #254). Nil leaves both
 	// unregistered. v1 does not write an inbox message when an ask is answered.
 	Asks *asks.KubeStore
+	// ProviderSourceReports is one fixed current-source slot.
+	// Nil, or RouteEnabled false, leaves both methods unregistered.
+	// Selection.MaxAge does not register the route.
+	ProviderSourceReports *ProviderSourceReports
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -349,6 +353,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.FleetPath, s.serve(route{methods: map[string]handler{
 		http.MethodGet: s.fleet,
 	}}))
+	if s.ProviderSourceReports.RouteEnabled() {
+		mux.Handle(ProviderSourceReportPath, s.serve(route{methods: map[string]handler{
+			http.MethodGet: s.ProviderSourceReports.Handle,
+			http.MethodPut: s.ProviderSourceReports.Handle,
+		}}))
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, notFound("no route %s %s", r.Method, r.URL.Path))
 	})
@@ -409,6 +419,7 @@ func (s *Server) serve(rt route) http.Handler {
 				case len(s.PortalLaunchRepos) > 0 && r.Method == http.MethodPost && r.URL.Path == apiv1.PortalLaunchPath:
 				case len(s.PortalConversationTargets) > 0 && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalConversationPrefix+r.PathValue("uid")+"/conversation":
 				case s.portalAskRoute(r):
+				case PortalProviderSourceGET(s.ProviderSourceReports.RouteEnabled(), r.Method, r.URL.Path):
 				default:
 					return 0, forbidden("the portal reader may only list session summaries")
 				}
