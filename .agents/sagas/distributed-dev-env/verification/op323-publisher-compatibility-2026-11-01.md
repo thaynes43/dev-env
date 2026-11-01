@@ -116,3 +116,20 @@ an assumed 2.71 client, or by this read.
 
 Operator flags, the ConfigMap, RBAC, the portal mount, and runtime activation
 remain separate and were not changed.
+
+### Freshness correction and integration qualification
+
+Native review found that a report could expire or pass reset during GET
+while validation still used the pre-request clock. Grok corrected validation
+to sample time after the response and added synchronized fake-clock age/reset
+regressions. No sleep or retry hides the boundary. The correction's frozen
+patch SHA256 is `bb45615d431d510e334fbdd7437d33079a93a9177b99f7955ffc6c30b2e538e1`.
+
+Sol verified patch/file hashes, inspected the narrow correction, and ran the
+full agentrun package with race detection: PASS in 11.210 seconds. Mechanical
+integration removed an unused import and used errors.Is for the sentinel
+assertion. No substantive implementation or test cases were authored by Sol.
+The configured client retains its existing 8 MiB transport bound; this mode
+accepts documents only through 16 KiB. Neither this source result nor the
+optional reader is a prerequisite to presenting the existing API/portal
+single-source activation proposal. Live acquisition remains separately held.

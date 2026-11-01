@@ -247,9 +247,11 @@ func (a *app) publishCurrentSource(ctx context.Context, body []byte) error {
 }
 
 // readCurrentSource GETs the fixed retained slot once. Selection and the
-// 30 minute age ceiling are checked before connect. The default local
-// formatter does not call this. A provider is not contacted, and nothing
-// here is an account, a cadence, or a served-model total.
+// 30 minute age ceiling are checked before connect. The retained report is
+// validated against a fresh clock reading after the response is received.
+// The default local formatter does not call this. A provider is not
+// contacted, and nothing here is an account, a cadence, or a served-model
+// total.
 func (a *app) readCurrentSource(ctx context.Context, in usageSourceFlags) error {
 	if ctx.Err() != nil {
 		return &exitError{code: ExitFailed, msg: "usage-source unavailable"}
@@ -258,6 +260,7 @@ func (a *app) readCurrentSource(ctx context.Context, in usageSourceFlags) error 
 	if a.env.Now != nil {
 		now = a.env.Now
 	}
+	// at is the pre-connect selection sample. It does not judge the body.
 	at := now()
 	selected, ok := usageSourceReadSelection(in, at)
 	if !ok {
@@ -298,7 +301,9 @@ func (a *app) readCurrentSource(ctx context.Context, in usageSourceFlags) error 
 	if err != nil || report.ProviderUpdatedAt != nil {
 		return &exitError{code: ExitFailed, msg: "usage-source read unavailable"}
 	}
-	if err := providerallowance.ValidateCurrentSource(report, selected, at); err != nil {
+	// Age and reset use the clock after the GET. The exchange can outlast both.
+	receivedAt := now()
+	if err := providerallowance.ValidateCurrentSource(report, selected, receivedAt); err != nil {
 		return &exitError{code: ExitFailed, msg: "usage-source read unavailable"}
 	}
 	body, err := json.Marshal(report)

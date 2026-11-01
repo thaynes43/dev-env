@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
@@ -303,5 +306,110 @@ func TestUsageSourceReadCurrentInputAndCancelDoNotConnect(t *testing.T) {
 	code := Run(ctx, append([]string{"usage-source"}, usageSourceReadArgs()...), h.env)
 	if code != ExitFailed || len(h.api.requests()) != 0 || len(h.ran) != 0 || h.stdout.Len() != 0 || h.stderr.String() != "agent-run: usage-source unavailable\n" {
 		t.Fatalf("cancel code %d stdout %q stderr %q requests %d", code, h.stdout.String(), h.stderr.String(), len(h.api.requests()))
+	}
+}
+
+// usageSourceReadClock is shared by the CLI goroutine and the httptest
+// handler goroutine. The mutex orders every fake-clock observation.
+type usageSourceReadClock struct {
+	mu    sync.Mutex
+	at    time.Time
+	steps int
+	seen  []time.Time
+}
+
+func (c *usageSourceReadClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seen = append(c.seen, c.at)
+	return c.at
+}
+
+func (c *usageSourceReadClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+	c.steps++
+}
+
+func (c *usageSourceReadClock) observations() (int, []time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.steps, append([]time.Time(nil), c.seen...)
+}
+
+func TestUsageSourceReadCurrentFreshnessDuringGET(t *testing.T) {
+	retrieved := time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)
+	selected := providerallowance.CurrentSourceSelection{
+		PublisherRef:        providerallowance.CurrentSourcePublisher,
+		ProducerIncarnation: "synthetic-codex-1",
+		SourceGeneration:    1,
+		MaxAge:              30 * time.Minute,
+	}
+	cases := []struct {
+		name    string
+		start   time.Time
+		advance time.Duration
+		resets  string
+		want    error
+	}{
+		{
+			name:    "retrieval-age-expires",
+			start:   retrieved.Add(20 * time.Minute),
+			advance: 15 * time.Minute,
+			resets:  "2026-01-15T00:00:00Z",
+			want:    providerallowance.ErrCurrentSourceExpired,
+		},
+		{
+			name:    "reset-passes",
+			start:   retrieved.Add(9 * time.Minute),
+			advance: 2 * time.Minute,
+			resets:  "2026-01-08T00:10:00Z",
+			want:    providerallowance.ErrCurrentSourceReset,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report := syntheticReadReport()
+			report.ResetsAt = tc.resets
+			if err := providerallowance.ValidateCurrentSource(report, selected, tc.start); err != nil {
+				t.Fatalf("preconnect instant must accept the report: %v", err)
+			}
+			end := tc.start.Add(tc.advance)
+			if err := providerallowance.ValidateCurrentSource(report, selected, end); !errors.Is(err, tc.want) {
+				t.Fatalf("post-receive instant %v, want %v", err, tc.want)
+			}
+			raw, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := append(append([]byte(nil), raw...), '\n')
+			clock := &usageSourceReadClock{at: tc.start}
+			h := newHarness(t)
+			h.env.Now = clock.now
+			h.env.Stdin = failReader{}
+			h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				clock.advance(tc.advance)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(wire)
+			}
+			h.mustRun(ExitFailed, append([]string{"usage-source"}, usageSourceReadArgs()...)...)
+			reqs := h.api.requests()
+			if len(reqs) != 1 || reqs[0].method != http.MethodGet || reqs[0].path != usageSourcePublishPath || len(reqs[0].query) != 0 || len(reqs[0].body) != 0 || len(h.sleeps) != 0 || len(h.ran) != 0 {
+				t.Fatalf("requests %#v sleeps %d ran %d", reqs, len(h.sleeps), len(h.ran))
+			}
+			if h.stdout.Len() != 0 || h.stderr.String() != "agent-run: usage-source read unavailable\n" {
+				t.Fatalf("stdout %q stderr %q", h.stdout.String(), h.stderr.String())
+			}
+			for _, leak := range []string{"40", "usedPercent", "remainingPercent", "retrievedAt", "resetsAt", report.RetrievedAt, report.ResetsAt} {
+				if strings.Contains(h.stdout.String(), leak) || strings.Contains(h.stderr.String(), leak) {
+					t.Fatalf("output echoed %s", leak)
+				}
+			}
+			steps, seen := clock.observations()
+			if steps != 1 || len(seen) != 2 || !seen[0].Equal(tc.start) || !seen[1].Equal(end) {
+				t.Fatalf("clock steps %d reads %v, want one advance from %s to %s between the preconnect sample and the post-receive sample", steps, seen, tc.start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano))
+			}
+		})
 	}
 }
