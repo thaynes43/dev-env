@@ -162,8 +162,14 @@ Codex capture and private-observer holds remain. Unbound evidence remains
 unverified as a current entitlement.
 
 `agent-run usage-source` sanitizes only an explicitly supplied retained task
-observation of the supported Codex tool. It makes no provider, operator,
-credential-store or history request. The native source reports used percentage,
+observation of the supported Codex tool. Local formatting makes no provider,
+operator, credential-store or history request. Raw nested input requires an
+explicit original `--observed-at`; legacy flattened input remains supported.
+Optional `--publish` uses the existing authenticated operator client for one
+fixed-slot PUT of canonical JSON without a newline. Redirects and blind retries
+are refused. The server retains all live identity, configuration and store
+fences. This does not activate the route or install acquisition or recurrence.
+The native source reports used percentage,
 duration in minutes and an exact reset. Remaining is its exact decimal
 complement, marked `derived_complement_of_used_percent`; a supplied complement
 or provenance marker must agree. The native `windowDurationMins` name and the
@@ -177,8 +183,9 @@ and legacy copies. It refuses secondary windows and unsupported fields;
 plan and credit metadata are compared for conflicts and discarded. Unix
 reset seconds become UTC RFC3339, then the existing flattened builder
 validates the report. Parsing establishes no source authentication or account
-binding. This bridge does not change the local command's flattened input
-contract or install acquisition, publication, recurrence, or runtime access.
+binding. The CLI uses this bridge only for explicit raw input with its original
+observation time; flattened input remains compatible. Neither input mode nor
+optional publication installs acquisition, recurrence or runtime access.
 
 The caller selects one publisher reference, producer incarnation, source
 generation and retrieval age limit. These are opaque caller-supplied source
