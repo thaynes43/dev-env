@@ -14,12 +14,20 @@ import (
 )
 
 func legacyFixture() map[string]any {
-	return map[string]any{
+	root := map[string]any{
 		"at":       "2026-11-01T12:00:00Z",
 		"claims":   []any{map[string]any{"name": "home-a", "namespace": "test", "uid": "pvc-a", "creationTimestamp": "2020-01-01T00:00:00Z", "ownerReferences": []any{map[string]any{"apiVersion": "dev-env.haynesops.com/v1alpha1", "kind": "AgentSession", "name": "session-a", "uid": "session-uid-a", "controller": true}}}},
 		"sessions": []any{map[string]any{"name": "session-a", "namespace": "test", "uid": "session-uid-a", "phase": "Suspended", "agent": map[string]any{"status": "Succeeded", "task": map[string]any{"finishedAt": "2026-10-24T12:00:00Z", "exitCode": 0}}, "rescue": map[string]any{"cleanAndPushed": true, "unpushedRefCount": 0}, "privateHistory": map[string]any{"sessionUID": "session-uid-a", "homeUID": "pvc-a", "homeClaim": "home-a", "lastExecutor": map[string]any{"podUID": "pod-uid-a", "generation": uint64(7), "revision": "image-template-revision"}, "executorTerminal": map[string]any{"version": 1, "podUID": "pod-uid-a", "phase": "Succeeded", "observedAt": "2026-10-26T12:00:00Z"}}}},
 		"pods":     []any{},
 	}
+	legacyTaskFixture(root)["exitSource"] = map[string]any{"sessionUID": "session-uid-a", "podUID": "pod-uid-a", "provider": "codex", "requestedModel": "gpt-6.1-sol", "attemptID": strings.Repeat("a", 64)}
+	legacySession(root)["agent"].(map[string]any)["status"] = "exited"
+	legacySession(root)["creationTimestamp"] = "2026-10-01T00:00:00Z"
+	return root
+}
+
+func legacyTaskFixture(root map[string]any) map[string]any {
+	return legacySession(root)["agent"].(map[string]any)["task"].(map[string]any)
 }
 
 func legacySession(root map[string]any) map[string]any {
@@ -63,7 +71,7 @@ func TestLegacyPrimaryClockBindingAndProvenance(t *testing.T) {
 	root["ignoredProviderMetadata"] = map[string]any{"newField": true}
 	snapshot, data := adaptLegacy(t, root, nil)
 	record := snapshot.Records[0]
-	if record.Binding.SessionUID != "session-uid-a" || record.Binding.PVCUID != "pvc-a" || record.Binding.PodUID != "pod-uid-a" || record.Binding.Attempt != "pod-uid-a:7" || record.Binding.WriterGeneration != 7 || record.Binding.HomeRevision != "" {
+	if record.Binding.SessionUID != "session-uid-a" || record.Binding.PVCUID != "pvc-a" || record.Binding.PodUID != "pod-uid-a" || record.Binding.Attempt != strings.Repeat("a", 64) || record.Binding.WriterGeneration != 0 || record.Binding.HomeRevision != "" {
 		t.Fatalf("incorrect binding: %+v", record.Binding)
 	}
 	if record.TaskCompletion == nil || record.TaskCompletion.FinishedAt != "2026-10-24T12:00:00Z" || record.TerminalRecord != nil || record.Proof != nil || record.Observation != nil {
@@ -73,6 +81,9 @@ func TestLegacyPrimaryClockBindingAndProvenance(t *testing.T) {
 	p := record.Provenance
 	if p == nil || p.SnapshotSHA256 != hex.EncodeToString(digest[:]) || p.CapturedAt != root["at"] || p.ClockPath != "$.sessions[0].agent.task.finishedAt" || p.BindingStatus != "matched_legacy_metadata" || p.RecordedClockAt != "2026-10-24T12:00:00Z" || p.RecordedClockSource != "task_finished_at" {
 		t.Fatalf("incorrect provenance: %+v", p)
+	}
+	if p.ClockBindingStatus != "recorded_attempt" {
+		t.Fatal("explicit provider attempt not retained")
 	}
 	report := evaluateLegacy(t, snapshot)
 	if e := report.StoppedWorkQueue[0]; e.ClockSource != "task_finished_at" || e.Deadline != "2026-10-31T12:00:00Z" || !e.DecisionRequired {
@@ -89,7 +100,7 @@ func TestLegacyActualTerminalFallback(t *testing.T) {
 	delete(legacySession(root)["agent"].(map[string]any), "task")
 	snapshot, _ := adaptLegacy(t, root, nil)
 	record := snapshot.Records[0]
-	if record.TaskCompletion != nil || record.TerminalRecord == nil || record.TerminalRecord.Source != "actual_executor_terminal" {
+	if record.TaskCompletion != nil || record.TerminalRecord == nil || record.TerminalRecord.Source != "actual_executor_terminal" || record.Binding.Attempt != "" || record.Binding.WriterGeneration != 0 || record.Provenance.ClockBindingStatus != "recorded_terminal" {
 		t.Fatal("actual terminal record not selected")
 	}
 	e := evaluateLegacy(t, snapshot).StoppedWorkQueue[0]
@@ -131,6 +142,9 @@ func TestLegacyInvalidAndAbsentClocksNeverFallBackToCreation(t *testing.T) {
 			if s.Records[0].TerminalRecord != nil || s.Records[0].TaskCompletion == nil {
 				t.Fatal("invalid present task fell back")
 			}
+			if p := s.Records[0].Provenance; p.TerminalObservedAt != "2026-10-26T12:00:00Z" || p.TerminalClockPath == "" {
+				t.Fatal("unselected terminal timestamp provenance erased")
+			}
 			e := evaluateLegacy(t, s).StoppedWorkQueue[0]
 			if e.Deadline != "" || !e.DecisionRequired {
 				t.Fatal("invalid clock invented deadline")
@@ -166,7 +180,6 @@ func TestLegacyAssociationConflictsRemainUnknown(t *testing.T) {
 		{"session-binding-conflict", func(r map[string]any) { legacyHistory(r)["sessionUID"] = "replacement-session" }},
 		{"home-name-conflict", func(r map[string]any) { legacyHistory(r)["homeClaim"] = "replacement-home" }},
 		{"unknown-pod", func(r map[string]any) { delete(legacyHistory(r)["lastExecutor"].(map[string]any), "podUID") }},
-		{"unknown-generation", func(r map[string]any) { delete(legacyHistory(r)["lastExecutor"].(map[string]any), "generation") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := legacyFixture()
@@ -191,6 +204,184 @@ func TestLegacyAssociationConflictsRemainUnknown(t *testing.T) {
 	}
 }
 
+func TestLegacyExitSourceMustBeExplicitAndExact(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{"foreign-session", func(r map[string]any) {
+			legacyTaskFixture(r)["exitSource"].(map[string]any)["sessionUID"] = "foreign-session"
+		}},
+		{"foreign-pod", func(r map[string]any) { legacyTaskFixture(r)["exitSource"].(map[string]any)["podUID"] = "foreign-pod" }},
+		{"short-attempt", func(r map[string]any) { legacyTaskFixture(r)["exitSource"].(map[string]any)["attemptID"] = "attempt" }},
+		{"uppercase-attempt", func(r map[string]any) {
+			legacyTaskFixture(r)["exitSource"].(map[string]any)["attemptID"] = strings.Repeat("A", 64)
+		}},
+		{"foreign-provider", func(r map[string]any) { legacyTaskFixture(r)["exitSource"].(map[string]any)["provider"] = "unknown" }},
+		{"missing-model", func(r map[string]any) { delete(legacyTaskFixture(r)["exitSource"].(map[string]any), "requestedModel") }},
+		{"oversized-model", func(r map[string]any) {
+			legacyTaskFixture(r)["exitSource"].(map[string]any)["requestedModel"] = strings.Repeat("m", 257)
+		}},
+		{"expected-provider", func(r map[string]any) { legacySession(r)["spec"] = map[string]any{"agent": "claude"} }},
+		{"expected-model", func(r map[string]any) { legacySession(r)["spec"] = map[string]any{"model": "other-model"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := legacyFixture()
+			tc.mutate(r)
+			s, _ := adaptLegacy(t, r, nil)
+			record := s.Records[0]
+			if record.Binding.Attempt != "" || record.Binding.WriterGeneration != 0 || record.TaskCompletion == nil || record.TerminalRecord != nil || record.Provenance.ClockBindingStatus != "conflict" {
+				t.Fatalf("invalid source guessed task binding: %+v", record)
+			}
+			if record.Provenance.RecordedClockAt != "2026-10-24T12:00:00Z" {
+				t.Fatal("foreign raw clock evidence erased")
+			}
+			e := evaluateLegacy(t, s).StoppedWorkQueue[0]
+			if e.Deadline != "" {
+				t.Fatal("foreign source established current attempt deadline")
+			}
+		})
+	}
+	r := legacyFixture()
+	delete(legacyTaskFixture(r), "exitSource")
+	s, _ := adaptLegacy(t, r, nil)
+	record := s.Records[0]
+	if record.Binding.Attempt != "" || record.Provenance.ClockBindingStatus != "unbound_legacy" || record.TaskCompletion == nil || record.Provenance.RecordedClockAt != "2026-10-24T12:00:00Z" {
+		t.Fatal("missing-source raw age not retained as unbound")
+	}
+	if e := evaluateLegacy(t, s).StoppedWorkQueue[0]; e.Deadline != "" || e.ClockSource != "task_finished_at" {
+		t.Fatal("legacy missing source was reconstructed")
+	}
+	if p := evaluateLegacy(t, s).StoppedWorkQueue[0].Provenance; p.RecordedDeadline != "2026-10-31T12:00:00Z" || !p.RecordedAgeEligible || p.ClockBindingStatus != "unbound_legacy" {
+		t.Fatal("unbound recorded audit age was erased")
+	}
+	for _, generation := range []any{nil, 0, 7, "not-an-attempt"} {
+		r := legacyFixture()
+		last := legacyHistory(r)["lastExecutor"].(map[string]any)
+		if generation == nil {
+			delete(last, "generation")
+		} else {
+			last["generation"] = generation
+		}
+		s, _ := adaptLegacy(t, r, nil)
+		if s.Records[0].Binding.Attempt != strings.Repeat("a", 64) || s.Records[0].Binding.WriterGeneration != 0 {
+			t.Fatal("Session generation influenced attempt/writer generation")
+		}
+	}
+}
+
+func TestLegacyRetainedTaskBindingAndConflicts(t *testing.T) {
+	for _, mode := range []string{"matching", "retained-only", "time-conflict", "source-conflict", "retained-foreign"} {
+		t.Run(mode, func(t *testing.T) {
+			r := legacyFixture()
+			data, err := json.Marshal(legacyTaskFixture(r))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var retained map[string]any
+			if err := json.Unmarshal(data, &retained); err != nil {
+				t.Fatal(err)
+			}
+			legacyHistory(r)["taskTerminal"] = map[string]any{"task": retained}
+			switch mode {
+			case "retained-only":
+				delete(legacySession(r)["agent"].(map[string]any), "task")
+			case "time-conflict":
+				retained["finishedAt"] = "2026-10-25T12:00:00Z"
+			case "source-conflict":
+				retained["exitSource"].(map[string]any)["attemptID"] = strings.Repeat("b", 64)
+			case "retained-foreign":
+				delete(legacySession(r)["agent"].(map[string]any), "task")
+				retained["exitSource"].(map[string]any)["sessionUID"] = "foreign-session"
+			}
+			s, _ := adaptLegacy(t, r, nil)
+			record := s.Records[0]
+			if record.TaskCompletion == nil || record.TerminalRecord != nil {
+				t.Fatal("retained task presence fell back to executor terminal")
+			}
+			valid := mode == "matching" || mode == "retained-only"
+			if valid {
+				if record.Binding.Attempt != strings.Repeat("a", 64) || record.Provenance.ClockPath != "$.sessions[0].privateHistory.taskTerminal.task.finishedAt" {
+					t.Fatal("exact retained task not selected")
+				}
+			} else {
+				if record.Binding.Attempt != "" || record.Provenance.ClockBindingStatus != "conflict" {
+					t.Fatal("conflicting retained task accepted")
+				}
+			}
+			e := evaluateLegacy(t, s).StoppedWorkQueue[0]
+			if (e.Deadline != "") != valid {
+				t.Fatal("retained task deadline mismatch")
+			}
+		})
+	}
+}
+
+func TestLegacyTaskPresenceAndSessionCreation(t *testing.T) {
+	for _, task := range []any{nil, map[string]any{}, map[string]any{"exitCode": 0}} {
+		r := legacyFixture()
+		legacySession(r)["agent"].(map[string]any)["task"] = task
+		s, _ := adaptLegacy(t, r, nil)
+		if s.Records[0].TaskCompletion != nil || s.Records[0].TerminalRecord == nil {
+			t.Fatal("non-completion task metadata hid actual terminal fallback")
+		}
+		if e := evaluateLegacy(t, s).StoppedWorkQueue[0]; e.ClockSource != "executor_terminal_observed_at" || e.Deadline == "" {
+			t.Fatal("terminal fallback provenance lost")
+		}
+	}
+	r := legacyFixture()
+	legacySession(r)["creationTimestamp"] = "2026-10-25T00:00:00Z"
+	s, _ := adaptLegacy(t, r, nil)
+	record := s.Records[0]
+	if record.Binding.Attempt != "" || record.Provenance.ClockBindingStatus != "conflict" || record.Provenance.RecordedClockAt != "2026-10-24T12:00:00Z" {
+		t.Fatal("pre-creation task clock was bound")
+	}
+	if e := evaluateLegacy(t, s).StoppedWorkQueue[0]; e.Deadline != "" {
+		t.Fatal("pre-creation task invented deadline")
+	}
+	r = legacyFixture()
+	delete(legacySession(r)["agent"].(map[string]any), "task")
+	legacySession(r)["creationTimestamp"] = "2026-10-27T00:00:00Z"
+	s, _ = adaptLegacy(t, r, nil)
+	if s.Records[0].TerminalRecord != nil || s.Records[0].Provenance.ClockBindingStatus != "conflict" {
+		t.Fatal("pre-creation terminal clock was bound")
+	}
+}
+
+func TestLegacyReportedActivityAndStaleTask(t *testing.T) {
+	for _, status := range []string{"busy", "waiting", "idle", "pending", "running", "resuming"} {
+		r := legacyFixture()
+		legacySession(r)["agent"].(map[string]any)["status"] = status
+		s, _ := adaptLegacy(t, r, nil)
+		if s.Records[0].State != "active" {
+			t.Fatal("positive activity without pod was erased by stale task")
+		}
+		if e := evaluateLegacy(t, s).StoppedWorkQueue[0]; e.Status != "protected" || e.DispositionDecisionRequired {
+			t.Fatal("reported activity became stopped disposition action")
+		}
+	}
+	r := legacyFixture()
+	legacySession(r)["agent"].(map[string]any)["status"] = "unknown"
+	delete(legacyHistory(r), "executorTerminal")
+	s, _ := adaptLegacy(t, r, nil)
+	if s.Records[0].State != "unknown" {
+		t.Fatal("unknown agent state certified stopped from stale task")
+	}
+	r = legacyFixture()
+	legacySession(r)["phase"] = "Pending"
+	legacySession(r)["spec"] = map[string]any{"operatingMode": "Running"}
+	legacySession(r)["deletionTimestamp"] = "2026-11-01T11:00:00Z"
+	s, _ = adaptLegacy(t, r, nil)
+	if s.Records[0].State != "stopped" {
+		t.Fatal("desired running mode hid deleting exited executor")
+	}
+	legacySession(r)["phase"] = "Resuming"
+	s, _ = adaptLegacy(t, r, nil)
+	if s.Records[0].State != "active" {
+		t.Fatal("explicit resuming phase ignored")
+	}
+}
+
 func legacyPod(phase string, hold bool) map[string]any {
 	labels := map[string]any{}
 	if hold {
@@ -208,8 +399,8 @@ func TestLegacyActiveForeignMountsAndRescueHold(t *testing.T) {
 			t.Fatal("foreign/current mount did not protect HOME")
 		}
 		e := evaluateLegacy(t, s).StoppedWorkQueue[0]
-		if e.Status != "protected" || e.DecisionRequired {
-			t.Fatal("active executor queued for expiry")
+		if e.Status != "protected" || e.DispositionDecisionRequired {
+			t.Fatal("active executor lost safety protection")
 		}
 	}
 	r := legacyFixture()

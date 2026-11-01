@@ -80,10 +80,37 @@ func TestStoppedSpecialWorkRequiresDispositionAtDeadline(t *testing.T) {
 				t.Fatalf("special stopped work hidden: %+v", e)
 			}
 			f.record.State = "active"
+			f.record.Observation.Payload.State = "active"
+			f.resign(t)
 			e = requireReason(t, f.evaluate(t), "active_session")
 			if e.Status != "protected" || e.DecisionRequired || e.DispositionDecisionRequired {
 				t.Fatalf("active work got expiry action: %+v", e)
 			}
 		}
+	}
+}
+
+func TestUnverifiedActivityCannotHideExpiredWork(t *testing.T) {
+	f := newFixture(t)
+	f.record.TaskCompletion.FinishedAt = formatTime(f.now.Add(-Retention))
+	f.record.State = "active"
+	e := requireReason(t, f.evaluate(t), "protection_unverified")
+	if e.Status != "protected" || !e.DecisionRequired || e.DispositionDecisionRequired {
+		t.Fatalf("unverified activity hid owner verification decision: %+v", e)
+	}
+}
+
+func TestUnsignedClockIsExplicitAuditEvidence(t *testing.T) {
+	f := newFixture(t)
+	f.record.Proof = nil
+	f.record.TaskCompletion.FinishedAt = formatTime(f.now.Add(-Retention))
+	e := requireReason(t, f.evaluate(t), "completion_clock_unverified")
+	if !e.DecisionRequired {
+		t.Fatal("expired recorded clock lost its decision")
+	}
+	f.record.TaskCompletion.FinishedAt = formatTime(f.now.Add(-1))
+	e = requireReason(t, f.evaluate(t), "completion_clock_unverified")
+	if e.CompletedAt == "" || e.Status != "retained" {
+		t.Fatal("recorded unsigned age was erased instead of marked unverified")
 	}
 }

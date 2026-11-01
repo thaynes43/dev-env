@@ -150,7 +150,11 @@ func validText(value string) bool {
 }
 
 func validExecutor(binding ExecutorBinding) bool {
-	return validText(binding.SessionUID) && validText(binding.PVCUID) && validText(binding.PodUID) && validText(binding.Attempt)
+	return validExecutorIdentity(binding) && validText(binding.Attempt)
+}
+
+func validExecutorIdentity(binding ExecutorBinding) bool {
+	return validText(binding.SessionUID) && validText(binding.PVCUID) && validText(binding.PodUID)
 }
 
 func validBinding(binding Binding) bool {

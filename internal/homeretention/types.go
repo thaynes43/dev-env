@@ -239,12 +239,19 @@ type Entry struct {
 // Provenance retains known legacy clock/identity evidence without asserting
 // that an offline snapshot is an authenticated current collection.
 type Provenance struct {
-	Source              string   `json:"source"`
-	SnapshotSHA256      string   `json:"snapshotSHA256"`
-	CapturedAt          string   `json:"capturedAt"`
-	ClockPath           string   `json:"clockPath"`
-	RecordedClockAt     string   `json:"recordedClockAt,omitempty"`
-	RecordedClockSource string   `json:"recordedClockSource,omitempty"`
+	Source              string `json:"source"`
+	SnapshotSHA256      string `json:"snapshotSHA256"`
+	CapturedAt          string `json:"capturedAt"`
+	ClockPath           string `json:"clockPath"`
+	ClockBindingStatus  string `json:"clockBindingStatus"`
+	RecordedClockAt     string `json:"recordedClockAt,omitempty"`
+	RecordedClockSource string `json:"recordedClockSource,omitempty"`
+	TerminalObservedAt  string `json:"terminalObservedAt,omitempty"`
+	TerminalClockPath   string `json:"terminalClockPath,omitempty"`
+	// Recorded age is audit-only when exact attempt provenance is unavailable.
+	RecordedWarningAt   string   `json:"recordedWarningAt,omitempty"`
+	RecordedDeadline    string   `json:"recordedDeadline,omitempty"`
+	RecordedAgeEligible bool     `json:"recordedAgeEligible"`
 	BindingStatus       string   `json:"bindingStatus"`
 	Exceptions          []string `json:"exceptions"`
 }

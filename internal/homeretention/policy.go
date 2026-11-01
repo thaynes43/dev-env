@@ -25,10 +25,33 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust EvidenceVer
 	report := Report{Version: Version, DryRun: true, DeleteEnabled: false, EvaluatedAt: formatTime(now), Retention: Retention.String(), WarningLead: policy.WarningLead.String(), ObservationMaxAge: policy.ObservationMaxAge.String(), ImmediateCandidates: []Entry{}, StoppedWorkQueue: []Entry{}}
 	for _, record := range snapshot.Records {
 		entry := Entry{UID: record.UID, Binding: record.Binding, Reasons: []string{}, Provenance: record.Provenance}
+		if record.Provenance != nil && record.Provenance.Source == "legacy-snapshot" {
+			// Preserve raw recorded age without promoting it to a bound task clock.
+			provenance := *record.Provenance
+			provenance.RecordedWarningAt, provenance.RecordedDeadline, provenance.RecordedAgeEligible = "", "", false
+			if at, ok := parseTime(provenance.RecordedClockAt); ok && !at.After(now) && provenance.ClockBindingStatus != "conflict" && provenance.BindingStatus != "conflict" {
+				deadline := at.Add(Retention)
+				provenance.RecordedDeadline = formatTime(deadline)
+				provenance.RecordedWarningAt = formatTime(deadline.Add(-policy.WarningLead))
+				provenance.RecordedAgeEligible = !now.Before(deadline)
+			}
+			entry.Provenance = &provenance
+		}
 		completed, clock, clockReason := completionClock(record, now)
 		entry.ClockSource = clock.Source
 		if clockReason != "" {
 			entry.Reasons = append(entry.Reasons, clockReason)
+		}
+		if !completed.IsZero() {
+			clockAuthenticated := false
+			if record.Proof != nil {
+				p := record.Proof.Payload
+				_, verified := evidence.verify("proof", p, record.Proof.Signature)
+				clockAuthenticated = verified && p.Version == Version && p.Binding == record.Binding && p.Clock == clock
+			}
+			if !clockAuthenticated {
+				entry.Reasons = append(entry.Reasons, "completion_clock_unverified")
+			}
 		}
 		if !completed.IsZero() {
 			deadline := completed.Add(Retention)
@@ -70,11 +93,12 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust EvidenceVer
 		entry.Reasons = sortedUnique(entry.Reasons)
 		if protected {
 			entry.Status = "protected"
-			// Active work is protected without expiry actions. Stopped holds and
-			// fixtures retain their explicit overdue/clockless disposition decision.
-			if record.State == "active" {
+			// Verified active work has no expiry decision. Unverified activity
+			// remains protected but cannot hide an owner verification decision.
+			// Stopped holds/fixtures retain their explicit disposition decision.
+			if record.State == "active" && verifiedProtection {
 				entry.DecisionRequired = false
-			} else if entry.DecisionRequired {
+			} else if record.State != "active" && entry.DecisionRequired {
 				entry.DispositionDecisionRequired = true
 				entry.Reasons = sortedUnique(append(entry.Reasons, "owner_disposition_required"))
 			}
@@ -101,7 +125,7 @@ func completionClock(record Record, now time.Time) (time.Time, Clock, string) {
 		value = record.TaskCompletion.FinishedAt
 	} else if record.TerminalRecord != nil {
 		clock.Source = "executor_terminal_observed_at"
-		if !validExecutor(record.Binding.ExecutorBinding) || record.TerminalRecord.Executor != record.Binding.ExecutorBinding || record.TerminalRecord.Source != "actual_executor_terminal" {
+		if !validExecutorIdentity(record.Binding.ExecutorBinding) || record.TerminalRecord.Executor != record.Binding.ExecutorBinding || record.TerminalRecord.Source != "actual_executor_terminal" {
 			return time.Time{}, clock, "terminal_clock_binding_or_source_invalid"
 		}
 		value = record.TerminalRecord.ObservedAt

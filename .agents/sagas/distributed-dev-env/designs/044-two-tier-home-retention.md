@@ -34,7 +34,9 @@ signature. An unverified protective marker prevents immediate candidacy and
 keeps protected status. Stopped holds and special fixtures still enter the owner
 disposition batch at expiry or when their clock is unknown, with
 `dispositionDecisionRequired: true`; protection never silently exempts stopped
-work from a decision. Active work remains protected without expiry actions.
+work from a decision. Verified active work remains protected without expiry actions. Unverified
+reported activity stays protected but retains any expired/clockless owner
+verification decision; it does not acquire deletion or disposition authority.
 
 ## Verifiable evidence and trust
 
@@ -114,7 +116,8 @@ proofs. It never weakens current finalizers or coordination retention.
 
 ## Bounded interface and remaining integration
 
-`internal/homeretention` is a standard-library-only policy/verifier.
+`internal/homeretention` uses the standard library and existing agentd protocol
+validation helpers; it adds no external dependency.
 `cmd/home-retention-dry-run` reads a bounded strict JSON snapshot and optional
 separate trusted public-key configuration, and writes JSON to stdout. Its
 explicit time and policy settings make output reproducible; it has no network,
@@ -127,7 +130,17 @@ Its UID-specific fixture dispositions can add protection but cannot remove it.
 It never promotes old rescue booleans into preservation proof and cannot use
 `--trust`. Unused provider metadata is ignored within strict depth/byte/count
 and duplicate-member bounds. Known unbound timestamps stay in provenance;
-missing bindings remain unknown decisions, never invented identities.
+missing bindings remain unknown decisions, never invented identities. Original
+provider attempt identity comes only from recorded `task.exitSource` (or matching
+retained `taskTerminal.task`), never Session generation/later configuration.
+Legacy raw clock age remains visible under `recordedWarningAt`,
+`recordedDeadline` and `recordedAgeEligible` without becoming an exact bound task
+clock. Conflicting task sources or timestamps before Session creation remain
+explicit exceptions. Null task/no recorded timestamp may use a valid matching
+actual terminal record; a present invalid timestamp never silently falls back.
+A valid unsigned bound clock carries `completion_clock_unverified`; offline
+queue arithmetic trusts its recorded value for planning, not as authenticated
+cleanup evidence or permission to reset the durable source record.
 
 Remaining integration is a separately owned collector: (1) adapt the existing
 rescue Git checks into non-mutating complete HOME inventory collection with

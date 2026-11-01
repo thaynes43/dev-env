@@ -32,6 +32,11 @@ bin/home-retention-dry-run --now 2026-11-01T21:09:03Z \
 
 This bounded adapter preserves existing task/terminal clocks, exact recorded
 identity associations, raw snapshot SHA-256, capture time and source field paths.
+A task clock binds to its recorded original `exitSource.attemptID`, never a
+Session generation or a later Pod/config. Older results without this source keep
+their timestamps and recorded warning/deadline under audit provenance, with an
+unknown bound task clock. Explicit conflicting sources cannot acquire a current
+executor binding. Recorded audit age never proves preservation.
 It never uses PVC birth as completion or promotes old success, `CleanAndPushed`
 or PR metadata into preservation proof. Missing/conflicting bindings remain
 exceptions; known timestamps remain in audit provenance even when they cannot
@@ -69,7 +74,9 @@ unknown disposition values block candidacy and follow the warning/decision clock
 State, hold and disposition must match a fresh authenticated observation before
 they can support candidacy. Stopped holds and special fixtures remain protected
 but carry `dispositionDecisionRequired: true` at expiry or with an unknown clock.
-Active work stays protected without expiry actions. Clearing a raw hold or
+Verified active work stays protected without expiry actions. Unverified reported
+activity stays protected but cannot hide an expired/unknown owner-verification
+decision; this is not a disposition or deletion action. Clearing a raw hold or
 fixture marker cannot reuse its old observation.
 Statuses distinguish retained, warning, decision required and protected work.
 Missing/future clocks have no fabricated deadline and need an owner decision;
@@ -79,7 +86,12 @@ UID-bound destructive approval.
 The primary clock is the recorded provider task `finishedAt` for the same
 Session/PVC/Pod/executor attempt. Only when no task-completion record exists may
 a recorded actual terminal observation supply `observedAt`. The report states
-the clock source. An invalid task timestamp cannot silently fall back. HOME
+the clock source. Null task/no recorded `finishedAt` may use a matching actual
+terminal observation; an explicitly invalid/future task timestamp cannot silently
+fall back. A timestamp before Session creation is a legacy identity/time conflict.
+Unsigned valid bound clocks are marked `completion_clock_unverified`: their
+recorded ages guide this offline queue, not authenticated cleanup or a new clock.
+Changing an input changes its provenance, not the durable source record. HOME
 revision changes invalidate preservation evidence but do not reset that attempt's
 completion clock. A resumed executor or replacement Pod needs its own actual
 binding and completion evidence; active mounts always prevent candidacy.

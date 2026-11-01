@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
+	"strings"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 const MaxLegacyPods = 4000
@@ -111,7 +113,7 @@ func DecodeLegacySnapshot(r io.Reader, dispositions map[string]string) (Snapshot
 	digest := sha256.Sum256(data)
 	snapshot := Snapshot{Version: Version, Records: make([]Record, 0, len(claims))}
 	for _, claim := range claims {
-		record := Record{UID: claim.uid, Binding: Binding{ExecutorBinding: ExecutorBinding{PVCUID: claim.uid}}, State: "unknown", Disposition: "normal", Provenance: &Provenance{Source: "legacy-snapshot", SnapshotSHA256: hex.EncodeToString(digest[:]), CapturedAt: at, BindingStatus: "unknown", Exceptions: []string{"legacy_evidence_unsigned", "home_revision_unknown"}}}
+		record := Record{UID: claim.uid, Binding: Binding{ExecutorBinding: ExecutorBinding{PVCUID: claim.uid}}, State: "unknown", Disposition: "normal", Provenance: &Provenance{Source: "legacy-snapshot", SnapshotSHA256: hex.EncodeToString(digest[:]), CapturedAt: at, BindingStatus: "unknown", ClockBindingStatus: "unknown", Exceptions: []string{"legacy_evidence_unsigned", "home_revision_unknown", "writer_generation_unknown"}}}
 		if err := legacyAssociate(&record, claim, bySessionUID); err != nil {
 			return Snapshot{}, err
 		}
@@ -178,6 +180,7 @@ func legacyAssociate(record *Record, claim legacyEntity, sessions map[string]leg
 	session, exists := sessions[uid]
 	if kind != "AgentSession" || api != "dev-env.haynesops.com/v1alpha1" || !exists || session.name != name || session.namespace != claim.namespace {
 		record.Provenance.BindingStatus = "conflict"
+		record.Provenance.ClockBindingStatus = "conflict"
 		record.Provenance.Exceptions = append(record.Provenance.Exceptions, "claim_session_identity_conflict")
 		return nil
 	}
@@ -231,42 +234,142 @@ func legacyAssociate(record *Record, claim legacyEntity, sessions map[string]leg
 	if err != nil {
 		return err
 	}
-	var generation uint64
-	if raw, exists := last["generation"]; exists {
-		if err := json.Unmarshal(raw, &generation); err != nil {
-			return errors.New("invalid legacy executor generation")
-		}
-	}
-	bound := !conflict && historySession != "" && historyHome != "" && historyClaim != "" && validText(podUID) && generation > 0
+	// lastExecutor.generation is the Session generation at observation. It is
+	// neither the provider attempt nor a writer generation and cannot fill either.
+	bound := !conflict && historySession != "" && historyHome != "" && historyClaim != "" && validText(podUID)
 	if conflict {
 		record.Provenance.BindingStatus = "conflict"
+		record.Provenance.ClockBindingStatus = "conflict"
 		record.Provenance.Exceptions = append(record.Provenance.Exceptions, "private_home_identity_conflict")
 	} else if !bound {
 		record.Provenance.Exceptions = append(record.Provenance.Exceptions, "legacy_executor_binding_missing")
 	} else {
-		record.Binding.ExecutorBinding = ExecutorBinding{SessionUID: session.uid, PVCUID: claim.uid, PodUID: podUID, Attempt: podUID + ":" + strconv.FormatUint(generation, 10)}
-		record.Binding.WriterGeneration = generation
+		record.Binding.ExecutorBinding = ExecutorBinding{SessionUID: session.uid, PVCUID: claim.uid, PodUID: podUID}
 		record.Provenance.BindingStatus = "matched_legacy_metadata"
+	}
+	// Retain the alternate terminal observation even if an invalid primary task
+	// clock prevents selecting it. This is evidence, not a silent clock fallback.
+	if bound && legacyTerminalMatches(history, podUID) {
+		terminal, err := legacyMap(history, "executorTerminal")
+		if err != nil {
+			return err
+		}
+		observed, err := legacyString(terminal, "observedAt")
+		if err != nil {
+			return err
+		}
+		record.Provenance.TerminalObservedAt = observed
+		record.Provenance.TerminalClockPath = fmt.Sprintf("$.sessions[%d].privateHistory.executorTerminal.observedAt", session.index)
 	}
 	agent, err := legacyMap(session.object, "agent")
 	if err != nil {
 		return err
 	}
-	if _, taskPresent := agent["task"]; taskPresent {
-		task, err := legacyMap(agent, "task")
+	activity, err := legacyString(agent, "status")
+	if err != nil {
+		return err
+	}
+	phase, err := legacyString(session.object, "phase")
+	if err != nil {
+		return err
+	}
+	reportedActive := false
+	switch strings.ToLower(activity) {
+	case "busy", "waiting", "idle", "pending", "running", "resuming", "starting":
+		reportedActive = true
+	}
+	if phase == "Running" || phase == "Resuming" {
+		reportedActive = true
+	}
+	exited := activity == "exited" || activity == "failed" || activity == "interrupted"
+	if reportedActive {
+		record.State = "active"
+		record.Provenance.Exceptions = append(record.Provenance.Exceptions, "legacy_active_executor_reported")
+	}
+	retained, err := legacyMap(history, "taskTerminal")
+	if err != nil {
+		return err
+	}
+	agentPresent, err := legacyCompletionPresent(agent)
+	if err != nil {
+		return err
+	}
+	retainedPresent, err := legacyCompletionPresent(retained)
+	if err != nil {
+		return err
+	}
+	if agentPresent || retainedPresent {
+		taskParent, taskField := agent, "agent"
+		if retainedPresent {
+			taskParent, taskField = retained, "privateHistory.taskTerminal"
+		}
+		task, err := legacyMap(taskParent, "task")
 		if err != nil {
 			return err
 		}
-		finished, err := legacyString(task, "finishedAt")
+		finished, source, sourceShapeOK, err := legacyTask(task)
 		if err != nil {
 			return err
 		}
 		record.Provenance.RecordedClockAt = finished
 		record.Provenance.RecordedClockSource = "task_finished_at"
+		record.Provenance.ClockPath = fmt.Sprintf("$.sessions[%d].%s.task.finishedAt", session.index, taskField)
+		conflictingTasks := false
+		if agentPresent && retainedPresent {
+			agentTask, err := legacyMap(agent, "task")
+			if err != nil {
+				return err
+			}
+			agentFinished, agentSource, agentShapeOK, err := legacyTask(agentTask)
+			if err != nil {
+				return err
+			}
+			conflictingTasks = agentFinished != finished || agentSource != source || agentShapeOK != sourceShapeOK
+		}
+		if conflictingTasks {
+			record.Provenance.ClockBindingStatus = "conflict"
+			record.Provenance.RecordedClockAt = ""
+			record.Provenance.Exceptions = append(record.Provenance.Exceptions, "legacy_task_records_conflict")
+			finished = ""
+		} else if bound && sourceShapeOK && source.SessionUID == session.uid && source.PodUID == podUID {
+			spec, err := legacyMap(session.object, "spec")
+			if err != nil {
+				return err
+			}
+			provider, err := legacyString(spec, "agent")
+			if err != nil {
+				return err
+			}
+			model, err := legacyString(spec, "model")
+			if err != nil {
+				return err
+			}
+			if (provider == "" || provider == source.Provider) && (model == "" || model == source.RequestedModel) {
+				record.Binding.Attempt = source.AttemptID
+				record.Provenance.ClockBindingStatus = "recorded_attempt"
+			} else {
+				record.Provenance.ClockBindingStatus = "conflict"
+				record.Provenance.Exceptions = append(record.Provenance.Exceptions, "task_exit_source_provider_or_model_conflict")
+			}
+		} else {
+			if raw, present := task["exitSource"]; present && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				record.Provenance.ClockBindingStatus = "conflict"
+			} else if record.Provenance.ClockBindingStatus != "conflict" {
+				record.Provenance.ClockBindingStatus = "unbound_legacy"
+			}
+			record.Provenance.Exceptions = append(record.Provenance.Exceptions, "task_exit_source_missing_foreign_or_invalid")
+		}
+		if legacyPredatesSession(session.object, finished) {
+			record.Binding.Attempt = ""
+			record.Provenance.ClockBindingStatus = "conflict"
+			record.Provenance.Exceptions = append(record.Provenance.Exceptions, "task_clock_predates_session")
+		}
 		record.TaskCompletion = &Completion{Executor: record.Binding.ExecutorBinding, FinishedAt: finished}
-		record.Provenance.ClockPath = fmt.Sprintf("$.sessions[%d].agent.task.finishedAt", session.index)
+		if record.Binding.Attempt == "" && record.Provenance.BindingStatus != "conflict" {
+			record.Provenance.BindingStatus = "task_attempt_unknown"
+		}
 		record.Provenance.Exceptions = append(record.Provenance.Exceptions, "legacy_task_attempt_association_unsigned")
-		if bound {
+		if bound && !reportedActive && (exited || legacyTerminalMatches(history, podUID)) {
 			record.State = "stopped"
 		}
 		return nil
@@ -284,7 +387,7 @@ func legacyAssociate(record *Record, claim legacyEntity, sessions map[string]leg
 	if err != nil {
 		return err
 	}
-	phase, err := legacyString(terminal, "phase")
+	terminalPhase, err := legacyString(terminal, "phase")
 	if err != nil {
 		return err
 	}
@@ -300,13 +403,74 @@ func legacyAssociate(record *Record, claim legacyEntity, sessions map[string]leg
 			return errors.New("invalid legacy terminal version")
 		}
 	}
-	if !bound || terminalPod != podUID || version != 1 || (phase != "Failed" && phase != "Succeeded") {
+	if !bound || terminalPod != podUID || version != 1 || (terminalPhase != "Failed" && terminalPhase != "Succeeded") {
+		record.Provenance.ClockBindingStatus = "conflict"
 		record.Provenance.Exceptions = append(record.Provenance.Exceptions, "terminal_identity_version_or_phase_unverified")
 		return nil
 	}
+	if legacyPredatesSession(session.object, observed) {
+		record.Provenance.ClockBindingStatus = "conflict"
+		record.Provenance.Exceptions = append(record.Provenance.Exceptions, "terminal_clock_predates_session")
+		return nil
+	}
 	record.TerminalRecord = &TerminalRecord{Executor: record.Binding.ExecutorBinding, ObservedAt: observed, Source: "actual_executor_terminal"}
-	record.State = "stopped"
+	record.Provenance.ClockBindingStatus = "recorded_terminal"
+	if !reportedActive {
+		record.State = "stopped"
+	}
 	return nil
+}
+
+// A task object is a completion record only when finishedAt is present. An
+// explicit invalid/empty timestamp blocks fallback; null/absent task or a task
+// object without finishedAt does not hide an actual recorded terminal clock.
+func legacyCompletionPresent(parent legacyObject) (bool, error) {
+	task, err := legacyMap(parent, "task")
+	if err != nil {
+		return false, err
+	}
+	_, present := task["finishedAt"]
+	return present, nil
+}
+
+func legacyTerminalMatches(history legacyObject, podUID string) bool {
+	terminal, err := legacyMap(history, "executorTerminal")
+	if err != nil {
+		return false
+	}
+	uid, err := legacyString(terminal, "podUID")
+	if err != nil || uid != podUID {
+		return false
+	}
+	phase, err := legacyString(terminal, "phase")
+	if err != nil || (phase != "Failed" && phase != "Succeeded") {
+		return false
+	}
+	var version int
+	return json.Unmarshal(terminal["version"], &version) == nil && version == 1
+}
+
+func legacyPredatesSession(session legacyObject, value string) bool {
+	created, err := legacyString(session, "creationTimestamp")
+	if err != nil {
+		return false
+	}
+	birth, birthOK := parseTime(created)
+	clock, clockOK := parseTime(value)
+	return birthOK && clockOK && clock.Before(birth)
+}
+
+func legacyTask(task legacyObject) (string, protocol.UsageSource, bool, error) {
+	finished, err := legacyString(task, "finishedAt")
+	if err != nil {
+		return "", protocol.UsageSource{}, false, err
+	}
+	var source protocol.UsageSource
+	raw, exists := task["exitSource"]
+	if !exists || decodeStrict(bytes.NewReader(raw), MaxSnapshotBytes, &source) != nil {
+		return finished, source, false, nil
+	}
+	return finished, source, source.Valid(), nil
 }
 
 func legacyProtect(record *Record, disposition string) {
