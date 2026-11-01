@@ -48,55 +48,24 @@ and stale busy versus stale Unknown. `TestSessionsPageGroupsByAttention`
 now expects the activity-absent Running row under State Unknown.
 `TestSessionLegacyRowRendersUnknownActivity` expects badge Unknown.
 
-This context could not run the Go tests: command execution was rejected.
-The coordinator command is `go test -p 1 -count=1` on `./web/portal/session`
-with `GOMAXPROCS=2`, `GOCACHE=/tmp/usage-040820-go-cache`, `nice -n 19`, and
-`flock /tmp/usage-040820-test.lock`, using
-`/home/dev/.local/toolchains/go/bin/go`. Targeted run first, then the package
-if the grouping change needs it. No deployment follows from this note.
+The Grok context could not execute commands. The parent integration driver ran
+`./web/portal/session` with Go 1.27.3, `GOMAXPROCS=2`, `go test -p 1`,
+`nice -n 19`, the shared test lock and cache. The final suite passed (package
+1.108 s; elapsed 2.22 s). Product and test SHA-256 hashes matched before and
+after that run and matched the imported source. No unchanged suite was rerun
+by the receiving coordinator.
 
-## Result receipt
+## Custody and limits
 
-The private report path
-`/home/dev/.shared/handoffs/usage-reset-priority-20261101/OP326-102716-GROK-RESULT.md`
-was rejected twice by the file writer, and Shell was rejected, so this
-authorized note is the copy. No acceptance, merge, publish, or deploy.
-Requested model grok-4.7-high. Served identity Unknown. No private quota
-observation.
+Grok implementation was committed as
+`8ce7c8c8ddfb1f81f7b68067ef05a63bd2a9da29` and imported into the dedicated
+coordinator branch. Requested model: `grok-4.7-high`; served identity: Unknown.
+The retained controller ended before integration; no active implementer remained.
+OP326 comments 4756 and 4759 record the separate driver test and transfer receipts.
 
-Head is still `1c5901b293c27f9bd2d06ea676e095c9e524474e` plus uncommitted edits
-in `web/portal/session/product_activity.go`,
-`web/portal/session/product_activity_test.go`, and this file.
-`product_filter_test.go` is untouched. This context did not commit or push.
-A fresh fetch and a competing-writer count were not performed.
-
-`TestMissingExecutionStateStaysUnknown` expects this matrix. It was not run.
-
-| Row | Phase | Mode | Agent state | Task result | Freshness | Group | Badge | Outcome |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| run-absent | Running | absent | absent | absent | observed | State Unknown | Unknown | none |
-| run-task-unknown | Running | task | Unknown | Unknown | observed | State Unknown | Unknown | Unknown |
-| run-remote-unknown | Running | remote | Unknown | absent | observed | State Unknown | Unknown | none |
-| run-local-unknown | Running | local | Unknown | absent | observed | State Unknown | Unknown | none |
-| pending-remote | Pending | remote | Unknown | absent | observed | State Unknown | Unknown | none |
-| idle-phase-local | Idle | local | Unknown | absent | observed | State Unknown | Unknown | none |
-| stale-unknown | Running | local | Unknown | absent | stale | State Unknown | Unknown | none |
-| exited-no-result | Running | task | exited | absent | observed | Stopped | Exited | Unknown |
-| exited-succeeded | Running | task | exited | Succeeded | observed | Stopped | Exited 0 muted | Unknown |
-| exited-result-unknown | Running | task | exited | Unknown | observed | Stopped | Exited | Unknown |
-| stale-busy | Running | remote | busy | absent | stale | In progress | Busy | none |
-| suspended-remote | Suspended | remote | Unknown | absent | observed | Stopped | Suspended | none |
-| archived-local | Archived | local | Unknown | absent | observed | Stopped | Archived | none |
-| draining-unknown | Draining | remote | Unknown | absent | observed | Stopped | Draining | none |
-| failed-unknown | Failed | remote | Unknown | absent | observed | Needs attention | Failed | none |
-
-Expected counts: Needs attention 1, In progress 1, Stopped 6, State Unknown 7,
-rail 15. Exit code and duration: unavailable.
-
-`TestSessionsPageGroupsByAttention` now expects the activity-absent Running
-row under State Unknown (`d-legacy` id s4, exited id s3).
-`TestSessionLegacyRowRendersUnknownActivity` expects badge Unknown / muted.
-
-Draining with no agent state stays Stopped / Draining. The producer’s task
-result word Unknown is not shown as Exited 0, because that word is also the
-default before any result exists. A known exited state still shows Exited.
+The original Running-plus-exited case already grouped as Stopped. This repair
+addresses only missing execution data. It changes no API, access permission,
+lifecycle, retention, usage/reset card or chart. Session inventory counts still
+include retained sessions; they are not counts of executing agents. Production
+browser acceptance is not established by these synthetic tests. Publication,
+deployment and installed usability require separate evidence in OP326.
