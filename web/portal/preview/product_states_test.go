@@ -283,6 +283,12 @@ func TestAllowancePreviewStatesAreUniformAndSeenVariesIsExplicit(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, allowance := range allowances {
+			if allowance.Provider == "Cursor" {
+				if string(allowance.Value) != "Unknown" || len(allowance.Windows) != 0 {
+					t.Errorf("%s cursor: %+v", state, allowance)
+				}
+				continue
+			}
 			want := "Measured"
 			if state == "stale" {
 				want = "Stale"

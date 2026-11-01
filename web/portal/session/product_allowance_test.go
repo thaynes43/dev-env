@@ -51,7 +51,7 @@ func TestMapProductAllowanceMeasuredAndStale(t *testing.T) {
 						if !reflect.DeepEqual(got[0], want) {
 							t.Fatalf("got %+v, want %+v", got[0], want)
 						}
-						if got[1].Provider != "Codex" || got[1].Value != portal.AllowanceUnknown {
+						if len(got) != 3 || got[1].Provider != "Codex" || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 {
 							t.Fatalf("missing provider: %+v", got)
 						}
 					})
@@ -165,7 +165,7 @@ func TestMapProductAllowanceDocumentAndAvailability(t *testing.T) {
 			}
 		}
 	}
-	for _, provider := range []string{"anthropic", "openai"} {
+	for _, provider := range []string{"anthropic", "openai", "cursor"} {
 		for _, asStatus := range []bool{false, true} {
 			doc := allowanceRead()
 			doc.Items[0].Observation.Provider = provider
@@ -176,8 +176,11 @@ func TestMapProductAllowanceDocumentAndAvailability(t *testing.T) {
 			}
 			got := MapProductAllowance(doc)
 			i := 0
-			if provider == "openai" {
+			switch provider {
+			case "openai":
 				i = 1
+			case "cursor":
+				i = 2
 			}
 			if got[i].Value != portal.AllowanceNotConnected || len(got[i].Windows) != 0 {
 				t.Fatalf("unconfigured: %+v", got)
@@ -187,7 +190,7 @@ func TestMapProductAllowanceDocumentAndAvailability(t *testing.T) {
 	doc := allowanceRead()
 	doc.Items[0].Observation.Provider = "other-provider"
 	got := MapProductAllowance(doc)
-	if len(got) != 2 || got[0].Value != portal.AllowanceUnknown || got[1].Value != portal.AllowanceUnknown {
+	if len(got) != 3 || got[0].Value != portal.AllowanceUnknown || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 {
 		t.Fatalf("provider set: %+v", got)
 	}
 	for _, availability := range []pa.Availability{pa.AvailabilityConflict, pa.AvailabilityUnavailable, pa.AvailabilityAuthNeeded, pa.AvailabilityThrottled, pa.AvailabilityUnsupported} {
@@ -308,8 +311,11 @@ func TestMapProductAllowanceReadInterfaceExample(t *testing.T) {
 		t.Fatalf("contract HTTP body cannot be strictly decoded: %v", err)
 	}
 	got := MapProductAllowance(doc)
-	if got[0].Value != portal.AllowanceNotConnected || got[1].Value != portal.AllowanceUnknown || len(got[1].Windows) != 0 {
+	if len(got) != 3 || got[0].Value != portal.AllowanceNotConnected || got[1].Value != portal.AllowanceUnknown || len(got[1].Windows) != 0 {
 		t.Fatalf("original cached example: %+v", got)
+	}
+	if got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 || !strings.Contains(got[2].Reason, "binding") {
+		t.Fatalf("cursor display became allowance: %+v", got[2])
 	}
 	// The original has unverified binding records and observation scope. Verify
 	// that verifying both still cannot turn capture-only freshness into a measurement.
@@ -526,6 +532,12 @@ func TestMapProductAllowanceMeasureIDsAreProviderWide(t *testing.T) {
 		// The same ID belongs to a separate namespace for each provider.
 		doc.Items[1].Observation.Provider = "openai"
 		for _, got := range MapProductAllowance(doc) {
+			if got.Provider == "Cursor" {
+				if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 {
+					t.Fatalf("cursor gained a window: %+v", got)
+				}
+				continue
+			}
 			if got.Value != portal.AllowanceMeasured || len(got.Windows) != 1 {
 				t.Fatalf("separate providers: %+v", got)
 			}
@@ -630,8 +642,8 @@ func TestMapProductAllowanceAvailabilityPrecedence(t *testing.T) {
 
 func TestMapProductAllowancePercentDecimalGrammar(t *testing.T) {
 	for _, tc := range []struct{ decimal, want string }{
-		{"0", "0% left"}, {"100", "100% left"}, {"100.000001", "100.000001% left"},
-		{"999999.999999", "999999.999999% left"}, {"000001.000001", "000001.000001% left"},
+		{"0", "0% left"}, {"100", "100% left"}, {"100.0", "100.0% left"}, {"99.999999", "99.999999% left"},
+		{"100.000001", "Unknown"}, {"101", "Unknown"}, {"999999.999999", "Unknown"}, {"000001.000001", "000001.000001% left"},
 		{"-1", "Unknown"}, {"", "Unknown"}, {"1000000", "Unknown"}, {"1.0000001", "Unknown"},
 		{".5", "Unknown"}, {"1.", "Unknown"}, {"+1", "Unknown"}, {" 1", "Unknown"}, {"1 ", "Unknown"},
 		{"1e2", "Unknown"}, {"NaN", "Unknown"}, {"1\n", "Unknown"}, {"１", "Unknown"},
@@ -686,5 +698,234 @@ func TestMapProductAllowancePartialAvailabilityAndResetMetadata(t *testing.T) {
 	doc.Items[0].Observation.Measures[0].Window = pa.Window{ResetPrecision: pa.ResetNotApplicable, ResetAt: allowanceString("2026-11-02T14:00:00Z")}
 	if got := MapProductAllowance(doc)[0].Windows[0].Reset; got != "Unknown" {
 		t.Fatal(got)
+	}
+}
+
+func TestStampAllowanceFactsCopiesTypedFields(t *testing.T) {
+	want := allowanceFacts{
+		PercentValue: 62, PercentKnown: true, Direction: "remaining",
+		ResetAt: "2026-11-02T14:00:00Z", ObservedAt: "2026-10-29T13:59:00Z",
+		WindowKind: "day", ResetPrecision: "instant", AccountKey: "fixture-account",
+	}
+	var got allowanceFacts
+	stampAllowanceFacts(&got, want)
+	if got != want {
+		t.Fatalf("stamp: %+v", got)
+	}
+	dirty := allowanceFacts{PercentValue: 75, PercentKnown: true, Direction: "used", WindowKind: "week", ResetAt: "2026-10-28T00:00:00Z", AccountKey: "weekly"}
+	stampAllowanceFacts(&dirty, allowanceFacts{})
+	if dirty != (allowanceFacts{}) {
+		t.Fatalf("stamp left a value: %+v", dirty)
+	}
+	window := portal.ProductAllowanceWindow{Percent: "62.00% left", Window: "7 days"}
+	stampAllowanceFacts(&window, want)
+	if window.Percent != "62.00% left" || window.Window != "7 days" {
+		t.Fatalf("stamp changed display text: %+v", window)
+	}
+	expectStamped(t, window, want)
+}
+
+func TestMapProductAllowanceCursorUsesTypedFields(t *testing.T) {
+	doc := allowanceRead()
+	item := &doc.Items[0]
+	item.Observation.Provider = "cursor"
+	item.Observation.Source.Kind = pa.SourceNativeDisplay
+	item.Observation.Scope.AccountRef = allowanceString("fixture-account")
+	item.Binding.AccountRef = allowanceString("fixture-account")
+	item.Observation.DirectFields = []pa.DirectField{
+		{Field: "included", LexicalValue: allowanceString("75% used")},
+		{Field: "periodHeading", LexicalValue: allowanceString("Monthly plan and on-demand usage")},
+		{Field: "resetLabel", LexicalValue: allowanceString("Oct 28")},
+		{Field: "remainingLabel", LexicalValue: allowanceString("$200 remaining")},
+	}
+	item.Observation.Measures[0].ID = "five-hour"
+	item.Observation.Measures[0].Direction = pa.DirectionUsed
+	item.Observation.Measures[0].Value.Decimal = allowanceString("40")
+	item.Observation.Measures[0].Window = pa.Window{
+		Ref: "cursor-weekly-pool", DurationMinutes: allowanceMinutes(300),
+		ResetAt: allowanceString("2026-11-02T09:00:00-05:00"), ResetPrecision: pa.ResetInstant,
+	}
+	item.CurrentMeasures[0].MeasureID = "five-hour"
+	item.CurrentMeasures[0].Value.Decimal = allowanceString("40")
+	got := MapProductAllowance(doc)
+	if len(got) != 3 || got[0].Value != portal.AllowanceUnknown || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceMeasured || len(got[2].Windows) != 1 {
+		t.Fatalf("cursor row: %+v", got)
+	}
+	w := got[2].Windows[0]
+	projected, facts := projectCursorMeasure(*item)
+	if w != projected {
+		t.Fatalf("mapper drifted from typed projection: %+v vs %+v", w, projected)
+	}
+	if w.Percent != "40% used" || w.Window != "5 hours" || w.Reset != "2 Nov 14:00 UTC" || w.Observed != "29 Oct 13:59 UTC" || w.Provenance != "Provider display" {
+		t.Fatalf("display: %+v", w)
+	}
+	if facts != (allowanceFacts{
+		PercentValue: 40, PercentKnown: true, Direction: "used", ResetAt: "2026-11-02T14:00:00Z",
+		ObservedAt: "2026-10-29T13:59:00Z", WindowKind: "hour", ResetPrecision: "instant", AccountKey: "fixture-account",
+	}) {
+		t.Fatalf("facts: %+v", facts)
+	}
+	for _, banned := range []string{"75", "week", "Week", "month", "Month", "Oct 28", "$200", "Super", "cursor-weekly-pool"} {
+		joined := w.Percent + w.Window + w.Reset + w.Observed + w.Provenance + facts.Direction + facts.WindowKind + facts.ResetAt + facts.AccountKey
+		if strings.Contains(joined, banned) {
+			t.Fatalf("display text %q leaked into %+v %+v", banned, w, facts)
+		}
+	}
+	item.Freshness.State = pa.FreshStale
+	if got := MapProductAllowance(doc)[2]; got.Value != portal.AllowanceStale || got.Windows[0].Percent != "40% used" {
+		t.Fatalf("stale cursor: %+v", got)
+	}
+	item.Freshness.State = pa.FreshFresh
+	item.Observation.Measures[0].Window.ResetPrecision = pa.ResetDisplayOnly
+	got = MapProductAllowance(doc)
+	projected, facts = projectCursorMeasure(*item)
+	if got[2].Windows[0] != projected || facts.ResetPrecision != "display_only" || facts.ResetAt != "" || facts.PercentKnown != true {
+		t.Fatalf("display-only reset: %+v %+v", got[2].Windows[0], facts)
+	}
+	item.Observation.Measures[0].Window.DurationMinutes = allowanceMinutes(10080)
+	item.Observation.Measures[0].Window.ResetPrecision = pa.ResetInstant
+	got = MapProductAllowance(doc)
+	_, facts = projectCursorMeasure(*item)
+	if got[2].Windows[0].Window != "7 days" || facts.WindowKind != "day" || strings.Contains(got[2].Windows[0].Window, "week") {
+		t.Fatalf("seven days became weekly: %+v %+v", got[2].Windows[0], facts)
+	}
+	item.Observation.Measures[0].Window.DurationMinutes = nil
+	got = MapProductAllowance(doc)
+	_, facts = projectCursorMeasure(*item)
+	if got[2].Windows[0].Window != "Unknown" || facts.WindowKind != "" || got[2].Windows[0].Percent != "40% used" {
+		t.Fatalf("missing duration invented a window: %+v %+v", got[2].Windows[0], facts)
+	}
+}
+
+func TestMapProductAllowanceCursorDisplayDoesNotBecomeWeekly(t *testing.T) {
+	doc := allowanceRead()
+	item := &doc.Items[0]
+	item.Observation.Provider = "cursor"
+	item.Observation.Scope.BindingState = pa.BindingUnknown
+	item.Observation.Measures = nil
+	item.CurrentMeasures = nil
+	item.Observation.DirectFields = []pa.DirectField{
+		{Field: "included", LexicalValue: allowanceString("75% used")},
+		{Field: "periodHeading", LexicalValue: allowanceString("Monthly plan and on-demand usage")},
+		{Field: "resetLabel", LexicalValue: allowanceString("Oct 28")},
+	}
+	got := MapProductAllowance(doc)[2]
+	if got.Provider != "Cursor" || got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 || strings.Contains(got.Reason, "75") || strings.Contains(got.Reason, "Oct") || strings.Contains(got.Reason, "Month") {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestMapProductAllowanceAccountKeyStaysOpaque(t *testing.T) {
+	for _, tc := range []struct {
+		scope, binding string
+		want           string
+	}{
+		{"fixture-account", "fixture-account", "fixture-account"},
+		{"fixture-account", "other-account", ""},
+		{"fixture-account", "", ""},
+		{"", "fixture-account", ""},
+		{"has space", "has space", ""},
+		{"../secret", "../secret", ""},
+		{"fixture@account", "fixture@account", ""},
+		{strings.Repeat("a", 129), strings.Repeat("a", 129), ""},
+	} {
+		doc := allowanceRead()
+		item := &doc.Items[0]
+		if tc.scope != "" {
+			item.Observation.Scope.AccountRef = allowanceString(tc.scope)
+		}
+		if tc.binding != "" {
+			item.Binding.AccountRef = allowanceString(tc.binding)
+		}
+		got := MapProductAllowance(doc)[0]
+		if got.Value != portal.AllowanceMeasured || len(got.Windows) != 1 || got.Windows[0].Percent != "62.00% left" {
+			t.Fatalf("key %q/%q changed the allowance: %+v", tc.scope, tc.binding, got)
+		}
+		if key := allowanceAccountKey(*item); key != tc.want {
+			t.Fatalf("key %q/%q: got %q", tc.scope, tc.binding, key)
+		}
+		_, facts := projectCursorMeasure(*item)
+		if facts.AccountKey != tc.want || facts.PercentKnown != true || facts.PercentValue != 62 || facts.Direction != "remaining" || facts.WindowKind != "day" {
+			t.Fatalf("key %q/%q facts: %+v", tc.scope, tc.binding, facts)
+		}
+		expectStamped(t, got.Windows[0], facts)
+	}
+}
+
+func TestMapProductAllowancePercentRangeDoesNotClamp(t *testing.T) {
+	doc := allowanceRead()
+	doc.Items[0].Observation.Measures[0].Value.Decimal = allowanceString("101.25")
+	doc.Items[0].CurrentMeasures[0].Value.Decimal = allowanceString("101.25")
+	got := MapProductAllowance(doc)[0]
+	if got.Value != portal.AllowanceUnknown || got.Reason != "No percent allowance reported" || len(got.Windows) != 0 {
+		t.Fatalf("over-limit was clamped: %+v", got)
+	}
+	doc = allowanceRead()
+	doc.Items[0].Observation.Measures[0].Value.Decimal = allowanceString("101")
+	doc.Items[0].CurrentMeasures[0].Value.Decimal = allowanceString("102")
+	got = MapProductAllowance(doc)[0]
+	if got.Value != portal.AllowanceUnknown || got.Reason != "Conflicting allowance values" || len(got.Windows) != 0 {
+		t.Fatalf("over-limit disagreement: %+v", got)
+	}
+	measure := allowanceRead().Items[0].Observation.Measures[0]
+	measure.Value.Decimal = allowanceString("000001.000001")
+	current := allowanceRead().Items[0].CurrentMeasures[0]
+	current.Value.Decimal = allowanceString("000001.000001")
+	fits := allowancePercentFits(measure.Value.Decimal) && allowancePercentFits(current.Value.Decimal)
+	_, facts := projectMeasure(measure, current, true, allowanceString("2026-10-29T13:59:00Z"), "Provider API", "", fits)
+	rat, ok := allowancePercentRat("000001.000001")
+	want, _ := rat.Float64()
+	if !fits || !ok || !facts.PercentKnown || facts.PercentValue != want {
+		t.Fatalf("lexical percent: %+v", facts)
+	}
+}
+
+func TestMapProductAllowanceLocalPreflightShapeStaysDisconnected(t *testing.T) {
+	// Shape of `agent-run usage -o json` with no file and no statusline callback.
+	// This does not run the command and does not prove a live provider.
+	if pa.UsageJSONCommand != "agent-run usage -o json" {
+		t.Fatal(pa.UsageJSONCommand)
+	}
+	doc := pa.ReadResponse{Schema: pa.SchemaRead, ServedAt: "2026-11-01T04:08:20Z"}
+	for _, provider := range []string{"cursor", "anthropic", "openai"} {
+		doc.SourceStatuses = append(doc.SourceStatuses, pa.SourceStatus{
+			Provider: provider, Availability: pa.AvailabilityUnconfigured,
+			Freshness:  pa.Freshness{State: pa.FreshUnknown, Basis: pa.BasisNone},
+			Validation: pa.ValidationRecord{State: pa.ValidationUnverified},
+			Binding:    pa.BindingRecord{State: pa.BindingUnknown},
+		})
+	}
+	got := MapProductAllowance(doc)
+	want := []string{"Claude", "Codex", "Cursor"}
+	if len(got) != len(want) {
+		t.Fatalf("%+v", got)
+	}
+	for i, a := range got {
+		if a.Provider != want[i] || a.Value != portal.AllowanceNotConnected || a.Reason != "" || len(a.Windows) != 0 {
+			t.Fatalf("%+v", a)
+		}
+	}
+}
+
+func projectCursorMeasure(item pa.ReadItem) (portal.ProductAllowanceWindow, allowanceFacts) {
+	m := item.Observation.Measures[0]
+	current := item.CurrentMeasures[0]
+	fits := allowancePercentFits(m.Value.Decimal) && allowancePercentFits(current.Value.Decimal)
+	return projectMeasure(m, current, true, item.Observation.ProviderObservedAt, "Provider display", allowanceAccountKey(item), fits)
+}
+
+func expectStamped(t *testing.T, w portal.ProductAllowanceWindow, facts allowanceFacts) {
+	t.Helper()
+	got := reflect.ValueOf(w)
+	src := reflect.ValueOf(facts)
+	for i := 0; i < src.NumField(); i++ {
+		name := src.Type().Field(i).Name
+		field := got.FieldByName(name)
+		if !field.IsValid() {
+			continue
+		}
+		if !reflect.DeepEqual(field.Interface(), src.Field(i).Interface()) {
+			t.Fatalf("%s = %#v, want %#v", name, field.Interface(), src.Field(i).Interface())
+		}
 	}
 }
