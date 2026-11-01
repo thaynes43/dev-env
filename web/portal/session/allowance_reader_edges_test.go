@@ -41,3 +41,27 @@ func TestCachedAllowanceCannotTrustFutureFreshness(t *testing.T) {
 		})
 	}
 }
+
+func TestCachedAllowanceDoesNotPromoteHistoricalMetrics(t *testing.T) {
+	now := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
+	doc, trust, reg := syntheticAllowanceDoc([]pa.Measure{syntheticMeasure("thirty-minute", "thirty-minute", 30, "40", "2026-11-01T06:00:00Z", pa.ResetInstant)}, []pa.CurrentMeasure{syntheticCurrent("thirty-minute", "40")})
+	metrics := reg.Metrics()
+	metrics[0].HistoricalOnly = true
+	historical := pa.NewStaticRegistry(pa.RegistryParts{Sources: reg.Sources(), Metrics: metrics, Accounts: reg.Accounts(), Entitlements: reg.Entitlements(), Projections: reg.Projections()})
+	got := claudeAllowance(t, newSyntheticReader(t, doc, trust, historical, AllowanceReadPolicy{MaxAge: time.Hour, Set: true}).Allowances(now))
+	if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 {
+		t.Fatalf("historical metric promoted: %+v", got)
+	}
+}
+
+func TestCachedAllowanceResetCannotHideKnownDisagreement(t *testing.T) {
+	now := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
+	doc, trust, reg := syntheticAllowanceDoc([]pa.Measure{
+		syntheticMeasure("thirty-minute", "thirty-minute", 30, "40", "2026-11-01T03:45:00Z", pa.ResetInstant),
+		syntheticMeasure("one-hour", "one-hour", 60, "70", "2026-11-01T06:00:00Z", pa.ResetInstant),
+	}, []pa.CurrentMeasure{syntheticCurrent("thirty-minute", "0"), syntheticCurrent("one-hour", "70")})
+	got := claudeAllowance(t, newSyntheticReader(t, doc, trust, reg, AllowanceReadPolicy{MaxAge: time.Hour, Set: true}).Allowances(now))
+	if got.Value != portal.AllowanceUnknown || got.Reason != "Conflicting allowance values" || len(got.Windows) != 0 {
+		t.Fatalf("reset hid known conflict: %+v", got)
+	}
+}
