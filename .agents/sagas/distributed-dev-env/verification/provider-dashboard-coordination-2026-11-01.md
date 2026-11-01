@@ -90,8 +90,9 @@ Acceptance includes used/remaining percentage only when the provider reports a
 compatible denominator and direction; actual window identity and duration;
 reset instant, timezone and countdown where available; original observation
 time, source, freshness and confidence. Monthly, rolling, multiple and absent
-windows remain distinct. Past reset expires the observation and never creates
-a zero-used sample. Missing, stale, partial, unsupported and conflicting data
+windows remain distinct. Past reset expires the affected window's current value;
+historical values and still-current sibling windows remain preserved. It never
+creates a zero-used sample. Missing, stale, partial, unsupported and conflicting data
 remain visible. Synthetic previews never appear as live account data.
 
 C checks account/window identity, duplicate receipt/retry/reclaim handling,
