@@ -151,3 +151,46 @@ Only `rate_limits.five_hour` and `rate_limits.seven_day`, and only `used_percent
 Without `--display`, capture reads at most one byte past the bound and does not wait for more input. `--display CMD ARG...` streams the original callback to that argv with no shell and with bounded memory. Crossing the capture bound disables capture and leaves the previous file in place; the display still receives the original bytes. Display stdout, stderr, and exit status stay in place when capture fails. A source-only example, not applied to a live HOME, is `claude-statusline-usage --output /path/to/private/read.json --display -- /path/to/existing-statusline`.
 
 Callback receipt time is the consumer's local capture time. It is not provider observation time. Freshness, account binding, and current usable amounts stay Unknown. A passed reset is not replenishment. Later reads of the saved file use `agent-run usage -o json --from-file PATH` and keep the original observation, received, and as-of times. Replaying the cache through `--claude-statusline` is not a refresh. The helper does not poll a provider, open a credential, or follow a path named by the callback. It does not establish live coverage.
+
+### Selected Codex current-source report (2026-11-01, OP323 source only)
+
+The [selected-source adapter](../../../../docs/provider-usage-current-source.md)
+adds a separate closed document, `codex.get_usage_limits.current_source.v1`.
+It does not extend `Observation` or `ReadItem` and does not relax
+`ValidateObservation`, account binding, or provider freshness. The original
+Codex capture and private-observer holds remain. Unbound evidence remains
+unverified as a current entitlement.
+
+`agent-run usage-source` sanitizes only an explicitly supplied retained task
+observation of the supported Codex tool. It makes no provider, operator,
+credential-store or history request. The native source reports used percentage,
+duration in minutes and an exact reset. Remaining is its exact decimal
+complement, marked `derived_complement_of_used_percent`; a supplied complement
+or provenance marker must agree. The native `windowDurationMins` name and the
+handoff's normalized `windowDurationMinutes` must agree if both are supplied.
+Local automation ceilings, points and unknown banked credits are discarded.
+
+The caller selects one publisher reference, producer incarnation, source
+generation and retrieval age limit. These are opaque caller-supplied source
+selection records, not provider account IDs or proof of origin. Stable account
+identity remains unavailable. The original retrieval time is preserved;
+provider update time remains null for this sanitizer. Neither preparing nor
+replaying the report refreshes it. The proposed consumer policy is 30 minutes,
+not a provider freshness guarantee. Future retrieval, age expiry, selection
+changes and a passed reset invalidate the current meter without inventing
+renewed capacity. An unobservable account change remains a coverage limitation.
+
+The portal's separate constructor projects a valid selected report as
+`Current source`, never `Measured`, and does not combine it with bound
+entitlements. Both compact and detailed views label derived remaining and
+separate retrieval from provider observation time. This is a selected report
+with a limited retrieval age, not an accepted account allowance. Production
+assembly does not inject it; missing source configuration remains disconnected.
+
+The linked document names the local publisher command, private retained
+artifact, fixed proposed operator slot, consumer configuration, retention and
+access review boundary. No new transport, portal ACL, credential, probe,
+collector or periodic acquisition is activated. The existing immutable
+PublishedContext contract remains unchanged. Synthetic sanitizer-to-renderer
+proof establishes source behavior only; authorized retained transport,
+installed ingestion and account entitlement acceptance remain separate.
