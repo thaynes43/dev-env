@@ -113,14 +113,41 @@ plans, and stderr are not copied into receipts. `question-required`
 contains the provider's explicit structured question and choices, not a terminal
 capture. It is task content, not authenticated approval or generic metadata.
 `permission-required` retains request/session correlation and option ids/kinds,
-and adds a `context` object derived solely from this request's `params.toolCall`.
-No transcript, terminal, pane, credential or earlier `session/update` is consulted.
+and adds a `context` object. Explicit `kind`, `title`, `locations` and `rawInput`
+on this request's `params.toolCall` are used as given. A null or omitted field
+can be filled from a sanitized `tool_call` or `tool_call_update` in this same
+session with the exact same `toolCallId`. Assistant text, reasoning, tool
+`content`, `rawOutput`, diffs and transcripts are not stored and are not read
+back. No terminal, pane or credential is consulted.
+
+The cache is process memory only: at most 16 entries, 8192 bytes of sanitized
+JSON, and 300 seconds from the last valid update for that id. Ids that do not
+fit are remembered in a dropped set of at most 16. One further uncached id sets
+a saturation latch and is not stored. While that latch is set, every id that is
+not already cached fails closed with `tool-cache-bound`, including a later
+explicit benign permission for an id the cache could not record. The cache is
+not evicted to make room, and the dropped set does not grow. Completion or
+failure discards that call's metadata and retains a closed tombstone, which
+still counts toward the 16 entries until the prompt completes or this process
+exits. Closed ids cannot be resurrected by a later benign update. More than 32
+distinct ids in one prompt can exhaust context availability; permission events
+and correlated `reject_once` replies still work. Prompt completion and process
+exit clear the cache. A later kind or title that disagrees,
+or any redacted, invalid or oversized update, tombstones the id. A `status`
+that is present and is not a string equal to `pending`, `in_progress`,
+`completed` or `failed` tombstones the id as well, including a list or object;
+that value does not leave the helper. An older benign snapshot cannot come
+back. Unknown ids, another session, expiry, completion and a full cache fail
+closed. Usable context still needs a recognized `kind` and a nonempty `title`,
+from the request or from that cached update. `toolCallId` is only the
+correlation key.
+
 The [ACP v1 request schema](https://agentclientprotocol.com/protocol/v1/schema#requestpermissionrequest)
-uses `ToolCallUpdate`; its fields may be omitted. This client requires a valid
-`toolCallId`, recognized `kind`, and nonempty `title` for usable context. It
-projects only `kind`, `title`, `locations` (basename `path` and optional `line`),
-and `rawInput`. Tool call ids, content, output, `_meta` and unknown fields are
-not projected. This projection does not establish that an action is safe.
+uses `ToolCallUpdate`; every field except `toolCallId` may be omitted. This
+client projects only `kind`, `title`, `locations` (basename `path` and optional
+`line`), and `rawInput`. Tool call ids, content, output, `_meta` and unknown
+fields are not projected. This projection does not establish that an action is
+safe. It does not approve or run the action.
 
 A usable example (synthetic data):
 
@@ -151,6 +178,34 @@ Path reduction is lexical and does not read the filesystem. Free-form titles,
 commands and argument strings containing a path separator plus whitespace,
 quotes or angle brackets are ambiguous and yield insufficient context.
 Explicit `path`/`paths` values safely reduce the whole path, including spaces.
+Absolute `args` also reduce to a basename. A structured `args` element that is
+a relative pattern is kept whole: a `.` or a segment of letters, digits, `.`,
+`_` and `-`, or the segment `...`, separated by `/`, with no `..` and no `~`.
+`./...` and `./internal/...` are the representative cases. The same checks
+descend into nested values under `args` or `command`, including `path` and
+`paths`. These path fields still reduce to a basename while retaining the
+inherited command and argument checks. A nested
+`description` such as `echo;rm` therefore fails closed. Before the `..` check,
+`\` is folded to `/`, so `..\\parent\\file.py` in `args` or `command` cannot
+reduce to `file.py` and look available. The kept pattern still uses `/` only.
+A free-form `command` or `title` such as `go test ./...` stays insufficient
+context, including when that prose is nested under `args`. The client does not
+split that prose into argv and does not execute it. This does not adopt a
+human-only command rule or a fixed command allowlist. `command` and `args` also
+fail closed when they contain a shell metacharacter (`;`, `&`, `|`, `<`, `>`,
+`` ` ``, `$`, `(`, `)`, `{`, `}`), `~`, or a `..` segment. Credential
+assignment, dynamic substitution and control operators stay fail-closed under
+those rules and the secret checks below.
+
+A correlation failure adds one fixed `context.reason` and no request text:
+`no-correlated-tool-call`, `tool-call-unavailable`, `tool-call-conflict`,
+`tool-call-closed`, `tool-call-expired` or `tool-cache-bound`.
+`scripts/cursor-acp-smoke-check.py` accepts a preserved relative argument only
+in a structured `args` string that matches the grammar above, and accepts
+`reason` only when it is the sole extra field and one of those six words. A
+slash in a title, location, `command`, `path`, `query` or top-level
+`description` is still refused. Any other reason or extra field is refused.
+The verdict still records only the state.
 
 ACP defines `rawInput` as arbitrary JSON; this deliberately narrower display
 subset accepts strings, lists and objects. Only object keys `command`, `args`,
@@ -374,3 +429,12 @@ new tests (`pass` inside words and the timing guard) pass on both. With the fix,
 took at most 32 ms (best of three; `:a` repeated), against a 100 ms budget;
 the unchanged client took at most 22 ms on the same set.
 This is source and fake-CLI evidence, not installed or live provider acceptance.
+
+The 2026-11-01 permission-context change is source plus the targeted tests in
+`scripts/test_cursor_acp_session.py` and `scripts/test_cursor_acp_smoke_check.py`.
+The checker now follows the helper for recovered relative argv and the six
+correlation reasons. Nested shell syntax, backslash parent segments, a
+non-string status, and a saturated dropped-id set fail closed. This paragraph
+does not record a run of those tests and it is not live provider acceptance.
+Reject-once is unchanged. Recovered context does not approve an action. See
+[the source note](../.agents/sagas/distributed-dev-env/verification/op318-permission-context-2026-11-01.md).

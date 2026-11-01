@@ -122,6 +122,25 @@ REDACTED = "[REDACTED]"
 MAX_CONTEXT = 2048
 MAX_PROBE = 8192
 PROBE_ROUNDS = 4
+# In-memory correlation for this process only. Not a transcript and not approval.
+MAX_TOOL_CACHE = 16
+MAX_TOOL_CACHE_BYTES = 8192
+MAX_TOOL_DROPPED = 16
+TOOL_CACHE_TTL = 300.0
+# Command and argv display refuse shell syntax. This does not parse or run a command.
+SHELL_META = re.compile(r"[;&|<>`$(){}]")
+_ARG_SEGMENT = r"(?:\.\.\.|[A-Za-z0-9_][A-Za-z0-9._-]*)"
+RELATIVE_ARG = re.compile(rf"^(?:\.|{_ARG_SEGMENT})(?:/{_ARG_SEGMENT})+$")
+TOOL_TRACKED = ("kind", "title", "locations", "rawInput")
+TOOL_STATUSES = frozenset({"pending", "in_progress", "completed", "failed"})
+TOOL_CACHE_REASONS = {
+    "poison": "tool-call-unavailable",
+    "conflict": "tool-call-conflict",
+    "closed": "tool-call-closed",
+    "expired": "tool-call-expired",
+    "bound": "tool-cache-bound",
+    "foreign": "no-correlated-tool-call",
+}
 
 
 class Redacted(Exception):
@@ -163,7 +182,7 @@ def secret_text(value, patterns=SECRET_PATTERNS):
     return any(pattern.search(probe) for probe in probes for pattern in patterns)
 
 
-def context_string(value, path=False):
+def context_string(value, path=False, *, argv=False, command=False):
     if not isinstance(value, str) or not value or len(value) > 256:
         raise ValueError
     # Reject control bytes, DEL, bidi/format controls, surrogate code points and
@@ -187,6 +206,17 @@ def context_string(value, path=False):
     # Explicit path/paths fields can safely reduce the entire value.
     if not path and ("/" in display or "\\" in display) and any(c.isspace() or c in "\"'<>" for c in display):
         raise ValueError
+    # Structured command/argv only. A title or prose string is never split into a command.
+    # Fold "\" before the parent-segment check. Basename already treats it as "/",
+    # so ".." written with backslashes would otherwise reduce to a visible name.
+    if argv or command:
+        folded = display.replace("\\", "/")
+        if SHELL_META.search(display) or "~" in display or ".." in folded.split("/"):
+            raise ValueError
+    # The relative grammar is forward-slash only, and only for argv, not path fields.
+    if argv and not path and RELATIVE_ARG.fullmatch(display):
+        # Relative package paths such as ./... stay intact. Absolute paths still reduce below.
+        return display
     def basename(text):
         name = text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
         if name in {"", ".", ".."}:
@@ -195,15 +225,15 @@ def context_string(value, path=False):
     return basename(display) if path or "/" in display or "\\" in display else display
 
 
-def context_input(value, depth=0, path=False):
+def context_input(value, depth=0, path=False, *, argv=False, command=False):
     if depth > 3:
         raise ValueError
     if isinstance(value, str):
-        return context_string(value, path)
+        return context_string(value, path, argv=argv, command=command)
     if isinstance(value, list):
         if not 1 <= len(value) <= 8:
             raise ValueError
-        return [context_input(item, depth + 1, path) for item in value]
+        return [context_input(item, depth + 1, path, argv=argv, command=command) for item in value]
     if isinstance(value, dict):
         if not 1 <= len(value) <= 8:
             raise ValueError
@@ -211,8 +241,16 @@ def context_input(value, depth=0, path=False):
         # contain a credential, so it fails the whole context closed.
         if any(secret_text(key) for key in value):
             raise Redacted
-        clean = {key: context_input(item, depth + 1, key in {"path", "paths"})
-                 for key, item in value.items() if key in RAW_FIELDS}
+        clean = {}
+        for key, item in value.items():
+            if key not in RAW_FIELDS:
+                continue
+            # path/paths stay basename reduction. Inherited args/command checks
+            # stay in force beneath them, so a nested path cannot skip shell or "..".
+            child_path = key in {"path", "paths"}
+            child_argv = argv or key == "args"
+            child_command = command or key == "command"
+            clean[key] = context_input(item, depth + 1, child_path, argv=child_argv, command=child_command)
         if not clean:
             raise ValueError
         return clean
@@ -236,8 +274,28 @@ def source_strings(value):
             yield from source_strings(item)
 
 
+def project_locations(locations):
+    if not isinstance(locations, list) or len(locations) > 8:
+        raise ValueError
+    projected = []
+    for location in locations:
+        if not isinstance(location, dict):
+            raise ValueError
+        entry = {"path": context_string(location.get("path"), path=True)}
+        line = location.get("line")
+        if line is not None:
+            if type(line) is not int or not 0 <= line <= 2147483647:
+                raise ValueError
+            entry["line"] = line
+        projected.append(entry)
+    return projected
+
+
 def permission_context(tool):
-    """Project ONLY this request's supported toolCall fields; never recover history."""
+    """Project one toolCall's supported fields. Callers may supply same-session cache fields.
+
+    This function has no memory. It does not read transcripts, content or raw output.
+    """
     insufficient = {"state": "insufficient-context"}
     try:
         if not isinstance(tool, dict):
@@ -251,20 +309,7 @@ def permission_context(tool):
         clean = {"state": "available", "kind": tool["kind"], "title": title}
         locations = tool.get("locations")
         if locations is not None:
-            if not isinstance(locations, list) or len(locations) > 8:
-                return insufficient
-            projected = []
-            for location in locations:
-                if not isinstance(location, dict):
-                    return insufficient
-                entry = {"path": context_string(location.get("path"), path=True)}
-                line = location.get("line")
-                if line is not None:
-                    if type(line) is not int or not 0 <= line <= 2147483647:
-                        return insufficient
-                    entry["line"] = line
-                projected.append(entry)
-            clean["locations"] = projected
+            clean["locations"] = project_locations(locations)
         if tool.get("rawInput") is not None:
             clean["rawInput"] = context_input(tool["rawInput"])
         # A flag and its value may sit in separate strings, list items or fields
@@ -289,9 +334,40 @@ def permission_context(tool):
         return insufficient
 
 
+def tracked_update_fields(update):
+    """Sanitized metadata fields from one tool_call update. Content and output are ignored."""
+    fields = {}
+    if "kind" in update and update["kind"] is not None:
+        if update["kind"] not in TOOL_KINDS:
+            raise ValueError
+        fields["kind"] = update["kind"]
+    if "title" in update and update["title"] is not None:
+        fields["title"] = context_string(update["title"])
+    if "locations" in update and update["locations"] is not None:
+        fields["locations"] = project_locations(update["locations"])
+    if "rawInput" in update and update["rawInput"] is not None:
+        encoded = json.dumps(update["rawInput"], ensure_ascii=True, separators=(",", ":"))
+        if len(encoded) > 4096:
+            raise ValueError
+        fields["rawInput"] = context_input(update["rawInput"])
+    joined = []
+    if isinstance(update.get("title"), str):
+        joined.append(update["title"])
+    if update.get("rawInput") is not None:
+        joined.extend(source_strings(update["rawInput"]))
+    locations = update.get("locations")
+    if isinstance(locations, list):
+        for location in locations:
+            if isinstance(location, dict) and isinstance(location.get("path"), str):
+                joined.append(location["path"])
+    if joined and (secret_text(" ".join(joined)) or secret_text("".join(joined), GLUED_PATTERNS)):
+        raise Redacted
+    return fields
+
+
 class Session:
     """State machine is independent of provider transport for offline qualification."""
-    def __init__(self, send, emit, cwd, prompt, model):
+    def __init__(self, send, emit, cwd, prompt, model, clock=None):
         self.send, self.emit = send, emit
         self.cwd, self.prompt, self.model = cwd, prompt, model
         self.session_id = None
@@ -299,6 +375,12 @@ class Session:
         self.pending = {}
         self.seen_requests = set()
         self.complete = False
+        self.clock = time.monotonic if clock is None else clock
+        self.tool_cache = {}
+        self.tool_dropped = set()
+        self.tool_cache_bytes = 0
+        self.tool_cache_closed = False
+        self.tool_untracked_closed = False
 
     def start(self):
         self.emit({"event": "starting", "modelRequested": self.model, "servedModel": "Unknown", "promptSHA256": hashlib.sha256(self.prompt.encode()).hexdigest()})
@@ -338,6 +420,7 @@ class Session:
             else:
                 if not label(result.get("stopReason")) or self.pending:
                     raise Refusal("invalid-prompt-result")
+                self.close_tool_cache()
                 self.complete = True
                 self.emit({"event": "prompt-complete", "sessionID": self.session_id, "stopReason": result["stopReason"]})
             return
@@ -354,7 +437,8 @@ class Session:
                 update = params.get("update", {})
                 if not isinstance(update, dict) or not label(update.get("sessionUpdate")):
                     raise Refusal("invalid-update")
-                # Deliberately do not emit any update content, tool data or text.
+                # Keep sanitized tool metadata only. Never emit content, output or text.
+                self.observe_tool_update(update)
             return
         ident = message["id"]
         if not request_id(ident):
@@ -380,7 +464,7 @@ class Session:
                     raise Refusal("duplicate-permission-option")
                 projected.append({"optionID": item["optionId"], "kind": item["kind"]})
             self.pending[(type(ident), ident)] = ("permission", projected)
-            self.emit({"event": "permission-required", "requestID": ident, "sessionID": self.session_id, "options": projected, "context": permission_context(params.get("toolCall"))})
+            self.emit({"event": "permission-required", "requestID": ident, "sessionID": self.session_id, "options": projected, "context": self.observed_permission_context(params.get("toolCall"))})
         elif method == "cursor/ask_question":
             if "sessionId" in params and params["sessionId"] != self.session_id:
                 raise Refusal("cross-session-question")
@@ -443,6 +527,194 @@ class Session:
         del self.pending[key]  # A transport failure never makes this request retryable.
         self.response(ident, result)
         self.emit({"event": "decision-sent", "requestID": ident, "sessionID": self.session_id, "kind": kind})
+
+    def close_tool_cache(self):
+        """Drop correlated tool metadata at prompt completion, failure or process exit."""
+        self.tool_cache.clear()
+        self.tool_dropped.clear()
+        self.tool_cache_bytes = 0
+        self.tool_cache_closed = True
+        self.tool_untracked_closed = False
+
+    def _drop_tool(self, tool_id):
+        """Remember a bounded set of ids that did not fit. Past that, latch.
+
+        Evicting an id, or storing every later one, would forget a poison or grow
+        without a bound. The latch fails every id that is not already cached.
+        """
+        if tool_id in self.tool_dropped:
+            return
+        if len(self.tool_dropped) < MAX_TOOL_DROPPED:
+            self.tool_dropped.add(tool_id)
+            return
+        self.tool_untracked_closed = True
+
+    def _install_tool(self, tool_id, state, fields):
+        if self.tool_cache_closed or not label(tool_id):
+            return
+        if self.tool_untracked_closed and tool_id not in self.tool_cache:
+            return
+        current = self.tool_cache.get(tool_id)
+        if current and current["state"] != "open":
+            return
+        if state != "open":
+            fields = {}
+        try:
+            size = len(json.dumps(fields, ensure_ascii=True, separators=(",", ":")))
+        except (TypeError, ValueError, UnicodeError):
+            state, fields, size = "poison", {}, 2
+        if state == "open" and size > MAX_CONTEXT:
+            state, fields, size = "poison", {}, 2
+        if current is None and len(self.tool_cache) >= MAX_TOOL_CACHE:
+            self._drop_tool(tool_id)
+            return
+        old_bytes = current["bytes"] if current else 0
+        if state == "open" and self.tool_cache_bytes - old_bytes + size > MAX_TOOL_CACHE_BYTES:
+            if current is None:
+                self._drop_tool(tool_id)
+                return
+            state, fields, size = "poison", {}, 2
+        self.tool_cache_bytes += size - old_bytes
+        self.tool_cache[tool_id] = {"state": state, "fields": fields, "at": self.clock(), "bytes": size, "session": self.session_id}
+
+    def _cached_tool(self, tool_id):
+        entry = self.tool_cache.get(tool_id)
+        if entry:
+            if entry.get("session") != self.session_id:
+                return {"state": "foreign", "fields": {}}
+            if entry["state"] == "open" and self.clock() - entry["at"] > TOOL_CACHE_TTL:
+                self._install_tool(tool_id, "expired", {})
+                entry = self.tool_cache.get(tool_id) or {"state": "expired", "fields": {}}
+            return entry
+        if tool_id in self.tool_dropped or self.tool_untracked_closed:
+            return {"state": "bound", "fields": {}}
+        return None
+
+    def observe_tool_update(self, update):
+        """Remember sanitized tool_call metadata for this session id only."""
+        if self.tool_cache_closed or not self.session_id or not isinstance(update, dict):
+            return
+        if update.get("sessionUpdate") not in {"tool_call", "tool_call_update"}:
+            return
+        tool_id = update.get("toolCallId")
+        if not label(tool_id):
+            return
+        if tool_id not in self.tool_cache and (tool_id in self.tool_dropped or self.tool_untracked_closed):
+            return
+        status = update.get("status")
+        # Any present invalid status, including null, tombstones the id.
+        # Set membership hashes the value, so validate its type first.
+        if "status" in update and (not isinstance(status, str) or status not in TOOL_STATUSES):
+            self._install_tool(tool_id, "poison", {})
+            return
+        if status in {"completed", "failed"}:
+            self._install_tool(tool_id, "closed", {})
+            return
+        current = self._cached_tool(tool_id)
+        if current and current["state"] != "open":
+            return
+        try:
+            incoming = tracked_update_fields(update)
+        except Redacted:
+            self._install_tool(tool_id, "poison", {})
+            return
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            self._install_tool(tool_id, "poison", {})
+            return
+        if not incoming:
+            return
+        base = dict(current["fields"]) if current else {}
+        if any(name in incoming and name in base and incoming[name] != base[name] for name in ("kind", "title")):
+            self._install_tool(tool_id, "conflict", {})
+            return
+        combined = dict(base)
+        combined.update(incoming)
+        if "kind" in combined and "title" in combined:
+            projected = permission_context({"toolCallId": tool_id, **combined})
+            if projected.get("state") != "available":
+                self._install_tool(tool_id, "poison", {})
+                return
+            stored = {key: projected[key] for key in TOOL_TRACKED if key in projected}
+        else:
+            stored = combined
+        self._install_tool(tool_id, "open", stored)
+
+    def _redacted_permission(self, tool, entry):
+        kind = tool.get("kind") if isinstance(tool, dict) else None
+        if kind not in TOOL_KINDS and entry:
+            kind = entry.get("fields", {}).get("kind")
+        if kind not in TOOL_KINDS:
+            return {"state": "insufficient-context", "reason": "tool-call-unavailable"}
+        result = {"state": "insufficient-context", "kind": kind, "title": REDACTED}
+        cached_raw = bool(entry and "rawInput" in entry.get("fields", {}))
+        if (isinstance(tool, dict) and tool.get("rawInput") is not None) or cached_raw:
+            result["rawInput"] = REDACTED
+        return result
+
+    def observed_permission_context(self, tool):
+        """Merge a partial permission toolCall with the same-session sanitized cache.
+
+        Explicit kind or title that disagrees with the cache is a conflict. A poisoned,
+        expired, closed or oversized id cannot fall back to an older benign snapshot.
+        """
+        if not isinstance(tool, dict):
+            return permission_context(tool)
+        tool_id = tool.get("toolCallId")
+        explicit = [name for name in TOOL_TRACKED if tool.get(name) is not None]
+        if not label(tool_id):
+            return permission_context(tool)
+        if self.tool_cache_closed:
+            if not explicit:
+                return {"state": "insufficient-context", "reason": "no-correlated-tool-call"}
+            return permission_context(tool)
+        entry = self._cached_tool(tool_id)
+        if entry is None:
+            if not explicit:
+                return {"state": "insufficient-context", "reason": "no-correlated-tool-call"}
+            return permission_context(tool)
+        if entry["state"] != "open":
+            return {"state": "insufficient-context", "reason": TOOL_CACHE_REASONS.get(entry["state"], "tool-call-unavailable")}
+        try:
+            sanitized = {}
+            for name in explicit:
+                if name == "kind":
+                    if tool["kind"] not in TOOL_KINDS:
+                        raise ValueError
+                    sanitized[name] = tool["kind"]
+                elif name == "title":
+                    sanitized[name] = context_string(tool["title"])
+                elif name == "locations":
+                    sanitized[name] = project_locations(tool["locations"])
+                else:
+                    encoded = json.dumps(tool["rawInput"], ensure_ascii=True, separators=(",", ":"))
+                    if len(encoded) > 4096:
+                        raise ValueError
+                    sanitized[name] = context_input(tool["rawInput"])
+        except Redacted:
+            self._install_tool(tool_id, "poison", {})
+            return self._redacted_permission(tool, entry)
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            self._install_tool(tool_id, "poison", {})
+            return {"state": "insufficient-context", "reason": "tool-call-unavailable"}
+        if any(name in sanitized and name in entry["fields"] and sanitized[name] != entry["fields"][name] for name in ("kind", "title")):
+            self._install_tool(tool_id, "conflict", {})
+            return {"state": "insufficient-context", "reason": "tool-call-conflict"}
+        merged = {"toolCallId": tool_id}
+        for name in TOOL_TRACKED:
+            if name in explicit:
+                merged[name] = tool[name]
+            elif name in entry["fields"]:
+                merged[name] = entry["fields"][name]
+        if "kind" not in merged or "title" not in merged:
+            return {"state": "insufficient-context", "reason": "no-correlated-tool-call"}
+        context = permission_context(merged)
+        if context.get("state") != "available":
+            self._install_tool(tool_id, "poison", {})
+            return context
+        if any(name in sanitized and entry["fields"].get(name) != sanitized[name] for name in ("rawInput", "locations")):
+            stored = {key: context[key] for key in TOOL_TRACKED if key in context}
+            self._install_tool(tool_id, "open", stored)
+        return context
 
 
 def write_bounded(descriptor, raw, deadline, clock=time.monotonic):
@@ -628,6 +900,7 @@ def exit_on_signal(signum, frame):
 
 def main(argv=None):
     process = None
+    session = None
     deadline = None
     def emit(value, best_effort=False):
         raw = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
@@ -682,8 +955,11 @@ def main(argv=None):
                 raise Refusal("outbound-frame-too-large")
             write_bounded(process.stdin.fileno(), raw, deadline)
         session = Session(send, emit, str(cwd.resolve()), prompt, args.model)
-        run_transport(process, sys.stdin.buffer, session, args.timeout, deadline=deadline)
-        return 0
+        try:
+            run_transport(process, sys.stdin.buffer, session, args.timeout, deadline=deadline)
+            return 0
+        finally:
+            session.close_tool_cache()
     except Exception as error:
         # Reason codes only: never an exception message, provider text or traceback.
         reason = str(error) if isinstance(error, Refusal) else "process-io-failed" if isinstance(error, OSError) else "internal-error"

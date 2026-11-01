@@ -668,6 +668,48 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(CHK.RAW_FIELDS, ACP.RAW_FIELDS)
         self.assertEqual(CHK.CONTEXT_MAX, ACP.MAX_CONTEXT)
         self.assertEqual(CHK.REDACTED, ACP.REDACTED)
+        self.assertEqual(CHK.RELATIVE_ARG.pattern, ACP.RELATIVE_ARG.pattern)
+        self.assertEqual(CHK.CORRELATION_REASONS, frozenset(ACP.TOOL_CACHE_REASONS.values()))
+
+    def test_fixed_reasons_and_relative_argv_are_bounded(self):
+        for reason in sorted(CHK.CORRELATION_REASONS):
+            with self.subTest(reason=reason):
+                context = {"state": "insufficient-context", "reason": reason}
+                verdict = self.classify(self.permission_stream(context))
+                self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "insufficient"}])
+                self.assertNotIn(reason, json.dumps(verdict))
+        accepted = [
+            ("go-test-dot", available(rawInput={"command": "go", "args": ["test", "./..."]})),
+            ("internal-dot", available(rawInput={"args": ["./internal/..."]})),
+            ("nested-args-description", available(rawInput={"args": {"description": "./..."}})),
+            ("nested-args-command", available(rawInput={"args": {"command": "./internal/..."}})),
+        ]
+        for name, context in accepted:
+            with self.subTest(case=name):
+                verdict = self.classify(self.permission_stream(context))
+                self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "available")
+                self.assert_omits(verdict, "./...", "internal", "go")
+        refused = [
+            ("invented-reason", {"state": "insufficient-context", "reason": "because"}),
+            ("generic-reason", {"state": "insufficient-context", "reason": "invalid-permission-context"}),
+            ("reason-and-title", {"state": "insufficient-context", "reason": "tool-call-closed", "title": "Run checks"}),
+            ("reason-and-kind", {"state": "insufficient-context", "reason": "tool-cache-bound", "kind": "execute"}),
+            ("reason-list", {"state": "insufficient-context", "reason": ["tool-call-closed"]}),
+            ("reason-on-available", dict(available(), reason="tool-call-closed")),
+            ("reason-on-redacted", dict(REDACTED_CONTEXT, reason="tool-call-unavailable")),
+            ("command-relative", available(rawInput={"command": "./..."})),
+            ("title-relative", available(title="Run ./... checks")),
+            ("path-relative", available(rawInput={"path": "./internal/..."})),
+            ("query-relative", available(rawInput={"query": "dir/check.py"})),
+            ("description-relative", available(rawInput={"description": "./..."})),
+            ("location-relative", available(locations=[{"path": "dir/check.py"}])),
+            ("args-parent", available(rawInput={"args": ["../up.py"]})),
+            ("args-backslash", available(rawInput={"args": ["..\\parent\\file.py"]})),
+            ("nested-backslash", available(rawInput={"args": {"description": "..\\parent\\file.py"}})),
+        ]
+        for name, context in refused:
+            with self.subTest(case=name):
+                self.assertEqual(self.reason(self.permission_stream(context)), "invalid-permission-context")
 
     # --- the three decisions stay apart ------------------------------------
 
@@ -790,6 +832,228 @@ class CheckerTests(unittest.TestCase):
                 emitted = [e for e in events if e["event"] == "permission-required"][0]["context"]["state"]
                 self.assertEqual(state, {"available": "available", "insufficient-context": "insufficient"}[emitted])
                 self.assert_omits(verdict, "DO_NOT_EXPORT", "customer")
+
+    def _announce(self, live, tool_id="fixture_1", kind="execute", title="Run fixture checks", raw=None, status="pending", session_update="tool_call"):
+        update = {"sessionUpdate": session_update, "toolCallId": tool_id, "status": status}
+        if kind is not None:
+            update["kind"] = kind
+        if title is not None:
+            update["title"] = title
+        if raw is not None:
+            update["rawInput"] = raw
+        live.provider({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": SESSION, "update": update}})
+
+    def _session_events(self, setup, permissions, clock=None):
+        """One fresh helper session. permissions is a list of (request id, toolCall)."""
+        sent, events = [], []
+        live = ACP.Session(sent.append, events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=clock)
+        live.start()
+        live.provider({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}})
+        live.provider({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": SESSION}})
+        setup(live)
+        emitted = []
+        options = [{"optionId": "yes", "kind": "allow_once"}, {"optionId": "no", "kind": "reject_once"}]
+        for ident, tool in permissions:
+            live.provider({"jsonrpc": "2.0", "id": ident, "method": "session/request_permission", "params": {"sessionId": SESSION, "toolCall": tool, "options": options}})
+            emitted.append([event for event in events if event["event"] == "permission-required"][-1])
+            live.decision({"requestID": ident, "sessionID": SESSION, "kind": "permission", "optionID": "no"})
+        live.provider({"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}})
+        return events, emitted
+
+    def _checked_session(self, setup, permissions, clock=None):
+        events, emitted = self._session_events(setup, permissions, clock)
+        verdict = self.classify(receipt(*events))
+        self.assertIs(verdict["permissionDecisionSent"], True)
+        self.assertIs(verdict["questionDecisionSent"], False)
+        self.assertIs(verdict["permissionCountedAsQuestionReply"], False)
+        self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+        self.assertNotIn("questionRequestIDs", verdict)
+        return emitted, verdict
+
+    def test_helper_receipts_cover_recovered_argv_reasons_and_p2_negatives(self):
+        """Helper output through the checker: recovered argv, six reasons, four P2s."""
+        raw = {"command": "go", "args": ["test", "./...", "./internal/..."]}
+        benign = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw}
+
+        def recover(live):
+            self._announce(live, raw=raw)
+
+        emitted, verdict = self._checked_session(recover, [(41, {"toolCallId": "fixture_1"})])
+        self.assertEqual(emitted[0]["context"]["state"], "available")
+        self.assertEqual(emitted[0]["context"]["rawInput"], raw)
+        self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "available"}])
+        self.assert_omits(verdict, "./...", "internal", "Run fixture")
+
+        def no_update(live):
+            return None
+
+        emitted, verdict = self._checked_session(no_update, [(41, {"toolCallId": "missing-call"})])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "no-correlated-tool-call"})
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+
+        def conflict(live):
+            self._announce(live, raw=raw)
+            self._announce(live, title="Other fixture checks", session_update="tool_call_update")
+
+        emitted, verdict = self._checked_session(conflict, [(41, {"toolCallId": "fixture_1"})])
+        self.assertEqual(emitted[0]["context"]["reason"], "tool-call-conflict")
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+        self.assert_omits(emitted[0]["context"], "./...", "Other fixture")
+        self.assert_omits(verdict, "./...", "Other fixture")
+
+        def closed(live):
+            self._announce(live, raw=raw)
+            self._announce(live, kind=None, title=None, raw=None, status="completed", session_update="tool_call_update")
+
+        emitted, verdict = self._checked_session(closed, [(41, benign)])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-call-closed"})
+        self.assertNotIn("./...", json.dumps(emitted[0]["context"]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+
+        class Clock:
+            def __init__(self):
+                self.now = 0.0
+
+            def __call__(self):
+                return self.now
+
+        clock = Clock()
+
+        def expired(live):
+            self._announce(live, raw=raw)
+            clock.now = ACP.TOOL_CACHE_TTL + 1
+
+        emitted, verdict = self._checked_session(expired, [(41, benign)], clock)
+        self.assertEqual(emitted[0]["context"]["reason"], "tool-call-expired")
+        self.assertNotIn("./...", json.dumps(emitted[0]["context"]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+
+        def bound(live):
+            for index in range(ACP.MAX_TOOL_CACHE):
+                self._announce(live, "cached-%d" % index, title="Run check %d" % index)
+            self._announce(live, "call-extra", title="Run extra check")
+
+        emitted, verdict = self._checked_session(bound, [(41, {"toolCallId": "call-extra", "kind": "execute", "title": "Run extra check"})])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+        self.assert_omits(verdict, "Run extra")
+
+        def poisoned(live):
+            self._announce(live, raw=raw)
+            self._announce(live, title="Use Bearer synthetic", session_update="tool_call_update")
+
+        emitted, verdict = self._checked_session(poisoned, [(41, benign)])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-call-unavailable"})
+        self.assertNotIn("./...", json.dumps(emitted[0]["context"]))
+        self.assertNotIn("Bearer", json.dumps(emitted[0]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+        self.assert_omits(verdict, "./...", "Bearer")
+
+        def bad_status(live):
+            self._announce(live, raw=raw)
+            self._announce(live, kind=None, title=None, raw=None, status=["completed"], session_update="tool_call_update")
+
+        emitted, verdict = self._checked_session(bad_status, [(41, benign)])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-call-unavailable"})
+        self.assertNotIn("./...", json.dumps(emitted[0]["context"]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+
+        def saturated(live):
+            for index in range(ACP.MAX_TOOL_CACHE):
+                self._announce(live, "cached-%d" % index, title="Run check %d" % index)
+            for index in range(ACP.MAX_TOOL_DROPPED):
+                self._announce(live, "dropped-%d" % index, title="Run drop %d" % index)
+            self._announce(live, "poisoned-extra", status=["nope"], raw=raw)
+
+        explicit = {"toolCallId": "poisoned-extra", "kind": "execute", "title": "Run benign checks", "rawInput": raw}
+        emitted, verdict = self._checked_session(saturated, [(41, explicit), (42, {"toolCallId": "cached-0"})])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        self.assertNotIn("./...", json.dumps(emitted[0]["context"]))
+        self.assertEqual(emitted[1]["context"]["state"], "available")
+        self.assertEqual(emitted[1]["context"]["title"], "Run check 0")
+        self.assertEqual(verdict["permissionContexts"], [
+            {"requestID": 41, "permissionContext": "insufficient"},
+            {"requestID": 42, "permissionContext": "available"},
+        ])
+        self.assert_omits(verdict, "./...", "Run benign", "Run check")
+
+        def dynamic(live):
+            return None
+
+        dynamic_tool = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": {"args": {"description": "echo;rm"}}}
+        emitted, verdict = self._checked_session(dynamic, [(41, dynamic_tool)])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context"})
+        self.assertNotIn("echo", json.dumps(emitted[0]["context"]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+
+        slash_tool = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": {"args": ["..\\parent\\file.py"]}}
+        emitted, verdict = self._checked_session(dynamic, [(41, slash_tool)])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context"})
+        self.assertNotIn("file.py", json.dumps(emitted[0]["context"]))
+        self.assertNotIn("parent", json.dumps(emitted[0]["context"]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+
+    def test_helper_rejects_nested_path_shell_under_args_and_command(self):
+        def noop(live):
+            return None
+
+        negatives = (
+            {"args": [{"path": "$(id)"}]},
+            {"args": [{"paths": ["echo;rm"]}]},
+            {"command": {"paths": ["$(id)"]}},
+            {"command": {"path": "..\\parent\\file.py"}},
+        )
+        for raw in negatives:
+            tool = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw}
+            emitted, verdict = self._checked_session(noop, [(41, tool)])
+            self.assertEqual(emitted[0]["context"], {"state": "insufficient-context"}, raw)
+            encoded = json.dumps(emitted[0]["context"])
+            for hidden in ("$(id)", "echo", "parent", "file.py"):
+                self.assertNotIn(hidden, encoded, raw)
+            self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+            self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+
+        benign = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": {"path": "/var/fixture/check.py"}}
+        emitted, verdict = self._checked_session(noop, [(41, benign)])
+        self.assertEqual(emitted[0]["context"]["state"], "available")
+        self.assertEqual(emitted[0]["context"]["rawInput"], {"path": "check.py"})
+        self.assertNotIn("/var/fixture", json.dumps(emitted[0]["context"]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "available")
+        self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+
+    def test_helper_nested_path_descendant_relative_argument(self):
+        raw = {"args": {"path": {"description": "./..."}}}
+        tool = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw}
+
+        def no_update(live):
+            return None
+
+        def recover(live):
+            self._announce(live, raw=raw)
+
+        for setup, request in ((no_update, tool), (recover, {"toolCallId": "fixture_1"})):
+            emitted, verdict = self._checked_session(setup, [(41, request)])
+            self.assertEqual(emitted[0]["context"]["rawInput"], raw)
+            self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "available"}])
+            self.assert_omits(verdict, "./...", "Run fixture")
+        # Inheriting argv does not allow slashes in an actual path field.
+        self.assertFalse(CHK.context_input_ok({"args": {"path": "./..."}}))
+        self.assertFalse(CHK.context_input_ok({"path": {"description": "./..."}}))
+
+    def test_completed_tombstones_bound_later_explicit_context(self):
+        def fill(live):
+            total = ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1
+            for index in range(total):
+                self._announce(live, "done-%d" % index, title="Run check %d" % index, status="completed")
+
+        explicit = {"toolCallId": "later-explicit", "kind": "execute", "title": "Run benign checks", "rawInput": {"command": "python3", "args": ["check.py"]}}
+        emitted, verdict = self._checked_session(fill, [(41, explicit)])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        self.assertNotIn("check.py", json.dumps(emitted[0]["context"]))
+        self.assertNotIn("Run benign", json.dumps(emitted[0]))
+        self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "insufficient"}])
+        self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+        self.assertIs(verdict["permissionCountedAsQuestionReply"], False)
 
 
 MAX_UNSUPPORTED_PLUS = CHK.MAX_UNSUPPORTED + 1

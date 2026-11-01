@@ -35,6 +35,18 @@ CONTEXT_DEPTH_MAX = 3
 CONTEXT_MAX = 2048
 REDACTED = "[REDACTED]"
 PRINTABLE_ASCII = re.compile(r"[ -~]*")
+# Same grammar as cursor-acp-session.py RELATIVE_ARG. Forward slash only.
+_ARG_SEGMENT = r"(?:\.\.\.|[A-Za-z0-9_][A-Za-z0-9._-]*)"
+RELATIVE_ARG = re.compile(rf"^(?:\.|{_ARG_SEGMENT})(?:/{_ARG_SEGMENT})+$")
+# The helper's fixed correlation reasons. No other reason string is a context.
+CORRELATION_REASONS = frozenset({
+    "no-correlated-tool-call",
+    "tool-call-unavailable",
+    "tool-call-conflict",
+    "tool-call-closed",
+    "tool-call-expired",
+    "tool-cache-bound",
+})
 
 
 class Refusal(Exception):
@@ -222,8 +234,13 @@ def validate_permission_options(options):
         seen.add(option["optionID"])
 
 
-def context_string_ok(value, path=False):
-    """One receipt string: the session's display form, so ASCII with no path separator."""
+def context_string_ok(value, path=False, *, argv=False):
+    """One receipt string: the session's display form.
+
+    A slash is refused except for a structured argv string that matches the
+    session's relative-argument grammar. Titles, locations and other fields
+    stay basename-only.
+    """
     if not isinstance(value, str) or not value or len(value) > CONTEXT_STRING_MAX:
         return False
     if any(unicodedata.category(char).startswith(("C", "Zl", "Zp")) for char in value):
@@ -235,25 +252,36 @@ def context_string_ok(value, path=False):
         return False
     if PRINTABLE_ASCII.fullmatch(unicodedata.normalize("NFKC", value)) is None or PRINTABLE_ASCII.fullmatch(value) is None:
         return False
-    # The session reduces every path-like string to its basename before emitting it,
-    # and refuses "." and ".." only in path fields, so a non-path "." (for example
-    # an argument) is valid output.
+    # The session keeps a relative argv pattern whole. The grammar is the
+    # acceptance check: it allows "/" and rejects "\", "..", and "~".
+    if argv and not path and RELATIVE_ARG.fullmatch(value):
+        return True
+    # The session reduces every other path-like string to its basename before
+    # emitting it, and refuses "." and ".." only in path fields, so a non-path
+    # "." (for example an argument) is valid output.
     return "/" not in value and "\\" not in value and not (path and value in {".", ".."})
 
 
-def context_input_ok(value, depth=0, path=False):
+def context_input_ok(value, depth=0, path=False, *, argv=False):
     if depth > CONTEXT_DEPTH_MAX:
         return False
     if isinstance(value, str):
-        return context_string_ok(value, path)
+        return context_string_ok(value, path, argv=argv)
     if isinstance(value, list):
-        return 1 <= len(value) <= CONTEXT_ENTRIES_MAX and all(context_input_ok(item, depth + 1, path) for item in value)
-    if type(value) is dict:
-        return (
-            1 <= len(value) <= CONTEXT_ENTRIES_MAX
-            and set(value) <= RAW_FIELDS
-            and all(context_input_ok(item, depth + 1, key in {"path", "paths"}) for key, item in value.items())
+        return 1 <= len(value) <= CONTEXT_ENTRIES_MAX and all(
+            context_input_ok(item, depth + 1, path, argv=argv) for item in value
         )
+    if type(value) is dict:
+        if not 1 <= len(value) <= CONTEXT_ENTRIES_MAX or not set(value) <= RAW_FIELDS:
+            return False
+        for key, item in value.items():
+            child_path = key in {"path", "paths"}
+            # Match the helper's inherited args rule through path containers.
+            # A path leaf still refuses relative patterns via path=True above.
+            child_argv = argv or key == "args"
+            if not context_input_ok(item, depth + 1, child_path, argv=child_argv):
+                return False
+        return True
     return False
 
 
@@ -282,9 +310,12 @@ def validate_permission_context(context):
     keys = set(context)
     ok = False
     if state == "insufficient-context":
-        # Bare, or the fail-closed redaction shape: kind kept, text replaced.
+        # Bare, a fixed correlation reason, or the fail-closed redaction shape.
         if keys == {"state"}:
             ok = True
+        elif keys == {"state", "reason"}:
+            reason = context["reason"]
+            ok = isinstance(reason, str) and reason in CORRELATION_REASONS
         elif keys in ({"state", "kind", "title"}, {"state", "kind", "title", "rawInput"}):
             ok = (
                 isinstance(context["kind"], str)
