@@ -282,4 +282,6 @@ The existing negotiated maintenance detail GET continues to return the requester
 
 The CLI validates canonical identifier syntax before posting. A direct API client can store a length-bounded noncanonical reference; the reader reports `Unknown` / `Invalid`. This source does not change grant authorization or treat the stored reference as verified task intent. Caller ACL, saved snapshot, and requester UID checks remain prerequisites to the existing observation.
 
+Grant show and MCP also corroborate a positive binding against the explicit envelope reference, the grant requester, and exactly one matching owned item in an Available observation. An Unknown or empty observation, a missing reference, or inconsistent or ambiguous identities cannot retain `Observed`. Normalization preserves legacy observations without a binding and does not change the server response in place.
+
 The AccessGrant CRD must include the optional field before a runtime request can retain it; an older schema can prune it. Schema installation and any real association require their own delivery evidence. This source change does not install a CRD, create a claim or grant, activate a source, or establish an OpenProject-to-runtime binding. Positive producer, persistence, and consumer tests use synthetic fixtures. Live association, populated inbox/ACK, and UI acceptance remain separate.

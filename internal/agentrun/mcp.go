@@ -272,7 +272,7 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 				return "", err
 			}
 			if args.IncludeTaskClaims && out.Type == "maintenance" {
-				out.TaskClaims = sessionTaskClaimsOrUnknown(out.TaskClaims)
+				out.TaskClaims = normalizeMaintenanceGrantClaims(out)
 			}
 			text, err := mcpJSON(out)
 			return noticeFor(text, out), err
