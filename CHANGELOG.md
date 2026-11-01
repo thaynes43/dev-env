@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.81.0](https://github.com/thaynes43/dev-env/compare/v2.80.0...v2.81.0) (2026-11-01)
+
+
+### Features
+
+* **inbox:** read stored acknowledgement metadata ([#813](https://github.com/thaynes43/dev-env/issues/813)) ([eb892bf](https://github.com/thaynes43/dev-env/commit/eb892bf9e470cf851ecf29ec94c9e434f194deed))
+* **mcp:** include requester claim metadata in named grant status ([#811](https://github.com/thaynes43/dev-env/issues/811)) ([f24c8e7](https://github.com/thaynes43/dev-env/commit/f24c8e7969a203473c4de26c0503b3a4fc1c9630))
+
 ## [2.80.0](https://github.com/thaynes43/dev-env/compare/v2.79.0...v2.80.0) (2026-11-01)
 
 
