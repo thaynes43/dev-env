@@ -20,6 +20,9 @@ import urllib.parse
 # Wire-frame limits include the terminating newline.
 MAX_FRAME = 65536
 MAX_PROVIDER_FRAME = 4 * 1024 * 1024
+# Count every object/array container, including the top-level object. Enforce
+# this before decoding rather than relying on a Python build's recursion limit.
+MAX_JSON_DEPTH = 64
 MAX_PROMPT = 16384
 LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
@@ -65,7 +68,27 @@ def strict_object(raw, maximum=MAX_FRAME):
     if len(raw) > maximum:
         raise Refusal("frame-too-large")
     try:
-        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+        depth, quoted, escaped = 0, False, False
+        for char in text:
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+            elif char == '"':
+                quoted = True
+            elif char in "[{":
+                depth += 1
+                if depth > MAX_JSON_DEPTH:
+                    raise Refusal("invalid-json")
+            elif char in "]}":
+                depth -= 1
+        # The scan only bounds nesting. The decoder still validates all syntax,
+        # duplicate keys, Unicode and non-finite numbers as before.
+        value = json.loads(text, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
     except (ValueError, UnicodeError, RecursionError):
         raise Refusal("invalid-json") from None
     if not isinstance(value, dict):
@@ -75,6 +98,24 @@ def strict_object(raw, maximum=MAX_FRAME):
 
 def label(value):
     return isinstance(value, str) and LABEL.fullmatch(value) is not None
+
+
+MAX_TOOL_ID_BYTES = 1024
+
+
+def tool_call_id(value):
+    """ACP v1 ToolCallId is an opaque string, not a display/filename label.
+
+    Keep exact equality in memory only (no trimming, normalization or output).
+    A local UTF-8 byte bound limits cache keys; all other identifier policies stay
+    unchanged. https://agentclientprotocol.com/protocol/v1/schema#toolcallid
+    """
+    if not isinstance(value, str) or len(value) > MAX_TOOL_ID_BYTES:
+        return False
+    try:
+        return len(value.encode("utf-8")) <= MAX_TOOL_ID_BYTES
+    except UnicodeError:
+        return False
 
 
 def request_id(value):
@@ -141,6 +182,198 @@ TOOL_CACHE_REASONS = {
     "bound": "tool-cache-bound",
     "foreign": "no-correlated-tool-call",
 }
+
+# Opt-in, private structural evidence only. Never traverse unknown keys or copy
+# source strings (including IDs, command text, models, content and extensions).
+DIAGNOSTIC_KEYS = (
+    "sessionId", "update", "sessionUpdate", "toolCall", "toolCallId", "kind",
+    "status", "title", "content", "locations", "rawInput", "rawOutput",
+    "options", "optionId", "name", "subject", "type", "id", "command",
+    "args", "path", "paths", "query", "description", "line", "text",
+    "modelId", "currentModelId", "models", "availableModels", "_meta",
+)
+DIAGNOSTIC_ENUMS = {
+    "kind": TOOL_KINDS | PERMISSION_KINDS,
+    "status": TOOL_STATUSES,
+    "sessionUpdate": frozenset({"tool_call", "tool_call_update"}),
+}
+MAX_DIAGNOSTIC_RECORDS = 64
+MAX_DIAGNOSTIC_BYTES = 96 * 1024
+MAX_DIAGNOSTIC_RECORD = 8192
+
+
+def structural_shape(value, depth=0, work=None):
+    """Fixed schema key presence/types, enum tags and counts; bounded traversal.
+
+    The public subject/type keys are observed structurally, never interpreted as
+    a different protocol. Missing differs from present-null in the fields map.
+    """
+    work = [192] if work is None else work
+    if work[0] <= 0:
+        return {"truncated": True}
+    work[0] -= 1
+    types = {dict: "object", list: "array", str: "string", int: "integer",
+             float: "number", bool: "boolean", type(None): "null"}
+    result = {"type": types.get(type(value), "unsupported")}
+    if isinstance(value, (dict, list)):
+        result["count"] = len(value)
+        if depth >= 5 or work[0] <= 0:
+            result["truncated"] = True
+        elif isinstance(value, dict):
+            fields = {}
+            for key in DIAGNOSTIC_KEYS:
+                if key in value:
+                    if work[0] <= 0:
+                        result["truncated"] = True
+                        break
+                    # Payload/history/extension containers are opaque even when
+                    # they happen to contain another familiar schema key.
+                    child_depth = 5 if key in {"content", "rawOutput", "_meta"} else depth + 1
+                    fields[key] = structural_shape(value[key], child_depth, work)
+                    item = value[key]
+                    if isinstance(item, str) and len(item) <= 32 and item in DIAGNOSTIC_ENUMS.get(key, ()):
+                        fields[key]["tag"] = item
+            result["fields"] = fields
+            result["unknownCount"] = len(value) - sum(key in value for key in DIAGNOSTIC_KEYS)
+        else:
+            result["items"] = [structural_shape(item, depth + 1, work) for item in value[:8]]
+            if len(value) > 8:
+                result["truncated"] = True
+    return result
+
+
+def diagnostic_tool_update(update):
+    """Skip streaming prose; preserve tool and subject/type structural evidence."""
+    if not isinstance(update, dict):
+        return False
+    tag = update.get("sessionUpdate")
+    return (isinstance(tag, str) and tag in {"tool_call", "tool_call_update"}) or "subject" in update or "type" in update
+
+
+class StructuralDiagnostic:
+    """One exclusive 0600 regular file directly in the selected worktree.
+
+    At most 64 records/96 KiB, 8 KiB per record, 192 shape nodes, depth 5,
+    eight array items and 64 in-memory ID ordinals. Exhaustion disables capture;
+    it cannot change permission decisions or normal receipts. No file is opened
+    and no extra receipt is emitted unless --diagnostic-file is explicitly set.
+    A bounded daemon queue owns disk writes: stalled storage cannot hold up the
+    session. A missing capture-end marker means incomplete diagnostic evidence.
+    """
+    def __init__(self, cwd, filename, deadline):
+        if not label(filename) or filename in {".", ".."}:
+            raise Refusal("invalid-diagnostic-target")
+        directory = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            self.fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                              0o600, dir_fd=directory)
+        finally:
+            os.close(directory)
+        self.deadline = deadline
+        self.records = self.bytes = 0
+        self.ordinals = {}
+        self.disabled = False
+        self.closed = False
+        self.writes_failed = False
+        self.output = queue.Queue(maxsize=MAX_DIAGNOSTIC_RECORDS + 1)
+        self.writer = threading.Thread(target=self._write_records, daemon=True)
+        try:
+            self.writer.start()
+        except Exception:
+            os.close(self.fd)
+            self.fd = None
+            raise
+
+    def _write_records(self):
+        try:
+            while True:
+                raw = self.output.get()
+                try:
+                    if raw is None:
+                        return
+                    if not self.writes_failed:
+                        # One write per bounded record. Regular-file writes may
+                        # stall; only this daemon waits, never the session thread.
+                        try:
+                            if os.write(self.fd, raw) != len(raw):
+                                self.writes_failed = self.disabled = True
+                        except OSError:
+                            self.writes_failed = self.disabled = True
+                finally:
+                    self.output.task_done()
+        finally:
+            os.close(self.fd)
+            self.fd = None
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        # record() reserves room for both a capture-bound and this final marker.
+        raw = b'{"diagnostic":"acp-structure-v1","stage":"capture-end"}\n'
+        self.output.put_nowait(raw)
+        self.output.put_nowait(None)
+        self.writer.join(timeout=max(0, min(0.05, self.deadline - time.monotonic())))
+        self.ordinals.clear()
+
+    def ordinal(self, tool):
+        ident = tool.get("toolCallId") if isinstance(tool, dict) else None
+        if not tool_call_id(ident):
+            return None
+        if ident not in self.ordinals and len(self.ordinals) < 64:
+            self.ordinals[ident] = len(self.ordinals) + 1
+        return self.ordinals.get(ident)
+
+    def cache(self, session, tool):
+        ident = tool.get("toolCallId") if isinstance(tool, dict) else None
+        entry = session.tool_cache.get(ident) if tool_call_id(ident) else None
+        states = {"open", "poison", "conflict", "closed", "expired", "foreign", "bound"}
+        state = entry["state"] if entry and entry["state"] in states else "absent"
+        return {"state": state, "fields": structural_shape(entry["fields"] if entry else {}),
+                "sameSession": bool(entry and entry.get("session") == session.session_id),
+                "dropped": bool(tool_call_id(ident) and ident in session.tool_dropped),
+                "cacheClosed": session.tool_cache_closed,
+                "untrackedClosed": session.tool_untracked_closed,
+                "cacheCount": len(session.tool_cache), "cacheBytes": session.tool_cache_bytes}
+
+    def record(self, stage, session, tool=None, params=None, before=None, context=None):
+        if self.disabled or self.closed or self.fd is None:
+            return
+        # These arguments come only from the fixed call sites below. No arbitrary
+        # event/metadata dictionary, source reason, key or value is serialised.
+        if stage not in {"permission-ingress", "update-ingress", "update-result", "projection"}:
+            return
+        record = {"diagnostic": "acp-structure-v1", "stage": stage,
+                  "ordinal": self.ordinal(tool), "tool": structural_shape(tool),
+                  "cache": self.cache(session, tool)}
+        ident = tool.get("toolCallId") if isinstance(tool, dict) else None
+        record["toolIdAccepted"] = tool_call_id(ident)
+        record["toolIdLabelAccepted"] = label(ident)
+        raw_input = tool.get("rawInput") if isinstance(tool, dict) else None
+        record["expectedSyntheticCommand"] = bool(isinstance(raw_input, dict) and (
+            raw_input.get("command") == "touch OP318-DIAG-SENTINEL-2017" or (
+                raw_input.get("command") == "touch" and
+                raw_input.get("args") == ["OP318-DIAG-SENTINEL-2017"])))
+        if params is not None:
+            record["params"] = structural_shape(params)
+            record["sameSession"] = bool(session.session_id and params.get("sessionId") == session.session_id)
+        if before is not None:
+            record["before"] = before
+        if context is not None:
+            record["projection"] = structural_shape(context)
+            record["available"] = context.get("state") == "available"
+            record["redacted"] = context.get("title") == REDACTED
+            record["reasons"] = {reason: context.get("reason") == reason
+                                 for reason in TOOL_CACHE_REASONS.values()}
+        raw = json.dumps(record, ensure_ascii=True, separators=(",", ":")).encode() + b"\n"
+        if (self.records >= MAX_DIAGNOSTIC_RECORDS - 2 or
+                self.bytes + len(raw) > MAX_DIAGNOSTIC_BYTES - 256 or
+                len(raw) > MAX_DIAGNOSTIC_RECORD):
+            raw = b'{"diagnostic":"acp-structure-v1","stage":"capture-bound","truncated":true}\n'
+            self.disabled = True
+        self.output.put_nowait(raw)
+        self.records += 1
+        self.bytes += len(raw)
 
 
 class Redacted(Exception):
@@ -303,7 +536,7 @@ def permission_context(tool):
         # Bound the source as well as the output, including discarded fields.
         if len(json.dumps(tool, ensure_ascii=True, separators=(",", ":"))) > 4096:
             return insufficient
-        if not label(tool.get("toolCallId")) or tool.get("kind") not in TOOL_KINDS:
+        if not tool_call_id(tool.get("toolCallId")) or tool.get("kind") not in TOOL_KINDS:
             return insufficient
         title = context_string(tool.get("title"))
         clean = {"state": "available", "kind": tool["kind"], "title": title}
@@ -367,7 +600,7 @@ def tracked_update_fields(update):
 
 class Session:
     """State machine is independent of provider transport for offline qualification."""
-    def __init__(self, send, emit, cwd, prompt, model, clock=None):
+    def __init__(self, send, emit, cwd, prompt, model, clock=None, diagnostic=None):
         self.send, self.emit = send, emit
         self.cwd, self.prompt, self.model = cwd, prompt, model
         self.session_id = None
@@ -381,6 +614,7 @@ class Session:
         self.tool_cache_bytes = 0
         self.tool_cache_closed = False
         self.tool_untracked_closed = False
+        self.diagnostic = diagnostic
 
     def start(self):
         self.emit({"event": "starting", "modelRequested": self.model, "servedModel": "Unknown", "promptSHA256": hashlib.sha256(self.prompt.encode()).hexdigest()})
@@ -427,6 +661,11 @@ class Session:
         method, params = message["method"], message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
             raise Refusal("invalid-method")
+        if self.diagnostic:
+            if method == "session/request_permission":
+                self.diagnostic.record("permission-ingress", self, params.get("toolCall"), params=params)
+            elif method == "session/update" and (diagnostic_tool_update(params.get("update")) or "subject" in params or "type" in params):
+                self.diagnostic.record("update-ingress", self, params.get("update"), params=params)
         if "id" not in message:
             if method == "session/update":
                 # Fail closed: before session/new answers, no session id exists to correlate.
@@ -550,7 +789,7 @@ class Session:
         self.tool_untracked_closed = True
 
     def _install_tool(self, tool_id, state, fields):
-        if self.tool_cache_closed or not label(tool_id):
+        if self.tool_cache_closed or not tool_call_id(tool_id):
             return
         if self.tool_untracked_closed and tool_id not in self.tool_cache:
             return
@@ -591,13 +830,22 @@ class Session:
         return None
 
     def observe_tool_update(self, update):
+        if not self.diagnostic or not diagnostic_tool_update(update):
+            return self._observe_tool_update(update)
+        before = self.diagnostic.cache(self, update)
+        try:
+            return self._observe_tool_update(update)
+        finally:
+            self.diagnostic.record("update-result", self, update, before=before)
+
+    def _observe_tool_update(self, update):
         """Remember sanitized tool_call metadata for this session id only."""
         if self.tool_cache_closed or not self.session_id or not isinstance(update, dict):
             return
         if update.get("sessionUpdate") not in {"tool_call", "tool_call_update"}:
             return
         tool_id = update.get("toolCallId")
-        if not label(tool_id):
+        if not tool_call_id(tool_id):
             return
         if tool_id not in self.tool_cache and (tool_id in self.tool_dropped or self.tool_untracked_closed):
             return
@@ -652,6 +900,14 @@ class Session:
         return result
 
     def observed_permission_context(self, tool):
+        if not self.diagnostic:
+            return self._observed_permission_context(tool)
+        before = self.diagnostic.cache(self, tool)
+        context = self._observed_permission_context(tool)
+        self.diagnostic.record("projection", self, tool, before=before, context=context)
+        return context
+
+    def _observed_permission_context(self, tool):
         """Merge a partial permission toolCall with the same-session sanitized cache.
 
         Explicit kind or title that disagrees with the cache is a conflict. A poisoned,
@@ -661,7 +917,7 @@ class Session:
             return permission_context(tool)
         tool_id = tool.get("toolCallId")
         explicit = [name for name in TOOL_TRACKED if tool.get(name) is not None]
-        if not label(tool_id):
+        if not tool_call_id(tool_id):
             return permission_context(tool)
         if self.tool_cache_closed:
             if not explicit:
@@ -902,6 +1158,7 @@ def main(argv=None):
     process = None
     session = None
     deadline = None
+    diagnostic = None
     def emit(value, best_effort=False):
         raw = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
         if len(raw.encode("utf-8")) + 1 > MAX_FRAME:
@@ -925,6 +1182,7 @@ def main(argv=None):
         parser.add_argument("--model", required=True)
         parser.add_argument("--prompt-file", required=True)
         parser.add_argument("--timeout", type=int, default=600)
+        parser.add_argument("--diagnostic-file", help="Opt-in structural JSONL; exclusive private basename in --worktree")
         args = parser.parse_args(argv)
         deadline = time.monotonic() + max(1, min(args.timeout, 3600))
         client, cwd, prompt_path = Path(args.client), Path(args.worktree), Path(args.prompt_file)
@@ -938,6 +1196,8 @@ def main(argv=None):
             prompt = raw.decode("utf-8")
         except UnicodeError:
             raise Refusal("invalid-prompt-encoding") from None
+        if args.diagnostic_file is not None:
+            diagnostic = StructuralDiagnostic(str(cwd.resolve()), args.diagnostic_file, deadline)
         # A signal to the client must still reach the finally that stops the child
         # group. While Popen runs, the child exists but is not owned yet, so only
         # record the signal there and replay it once `process` is assigned.
@@ -954,7 +1214,7 @@ def main(argv=None):
             if len(raw) > MAX_FRAME:
                 raise Refusal("outbound-frame-too-large")
             write_bounded(process.stdin.fileno(), raw, deadline)
-        session = Session(send, emit, str(cwd.resolve()), prompt, args.model)
+        session = Session(send, emit, str(cwd.resolve()), prompt, args.model, diagnostic=diagnostic)
         try:
             run_transport(process, sys.stdin.buffer, session, args.timeout, deadline=deadline)
             return 0
@@ -974,6 +1234,8 @@ def main(argv=None):
     finally:
         if process is not None:
             stop_group(process)
+        if diagnostic is not None:
+            diagnostic.close()
 
 
 if __name__ == "__main__":

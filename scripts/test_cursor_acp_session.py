@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 # The approved child environment, stated independently of the code under test.
 ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "XDG_RUNTIME_DIR")
@@ -206,6 +207,42 @@ class ProtocolTests(unittest.TestCase):
         for raw in [b'{"id":1,"id":2}', b"[]", b"x" * (ACP.MAX_FRAME + 1), b"\xff", b'{"id":NaN}', ("[" * 2000 + "]" * 2000).encode()]:
             with self.assertRaises(ACP.Refusal):
                 ACP.strict_object(raw)
+
+    def test_json_depth_has_an_explicit_container_bound(self):
+        # 64 includes the root object. Exercise objects, arrays and mixed shapes
+        # independently of the host interpreter's recursion limit.
+        for nesting in ["objects", "arrays", "mixed"]:
+            for depth in [63, 64, 65, 2000]:
+                with self.subTest(nesting=nesting, depth=depth):
+                    opens, closes = [b'{"subject":'], [b'}']
+                    for index in range(depth - 1):
+                        is_object = nesting == "objects" or nesting == "mixed" and index % 2 == 0
+                        opens.append(b'{"subject":' if is_object else b'[')
+                        closes.append(b'}' if is_object else b']')
+                    raw = b''.join(opens) + b'0' + b''.join(reversed(closes))
+                    if depth <= 64:
+                        self.assertIsInstance(ACP.strict_object(raw), dict)
+                    else:
+                        with self.assertRaisesRegex(ACP.Refusal, "^invalid-json$"):
+                            ACP.strict_object(raw)
+
+    def test_json_depth_scan_respects_strings_and_keeps_strict_decoding(self):
+        value = {"subject": '[{' * 2000 + '"\\' + '}]' * 2000,
+                 "escaped": '\\"[{}]'}
+        self.assertEqual(ACP.strict_object(json.dumps(value).encode()), value)
+        for raw, reason in [(b'{"x":1,"x":2}', "duplicate-field"),
+                            (b'{"x":{"y":1,"y":2}}', "duplicate-field"),
+                            (b'{"x":"\xff"}', "invalid-json"),
+                            (b'{"x":Infinity}', "invalid-json"),
+                            (b'{"x":"unterminated}', "invalid-json"),
+                            (b'{"x":[}', "invalid-json"),
+                            (b'[]', "object-required")]:
+            with self.subTest(raw=raw), self.assertRaisesRegex(ACP.Refusal, '^' + reason + '$'):
+                ACP.strict_object(raw)
+        raw = b'{"x":0}'
+        self.assertEqual(ACP.strict_object(raw, len(raw)), {"x": 0})
+        with self.assertRaisesRegex(ACP.Refusal, "^frame-too-large$"):
+            ACP.strict_object(raw, len(raw) - 1)
 
 
 def json_frame(size, name="synthetic"):
@@ -1090,6 +1127,46 @@ class ToolCacheTests(unittest.TestCase):
         follow = self.permit(42, {"toolCallId": "fixture_1"})
         self.assertEqual(follow["context"]["rawInput"], {"command": "python3", "args": ["check.py"]})
 
+    def test_opaque_tool_id_retains_command_through_status_and_permission_copy(self):
+        # Synthetic representative of the observed structural sequence. The real
+        # ID/title/content were never retained; no particular ID character is inferred.
+        self.ready()
+        tool_id = "fixture:opaque/tool id"
+        raw = {"command": "touch OP318-DIAG-SENTINEL-2017"}
+        self.announce(tool_id, raw=raw)
+        self.announce(tool_id, kind=None, title=None, status="in_progress", session_update="tool_call_update")
+        copy = {"toolCallId": tool_id, "kind": "execute", "title": "Run fixture checks", "status": "pending",
+                "content": [{"type": "content", "content": {"type": "text", "text": "PRIVATE_CONTENT"}}]}
+        context = self.permit(41, copy)["context"]
+        self.assertEqual(context["state"], "available")
+        self.assertEqual(context["rawInput"], raw)
+        self.assertNotIn(tool_id, json.dumps(self.events))
+        self.assertNotIn("PRIVATE_CONTENT", json.dumps(self.events))
+        self.assert_reject_only(41)
+        self.announce(tool_id, kind=None, title=None, status="completed", session_update="tool_call_update")
+        self.assertEqual(self.permit(42, copy)["context"]["reason"], "tool-call-closed")
+
+    def test_opaque_ids_correlate_exactly_without_normalization_or_cross_session(self):
+        self.ready()
+        for tool_id in ["fixture:opaque", " fixture:opaque", "fixture:opaque ", "", "fixture/雪", "fixture\u0000opaque"]:
+            self.announce(tool_id, raw={"command": "go", "args": ["test", "./..."]})
+        for ident, tool_id in enumerate(["fixture:opaque", " fixture:opaque", "fixture:opaque ", "", "fixture/雪", "fixture\u0000opaque"], 40):
+            self.assertEqual(self.permit(ident, {"toolCallId": tool_id})["context"]["state"], "available")
+            self.assert_reject_only(ident)
+        self.assertEqual(len(self.session.tool_cache), 6)
+        self.assertEqual(self.permit(50, {"toolCallId": "fixture:OPAQUE"})["context"]["reason"], "no-correlated-tool-call")
+
+    def test_tool_id_byte_bound_and_malformed_types_remain_fail_closed(self):
+        self.ready()
+        valid = ["x" * 1024, "雪" * 341 + "x"]
+        invalid = ["x" * 1025, "雪" * 342, "\ud800", None, True, 1, [], {}]
+        for tool_id in valid:
+            self.announce(tool_id)
+        for offset, tool_id in enumerate(valid + invalid, 60):
+            self.assertEqual(self.permit(offset, dict(VALID_CONTEXT, toolCallId=tool_id))["context"]["state"],
+                             "available" if tool_id in valid else "insufficient-context")
+        self.assertEqual(len(self.session.tool_cache), 2)
+
 
 FAKE = '''#!/usr/bin/env python3
 import json,os,sys,time
@@ -1152,6 +1229,12 @@ for line in sys.stdin:
   if mode=="error": write({"jsonrpc":"2.0","id":3,"error":{"message":"PRIVATE_PROVIDER_ERROR"}}); continue
   if mode=="exit": sys.exit(0)
   if mode in ("grandchild","env"): write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}); continue
+  if mode=="opaque-id":
+   tool_id="fixture:opaque/tool id"
+   write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call","toolCallId":tool_id,"title":"Run fixture checks","kind":"execute","status":"pending","rawInput":{"command":"touch OP318-DIAG-SENTINEL-2017"}}}})
+   write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call_update","toolCallId":tool_id,"status":"in_progress"}}})
+   write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":{"toolCallId":tool_id,"title":"Run fixture checks","kind":"execute","status":"pending","content":[{"type":"content","content":{"type":"text","text":"PRIVATE_OPAQUE_CONTENT"}}]},"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
+   continue
   if mode=="partial-id":
    write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call","toolCallId":"fixture_1","title":"Run fixture checks","kind":"execute","status":"pending","rawInput":{"command":"go","args":["test","./..."]}}}})
    write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":{"toolCallId":"fixture_1"},"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
@@ -1165,7 +1248,7 @@ for line in sys.stdin:
    write({"jsonrpc":"2.0","id":52,"method":"terminal/create","params":{"sessionId":"fixture-session","command":"PRIVATE_COMMAND"}})
    continue
   write({"jsonrpc":"2.0","id":40,"method":"cursor/ask_question","params":{"questions":[{"id":"q1","prompt":"Fixture choice?","options":[{"id":"a","label":"First"}]}]}})
- elif (mode=="permission" or mode=="partial-id" or mode.startswith("context-")) and msg.get("id")==41:
+ elif (mode in ("permission","partial-id","opaque-id") or mode.startswith("context-")) and msg.get("id")==41:
   if msg.get("result")=={"outcome":{"outcome":"selected","optionId":"deny"}}: write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
   else: write({"jsonrpc":"2.0","id":3,"error":{"message":"fixture expected rejection"}})
  elif mode=="callbacks" and msg.get("id") in (50,51,52):
@@ -1191,6 +1274,246 @@ def pid_gone(pid, limit=5.0):
     return False
 
 
+class StructuralDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "shape.jsonl"
+        self.diag = ACP.StructuralDiagnostic(self.directory.name, self.path.name, time.monotonic() + 30)
+        self.addCleanup(self.diag.close)
+        self.sent, self.events = [], []
+        self.clock = ManualClock()
+        self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "fixture", "fixture-model",
+                                   clock=self.clock, diagnostic=self.diag)
+        self.session.start()
+        self.session.provider({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}})
+        self.session.provider({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "fixture-session"}})
+
+    def records(self):
+        self.diag.output.join()  # Offline temporary filesystem only, never the live helper.
+        return [json.loads(line) for line in self.path.read_bytes().splitlines()]
+
+    def update(self, tool):
+        self.session.provider({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "fixture-session", "update": tool}})
+
+    def permission(self, tool, ident=41, **extra):
+        self.session.provider({"jsonrpc": "2.0", "id": ident, "method": "session/request_permission", "params": {
+            "sessionId": "fixture-session", "toolCall": tool,
+            "options": [{"optionId": "deny", "kind": "reject_once"}, {"optionId": "allow", "kind": "allow_once"}], **extra}})
+
+    def test_privacy_canaries_never_copy_unknown_keys_values_ids_or_encodings(self):
+        import base64
+        import hashlib
+        canary = "PRIVATE-CANARY-COMMAND-0123456789"
+        tool = {"toolCallId": canary, "kind": "execute", "title": canary,
+                "rawInput": {"command": canary, "args": [canary], canary: {"title": canary}},
+                "content": [{"text": canary}], "rawOutput": {"command": canary},
+                "_meta": {canary: canary}, canary: canary}
+        self.update(dict(tool, sessionUpdate="tool_call"))
+        self.permission(tool, subject={"type": canary, "toolCall": tool}, modelId=canary)
+        self.records()
+        raw = self.path.read_text()
+        for forbidden in [canary, base64.b64encode(canary.encode()).decode(), hashlib.sha256(canary.encode()).hexdigest(),
+                          "fixture-session", "fixture-model"]:
+            self.assertNotIn(forbidden, raw)
+        ingress = self.records()[-2]
+        self.assertEqual(ingress["tool"]["unknownCount"], 1)
+        self.assertEqual(ingress["tool"]["fields"]["rawInput"]["unknownCount"], 1)
+        self.assertEqual(ingress["params"]["fields"]["subject"]["fields"]["type"], {"type": "string"})
+        self.assertIsInstance(ingress["ordinal"], int)
+
+    def test_missing_null_wrong_type_and_known_enums_are_distinct(self):
+        for tool in [{}, {"kind": None, "title": None, "status": None},
+                     {"kind": [], "title": 4, "status": {}},
+                     {"kind": "execute", "status": "pending", "sessionUpdate": "tool_call"},
+                     {"kind": "PRIVATE_ENUM", "status": "PRIVATE_STATUS"}]:
+            shape = ACP.structural_shape(tool)
+            self.assertEqual(set(shape["fields"]), set(tool))
+        self.assertEqual(ACP.structural_shape({"kind": None})["fields"]["kind"], {"type": "null"})
+        self.assertEqual(ACP.structural_shape({"kind": "execute"})["fields"]["kind"]["tag"], "execute")
+        self.assertNotIn("PRIVATE", json.dumps(ACP.structural_shape({"kind": "PRIVATE_ENUM"})))
+
+    def test_same_id_join_projection_and_reject_only_are_observed(self):
+        self.update(dict(VALID_CONTEXT, sessionUpdate="tool_call", status="pending"))
+        self.permission({"toolCallId": "fixture-call"})
+        records = self.records()
+        self.assertEqual([r["stage"] for r in records], ["update-ingress", "update-result", "permission-ingress", "projection"])
+        self.assertEqual({r["ordinal"] for r in records}, {1})
+        self.assertEqual(records[1]["before"]["state"], "absent")
+        self.assertEqual(records[1]["cache"]["state"], "open")
+        self.assertTrue(records[-1]["available"])
+        self.assertNotIn("check.py", self.path.read_text())
+        before = list(self.sent)
+        for choice in ["allow", "other"]:
+            with self.assertRaisesRegex(ACP.Refusal, "approval-not-supported"):
+                self.session.decision({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": choice})
+            self.assertEqual(self.sent, before)
+        self.session.decision({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"})
+        self.assertEqual(self.sent[-1]["result"]["outcome"]["optionId"], "deny")
+
+    def test_null_status_poison_is_observed_without_changing_current_policy(self):
+        # A hypothesis fixture, not a claim about the unobserved real failure.
+        self.update(dict(VALID_CONTEXT, sessionUpdate="tool_call", status="pending"))
+        self.update({"sessionUpdate": "tool_call_update", "toolCallId": "fixture-call", "status": None})
+        self.permission({"toolCallId": "fixture-call"})
+        records = self.records()
+        self.assertEqual(records[-3]["before"]["state"], "open")
+        self.assertEqual(records[-3]["cache"]["state"], "poison")
+        self.assertFalse(records[-1]["available"])
+        self.assertTrue(records[-1]["reasons"]["tool-call-unavailable"])
+
+    def test_conflict_expiry_and_unknown_join_are_visible(self):
+        self.permission({"toolCallId": "unknown-call"})
+        self.assertTrue(self.records()[-1]["reasons"]["no-correlated-tool-call"])
+        self.update(dict(VALID_CONTEXT, sessionUpdate="tool_call", status="pending"))
+        self.clock.now += ACP.TOOL_CACHE_TTL + 1
+        self.permission({"toolCallId": "fixture-call"}, 42)
+        self.assertEqual(self.records()[-1]["cache"]["state"], "expired")
+        self.update(dict(VALID_CONTEXT, toolCallId="second-call", sessionUpdate="tool_call", status="pending"))
+        self.permission({"toolCallId": "second-call", "title": "Other checks"}, 43)
+        self.assertEqual(self.records()[-1]["cache"]["state"], "conflict")
+
+    def test_cache_drop_and_latch_are_fixed_flags(self):
+        for index in range(ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1):
+            # Direct cache updates keep this fixture below diagnostic record cap.
+            self.session._install_tool(f"call-{index}", "closed", {})
+        self.permission({"toolCallId": f"call-{ACP.MAX_TOOL_CACHE}"})
+        record = self.records()[-1]
+        self.assertTrue(record["cache"]["dropped"])
+        self.assertTrue(record["cache"]["untrackedClosed"])
+        self.assertTrue(record["reasons"]["tool-cache-bound"])
+
+    def test_redaction_is_boolean_and_cache_poison_visible(self):
+        self.update(dict(VALID_CONTEXT, sessionUpdate="tool_call", status="pending"))
+        self.permission({"toolCallId": "fixture-call", "rawInput": {"command": "echo", "args": ["Bearer PRIVATE"]}})
+        record = self.records()[-1]
+        self.assertTrue(record["redacted"])
+        self.assertEqual(record["cache"]["state"], "poison")
+        self.assertNotIn("Bearer", self.path.read_text())
+
+    def test_expected_synthetic_command_is_only_boolean(self):
+        for index, raw in enumerate([{"command": "touch OP318-DIAG-SENTINEL-2017"},
+                                     {"command": "touch", "args": ["OP318-DIAG-SENTINEL-2017"]},
+                                     {"command": "touch OTHER-PRIVATE-FILE"}]):
+            self.permission({"toolCallId": f"tool-{index}", "rawInput": raw}, 41 + index)
+            self.assertEqual(self.records()[-2]["expectedSyntheticCommand"], index < 2)
+        self.assertNotIn("OP318-DIAG-SENTINEL-2017", self.path.read_text())
+        self.assertNotIn("OTHER-PRIVATE", self.path.read_text())
+
+    def test_opaque_tool_id_is_only_an_ordinal_and_never_displayed(self):
+        tool_id = "PRIVATE:opaque/id with\u0000control"
+        self.update(dict(VALID_CONTEXT, toolCallId=tool_id, sessionUpdate="tool_call", status="pending"))
+        self.permission({"toolCallId": tool_id})
+        records = self.records()
+        self.assertEqual({record["ordinal"] for record in records}, {1})
+        self.assertTrue(all(record["toolIdAccepted"] for record in records))
+        self.assertFalse(any(record["toolIdLabelAccepted"] for record in records))
+        self.assertTrue(records[-1]["available"])
+        self.assertEqual(records[-1]["cache"]["state"], "open")
+        self.assertNotIn("PRIVATE", self.path.read_text())
+        self.assertNotIn("control", self.path.read_text())
+
+    def test_deep_wide_and_unknown_containers_have_bounded_shape_work(self):
+        deep = {"command": "PRIVATE"}
+        for _ in range(100):
+            deep = {"subject": deep}
+        value = {"rawInput": deep, "locations": [{"path": "PRIVATE"}] * 10000,
+                 "content": [{"text": "PRIVATE"}] * 10000, "PRIVATE-KEY": deep}
+        shape = ACP.structural_shape(value)
+        encoded = json.dumps(shape)
+        self.assertLess(len(encoded), 4096)
+        self.assertIn('"truncated": true', encoded)
+        self.assertNotIn("PRIVATE", encoded)
+        self.assertEqual(shape["unknownCount"], 1)
+        self.assertEqual(len(shape["fields"]["locations"]["items"]), 8)
+
+    def test_record_byte_count_id_and_output_write_bounds(self):
+        for index in range(100):
+            self.diag.record("projection", self.session, {"toolCallId": f"private-{index}"}, context={"state": "insufficient-context"})
+        records = self.records()
+        self.assertLessEqual(len(records), ACP.MAX_DIAGNOSTIC_RECORDS)
+        self.assertLessEqual(self.path.stat().st_size, ACP.MAX_DIAGNOSTIC_BYTES)
+        self.assertLessEqual(len(self.diag.ordinals), 64)
+        self.assertEqual(records[-1]["stage"], "capture-bound")
+        size = self.path.stat().st_size
+        self.diag.record("projection", self.session)
+        self.assertEqual(self.path.stat().st_size, size)
+
+    def test_deadline_or_write_failure_disables_without_changing_session(self):
+        with mock.patch.object(ACP.os, "write", side_effect=OSError("PRIVATE_IO_ERROR")):
+            self.permission(None)
+            self.diag.output.join()
+        self.assertTrue(self.diag.disabled)
+        self.assertEqual(self.events[-1]["context"]["state"], "insufficient-context")
+        self.assertEqual(self.path.stat().st_size, 0)
+
+    def test_stalled_diagnostic_disk_never_blocks_permission_or_close(self):
+        entered, release = threading.Event(), threading.Event()
+        original = os.write
+        def stalled(descriptor, raw):
+            if descriptor == self.diag.fd:
+                entered.set()
+                release.wait(timeout=5)
+            return original(descriptor, raw)
+        try:
+            with mock.patch.object(ACP.os, "write", side_effect=stalled):
+                self.permission(None)
+                self.assertTrue(entered.wait(timeout=1))
+                before = time.monotonic()
+                self.session.decision({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"})
+                self.diag.close()
+                self.assertLess(time.monotonic() - before, 0.2)
+                self.assertEqual(self.sent[-1]["result"]["outcome"]["optionId"], "deny")
+                self.assertNotIn("capture-end", self.path.read_text())
+                release.set()
+                self.diag.writer.join(timeout=1)
+        finally:
+            release.set()
+            self.diag.writer.join(timeout=1)
+        self.assertEqual(self.records()[-1]["stage"], "capture-end")
+
+    def test_target_is_exclusive_private_no_follow_and_cannot_escape(self):
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        with self.assertRaises(FileExistsError):
+            ACP.StructuralDiagnostic(self.directory.name, self.path.name, time.monotonic() + 1)
+        target = Path(self.directory.name) / "link"
+        target.symlink_to(self.path)
+        with self.assertRaises(OSError):
+            ACP.StructuralDiagnostic(self.directory.name, target.name, time.monotonic() + 1)
+        for name in ["../escape", "/tmp/escape", ".", "..", "nested/escape"]:
+            with self.subTest(name=name), self.assertRaises(ACP.Refusal):
+                ACP.StructuralDiagnostic(self.directory.name, name, time.monotonic() + 1)
+        target.unlink()
+        target.symlink_to(self.directory.name, target_is_directory=True)
+        with self.assertRaises(OSError):
+            ACP.StructuralDiagnostic(str(target), "new.jsonl", time.monotonic() + 1)
+
+    def test_disabled_compatibility_and_no_diagnostic_io(self):
+        sent, events = [], []
+        plain = ACP.Session(sent.append, events.append, "/synthetic/project", "fixture", "fixture-model", clock=self.clock)
+        plain.start()
+        with mock.patch.object(ACP.StructuralDiagnostic, "record", side_effect=AssertionError("disabled called diagnostic")), \
+                mock.patch.object(ACP.os, "open", side_effect=AssertionError("disabled opened file")):
+            for message in [{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}},
+                            {"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "fixture-session"}}]:
+                plain.provider(message)
+            plain.observe_tool_update(dict(VALID_CONTEXT, sessionUpdate="tool_call", status="pending"))
+            plain.observed_permission_context({"toolCallId": "fixture-call"})
+        self.update(dict(VALID_CONTEXT, sessionUpdate="tool_call", status="pending"))
+        self.assertEqual(plain.tool_cache, self.session.tool_cache)
+        self.assertEqual(sent, self.sent)
+        self.assertEqual(events, self.events)
+
+    def test_malformed_duplicate_deep_and_oversize_json_remain_strict(self):
+        for raw in [b'{"PRIVATE":}', b'{"PRIVATE":1,"PRIVATE":2}',
+                    b'{"subject":' + b'[' * 2000 + b'0' + b']' * 2000 + b'}',
+                    b'{"title":"' + b'x' * ACP.MAX_PROVIDER_FRAME + b'"}']:
+            with self.assertRaises(ACP.Refusal):
+                ACP.strict_object(raw, ACP.MAX_PROVIDER_FRAME)
+        self.assertEqual(self.records(), [])
+
+
 class SubprocessTests(unittest.TestCase):
     def fake(self, directory, mode):
         client = Path(directory) / "fake-cursor"
@@ -1200,11 +1523,127 @@ class SubprocessTests(unittest.TestCase):
         prompt.write_text("Synthetic offline task")
         return client, prompt
 
-    def launch(self, directory, mode="question", timeout=10, client_arg=None, model=None, env=None, prefix=()):
+    def launch(self, directory, mode="question", timeout=10, client_arg=None, model=None, env=None, prefix=(), diagnostic=None):
         client, prompt = self.fake(directory, mode)
         model_args = ["--model", "fixture-model"] if model is None else model
-        command = [sys.executable, "-I", "-B", *prefix, str(CLIENT), "run", "--client", client_arg or str(client), "--worktree", directory, *model_args, "--prompt-file", str(prompt), "--timeout", str(timeout)]
+        entrypoint = CLIENT
+        if diagnostic is not None:
+            # Offline fixtures require complete evidence. Run the real main and
+            # original bounded close, then explicitly join its writer before
+            # this test child exits. Production retains its 50 ms close; the
+            # separate stalled-storage test exercises that unchanged bound.
+            entrypoint = Path(directory) / "offline-diagnostic-harness.py"
+            entrypoint.write_text('''import importlib.util
+import sys
+spec = importlib.util.spec_from_file_location("offline_acp", sys.argv.pop(1))
+acp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(acp)
+original_close = acp.StructuralDiagnostic.close
+def close_and_join(self):
+    original_close(self)
+    self.writer.join(timeout=5)
+    if self.writer.is_alive():
+        raise RuntimeError("offline diagnostic writer did not finish")
+acp.StructuralDiagnostic.close = close_and_join
+raise SystemExit(acp.main())
+''')
+        command = [sys.executable, "-I", "-B", *prefix, str(entrypoint)]
+        if diagnostic is not None:
+            command.append(str(CLIENT))
+        command.extend(["run", "--client", client_arg or str(client), "--worktree", directory, *model_args, "--prompt-file", str(prompt), "--timeout", str(timeout)])
+        if diagnostic is not None:
+            command.extend(["--diagnostic-file", diagnostic])
         return subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+
+    def test_diagnostic_cli_partial_join_preserves_normal_output_and_rejection(self):
+        outputs = []
+        for enabled in [False, True]:
+            with tempfile.TemporaryDirectory() as directory:
+                process = self.launch(directory, "partial-id", diagnostic="shape.jsonl" if enabled else None)
+                decision = {"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"}
+                observed = []
+                try:
+                    while True:
+                        line = process.stdout.readline()
+                        self.assertTrue(line, "helper ended before permission request")
+                        observed.append(line)
+                        if json.loads(line)["event"] == "permission-required":
+                            break
+                    stdout, stderr = process.communicate(json.dumps(decision) + "\n", timeout=15)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate(timeout=5)
+                stdout = "".join(observed) + stdout
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(stderr, "")
+                outputs.append(stdout)
+                path = Path(directory) / "shape.jsonl"
+                self.assertEqual(path.exists(), enabled)
+                if enabled:
+                    records = [json.loads(line) for line in path.read_bytes().splitlines()]
+                    self.assertEqual(records[-1]["stage"], "capture-end")
+                    self.assertTrue(records[-2]["available"])
+                    self.assertEqual(records[-2]["ordinal"], records[0]["ordinal"])
+                    for forbidden in ["fixture_1", "fixture-session", "Run fixture checks", "./...", "go"]:
+                        self.assertNotIn(forbidden, path.read_text())
+        self.assertEqual(outputs[0], outputs[1])
+
+    def test_fake_opaque_id_wire_sequence_preserves_command_and_rejects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "opaque-id", diagnostic="shape.jsonl")
+            observed = []
+            try:
+                while True:
+                    line = process.stdout.readline()
+                    self.assertTrue(line, "helper ended before permission request")
+                    value = json.loads(line)
+                    observed.append(value)
+                    if value["event"] == "permission-required":
+                        break
+                self.assertEqual(value["context"]["rawInput"], {"command": "touch OP318-DIAG-SENTINEL-2017"})
+                self.assertEqual(value["context"]["state"], "available")
+                decision = {"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"}
+                stdout, stderr = process.communicate(json.dumps(decision) + "\n", timeout=15)
+                observed.extend(json.loads(line) for line in stdout.splitlines())
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(observed[-1]["stopReason"], "end_turn")
+                self.assertNotIn("PRIVATE_OPAQUE_CONTENT", json.dumps(observed))
+                self.assertNotIn("fixture:opaque/tool id", json.dumps(observed))
+                self.assertFalse((Path(directory) / "OP318-DIAG-SENTINEL-2017").exists())
+                records = [json.loads(line) for line in (Path(directory) / "shape.jsonl").read_bytes().splitlines()]
+                self.assertEqual(records[-1]["stage"], "capture-end")
+                self.assertTrue(records[-2]["available"])
+                self.assertTrue(records[0]["expectedSyntheticCommand"])
+                self.assertEqual({record["ordinal"] for record in records[:-1]}, {1})
+                self.assertNotIn("PRIVATE_OPAQUE_CONTENT", json.dumps(records))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+
+    def test_diagnostic_cli_framing_failures_do_not_persist_source(self):
+        for mode in ["frame-too-large", "frame-malformed-json", "frame-duplicate-key", "frame-truncated-eof"]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                process = self.launch(directory, mode, diagnostic="shape.jsonl")
+                events, raw = self.finish(process)
+                self.assertEqual(process.returncode, 2)
+                self.assertEqual(events[-1]["reason"], "invalid-frame")
+                self.assertNotIn("PRIVATE", raw)
+                records = [json.loads(line) for line in (Path(directory) / "shape.jsonl").read_bytes().splitlines()]
+                self.assertEqual(records, [{"diagnostic": "acp-structure-v1", "stage": "capture-end"}])
+
+    def test_diagnostic_cli_rejects_path_or_existing_target_before_provider_launch(self):
+        for target in ["../escape.jsonl", "/tmp/escape.jsonl", "exists.jsonl"]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
+                existing = Path(directory) / "exists.jsonl"
+                existing.write_text("PRESERVE")
+                process = self.launch(directory, "env", diagnostic=target)
+                events, raw = self.finish(process)
+                self.assertEqual(process.returncode, 2)
+                self.assertFalse((Path(directory) / "fake-env-names.json").exists())
+                self.assertEqual(existing.read_text(), "PRESERVE")
+                self.assertNotIn(target, raw)
 
     def finish(self, process, timeout=15):
         try:
