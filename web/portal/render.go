@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html/template"
+	"math"
+	"math/big"
 	"net/url"
 	"regexp"
 	"slices"
@@ -414,9 +416,15 @@ type ProductGroup struct {
 }
 
 // ProductUsageCell is one table cell; Unknown dims it.
+// ChartAmount is the exact raw decimal for a bar. It is never parsed from Value.
+// ChartUnit is "tokens" or "USD". ChartMetric is "input", "output", or "cost".
+// An empty ChartAmount with a metric set is unknown, not zero. ChartPartial
+// means the amount sums only the reported values in the group.
 type ProductUsageCell struct {
-	Label, Value string
-	Unknown      bool
+	Label, Value                        string
+	Unknown                             bool
+	ChartAmount, ChartUnit, ChartMetric string
+	ChartPartial                        bool
 }
 
 // ProductUsageRow is one session's usage row, linked by SessionUID. ID is only
@@ -442,6 +450,137 @@ type ProductUsageTable struct {
 	Rows        []ProductUsageRow
 }
 
+// ProductUsageBar is one bar drawn from a cell's raw chart fields.
+// Width is a finite integer 0–100, relative to the other bars of the same
+// metric. Text is the exact amount for a screen reader.
+type ProductUsageBar struct {
+	Label, Amount, Unit, Text, Width string
+	Unknown, Zero, Partial           bool
+}
+
+// ProductUsageChart is one metric's bars. Tokens and USD are never mixed.
+// The width denominator is the largest reported amount in this chart, not a quota.
+type ProductUsageChart struct {
+	Title, Unit, Metric, Note string
+	Bars                      []ProductUsageBar
+}
+
+// Charts builds input, output and estimated-cost bars from typed cell fields.
+func (t ProductUsageTable) Charts() []ProductUsageChart {
+	return usageCharts(t.Title, t.Rows)
+}
+
+var chartWidthText = regexp.MustCompile(`^(?:100|[1-9]?[0-9])$`)
+
+func usageCharts(scope string, rows []ProductUsageRow) []ProductUsageChart {
+	if scope == "" {
+		scope = "this group"
+	}
+	specs := []struct{ metric, unit, title, note string }{
+		{"input", "tokens", "Input tokens", "Compared with other reported input totals in " + scope + ". Not a quota. Input follows each provider's own convention. Cache reads are never added again."},
+		{"output", "tokens", "Output tokens", "Compared with other reported output totals in " + scope + ". Not a quota."},
+		{"cost", "USD", "Estimated cost", "Estimated list price, not a subscription charge. Compared only with other estimates in " + scope + "."},
+	}
+	var charts []ProductUsageChart
+	for _, spec := range specs {
+		var bars []ProductUsageBar
+		var amounts []*big.Rat
+		max := new(big.Rat)
+		for _, row := range rows {
+			cell, ok := chartCell(row, spec.metric, spec.unit)
+			if !ok {
+				continue
+			}
+			bar := ProductUsageBar{Label: row.Name, Unit: spec.unit, Partial: cell.ChartPartial}
+			if cell.Unknown || cell.ChartAmount == "" {
+				bar.Unknown = true
+				bar.Text = row.Name + ": Unknown"
+				bars = append(bars, bar)
+				amounts = append(amounts, nil)
+				continue
+			}
+			rat, ok := new(big.Rat).SetString(cell.ChartAmount)
+			if !ok || rat.Sign() < 0 || (spec.unit == "tokens" && !rat.IsInt()) {
+				bar.Unknown = true
+				bar.Partial = false
+				bar.Text = row.Name + ": Unknown"
+				bars = append(bars, bar)
+				amounts = append(amounts, nil)
+				continue
+			}
+			bar.Amount = cell.ChartAmount
+			bar.Zero = rat.Sign() == 0
+			bar.Text = row.Name + ": " + chartDisplayAmount(rat, cell.ChartAmount, spec.unit) + " " + spec.unit
+			if cell.ChartPartial {
+				bar.Text += " (partial sum)"
+			}
+			if rat.Cmp(max) > 0 {
+				max = rat
+			}
+			bars = append(bars, bar)
+			amounts = append(amounts, rat)
+		}
+		if len(bars) == 0 {
+			continue
+		}
+		for i := range bars {
+			if amounts[i] == nil {
+				continue
+			}
+			bars[i].Width = chartWidth(amounts[i], max)
+		}
+		charts = append(charts, ProductUsageChart{Title: spec.title, Unit: spec.unit, Metric: spec.metric, Note: spec.note, Bars: bars})
+	}
+	return charts
+}
+
+// Source costs are bounded decimal observations (at most 64 characters).
+// Render their exact finite decimal instead of a reduced fraction. A value
+// outside that source convention retains its exact original spelling.
+func chartDisplayAmount(amount *big.Rat, raw, unit string) string {
+	if unit != "USD" {
+		return raw
+	}
+	decimal := strings.TrimRight(strings.TrimRight(amount.FloatString(64), "0"), ".")
+	if parsed, ok := new(big.Rat).SetString(decimal); ok && parsed.Cmp(amount) == 0 {
+		return decimal
+	}
+	return raw
+}
+
+func chartCell(row ProductUsageRow, metric, unit string) (ProductUsageCell, bool) {
+	for _, cell := range row.Cells {
+		if cell.ChartMetric == metric && cell.ChartUnit == unit {
+			return cell, true
+		}
+	}
+	return ProductUsageCell{}, false
+}
+
+func chartWidth(amount, max *big.Rat) string {
+	if amount == nil || max == nil || max.Sign() <= 0 || amount.Sign() <= 0 {
+		return "0"
+	}
+	scaled := new(big.Rat).Quo(new(big.Rat).Set(amount), max)
+	scaled.Mul(scaled, big.NewRat(100, 1))
+	if scaled.Cmp(big.NewRat(100, 1)) > 0 {
+		return "100"
+	}
+	scaled.Add(scaled, big.NewRat(1, 2))
+	n := new(big.Int).Quo(scaled.Num(), scaled.Denom())
+	if n.Sign() <= 0 {
+		return "1"
+	}
+	if n.Cmp(big.NewInt(100)) > 0 {
+		return "100"
+	}
+	width := n.String()
+	if !chartWidthText.MatchString(width) {
+		return "0"
+	}
+	return width
+}
+
 // ProductAllowanceState is an account allowance's fixed user-facing state.
 type ProductAllowanceState string
 
@@ -465,10 +604,248 @@ type ProductAllowance struct {
 	SeenVaries           bool
 }
 
-// ProductAllowanceWindow holds provider-reported display text. Percent includes
-// its reported direction; absent metadata is displayed as Unknown.
+// ProductAllowanceWindow holds provider-reported display text and optional
+// typed measurement fields. Percent, Window, Reset, Observed and Provenance
+// stay the compatible display strings. Bars, exact reset times and countdowns
+// use only the typed fields: they never parse Percent or Reset.
+//
+// Direction is "used" or "remaining". ResetAt and ObservedAt are canonical UTC
+// RFC3339. ResetPrecision is "instant", "display_only", or empty. WindowKind is
+// "minute", "hour", "day", or empty. The allowance mapper leaves WindowKind
+// empty: a provider window has a duration, not a calendar kind. AccountKey is
+// an opaque token for identity checks and is not rendered. PercentKnown selects
+// the bar. AsOf is the page render clock; zero draws no countdown. Callers that
+// have not filled the typed fields leave them zero.
 type ProductAllowanceWindow struct {
 	Percent, Window, Reset, Observed, Provenance string
+	PercentValue                                 float64
+	PercentKnown                                 bool
+	Direction                                    string
+	ResetAt                                      string
+	ObservedAt                                   string
+	WindowKind                                   string
+	ResetPrecision                               string
+	AccountKey                                   string
+	AsOf                                         time.Time
+}
+
+// allowanceWindowKinds are the only window kinds the cards name. Any other
+// token is refused without being echoed.
+var allowanceWindowKinds = map[string]string{
+	"minute": "minute",
+	"hour":   "hour",
+	"day":    "day",
+}
+
+// allowanceMeter is the used/remaining bar for one window. Shown is false when
+// the typed percent or direction cannot draw an honest bar. Note is fixed copy.
+type allowanceMeter struct {
+	Shown      bool
+	Note       string
+	UsedText   string
+	RemainText string
+	UsedWidth  string
+}
+
+func roundAllowancePercent(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+func formatAllowancePercent(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 2, 64)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	if s == "" || s == "-0" {
+		return "0"
+	}
+	return s
+}
+
+// Meter draws a bar from PercentValue, PercentKnown and Direction only.
+func (w ProductAllowanceWindow) Meter() allowanceMeter {
+	if !w.PercentKnown {
+		return allowanceMeter{Note: "Numeric percent not reported, so no bar is drawn."}
+	}
+	if math.IsNaN(w.PercentValue) || math.IsInf(w.PercentValue, 0) || w.PercentValue < 0 || w.PercentValue > 100 {
+		return allowanceMeter{Note: "Percent is outside 0–100, so no bar is drawn."}
+	}
+	value := roundAllowancePercent(w.PercentValue)
+	var used float64
+	switch w.Direction {
+	case "used":
+		used = value
+	case "remaining":
+		used = roundAllowancePercent(100 - value)
+	default:
+		return allowanceMeter{Note: "Direction not reported, so no bar is drawn."}
+	}
+	remain := roundAllowancePercent(100 - used)
+	text := formatAllowancePercent(used)
+	return allowanceMeter{
+		Shown:      true,
+		UsedText:   text,
+		RemainText: formatAllowancePercent(remain),
+		UsedWidth:  text,
+	}
+}
+
+// AllowanceResetStatus is the exact reset instant, or an honest gap.
+// State is missing, display_only, unrecognized, invalid, unclocked, past or
+// future. Exact is RFC3339 when known. AsOf is the render clock for a countdown.
+type AllowanceResetStatus struct {
+	State, Exact, Zone, Human, Countdown, AsOf string
+}
+
+func parseAllowanceInstant(raw string) (time.Time, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, "missing"
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || t.IsZero() {
+		return time.Time{}, "invalid"
+	}
+	return t, "exact"
+}
+
+func allowanceZone(t time.Time) string {
+	_, offset := t.Zone()
+	if offset == 0 {
+		return "UTC"
+	}
+	sign := "+"
+	if offset < 0 {
+		sign = "-"
+		offset = -offset
+	}
+	return fmt.Sprintf("UTC%s%02d:%02d", sign, offset/3600, (offset%3600)/60)
+}
+
+func allowancePlural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
+}
+
+func allowanceCountdown(t, now time.Time) string {
+	d := t.Sub(now)
+	if d < time.Minute {
+		return "under 1 minute"
+	}
+	mins := int(d / time.Minute)
+	days := mins / 1440
+	hours := (mins % 1440) / 60
+	minutes := mins % 60
+	parts := make([]string, 0, 3)
+	if days > 0 {
+		parts = append(parts, allowancePlural(days, "day"))
+	}
+	if hours > 0 {
+		parts = append(parts, allowancePlural(hours, "hour"))
+	}
+	if minutes > 0 {
+		parts = append(parts, allowancePlural(minutes, "minute"))
+	}
+	if len(parts) == 0 {
+		return "under 1 minute"
+	}
+	return strings.Join(parts, " ")
+}
+
+// ResetStatus reports a reset instant only when ResetPrecision is instant.
+// It does not read Reset, and it does not treat a display-only time as an instant.
+func (w ProductAllowanceWindow) ResetStatus() AllowanceResetStatus {
+	switch w.ResetPrecision {
+	case "":
+		return AllowanceResetStatus{State: "missing"}
+	case "display_only":
+		return AllowanceResetStatus{State: "display_only"}
+	case "instant":
+	default:
+		return AllowanceResetStatus{State: "unrecognized"}
+	}
+	t, state := parseAllowanceInstant(w.ResetAt)
+	if state != "exact" {
+		return AllowanceResetStatus{State: "invalid"}
+	}
+	status := AllowanceResetStatus{
+		Exact: t.Format(time.RFC3339),
+		Zone:  allowanceZone(t),
+		Human: t.Format("2 Jan 2006, 15:04:05"),
+	}
+	if w.AsOf.IsZero() {
+		status.State = "unclocked"
+		return status
+	}
+	if !t.After(w.AsOf) {
+		status.State = "past"
+		return status
+	}
+	status.State = "future"
+	status.Countdown = allowanceCountdown(t, w.AsOf)
+	status.AsOf = w.AsOf.UTC().Format("2 Jan 2006, 15:04:05 UTC")
+	return status
+}
+
+// AllowanceObservedStatus is the typed observation instant.
+// State is missing, invalid, exact or future.
+type AllowanceObservedStatus struct {
+	State, Exact, Zone, Human string
+}
+
+// ObservedStatus reports the typed ObservedAt instant. It does not read Observed.
+func (w ProductAllowanceWindow) ObservedStatus() AllowanceObservedStatus {
+	t, state := parseAllowanceInstant(w.ObservedAt)
+	if state != "exact" {
+		return AllowanceObservedStatus{State: state}
+	}
+	status := AllowanceObservedStatus{
+		State: "exact",
+		Exact: t.Format(time.RFC3339),
+		Zone:  allowanceZone(t),
+		Human: t.Format("2 Jan 2006, 15:04:05"),
+	}
+	if !w.AsOf.IsZero() && t.After(w.AsOf) {
+		status.State = "future"
+	}
+	return status
+}
+
+// WindowLine names the display window and a recognized WindowKind.
+func (w ProductAllowanceWindow) WindowLine() string {
+	kind, known := allowanceWindowKinds[w.WindowKind]
+	window := w.Window
+	if window == "" {
+		window = "Unknown"
+	}
+	switch {
+	case w.WindowKind == "" && window == "Unknown":
+		return "Window not reported."
+	case w.WindowKind == "":
+		return "Window: " + window + "."
+	case !known && window == "Unknown":
+		return "Window kind not recognized."
+	case !known:
+		return "Window: " + window + ". Window kind not recognized."
+	case window == "Unknown":
+		return "Window kind: " + kind + ". Duration not reported."
+	default:
+		return "Window: " + window + ", " + kind + "."
+	}
+}
+
+// AccountLabel is empty. Raw account tokens are not shown; the mapper refuses
+// inconsistent identities instead of publishing a private identifier.
+func (w ProductAllowanceWindow) AccountLabel() string {
+	return ""
+}
+
+// SourceLine names Provenance, or says the source was not reported.
+func (w ProductAllowanceWindow) SourceLine() string {
+	if w.Provenance == "" || w.Provenance == "Unknown" {
+		return "Source not reported."
+	}
+	return "Source: " + w.Provenance + "."
 }
 
 func (a ProductAllowance) Tone() string {
@@ -478,10 +855,38 @@ func (a ProductAllowance) Tone() string {
 	return "muted"
 }
 
+// Confidence is the account-level freshness sentence. Empty for states that
+// already explain themselves in the summary.
+func (a ProductAllowance) Confidence() string {
+	switch a.Value {
+	case AllowanceStale:
+		return "This report is stale. The figures are the last trusted reading, not a live one."
+	case AllowanceMeasured:
+		return "This is a measured provider report."
+	default:
+		return ""
+	}
+}
+
+// MissingNote explains Cursor when no account view is connected.
+func (a ProductAllowance) MissingNote() string {
+	if a.Provider == "Cursor" && a.Value == AllowanceNotConnected {
+		return "No Cursor account view is connected. Nothing here is estimated."
+	}
+	return ""
+}
+
+func (w ProductAllowanceWindow) reportedPercent() bool {
+	if w.PercentKnown {
+		return true
+	}
+	return w.Percent != "" && w.Percent != "Unknown"
+}
+
 func (a ProductAllowance) CompactWindows() []ProductAllowanceWindow {
 	var windows []ProductAllowanceWindow
 	for _, w := range a.Windows {
-		if w.Percent != "" && w.Percent != "Unknown" {
+		if w.reportedPercent() {
 			windows = append(windows, w)
 			if len(windows) == 2 {
 				break
@@ -493,10 +898,34 @@ func (a ProductAllowance) CompactWindows() []ProductAllowanceWindow {
 
 func (a ProductAllowance) More() int { return len(a.Windows) - len(a.CompactWindows()) }
 
-// allowanceViews keeps the provider set fixed, fills absent metadata, and never
-// renders a percent for an untrusted state. It does not inspect session usage.
+// withAllowanceAsOf copies windows and sets the render clock used for
+// countdowns. A zero clock leaves the windows unchanged.
+func withAllowanceAsOf(in []ProductAllowance, now time.Time) []ProductAllowance {
+	if now.IsZero() || len(in) == 0 {
+		return in
+	}
+	out := make([]ProductAllowance, len(in))
+	for i, a := range in {
+		if len(a.Windows) > 0 {
+			a.Windows = append([]ProductAllowanceWindow(nil), a.Windows...)
+			for j := range a.Windows {
+				a.Windows[j].AsOf = now
+			}
+		}
+		out[i] = a
+	}
+	return out
+}
+
+// allowanceViews keeps Claude, Codex and Cursor fixed, in that order, fills
+// absent metadata, and never renders a percent for an untrusted state. An
+// absent Cursor row stays Not connected. It does not inspect session usage.
 func allowanceViews(input []ProductAllowance) []ProductAllowance {
-	out := []ProductAllowance{{Provider: "Claude", Value: AllowanceNotConnected}, {Provider: "Codex", Value: AllowanceNotConnected}}
+	out := []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceNotConnected},
+		{Provider: "Codex", Value: AllowanceNotConnected},
+		{Provider: "Cursor", Value: AllowanceNotConnected},
+	}
 	for i := range out {
 		for _, a := range input {
 			if a.Provider != out[i].Provider {
@@ -552,6 +981,15 @@ type ProductUsage struct {
 	RowsTitle        string
 	RowsNote         string
 	Coverage         []ProductField
+}
+
+// SessionCharts draws the per-session bars from raw chart fields on Rows.
+func (u ProductUsage) SessionCharts() []ProductUsageChart {
+	title := u.RowsTitle
+	if title == "" {
+		title = "By session"
+	}
+	return usageCharts(title, u.Rows)
 }
 
 // ProductFilter narrows a product list: to its Needs attention group, or, on
@@ -707,6 +1145,8 @@ type ProductPage struct {
 	// ReadCompletedAt is the completion time of this page's successful Sessions
 	// or Tasks read. An empty value is unknown; ObservedAt is only the render time.
 	ReadCompletedAt string
+	// AsOf is the render clock for allowance countdowns. Zero draws no countdown.
+	AsOf time.Time
 	// Launch is the Sessions page's launch form, set only when the route is
 	// configured for this caller.
 	Launch      *ProductLaunch
@@ -926,7 +1366,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 	}
 	view.ReadFailure = productReadFailure(page.ReadFailure, page.Filter, page.Title)
 	if view.Current == "sessions" && page.ReadFailure == nil {
-		view.Allowance = allowanceViews(page.Allowance)
+		view.Allowance = allowanceViews(withAllowanceAsOf(page.Allowance, page.AsOf))
 	}
 	view.UsageView = page.Filter.View == "usage" && view.Current == "sessions"
 	if view.UsageView {
@@ -961,7 +1401,7 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		view.Quiet, view.ListCount, view.Usage = page.Quiet, page.ListCount, page.Usage
 		if view.UsageView && view.Usage != nil {
 			usage := *view.Usage
-			usage.Allowance = allowanceViews(usage.Allowance)
+			usage.Allowance = allowanceViews(withAllowanceAsOf(usage.Allowance, page.AsOf))
 			usage.RowsNote = strings.ReplaceAll(usage.RowsNote, "listed on the left", "shown below")
 			view.Usage = &usage
 		}

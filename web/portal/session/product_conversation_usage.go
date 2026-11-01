@@ -249,15 +249,17 @@ func (t *conversationTotal) row(name string) portal.ProductUsageRow {
 	cell := func(label, value string, unknown bool) portal.ProductUsageCell {
 		return portal.ProductUsageCell{Label: label, Value: value, Unknown: unknown}
 	}
-	tokens := func(label string, s *tokenSum) portal.ProductUsageCell {
+	tokens := func(label, metric string, s *tokenSum) portal.ProductUsageCell {
 		if s.unknown == t.sessions {
-			return cell(label, "Unknown", true)
+			return withChart(cell(label, "Unknown", true), metric, "tokens", "", false)
 		}
 		v := groupDigits(s.sum.String())
 		if s.unknown > 0 {
 			v += " (" + strconv.Itoa(s.unknown) + " Unknown)"
 		}
-		return cell(label, v, false)
+		// A Partial session makes the reported sum a lower bound. Unknown
+		// counters are omitted, not treated as zero. There is no cost to chart.
+		return withChart(cell(label, v, false), metric, "tokens", s.sum.String(), s.unknown > 0 || t.partial > 0)
 	}
 	// The row's own line says what its Partial and Stale counts mean.
 	var flags []string
@@ -269,7 +271,7 @@ func (t *conversationTotal) row(name string) portal.ProductUsageRow {
 	}
 	return portal.ProductUsageRow{Name: shown(name), Sub: strings.Join(flags, " · "), Cells: []portal.ProductUsageCell{
 		cell("Sessions", strconv.Itoa(t.sessions), false),
-		tokens("Input", &t.input), tokens("Output", &t.output), tokens("Cache read", &t.cacheRead), tokens("Cache create", &t.created),
+		tokens("Input", "input", &t.input), tokens("Output", "output", &t.output), tokens("Cache read", "", &t.cacheRead), tokens("Cache create", "", &t.created),
 		cell("Partial", strconv.Itoa(t.partial), false), cell("Stale", strconv.Itoa(t.stale), false),
 	}}
 }

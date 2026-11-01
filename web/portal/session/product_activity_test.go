@@ -1,7 +1,10 @@
 package session
 
 import (
+	stdhtml "html"
+	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -655,8 +658,216 @@ func TestAccountAllowanceNeverComesFromSessionTokensOrCost(t *testing.T) {
 			pattern = `(?s)<section class="allowance".*?Plan limits.*?</section>`
 		}
 		block := regexp.MustCompile(pattern).FindString(string(body))
-		if block == "" || strings.Count(block, "Not connected") != 2 || strings.Contains(block, "%") || strings.Contains(block, "38.00") || strings.Contains(block, "62,000") {
+		for _, name := range []string{"Claude", "Codex", "Cursor"} {
+			if !strings.Contains(block, name) {
+				t.Fatalf("allowance missing %s: %s", name, block)
+			}
+		}
+		if block == "" || strings.Count(block, "Not connected") != 3 || strings.Contains(block, "%") || strings.Contains(block, "38.00") || strings.Contains(block, "62,000") || strings.Contains(block, "62000") {
 			t.Fatalf("usage leaked into allowance: %s", block)
 		}
+		if view == "usage" {
+			html := string(body)
+			chart, fold := strings.Index(html, `class="usage-chart"`), strings.Index(html, `<details class="usage-fold"`)
+			if chart < 0 || fold < 0 || chart > fold || !strings.Contains(html, "synthetic-worker: 62000 tokens") {
+				t.Fatal("measured tokens were not charted ahead of the tables")
+			}
+		}
 	}
+}
+
+func TestUsageChartsUseExactSourceAmounts(t *testing.T) {
+	now := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	unk := protocol.TokenObservation{State: protocol.UsageUnknown}
+	reported := func(n int64) protocol.TokenObservation {
+		v := n
+		return protocol.TokenObservation{State: protocol.UsageReported, Amount: &v}
+	}
+	usd := func(amount string) protocol.CostObservation {
+		return protocol.CostObservation{State: protocol.UsageReported, Amount: amount, Unit: "USD", Kind: protocol.UsageCLIEstimate}
+	}
+	unknownCost := protocol.CostObservation{State: protocol.UsageUnknown, Kind: protocol.UsageUnknown}
+	usage := func(in, out, cache protocol.TokenObservation, cost protocol.CostObservation) apiv1.PortalSessionUsage {
+		return apiv1.PortalSessionUsage{Scope: protocol.UsageInitial, ResultState: "Final", ServedModels: []string{"claude-opus-5-5"},
+			InputTokens: in, OutputTokens: out, CacheReadInputTokens: cache, CacheCreationInputTokens: unk, Cost: cost}
+	}
+	task := func(name, repo string, u apiv1.PortalSessionUsage) apiv1.PortalSessionSummary {
+		return apiv1.PortalSessionSummary{Name: name, UID: "uid-" + name, Repo: repo, Phase: "Running", Freshness: "observed", ObservedAt: now,
+			Activity: &apiv1.PortalSessionActivity{Mode: "task", Provider: "claude", AgentState: protocol.AgentBusy, RequestedModel: "claude-opus-5-5", Usage: u}}
+	}
+	half := protocol.MaxUsageTokens / 2
+	page := sessionsPage([]apiv1.PortalSessionSummary{
+		task("zero", "zero-repo", usage(reported(0), reported(0), reported(7), usd("0"))),
+		task("part-known", "partial-repo", usage(reported(100), unk, reported(40), unknownCost)),
+		task("part-unknown", "partial-repo", usage(unk, reported(5), unk, unknownCost)),
+		task("tiny", "tiny-repo", usage(reported(4), reported(1), reported(9), usd("0.0000001"))),
+		task("huge-a", "sum-huge", usage(reported(protocol.MaxUsageTokens), reported(1), reported(protocol.MaxUsageTokens), usd("1"))),
+		task("huge-b", "sum-huge", usage(reported(protocol.MaxUsageTokens), reported(1), reported(protocol.MaxUsageTokens), usd("1"))),
+		task("half", "half-huge", usage(reported(half), reported(1), reported(0), usd("0"))),
+		{Name: "person", UID: "uid-person", Repo: "interactive-repo", Phase: "Running", Freshness: "observed", ObservedAt: now,
+			Activity: &apiv1.PortalSessionActivity{Mode: "remote", Provider: "claude", AgentState: protocol.AgentIdle, RequestedModel: "claude-opus-5-5", Usage: unknownSessionUsage()}},
+	}, true, "observed", now, portal.ProductFilter{View: "usage"})
+	if !page.AsOf.Equal(now) {
+		t.Fatalf("page clock = %s", page.AsOf)
+	}
+	project := breakdownTable(t, page, "By project")
+	sumInput := new(big.Int).Add(big.NewInt(protocol.MaxUsageTokens), big.NewInt(protocol.MaxUsageTokens)).String()
+	input := chartCell(t, project.Rows, "sum-huge", "Input")
+	if input.ChartAmount != sumInput || input.ChartMetric != "input" || input.ChartUnit != "tokens" || input.ChartPartial || input.Unknown || input.ChartAmount == "4000000000000000" {
+		t.Fatalf("huge input %+v", input)
+	}
+	if cache := chartCell(t, project.Rows, "sum-huge", "Cache read"); cache.ChartMetric != "" || cache.ChartAmount != "" {
+		t.Fatalf("cache read joined the chart: %+v", cache)
+	}
+	halfBar := barByLabel(t, project.Charts(), "input", "half-huge")
+	sumBar := barByLabel(t, project.Charts(), "input", "sum-huge")
+	if sumBar.Width != "100" || halfBar.Width != "25" || halfBar.Amount != strconv.FormatInt(half, 10) || sumBar.Amount != sumInput {
+		t.Fatalf("ratio half %+v sum %+v", halfBar, sumBar)
+	}
+	partial := chartCell(t, project.Rows, "partial-repo", "Input")
+	if partial.ChartAmount != "100" || !partial.ChartPartial || partial.Unknown || strings.Contains(partial.ChartAmount, "40") {
+		t.Fatalf("partial input %+v", partial)
+	}
+	if out := chartCell(t, project.Rows, "partial-repo", "Output"); out.ChartAmount != "5" || !out.ChartPartial {
+		t.Fatalf("partial output %+v", out)
+	}
+	zero := chartCell(t, project.Rows, "zero-repo", "Output")
+	if zero.ChartAmount != "0" || zero.Unknown || zero.ChartPartial || zero.ChartMetric != "output" {
+		t.Fatalf("known zero %+v", zero)
+	}
+	idle := chartCell(t, project.Rows, "interactive-repo", "Input")
+	if idle.ChartAmount != "" || !idle.Unknown || idle.ChartMetric != "input" || idle.ChartUnit != "tokens" || idle.Value != "Not measured" {
+		t.Fatalf("unmeasured %+v", idle)
+	}
+	tinyCost := chartCell(t, project.Rows, "tiny-repo", "Est. cost")
+	if tinyCost.ChartAmount != "1/10000000" || tinyCost.Value != "<0.01 USD" || tinyCost.ChartUnit != "USD" || tinyCost.Unknown {
+		t.Fatalf("tiny sum %+v", tinyCost)
+	}
+	sessionCost := chartCell(t, page.Usage.Rows, "tiny", "Est. cost")
+	if sessionCost.ChartAmount != "0.0000001" || sessionCost.Value != "0.0000001 USD" {
+		t.Fatalf("source cost %+v", sessionCost)
+	}
+	sessionInput := chartCell(t, page.Usage.Rows, "tiny", "Input")
+	if sessionInput.ChartAmount != "4" || chartCell(t, page.Usage.Rows, "tiny", "Cache read").ChartMetric != "" {
+		t.Fatalf("session cache joined input: %+v", sessionInput)
+	}
+	unknownOut := chartCell(t, page.Usage.Rows, "part-known", "Output")
+	if unknownOut.ChartAmount != "" || !unknownOut.Unknown || unknownOut.ChartMetric != "output" || unknownOut.ChartUnit != "tokens" {
+		t.Fatalf("unknown output %+v", unknownOut)
+	}
+	knownZero := chartCell(t, page.Usage.Rows, "zero", "Output")
+	if knownZero.ChartAmount != "0" || knownZero.Unknown {
+		t.Fatalf("session zero %+v", knownZero)
+	}
+	tinyBar := barByLabel(t, page.Usage.SessionCharts(), "cost", "tiny")
+	zeroBar := barByLabel(t, page.Usage.SessionCharts(), "cost", "zero")
+	if tinyBar.Unknown || tinyBar.Zero || tinyBar.Width == "0" || tinyBar.Amount != "0.0000001" || !zeroBar.Zero || zeroBar.Width != "0" || zeroBar.Unknown {
+		t.Fatalf("session cost bars tiny %+v zero %+v", tinyBar, zeroBar)
+	}
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	chart, fold := strings.Index(html, `class="usage-chart"`), strings.Index(html, `<details class="usage-fold"`)
+	for _, want := range []string{"tiny: 0.0000001 USD", sumInput + " tokens", "Input follows each provider's own convention", "Cache reads are never added again"} {
+		if !strings.Contains(html, stdhtml.EscapeString(want)) {
+			t.Errorf("rendered chart lacks %s", want)
+		}
+	}
+	if chart < 0 || fold < 0 || chart > fold || strings.Contains(html, "4000000000000000") || strings.Contains(html, "13 tokens") || strings.Contains(html, "<script") {
+		t.Fatal("charts were missing, parsed display text, or added cache reads to input")
+	}
+}
+
+func TestConversationChartsDoNotCrossInitialInvocations(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	unk := protocol.TokenObservation{State: protocol.UsageUnknown}
+	reported := func(n int64) protocol.TokenObservation {
+		v := n
+		return protocol.TokenObservation{State: protocol.UsageReported, Amount: &v}
+	}
+	conv := func(model string, in, cache int64, partial bool) *apiv1.PortalConversationUsage {
+		state, reason := protocol.ConversationFinal, ""
+		if partial {
+			state, reason = protocol.ConversationPartial, "skipped_records"
+		}
+		return &apiv1.PortalConversationUsage{ResultState: state, ReasonCode: reason, Turns: 1, ObservedAt: now.Add(-time.Minute),
+			Models: []apiv1.PortalConversationModelUsage{{Model: model, InputTokens: reported(in), OutputTokens: reported(0), CacheReadInputTokens: reported(cache), CacheCreationInputTokens: unk}}}
+	}
+	sess := func(name, mode, provider, model string, c *apiv1.PortalConversationUsage) apiv1.PortalSessionSummary {
+		return apiv1.PortalSessionSummary{Name: name, UID: "uid-" + name, Repo: "dev-env", Phase: "Running", Freshness: "observed", ObservedAt: now,
+			Activity: &apiv1.PortalSessionActivity{Mode: mode, Provider: provider, AgentState: protocol.AgentIdle, RequestedModel: model, Usage: unknownSessionUsage(), ConversationUsage: c}}
+	}
+	page := sessionsPage([]apiv1.PortalSessionSummary{
+		sess("claude-one", "remote", "claude", "claude-opus-5-5", conv("claude-opus-5-5", 10, 4, true)),
+		sess("codex-one", "local", "codex", "gpt-6-astra", conv("gpt-6-astra", 7, 3, false)),
+	}, true, "observed", now, portal.ProductFilter{View: "usage"})
+	table := page.Usage.Breakdowns[0]
+	if table.Title != "Conversation usage by provider and served model" {
+		t.Fatal(table.Title)
+	}
+	claude := chartCell(t, table.Rows, "claude · claude-opus-5-5", "Input")
+	codex := chartCell(t, table.Rows, "codex · gpt-6-astra", "Input")
+	if claude.ChartAmount != "10" || !claude.ChartPartial || codex.ChartAmount != "7" || codex.ChartPartial || chartCell(t, table.Rows, "claude · claude-opus-5-5", "Cache read").ChartMetric != "" {
+		t.Fatalf("conversation input claude %+v codex %+v", claude, codex)
+	}
+	charts := table.Charts()
+	if len(charts) != 2 || charts[0].Metric != "input" || charts[1].Metric != "output" {
+		t.Fatalf("conversation charts %+v", charts)
+	}
+	for _, chart := range charts {
+		for _, bar := range chart.Bars {
+			if bar.Amount == "14" || bar.Amount == "17" || bar.Amount == "13" {
+				t.Fatalf("cross-scope or cache total %s", bar.Amount)
+			}
+		}
+	}
+	initial := breakdownTable(t, page, "Initial invocations by how sessions ran")
+	if got := chartCell(t, initial.Rows, "Interactive", "Input"); got.ChartAmount != "" || got.Value != "Not measured" {
+		t.Fatalf("conversation tokens entered the invocation chart: %+v", got)
+	}
+}
+
+func breakdownTable(t *testing.T, page portal.ProductPage, title string) portal.ProductUsageTable {
+	t.Helper()
+	for _, table := range page.Usage.Breakdowns {
+		if table.Title == title {
+			return table
+		}
+	}
+	t.Fatalf("no table %s", title)
+	return portal.ProductUsageTable{}
+}
+
+func chartCell(t *testing.T, rows []portal.ProductUsageRow, name, label string) portal.ProductUsageCell {
+	t.Helper()
+	for _, row := range rows {
+		if row.Name != name {
+			continue
+		}
+		for _, cell := range row.Cells {
+			if cell.Label == label {
+				return cell
+			}
+		}
+	}
+	t.Fatalf("no %s/%s", name, label)
+	return portal.ProductUsageCell{}
+}
+
+func barByLabel(t *testing.T, charts []portal.ProductUsageChart, metric, label string) portal.ProductUsageBar {
+	t.Helper()
+	for _, chart := range charts {
+		if chart.Metric != metric {
+			continue
+		}
+		for _, bar := range chart.Bars {
+			if bar.Label == label {
+				return bar
+			}
+		}
+	}
+	t.Fatalf("no %s bar %s", metric, label)
+	return portal.ProductUsageBar{}
 }

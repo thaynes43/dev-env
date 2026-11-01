@@ -1,6 +1,7 @@
 package main
 
 import (
+	stdhtml "html"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -47,8 +48,22 @@ func TestProductStatePreviews(t *testing.T) {
 		if name == "sessions-timed-out" && !strings.Contains(text, `<form class="launch"`) {
 			t.Error("timeout preview lost the independent New agent form")
 		}
-		if name == "usage" && !strings.Contains(text, `?session=uid-synthetic-agent">synthetic-agent</a>`) {
-			t.Error("Usage preview does not select its session by UID")
+		if name == "usage" {
+			if !strings.Contains(text, `?session=uid-synthetic-agent">synthetic-agent</a>`) {
+				t.Error("Usage preview does not select its session by UID")
+			}
+			chart, fold := strings.Index(text, `class="usage-chart"`), strings.Index(text, `<details class="usage-fold"`)
+			if chart < 0 || fold < 0 || chart > fold {
+				t.Error("usage preview charts are not ahead of the tables")
+			}
+			for _, want := range []string{"synthetic-agent: 1000 tokens", "synthetic-agent: 0 tokens", "synthetic-agent: 0.75 USD", "Input follows each provider's own convention"} {
+				if !strings.Contains(text, stdhtml.EscapeString(want)) {
+					t.Errorf("usage preview lacks %s", want)
+				}
+			}
+			if strings.Contains(text, "synthetic-agent: 1250 tokens") {
+				t.Error("usage preview added cache reads to input")
+			}
 		}
 		if name == "usage-empty" && (strings.Count(text, "No sessions in this read.") != 1 || strings.Count(text, "<dd>0</dd>") != 2 || strings.Contains(text, "<table>")) {
 			t.Error("empty Usage preview lost zeros or has empty tables")
@@ -252,8 +267,25 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		if block == "" {
 			t.Fatalf("%s: no allowance", tc.name)
 		}
-		if strings.Contains(block, "62% left") != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || strings.Contains(block, "Not connected") != tc.disconnected {
+		if (strings.Contains(block, "62% left") || strings.Contains(block, "62% remaining")) != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || !strings.Contains(block, "Cursor") {
 			t.Errorf("%s: wrong states %s", tc.name, block)
+		}
+		// The fixture sends no Cursor source. Missing source stays Unknown.
+		// It is not Not connected and it is not a percent quota.
+		cursorAt := strings.Index(block, ">Cursor")
+		if cursorAt < 0 {
+			t.Fatalf("%s: cursor missing", tc.name)
+		}
+		cursor := block[cursorAt:]
+		if strings.Contains(cursor, "%") || strings.Contains(cursor, "meter-fill") || strings.Contains(cursor, "62") || strings.Contains(cursor, "38") || !strings.Contains(cursor, "No percent allowance reported") {
+			t.Errorf("%s: missing cursor source became a quota: %s", tc.name, cursor)
+		}
+		wantNotConnected := 0
+		if tc.disconnected {
+			wantNotConnected = 2
+		}
+		if strings.Count(block, "Not connected") != wantNotConnected {
+			t.Errorf("%s: Not connected count %d, want %d: %s", tc.name, strings.Count(block, "Not connected"), wantNotConnected, block)
 		}
 		for _, ref := range []string{"anthropic-primary-window", "openai-primary-window", "anthropic-secondary-window", "openai-secondary-window"} {
 			if strings.Contains(text, ref) {
@@ -283,6 +315,12 @@ func TestAllowancePreviewStatesAreUniformAndSeenVariesIsExplicit(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, allowance := range allowances {
+			if allowance.Provider == "Cursor" {
+				if string(allowance.Value) != "Unknown" || len(allowance.Windows) != 0 {
+					t.Errorf("%s cursor: %+v", state, allowance)
+				}
+				continue
+			}
 			want := "Measured"
 			if state == "stale" {
 				want = "Stale"

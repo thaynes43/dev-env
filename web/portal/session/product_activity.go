@@ -532,7 +532,7 @@ func sessionAttention(s apiv1.PortalSessionSummary, now time.Time, link string) 
 // Usage sums reported values per group only: Unknown is never counted as zero
 // and cache reads are never added to input.
 func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshness string, now time.Time, filter portal.ProductFilter) portal.ProductPage {
-	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete, Filter: filter, Allowance: disconnectedAllowances()}
+	page := portal.ProductPage{Title: "Sessions", ListTitle: "All sessions", Connected: true, Complete: complete, Filter: filter, Allowance: disconnectedAllowances(), AsOf: now}
 	group := make([]int, len(sessions))
 	projects := map[string]int{}
 	attention := 0
@@ -727,6 +727,17 @@ func sessionsPage(sessions []apiv1.PortalSessionSummary, complete bool, freshnes
 	return page
 }
 
+// DecodeUsageView decodes one operator session page into the Usage view.
+// now is the render clock copied onto ProductPage.AsOf. It does not read a
+// provider, a credential, or the process clock.
+func DecodeUsageView(body []byte, now time.Time) (portal.ProductPage, error) {
+	decoded, err := decodeSessionPage(body, now)
+	if err != nil {
+		return portal.ProductPage{}, err
+	}
+	return sessionsPage(decoded.Sessions, decoded.Complete, decoded.Freshness, now, portal.ProductFilter{View: "usage"}), nil
+}
+
 // cacheReadCoverage says how each provider counts cache reads against input:
 // Claude reports them apart from input, and Codex input already includes them.
 const cacheReadCoverage = "Claude reports them apart from input; Codex input already includes them. Never added to input"
@@ -783,38 +794,59 @@ func (t *usageTotal) add(u apiv1.PortalSessionUsage) {
 	t.costMissing++
 }
 
+// withChart sets the bar fields. An empty amount with a metric is unknown,
+// not zero. partial is kept only when an amount is present. Cache metrics are
+// not charted: pass an empty metric. Cost sums pass big.Rat.RatString, the
+// exact rational ("a/b", or "a" when the denominator is 1), which
+// big.Rat.SetString accepts. The bar never reads Value.
+func withChart(cell portal.ProductUsageCell, metric, unit, amount string, partial bool) portal.ProductUsageCell {
+	if metric == "" || unit == "" {
+		return cell
+	}
+	cell.ChartMetric = metric
+	cell.ChartUnit = unit
+	cell.ChartAmount = amount
+	cell.ChartPartial = amount != "" && partial
+	return cell
+}
+
 // row is the group's table row. A group with nothing measured shows Not
-// measured, not zero.
+// measured, not zero. Input, output and estimated cost carry chart fields
+// from the reported sums. Cache reads stay out of input.
 func (t *usageTotal) row(name string) portal.ProductUsageRow {
 	cell := func(label, value string, unknown bool) portal.ProductUsageCell {
 		return portal.ProductUsageCell{Label: label, Value: value, Unknown: unknown}
 	}
-	tokens := func(label string, s *tokenSum) portal.ProductUsageCell {
+	tokens := func(label, metric string, s *tokenSum) portal.ProductUsageCell {
 		switch {
 		case t.measured == 0:
-			return cell(label, "Not measured", true)
+			return withChart(cell(label, "Not measured", true), metric, "tokens", "", false)
 		case s.unknown == t.measured:
-			return cell(label, "Unknown", true)
+			return withChart(cell(label, "Unknown", true), metric, "tokens", "", false)
 		}
 		v := groupDigits(s.sum.String())
 		if s.unknown > 0 {
 			v += " (" + strconv.Itoa(s.unknown) + " Unknown)"
 		}
-		return cell(label, v, false)
+		return withChart(cell(label, v, false), metric, "tokens", s.sum.String(), s.unknown > 0)
 	}
 	cost := cell("Est. cost", "Unavailable", true)
+	if t.measured == 0 {
+		cost.Value = "Not measured"
+	}
+	amount := ""
 	if t.cost != nil {
 		cost = cell("Est. cost", usdText(t.cost), false)
 		if t.costMissing > 0 {
 			cost.Value += " (" + strconv.Itoa(t.costMissing) + " unavailable)"
 		}
-	} else if t.measured == 0 {
-		cost.Value = "Not measured"
+		amount = t.cost.RatString()
 	}
+	cost = withChart(cost, "cost", "USD", amount, t.costMissing > 0)
 	sub := strconv.Itoa(t.measured) + " of " + strconv.Itoa(t.sessions) + " measured"
 	return portal.ProductUsageRow{Name: shown(name), Sub: sub, Cells: []portal.ProductUsageCell{
 		cell("Sessions", strconv.Itoa(t.sessions), false), cell("Measured", strconv.Itoa(t.measured), t.measured == 0),
-		tokens("Input", &t.input), tokens("Output", &t.output), tokens("Cache read", &t.cacheRead), tokens("Cache create", &t.created), cost,
+		tokens("Input", "input", &t.input), tokens("Output", "output", &t.output), tokens("Cache read", "", &t.cacheRead), tokens("Cache create", "", &t.created), cost,
 	}}
 }
 
@@ -891,19 +923,43 @@ func sessionUsageRow(id string, s apiv1.PortalSessionSummary) (portal.ProductUsa
 	if a.RequestedModel != protocol.UsageUnknown {
 		row.Sub = a.RequestedModel + " requested"
 	}
-	cell := func(label, value string) portal.ProductUsageCell {
-		return portal.ProductUsageCell{Label: label, Value: value, Unknown: value == "Unknown"}
-	}
 	measured := u.Scope == protocol.UsageInitial
 	if measured && len(u.ServedModels) > 0 {
 		row.Sub += " · served " + servedModelsText(u.ServedModels)
 	}
 	row.Cells = []portal.ProductUsageCell{
-		cell("Input", tokenText(u.InputTokens)), cell("Output", tokenText(u.OutputTokens)),
-		cell("Cache read", tokenText(u.CacheReadInputTokens)), cell("Cache create", tokenText(u.CacheCreationInputTokens)),
-		cell("Est. cost", shortCost(u.Cost)),
+		tokenUsageCell("Input", u.InputTokens, "input"), tokenUsageCell("Output", u.OutputTokens, "output"),
+		tokenUsageCell("Cache read", u.CacheReadInputTokens, ""), tokenUsageCell("Cache create", u.CacheCreationInputTokens, ""),
+		costUsageCell(u.Cost),
 	}
 	return row, measured
+}
+
+// tokenUsageCell is one counter. A reported amount, including zero, is the
+// exact decimal. Unknown keeps ChartAmount empty and still names the metric.
+func tokenUsageCell(label string, m protocol.TokenObservation, metric string) portal.ProductUsageCell {
+	value := tokenText(m)
+	cell := portal.ProductUsageCell{Label: label, Value: value, Unknown: value == "Unknown"}
+	amount := ""
+	if metric != "" && value != "Unknown" && m.Amount != nil {
+		amount = strconv.FormatInt(*m.Amount, 10)
+	}
+	return withChart(cell, metric, "tokens", amount, false)
+}
+
+// costUsageCell charts the reported USD decimal. The source string is exact
+// and big.Rat.SetString accepts it. Group sums use RatString instead. An
+// unknown or non-USD cost keeps the amount empty. It is an estimate, not a charge.
+func costUsageCell(c protocol.CostObservation) portal.ProductUsageCell {
+	value := shortCost(c)
+	cell := portal.ProductUsageCell{Label: "Est. cost", Value: value, Unknown: value == "Unknown"}
+	amount := ""
+	if value != "Unknown" {
+		if rat, ok := new(big.Rat).SetString(c.Amount); ok && rat.Sign() >= 0 {
+			amount = c.Amount
+		}
+	}
+	return withChart(cell, "cost", "USD", amount, false)
 }
 
 func activityOrUnknown(a *apiv1.PortalSessionActivity) *apiv1.PortalSessionActivity {
