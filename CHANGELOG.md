@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.83.0](https://github.com/thaynes43/dev-env/compare/v2.82.0...v2.83.0) (2026-11-01)
+
+
+### Features
+
+* **api:** connect the default-off selected-source report route ([#821](https://github.com/thaynes43/dev-env/issues/821)) ([72bfb76](https://github.com/thaynes43/dev-env/commit/72bfb7637c7cee2685177d781f12ea71cfd17461))
+* **api:** prepare dormant selected-source report transport ([#819](https://github.com/thaynes43/dev-env/issues/819)) ([3464e93](https://github.com/thaynes43/dev-env/commit/3464e930ae8f7dbef58df21d6066a8c0141d3f54))
+* **operator:** prepare default-off selected usage source configuration ([#825](https://github.com/thaynes43/dev-env/issues/825)) ([7d20bf4](https://github.com/thaynes43/dev-env/commit/7d20bf472b52888bb7a923eb671e0debaaa46f21))
+* **portal:** connect optional selected usage source ([#823](https://github.com/thaynes43/dev-env/issues/823)) ([9aa09b6](https://github.com/thaynes43/dev-env/commit/9aa09b6bdbf85f65bd46f544d3033373c3829e71))
+* prepare default-off connected question audit metadata ([#820](https://github.com/thaynes43/dev-env/issues/820)) ([e9d29db](https://github.com/thaynes43/dev-env/commit/e9d29db28864494d083999fb2af17cccd6a01029))
+
+
+### Bug Fixes
+
+* **acp:** recover bounded tool context and preserve nested command checks ([#826](https://github.com/thaynes43/dev-env/issues/826)) ([efe4d88](https://github.com/thaynes43/dev-env/commit/efe4d886db8476d54cdda79e33206d29f16f6ce2))
+* **portal:** keep unknown executor state out of in-progress sessions ([#817](https://github.com/thaynes43/dev-env/issues/817)) ([7e581c7](https://github.com/thaynes43/dev-env/commit/7e581c7555a969ea78359d85ba5ceb62cfb3e9f8))
+
 ## [2.82.0](https://github.com/thaynes43/dev-env/compare/v2.81.0...v2.82.0) (2026-11-01)
 
 
