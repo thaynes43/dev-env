@@ -176,6 +176,32 @@ func TestMCPGrantStatusIncludeTaskClaimsRequiresNamedStatus(t *testing.T) {
 	}
 }
 
+func TestMCPGrantStatusIncludeTaskClaimsRejectsCaseAlias(t *testing.T) {
+	h := newHarness(t)
+	serveRaw(h, map[string]func(*http.Request) (int, string){
+		apiv1.GrantsPath: func(r *http.Request) (int, string) {
+			t.Errorf("API %s %s", r.Method, r.URL.RequestURI())
+			return http.StatusOK, `{"items":[]}`
+		},
+		apiv1.GrantPath("grant-maint"): func(r *http.Request) (int, string) {
+			t.Errorf("API %s %s", r.Method, r.URL.RequestURI())
+			return http.StatusOK, `{"name":"grant-maint","type":"maintenance"}`
+		},
+	})
+	for _, args := range []string{
+		`{"name":"grant-maint","IncludeTaskClaims":null}`,
+		`{"name":"grant-maint","IncludeTaskClaims":true}`,
+		`{"name":"grant-maint","IncludeTaskClaims":false}`,
+		`{"name":"grant-maint","includeTaskClaims":false,"IncludeTaskClaims":true}`,
+	} {
+		before := len(h.api.requests())
+		text, isErr := mcpToolText(t, h, "grant_status", args)
+		if !isErr || text != "includeTaskClaims must use its exact field name" || len(h.api.requests()) != before {
+			t.Fatalf("%s: error %v requests %d text %q", args, isErr, len(h.api.requests())-before, text)
+		}
+	}
+}
+
 func TestMCPGrantStatusIncludeTaskClaimsMaintenance(t *testing.T) {
 	h := newHarness(t)
 	grant := apiv1.Grant{

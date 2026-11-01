@@ -205,20 +205,38 @@ type accessToolArgs struct {
 	IncludeTaskClaims bool `json:"includeTaskClaims"`
 }
 
-// includeTaskClaimsArgument checks only the new optional grant_status flag.
-// A missing field stays false, and JSON true or false is valid. A present
-// null or any other type is refused before the API: encoding/json would
-// accept null as false. The other access fields keep their existing decoding.
+// includeTaskClaimsArgument checks only the new optional grant_status flag
+// before decoding. Missing stays false. Exact true or false is valid. Exact
+// null or any other type is refused: encoding/json would accept null as false.
+// A case-folded alias is refused even when the exact key is also present; the
+// scan visits every raw key so map order cannot hide the alias. Other access
+// fields keep their existing decoding.
 func includeTaskClaimsArgument(raw json.RawMessage) error {
 	var probe map[string]any
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return nil
 	}
-	value, ok := probe["includeTaskClaims"]
-	if !ok {
+	var (
+		exact   any
+		present bool
+		alias   bool
+	)
+	for key, value := range probe {
+		switch {
+		case key == "includeTaskClaims":
+			present = true
+			exact = value
+		case strings.EqualFold(key, "includeTaskClaims"):
+			alias = true
+		}
+	}
+	if alias {
+		return usageError("includeTaskClaims must use its exact field name")
+	}
+	if !present {
 		return nil
 	}
-	if _, isBool := value.(bool); !isBool {
+	if _, isBool := exact.(bool); !isBool {
 		return usageError("includeTaskClaims must be a boolean")
 	}
 	return nil
