@@ -208,6 +208,42 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(ACP.Refusal):
                 ACP.strict_object(raw)
 
+    def test_json_depth_has_an_explicit_container_bound(self):
+        # 64 includes the root object. Exercise objects, arrays and mixed shapes
+        # independently of the host interpreter's recursion limit.
+        for nesting in ["objects", "arrays", "mixed"]:
+            for depth in [63, 64, 65, 2000]:
+                with self.subTest(nesting=nesting, depth=depth):
+                    opens, closes = [b'{"subject":'], [b'}']
+                    for index in range(depth - 1):
+                        is_object = nesting == "objects" or nesting == "mixed" and index % 2 == 0
+                        opens.append(b'{"subject":' if is_object else b'[')
+                        closes.append(b'}' if is_object else b']')
+                    raw = b''.join(opens) + b'0' + b''.join(reversed(closes))
+                    if depth <= 64:
+                        self.assertIsInstance(ACP.strict_object(raw), dict)
+                    else:
+                        with self.assertRaisesRegex(ACP.Refusal, "^invalid-json$"):
+                            ACP.strict_object(raw)
+
+    def test_json_depth_scan_respects_strings_and_keeps_strict_decoding(self):
+        value = {"subject": '[{' * 2000 + '"\\' + '}]' * 2000,
+                 "escaped": '\\"[{}]'}
+        self.assertEqual(ACP.strict_object(json.dumps(value).encode()), value)
+        for raw, reason in [(b'{"x":1,"x":2}', "duplicate-field"),
+                            (b'{"x":{"y":1,"y":2}}', "duplicate-field"),
+                            (b'{"x":"\xff"}', "invalid-json"),
+                            (b'{"x":Infinity}', "invalid-json"),
+                            (b'{"x":"unterminated}', "invalid-json"),
+                            (b'{"x":[}', "invalid-json"),
+                            (b'[]', "object-required")]:
+            with self.subTest(raw=raw), self.assertRaisesRegex(ACP.Refusal, '^' + reason + '$'):
+                ACP.strict_object(raw)
+        raw = b'{"x":0}'
+        self.assertEqual(ACP.strict_object(raw, len(raw)), {"x": 0})
+        with self.assertRaisesRegex(ACP.Refusal, "^frame-too-large$"):
+            ACP.strict_object(raw, len(raw) - 1)
+
 
 def json_frame(size, name="synthetic"):
     """One valid JSON object frame of exactly `size` bytes, newline included."""
@@ -1490,7 +1526,31 @@ class SubprocessTests(unittest.TestCase):
     def launch(self, directory, mode="question", timeout=10, client_arg=None, model=None, env=None, prefix=(), diagnostic=None):
         client, prompt = self.fake(directory, mode)
         model_args = ["--model", "fixture-model"] if model is None else model
-        command = [sys.executable, "-I", "-B", *prefix, str(CLIENT), "run", "--client", client_arg or str(client), "--worktree", directory, *model_args, "--prompt-file", str(prompt), "--timeout", str(timeout)]
+        entrypoint = CLIENT
+        if diagnostic is not None:
+            # Offline fixtures require complete evidence. Run the real main and
+            # original bounded close, then explicitly join its writer before
+            # this test child exits. Production retains its 50 ms close; the
+            # separate stalled-storage test exercises that unchanged bound.
+            entrypoint = Path(directory) / "offline-diagnostic-harness.py"
+            entrypoint.write_text('''import importlib.util
+import sys
+spec = importlib.util.spec_from_file_location("offline_acp", sys.argv.pop(1))
+acp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(acp)
+original_close = acp.StructuralDiagnostic.close
+def close_and_join(self):
+    original_close(self)
+    self.writer.join(timeout=5)
+    if self.writer.is_alive():
+        raise RuntimeError("offline diagnostic writer did not finish")
+acp.StructuralDiagnostic.close = close_and_join
+raise SystemExit(acp.main())
+''')
+        command = [sys.executable, "-I", "-B", *prefix, str(entrypoint)]
+        if diagnostic is not None:
+            command.append(str(CLIENT))
+        command.extend(["run", "--client", client_arg or str(client), "--worktree", directory, *model_args, "--prompt-file", str(prompt), "--timeout", str(timeout)])
         if diagnostic is not None:
             command.extend(["--diagnostic-file", diagnostic])
         return subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)

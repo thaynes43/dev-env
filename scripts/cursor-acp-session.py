@@ -20,6 +20,9 @@ import urllib.parse
 # Wire-frame limits include the terminating newline.
 MAX_FRAME = 65536
 MAX_PROVIDER_FRAME = 4 * 1024 * 1024
+# Count every object/array container, including the top-level object. Enforce
+# this before decoding rather than relying on a Python build's recursion limit.
+MAX_JSON_DEPTH = 64
 MAX_PROMPT = 16384
 LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PERMISSION_KINDS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
@@ -65,7 +68,27 @@ def strict_object(raw, maximum=MAX_FRAME):
     if len(raw) > maximum:
         raise Refusal("frame-too-large")
     try:
-        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+        depth, quoted, escaped = 0, False, False
+        for char in text:
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+            elif char == '"':
+                quoted = True
+            elif char in "[{":
+                depth += 1
+                if depth > MAX_JSON_DEPTH:
+                    raise Refusal("invalid-json")
+            elif char in "]}":
+                depth -= 1
+        # The scan only bounds nesting. The decoder still validates all syntax,
+        # duplicate keys, Unicode and non-finite numbers as before.
+        value = json.loads(text, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
     except (ValueError, UnicodeError, RecursionError):
         raise Refusal("invalid-json") from None
     if not isinstance(value, dict):
