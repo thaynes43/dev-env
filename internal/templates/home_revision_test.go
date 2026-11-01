@@ -36,6 +36,13 @@ func TestHomeCapacityPreservesLegacyRevision(t *testing.T) {
 			if got.Home.Size.String() != size {
 				t.Fatalf("revision calculation changed allocation to %s, want %s", got.Home.Size.String(), size)
 			}
+			frozen, err := got.ReviewRevision()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (frozen == want) != (size == "20Gi") {
+				t.Fatalf("review revision did not preserve the legacy capacity freeze for %s", size)
+			}
 		})
 	}
 	changed, err := parse(t, strings.Replace(example(t), "storageClassName: gasha01-rbd", "storageClassName: other-rbd", 1))

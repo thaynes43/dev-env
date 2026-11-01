@@ -14,6 +14,11 @@ The frozen value preserves the existing hash for the deployed 20Gi default;
 omitting the field would change every revision during adoption. Storage class,
 image, environment, limits and other existing revision inputs stay significant.
 
+Canary and pilot review pins continue using the full legacy hash through
+`ReviewRevision`, including the real HOME size. Their shared validation still
+refuses capacity drift; only pod revision comparisons ignore capacity. This
+preserves existing finite review bounds rather than narrowing the freeze.
+
 This prevents a capacity-only template update from creating a new reason to
 drain sessions. It does not suppress drains caused by other template changes or
 cancel drains already underway. Existing HOME requests, PVs, filesystems and

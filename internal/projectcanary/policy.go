@@ -267,7 +267,11 @@ func (r Record) ValidateTemplate(t *templates.Templates, owner string) error {
 
 // Shared finite private shape; canary and pilot policy validation remain separate.
 func validatePrivateTemplate(t *templates.Templates, owner, provider, profileName, revision, image string) error {
-	if t == nil || t.Revision() != revision || t.Image != image || t.Workspace != nil && t.Workspace.Enabled {
+	if t == nil {
+		return ErrRefused
+	}
+	reviewRevision, err := t.ReviewRevision()
+	if err != nil || reviewRevision != revision || t.Image != image || t.Workspace != nil && t.Workspace.Enabled {
 		return ErrRefused
 	}
 	_, profile, err := t.Profile(profileName)
