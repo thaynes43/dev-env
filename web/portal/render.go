@@ -500,7 +500,7 @@ func usageCharts(scope string, rows []ProductUsageRow) []ProductUsageChart {
 				continue
 			}
 			rat, ok := new(big.Rat).SetString(cell.ChartAmount)
-			if !ok || rat.Sign() < 0 {
+			if !ok || rat.Sign() < 0 || (spec.unit == "tokens" && !rat.IsInt()) {
 				bar.Unknown = true
 				bar.Partial = false
 				bar.Text = row.Name + ": Unknown"
@@ -510,7 +510,7 @@ func usageCharts(scope string, rows []ProductUsageRow) []ProductUsageChart {
 			}
 			bar.Amount = cell.ChartAmount
 			bar.Zero = rat.Sign() == 0
-			bar.Text = row.Name + ": " + cell.ChartAmount + " " + spec.unit
+			bar.Text = row.Name + ": " + chartDisplayAmount(rat, cell.ChartAmount, spec.unit) + " " + spec.unit
 			if cell.ChartPartial {
 				bar.Text += " (partial sum)"
 			}
@@ -532,6 +532,20 @@ func usageCharts(scope string, rows []ProductUsageRow) []ProductUsageChart {
 		charts = append(charts, ProductUsageChart{Title: spec.title, Unit: spec.unit, Metric: spec.metric, Note: spec.note, Bars: bars})
 	}
 	return charts
+}
+
+// Source costs are bounded decimal observations (at most 64 characters).
+// Render their exact finite decimal instead of a reduced fraction. A value
+// outside that source convention retains its exact original spelling.
+func chartDisplayAmount(amount *big.Rat, raw, unit string) string {
+	if unit != "USD" {
+		return raw
+	}
+	decimal := strings.TrimRight(strings.TrimRight(amount.FloatString(64), "0"), ".")
+	if parsed, ok := new(big.Rat).SetString(decimal); ok && parsed.Cmp(amount) == 0 {
+		return decimal
+	}
+	return raw
 }
 
 func chartCell(row ProductUsageRow, metric, unit string) (ProductUsageCell, bool) {
