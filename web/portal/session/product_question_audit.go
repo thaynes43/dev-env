@@ -15,8 +15,9 @@ import (
 	"github.com/thaynes43/dev-env/web/portal"
 )
 
-// questionAuditTimeout bounds both box reads together. It is not the inventory
-// budget: a slow or failed audit does not discard the session page.
+// questionAuditTimeout bounds both box reads together, on the request context.
+// Request cancellation stops the reads. A slow, failed, or cancelled audit
+// leaves the session page in place. This bound is separate from sessionReadTimeout.
 var questionAuditTimeout = 4 * time.Second
 
 var errQuestionAudit = errors.New("question audit unavailable")
@@ -60,7 +61,9 @@ func (s *SessionSource) attachQuestionAudit(ctx context.Context, page portal.Pro
 	if loc.name == "" || loc.uid == "" || ctx.Err() != nil {
 		return questionAuditApply(page, loc, questionAuditUnavailable())
 	}
-	panelCtx, cancel := context.WithTimeout(context.Background(), questionAuditTimeout)
+	// Bound the panel by the request and by questionAuditTimeout. Cancellation
+	// of the request cancels this context, so the reads stop with the request.
+	panelCtx, cancel := context.WithTimeout(ctx, questionAuditTimeout)
 	defer cancel()
 	inbox, err := s.readQuestionAudit(panelCtx, loc.name, loc.uid, apiv1.PortalQuestionBoxInbox)
 	if err != nil {

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -70,9 +71,25 @@ func TestQuestionAuditSelectedReadsTwoBoxes(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := string(body)
-	for _, secret := range []string{cursor, "SECRET_QUESTION_TEXT", "claude-opus-5-5", sent.Provenance.GitHub} {
+	// Session detail keeps the requested model. The audit section is a separate
+	// surface: it serves Unknown and carries no requested or served inference.
+	if !strings.Contains(rendered, "claude-opus-5-5") || !strings.Contains(rendered, "Requested model") {
+		t.Fatal("session detail dropped the requested model")
+	}
+	for _, secret := range []string{cursor, "SECRET_QUESTION_TEXT", sent.Provenance.GitHub} {
 		if strings.Contains(rendered, secret) {
 			t.Fatalf("render included %s", secret)
+		}
+	}
+	panel := questionAuditPanelHTML(t, rendered)
+	for _, secret := range []string{cursor, "SECRET_QUESTION_TEXT", sent.Provenance.GitHub, "claude-opus-5-5", "Requested model", "servedModels"} {
+		if strings.Contains(panel, secret) {
+			t.Fatalf("audit section included %s", secret)
+		}
+	}
+	for _, allowed := range []string{"<dt>Origin</dt><dd>Unknown</dd>", "<dt>Approval</dt><dd>not recorded</dd>", "<dt>Provider consumption</dt><dd>not recorded</dd>", "<dt>Served model</dt><dd>Unknown</dd>"} {
+		if !strings.Contains(panel, allowed) {
+			t.Fatalf("audit section lost %s", allowed)
 		}
 	}
 	base := questionAuditSource(t, now, &questionAuditScript{
@@ -85,6 +102,62 @@ func TestQuestionAuditSelectedReadsTwoBoxes(t *testing.T) {
 	}
 	if questionAuditSignature(before) != questionAuditSignature(page) {
 		t.Fatalf("inventory changed\nbefore %s\nafter %s", questionAuditSignature(before), questionAuditSignature(page))
+	}
+}
+
+func TestQuestionAuditCatalogProjectIsNotRepoAlias(t *testing.T) {
+	const catalogProject = "sample"
+	const repoAlias = "alias"
+	if catalogProject == repoAlias {
+		t.Fatal("catalog project collapsed into the repository alias")
+	}
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	script := &questionAuditScript{
+		inventoryRepo: repoAlias,
+		inbox:         auditPageBytes(t, apiv1.PortalQuestionBoxInbox, []apiv1.PortalQuestionAuditItem{auditQuestionItem(apiv1.InboxStateUnanswered)}, false, ""),
+		sent:          auditPageBytes(t, apiv1.PortalQuestionBoxSent, nil, false, ""),
+	}
+	src := questionAuditSource(t, now, script)
+	src.UseQuestionAudit(catalogProject)
+	page, err := src.Read(t.Context(), portal.ProductFilter{Session: "uid-agent", Project: repoAlias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := findRow(t, page, "agent")
+	if row.Kicker != repoAlias {
+		t.Fatalf("selected row repo %q", row.Kicker)
+	}
+	projectField := ""
+	for _, field := range row.Context {
+		if field.Label == "Project" {
+			projectField = field.Value
+		}
+	}
+	if projectField != repoAlias || page.Filter.Project != repoAlias {
+		t.Fatalf("inventory repo %q filter %q", projectField, page.Filter.Project)
+	}
+	if len(script.queries) != 2 {
+		t.Fatalf("queries %v", script.queries)
+	}
+	for _, raw := range script.queries {
+		q, err := url.ParseQuery(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q.Get("project") != catalogProject || strings.Contains(raw, repoAlias) {
+			t.Fatalf("audit request used the repo alias %s", raw)
+		}
+	}
+	section := questionAuditSectionOf(t, page, "agent")
+	fields := map[string]string{}
+	for _, f := range section.Fields {
+		fields[f.Label] = f.Value
+	}
+	if fields["Served model"] != apiv1.PortalQuestionServedModelUnknown {
+		t.Fatalf("served model %+v", fields)
+	}
+	if questionAuditSectionCount(page, "other") != 0 {
+		t.Fatal("unselected row gained a question audit")
 	}
 }
 
@@ -142,12 +215,13 @@ func TestQuestionAuditPanelFailuresPreserveInventory(t *testing.T) {
 	acked.Thread.WaitingOn = nil
 	acked.Acknowledgement = apiv1.PortalQuestionAuditAck{Status: apiv1.PortalQuestionAckRecorded, Actor: &apiv1.TaskClaimActor{Kind: "session", ServiceAccount: "dev-agents/dev-env", PodName: "claimed-origin", PodUID: "pod-claimed"}, CreatedAt: &at}
 	cases := []struct {
-		name    string
-		script  questionAuditScript
-		status  string
-		secret  string
-		calls   int
-		missing bool
+		name         string
+		script       questionAuditScript
+		status       string
+		secret       string
+		calls        int
+		missing      bool
+		cancelParent bool
 	}{
 		{name: "substituted ref", script: questionAuditScript{inbox: auditPageBytes(t, apiv1.PortalQuestionBoxInbox, []apiv1.PortalQuestionAuditItem{substituted}, false, "")}, status: "Unavailable", secret: auditMessageName('e', 'f'), calls: 1},
 		{name: "echo", script: questionAuditScript{inbox: echoBody}, status: "Unavailable", secret: "other", calls: 1},
@@ -159,12 +233,21 @@ func TestQuestionAuditPanelFailuresPreserveInventory(t *testing.T) {
 		{name: "forbidden", script: questionAuditScript{inboxStatus: http.StatusForbidden}, status: "Unavailable", calls: 1},
 		{name: "sent missing", script: questionAuditScript{inbox: good, sentStatus: http.StatusNotFound}, status: "Unavailable", calls: 2},
 		{name: "timeout", script: questionAuditScript{hang: true}, status: "Unavailable", calls: 1},
+		{name: "parent deadline during panel", script: questionAuditScript{hang: true}, status: "Unavailable", calls: 1, cancelParent: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.script.hang {
+			if tc.script.hang && !tc.cancelParent {
 				previous := questionAuditTimeout
 				questionAuditTimeout = 30 * time.Millisecond
+				t.Cleanup(func() { questionAuditTimeout = previous })
+			}
+			if tc.cancelParent {
+				if sessionReadTimeout != 12*time.Second {
+					t.Fatal("inventory timeout contract changed")
+				}
+				previous := questionAuditTimeout
+				questionAuditTimeout = 5 * time.Second
 				t.Cleanup(func() { questionAuditTimeout = previous })
 			}
 			baseScript := &questionAuditScript{inbox: good, sent: auditPageBytes(t, apiv1.PortalQuestionBoxSent, nil, false, "")}
@@ -176,9 +259,46 @@ func TestQuestionAuditPanelFailuresPreserveInventory(t *testing.T) {
 			script := tc.script
 			src := questionAuditSource(t, now, &script)
 			src.UseQuestionAudit("sample")
-			page, err := src.Read(t.Context(), portal.ProductFilter{Session: "uid-agent"})
+			readCtx := t.Context()
+			var page portal.ProductPage
+			if tc.cancelParent {
+				entered := make(chan struct{})
+				stopped := make(chan struct{})
+				script.entered = entered
+				script.stopped = stopped
+				var cancel context.CancelFunc
+				readCtx, cancel = context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				go func() {
+					<-entered
+					cancel()
+				}()
+				done := make(chan struct{})
+				go func() {
+					page, err = src.Read(readCtx, portal.ProductFilter{Session: "uid-agent"})
+					close(done)
+				}()
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					cancel()
+					t.Fatal("optional panel kept working after the request was cancelled")
+				}
+				select {
+				case <-stopped:
+				case <-time.After(time.Second):
+					t.Fatal("panel request kept running after the client returned")
+				}
+			} else {
+				page, err = src.Read(readCtx, portal.ProductFilter{Session: "uid-agent"})
+			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.cancelParent {
+				if page.ListCount == "" || len(page.Groups) == 0 || findRow(t, page, "agent").Title != "agent" {
+					t.Fatal("inventory, group, count, or card dropped")
+				}
 			}
 			if len(script.queries) != tc.calls {
 				t.Fatalf("calls %d %v", len(script.queries), script.queries)
@@ -276,19 +396,28 @@ func TestQuestionAuditLeavesInventoryDecoderUnchanged(t *testing.T) {
 }
 
 type questionAuditScript struct {
-	mu          sync.Mutex
-	queries     []string
-	inbox       []byte
-	sent        []byte
-	inboxStatus int
-	sentStatus  int
-	hang        bool
+	mu            sync.Mutex
+	queries       []string
+	inbox         []byte
+	sent          []byte
+	inboxStatus   int
+	sentStatus    int
+	hang          bool
+	inventoryRepo string
+	entered       chan struct{}
+	stopped       chan struct{}
 }
 
 func (s *questionAuditScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/sessions" {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, activityPage(activityRow("agent", unknownActivity), activityRow("other", unknownActivity)))
+		agent := activityRow("agent", unknownActivity)
+		other := activityRow("other", unknownActivity)
+		if s.inventoryRepo != "" {
+			agent = strings.Replace(agent, `"repo":"dev-env"`, `"repo":"`+s.inventoryRepo+`"`, 1)
+			other = strings.Replace(other, `"repo":"dev-env"`, `"repo":"`+s.inventoryRepo+`"`, 1)
+		}
+		_, _ = io.WriteString(w, activityPage(agent, other))
 		return
 	}
 	if r.URL.Path != apiv1.PortalQuestionAuditPath {
@@ -298,8 +427,15 @@ func (s *questionAuditScript) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	s.mu.Lock()
 	s.queries = append(s.queries, r.URL.RawQuery)
 	s.mu.Unlock()
+	if s.entered != nil {
+		close(s.entered)
+		s.entered = nil
+	}
 	if s.hang {
 		<-r.Context().Done()
+		if s.stopped != nil {
+			close(s.stopped)
+		}
 		return
 	}
 	status, body := http.StatusOK, s.inbox
@@ -411,6 +547,21 @@ func copyAuditThread(in *apiv1.InboxThread) *apiv1.InboxThread {
 		out.WaitingOn = &owner
 	}
 	return &out
+}
+
+func questionAuditPanelHTML(t *testing.T, html string) string {
+	t.Helper()
+	const marker = "<h3>Question audit</h3>"
+	start := strings.Index(html, marker)
+	if start < 0 {
+		t.Fatal("rendered page has no question audit section")
+	}
+	rest := html[start:]
+	end := strings.Index(rest, "</section>")
+	if end < 0 {
+		t.Fatal("question audit section did not close")
+	}
+	return rest[:end]
 }
 
 func questionAuditSectionOf(t *testing.T, page portal.ProductPage, title string) portal.ProductSection {
