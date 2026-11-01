@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.80.0](https://github.com/thaynes43/dev-env/compare/v2.79.0...v2.80.0) (2026-11-01)
+
+
+### Features
+
+* **inbox:** render question metadata as an audit page ([#810](https://github.com/thaynes43/dev-env/issues/810)) ([b856bd0](https://github.com/thaynes43/dev-env/commit/b856bd02358f19688571f41b87e9bde6b39a0bcf))
+* **usage:** adapt retained Codex meters as selected source reports ([#808](https://github.com/thaynes43/dev-env/issues/808)) ([0ccd54a](https://github.com/thaynes43/dev-env/commit/0ccd54ae7088d2c0a1adaed60d9dc0d067bbfc55))
+
 ## [2.79.0](https://github.com/thaynes43/dev-env/compare/v2.78.0...v2.79.0) (2026-11-01)
 
 
