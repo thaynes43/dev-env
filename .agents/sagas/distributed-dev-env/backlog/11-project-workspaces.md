@@ -290,6 +290,12 @@ The old H7-H10 sequence remains historical delivery context, not a competing
 rollout or a new prerequisite. Existing archive resources/holds, finalizers,
 canary/pilot protections and ADR-004 coordination retention are unchanged.
 
+The source slice also includes a bounded audit-only legacy metadata adapter.
+Existing authenticated callers can supply exact proof/receipt provenance through
+the verifier boundary; new signing-key provision is not a cleanup prerequisite.
+Stopped fixture/hold decisions stay explicit at seven days or with unknown clocks,
+while their protections remain intact. Runtime evidence collection remains open.
+
 The following Q-31 policy and delivery table are historical where superseded.
 
 Follow-up F1 of the retention section above. **Ruled 2026-10-12 (Q-31).** Tom

@@ -22,6 +22,26 @@ separate, at most 64 KiB and 64 keys. Omit `--trust` to report deadlines and
 exceptions without allowing immediate candidates. No keys are trusted by default.
 No production attestation keys or collector are supplied by this change.
 
+The same command consumes existing sanitized AgentSession/PVC/Pod audit metadata:
+
+```sh
+bin/home-retention-dry-run --now 2026-11-01T21:09:03Z \
+  --format legacy-snapshot --input /private/snapshot.json \
+  --legacy-dispositions /private/fixture-uids.json
+```
+
+This bounded adapter preserves existing task/terminal clocks, exact recorded
+identity associations, raw snapshot SHA-256, capture time and source field paths.
+It never uses PVC birth as completion or promotes old success, `CleanAndPushed`
+or PR metadata into preservation proof. Missing/conflicting bindings remain
+exceptions; known timestamps remain in audit provenance even when they cannot
+establish a bound clock. Active provider mounts protect work; rescue holds retain
+separate protection. The optional `--legacy-dispositions` file maps exact PVCUIDs
+to named fixture dispositions. It cannot remove existing protection or supply
+preservation authority; real UID lists stay private. Extra/duplicate UIDs and
+invalid disposition values refuse. Legacy mode rejects `--trust` and cannot
+certify live immediate candidates.
+
 `--now` is mandatory, so a replay uses the same clock. Seven days is exactly
 168 hours, including equality. `--warning-lead` defaults to `24h` and must be
 positive and at most `168h`. `--observation-max-age` defaults to `5m` and must be
@@ -46,10 +66,11 @@ or separate-disposition records. Each list is ordered by immutable PVCUID
 (`uid`), with sorted reason codes and exact Session/PVC/Pod/executor binding.
 Named `canary`, `pilot`, `fixture` and `rescue_hold` dispositions are protected;
 unknown disposition values block candidacy and follow the warning/decision clock.
-State, hold and disposition must match a fresh signed observation before they
-can support candidacy or suppress an expiry decision. Unverified protection
-still prevents candidacy, but expired or clockless work remains flagged for an
-owner decision. Clearing a raw hold or fixture marker cannot reuse its signature.
+State, hold and disposition must match a fresh authenticated observation before
+they can support candidacy. Stopped holds and special fixtures remain protected
+but carry `dispositionDecisionRequired: true` at expiry or with an unknown clock.
+Active work stays protected without expiry actions. Clearing a raw hold or
+fixture marker cannot reuse its old observation.
 Statuses distinguish retained, warning, decision required and protected work.
 Missing/future clocks have no fabricated deadline and need an owner decision;
 expired unresolved work stays in the decision queue. A candidate is never a
@@ -63,10 +84,10 @@ revision changes invalidate preservation evidence but do not reset that attempt'
 completion clock. A resumed executor or replacement Pod needs its own actual
 binding and completion evidence; active mounts always prevent candidacy.
 
-The signed contract is defined in
+The attestation contract is defined in
 [`types.go`](../internal/homeretention/types.go), with signing and verification in
 [`verify.go`](../internal/homeretention/verify.go). Signing uses domain-separated
-bytes from `SigningBytes` and Ed25519. The payload is the typed Go `encoding/json`
+bytes from `SigningBytes` and Ed25519 for optional offline verification. The payload is the typed Go `encoding/json`
 representation, preserving array order; it is not arbitrary raw JSON or a generic
 cross-language canonicalization scheme. Trust purpose separates collector,
 publication and durable-copy keys. Publication keys are scoped to an exact
@@ -75,24 +96,33 @@ cannot add trusted keys. Signatures authenticate an authorized collector's
 assertions; they do not independently query a Git host, verify a push or inspect
 HOME contents.
 
+The reusable library also accepts an `EvidenceVerifier` supplied by an already
+authenticated caller. It can verify exact existing agentd/operator transport
+provenance and remote receipt scopes without new signing infrastructure. It
+must authenticate the complete domain/payload and receipt authority, never a
+snapshot's own flag. The offline CLI cannot enable this boundary from a JSON
+field or command-line assertion. Production collector integration remains
+separate; new signing-key provision is not a policy gate.
+
 An immediate candidate needs complete clean repository/worktree/ref/stash
 inventory, authenticated exact-remote publication receipts, separately preserved
-required artifacts, and a current signed observation matching proof ID, executor,
+required artifacts, and a current authenticated observation matching proof ID, executor,
 writer generation and HOME revision. Success/PR existence, old `CleanAndPushed`
 booleans, stale remote-tracking refs and missing arrays cannot substitute for
 these attestations. Every required handoff, result, history or recovery category
 must be explicitly resolved; unknown requirements remain named exceptions.
 No provider-history archive is required when that requirement is explicitly none.
-The signed requirements include an authoritative `source` and immutable
+The authenticated requirements include an authoritative `source` and immutable
 `revision`. The future collector must resolve these references to existing owner
 decisions; naming one does not create authority. Initialized submodules also
 need their own repository inventory and receipts.
 
-Legacy operator records require a future collector/adapter to produce this
-versioned input. There is no automatic migration or backfill of proof. Unknown
-input versions/fields, duplicate records or JSON members, excessive nesting,
-trailing documents and input bounds are rejected. Valid old records with missing
-proof remain reportable exceptions.
+The legacy adapter produces audit records, not automatic migration or backfill
+of proof. Versioned attestation input rejects unknown versions/fields, duplicate
+records or JSON members, excessive nesting, trailing documents and input bounds.
+Valid old records with missing proof remain reportable exceptions. The legacy
+metadata format ignores unused provider fields within strict byte/count/depth/
+duplicate bounds; ignored fields never establish preservation or authority.
 
 This tool intentionally cannot certify that a later destructive action is safe.
 Late writes, resumed work, new Pod/PVC UIDs, stale observations and superseded

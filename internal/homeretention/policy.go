@@ -8,7 +8,7 @@ import (
 
 // Evaluate is pure: the caller supplies the entire snapshot, trust, and clock.
 // Even an immediate candidate is a proposal, never deletion authority.
-func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust *TrustStore) (Report, error) {
+func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust EvidenceVerifier) (Report, error) {
 	if err := validateSnapshot(snapshot); err != nil {
 		return Report{}, err
 	}
@@ -21,9 +21,10 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust *TrustStore
 	if policy.ObservationMaxAge <= 0 || policy.ObservationMaxAge > time.Hour {
 		return Report{}, errors.New("observation maximum age must be positive and at most 1h")
 	}
+	evidence := verifier{source: trust}
 	report := Report{Version: Version, DryRun: true, DeleteEnabled: false, EvaluatedAt: formatTime(now), Retention: Retention.String(), WarningLead: policy.WarningLead.String(), ObservationMaxAge: policy.ObservationMaxAge.String(), ImmediateCandidates: []Entry{}, StoppedWorkQueue: []Entry{}}
 	for _, record := range snapshot.Records {
-		entry := Entry{UID: record.UID, Binding: record.Binding, Reasons: []string{}}
+		entry := Entry{UID: record.UID, Binding: record.Binding, Reasons: []string{}, Provenance: record.Provenance}
 		completed, clock, clockReason := completionClock(record, now)
 		entry.ClockSource = clock.Source
 		if clockReason != "" {
@@ -44,7 +45,7 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust *TrustStore
 		} else {
 			entry.Status, entry.DecisionRequired = "decision_required", true
 		}
-		entry.Reasons = append(entry.Reasons, trust.preservation(record, clock, completed, now, policy.ObservationMaxAge)...)
+		entry.Reasons = append(entry.Reasons, evidence.preservation(record, clock, completed, now, policy.ObservationMaxAge)...)
 		protected := false
 		if record.State == "active" {
 			protected = true
@@ -62,16 +63,20 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust *TrustStore
 		default:
 			entry.Reasons = append(entry.Reasons, "disposition_unknown")
 		}
-		verifiedProtection := protected && trust.verifiedSafety(record, now, policy.ObservationMaxAge)
+		verifiedProtection := protected && evidence.verifiedSafety(record, now, policy.ObservationMaxAge)
 		if protected && !verifiedProtection {
 			entry.Reasons = append(entry.Reasons, "protection_unverified")
 		}
 		entry.Reasons = sortedUnique(entry.Reasons)
 		if protected {
 			entry.Status = "protected"
-			// Only current authenticated protection can suppress an expiry decision.
-			if verifiedProtection {
+			// Active work is protected without expiry actions. Stopped holds and
+			// fixtures retain their explicit overdue/clockless disposition decision.
+			if record.State == "active" {
 				entry.DecisionRequired = false
+			} else if entry.DecisionRequired {
+				entry.DispositionDecisionRequired = true
+				entry.Reasons = sortedUnique(append(entry.Reasons, "owner_disposition_required"))
 			}
 		} else if len(entry.Reasons) == 0 {
 			entry.Status, entry.DecisionRequired = "immediate_preserved", false

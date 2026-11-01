@@ -68,3 +68,28 @@ func TestBoundedFilesAndStrictInput(t *testing.T) {
 		t.Fatal("input snapshot changed")
 	}
 }
+
+func TestLegacyAuditModeNeverPromotesTrust(t *testing.T) {
+	// The orphan has no clock; its PVC birth must not create one.
+	input := `{"at":"2026-11-01T12:00:00Z","claims":[{"name":"home-fixture","namespace":"test","uid":"pvc-1","creationTimestamp":"2020-01-01T00:00:00Z"}],"sessions":[],"pods":[]}`
+	var stdout, stderr bytes.Buffer
+	args := []string{"--now", "2026-11-01T12:00:00Z", "--format", "legacy-snapshot"}
+	if code := run(args, strings.NewReader(input), &stdout, &stderr); code != 0 {
+		t.Fatalf("legacy audit failed: %s", stderr.String())
+	}
+	var report homeretention.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.DryRun || report.DeleteEnabled || len(report.ImmediateCandidates) != 0 || len(report.StoppedWorkQueue) != 1 || report.StoppedWorkQueue[0].Deadline != "" || report.StoppedWorkQueue[0].Provenance == nil {
+		t.Fatalf("legacy input promoted or lost provenance: %+v", report)
+	}
+	for _, invalid := range [][]string{{"--format", "unsupported"}, {"--format", "legacy-snapshot", "--trust", "must-not-open"}, {"--legacy-dispositions", "must-not-open"}} {
+		stdout.Reset()
+		stderr.Reset()
+		invalid = append([]string{"--now", "2026-11-01T12:00:00Z"}, invalid...)
+		if code := run(invalid, strings.NewReader(input), &stdout, &stderr); code != 2 || stdout.Len() != 0 {
+			t.Fatalf("invalid legacy invocation accepted: %v", invalid)
+		}
+	}
+}

@@ -515,12 +515,12 @@ func TestProtectionMetadataCannotBeClearedWithoutNewObservation(t *testing.T) {
 	if entry.Status != "protected" || !entry.DecisionRequired {
 		t.Fatalf("unverified hold hid expired work: %+v", entry)
 	}
-	// A fresh authenticated hold remains an explicit exception at the deadline.
+	// A fresh authenticated hold still needs an explicit disposition at expiry.
 	f.record.Observation.Payload.Hold = f.record.Hold
 	f.resign(t)
 	entry = requireReason(t, f.evaluate(t), "owner_hold")
-	if entry.Status != "protected" || entry.DecisionRequired {
-		t.Fatalf("authenticated hold lost protection: %+v", entry)
+	if entry.Status != "protected" || !entry.DecisionRequired || !entry.DispositionDecisionRequired {
+		t.Fatalf("authenticated hold hid disposition decision: %+v", entry)
 	}
 }
 

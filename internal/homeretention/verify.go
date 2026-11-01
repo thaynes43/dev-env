@@ -11,6 +11,33 @@ import (
 	"unicode"
 )
 
+// Authority is the exact authenticated scope of a verified receipt. It is not
+// an approval, grant, credential or lifecycle authority.
+type Authority struct {
+	Repository  string
+	Remote      string
+	Destination string
+}
+
+// EvidenceVerifier is a trusted caller boundary, never snapshot-provided data.
+// An integration may verify exact payload provenance from existing authenticated
+// agentd/operator channels and authenticated Git/durable-copy receipts. It must
+// verify the given domain, complete payload and scope, not trust a payload's own
+// boolean or claimed identity. TrustStore is an optional offline implementation;
+// production signing keys are not a prerequisite imposed by this policy.
+type EvidenceVerifier interface {
+	Verify(domain string, payload any, signature Signature) (Authority, bool)
+}
+
+type verifier struct{ source EvidenceVerifier }
+
+func (v verifier) verify(domain string, payload any, signature Signature) (Authority, bool) {
+	if v.source == nil {
+		return Authority{}, false
+	}
+	return v.source.Verify(domain, payload, signature)
+}
+
 type trustedKey struct {
 	config TrustedKey
 	public ed25519.PublicKey
@@ -87,9 +114,9 @@ func SigningBytes(domain string, payload any) ([]byte, error) {
 	return append([]byte("dev-env/home-retention/v1/"+domain+"\n"), encoded...), nil
 }
 
-func (store *TrustStore) verify(domain string, payload any, signature Signature) (TrustedKey, bool) {
+func (store *TrustStore) Verify(domain string, payload any, signature Signature) (Authority, bool) {
 	if store == nil {
-		return TrustedKey{}, false
+		return Authority{}, false
 	}
 	key, exists := store.keys[signature.KeyID]
 	purpose := domain
@@ -97,17 +124,17 @@ func (store *TrustStore) verify(domain string, payload any, signature Signature)
 		purpose = "collector"
 	}
 	if !exists || key.config.Purpose != purpose {
-		return TrustedKey{}, false
+		return Authority{}, false
 	}
 	decoded, err := base64.StdEncoding.DecodeString(signature.Value)
 	if err != nil || len(decoded) != ed25519.SignatureSize {
-		return TrustedKey{}, false
+		return Authority{}, false
 	}
 	message, err := SigningBytes(domain, payload)
 	if err != nil || !ed25519.Verify(key.public, message, decoded) {
-		return TrustedKey{}, false
+		return Authority{}, false
 	}
-	return key.config, true
+	return Authority{Repository: key.config.Repository, Remote: key.config.Remote, Destination: key.config.Destination}, true
 }
 
 func validText(value string) bool {
@@ -155,10 +182,10 @@ func sameSafety(record Record, observation ObservationPayload) bool {
 	return observation.State == record.State && observation.Hold == record.Hold && observation.Disposition == record.Disposition
 }
 
-// verifiedSafety permits a current trusted protection marker to suppress an
-// expiry decision. Unverified markers still protect against candidacy, but do
-// not hide expired or clockless work from the owner decision queue.
-func (store *TrustStore) verifiedSafety(record Record, now time.Time, maxAge time.Duration) bool {
+// verifiedSafety authenticates protective metadata for report provenance.
+// Stopped holds/fixtures still need disposition at expiry; no protection marker
+// grants candidacy or deletion authority.
+func (store verifier) verifiedSafety(record Record, now time.Time, maxAge time.Duration) bool {
 	if record.Observation == nil || !validBinding(record.Binding) || record.Binding.PVCUID != record.UID {
 		return false
 	}
@@ -168,7 +195,7 @@ func (store *TrustStore) verifiedSafety(record Record, now time.Time, maxAge tim
 	return verified && o.Version == Version && o.Binding == record.Binding && sameSafety(record, o) && ok && !observed.After(now) && now.Sub(observed) <= maxAge
 }
 
-func (store *TrustStore) preservation(record Record, clock Clock, completed, now time.Time, maxAge time.Duration) []string {
+func (store verifier) preservation(record Record, clock Clock, completed, now time.Time, maxAge time.Duration) []string {
 	reasons := []string{}
 	add := func(reason string) { reasons = append(reasons, reason) }
 	if !validBinding(record.Binding) || record.Binding.PVCUID != record.UID {
@@ -330,7 +357,7 @@ func (store *TrustStore) preservation(record Record, clock Clock, completed, now
 	return reasons
 }
 
-func (store *TrustStore) published(binding Binding, repository string, ref Ref, captured time.Time, capturedOK bool, now time.Time, maxAge time.Duration) bool {
+func (store verifier) published(binding Binding, repository string, ref Ref, captured time.Time, capturedOK bool, now time.Time, maxAge time.Duration) bool {
 	for _, receipt := range ref.Receipts {
 		p := receipt.Payload
 		key, verified := store.verify("publication", p, receipt.Signature)
@@ -351,7 +378,7 @@ func (store *TrustStore) published(binding Binding, repository string, ref Ref, 
 	return false
 }
 
-func (store *TrustStore) copied(binding Binding, artifact Artifact, captured time.Time, capturedOK bool, now time.Time, maxAge time.Duration) bool {
+func (store verifier) copied(binding Binding, artifact Artifact, captured time.Time, capturedOK bool, now time.Time, maxAge time.Duration) bool {
 	for _, receipt := range artifact.Receipts {
 		p := receipt.Payload
 		key, verified := store.verify("durable-copy", p, receipt.Signature)

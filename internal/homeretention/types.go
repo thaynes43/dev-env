@@ -63,6 +63,8 @@ type Record struct {
 	LatestProofID  string                      `json:"latestProofID"`
 	Proof          *Signed[ProofPayload]       `json:"proof"`
 	Observation    *Signed[ObservationPayload] `json:"observation"`
+	// Provenance is audit metadata only; it cannot establish preservation trust.
+	Provenance *Provenance `json:"provenance,omitempty"`
 }
 
 type Signature struct {
@@ -221,15 +223,30 @@ func DefaultPolicy() Policy {
 }
 
 type Entry struct {
-	UID              string   `json:"uid"`
-	Binding          Binding  `json:"binding"`
-	Status           string   `json:"status"`
-	ClockSource      string   `json:"clockSource"`
-	CompletedAt      string   `json:"completedAt,omitempty"`
-	WarningAt        string   `json:"warningAt,omitempty"`
-	Deadline         string   `json:"deadline,omitempty"`
-	DecisionRequired bool     `json:"decisionRequired"`
-	Reasons          []string `json:"reasons"`
+	UID                         string      `json:"uid"`
+	Binding                     Binding     `json:"binding"`
+	Status                      string      `json:"status"`
+	ClockSource                 string      `json:"clockSource"`
+	CompletedAt                 string      `json:"completedAt,omitempty"`
+	WarningAt                   string      `json:"warningAt,omitempty"`
+	Deadline                    string      `json:"deadline,omitempty"`
+	DecisionRequired            bool        `json:"decisionRequired"`
+	DispositionDecisionRequired bool        `json:"dispositionDecisionRequired"`
+	Reasons                     []string    `json:"reasons"`
+	Provenance                  *Provenance `json:"provenance,omitempty"`
+}
+
+// Provenance retains known legacy clock/identity evidence without asserting
+// that an offline snapshot is an authenticated current collection.
+type Provenance struct {
+	Source              string   `json:"source"`
+	SnapshotSHA256      string   `json:"snapshotSHA256"`
+	CapturedAt          string   `json:"capturedAt"`
+	ClockPath           string   `json:"clockPath"`
+	RecordedClockAt     string   `json:"recordedClockAt,omitempty"`
+	RecordedClockSource string   `json:"recordedClockSource,omitempty"`
+	BindingStatus       string   `json:"bindingStatus"`
+	Exceptions          []string `json:"exceptions"`
 }
 
 type Report struct {

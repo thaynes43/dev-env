@@ -21,6 +21,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	nowFlag := flags.String("now", "", "required evaluation time, RFC3339")
 	inputFlag := flags.String("input", "-", "offline snapshot file or - for stdin (maximum 4MiB, 1000 records)")
+	formatFlag := flags.String("format", "attestation", "input format: attestation or legacy-snapshot (audit only)")
+	dispositionsFlag := flags.String("legacy-dispositions", "", "optional bounded UID-to-fixture-disposition file, legacy-snapshot only")
 	trustFlag := flags.String("trust", "", "separate trusted public-key JSON file (optional; no trust means no immediate candidates)")
 	warningFlag := flags.Duration("warning-lead", homeretention.DefaultWarningLead, "warning lead, positive and at most 168h")
 	freshnessFlag := flags.Duration("observation-max-age", homeretention.DefaultObservationMaxAge, "maximum age of signed current observations, positive and at most 1h")
@@ -33,6 +35,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fail := func(err error) int { _, _ = fmt.Fprintln(stderr, err); return 2 }
 	if flags.NArg() != 0 {
 		return fail(errors.New("unexpected positional argument"))
+	}
+	if *formatFlag != "attestation" && *formatFlag != "legacy-snapshot" {
+		return fail(errors.New("unsupported input format"))
+	}
+	if (*formatFlag == "legacy-snapshot" && *trustFlag != "") || (*formatFlag != "legacy-snapshot" && *dispositionsFlag != "") {
+		return fail(errors.New("legacy audit input cannot use trust; dispositions require legacy-snapshot"))
 	}
 	now, err := time.Parse(time.RFC3339Nano, *nowFlag)
 	if err != nil || now.IsZero() {
@@ -67,7 +75,27 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		defer func() { _ = file.Close() }()
 		input = file
 	}
-	snapshot, err := homeretention.DecodeSnapshot(input)
+	var snapshot homeretention.Snapshot
+	if *formatFlag == "legacy-snapshot" {
+		var dispositions map[string]string
+		if *dispositionsFlag != "" {
+			file, openErr := os.Open(*dispositionsFlag)
+			if openErr != nil {
+				return fail(openErr)
+			}
+			dispositions, err = homeretention.DecodeLegacyDispositions(file)
+			closeErr := file.Close()
+			if err != nil {
+				return fail(err)
+			}
+			if closeErr != nil {
+				return fail(closeErr)
+			}
+		}
+		snapshot, err = homeretention.DecodeLegacySnapshot(input, dispositions)
+	} else {
+		snapshot, err = homeretention.DecodeSnapshot(input)
+	}
 	if err != nil {
 		return fail(err)
 	}

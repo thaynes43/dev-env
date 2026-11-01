@@ -28,26 +28,31 @@ present task timestamp cannot silently fall back. Pod absence, Session phase,
 PVC birth, filesystem mtime and classifier run time are not completion clocks.
 A valid completion clock does not by itself prove terminal state or no mounts.
 
-The current signed observation also binds lifecycle state, owner hold and
+The current authenticated observation also binds lifecycle state, owner hold and
 special disposition. Raw metadata cannot clear protection while reusing an old
 signature. An unverified protective marker prevents immediate candidacy and
-keeps protected status, but still enters the owner decision batch at expiry or
-when its clock is unknown. Only fresh authenticated protection suppresses that
-decision, so an invented hold cannot hide unknown work indefinitely.
+keeps protected status. Stopped holds and special fixtures still enter the owner
+disposition batch at expiry or when their clock is unknown, with
+`dispositionDecisionRequired: true`; protection never silently exempts stopped
+work from a decision. Active work remains protected without expiry actions.
 
 ## Verifiable evidence and trust
 
-The proof is a versioned signed attestation, not an input `CleanAndPushed` flag.
-Caller-configured public keys are supplied separately from the snapshot. The
-verifier validates signatures, key purpose and exact identity/revision binding.
-An input cannot introduce its own trusted signer. Remote publication receipts
-must come from a separately configured trusted publisher/verifier and bind the
+The proof is a versioned attestation, not an input `CleanAndPushed` flag.
+`EvidenceVerifier` is an explicit trusted caller boundary: an existing agentd/
+operator integration can authenticate exact payloads and receipt scopes through
+its supported authenticated channels. It cannot trust a snapshot's own boolean
+or claimed identity. No new production signing service or public-key provision
+is a compulsory cleanup prerequisite. Remote publication receipts must bind the
 exact repository identity, local ref/commit and authenticated remote ref/commit.
 The collector must obtain that evidence via an authenticated push acknowledgement
 or authenticated remote query, not stale remote-tracking refs or a PR link.
-Signatures authenticate the collector's assertions; offline verification cannot
-observe Git or Kubernetes by itself and does not turn a self-signed fixture into
-real preservation evidence.
+For portable offline input, the optional `TrustStore` verifier uses separately
+configured purpose-scoped Ed25519 public keys; inputs cannot introduce trusted
+signers. This prevents an untrusted file from asserting its own authentication.
+Signatures authenticate collector assertions; they do not query Git/Kubernetes
+or turn a self-signed fixture into real preservation evidence. The offline CLI
+has no flag that promotes arbitrary JSON into an authenticated caller boundary.
 
 Each binding includes SessionUID, HOME/PVCUID, PodUID, executor attempt,
 writer generation and current HOME revision. Inventory must account for every
@@ -61,7 +66,7 @@ and verified durable-copy receipts. Known no-history-required is explicit;
 unknown requirements block eligibility with a named exception. No credential
 or provider-cache archive is implicitly required.
 
-Requirements carry signed `source` and immutable `revision` references to an
+Requirements carry authenticated `source` and immutable `revision` references to an
 existing authoritative decision. Missing references are a named exception.
 Resolving those references and proving that the collector applied the actual
 owner requirements is part of collector integration, not new decision authority
@@ -77,7 +82,7 @@ collector foundation. They enumerate all branch/tag candidates and every stash,
 and check dirt and unpushed commits. Rescue can create a local rescue branch or
 bundle and is therefore not invoked by this read-only classifier. Its fetched
 remote refs and `RescueReport.CleanAndPushed` do not supply the new authenticated
-publication receipt or a complete signed HOME inventory. This slice reuses the
+publication receipt or a complete authenticated HOME inventory. This slice reuses the
 check semantics; the exact remaining collector integration is described below.
 
 ## Freshness and races
@@ -115,15 +120,23 @@ separate trusted public-key configuration, and writes JSON to stdout. Its
 explicit time and policy settings make output reproducible; it has no network,
 subprocess, Kubernetes client, filesystem mutation or delete mode. Unknown
 versions/fields and oversized or duplicate records fail closed. Missing legacy
-proofs classify as exceptions rather than becoming unsigned truth.
+proofs classify as exceptions rather than becoming unsigned truth. A bounded
+`legacy-snapshot` adapter consumes existing sanitized AgentSession/PVC/Pod audit
+metadata, preserving clock paths, recorded associations and snapshot hashes.
+Its UID-specific fixture dispositions can add protection but cannot remove it.
+It never promotes old rescue booleans into preservation proof and cannot use
+`--trust`. Unused provider metadata is ignored within strict depth/byte/count
+and duplicate-member bounds. Known unbound timestamps stay in provenance;
+missing bindings remain unknown decisions, never invented identities.
 
 Remaining integration is a separately owned collector: (1) adapt the existing
 rescue Git checks into non-mutating complete HOME inventory collection with
 read/write fencing; (2) capture authenticated exact-remote publication receipts;
-(3) enumerate and preserve explicitly required artifacts; (4) sign immutable
-proofs through an authorized attestor with managed keys; (5) collect uncached
+(3) enumerate and preserve explicitly required artifacts; (4) authenticate exact
+proof provenance through existing authenticated agentd/operator identity (with
+optional offline signatures when needed); (5) collect uncached
 Session/executor/PVC identity and all current mounts, validate terminal
-provenance, record revisions/supersession and sign fresh observations. Existing
+provenance, record revisions/supersession and authenticate fresh observations. Existing
 records do not yet have this evidence. No production attestation keys, collectors
 or authorities are provisioned here. Notification delivery, owner decision UX,
 approved batch execution and rollout remain separate. No cleanup is enabled.

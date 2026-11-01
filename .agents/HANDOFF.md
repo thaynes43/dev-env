@@ -19,6 +19,13 @@ flags, finalizers and coordination policies are unchanged; no cleanup is enabled
 Older 30-day HOME and universal archive gates below are historical where this
 newer policy supersedes them. They do not authorize a rollout.
 
+The bounded legacy metadata adapter preserves existing clock/identity provenance
+without promoting rescue booleans into preservation proof. Stopped special
+fixtures and holds remain protected and receive an explicit overdue/clockless
+owner-disposition flag; active work receives no expiry action. The library's
+trusted caller boundary can reuse authenticated agentd/operator channels;
+optional offline signatures do not impose new production signing infrastructure.
+
 ## RC launch design — 2026-10-29 (#267)
 
 [DESIGN-038](sagas/distributed-dev-env/designs/038-remote-control-launch.md)
