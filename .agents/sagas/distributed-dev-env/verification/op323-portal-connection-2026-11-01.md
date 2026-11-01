@@ -35,7 +35,7 @@ flock /tmp/usage-040820-test.lock nice -n 19 go test -count=1 -p 1 ./web/portal/
 
 ## Still not done
 
-- The central server still does not mount the slot.
+- The central server supports conditional registration after PR821; production leaves its handler nil and the portal config absent.
 - No production config file, grant, or flag is installed.
 - A real retained report rendered from the live operator is not accepted.
 - Hashes were not computed here because this worker did not run shell commands.
@@ -53,3 +53,7 @@ Worktree `/home/dev/work/op323-portal-age-grok-1101-154146`, branch `agent/op323
 The guide and DESIGN-030 now say this selected transport enforces 30 minutes and can choose a shorter positive age. `config/current-source.json` stays optional, unmounted, and default-off. No route, grant, flag, ConfigMap, credential, or server change is in this patch.
 
 The 2.293 s result above is the pre-correction suite only. Tests for this correction were not run here. A synthetic fixture is not live acceptance. Sol qualifies the frozen artifact.
+
+## Final driver qualification
+
+The coordinator imported the frozen age correction and preserved the reviewed portal additions while integrating main through PR821/822. The changed configuration test passed under the race detector in 1.067 s. The combined current-source and question-audit production/transport suites then passed with `-race -p 1 -count=1` in 2.306 s on Go 1.27.3, GOMAXPROCS=2, nice 19, shared lock/cache. Earlier portal vet passed. Independent native review approved the corrected source and integration at `d58b4104933184311762c8a449a8c3baa7065216`; it verified both separately guarded portal GET cases, request isolation, authorization and the 1800-second ceiling. The subsequent PR822 merge adds independent Pages/MCP fixtures. Required hosted CI and the final documentation review are separate gates; no live ingestion, deployment or authenticated UI acceptance is established here.
