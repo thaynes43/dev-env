@@ -49,7 +49,10 @@ type SessionSource struct {
 	lastSuccess   time.Time
 	logger        *slog.Logger
 	// allowance projects one injected cached read. Production leaves it nil.
-	allowance AllowanceReader
+	// currentSource, when set, fetches the fixed slot for one authorized
+	// request and does not assign allowance.
+	allowance     AllowanceReader
+	currentSource *currentSourceConnection
 	// questionAuditProject is the one catalog project for a selected session's
 	// question-audit metadata. Empty performs no audit read.
 	questionAuditProject string
@@ -1272,6 +1275,9 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		} else {
 			page, _ = c.Sessions.read(readCtx, filter, started)
 		}
+		// The slot read runs only after Authorize has accepted this request,
+		// and before the final authorization check can refuse to release it.
+		page = c.Sessions.projectAuthorizedCurrentSource(readCtx, page)
 		cancel()
 		if page.ReadFailure != nil && c.Sessions == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)

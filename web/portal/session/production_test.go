@@ -751,3 +751,65 @@ func TestProductionQuestionAuditWiring(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionCurrentSourceConfigFailsClosed(t *testing.T) {
+	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGSSLCRL", "PGSSLCRLDIR"} {
+		t.Setenv(name, "")
+	}
+	secret := []byte(`{"slot":"codex-current-source","SECRET-CONFIG":true}` + "\n")
+	root := writeRuntimeDir(t, "SECRET-CANARY")
+	if err := os.WriteFile(filepath.Join(root, currentSourceConfigRel), secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProduction(root); !errors.Is(err, errProductionConfig) || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("malformed current source: %v", err)
+	}
+	valid := currentSourceConfigDocument("synthetic-january-2026", 1, 1800) + "\n"
+	noToken := writeRuntimeDir(t, "SECRET-CANARY")
+	if err := os.WriteFile(filepath.Join(noToken, currentSourceConfigRel), []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProduction(noToken); !errors.Is(err, errProductionConfig) || strings.Contains(err.Error(), "synthetic-january-2026") || strings.Contains(err.Error(), "SECRET-CANARY") {
+		t.Fatalf("config without an operator client: %v", err)
+	}
+	enabled := writeRuntimeDir(t, "SECRET-CANARY")
+	if err := os.WriteFile(filepath.Join(enabled, currentSourceConfigRel), []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token := fixtureOperatorToken(apiv1.TokenAudience, time.Now().Add(time.Hour))
+	if err := os.WriteFile(filepath.Join(enabled, "secrets/OPERATOR_TOKEN"), []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := LoadProduction(enabled)
+	if err != nil {
+		t.Fatal("optional current-source file was rejected")
+	}
+	if strings.Contains(fmt.Sprintf("%v%+v%#v", rt, rt, rt), "synthetic-january-2026") || strings.Contains(fmt.Sprintf("%#v", rt), "SECRET-CANARY") {
+		t.Fatal("runtime formatting exposed the current-source selection")
+	}
+	rt.Close()
+	for _, raw := range []string{
+		`{"slot":"codex-current-source","slot":"other","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":1800}`,
+		`{"slot":"other-slot","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":1800}`,
+		`{"slot":"codex-current-source","publisherRef":"other-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":1800}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"has space","sourceGeneration":1,"maxAgeSeconds":1800}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":0,"maxAgeSeconds":1800}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":0}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":1801}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":86400}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":86401}`,
+		`{"publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":1800}`,
+		currentSourceConfigDocument("synthetic-january-2026", 1, 1800) + `{"extra":true}`,
+	} {
+		if _, err := decodeCurrentSourceConfig([]byte(raw)); !errors.Is(err, errProductionConfig) || strings.Contains(err.Error(), "synthetic") || strings.Contains(err.Error(), "SECRET") {
+			t.Fatalf("accepted or leaked %s: %v", raw, err)
+		}
+	}
+	boundary, err := decodeCurrentSourceConfig([]byte(currentSourceConfigDocument("synthetic-january-2026", 1, 1800)))
+	if err != nil || boundary.MaxAge != 1800*time.Second || boundary.SourceGeneration != 1 {
+		t.Fatalf("30m selection %+v %v", boundary, err)
+	}
+	if err := attachCurrentSourceConfig(t.TempDir(), nil); err != nil {
+		t.Fatal("absent file with no session failed")
+	}
+}

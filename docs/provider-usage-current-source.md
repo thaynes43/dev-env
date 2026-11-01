@@ -63,11 +63,11 @@ route is `/v1/provider-source-reports/codex-current-source`, with one authorized
 publisher write and portal read. The fixed-slot handler and store now exist in
 source. The central server can mount the exact route only when an injected
 handler is explicitly enabled and fully configured. Production leaves that
-handler nil; operator configuration and the portal consumer remain
-disconnected. Their
-authorization, persistence, bounded retention and exposure of private report
-data require review together before activation. A missing account ID or update
-time does not itself require a new credential or human login.
+handler nil. The optional portal consumer stays off unless
+`config/current-source.json` is present; no such config is mounted in production.
+Their authorization, persistence, bounded retention and exposure of private
+report data require review together before activation. A missing account ID or
+update time does not itself require a new credential or human login.
 
 The store updates one existing ConfigMap through a live resourceVersion CAS;
 it never creates the object. Updates preserve its metadata and unrelated data.
@@ -79,21 +79,44 @@ An identical replay does not refresh the report. A lost update response is
 confirmed only by a live read of the same bytes at a changed resourceVersion.
 The handler remains disabled without all explicit source and caller fences;
 maximum age alone cannot register or enable the route. No ConfigMap, Role,
-binding, flag, or production reader is installed by this source preparation.
+binding, or flag is installed. The operator may still return 404 while that
+activation is held. This consumer does not widen the ACL.
 
-Consumer configuration would live in the portal's existing configuration root
-and name that fixed slot, publisher identity, incarnation, generation and
-`maxAgeSeconds: 1800`. The assembly point is `productSources` in
-`web/portal/session/production.go`. A consumer must reject mismatched publishers,
-source generations and content digests. It must not scan arbitrary contexts,
-merge account reports, select by arrival order or use per-request subprocesses.
-No mixed bound entitlement and selected-source report may silently win over the
-other. An absent source remains disconnected.
+`config/current-source.json` is optional and is not a deployed manifest. When
+absent, the portal makes no current-source read. When present, it must name
+the fixed slot `codex-current-source`, the publisher
+`codex-get-usage-limits-observation-publisher`, one producer incarnation, a
+positive source generation, and a positive `maxAgeSeconds`. This selected
+transport enforces a 30 minute maximum (1800 seconds) and accepts a shorter
+positive age. The generic current-source validator's 24 hour ceiling is
+unchanged. `attachCurrentSourceConfig` in
+`web/portal/session/production.go` copies that selection onto the session's
+existing pinned operator client and token path. It does not assign
+`SessionSource.allowance` or dial during load.
 
-Source tests and synthetic rendered reports establish the representation and
-adapter only. Installed charts, an authorized retained transport, and one real
-report rendered with its original retrieval time are separate acceptance
-evidence. OP323 remains open until its actual consumer criteria are met.
+After Authentik has accepted the request as `portal_is_active` and
+`portal_is_admin`, one Sessions request, including Usage and a selected
+session, GETs `/v1/provider-source-reports/codex-current-source` at most once.
+The fetched bytes stay on that request. `NewCurrentSourceReader` projects
+them. Tasks do not read the slot. A failed inventory does not read it either.
+The final authorization check still runs afterward; a revocation does not
+release the page. This selected path treats a non-null `providerUpdatedAt` as
+unavailable. The generic constructor still accepts a non-null value that
+`ValidateCurrentSource` accepts. A mismatched publisher, incarnation, or
+generation, a stale retrieval, a passed reset, a malformed body, a redirect,
+a body over 16 KiB, a 403, a 404, or a timeout stays on the allowance panel as
+`Unknown · Current source unavailable`. The session inventory remains. Session
+token counts are not turned into a quota. A bound allowance already stored on
+the session is not merged into the selected projection and does not remain as
+a fallback when the slot fails. Claude and Cursor stay disconnected. A
+10,080 minute window still renders as seven days, not a calendar week. An
+absent file leaves every provider disconnected.
+
+Source tests use synthetic fixtures. They show the representation, the
+default-off connection, and one authorized portal render of a synthetic slot.
+They are not a live operator, a mounted route, or an accepted account
+entitlement. OP323 remains open until a real retained report is served with
+the route and grants activated.
 
 ## Local preparation
 
