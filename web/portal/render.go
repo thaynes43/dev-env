@@ -450,7 +450,7 @@ const (
 	AllowanceNotConnected ProductAllowanceState = "Not connected"
 	AllowanceUnknown      ProductAllowanceState = "Unknown"
 	AllowanceStale        ProductAllowanceState = "Stale"
-	AllowanceMeasured ProductAllowanceState = "Measured"
+	AllowanceMeasured     ProductAllowanceState = "Measured"
 )
 
 // ProductAllowance is one provider's account allowance, independent of session
