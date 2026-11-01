@@ -176,7 +176,7 @@ func TestMapProductAllowanceEdgePercentDirectionAndRange(t *testing.T) {
 	}
 	t.Run("typed values", func(t *testing.T) {
 		if !edgeTypedSurface() {
-			t.Skip("typed allowance fields pending integration")
+			t.Fatal("required typed allowance fields are missing")
 		}
 		left, ok := edgeFactsOf(t, row.Windows[0])
 		used, okUsed := edgeFactsOf(t, row.Windows[1])
@@ -200,7 +200,7 @@ func TestMapProductAllowanceEdgePercentDirectionAndRange(t *testing.T) {
 		}
 		t.Run("typed", func(t *testing.T) {
 			if !edgeTypedSurface() {
-				t.Skip("typed allowance fields pending integration")
+				t.Fatal("required typed allowance fields are missing")
 			}
 			facts, ok := edgeFactsOf(t, zero.Windows[0])
 			if !ok || !facts.Known || facts.Value != 0 || facts.Direction != "remaining" {
@@ -336,7 +336,7 @@ func TestMapProductAllowanceEdgeResetOffsetDSTAndDisplayOnly(t *testing.T) {
 
 	t.Run("typed instants", func(t *testing.T) {
 		if !edgeTypedSurface() {
-			t.Skip("typed allowance fields pending integration")
+			t.Fatal("required typed allowance fields are missing")
 		}
 		var instants []time.Time
 		for _, w := range equal {
@@ -406,7 +406,7 @@ func TestMapProductAllowanceEdgeEpochStringsAndYearCollision(t *testing.T) {
 	}
 	t.Run("typed fraction and year", func(t *testing.T) {
 		if !edgeTypedSurface() {
-			t.Skip("typed allowance fields pending integration")
+			t.Fatal("required typed allowance fields are missing")
 		}
 		older, ok := edgeFactsOf(t, whole)
 		newer, okNewer := edgeFactsOf(t, fraction)
