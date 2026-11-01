@@ -116,8 +116,9 @@ proofs. It never weakens current finalizers or coordination retention.
 
 ## Bounded interface and remaining integration
 
-`internal/homeretention` uses the standard library and existing agentd protocol
-validation helpers; it adds no external dependency.
+`internal/homeretention` uses the standard library, existing agentd protocol
+validation helpers, and the shared API annotation constants for read-only legacy
+hold projection. It adds no module dependency.
 `cmd/home-retention-dry-run` reads a bounded strict JSON snapshot and optional
 separate trusted public-key configuration, and writes JSON to stdout. Its
 explicit time and policy settings make output reproducible; it has no network,

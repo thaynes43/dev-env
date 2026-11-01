@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	v1alpha1 "github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
@@ -202,11 +203,14 @@ func legacyAssociate(record *Record, claim legacyEntity, sessions map[string]leg
 	if err != nil {
 		return err
 	}
-	hold, err := legacyString(annotations, "dev-env.haynesops.com/home-expiry")
-	if err != nil {
-		return err
+	owner := struct{ Annotations legacyObject }{Annotations: annotations}
+	var hold string
+	if raw := owner.Annotations[v1alpha1.AnnotationHomeExpiry]; raw != nil {
+		if err := json.Unmarshal(raw, &hold); err != nil {
+			return fmt.Errorf("invalid owner hold annotation: %w", err)
+		}
 	}
-	if hold == "hold" {
+	if hold == v1alpha1.HomeExpiryHold {
 		record.Hold = "legacy_home_expiry_owner_hold"
 	}
 	history, err := legacyMap(session.object, "privateHistory")
