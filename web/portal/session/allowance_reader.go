@@ -121,6 +121,9 @@ func projectCachedAllowance(doc *providerallowance.ReadResponse, contexts []prov
 		if held, ok := freshHold[status.Provider]; ok {
 			releaseUnconfigured(status, held)
 		}
+		if at, ok := allowanceParsed(&status.Freshness.AsOf); !ok || at.After(now) {
+			expireFreshLabel(&status.Freshness)
+		}
 	}
 }
 
@@ -193,6 +196,11 @@ func degradeFreshness(fresh *providerallowance.Freshness, observed *string, poli
 		expireFreshLabel(fresh)
 		return
 	}
+	asOf, valid := allowanceParsed(&fresh.AsOf)
+	if !valid || asOf.After(now) || at.After(asOf) {
+		expireFreshLabel(fresh)
+		return
+	}
 	if now.Sub(at) > policy.MaxAge && fresh.State == providerallowance.FreshFresh {
 		fresh.State = providerallowance.FreshStale
 	}
@@ -231,7 +239,7 @@ func expirePastResets(item *providerallowance.ReadItem, now time.Time) {
 			continue
 		}
 		for j := range item.CurrentMeasures {
-			if item.CurrentMeasures[j].MeasureID != measure.ID {
+			if item.CurrentMeasures[j].MeasureID != measure.ID || item.CurrentMeasures[j].State != providerallowance.CurrentKnown {
 				continue
 			}
 			item.CurrentMeasures[j].State = providerallowance.CurrentUnknown
