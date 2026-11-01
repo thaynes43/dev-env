@@ -13,3 +13,7 @@ Native review P3, source only, 2026-11-01: the `session shape stays strict` subt
 ## Final driver qualification
 
 After the P3 correction, the current coordinator reran only `TestProviderSourceServerConnection` on the same pinned, serial test harness. It passed in 0.081 s. Independent native review passed the corrected nonempty-byte assertions and the unchanged dormant registration. The worker ran no tests. Required final-head CI and source delivery remain separate gates; no runtime activation or usable-ingestion acceptance follows.
+
+## Question-audit source integration
+
+After PR820 merged as `e9d29db28864494d083999fb2af17cccd6a01029`, the coordinator integrated that main revision. Both additions occupied the same portal-admission switch insertion point; integration retains the separately guarded selected-source GET and question-audit GET cases, with the original denial default. The combined new Server connection and `TestPortalQuestionAudit` producer cases passed in 0.356 s under the pinned serial harness. This is source compatibility evidence, not activation of either data class.
