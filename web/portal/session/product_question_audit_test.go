@@ -32,11 +32,12 @@ func TestQuestionAuditSelectedReadsTwoBoxes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(script.queries) != 2 {
-		t.Fatalf("queries %v", script.queries)
+	queries := script.recordedQueries()
+	if len(queries) != 2 {
+		t.Fatalf("queries %v", queries)
 	}
 	seen := map[string]bool{}
-	for _, raw := range script.queries {
+	for _, raw := range queries {
 		q, err := url.ParseQuery(raw)
 		if err != nil {
 			t.Fatal(err)
@@ -47,7 +48,7 @@ func TestQuestionAuditSelectedReadsTwoBoxes(t *testing.T) {
 		seen[q.Get("box")] = true
 	}
 	if !seen[apiv1.PortalQuestionBoxInbox] || !seen[apiv1.PortalQuestionBoxSent] {
-		t.Fatalf("boxes %v", script.queries)
+		t.Fatalf("boxes %v", queries)
 	}
 	section := questionAuditSectionOf(t, page, "agent")
 	if questionAuditSectionCount(page, "other") != 0 {
@@ -136,10 +137,11 @@ func TestQuestionAuditCatalogProjectIsNotRepoAlias(t *testing.T) {
 	if projectField != repoAlias || page.Filter.Project != repoAlias {
 		t.Fatalf("inventory repo %q filter %q", projectField, page.Filter.Project)
 	}
-	if len(script.queries) != 2 {
-		t.Fatalf("queries %v", script.queries)
+	queries := script.recordedQueries()
+	if len(queries) != 2 {
+		t.Fatalf("queries %v", queries)
 	}
-	for _, raw := range script.queries {
+	for _, raw := range queries {
 		q, err := url.ParseQuery(raw)
 		if err != nil {
 			t.Fatal(err)
@@ -176,8 +178,9 @@ func TestQuestionAuditNoSelectionOrDisabledMakesNoRequest(t *testing.T) {
 	if _, err := enabled.Read(t.Context(), portal.ProductFilter{View: "usage"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(script.queries) != 0 {
-		t.Fatalf("audit calls %v", script.queries)
+	queries := script.recordedQueries()
+	if len(queries) != 0 {
+		t.Fatalf("audit calls %v", queries)
 	}
 }
 
@@ -216,24 +219,24 @@ func TestQuestionAuditPanelFailuresPreserveInventory(t *testing.T) {
 	acked.Acknowledgement = apiv1.PortalQuestionAuditAck{Status: apiv1.PortalQuestionAckRecorded, Actor: &apiv1.TaskClaimActor{Kind: "session", ServiceAccount: "dev-agents/dev-env", PodName: "claimed-origin", PodUID: "pod-claimed"}, CreatedAt: &at}
 	cases := []struct {
 		name         string
-		script       questionAuditScript
+		script       *questionAuditScript
 		status       string
 		secret       string
 		calls        int
 		missing      bool
 		cancelParent bool
 	}{
-		{name: "substituted ref", script: questionAuditScript{inbox: auditPageBytes(t, apiv1.PortalQuestionBoxInbox, []apiv1.PortalQuestionAuditItem{substituted}, false, "")}, status: "Unavailable", secret: auditMessageName('e', 'f'), calls: 1},
-		{name: "echo", script: questionAuditScript{inbox: echoBody}, status: "Unavailable", secret: "other", calls: 1},
-		{name: "wrong limit", script: questionAuditScript{inbox: limitBody}, status: "Unavailable", calls: 1},
-		{name: "text field", script: questionAuditScript{inbox: textBody}, status: "Unavailable", secret: "SECRET_QUESTION_TEXT", calls: 1},
-		{name: "ack actor", script: questionAuditScript{inbox: auditPageBytes(t, apiv1.PortalQuestionBoxInbox, []apiv1.PortalQuestionAuditItem{acked}, false, "")}, status: "Unavailable", secret: "claimed-origin", calls: 1},
-		{name: "oversize", script: questionAuditScript{inboxStatus: http.StatusOK, inbox: []byte(strings.Repeat("x", apiv1.PortalQuestionAuditMaxBytes+1))}, status: "Unavailable", calls: 1},
-		{name: "malformed", script: questionAuditScript{inboxStatus: http.StatusOK, inbox: []byte("{")}, status: "Unavailable", calls: 1},
-		{name: "forbidden", script: questionAuditScript{inboxStatus: http.StatusForbidden}, status: "Unavailable", calls: 1},
-		{name: "sent missing", script: questionAuditScript{inbox: good, sentStatus: http.StatusNotFound}, status: "Unavailable", calls: 2},
-		{name: "timeout", script: questionAuditScript{hang: true}, status: "Unavailable", calls: 1},
-		{name: "parent deadline during panel", script: questionAuditScript{hang: true}, status: "Unavailable", calls: 1, cancelParent: true},
+		{name: "substituted ref", script: &questionAuditScript{inbox: auditPageBytes(t, apiv1.PortalQuestionBoxInbox, []apiv1.PortalQuestionAuditItem{substituted}, false, "")}, status: "Unavailable", secret: auditMessageName('e', 'f'), calls: 1},
+		{name: "echo", script: &questionAuditScript{inbox: echoBody}, status: "Unavailable", secret: "other", calls: 1},
+		{name: "wrong limit", script: &questionAuditScript{inbox: limitBody}, status: "Unavailable", calls: 1},
+		{name: "text field", script: &questionAuditScript{inbox: textBody}, status: "Unavailable", secret: "SECRET_QUESTION_TEXT", calls: 1},
+		{name: "ack actor", script: &questionAuditScript{inbox: auditPageBytes(t, apiv1.PortalQuestionBoxInbox, []apiv1.PortalQuestionAuditItem{acked}, false, "")}, status: "Unavailable", secret: "claimed-origin", calls: 1},
+		{name: "oversize", script: &questionAuditScript{inboxStatus: http.StatusOK, inbox: []byte(strings.Repeat("x", apiv1.PortalQuestionAuditMaxBytes+1))}, status: "Unavailable", calls: 1},
+		{name: "malformed", script: &questionAuditScript{inboxStatus: http.StatusOK, inbox: []byte("{")}, status: "Unavailable", calls: 1},
+		{name: "forbidden", script: &questionAuditScript{inboxStatus: http.StatusForbidden}, status: "Unavailable", calls: 1},
+		{name: "sent missing", script: &questionAuditScript{inbox: good, sentStatus: http.StatusNotFound}, status: "Unavailable", calls: 2},
+		{name: "timeout", script: &questionAuditScript{hang: true}, status: "Unavailable", calls: 1},
+		{name: "parent deadline during panel", script: &questionAuditScript{hang: true}, status: "Unavailable", calls: 1, cancelParent: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -257,7 +260,7 @@ func TestQuestionAuditPanelFailuresPreserveInventory(t *testing.T) {
 				t.Fatal(err)
 			}
 			script := tc.script
-			src := questionAuditSource(t, now, &script)
+			src := questionAuditSource(t, now, script)
 			src.UseQuestionAudit("sample")
 			readCtx := t.Context()
 			var page portal.ProductPage
@@ -300,8 +303,9 @@ func TestQuestionAuditPanelFailuresPreserveInventory(t *testing.T) {
 					t.Fatal("inventory, group, count, or card dropped")
 				}
 			}
-			if len(script.queries) != tc.calls {
-				t.Fatalf("calls %d %v", len(script.queries), script.queries)
+			queries := script.recordedQueries()
+			if len(queries) != tc.calls {
+				t.Fatalf("calls %d %v", len(queries), queries)
 			}
 			if questionAuditSignature(before) != questionAuditSignature(page) {
 				t.Fatalf("inventory changed\n%s\n%s", questionAuditSignature(before), questionAuditSignature(page))
@@ -367,7 +371,7 @@ func TestQuestionAuditEmptyMissingUnknownAndNeutralNotFound(t *testing.T) {
 	if err != nil || strings.Contains(string(body), "plain-page-cursor") {
 		t.Fatalf("cursor rendered: %v", err)
 	}
-	for _, raw := range truncated.queries {
+	for _, raw := range truncated.recordedQueries() {
 		if strings.Contains(raw, "continue") {
 			t.Fatalf("consumer followed a cursor %s", raw)
 		}
@@ -385,8 +389,9 @@ func TestQuestionAuditEmptyMissingUnknownAndNeutralNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(missing.queries) != 1 {
-		t.Fatalf("not-found response caused %d calls", len(missing.queries))
+	missingQueries := missing.recordedQueries()
+	if len(missingQueries) != 1 {
+		t.Fatalf("not-found response caused %d calls", len(missingQueries))
 	}
 	if questionAuditSignature(before) != questionAuditSignature(page) {
 		t.Fatalf("inventory changed\n%s\n%s", questionAuditSignature(before), questionAuditSignature(page))
@@ -444,6 +449,18 @@ type questionAuditScript struct {
 	inventoryRepo string
 	entered       chan struct{}
 	stopped       chan struct{}
+}
+
+// recordedQueries copies the queries the handler appended. The copy is taken
+// under the same mutex as the append. A hung request never finishes its
+// response, so the client's timeout return does not order that append.
+func (s *questionAuditScript) recordedQueries() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.queries...)
 }
 
 func (s *questionAuditScript) ServeHTTP(w http.ResponseWriter, r *http.Request) {

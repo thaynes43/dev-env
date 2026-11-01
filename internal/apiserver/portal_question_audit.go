@@ -151,7 +151,7 @@ func (s *Server) questionAuditAck(ctx context.Context, project string, ref apiv1
 	if a.CreationTimestamp.IsZero() || a.CreationTimestamp.Time.Before(m.CreationTimestamp.Time) {
 		return unavailable
 	}
-	at := a.CreationTimestamp.Time.UTC()
+	at := a.CreationTimestamp.UTC()
 	return apiv1.PortalQuestionAuditAck{Status: apiv1.PortalQuestionAckRecorded, Actor: &actor, CreatedAt: &at}
 }
 
@@ -164,7 +164,7 @@ func questionAuditItem(m *coord.InboxMessage, thread *apiv1.InboxThread, ack api
 		Name: m.Name, UID: string(m.UID), Kind: kind,
 		Sender: inboxOwner(m.Spec.Sender), Recipient: inboxOwner(m.Spec.Recipient),
 		Actor: inboxActorView(m.Spec.Actor), Provenance: questionAuditProvenance(m.Spec.Provenance),
-		CreatedAt: m.CreationTimestamp.Time.UTC(),
+		CreatedAt: m.CreationTimestamp.UTC(),
 		Origin:    apiv1.PortalQuestionOriginUnknown, Approval: apiv1.PortalQuestionApprovalNotRecorded,
 		ProviderConsumption: apiv1.PortalQuestionConsumptionNotRecorded, ServedModel: apiv1.PortalQuestionServedModelUnknown,
 		Acknowledgement: ack,
