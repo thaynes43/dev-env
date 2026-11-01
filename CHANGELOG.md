@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.84.1](https://github.com/thaynes43/dev-env/compare/v2.84.0...v2.84.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **acp:** preserve opaque tool metadata with strict JSON and deterministic capture tests ([#832](https://github.com/thaynes43/dev-env/issues/832)) ([02a4679](https://github.com/thaynes43/dev-env/commit/02a4679fea9b8f5d356edbe3708bc78a6ca93b72))
+
 ## [2.84.0](https://github.com/thaynes43/dev-env/compare/v2.83.0...v2.84.0) (2026-11-01)
 
 
