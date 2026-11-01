@@ -170,6 +170,16 @@ or provenance marker must agree. The native `windowDurationMins` name and the
 handoff's normalized `windowDurationMinutes` must agree if both are supplied.
 Local automation ceilings, points and unknown banked credits are discarded.
 
+The separate pure `CodexRawToolReport` bridge accepts the official nested
+tool envelope and a caller-supplied original observation time. It requires
+`accountId: null`, one primary Codex window, and agreement between preferred
+and legacy copies. It refuses secondary windows and unsupported fields;
+plan and credit metadata are compared for conflicts and discarded. Unix
+reset seconds become UTC RFC3339, then the existing flattened builder
+validates the report. Parsing establishes no source authentication or account
+binding. This bridge does not change the local command's flattened input
+contract or install acquisition, publication, recurrence, or runtime access.
+
 The caller selects one publisher reference, producer incarnation, source
 generation and retrieval age limit. These are opaque caller-supplied source
 selection records, not provider account IDs or proof of origin. Stable account
