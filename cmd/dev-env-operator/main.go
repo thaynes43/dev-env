@@ -102,6 +102,8 @@ type options struct {
 	inboxQuestions                bool
 	inboxProjects                 []string
 	inboxCoordinatorReadProjects  []string
+	portalQuestionAudit           bool
+	portalQuestionProjects        []string
 	taskClaimsEnabled             bool
 	taskClaimReadProjects         []string
 	ownedRootPolicy               string
