@@ -71,10 +71,15 @@ session applies in `permission_context()` and refuses anything else with the fix
 reason `invalid-permission-context`. The accepted shapes are:
 
 - `{"state":"insufficient-context"}`, the session's fail-closed state;
+- that state plus `reason` as its only other field, where `reason` is exactly
+  one of `no-correlated-tool-call`, `tool-call-unavailable`,
+  `tool-call-conflict`, `tool-call-closed`, `tool-call-expired` or
+  `tool-cache-bound`. Any other reason, a non-string reason, or any further
+  field is refused. The verdict does not copy the reason;
 - the redaction form of that state: `state` `insufficient-context`, a known
   `kind`, `title` exactly `[REDACTED]` and, optionally, `rawInput` exactly
   `[REDACTED]`. The session emits it when a secret-like value fails the whole
-  context closed;
+  context closed. A `reason` beside this shape is refused;
 - `{"state":"available","kind":K,"title":T}` with optional `locations` and
   `rawInput`, and no other key.
 
@@ -85,12 +90,18 @@ entries, each `{path}` or `{path,line}` with `line` an integer from 0 to
 2147483647; `rawInput` is a string, a list of 1 to 8 items or a map of 1 to 8
 entries, nested at most 3 edges deep, and a map may use only the keys `command`,
 `args`, `path`, `paths`, `query` and `description`; and the whole context is at
-most 2048 bytes as compact ASCII JSON. The session reduces every path-like string
-to its basename, so a string containing `/` or `\` is refused anywhere in a
-context. `.` and `..` are refused only in path fields (location paths and
-`rawInput` `path`/`paths`), as the session does; elsewhere, such as an argument,
-they are valid. The constants (tool kinds, raw keys, size, redaction
-marker) are copied from the session, and a test pins them to its values.
+most 2048 bytes as compact ASCII JSON. The session reduces path-like strings
+to a basename. A `/` is accepted only in a structured `args` string, including
+one nested under `args`, that matches the session's relative-argument grammar
+(`./...` and `./internal/...` are the representative cases). A title, location,
+`command`, `path`, `paths`, `query`, top-level `description`, or a backslash is
+still refused. An argument such as `../up.py` is refused because it does not
+match that grammar.
+`.` and `..` are refused only in path fields (location paths and `rawInput`
+`path`/`paths`), as the session does; elsewhere, such as a slash-free argument,
+they are valid. The constants (tool kinds, raw keys, relative grammar,
+correlation reasons, size, redaction marker) are copied from the session, and
+a test pins them to its values.
 
 The checker does not repeat the session's secret screening and does not claim a
 context is safe. `available` means the shape is in bounds, not that the action is

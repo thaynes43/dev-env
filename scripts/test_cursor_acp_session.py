@@ -614,6 +614,91 @@ class PermissionContextTests(unittest.TestCase):
         # Conservative: any `@` after `://` in the same token fails closed.
         self.assertRedacted(dict(VALID_CONTEXT, rawInput={"query": "https://example.com/a?mail=a@example.com"}))
 
+    def test_permission_context_has_no_hidden_memory(self):
+        secret = dict(VALID_CONTEXT, title="Use Bearer synthetic")
+        self.assertEqual(ACP.permission_context(secret)["title"], "[REDACTED]")
+        context = ACP.permission_context(VALID_CONTEXT)
+        self.assertEqual(context["state"], "available")
+        self.assertEqual(context["title"], "Run fixture checks")
+        self.assertNotIn("Bearer", json.dumps(context))
+
+    def test_structured_relative_argv_stays_visible(self):
+        for args in (["test", "./..."], ["test", "./internal/..."]):
+            tool = dict(VALID_CONTEXT, rawInput={"command": "go", "args": args})
+            context = ACP.permission_context(tool)
+            self.assertEqual(context["state"], "available")
+            self.assertEqual(context["rawInput"], {"command": "go", "args": args})
+            self.assertEqual(context["locations"], [{"path": "check.py", "line": 12}])
+        absolute = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"args": ["/a/customer/b/f.py"]}))
+        self.assertEqual(absolute["rawInput"], {"args": ["f.py"]})
+        self.assertNotIn("customer", json.dumps(absolute))
+
+    def test_unstructured_command_text_is_not_inferred(self):
+        for tool in [dict(VALID_CONTEXT, rawInput={"command": "go test ./..."}), dict(VALID_CONTEXT, title="go test ./...")]:
+            context = ACP.permission_context(tool)
+            self.assertEqual(context, {"state": "insufficient-context"})
+            encoded = json.dumps(context)
+            self.assertNotIn("go test", encoded)
+            self.assertNotIn("./...", encoded)
+            self.assertNotIn("python3", encoded)
+
+    def test_shell_dynamic_and_foreign_argv_fail_closed(self):
+        samples = [
+            {"command": "go", "args": ["test", "./...;rm"]},
+            {"command": "go", "args": ["test", "$(pwd)"]},
+            {"command": "go", "args": ["test", "`id`"]},
+            {"command": "go", "args": ["test", "./...", "&&"]},
+            {"command": "go", "args": ["../secret"]},
+            {"command": "go", "args": ["~/secret"]},
+            {"command": "sh", "args": ["-c", "go test ./..."]},
+            {"command": "go test $(pwd)"},
+            {"command": "go", "args": ["test", "./...", "DB_PASS=hunter2"]},
+            {"args": ["/private/proj/x"]},
+        ]
+        for raw in samples:
+            context = ACP.permission_context(dict(VALID_CONTEXT, rawInput=raw))
+            encoded = json.dumps(context, ensure_ascii=False)
+            self.assertIn(context["state"], ("insufficient-context",))
+            for hidden in ("hunter2", "./...", "secret", "private", "$(pwd)", "`id`"):
+                self.assertNotIn(hidden, encoded)
+
+    def test_nested_dynamic_syntax_and_backslash_parents_fail_closed(self):
+        # Nested args/command values keep the shell and ".." checks. A backslash
+        # parent segment must not fall through to a basename and look available.
+        samples = [
+            {"args": ["..\\parent\\file.py"]},
+            {"args": ["foo\\..\\bar.py"]},
+            {"args": ["foo/..\\bar.py"]},
+            {"command": "go", "args": ["..\\parent\\file.py"]},
+            {"command": "..\\parent\\file.py"},
+            {"args": {"description": "echo;rm"}},
+            {"args": {"description": "$(id)"}},
+            {"command": {"description": "echo;rm"}},
+            {"args": [{"description": "echo;rm"}]},
+            {"args": {"description": "go test ./..."}},
+        ]
+        for raw in samples:
+            context = ACP.permission_context(dict(VALID_CONTEXT, rawInput=raw))
+            encoded = json.dumps(context)
+            self.assertEqual(context["state"], "insufficient-context", raw)
+            for hidden in ("parent", "file.py", "bar.py", "echo", "go test", "./...", "$(id)"):
+                self.assertNotIn(hidden, encoded, raw)
+        kept = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"args": {"description": "check.py"}}))
+        self.assertEqual(kept["state"], "available")
+        self.assertEqual(kept["rawInput"], {"args": {"description": "check.py"}})
+        relative = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"command": "go", "args": ["test", "./..."]}))
+        self.assertEqual(relative["rawInput"], {"command": "go", "args": ["test", "./..."]})
+        nested_arg = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"args": {"command": "./internal/..."}}))
+        self.assertEqual(nested_arg["rawInput"], {"args": {"command": "./internal/..."}})
+        # A command string is not an argv position, so the relative pattern reduces.
+        command_only = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"command": "./..."}))
+        self.assertEqual(command_only["rawInput"], {"command": "..."})
+        # Explicit path fields still reduce, including a backslash parent.
+        reduced = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"path": "..\\other\\file.py"}))
+        self.assertEqual(reduced["state"], "available")
+        self.assertEqual(reduced["rawInput"], {"path": "file.py"})
+        self.assertNotIn("other", json.dumps(reduced))
+
     def test_adversarial_source_is_bounded_in_time(self):
         # A guard against quadratic patterns on a 4096-byte source, with 10x headroom
         # over the recorded 100 ms budget so a loaded worker does not flake it.
@@ -632,6 +717,306 @@ class PermissionContextTests(unittest.TestCase):
         start = time.perf_counter()
         ACP.permission_context(tool)
         return time.perf_counter() - start
+
+
+class ManualClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class ToolCacheTests(unittest.TestCase):
+    """Same-session tool_call correlation. Reject-once and question replies stay unchanged."""
+
+    def setUp(self):
+        self.sent, self.events = [], []
+        self.clock = ManualClock()
+        self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        self.session.start()
+
+    def ready(self):
+        self.session.provider({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}})
+        self.session.provider({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "fixture-session"}})
+
+    def announce(self, tool_id="fixture_1", kind="execute", title="Run fixture checks", raw=None, status="pending", session_update="tool_call", session_id="fixture-session", extra=None):
+        update = {"sessionUpdate": session_update, "toolCallId": tool_id, "status": status}
+        if kind is not None:
+            update["kind"] = kind
+        if title is not None:
+            update["title"] = title
+        if raw is not None:
+            update["rawInput"] = raw
+        if extra:
+            update.update(extra)
+        before = list(self.events)
+        self.session.provider({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session_id, "update": update}})
+        self.assertEqual(self.events, before)
+
+    def permit(self, ident, tool):
+        options = [{"optionId": kind, "kind": kind} for kind in ["allow_once", "allow_always", "reject_once", "reject_always"]]
+        before = list(self.sent)
+        self.session.provider({"jsonrpc": "2.0", "id": ident, "method": "session/request_permission", "params": {"sessionId": "fixture-session", "toolCall": tool, "options": options}})
+        self.assertEqual(self.sent, before)
+        self.assertEqual(self.events[-1]["event"], "permission-required")
+        self.assertEqual(self.events[-1]["requestID"], ident)
+        self.assertEqual(self.events[-1]["sessionID"], "fixture-session")
+        return self.events[-1]
+
+    def assert_reject_only(self, ident):
+        before = list(self.sent)
+        for option in ("allow_once", "allow_always", "reject_always", "missing"):
+            with self.assertRaisesRegex(ACP.Refusal, "approval-not-supported"):
+                self.session.decision({"requestID": ident, "sessionID": "fixture-session", "kind": "permission", "optionID": option})
+            self.assertEqual(self.sent, before)
+        self.session.decision({"requestID": ident, "sessionID": "fixture-session", "kind": "permission", "optionID": "reject_once"})
+        self.assertEqual(self.sent[-1], {"jsonrpc": "2.0", "id": ident, "result": {"outcome": {"outcome": "selected", "optionId": "reject_once"}}})
+
+    def test_public_partial_id_uses_same_session_tool_call(self):
+        self.ready()
+        raw = {"command": "go", "args": ["test", "./..."]}
+        self.announce(raw=raw)
+        event = self.permit(41, {"toolCallId": "fixture_1"})
+        self.assertEqual(event["context"], {"state": "available", "kind": "execute", "title": "Run fixture checks", "rawInput": raw})
+        self.assertNotIn("./...", json.dumps(self.sent))
+        self.assert_reject_only(41)
+
+    def test_explicit_tool_call_matches_direct_projection_with_or_without_cache(self):
+        self.ready()
+        direct = ACP.permission_context(VALID_CONTEXT)
+        self.assertEqual(self.permit(41, VALID_CONTEXT)["context"], direct)
+        self.session.decision({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "reject_once"})
+        update = {"sessionUpdate": "tool_call", "toolCallId": "fixture-call", "status": "pending", "kind": "execute", "title": "Run fixture checks", "locations": VALID_CONTEXT["locations"], "rawInput": VALID_CONTEXT["rawInput"]}
+        self.session.provider({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "fixture-session", "update": update}})
+        self.assertEqual(self.permit(42, VALID_CONTEXT)["context"], direct)
+
+    def test_permission_before_update_unknown_and_other_session_fail_closed(self):
+        self.ready()
+        early = self.permit(41, {"toolCallId": "fixture_1"})
+        self.assertEqual(early["context"], {"state": "insufficient-context", "reason": "no-correlated-tool-call"})
+        self.assert_reject_only(41)
+        self.announce(raw={"command": "go", "args": ["test", "./..."]})
+        unknown = self.permit(42, {"toolCallId": "missing-call"})
+        self.assertEqual(unknown["context"]["reason"], "no-correlated-tool-call")
+        self.assertNotIn("Run fixture checks", json.dumps(unknown["context"]))
+        with self.assertRaisesRegex(ACP.Refusal, "cross-session-update"):
+            self.announce(session_id="other-session", title="Use Bearer synthetic")
+        self.assertNotIn("Bearer", json.dumps(self.events))
+        sent, events = [], []
+        other = ACP.Session(sent.append, events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        other.start()
+        other.provider({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}})
+        other.provider({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "other-session"}})
+        other.provider({"jsonrpc": "2.0", "id": 43, "method": "session/request_permission", "params": {"sessionId": "other-session", "toolCall": {"toolCallId": "fixture_1"}, "options": [{"optionId": "reject_once", "kind": "reject_once"}]}})
+        self.assertEqual(events[-1]["context"]["reason"], "no-correlated-tool-call")
+        self.assertNotIn("./...", json.dumps(events))
+        later = self.permit(44, {"toolCallId": "fixture_1"})
+        self.assertEqual(later["context"]["rawInput"], {"command": "go", "args": ["test", "./..."]})
+
+    def test_distinct_request_ids_keep_their_own_tool_context(self):
+        self.ready()
+        self.announce("alpha", title="Run alpha checks", raw={"command": "go", "args": ["test", "./..."]})
+        self.announce("beta", title="Run beta checks", raw={"command": "python3", "args": ["check.py"]})
+        alpha = self.permit(50, {"toolCallId": "alpha"})
+        beta = self.permit(51, {"toolCallId": "beta"})
+        self.assertEqual(alpha["context"]["title"], "Run alpha checks")
+        self.assertEqual(alpha["context"]["rawInput"]["args"], ["test", "./..."])
+        self.assertEqual(beta["context"]["title"], "Run beta checks")
+        self.assertEqual(beta["context"]["rawInput"], {"command": "python3", "args": ["check.py"]})
+        self.assert_reject_only(50)
+        self.assert_reject_only(51)
+
+    def test_conflict_redaction_and_completion_cannot_restore_stale_context(self):
+        self.ready()
+        raw = {"command": "go", "args": ["test", "./..."]}
+        self.announce(raw=raw)
+        self.announce(title="Other fixture checks", session_update="tool_call_update")
+        conflict = self.permit(41, {"toolCallId": "fixture_1"})
+        self.assertEqual(conflict["context"], {"state": "insufficient-context", "reason": "tool-call-conflict"})
+        self.assertNotIn("Run fixture checks", json.dumps(conflict))
+        self.assertNotIn("./...", json.dumps(conflict))
+        fresh = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        fresh.start()
+        fresh.provider({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}})
+        fresh.provider({"jsonrpc": "2.0", "id": 2, "result": {"sessionId": "fixture-session"}})
+        self.session = fresh
+        self.announce(raw=raw)
+        self.announce(title="Use Bearer synthetic", session_update="tool_call_update")
+        redacted = self.permit(42, {"toolCallId": "fixture_1"})
+        self.assertEqual(redacted["context"]["reason"], "tool-call-unavailable")
+        self.assertNotIn("Bearer", json.dumps(redacted))
+        self.assertNotIn("./...", json.dumps(redacted["context"]))
+        blocked = self.permit(43, {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw})
+        self.assertEqual(blocked["context"]["reason"], "tool-call-unavailable")
+        self.assertNotIn("./...", json.dumps(blocked["context"]))
+        self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        self.session.start()
+        self.ready()
+        self.announce(raw=raw)
+        explicit = self.permit(44, {"toolCallId": "fixture_1", "kind": "execute", "title": "Different fixture checks"})
+        self.assertEqual(explicit["context"]["reason"], "tool-call-conflict")
+        self.assertNotIn("Different fixture checks", json.dumps(explicit))
+        self.assertNotIn("./...", json.dumps(explicit["context"]))
+        self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        self.session.start()
+        self.ready()
+        self.announce(raw=raw)
+        self.announce(kind=None, title=None, raw=None, status="completed", session_update="tool_call_update")
+        closed = self.permit(45, {"toolCallId": "fixture_1"})
+        self.assertEqual(closed["context"]["reason"], "tool-call-closed")
+        self.announce(raw=raw)
+        self.assertEqual(self.permit(46, {"toolCallId": "fixture_1"})["context"]["reason"], "tool-call-closed")
+        self.assert_reject_only(45)
+
+    def test_null_update_keeps_prior_and_secret_permission_poisons_it(self):
+        self.ready()
+        raw = {"command": "go", "args": ["test", "./..."]}
+        self.announce(raw=raw)
+        self.session.provider({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "fixture-session", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "fixture_1", "rawInput": None, "content": [{"type": "text", "text": "TRANSCRIPT_SECRET_PHRASE"}]}}})
+        kept = self.permit(41, {"toolCallId": "fixture_1"})
+        self.assertEqual(kept["context"]["rawInput"], raw)
+        self.assertNotIn("TRANSCRIPT_SECRET_PHRASE", json.dumps(self.events))
+        omitted = self.permit(44, {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": None})
+        self.assertEqual(omitted["context"]["rawInput"], raw)
+        poisoned = self.permit(42, {"toolCallId": "fixture_1", "kind": "execute", "title": "Use Bearer synthetic"})
+        self.assertEqual(poisoned["context"]["title"], "[REDACTED]")
+        self.assertEqual(poisoned["context"]["rawInput"], "[REDACTED]")
+        self.assertNotIn("./...", json.dumps(poisoned["context"]))
+        self.assertNotIn("Bearer", json.dumps(poisoned["context"]))
+        follow = self.permit(43, {"toolCallId": "fixture_1"})
+        self.assertEqual(follow["context"]["reason"], "tool-call-unavailable")
+        self.assertNotIn("./...", json.dumps(follow["context"]))
+
+    def test_later_invalid_update_drops_the_benign_snapshot(self):
+        self.ready()
+        self.announce(raw={"command": "go", "args": ["test", "./..."]})
+        self.announce(title="x" * 257, session_update="tool_call_update")
+        event = self.permit(41, {"toolCallId": "fixture_1"})
+        self.assertEqual(event["context"]["reason"], "tool-call-unavailable")
+        self.assertNotIn("Run fixture checks", json.dumps(event["context"]))
+        self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        self.session.start()
+        self.ready()
+        self.announce(title="Run fixture checks")
+        self.announce(title="Caf\u00e9 checks", session_update="tool_call_update")
+        event = self.permit(42, {"toolCallId": "fixture_1"})
+        self.assertEqual(event["context"]["reason"], "tool-call-unavailable")
+        self.assertNotIn("Run fixture checks", json.dumps(event["context"]))
+
+    def test_cache_count_bytes_and_expiry_fail_closed(self):
+        self.ready()
+        for index in range(ACP.MAX_TOOL_CACHE):
+            self.announce(f"call-{index}", title=f"Run check {index}")
+        self.announce("call-extra", title="Run extra check")
+        extra = self.permit(70, {"toolCallId": "call-extra"})
+        self.assertEqual(extra["context"]["reason"], "tool-cache-bound")
+        self.assertNotIn("Run extra check", json.dumps(extra["context"]))
+        first = self.permit(71, {"toolCallId": "call-0"})
+        self.assertEqual(first["context"]["state"], "available")
+        self.assertEqual(first["context"]["title"], "Run check 0")
+        original = ACP.MAX_TOOL_CACHE_BYTES
+        try:
+            ACP.MAX_TOOL_CACHE_BYTES = 280
+            self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+            self.session.start()
+            self.ready()
+            wide = "Aa1." * 50
+            self.announce("wide-1", title=wide)
+            self.announce("wide-2", title="Bb2." * 50)
+            self.assertEqual(self.permit(72, {"toolCallId": "wide-2"})["context"]["reason"], "tool-cache-bound")
+            self.assertEqual(self.permit(73, {"toolCallId": "wide-1"})["context"]["title"], wide)
+        finally:
+            ACP.MAX_TOOL_CACHE_BYTES = original
+        self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        self.session.start()
+        self.ready()
+        self.announce(raw={"command": "go", "args": ["test", "./..."]})
+        self.clock.now = ACP.TOOL_CACHE_TTL + 1
+        expired = self.permit(74, {"toolCallId": "fixture_1"})
+        self.assertEqual(expired["context"]["reason"], "tool-call-expired")
+        self.assertNotIn("./...", json.dumps(expired["context"]))
+        self.announce(raw={"command": "go", "args": ["test", "./..."]})
+        self.assertEqual(self.permit(75, {"toolCallId": "fixture_1"})["context"]["reason"], "tool-call-expired")
+
+    def test_unhashable_status_tombstones_and_blocks_later_benign(self):
+        raw = {"command": "go", "args": ["test", "./..."]}
+        explicit = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw}
+        for status in (["completed"], {"bad": True}):
+            with self.subTest(status=status):
+                self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+                self.session.start()
+                self.ready()
+                self.announce(raw=raw)
+                self.announce(kind=None, title=None, raw=None, status=status, session_update="tool_call_update")
+                event = self.permit(41, explicit)
+                self.assertEqual(event["context"], {"state": "insufficient-context", "reason": "tool-call-unavailable"})
+                self.assertNotIn("./...", json.dumps(event["context"]))
+                self.assertNotIn("Run fixture checks", json.dumps(event["context"]))
+        self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
+        self.session.start()
+        self.ready()
+        self.announce("fresh-call", kind=None, title=None, raw=None, status=["pending"])
+        fresh = self.permit(42, {"toolCallId": "fresh-call", "kind": "execute", "title": "Run fixture checks", "rawInput": raw})
+        self.assertEqual(fresh["context"]["reason"], "tool-call-unavailable")
+        self.assertNotIn("./...", json.dumps(fresh["context"]))
+
+    def test_dropped_id_saturation_fails_untracked_ids_closed(self):
+        self.ready()
+        raw = {"command": "go", "args": ["test", "./..."]}
+        for index in range(ACP.MAX_TOOL_CACHE):
+            self.announce(f"cached-{index}", title=f"Run check {index}")
+        for index in range(ACP.MAX_TOOL_DROPPED):
+            self.announce(f"dropped-{index}", title=f"Run drop {index}")
+        self.announce("poisoned-extra", status=["nope"], raw=raw)
+        for index in range(8):
+            self.announce(f"later-{index}", title=f"Run later {index}", raw=raw)
+        self.assertEqual(len(self.session.tool_cache), ACP.MAX_TOOL_CACHE)
+        self.assertEqual(len(self.session.tool_dropped), ACP.MAX_TOOL_DROPPED)
+        self.assertTrue(self.session.tool_untracked_closed)
+        explicit = {"kind": "execute", "title": "Run benign checks", "rawInput": raw}
+        poisoned = self.permit(90, dict(explicit, toolCallId="poisoned-extra"))
+        self.assertEqual(poisoned["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        unseen = self.permit(91, dict(explicit, toolCallId="never-tracked"))
+        self.assertEqual(unseen["context"]["reason"], "tool-cache-bound")
+        later = self.permit(92, dict(explicit, toolCallId="later-0"))
+        self.assertEqual(later["context"]["reason"], "tool-cache-bound")
+        for event in (poisoned, unseen, later):
+            encoded = json.dumps(event["context"])
+            self.assertNotIn("./...", encoded)
+            self.assertNotIn("Run benign", encoded)
+        kept = self.permit(93, {"toolCallId": "cached-0"})
+        self.assertEqual(kept["context"]["state"], "available")
+        self.assertEqual(kept["context"]["title"], "Run check 0")
+        dropped = self.permit(94, {"toolCallId": "dropped-0"})
+        self.assertEqual(dropped["context"]["reason"], "tool-cache-bound")
+        self.assert_reject_only(90)
+
+    def test_prompt_completion_clears_cache_and_question_ack_is_unchanged(self):
+        self.ready()
+        self.announce(raw={"command": "go", "args": ["test", "./..."]})
+        self.session.provider({"jsonrpc": "2.0", "id": 40, "method": "cursor/ask_question", "params": {"questions": [{"id": "q1", "prompt": "Which fixture?", "options": [{"id": "a", "label": "First"}, {"id": "b", "label": "Second"}]}]}})
+        self.assertEqual(self.events[-1]["event"], "question-required")
+        self.assertNotIn("context", self.events[-1])
+        self.session.decision({"requestID": 40, "sessionID": "fixture-session", "kind": "question", "answers": [{"questionId": "q1", "selectedOptionIds": ["a"]}]})
+        self.assertEqual(self.sent[-1]["result"]["outcome"]["outcome"], "answered")
+        self.session.provider({"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}})
+        self.assertTrue(self.session.complete)
+        self.assertEqual(self.session.tool_cache, {})
+        self.assertTrue(self.session.tool_cache_closed)
+        self.announce(raw={"command": "go", "args": ["test", "./..."]})
+        self.assertEqual(self.session.tool_cache, {})
+        with self.assertRaisesRegex(ACP.Refusal, "request-outside-prompt"):
+            self.permit(81, {"toolCallId": "fixture_1"})
+
+    def test_explicit_raw_input_is_not_replaced_by_cached_args(self):
+        self.ready()
+        self.announce(raw={"command": "go", "args": ["test", "./..."]})
+        event = self.permit(41, {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": {"command": "python3", "args": ["check.py"]}})
+        self.assertEqual(event["context"]["rawInput"], {"command": "python3", "args": ["check.py"]})
+        self.assertNotIn("./...", json.dumps(event["context"]))
+        follow = self.permit(42, {"toolCallId": "fixture_1"})
+        self.assertEqual(follow["context"]["rawInput"], {"command": "python3", "args": ["check.py"]})
 
 
 FAKE = '''#!/usr/bin/env python3
@@ -695,6 +1080,10 @@ for line in sys.stdin:
   if mode=="error": write({"jsonrpc":"2.0","id":3,"error":{"message":"PRIVATE_PROVIDER_ERROR"}}); continue
   if mode=="exit": sys.exit(0)
   if mode in ("grandchild","env"): write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}); continue
+  if mode=="partial-id":
+   write({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-session","update":{"sessionUpdate":"tool_call","toolCallId":"fixture_1","title":"Run fixture checks","kind":"execute","status":"pending","rawInput":{"command":"go","args":["test","./..."]}}}})
+   write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":{"toolCallId":"fixture_1"},"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
+   continue
   if mode=="permission" or mode.startswith("context-"):
    write({"jsonrpc":"2.0","id":41,"method":"session/request_permission","params":{"sessionId":"fixture-session","toolCall":tool_context,"options":[{"optionId":"allow","kind":"allow_once","name":"Allow"},{"optionId":"deny","kind":"reject_once","name":"Deny"}]}})
    continue
@@ -704,7 +1093,7 @@ for line in sys.stdin:
    write({"jsonrpc":"2.0","id":52,"method":"terminal/create","params":{"sessionId":"fixture-session","command":"PRIVATE_COMMAND"}})
    continue
   write({"jsonrpc":"2.0","id":40,"method":"cursor/ask_question","params":{"questions":[{"id":"q1","prompt":"Fixture choice?","options":[{"id":"a","label":"First"}]}]}})
- elif (mode=="permission" or mode.startswith("context-")) and msg.get("id")==41:
+ elif (mode=="permission" or mode=="partial-id" or mode.startswith("context-")) and msg.get("id")==41:
   if msg.get("result")=={"outcome":{"outcome":"selected","optionId":"deny"}}: write({"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}})
   else: write({"jsonrpc":"2.0","id":3,"error":{"message":"fixture expected rejection"}})
  elif mode=="callbacks" and msg.get("id") in (50,51,52):
@@ -814,6 +1203,36 @@ class SubprocessTests(unittest.TestCase):
             self.assertEqual(process.returncode, 2)
             self.assertEqual(observed[-1], {"event": "failed", "reason": "permission-approval-not-supported"})
             self.assertNotIn("decision-sent", output)
+
+    def test_fake_transport_partial_id_emits_cached_relative_argv(self):
+        # Reads the session events directly. It does not approve or execute the command.
+        # The smoke checker accepts this relative argv shape in its own fixtures.
+        with tempfile.TemporaryDirectory() as directory:
+            process = self.launch(directory, "partial-id")
+            try:
+                observed = []
+                while True:
+                    event = json.loads(process.stdout.readline())
+                    observed.append(event)
+                    if event["event"] == "permission-required":
+                        break
+                self.assertEqual(event["requestID"], 41)
+                self.assertEqual(event["options"], [{"optionID": "allow", "kind": "allow_once"}, {"optionID": "deny", "kind": "reject_once"}])
+                self.assertEqual(event["context"], {"state": "available", "kind": "execute", "title": "Run fixture checks", "rawInput": {"command": "go", "args": ["test", "./..."]}})
+                process.stdin.write(json.dumps({"requestID": 41, "sessionID": "fixture-session", "kind": "permission", "optionID": "deny"}) + "\n")
+                process.stdin.flush()
+                stdout, stderr = process.communicate(timeout=15)
+                observed.extend(json.loads(line) for line in stdout.splitlines())
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual([item["event"] for item in observed], ["starting", "session-created", "permission-required", "decision-sent", "prompt-complete"])
+                self.assertNotIn("decision-sent", json.dumps(observed[2]))
+                blob = json.dumps(observed) + stderr
+                self.assertIn("./...", blob)
+                self.assertNotIn("go test ./...", blob)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def test_permission_context_fixtures_over_fake_cli(self):
         # Every redaction fails closed (review of 6b9ae3d7, finding 3).
