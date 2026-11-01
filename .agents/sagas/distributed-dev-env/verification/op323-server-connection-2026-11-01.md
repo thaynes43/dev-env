@@ -1,0 +1,19 @@
+# Dormant selected-source Server connection — 2026-11-01
+
+This slice connects the existing fixed-slot handler to `Server.Handler` without enabling it in production. `Server.ProviderSourceReports` is nil by default; registration requires `RouteEnabled()`. Portal admission recognizes only enabled GET of the exact fixed path. PUT and unrelated portal routes retain their refusal. Operator main, flags, ConfigMap/RBAC installation and the production portal consumer are unchanged.
+
+Grok wrote the Server connection and connected tests in the isolated OP323-SERVER-154146 lane. Its physical controller timed out on 2026-11-01 at 16:14:38 UTC. The frozen owned patch was retained as a task artifact, SHA-256 `2ca90cb7765a8b0c82b12d45224ee953cd6f8b9704912c891259005a5b84b630`. No worker test or publication was verified. The delivery coordinator imported the exact source into its own private task worktree and reconciled the guide/design with the implemented connection. Requested worker model was `grok-4.7-high`; served identity remains Unknown.
+
+The current coordinator ran the new connected Server test plus the existing caller-fence, portal, max-age and GET-admission cases once. The focused suite passed in 0.081 s on pinned Go 1.27.3, GOMAXPROCS=2, one package, nice 19 and the existing shared test lock/cache. `gofmt -l` reported no files. The test traverses the actual Server authentication/registration path to a synthetic retained report store; it covers disabled zero reads, exact retained bytes, unchanged session shape, replay, portal GET/PUT restrictions, stale Unknown and current Pod/Session identity fences. It creates no live report, claim, grant or access configuration.
+
+These are source and connected fixture results. Final independent review, required hosted CI, signed publication and deployment are recorded separately. A nil/default-off installation does not establish usable quota ingestion, live Flux coexistence or authorization to activate the sealed transport. Original retrieval, source-report labeling and missing entitlement/account identity remain unchanged.
+
+Native review P3, source only, 2026-11-01: the `session shape stays strict` subtest decoded `httptest.ResponseRecorder.Body` directly. That buffer is consumed by `json.Decoder`, so the following `usedPercent` / `current_source` / `"availability"` absence checks and the `CurrentSourceReport` unmarshal inspected empty bytes. The subtest now copies the raw response before decode, decodes strict `apiv1.Session` from a separate `bytes.Reader`, and runs those same assertions on the copy. It fails if that copy is empty or no longer matches the recorder. Auth, path, default-off registration, and the other subtests are unchanged. No production source was edited. This worker did not run the suite and did not compute a patch hash. The earlier 0.081 s pass predates this correction. Sol qualifies the frozen test. A passing fixture is not live acceptance.
+
+## Final driver qualification
+
+After the P3 correction, the current coordinator reran only `TestProviderSourceServerConnection` on the same pinned, serial test harness. It passed in 0.081 s. Independent native review passed the corrected nonempty-byte assertions and the unchanged dormant registration. The worker ran no tests. Required final-head CI and source delivery remain separate gates; no runtime activation or usable-ingestion acceptance follows.
+
+## Question-audit source integration
+
+After PR820 merged as `e9d29db28864494d083999fb2af17cccd6a01029`, the coordinator integrated that main revision. Both additions occupied the same portal-admission switch insertion point; integration retains the separately guarded selected-source GET and question-audit GET cases, with the original denial default. The combined new Server connection and `TestPortalQuestionAudit` producer cases passed in 0.356 s under the pinned serial harness. This is source compatibility evidence, not activation of either data class.

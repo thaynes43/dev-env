@@ -193,8 +193,10 @@ present. An absent file performs no read. A present file copies one immutable
 selection onto the existing operator client and does not assign
 `SessionSource.allowance`.
 
-The fixed-slot handler and store exist in source but are not mounted by the
-central server. The store updates an existing ConfigMap only, preserving
+The fixed-slot handler and store exist in source. The central server registers
+the exact route only for an explicitly enabled, fully configured handler;
+production leaves the handler nil. Portal admission adds only that enabled
+GET, never PUT or other paths. The store updates an existing ConfigMap only, preserving
 metadata through live resourceVersion CAS; it never creates the object.
 This selected source refuses non-null `providerUpdatedAt`. Undecodable stored
 bytes block later writes. Invalid or expired reads suppress current values
