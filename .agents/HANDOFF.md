@@ -1,5 +1,31 @@
 # HANDOFF: start here
 
+## HOME retention source slice — 2026-11-01 (OP350)
+
+[ADR-018](sagas/distributed-dev-env/adrs/018-two-tier-home-retention.md) and
+[DESIGN-044](sagas/distributed-dev-env/designs/044-two-tier-home-retention.md)
+record Tom's 21:11:37 UTC policy: completed work with verified publication and
+preservation can be an immediate candidate; stopped recovery work gets seven
+days with warning, then a visible owner decision batch. Active work stays
+protected. Missing proof is explicit, and a provider-history archive is not a
+universal requirement. Specific UID-bound destructive approval is still required.
+
+Source owner is OP350, linked to OP102 under Epic99 and historical issue174.
+The isolated policy/verifier and offline dry-run implement this source slice;
+validation and PR evidence are recorded with OP350. Collection of authentic
+attestations and fresh runtime observations remains unimplemented. H7-H10,
+deployment, notification delivery and batch execution are separate work. Existing
+flags, finalizers and coordination policies are unchanged; no cleanup is enabled.
+Older 30-day HOME and universal archive gates below are historical where this
+newer policy supersedes them. They do not authorize a rollout.
+
+The bounded legacy metadata adapter preserves existing clock/identity provenance
+without promoting rescue booleans into preservation proof. Stopped special
+fixtures and holds remain protected and receive an explicit overdue/clockless
+owner-disposition flag; active work receives no expiry action. The library's
+trusted caller boundary can reuse authenticated agentd/operator channels;
+optional offline signatures do not impose new production signing infrastructure.
+
 ## RC launch design — 2026-10-29 (#267)
 
 [DESIGN-038](sagas/distributed-dev-env/designs/038-remote-control-launch.md)

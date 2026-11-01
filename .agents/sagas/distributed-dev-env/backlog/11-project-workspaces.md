@@ -278,6 +278,26 @@ not decided here.
 
 ### Private HOME expiry
 
+**Superseding owner policy, 2026-11-01 21:11:37 UTC:**
+[ADR-018](../adrs/018-two-tier-home-retention.md) and
+[DESIGN-044](../designs/044-two-tier-home-retention.md) replace the 30-day HOME
+and universal archive prerequisite below. OP350 owns only the reusable policy,
+signed proof verifier, finite offline dry-run and synthetic tests, linked to
+OP102 under Epic99. Its source PR and required CI/native review are its evidence;
+collector integration, warning delivery, UID-bound owner decision/action and
+activation remain separate. No cleanup, mount or runtime change is authorized.
+The old H7-H10 sequence remains historical delivery context, not a competing
+rollout or a new prerequisite. Existing archive resources/holds, finalizers,
+canary/pilot protections and ADR-004 coordination retention are unchanged.
+
+The source slice also includes a bounded audit-only legacy metadata adapter.
+Existing authenticated callers can supply exact proof/receipt provenance through
+the verifier boundary; new signing-key provision is not a cleanup prerequisite.
+Stopped fixture/hold decisions stay explicit at seven days or with unknown clocks,
+while their protections remain intact. Runtime evidence collection remains open.
+
+The following Q-31 policy and delivery table are historical where superseded.
+
 Follow-up F1 of the retention section above. **Ruled 2026-10-12 (Q-31).** Tom
 answered through the Claude native prompt: "Archive, then delete
 (Recommended)".
