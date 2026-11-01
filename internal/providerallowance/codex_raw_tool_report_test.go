@@ -2,6 +2,7 @@ package providerallowance
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -47,10 +48,6 @@ func rawEnvelope(legacy, byID string) string {
 
 func rawBoth(limit string) string {
 	return rawEnvelope(limit, `{"codex":`+limit+`}`)
-}
-
-func rawSyntheticBody() string {
-	return rawBoth(rawLimitJSON(rawSyntheticUsed, rawSyntheticWindow, rawSyntheticReset))
 }
 
 func TestCodexRawToolReportAdaptsNestedEnvelope(t *testing.T) {
@@ -270,7 +267,7 @@ func TestCodexRawToolReportRejectsClosed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := CodexRawToolReport([]byte(tc.body), tc.observed, tc.sel, tc.now)
-			if err == nil || err != errCodexRawToolReport || got != (CurrentSourceReport{}) {
+			if err == nil || !errors.Is(err, errCodexRawToolReport) || got != (CurrentSourceReport{}) {
 				t.Fatalf("got %#v %v", got, err)
 			}
 			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), rawSyntheticReset) || strings.Contains(err.Error(), "1775649600000") || strings.Contains(err.Error(), "TOKEN") || strings.Contains(err.Error(), "acct-") {
