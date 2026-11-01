@@ -115,3 +115,18 @@ permissions or establish question delivery. Native exact-head review, hosted CI,
 guarded merge, signed publication and any separately qualified installation
 remain later evidence levels. Live own-platform Cursor question/reply/ACK is
 still unproven.
+
+Final native review identified a helper/checker mismatch for a non-path field
+beneath an `args.path` container. The checker now carries the same inherited
+argument flag as the helper; an actual path string still cannot retain slashes.
+A direct and cached helper-to-checker fixture for `args.path.description`
+failed first with `invalid-permission-context`, then passed after the correction.
+The same review found that a present null status was treated as omitted despite
+the documented invalid-status rule. Null now tombstones the id, with the existing
+malformed-status fixture extended to cover it.
+
+After these integration fixes, both assertion-enabled suites passed: 121 tests
+in 20.894 seconds under the same serial lock and priority limit. The automated
+review independently reported the same inherited-argument mismatch; that finding
+is covered by this correction and fixture. These are source and offline protocol
+results, with no provider launch or runtime replacement.

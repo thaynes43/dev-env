@@ -1021,6 +1021,25 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "available")
         self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
 
+    def test_helper_nested_path_descendant_relative_argument(self):
+        raw = {"args": {"path": {"description": "./..."}}}
+        tool = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw}
+
+        def no_update(live):
+            return None
+
+        def recover(live):
+            self._announce(live, raw=raw)
+
+        for setup, request in ((no_update, tool), (recover, {"toolCallId": "fixture_1"})):
+            emitted, verdict = self._checked_session(setup, [(41, request)])
+            self.assertEqual(emitted[0]["context"]["rawInput"], raw)
+            self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "available"}])
+            self.assert_omits(verdict, "./...", "Run fixture")
+        # Inheriting argv does not allow slashes in an actual path field.
+        self.assertFalse(CHK.context_input_ok({"args": {"path": "./..."}}))
+        self.assertFalse(CHK.context_input_ok({"path": {"description": "./..."}}))
+
     def test_completed_tombstones_bound_later_explicit_context(self):
         def fill(live):
             total = ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1

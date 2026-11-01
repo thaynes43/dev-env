@@ -276,8 +276,9 @@ def context_input_ok(value, depth=0, path=False, *, argv=False):
             return False
         for key, item in value.items():
             child_path = key in {"path", "paths"}
-            # Relative patterns are accepted only under args, never in path fields.
-            child_argv = (argv or key == "args") and not child_path
+            # Match the helper's inherited args rule through path containers.
+            # A path leaf still refuses relative patterns via path=True above.
+            child_argv = argv or key == "args"
             if not context_input_ok(item, depth + 1, child_path, argv=child_argv):
                 return False
         return True

@@ -92,7 +92,8 @@ entries, nested at most 3 edges deep, and a map may use only the keys `command`,
 `args`, `path`, `paths`, `query` and `description`; and the whole context is at
 most 2048 bytes as compact ASCII JSON. The session reduces path-like strings
 to a basename. A `/` is accepted only in a structured `args` string, including
-one nested under `args`, that matches the session's relative-argument grammar
+one nested under `args` (including a non-path descendant of a path container),
+that matches the session's relative-argument grammar
 (`./...` and `./internal/...` are the representative cases). A title, location,
 `command`, `path`, `paths`, `query`, top-level `description`, or a backslash is
 still refused. An argument such as `../up.py` is refused because it does not

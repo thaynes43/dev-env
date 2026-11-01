@@ -973,10 +973,10 @@ class ToolCacheTests(unittest.TestCase):
         self.announce(raw={"command": "go", "args": ["test", "./..."]})
         self.assertEqual(self.permit(75, {"toolCallId": "fixture_1"})["context"]["reason"], "tool-call-expired")
 
-    def test_unhashable_status_tombstones_and_blocks_later_benign(self):
+    def test_invalid_status_tombstones_and_blocks_later_benign(self):
         raw = {"command": "go", "args": ["test", "./..."]}
         explicit = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw}
-        for status in (["completed"], {"bad": True}):
+        for status in (None, ["completed"], {"bad": True}):
             with self.subTest(status=status):
                 self.session = ACP.Session(self.sent.append, self.events.append, "/synthetic/project", "Inspect fixture", "grok-synthetic", clock=self.clock)
                 self.session.start()

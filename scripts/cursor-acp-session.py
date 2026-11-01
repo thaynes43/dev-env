@@ -602,8 +602,9 @@ class Session:
         if tool_id not in self.tool_cache and (tool_id in self.tool_dropped or self.tool_untracked_closed):
             return
         status = update.get("status")
-        # Set membership hashes the value. A list or object must tombstone, not escape.
-        if status is not None and (not isinstance(status, str) or status not in TOOL_STATUSES):
+        # Any present invalid status, including null, tombstones the id.
+        # Set membership hashes the value, so validate its type first.
+        if "status" in update and (not isinstance(status, str) or status not in TOOL_STATUSES):
             self._install_tool(tool_id, "poison", {})
             return
         if status in {"completed", "failed"}:
