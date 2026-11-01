@@ -16,17 +16,28 @@ import (
 	"github.com/thaynes43/dev-env/web/portal/session"
 )
 
+// syntheticChartUsage is a synthetic operator page. The Usage preview decodes
+// it through the live session decoder so the chart bars come from reported
+// counters, including an explicit zero, and not from display text.
+const syntheticChartUsage = `{"sessions":[` +
+	`{"name":"synthetic-agent","uid":"uid-synthetic-agent","repo":"dev-env","phase":"Running","observedAt":"2026-10-29T13:59:00Z","freshness":"observed","activity":{"mode":"task","provider":"claude","agentState":"busy","lastActivity":"2026-10-29T13:58:00Z","requestedModel":"claude-opus-5-5","usage":{"scope":"InitialManagedInvocation","resultState":"Final","servedModels":["claude-opus-5-5"],"inputTokens":{"state":"Reported","amount":1000},"outputTokens":{"state":"Reported","amount":0},"cacheReadInputTokens":{"state":"Reported","amount":250},"cacheCreationInputTokens":{"state":"Unknown"},"cost":{"state":"Reported","amount":"0.75","unit":"USD","kind":"ProviderCLIEquivalentEstimate"}}}},` +
+	`{"name":"synthetic-other","uid":"uid-synthetic-other","repo":"dev-env","phase":"Running","observedAt":"2026-10-29T13:59:00Z","freshness":"observed","activity":{"mode":"remote","provider":"claude","agentState":"idle","requestedModel":"claude-opus-5-5","usage":{"scope":"Unknown","resultState":"Unknown","servedModels":[],"inputTokens":{"state":"Unknown"},"outputTokens":{"state":"Unknown"},"cacheReadInputTokens":{"state":"Unknown"},"cacheCreationInputTokens":{"state":"Unknown"},"cost":{"state":"Unknown","kind":"Unknown"}}}}` +
+	`],"limit":50,"complete":true,"freshness":"observed","observedAt":"2026-10-29T13:59:00Z"}`
+
 func writeProductStates(dir string) error {
 	disconnected, err := allowancePreview("not-connected")
 	if err != nil {
 		return err
 	}
+	chartNow := time.Date(2026, 10, 29, 14, 0, 0, 0, time.UTC)
+	measured, err := session.DecodeUsageView([]byte(syntheticChartUsage), chartNow)
+	if err != nil {
+		return err
+	}
+	measured.Usage.Allowance = disconnected
 	page := portal.ProductPage{Title: "Sessions", Connected: true, Complete: true, Preview: true,
-		ObservedAt: "2026-10-29T14:00:00Z", ReadCompletedAt: "2026-10-29T13:59:00Z", Filter: portal.ProductFilter{View: "usage"},
-		Allowance: disconnected,
-		Usage: &portal.ProductUsage{Allowance: disconnected, Scope: "Synthetic usage preview", ScopeNote: "Fixture data only.",
-			Stats:   []portal.ProductStat{{Label: "Measured", Value: "Unknown", Tone: "muted"}},
-			Columns: []string{"Session", "Input"}, Rows: []portal.ProductUsageRow{{ID: "s1", SessionUID: "uid-synthetic-agent", Name: "synthetic-agent", Cells: []portal.ProductUsageCell{{Label: "Input", Value: "Unknown", Unknown: true}}}}}}
+		ObservedAt: "2026-10-29T14:00:00Z", ReadCompletedAt: "2026-10-29T13:59:00Z", AsOf: chartNow, Filter: portal.ProductFilter{View: "usage"},
+		Allowance: disconnected, Usage: measured.Usage}
 	body, err := portal.RenderProduct(page)
 	if err != nil {
 		return err
