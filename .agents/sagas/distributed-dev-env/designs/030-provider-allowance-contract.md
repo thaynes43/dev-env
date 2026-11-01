@@ -195,7 +195,21 @@ selection onto the existing operator client and does not assign
 
 The fixed-slot handler and store exist in source. The central server registers
 the exact route only for an explicitly enabled, fully configured handler;
-production leaves the handler nil. Portal admission adds only that enabled
+the deployed process leaves the handler nil. The operator entrypoint can
+construct that handler only from `--enable-provider-source-reports` and an
+exact `--provider-source-config` document. Both default off, and neither is
+set in a deployment. Maximum age alone does not enable the route. A refused
+setting returns `provider source configuration was refused` and does not
+echo the submitted text. The flags do not enable the API or the portal
+reader. Portal GET still requires the existing portal reader. The route,
+ConfigMap `dev-env-system/dev-env-provider-source-codex-current`, key
+`report.json`, publisher session UID `84ddc461-fd07-47ab-a2c1-72910898bac4`,
+ServiceAccount `dev-env-workbench`, portal ServiceAccount
+`dev-env-v2-portal`, incarnation `codex-retained-tool-source-1`, and
+generation 1 are fixed. `maxAgeSeconds` must be an integer from 1 through
+1800. The exact document is recorded in the
+[current-source guide](../../../../docs/provider-usage-current-source.md).
+Portal admission adds only that enabled
 GET, never PUT or other paths. The store updates an existing ConfigMap only, preserving
 metadata through live resourceVersion CAS; it never creates the object.
 This selected source refuses non-null `providerUpdatedAt`. Undecodable stored

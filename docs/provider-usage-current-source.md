@@ -62,8 +62,10 @@ publisher session UID/incarnation and source generation. The proposed exact
 route is `/v1/provider-source-reports/codex-current-source`, with one authorized
 publisher write and portal read. The fixed-slot handler and store now exist in
 source. The central server can mount the exact route only when an injected
-handler is explicitly enabled and fully configured. Production leaves that
-handler nil. The optional portal consumer stays off unless
+handler is explicitly enabled and fully configured. The deployed process
+leaves that handler nil. The operator entrypoint below can construct it
+only from an explicit valid configuration, and that configuration is not
+set. The optional portal consumer stays off unless
 `config/current-source.json` is present; no such config is mounted in production.
 Their authorization, persistence, bounded retention and exposure of private
 report data require review together before activation. A missing account ID or
@@ -79,7 +81,8 @@ An identical replay does not refresh the report. A lost update response is
 confirmed only by a live read of the same bytes at a changed resourceVersion.
 The handler remains disabled without all explicit source and caller fences;
 maximum age alone cannot register or enable the route. No ConfigMap, Role,
-binding, or flag is installed. The operator may still return 404 while that
+or binding is installed. The operator flags below default off and are not
+set in a deployment. The operator may still return 404 while that
 activation is held. This consumer does not widen the ACL.
 
 `config/current-source.json` is optional and is not a deployed manifest. When
@@ -117,6 +120,57 @@ default-off connection, and one authorized portal render of a synthetic slot.
 They are not a live operator, a mounted route, or an accepted account
 entitlement. OP323 remains open until a real retained report is served with
 the route and grants activated.
+
+## Operator entrypoint
+
+The operator process can build `apiserver.ProviderSourceReports` only when
+both of these are set. With the enable flag false and the selection empty,
+the handler stays nil. Enabling without a selection, or supplying a
+selection while disabled, refuses startup. Construction
+does not read, write, list, or watch the slot. Maximum age alone does not
+enable the route. The flags do not turn on the API and do not turn on the
+portal reader. A bad setting refuses process start with the fixed sentence
+`provider source configuration was refused`. That sentence does not include
+the submitted text.
+
+```text
+--enable-provider-source-reports
+--provider-source-config=<json>
+```
+
+`--enable-provider-source-reports` defaults false.
+`--provider-source-config` defaults empty and is inline JSON, not a file
+path. The API must be on (`--api-bind-address` is not `0`) and
+`--session-namespace` must be `dev-agents`. The JSON object has exactly
+these fields:
+
+```json
+{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"codex-retained-tool-source-1","sourceGeneration":1,"maxAgeSeconds":1800}
+```
+
+`slot`, `publisherRef`, `producerIncarnation`, and `sourceGeneration` must
+match those values. `sourceGeneration` is the integer 1. `maxAgeSeconds` is
+an integer from 1 through 1800. A shorter positive age is accepted. Zero,
+a negative age, and any age above 1800, including 86400, are refused.
+Unknown fields, duplicate keys, a missing field, and a non-integer age are
+refused. An `enabled` field inside the JSON is unknown and is refused.
+
+These are fixed. They are not fields of the JSON:
+
+- route `GET` and `PUT` `/v1/provider-source-reports/codex-current-source`
+- ConfigMap `dev-env-system/dev-env-provider-source-codex-current`
+- data key `report.json`
+- publisher session `dev-agents/dev-env-1027-010058`, UID `84ddc461-fd07-47ab-a2c1-72910898bac4`, ServiceAccount `dev-env-workbench`
+- portal ServiceAccount `dev-agents/dev-env-v2-portal`, GET only, and only when `--enable-portal-reader` is also set
+- report ceiling 16 KiB, with `providerUpdatedAt` null
+
+The publisher check uses that session UID and the pod that exists at the
+request. It does not pin a historical pod UID. The store writer is the
+manager client. The store reader and the caller reader are the manager API
+reader. The store still only gets and CAS-updates an existing object. This
+entrypoint does not create the ConfigMap, install RBAC, collect usage, or
+call a provider. It does not establish a provider account identity, and it
+does not mean ingestion is complete.
 
 ## Local preparation
 
