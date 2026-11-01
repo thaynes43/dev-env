@@ -2,7 +2,6 @@ package session
 
 import (
 	"math/big"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,10 +27,7 @@ var allowanceProviders = []struct{ id, label string }{
 }
 
 func disconnectedAllowances() []portal.ProductAllowance {
-	return []portal.ProductAllowance{
-		{Provider: "Claude", Value: portal.AllowanceNotConnected},
-		{Provider: "Codex", Value: portal.AllowanceNotConnected},
-	}
+	return mappedAllowances()
 }
 
 func mappedAllowances() []portal.ProductAllowance {
@@ -40,19 +36,6 @@ func mappedAllowances() []portal.ProductAllowance {
 		out[i] = portal.ProductAllowance{Provider: provider.label, Value: portal.AllowanceNotConnected}
 	}
 	return out
-}
-
-// allowanceFacts is the typed window projection. Field names match the
-// additions lane B adds to portal.ProductAllowanceWindow.
-type allowanceFacts struct {
-	PercentValue   float64
-	PercentKnown   bool
-	Direction      string
-	ResetAt        string
-	ObservedAt     string
-	WindowKind     string
-	ResetPrecision string
-	AccountKey     string
 }
 
 // MapProductAllowance projects a decoded cached-read contract into account
@@ -122,6 +105,7 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 			continue
 		}
 		var windows []portal.ProductAllowanceWindow
+		var identities []allowanceID
 		state := portal.AllowanceMeasured
 		if statusStale {
 			state = portal.AllowanceStale
@@ -136,17 +120,27 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 				a.Reason, refused = reason, true
 				break
 			}
+			id, ok := allowanceItemIdentity(item)
+			if !ok {
+				a.Reason, refused = "Account identity does not match", true
+				break
+			}
+			identities = append(identities, id)
 			if item.Freshness.State == providerallowance.FreshStale {
 				state = portal.AllowanceStale
 			}
 			windows = append(windows, mapped...)
 		}
 		if !refused {
-			a.Reason = "No percent allowance reported"
-			for _, w := range windows {
-				if w.Percent != "Unknown" {
-					a.Value, a.Reason, a.Windows = state, "", windows
-					break
+			if reason := allowanceIdentityReason(identities, doc.SourceStatuses, provider.id); reason != "" {
+				a.Reason = reason
+			} else {
+				a.Reason = "No percent allowance reported"
+				for _, w := range windows {
+					if w.Percent != "Unknown" {
+						a.Value, a.Reason, a.Windows = state, "", windows
+						break
+					}
 				}
 			}
 		}
@@ -239,74 +233,130 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 			}
 			continue
 		}
-		window, _ := projectMeasure(m, current, ok, o.ProviderObservedAt, source, accountKey, validDecimals)
+		window := projectMeasure(m, current, ok, o.ProviderObservedAt, source, accountKey, validDecimals)
 		windows = append(windows, window)
 	}
 	return windows, ""
 }
 
 // projectMeasure reads typed measure fields only. It does not read direct
-// fields or format a percent by scanning display text.
-func projectMeasure(m providerallowance.Measure, current providerallowance.CurrentMeasure, hasCurrent bool, observed *string, source, accountKey string, validDecimals bool) (portal.ProductAllowanceWindow, allowanceFacts) {
-	facts := allowanceFacts{
+// fields or format a percent by scanning display text. WindowKind stays empty:
+// providerallowance.Window has no kind, and a round number of minutes is not a
+// calendar week or month.
+func projectMeasure(m providerallowance.Measure, current providerallowance.CurrentMeasure, hasCurrent bool, observed *string, source, accountKey string, validDecimals bool) portal.ProductAllowanceWindow {
+	window := portal.ProductAllowanceWindow{
+		Percent: "Unknown", Window: allowanceWindow(m.Window),
+		Reset: "Unknown", Observed: allowanceTime(observed), Provenance: source,
 		ObservedAt: allowanceRFC3339(observed),
-		WindowKind: allowanceWindowKind(m.Window),
-		AccountKey: accountKey,
+	}
+	if allowanceAccountToken.MatchString(accountKey) {
+		window.AccountKey = accountKey
 	}
 	suffix := ""
 	switch m.Direction {
 	case providerallowance.DirectionRemaining:
-		facts.Direction, suffix = "remaining", "% left"
+		window.Direction, suffix = "remaining", "% left"
 	case providerallowance.DirectionUsed:
-		facts.Direction, suffix = "used", "% used"
+		window.Direction, suffix = "used", "% used"
 	}
-	percent := "Unknown"
 	if hasCurrent && current.State == providerallowance.CurrentKnown && current.Value.State == providerallowance.ValueKnown && m.Value.State == providerallowance.ValueKnown && validDecimals && suffix != "" && current.Value.Decimal != nil {
-		percent = *current.Value.Decimal + suffix
-		facts.PercentKnown = true
-		facts.PercentValue = allowancePercentValue(*current.Value.Decimal)
+		window.Percent = *current.Value.Decimal + suffix
+		window.PercentKnown = true
+		window.PercentValue = allowancePercentValue(*current.Value.Decimal)
 	}
-	reset := "Unknown"
 	switch m.Window.ResetPrecision {
 	case providerallowance.ResetInstant:
-		reset = allowanceTime(m.Window.ResetAt)
+		window.Reset = allowanceTime(m.Window.ResetAt)
 		if at := allowanceRFC3339(m.Window.ResetAt); at != "" {
-			facts.ResetPrecision = "instant"
-			facts.ResetAt = at
+			window.ResetPrecision = "instant"
+			window.ResetAt = at
 		}
 	case providerallowance.ResetDisplayOnly:
-		reset = allowanceTime(m.Window.ResetAt)
-		if reset != "Unknown" {
-			reset += " (display only)"
-			facts.ResetPrecision = "display_only"
+		window.Reset = allowanceTime(m.Window.ResetAt)
+		if window.Reset != "Unknown" {
+			window.Reset += " (display only)"
+			window.ResetPrecision = "display_only"
 		}
 	}
-	window := portal.ProductAllowanceWindow{
-		Percent: percent, Window: allowanceWindow(m.Window),
-		Reset: reset, Observed: allowanceTime(observed), Provenance: source,
-	}
-	stampAllowanceFacts(&window, facts)
-	return window, facts
+	return window
 }
 
-// stampAllowanceFacts copies the projection onto exported fields of the same
-// names. Fields render.go does not have yet are skipped.
-func stampAllowanceFacts(dest any, facts allowanceFacts) {
-	v := reflect.ValueOf(dest)
-	if v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Struct {
-		return
+// allowanceID is the account binding shared by observations that may appear
+// in one provider card. known is false when no account ref was reported.
+type allowanceID struct {
+	account, workspace string
+	generation         int64
+	known              bool
+}
+
+func allowanceDeref(p *string) string {
+	if p == nil {
+		return ""
 	}
-	v = v.Elem()
-	src := reflect.ValueOf(facts)
-	for i := 0; i < src.NumField(); i++ {
-		name := src.Type().Field(i).Name
-		field := v.FieldByName(name)
-		in := src.Field(i)
-		if !field.IsValid() || !field.CanSet() || field.Type() != in.Type() {
+	return *p
+}
+
+func allowanceRefEqual(a, b *string) bool {
+	return allowanceDeref(a) == allowanceDeref(b)
+}
+
+// allowanceItemIdentity accepts one item only when its scope and binding name
+// the same account, workspace and generation. A single item may omit them.
+func allowanceItemIdentity(item providerallowance.ReadItem) (allowanceID, bool) {
+	if !allowanceRefEqual(item.Observation.Scope.AccountRef, item.Binding.AccountRef) || !allowanceRefEqual(item.Observation.Scope.WorkspaceRef, item.Binding.WorkspaceRef) {
+		return allowanceID{}, false
+	}
+	if int64(item.Observation.BindingGeneration) != int64(item.Binding.Generation) {
+		return allowanceID{}, false
+	}
+	id := allowanceID{
+		account:    allowanceDeref(item.Observation.Scope.AccountRef),
+		workspace:  allowanceDeref(item.Observation.Scope.WorkspaceRef),
+		generation: int64(item.Binding.Generation),
+	}
+	id.known = id.account != ""
+	return id, true
+}
+
+func combineAllowanceIdentities(ids []allowanceID) string {
+	if len(ids) <= 1 {
+		return ""
+	}
+	for _, id := range ids {
+		if !id.known {
+			return "Account identity is incomplete"
+		}
+	}
+	first := ids[0]
+	for _, id := range ids[1:] {
+		if id.account != first.account || id.workspace != first.workspace || id.generation != first.generation {
+			return "Account identity does not match"
+		}
+	}
+	return ""
+}
+
+func allowanceStatusIdentity(statuses []providerallowance.SourceStatus, provider string, ids []allowanceID) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	want := ids[0]
+	for _, status := range statuses {
+		if status.Provider != provider {
 			continue
 		}
-		field.Set(in)
+		if allowanceDeref(status.Binding.AccountRef) != want.account || allowanceDeref(status.Binding.WorkspaceRef) != want.workspace || int64(status.Binding.Generation) != want.generation {
+			return "Account identity does not match"
+		}
 	}
+	return ""
+}
+
+func allowanceIdentityReason(ids []allowanceID, statuses []providerallowance.SourceStatus, provider string) string {
+	if reason := combineAllowanceIdentities(ids); reason != "" {
+		return reason
+	}
+	return allowanceStatusIdentity(statuses, provider, ids)
 }
 
 func allowanceAccountKey(item providerallowance.ReadItem) string {
@@ -392,16 +442,6 @@ func allowanceWindow(w providerallowance.Window) string {
 		unit += "s"
 	}
 	return strconv.FormatInt(amount, 10) + " " + unit
-}
-
-// allowanceWindowKind is the duration unit. Week and month are never invented
-// from a ref, a round week of minutes, or display text.
-func allowanceWindowKind(w providerallowance.Window) string {
-	_, unit, ok := allowanceDuration(w)
-	if !ok {
-		return ""
-	}
-	return unit
 }
 
 func allowanceDuration(w providerallowance.Window) (amount int64, unit string, ok bool) {
