@@ -11,3 +11,7 @@ Independent review found a brittle enumeration of all AssemblyConfig fields in t
 ## Final driver qualification
 
 The current coordinator ran only the changed `TestConnectedClaimsAssemblyHasNoResponseSource` after removing the brittle enumeration. It passed in 0.022 s on the same pinned, serial harness. The MCP and other render fixtures were unchanged and were not repeated. Independent native delta review passed. Worker test execution, required final-head CI, a production canonical reader and live portal response integration are not implied by this result.
+
+## Question-audit source integration
+
+The coordinator merged main at `e9d29db28864494d083999fb2af17cccd6a01029` so these fixtures compile and execute alongside the delivered question-audit configuration. The focused `TestConnectedClaims` cases passed in 0.024 s for agentrun and 0.020 s for portal/session. The removed field enumeration no longer couples this behavior contract to unrelated config fields. No production claim reader or Page response source was added.
