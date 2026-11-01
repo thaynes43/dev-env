@@ -61,8 +61,10 @@ existing operator service, `codex-current-source`, with an explicitly selected
 publisher session UID/incarnation and source generation. The proposed exact
 route is `/v1/provider-source-reports/codex-current-source`, with one authorized
 publisher write and portal read. The fixed-slot handler and store now exist in
-source, but the central server does not mount them. Operator configuration and
-the portal consumer remain disconnected. Their
+source. The central server can mount the exact route only when an injected
+handler is explicitly enabled and fully configured. Production leaves that
+handler nil; operator configuration and the portal consumer remain
+disconnected. Their
 authorization, persistence, bounded retention and exposure of private report
 data require review together before activation. A missing account ID or update
 time does not itself require a new credential or human login.
