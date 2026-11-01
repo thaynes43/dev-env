@@ -151,8 +151,10 @@ script. They keep the two existing routes; nothing new is fetched or routed.
 - **Usage view (`#usage`).** Measured sessions as "k of N", account
   allowance and billed cost `Unknown`, one row per session with input, output,
   cache read, cache create and the CLI-equivalent estimate, and a coverage
-  panel. A session without measured usage shows `Unknown` in every cell. No
-  totals are computed.
+  panel. A session without measured usage shows `Unknown` in every cell. Typed
+  input/output/estimated-cost charts precede closed drilldown tables. Group sums
+  preserve missing coverage and never infer quota or charges. See
+  [provider usage dashboard](provider-usage-dashboard.md).
 - **Conversation usage.** An interactive session whose agent reports its
   registered conversation (behind the operator's default-off
   `--portal-conversation-usage`) gets a Conversation usage panel: Final or
@@ -181,7 +183,7 @@ the policy.
 Sessions shows a compact Account allowance list in the list header. Usage shows the
 same model in full, also on a read with no rows. Tasks, Asks and Pages show none.
 A failed Sessions read shows no allowance.
-No allowance reader is deployed, so production shows Claude and Codex as
+No allowance reader is configured in production, so Claude, Codex and Cursor show
 `Not connected`, with no percent.
 
 When any provider reports usage windows, the provider lines sit in a "By provider"
@@ -192,7 +194,8 @@ today's `Not connected` line, has no disclosure and never folds.
 
 `MapProductAllowance` is the pure projection a later reader will use. It maps a
 decoded `providerallowance.read.v1` document ([DESIGN-030](../.agents/sagas/distributed-dev-env/designs/030-provider-allowance-contract.md))
-to four states. Only the preview fixtures call it today.
+to four states. The optional cached reader also calls it after validation; production
+assembly remains disconnected pending an explicit retained source and trusted context.
 
 | State | Meaning | Percent |
 | --- | --- | --- |
@@ -201,9 +204,11 @@ to four states. Only the preview fixtures call it today.
 | `Stale` | validated, verified, known value with `stale` freshness | as reported |
 | `Measured` | validated, verified, known value with `fresh` freshness | as reported |
 
-A percent is printed as the contract spells it, with its reported direction (`% left`
-or `% used`). The portal never converts used to remaining, reads no derivation and
-takes no token or cost input. A window label comes from `durationMinutes`; a contract
+A valid typed percent retains its reported direction and draws complementary used
+and remaining bars. Arbitrary display text never supplies a numeric meter. The
+allowance projection takes no token or cost input. Exact reset instants and observation
+times retain their timezone; countdowns use the explicit render as-of clock. Display-only
+reset values do not become instants. A window label comes from `durationMinutes`; a contract
 ref is never displayed. Windows that are not percent, or not `included_quota` or
 `rate_limit`, are left out. A window with no known value shows `Unknown` beside any
 known ones. Any current conflict in a provider's items refuses that provider, whether or
