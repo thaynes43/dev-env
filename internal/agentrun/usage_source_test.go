@@ -178,8 +178,6 @@ func TestUsageSourceDispatchDerivesAbsentRemaining(t *testing.T) {
 	}
 }
 
-// UNRUN: nested-report cases below were not executed in this delivery.
-
 const syntheticRawObserved = "2026-06-15T09:04:05-07:00"
 const syntheticRawResetUnix = "1782144245"
 
@@ -224,7 +222,7 @@ func syntheticRawWant() providerallowance.CurrentSourceReport {
 	}
 }
 
-// UNRUN: Sol runs this. Nested stdin and file input keep the original retrieval
+// Nested stdin and file input keep the original retrieval
 // spelling, derive remaining, and do not turn a 300 minute window into a week.
 func TestUsageSourceRawFileStdinAndOriginalTime(t *testing.T) {
 	now := syntheticRawNow()
@@ -270,7 +268,7 @@ func TestUsageSourceRawFileStdinAndOriginalTime(t *testing.T) {
 	}
 }
 
-// UNRUN: Sol runs this. Bad raw input fails closed without echoing the rejected bytes.
+// Bad raw input fails closed without echoing the rejected bytes.
 func TestUsageSourceRawRejectsTimeAndPrivacy(t *testing.T) {
 	now := syntheticRawNow()
 	secretPath := filepath.Join(t.TempDir(), "SECRET-CANARY.json")
