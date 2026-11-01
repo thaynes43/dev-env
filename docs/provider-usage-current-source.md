@@ -191,3 +191,23 @@ stdout must not be committed as a real account fixture.
 field name or the retained handoff's normalized name and refuses disagreement
 when both are supplied. A supplied remaining percentage or derivation marker
 must agree; omission of the upstream remaining percentage is supported.
+
+The pure `providerallowance.CodexRawToolReport` library adapter accepts the
+nested official-tool envelope separately. It requires an unattributed
+`accountId: null` and a primary Codex window. Preferred
+`rateLimitsByLimitId.codex` and legacy `rateLimits` must agree when both are
+present. A different limit, a secondary window, unknown or duplicate fields,
+and conflicting plan or credit metadata are refused. Plan and credit fields
+are discarded after comparison; they do not become allowance or entitlement.
+
+The caller supplies the original observation time. The adapter preserves it,
+converts Unix reset seconds to UTC RFC3339, and uses the existing builder to
+derive remaining percentage and validate freshness. It never authenticates
+the input, discovers an account, refreshes retrieval time, or infers a calendar
+week from the window duration. Provider update time stays null.
+
+This library adapter does not add nested-envelope input to
+`agent-run usage-source`. That command still takes the flattened observation described
+above. The adapter installs no acquisition process, publisher loop, recurring
+collection, API connection, or runtime configuration. A manual first report
+does not establish automatic ingestion or other-provider coverage.
