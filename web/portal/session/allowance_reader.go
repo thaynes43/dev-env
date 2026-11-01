@@ -105,6 +105,7 @@ func projectCachedAllowance(doc *providerallowance.ReadResponse, contexts []prov
 			continue
 		}
 		alignItemTrust(item, matched[0])
+		preserveKnownConflicts(item)
 		degradeFreshness(&item.Freshness, item.Observation.ProviderObservedAt, policy, now)
 		if freshnessBlocks(item.Freshness) {
 			freshHold[provider] = item.Freshness
@@ -139,9 +140,34 @@ func contextsForProvider(contexts []providerallowance.TrustedContext, provider s
 
 func observationTrusted(obs providerallowance.Observation, trusted providerallowance.TrustedContext, reg providerallowance.Registry) bool {
 	assessment := providerallowance.ValidateObservation(obs, trusted, reg)
-	return len(assessment.Issues) == 0 &&
-		assessment.TrustedBinding == providerallowance.BindingVerified &&
-		assessment.ObservationBinding == providerallowance.BindingVerified
+	if len(assessment.Issues) != 0 || assessment.TrustedBinding != providerallowance.BindingVerified || assessment.ObservationBinding != providerallowance.BindingVerified {
+		return false
+	}
+	for i, measure := range obs.Measures {
+		if measure.Value.State == providerallowance.ValueKnown || measure.Value.State == providerallowance.ValueUncapped {
+			if i >= len(assessment.Measures) || assessment.Measures[i].HistoricalOnly || !assessment.Measures[i].Actionable {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// preserveKnownConflicts runs before expiry can discard current decimals.
+// A reset is never evidence that contradictory reports have been resolved.
+func preserveKnownConflicts(item *providerallowance.ReadItem) {
+	for i := range item.CurrentMeasures {
+		current := &item.CurrentMeasures[i]
+		if current.State != providerallowance.CurrentKnown || current.Value.State != providerallowance.ValueKnown || current.Value.Decimal == nil {
+			continue
+		}
+		for _, measure := range item.Observation.Measures {
+			if measure.ID == current.MeasureID && measure.Value.State == providerallowance.ValueKnown && measure.Value.Decimal != nil && *measure.Value.Decimal != *current.Value.Decimal {
+				current.State = providerallowance.CurrentConflict
+				break
+			}
+		}
+	}
 }
 
 func alignItemTrust(item *providerallowance.ReadItem, trusted providerallowance.TrustedContext) {
