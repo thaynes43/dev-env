@@ -27,6 +27,9 @@ that a larger allocation creates the larger new claim while producing the same
 pod and leaving a current idle pod ineligible for a revision drain.
 
 Delivery order: reviewed source and required CI, signed operator publication,
-coordinated GitOps adoption preserving sessions, then the separate larger HOME
-default. Do not adopt the default under an older operator that still hashes
-capacity. No access, credential, security, network or retention policy changes.
+coordinated GitOps adoption on every operator replica preserving sessions, then
+the separate larger HOME default. Do not adopt the default under an older
+operator that still hashes capacity. Before reverting to an older operator,
+restore the default to 20Gi while the fixed operator remains installed. Preserve
+existing canary and pilot template-freeze rules. No access, credential, security,
+network or retention policy changes.
