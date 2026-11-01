@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.82.0](https://github.com/thaynes43/dev-env/compare/v2.81.0...v2.82.0) (2026-11-01)
+
+
+### Features
+
+* **grants:** associate maintenance grants with corroborated task claims ([#815](https://github.com/thaynes43/dev-env/issues/815)) ([79085ea](https://github.com/thaynes43/dev-env/commit/79085eaab360fd7f4789969693c2c83472d17ae3))
+
 ## [2.81.0](https://github.com/thaynes43/dev-env/compare/v2.80.0...v2.81.0) (2026-11-01)
 
 
