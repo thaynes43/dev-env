@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html/template"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -449,7 +450,7 @@ const (
 	AllowanceNotConnected ProductAllowanceState = "Not connected"
 	AllowanceUnknown      ProductAllowanceState = "Unknown"
 	AllowanceStale        ProductAllowanceState = "Stale"
-	AllowanceMeasured     ProductAllowanceState = "Measured"
+	AllowanceMeasured ProductAllowanceState = "Measured"
 )
 
 // ProductAllowance is one provider's account allowance, independent of session
@@ -465,10 +466,248 @@ type ProductAllowance struct {
 	SeenVaries           bool
 }
 
-// ProductAllowanceWindow holds provider-reported display text. Percent includes
-// its reported direction; absent metadata is displayed as Unknown.
+// ProductAllowanceWindow holds provider-reported display text and optional
+// typed measurement fields. Percent, Window, Reset, Observed and Provenance
+// stay the compatible display strings. Bars, exact reset times and countdowns
+// use only the typed fields: they never parse Percent or Reset.
+//
+// Direction is "used" or "remaining". ResetAt and ObservedAt are canonical UTC
+// RFC3339. ResetPrecision is "instant", "display_only", or empty. WindowKind is
+// "minute", "hour", "day", or empty. AccountKey is shown only when it matches
+// the agreed account token pattern. PercentKnown selects the bar. Callers that
+// have not filled the typed fields leave them zero.
 type ProductAllowanceWindow struct {
 	Percent, Window, Reset, Observed, Provenance string
+	PercentValue                                 float64
+	PercentKnown                                 bool
+	Direction                                    string
+	ResetAt                                      string
+	ObservedAt                                   string
+	WindowKind                                   string
+	ResetPrecision                               string
+	AccountKey                                   string
+}
+
+// allowanceNow is the clock for reset and observation wording. Tests replace it.
+var allowanceNow = time.Now
+
+// allowanceWindowKinds are the only window kinds the cards name. Any other
+// token is refused without being echoed.
+var allowanceWindowKinds = map[string]string{
+	"minute": "minute",
+	"hour":   "hour",
+	"day":    "day",
+}
+
+// allowanceAccountKey is the only account token the card may show.
+var allowanceAccountKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+
+// allowanceMeter is the used/remaining bar for one window. Shown is false when
+// the typed percent or direction cannot draw an honest bar. Note is fixed copy.
+type allowanceMeter struct {
+	Shown      bool
+	Note       string
+	UsedText   string
+	RemainText string
+	UsedWidth  string
+}
+
+func roundAllowancePercent(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+func formatAllowancePercent(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 2, 64)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	if s == "" || s == "-0" {
+		return "0"
+	}
+	return s
+}
+
+// Meter draws a bar from PercentValue, PercentKnown and Direction only.
+func (w ProductAllowanceWindow) Meter() allowanceMeter {
+	if !w.PercentKnown {
+		return allowanceMeter{Note: "Numeric percent not reported, so no bar is drawn."}
+	}
+	if math.IsNaN(w.PercentValue) || math.IsInf(w.PercentValue, 0) || w.PercentValue < 0 || w.PercentValue > 100 {
+		return allowanceMeter{Note: "Percent is outside 0–100, so no bar is drawn."}
+	}
+	value := roundAllowancePercent(w.PercentValue)
+	var used float64
+	switch w.Direction {
+	case "used":
+		used = value
+	case "remaining":
+		used = roundAllowancePercent(100 - value)
+	default:
+		return allowanceMeter{Note: "Direction not reported, so no bar is drawn."}
+	}
+	remain := roundAllowancePercent(100 - used)
+	text := formatAllowancePercent(used)
+	return allowanceMeter{
+		Shown:      true,
+		UsedText:   text,
+		RemainText: formatAllowancePercent(remain),
+		UsedWidth:  text,
+	}
+}
+
+// AllowanceResetStatus is the exact reset instant, or an honest gap.
+// State is missing, invalid, past or future. Exact is RFC3339 when known.
+type AllowanceResetStatus struct {
+	State, Exact, Zone, Human, Countdown string
+}
+
+func parseAllowanceInstant(raw string) (time.Time, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, "missing"
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || t.IsZero() {
+		return time.Time{}, "invalid"
+	}
+	return t, "exact"
+}
+
+func allowanceZone(t time.Time) string {
+	_, offset := t.Zone()
+	if offset == 0 {
+		return "UTC"
+	}
+	sign := "+"
+	if offset < 0 {
+		sign = "-"
+		offset = -offset
+	}
+	return fmt.Sprintf("UTC%s%02d:%02d", sign, offset/3600, (offset%3600)/60)
+}
+
+func allowancePlural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
+}
+
+func allowanceCountdown(t, now time.Time) string {
+	d := t.Sub(now)
+	if d < time.Minute {
+		return "under 1 minute"
+	}
+	mins := int(d / time.Minute)
+	days := mins / 1440
+	hours := (mins % 1440) / 60
+	minutes := mins % 60
+	parts := make([]string, 0, 3)
+	if days > 0 {
+		parts = append(parts, allowancePlural(days, "day"))
+	}
+	if hours > 0 {
+		parts = append(parts, allowancePlural(hours, "hour"))
+	}
+	if minutes > 0 {
+		parts = append(parts, allowancePlural(minutes, "minute"))
+	}
+	if len(parts) == 0 {
+		return "under 1 minute"
+	}
+	return strings.Join(parts, " ")
+}
+
+// ResetStatus reports a reset instant only when ResetPrecision is instant.
+// It does not read Reset, and it does not treat a display-only time as an instant.
+func (w ProductAllowanceWindow) ResetStatus() AllowanceResetStatus {
+	switch w.ResetPrecision {
+	case "":
+		return AllowanceResetStatus{State: "missing"}
+	case "display_only":
+		return AllowanceResetStatus{State: "display_only"}
+	case "instant":
+	default:
+		return AllowanceResetStatus{State: "unrecognized"}
+	}
+	t, state := parseAllowanceInstant(w.ResetAt)
+	if state != "exact" {
+		return AllowanceResetStatus{State: "invalid"}
+	}
+	status := AllowanceResetStatus{
+		Exact: t.Format(time.RFC3339),
+		Zone:  allowanceZone(t),
+		Human: t.Format("2 Jan 2006, 15:04"),
+	}
+	now := allowanceNow()
+	if !t.After(now) {
+		status.State = "past"
+		return status
+	}
+	status.State = "future"
+	status.Countdown = allowanceCountdown(t, now)
+	return status
+}
+
+// AllowanceObservedStatus is the typed observation instant.
+// State is missing, invalid, exact or future.
+type AllowanceObservedStatus struct {
+	State, Exact, Zone, Human string
+}
+
+// ObservedStatus reports the typed ObservedAt instant. It does not read Observed.
+func (w ProductAllowanceWindow) ObservedStatus() AllowanceObservedStatus {
+	t, state := parseAllowanceInstant(w.ObservedAt)
+	if state != "exact" {
+		return AllowanceObservedStatus{State: state}
+	}
+	status := AllowanceObservedStatus{
+		State: "exact",
+		Exact: t.Format(time.RFC3339),
+		Zone:  allowanceZone(t),
+		Human: t.Format("2 Jan 2006, 15:04"),
+	}
+	if t.After(allowanceNow()) {
+		status.State = "future"
+	}
+	return status
+}
+
+// WindowLine names the display window and a recognized WindowKind.
+func (w ProductAllowanceWindow) WindowLine() string {
+	kind, known := allowanceWindowKinds[w.WindowKind]
+	window := w.Window
+	if window == "" {
+		window = "Unknown"
+	}
+	switch {
+	case w.WindowKind == "" && window == "Unknown":
+		return "Window not reported."
+	case w.WindowKind == "":
+		return "Window: " + window + "."
+	case !known && window == "Unknown":
+		return "Window kind not recognized."
+	case !known:
+		return "Window: " + window + ". Window kind not recognized."
+	case window == "Unknown":
+		return "Window kind: " + kind + ". Duration not reported."
+	default:
+		return "Window: " + window + ", " + kind + "."
+	}
+}
+
+// AccountLabel is the opaque account token, or empty when it must not be shown.
+func (w ProductAllowanceWindow) AccountLabel() string {
+	if !allowanceAccountKey.MatchString(w.AccountKey) {
+		return ""
+	}
+	return "Account " + w.AccountKey
+}
+
+// SourceLine names Provenance, or says the source was not reported.
+func (w ProductAllowanceWindow) SourceLine() string {
+	if w.Provenance == "" || w.Provenance == "Unknown" {
+		return "Source not reported."
+	}
+	return "Source: " + w.Provenance + "."
 }
 
 func (a ProductAllowance) Tone() string {
@@ -478,10 +717,38 @@ func (a ProductAllowance) Tone() string {
 	return "muted"
 }
 
+// Confidence is the account-level freshness sentence. Empty for states that
+// already explain themselves in the summary.
+func (a ProductAllowance) Confidence() string {
+	switch a.Value {
+	case AllowanceStale:
+		return "This report is stale. The figures are the last trusted reading, not a live one."
+	case AllowanceMeasured:
+		return "This is a measured provider report."
+	default:
+		return ""
+	}
+}
+
+// MissingNote explains Cursor when no account view is connected.
+func (a ProductAllowance) MissingNote() string {
+	if a.Provider == "Cursor" && a.Value == AllowanceNotConnected {
+		return "No Cursor account view is connected. Nothing here is estimated."
+	}
+	return ""
+}
+
+func (w ProductAllowanceWindow) reportedPercent() bool {
+	if w.PercentKnown {
+		return true
+	}
+	return w.Percent != "" && w.Percent != "Unknown"
+}
+
 func (a ProductAllowance) CompactWindows() []ProductAllowanceWindow {
 	var windows []ProductAllowanceWindow
 	for _, w := range a.Windows {
-		if w.Percent != "" && w.Percent != "Unknown" {
+		if w.reportedPercent() {
 			windows = append(windows, w)
 			if len(windows) == 2 {
 				break
@@ -493,10 +760,15 @@ func (a ProductAllowance) CompactWindows() []ProductAllowanceWindow {
 
 func (a ProductAllowance) More() int { return len(a.Windows) - len(a.CompactWindows()) }
 
-// allowanceViews keeps the provider set fixed, fills absent metadata, and never
-// renders a percent for an untrusted state. It does not inspect session usage.
+// allowanceViews keeps Claude, Codex and Cursor fixed, in that order, fills
+// absent metadata, and never renders a percent for an untrusted state. An
+// absent Cursor row stays Not connected. It does not inspect session usage.
 func allowanceViews(input []ProductAllowance) []ProductAllowance {
-	out := []ProductAllowance{{Provider: "Claude", Value: AllowanceNotConnected}, {Provider: "Codex", Value: AllowanceNotConnected}}
+	out := []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceNotConnected},
+		{Provider: "Codex", Value: AllowanceNotConnected},
+		{Provider: "Cursor", Value: AllowanceNotConnected},
+	}
 	for i := range out {
 		for _, a := range input {
 			if a.Provider != out[i].Provider {
