@@ -140,7 +140,13 @@ that value does not leave the helper. An older benign snapshot cannot come
 back. Unknown ids, another session, expiry, completion and a full cache fail
 closed. Usable context still needs a recognized `kind` and a nonempty `title`,
 from the request or from that cached update. `toolCallId` is only the
-correlation key.
+correlation key. The [ACP v1 schema](https://agentclientprotocol.com/protocol/v1/schema#toolcallid)
+defines it as a string. The helper keeps its exact UTF-8 spelling in memory,
+with a local 1024-byte limit, rather than applying the display-label grammar.
+It does not trim or normalize tool IDs, put them in paths, or emit them in
+context or diagnostics. Session, request and option identifier rules remain
+unchanged. A source correction for this distinction does not prove that a
+particular installed provider request now has usable context.
 
 The [ACP v1 request schema](https://agentclientprotocol.com/protocol/v1/schema#requestpermissionrequest)
 uses `ToolCallUpdate`; every field except `toolCallId` may be omitted. This
@@ -438,3 +444,24 @@ non-string status, and a saturated dropped-id set fail closed. This paragraph
 does not record a run of those tests and it is not live provider acceptance.
 Reject-once is unchanged. Recovered context does not approve an action. See
 [the source note](../.agents/sagas/distributed-dev-env/verification/op318-permission-context-2026-11-01.md).
+
+## Optional private structural diagnostic
+
+`--diagnostic-file BASENAME` is off by default. When explicitly selected, the
+helper exclusively creates a 0600 regular file directly in the private
+worktree; it refuses an existing target, symlink or path escape. Default
+stdout, stderr and permission policy stay the same. The file contains only
+known schema field presence and types, fixed enum tags, counts, in-memory
+correlation ordinals and fixed cache/projection flags. Content, raw output
+and extension containers remain opaque. Raw IDs, commands, titles, unknown
+keys or values, history, credentials and hashes of those values are omitted.
+One fixed synthetic-command comparison produces only a boolean.
+
+Capture is bounded to 64 records and 96 KiB, at most 8 KiB per record, with
+bounded shape traversal and an asynchronous writer. Stalled storage cannot
+hold up permission handling. A final `capture-end` marker is required for
+complete evidence; `capture-bound` means truncated capture. A missing end
+marker or write failure leaves incomplete evidence and does not authorize
+a retry or a permission decision. This diagnostic does not fetch history,
+change protocol version or establish question delivery, model understanding
+or action execution. Any real run needs its own bounded authorization.

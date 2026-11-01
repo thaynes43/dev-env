@@ -130,3 +130,36 @@ in 20.894 seconds under the same serial lock and priority limit. The automated
 review independently reported the same inherited-argument mismatch; that finding
 is covered by this correction and fixture. These are source and offline protocol
 results, with no provider launch or runtime replacement.
+
+## Opaque tool-ID source correction and structural diagnostic
+
+A separately authorized reject-only development capture showed a same-session
+tool update with the expected synthetic command, followed by an absent cache
+entry and absent diagnostic ordinal. The later permission copy omitted that
+input. The fixed-schema capture retained no actual tool ID characters or
+length. Source inspection confirms that both paths used the same display-label
+validator before storing or assigning the ID. This identifies the source drop
+predicate without inventing the original ID spelling.
+
+The source correction validates tool IDs as exact bounded UTF-8 strings,
+independently of display labels. An invented punctuation-ID fixture reproduces
+the observed update/status/partial-permission sequence: it fails before the
+change and recovers the cached command afterward. Negative and compatibility
+fixtures retain session correlation, cache bounds, closed/expired/poisoned
+entries, privacy and reject-once policy. Null-status handling is unchanged;
+that was not the observed cause. The optional private structural diagnostic
+is default off and is described in the helper guide.
+
+The source owner reports 105 helper tests and 39 checker tests passing, with
+an independent native privacy/code review of the exact frozen files. The
+integration coordinator also ran the hosted optimized-mode discovery command
+locally: all 144 tests passed. Hosted CI reported an early test failure; its
+actual cause and any correction must be recorded before merge. No retry or
+flaky-pass inference follows from the local pass.
+
+The development run sent a matching reject-once and ended with its sentinel
+absent; the known child group was subsequently absent. Exact process exit UTC
+was not retained, so the capture file timestamp does not prove a 120-second
+process bound. This is not installed post-fix acceptance. A later permitted
+installed-path check, and the separate platform question/answer/provider-ACK
+chain, still need their own evidence.
