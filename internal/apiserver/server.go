@@ -110,7 +110,8 @@ type Server struct {
 	// kind and inReplyTo is installed.
 	InboxQuestions bool
 	// PortalQuestionAudit serves GET /v1/portal/question-audit, a metadata-only
-	// page for one explicit project and one live session name and UID.
+	// page of question and reply records for one explicit project and one live
+	// session name and UID. Plain messages on the store page are omitted.
 	// Default off. It does not admit the portal reader to /v1/inbox, and an
 	// empty PortalQuestionProjects list leaves the route unregistered.
 	// Source wiring is not a deployed permission.

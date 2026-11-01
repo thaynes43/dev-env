@@ -58,15 +58,29 @@ func (s *Server) portalQuestionAudit(ctx context.Context, _ http.ResponseWriter,
 	if err != nil {
 		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "question audit metadata is unavailable")
 	}
+	// One store page. Plain messages on it are omitted and do not widen the
+	// metadata scope. The handler does not read another page to refill the limit.
+	// Truncated and NextCursor still describe the store page, so a filtered
+	// page can be shorter than Limit, including empty while Truncated is set.
 	memo := map[coord.SessionIdentity]inboxEnded{}
 	lookup := s.pageReplies(q.project, id, q.sent)
 	views := make([]apiv1.PortalQuestionAuditItem, 0, len(items))
 	for i := range items {
 		m := &items[i]
+		if m.Spec.Kind != inbox.KindQuestion && m.Spec.Kind != inbox.KindReply {
+			continue
+		}
 		thread := s.inboxThread(ctx, m, false, lookup, memo)
 		ack := apiv1.PortalQuestionAuditAck{Status: apiv1.PortalQuestionAckUnavailable}
-		if thread != nil && thread.Reply != nil {
+		if thread != nil && thread.State == apiv1.InboxStateAcknowledged && thread.Reply != nil {
 			ack = s.questionAuditAck(ctx, q.project, *thread.Reply)
+			if ack.Status != apiv1.PortalQuestionAckRecorded {
+				reduced := *thread
+				reduced.State = apiv1.InboxStateUnknown
+				reduced.WaitingOn = nil
+				thread = &reduced
+				ack = apiv1.PortalQuestionAuditAck{Status: apiv1.PortalQuestionAckUnavailable}
+			}
 		}
 		views = append(views, questionAuditItem(m, thread, ack))
 	}
@@ -74,10 +88,15 @@ func (s *Server) portalQuestionAudit(ctx context.Context, _ http.ResponseWriter,
 	if freshErr != nil || fresh == nil || *fresh != *id {
 		return 0, nil, notFound("question audit metadata was not found")
 	}
+	for i := range views {
+		if !apiv1.PortalQuestionAuditItemOK(views[i]) {
+			return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "question audit metadata is unavailable")
+		}
+	}
 	resp := apiv1.PortalQuestionAudit{
 		Version: apiv1.PortalQuestionAuditVersion, Project: q.project,
 		Session: apiv1.PortalQuestionAuditIdentity{Namespace: id.Namespace, Name: id.Name, UID: id.UID},
-		Box: q.box, Limit: int(q.limit), Truncated: next != "", NextCursor: next,
+		Box:     q.box, Limit: int(q.limit), Truncated: next != "", NextCursor: next,
 		Origin: apiv1.PortalQuestionOriginUnknown, Approval: apiv1.PortalQuestionApprovalNotRecorded,
 		ProviderConsumption: apiv1.PortalQuestionConsumptionNotRecorded, ServedModel: apiv1.PortalQuestionServedModelUnknown,
 		Items: views,
@@ -107,8 +126,11 @@ func (s *Server) provenQuestionSession(ctx context.Context, name, uid string) (*
 }
 
 // questionAuditAck copies actor and time only from the acknowledgement of the
-// exact linked reply. A missing or mismatched record stays unavailable. The
-// thread state word is not a source for either field.
+// exact linked reply. The actor must be the recorded recipient session, not
+// the message's sender and not a claimed origin. A missing record, a crossed
+// name or UID, a project or recipient mismatch, an actor that is not that
+// session, or a time before the reply stays unavailable. The thread state
+// word is not a source for either field, and Acknowledged is not approval.
 func (s *Server) questionAuditAck(ctx context.Context, project string, ref apiv1.InboxMessageRef) apiv1.PortalQuestionAuditAck {
 	unavailable := apiv1.PortalQuestionAuditAck{Status: apiv1.PortalQuestionAckUnavailable}
 	if s == nil || s.Inbox == nil || !inbox.ValidMessageName(ref.Name) || !questionAuditUID(ref.UID) {
@@ -123,6 +145,12 @@ func (s *Server) questionAuditAck(ctx context.Context, project string, ref apiv1
 		return unavailable
 	}
 	actor := inboxActorView(a.Spec.Actor)
+	if !apiv1.PortalQuestionAckActorMatches(actor, inboxOwner(m.Spec.Recipient)) {
+		return unavailable
+	}
+	if a.CreationTimestamp.IsZero() || a.CreationTimestamp.Time.Before(m.CreationTimestamp.Time) {
+		return unavailable
+	}
 	at := a.CreationTimestamp.Time.UTC()
 	return apiv1.PortalQuestionAuditAck{Status: apiv1.PortalQuestionAckRecorded, Actor: &actor, CreatedAt: &at}
 }
@@ -140,6 +168,10 @@ func questionAuditItem(m *coord.InboxMessage, thread *apiv1.InboxThread, ack api
 		Origin:    apiv1.PortalQuestionOriginUnknown, Approval: apiv1.PortalQuestionApprovalNotRecorded,
 		ProviderConsumption: apiv1.PortalQuestionConsumptionNotRecorded, ServedModel: apiv1.PortalQuestionServedModelUnknown,
 		Acknowledgement: ack,
+	}
+	if m.Spec.InReplyTo != nil {
+		ref := apiv1.InboxMessageRef{Name: m.Spec.InReplyTo.Name, UID: m.Spec.InReplyTo.UID}
+		item.InReplyTo = &ref
 	}
 	if thread != nil {
 		copied := *thread
@@ -211,7 +243,7 @@ func parsePortalQuestionQuery(r *http.Request) (portalQuestionQuery, error) {
 		q.limit = n
 	}
 	if raw, ok := values["continue"]; ok {
-		if !validQuestionCursor(raw[0]) {
+		if !apiv1.PortalQuestionCursorOK(raw[0]) {
 			return q, badRequest("invalid question audit query")
 		}
 		q.cursor = raw[0]
@@ -225,18 +257,6 @@ func questionAuditUID(uid string) bool {
 	}
 	for _, r := range uid {
 		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' {
-			return false
-		}
-	}
-	return true
-}
-
-func validQuestionCursor(s string) bool {
-	if len(s) < 1 || len(s) > 4096 {
-		return false
-	}
-	for _, r := range s {
-		if r <= ' ' || r == 0x7f {
 			return false
 		}
 	}

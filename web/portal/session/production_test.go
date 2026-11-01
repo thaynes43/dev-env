@@ -711,3 +711,43 @@ func TestProductionLaunchConstructor(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionQuestionAuditWiring(t *testing.T) {
+	for _, name := range []string{"PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGSSLCRL", "PGSSLCRLDIR"} {
+		t.Setenv(name, "")
+	}
+	absent := writeRuntimeDir(t, "SECRET-CANARY")
+	rt, err := LoadProduction(absent)
+	if err != nil || rt.questionAudit != "" {
+		t.Fatalf("absent config err=%v project=%q", err, rt.questionAudit)
+	}
+	rt.Close()
+	enabled := writeRuntimeDir(t, "SECRET-CANARY")
+	if err := os.WriteFile(filepath.Join(enabled, "config/question-audit"), []byte("sample\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProduction(enabled); err == nil {
+		t.Fatal("question audit without an operator credential connected")
+	}
+	token := fixtureOperatorToken(apiv1.TokenAudience, time.Now().Add(time.Hour))
+	if err := os.WriteFile(filepath.Join(enabled, "secrets/OPERATOR_TOKEN"), []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt, err = LoadProduction(enabled)
+	if err != nil || rt.questionAudit != "sample" {
+		t.Fatalf("enabled fixture err=%v project=%q", err, rt.questionAudit)
+	}
+	if strings.Contains(fmt.Sprintf("%v%+v%#v", rt, rt, rt), "sample") {
+		t.Fatal("runtime formatting exposed the project")
+	}
+	rt.Close()
+	for _, body := range []string{"Sample\n", "*\n", "sample,other\n", "\n", "sample\n\n", " sample\n"} {
+		root := writeRuntimeDir(t, "SECRET-CANARY")
+		if err := os.WriteFile(filepath.Join(root, "config/question-audit"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadProduction(root); err == nil {
+			t.Fatalf("accepted %q", body)
+		}
+	}
+}

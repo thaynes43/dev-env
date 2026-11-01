@@ -267,6 +267,8 @@ func parseFlags(args []string) (options, error) {
 	inboxProjects := fs.String("inbox-projects", "", "explicit comma-separated projects enabled for durable Session inbox access")
 	inboxCoordinatorProjects := fs.String("inbox-coordinator-read-projects", "", "separate explicit projects granting configured coordinators inbox content read only")
 	fs.BoolVar(&o.inboxQuestions, "enable-inbox-questions", false, "accept inbox ask and reply publications and serve the thread view and sent box; requires enable-durable-inbox and the InboxMessage CRD with kind and inReplyTo")
+	fs.BoolVar(&o.portalQuestionAudit, "enable-portal-question-audit", false, "serve GET /v1/portal/question-audit, one page of question and reply metadata for an explicit project and live session; default off and requires the portal reader, durable inbox, inbox questions and an explicit project allowlist. Source wiring is not a deployed permission")
+	portalQuestionProjects := fs.String("portal-question-projects", "", "comma-separated projects whose question and reply metadata the portal reader may audit; empty leaves the route off")
 	fs.StringVar(&o.ownedRootPolicy, "owned-root-policy", "", "explicit operator-owned finite root policy ConfigMap in dev-env-system")
 	fs.BoolVar(&o.nativeFixtureEnabled, "enable-native-lifecycle-fixture", false, "admit only the fixed isolated zero-task native lifecycle fixture")
 	fs.StringVar(&o.nativeFixtureImage, "native-fixture-image", "", "signature-verified immutable agent image for the isolated fixture")
@@ -510,6 +512,22 @@ func parseFlags(args []string) (options, error) {
 		}
 	} else if len(o.inboxProjects) != 0 || len(o.inboxCoordinatorReadProjects) != 0 || o.inboxQuestions {
 		return o, errors.New("inbox scopes and questions require explicit enable-durable-inbox")
+	}
+	o.portalQuestionProjects, err = apiserver.ParseTaskClaimReadProjects(*portalQuestionProjects)
+	if err != nil {
+		return o, err
+	}
+	if o.portalQuestionAudit {
+		if !o.portalReaderEnabled || !o.inboxEnabled || !o.inboxQuestions || len(o.portalQuestionProjects) == 0 {
+			return o, errors.New("--enable-portal-question-audit requires --enable-portal-reader, --enable-durable-inbox, --enable-inbox-questions and at least one --portal-question-projects entry")
+		}
+		for _, project := range o.portalQuestionProjects {
+			if !slices.Contains(o.inboxProjects, project) {
+				return o, errors.New("--portal-question-projects must be a subset of --inbox-projects")
+			}
+		}
+	} else if len(o.portalQuestionProjects) != 0 {
+		return o, errors.New("--portal-question-projects requires --enable-portal-question-audit")
 	}
 
 	if o.privateProjectCanaries.OutputCaptureEnabled() && !o.contextsEnabled {
@@ -862,6 +880,7 @@ func run(args []string) error {
 			SessionDirectory:          directories, SessionDirectoryProjects: o.directoryProjects, MetadataDiscoveryProjects: o.metadataDiscoveryProjects, DirectoryContexts: directoryContexts,
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
 			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects, InboxQuestions: o.inboxQuestions,
+			PortalQuestionAudit: o.portalQuestionAudit, PortalQuestionProjects: o.portalQuestionProjects,
 			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
 			Client:      mgr.GetClient(),
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
