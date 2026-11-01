@@ -413,7 +413,13 @@ func sessionDriver(mode string) string {
 // sessionGroup files a session by what it needs now. A task's own result comes
 // first: a Failed phase only says the pod ended, and agentd's last state
 // outlives the pod. A failure is Needs attention for attentionWindow, then
-// Stopped. A suspended or archived session is Stopped.
+// Stopped. A suspended or archived session is Stopped. A known agent state
+// then decides the group, including exited while the phase is still Running.
+//
+// Running, Pending and Idle are pod phases. They are not evidence the executor
+// is live, so a missing or Unknown agent state stays State Unknown. Draining
+// with no execution state is Stopped. A stale observation does not change a
+// known state and does not invent one.
 //
 // When a failure happened: a task ends at its last activity. A pod that ended
 // stops heartbeating, so its last heartbeat can be later than its last
@@ -451,10 +457,7 @@ func sessionGroup(s apiv1.PortalSessionSummary, now time.Time) int {
 	case protocol.AgentExited:
 		return 2
 	}
-	switch s.Phase {
-	case "Running", "Pending", "Idle":
-		return 1
-	case "Draining":
+	if s.Phase == "Draining" {
 		return 2
 	}
 	return 3
@@ -1078,8 +1081,10 @@ func sessionRow(row apiv1.PortalSessionSummary, now time.Time) portal.ProductRow
 }
 
 // sessionStatus shows how a task's process ended first, then a stopped or
-// failed phase, then agentd's state word, then the phase. A clean exit reads
-// Exited 0, not success: only the task's outcome says what it did.
+// failed phase, then agentd's state word. A clean exit reads Exited 0, not
+// success: only the task's outcome says what it did. Running, Pending and
+// Idle do not stand in for a missing agent state; that badge stays Unknown.
+// Draining with no execution state keeps its phase word.
 func sessionStatus(phase string, a *apiv1.PortalSessionActivity) portal.ProductStatus {
 	switch a.TaskResult {
 	case "Succeeded":
@@ -1111,8 +1116,10 @@ func sessionStatus(phase string, a *apiv1.PortalSessionActivity) portal.ProductS
 	case protocol.AgentInterrupted:
 		return portal.ProductStatus{Text: "Interrupted", Tone: "bad"}
 	}
-	tone := map[string]string{"Running": "ok", "Pending": "muted", "Idle": "muted", "Draining": "wait", "Failed": "bad"}[phase]
-	return portal.ProductStatus{Text: shown(phase), Tone: tone}
+	if phase == "Draining" {
+		return portal.ProductStatus{Text: "Draining", Tone: "wait"}
+	}
+	return portal.ProductStatus{Text: protocol.UsageUnknown, Tone: "muted"}
 }
 
 // compactAgo is the list's short age: 2m, 3h, 4d, now or Unknown.
