@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
@@ -19,7 +21,8 @@ func TestHomeCapacityChangesNewClaimsWithoutRevisionDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := drainFixture("capacity-only")
+	s := taskSession()
+	s.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentIdle}
 	oldPod, err := buildPod(s, old, "")
 	if err != nil {
 		t.Fatal(err)
