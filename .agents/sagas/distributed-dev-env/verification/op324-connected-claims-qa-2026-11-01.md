@@ -1,0 +1,17 @@
+# Connected Pages and claims consumer fixtures — 2026-11-01
+
+Grok wrote two new fixture files under OP322/324. The worker reached its physical bound at 16:14:38 UTC; no worker-run test was verified. The coordinator imported the frozen task patch `35324383ed94f5bc2b63f47705dde07cd99503586dd642ff89973b0964386666` into a private integration worktree and applied only gofmt. Requested model was `grok-4.7-high`; served identity remains Unknown.
+
+Before this correction, the focused new tests passed locally on pinned Go 1.27.3, GOMAXPROCS=2, -p 1, nice 19 and the shared test lock/cache: agentrun 0.022 s and portal/session 0.024 s. Those timings are the pre-correction suite only. Tests traverse actual JSON-RPC MCP request handling, the existing V1 responder-order parser/projector and rendered HTML. Cases cover exact incident/order identity, stale and failed sources, batching, unchanged inventory and withheld evidence.
+
+Canonical claims are supplied by synthetic test doubles. UID/conflict rejection inside those doubles does not qualify a production canonical reader, a real registry lookup, claim creation or live ownership. The portal HTTP test explicitly demonstrates that the production assembly has no response-source seam and remains Unconfigured. Missing workflow waiting reason, expiry and renewal are absent source fields; these tests do not create them or infer transfer. No live Page, grant, claim, report, access configuration or source was created.
+
+Independent review found a brittle enumeration of all AssemblyConfig fields in the portal test. That enumeration is removed: `TestConnectedClaimsAssemblyHasNoResponseSource` no longer lists `wantFields`, calls `reflect.VisibleFields`, or loops over declaration order. The unused `reflect` import is removed. The test still requires the assembled pages HTTP response to be status 200, to match `PagesWorkspace` rendered with empty response sources, to project `Unconfigured` order and claim conditions with unknown claim identity, to keep both synthetic alert fingerprints, and to omit the canonical claim UID, owner, and evidence link. An unrelated AssemblyConfig field addition or reorder is outside this contract. Production source, registry, and reader limits are unchanged. This authoring pass did not run the corrected test, so no pass is claimed for it. Required final-head review and hosted CI remain with Sol. This source QA slice leaves real producer/consumer integration and usable runtime acceptance open under OP322/324.
+
+## Final driver qualification
+
+The current coordinator ran only the changed `TestConnectedClaimsAssemblyHasNoResponseSource` after removing the brittle enumeration. It passed in 0.022 s on the same pinned, serial harness. The MCP and other render fixtures were unchanged and were not repeated. Independent native delta review passed. Worker test execution, required final-head CI, a production canonical reader and live portal response integration are not implied by this result.
+
+## Question-audit source integration
+
+The coordinator merged main at `e9d29db28864494d083999fb2af17cccd6a01029` so these fixtures compile and execute alongside the delivered question-audit configuration. The focused `TestConnectedClaims` cases passed in 0.024 s for agentrun and 0.020 s for portal/session. The removed field enumeration no longer couples this behavior contract to unrelated config fields. No production claim reader or Page response source was added.
