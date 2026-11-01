@@ -174,7 +174,26 @@ does not mean ingestion is complete.
 
 ## Local preparation
 
-By default, the command emits only the sanitized report:
+The selected publisher's `/usr/local/bin/agent-run` was v2.45.0 when its
+owner checked it on 2026-11-01 at 22:26 UTC. It lacks `usage-source`.
+An unknown command can fall through to the session launcher, and general
+launcher help can exit successfully. Check the executable before passing a
+report path or publication arguments.
+
+Explicit publication first shipped in v2.84.0. Use a verified signed release
+that contains it, through an explicit executable path. The v2.84.1 agent image
+contains `/usr/local/bin/agent-run`; obtaining that binary does not require
+replacing the running session's image or its installed client. Installation
+and activation require their own authorization.
+
+For the chosen executable, check `version`, then `help usage-source`. The help
+must start with `Usage: agent-run usage-source` and include the required mode.
+General launcher help fails this check even when it exits 0. Qualify local
+formatting and stale refusal with synthetic input before any approved publish.
+These checks do not enable the route, create storage, or grant publication.
+
+By default, once that binary is the one invoked, the command emits only
+the sanitized report:
 
 ```sh
 agent-run usage-source --codex-tool-report /declared/retained-observation.json \
