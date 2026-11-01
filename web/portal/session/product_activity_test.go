@@ -228,12 +228,208 @@ func TestSessionsPageGroupsByAttention(t *testing.T) {
 			got = append(got, g.Title+":"+row.Title+":"+row.ID)
 		}
 	}
-	want := []string{"Needs attention:c-waiting:s1", "In progress:a-busy:s2", "In progress:d-legacy:s3", "Stopped:b-exited:s4"}
+	want := []string{"Needs attention:c-waiting:s1", "In progress:a-busy:s2", "Stopped:b-exited:s3", "State Unknown:d-legacy:s4"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("groups %v, want %v", got, want)
 	}
 	if !page.Groups[0].Attention || page.Notice != "Connected session summaries." || !page.Quiet {
 		t.Fatalf("page %+v", page)
+	}
+}
+
+// Missing execution state stays Unknown. Running, Pending and Idle are pod
+// phases, so they do not put a session in progress or paint a live badge.
+// A known exit stays Stopped. Exited 0 does not record accepted work.
+func TestMissingExecutionStateStaysUnknown(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	activity := func(mode, state, result string) string {
+		body := strings.Replace(unknownActivity, `"mode":"remote"`, `"mode":"`+mode+`"`, 1)
+		body = strings.Replace(body, `"agentState":"idle"`, `"agentState":"`+state+`"`, 1)
+		if result != "" {
+			body = strings.Replace(body, `"requestedModel"`, `"taskResult":"`+result+`","requestedModel"`, 1)
+		}
+		return body
+	}
+	row := func(name, phase, freshness, body string) string {
+		out := activityRowPhase(name, phase, body)
+		if freshness != "observed" {
+			out = strings.Replace(out, `"freshness":"observed"`, `"freshness":"`+freshness+`"`, 1)
+		}
+		return out
+	}
+	// The connected decoder refuses a task result on an interactive session
+	// before any group or badge is chosen. The producer sets one only for task mode.
+	for _, mode := range []string{"remote", "local"} {
+		if _, err := decodeSessionPage([]byte(activityPage(row(mode+"-result", "Running", "observed", activity(mode, "Unknown", "Succeeded")))), now); err == nil {
+			t.Fatalf("%s taskResult Succeeded was accepted", mode)
+		}
+	}
+	decoded, err := decodeSessionPage([]byte(activityPage(
+		legacyRow("run-absent"),
+		row("run-task-unknown", "Running", "observed", activity("task", "Unknown", "Unknown")),
+		row("run-remote-unknown", "Running", "observed", activity("remote", "Unknown", "")),
+		row("run-local-unknown", "Running", "observed", activity("local", "Unknown", "")),
+		row("pending-remote", "Pending", "observed", activity("remote", "Unknown", "")),
+		row("idle-phase-local", "Idle", "observed", activity("local", "Unknown", "")),
+		row("stale-unknown", "Running", "stale", activity("local", "Unknown", "")),
+		row("exited-no-result", "Running", "observed", activity("task", "exited", "")),
+		row("exited-succeeded", "Running", "observed", activity("task", "exited", "Succeeded")),
+		row("exited-result-unknown", "Running", "observed", activity("task", "exited", "Unknown")),
+		row("stale-busy", "Running", "stale", activity("remote", "busy", "")),
+		row("suspended-remote", "Suspended", "observed", activity("remote", "Unknown", "")),
+		row("archived-local", "Archived", "observed", activity("local", "Unknown", "")),
+		row("draining-unknown", "Draining", "observed", activity("remote", "Unknown", "")),
+		row("failed-unknown", "Failed", "observed", activity("remote", "Unknown", "")),
+	)), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{})
+	cases := []struct {
+		name      string
+		group     string
+		text      string
+		tone      string
+		outcome   string
+		exit      string
+		attention bool
+	}{
+		{"run-absent", "State Unknown", "Unknown", "muted", "absent", "", false},
+		{"run-task-unknown", "State Unknown", "Unknown", "muted", "unknown", "Unknown", false},
+		{"run-remote-unknown", "State Unknown", "Unknown", "muted", "absent", "", false},
+		{"run-local-unknown", "State Unknown", "Unknown", "muted", "absent", "", false},
+		{"pending-remote", "State Unknown", "Unknown", "muted", "absent", "", false},
+		{"idle-phase-local", "State Unknown", "Unknown", "muted", "absent", "", false},
+		{"stale-unknown", "State Unknown", "Unknown", "muted", "absent", "", false},
+		{"exited-no-result", "Stopped", "Exited", "muted", "unknown", "", false},
+		{"exited-succeeded", "Stopped", "Exited 0", "muted", "unknown", "Exited 0", false},
+		{"exited-result-unknown", "Stopped", "Exited", "muted", "unknown", "Unknown", false},
+		{"stale-busy", "In progress", "Busy", "busy", "absent", "", false},
+		{"suspended-remote", "Stopped", "Suspended", "muted", "absent", "", false},
+		{"archived-local", "Stopped", "Archived", "muted", "absent", "", false},
+		{"draining-unknown", "Stopped", "Draining", "wait", "absent", "", false},
+		{"failed-unknown", "Needs attention", "Failed", "bad", "absent", "", true},
+	}
+	counts := map[string]int{}
+	grouped := map[string]string{}
+	for _, g := range page.Groups {
+		counts[g.Title] = g.Total
+		for _, item := range g.Rows {
+			grouped[item.Title] = g.Title
+		}
+	}
+	if counts["Needs attention"] != 1 || counts["In progress"] != 1 || counts["Stopped"] != 6 || counts["State Unknown"] != 7 || page.ListCount != "15 sessions · all projects" {
+		t.Fatalf("counts %+v list %q", counts, page.ListCount)
+	}
+	for _, tc := range cases {
+		item := findRow(t, page, tc.name)
+		fields := rowFields(item)
+		if grouped[tc.name] != tc.group || item.Status != (portal.ProductStatus{Text: tc.text, Tone: tc.tone}) {
+			t.Errorf("%s group %q status %+v, want %s / %s %s", tc.name, grouped[tc.name], item.Status, tc.group, tc.text, tc.tone)
+		}
+		outcome := "absent"
+		for _, section := range item.Sections {
+			if section.Title != "Task outcome" {
+				continue
+			}
+			outcome = "unknown"
+			if len(section.States) != 1 || section.States[0].Status != (portal.ProductStatus{Text: "Unknown", Tone: "muted"}) || section.States[0].Text != "No outcome recorded." || !strings.Contains(section.Note, "does not mean the work is done") {
+				t.Errorf("%s outcome %+v note %q", tc.name, section.States, section.Note)
+			}
+		}
+		if outcome != tc.outcome {
+			t.Errorf("%s outcome %s, want %s", tc.name, outcome, tc.outcome)
+		}
+		if got := fields["Process exit"]; got != tc.exit {
+			t.Errorf("%s process exit %q, want %q", tc.name, got, tc.exit)
+		}
+		if (item.Attention != nil) != tc.attention {
+			t.Errorf("%s attention %v", tc.name, item.Attention != nil)
+		}
+		if fields["Phase"] == "" {
+			t.Errorf("%s dropped its phase", tc.name)
+		}
+	}
+	absent := findRow(t, page, "run-absent")
+	if rowFields(absent)["Phase"] != "Running" || rowFields(absent)["Last reported agent state"] != "Unknown" {
+		t.Fatalf("absent activity lost its phase or invented a state: %+v", rowFields(absent))
+	}
+	busy := findRow(t, page, "stale-busy")
+	if rowFields(busy)["Freshness"] != "stale" || rowFields(busy)["Last reported agent state"] != "busy" || busy.Messages == nil || !busy.Messages.Draftable || busy.Messages.Route.Text != "CLI route" {
+		t.Fatalf("stale known busy changed: status %+v fields %+v messages %+v", busy.Status, rowFields(busy), busy.Messages)
+	}
+	remote := findRow(t, page, "run-remote-unknown")
+	if remote.Messages == nil || remote.Messages.Draftable || remote.Messages.Route.Text != "Route Unknown" {
+		t.Fatalf("unknown remote was treated as reachable: %+v", remote.Messages)
+	}
+	body, err := portal.RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if strings.Contains(html, `tone-ok">Running`) || strings.Contains(html, `tone-ok">Pending`) || strings.Contains(html, `tone-ok">Idle`) {
+		t.Fatal("a pod phase was rendered as a live execution status")
+	}
+	section := func(title string) string {
+		t.Helper()
+		marker := "<span>" + title + "</span><span>"
+		i := strings.Index(html, marker)
+		if i < 0 {
+			t.Fatalf("rendered page has no %s group", title)
+		}
+		rest := html[i:]
+		if j := strings.Index(rest[len(marker):], `<h2 class="group-label"`); j >= 0 {
+			return rest[:len(marker)+j]
+		}
+		if j := strings.Index(rest, "<main"); j >= 0 {
+			return rest[:j]
+		}
+		return rest
+	}
+	inProgress := section("In progress")
+	unknown := section("State Unknown")
+	stopped := section("Stopped")
+	attention := section("Needs attention")
+	if !strings.Contains(inProgress, "<span>1</span>") || !strings.Contains(inProgress, `<span class="badge tone-busy">Busy</span></span><h3>stale-busy</h3>`) {
+		t.Fatalf("in progress section: %s", inProgress)
+	}
+	for _, name := range []string{"run-absent", "run-task-unknown", "run-remote-unknown", "run-local-unknown", "pending-remote", "idle-phase-local", "stale-unknown", "exited-no-result", "exited-succeeded", "exited-result-unknown", "suspended-remote", "archived-local"} {
+		if strings.Contains(inProgress, "<h3>"+name+"</h3>") {
+			t.Errorf("%s is listed in progress", name)
+		}
+	}
+	if !strings.Contains(unknown, "<span>7</span>") || strings.Contains(unknown, "Exited") || strings.Contains(unknown, "<h3>stale-busy</h3>") {
+		t.Fatalf("state unknown section: %s", unknown)
+	}
+	for _, name := range []string{"run-absent", "run-task-unknown", "run-remote-unknown", "run-local-unknown", "pending-remote", "idle-phase-local", "stale-unknown"} {
+		if !strings.Contains(unknown, `<span class="badge tone-muted">Unknown</span></span><h3>`+name+`</h3>`) {
+			t.Errorf("state unknown list lacks %s", name)
+		}
+	}
+	for _, piece := range []string{
+		"<span>6</span>",
+		`<span class="badge tone-muted">Exited</span></span><h3>exited-no-result</h3>`,
+		`<span class="badge tone-muted">Exited 0</span></span><h3>exited-succeeded</h3>`,
+		`<span class="badge tone-muted">Exited</span></span><h3>exited-result-unknown</h3>`,
+		`<span class="badge tone-muted">Suspended</span></span><h3>suspended-remote</h3>`,
+		`<span class="badge tone-muted">Archived</span></span><h3>archived-local</h3>`,
+		`<span class="badge tone-wait">Draining</span></span><h3>draining-unknown</h3>`,
+	} {
+		if !strings.Contains(stopped, piece) {
+			t.Errorf("stopped list lacks %s", piece)
+		}
+	}
+	if !strings.Contains(attention, "<span>1</span>") || !strings.Contains(attention, `<span class="badge tone-bad">Failed</span></span><h3>failed-unknown</h3>`) {
+		t.Fatalf("attention section: %s", attention)
+	}
+	if !strings.Contains(html, `All sessions<span class="count">15</span>`) || !strings.Contains(html, `Needs attention<span class="attention-count">1</span>`) {
+		t.Fatal("rail counts omitted the unknown and failed rows")
+	}
+	if strings.Contains(html, "Succeeded") || strings.Contains(html, "Success") || strings.Contains(html, "Accepted") {
+		t.Fatal("a process exit or missing outcome was rendered as accepted work")
+	}
+	if strings.Count(html, `<span class="badge tone-muted">Unknown</span><span>No outcome recorded.</span>`) != 4 || !strings.Contains(html, "A clean process exit does not mean the work is done.") {
+		t.Fatal("task outcome Unknown was not rendered for each task")
 	}
 }
 
@@ -341,6 +537,9 @@ func TestSessionLegacyRowRendersUnknownActivity(t *testing.T) {
 	}
 	if got["Phase"] != "Running" || got["Freshness"] != "observed" || got["UID"] != "uid-legacy" || row.Title != "legacy" || row.Meta != "" || row.Description != "model Unknown · mode Unknown" || row.Age != "Unknown" {
 		t.Fatalf("legacy row %+v", row)
+	}
+	if row.Status != (portal.ProductStatus{Text: "Unknown", Tone: "muted"}) {
+		t.Fatalf("legacy status %+v", row.Status)
 	}
 }
 
