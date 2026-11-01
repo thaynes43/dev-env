@@ -48,6 +48,8 @@ type SessionSource struct {
 	lastSuccessMu sync.Mutex
 	lastSuccess   time.Time
 	logger        *slog.Logger
+	// allowance projects one injected cached read. Production leaves it nil.
+	allowance AllowanceReader
 }
 
 // TaskSource reads project 3's work-package collection. It does not follow an
@@ -288,6 +290,7 @@ func (s *SessionSource) read(ctx context.Context, filter portal.ProductFilter, r
 	step = time.Now()
 	page = sessionsPage(sessions, complete, freshness, s.now(), filter)
 	stats.projection = time.Since(step)
+	page = applyCachedAllowance(page, s.allowance, s.now)
 	step = time.Now()
 	page = withHistory(ctx, page, filter.Session, s.conversations, s.now())
 	stats.history = time.Since(step)
