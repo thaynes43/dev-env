@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -1166,8 +1167,8 @@ func TestAllowanceStripFoldsOnShortWindows(t *testing.T) {
 	if strings.Count(strip, "<details") != 1 || strings.Contains(strip, "<details open") || strings.Contains(strip, " open>") {
 		t.Fatal("the disclosure must start closed so a short window starts folded")
 	}
-	if !strings.HasSuffix(strip, `</ul></details></div>`) || strings.Count(strip, `class="allowance-provider"`) != 2 {
-		t.Fatal("both providers must sit inside the disclosure")
+	if !strings.HasSuffix(strip, `</ul></details></div>`) || strings.Count(strip, `class="allowance-provider"`) != 3 {
+		t.Fatal("Claude, Codex and Cursor must sit inside the disclosure")
 	}
 	style := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindSubmatch(body)
 	if style == nil {
@@ -1365,5 +1366,194 @@ func TestProductFieldLinksAreAllowlistedEverywhere(t *testing.T) {
 	check("context", fieldLinks(fields))
 	if fields[0].Href != bad[0] {
 		t.Fatal("the caller's fields changed")
+	}
+}
+
+func setAllowanceNow(t *testing.T, now time.Time) {
+	t.Helper()
+	previous := allowanceNow
+	allowanceNow = func() time.Time { return now }
+	t.Cleanup(func() { allowanceNow = previous })
+}
+
+func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
+	setAllowanceNow(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	window := ProductAllowanceWindow{
+		Percent: "99% left", Window: "7 days", Reset: "1 Jan 2020, 00:00 UTC",
+		Observed: "29 Oct 13:59 UTC", Provenance: "Provider API",
+		PercentValue: 10, PercentKnown: true, Direction: "used",
+		ObservedAt: "2026-10-29T13:59:00Z", WindowKind: "rolling",
+	}
+	page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{window}}}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := allowanceBlock(t, body, true)
+	for _, want := range []string{
+		`width="10"`, "10% used", "90% remaining", "99% left",
+		"Window: 7 days, rolling.", "Exact reset time not reported.",
+		"Observed at <time datetime=\"2026-10-29T13:59:00Z\">29 Oct 2026, 13:59</time> (UTC).",
+		"Source: Provider API.", "This is a measured provider report.",
+		`<details class="allowance-table-fold"><summary>Window table</summary>`,
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(section, "has passed") || strings.Contains(section, "Resets in") || strings.Contains(section, "99% used") || strings.Contains(section, "<script") || strings.Contains(section, "http:") {
+		t.Fatalf("bar followed display text or left the page: %s", section)
+	}
+	if strings.Contains(section, " open>") || strings.Contains(section, "<details open") {
+		t.Fatal("window table must start closed")
+	}
+	page.Filter.View = ""
+	page.Allowance = page.Usage.Allowance
+	body, err = RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strip := allowanceBlock(t, body, false)
+	if !strings.Contains(strip, "10% used · 90% remaining") || strings.Contains(strip, "99% left") || strings.Contains(strip, "meter-fill") {
+		t.Fatalf("strip summary: %s", strip)
+	}
+}
+
+func TestRenderAllowanceRemainingBarAndResetInstants(t *testing.T) {
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	setAllowanceNow(t, now)
+	base := ProductAllowanceWindow{Window: "5 hours", WindowKind: "fixed", Provenance: "Provider API", PercentKnown: true, PercentValue: 62.5, Direction: "remaining"}
+	cases := []struct {
+		name   string
+		reset  string
+		want   []string
+		absent []string
+	}{
+		{"missing", "", []string{"Exact reset time not reported."}, []string{"Resets in", "has passed", "PRIVATE"}},
+		{"invalid", "PRIVATE-RESET", []string{"Reset time is not a usable instant."}, []string{"PRIVATE-RESET", "Resets in", "has passed"}},
+		{"past", "2020-01-01T00:00:00Z", []string{`datetime="2020-01-01T00:00:00Z"`, "(UTC).", "That time has passed."}, []string{"Resets in"}},
+		{"future", "2026-11-02T03:30:00Z", []string{`datetime="2026-11-02T03:30:00Z"`, "2 Nov 2026, 03:30", "Resets in 1 day 3 hours 30 minutes."}, []string{"has passed"}},
+		{"offset", "2026-11-02T09:00:00-05:00", []string{`datetime="2026-11-02T09:00:00-05:00"`, "(UTC-05:00).", "2 Nov 2026, 09:00", "Resets in 1 day 14 hours."}, []string{"has passed"}},
+		{"soon", "2026-11-01T00:00:30Z", []string{"Resets in under 1 minute."}, []string{"has passed"}},
+		{"equal", "2026-11-01T00:00:00Z", []string{"That time has passed."}, []string{"Resets in"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			window := base
+			window.ResetAt = tc.reset
+			window.Percent = "1% used"
+			body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
+				Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceStale, Windows: []ProductAllowanceWindow{window}}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			section := allowanceBlock(t, body, true)
+			for _, want := range append([]string{`width="37.5"`, "37.5% used", "62.5% remaining", "Window: 5 hours, fixed.", "This report is stale.", "1% used"}, tc.want...) {
+				if !strings.Contains(section, want) {
+					t.Errorf("missing %q", want)
+				}
+			}
+			for _, absent := range tc.absent {
+				if strings.Contains(section, absent) {
+					t.Errorf("rendered %q", absent)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderAllowanceRefusesUnusableTypedFields(t *testing.T) {
+	setAllowanceNow(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	windows := []ProductAllowanceWindow{
+		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: math.NaN(), Direction: "used"},
+		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: 140, Direction: "used"},
+		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: 40, Direction: "PRIVATE-DIR", WindowKind: "PRIVATE-KIND", ObservedAt: "PRIVATE-OBSERVED"},
+		{Percent: "Unknown", PercentKnown: true, PercentValue: 40, Direction: "remaining", WindowKind: "hourly"},
+	}
+	body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: windows}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := allowanceBlock(t, body, true)
+	for _, want := range []string{
+		"Percent is outside 0–100, so no bar is drawn.",
+		"Direction not reported, so no bar is drawn.",
+		"Window: 7 days. Window kind not recognized.",
+		"Observation time is not a usable instant.",
+		"Window kind: hourly. Duration not reported.",
+		`width="60"`, "60% used", "40% remaining",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Count(section, "meter-fill") != 1 || strings.Contains(section, "NaN") || strings.Contains(section, "PRIVATE") || strings.Contains(section, "No percent allowance reported") {
+		t.Fatalf("unusable values became a bar or were echoed: %s", section)
+	}
+}
+
+func TestRenderCursorMissingAllowanceView(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Complete: true, Allowance: []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceNotConnected},
+		{Provider: "Codex", Value: AllowanceNotConnected},
+	}, Usage: &ProductUsage{Allowance: []ProductAllowance{
+		{Provider: "Claude", Value: AllowanceNotConnected},
+		{Provider: "Codex", Value: AllowanceNotConnected},
+	}}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strip := allowanceBlock(t, body, false)
+	if strings.Count(strip, "Not connected") != 2 || !strings.Contains(strip, `<span class="allowance-name">Cursor</span>`) || !strings.Contains(strip, ">Missing</span>") || strings.Contains(strip, "%") || strings.Contains(strip, "estimated") {
+		t.Fatalf("strip cursor view: %s", strip)
+	}
+	page.Filter.View = "usage"
+	body, err = RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := allowanceBlock(t, body, true)
+	if strings.Count(section, "Not connected") != 2 || !strings.Contains(section, "No Cursor account allowance is reported. Nothing here is estimated.") || strings.Contains(section, "%") || strings.Contains(section, "meter-fill") || strings.Contains(section, "<table") {
+		t.Fatalf("usage cursor view: %s", section)
+	}
+}
+
+func TestRenderUsageTablesStartClosed(t *testing.T) {
+	page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"}, Usage: &ProductUsage{
+		Breakdowns: []ProductUsageTable{{Title: "By provider and requested model", Columns: []string{"Model", "Tokens"}, Rows: []ProductUsageRow{{Name: "synthetic", Cells: []ProductUsageCell{{Label: "Tokens", Value: "10"}}}}}},
+		Columns:    []string{"Session", "Tokens"},
+		Rows:       []ProductUsageRow{{Name: "synthetic-session", Cells: []ProductUsageCell{{Label: "Tokens", Value: "10"}}}},
+		RowsTitle:  "By session",
+		Coverage:   []ProductField{{Label: "Scope", Value: "Initial invocations only"}},
+	}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if strings.Contains(s, "<script") || strings.Contains(s, `class="usage-fold" open`) || strings.Contains(s, "<details open") {
+		t.Fatal("usage drilldowns must be native closed details, without script")
+	}
+	fold := strings.Index(s, `<details class="usage-fold"><summary>By provider and requested model</summary>`)
+	head := strings.Index(s, `<h2 id="usage-b0">By provider and requested model</h2>`)
+	session := strings.Index(s, `<details class="usage-fold"><summary>By session</summary>`)
+	if fold < 0 || head < fold || session < 0 || !strings.Contains(s, "Token, cost, model and session tables start closed.") || !strings.Contains(s, "What these numbers cover") {
+		t.Fatalf("tables are not folded drilldowns")
+	}
+}
+
+func TestRenderStringPercentDoesNotDrawABar(t *testing.T) {
+	window := ProductAllowanceWindow{Percent: "62% left", Window: "7 days", Reset: "2 Nov 14:00 UTC", Observed: "29 Oct 13:59 UTC", Provenance: "Provider API"}
+	body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{window}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := allowanceBlock(t, body, true)
+	if strings.Contains(section, "meter-fill") || !strings.Contains(section, "Numeric percent not reported, so no bar is drawn.") || !strings.Contains(section, "62% left") || !strings.Contains(section, "Exact reset time not reported.") || !strings.Contains(section, "Exact observation time not reported.") {
+		t.Fatalf("display text was treated as a measurement: %s", section)
 	}
 }
