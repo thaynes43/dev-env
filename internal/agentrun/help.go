@@ -221,7 +221,7 @@ itself. A lost mutation acknowledgement is not retried.
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
        agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt
        agent-run inbox reply <question> --project <project> --key <key> < reply.txt
-       agent-run inbox list --project <project> [--sent] [--limit N] [--continue <cursor>]
+       agent-run inbox list --project <project> [--sent] [--limit N] [--continue <cursor>] [-o audit|json]
        agent-run inbox read <message> --project <project> [-o json]
        agent-run inbox ack <message> --project <project>
 
@@ -247,6 +247,9 @@ not provider consumption. Nothing interrupts a running task: it sees a reply
 when it lists or reads its inbox. The server authorizes all operations; a
 configured coordinator may read authorized project content but cannot send or
 acknowledge for a Session. Send, ask, reply, list and ack print JSON.
+List -o audit prints escaped metadata, identities, question state and the
+continuation cursor without reading text or acknowledging a message. Missing
+or contradictory thread metadata is Unknown. It makes no approval claim.
 `,
 	"directory": `Usage: agent-run directory list --project <project> --once [flags]
 
