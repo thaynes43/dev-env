@@ -252,8 +252,11 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		if block == "" {
 			t.Fatalf("%s: no allowance", tc.name)
 		}
-		if strings.Contains(block, "62% left") != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || strings.Contains(block, "Not connected") != tc.disconnected {
+		if strings.Contains(block, "62% left") != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || !strings.Contains(block, "Cursor") || !strings.Contains(block, "Not connected") {
 			t.Errorf("%s: wrong states %s", tc.name, block)
+		}
+		if tc.disconnected && strings.Count(block, "Not connected") < 2 {
+			t.Errorf("%s: disconnected providers missing", tc.name)
 		}
 		for _, ref := range []string{"anthropic-primary-window", "openai-primary-window", "anthropic-secondary-window", "openai-secondary-window"} {
 			if strings.Contains(text, ref) {

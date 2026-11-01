@@ -1216,8 +1216,8 @@ func TestAllowanceStripWithoutWindowsNeverFolds(t *testing.T) {
 	if strings.Contains(strip, "<details") || strings.Contains(strip, "allowance-toggle") || !strings.HasSuffix(strip, "</ul></div>") {
 		t.Fatalf("a strip without windows must not fold: %s", strip)
 	}
-	if strings.Count(strip, "Not connected") != 2 {
-		t.Fatalf("both providers must stay visible: %s", strip)
+	if strings.Count(strip, "Not connected") != 3 {
+		t.Fatalf("Claude, Codex and Cursor must stay visible: %s", strip)
 	}
 }
 
@@ -1382,7 +1382,7 @@ func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
 		Percent: "99% left", Window: "7 days", Reset: "1 Jan 2020, 00:00 UTC",
 		Observed: "29 Oct 13:59 UTC", Provenance: "Provider API",
 		PercentValue: 10, PercentKnown: true, Direction: "used",
-		ObservedAt: "2026-10-29T13:59:00Z", WindowKind: "rolling",
+		ObservedAt: "2026-10-29T13:59:00Z", WindowKind: "day", AccountKey: "acct.ok_1",
 	}
 	page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
 		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{window}}}}}
@@ -1393,7 +1393,7 @@ func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
 	section := allowanceBlock(t, body, true)
 	for _, want := range []string{
 		`width="10"`, "10% used", "90% remaining", "99% left",
-		"Window: 7 days, rolling.", "Exact reset time not reported.",
+		"Window: 7 days, day.", "Exact reset time not reported.", "Account acct.ok_1",
 		"Observed at <time datetime=\"2026-10-29T13:59:00Z\">29 Oct 2026, 13:59</time> (UTC).",
 		"Source: Provider API.", "This is a measured provider report.",
 		`<details class="allowance-table-fold"><summary>Window table</summary>`,
@@ -1423,24 +1423,26 @@ func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
 func TestRenderAllowanceRemainingBarAndResetInstants(t *testing.T) {
 	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	setAllowanceNow(t, now)
-	base := ProductAllowanceWindow{Window: "5 hours", WindowKind: "fixed", Provenance: "Provider API", PercentKnown: true, PercentValue: 62.5, Direction: "remaining"}
+	base := ProductAllowanceWindow{Window: "5 hours", WindowKind: "hour", Provenance: "Provider API", PercentKnown: true, PercentValue: 62.5, Direction: "remaining", Reset: "1 Jan 2020, 00:00 UTC"}
 	cases := []struct {
-		name   string
-		reset  string
-		want   []string
-		absent []string
+		name, precision, reset string
+		want                   []string
+		absent                 []string
 	}{
-		{"missing", "", []string{"Exact reset time not reported."}, []string{"Resets in", "has passed", "PRIVATE"}},
-		{"invalid", "PRIVATE-RESET", []string{"Reset time is not a usable instant."}, []string{"PRIVATE-RESET", "Resets in", "has passed"}},
-		{"past", "2020-01-01T00:00:00Z", []string{`datetime="2020-01-01T00:00:00Z"`, "(UTC).", "That time has passed."}, []string{"Resets in"}},
-		{"future", "2026-11-02T03:30:00Z", []string{`datetime="2026-11-02T03:30:00Z"`, "2 Nov 2026, 03:30", "Resets in 1 day 3 hours 30 minutes."}, []string{"has passed"}},
-		{"offset", "2026-11-02T09:00:00-05:00", []string{`datetime="2026-11-02T09:00:00-05:00"`, "(UTC-05:00).", "2 Nov 2026, 09:00", "Resets in 1 day 14 hours."}, []string{"has passed"}},
-		{"soon", "2026-11-01T00:00:30Z", []string{"Resets in under 1 minute."}, []string{"has passed"}},
-		{"equal", "2026-11-01T00:00:00Z", []string{"That time has passed."}, []string{"Resets in"}},
+		{"missing", "", "2026-11-02T03:30:00Z", []string{"Exact reset time not reported."}, []string{"Resets in", "has passed", "2026-11-02T03:30:00Z"}},
+		{"display-only", "display_only", "2026-11-02T03:30:00Z", []string{"Reset time is display only. No exact reset instant was reported.", "1 Jan 2020, 00:00 UTC"}, []string{"Resets in", "has passed", "2026-11-02T03:30:00Z"}},
+		{"bad-precision", "PRIVATE-PRECISION", "", []string{"Reset precision not recognized."}, []string{"PRIVATE-PRECISION", "Resets in", "has passed"}},
+		{"invalid", "instant", "PRIVATE-RESET", []string{"Reset time is not a usable instant."}, []string{"PRIVATE-RESET", "Resets in", "has passed"}},
+		{"past", "instant", "2020-01-01T00:00:00Z", []string{`datetime="2020-01-01T00:00:00Z"`, "(UTC).", "That time has passed."}, []string{"Resets in"}},
+		{"future", "instant", "2026-11-02T03:30:00Z", []string{`datetime="2026-11-02T03:30:00Z"`, "2 Nov 2026, 03:30", "Resets in 1 day 3 hours 30 minutes."}, []string{"has passed"}},
+		{"offset", "instant", "2026-11-02T09:00:00-05:00", []string{`datetime="2026-11-02T09:00:00-05:00"`, "(UTC-05:00).", "2 Nov 2026, 09:00", "Resets in 1 day 14 hours."}, []string{"has passed"}},
+		{"soon", "instant", "2026-11-01T00:00:30Z", []string{"Resets in under 1 minute."}, []string{"has passed"}},
+		{"equal", "instant", "2026-11-01T00:00:00Z", []string{"That time has passed."}, []string{"Resets in"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			window := base
+			window.ResetPrecision = tc.precision
 			window.ResetAt = tc.reset
 			window.Percent = "1% used"
 			body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
@@ -1449,7 +1451,7 @@ func TestRenderAllowanceRemainingBarAndResetInstants(t *testing.T) {
 				t.Fatal(err)
 			}
 			section := allowanceBlock(t, body, true)
-			for _, want := range append([]string{`width="37.5"`, "37.5% used", "62.5% remaining", "Window: 5 hours, fixed.", "This report is stale.", "1% used"}, tc.want...) {
+			for _, want := range append([]string{`width="37.5"`, "37.5% used", "62.5% remaining", "Window: 5 hours, hour.", "This report is stale.", "1% used"}, tc.want...) {
 				if !strings.Contains(section, want) {
 					t.Errorf("missing %q", want)
 				}
@@ -1468,8 +1470,8 @@ func TestRenderAllowanceRefusesUnusableTypedFields(t *testing.T) {
 	windows := []ProductAllowanceWindow{
 		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: math.NaN(), Direction: "used"},
 		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: 140, Direction: "used"},
-		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: 40, Direction: "PRIVATE-DIR", WindowKind: "PRIVATE-KIND", ObservedAt: "PRIVATE-OBSERVED"},
-		{Percent: "Unknown", PercentKnown: true, PercentValue: 40, Direction: "remaining", WindowKind: "hourly"},
+		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: 40, Direction: "PRIVATE-DIR", WindowKind: "PRIVATE-KIND", ObservedAt: "PRIVATE-OBSERVED", AccountKey: "acct/secret"},
+		{Percent: "Unknown", PercentKnown: true, PercentValue: 40, Direction: "remaining", WindowKind: "minute"},
 	}
 	body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
 		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: windows}}}})
@@ -1482,14 +1484,14 @@ func TestRenderAllowanceRefusesUnusableTypedFields(t *testing.T) {
 		"Direction not reported, so no bar is drawn.",
 		"Window: 7 days. Window kind not recognized.",
 		"Observation time is not a usable instant.",
-		"Window kind: hourly. Duration not reported.",
+		"Window kind: minute. Duration not reported.",
 		`width="60"`, "60% used", "40% remaining",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if strings.Count(section, "meter-fill") != 1 || strings.Contains(section, "NaN") || strings.Contains(section, "PRIVATE") || strings.Contains(section, "No percent allowance reported") {
+	if strings.Count(section, "meter-fill") != 1 || strings.Contains(section, "NaN") || strings.Contains(section, "PRIVATE") || strings.Contains(section, "acct/secret") || strings.Contains(section, "No percent allowance reported") {
 		t.Fatalf("unusable values became a bar or were echoed: %s", section)
 	}
 }
@@ -1507,7 +1509,7 @@ func TestRenderCursorMissingAllowanceView(t *testing.T) {
 		t.Fatal(err)
 	}
 	strip := allowanceBlock(t, body, false)
-	if strings.Count(strip, "Not connected") != 2 || !strings.Contains(strip, `<span class="allowance-name">Cursor</span>`) || !strings.Contains(strip, ">Missing</span>") || strings.Contains(strip, "%") || strings.Contains(strip, "estimated") {
+	if strings.Count(strip, "Not connected") != 3 || !strings.Contains(strip, `<span class="allowance-name">Cursor</span>`) || !strings.Contains(strip, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(strip, "%") || strings.Contains(strip, ">Missing</span>") {
 		t.Fatalf("strip cursor view: %s", strip)
 	}
 	page.Filter.View = "usage"
@@ -1516,7 +1518,7 @@ func TestRenderCursorMissingAllowanceView(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := allowanceBlock(t, body, true)
-	if strings.Count(section, "Not connected") != 2 || !strings.Contains(section, "No Cursor account allowance is reported. Nothing here is estimated.") || strings.Contains(section, "%") || strings.Contains(section, "meter-fill") || strings.Contains(section, "<table") {
+	if strings.Count(section, "Not connected") != 3 || !strings.Contains(section, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(section, "%") || strings.Contains(section, "meter-fill") || strings.Contains(section, "<table") {
 		t.Fatalf("usage cursor view: %s", section)
 	}
 }
