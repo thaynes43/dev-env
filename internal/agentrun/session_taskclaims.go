@@ -8,6 +8,12 @@ import (
 
 func printSessionTaskClaims(claims *apiv1.SessionTaskClaims, row func(string, string, ...any)) {
 	claims = sessionTaskClaimsOrUnknown(claims)
+	if claims.ClaimBinding != nil {
+		row("Task claim association", "%s (%s); explicit metadata, not approval, permission, stop proof, or custody", claims.ClaimBinding.State, claims.ClaimBinding.Reason)
+		if claims.ClaimBinding.State == "Observed" {
+			row("  associated claim", "%s (UID %s) project %s", claims.ClaimBinding.Name, claims.ClaimBinding.UID, claims.ClaimBinding.Project)
+		}
+	}
 	if claims.State != "Available" {
 		row("Task claims", "Unknown (%s)", claims.Reason)
 		return
@@ -39,5 +45,9 @@ func sessionTaskClaimsOrUnknown(claims *apiv1.SessionTaskClaims) *apiv1.SessionT
 			reason = "NoJoinedClaims"
 		}
 	}
-	return &apiv1.SessionTaskClaims{State: "Unknown", Reason: reason, Items: []apiv1.TaskClaim{}}
+	out := &apiv1.SessionTaskClaims{State: "Unknown", Reason: reason, Items: []apiv1.TaskClaim{}}
+	if claims != nil {
+		out.ClaimBinding = claims.ClaimBinding
+	}
+	return out
 }

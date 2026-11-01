@@ -1,5 +1,7 @@
 package apiv1
 
+import "regexp"
+
 // MaintenanceIdentity pins an already authenticated session and original pod.
 type MaintenanceIdentity struct {
 	// +kubebuilder:validation:MinLength=1
@@ -75,6 +77,39 @@ type MaintenanceTask struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ExtensionOf string `json:"extensionOf,omitempty"`
+	// TaskClaim is an optional canonical association. It is not permission.
+	// +optional
+	TaskClaim *MaintenanceTaskClaim `json:"taskClaim,omitempty"`
+}
+
+// MaintenanceTaskClaim names one TaskClaim by canonical name, UID and project.
+// Metadata only: not permission, approval, stop proof or grant custody.
+type MaintenanceTaskClaim struct {
+	Name    string `json:"name"`
+	UID     string `json:"uid"`
+	Project string `json:"project"`
+}
+
+// MaintenanceClaimBinding is the detail comparison of an explicit taskClaim
+// with the requester-owned observation. Unknown is not unclaimed or approved.
+type MaintenanceClaimBinding struct {
+	State   string `json:"state"`
+	Reason  string `json:"reason"`
+	Name    string `json:"name,omitempty"`
+	UID     string `json:"uid,omitempty"`
+	Project string `json:"project,omitempty"`
+}
+
+var (
+	maintenanceTaskClaimName    = regexp.MustCompile(`^task-claim\.[0-9a-f]{32}\.[0-9a-f]{32}$`)
+	maintenanceTaskClaimUID     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	maintenanceTaskClaimProject = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+)
+
+// ValidMaintenanceTaskClaim reports the canonical name, immutable UID and project.
+// It mirrors the task-claim name, Kubernetes UID and project-catalog name grammars.
+func ValidMaintenanceTaskClaim(name, uid, project string) bool {
+	return maintenanceTaskClaimName.MatchString(name) && maintenanceTaskClaimUID.MatchString(uid) && maintenanceTaskClaimProject.MatchString(project)
 }
 
 // MaintenanceStatus never equates API deletion with node termination.

@@ -272,3 +272,14 @@ approve a grant, transfer ownership, prove completion or authorize a merge.
 The production Pages source and held cross-project read scope stay unchanged.
 Source fixtures and an MCP output option do not close installed shared-UI or
 eligible maintenance acceptance.
+
+
+## Explicit maintenance claim association — 2026-11-01 source addendum
+
+An optional `maintenance.taskClaim` contains a canonical TaskClaim name, immutable UID, and project. The existing maintenance request producer carries that reference into the immutable envelope. It is an attributed association, with no effect on access, approval, executor state, or custody. Omitting it preserves legacy envelope serialization and digests. A present reference participates in the existing whole-envelope digests and therefore cannot reuse a decision for a different envelope.
+
+The existing negotiated maintenance detail GET continues to return the requester-owned `taskClaims` list. Its optional `claimBinding` compares the explicit reference with that same authorized observation; it adds no request or read scope. `Observed` / `Exact` requires one matching name, UID, project, and requester owner identity. Missing, unreadable, mismatched, stale, or ambiguous evidence stays `Unknown`. Legacy envelopes omit the binding; a requester-owned list alone does not identify a grant's claim. Operation text, reported HEAD, and item order never choose a match. Grant show and the existing MCP JSON consumer carry this metadata separately from permission and approval.
+
+The CLI validates canonical identifier syntax before posting. A direct API client can store a length-bounded noncanonical reference; the reader reports `Unknown` / `Invalid`. This source does not change grant authorization or treat the stored reference as verified task intent. Caller ACL, saved snapshot, and requester UID checks remain prerequisites to the existing observation.
+
+The AccessGrant CRD must include the optional field before a runtime request can retain it; an older schema can prune it. Schema installation and any real association require their own delivery evidence. This source change does not install a CRD, create a claim or grant, activate a source, or establish an OpenProject-to-runtime binding. Positive producer, persistence, and consumer tests use synthetic fixtures. Live association, populated inbox/ACK, and UI acceptance remain separate.
