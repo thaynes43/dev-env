@@ -58,6 +58,13 @@ collect, fetch, or inject allowance, and it does not claim a live allowance.
 
 ## Minimum production wiring still needed
 
+The separate [selected Codex source adapter](provider-usage-current-source.md)
+now sanitizes an explicitly supplied retained tool observation and projects it as
+Current source. It preserves retrieval time and labels remaining as a derived
+complement. Its local CLI and projector do not activate a production transport
+or establish a stable account identity. The strict bound reader below remains
+unchanged.
+
 The cached reader is implemented, but the portal assembly does not select a
 retained source or inject a reader. This release does not establish a current
 provider account or activate collection.

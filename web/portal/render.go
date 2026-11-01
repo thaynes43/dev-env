@@ -585,10 +585,11 @@ func chartWidth(amount, max *big.Rat) string {
 type ProductAllowanceState string
 
 const (
-	AllowanceNotConnected ProductAllowanceState = "Not connected"
-	AllowanceUnknown      ProductAllowanceState = "Unknown"
-	AllowanceStale        ProductAllowanceState = "Stale"
-	AllowanceMeasured     ProductAllowanceState = "Measured"
+	AllowanceNotConnected  ProductAllowanceState = "Not connected"
+	AllowanceUnknown       ProductAllowanceState = "Unknown"
+	AllowanceStale         ProductAllowanceState = "Stale"
+	AllowanceMeasured      ProductAllowanceState = "Measured"
+	AllowanceCurrentSource ProductAllowanceState = "Current source"
 )
 
 // ProductAllowance is one provider's account allowance, independent of session
@@ -623,10 +624,14 @@ type ProductAllowanceWindow struct {
 	Direction                                    string
 	ResetAt                                      string
 	ObservedAt                                   string
-	WindowKind                                   string
-	ResetPrecision                               string
-	AccountKey                                   string
-	AsOf                                         time.Time
+	// RetrievedAt is transport retrieval, independent of provider update time.
+	RetrievedAt string
+	// RemainingDerived marks a complement of reported used percentage.
+	RemainingDerived bool
+	WindowKind       string
+	ResetPrecision   string
+	AccountKey       string
+	AsOf             time.Time
 }
 
 // allowanceWindowKinds are the only window kinds the cards name. Any other
@@ -811,6 +816,13 @@ func (w ProductAllowanceWindow) ObservedStatus() AllowanceObservedStatus {
 	return status
 }
 
+// RetrievedStatus formats retrieval without claiming a provider update.
+func (w ProductAllowanceWindow) RetrievedStatus() AllowanceObservedStatus {
+	copy := w
+	copy.ObservedAt = w.RetrievedAt
+	return copy.ObservedStatus()
+}
+
 // WindowLine names the display window and a recognized WindowKind.
 func (w ProductAllowanceWindow) WindowLine() string {
 	kind, known := allowanceWindowKinds[w.WindowKind]
@@ -863,6 +875,8 @@ func (a ProductAllowance) Confidence() string {
 		return "This report is stale. The figures are the last trusted reading, not a live one."
 	case AllowanceMeasured:
 		return "This is a measured provider report."
+	case AllowanceCurrentSource:
+		return "Selected source report. Stable account identity is unavailable."
 	default:
 		return ""
 	}
@@ -935,7 +949,7 @@ func allowanceViews(input []ProductAllowance) []ProductAllowance {
 			switch a.Value {
 			case AllowanceNotConnected, AllowanceUnknown:
 				a.Windows = nil
-			case AllowanceMeasured, AllowanceStale:
+			case AllowanceMeasured, AllowanceStale, AllowanceCurrentSource:
 				a.Windows = append([]ProductAllowanceWindow(nil), a.Windows...)
 				for j, w := range a.Windows {
 					w.Percent, w.Window, w.Reset = display(w.Percent), display(w.Window), display(w.Reset)

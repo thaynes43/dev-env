@@ -599,6 +599,14 @@ callback from stdin; its provider freshness and account binding are Unknown.
 original observation and served times preserved. It does not configure live
 acquisition or establish provider coverage, account binding or freshness.
 `,
+	"usage-source": `Usage: agent-run usage-source --codex-tool-report FILE|- --incarnation ID --generation N --max-age 30m -o json
+
+Sanitizes an explicitly supplied retained Codex tool observation into a selected
+source report. It makes no provider, operator, history, or credential request.
+Used percentage is reported; remaining is its derived complement. Retrieval time
+is preserved and does not establish provider update time or account identity.
+Output is an operational artifact, not a bound allowance or public fixture.
+`,
 	"usage-export": `Usage: agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>] [flags]
 
 Writes a private, bounded report for only the Sessions explicitly named in a
