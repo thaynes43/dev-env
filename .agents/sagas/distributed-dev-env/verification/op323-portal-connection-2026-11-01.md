@@ -42,4 +42,14 @@ flock /tmp/usage-040820-test.lock nice -n 19 go test -count=1 -p 1 ./web/portal/
 
 ## Initial driver checks and remaining review finding
 
-The current coordinator imported the frozen Grok task patch `1045c971fba090f9ef5dc8a344065af009f3744475748a240f87eb3104fef60e` and applied gofmt. Focused connected transport/config tests passed locally with `-race -p 1 -count=1` in 2.293 s on pinned Go 1.27.3, GOMAXPROCS=2, nice 19 and the shared lock/cache. This is the pre-correction source only. Native review found one P2: the selected transport parser allows the generic 86400 s maximum, while the selected-path plan uses an 1800 s ceiling. The bounded correction must cap this transport at 1800, reject larger configurations and clarify the guide. No runtime configuration or access is installed. Final qualification and review follow that correction.
+The current coordinator imported the frozen Grok task patch `1045c971fba090f9ef5dc8a344065af009f3744475748a240f87eb3104fef60e` and applied gofmt. Focused connected transport/config tests passed locally with `-race -p 1 -count=1` in 2.293 s on pinned Go 1.27.3, GOMAXPROCS=2, nice 19 and the shared lock/cache. This is the pre-correction source only. Native review found one P2: the selected transport parser allows the generic 86400 s maximum, while the selected-path plan uses an 1800 s ceiling. The source correction is recorded below. No runtime configuration or access is installed. This worker did not rerun that suite. Final qualification and review follow the frozen patch.
+
+## Selected age correction, source only
+
+Worktree `/home/dev/work/op323-portal-age-grok-1101-154146`, branch `agent/op323-portal-age-grok-1101-154146`. Dispatch exact base `02cf948dc9ccdbda7dee57f33c5375405407b5ce`. This worker did not run Git, so HEAD and a content hash were not recomputed.
+
+`currentSourceMaxAgeSeconds` in `web/portal/session/current_source_transport.go` is 1800. The fixed-slot config accepts a positive `maxAgeSeconds` through 1800 and refuses 1801 and 86400. A shorter positive age stays allowed. The existing non-positive and other refusal cases stay. `internal/providerallowance` `CurrentSourceSelection` and its 24 hour validator ceiling are untouched.
+
+The guide and DESIGN-030 now say this selected transport enforces 30 minutes and can choose a shorter positive age. `config/current-source.json` stays optional, unmounted, and default-off. No route, grant, flag, ConfigMap, credential, or server change is in this patch.
+
+The 2.293 s result above is the pre-correction suite only. Tests for this correction were not run here. A synthetic fixture is not live acceptance. Sol qualifies the frozen artifact.

@@ -176,7 +176,10 @@ selection records, not provider account IDs or proof of origin. Stable account
 identity remains unavailable. The original retrieval time is preserved;
 provider update time remains null for this sanitizer. Neither preparing nor
 replaying the report refreshes it. The proposed consumer policy is 30 minutes,
-not a provider freshness guarantee. Future retrieval, age expiry, selection
+not a provider freshness guarantee. This selected transport enforces that
+limit: `maxAgeSeconds` must be positive and at most 1800, and a shorter
+positive age is allowed. The generic `CurrentSourceSelection` validator's
+24 hour ceiling remains unchanged. Future retrieval, age expiry, selection
 changes and a passed reset invalidate the current meter without inventing
 renewed capacity. An unobservable account change remains a coverage limitation.
 

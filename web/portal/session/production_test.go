@@ -795,6 +795,8 @@ func TestProductionCurrentSourceConfigFailsClosed(t *testing.T) {
 		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"has space","sourceGeneration":1,"maxAgeSeconds":1800}`,
 		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":0,"maxAgeSeconds":1800}`,
 		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":0}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":1801}`,
+		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":86400}`,
 		`{"slot":"codex-current-source","publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":86401}`,
 		`{"publisherRef":"codex-get-usage-limits-observation-publisher","producerIncarnation":"synthetic-january-2026","sourceGeneration":1,"maxAgeSeconds":1800}`,
 		currentSourceConfigDocument("synthetic-january-2026", 1, 1800) + `{"extra":true}`,
@@ -803,9 +805,9 @@ func TestProductionCurrentSourceConfigFailsClosed(t *testing.T) {
 			t.Fatalf("accepted or leaked %s: %v", raw, err)
 		}
 	}
-	ceiling, err := decodeCurrentSourceConfig([]byte(currentSourceConfigDocument("synthetic-january-2026", 1, 86400)))
-	if err != nil || ceiling.MaxAge != 24*time.Hour || ceiling.SourceGeneration != 1 {
-		t.Fatalf("24h selection %+v %v", ceiling, err)
+	boundary, err := decodeCurrentSourceConfig([]byte(currentSourceConfigDocument("synthetic-january-2026", 1, 1800)))
+	if err != nil || boundary.MaxAge != 1800*time.Second || boundary.SourceGeneration != 1 {
+		t.Fatalf("30m selection %+v %v", boundary, err)
 	}
 	if err := attachCurrentSourceConfig(t.TempDir(), nil); err != nil {
 		t.Fatal("absent file with no session failed")

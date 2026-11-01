@@ -23,8 +23,10 @@ const (
 	currentSourceSlotName = "codex-current-source"
 	// currentSourceReportMaxBytes matches DecodeCurrentSource's 16 KiB ceiling.
 	currentSourceReportMaxBytes int64 = 16 << 10
-	// currentSourceMaxAgeSeconds is the validator's 24 hour ceiling, in seconds.
-	currentSourceMaxAgeSeconds int64 = 24 * 60 * 60
+	// currentSourceMaxAgeSeconds is this fixed-slot consumer's 30 minute limit.
+	// A positive maxAgeSeconds through 1800 is accepted, including a shorter age.
+	// The generic CurrentSourceSelection validator's 24 hour ceiling is unchanged.
+	currentSourceMaxAgeSeconds int64 = 1800
 	currentSourceConfigRel           = "config/current-source.json"
 )
 

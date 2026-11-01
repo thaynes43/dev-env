@@ -84,8 +84,10 @@ activation is held. This consumer does not widen the ACL.
 absent, the portal makes no current-source read. When present, it must name
 the fixed slot `codex-current-source`, the publisher
 `codex-get-usage-limits-observation-publisher`, one producer incarnation, a
-positive source generation, and `maxAgeSeconds`. 1800 is the 30 minute
-consumer limit. The ceiling is 86400 seconds. `attachCurrentSourceConfig` in
+positive source generation, and a positive `maxAgeSeconds`. This selected
+transport enforces a 30 minute maximum (1800 seconds) and accepts a shorter
+positive age. The generic current-source validator's 24 hour ceiling is
+unchanged. `attachCurrentSourceConfig` in
 `web/portal/session/production.go` copies that selection onto the session's
 existing pinned operator client and token path. It does not assign
 `SessionSource.allowance` or dial during load.
