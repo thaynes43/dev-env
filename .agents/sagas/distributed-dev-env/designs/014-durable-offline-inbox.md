@@ -341,3 +341,25 @@ session detail (#322) stay open under #321. Tests:
 `internal/agentrun/inbox_askreply_test.go`, the operator flag case in
 `cmd/dev-env-operator/inbox_test.go` and the envtest schema case in
 `api/coordination/v1alpha1/inbox_validation_test.go`.
+
+## 2026-11-01: metadata audit output (OP321 source slice)
+
+`agent-run inbox list --project <project> [--sent] -o audit` renders the
+existing bounded metadata response as a readable audit. It uses the same GET,
+authorization, thread negotiation and pagination as JSON list. Default output
+and explicit `-o json` retain their wire-compatible shape. Other inbox verbs
+do not accept audit output.
+
+The audit names the immutable message and sender/recipient UIDs, correlated
+question/reply, server-derived state, waiting-on identity, observation timestamp
+and stale threshold. It never fetches message text or acknowledges anything.
+Missing or contradictory thread metadata displays Unknown. It does not
+recompute state from elapsed time, a model exit or a process timeout. A reply
+is information; an API acknowledgement proves neither provider consumption
+nor approval. Values are escaped so metadata cannot inject terminal rows.
+Continuation is printed as an escaped cursor, without automatically reading
+another page.
+
+This is a connected CLI source improvement. It does not provide the held
+portal inbox read permission, activate human Asks, prove a new provider actor,
+or close OP321's installed UI and cross-provider acceptance.

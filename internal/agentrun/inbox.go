@@ -40,7 +40,13 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 	}
 	verb := args[0]
 	publish := verb == "send" || verb == "ask" || verb == "reply"
-	cmd := newCommand("inbox", outputJSON)
+	// audit renders the list GET. Other verbs stay json-only, so -o audit
+	// fails in flag parse before a connection.
+	outputs := []string{outputJSON}
+	if verb == "list" {
+		outputs = append(outputs, outputAudit)
+	}
+	cmd := newCommand("inbox", outputs...)
 	var project, namespace, name, uid, key, cursor string
 	var limit int
 	var sent bool
@@ -189,6 +195,9 @@ func (a *app) inbox(ctx context.Context, args []string) error {
 			if item.Project != project || !inboxMessagePattern.MatchString(item.Name) || item.UID == "" {
 				return fail(ExitFailed, "inbox list returned an unconfirmed identity or project")
 			}
+		}
+		if cmd.c.output == outputAudit {
+			return printInboxAudit(a.env.Stdout, result)
 		}
 		return a.printJSON(result)
 	case "read":
