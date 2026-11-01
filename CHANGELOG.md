@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.84.0](https://github.com/thaynes43/dev-env/compare/v2.83.0...v2.84.0) (2026-11-01)
+
+
+### Features
+
+* **usage:** accept raw reports and explicitly publish the fixed source slot ([#831](https://github.com/thaynes43/dev-env/issues/831)) ([dbc9003](https://github.com/thaynes43/dev-env/commit/dbc90034eb091b9c3767f61c399b5611fcc1e9d7))
+* **usage:** adapt retained raw Codex tool reports ([#828](https://github.com/thaynes43/dev-env/issues/828)) ([da77cbe](https://github.com/thaynes43/dev-env/commit/da77cbe1a238f3539359947f50bc43685aae2057))
+
+
+### Bug Fixes
+
+* **templates:** preserve pod revisions across HOME capacity changes ([#827](https://github.com/thaynes43/dev-env/issues/827)) ([9b5dff2](https://github.com/thaynes43/dev-env/commit/9b5dff23a22ed91e97c827a78f75a4b15d3796c6))
+
 ## [2.83.0](https://github.com/thaynes43/dev-env/compare/v2.82.0...v2.83.0) (2026-11-01)
 
 
