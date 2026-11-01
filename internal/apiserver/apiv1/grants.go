@@ -125,6 +125,7 @@ type Grant struct {
 	// HardwareIntent is an audit receipt, never permission or proof of use.
 	HardwareIntent *HardwareIntentReceipt `json:"hardwareIntent,omitempty"`
 	// TaskClaims is a read-only requester observation, not approval or transfer.
+	// Its claimBinding is optional explicit-association metadata, not authority.
 	TaskClaims *SessionTaskClaims `json:"taskClaims,omitempty"`
 	// UID is the grant's UID: set for a maintenance grant, and for every grant
 	// while the operator serves delegate decisions (GrantDecisionRequest).

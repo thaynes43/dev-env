@@ -535,7 +535,7 @@ func (a *app) grantShow(ctx context.Context, args []string) error {
 		return err
 	}
 	if out.Type == "maintenance" {
-		out.TaskClaims = sessionTaskClaimsOrUnknown(out.TaskClaims)
+		out.TaskClaims = normalizeMaintenanceGrantClaims(out)
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(out)

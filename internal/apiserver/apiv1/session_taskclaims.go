@@ -11,4 +11,7 @@ type SessionTaskClaims struct {
 	State  string      `json:"state"`
 	Reason string      `json:"reason"`
 	Items  []TaskClaim `json:"items"`
+	// ClaimBinding is set only when a maintenance envelope stored an explicit
+	// taskClaim. Omitted for legacy envelopes. It is not permission or approval.
+	ClaimBinding *MaintenanceClaimBinding `json:"claimBinding,omitempty"`
 }

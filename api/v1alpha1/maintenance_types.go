@@ -75,6 +75,23 @@ type MaintenanceTask struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ExtensionOf string `json:"extensionOf,omitempty"`
+	// TaskClaim is an optional canonical association. It is not permission.
+	// +optional
+	TaskClaim *MaintenanceTaskClaim `json:"taskClaim,omitempty"`
+}
+
+// MaintenanceTaskClaim names one TaskClaim by canonical name, UID and project.
+// Metadata only: not permission, approval, stop proof or grant custody.
+type MaintenanceTaskClaim struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=76
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	UID string `json:"uid"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Project string `json:"project"`
 }
 
 // MaintenanceStatus never equates API deletion with node termination.

@@ -40,6 +40,9 @@ func (a *app) grantMaintenance(ctx context.Context, action string, args []string
 		if err := dec.Decode(&scope); err != nil {
 			return usageError("invalid maintenance task: %v", err)
 		}
+		if scope.TaskClaim != nil && !apiv1.ValidMaintenanceTaskClaim(scope.TaskClaim.Name, scope.TaskClaim.UID, scope.TaskClaim.Project) {
+			return usageError("maintenance taskClaim requires a canonical name, immutable UID and project")
+		}
 		if ttl != "" {
 			if d, err := time.ParseDuration(ttl); err != nil || d < 10*time.Minute || d > time.Hour {
 				return usageError("maintenance TTL is10m to1h")
