@@ -993,6 +993,49 @@ class CheckerTests(unittest.TestCase):
         self.assertNotIn("parent", json.dumps(emitted[0]["context"]))
         self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
 
+    def test_helper_rejects_nested_path_shell_under_args_and_command(self):
+        def noop(live):
+            return None
+
+        negatives = (
+            {"args": [{"path": "$(id)"}]},
+            {"args": [{"paths": ["echo;rm"]}]},
+            {"command": {"paths": ["$(id)"]}},
+            {"command": {"path": "..\\parent\\file.py"}},
+        )
+        for raw in negatives:
+            tool = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": raw}
+            emitted, verdict = self._checked_session(noop, [(41, tool)])
+            self.assertEqual(emitted[0]["context"], {"state": "insufficient-context"}, raw)
+            encoded = json.dumps(emitted[0]["context"])
+            for hidden in ("$(id)", "echo", "parent", "file.py"):
+                self.assertNotIn(hidden, encoded, raw)
+            self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "insufficient")
+            self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+
+        benign = {"toolCallId": "fixture_1", "kind": "execute", "title": "Run fixture checks", "rawInput": {"path": "/var/fixture/check.py"}}
+        emitted, verdict = self._checked_session(noop, [(41, benign)])
+        self.assertEqual(emitted[0]["context"]["state"], "available")
+        self.assertEqual(emitted[0]["context"]["rawInput"], {"path": "check.py"})
+        self.assertNotIn("/var/fixture", json.dumps(emitted[0]["context"]))
+        self.assertEqual(verdict["permissionContexts"][0]["permissionContext"], "available")
+        self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+
+    def test_completed_tombstones_bound_later_explicit_context(self):
+        def fill(live):
+            total = ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1
+            for index in range(total):
+                self._announce(live, "done-%d" % index, title="Run check %d" % index, status="completed")
+
+        explicit = {"toolCallId": "later-explicit", "kind": "execute", "title": "Run benign checks", "rawInput": {"command": "python3", "args": ["check.py"]}}
+        emitted, verdict = self._checked_session(fill, [(41, explicit)])
+        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        self.assertNotIn("check.py", json.dumps(emitted[0]["context"]))
+        self.assertNotIn("Run benign", json.dumps(emitted[0]))
+        self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "insufficient"}])
+        self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
+        self.assertIs(verdict["permissionCountedAsQuestionReply"], False)
+
 
 MAX_UNSUPPORTED_PLUS = CHK.MAX_UNSUPPORTED + 1
 

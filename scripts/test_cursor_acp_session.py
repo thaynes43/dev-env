@@ -699,6 +699,40 @@ class PermissionContextTests(unittest.TestCase):
         self.assertEqual(reduced["rawInput"], {"path": "file.py"})
         self.assertNotIn("other", json.dumps(reduced))
 
+    def test_nested_path_keeps_inherited_argv_and_command_checks(self):
+        # path=True still basename-reduces. It must not clear argv/command checks
+        # inherited from an enclosing args or command field.
+        samples = [
+            {"args": [{"path": "$(id)"}]},
+            {"args": [{"path": "`id`"}]},
+            {"args": [{"paths": ["echo;rm"]}]},
+            {"args": [{"path": "../other"}]},
+            {"args": [{"path": "..\\parent\\file.py"}]},
+            {"command": {"paths": ["$(id)"]}},
+            {"command": {"paths": ["echo;rm"]}},
+            {"command": [{"path": "~/other"}]},
+            {"command": {"path": "foo/../bar.py"}},
+        ]
+        for raw in samples:
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    ACP.context_input(raw)
+                context = ACP.permission_context(dict(VALID_CONTEXT, rawInput=raw))
+                encoded = json.dumps(context)
+                self.assertEqual(context, {"state": "insufficient-context"})
+                for hidden in ("$(id)", "`id`", "echo", "other", "parent", "file.py", "bar.py"):
+                    self.assertNotIn(hidden, encoded)
+        self.assertEqual(ACP.context_input({"path": "..\\other\\file.py"}), {"path": "file.py"})
+        self.assertEqual(ACP.context_input({"path": "/var/fixture/check.py"}), {"path": "check.py"})
+        self.assertEqual(ACP.context_input({"args": [{"path": "/var/fixture/check.py"}]}), {"args": [{"path": "check.py"}]})
+        outside = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"path": "/var/fixture/check.py"}))
+        self.assertEqual(outside["state"], "available")
+        self.assertEqual(outside["rawInput"], {"path": "check.py"})
+        self.assertNotIn("/var/fixture", json.dumps(outside))
+        nested = ACP.permission_context(dict(VALID_CONTEXT, rawInput={"args": [{"path": "/var/fixture/check.py"}]}))
+        self.assertEqual(nested["state"], "available")
+        self.assertEqual(nested["rawInput"], {"args": [{"path": "check.py"}]})
+
     def test_adversarial_source_is_bounded_in_time(self):
         # A guard against quadratic patterns on a 4096-byte source, with 10x headroom
         # over the recorded 100 ms budget so a loaded worker does not flake it.
@@ -990,6 +1024,44 @@ class ToolCacheTests(unittest.TestCase):
         self.assertEqual(kept["context"]["title"], "Run check 0")
         dropped = self.permit(94, {"toolCallId": "dropped-0"})
         self.assertEqual(dropped["context"]["reason"], "tool-cache-bound")
+        self.assert_reject_only(90)
+
+    def test_completed_tombstones_saturate_and_reject_once_still_sends(self):
+        # More than 32 completed ids: 16 closed tombstones, 16 dropped, then the latch.
+        # A later explicit context is tool-cache-bound. reject_once still sends.
+        self.ready()
+        total = ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1
+        self.assertGreater(total, 32)
+        for index in range(total):
+            self.announce(f"done-{index}", title=f"Run check {index}", status="completed")
+        self.assertEqual(len(self.session.tool_cache), ACP.MAX_TOOL_CACHE)
+        self.assertEqual(len(self.session.tool_dropped), ACP.MAX_TOOL_DROPPED)
+        self.assertTrue(self.session.tool_untracked_closed)
+        for entry in self.session.tool_cache.values():
+            self.assertEqual(entry["state"], "closed")
+            self.assertEqual(entry["fields"], {})
+        kept = self.permit(89, {
+            "toolCallId": "done-0",
+            "kind": "execute",
+            "title": "Run benign checks",
+            "rawInput": {"command": "python3", "args": ["check.py"]},
+        })
+        self.assertEqual(kept["context"], {"state": "insufficient-context", "reason": "tool-call-closed"})
+        explicit = {
+            "toolCallId": "later-explicit",
+            "kind": "execute",
+            "title": "Run benign checks",
+            "rawInput": {"command": "python3", "args": ["check.py"]},
+        }
+        later = self.permit(90, explicit)
+        self.assertEqual(later["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        for event in (kept, later):
+            encoded = json.dumps(event["context"])
+            self.assertNotIn("check.py", encoded)
+            self.assertNotIn("Run benign", encoded)
+        self.assertEqual(len(self.session.tool_cache), ACP.MAX_TOOL_CACHE)
+        self.assertEqual(len(self.session.tool_dropped), ACP.MAX_TOOL_DROPPED)
+        self.assertTrue(self.session.tool_untracked_closed)
         self.assert_reject_only(90)
 
     def test_prompt_completion_clears_cache_and_question_ack_is_unchanged(self):

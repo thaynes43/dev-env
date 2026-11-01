@@ -21,8 +21,9 @@ installed. This worker did not run the tests.
 session, keyed by the exact id. A later permission with omitted fields can show
 that sanitized context. Explicit fields on the permission are not replaced when
 they disagree with the cache. A conflicting kind or title, or a redacted,
-invalid or oversized later update, tombstones the id. Completion, failure,
-prompt end and process exit clear the cache.
+invalid or oversized later update, tombstones the id. Completion and failure
+discard the metadata and retain a closed tombstone. Prompt end and process exit
+clear the cache.
 
 Bounds: 16 entries, 8192 bytes of sanitized JSON, 300 seconds from the last
 valid update, and 16 remembered ids that did not fit. One further uncached id
@@ -39,7 +40,7 @@ A `status` that is present and is not a string equal to `pending`,
 
 Structured `args` that match a relative pattern, including `./...` and
 `./internal/...`, stay visible. Those `args` and `command` checks descend into
-nested values, except `path` and `paths`, which still reduce to a basename. A
+nested values, including `path` and `paths`, which still reduce to a basename. A
 nested description such as `echo;rm` fails closed. Before the `..` check, `\`
 is folded to `/`, so a backslash parent segment in `args` or `command` cannot
 reduce to a basename and look available. The kept pattern uses `/` only.
@@ -86,3 +87,31 @@ One assertion-enabled local run of both Python suites passed: 116 tests in 20.31
 The relay records controller start at 17:32:30Z and exit 0 at 17:51:44Z, later than its requested 900-second bound. The integrator preserves that timing discrepancy and its freeze/stop request; it does not certify the requested wall-clock bound as met. Source hashes in the final receipt match the 17:47:50Z observation.
 
 Independent final native review, hosted CI, guarded source merge and signed publication are subsequent gates. Installation and real Cursor question/reply/recipient acknowledgement remain unverified. The existing relay's project-scope gap and a default-off adapter proposal are recorded privately; this source change adds no actor, access or configuration to resolve them.
+
+## Successor integration, 2026-11-01
+
+The bounded successor imported the nested-path correction patch
+`0049eaa158531583d24237305d014ed730351509570cfc9381fa24e3ad9cbc6a`
+on exact prior head `52c99bf98fa481b61aeb32b255f06744bb531de3`.
+All five file hashes in its producer receipt matched before integration edits.
+The patch preserves inherited command and argument screening beneath `path`
+and `paths`, adds direct and helper-to-checker negatives and benign basename
+controls, and tests 33 completed tool ids followed by a correlated rejection.
+The integrator corrected the helper guide and this record: completion drops
+metadata, retains a bounded closed tombstone, and does not prevent a
+`reject_once` reply when later context is unavailable.
+
+Both assertion-enabled Python suites passed together: 120 tests in 20.233
+seconds, under `nice -n 19` and the serial test lock. No provider was launched.
+The source worker ran no tests. Its recorded start was 18:04:17Z and terminal
+exit 0 was 18:21:27Z, beyond the requested 600-second bound and the 18:14:34Z
+stop request. The terminal artifact is retained; bound compliance is not claimed.
+
+The earlier automated cache-availability finding is answered by the intentional
+bounded no-resurrection rule and the new rejection fixture. Closed ids remain
+remembered until prompt or process cleanup; eviction could make an old id appear
+new. This limits displayed context during a long prompt. It does not approve
+permissions or establish question delivery. Native exact-head review, hosted CI,
+guarded merge, signed publication and any separately qualified installation
+remain later evidence levels. Live own-platform Cursor question/reply/ACK is
+still unproven.

@@ -97,9 +97,12 @@ one nested under `args`, that matches the session's relative-argument grammar
 `command`, `path`, `paths`, `query`, top-level `description`, or a backslash is
 still refused. An argument such as `../up.py` is refused because it does not
 match that grammar.
-`.` and `..` are refused only in path fields (location paths and `rawInput`
-`path`/`paths`), as the session does; elsewhere, such as a slash-free argument,
-they are valid. The constants (tool kinds, raw keys, relative grammar,
+The helper rejects `..` under `command` and `args`, including a slash-free `..`
+and a `..` segment nested under `path` or `paths`. The checker accepts shape
+only. It refuses `.` and `..` only when that is the whole value of a path field
+(a location path or `rawInput` `path`/`paths`). A slash-free `..` outside a path
+field, such as an argument or a title, is a valid shape. That acceptance is not
+the helper's command or args rule. The constants (tool kinds, raw keys, relative grammar,
 correlation reasons, size, redaction marker) are copied from the session, and
 a test pins them to its values.
 

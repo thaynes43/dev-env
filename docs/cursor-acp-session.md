@@ -126,9 +126,13 @@ fit are remembered in a dropped set of at most 16. One further uncached id sets
 a saturation latch and is not stored. While that latch is set, every id that is
 not already cached fails closed with `tool-cache-bound`, including a later
 explicit benign permission for an id the cache could not record. The cache is
-not evicted to make room, and the dropped set does not grow. The cache is
-cleared when that tool call's status is `completed` or `failed`, when the prompt
-completes, and when this process exits. A later kind or title that disagrees,
+not evicted to make room, and the dropped set does not grow. Completion or
+failure discards that call's metadata and retains a closed tombstone, which
+still counts toward the 16 entries until the prompt completes or this process
+exits. Closed ids cannot be resurrected by a later benign update. More than 32
+distinct ids in one prompt can exhaust context availability; permission events
+and correlated `reject_once` replies still work. Prompt completion and process
+exit clear the cache. A later kind or title that disagrees,
 or any redacted, invalid or oversized update, tombstones the id. A `status`
 that is present and is not a string equal to `pending`, `in_progress`,
 `completed` or `failed` tombstones the id as well, including a list or object;
@@ -178,8 +182,9 @@ Absolute `args` also reduce to a basename. A structured `args` element that is
 a relative pattern is kept whole: a `.` or a segment of letters, digits, `.`,
 `_` and `-`, or the segment `...`, separated by `/`, with no `..` and no `~`.
 `./...` and `./internal/...` are the representative cases. The same checks
-descend into nested values under `args` or `command`. `path` and `paths` still
-reduce to a basename, including when they sit under `args`. A nested
+descend into nested values under `args` or `command`, including `path` and
+`paths`. These path fields still reduce to a basename while retaining the
+inherited command and argument checks. A nested
 `description` such as `echo;rm` therefore fails closed. Before the `..` check,
 `\` is folded to `/`, so `..\\parent\\file.py` in `args` or `command` cannot
 reduce to `file.py` and look available. The kept pattern still uses `/` only.

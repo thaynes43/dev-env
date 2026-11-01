@@ -245,11 +245,11 @@ def context_input(value, depth=0, path=False, *, argv=False, command=False):
         for key, item in value.items():
             if key not in RAW_FIELDS:
                 continue
-            # path/paths stay basename reduction. args/command checks descend into
-            # nested values, so a description under args cannot skip shell or ".." rules.
+            # path/paths stay basename reduction. Inherited args/command checks
+            # stay in force beneath them, so a nested path cannot skip shell or "..".
             child_path = key in {"path", "paths"}
-            child_argv = (argv or key == "args") and not child_path
-            child_command = (command or key == "command") and not child_path
+            child_argv = argv or key == "args"
+            child_command = command or key == "command"
             clean[key] = context_input(item, depth + 1, child_path, argv=child_argv, command=child_command)
         if not clean:
             raise ValueError
