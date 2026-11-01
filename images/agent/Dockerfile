@@ -206,7 +206,7 @@ ARG TSX_VERSION=4.23.15
 # renovate: datasource=npm depName=pnpm
 ARG PNPM_VERSION=12.16.1
 # renovate: datasource=npm depName=@playwright/mcp
-ARG PLAYWRIGHT_MCP_VERSION=0.0.83
+ARG PLAYWRIGHT_MCP_VERSION=0.0.84
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
