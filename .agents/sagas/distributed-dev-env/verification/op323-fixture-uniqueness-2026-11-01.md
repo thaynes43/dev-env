@@ -1,6 +1,6 @@
 # Current driver qualification — 2026-11-01 13:14 UTC
 
-GrantDecision and ParseGrantDelegates suite PASS1.407s; elapsed14.57s. Actual targeted tests ran serially under the pinned toolchain and shared lock; source hashes stayed stable. This is source regression evidence only. Independent final-head review and required hosted CI remain pending. No runtime permission or feature was enabled. The original worker record below describes what that Grok context did before driver qualification.
+The GrantDecision and ParseGrantDelegates suite passed in 1.407 s (14.57 s elapsed). Actual targeted tests ran serially under the pinned toolchain and shared lock; source hashes stayed stable. This is source regression evidence only. Independent final-head review and required hosted CI remain pending. No runtime permission or feature was enabled. All sections below are the original worker record from before that test run; their statements about not running tests describe that earlier context only.
 
 ---
 
