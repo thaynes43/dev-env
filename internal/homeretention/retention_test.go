@@ -60,7 +60,7 @@ func newFixture(t *testing.T) fixture {
 		inventory.Artifacts = append(inventory.Artifacts, f.artifact(t, kind))
 	}
 	f.record.Proof = &Signed[ProofPayload]{Payload: ProofPayload{Version: Version, ID: "proof-7", Binding: binding, CapturedAt: formatTime(f.now.Add(-2 * time.Minute)), Clock: clock, Inventory: inventory}}
-	f.record.Observation = &Signed[ObservationPayload]{Payload: ObservationPayload{Version: Version, Binding: binding, ObservedAt: formatTime(f.now.Add(-time.Minute)), Terminal: true, MountsComplete: true, ActiveMountPodUIDs: []string{}, LatestProofID: "proof-7"}}
+	f.record.Observation = &Signed[ObservationPayload]{Payload: ObservationPayload{Version: Version, Binding: binding, ObservedAt: formatTime(f.now.Add(-time.Minute)), State: f.record.State, Hold: f.record.Hold, Disposition: f.record.Disposition, Terminal: true, MountsComplete: true, ActiveMountPodUIDs: []string{}, LatestProofID: "proof-7"}}
 	f.resign(t)
 	return f
 }
@@ -480,6 +480,47 @@ func TestUnknownDispositionRemainsInDecisionBatch(t *testing.T) {
 	entry = requireReason(t, f.evaluate(t), "disposition_unknown")
 	if entry.Status != "decision_required" || !entry.DecisionRequired {
 		t.Fatalf("expired unknown disposition hidden: %+v", entry)
+	}
+}
+
+func TestProtectionMetadataCannotBeClearedWithoutNewObservation(t *testing.T) {
+	for _, safety := range []string{"hold", "fixture", "active"} {
+		t.Run(safety, func(t *testing.T) {
+			f := newFixture(t)
+			switch safety {
+			case "hold":
+				f.record.Hold = "owner-review"
+			case "fixture":
+				f.record.Disposition = "fixture"
+			case "active":
+				f.record.State = "active"
+			}
+			o := &f.record.Observation.Payload
+			o.State, o.Hold, o.Disposition = f.record.State, f.record.Hold, f.record.Disposition
+			f.resign(t)
+			if report := f.evaluate(t); len(report.StoppedWorkQueue) != 1 || report.StoppedWorkQueue[0].Status != "protected" {
+				t.Fatal("authenticated safety metadata did not protect")
+			}
+			// Alter only unsigned metadata, leaving the valid signed evidence intact.
+			f.record.State, f.record.Hold, f.record.Disposition = "stopped", "", "normal"
+			requireReason(t, f.evaluate(t), "current_safety_metadata_mismatch")
+		})
+	}
+
+	f := newFixture(t)
+	f.record.Proof = nil
+	f.record.TaskCompletion.FinishedAt = formatTime(f.now.Add(-Retention))
+	f.record.Hold = "unverified-owner-claim"
+	entry := requireReason(t, f.evaluate(t), "protection_unverified")
+	if entry.Status != "protected" || !entry.DecisionRequired {
+		t.Fatalf("unverified hold hid expired work: %+v", entry)
+	}
+	// A fresh authenticated hold remains an explicit exception at the deadline.
+	f.record.Observation.Payload.Hold = f.record.Hold
+	f.resign(t)
+	entry = requireReason(t, f.evaluate(t), "owner_hold")
+	if entry.Status != "protected" || entry.DecisionRequired {
+		t.Fatalf("authenticated hold lost protection: %+v", entry)
 	}
 }
 

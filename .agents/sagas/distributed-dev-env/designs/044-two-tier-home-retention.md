@@ -12,8 +12,9 @@ measurements or a candidate count.
 The classifier accepts an explicit evaluation time and finite synthetic/offline
 records. It produces two UID-ordered lists: immediate safe-preserved candidates,
 and a stopped-work queue with clock source, warning, deadline, decision status
-and named exceptions. Active/held/special-disposition or unsafe identity records
-remain visible with protected status. Seven days is exactly 168 hours; equality
+and named exceptions. Active/held/named special-disposition records remain
+visible with protected status; unsafe identities remain explicit queue
+exceptions. Seven days is exactly 168 hours; equality
 is expired. The configurable warning lead defaults to 24 hours. A clockless or
 future-dated record enters decision status now, with no invented deadline.
 Unknown work with a valid old completion clock remains in the expired decision
@@ -26,6 +27,13 @@ observation may supply `observedAt`; the output names this fallback. An invalid
 present task timestamp cannot silently fall back. Pod absence, Session phase,
 PVC birth, filesystem mtime and classifier run time are not completion clocks.
 A valid completion clock does not by itself prove terminal state or no mounts.
+
+The current signed observation also binds lifecycle state, owner hold and
+special disposition. Raw metadata cannot clear protection while reusing an old
+signature. An unverified protective marker prevents immediate candidacy and
+keeps protected status, but still enters the owner decision batch at expiry or
+when its clock is unknown. Only fresh authenticated protection suppresses that
+decision, so an invented hold cannot hide unknown work indefinitely.
 
 ## Verifiable evidence and trust
 

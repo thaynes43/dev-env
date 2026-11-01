@@ -90,11 +90,16 @@ type ProofPayload struct {
 }
 
 type ObservationPayload struct {
-	Version        string  `json:"version"`
-	Binding        Binding `json:"binding"`
-	ObservedAt     string  `json:"observedAt"`
-	Terminal       bool    `json:"terminal"`
-	MountsComplete bool    `json:"mountsComplete"`
+	Version    string  `json:"version"`
+	Binding    Binding `json:"binding"`
+	ObservedAt string  `json:"observedAt"`
+	// Current safety metadata must match the enclosing record. Removing a hold
+	// or fixture marker from raw snapshot metadata cannot reuse this signature.
+	State          string `json:"state"`
+	Hold           string `json:"hold"`
+	Disposition    string `json:"disposition"`
+	Terminal       bool   `json:"terminal"`
+	MountsComplete bool   `json:"mountsComplete"`
 	// Every active mount must be listed, including other/replacement pods.
 	ActiveMountPodUIDs []string `json:"activeMountPodUIDs"`
 	LatestProofID      string   `json:"latestProofID"`

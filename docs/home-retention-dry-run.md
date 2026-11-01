@@ -46,6 +46,10 @@ or separate-disposition records. Each list is ordered by immutable PVCUID
 (`uid`), with sorted reason codes and exact Session/PVC/Pod/executor binding.
 Named `canary`, `pilot`, `fixture` and `rescue_hold` dispositions are protected;
 unknown disposition values block candidacy and follow the warning/decision clock.
+State, hold and disposition must match a fresh signed observation before they
+can support candidacy or suppress an expiry decision. Unverified protection
+still prevents candidacy, but expired or clockless work remains flagged for an
+owner decision. Clearing a raw hold or fixture marker cannot reuse its signature.
 Statuses distinguish retained, warning, decision required and protected work.
 Missing/future clocks have no fabricated deadline and need an owner decision;
 expired unresolved work stays in the decision queue. A candidate is never a

@@ -151,6 +151,23 @@ func validDigest(value string) bool {
 	return err == nil && strings.ToLower(value) == value
 }
 
+func sameSafety(record Record, observation ObservationPayload) bool {
+	return observation.State == record.State && observation.Hold == record.Hold && observation.Disposition == record.Disposition
+}
+
+// verifiedSafety permits a current trusted protection marker to suppress an
+// expiry decision. Unverified markers still protect against candidacy, but do
+// not hide expired or clockless work from the owner decision queue.
+func (store *TrustStore) verifiedSafety(record Record, now time.Time, maxAge time.Duration) bool {
+	if record.Observation == nil || !validBinding(record.Binding) || record.Binding.PVCUID != record.UID {
+		return false
+	}
+	o := record.Observation.Payload
+	_, verified := store.verify("observation", o, record.Observation.Signature)
+	observed, ok := parseTime(o.ObservedAt)
+	return verified && o.Version == Version && o.Binding == record.Binding && sameSafety(record, o) && ok && !observed.After(now) && now.Sub(observed) <= maxAge
+}
+
 func (store *TrustStore) preservation(record Record, clock Clock, completed, now time.Time, maxAge time.Duration) []string {
 	reasons := []string{}
 	add := func(reason string) { reasons = append(reasons, reason) }
@@ -196,6 +213,9 @@ func (store *TrustStore) preservation(record Record, clock Clock, completed, now
 		}
 		if o.Binding != record.Binding {
 			add("current_identity_or_revision_changed")
+		}
+		if !sameSafety(record, o) {
+			add("current_safety_metadata_mismatch")
 		}
 		observed, ok := parseTime(o.ObservedAt)
 		if !ok || observed.After(now) || now.Sub(observed) > maxAge || !capturedOK || observed.Before(captured) {

@@ -62,11 +62,17 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust *TrustStore
 		default:
 			entry.Reasons = append(entry.Reasons, "disposition_unknown")
 		}
+		verifiedProtection := protected && trust.verifiedSafety(record, now, policy.ObservationMaxAge)
+		if protected && !verifiedProtection {
+			entry.Reasons = append(entry.Reasons, "protection_unverified")
+		}
 		entry.Reasons = sortedUnique(entry.Reasons)
 		if protected {
 			entry.Status = "protected"
-			// Protected records remain visible without soliciting an expiry action.
-			entry.DecisionRequired = false
+			// Only current authenticated protection can suppress an expiry decision.
+			if verifiedProtection {
+				entry.DecisionRequired = false
+			}
 		} else if len(entry.Reasons) == 0 {
 			entry.Status, entry.DecisionRequired = "immediate_preserved", false
 			report.ImmediateCandidates = append(report.ImmediateCandidates, entry)
