@@ -420,7 +420,14 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .allowance-meter { display: block; width: 100%; height: 8px; margin: 0 0 8px; }
 .meter-track { fill: var(--soft); }
 .meter-fill { fill: var(--accent); }
-.allowance-bar-note, .allowance-card-line, .allowance-reset, .allowance-fresh, .allowance-source, .allowance-missing, .allowance-confidence, .account-ref { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.allowance-meter-note, .allowance-card-line, .allowance-reset, .allowance-fresh, .allowance-source, .allowance-missing, .allowance-confidence, .account-ref { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.usage-chart { margin: 12px 0; min-width: 0; }
+.usage-chart ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.usage-chart li { margin: 0 0 8px; }
+.usage-chart-label { display: block; color: var(--ink); font-size: 12px; }
+.usage-chart-note, .usage-chart-value { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.usage-meter { display: block; width: 100%; height: 8px; margin: 4px 0; }
+.usage-chart .unknown { color: var(--muted); }
 .allowance-card .allowance-card-line, .allowance-split { color: var(--ink); }
 .allowance-table-fold, .usage-fold { margin-top: 8px; }
 .allowance-table-fold > summary, .usage-fold > summary { display: flex; align-items: center; width: fit-content; max-width: 100%; min-height: 24px; color: var(--accent); cursor: pointer; }
