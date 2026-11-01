@@ -187,6 +187,15 @@ separate retrieval from provider observation time. This is a selected report
 with a limited retrieval age, not an accepted account allowance. Production
 assembly does not inject it; missing source configuration remains disconnected.
 
+The fixed-slot handler and store exist in source but are not mounted by the
+central server. The store updates an existing ConfigMap only, preserving
+metadata through live resourceVersion CAS; it never creates the object.
+This selected source refuses non-null `providerUpdatedAt`. Undecodable stored
+bytes block later writes. Invalid or expired reads suppress current values
+without changing stored retrieval time, and replay does not refresh them.
+These source rules do not install the object, grant access, enable a route,
+or connect a production portal reader.
+
 The linked document names the local publisher command, private retained
 artifact, fixed proposed operator slot, consumer configuration, retention and
 access review boundary. No new transport, portal ACL, credential, probe,
