@@ -176,6 +176,7 @@ type options struct {
 	standbyRepo, standbyModel     string
 	standbyProfile, standbyEffort string
 	catalogBinding                *apiserver.CatalogBinding
+	providerSource                *providerSourceSelection
 }
 
 func parseFlags(args []string) (options, error) {
@@ -285,6 +286,9 @@ func parseFlags(args []string) (options, error) {
 	catalog := fs.String("project-catalog", "", "explicit accepted namespace/name ConfigMap binding")
 	cloneOwner := fs.String("project-clone-owner", "", "configured GitHub clone owner for accepted project tasks")
 	clients := fs.String("client-service-accounts", "dev-agents/dev-env-workbench", "comma-separated ServiceAccounts, <namespace>/<name>, of trusted clients that are not sessions: the workbench, and the v1 pod (dev/dev-env) until cutover (D-46)")
+	var providerSourceEnabled bool
+	fs.BoolVar(&providerSourceEnabled, "enable-provider-source-reports", false, "HELD SOURCE ONLY: serve the fixed Codex current-source slot when --provider-source-config is exact; default off, does not enable the API or the portal reader, and max age alone does not enable the route")
+	providerSourceRaw := fs.String("provider-source-config", "", "HELD SOURCE ONLY: inline JSON selection for --enable-provider-source-reports; empty leaves the route off and is not a file path")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -637,6 +641,9 @@ func parseFlags(args []string) (options, error) {
 	if o.privatePilot != nil && (!o.directoryEnabled || !slices.Contains(o.directoryProjects, projectcanary.PilotProject)) {
 		return o, errors.New("sealed pilot requires the dev-env session directory")
 	}
+	if o.providerSource, err = parseProviderSourceConfig(providerSourceEnabled, *providerSourceRaw, o.apiAddr, o.sessionNamespace); err != nil {
+		return o, err
+	}
 	return o, nil
 }
 
@@ -870,6 +877,12 @@ func run(args []string) error {
 			directories = directoryStore
 			directoryContexts = &contextpublication.KubeStore{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: o.templatesNamespace}
 		}
+		// Fixed current-source slot. Nil unless the explicit selection parsed.
+		// Construction does not read, list or watch the ConfigMap.
+		sourceReports, err := providerSourceReports(o.providerSource, mgr.GetClient(), mgr.GetAPIReader())
+		if err != nil {
+			return err
+		}
 		api := &apiserver.Server{
 			PortalMessageTargets:      o.portalMessageTargets,
 			PortalLaunchRepos:         o.portalLaunchRepos,
@@ -929,6 +942,7 @@ func run(args []string) error {
 			LegacyGrantDelegates:       o.legacyGrantDelegates,
 			PolicyNamespace:            o.policyNamespace,
 			Asks:                       askStore,
+			ProviderSourceReports:      sourceReports,
 		}
 		// The standby session is default off. It is made through the API's own
 		// creation path and found again by its label (Story110 T25, plan 03).
