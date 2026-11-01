@@ -24,6 +24,7 @@ import (
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 	"github.com/thaynes43/dev-env/internal/tokenfile"
 	"github.com/thaynes43/dev-env/web/portal"
 )
@@ -57,6 +58,9 @@ type Runtime struct {
 	Handler   http.Handler
 	TLSConfig *tls.Config
 	store     *PostgresStore
+	// questionAudit is the project wired into Sessions, or empty when
+	// config/question-audit is absent. It does not enable an operator route.
+	questionAudit string
 }
 
 func (Runtime) String() string     { return "[redacted portal runtime]" }
@@ -163,6 +167,16 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
+	questionProject, questionErr := loadQuestionAuditProject(root)
+	if questionErr != nil {
+		return Runtime{}, errProductionConfig
+	}
+	if questionProject != "" {
+		if sessions == nil {
+			return Runtime{}, errProductionConfig
+		}
+		sessions.UseQuestionAudit(questionProject)
+	}
 	asks, err := optionalAsksSource(root, operatorCA)
 	if err != nil {
 		return Runtime{}, errProductionConfig
@@ -235,7 +249,26 @@ func LoadProduction(root string) (Runtime, error) {
 		}
 	}
 	closeStore = false
-	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Pages: newPagesSource(pagesEnabled, time.Now, nil), Asks: asks, Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store}, nil
+	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Pages: newPagesSource(pagesEnabled, time.Now, nil), Asks: asks, Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store, questionAudit: questionProject}, nil
+}
+
+// loadQuestionAuditProject reads config/question-audit. An absent file is off.
+// A present file must be one catalog project name. It does not enable the
+// operator route and is not a deployed manifest.
+func loadQuestionAuditProject(root string) (string, error) {
+	path := filepath.Join(root, "config/question-audit")
+	present, err := mountedPresent(path)
+	if err != nil {
+		return "", errProductionConfig
+	}
+	if !present {
+		return "", nil
+	}
+	text, err := readMountedText(root, "config/question-audit", 64)
+	if err != nil || !projectcatalog.ValidName(text) {
+		return "", errProductionConfig
+	}
+	return text, nil
 }
 
 func productSources(root string, openProjectCA, operatorCA []byte) (*SessionSource, *TaskSource, error) {

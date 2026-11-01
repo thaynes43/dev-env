@@ -50,6 +50,9 @@ type SessionSource struct {
 	logger        *slog.Logger
 	// allowance projects one injected cached read. Production leaves it nil.
 	allowance AllowanceReader
+	// questionAuditProject is the one catalog project for a selected session's
+	// question-audit metadata. Empty performs no audit read.
+	questionAuditProject string
 }
 
 // TaskSource reads project 3's work-package collection. It does not follow an
@@ -294,9 +297,13 @@ func (s *SessionSource) read(ctx context.Context, filter portal.ProductFilter, r
 	step = time.Now()
 	page = withHistory(ctx, page, filter.Session, s.conversations, s.now())
 	stats.history = time.Since(step)
+	// A deadline during history still fails this read. The question-audit panel
+	// runs only after that check, on the request context, and its own deadline
+	// leaves the inventory page in place.
 	if ctx.Err() != nil {
 		return page, sessionTransportFailure(ctx, ctx.Err())
 	}
+	page = s.attachQuestionAudit(ctx, page, filter.Session)
 	return page, nil
 }
 

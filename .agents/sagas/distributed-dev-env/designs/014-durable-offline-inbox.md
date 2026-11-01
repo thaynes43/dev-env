@@ -382,3 +382,82 @@ An API read acknowledgement proves neither provider consumption nor approval.
 This connected source read adds no API route, reader eligibility, ACL, body
 capture or actor. Fixtures do not close populated live ACK, cross-provider or
 portal audit acceptance.
+
+## 2026-11-01: portal question-audit metadata (OP321 connected source)
+
+Ordinary default-off source and this design amendment are authorized. Runtime
+activation is not. No deployment flag, API ACL, project allowlist, Role,
+credential, or installed portal is authorized by this slice. A research note
+that called ordinary source unauthorized is corrected: that claim was wrong.
+The route stays unregistered until every prerequisite below is set, and this
+repository does not set them in a deployed manifest.
+
+`GET /v1/portal/question-audit` is a separate metadata route. Portal readers
+remain denied on `/v1/inbox`, message body, and acknowledgement routes. The
+strict `GET /v1/sessions` inventory shape is unchanged: this page is not an
+inventory field and the selected-detail consumer does not add one. The route
+is registered only when the portal reader, durable inbox, inbox questions, a
+non-empty portal question project allowlist, and inbox projects are all set,
+and every allowlist project is also an inbox project. The flag parser refuses
+the flag without those prerequisites, projects without the flag, duplicates,
+and `*`. An unregistered route is a 404.
+
+The query names one project, one session name, one session UID, and
+`box=inbox|sent`, with an optional limit and continue cursor. Unknown,
+repeated, or non-canonical keys fail closed. The handler proves the session
+with a live Get of that exact name and UID in the session namespace. It passes
+a non-nil session identity into the existing inbox list. It does not read the
+session's project annotation, a claim snapshot, or a replacement catalog. After
+derivation it reads the same object again. Deletion or a different UID is a
+404. A foreign project is a 404. A later snapshot cannot grant the read.
+
+The list is one existing store page, default 20 and maximum 50. Plain messages
+on that page are omitted. The handler does not read another page to refill the
+limit. `truncated` and `nextCursor` describe the store page, so a filtered page
+can be shorter than the limit, including empty while truncated. The consumer
+requests limit 20 and does not send or follow a cursor.
+
+Each item is a question or a reply. A reply copies the stored `inReplyTo`
+reference. The derived state is the existing inbox thread, including
+RecipientEnded for a task whose agent has exited, failed, or been interrupted
+while the phase is still Running, and the existing live result for a resumable
+remote or local session and for Suspended. Origin, approval, provider
+consumption, and served model are the fixed literals Unknown, not recorded,
+not recorded, and Unknown. Requested model is not served model. The response
+has no message text, idempotency key, prompt, or provider output. The response
+cap is 128 KiB.
+
+An acknowledgement is copied only when the derived state is already
+Acknowledged and the exact linked reply matches name, UID, project, and
+recipient. The actor must be that reply's recorded recipient session: kind
+session, service-account namespace equal to the recipient namespace, and pod
+name equal to the recipient session name. A claimed origin does not match.
+The acknowledgement time must not be zero and must not precede the reply.
+Anything else is status unavailable, with no actor and no time. If the derived
+state was Acknowledged but that evidence fails, the copied state becomes
+Unknown and waiting-on is cleared. Acknowledged is not provider consumption
+or approval. A race that leaves the thread and the acknowledgement
+inconsistent reduces the evidence; it does not invent a receipt.
+
+The portal consumer is the existing selected-session detail. Production reads
+`config/question-audit` with the existing mounted-file convention. An absent
+file leaves the consumer off and performs no audit request. A present file
+must be one catalog project name. It is refused when the operator credential
+is absent, and it is not a deployed manifest. No selection, or an empty
+configured project, performs no audit request. A selected session performs at
+most two reads, inbox then sent, under a panel timeout that does not cancel
+the inventory read. Each read is capped at 128 KiB. The decoder requires the
+version, the configured project, the inventory name and UID, the requested
+box, limit 20, the fixed literals, and one item object per array element.
+Every item must pass the same wire check as the producer, including reply
+self-reference and `inReplyTo` agreement with `thread.question`. A bad item,
+a mismatched echo, a malformed body, an oversize body, a 403, a timeout, or a
+404 on the second box rejects the whole panel. A rejected panel is
+Unavailable and shows no item. The first read's 404 is Missing, which is how
+an older operator stays compatible, and it does not perform the second read.
+A 200 with no question or reply and no truncation is Empty. Unknown is a
+derived state and is not Unanswered. A truncated page whose question and
+reply records were all omitted is Truncated, not Empty. The panel is one
+ProductSection on the selected row. Its failure does not drop inventory,
+groups, counts, cards, or other rows. The panel has no new read, write, or
+acknowledgement action.
