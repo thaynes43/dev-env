@@ -250,3 +250,25 @@ in CLAUDE.md; these two documentation changes do not touch its inputs.
 This is proposed source documentation. It is not built code, a deployed
 integration or usable/accepted upgrade ownership. Producer, consumer and
 activation work need later bounded authorization and their own evidence.
+
+## 2026-11-01: requester claim metadata in named MCP grant reads (OP322)
+
+The existing `grant_status` MCP tool accepts optional
+`includeTaskClaims: true` only with a grant name. It negotiates the existing
+maintenance-grant detail header on that same authorized GET. It uses the
+same requester-claim normalization as `agent-run grant show`; missing,
+unreadable or empty observations remain Unknown. No new API route, read
+scope, claim registry or identity inference is introduced.
+
+Default named reads and list output remain unchanged. The option does not
+turn a list into many detail reads, and non-maintenance grants do not acquire
+invented claim metadata. The server remains responsible for requester UID,
+snapshot and project-scope enforcement. Tool arguments cannot bypass it.
+
+These are the requester's canonical claim observations, not a binding of one
+grant to one claim or upgrade head. The maintenance envelope still lacks that
+explicit reference. A claim, observed process state or model exit does not
+approve a grant, transfer ownership, prove completion or authorize a merge.
+The production Pages source and held cross-project read scope stay unchanged.
+Source fixtures and an MCP output option do not close installed shared-UI or
+eligible maintenance acceptance.

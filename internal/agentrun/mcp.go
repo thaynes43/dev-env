@@ -155,6 +155,9 @@ func (a *app) callAccessTool(ctx context.Context, c *conn, params json.RawMessag
 	}
 	var args accessToolArgs
 	if len(call.Arguments) > 0 && string(call.Arguments) != "null" {
+		if err := includeTaskClaimsArgument(call.Arguments); err != nil {
+			return mcpToolError(err.Error())
+		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return mcpToolError("the tool arguments are not the access fields")
 		}
@@ -198,9 +201,33 @@ type accessToolArgs struct {
 	Digest     string                `json:"digest"`
 	Approve    bool                  `json:"approve"`
 	Ref        string                `json:"ref"`
+
+	IncludeTaskClaims bool `json:"includeTaskClaims"`
+}
+
+// includeTaskClaimsArgument checks only the new optional grant_status flag.
+// A missing field stays false, and JSON true or false is valid. A present
+// null or any other type is refused before the API: encoding/json would
+// accept null as false. The other access fields keep their existing decoding.
+func includeTaskClaimsArgument(raw json.RawMessage) error {
+	var probe map[string]any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil
+	}
+	value, ok := probe["includeTaskClaims"]
+	if !ok {
+		return nil
+	}
+	if _, isBool := value.(bool); !isBool {
+		return usageError("includeTaskClaims must be a boolean")
+	}
+	return nil
 }
 
 func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args accessToolArgs) (string, error) {
+	if args.IncludeTaskClaims && (name != "grant_status" || args.Name == "") {
+		return "", usageError("includeTaskClaims requires a named grant_status")
+	}
 	switch name {
 	case "request_access":
 		req, err := accessRequest(args)
@@ -219,8 +246,15 @@ func (a *app) dispatchAccessTool(ctx context.Context, c *conn, name string, args
 				return "", err
 			}
 			var out apiv1.Grant
-			if _, err := a.call(ctx, c, http.MethodGet, apiv1.GrantPath(args.Name), nil, nil, &out); err != nil {
+			statusCtx := ctx
+			if args.IncludeTaskClaims {
+				statusCtx = context.WithValue(ctx, grantTaskClaimsHeader{}, true)
+			}
+			if _, err := a.call(statusCtx, c, http.MethodGet, apiv1.GrantPath(args.Name), nil, nil, &out); err != nil {
 				return "", err
+			}
+			if args.IncludeTaskClaims && out.Type == "maintenance" {
+				out.TaskClaims = sessionTaskClaimsOrUnknown(out.TaskClaims)
 			}
 			text, err := mcpJSON(out)
 			return noticeFor(text, out), err
@@ -371,6 +405,11 @@ func accessTools() []map[string]any {
 					"session": map[string]any{"type": "string"},
 					"phase":   map[string]any{"type": "string"},
 					"mine":    map[string]any{"type": "boolean"},
+					"includeTaskClaims": map[string]any{
+						"type":        "boolean",
+						"default":     false,
+						"description": "Include requester canonical task-claim metadata for a named maintenance grant. Identity is not approval or transfer permission.",
+					},
 				},
 			},
 		},
