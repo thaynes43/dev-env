@@ -68,17 +68,23 @@ func TestProviderSourceServerConnection(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("status %d %s", w.Code, w.Body.String())
 		}
-		dec := json.NewDecoder(w.Body)
+		// ResponseRecorder.Body is a bytes.Buffer. Decoding it consumes the
+		// unread bytes, so later absence checks must use a snapshot.
+		raw := bytes.Clone(w.Body.Bytes())
+		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		var sess apiv1.Session
 		if err := dec.Decode(&sess); err != nil || sess.Name != sourcePublisherName || sess.UID != string(c.sessionUID) {
-			t.Fatalf("strict session: %v %s", err, w.Body.String())
+			t.Fatalf("strict session: %v %s", err, raw)
 		}
-		if strings.Contains(w.Body.String(), "usedPercent") || strings.Contains(w.Body.String(), "current_source") || strings.Contains(w.Body.String(), `"availability"`) {
-			t.Fatal(w.Body.String())
+		if len(raw) == 0 || !bytes.Equal(raw, w.Body.Bytes()) {
+			t.Fatal("session field checks saw a drained response")
+		}
+		if strings.Contains(string(raw), "usedPercent") || strings.Contains(string(raw), "current_source") || strings.Contains(string(raw), `"availability"`) {
+			t.Fatal(string(raw))
 		}
 		var report providerallowance.CurrentSourceReport
-		if json.Unmarshal(w.Body.Bytes(), &report) == nil && report.Schema != "" {
+		if json.Unmarshal(raw, &report) == nil && report.Schema != "" {
 			t.Fatal("session decoded as a source report")
 		}
 		c.holds(t, before, c.updates)
