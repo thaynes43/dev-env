@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -301,6 +302,147 @@ func TestUsageSourceRawRejectsTimeAndPrivacy(t *testing.T) {
 		var ee *exitError
 		if out.Len() != 0 || !errors.As(err, &ee) || ee.code != ExitFailed || ee.msg != "usage-source input unavailable" || strings.Contains(err.Error(), tc.leak) || strings.Contains(err.Error(), "SECRET-CANARY") || strings.Contains(err.Error(), "SECRET-ACCOUNT") {
 			t.Fatalf("%v %q %v", tc.args, out.String(), err)
+		}
+	}
+}
+
+// These integration cases use only newHarness's synthetic token/CA files,
+// injected environment and loopback TLS API. They never use DefaultEnv.
+func TestUsageSourcePublishIntegrationCanonical(t *testing.T) {
+	for _, raw := range []bool{false, true} {
+		t.Run(strconv.FormatBool(raw), func(t *testing.T) {
+			h := newHarness(t)
+			args := usageSourceArgs("-")
+			body := syntheticUsageSourceBody
+			want := providerallowance.CurrentSourceReport{
+				Schema: providerallowance.CurrentSourceSchema, PublisherRef: providerallowance.CurrentSourcePublisher,
+				ProducerIncarnation: "synthetic-codex-1", SourceGeneration: 1,
+				RetrievedAt: "2026-01-08T00:00:00Z", UsedPercent: "40", RemainingPercent: "60",
+				RemainingPercentBasis: providerallowance.CurrentSourceRemainingBasis,
+				WindowDurationMinutes: 10080, ResetsAt: "2026-01-15T00:00:00Z",
+			}
+			h.now = usageSourceNow()
+			if raw {
+				args, body, want = usageSourceRawArgs("-", syntheticRawObserved), syntheticRawBody(), syntheticRawWant()
+				h.now = syntheticRawNow()
+			}
+			h.env.Stdin = strings.NewReader(body)
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if r.Header.Get("Content-Type") != "application/json" {
+					t.Error("publication content type is not JSON")
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}
+			h.mustRun(ExitOK, append([]string{"usage-source"}, append(args, "--publish")...)...)
+			reqs := h.api.requests()
+			canonical, err := json.Marshal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(reqs) != 1 || reqs[0].method != http.MethodPut || reqs[0].path != "/v1/provider-source-reports/codex-current-source" || len(reqs[0].query) != 0 || reqs[0].auth != "Bearer "+testToken || !bytes.Equal(reqs[0].body, canonical) || bytes.HasSuffix(reqs[0].body, []byte{'\n'}) {
+				t.Fatal("publication must send one authenticated fixed-path PUT of exact canonical bytes")
+			}
+			if h.stdout.String() != "published codex-current-source status=204\n" || h.stderr.Len() != 0 || len(h.ran) != 0 || len(h.sleeps) != 0 {
+				t.Fatal("publication must emit only its fixed success line, without subprocesses or retries")
+			}
+		})
+	}
+}
+
+func TestUsageSourcePublishIntegrationRefusalAndRedirect(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   int
+		msg    string
+	}{
+		{401, ExitAuth, "refused"}, {403, ExitAuth, "refused"},
+		{404, ExitNotFound, "unavailable"}, {409, ExitFailed, "conflict"},
+		{500, ExitFailed, "unavailable"}, {200, ExitFailed, "unavailable"},
+		{301, ExitFailed, "refused"}, {302, ExitFailed, "refused"},
+		{303, ExitFailed, "refused"}, {307, ExitFailed, "refused"}, {308, ExitFailed, "refused"},
+	} {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			h := newHarness(t)
+			h.now = syntheticRawNow()
+			h.env.Stdin = strings.NewReader(syntheticRawBody())
+			h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				w.Header().Set("Location", h.api.srv.URL+"/SECRET-REDIRECT-TARGET")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, "SECRET-RESPONSE-BODY "+testToken)
+			}
+			h.mustRun(tc.code, append([]string{"usage-source"}, append(usageSourceRawArgs("-", syntheticRawObserved), "--publish")...)...)
+			reqs := h.api.requests()
+			if len(reqs) != 1 || reqs[0].path != "/v1/provider-source-reports/codex-current-source" || len(h.sleeps) != 0 || len(h.ran) != 0 {
+				t.Fatal("refusal or redirect must not retry, follow a Location or invoke a subprocess")
+			}
+			if h.stdout.Len() != 0 || h.stderr.String() != "agent-run: usage-source publication "+tc.msg+"\n" {
+				t.Fatal("publication error must contain only its fixed category")
+			}
+		})
+	}
+}
+
+func TestUsageSourcePublishIntegrationUncertainResponse(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		t.Run(strconv.FormatBool(timeout), func(t *testing.T) {
+			h := newHarness(t)
+			h.now = syntheticRawNow()
+			h.env.Stdin = strings.NewReader(syntheticRawBody())
+			h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				if timeout {
+					select {
+					case <-r.Context().Done():
+					case <-time.After(3 * time.Second):
+					}
+					return
+				}
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error("synthetic transport disconnect unavailable")
+					return
+				}
+				_ = conn.Close()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			code := Run(ctx, append([]string{"usage-source"}, append(usageSourceRawArgs("-", syntheticRawObserved), "--publish")...), h.env)
+			reqs := h.api.requests()
+			if code != ExitFailed || len(reqs) != 1 || h.stdout.Len() != 0 || h.stderr.String() != "agent-run: usage-source publication unavailable\n" || len(h.sleeps) != 0 || len(h.ran) != 0 {
+				t.Fatal("an uncertain publication must fail once without response, credential or input output")
+			}
+		})
+	}
+}
+
+func TestUsageSourcePublishIntegrationLocalPathsAvoidClient(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		body string
+		code int
+	}{
+		{usageSourceRawArgs("-", syntheticRawObserved), syntheticRawBody(), ExitOK},
+		{append(usageSourceRawArgs("-", syntheticRawObserved), "--publish=false"), syntheticRawBody(), ExitOK},
+		{append(usageSourceRawArgs("-", syntheticRawObserved), "--publish", "--publish"), syntheticRawBody(), ExitUsage},
+		{append(usageSourceRawArgs("-", syntheticRawObserved), "--publish", "--codex-tool-report", "-"), syntheticRawBody(), ExitUsage},
+		{append(usageSourceRawArgs("-", "2026-06-15T12:00:00Z"), "--publish"), syntheticRawBody(), ExitFailed},
+		{append(usageSourceRawArgs("-", "now"), "--publish"), syntheticRawBody(), ExitFailed},
+		{append(usageSourceRawArgs("-", syntheticRawObserved), "--publish"), `{"accountId":"SECRET-ACCOUNT"}`, ExitFailed},
+		{append(usageSourceRawArgs("-", syntheticRawObserved), "--publish"), syntheticRawBody() + strings.Repeat(" ", usageSourceMaxBytes), ExitFailed},
+		{append(usageSourceRawArgs("-", syntheticRawObserved), "--publish", "--api-url", "https://example.invalid"), syntheticRawBody(), ExitUsage},
+	} {
+		h := newHarness(t)
+		h.now = syntheticRawNow()
+		h.env.Stdin = strings.NewReader(tc.body)
+		h.env.Getenv = func(string) string {
+			t.Error("local formatting or rejected input must not inspect client configuration")
+			panic("unexpected client configuration read")
+		}
+		h.mustRun(tc.code, append([]string{"usage-source"}, tc.args...)...)
+		if len(h.api.requests()) != 0 || len(h.ran) != 0 || len(h.sleeps) != 0 {
+			t.Fatal("local formatting or rejected input must not make any client request")
+		}
+		if tc.code != ExitOK && h.stdout.Len() != 0 {
+			t.Fatal("rejected input emitted report bytes")
 		}
 	}
 }
