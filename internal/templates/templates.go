@@ -378,6 +378,11 @@ func (t *Templates) computeRevision() (string, error) {
 	// The timers reach no pod, so they are not part of the revision.
 	c := *t
 	c.Lifecycle = nil
+	// HOME capacity is used only when creating a claim, not building a pod.
+	// Freeze its hash input at the historical default so increasing capacity
+	// neither changes existing 20Gi revisions nor triggers an idle pod drain.
+	// Keep the actual parsed size in t for new claims; storage class still hashes.
+	c.Home.Size = resource.MustParse("20Gi")
 	// Marshal sorts map keys, so equal content gives equal bytes.
 	b, err := json.Marshal(&c)
 	if err != nil {
