@@ -1369,15 +1369,12 @@ func TestProductFieldLinksAreAllowlistedEverywhere(t *testing.T) {
 	}
 }
 
-func setAllowanceNow(t *testing.T, now time.Time) {
-	t.Helper()
-	previous := allowanceNow
-	allowanceNow = func() time.Time { return now }
-	t.Cleanup(func() { allowanceNow = previous })
+func setAllowanceNow(page *ProductPage, now time.Time) {
+	page.AsOf = now
 }
 
 func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
-	setAllowanceNow(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	window := ProductAllowanceWindow{
 		Percent: "99% left", Window: "7 days", Reset: "1 Jan 2020, 00:00 UTC",
 		Observed: "29 Oct 13:59 UTC", Provenance: "Provider API",
@@ -1386,6 +1383,7 @@ func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
 	}
 	page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
 		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{window}}}}}
+	setAllowanceNow(&page, now)
 	body, err := RenderProduct(page)
 	if err != nil {
 		t.Fatal(err)
@@ -1393,8 +1391,8 @@ func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
 	section := allowanceBlock(t, body, true)
 	for _, want := range []string{
 		`width="10"`, "10% used", "90% remaining", "99% left",
-		"Window: 7 days, day.", "Exact reset time not reported.", "Account acct.ok_1",
-		"Observed at <time datetime=\"2026-10-29T13:59:00Z\">29 Oct 2026, 13:59</time> (UTC).",
+		"Window: 7 days, day.", "Exact reset time not reported.",
+		"Observed at <time datetime=\"2026-10-29T13:59:00Z\">29 Oct 2026, 13:59:00</time> (UTC).",
 		"Source: Provider API.", "This is a measured provider report.",
 		`<details class="allowance-table-fold"><summary>Window table</summary>`,
 	} {
@@ -1402,8 +1400,8 @@ func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if strings.Contains(section, "has passed") || strings.Contains(section, "Resets in") || strings.Contains(section, "99% used") || strings.Contains(section, "<script") || strings.Contains(section, "http:") {
-		t.Fatalf("bar followed display text or left the page: %s", section)
+	if strings.Contains(section, "acct.ok_1") || strings.Contains(section, "has passed") || strings.Contains(section, "Resets in") || strings.Contains(section, "99% used") || strings.Contains(section, "<script") || strings.Contains(section, "http:") {
+		t.Fatalf("bar followed display text, showed an account key, or left the page: %s", section)
 	}
 	if strings.Contains(section, " open>") || strings.Contains(section, "<details open") {
 		t.Fatal("window table must start closed")
@@ -1422,7 +1420,6 @@ func TestRenderTypedAllowanceBarsIgnorePercentText(t *testing.T) {
 
 func TestRenderAllowanceRemainingBarAndResetInstants(t *testing.T) {
 	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	setAllowanceNow(t, now)
 	base := ProductAllowanceWindow{Window: "5 hours", WindowKind: "hour", Provenance: "Provider API", PercentKnown: true, PercentValue: 62.5, Direction: "remaining", Reset: "1 Jan 2020, 00:00 UTC"}
 	cases := []struct {
 		name, precision, reset string
@@ -1434,9 +1431,9 @@ func TestRenderAllowanceRemainingBarAndResetInstants(t *testing.T) {
 		{"bad-precision", "PRIVATE-PRECISION", "", []string{"Reset precision not recognized."}, []string{"PRIVATE-PRECISION", "Resets in", "has passed"}},
 		{"invalid", "instant", "PRIVATE-RESET", []string{"Reset time is not a usable instant."}, []string{"PRIVATE-RESET", "Resets in", "has passed"}},
 		{"past", "instant", "2020-01-01T00:00:00Z", []string{`datetime="2020-01-01T00:00:00Z"`, "(UTC).", "That time has passed."}, []string{"Resets in"}},
-		{"future", "instant", "2026-11-02T03:30:00Z", []string{`datetime="2026-11-02T03:30:00Z"`, "2 Nov 2026, 03:30", "Resets in 1 day 3 hours 30 minutes."}, []string{"has passed"}},
-		{"offset", "instant", "2026-11-02T09:00:00-05:00", []string{`datetime="2026-11-02T09:00:00-05:00"`, "(UTC-05:00).", "2 Nov 2026, 09:00", "Resets in 1 day 14 hours."}, []string{"has passed"}},
-		{"soon", "instant", "2026-11-01T00:00:30Z", []string{"Resets in under 1 minute."}, []string{"has passed"}},
+		{"future", "instant", "2026-11-02T03:30:00Z", []string{`datetime="2026-11-02T03:30:00Z"`, "2 Nov 2026, 03:30:00", "Resets in 1 day 3 hours 30 minutes, as of 1 Nov 2026, 00:00:00 UTC."}, []string{"has passed"}},
+		{"offset", "instant", "2026-11-02T09:00:00-05:00", []string{`datetime="2026-11-02T09:00:00-05:00"`, "(UTC-05:00).", "2 Nov 2026, 09:00:00", "Resets in 1 day 14 hours, as of 1 Nov 2026, 00:00:00 UTC."}, []string{"has passed"}},
+		{"soon", "instant", "2026-11-01T00:00:30Z", []string{"Resets in under 1 minute, as of 1 Nov 2026, 00:00:00 UTC."}, []string{"has passed"}},
 		{"equal", "instant", "2026-11-01T00:00:00Z", []string{"That time has passed."}, []string{"Resets in"}},
 	}
 	for _, tc := range cases {
@@ -1445,8 +1442,10 @@ func TestRenderAllowanceRemainingBarAndResetInstants(t *testing.T) {
 			window.ResetPrecision = tc.precision
 			window.ResetAt = tc.reset
 			window.Percent = "1% used"
-			body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
-				Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceStale, Windows: []ProductAllowanceWindow{window}}}}})
+			page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
+				Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceStale, Windows: []ProductAllowanceWindow{window}}}}}
+			setAllowanceNow(&page, now)
+			body, err := RenderProduct(page)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1466,15 +1465,16 @@ func TestRenderAllowanceRemainingBarAndResetInstants(t *testing.T) {
 }
 
 func TestRenderAllowanceRefusesUnusableTypedFields(t *testing.T) {
-	setAllowanceNow(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
 	windows := []ProductAllowanceWindow{
 		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: math.NaN(), Direction: "used"},
 		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: 140, Direction: "used"},
 		{Percent: "62% left", Window: "7 days", PercentKnown: true, PercentValue: 40, Direction: "PRIVATE-DIR", WindowKind: "PRIVATE-KIND", ObservedAt: "PRIVATE-OBSERVED", AccountKey: "acct/secret"},
 		{Percent: "Unknown", PercentKnown: true, PercentValue: 40, Direction: "remaining", WindowKind: "minute"},
 	}
-	body, err := RenderProduct(ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
-		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: windows}}}})
+	page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: windows}}}}
+	setAllowanceNow(&page, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	body, err := RenderProduct(page)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1544,6 +1544,48 @@ func TestRenderUsageTablesStartClosed(t *testing.T) {
 	session := strings.Index(s, `<details class="usage-fold"><summary>By session</summary>`)
 	if fold < 0 || head < fold || session < 0 || !strings.Contains(s, "Token, cost, model and session tables start closed.") || !strings.Contains(s, "What these numbers cover") {
 		t.Fatalf("tables are not folded drilldowns")
+	}
+}
+
+func TestUsageChartsDoNotParseDisplayText(t *testing.T) {
+	table := ProductUsageTable{Title: "By project", Rows: []ProductUsageRow{
+		{Name: "display", Cells: []ProductUsageCell{{Label: "Input", Value: "9,999", ChartMetric: "input", ChartUnit: "tokens", ChartAmount: "10"}}},
+		{Name: "grouped", Cells: []ProductUsageCell{{Label: "Input", Value: "1000", ChartMetric: "input", ChartUnit: "tokens", ChartAmount: "1,000"}}},
+		{Name: "negative", Cells: []ProductUsageCell{{Label: "Input", Value: "5", ChartMetric: "input", ChartUnit: "tokens", ChartAmount: "-5"}}},
+		{Name: "mismatch", Cells: []ProductUsageCell{{Label: "Output", Value: "50", ChartMetric: "output", ChartUnit: "USD", ChartAmount: "50"}}},
+		{Name: "tiny", Cells: []ProductUsageCell{{Label: "Est. cost", Value: "<0.01 USD", ChartMetric: "cost", ChartUnit: "USD", ChartAmount: "1/10000000"}}},
+	}}
+	charts := table.Charts()
+	if len(charts) != 2 || charts[0].Metric != "input" || charts[1].Metric != "cost" {
+		t.Fatalf("charts %+v", charts)
+	}
+	bars := map[string]ProductUsageBar{}
+	for _, bar := range charts[0].Bars {
+		bars[bar.Label] = bar
+	}
+	if bars["display"].Amount != "10" || bars["display"].Text != "display: 10 tokens" || bars["display"].Width != "100" || bars["display"].Unknown {
+		t.Fatalf("display text was parsed: %+v", bars["display"])
+	}
+	if !bars["grouped"].Unknown || bars["grouped"].Amount != "" || !bars["negative"].Unknown || bars["negative"].Text != "negative: Unknown" {
+		t.Fatalf("bad amounts stayed numeric: grouped %+v negative %+v", bars["grouped"], bars["negative"])
+	}
+	if _, ok := bars["mismatch"]; ok {
+		t.Fatal("mismatched unit entered the token chart")
+	}
+	cost := charts[1].Bars[0]
+	if cost.Label != "tiny" || cost.Amount != "1/10000000" || cost.Zero || cost.Width == "0" || strings.Contains(cost.Text, "<0.01") || strings.Contains(cost.Text, "9,999") {
+		t.Fatalf("cost chart %+v", cost)
+	}
+	page := ProductPage{Title: "Sessions", Connected: true, Filter: ProductFilter{View: "usage"}, Usage: &ProductUsage{
+		Breakdowns: []ProductUsageTable{table}, Columns: []string{"Session"}, Rows: []ProductUsageRow{{Name: "session", Cells: []ProductUsageCell{{Label: "Input", Value: "nope", ChartMetric: "input", ChartUnit: "tokens", ChartAmount: "2"}}}},
+	}}
+	body, err := RenderProduct(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(body)
+	if !strings.Contains(html, `class="usage-chart-value">display: 10 tokens</span>`) || !strings.Contains(html, `class="usage-chart-value">tiny: 1/10000000 USD</span>`) || !strings.Contains(html, `class="usage-chart-value">session: 2 tokens</span>`) || strings.Contains(html, "-5 tokens") || strings.Contains(html, "<script") {
+		t.Fatal("rendered chart used display text or a negative amount")
 	}
 }
 

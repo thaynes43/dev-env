@@ -308,7 +308,7 @@ func TestSessionUsageBreakdowns(t *testing.T) {
 	if model := tables["By provider and requested model"]["Unknown · claude-opus-5-5"]; model["Sessions"] != "4" || model["Input"] != "3,500" {
 		t.Fatalf("model rows %v", tables["By provider and requested model"])
 	}
-	if len(page.Usage.Allowance) != 2 || page.Usage.Allowance[0].Value != "Not connected" {
+	if len(page.Usage.Allowance) != 3 || page.Usage.Allowance[0].Provider != "Claude" || page.Usage.Allowance[0].Value != "Not connected" || page.Usage.Allowance[1].Provider != "Codex" || page.Usage.Allowance[1].Value != "Not connected" || page.Usage.Allowance[2].Provider != "Cursor" || page.Usage.Allowance[2].Value != "Not connected" || len(page.Usage.Allowance[2].Windows) != 0 {
 		t.Fatalf("allowance %+v", page.Usage.Allowance)
 	}
 	filtered := sessionsPage(decoded.Sessions, true, "observed", now, portal.ProductFilter{Project: "haynes-ops"})

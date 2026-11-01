@@ -477,7 +477,7 @@ func usageCharts(scope string, rows []ProductUsageRow) []ProductUsageChart {
 		scope = "this group"
 	}
 	specs := []struct{ metric, unit, title, note string }{
-		{"input", "tokens", "Input tokens", "Compared with other reported input totals in " + scope + ". Not a quota. Cache reads are not included."},
+		{"input", "tokens", "Input tokens", "Compared with other reported input totals in " + scope + ". Not a quota. Input follows each provider's own convention. Cache reads are never added again."},
 		{"output", "tokens", "Output tokens", "Compared with other reported output totals in " + scope + ". Not a quota."},
 		{"cost", "USD", "Estimated cost", "Estimated list price, not a subscription charge. Compared only with other estimates in " + scope + "."},
 	}
