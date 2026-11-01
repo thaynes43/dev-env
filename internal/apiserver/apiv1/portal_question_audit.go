@@ -49,39 +49,43 @@ type PortalQuestionAuditAck struct {
 	CreatedAt *time.Time      `json:"createdAt,omitempty"`
 }
 
-// PortalQuestionAuditItem is one message's metadata. Kind plain has no thread.
-// Origin, approval, provider consumption and served model are fixed literals:
-// this schema does not record them, and requested model is not served model.
+// PortalQuestionAuditItem is one question or reply. Plain messages are not
+// part of this page. InReplyTo is the stored question reference on a reply
+// and is absent on a question. Origin, approval, provider consumption and
+// served model are fixed literals: this schema does not record them, and
+// requested model is not served model.
 type PortalQuestionAuditItem struct {
-	Name                 string                `json:"name"`
-	UID                  string                `json:"uid"`
-	Kind                 string                `json:"kind"`
-	Sender               TaskClaimOwner        `json:"sender"`
-	Recipient            TaskClaimOwner        `json:"recipient"`
-	Actor                TaskClaimActor        `json:"actor"`
-	Provenance           TaskClaimProvenance   `json:"provenance"`
-	CreatedAt            time.Time             `json:"createdAt"`
-	Origin               string                `json:"origin"`
-	Approval             string                `json:"approval"`
-	ProviderConsumption  string                `json:"providerConsumption"`
-	ServedModel          string                `json:"servedModel"`
-	Thread               *InboxThread          `json:"thread,omitempty"`
-	Acknowledgement      PortalQuestionAuditAck `json:"acknowledgement"`
+	Name                string                 `json:"name"`
+	UID                 string                 `json:"uid"`
+	Kind                string                 `json:"kind"`
+	InReplyTo           *InboxMessageRef       `json:"inReplyTo,omitempty"`
+	Sender              TaskClaimOwner         `json:"sender"`
+	Recipient           TaskClaimOwner         `json:"recipient"`
+	Actor               TaskClaimActor         `json:"actor"`
+	Provenance          TaskClaimProvenance    `json:"provenance"`
+	CreatedAt           time.Time              `json:"createdAt"`
+	Origin              string                 `json:"origin"`
+	Approval            string                 `json:"approval"`
+	ProviderConsumption string                 `json:"providerConsumption"`
+	ServedModel         string                 `json:"servedModel"`
+	Thread              *InboxThread           `json:"thread,omitempty"`
+	Acknowledgement     PortalQuestionAuditAck `json:"acknowledgement"`
 }
 
-// PortalQuestionAudit is one box's page. Truncated with NextCursor means the
-// store has another page; this response does not contain it.
+// PortalQuestionAudit is one store page after plain messages are removed.
+// Truncated and NextCursor describe that store page, not a filtered continuation.
+// A short item list can still be truncated. The consumer does not follow NextCursor.
 type PortalQuestionAudit struct {
-	Version              string                      `json:"version"`
-	Project              string                      `json:"project"`
-	Session              PortalQuestionAuditIdentity `json:"session"`
-	Box                  string                      `json:"box"`
-	Limit                int                         `json:"limit"`
-	Truncated            bool                        `json:"truncated"`
-	NextCursor           string                      `json:"nextCursor,omitempty"`
-	Origin               string                      `json:"origin"`
-	Approval             string                      `json:"approval"`
-	ProviderConsumption  string                      `json:"providerConsumption"`
-	ServedModel          string                      `json:"servedModel"`
-	Items                []PortalQuestionAuditItem   `json:"items"`
+	Version             string                      `json:"version"`
+	Project             string                      `json:"project"`
+	Session             PortalQuestionAuditIdentity `json:"session"`
+	Box                 string                      `json:"box"`
+	Limit               int                         `json:"limit"`
+	Truncated           bool                        `json:"truncated"`
+	NextCursor          string                      `json:"nextCursor,omitempty"`
+	Origin              string                      `json:"origin"`
+	Approval            string                      `json:"approval"`
+	ProviderConsumption string                      `json:"providerConsumption"`
+	ServedModel         string                      `json:"servedModel"`
+	Items               []PortalQuestionAuditItem   `json:"items"`
 }

@@ -550,3 +550,39 @@ func TestLegacyTerminalTaskReclaimFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestPortalQuestionAuditFlagsDefaultOff(t *testing.T) {
+	o, err := parseFlags(nil)
+	if err != nil || o.portalQuestionAudit || len(o.portalQuestionProjects) != 0 {
+		t.Fatal("question audit enabled by default", err)
+	}
+	base := []string{"--enable-durable-inbox", "--inbox-projects=sample", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--enable-inbox-questions", "--enable-portal-reader"}
+	o, err = parseFlags(base)
+	if err != nil || o.portalQuestionAudit || len(o.portalQuestionProjects) != 0 || !o.inboxQuestions || !o.portalReaderEnabled {
+		t.Fatal("prerequisites enabled question audit", err)
+	}
+	o, err = parseFlags(append(slices.Clone(base), "--enable-portal-question-audit", "--portal-question-projects=sample"))
+	if err != nil || !o.portalQuestionAudit || !slices.Equal(o.portalQuestionProjects, []string{"sample"}) {
+		t.Fatal("explicit question audit refused", err)
+	}
+	both := []string{"--enable-durable-inbox", "--inbox-projects=sample,other", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--enable-inbox-questions", "--enable-portal-reader", "--enable-portal-question-audit", "--portal-question-projects=other"}
+	o, err = parseFlags(both)
+	if err != nil || !slices.Equal(o.portalQuestionProjects, []string{"other"}) {
+		t.Fatal("subset project refused", err)
+	}
+	refused := [][]string{
+		{"--enable-portal-question-audit"},
+		{"--portal-question-projects=sample"},
+		append(slices.Clone(base), "--enable-portal-question-audit"),
+		{"--enable-durable-inbox", "--inbox-projects=sample", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--enable-inbox-questions", "--enable-portal-question-audit", "--portal-question-projects=sample"},
+		{"--enable-durable-inbox", "--inbox-projects=sample", "--project-catalog=dev-env-system/dev-env-project-catalog", "--project-clone-owner=thaynes43", "--enable-portal-reader", "--enable-portal-question-audit", "--portal-question-projects=sample"},
+		append(slices.Clone(base), "--enable-portal-question-audit", "--portal-question-projects=other"),
+		append(slices.Clone(base), "--enable-portal-question-audit", "--portal-question-projects=sample,sample"),
+		append(slices.Clone(base), "--enable-portal-question-audit", "--portal-question-projects=*"),
+	}
+	for _, args := range refused {
+		if _, err := parseFlags(args); err == nil {
+			t.Fatal("inconsistent question audit accepted", args)
+		}
+	}
+}
