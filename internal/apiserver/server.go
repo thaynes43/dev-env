@@ -109,6 +109,14 @@ type Server struct {
 	// 2026-10-31). Default off: enable it only after the InboxMessage CRD with
 	// kind and inReplyTo is installed.
 	InboxQuestions bool
+	// PortalQuestionAudit serves GET /v1/portal/question-audit, a metadata-only
+	// page of question and reply records for one explicit project and one live
+	// session name and UID. Plain messages on the store page are omitted.
+	// Default off. It does not admit the portal reader to /v1/inbox, and an
+	// empty PortalQuestionProjects list leaves the route unregistered.
+	// Source wiring is not a deployed permission.
+	PortalQuestionAudit    bool
+	PortalQuestionProjects []string
 	// Nil leaves immutable coordination routes disabled. This store always reads Live.
 	TaskClaims            *taskclaim.KubeStore
 	TaskClaimReadProjects []string
@@ -252,6 +260,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if len(s.PortalLaunchRepos) > 0 {
 		mux.Handle(apiv1.PortalLaunchPath, s.serve(route{methods: map[string]handler{http.MethodPost: s.portalLaunch}}))
+	}
+	if s.portalQuestionAuditEnabled() {
+		mux.Handle(apiv1.PortalQuestionAuditPath, s.serve(route{methods: map[string]handler{http.MethodGet: s.portalQuestionAudit}}))
 	}
 	s.registerCodexRC(mux)
 	s.registerReminders(mux)
@@ -420,6 +431,7 @@ func (s *Server) serve(rt route) http.Handler {
 				case len(s.PortalConversationTargets) > 0 && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalConversationPrefix+r.PathValue("uid")+"/conversation":
 				case s.portalAskRoute(r):
 				case PortalProviderSourceGET(s.ProviderSourceReports.RouteEnabled(), r.Method, r.URL.Path):
+				case s.portalQuestionAuditEnabled() && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalQuestionAuditPath:
 				default:
 					return 0, forbidden("the portal reader may only list session summaries")
 				}
