@@ -64,7 +64,11 @@ func NewPilot(t *testing.T) PilotFixture {
 	a, h := commonfixture.Sources("Synthetic common pilot instructions.", "Synthetic Codex header.")
 	rules := commonfixture.Snapshot(t, saved, "Synthetic common pilot instructions.", "Synthetic Codex header.")
 	now := time.Date(2026, 10, 16, 4, 0, 0, 0, time.UTC)
-	p := &projectcanary.PilotPolicy{NotBefore: now.Add(-time.Minute), ExpiresAt: now.Add(20 * time.Minute), SealUID: "11111111-1111-4111-8111-111111111111", CatalogRevision: catalog.Revision(), RulesRevision: snapshot.RulesRevision(), CommonRevision: rules.CommonRevision, TemplateRevision: tmpl.Revision(), Image: tmpl.Image, Prompts: []string{"Perform bounded integration actor A without source edits.", "Perform bounded integration actor B without source edits."}}
+	reviewRevision, err := tmpl.ReviewRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &projectcanary.PilotPolicy{NotBefore: now.Add(-time.Minute), ExpiresAt: now.Add(20 * time.Minute), SealUID: "11111111-1111-4111-8111-111111111111", CatalogRevision: catalog.Revision(), RulesRevision: snapshot.RulesRevision(), CommonRevision: rules.CommonRevision, TemplateRevision: reviewRevision, Image: tmpl.Image, Prompts: []string{"Perform bounded integration actor A without source edits.", "Perform bounded integration actor B without source edits."}}
 	yes := true
 	f := PilotFixture{Policy: p, Now: now, Catalog: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: projectcanary.CatalogNamespace, Name: projectcanary.CatalogName, UID: "catalog-original", ResourceVersion: "1"}, Data: map[string]string{"catalog.json": raw}}, Template: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "dev-env-system", Name: templates.DefaultName, UID: "template-original", ResourceVersion: "1"}, Data: map[string]string{templates.Key: string(doc)}}, Seal: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: projectcanary.PilotSealNamespace, Name: projectcanary.PilotSealName, UID: types.UID(p.SealUID), ResourceVersion: "1"}, Immutable: &yes, Data: map[string]string{"policySHA256": p.Digest()}}, Common: a, Header: h, Templates: tmpl, Snapshot: saved, Rules: rules}
 	if p.Validate() != nil || p.ValidateTemplate(tmpl) != nil {

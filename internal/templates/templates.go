@@ -368,14 +368,26 @@ func Parse(data map[string]string) (*Templates, error) {
 	return &t, nil
 }
 
-// Revision is the hash of the templates' content (D-04, DESIGN-001 5.2), prefixed
+// Revision is the hash of pod-affecting template content (D-04, DESIGN-001 5.2), prefixed
 // with the image tag when there is one: 2.0.3-1a2b3c4d5e. It hashes the parsed
 // document, so a comment or a reordered key is not a new revision, and it is a
 // valid label value.
 func (t *Templates) Revision() string { return t.revision }
 
 func (t *Templates) computeRevision() (string, error) {
-	// The timers reach no pod, so they are not part of the revision.
+	c := *t
+	// HOME capacity is used only when creating a claim, not building a pod.
+	// Freeze its hash input at the historical default so increasing capacity
+	// neither changes existing 20Gi revisions nor triggers an idle pod drain.
+	// Keep the actual parsed size in t for new claims; storage class still hashes.
+	c.Home.Size = resource.MustParse("20Gi")
+	return c.ReviewRevision()
+}
+
+// ReviewRevision retains the legacy template freeze hash, including HOME size.
+// Finite canary/pilot records must still refuse a capacity change even though
+// it does not change a running pod's revision. Timers remain excluded as before.
+func (t *Templates) ReviewRevision() (string, error) {
 	c := *t
 	c.Lifecycle = nil
 	// Marshal sorts map keys, so equal content gives equal bytes.

@@ -70,7 +70,11 @@ func New(t *testing.T, provider, caller string) Fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := projectcanary.Record{ID: provider + "-rules", Client: caller, Project: "sample", Repository: "demo", Provider: provider, Profile: "canary", Model: model, Effort: "xhigh", Size: "S", CatalogRevision: catalog.Revision(), RulesRevision: snapshot.RulesRevision(), TemplateRevision: tmpl.Revision(), Image: tmpl.Image, IdempotencyKey: provider + "-once", Prompt: "Report the identifiers required by the common and repository rules without editing files.", Timeout: "180s", MaxTurns: turns}
+	reviewRevision, err := tmpl.ReviewRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := projectcanary.Record{ID: provider + "-rules", Client: caller, Project: "sample", Repository: "demo", Provider: provider, Profile: "canary", Model: model, Effort: "xhigh", Size: "S", CatalogRevision: catalog.Revision(), RulesRevision: snapshot.RulesRevision(), TemplateRevision: reviewRevision, Image: tmpl.Image, IdempotencyKey: provider + "-once", Prompt: "Report the identifiers required by the common and repository rules without editing files.", Timeout: "180s", MaxTurns: turns}
 	policyDoc, err := json.Marshal([]projectcanary.Record{r})
 	if err != nil {
 		t.Fatal(err)
