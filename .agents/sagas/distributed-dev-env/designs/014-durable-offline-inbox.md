@@ -363,3 +363,22 @@ another page.
 This is a connected CLI source improvement. It does not provide the held
 portal inbox read permission, activate human Asks, prove a new provider actor,
 or close OP321's installed UI and cross-provider acceptance.
+
+## 2026-11-01: read-only acknowledgement metadata (OP321 source slice)
+
+`agent-run inbox ack-status <message> --project <project>` reads the existing
+acknowledgement endpoint once and prints its direct metadata JSON. It does not
+read message text, create an acknowledgement, retry a write, or alter the
+existing `inbox ack` POST. Redirect and response-size safeguards match the
+other inbox reads.
+
+The receipt retains message name/UID, acknowledgement name/UID, recipient and
+authenticated actor as supplied by the API. The client checks the requested
+project/message and required receipt identifiers before printing success.
+A hidden or missing record is not proof that a message is unacknowledged:
+404 can also hide scope. No successful acknowledgement receipt was established.
+An API read acknowledgement proves neither provider consumption nor approval.
+
+This connected source read adds no API route, reader eligibility, ACL, body
+capture or actor. Fixtures do not close populated live ACK, cross-provider or
+portal audit acceptance.

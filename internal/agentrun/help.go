@@ -14,7 +14,8 @@ Usage:
   agent-run list [--repo <r>] [--state <s>] [--mine]
                                                   list sessions, newest first
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
-  agent-run inbox send|ask|reply|list|read|ack     durable inbox
+  agent-run inbox send|ask|reply|list|read|ack|ack-status
+                                                  durable inbox
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
@@ -224,6 +225,7 @@ itself. A lost mutation acknowledgement is not retried.
        agent-run inbox list --project <project> [--sent] [--limit N] [--continue <cursor>] [-o audit|json]
        agent-run inbox read <message> --project <project> [-o json]
        agent-run inbox ack <message> --project <project>
+       agent-run inbox ack-status <message> --project <project> [-o json]
 
 Send, ask and reply read 1..16384 UTF-8 bytes from stdin and require a stable
 logical key. Each sends once. If unconfirmed, explicitly retry only the
@@ -246,7 +248,10 @@ the state on stderr. Ack is explicit and proves an API read acknowledgement,
 not provider consumption. Nothing interrupts a running task: it sees a reply
 when it lists or reads its inbox. The server authorizes all operations; a
 configured coordinator may read authorized project content but cannot send or
-acknowledge for a Session. Send, ask, reply, list and ack print JSON.
+acknowledge for a Session. Send, ask, reply, list, ack and ack-status print JSON.
+Ack-status reads one existing API acknowledgement receipt without reading text
+or acknowledging a message. A missing or hidden receipt is not proof of absence.
+An API acknowledgement proves neither provider consumption nor approval.
 List -o audit prints escaped metadata, identities, question state and the
 continuation cursor without reading text or acknowledging a message. Missing
 or contradictory thread metadata is Unknown. It makes no approval claim.
