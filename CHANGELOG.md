@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.85.0](https://github.com/thaynes43/dev-env/compare/v2.84.1...v2.85.0) (2026-11-02)
+
+
+### Features
+
+* read the retained usage source explicitly ([#836](https://github.com/thaynes43/dev-env/issues/836)) ([577a750](https://github.com/thaynes43/dev-env/commit/577a7501bbad584f40b1190fb91c7fccfb234bab))
+* **retention:** verify preservation and report HOME deadlines ([#833](https://github.com/thaynes43/dev-env/issues/833)) ([3f419a1](https://github.com/thaynes43/dev-env/commit/3f419a16d1f2f4d66acbbfe2da833a891f49bde0))
+
 ## [2.84.1](https://github.com/thaynes43/dev-env/compare/v2.84.0...v2.84.1) (2026-11-01)
 
 
