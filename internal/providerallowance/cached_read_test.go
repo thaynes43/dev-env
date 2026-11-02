@@ -241,3 +241,35 @@ func repairRead(obs Observation, captured, received, asOf string, current Curren
 }
 
 func repairStr(value string) *string { return &value }
+
+func TestProjectCachedReadDegradesConfiguredStatusWithItem(t *testing.T) {
+	for _, availability := range []Availability{AvailabilityAvailable, AvailabilityUnavailable, AvailabilityConflict} {
+		for _, futureReceipt := range []bool{false, true} {
+			name := string(availability) + "/stale"
+			if futureReceipt {
+				name = string(availability) + "/expired"
+			}
+			t.Run(name, func(t *testing.T) {
+				obs, ctx, reg := repairAllowanceFixture(t)
+				received := "2026-11-02T03:05:00Z"
+				want := FreshStale
+				if futureReceipt {
+					received, want = "2099-01-01T00:00:00Z", FreshExpired
+				}
+				doc := repairRead(obs, obs.CapturedAt, received, *obs.ProviderObservedAt, CurrentMeasure{
+					MeasureID: "window", State: CurrentKnown, Value: MeasureValue{State: ValueKnown, Decimal: repairStr("55")},
+				})
+				doc.SourceStatuses[0].Availability = availability
+				asOf := doc.SourceStatuses[0].Freshness.AsOf
+				ProjectCachedRead(&doc, []TrustedContext{ctx}, reg, 30*time.Minute, true, time.Date(2026, 11, 2, 3, 40, 0, 0, time.UTC))
+				status := doc.SourceStatuses[0]
+				if doc.Items[0].Freshness.State != want || status.Freshness.State != want || status.Freshness.AsOf != asOf || status.Availability != availability {
+					t.Fatalf("status drifted from item or moved original metadata: item=%+v status=%+v", doc.Items[0].Freshness, status)
+				}
+				if doc.Items[0].Observation.Measures[0].Value.Decimal == nil || *doc.Items[0].Observation.Measures[0].Value.Decimal != "55" {
+					t.Fatal("reported history was removed")
+				}
+			})
+		}
+	}
+}

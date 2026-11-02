@@ -337,3 +337,40 @@ func TestAggregateAllowanceStoreTrustedProducerRestart(t *testing.T) {
 		t.Fatal("restart rolled back the binding generation", err)
 	}
 }
+
+func TestAggregateAllowanceStoreExplicitAccountRebind(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal(err)
+	}
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	next := cloneAllowanceReport(t, previous)
+	item := allowanceOpenAIItem(t, &next)
+	item.Observation.ObservationID = "fixture-rebound"
+	item.Observation.Sequence++
+	account, workspace := "next-account", "next-workspace"
+	item.Observation.Scope.AccountRef, item.Observation.Scope.WorkspaceRef = &account, &workspace
+	item.Binding.AccountRef, item.Binding.WorkspaceRef = &account, &workspace
+	captured, _ := time.Parse(time.RFC3339Nano, item.Observation.CapturedAt)
+	received, _ := time.Parse(time.RFC3339Nano, item.ReceivedAt)
+	item.Observation.CapturedAt = captured.Add(time.Minute).Format(time.RFC3339Nano)
+	item.ReceivedAt = received.Add(time.Minute).Format(time.RFC3339Nano)
+	status := allowanceOpenAIStatus(t, &next)
+	status.Binding = item.Binding
+	status.LastGood.ObservationID, status.LastGood.CapturedAt, status.LastGood.ReceivedAt = item.Observation.ObservationID, item.Observation.CapturedAt, item.ReceivedAt
+	refuseAllowancePut(t, store, mem, next, now, held)
+	store.Contexts[0].AccountRef, store.Contexts[0].WorkspaceRef = &account, &workspace
+	store.Registry = assemblyRegistryForBinding("fixture-incarnation-1", account, workspace, 0)
+	// Selecting another account without advancing its generation still refuses.
+	refuseAllowancePut(t, store, mem, next, now, held)
+	store.Contexts[0].BindingGeneration = 1
+	store.Registry = assemblyRegistryForBinding("fixture-incarnation-1", account, workspace, 1)
+	item.Observation.BindingGeneration, item.Binding.Generation, status.Binding.Generation = 1, 1, 1
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, next), now); err != nil || mem.updates != 2 {
+		t.Fatal("explicit trusted rebind did not recover", err, mem.updates)
+	}
+	refuseAllowancePut(t, store, mem, previous, now, mem.cm.Data[AggregateAllowanceDataKey])
+}

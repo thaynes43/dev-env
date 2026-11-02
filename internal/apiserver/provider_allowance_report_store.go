@@ -340,20 +340,25 @@ func preserveAllowance(prev, next providerallowance.ReadResponse) error {
 			}
 			continue
 		}
+		rebound := !aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) ||
+			!aggregateStringEqual(before.Observation.Scope.WorkspaceRef, after.Observation.Scope.WorkspaceRef)
 		if after.Observation.BindingGeneration < before.Observation.BindingGeneration ||
-			!aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) ||
-			!aggregateStringEqual(before.Observation.Scope.WorkspaceRef, after.Observation.Scope.WorkspaceRef) {
+			(rebound && after.Observation.BindingGeneration <= before.Observation.BindingGeneration) {
 			return ErrAggregateRejected
 		}
-		if before.Observation.ProducerRef == after.Observation.ProducerRef && before.Observation.ProducerIncarnation == after.Observation.ProducerIncarnation {
+		sameProducer := before.Observation.ProducerRef == after.Observation.ProducerRef && before.Observation.ProducerIncarnation == after.Observation.ProducerIncarnation
+		if sameProducer {
 			if after.Observation.Sequence <= before.Observation.Sequence {
 				return ErrAggregateRejected
 			}
-			continue
+			if !rebound {
+				continue
+			}
 		}
 		// The new report has already passed the store's caller-owned trust.
-		// A newly selected producer incarnation may restart its counter, but
-		// cannot replay an older capture or refresh its original receipt.
+		// A newly selected producer incarnation may restart its counter. An
+		// explicit higher-generation scope rebind may replace the old account.
+		// Neither can replay an older capture or refresh its original receipt.
 		for _, stamps := range [][2]string{
 			{before.Observation.CapturedAt, after.Observation.CapturedAt},
 			{before.ReceivedAt, after.ReceivedAt},

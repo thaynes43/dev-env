@@ -535,6 +535,10 @@ func assemblyRegistry() *providerallowance.StaticRegistry {
 }
 
 func assemblyRegistryForIncarnation(incarnation string) *providerallowance.StaticRegistry {
+	return assemblyRegistryForBinding(incarnation, "fixture-account", "fixture-workspace", 0)
+}
+
+func assemblyRegistryForBinding(incarnation, account, workspace string, generation int64) *providerallowance.StaticRegistry {
 	min, max := "0", "100"
 	return providerallowance.NewStaticRegistry(providerallowance.RegistryParts{
 		Sources: []providerallowance.SourceRule{{
@@ -547,7 +551,7 @@ func assemblyRegistryForIncarnation(incarnation string) *providerallowance.Stati
 			Windows: []string{"five-hour-window", "seven-day-window"}, Min: &min, Max: &max,
 		}},
 		Accounts: []providerallowance.AccountRule{{
-			AccountRef: "fixture-account", WorkspaceRef: "fixture-workspace", Generation: 0,
+			AccountRef: account, WorkspaceRef: workspace, Generation: generation,
 			ProducerRef: "fixture-producer", ProducerIncarnation: incarnation,
 		}},
 	})

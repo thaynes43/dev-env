@@ -35,8 +35,8 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		cachedAlignTrust(item, matched[0])
 		cachedPreserveConflicts(item)
 		cachedDegrade(&item.Freshness, item.Observation.ProviderObservedAt, item.ReceivedAt, maxAge, maxAgeSet, now)
+		freshHold[provider] = item.Freshness
 		if cachedFreshnessBlocks(item.Freshness) {
-			freshHold[provider] = item.Freshness
 			cachedWithholdCurrent(item)
 			continue
 		}
@@ -54,7 +54,12 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 			status.Binding = BindingRecord{State: BindingUnknown}
 		}
 		if held, ok := freshHold[status.Provider]; ok {
-			cachedReleaseUnconfigured(status, held)
+			if cachedFreshnessBlocks(held) {
+				cachedReleaseUnconfigured(status, held)
+				cachedExpireLabel(&status.Freshness)
+			} else if held.State == FreshStale && status.Freshness.State == FreshFresh {
+				status.Freshness.State = FreshStale
+			}
 		}
 		if at, ok := cachedTime(&status.Freshness.AsOf); !ok || at.After(now) {
 			cachedExpireLabel(&status.Freshness)
