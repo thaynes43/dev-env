@@ -1588,7 +1588,7 @@ func TestSyntheticStagedGitlinksAreNotClean(t *testing.T) {
 					}
 				}
 				inventory, err := CollectPreservation(context.Background(), req, runner, fixedRevision(req.Binding.HomeRevision))
-				if err == nil || inventory.Complete || !(strings.Contains(err.Error(), "staged submodule changes") || strings.Contains(err.Error(), "unmerged index")) {
+				if err == nil || inventory.Complete || (!strings.Contains(err.Error(), "staged submodule changes") && !strings.Contains(err.Error(), "unmerged index")) {
 					t.Fatalf("staged gitlink was clean: %+v %v", inventory, err)
 				}
 			})
