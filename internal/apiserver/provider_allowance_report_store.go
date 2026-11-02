@@ -379,7 +379,7 @@ func preserveAllowance(prev, next providerallowance.ReadResponse) error {
 			}
 			continue
 		}
-		if !allowanceClaimsCurrent(after) && !lastGoodEqual(prevStatus[provider].LastGood, nextStatus[provider].LastGood) {
+		if !allowanceClaimsCurrent(after) && !lastGoodEqual(prevStatus[provider].LastGood, nextStatus[provider].LastGood) && !lastGoodMatches(nextStatus[provider].LastGood, after) {
 			return ErrAggregateRejected
 		}
 		rebound := !aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) ||

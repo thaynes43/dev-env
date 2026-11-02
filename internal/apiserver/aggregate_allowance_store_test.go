@@ -435,3 +435,42 @@ func TestAggregateAllowanceStoreRejectsUnsupportedCurrentAndNoncurrentPoison(t *
 		t.Fatal("refused reports mutated slot", mem.updates)
 	}
 }
+
+func TestAggregateAllowanceStoreAdvancesTrustedUnknownTimeCapture(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	item := allowanceOpenAIItem(t, &previous)
+	item.Observation.ProviderObservedAt = nil
+	item.Freshness.State, item.Freshness.Basis = providerallowance.FreshUnknown, providerallowance.BasisCapture
+	for i := range item.CurrentMeasures {
+		item.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+		item.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+	}
+	status := allowanceOpenAIStatus(t, &previous)
+	status.Freshness = item.Freshness
+	status.LastGood.ProviderObservedAt = nil
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal("first unknown-time capture", err)
+	}
+	next := cloneAllowanceReport(t, previous)
+	after := allowanceOpenAIItem(t, &next)
+	after.Observation.ObservationID = "next-trusted-unknown-time"
+	after.Observation.Sequence++
+	captured, _ := time.Parse(time.RFC3339Nano, after.Observation.CapturedAt)
+	received, _ := time.Parse(time.RFC3339Nano, after.ReceivedAt)
+	after.Observation.CapturedAt, after.ReceivedAt = captured.Add(time.Minute).Format(time.RFC3339Nano), received.Add(time.Minute).Format(time.RFC3339Nano)
+	good := allowanceOpenAIStatus(t, &next).LastGood
+	good.ObservationID, good.CapturedAt, good.ReceivedAt = after.Observation.ObservationID, after.Observation.CapturedAt, after.ReceivedAt
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	erased := cloneAllowanceReport(t, next)
+	allowanceOpenAIStatus(t, &erased).LastGood = nil
+	refuseAllowancePut(t, store, mem, erased, now, held)
+	unrelated := cloneAllowanceReport(t, next)
+	allowanceOpenAIStatus(t, &unrelated).LastGood.ObservationID = "unrelated-history"
+	refuseAllowancePut(t, store, mem, unrelated, now, held)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, next), now); err != nil || mem.updates != 2 {
+		t.Fatal("new trusted unknown-time capture cannot advance", err, mem.updates)
+	}
+}
