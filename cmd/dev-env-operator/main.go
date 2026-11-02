@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -668,7 +669,7 @@ func parseFlags(args []string) (options, error) {
 		return o, err
 	}
 	if *rescueOwnersFile != "" {
-		f, err := os.Open(*rescueOwnersFile)
+		f, err := os.OpenFile(*rescueOwnersFile, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return o, errors.New("cannot read rescue incident ownership configuration")
 		}

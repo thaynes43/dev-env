@@ -116,6 +116,7 @@ func (c *RescueIncidentOwners) ownerFor(s *v1alpha1.AgentSession, cond *metav1.C
 				owner := &sessions[i]
 				a := owner.Status.Agent
 				if string(owner.UID) != o.OwnerSessionUID || !owner.DeletionTimestamp.IsZero() || owner.Status.TaskOutcome != nil ||
+					(owner.Status.Phase != v1alpha1.PhaseRunning && owner.Status.Phase != v1alpha1.PhaseIdle) || owner.Spec.OperatingMode != v1alpha1.OperatingModeRunning ||
 					a == nil || a.Task != nil || a.Boot != "ready" || a.ConversationID != o.OwnerConversationID ||
 					a.LastHeartbeat == nil || a.LastHeartbeat.After(now) || now.Sub(a.LastHeartbeat.Time) > 3*time.Minute {
 					continue

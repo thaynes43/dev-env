@@ -26,18 +26,25 @@ SHA-256, acknowledgment time and expiry (at most 24 hours). This is trusted
 operator configuration, not a provider payload or arbitrary Session annotation.
 Reviewers must verify the actual native acknowledgment and its scope before
 configuration adoption. A saved file, a Pod phase or a task budget is not proof
-of continuing native availability. Eligible ownership additionally requires the
-same native conversation in an existing nonterminal owner Session, ready agentd,
-a current accepted heartbeat and busy/idle/waiting agent status; missing, stale,
-exited or conflicting evidence fails unowned. No entries or automatic renewal ship here.
+of continuing native availability. Eligible accountability additionally requires
+the same native conversation in an existing Running/Idle owner Session still
+requesting Running mode, ready agentd, a current accepted heartbeat and
+busy/idle/waiting agent status. Missing, stale, terminal, suspending or conflicting
+evidence fails unowned. These process facts do not certify provider authentication,
+API health or the ability to execute the next model turn. No entries or automatic
+renewal ship here.
 Unknown, stale, mismatched or expired ownership remains unowned. This config
 grants no runtime, deletion, preservation or credential authority.
 
 A separate notification metric retains Session UID, reason, risk key, deletion
 state and eligible owner UID. The original rescue-failure metric is unchanged.
 The alert rule uses the new metric when present and falls back to the original
-metric for older operators. Latest attempt time is an annotation/query, never
-an alert label. Unowned failures keep the existing critical route. An exactly
+metric for older operators. A persisted RescueFailed verdict is already a
+recorded failure: notification eligibility is immediate. The old 20-minute
+alert debounce is removed so changing risk or ownership cannot reset it and
+hide a continuous failure. The old 30-minute keep-firing is also removed so an
+obsolete owned identity cannot mask the current unowned one. Latest attempt time
+is an annotation/query, never an alert label. Unowned failures keep the existing critical route. An exactly
 owned, unchanged failure remains visible and gets normal-priority notifications
 with a longer repeat interval; it is never silenced. New risk, a new UID or
 expired ownership returns to the urgent route. Unrelated critical alerts retain

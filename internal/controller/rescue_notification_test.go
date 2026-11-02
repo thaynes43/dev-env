@@ -29,6 +29,7 @@ func notificationFixture(t *testing.T) (*v1alpha1.AgentSession, *v1alpha1.AgentS
 	s.Status.Rescue = r
 	setRescueCondition(s, &s.Status, reason)
 	owner := sessionWith("native-owner", v1alpha1.PhaseRunning)
+	owner.Spec.OperatingMode = v1alpha1.OperatingModeRunning
 	owner.UID = "22222222-2222-2222-2222-222222222222"
 	owner.Status.Agent = &v1alpha1.AgentStatus{Boot: "ready", Status: "busy", ConversationID: "33333333-3333-3333-3333-333333333333", LastHeartbeat: &metav1.Time{Time: now}}
 	c := &RescueIncidentOwners{Schema: "dev-env.rescue-incident-owners.v1", Owners: []RescueIncidentOwner{{
@@ -105,6 +106,11 @@ func TestRescueNotificationOwnerRequiresCurrentExactNativeEvidence(t *testing.T)
 		"missing heartbeat":       func(_, o *v1alpha1.AgentSession) { o.Status.Agent.LastHeartbeat = nil },
 		"terminal task":           func(_, o *v1alpha1.AgentSession) { o.Status.Agent.Task = &v1alpha1.TaskStatus{} },
 		"owner deleting":          func(_, o *v1alpha1.AgentSession) { o.DeletionTimestamp = &metav1.Time{Time: now} },
+		"failed owner":            func(_, o *v1alpha1.AgentSession) { o.Status.Phase = v1alpha1.PhaseFailed },
+		"archived owner":          func(_, o *v1alpha1.AgentSession) { o.Status.Phase = v1alpha1.PhaseArchived },
+		"suspended owner":         func(_, o *v1alpha1.AgentSession) { o.Status.Phase = v1alpha1.PhaseSuspended },
+		"pending owner":           func(_, o *v1alpha1.AgentSession) { o.Status.Phase = v1alpha1.PhasePending },
+		"suspension requested":    func(_, o *v1alpha1.AgentSession) { o.Spec.OperatingMode = v1alpha1.OperatingModeSuspended },
 		"pod ready without agent": func(_, o *v1alpha1.AgentSession) { o.Status.Agent = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
