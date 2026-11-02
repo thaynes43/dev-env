@@ -69,23 +69,8 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust EvidenceVer
 			entry.Status, entry.DecisionRequired = "decision_required", true
 		}
 		entry.Reasons = append(entry.Reasons, evidence.preservation(record, clock, completed, now, policy.ObservationMaxAge)...)
-		protected := false
-		if record.State == "active" {
-			protected = true
-			entry.Reasons = append(entry.Reasons, "active_session")
-		}
-		if record.Hold != "" {
-			protected = true
-			entry.Reasons = append(entry.Reasons, "owner_hold")
-		}
-		switch record.Disposition {
-		case "", "normal":
-		case "canary", "pilot", "fixture", "rescue_hold":
-			protected = true
-			entry.Reasons = append(entry.Reasons, "special_disposition")
-		default:
-			entry.Reasons = append(entry.Reasons, "disposition_unknown")
-		}
+		safety, protected := homeSafety(record.State, record.Hold, record.Disposition)
+		entry.Reasons = append(entry.Reasons, safety...)
 		verifiedProtection := protected && evidence.verifiedSafety(record, now, policy.ObservationMaxAge)
 		if protected && !verifiedProtection {
 			entry.Reasons = append(entry.Reasons, "protection_unverified")
@@ -112,6 +97,33 @@ func Evaluate(snapshot Snapshot, now time.Time, policy Policy, trust EvidenceVer
 	sort.Slice(report.ImmediateCandidates, func(i, j int) bool { return report.ImmediateCandidates[i].UID < report.ImmediateCandidates[j].UID })
 	sort.Slice(report.StoppedWorkQueue, func(i, j int) bool { return report.StoppedWorkQueue[i].UID < report.StoppedWorkQueue[j].UID })
 	return report, nil
+}
+
+// homeSafety classifies the HOME itself. Active work, a hold, and a named
+// special disposition are protected. Any other non-empty disposition stays
+// visible as unknown and is not ordinary. State other than stopped is not
+// ordinary, including active.
+func homeSafety(state, hold, disposition string) (reasons []string, protected bool) {
+	if state != "stopped" {
+		reasons = append(reasons, "stopped_state_unknown")
+	}
+	if state == "active" {
+		protected = true
+		reasons = append(reasons, "active_session")
+	}
+	if hold != "" {
+		protected = true
+		reasons = append(reasons, "owner_hold")
+	}
+	switch disposition {
+	case "", "normal":
+	case "canary", "pilot", "fixture", "rescue_hold":
+		protected = true
+		reasons = append(reasons, "special_disposition")
+	default:
+		reasons = append(reasons, "disposition_unknown")
+	}
+	return reasons, protected
 }
 
 func completionClock(record Record, now time.Time) (time.Time, Clock, string) {

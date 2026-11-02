@@ -118,7 +118,9 @@ proofs. It never weakens current finalizers or coordination retention.
 
 `internal/homeretention` uses the standard library, existing agentd protocol
 validation helpers, and the shared API annotation constants for read-only legacy
-hold projection. It adds no module dependency.
+hold projection. It adds no module dependency. The collector's optional
+`ExecGit` uses the standard-library process API. The dry-run command does not
+call it.
 `cmd/home-retention-dry-run` reads a bounded strict JSON snapshot and optional
 separate trusted public-key configuration, and writes JSON to stdout. Its
 explicit time and policy settings make output reproducible; it has no network,
@@ -143,17 +145,86 @@ A valid unsigned bound clock carries `completion_clock_unverified`; offline
 queue arithmetic trusts its recorded value for planning, not as authenticated
 cleanup evidence or permission to reset the durable source record.
 
-Remaining integration is a separately owned collector: (1) adapt the existing
-rescue Git checks into non-mutating complete HOME inventory collection with
-read/write fencing; (2) capture authenticated exact-remote publication receipts;
-(3) enumerate and preserve explicitly required artifacts; (4) authenticate exact
-proof provenance through existing authenticated agentd/operator identity (with
-optional offline signatures when needed); (5) collect uncached
-Session/executor/PVC identity and all current mounts, validate terminal
-provenance, record revisions/supersession and authenticate fresh observations. Existing
-records do not yet have this evidence. No production attestation keys, collectors
-or authorities are provisioned here. Notification delivery, owner decision UX,
-approved batch execution and rollout remain separate. No cleanup is enabled.
+Source now contains the read-only collector, the caller-supplied decision
+store, and the exact-UID preflight described below. Those components do not
+activate collection, notification, or cleanup. Existing records still lack live
+evidence. No production attestation keys or authorities are provisioned here.
+No cleanup is enabled.
+
+## Source collector, decision records, and preflight
+
+`CollectPreservation` adapts the read side of `listWorktrees` and
+`unpushedRefs`: porcelain worktrees, every branch and tag, annotated tag
+objects, every `stash@{n}`, detached `HEAD:<path>`, staged, unstaged,
+untracked, nested, in-progress merge/rebase, and initialized submodule state.
+It reads each repository twice and again after receipt queries. A read error,
+unsupported repository config, symlink, unbound submodule identity, prunable or
+bare worktree, or any ref/HEAD/HOME revision change returns an error and no
+inventory. The command allowlist refuses fetch, checkout, reset, stash writes,
+update-ref, and remote-tracking comparison. `FetchSucceeded` stays false. A
+remote-tracking ref is not publication proof, and neither is that boolean.
+
+Publication and durable-copy proof come only from injected
+`PublicationSource` and `DurableCopySource` values, checked with the existing
+`EvidenceVerifier`. A nil source attaches no receipt. A receipt that does not
+verify for the exact binding, repository, and object fails the collection.
+Requirements and artifact digests stay caller-supplied. The collector does not
+scan a HOME directory or provider history. `ExecGit` uses a private empty HOME,
+clears the caller environment, and passes `protocol.allow=never`, disabled
+hooks, fsmonitor, helpers, recurse, and external diff both as `-c` and as
+inherited `GIT_CONFIG_COUNT` pairs. Each Git command is limited to the shorter
+of the caller's remaining deadline and 30 seconds.
+
+Git does not let an alias replace a builtin, so `alias.status` does not run
+instead of `git status` and `alias.config` does not hide the config scan. The
+collector still refuses `alias.*` because it is not non-executing repository
+data. Before `status`, `ls-files`, or `submodule` in a worktree or submodule, it
+lists local config and worktree config when `extensions.worktreeConfig` is
+true. Any file or blob key outside the small non-executing set (core data,
+user name and email, remote URL and fetch, branch upstream, submodule path, URL,
+and active) fails closed. The scan does not follow symlinks. A nested `.git`
+that status omits because it is ignored is recorded as a nested repository,
+including under an ignored directory. A symlink stops that walk. `BISECT_START`
+is an in-progress operation. The CLI is not wired to the collector.
+
+`ProjectDecisions` writes warning and decision rows through a caller-supplied
+`DecisionStore`. The clock is the caller's, including a test clock. Retention
+is 168 hours and the default warning lead is 24 hours, using `Evaluate`. The
+same binding and projection does not write again. `RecordOwnerDecision` accepts
+only `retain`, `approve_exact_cleanup`, and `withdraw` for the open row of that
+exact binding. A new Session, PVC, Pod, attempt, writer generation, or HOME
+revision supersedes the row and starts at `pending`. The old disposition stays
+on the superseded row and is not copied. There is no service, notifier, or
+enabled loop.
+
+`Preflight` compares one approved UID set with fresh caller-supplied uncached
+fences: Session, PVC, and Pod UIDs, resourceVersions, writer revision, mounts,
+proof, required artifacts, and `approve_exact_cleanup`. It refuses a replaced
+PVC or Pod, a late write, a new mount, stale or mismatched proof, a replayed
+approval, a future timestamp, and any other approved set. It also reuses
+`homeSafety` and the preservation inventory check: state must be stopped, hold
+empty, and disposition empty or normal; worktree, ref, stash, and unpushed
+arrays must be present; each worktree head ref must exist; the signed
+observation must be at or after proof capture; an artifact whose requirement is
+not `required` is inconsistent. Publication remains the per-ref authenticated
+receipt. `FetchSucceeded` is not consulted. `DeleteEnabled` and
+`ExecutionAuthority` stay false. It does not delete, strip finalizers, or call
+Kubernetes. Passing preflight is not permission to delete. Controller guards
+are unchanged.
+
+`Evaluate` uses the same inventory check. A false `FetchSucceeded` with current
+authenticated push or query receipts can be preserved. A true `FetchSucceeded`
+without those receipts cannot. The boolean remains on the wire and never
+establishes remote publication. Unknown artifact requirements, unknown
+dispositions, and stale or forged proofs stay refused.
+
+Residuals, not delivered here: uncached Session, PVC, Pod, and mount reads stay
+caller-supplied. Decision persistence stays behind `DecisionStore`; no production
+adapter is supplied or deployed, so durable persistence remains integration work. No operator,
+agentd, or dry-run CLI path calls these functions. The layout sentence for this
+package was not edited. A repository config key this collector does not
+recognize fails closed rather than being executed. An ordinary symlink in a
+worktree stops the nested walk instead of being followed.
 
 ## Validation
 

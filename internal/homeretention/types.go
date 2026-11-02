@@ -1,5 +1,7 @@
-// Package homeretention verifies caller-supplied HOME preservation attestations
-// and classifies offline records. It performs no collection or lifecycle action.
+// Package homeretention verifies caller-supplied HOME preservation attestations,
+// reads a bounded non-mutating Git inventory, projects owner-decision records,
+// and preflights an exact approved UID set. It does not delete, strip
+// finalizers, call Kubernetes, or turn eligibility into execution authority.
 package homeretention
 
 import "time"
@@ -128,15 +130,18 @@ type Inventory struct {
 
 type Repository struct {
 	// Identity is the collector's canonical repository identity, scoped by trust.
-	Identity          string     `json:"identity"`
-	WorktreesComplete bool       `json:"worktreesComplete"`
-	RefsComplete      bool       `json:"refsComplete"`
-	StashesComplete   bool       `json:"stashesComplete"`
-	FetchSucceeded    bool       `json:"fetchSucceeded"`
-	Worktrees         []Worktree `json:"worktrees"`
-	Refs              []Ref      `json:"refs"`
-	Stashes           []string   `json:"stashes"`
-	UnpushedRefs      []string   `json:"unpushedRefs"`
+	Identity          string `json:"identity"`
+	WorktreesComplete bool   `json:"worktreesComplete"`
+	RefsComplete      bool   `json:"refsComplete"`
+	StashesComplete   bool   `json:"stashesComplete"`
+	// FetchSucceeded is retained for wire compatibility. The collector leaves it
+	// false. Verifiers ignore it: a true value is not publication, and a false
+	// value does not reject a ref that has a current authenticated receipt.
+	FetchSucceeded bool       `json:"fetchSucceeded"`
+	Worktrees      []Worktree `json:"worktrees"`
+	Refs           []Ref      `json:"refs"`
+	Stashes        []string   `json:"stashes"`
+	UnpushedRefs   []string   `json:"unpushedRefs"`
 }
 
 type Worktree struct {
