@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.86.0](https://github.com/thaynes43/dev-env/compare/v2.85.0...v2.86.0) (2026-11-02)
+
+
+### Features
+
+* **usage:** preserve typed display-only reset labels ([#847](https://github.com/thaynes43/dev-env/issues/847)) ([9777d84](https://github.com/thaynes43/dev-env/commit/9777d8421afd43ff7333aacb87f56559cb657db4))
+
+
+### Bug Fixes
+
+* **cursor-acp:** retain safe tool context through long sessions ([#842](https://github.com/thaynes43/dev-env/issues/842)) ([c544443](https://github.com/thaynes43/dev-env/commit/c544443ab52192bc36c1d03f17190a66b52388d0))
+
 ## [2.85.0](https://github.com/thaynes43/dev-env/compare/v2.84.1...v2.85.0) (2026-11-02)
 
 
