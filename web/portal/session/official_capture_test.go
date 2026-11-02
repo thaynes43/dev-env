@@ -54,3 +54,37 @@ func TestOfficialPersonalCodexReadingReachesLastReportedWithoutCurrentCapacity(t
 		}
 	}
 }
+
+func TestCursorBillingLabelDoesNotBecomeAllowanceRenewal(t *testing.T) {
+	at := time.Date(2026, 11, 2, 19, 0, 0, 0, time.UTC)
+	account := "cursor-email-sha256:" + strings.Repeat("b", 64)
+	used, label := 61, "Nov 6"
+	payload := pa.CursorCLIUsageCapture{Schema: pa.CursorCLICaptureSchema, RendererVersion: pa.CursorCLIQualifiedVersion, CollectionStartedAt: at.Format(time.RFC3339Nano), ReceivedAt: at.Add(time.Minute).Format(time.RFC3339Nano), AccountRef: &account, Plan: "fixture-tier", IncludedPercentDisplay: &used, PercentPrecision: "rounded_integer_display", ResetMonthDay: &label, Period: "not_exposed"}
+	raw, _ := json.Marshal(map[string]any{"schema": pa.CaptureBundleSchema, "captures": []any{map[string]any{"provider": "cursor", "producerRef": "cli-fixture", "producerIncarnation": "i-1", "sequence": 1, "capturedAt": payload.CollectionStartedAt, "receivedAt": payload.ReceivedAt, "payload": payload}}})
+	ctx := pa.TrustedContext{Provider: "cursor", ProducerRef: "cli-fixture", ProducerIncarnation: "i-1", BindingState: pa.BindingVerified, AccountRef: &account, SourceKind: pa.SourceNativeDisplay, SourceVersion: pa.CursorCLISourceVersion}
+	fields := map[string]pa.DirectFieldRule{}
+	for _, name := range []string{"plan", "accountLabel", "billingResetDisplayText", "rendererVersion", "percentPrecision", "captureTimeBasis", "period", "includedPercentDisplay"} {
+		fields[name] = pa.DirectFieldRule{OriginalType: pa.TypeString, Class: pa.ClassDisplay}
+	}
+	min, max := "0", "100"
+	reg := pa.NewStaticRegistry(pa.RegistryParts{Sources: []pa.SourceRule{{Provider: "cursor", Kind: pa.SourceNativeDisplay, Version: pa.CursorCLISourceVersion, CapabilityRef: pa.CursorCLICapability, AllowNormalizedMeasures: true, AllowDerivations: true, DirectFields: fields}}, Accounts: []pa.AccountRule{{AccountRef: account, AccountScopeOnly: true, ProducerRef: "cli-fixture", ProducerIncarnation: "i-1"}}, Metrics: []pa.MetricRule{{ValidationRef: pa.CursorDisplayIncludedValidation, Provider: "cursor", SourceKind: pa.SourceNativeDisplay, SourceVersion: pa.CursorCLISourceVersion, Category: pa.CategoryIncluded, Unit: pa.UnitPercent, Direction: pa.DirectionUsed, Windows: []string{pa.CursorDisplayIncludedWindow}, Min: &min, Max: &max, ComplementOf: "100", HistoricalOnly: true}}})
+	doc, err := pa.AssembleCaptureBundle(raw, pa.AggregateTrust{Contexts: []pa.TrustedContext{ctx}, Registry: reg, MaxAge: 1800}, at.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(doc)
+	cards := NewCachedAllowanceReader(body, pa.FixtureParseLimits, []pa.TrustedContext{ctx}, reg, AllowanceReadPolicy{MaxAge: 30 * time.Minute, Set: true}).Allowances(at.Add(3 * time.Minute))
+	found := false
+	for _, card := range cards {
+		if card.Provider != "Cursor" {
+			continue
+		}
+		found = true
+		if len(card.Windows) != 0 || len(card.LastReported) != 1 || card.LastReported[0].Percent != "61% used" || card.LastReported[0].Reset != "Reset time not reported." || card.LastReported[0].ResetAtExact != "" {
+			t.Fatal("billing end became quota renewal", card)
+		}
+	}
+	if !found {
+		t.Fatal("missing Cursor reported reading")
+	}
+}

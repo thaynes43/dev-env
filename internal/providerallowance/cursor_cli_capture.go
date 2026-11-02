@@ -21,7 +21,8 @@ var cursorEmailHash = regexp.MustCompile(`^cursor-email-sha256:[a-f0-9]{64}$`)
 // CursorCLIUsageCapture is a sanitized observation of the qualified normal
 // interactive builtin Usage display, not a raw Dashboard RPC. The local
 // acquisition interval is retained because no exact display/provider timestamp
-// is supplied. Every scalar is display precision; no generic Monthly caption,
+// is supplied. ResetMonthDay is the vendor billing-cycle label, not an
+// authoritative included-allowance renewal. Every scalar is display precision; no generic Monthly caption,
 // omitted API percentage or matching email proves a window/shared entitlement.
 type CursorCLIUsageCapture struct {
 	Schema                 string  `json:"schema"`
@@ -71,7 +72,7 @@ func projectCursorCLIUsage(raw []byte, selected CursorDisplaySelection) (ReadIte
 		v := "display_unknown"
 		code = &v
 	}
-	body, err := json.Marshal(map[string]any{"schema": CursorDisplayInputSchema, "capturedAt": report.CollectionStartedAt, "route": "cursor_plan_usage", "product": "cursor", "plan": report.Plan, "accountRef": report.AccountRef, "availability": availability, "errorCode": code, "windowLabel": nil, "durationMinutes": nil, "usedPercent": used, "resetDisplayDate": nil, "resetDisplayText": report.ResetMonthDay, "spendAmount": nil, "spendCurrency": nil})
+	body, err := json.Marshal(map[string]any{"schema": CursorDisplayInputSchema, "capturedAt": report.CollectionStartedAt, "route": "cursor_plan_usage", "product": "cursor", "plan": report.Plan, "accountRef": report.AccountRef, "availability": availability, "errorCode": code, "windowLabel": nil, "durationMinutes": nil, "usedPercent": used, "resetDisplayDate": nil, "resetDisplayText": nil, "spendAmount": nil, "spendCurrency": nil})
 	if err != nil {
 		return fail()
 	}
@@ -90,6 +91,10 @@ func projectCursorCLIUsage(raw []byte, selected CursorDisplaySelection) (ReadIte
 	if report.IncludedPercentDisplay != nil {
 		value := strconv.Itoa(*report.IncludedPercentDisplay) + "% used"
 		item.Observation.DirectFields = append(item.Observation.DirectFields, DirectField{Field: "includedPercentDisplay", OriginalType: TypeString, LexicalValue: &value})
+	}
+	if report.ResetMonthDay != nil {
+		value := *report.ResetMonthDay
+		item.Observation.DirectFields = append(item.Observation.DirectFields, DirectField{Field: "billingResetDisplayText", OriginalType: TypeString, LexicalValue: &value})
 	}
 	// Stable IDs include these typed precision facts; a later serving clock
 	// cannot create a different original observation or a provider refresh.

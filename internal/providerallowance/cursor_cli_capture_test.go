@@ -21,7 +21,7 @@ func cursorCLIFixture(t *testing.T, used *int) ([]byte, AggregateTrust, time.Tim
 	raw, _ := json.Marshal(map[string]any{"schema": CaptureBundleSchema, "captures": []captureEntry{{Provider: "cursor", ProducerRef: "normal-cli", ProducerIncarnation: "own-ui-1", Sequence: 1, CapturedAt: report.CollectionStartedAt, ReceivedAt: report.ReceivedAt, Payload: payload}}})
 	ctx := TrustedContext{Provider: "cursor", ProducerRef: "normal-cli", ProducerIncarnation: "own-ui-1", AccountRef: &account, BindingState: BindingVerified, SourceKind: SourceNativeDisplay, SourceVersion: CursorCLISourceVersion}
 	fields := map[string]DirectFieldRule{}
-	for _, name := range []string{"plan", "accountLabel", "resetDisplayText", "rendererVersion", "percentPrecision", "captureTimeBasis", "period", "includedPercentDisplay"} {
+	for _, name := range []string{"plan", "accountLabel", "billingResetDisplayText", "rendererVersion", "percentPrecision", "captureTimeBasis", "period", "includedPercentDisplay"} {
 		fields[name] = DirectFieldRule{OriginalType: TypeString, Class: ClassDisplay}
 	}
 	min, max := "0", "100"
@@ -38,8 +38,11 @@ func TestCursorNormalCLIAccountScopeKeepsRoundedDisplayAndUnknownPeriod(t *testi
 	item := doc.Items[0]
 	obs := item.Observation
 	m := obs.Measures[0]
-	if item.Binding.State != BindingVerified || item.Binding.WorkspaceRef != nil || obs.ProviderObservedAt != nil || m.Window.ResetAt != nil || m.Window.DurationMinutes != nil || m.Window.ResetDisplayText == nil || *m.Window.ResetDisplayText != "Nov 6" || obs.Scope.EntitlementRef != nil || len(obs.Scope.Products) != 1 || obs.Scope.Products[0] != "cursor" {
+	if item.Binding.State != BindingVerified || item.Binding.WorkspaceRef != nil || obs.ProviderObservedAt != nil || m.Window.ResetAt != nil || m.Window.DurationMinutes != nil || m.Window.ResetDisplayText != nil || m.Window.ResetPrecision != ResetUnknown || obs.Scope.EntitlementRef != nil || len(obs.Scope.Products) != 1 || obs.Scope.Products[0] != "cursor" {
 		t.Fatal("invented source scope/time/period/shared pool")
+	}
+	if cursorDisplayLexical(obs, "billingResetDisplayText") != "Nov 6" {
+		t.Fatal("original billing label lost")
 	}
 	if obs.Source.Version != CursorCLISourceVersion || *m.Value.Decimal != "61" || *obs.Derivations[0].Value.Decimal != "39" || item.CurrentMeasures[0].Value.Decimal != nil {
 		t.Fatal("display lost or promoted")

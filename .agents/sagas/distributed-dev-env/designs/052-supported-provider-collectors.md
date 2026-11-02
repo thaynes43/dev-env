@@ -181,8 +181,13 @@ qualified version. Included percent is rounded display precision, not raw API
 precision; zero can be a UI fallback and therefore normalizes to unknown while
 its literal remains display evidence. Auto is an alias, and API's displayed zero
 may be missing-data fallback: neither becomes another quota meter. The generic
-Monthly caption does not set a duration; the literal month/day reset stays without
-a year, timezone or reset instant. Capture time uses the original conservative
+Monthly caption does not set a duration. The normal renderer derives its
+"Resets" month/day label from current-usage billingCycleEnd with plan-info
+billingCycleEnd fallback, not included_usage_resets_at. Retain the literal in
+`directFields.billingResetDisplayText` as vendor billing display evidence only.
+The included measure has ResetUnknown and no reset text/date/instant, so API/UI
+cannot present billing end as an allowance renewal or countdown. The label stays
+without a year or exact instant. Capture time uses the original conservative
 local acquisition start and receipt uses its actual end, never preparation time.
 The interval is bounded to five minutes. This adapter does not launch a CLI or
 assert recurring acquisition. Normal CLI acquisition and its auth/cache behavior

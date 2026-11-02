@@ -131,7 +131,11 @@ The portal still needs its independently reviewed private trust configuration.
 
 A sanitized version-pinned normal Cursor Usage capture uses
 `cursor.cli.usage-capture.v1`. It retains the actual local acquisition interval,
-rounded Included display, nullable account ref and literal month/day reset.
+rounded Included display, nullable account ref and literal month/day billing
+label. The qualified renderer obtains that label from billing-cycle end, not
+from the included-allowance reset. It is retained only in the advisory
+`billingResetDisplayText` direct field. The quota reset precision remains unknown,
+with no quota reset date, instant or countdown.
 Generic period captions and API fallback zero do not become numeric entitlement
 facts. A displayed Included zero remains unknown unless separately qualified,
 and Auto is not a separate pool. The assembler supports caller-qualified account
