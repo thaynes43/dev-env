@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.88.0](https://github.com/thaynes43/dev-env/compare/v2.87.0...v2.88.0) (2026-11-02)
+
+
+### Features
+
+* **operator:** qualify fresh ordinary instruction publishers ([#862](https://github.com/thaynes43/dev-env/issues/862)) ([0a500ff](https://github.com/thaynes43/dev-env/commit/0a500ff704c2a20b7ae7c8a33b1dc165385abe50))
+* **usage:** collect supported account-scoped provider readings ([#864](https://github.com/thaynes43/dev-env/issues/864)) ([1272547](https://github.com/thaynes43/dev-env/commit/1272547c422d1b4bdf8b64473cbe8a2b623b52c3))
+
 ## [2.87.0](https://github.com/thaynes43/dev-env/compare/v2.86.0...v2.87.0) (2026-11-02)
 
 
