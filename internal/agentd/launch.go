@@ -87,6 +87,9 @@ type Launch struct {
 	TUI bool `json:"tui,omitempty"`
 	// Resume is set on a later boot's launch: it resumes ConversationID.
 	Resume bool `json:"resume,omitempty"`
+	// ExplicitClaudeRC is set only by an accepted explicit user continuation
+	// of one retained private Claude task. Automatic resume never sets it.
+	ExplicitClaudeRC *ExplicitClaudeRCLaunch `json:"explicitClaudeRC,omitempty"`
 }
 
 // ErrNotInPlan01 marks a session kind that a later plan builds.
@@ -263,7 +266,9 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 
 // BuildResume builds an interactive/shared later launch (D-58). Retained
 // private tasks cannot automatically resume, even when their result is lost
-// (DESIGN-025 24). The model and effort remain fixed at create (D-39).
+// (DESIGN-025 24). StartExplicitClaudeRC is the only explicit continuation,
+// and only after a separate request proves the original owner has stopped.
+// The model and effort remain fixed at create (D-39).
 func BuildResume(s Settings, sess protocol.Session, ws protocol.Workspace, first Launch, bootID string, now time.Time) (Launch, error) {
 	if retainedPrivateTask(s, sess) {
 		return Launch{}, errors.New("a terminal private task cannot automatically resume its provider")

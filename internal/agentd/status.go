@@ -21,9 +21,19 @@ type bootRecord struct {
 	Steps       []Step              `json:"steps,omitempty"`
 	Workspace   *protocol.Workspace `json:"workspace,omitempty"`
 	AgentError  string              `json:"agentError,omitempty"`
+	// Daemon binds pod-local control to the binary actually supervising this boot.
+	// Older daemons omit it; a side binary must not start a continuation for them.
+	Daemon *daemonProcess `json:"daemon,omitempty"`
 	// ProjectBootstrap is this boot's private catalog bootstrap, as names
 	// and codes only (DESIGN-006, reason codes).
 	ProjectBootstrap *protocol.ProjectBootstrap `json:"projectBootstrap,omitempty"`
+}
+
+type daemonProcess struct {
+	SessionUID string `json:"sessionUID"`
+	PodUID     string `json:"podUID"`
+	Pid        int    `json:"pid"`
+	Start      string `json:"start"`
 }
 
 // startWindow is how long after the launch file is written the agent counts
@@ -114,6 +124,12 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	if readJSONFile(s.statePath(resumeFile), &resumed) == nil && resumed.BootID == boot.BootID && boot.BootID != "" {
 		cur, hasCur = resumed, true
 	}
+	// An uncertain explicit start is not hidden by the original task result.
+	// Reading this record never starts or retries a provider invocation.
+	explicitLaunch, explicitState, hasExplicit := explicitClaudeRCStatus(ctx, r, s, sess, now)
+	if hasExplicit && explicitState != explicitClaudeRCUncertain {
+		cur, hasCur = explicitLaunch, true
+	}
 	switch {
 	case boot.AgentError != "":
 		st.Agent = protocol.AgentState{State: protocol.AgentFailed, Error: boot.AgentError}
@@ -153,6 +169,18 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 			}
 		}
 	}
+	if hasExplicit {
+		switch explicitState {
+		case explicitClaudeRCStarting, explicitClaudeRCSupervised:
+			started := cur.CreatedAt
+			st.Agent = protocol.AgentState{State: protocol.AgentBusy, StartedAt: &started}
+		case explicitClaudeRCExited:
+			st.Agent = tuiState(s, cur, now)
+		default:
+			st.Agent = protocol.AgentState{State: protocol.AgentInterrupted, Error: "explicit continuation ownership or exit is uncertain; no replay"}
+			hasCur = false
+		}
+	}
 	if launched {
 		st.Agent.ConversationID = first.ConversationID
 	}
@@ -177,8 +205,19 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		pid, live = p.Pid, p
 	}
 	applyActivity(ctx, r, s, &st, pid, hasCur && cur.TUI, now)
-	if sess.Mode == protocol.ModeRemote && sess.Agent == protocol.AgentClaude {
+	switch {
+	case sess.Mode == protocol.ModeRemote && sess.Agent == protocol.AgentClaude:
 		st.RemoteControl = collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, hasCur)
+	case hasCur && hasExplicit && explicitState != explicitClaudeRCUncertain && explicitRCAccepted(s, sess, cur):
+		rc := collectRemoteControl(s, sess, checkLogin(s).Usable(now), live, true)
+		rc.Name = cur.ExplicitClaudeRC.Title
+		if rc.URL == "" {
+			rc.SessionID = ""
+			if rc.State == protocol.RemoteRegistered {
+				rc.State = protocol.RemoteStarting
+			}
+		}
+		st.RemoteControl = rc
 	}
 	return st
 }

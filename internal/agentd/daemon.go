@@ -169,6 +169,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("state dir: %w", err)
 	}
 	rec := bootRecord{BootID: newBootID(), BootedAt: d.now().UTC(), Boot: protocol.BootBooting, CurrentStep: "admitting workspace"}
+	if d.Session.SessionUID != "" && d.S.PodUID != "" {
+		rec.Daemon = &daemonProcess{SessionUID: d.Session.SessionUID, PodUID: d.S.PodUID, Pid: os.Getpid(), Start: procStartTime(os.Getpid())}
+	}
 	if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
 		return fmt.Errorf("boot record: %w", err)
 	}
@@ -294,6 +297,12 @@ func (d *Daemon) bootHeartbeat(ctx context.Context) func() {
 // when the agent cannot run, why.
 func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Step, bootID string) (Step, string) {
 	if repo.State != StepFail && retainedPrivateTask(d.S, d.Session) {
+		// A retained private task still does not resume on its own. A supervised
+		// explicit continuation is a separate record and is restarted only when
+		// that record is already present and revalidates.
+		if step, why, handled := d.restartExplicitClaudeRC(ctx, ws, bootID); handled {
+			return step, why
+		}
 		return newStep("agent", []string{"private task launch/result retained; no automatic provider resume"}, nil), ""
 	}
 	if codexRemoteSession(d.Session) {

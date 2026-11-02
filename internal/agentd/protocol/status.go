@@ -106,7 +106,10 @@ type Status struct {
 	// does not know the field ignores it.
 	ConversationUsage *ConversationUsage `json:"conversationUsage,omitempty"`
 	Decision          *DecisionOutcome   `json:"decision,omitempty"`
-	// RemoteControl is set for a remote session only.
+	// RemoteControl is set for a remote session, and for one accepted explicit
+	// Claude remote-control continuation of a retained private task. The URL is
+	// present only after the live CLI session record has a bridge id. A
+	// headless (-p) launch never sets it. Session mode is unchanged.
 	RemoteControl *RemoteControl `json:"remoteControl,omitempty"`
 	// ProjectBootstrap is the boot's private catalog bootstrap, when it ran:
 	// catalog names, states, steps and reason codes only (DESIGN-006).

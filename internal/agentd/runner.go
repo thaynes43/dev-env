@@ -157,6 +157,9 @@ func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var stopping atomic.Bool
 	exited := make(chan struct{})
+	// Snapshot configuration before cancellation can outlive Run and its caller.
+	// Tests restore these package defaults after Run returns.
+	grace := stopGrace
 	cmd.Cancel = func() error {
 		pgid := cmd.Process.Pid
 		if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
@@ -164,7 +167,7 @@ func (r ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 		}
 		stopping.Store(true)
 		go func() {
-			timer := time.NewTimer(stopGrace)
+			timer := time.NewTimer(grace)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
