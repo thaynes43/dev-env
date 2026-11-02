@@ -180,3 +180,15 @@ func TestAllowanceGlanceEdgeStates(t *testing.T) {
 		t.Errorf("no page clock must mean no countdown: %s", u)
 	}
 }
+
+func TestAllowanceGlanceRefusedPercentWithoutTextNamesNoProviderText(t *testing.T) {
+	w := ProductAllowanceWindow{Percent: "Unknown", Window: "7 days", Reset: "Unknown", Observed: "Unknown", Provenance: "Provider API", PercentKnown: true, PercentValue: 101, Direction: "used"}
+	body := allowanceRender(t, ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{w}}}},
+	})
+	c := glanceTile(t, glanceSection(t, body), "Claude")
+	if strings.Contains(c, "Provider text") || !strings.Contains(c, "Percent is outside 0–100, so no bar is drawn.") || strings.Contains(c, "meter-fill") {
+		t.Fatalf("refused percent with no provider text: %s", c)
+	}
+}

@@ -365,7 +365,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 }
 @media (forced-colors: active) {
   .badge, .item, .tile, .btn, .coverage, .scope-chip, .chips a, .rail-link[aria-current="page"], .composer, .allowance-card { border: 1px solid CanvasText; }
-  .meter-track { fill: Canvas; stroke: CanvasText; }
+  .meter-track { fill: Canvas; stroke: CanvasText; vector-effect: non-scaling-stroke; }
   .meter-fill { fill: Highlight; }
   .btn:disabled { color: GrayText; border-color: GrayText; }
   .btn.primary { forced-color-adjust: none; background: ButtonText; color: ButtonFace; }
