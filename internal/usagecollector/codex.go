@@ -91,7 +91,7 @@ type rpcClient struct {
 // CLI requires an explicit caller acknowledgement, not an auth-file inspection.
 // The child uses its normal existing authentication; this code opens no auth
 // files and services no credential-refresh requests. It always stops/reaps it.
-func CollectCodex(ctx context.Context, executable string, now func() time.Time) (CodexAccountCapture, error) {
+func CollectCodex(ctx context.Context, executable string, now func() time.Time) (capture CodexAccountCapture, captureErr error) {
 	if ctx == nil || ctx.Err() != nil || executable == "" || now == nil {
 		return CodexAccountCapture{}, ErrCapture
 	}
@@ -135,7 +135,9 @@ func CollectCodex(ctx context.Context, executable string, now func() time.Time) 
 		_ = in.Close()
 		cancel()
 		_ = out.Close()
-		_ = cmd.Wait()
+		if !stopOwnedGroup(cmd) {
+			capture, captureErr = CodexAccountCapture{}, ErrCapture
+		}
 		close(stopped)
 		<-watcherDone
 	}()
@@ -357,4 +359,16 @@ func rpcAccountPlanMismatch(account codexAccount, plan *string) bool {
 		return true
 	}
 	return account.plan != "" && *plan != account.plan
+}
+
+// stopOwnedGroup kills even when the direct child already exited. Cancellation
+// alone may race Cmd.Wait and leave same-group descendants alive. Wait always
+// reaps the direct child; a missing process state is not a successful cleanup.
+func stopOwnedGroup(cmd *exec.Cmd) bool {
+	if cmd == nil || cmd.Process == nil {
+		return false
+	}
+	killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = cmd.Wait()
+	return (killErr == nil || errors.Is(killErr, syscall.ESRCH)) && cmd.ProcessState != nil
 }

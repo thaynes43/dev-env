@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -52,5 +53,55 @@ func TestCodexCancellationClosesInheritedOutputAndStopsOwnProcessGroup(t *testin
 			t.Fatal("collector leaked its running descendant")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestOwnedGroupCleanupAfterDirectChildExit(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "descendant.pid")
+	body := "/bin/sleep 60 &\nprintf '%s' \"$!\" > '" + strings.ReplaceAll(pidFile, "'", "'\\''") + "'\nexit 0\n"
+	cmd := exec.Command("/bin/sh", "-c", body)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	cleaned := false
+	t.Cleanup(func() {
+		if !cleaned {
+			_ = stopOwnedGroup(cmd)
+		}
+	})
+	deadline := time.Now().Add(time.Second)
+	for {
+		stat, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "stat"))
+		if strings.Contains(string(stat), ") Z ") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fixture direct child did not exit")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(raw))
+	if err != nil || pid < 1 || syscall.Kill(pid, 0) != nil {
+		t.Fatal("fixture descendant did not remain alive")
+	}
+	if !stopOwnedGroup(cmd) {
+		t.Fatal("group kill/direct reap unavailable")
+	}
+	cleaned = true
+	for {
+		stat, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) || strings.Contains(string(stat), ") Z ") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("owned descendant survived direct-child exit cleanup")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
