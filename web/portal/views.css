@@ -417,7 +417,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .allowance-cards { display: grid; gap: 12px; margin: 0 0 12px; }
 .allowance-card { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .allowance-split { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 12.5px; }
-.allowance-meter { display: block; width: 100%; height: 8px; margin: 0 0 8px; }
+.allowance-meter { display: block; width: 100%; height: 8px; margin: 0 0 8px; border-radius: 4px; overflow: hidden; }
 .meter-track { fill: var(--soft); }
 .meter-fill { fill: var(--accent); }
 .allowance-meter-note, .allowance-card-line, .allowance-reset, .allowance-fresh, .allowance-source, .allowance-missing, .allowance-confidence, .account-ref { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
@@ -428,9 +428,11 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .glance-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .glance-name { margin: 0; font-size: 14px; font-weight: 650; }
 .glance-windows { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
-.glance-split { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.glance-split { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 8px; overflow-wrap: anywhere; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.glance-split > * { min-width: 0; }
+.glance-text { color: var(--ink); }
 .glance-split strong { color: var(--ink); font-size: 20px; font-weight: 650; letter-spacing: -.4px; }
-.glance-meter { display: block; width: 100%; height: 8px; }
+.glance-meter { display: block; width: 100%; height: 8px; border-radius: 4px; overflow: hidden; }
 .glance-reset, .glance-note { margin: 6px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .glance-reset time { color: var(--ink); }
 .glance-note { margin-top: auto; }
@@ -440,7 +442,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .usage-chart li { margin: 0 0 8px; }
 .usage-chart-label { display: block; color: var(--ink); font-size: 12px; }
 .usage-chart-note, .usage-chart-value { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.usage-meter { display: block; width: 100%; height: 8px; margin: 4px 0; }
+.usage-meter { display: block; width: 100%; height: 8px; margin: 4px 0; border-radius: 4px; overflow: hidden; }
 .usage-chart .unknown { color: var(--muted); }
 .allowance-card .allowance-card-line, .allowance-split { color: var(--ink); }
 .allowance-table-fold, .usage-fold { margin-top: 8px; }

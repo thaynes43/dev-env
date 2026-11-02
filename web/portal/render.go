@@ -931,11 +931,17 @@ func (a ProductAllowance) GlanceNote() string {
 	seen := ""
 	switch {
 	case a.SeenVaries:
-		seen = " Observation times vary by window."
+		seen = " Observation time or source varies by window."
 	case a.Observed != "" && a.Observed != "Unknown":
 		seen = " Seen " + a.Observed + "."
 	case len(a.Windows) > 0:
 		seen = " Observation time not reported."
+	}
+	for _, w := range a.Windows {
+		if w.ObservedStatus().State == "future" {
+			seen += " An observation time is in the future."
+			break
+		}
 	}
 	switch a.Value {
 	case AllowanceMeasured:

@@ -58,7 +58,7 @@ func TestAllowanceGlanceKeepsProvidersFixedAndGapsUnknown(t *testing.T) {
 	}
 
 	c := glanceTile(t, section, "Claude")
-	for _, want := range []string{`tone-ok">Measured<`, "24% used", `width="24"`, `preserveAspectRatio="none"`, "Resets in 1 day 20 hours 30 minutes", `datetime="2026-11-04T09:30:00Z"`, "Seen 2 Nov 12:18 UTC."} {
+	for _, want := range []string{`tone-ok">Measured<`, "24% used", `width="24"`, `preserveAspectRatio="none"`, "Resets in 1 day 20 hours 30 minutes · <time datetime=\"2026-11-04T09:30:00Z\">4 Nov 2026, 09:30:00</time> UTC, as of 2 Nov 2026, 13:00:00 UTC", `datetime="2026-11-04T09:30:00Z"`, "Seen 2 Nov 12:18 UTC."} {
 		if !strings.Contains(c, want) {
 			t.Errorf("Claude tile lacks %q: %s", want, c)
 		}
@@ -71,7 +71,7 @@ func TestAllowanceGlanceKeepsProvidersFixedAndGapsUnknown(t *testing.T) {
 	if !strings.Contains(x, "Resets Nov 9. Provider label, not an exact time.") || strings.Contains(x, "<time ") || strings.Contains(x, "Resets in") {
 		t.Errorf("display-only reset became an instant or countdown: %s", x)
 	}
-	if strings.Count(x, `<rect class="meter-fill"`) != 1 || !strings.Contains(x, `width="0"`) || !strings.Contains(x, "<strong>3% used</strong>") {
+	if strings.Count(x, `<rect class="meter-fill"`) != 1 || !strings.Contains(x, `width="0"`) || !strings.Contains(x, "Provider text: 3% used") || strings.Contains(x, "<strong>3% used</strong>") || !strings.Contains(x, "Numeric percent not reported, so no bar is drawn.") {
 		t.Errorf("Codex: typed 0%% needs one bar, display-only 3%% needs text and no bar: %s", x)
 	}
 
@@ -109,7 +109,7 @@ func TestAllowanceGlanceUnknownReasonAndPastReset(t *testing.T) {
 	if !strings.Contains(k, `tone-muted">Unknown<`) || !strings.Contains(k, "No quota counters in the CLI. Nothing is estimated.") {
 		t.Errorf("Unknown Cursor lost its reason: %s", k)
 	}
-	if strings.Contains(body, "At a glance") && !strings.Contains(glanceTile(t, section, "Codex"), "Not connected") {
+	if !strings.Contains(glanceTile(t, section, "Codex"), "Not connected") {
 		t.Error("absent Codex is not Not connected")
 	}
 }
@@ -120,5 +120,63 @@ func TestAllowanceMetersStretchToTheirBox(t *testing.T) {
 		if !re.MatchString(viewsSource) {
 			t.Errorf("%s keeps the default letterboxed aspect ratio, so a full-width bar renders 100px wide", class)
 		}
+	}
+}
+
+func TestAllowanceGlanceEdgeStates(t *testing.T) {
+	asOf := time.Date(2026, 11, 2, 13, 0, 0, 0, time.UTC)
+	typed := func(pct float64, dir, resetAt, precision, observedAt string) ProductAllowanceWindow {
+		return ProductAllowanceWindow{
+			Percent: "x", Window: "5 hours", Reset: "Unknown", Observed: "2 Nov 12:00 UTC", Provenance: "Provider API",
+			PercentKnown: true, PercentValue: pct, Direction: dir, ResetAt: resetAt, ResetPrecision: precision, ObservedAt: observedAt,
+		}
+	}
+	claudeWindows := []ProductAllowanceWindow{
+		typed(10, "used", "", "", "2026-11-02T12:00:00Z"),
+		typed(20, "used", "not-a-time", "instant", "2026-11-02T12:00:00Z"),
+		typed(98, "used", "2026-11-02T14:00:00Z", "instant", "2026-11-02T12:00:00Z"),
+	}
+	claudeWindows[1].Provenance = "CLI"
+	codexOdd := typed(150, "used", "2026-11-02T14:00:00Z", "weekly", "2026-11-03T00:00:00Z")
+	codexOdd.Percent = "150% x"
+	codexNoDir := typed(40, "", "", "", "2026-11-02T12:00:00Z")
+	codexNoDir.Percent, codexNoDir.Reset = "40% x", "Tue 9am"
+	body := allowanceRender(t, ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"}, AsOf: asOf,
+		Usage: &ProductUsage{Allowance: []ProductAllowance{
+			{Provider: "Claude", Value: AllowanceMeasured, Windows: claudeWindows},
+			{Provider: "Codex", Value: AllowanceCurrentSource, Windows: []ProductAllowanceWindow{codexOdd, codexNoDir}},
+		}},
+	})
+	allowanceAssertPassive(t, body)
+	section := glanceSection(t, body)
+
+	c := glanceTile(t, section, "Claude")
+	for _, want := range []string{"10% used", "20% used", "Reset time not reported.", "Reset time is not usable.", "+1 more", `href="#usage-allowance"`, "Observation time or source varies by window."} {
+		if !strings.Contains(c, want) {
+			t.Errorf("Claude tile lacks %q: %s", want, c)
+		}
+	}
+	if strings.Contains(c, "98% used") {
+		t.Errorf("third window shown in a two-window tile: %s", c)
+	}
+
+	x := glanceTile(t, section, "Codex")
+	for _, want := range []string{`tone-wait">Current source<`, "Selected source report.", "Provider text: 150% x", "Percent is outside 0–100, so no bar is drawn.", "Provider text: 40% x", "Direction not reported, so no bar is drawn.", "Reset time is not usable.", "Resets Tue 9am. Not an exact time.", "An observation time is in the future."} {
+		if !strings.Contains(x, want) {
+			t.Errorf("Codex tile lacks %q: %s", want, x)
+		}
+	}
+	if strings.Contains(x, "meter-fill") || strings.Contains(x, "<strong>") || strings.Contains(x, "<time ") {
+		t.Errorf("refused percent or reset drew a bar, a figure or a time: %s", x)
+	}
+
+	unclocked := allowanceRender(t, ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"},
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Claude", Value: AllowanceMeasured, Windows: []ProductAllowanceWindow{typed(5, "used", "2026-11-04T09:30:00Z", "instant", "")}}}},
+	})
+	u := glanceTile(t, glanceSection(t, unclocked), "Claude")
+	if !strings.Contains(u, `Resets <time datetime="2026-11-04T09:30:00Z">`) || strings.Contains(u, "Resets in") {
+		t.Errorf("no page clock must mean no countdown: %s", u)
 	}
 }
