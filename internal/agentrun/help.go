@@ -608,13 +608,14 @@ original observation and served times preserved. It does not configure live
 acquisition or establish provider coverage, account binding or freshness.
 `,
 	"usage-source": `Usage: agent-run usage-source -o json --incarnation ID --generation N --max-age 30m (--codex-tool-report FILE|- | --codex-raw-tool-report FILE|- --observed-at RFC3339) [--publish]
+       agent-run usage-source -o json --incarnation ID --generation N --max-age 30m --read-current
 
 Sanitizes one explicitly supplied retained Codex observation into a selected
 source report. --codex-tool-report is the flattened observation.
 --codex-raw-tool-report is the nested official tool envelope and requires
 --observed-at, the original retrieval time, copied as given. Observation time
-is never taken from the clock, a file time, or the reset instant. The two modes
-cannot be combined, and a duplicate flag is a usage error before any read.
+is never taken from the clock, a file time, or the reset instant. The two input
+modes cannot be combined, and a duplicate flag is a usage error before any read.
 
 Used percentage is reported; remaining is its derived complement. The window is
 the supplied minute count, not a calendar week. Retrieval time is preserved,
@@ -630,6 +631,23 @@ are fixed. Redirects are not followed. Conflict, denial, absence, timeout, and
 any uncertain answer are not retried and are not echoed. Success prints only
 that the fixed slot was published. The server's session, pod, and ServiceAccount
 fence stays authoritative. This command does not grant or impersonate.
+
+--read-current is off unless set. agent-run usage is unchanged. The flag
+conflicts with both report paths, --observed-at, and --publish. A duplicate
+flag is a usage error before any read or connection. The incarnation must be
+a selected-source identifier, the generation must be positive, and --max-age
+must be greater than zero and at most 30 minutes. Those checks happen before
+the operator connection. A longer age does not connect, and it does not change
+the local formatter's limit.
+
+The mode uses the configured operator client for one GET of the same fixed
+path. Redirects are not followed and the GET is not retried. The response is
+at most 16 KiB and is never copied into an error. A validated report is
+printed as canonical JSON with providerUpdatedAt null. The exact object
+{"availability":"Unknown"} prints that object and does not add a percentage
+or a freshness time. Any other shape, a stale retrieval, a passed reset, or
+a selection mismatch fails closed. This mode does not collect a provider
+report, schedule a cadence, or attribute an account.
 `,
 	"usage-export": `Usage: agent-run usage-export --manifest <path> --output-dir <private-dir> [--allowance-read <path>] [flags]
 
