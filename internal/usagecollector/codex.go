@@ -136,7 +136,7 @@ func CollectCodex(ctx context.Context, executable string, now func() time.Time) 
 		cancel()
 		_ = out.Close()
 		if !stopOwnedGroup(cmd) {
-			capture, captureErr = CodexAccountCapture{}, ErrCapture
+			capture, captureErr = CodexAccountCapture{}, ErrCleanup
 		}
 		close(stopped)
 		<-watcherDone

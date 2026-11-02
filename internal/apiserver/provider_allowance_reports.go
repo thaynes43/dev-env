@@ -46,9 +46,12 @@ type AggregateAllowanceReports struct {
 	SessionUIDs             []types.UID
 	PublisherSessionUID     types.UID
 	PublisherServiceAccount string
-	PortalNamespace         string
-	PortalServiceAccount    string
-	Now                     func() time.Time
+	// OperatorProducer permits the validated internal collector only; external
+	// PUT remains disabled, while the existing reader and host fences remain.
+	OperatorProducer     bool
+	PortalNamespace      string
+	PortalServiceAccount string
+	Now                  func() time.Time
 }
 
 // RouteEnabled reports whether Handler may mount the path.
@@ -71,7 +74,7 @@ func (h *AggregateAllowanceReports) RouteEnabled() bool {
 
 // PublishEnabled reports whether PUT may be mounted. GET-only source mode is false.
 func (h *AggregateAllowanceReports) PublishEnabled() bool {
-	return h.storeMode()
+	return h.storeMode() && !h.OperatorProducer
 }
 
 // PortalAggregateAllowanceGET is the only portal admission for this path.
@@ -81,7 +84,7 @@ func PortalAggregateAllowanceGET(enabled bool, method, path string) bool {
 }
 
 func (h *AggregateAllowanceReports) usesStore() bool {
-	return h != nil && (h.Store != nil || h.Live != nil || h.PublisherSessionUID != "" || h.PublisherServiceAccount != "")
+	return h != nil && (h.Store != nil || h.Live != nil || h.PublisherSessionUID != "" || h.PublisherServiceAccount != "" || h.OperatorProducer)
 }
 
 func (h *AggregateAllowanceReports) storeMode() bool {
@@ -151,6 +154,9 @@ func (h *AggregateAllowanceReports) handleStored(ctx context.Context, w http.Res
 		}
 		return h.readStored(ctx)
 	case http.MethodPut:
+		if h.OperatorProducer {
+			return 0, nil, newError(http.StatusMethodNotAllowed, apiv1.CodeMethodNotAllowed, "the operator-owned allowance slot takes GET")
+		}
 		if err := h.allowPublisher(ctx, c); err != nil {
 			return 0, nil, err
 		}
@@ -262,7 +268,7 @@ func (h *AggregateAllowanceReports) allowSession(c *caller) error {
 }
 
 func (h *AggregateAllowanceReports) allowPublisher(ctx context.Context, c *caller) error {
-	if c == nil || c.kind != kindSession || !h.publisherBinding() || c.identity.Namespace != h.SessionNamespace || c.identity.ServiceAccount != h.PublisherServiceAccount || c.identity.PodName == "" || c.identity.PodUID == "" {
+	if h == nil || h.OperatorProducer || c == nil || c.kind != kindSession || !h.publisherBinding() || c.identity.Namespace != h.SessionNamespace || c.identity.ServiceAccount != h.PublisherServiceAccount || c.identity.PodName == "" || c.identity.PodUID == "" {
 		return forbidden("the allowance publisher is not the selected session")
 	}
 	pod, err := h.publisherPod(ctx, c.identity.PodName, c.identity.PodUID)

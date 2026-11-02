@@ -1,5 +1,5 @@
-# The operator image: dev-env-operator and dev-env-keeper (D-38), two static
-# binaries in one distroless/nonroot image. Build from the repo root:
+# The operator image: dev-env-operator, dev-env-keeper (D-38), and the finite
+# allowance helper in agent-run, in one distroless/nonroot image. Build from the repo root:
 #
 #   docker build -f images/operator/Dockerfile \
 #     --build-arg COMMIT=$(git rev-parse HEAD) [--build-arg VERSION=v2.0.0] .
@@ -25,19 +25,19 @@ ARG COMMIT=
 ARG VERSION=
 # `make build` is the same path CI and developers use (static, trimpath, stamped).
 RUN make build COMMIT="${COMMIT}" VERSION="${VERSION}"
-# The texts of the third-party modules the two binaries link, plus the Go standard
+# The texts of the third-party modules the binaries link, plus the Go standard
 # library's own license. `--ignore` skips this repo's own packages (MIT, the LICENSE
 # copied beside them below). CGO_ENABLED=0 matches the Makefile, so go-licenses sees
 # the package set the binaries were built from. go-licenses refuses an existing save
 # path and may write none when no third-party module is linked, hence the late mkdir.
 RUN mkdir -p /out/licenses/go-stdlib \
- && CGO_ENABLED=0 go-licenses save ./cmd/dev-env-operator ./cmd/dev-env-keeper \
+ && CGO_ENABLED=0 go-licenses save ./cmd/dev-env-operator ./cmd/dev-env-keeper ./cmd/agent-run \
       --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
  && mkdir -p /out/licenses/go-modules \
  && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
 FROM gcr.io/distroless/static:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
-COPY --from=build /src/bin/dev-env-operator /src/bin/dev-env-keeper /usr/local/bin/
+COPY --from=build /src/bin/dev-env-operator /src/bin/dev-env-keeper /src/bin/agent-run /usr/local/bin/
 # This repo's license, the third-party list and the module license texts (#55). The
 # distroless base keeps its Debian packages' copyright files in /usr/share/doc.
 COPY LICENSE images/THIRD_PARTY.md /usr/share/doc/dev-env/
