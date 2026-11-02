@@ -190,3 +190,9 @@ launch, tracker update, live wake or notification. Every report and recommendati
 has `dryRun: true`, `executed: false`, and `checkerAuthority: none`. Acceptance of
 these offline fixtures establishes neither live subscription/delivery nor the
 broader #211 outcome.
+
+## Current-head review recovery
+
+[coordinator-recovery.md](coordinator-recovery.md) describes the source-only adapter that requeues one exact-current-head read-only review through the existing inbox. It calls this checker's reducer on an explicit handoff document whose head is the observed pull-request oid. It does not publish, deploy, notify, transfer TaskClaim, or start a worker.
+
+A stale verdict does not authorize a new head or publication. A scheduling window renews only from a matching durable acknowledgement inside the source deadline. Access and authorization TTLs are refused. A lost acknowledgement escalates to the coordinator. Pod Ready, heartbeat, and wrapper exit 0 are not a review verdict. These source fixtures do not accept OP355.
