@@ -53,7 +53,11 @@ const asksStyle = `
 `
 
 var asksPolicy = strings.Replace(policy(viewsStyle+asksStyle), "form-action 'none'", "form-action 'self'", 1)
-var asksTemplate = template.Must(template.New("asks").Parse(strings.Replace(asksSource, "/*PORTAL_STYLE*/", viewsStyle+asksStyle, 1)))
+var asksTemplate = parseAsksTemplate()
+
+func parseAsksTemplate() *template.Template {
+	return template.Must(template.New("asks").Parse(strings.Replace(asksSource, "/*PORTAL_STYLE*/", viewsStyle+asksStyle, 1)))
+}
 
 func init() {
 	for _, name := range []string{"product-nav", "product-mobile-nav", "product-icons"} {
@@ -64,7 +68,9 @@ func init() {
 // AsksPage carries only an authorized read and the current request's form
 // credentials. Complete describes only open-ask coverage; HistoryNotice
 // describes the independent history page. Preview disables every answer control.
+// ClaimsNav links Claims in the navigation; set it only when Claims is served.
 type AsksPage struct {
+	ClaimsNav                                                                 bool
 	Asks                                                                      []apiv1.Ask
 	Connected, Complete, CanAnswer, Preview, Retry, ReadOnly                  bool
 	Notice, CSRF, PortalHost, SelectedID, OlderHref, HistoryNotice, RetryHref string
@@ -182,8 +188,12 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 			}
 		}
 	}
+	set := asksTemplate
+	if page.ClaimsNav {
+		set = asksClaimsTemplate
+	}
 	buffer := &boundedPagesBuffer{limit: limit}
-	if err := asksTemplate.Execute(buffer, view); err != nil {
+	if err := set.Execute(buffer, view); err != nil {
 		// Try again without history before refusing the page. Open asks and
 		// an explicitly selected ask keep priority over historical cards.
 		if len(view.Closed) == 0 {
@@ -192,7 +202,7 @@ func RenderAsks(page AsksPage, limit int) ([]byte, string, error) {
 		view.Closed = nil
 		view.HistoryNotice = "Older history was omitted to fit this page."
 		buffer = &boundedPagesBuffer{limit: limit}
-		if err := asksTemplate.Execute(buffer, view); err != nil {
+		if err := set.Execute(buffer, view); err != nil {
 			return nil, "", ErrUnavailable
 		}
 	}

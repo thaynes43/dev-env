@@ -145,7 +145,9 @@ func servePages(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 			snapshot = got
 		}
 	}
-	body, err := portal.RenderPages(PagesWorkspace(snapshot, c.Pages == nil), maximumResponse*7/8)
+	view := PagesWorkspace(snapshot, c.Pages == nil)
+	view.ClaimsNav = c.Claims != nil
+	body, err := portal.RenderPages(view, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)
 		return

@@ -101,7 +101,11 @@ const (
 )
 
 var PagesPolicy = policy(viewsStyle + pagesStyle)
-var pagesTemplate = template.Must(template.New("pages").Funcs(template.FuncMap{"pagesTime": pagesTime, "shortFingerprint": shortFingerprint}).Parse(strings.Replace(pagesSource, "/*PORTAL_STYLE*/", viewsStyle+pagesStyle, 1) + pagesWorkspaceSource))
+var pagesTemplate = parsePagesTemplate()
+
+func parsePagesTemplate() *template.Template {
+	return template.Must(template.New("pages").Funcs(template.FuncMap{"pagesTime": pagesTime, "shortFingerprint": shortFingerprint}).Parse(strings.Replace(pagesSource, "/*PORTAL_STYLE*/", viewsStyle+pagesStyle, 1) + pagesWorkspaceSource))
+}
 
 // PagesWorkspace is the read-only Pages document: one current snapshot and
 // disconnected controls. It is not applied policy and not a saved store.
@@ -112,6 +116,9 @@ type PagesWorkspace struct {
 	ListOnly                                 bool
 	Groups                                   []PagesGroup
 	Controls                                 PagesControls
+
+	// ClaimsNav links Claims in the navigation; set it only when Claims is served.
+	ClaimsNav bool
 }
 
 // PagesGroup is one aggregate row and the alerts that belong to it.
@@ -222,14 +229,18 @@ func RenderPages(view PagesWorkspace, limit int) ([]byte, error) {
 	}
 	view.Banner = pages.AlertmanagerBanner
 	view.Policy = strings.TrimSuffix(PagesPolicy, "; frame-ancestors 'none'")
+	set := pagesTemplate
+	if view.ClaimsNav {
+		set = pagesClaimsTemplate
+	}
 	b := &boundedPagesBuffer{limit: limit}
-	if err := pagesTemplate.Execute(b, view); err != nil {
+	if err := set.Execute(b, view); err != nil {
 		if !errors.Is(err, errPagesRenderLimit) || len(view.Groups) == 0 || view.ListOnly {
 			return nil, err
 		}
 		view.ListOnly = true
 		b.Reset()
-		if err := pagesTemplate.Execute(b, view); err != nil {
+		if err := set.Execute(b, view); err != nil {
 			return nil, err
 		}
 	}

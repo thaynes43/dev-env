@@ -1310,6 +1310,10 @@ type ProductPage struct {
 	// configured for this caller.
 	Launch      *ProductLaunch
 	ReadFailure *ProductReadFailure
+	// ClaimsNav links Claims in the navigation; set it only when Claims is
+	// served. TODO(DESIGN-045, after dev-env #850): serveProduct sets it from
+	// AssemblyConfig.Claims.
+	ClaimsNav bool
 }
 
 const (
@@ -1654,8 +1658,12 @@ func RenderProduct(page ProductPage) ([]byte, error) {
 		}
 	}
 	view.Banner = view.HasRows && !view.Quiet && view.Notice != ""
+	set := viewsTemplate
+	if page.ClaimsNav {
+		set = viewsClaimsTemplate
+	}
 	var body bytes.Buffer
-	if err := viewsTemplate.Execute(&body, view); err != nil {
+	if err := set.Execute(&body, view); err != nil {
 		return nil, err
 	}
 	return body.Bytes(), nil
