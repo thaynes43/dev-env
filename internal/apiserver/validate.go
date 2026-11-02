@@ -304,6 +304,12 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			return nil, forbidden("profile %s runs as a named coordinator identity, which serves the Claude lead; a %s session may not run on it (DESIGN-042 6.4)", spec.Profile, spec.Agent)
 		}
 	}
+	if req.CoordinatorInstructionPublisher {
+		if err := s.admitInstructionPublisher(ctx, req, c, &spec, snapshot); err != nil {
+			return nil, err
+		}
+		spec.CoordinatorInstructionPublisher = true
+	}
 	if req.CoordinatorInstructions {
 		if err := s.admitCoordinatorInstructionOptIn(req, c, &spec, snapshot); err != nil {
 			return nil, err
@@ -378,6 +384,24 @@ func (s *Server) admitCoordinatorInstructionOptIn(req apiv1.CreateSessionRequest
 	}
 	if spec.Profile != "dev" || req.Restore != "" || len(req.Tools) > 0 || req.Name != "" || req.Lane != "" || spec.Caller != "" || spec.Lane != "" || spec.LLM != nil {
 		return deny("coordinator instruction opt-in rejects unsupported scope")
+	}
+	return nil
+}
+
+// admitInstructionPublisher delivers a control client to a newly created
+// ordinary project parent. Existing Session messaging authorization is unchanged.
+func (s *Server) admitInstructionPublisher(ctx context.Context, req apiv1.CreateSessionRequest, c *caller, spec *v1alpha1.AgentSessionSpec, snapshot []byte) error {
+	deny := func() error {
+		return invalid(fieldError("coordinatorInstructionPublisher", "requires a trusted ordinary client creating a fresh private dev project task parent"))
+	}
+	if c == nil || c.kind != kindClient || c.depth > 1 || c.parent == "" || spec == nil || spec.Parent != c.parent ||
+		req.CoordinatorInstructions || req.Project == "" || len(snapshot) == 0 || !s.PrivateProjectTasks ||
+		spec.Repo == "" || spec.Base == "" || spec.Profile != "dev" || spec.Mode != v1alpha1.ModeTask || req.Mode != string(v1alpha1.ModeTask) ||
+		(spec.Agent != v1alpha1.AgentClaude && spec.Agent != v1alpha1.AgentCodex) ||
+		spec.Workspace != nil || spec.ProjectCanary != nil || spec.PrivatePilot != nil || projectcanary.IsPilot(&v1alpha1.AgentSession{Spec: *spec}) ||
+		req.CanaryID != "" || s.callerHasTaskBudget(c) || req.Restore != "" || len(req.Tools) != 0 || req.Name != "" || req.Lane != "" ||
+		spec.Caller != "" || spec.Lane != "" || spec.LLM != nil || s.profileIdentity(ctx, spec.Profile) != "" {
+		return deny()
 	}
 	return nil
 }

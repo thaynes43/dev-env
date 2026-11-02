@@ -123,6 +123,16 @@ native task.
 
 ## Native lifecycle and explicit pull
 
+A fresh ordinary project parent created through an existing trusted client can
+separately request `--coordinator-instruction-publisher` (DESIGN-051). This selects
+the qualified instruction control-client image for that prospective task, with
+no receiver environment or native attempt. It is immutable, default off and
+requires the dev profile, accepted project and ordinary bounded private scope.
+The selected released image must contain the receiver-create client (2.87 or
+newer); signatures and exact artifacts are separately qualified. Existing tasks,
+global images, parent UID checks, depth and messaging authority are unchanged.
+It cannot combine with receiver enrollment or retrofit a legacy parent.
+
 A child-decision launch still binds the platform invocation id, session UID
 and pod UID written by `beginNativeInvocation`. agentd reads that local file
 before it posts a child-decision attempt. An ordinary private task does not

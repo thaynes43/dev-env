@@ -521,6 +521,28 @@ func TestCreateCoordinatorInstructionsOptIn(t *testing.T) {
 	}
 }
 
+func TestCreateInstructionPublisherIsIndependentAndExplicit(t *testing.T) {
+	h := newHarness(t)
+	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "--repo", "haynes-ops", "--project", "sample", "-p", "task", "--coordinator-instruction-publisher", "--wait", "0")
+	r := decodeCreate(t, h.api.requests()[0].body)
+	if !r.CoordinatorInstructionPublisher || r.CoordinatorInstructions {
+		t.Fatal("publisher selected receiver or lost opt-in")
+	}
+	for _, args := range [][]string{
+		{"--repo", "haynes-ops", "-p", "task", "--coordinator-instruction-publisher"},
+		{"--repo", "haynes-ops", "--project", "sample", "-p", "task", "--coordinator-instruction-publisher", "--coordinator-instructions"},
+		{"--repo", "haynes-ops", "--project", "sample", "--local", "--coordinator-instruction-publisher"},
+		{"--repo", "haynes-ops", "--project", "sample", "-p", "task", "--dry-run=server", "--coordinator-instruction-publisher"},
+	} {
+		h := newHarness(t)
+		h.mustRun(ExitUsage, args...)
+		if len(h.api.requests()) != 0 {
+			t.Fatal("invalid publisher made API request")
+		}
+	}
+}
+
 func TestCreateCoordinatorInstructionsRejectsUnsupportedLaunch(t *testing.T) {
 	for _, tc := range []struct {
 		name string

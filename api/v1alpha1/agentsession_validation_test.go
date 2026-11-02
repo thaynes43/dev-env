@@ -1808,3 +1808,32 @@ func TestCoordinatorInstructionOptInImmutableAndDefaultOff(t *testing.T) {
 		t.Fatalf("allowed update did not keep the opt-in: %+v", got.Spec)
 	}
 }
+
+func TestInstructionPublisherImmutableAndDefaultOff(t *testing.T) {
+	s := taskSession()
+	if err := k8s.Create(ctx(t), s); err != nil {
+		t.Fatal(err)
+	}
+	if get(t, s).Spec.CoordinatorInstructionPublisher {
+		t.Fatal("publisher default enabled")
+	}
+	changed := get(t, s)
+	changed.Spec.CoordinatorInstructionPublisher = true
+	wantInvalid(t, k8s.Update(ctx(t), changed), "coordinator instruction publisher selection is immutable")
+	fresh := taskSession()
+	fresh.Spec.CoordinatorInstructionPublisher = true
+	if err := k8s.Create(ctx(t), fresh); err != nil {
+		t.Fatal(err)
+	}
+	changed = get(t, fresh)
+	changed.Spec.CoordinatorInstructionPublisher = false
+	wantInvalid(t, k8s.Update(ctx(t), changed), "coordinator instruction publisher selection is immutable")
+	kept := get(t, fresh)
+	kept.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if err := k8s.Update(ctx(t), kept); err != nil {
+		t.Fatal(err)
+	}
+	if !get(t, fresh).Spec.CoordinatorInstructionPublisher {
+		t.Fatal("lifecycle update lost publisher selection")
+	}
+}
