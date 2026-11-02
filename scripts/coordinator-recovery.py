@@ -1117,22 +1117,33 @@ def correlation_conflicts(req, family, entry):
     return False
 
 
-def reconcile_proven_outcome(req, cache, messages, key, text):
+def retained_proves_cached_intent(req, message, cached_key, digest):
+    if not message_meta_ok(message, req["project"]):
+        return False
+    actual = message.get("text")
+    if message.get("key") != cached_key or not isinstance(actual, str):
+        return False
+    if message.get("sender") != req["authenticatedSender"] or message.get("recipient") != req["recipient"]:
+        return False
+    if not same_family(req, message):
+        return False
+    return hashlib.sha256(actual.encode("utf-8")).hexdigest() == digest
+
+
+def reconcile_proven_outcome(req, cache, messages, current_key, current_text):
+    # current_key and current_text are the live head. They are not delivery proof.
+    del current_key, current_text
     fam = family_key(req)
     entry = cache["entries"].get(fam)
-    if not isinstance(entry, dict) or entry.get("class") not in {"uncertain", "unconfirmed"}:
+    if not isinstance(entry, dict) or entry.get("class") not in {"uncertain", "unconfirmed", "pending"}:
         return
-    if entry.get("intentKey") != key:
-        return
+    cached_key = entry.get("intentKey")
     digest = entry.get("digest")
-    if not isinstance(digest, str) or hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+    if not isinstance(cached_key, str) or not cached_key or not isinstance(digest, str) or not digest:
         return
     proved = [
         item for item in messages
-        if item.get("key") == key
-        and item.get("text") == text
-        and item.get("sender") == req["authenticatedSender"]
-        and item.get("recipient") == req["recipient"]
+        if retained_proves_cached_intent(req, item, cached_key, digest)
     ]
     if len(proved) != 1:
         return

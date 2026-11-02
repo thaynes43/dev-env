@@ -452,6 +452,52 @@ def add_custody(state, req, created="2026-11-02T02:00:00Z"):
     return item
 
 
+def seed_fence(store, req, klass, key, text):
+    cache = {
+        "schema": mod.CACHE_SCHEMA,
+        "entries": {
+            mod.family_key(req): {
+                "class": klass,
+                "exit": None,
+                "at": req["observedAt"],
+                "attempts": 1,
+                "nextAttemptAt": "",
+                "intentKey": key,
+                "digest": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "correlation": req["correlation"],
+            }
+        },
+    }
+    (store / "cache.json").write_text(json.dumps(cache), encoding="utf-8")
+
+
+def cache_entry(store, req):
+    path = store / "cache.json"
+    if not path.exists():
+        return None
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    entries = loaded.get("entries") if isinstance(loaded, dict) else None
+    if not isinstance(entries, dict):
+        return None
+    return entries.get(mod.family_key(req))
+
+
+def add_message(state, key, text, sender=None, recipient=None, project="dev-env"):
+    item = {
+        "name": message_name(key, text),
+        "uid": message_uid(key, text),
+        "project": project,
+        "key": key,
+        "sender": dict(sender or SENDER),
+        "recipient": dict(recipient or RECIPIENT),
+        "createdAt": state["clock"],
+        "kind": "plain",
+        "text": text,
+    }
+    state["sent"].append(item)
+    return item
+
+
 def add_question(state, thread_state):
     key = "q-corr-355"
     text = "{\"correlation\":\"corr-355\"}"
@@ -521,6 +567,13 @@ class RecoveryAdapterTests(unittest.TestCase):
     def sends(self, store):
         state = self.load_state(store)
         return [call for call in state["calls"] if call[:2] == ["inbox", "send"]], state
+
+    def send_keys(self, store):
+        keys = []
+        for call in self.sends(store)[0]:
+            if "--key" in call:
+                keys.append(call[call.index("--key") + 1])
+        return keys
 
     def test_source_only_and_refusals_call_nothing(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -1027,6 +1080,322 @@ class RecoveryAdapterTests(unittest.TestCase):
             self.assertEqual(saved["childEnv"], expected)
             self.assertFalse(saved["decoyPresent"])
             self.assertNotIn("synthetic-decoy-value", json.dumps(saved["childEnv"]))
+
+    def test_timeout_after_delivered_head_allows_one_later_head(self):
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            body = request()
+            self.write_state(store, fresh(OLD, show(), sendHang="after"))
+            code, hung = self.run_adapter(store, body)
+            self.assertEqual(code, 0)
+            self.assertEqual(hung["status"], "blocked")
+            self.assertEqual(hung["reason"], "uncertain-not-replayed")
+            self.assertEqual(hung["head"], OLD)
+            old_key = hung["logicalKey"]
+            self.assertEqual(self.send_keys(store), [old_key])
+            saved = self.load_state(store)
+            self.assertEqual([item["key"] for item in saved["sent"]], [old_key])
+            self.assertEqual(cache_entry(store, body)["class"], "uncertain")
+            self.assertEqual(cache_entry(store, body)["intentKey"], old_key)
+
+            saved["sendHang"] = ""
+            saved["headRefOid"] = NEW
+            self.write_state(store, saved)
+            later = request(handoffEvents=[review_event("obs-old", OLD, "2026-11-02T03:00:00Z")])
+            code, moved = self.run_adapter(store, later)
+            self.assertEqual(code, 0)
+            self.assertEqual(moved["head"], NEW)
+            self.assertEqual(moved["status"], "pending")
+            self.assertEqual(moved["reason"], "inbox-delivered")
+            self.assertNotEqual(moved["logicalKey"], old_key)
+            self.assertEqual(moved["logicalKey"], mod.logical_key(later, NEW))
+            self.assertNotIn(moved["status"], {"completed", "recovered", "accepted"})
+            self.assertIsNone(moved["verdict"])
+            self.assertEqual(moved["states"]["verdict"], "absent")
+            self.assertFalse(moved["states"]["readAck"])
+            self.assertTrue(moved["staleHeadRefused"])
+            self.assertEqual(moved["notificationsSent"], 0)
+            self.assertEqual(moved["publication"], "not-authorized")
+            self.assertEqual(moved["deployment"], "not-performed")
+            self.assertEqual(moved["taskClaim"], "unchanged")
+            self.assertEqual(self.send_keys(store), [old_key, moved["logicalKey"]])
+            self.assertEqual(len(self.load_state(store)["sent"]), 2)
+            self.assertIsNone(cache_entry(store, later))
+
+            code, repeat = self.run_adapter(store, later)
+            self.assertEqual(code, 0)
+            self.assertEqual(repeat["status"], "pending")
+            self.assertEqual(repeat["states"]["apiDelivered"], True)
+            self.assertEqual(repeat["message"]["key"], moved["logicalKey"])
+            self.assertNotIn(repeat["status"], {"completed", "recovered", "accepted"})
+            self.assertIsNone(repeat["verdict"])
+            self.assertEqual(self.send_keys(store), [old_key, moved["logicalKey"]])
+            self.assertEqual(len(self.load_state(store)["sent"]), 2)
+
+    def test_pending_retained_delivery_allows_one_later_head(self):
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            body = request()
+            self.write_state(store, fresh(OLD, show(), sendExit=7, sendStderr="inbox outcome Pending\n"))
+            code, pending = self.run_adapter(store, body)
+            self.assertEqual(code, 0)
+            self.assertEqual(pending["status"], "blocked")
+            self.assertEqual(pending["reason"], "pending-not-replayed")
+            old_key = pending["logicalKey"]
+            self.assertEqual(self.send_keys(store), [old_key])
+            self.assertEqual(self.load_state(store)["sent"], [])
+            self.assertEqual(cache_entry(store, body)["class"], "pending")
+
+            saved = self.load_state(store)
+            saved["sendExit"] = 0
+            saved["headRefOid"] = NEW
+            self.write_state(store, saved)
+            code, switched = self.run_adapter(store, body)
+            self.assertEqual(switched["reason"], "pending-not-replayed")
+            self.assertEqual(switched["status"], "blocked")
+            self.assertNotIn(switched["status"], {"completed", "recovered", "accepted"})
+            self.assertEqual(self.send_keys(store), [old_key])
+            self.assertEqual(cache_entry(store, body)["class"], "pending")
+            self.assertEqual(cache_entry(store, body)["intentKey"], old_key)
+
+            saved = self.load_state(store)
+            add_intent(saved, body, OLD)
+            self.write_state(store, saved)
+            code, proved = self.run_adapter(store, body)
+            self.assertEqual(code, 0)
+            self.assertEqual(proved["head"], NEW)
+            self.assertEqual(proved["status"], "pending")
+            self.assertEqual(proved["reason"], "inbox-delivered")
+            self.assertNotEqual(proved["logicalKey"], old_key)
+            self.assertIsNone(proved["verdict"])
+            self.assertEqual(proved["notificationsSent"], 0)
+            self.assertEqual(proved["publication"], "not-authorized")
+            self.assertEqual(proved["deployment"], "not-performed")
+            self.assertEqual(proved["taskClaim"], "unchanged")
+            self.assertEqual(self.send_keys(store), [old_key, proved["logicalKey"]])
+            self.assertEqual(len(self.load_state(store)["sent"]), 2)
+
+            code, repeat = self.run_adapter(store, body)
+            self.assertEqual(repeat["status"], "pending")
+            self.assertEqual(repeat["states"]["apiDelivered"], True)
+            self.assertEqual(repeat["message"]["key"], proved["logicalKey"])
+            self.assertEqual(self.send_keys(store), [old_key, proved["logicalKey"]])
+            self.assertEqual(len(self.load_state(store)["sent"]), 2)
+
+    def test_unconfirmed_retained_delivery_allows_one_later_head(self):
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            body = request()
+            state = fresh(OLD, show(), sendExit=6, sendStderr="inbox outcome Unknown; no request was repeated\n")
+            self.write_state(store, state)
+            code, unknown = self.run_adapter(store, body)
+            self.assertEqual(unknown["reason"], "unconfirmed-not-replayed")
+            old_key = unknown["logicalKey"]
+            saved = self.load_state(store)
+            saved["sendExit"] = 0
+            saved["headRefOid"] = NEW
+            self.write_state(store, saved)
+            code, switched = self.run_adapter(store, body)
+            self.assertEqual(switched["reason"], "unconfirmed-not-replayed")
+            self.assertEqual(self.send_keys(store), [old_key])
+            self.assertEqual(cache_entry(store, body)["intentKey"], old_key)
+
+            saved = self.load_state(store)
+            add_intent(saved, body, OLD)
+            self.write_state(store, saved)
+            code, proved = self.run_adapter(store, body)
+            self.assertEqual(proved["status"], "pending")
+            self.assertEqual(proved["reason"], "inbox-delivered")
+            self.assertEqual(proved["head"], NEW)
+            self.assertNotEqual(proved["logicalKey"], old_key)
+            self.assertIsNone(proved["verdict"])
+            self.assertEqual(self.send_keys(store), [old_key, proved["logicalKey"]])
+            code, repeat = self.run_adapter(store, body)
+            self.assertEqual(self.send_keys(store), [old_key, proved["logicalKey"]])
+            self.assertEqual(len(self.load_state(store)["sent"]), 2)
+
+    def test_fenced_outcomes_need_one_exact_retained_message(self):
+        body = request()
+        old_key = mod.logical_key(body, OLD)
+        old_text = mod.intent_text(body, OLD)
+        ready = show(task_result(0, "success", "2026-11-02T03:04:00Z"))
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(NEW, ready))
+            seed_fence(store, body, "uncertain", old_key, old_text)
+            code, bare = self.run_adapter(store, body)
+            self.assertEqual(code, 0)
+            self.assertEqual(bare["status"], "blocked")
+            self.assertEqual(bare["reason"], "uncertain-not-replayed")
+            self.assertEqual(bare["states"]["nativeTerminal"], "succeeded")
+            self.assertTrue(any(item["name"] == "pod-ready-not-provider-proof" for item in bare["evidence"]))
+            self.assertNotIn(bare["status"], {"completed", "recovered", "accepted"})
+            self.assertEqual(self.send_keys(store), [])
+            kept = cache_entry(store, body)
+            self.assertEqual(kept["class"], "uncertain")
+            self.assertEqual(kept["intentKey"], old_key)
+            self.assertEqual(kept["digest"], hashlib.sha256(old_text.encode("utf-8")).hexdigest())
+            self.assertNotEqual(kept["digest"], hashlib.sha256(mod.intent_text(body, NEW).encode("utf-8")).hexdigest())
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            add_intent(state, body, NEW)
+            self.write_state(store, state)
+            seed_fence(store, body, "uncertain", old_key, old_text)
+            code, current = self.run_adapter(store, body)
+            self.assertEqual(current["status"], "pending")
+            self.assertEqual(current["head"], NEW)
+            self.assertIsNone(current["verdict"])
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(cache_entry(store, body)["class"], "uncertain")
+            self.assertEqual(cache_entry(store, body)["intentKey"], old_key)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            add_message(state, old_key, mod.intent_text(body, CUR))
+            self.write_state(store, state)
+            seed_fence(store, body, "uncertain", old_key, old_text)
+            code, wrong_body = self.run_adapter(store, body)
+            self.assertEqual(wrong_body["reason"], "uncertain-not-replayed")
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(cache_entry(store, body)["class"], "uncertain")
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            sender = dict(SENDER)
+            sender["uid"] = "wrong-sender-uid"
+            add_message(state, old_key, old_text, sender=sender)
+            self.write_state(store, state)
+            seed_fence(store, body, "uncertain", old_key, old_text)
+            code, wrong_sender = self.run_adapter(store, body)
+            self.assertEqual(wrong_sender["reason"], "uncertain-not-replayed")
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(cache_entry(store, body)["intentKey"], old_key)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            recipient = dict(RECIPIENT)
+            recipient["uid"] = "wrong-recipient-uid"
+            add_message(state, old_key, old_text, recipient=recipient)
+            self.write_state(store, state)
+            seed_fence(store, body, "uncertain", old_key, old_text)
+            code, wrong_recipient = self.run_adapter(store, body)
+            self.assertEqual(wrong_recipient["reason"], "uncertain-not-replayed")
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(cache_entry(store, body)["class"], "uncertain")
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            alien = request(taskUID="uid-review-9")
+            alien_text = mod.intent_text(alien, OLD)
+            alien_key = "ror-alien-family"
+            state = fresh(NEW, show())
+            add_message(state, alien_key, alien_text)
+            self.write_state(store, state)
+            seed_fence(store, body, "uncertain", alien_key, alien_text)
+            code, wrong_family = self.run_adapter(store, body)
+            self.assertEqual(wrong_family["reason"], "uncertain-not-replayed")
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(cache_entry(store, body)["class"], "uncertain")
+            self.assertEqual(cache_entry(store, body)["digest"], hashlib.sha256(alien_text.encode("utf-8")).hexdigest())
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            add_message(state, old_key, old_text)
+            add_message(state, old_key, old_text)
+            self.write_state(store, state)
+            seed_fence(store, body, "uncertain", old_key, old_text)
+            code, ambiguous = self.run_adapter(store, body)
+            self.assertEqual(ambiguous["reason"], "uncertain-not-replayed")
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(cache_entry(store, body)["class"], "uncertain")
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(OLD, show(), sendExit=3))
+            code, denied = self.run_adapter(store, body)
+            self.assertEqual(denied["reason"], "denied-not-replayed")
+            denied_key = denied["logicalKey"]
+            saved = self.load_state(store)
+            saved["sendExit"] = 0
+            saved["headRefOid"] = NEW
+            add_intent(saved, body, OLD)
+            self.write_state(store, saved)
+            code, replay = self.run_adapter(store, body)
+            self.assertEqual(replay["status"], "blocked")
+            self.assertEqual(replay["reason"], "denied-not-replayed")
+            self.assertNotEqual(replay["logicalKey"], denied_key)
+            self.assertEqual(self.send_keys(store), [denied_key])
+            self.assertEqual(len(self.load_state(store)["sent"]), 1)
+            self.assertEqual(cache_entry(store, body)["class"], "denied")
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            add_message(state, old_key, old_text)
+            self.write_state(store, state)
+            seed_fence(store, body, "conflict", old_key, old_text)
+            code, conflicted = self.run_adapter(store, body)
+            self.assertEqual(conflicted["reason"], "conflict-not-replayed")
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(cache_entry(store, body)["class"], "conflict")
+
+    def test_proved_delivery_still_obeys_deadline_and_history(self):
+        body = request()
+        old_key = mod.logical_key(body, OLD)
+        old_text = mod.intent_text(body, OLD)
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            self.write_state(store, fresh(NEW, show()))
+            late = request(windowExpiresAt="2026-11-02T04:10:00Z", deadline="2026-11-02T04:00:00Z")
+            code, refused = self.run_adapter(store, late)
+            self.assertEqual(code, 2)
+            self.assertIn("windowExpiresAt", refused["reason"])
+            self.assertEqual(self.load_state(store)["calls"], [])
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            add_message(state, old_key, old_text)
+            self.write_state(store, state)
+            at_deadline = request(observedAt="2026-11-02T04:10:00Z")
+            seed_fence(store, at_deadline, "uncertain", old_key, old_text)
+            code, blocked = self.run_adapter(store, at_deadline)
+            self.assertEqual(code, 0)
+            self.assertEqual(blocked["status"], "blocked")
+            self.assertEqual(blocked["reason"], "deadline-elapsed")
+            self.assertEqual(blocked["publication"], "not-authorized")
+            self.assertEqual(blocked["deployment"], "not-performed")
+            self.assertEqual(blocked["taskClaim"], "unchanged")
+            self.assertEqual(blocked["notificationsSent"], 0)
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(len(self.load_state(store)["sent"]), 1)
+            self.assertIsNone(cache_entry(store, at_deadline))
+
+        with tempfile.TemporaryDirectory() as raw:
+            store = Path(raw)
+            state = fresh(NEW, show())
+            add_intent(state, body, OLD)
+            add_intent(state, body, CUR)
+            add_intent(state, body, "d" * 40)
+            self.write_state(store, state)
+            seed_fence(store, body, "uncertain", old_key, old_text)
+            code, capped = self.run_adapter(store, body)
+            self.assertEqual(code, 0)
+            self.assertEqual(capped["status"], "blocked")
+            self.assertEqual(capped["reason"], "persistent-failure")
+            self.assertTrue(capped["escalated"])
+            self.assertEqual(self.send_keys(store), [])
+            self.assertEqual(len(self.load_state(store)["sent"]), 3)
+            self.assertIsNone(capped["verdict"])
+            self.assertIsNone(cache_entry(store, body))
 
 
 if __name__ == "__main__":
