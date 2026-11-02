@@ -188,13 +188,17 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err != nil {
 		return nil, err
 	}
-	// Defense in depth: legacy selection wins on overlap. Startup flags refuse
-	// equal parent/key tuples, so flag configuration cannot reach this case.
-	// Task and remote selection are also disjoint by mode.
+	// Legacy selectors retain their precedence on overlap; startup flags refuse
+	// equal parent/key tuples where applicable. Task and remote selectors are
+	// disjoint by mode. Explicit instruction enrollment instead refuses an
+	// overlapping pilot mapping in applyInstructionAgentImage.
 	applyCodexRCImage(pod, s, r.CodexRCAgent)
 	applyRemotePilotImage(pod, s, r.RemotePilotAgent)
 	applyPilotImage(pod, s, r.PilotAgent)
 	applyTaskPilotImage(pod, s, r.TaskPilotAgent)
+	if err := r.applyInstructionAgentImage(pod, s); err != nil {
+		return nil, err
+	}
 	return pod, nil
 }
 

@@ -91,6 +91,8 @@ func main() {
 }
 
 type options struct {
+	coordinatorInstructionAgentImage string
+
 	originalHome                  *homeguard.Binding
 	directoryEnabled              bool
 	directoryProjects             []string
@@ -235,6 +237,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.privateProjectTasks, "enable-private-project-tasks", false, "enable new accepted-project tasks with private repositories and worktrees")
 	fs.BoolVar(&o.codexRCEnabled, "enable-codex-rc-thread", false, "enable the fixed qualified existing-daemon thread-and-handoff operation; default off, runtime activation requires separate approval")
 	fs.StringVar(&o.codexRCTargetFile, "codex-rc-target-file", "", "deployment-owned bounded existing-host qualification packet")
+	fs.StringVar(&o.coordinatorInstructionAgentImage, "coordinator-instruction-agent-image", "", "digest-pinned released agent image for new explicitly enrolled ordinary private task receivers; empty refuses new enrollment")
 	codexRCImage := fs.String("codex-rc-agent-image", "", "digest-pinned released agent image for one existing Codex remote Session; does not restart it")
 	codexRCSession := fs.String("codex-rc-agent-session", "", "exact <session-name>/<SessionUID> for independent Codex RC image adoption; requires --codex-rc-agent-image")
 	fs.BoolVar(&o.managedCodexTasks, "enable-managed-codex-tasks", false, "enable accepted-project managed Codex task admission")
@@ -587,6 +590,11 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New(strings.ReplaceAll(err.Error(), "--pilot-agent-", "--task-pilot-agent-"))
 	}
 	o.taskPilotAgent = taskPilot
+	if o.coordinatorInstructionAgentImage != "" {
+		if !o.privateProjectTasks || controller.ValidateInstructionAgentImage(o.coordinatorInstructionAgentImage) != nil {
+			return o, errors.New("--coordinator-instruction-agent-image requires private project tasks and a digest-pinned released ghcr.io/thaynes43/dev-env:2.X.Y image")
+		}
+	}
 	if o.codexRCAgent, err = parseCodexRCAgent(*codexRCImage, *codexRCSession); err != nil {
 		return o, err
 	}
@@ -675,6 +683,8 @@ func reconcilerForOptions(o options) *controller.Reconciler {
 		}
 	}
 	return &controller.Reconciler{
+		CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,
+
 		TaskBudgetWorkerImage:       o.taskBudgetWorkerImage,
 		PilotAgent:                  o.pilotAgent,
 		TaskPilotAgent:              o.taskPilotAgent,
@@ -903,6 +913,8 @@ func run(args []string) error {
 			return err
 		}
 		api := &apiserver.Server{
+			CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,
+
 			PortalMessageTargets:      o.portalMessageTargets,
 			PortalLaunchRepos:         o.portalLaunchRepos,
 			PortalConversationUsage:   o.portalConversationUsage,

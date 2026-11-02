@@ -245,3 +245,15 @@ the corresponding generated schema/operator adoption, a legitimate fresh
 parent route and the receiver's model-issued checkpoint/consume remain needed.
 An ordinary server dry-run must not be used to bypass the separate sealed-pilot
 admission-only route. Existing runtime holds and access boundaries remain.
+
+## Qualified receiver image (source only)
+
+[DESIGN-048](../.agents/sagas/distributed-dev-env/designs/048-instruction-receiver-image.md)
+adds `--coordinator-instruction-agent-image` for new ordinary explicitly
+enrolled receivers. Empty configuration refuses new true enrollment and new
+enrolled Pod construction; it does not change plain tasks. A configured
+released digest replaces only that prospective receiver's agent image. It
+does not patch existing Pods, alter the global worker image or reuse pilot
+selection. An overlapping legacy mapping refuses construction. The API and
+controller share the configured image. Signature verification, configuration
+adoption and actual native consumption remain separate delivery gates.
