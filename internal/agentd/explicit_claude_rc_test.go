@@ -474,3 +474,21 @@ func TestExplicitClaudeRCRemovedPIDDoesNotHideLiveWriter(t *testing.T) {
 		t.Fatal("live writer hidden or replayed")
 	}
 }
+
+func TestExplicitClaudeRCDeadOriginalPIDIsAStartingWindow(t *testing.T) {
+	s, sess, _, req, r, pane := explicitFixture(t)
+	pane.publishPID = false
+	if err := writeJSONFile(s.statePath(pidFile), agentPid{Pid: 99999999, Start: "dead-original-process"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := explicitStart(t, s, sess, req, r)
+	if rec.Phase != explicitClaudeRCStarting || pane.starts != 1 {
+		t.Fatalf("stale dead PID became failed start: %+v", rec)
+	}
+	if _, err := StartExplicitClaudeRC(context.Background(), r, s, sess, req, explicitNow.Add(time.Second), explicitSelf(t)); err != nil {
+		t.Fatal(err)
+	}
+	if pane.starts != 1 {
+		t.Fatal("starting window duplicated writer")
+	}
+}

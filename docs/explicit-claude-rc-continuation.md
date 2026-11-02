@@ -5,6 +5,9 @@ retained private Claude task. It preserves the original Session, HOME,
 conversation, launch and task outcome. It does not change Session mode or
 permit ordinary automatic task resume.
 
+The saga decision and adoption plan are in
+[DESIGN-047](../.agents/sagas/distributed-dev-env/designs/047-explicit-claude-rc-continuation.md).
+
 The caller must already have authorized control of the target pod. Request
 provenance and cooperative-freeze descriptions are optional audit text. They
 are not credentials, and a locally written freeze file grants no authority.
@@ -47,6 +50,13 @@ changes. A missing or inconsistent process/exit record reports uncertainty,
 which is not terminal-task reclaim proof. A bound intentional TUI exit ends
 the continuation and is never automatically relaunched. The original task
 outcome remains retained, and no permanent reclaim exemption is introduced.
+
+This pod-local generation uses the original pod. While its RC process is live
+or uncertain, status is not exited, so the existing terminal-task compute
+reclaim proof refuses it. HOME expiry still requires the whole original pod
+to have terminated, including all its containers, on a live node. An earlier
+task result alone cannot satisfy that proof. An explicit suspend/reap retains
+the existing guarded whole-pod stop path; the journal adds no stop authority.
 
 Remote Control status reports a URL only from the live CLI's matching process
 record and bridge ID. Synthetic registration fixtures test that projection;

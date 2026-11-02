@@ -313,7 +313,7 @@ func observeExplicitClaudeRC(ctx context.Context, r Runner, s Settings, rec Expl
 	if readPrivateManagedJSON(s, tuiExitFile, 4096, &exit) == nil && exit.BootID == rec.BootID && exit.ConversationID == rec.NativeConversation && !exit.StartedAt.Before(rec.StartedAt.Truncate(time.Second)) && !exit.FinishedAt.Before(exit.StartedAt) && !exit.FinishedAt.After(now) && !present {
 		return explicitClaudeRCExited, pid, exit, nil
 	}
-	if rec.Phase == explicitClaudeRCStarting && state == "absent" && present && !now.Before(rec.StartedAt) && now.Sub(rec.StartedAt) < startWindow {
+	if rec.Phase == explicitClaudeRCStarting && (state == "absent" || state == "dead") && present && !now.Before(rec.StartedAt) && now.Sub(rec.StartedAt) < startWindow {
 		return explicitClaudeRCStarting, pid, exit, nil
 	}
 	return uncertain()
