@@ -101,7 +101,7 @@ func TestInstructionCLISendReadConsumeAndConfirmedRetry(t *testing.T) {
 					Outcome: apiv1.InstructionOutcomeConfirmed, Key: "correction-1", MessageUID: "m-uid", TextSHA256: digest,
 					TargetSessionUID: "session-1", TargetPodUID: "pod-1", AttemptID: attempt, Project: "sample", Repository: "alias", TaskKey: "task:coord-instruction",
 				},
-				Text: text, Nonce: nonce,
+				SenderUID: "parent-uid", Text: text, Nonce: nonce,
 			})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/consume"):
 			kinds = append(kinds, "consume")
@@ -120,7 +120,7 @@ func TestInstructionCLISendReadConsumeAndConfirmedRetry(t *testing.T) {
 		t.Fatalf("created stdout %s", h.stdout.String())
 	}
 	h.mustRun(ExitOK, "instruction", "read", "--session", "child", "--key", "correction-1")
-	if !strings.Contains(h.stdout.String(), `"messageUID": "m-uid"`) || !strings.Contains(h.stdout.String(), digest) || !strings.Contains(h.stdout.String(), `"project": "sample"`) || !strings.Contains(h.stdout.String(), "clarify the assigned outcome") {
+	if !strings.Contains(h.stdout.String(), `"messageUID": "m-uid"`) || !strings.Contains(h.stdout.String(), `"senderUID": "parent-uid"`) || !strings.Contains(h.stdout.String(), digest) || !strings.Contains(h.stdout.String(), `"project": "sample"`) || !strings.Contains(h.stdout.String(), "clarify the assigned outcome") {
 		t.Fatalf("read stdout %s", h.stdout.String())
 	}
 	h.mustRun(ExitOK, "instruction", "consume", "--session", "child", "--key", "correction-1", "--attempt", attempt, "--nonce", nonce, "--message-uid", "m-uid", "--text-sha256", digest, "--expect-uid", "session-1", "--expect-pod", "pod-1")
@@ -162,3 +162,60 @@ func TestInstructionCLIConflictIsNotRetried(t *testing.T) {
 		t.Fatalf("conflict retried %d", calls)
 	}
 }
+
+func TestSyntheticInstructionCheckpointDiscoversPostedCorrection(t *testing.T) {
+	h := newHarness(t)
+	attempt := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	nonce := strings.Repeat("cd", 32)
+	digest := strings.Repeat("ab", 32)
+	var methods []string
+	posted := false
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		methods = append(methods, r.Method)
+		if r.Method != http.MethodGet || r.URL.Path != apiv1.SessionInstructionsPath("child") {
+			t.Fatalf("checkpoint used %s %s", r.Method, r.URL.Path)
+		}
+		pending := []apiv1.CoordinatorInstructionView{}
+		if posted {
+			pending = append(pending, apiv1.CoordinatorInstructionView{
+				CoordinatorInstructionReceipt: apiv1.CoordinatorInstructionReceipt{
+					Outcome: apiv1.InstructionOutcomeConfirmed, Key: "correction-after-launch", MessageUID: "m-uid", TextSHA256: digest,
+					TargetSessionUID: "session-1", TargetPodUID: "pod-1", AttemptID: attempt, Project: "sample", Repository: "alias", TaskKey: "task:coord-instruction",
+				},
+				SenderUID: "parent-uid", Text: "synthetic correction posted after launch\n", Nonce: nonce,
+			})
+		}
+		writeTestJSON(w, http.StatusOK, apiv1.CoordinatorInstructionCheckpoint{
+			Outcome: apiv1.InstructionOutcomeConfirmed, AttemptID: attempt, SessionUID: "session-1", PodUID: "pod-1", Pending: pending,
+		})
+	}
+	h.mustRun(ExitOK, "instruction", "checkpoint", "--session", "child")
+	if strings.Contains(h.stdout.String(), "correction-after-launch") || strings.Contains(methodsString(methods), http.MethodPost) {
+		t.Fatalf("empty checkpoint invented a correction or consumed: %s %v", h.stdout.String(), methods)
+	}
+	posted = true
+	h.stdout.Reset()
+	h.mustRun(ExitOK, "instruction", "checkpoint", "--session", "child")
+	if !strings.Contains(h.stdout.String(), `"senderUID": "parent-uid"`) || !strings.Contains(h.stdout.String(), "synthetic correction posted after launch") || !strings.Contains(h.stdout.String(), digest) || !strings.Contains(h.stdout.String(), nonce) {
+		t.Fatalf("checkpoint missed the posted correction: %s", h.stdout.String())
+	}
+	if strings.Contains(strings.Join(methods, ","), http.MethodPost) {
+		t.Fatal("checkpoint consumed")
+	}
+	h.mustRun(ExitUsage, "instruction", "checkpoint", "--session", "child", "--key", "correction-after-launch")
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		writeTestJSON(w, http.StatusOK, apiv1.CoordinatorInstructionCheckpoint{
+			Outcome: apiv1.InstructionOutcomeConfirmed, AttemptID: attempt, SessionUID: "session-1", PodUID: "pod-1",
+			Pending: []apiv1.CoordinatorInstructionView{{
+				CoordinatorInstructionReceipt: apiv1.CoordinatorInstructionReceipt{
+					Outcome: apiv1.InstructionOutcomeConfirmed, Key: "correction-after-launch", MessageUID: "m-uid", TextSHA256: digest,
+					TargetSessionUID: "session-1", TargetPodUID: "pod-1", AttemptID: attempt, Project: "sample", Repository: "alias", TaskKey: "task:coord-instruction",
+				},
+				Text: "missing sender\n", Nonce: nonce,
+			}},
+		})
+	}
+	h.mustRun(ExitUnconfirmed, "instruction", "checkpoint", "--session", "child")
+}
+
+func methodsString(methods []string) string { return strings.Join(methods, ",") }

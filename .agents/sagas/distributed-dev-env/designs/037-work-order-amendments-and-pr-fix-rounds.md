@@ -605,7 +605,11 @@ No answer is inferred from this document's review, CI success or publication.
 OpenProject #354 adds a source-only delivery path, documented in
 [coordinator instructions](../../../../docs/coordinator-instructions.md). It
 binds the parent Session UID at create, reuses the inbox for the text, and
-stores a separate native consumption receipt. It does not implement this
-proposal's publication gate, provider boundary, fix rounds, deadlines, or
-open questions. Those remain unresolved. The slice grants no runtime authority
-and is not acceptance of this proposal.
+stores a separate native consumption receipt. The status list is a map keyed
+by the immutable delivery key so a real Kubernetes 1.35 API server can enforce
+the item transition rules. A running native task discovers a correction posted
+after launch only by calling the checkpoint command; Codex exec stdin and a
+resumed Codex TUI are not interrupted. It does not implement this proposal's
+publication gate, provider boundary, fix rounds, deadlines, or open questions.
+Those remain unresolved. The slice grants no runtime authority and is not
+acceptance of this proposal.

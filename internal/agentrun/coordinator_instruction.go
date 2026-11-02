@@ -21,9 +21,9 @@ func (a *app) instruction(ctx context.Context, args []string) error {
 	}
 	verb, rest := args[0], args[1:]
 	switch verb {
-	case "send", "read", "consume", "attempt":
+	case "send", "read", "consume", "attempt", "checkpoint":
 	default:
-		return usageError("instruction requires send, read, consume or attempt; see agent-run help instruction")
+		return usageError("instruction requires send, read, consume, checkpoint or attempt; see agent-run help instruction")
 	}
 	var session, key, project, repository, taskKey, expectUID, expectPod, attempt, nonce, messageUID, textSHA string
 	var ended bool
@@ -65,6 +65,26 @@ func (a *app) instruction(ctx context.Context, args []string) error {
 			return fail(ExitUnconfirmed, "instruction attempt returned an unconfirmed binding; retry the same attempt")
 		}
 		return a.printJSON(got)
+	case "checkpoint":
+		if key != "" || project != "" || repository != "" || taskKey != "" || attempt != "" || nonce != "" || messageUID != "" || textSHA != "" || expectUID != "" || expectPod != "" || ended {
+			return usageError("instruction checkpoint requires --session and no key")
+		}
+		var got apiv1.CoordinatorInstructionCheckpoint
+		status, callErr := a.callWith(ctx, c, http.MethodGet, apiv1.SessionInstructionsPath(session), nil, nil, &got, false)
+		if callErr != nil {
+			return callErr
+		}
+		if status != http.StatusOK || got.Outcome != apiv1.InstructionOutcomeConfirmed || !instructionAttemptPattern.MatchString(got.AttemptID) || got.SessionUID == "" || got.PodUID == "" || len(got.Pending) > 4 {
+			return fail(ExitUnconfirmed, "instruction checkpoint returned an unconfirmed list; retry the same attempt")
+		}
+		seen := map[string]bool{}
+		for _, item := range got.Pending {
+			if seen[item.Key] || item.Consumed || !instructionKeyPattern.MatchString(item.Key) || item.SenderUID == "" || !validInstructionMessageUID(item.MessageUID) || !instructionNoncePattern.MatchString(item.TextSHA256) || !instructionNoncePattern.MatchString(item.Nonce) || item.Text == "" || item.Project == "" || item.Repository == "" || item.TaskKey == "" || item.AttemptID != got.AttemptID || item.TargetSessionUID != got.SessionUID || item.TargetPodUID != got.PodUID || item.Outcome != apiv1.InstructionOutcomeConfirmed {
+				return fail(ExitUnconfirmed, "instruction checkpoint returned an unconfirmed correction; nothing was consumed")
+			}
+			seen[item.Key] = true
+		}
+		return a.printJSON(got)
 	case "read":
 		if !instructionKeyPattern.MatchString(key) {
 			return usageError("instruction read requires --key")
@@ -74,7 +94,7 @@ func (a *app) instruction(ctx context.Context, args []string) error {
 		if callErr != nil {
 			return callErr
 		}
-		if status != http.StatusOK || got.Key != key || got.MessageUID == "" {
+		if status != http.StatusOK || got.Key != key || got.MessageUID == "" || got.SenderUID == "" {
 			return fail(ExitFailed, "instruction read returned an unconfirmed delivery")
 		}
 		return a.printJSON(got)
@@ -125,7 +145,7 @@ func (a *app) instruction(ctx context.Context, args []string) error {
 		}
 		return a.printJSON(got)
 	default:
-		return usageError("instruction requires send, read, consume or attempt; see agent-run help instruction")
+		return usageError("instruction requires send, read, consume, checkpoint or attempt; see agent-run help instruction")
 	}
 }
 

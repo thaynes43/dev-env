@@ -537,7 +537,7 @@ type CoordinatorInstructionConsumptionStatus struct {
 	// +kubebuilder:validation:MinLength=64
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
-	TextSHA256 string `json:"textSHA256"`
+	TextSHA256 string      `json:"textSHA256"`
 	At         metav1.Time `json:"at"`
 }
 
@@ -590,8 +590,8 @@ type CoordinatorInstructionStatus struct {
 	// +kubebuilder:validation:MinLength=64
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
-	Nonce       string                                  `json:"nonce"`
-	DeliveredAt metav1.Time                             `json:"deliveredAt"`
+	Nonce       string      `json:"nonce"`
+	DeliveredAt metav1.Time `json:"deliveredAt"`
 	// +optional
 	Consumed *CoordinatorInstructionConsumptionStatus `json:"consumed,omitempty"`
 }
@@ -604,7 +604,7 @@ type CoordinatorInstructionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.capturedUsage) || has(self.capturedUsage)",message="captured usage ledger cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)",message="directory creation evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructionAttempt) || has(self.coordinatorInstructionAttempt)",message="instruction attempt evidence cannot be removed"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructions) || (has(self.coordinatorInstructions) && size(self.coordinatorInstructions) >= size(oldSelf.coordinatorInstructions))",message="instruction delivery records cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructions) || (has(self.coordinatorInstructions) && size(self.coordinatorInstructions) >= size(oldSelf.coordinatorInstructions) && oldSelf.coordinatorInstructions.all(old, self.coordinatorInstructions.exists(cur, cur.key == old.key)))",message="instruction delivery records cannot be removed or replaced"
 type AgentSessionStatus struct {
 	// +optional
 	SessionDirectory *SessionDirectoryReceipt `json:"sessionDirectory,omitempty"`
@@ -741,8 +741,13 @@ type AgentSessionStatus struct {
 
 	// CoordinatorInstructions are delivery records for this task. The text lives
 	// in the inbox message. A nested consumption receipt is not an inbox read ACK.
+	// The list is a map keyed by the immutable delivery key, so item and nested
+	// consumption transition rules stay correlatable. MaxItems stays 4. A later
+	// update cannot drop the list, remove an old key, or swap an old key for a
+	// new key at the same length. Duplicate keys are rejected.
 	// +kubebuilder:validation:MaxItems=4
-	// +listType=atomic
+	// +listType=map
+	// +listMapKey=key
 	// +optional
 	CoordinatorInstructions []CoordinatorInstructionStatus `json:"coordinatorInstructions,omitempty"`
 }

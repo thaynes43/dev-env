@@ -347,7 +347,10 @@ func (s *Server) readInstruction(ctx context.Context, _ http.ResponseWriter, r *
 	if err != nil || string(msg.UID) != rec.MessageUID || instructionDigest(msg.Spec.Text) != rec.TextSHA256 {
 		return 0, nil, instructionUnknown()
 	}
-	view := apiv1.CoordinatorInstructionView{CoordinatorInstructionReceipt: instructionReceipt(apiv1.InstructionOutcomeConfirmed, rec)}
+	if rec.SenderUID == "" || rec.SenderUID != target.Spec.CoordinatorInstructionParentUID {
+		return 0, nil, instructionUnknown()
+	}
+	view := apiv1.CoordinatorInstructionView{CoordinatorInstructionReceipt: instructionReceipt(apiv1.InstructionOutcomeConfirmed, rec), SenderUID: rec.SenderUID}
 	if ack, err := s.Inbox.ReadAck(ctx, msg); err == nil && ack != nil {
 		view.ReadAck = true
 	} else if err != nil && !errors.Is(err, inbox.ErrNotFound) {
@@ -358,6 +361,55 @@ func (s *Server) readInstruction(ctx context.Context, _ http.ResponseWriter, r *
 		view.Nonce = rec.Nonce
 	}
 	return http.StatusOK, view, nil
+}
+
+func (s *Server) listPendingInstructions(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if err := s.inboxAvailable(); err != nil {
+		return 0, nil, err
+	}
+	target, err := s.instructionSession(ctx, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	caller, err := s.inboxRecipientCaller(ctx, c)
+	if err != nil || caller.Name != target.Name || caller.UID != target.UID {
+		return 0, nil, inboxHidden()
+	}
+	pod, err := s.instructionPod(ctx, target)
+	if err != nil || !instructionCallerPod(c, pod) {
+		return 0, nil, inboxHidden()
+	}
+	cur := target.Status.CoordinatorInstructionAttempt
+	if cur == nil || !instructionAttemptLive(target, pod, cur.AttemptID) {
+		return 0, nil, inboxHidden()
+	}
+	pending := make([]apiv1.CoordinatorInstructionView, 0)
+	for i := range target.Status.CoordinatorInstructions {
+		rec := target.Status.CoordinatorInstructions[i]
+		if rec.Consumed != nil || rec.AttemptID != cur.AttemptID || rec.TargetSessionUID != string(target.UID) || rec.TargetPodUID != string(pod.UID) {
+			continue
+		}
+		if rec.SenderUID == "" || rec.SenderUID != target.Spec.CoordinatorInstructionParentUID || rec.Key == "" {
+			return 0, nil, instructionUnknown()
+		}
+		msg, err := s.Inbox.Get(ctx, rec.MessageName)
+		if err != nil || string(msg.UID) != rec.MessageUID || instructionDigest(msg.Spec.Text) != rec.TextSHA256 {
+			return 0, nil, instructionUnknown()
+		}
+		view := apiv1.CoordinatorInstructionView{CoordinatorInstructionReceipt: instructionReceipt(apiv1.InstructionOutcomeConfirmed, &rec), SenderUID: rec.SenderUID, Text: msg.Spec.Text, Nonce: rec.Nonce}
+		if ack, err := s.Inbox.ReadAck(ctx, msg); err == nil && ack != nil {
+			view.ReadAck = true
+		} else if err != nil && !errors.Is(err, inbox.ErrNotFound) {
+			return 0, nil, instructionUnknown()
+		}
+		pending = append(pending, view)
+		if len(pending) > instructionMaxRecords {
+			return 0, nil, instructionUnknown()
+		}
+	}
+	return http.StatusOK, apiv1.CoordinatorInstructionCheckpoint{
+		Outcome: apiv1.InstructionOutcomeConfirmed, AttemptID: cur.AttemptID, SessionUID: string(target.UID), PodUID: string(pod.UID), Pending: pending,
+	}, nil
 }
 
 func (s *Server) consumeInstruction(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
@@ -487,7 +539,7 @@ func (s *Server) patchInstructionStatus(ctx context.Context, sess *v1alpha1.Agen
 
 type instructionScope struct {
 	project, repository, taskKey string
-	snapshot                      projectcatalog.Snapshot
+	snapshot                     projectcatalog.Snapshot
 }
 
 func (s *Server) instructionScope(ctx context.Context, target *v1alpha1.AgentSession, project, repository, taskKey string) (instructionScope, error) {

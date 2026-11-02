@@ -277,7 +277,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.InboxPath+"/{message}", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.readInbox}}))
 	mux.Handle(apiv1.InboxPath+"/{message}/ack", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.ackInbox, http.MethodGet: s.readInboxAck}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/instruction-attempt", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.registerInstructionAttempt}}))
-	mux.Handle(apiv1.SessionsPath+"/{name}/instructions", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInstruction}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/instructions", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInstruction, http.MethodGet: s.listPendingInstructions}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/instructions/{key}/consume", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.consumeInstruction}}))
 	mux.Handle(apiv1.SessionsPath+"/{name}/instructions/{key}", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.readInstruction}}))
 	mux.Handle(apiv1.TaskClaimsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskClaim, http.MethodGet: s.listTaskClaims}}))

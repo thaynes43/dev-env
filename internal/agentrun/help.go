@@ -16,7 +16,7 @@ Usage:
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
-  agent-run instruction send|read|consume|attempt designated parent delivery and native consumption
+  agent-run instruction send|read|checkpoint|consume|attempt designated parent delivery and native consumption
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
@@ -222,6 +222,7 @@ itself. A lost mutation acknowledgement is not retried.
 `,
 	"instruction": `Usage: agent-run instruction send --session <name> --key <key> --project <project> --repository <repository> --task-key <task> --expect-uid <uid> --expect-pod <pod> --attempt <id> < correction.txt
        agent-run instruction read --session <name> --key <key>
+       agent-run instruction checkpoint --session <name>
        agent-run instruction consume --session <name> --key <key> --attempt <id> --nonce <nonce> --message-uid <uid> --text-sha256 <digest> --expect-uid <uid> --expect-pod <pod>
        agent-run instruction attempt --session <name> --attempt <id> [--ended]
 
@@ -233,18 +234,30 @@ does not create consumption. An identical retry returns the stored receipt,
 including consumed true when a separate consume already happened. A changed
 intent conflicts and no new key is chosen.
 
-Read shows the delivery. The target session also receives the text and nonce.
-An inbox read acknowledgement is reported separately and is not consumption.
-The one-shot native exec does not push this read into the running process.
+Read shows one known key. The target session also receives the sender UID,
+text and nonce. An inbox read acknowledgement is reported separately and is
+not consumption. The one-shot native exec does not push this read into the
+running process.
+
+Checkpoint lists pending corrections for the caller's own active attempt.
+It takes no key. Each item includes the server-authored sender UID, text,
+message UID, text digest and nonce. An empty pending list is a confirmed
+read of nothing new. Codex exec has no live steer: the original prompt is
+written to stdin once, and a resumed Codex TUI reads the terminal. Neither
+is interrupted when a correction is stored. A model sees a later correction
+only by running this command. The command does not consume.
 
 Consume is the target task's explicit acknowledgement. --message-uid and
---text-sha256 must be the values from that read; a nonempty acknowledgement
-with different values is unconfirmed. It is not an inbox read ACK, a grant,
-or a human decision. Retry only the same nonce and attempt. A file written
-by the daemon is not consumption.
+--text-sha256 must be the values from that checkpoint or read; a nonempty
+acknowledgement with different values is unconfirmed. It is not an inbox
+read ACK, a grant, or a human decision. Retry only the same nonce and
+attempt. A checkpoint, a read, or a file written by the daemon is not
+consumption.
 
 Attempt registers this pod's active native attempt, or --ended for that same
 attempt. A replaced or ended attempt cannot accept a new delivery.
+Registration runs only for a launch built with the instruction capability.
+A legacy or disabled native task does not call this route.
 
 Source tests do not prove an installed operator or a live native task.
 `,

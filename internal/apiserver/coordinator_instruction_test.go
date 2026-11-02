@@ -2,15 +2,25 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
+	"github.com/thaynes43/dev-env/internal/agentd"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/agentrun"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -58,12 +68,13 @@ func TestCoordinatorInstructionDeliveryAndConsumption(t *testing.T) {
 	changed := req
 	changed.Text = "a different correction\n"
 	wantError(t, f.do(http.MethodPost, apiv1.SessionInstructionsPath("child"), parentTok, changed), http.StatusConflict, apiv1.CodeConflict)
+	parentUID := string(f.session("parent").UID)
 	parentView := decode[apiv1.CoordinatorInstructionView](t, f.do(http.MethodGet, apiv1.SessionInstructionPath("child", req.Key), parentTok, nil))
-	if parentView.Nonce != "" || parentView.Text != "" || parentView.ReadAck || parentView.Consumed || parentView.MessageUID != receipt.MessageUID {
+	if parentView.Nonce != "" || parentView.Text != "" || parentView.ReadAck || parentView.Consumed || parentView.MessageUID != receipt.MessageUID || parentView.SenderUID != parentUID {
 		t.Fatalf("parent read %+v", parentView)
 	}
 	childView := decode[apiv1.CoordinatorInstructionView](t, f.do(http.MethodGet, apiv1.SessionInstructionPath("child", req.Key), childTok, nil))
-	if childView.Text != instructionText || len(childView.Nonce) != 64 || childView.ReadAck || childView.Consumed {
+	if childView.Text != instructionText || len(childView.Nonce) != 64 || childView.ReadAck || childView.Consumed || childView.SenderUID != parentUID {
 		t.Fatalf("child read %+v", childView)
 	}
 	ackPath := apiv1.InboxPath + "/" + receipt.MessageName + "/ack?project=sample"
@@ -208,4 +219,135 @@ func instructionRequest(uid, pod, key, taskKey, text string) apiv1.CoordinatorIn
 		Key: key, Project: "sample", Repository: "alias", TaskKey: taskKey,
 		TargetSessionUID: uid, TargetPodUID: pod, AttemptID: instructionAttempt, Text: text,
 	}
+}
+
+func TestSyntheticInstructionCheckpointAfterLaunch(t *testing.T) {
+	const text = "synthetic correction posted after launch\n"
+	f, parentTok, childTok, childUID, podUID := instructionReady(t, "parent", "child", "task:coord-instruction")
+	parentUID := string(f.session("parent").UID)
+	empty := decode[apiv1.CoordinatorInstructionCheckpoint](t, f.do(http.MethodGet, apiv1.SessionInstructionsPath("child"), childTok, nil))
+	if empty.Outcome != apiv1.InstructionOutcomeConfirmed || empty.AttemptID != instructionAttempt || len(empty.Pending) != 0 || empty.SessionUID != childUID || empty.PodUID != podUID {
+		t.Fatalf("checkpoint before a correction %+v", empty)
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionsPath("child"), parentTok, nil), http.StatusNotFound, apiv1.CodeNotFound)
+
+	var consumePosts int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/consume") {
+			consumePosts++
+		}
+		if r.Method == http.MethodPost && r.URL.Path == apiv1.SessionInstructionsPath("child") && (strings.Contains(string(body), `"sender"`) || strings.Contains(string(body), `"from"`)) {
+			t.Errorf("send body carried a sender: %s", body)
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		f.h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	state := filepath.Join(home, ".agentd")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	caPath := filepath.Join(dir, "ca.crt")
+	tokenPath := filepath.Join(dir, "helper-token")
+	cliToken := filepath.Join(dir, "cli-token")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"version": 1,
+		"binding": map[string]any{
+			"invocationID": instructionAttempt, "launchDigest": strings.Repeat("ab", 32),
+			"session": "child", "sessionUID": childUID, "podUID": podUID,
+			"bootID": "boot-synthetic", "threadID": "", "generation": 1,
+		},
+		"phase": "Running", "startedAt": time.Now().UTC(), "finishedAt": time.Time{},
+		"leaderReaped": false, "groupAbsent": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "native-invocation.json"), append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte(childTok), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := agentd.Settings{Home: home, StateDir: state, PodUID: podUID, APIURL: server.URL, APITokenFile: tokenPath, APICAFile: caPath}
+	helper, err := agentd.NewInboxClient(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := helper.RegisterInstructionAttempt(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	before, err := helper.CheckpointInstructions(context.Background(), settings)
+	if err != nil || len(before.Pending) != 0 || consumePosts != 0 {
+		t.Fatalf("native helper checkpoint before send %+v posts %d err %v", before, consumePosts, err)
+	}
+	run := func(token, stdin string, want int, args ...string) string {
+		t.Helper()
+		if err := os.WriteFile(cliToken, []byte(token), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr strings.Builder
+		env := agentrun.DefaultEnv()
+		env.Stdout, env.Stderr = &stdout, &stderr
+		env.Stdin = strings.NewReader(stdin)
+		env.Getenv = func(string) string { return "" }
+		env.SessionTokenFile = filepath.Join(dir, "absent-session")
+		env.ServiceAccountDir = filepath.Join(dir, "absent-sa")
+		env.LookPath = func(string) (string, error) { return "", errors.New("synthetic: no host command") }
+		env.Run = func(context.Context, []string, io.Reader) (int, error) {
+			return 0, errors.New("synthetic host process refused")
+		}
+		env.Output = func(context.Context, []string) ([]byte, error) {
+			return nil, errors.New("synthetic host process refused")
+		}
+		env.ExecOutput = func(context.Context, []string) (int, string, string, error) {
+			return 0, "", "", errors.New("synthetic host process refused")
+		}
+		env.PortForward = func(context.Context, []string) (string, func(), error) {
+			return "", func() {}, errors.New("synthetic port-forward refused")
+		}
+		args = append(append([]string{}, args...), "--api-url", server.URL, "--token-file", cliToken, "--ca-file", caPath)
+		if code := agentrun.Run(context.Background(), args, env); code != want {
+			t.Fatalf("%v exit %d want %d\nstdout %s\nstderr %s", args, code, want, stdout.String(), stderr.String())
+		}
+		return stdout.String()
+	}
+	send := run(parentTok, text, agentrun.ExitOK, "instruction", "send", "--session", "child", "--key", "after-launch", "--project", "sample", "--repository", "alias", "--task-key", "task:coord-instruction", "--expect-uid", childUID, "--expect-pod", podUID, "--attempt", instructionAttempt)
+	if strings.Contains(send, text) || strings.Contains(send, `"nonce"`) || strings.Contains(send, "sender") {
+		t.Fatalf("send disclosed text, nonce or sender: %s", send)
+	}
+	if f.session("child").Status.CoordinatorInstructions[0].Consumed != nil || consumePosts != 0 {
+		t.Fatal("delivery or checkpoint consumed the correction")
+	}
+	found, err := helper.CheckpointInstructions(context.Background(), settings)
+	if err != nil || len(found.Pending) != 1 || found.Pending[0].Key != "after-launch" || found.Pending[0].SenderUID != parentUID || found.Pending[0].Text != text || found.Pending[0].Consumed || consumePosts != 0 {
+		t.Fatalf("native helper missed the posted correction %+v posts %d err %v", found, consumePosts, err)
+	}
+	listed := run(childTok, "", agentrun.ExitOK, "instruction", "checkpoint", "--session", "child")
+	var checkpoint apiv1.CoordinatorInstructionCheckpoint
+	if json.Unmarshal([]byte(listed), &checkpoint) != nil || len(checkpoint.Pending) != 1 || checkpoint.Pending[0].MessageUID != found.Pending[0].MessageUID || checkpoint.Pending[0].TextSHA256 != found.Pending[0].TextSHA256 || checkpoint.Pending[0].Nonce != found.Pending[0].Nonce || checkpoint.Pending[0].SenderUID != parentUID {
+		t.Fatalf("cli checkpoint %s", listed)
+	}
+	if consumePosts != 0 {
+		t.Fatal("checkpoint consumed")
+	}
+	item := checkpoint.Pending[0]
+	run(childTok, "", agentrun.ExitOK, "instruction", "consume", "--session", "child", "--key", item.Key, "--attempt", item.AttemptID, "--nonce", item.Nonce, "--message-uid", item.MessageUID, "--text-sha256", item.TextSHA256, "--expect-uid", item.TargetSessionUID, "--expect-pod", item.TargetPodUID)
+	if consumePosts != 1 || f.session("child").Status.CoordinatorInstructions[0].Consumed == nil {
+		t.Fatalf("explicit consume did not store the receipt posts %d", consumePosts)
+	}
+	after, err := helper.CheckpointInstructions(context.Background(), settings)
+	if err != nil || len(after.Pending) != 0 {
+		t.Fatalf("consumed correction stayed pending %+v %v", after, err)
+	}
+	run(parentTok, "", agentrun.ExitNotFound, "instruction", "checkpoint", "--session", "child")
 }

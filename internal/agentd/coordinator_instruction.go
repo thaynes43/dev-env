@@ -29,11 +29,12 @@ func ActiveInstructionAttempt(s Settings) (nativeBinding, error) {
 	return b, nil
 }
 
-var instructionClientPath = regexp.MustCompile(`^/v1/sessions/[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?/(?:instruction-attempt|instructions/[a-z0-9](?:[a-z0-9._-]{0,118}[a-z0-9])?(?:/consume)?)$`)
+var instructionClientPath = regexp.MustCompile(`^/v1/sessions/[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?/(?:instruction-attempt|instructions(?:/[a-z0-9](?:[a-z0-9._-]{0,118}[a-z0-9])?(?:/consume)?)?)$`)
 
 // nativeInstructionPullGuidance is launch text for an enabled native child.
-// It describes an explicit pull. It is not a live push or a consumption receipt.
-const nativeInstructionPullGuidance = "This native exec does not receive a live coordinator push or steer. The one-shot task prompt is written to stdin once. If this task already names a correction key, pull that stored instruction with `agent-run instruction read --session <this-session> --key <key>`. The read shows the project, repository, task key, target session, target pod, attempt, message UID, text digest, text and nonce. Acknowledge only with an explicit `agent-run instruction consume` that copies that read's message UID, text digest and nonce. A read, a daemon file, or a nonempty reply is not consumption. If the key or the result is unknown, stop and report that; do not invent an acknowledgement."
+// It describes an explicit checkpoint. It is not a live push, a steer, or a
+// consumption receipt. Codex exec and a resumed Codex TUI are not interrupted.
+const nativeInstructionPullGuidance = "This native exec does not receive a live coordinator push or steer. Codex exec writes the original task prompt to stdin once and has no channel that interrupts the process with a later correction. A resumed Codex TUI reads the terminal; that keyboard attach is not a coordinator push. Claude Code is not enrolled by this launch and is not interrupted either. A correction posted after launch is visible to this process only when you run `agent-run instruction checkpoint --session <this-session>` at a meaningful checkpoint: before an irreversible step, before declaring the task done, and when you resume work. The checkpoint lists pending corrections for this active attempt, including the sender UID, project, repository, task key, text, message UID, text digest and nonce. It does not consume them. Acknowledge one correction only with an explicit `agent-run instruction consume` that copies that checkpoint's message UID, text digest and nonce. A checkpoint, a keyed read, a daemon file, or a nonempty reply is not consumption. If the checkpoint result is unknown, stop and report that; do not invent an acknowledgement or a key."
 
 // Instruction performs one coordinator-instruction call on the existing inbox
 // transport. It does not follow redirects or retry. Paths outside the attempt,
@@ -107,10 +108,39 @@ func (c *InboxClient) ReadInstruction(ctx context.Context, s Settings, key strin
 	if err := decodeInstructionJSON(raw, &view); err != nil {
 		return apiv1.CoordinatorInstructionView{}, errors.New("instruction read reply is not correlated")
 	}
-	if view.Outcome != apiv1.InstructionOutcomeConfirmed || view.Key != key || view.MessageUID == "" || view.TextSHA256 == "" || view.Nonce == "" || view.Text == "" || view.Project == "" || view.Repository == "" || view.TaskKey == "" || view.AttemptID != binding.InvocationID || view.TargetSessionUID != binding.SessionUID || view.TargetPodUID != binding.PodUID {
+	if view.Outcome != apiv1.InstructionOutcomeConfirmed || view.Key != key || view.SenderUID == "" || view.MessageUID == "" || view.TextSHA256 == "" || view.Nonce == "" || view.Text == "" || view.Project == "" || view.Repository == "" || view.TaskKey == "" || view.AttemptID != binding.InvocationID || view.TargetSessionUID != binding.SessionUID || view.TargetPodUID != binding.PodUID {
 		return apiv1.CoordinatorInstructionView{}, errors.New("instruction read reply is not correlated")
 	}
 	return view, nil
+}
+
+// CheckpointInstructions lists pending corrections for the active attempt.
+// The caller does not supply a key. The reply is a read, not consumption,
+// and the daemon does not call this from the lifecycle path.
+func (c *InboxClient) CheckpointInstructions(ctx context.Context, s Settings) (apiv1.CoordinatorInstructionCheckpoint, error) {
+	binding, err := ActiveInstructionAttempt(s)
+	if err != nil {
+		return apiv1.CoordinatorInstructionCheckpoint{}, err
+	}
+	raw, status, err := c.Instruction(ctx, http.MethodGet, apiv1.SessionInstructionsPath(binding.Session), nil)
+	if err != nil || status != http.StatusOK {
+		return apiv1.CoordinatorInstructionCheckpoint{}, errors.New("instruction checkpoint outcome Unknown; retry the same attempt")
+	}
+	var got apiv1.CoordinatorInstructionCheckpoint
+	if err := decodeInstructionJSON(raw, &got); err != nil {
+		return apiv1.CoordinatorInstructionCheckpoint{}, errors.New("instruction checkpoint reply is not correlated")
+	}
+	if got.Outcome != apiv1.InstructionOutcomeConfirmed || got.AttemptID != binding.InvocationID || got.SessionUID != binding.SessionUID || got.PodUID != binding.PodUID || len(got.Pending) > 4 {
+		return apiv1.CoordinatorInstructionCheckpoint{}, errors.New("instruction checkpoint reply is not correlated")
+	}
+	seen := map[string]bool{}
+	for _, item := range got.Pending {
+		if seen[item.Key] || item.Outcome != apiv1.InstructionOutcomeConfirmed || item.Consumed || item.Key == "" || item.SenderUID == "" || item.MessageUID == "" || item.TextSHA256 == "" || item.Nonce == "" || item.Text == "" || item.Project == "" || item.Repository == "" || item.TaskKey == "" || item.AttemptID != binding.InvocationID || item.TargetSessionUID != binding.SessionUID || item.TargetPodUID != binding.PodUID {
+			return apiv1.CoordinatorInstructionCheckpoint{}, errors.New("instruction checkpoint reply is not correlated")
+		}
+		seen[item.Key] = true
+	}
+	return got, nil
 }
 
 // AcknowledgeReadInstruction consumes only when the model-issued message UID
@@ -163,11 +193,13 @@ func (c *InboxClient) EndInstructionAttempt(ctx context.Context, s Settings) (ap
 }
 
 // publishNativeInstructionLifecycle registers the local Running attempt, or
-// ends a verified local exit, through the existing inbox client. An absent
-// API origin does nothing and creates no consumption. The daemon does not
-// call AcknowledgeReadInstruction from this path.
-func publishNativeInstructionLifecycle(lease *nativeInvocationLease, ended bool) error {
-	if lease == nil || lease.s.APIURL == "" {
+// ends a verified local exit, through the existing inbox client. Legacy and
+// disabled launches return before any request, including when an API origin
+// is configured. An enabled launch with an empty origin also makes no request.
+// A configured origin that fails is returned to the caller, which stops that
+// native attempt. This path does not checkpoint or consume.
+func publishNativeInstructionLifecycle(lease *nativeInvocationLease, enabled, ended bool) error {
+	if lease == nil || !enabled || !lease.s.CoordinatorInstructions || lease.s.APIURL == "" {
 		return nil
 	}
 	client, err := NewInboxClient(lease.s)

@@ -163,8 +163,8 @@ spec:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: immutable after create; coordinator instruction parent UID
-                    does not change
+                - message: immutable after create; coordinator instruction parent
+                    UID does not change
                   rule: self == oldSelf
               effort:
                 description: |-
@@ -1707,6 +1707,10 @@ spec:
                 description: |-
                   CoordinatorInstructions are delivery records for this task. The text lives
                   in the inbox message. A nested consumption receipt is not an inbox read ACK.
+                  The list is a map keyed by the immutable delivery key, so item and nested
+                  consumption transition rules stay correlatable. MaxItems stays 4. A later
+                  update cannot drop the list, remove an old key, or swap an old key for a
+                  new key at the same length. Duplicate keys are rejected.
                 items:
                   description: |-
                     CoordinatorInstructionStatus is one server-authored delivery record. The
@@ -1842,21 +1846,25 @@ spec:
                     rule: '!has(self.consumed) || (self.consumed.attemptID == self.attemptID
                       && self.consumed.sessionUID == self.targetSessionUID && self.consumed.podUID
                       == self.targetPodUID && self.consumed.messageUID == self.messageUID
-                      && self.consumed.nonce == self.nonce && self.consumed.textSHA256 ==
-                      self.textSHA256)'
-                  - message: instruction delivery is immutable; consumption is set once
+                      && self.consumed.nonce == self.nonce && self.consumed.textSHA256
+                      == self.textSHA256)'
+                  - message: instruction delivery is immutable; consumption is set
+                      once
                     rule: self.key == oldSelf.key && self.messageName == oldSelf.messageName
-                      && self.messageUID == oldSelf.messageUID && self.senderUID == oldSelf.senderUID
-                      && self.senderPodUID == oldSelf.senderPodUID && self.targetSessionUID
-                      == oldSelf.targetSessionUID && self.targetPodUID == oldSelf.targetPodUID
-                      && self.attemptID == oldSelf.attemptID && self.project == oldSelf.project
-                      && self.repository == oldSelf.repository && self.taskKey == oldSelf.taskKey
-                      && self.textSHA256 == oldSelf.textSHA256 && self.nonce == oldSelf.nonce
-                      && self.deliveredAt == oldSelf.deliveredAt && (!has(oldSelf.consumed)
-                      || (has(self.consumed) && self.consumed == oldSelf.consumed))
+                      && self.messageUID == oldSelf.messageUID && self.senderUID ==
+                      oldSelf.senderUID && self.senderPodUID == oldSelf.senderPodUID
+                      && self.targetSessionUID == oldSelf.targetSessionUID && self.targetPodUID
+                      == oldSelf.targetPodUID && self.attemptID == oldSelf.attemptID
+                      && self.project == oldSelf.project && self.repository == oldSelf.repository
+                      && self.taskKey == oldSelf.taskKey && self.textSHA256 == oldSelf.textSHA256
+                      && self.nonce == oldSelf.nonce && self.deliveredAt == oldSelf.deliveredAt
+                      && (!has(oldSelf.consumed) || (has(self.consumed) && self.consumed
+                      == oldSelf.consumed))
                 maxItems: 4
                 type: array
-                x-kubernetes-list-type: atomic
+                x-kubernetes-list-map-keys:
+                - key
+                x-kubernetes-list-type: map
               decisionAnswer:
                 description: |-
                   DecisionAnswer is written only by the authenticated direct-parent API route.
@@ -3423,9 +3431,11 @@ spec:
               rule: '!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)'
             - message: instruction attempt evidence cannot be removed
               rule: '!has(oldSelf.coordinatorInstructionAttempt) || has(self.coordinatorInstructionAttempt)'
-            - message: instruction delivery records cannot be removed
+            - message: instruction delivery records cannot be removed or replaced
               rule: '!has(oldSelf.coordinatorInstructions) || (has(self.coordinatorInstructions)
-                && size(self.coordinatorInstructions) >= size(oldSelf.coordinatorInstructions))'
+                && size(self.coordinatorInstructions) >= size(oldSelf.coordinatorInstructions)
+                && oldSelf.coordinatorInstructions.all(old, self.coordinatorInstructions.exists(cur,
+                cur.key == old.key)))'
         required:
         - spec
         type: object

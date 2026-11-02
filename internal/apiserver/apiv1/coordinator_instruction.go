@@ -64,13 +64,24 @@ type CoordinatorInstructionReceipt struct {
 }
 
 // CoordinatorInstructionView is a read. Text and nonce are returned only to
-// the target session. ReadAck is the inbox read acknowledgement, which is not
-// native consumption.
+// the target session. SenderUID is the server-authored parent identity.
+// ReadAck is the inbox read acknowledgement, which is not native consumption.
 type CoordinatorInstructionView struct {
 	CoordinatorInstructionReceipt
-	Text    string `json:"text,omitempty"`
-	Nonce   string `json:"nonce,omitempty"`
-	ReadAck bool   `json:"readAck"`
+	SenderUID string `json:"senderUID,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Nonce     string `json:"nonce,omitempty"`
+	ReadAck   bool   `json:"readAck"`
+}
+
+// CoordinatorInstructionCheckpoint is the active recipient attempt's pending
+// list. Pending is empty when nothing is unconsumed. The call does not consume.
+type CoordinatorInstructionCheckpoint struct {
+	Outcome    string                       `json:"outcome"`
+	AttemptID  string                       `json:"attemptID"`
+	SessionUID string                       `json:"sessionUID"`
+	PodUID     string                       `json:"podUID"`
+	Pending    []CoordinatorInstructionView `json:"pending"`
 }
 
 // CoordinatorInstructionConsumeRequest is the target task's consume call.

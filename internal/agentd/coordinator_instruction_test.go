@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
@@ -145,13 +146,19 @@ func TestSyntheticNativeInstructionReadAckUsesExactRead(t *testing.T) {
 		}
 	}
 	write("Running")
-	if err := publishNativeInstructionLifecycle(nil, false); err != nil {
+	if err := publishNativeInstructionLifecycle(nil, true, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishNativeInstructionLifecycle(&nativeInvocationLease{s: Settings{}}, true); err != nil {
+	if err := publishNativeInstructionLifecycle(&nativeInvocationLease{s: Settings{}}, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishNativeInstructionLifecycle(&nativeInvocationLease{s: Settings{APIURL: "http://insecure.example"}}, false); err == nil {
+	if err := publishNativeInstructionLifecycle(&nativeInvocationLease{s: Settings{APIURL: "http://insecure.example", CoordinatorInstructions: true}}, false, false); err != nil {
+		t.Fatal("disabled launch contacted an origin")
+	}
+	if err := publishNativeInstructionLifecycle(&nativeInvocationLease{s: Settings{CoordinatorInstructions: true}}, true, false); err != nil {
+		t.Fatal("enabled launch with no origin failed")
+	}
+	if err := publishNativeInstructionLifecycle(&nativeInvocationLease{s: Settings{APIURL: "http://insecure.example", CoordinatorInstructions: true}}, true, false); err == nil {
 		t.Fatal("insecure origin registered an attempt")
 	}
 	nonce := strings.Repeat("cd", 32)
@@ -171,7 +178,7 @@ func TestSyntheticNativeInstructionReadAckUsesExactRead(t *testing.T) {
 					TargetSessionUID: binding.SessionUID, TargetPodUID: binding.PodUID, AttemptID: binding.InvocationID,
 					Project: "sample", Repository: "alias", TaskKey: "task:coord-instruction",
 				},
-				Text: "clarify the assigned outcome\n", Nonce: nonce,
+				SenderUID: "parent-uid", Text: "clarify the assigned outcome\n", Nonce: nonce,
 			})
 		case apiv1.SessionInstructionConsumePath("child", "correction-1"):
 			if body["nonce"] != nonce || body["attemptID"] != binding.InvocationID {
@@ -225,6 +232,94 @@ func TestSyntheticNativeInstructionReadAckUsesExactRead(t *testing.T) {
 	ended, err := client.EndInstructionAttempt(context.Background(), s)
 	if err != nil || ended.Phase != apiv1.InstructionPhaseEnded || ended.AttemptID != binding.InvocationID {
 		t.Fatalf("ended %+v %v", ended, err)
+	}
+}
+
+func TestSyntheticInstructionGuidanceRequiresExplicitCapability(t *testing.T) {
+	s, sess, ws, now := managedCodexFixture(t)
+	s.ManagedChildDecisions, s.CoordinatorInstructions, s.PodUID = true, true, "pod-synthetic"
+	sess.Workspace = &protocol.WorkspaceBinding{ID: "projects", SessionUID: sess.SessionUID}
+	s.CodexBin = fakeCLI(t, t.TempDir(), "exit 0\n")
+	l, err := BuildLaunch(s, sess, ws, "boot", now)
+	if err != nil || !l.CoordinatorInstructions || !strings.Contains(strings.Join(l.Argv, "\n"), "instruction checkpoint") || !strings.Contains(strings.Join(l.Argv, "\n"), "no channel that interrupts") {
+		t.Fatalf("enabled launch did not name the checkpoint limit: %v %+v", err, l.Argv)
+	}
+}
+
+func TestSyntheticCheckpointDiscoversCorrectionPostedAfterLaunch(t *testing.T) {
+	home := t.TempDir()
+	s := Settings{Home: home, StateDir: filepath.Join(home, ".agentd"), PodUID: "pod-1"}
+	if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binding := nativeBinding{
+		InvocationID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", LaunchDigest: strings.Repeat("ab", 32),
+		Session: "child", SessionUID: "session-1", PodUID: "pod-1", BootID: "boot-1", Generation: 1,
+	}
+	raw, err := json.Marshal(nativeInvocation{Version: 1, Binding: binding, Phase: "Running", StartedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.statePath(nativeInvocationFile), append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nonce := strings.Repeat("cd", 32)
+	digest := strings.Repeat("ef", 32)
+	var calls []string
+	posted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != apiv1.SessionInstructionsPath("child") {
+			t.Fatalf("checkpoint called %s %s", r.Method, r.URL.Path)
+		}
+		pending := []apiv1.CoordinatorInstructionView{}
+		if posted {
+			pending = append(pending, apiv1.CoordinatorInstructionView{
+				CoordinatorInstructionReceipt: apiv1.CoordinatorInstructionReceipt{
+					Outcome: apiv1.InstructionOutcomeConfirmed, Key: "after-launch", MessageUID: "message-uid", TextSHA256: digest,
+					TargetSessionUID: binding.SessionUID, TargetPodUID: binding.PodUID, AttemptID: binding.InvocationID,
+					Project: "sample", Repository: "alias", TaskKey: "task:coord-instruction",
+				},
+				SenderUID: "parent-uid", Text: "synthetic correction posted after launch\n", Nonce: nonce,
+			})
+		}
+		writeTestInstructionJSON(w, apiv1.CoordinatorInstructionCheckpoint{
+			Outcome: apiv1.InstructionOutcomeConfirmed, AttemptID: binding.InvocationID, SessionUID: binding.SessionUID, PodUID: binding.PodUID, Pending: pending,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	token := filepath.Join(home, "token")
+	if err := os.WriteFile(token, []byte("synthetic-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &InboxClient{URL: srv.URL, TokenFile: token, HTTP: srv.Client()}
+	first, err := client.CheckpointInstructions(context.Background(), s)
+	if err != nil || len(first.Pending) != 0 {
+		t.Fatalf("before post %+v %v", first, err)
+	}
+	posted = true
+	found, err := client.CheckpointInstructions(context.Background(), s)
+	if err != nil || len(found.Pending) != 1 || found.Pending[0].SenderUID != "parent-uid" || found.Pending[0].Text != "synthetic correction posted after launch\n" || found.Pending[0].Nonce != nonce || found.Pending[0].Consumed {
+		t.Fatalf("posted correction %+v %v", found, err)
+	}
+	if strings.Contains(strings.Join(calls, ","), http.MethodPost) {
+		t.Fatalf("checkpoint consumed: %v", calls)
+	}
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestInstructionJSON(w, apiv1.CoordinatorInstructionCheckpoint{
+			Outcome: apiv1.InstructionOutcomeConfirmed, AttemptID: binding.InvocationID, SessionUID: binding.SessionUID, PodUID: binding.PodUID,
+			Pending: []apiv1.CoordinatorInstructionView{{
+				CoordinatorInstructionReceipt: apiv1.CoordinatorInstructionReceipt{
+					Outcome: apiv1.InstructionOutcomeConfirmed, Key: "after-launch", MessageUID: "message-uid", TextSHA256: digest,
+					TargetSessionUID: binding.SessionUID, TargetPodUID: binding.PodUID, AttemptID: binding.InvocationID,
+					Project: "sample", Repository: "alias", TaskKey: "task:coord-instruction",
+				},
+				Text: "missing sender\n", Nonce: nonce,
+			}},
+		})
+	})
+	if _, err := client.CheckpointInstructions(context.Background(), s); err == nil || !strings.Contains(err.Error(), "not correlated") {
+		t.Fatalf("missing sender accepted: %v", err)
 	}
 }
 
