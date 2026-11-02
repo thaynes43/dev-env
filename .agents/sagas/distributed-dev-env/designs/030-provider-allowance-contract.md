@@ -249,3 +249,69 @@ credential, probe, collector, periodic acquisition, ConfigMap, Role, or flag
 is activated. The existing immutable PublishedContext contract remains
 unchanged. Synthetic portal fixtures prove the connection in source only.
 Installed ingestion and account entitlement acceptance remain separate.
+
+
+## OP192 aggregate continuation — 2026-11-02
+
+This is the existing OP187 allowance deliverable across Cursor, Claude and Codex.
+OP190 owns collector/native Codex acquisition, OP191 passive Claude, OP192
+Cursor/Grok, OP193 private-adapter permission, OP315 retained invocation totals,
+and OP323 the consumer integration. This adds no work queue or replacement
+accounting framework. Source, tests, publication, installation and usable
+acceptance remain separate.
+
+The common document is `providerallowance.read.v1`. The disabled aggregate cached
+GET and explicit agent read use that envelope. The fixed
+`/v1/provider-source-reports/codex-current-source` slot keeps its Codex-only
+selection and security boundary. An aggregate read must not route Cursor data
+through that slot. `agent-run usage -o json --read-current` is the explicit remote read; default
+usage stays a local preflight. No runtime configuration, account registry, provider
+credential, permission, observer or scheduled collection is enabled here.
+
+| Provider | Source and cadence | API, agent and UI evidence | Freshness and live acceptance |
+| --- | --- | --- | --- |
+| Cursor, including Grok through Cursor | One relayed authenticated native Plan & Usage capture. The new sanitized display adapter preserves included percent, plan/window label, account-binding uncertainty and exact yearless reset text. Recurring native acquisition is not qualified. | Adapter target tests pass locally. Aggregate TLS API/agent and cached-UI projection tests pass; the collection receipt-time freshness correction is still a source gate. Existing cached mapper requires independently trusted binding/freshness; actual unverified data stays Unknown. | Provider observation time and exact reset time/timezone are Unknown. Two refreshed native observations have not been verified. OP192 remains open. |
+| Codex | Existing owned native capture and retained-export source exists. Observer execution and automatic ingestion remain held. No production cadence is established. | The selected Codex report API and explicit `usage-source --read-current` exist. The OP323 peer reports signed 2.85.0 operator/portal installation; that does not enable the quota slot or prove the aggregate path. | Selected report retrieval time is not provider update time; account binding remains Unknown. OP190/225 and OP323 acceptance stay separate. |
+| Claude | Existing passive documented statusline decoder. Callback coverage cannot establish idle-account freshness. No new model call for quota polling. | Existing `usage --claude-statusline -o json` projects independent five-hour/seven-day windows when reported. Retained same-child result pickup and observer activation remain separate. | Callback capture time cannot establish provider freshness or account binding. OP191 remains open. |
+| Direct xAI | No qualified authenticated current-account quota source identified. Cursor entitlement and local token receipts cannot substitute. | Unknown; no credential/private API integration or account probe added. | Unknown. |
+
+OP315 retained invocation token/cost accounting is accepted with explicit ancestry
+coverage limits. It supplies fine-grained attribution charts, not an allowance
+denominator, remaining quota, reset, balance or proof of provider freshness.
+Percentages across providers are never added. Cursor/Grok aliases require a
+caller-trusted shared entitlement and never merge different accounts or windows.
+
+The bounded collection source is opt-in and receives its clock, wait, source
+selection and acquisition interface from its caller. It must retain original
+capture/provider/receipt times on replay, preserve last-good history separately
+from a failed attempt, redact callback errors, invalidate changed account
+generations and degrade expired or untrusted current values. The deadline/cancellation and concurrent-read corrections pass the full package
+and race suite. A later review reproduced future-at-receipt data becoming
+current only because the serving clock advanced; that correction, independent
+review and required CI remain publication gates for this aggregate slice.
+
+Native capability preflight: the documented Cursor `about --format json` command
+completed with no raw output retained; safe metadata found eleven unrecognized
+fields and no recognized quota/account fields. That is an inconclusive schema
+observation, not proof that the command cannot supply data. The public
+[CLI parameters](https://cursor.com/docs/cli/reference/parameters) describe
+`status` and `about` as account/authentication metadata, without documenting an
+individual weekly-quota command on that page. The
+[team Admin API](https://cursor.com/docs/account/teams/admin-api) requires team API
+key authentication. Individual-plan access has not been established. Native Mac
+accessibility refresh returned a tool availability/lock error; this does not prove
+an operating-system lock or authorize unlocking, login changes or a private API.
+
+A single read-only request using the locally built explicit agent command and
+the existing managed Session identity returned NotFound; the live aggregate
+route remains unavailable. No retry, provider request or runtime write followed.
+The existing portal admission switch also refuses this path, and production
+assembly does not set the optional source.
+
+An activation request is not fully preflighted yet. The supported recurring
+source, account binding, two fresh observations, runtime assembly and exact
+permission/configuration inputs must be concrete first. Existing Codex-only
+activation materials cannot stand in for the original aggregate deliverable.
+OP193 private-adapter, observer and ingestion-security holds remain in force.
+No new credential, grant, network/security change, session restart, reset
+redemption or capacity purchase follows from this source work.

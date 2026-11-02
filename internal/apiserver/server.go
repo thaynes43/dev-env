@@ -215,6 +215,9 @@ type Server struct {
 	// Nil, or RouteEnabled false, leaves both methods unregistered.
 	// Selection.MaxAge does not register the route.
 	ProviderSourceReports *ProviderSourceReports
+	// AggregateAllowanceReports serves GET /v1/provider-allowances.
+	// Nil leaves the route unregistered. It is not the Codex current-source slot.
+	AggregateAllowanceReports *AggregateAllowanceReports
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -368,6 +371,11 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle(ProviderSourceReportPath, s.serve(route{methods: map[string]handler{
 			http.MethodGet: s.ProviderSourceReports.Handle,
 			http.MethodPut: s.ProviderSourceReports.Handle,
+		}}))
+	}
+	if s.AggregateAllowanceReports.RouteEnabled() {
+		mux.Handle(ProviderAllowanceReportsPath, s.serve(route{methods: map[string]handler{
+			http.MethodGet: s.AggregateAllowanceReports.Handle,
 		}}))
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
