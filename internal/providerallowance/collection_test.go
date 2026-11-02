@@ -238,6 +238,140 @@ func TestCollectionFreshnessResetAndUnknownAccount(t *testing.T) {
 	})
 }
 
+func TestCollectionFutureAtReceiptStaysUnknown(t *testing.T) {
+	later := collectionServed.Add(2 * time.Minute)
+	t.Run("future-provider", func(t *testing.T) {
+		clock := &fakeClock{now: collectionStart}
+		raw := collectionObs(t, obsOpts{id: "future-provider", provider: "openai", decimal: "11", observed: "2026-11-02T03:07:00Z"})
+		acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{"openai": {successStep(clock, raw)}}}
+		collection := mustCollection(t, collectionBounds(30*time.Minute, 1), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, testRegistry(t, true), clock, &fakeWait{}, acquire)
+		if err := collection.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		calls := acquire.total
+		first, _, err := collection.Snapshot(collectionServed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, _, err := collection.Snapshot(later)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acquire.total != calls {
+			t.Fatal("later read acquired")
+		}
+		assertReceiptFutureUnknown(t, first, "11", collectionCaptured, "2026-11-02T03:07:00Z")
+		assertReceiptFutureUnknown(t, second, "11", collectionCaptured, "2026-11-02T03:07:00Z")
+		if onlyItem(t, second, "openai").Freshness.State != providerallowance.FreshExpired || onlyItem(t, second, "openai").Freshness.Basis != providerallowance.BasisProvider {
+			t.Fatalf("future provider time was reclassified %+v", onlyItem(t, second, "openai").Freshness)
+		}
+	})
+	t.Run("future-capture", func(t *testing.T) {
+		clock := &fakeClock{now: collectionStart}
+		raw := collectionObs(t, obsOpts{id: "future-capture", provider: "openai", decimal: "11", captured: "2026-11-02T03:07:00Z", observed: collectionObserved})
+		acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{"openai": {successStep(clock, raw)}}}
+		collection := mustCollection(t, collectionBounds(30*time.Minute, 1), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, testRegistry(t, true), clock, &fakeWait{}, acquire)
+		if err := collection.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		calls := acquire.total
+		first, _, err := collection.Snapshot(collectionServed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, _, err := collection.Snapshot(later)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acquire.total != calls {
+			t.Fatal("later read acquired")
+		}
+		assertReceiptFutureUnknown(t, first, "11", "2026-11-02T03:07:00Z", collectionObserved)
+		assertReceiptFutureUnknown(t, second, "11", "2026-11-02T03:07:00Z", collectionObserved)
+		item := onlyItem(t, second, "openai")
+		if item.Freshness.State != providerallowance.FreshExpired || item.Freshness.Basis != providerallowance.BasisCapture || item.Freshness.AsOf != "2026-11-02T03:07:00Z" {
+			t.Fatalf("future capture was reclassified %+v", item.Freshness)
+		}
+	})
+	t.Run("replay-keeps-receipt", func(t *testing.T) {
+		clock := &fakeClock{now: collectionStart}
+		raw := collectionObs(t, obsOpts{id: "future-replay", provider: "openai", decimal: "11", observed: "2026-11-02T03:07:00Z"})
+		acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{
+			"openai": {
+				successStep(clock, raw),
+				func(context.Context, providerallowance.SourceSpec) (providerallowance.Acquisition, error) {
+					clock.Advance(4 * time.Minute)
+					return providerallowance.Acquisition{Observation: append([]byte(nil), raw...)}, nil
+				},
+			},
+		}}
+		collection := mustCollection(t, collectionBounds(30*time.Minute, 2), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, testRegistry(t, true), clock, &fakeWait{}, acquire)
+		if err := collection.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		calls := acquire.total
+		doc, _, err := collection.Snapshot(collectionServed.Add(5 * time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acquire.total != calls {
+			t.Fatal("replay read acquired")
+		}
+		wantReceived := collectionStart.Add(collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+		item := onlyItem(t, doc, "openai")
+		status := statusBy(t, doc, "openai")
+		if item.ReceivedAt != wantReceived || status.LastGood == nil || status.LastGood.ReceivedAt != wantReceived {
+			t.Fatalf("replay moved the receipt item=%s lastGood=%+v", item.ReceivedAt, status.LastGood)
+		}
+		if deref(status.LastAttempt.CompletedAt) == wantReceived {
+			t.Fatal("replay did not record the later attempt")
+		}
+		assertReceiptFutureUnknown(t, doc, "11", collectionCaptured, "2026-11-02T03:07:00Z")
+		if item.Observation.ObservationID != "future-replay" {
+			t.Fatal("replay replaced the original observation")
+		}
+	})
+	t.Run("later-valid-recovers", func(t *testing.T) {
+		clock := &fakeClock{now: collectionStart}
+		first := collectionObs(t, obsOpts{id: "future-then", provider: "openai", decimal: "11", sequence: 1, observed: "2026-11-02T03:07:00Z"})
+		second := collectionObs(t, obsOpts{id: "valid-later", provider: "openai", decimal: "22", sequence: 2, captured: "2026-11-02T03:02:00Z", observed: "2026-11-02T03:01:00Z"})
+		acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{"openai": {successStep(clock, first), successStep(clock, second)}}}
+		collection := mustCollection(t, collectionBounds(30*time.Minute, 2), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, testRegistry(t, true), clock, &fakeWait{}, acquire)
+		if err := collection.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		doc, raw, err := collection.Snapshot(collectionServed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		item := onlyItem(t, doc, "openai")
+		wantReceived := collectionStart.Add(2 * collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+		if item.Observation.ObservationID != "valid-later" || item.Observation.CapturedAt != "2026-11-02T03:02:00Z" || deref(item.Observation.ProviderObservedAt) != "2026-11-02T03:01:00Z" || item.ReceivedAt != wantReceived {
+			t.Fatalf("valid acquisition did not replace the future receipt: received=%s obs=%+v", item.ReceivedAt, item.Observation)
+		}
+		if item.CurrentMeasures[0].State != providerallowance.CurrentKnown || deref(item.CurrentMeasures[0].Value.Decimal) != "22" || item.Freshness.State != providerallowance.FreshFresh {
+			t.Fatalf("valid chronology stayed unknown %+v freshness=%+v", item.CurrentMeasures[0], item.Freshness)
+		}
+		if strings.Contains(string(raw), "future-then") || strings.Contains(string(raw), `"decimal":"11"`) {
+			t.Fatal("the future observation stayed actionable or current")
+		}
+	})
+}
+
+func assertReceiptFutureUnknown(t *testing.T, doc providerallowance.ReadResponse, decimal, captured, observed string) {
+	t.Helper()
+	item := onlyItem(t, doc, "openai")
+	if item.CurrentMeasures[0].State != providerallowance.CurrentUnknown || item.CurrentMeasures[0].Value.Decimal != nil {
+		t.Fatalf("serving view became actionable: %+v", item.CurrentMeasures[0])
+	}
+	if item.Freshness.State == providerallowance.FreshFresh || item.Freshness.State == providerallowance.FreshStale {
+		t.Fatalf("freshness became current: %+v", item.Freshness)
+	}
+	if deref(item.Observation.Measures[0].Value.Decimal) != decimal || item.Observation.CapturedAt != captured || deref(item.Observation.ProviderObservedAt) != observed {
+		t.Fatalf("historical observation changed captured=%s observed=%s decimal=%s", item.Observation.CapturedAt, deref(item.Observation.ProviderObservedAt), deref(item.Observation.Measures[0].Value.Decimal))
+	}
+}
+
 func TestCollectionAccountChangeDropsQuota(t *testing.T) {
 	clock := &fakeClock{now: collectionStart}
 	raw := collectionObs(t, obsOpts{id: "acct-0", provider: "openai", decimal: "11", sequence: 1})

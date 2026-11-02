@@ -287,8 +287,11 @@ capture/provider/receipt times on replay, preserve last-good history separately
 from a failed attempt, redact callback errors, invalidate changed account
 generations and degrade expired or untrusted current values. The deadline/cancellation and concurrent-read corrections pass the full package
 and race suite. A later review reproduced future-at-receipt data becoming
-current only because the serving clock advanced; that correction, independent
-review and required CI remain publication gates for this aggregate slice.
+current only because the serving clock advanced. The correction now compares
+provider/capture timestamps against the original receipt and keeps them unusable
+on later reads/replays; a distinct valid acquisition can recover. The full
+allowance race suite passes after that correction. Independent review and
+required CI remain publication gates for this aggregate slice.
 
 Native capability preflight: the documented Cursor `about --format json` command
 completed with no raw output retained; safe metadata found eleven unrecognized
@@ -315,3 +318,10 @@ activation materials cannot stand in for the original aggregate deliverable.
 OP193 private-adapter, observer and ingestion-security holds remain in force.
 No new credential, grant, network/security change, session restart, reset
 redemption or capacity purchase follows from this source work.
+
+The current [official usage help](https://prod.cursor.com/help/models-and-usage/usage-limits)
+identifies Super as an X Subscription with a weekly Cursor/Grok pool and directs
+users to Usage at `https://grok.com/dashboard`. That is a supported display path;
+it does not establish a compatible individual programmatic quota API or native
+authentication selector. Direct xAI API usage and legacy Cursor monthly meters
+must stay separate. No private call follows from this documentation.

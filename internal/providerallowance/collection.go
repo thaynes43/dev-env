@@ -11,9 +11,14 @@ import (
 	"time"
 )
 
-// Collection emits the existing cached-read document for an injected API getter,
-// agent-run's explicit cached read, and the existing portal reader. It does not
-// register a route, start a production schedule, or configure source authority.
+// Snapshot bytes are a providerallowance.read.v1 document. Callers can pass
+// them to web/portal/session.NewCachedAllowanceReader or to
+// `agent-run usage -o json --from-file`. This package does not register a
+// route, start a schedule, or claim that recurring acquisition is running.
+// internal/apiserver/usage.go still serves invocation usage only.
+// `agent-run usage -o json` without `--from-file` remains the local
+// unconfigured preflight. Production session assembly does not call
+// SessionSource.SetAllowanceReader.
 
 const (
 	collectionCycleLimit    = 8
@@ -40,17 +45,18 @@ const (
 )
 
 const (
-	reasonBinding      = "binding not actionable"
-	reasonTimeMissing  = "provider time missing"
-	reasonTimeFuture   = "provider time future"
-	reasonTimeStale    = "provider time stale"
-	reasonReset        = "reset passed"
-	reasonHistorical   = "historical only"
-	reasonAlias        = "shared pool alias"
-	reasonProjection   = "projection alias"
-	reasonConflict     = "conflict withheld"
-	reasonUnconfigured = "source not configured"
-	reasonAttempt      = "acquisition failed"
+	reasonBinding       = "binding not actionable"
+	reasonTimeMissing   = "provider time missing"
+	reasonTimeFuture    = "provider time future"
+	reasonCaptureFuture = "capture time future"
+	reasonTimeStale     = "provider time stale"
+	reasonReset         = "reset passed"
+	reasonHistorical    = "historical only"
+	reasonAlias         = "shared pool alias"
+	reasonProjection    = "projection alias"
+	reasonConflict      = "conflict withheld"
+	reasonUnconfigured  = "source not configured"
+	reasonAttempt       = "acquisition failed"
 )
 
 var (
@@ -704,6 +710,12 @@ func viewFreshness(obs Observation, received string, servedAt time.Time, maxAge 
 	if err != nil {
 		return Freshness{State: FreshUnknown, AsOf: asOf, Basis: BasisCapture, Reason: reasonTimeMissing}
 	}
+	// received is the original receipt. A provider or capture timestamp that
+	// was already after that receipt stays non-current when servedAt advances.
+	// A later acquisition stores its own receipt and can become current.
+	if future, ok := receiptFuture(obs, received, observed); ok {
+		return future
+	}
 	if observed.After(servedAt) {
 		return Freshness{State: FreshExpired, AsOf: *obs.ProviderObservedAt, Basis: BasisProvider, Reason: reasonTimeFuture}
 	}
@@ -714,6 +726,21 @@ func viewFreshness(obs Observation, received string, servedAt time.Time, maxAge 
 		reason = reasonTimeStale
 	}
 	return Freshness{State: state, AsOf: *obs.ProviderObservedAt, Basis: BasisProvider, Reason: reason}
+}
+
+func receiptFuture(obs Observation, received string, observed time.Time) (Freshness, bool) {
+	receipt, err := time.Parse(time.RFC3339Nano, received)
+	if err != nil {
+		return Freshness{}, false
+	}
+	if obs.ProviderObservedAt != nil && observed.After(receipt) {
+		return Freshness{State: FreshExpired, AsOf: *obs.ProviderObservedAt, Basis: BasisProvider, Reason: reasonTimeFuture}, true
+	}
+	captured, err := time.Parse(time.RFC3339Nano, obs.CapturedAt)
+	if err == nil && captured.After(receipt) {
+		return Freshness{State: FreshExpired, AsOf: obs.CapturedAt, Basis: BasisCapture, Reason: reasonCaptureFuture}, true
+	}
+	return Freshness{}, false
 }
 
 func validationFor(assessment Assessment, accepted bool) ValidationState {
