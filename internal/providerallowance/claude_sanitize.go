@@ -44,14 +44,3 @@ func SanitizeClaudeStatusline(raw []byte) ([]byte, error) {
 	}
 	return json.Marshal(map[string]any{"rate_limits": windows})
 }
-
-// ValidJSONDocument checks bounded duplicate-free JSON without retaining it.
-// It supplies the same parser limits used for provider observations.
-func ValidJSONDocument(raw []byte, maxBytes int) bool {
-	limits := FixtureParseLimits
-	if maxBytes <= 0 || maxBytes > limits.MaxBytes {
-		return false
-	}
-	limits.MaxBytes = maxBytes
-	return checkDocument(raw, limits) == nil
-}

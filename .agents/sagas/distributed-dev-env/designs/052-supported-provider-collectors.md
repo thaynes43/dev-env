@@ -125,3 +125,20 @@ coding owner cannot provide a durable collector identity. Do not present a
 background task, a task runtime cap or periodic recapture of an old file as a
 provider service. No new deployment, access, observer, source setting or schedule
 is activated in this change.
+
+The aggregate source's direct-field allowlist bound is 128, raised from eight to
+retain scoped SDK row evidence (up to 16 rows with six metadata fields each)
+without discarding scope or promoting display labels. The overall private trust
+configuration still has its independent 48-KiB limit; 129 fields are refused.
+Canonical case aliases of known source/control keys are refused, even when a
+canonical spelling is also present. Retained numeric values are constructed from
+exact-key fields so the decoder cannot overwrite an already validated value.
+
+The unsalted provider-email hash is a private correlation reference, not anonymous
+data or a secret-resistant identifier. Actual trust registries carrying it must
+stay private, including operator configuration: never commit their values in
+public GitOps arguments, manifests, fixtures or logs. Use an explicitly qualified
+private configuration delivery mechanism before activation. This source creates
+no secret or delivery permission. It preserves the provider's exact email spelling
+rather than silently treating two differently spelled identities as equal; a
+changed spelling must fail the selected account match and be requalified.

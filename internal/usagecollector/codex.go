@@ -214,7 +214,7 @@ func (r *rpcClient) call(id int, method string, params any) (json.RawMessage, er
 		}
 		// Reuse the bounded duplicate-key detector before normal decoding. RPC
 		// envelopes may contain optional fields; no raw bytes enter error messages.
-		if !providerallowance.ValidJSONDocument(line, 64<<10) {
+		if !providerallowance.ValidJSONDocument(line, 64<<10) || !providerallowance.CanonicalFieldNames(line, "id", "method", "result", "error", "params") {
 			return nil, &CaptureError{Kind: "rpc_shape"}
 		}
 		var msg rpcWire
@@ -234,7 +234,7 @@ func (r *rpcClient) call(id int, method string, params any) (json.RawMessage, er
 					AuthMode string  `json:"authMode"`
 					Plan     *string `json:"planType"`
 				}
-				if json.Unmarshal(msg.Params, &update) != nil || update.AuthMode != "chatgpt" || rpcAccountPlanMismatch(r.account, update.Plan) {
+				if !providerallowance.CanonicalFieldNames(msg.Params, "authMode", "planType") || json.Unmarshal(msg.Params, &update) != nil || update.AuthMode != "chatgpt" || rpcAccountPlanMismatch(r.account, update.Plan) {
 					return nil, &CaptureError{Kind: "account_metadata_changed"}
 				}
 			}
@@ -244,7 +244,7 @@ func (r *rpcClient) call(id int, method string, params any) (json.RawMessage, er
 			var failure struct {
 				Code int `json:"code"`
 			}
-			if json.Unmarshal(msg.Error, &failure) != nil {
+			if !providerallowance.CanonicalFieldNames(msg.Error, "code", "message", "data") || json.Unmarshal(msg.Error, &failure) != nil {
 				return nil, ErrCapture
 			}
 			return nil, &CaptureError{Kind: "rpc_error", Code: failure.Code}
@@ -274,7 +274,12 @@ func decodeAccount(raw []byte) (codexAccount, error) {
 			Plan  string  `json:"planType"`
 		} `json:"account"`
 	}
-	if json.Unmarshal(raw, &result) != nil || result.Account == nil || result.Account.Type != "chatgpt" || result.Account.Email == nil {
+	if !providerallowance.CanonicalFieldNames(raw, "account", "requiresOpenaiAuth") || json.Unmarshal(raw, &result) != nil || result.Account == nil || result.Account.Type != "chatgpt" || result.Account.Email == nil {
+		return codexAccount{}, ErrCapture
+	}
+	var accountFields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &accountFields)
+	if !providerallowance.CanonicalFieldNames(accountFields["account"], "type", "email", "planType") {
 		return codexAccount{}, ErrCapture
 	}
 	email := *result.Account.Email
@@ -303,8 +308,22 @@ func sanitizeCodexQuota(account codexAccount, raw []byte, received time.Time) (C
 		RateLimits bucket            `json:"rateLimits"`
 		ByID       map[string]bucket `json:"rateLimitsByLimitId"`
 	}
-	if json.Unmarshal(raw, &result) != nil {
+	if !providerallowance.CanonicalFieldNames(raw, "rateLimits", "rateLimitsByLimitId") || json.Unmarshal(raw, &result) != nil {
 		return CodexAccountCapture{}, ErrCapture
+	}
+	var rawResult map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &rawResult)
+	rawBuckets := map[string]json.RawMessage{}
+	if v := rawResult["rateLimitsByLimitId"]; len(v) > 0 && !bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+		_ = json.Unmarshal(v, &rawBuckets)
+	}
+	if v := rawResult["rateLimits"]; len(v) > 0 && !bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+		rawBuckets["legacy"] = v
+	}
+	for _, bucketRaw := range rawBuckets {
+		if !providerallowance.CanonicalFieldNames(bucketRaw, "limitId", "planType", "primary", "secondary") {
+			return CodexAccountCapture{}, ErrCapture
+		}
 	}
 	selected := result.RateLimits
 	if preferred, ok := result.ByID["codex"]; ok {

@@ -38,6 +38,9 @@ type CodexWindow struct {
 
 // UnmarshalJSON requires an actual integer usedPercent. Missing/null is not zero.
 func (w *CodexWindow) UnmarshalJSON(raw []byte) error {
+	if !CanonicalFieldNames(raw, "usedPercent", "windowDurationMins", "resetsAt") {
+		return ErrCodexRPCReport
+	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil || fields == nil {
 		return ErrCodexRPCReport
@@ -50,14 +53,21 @@ func (w *CodexWindow) UnmarshalJSON(raw []byte) error {
 	if err != nil || used < 0 || used > 100 {
 		return ErrCodexRPCReport
 	}
-	type plain CodexWindow
-	var parsed plain
-	if json.Unmarshal(raw, &parsed) != nil {
-		return ErrCodexRPCReport
+	parsed := CodexWindow{UsedPercent: used}
+	if value, ok = fields["windowDurationMins"]; ok {
+		if json.Unmarshal(value, &parsed.WindowDurationMins) != nil {
+			return ErrCodexRPCReport
+		}
 	}
-	*w = CodexWindow(parsed)
+	if value, ok = fields["resetsAt"]; ok {
+		if json.Unmarshal(value, &parsed.ResetsAt) != nil {
+			return ErrCodexRPCReport
+		}
+	}
+	*w = parsed
 	return nil
 }
+
 func DecodeCodexAccountCapture(raw []byte) (CodexAccountCapture, error) {
 	var report CodexAccountCapture
 	if checkDocument(raw, FixtureParseLimits) != nil || !ExactObjectKeys(raw, []string{"schema", "accountRef", "identityBasis", "planType", "receivedAt", "providerObservedAt", "primary", "secondary"}) || strictDecode(raw, &report) != nil {

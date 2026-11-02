@@ -12,7 +12,7 @@ import (
 )
 
 func TestCodexOfficialRPCReadSanitizesAndBracketsIdentity(t *testing.T) {
-	for _, variant := range []string{"success", "matching-account-notification", "mid-bracket-matching-notification", "account-change", "plan-mismatch", "missing-used", "null-used", "out-of-range", "duplicate-used", "refresh-request", "auth-notification", "wrong-response", "legacy-conflict"} {
+	for _, variant := range []string{"success", "matching-account-notification", "mid-bracket-matching-notification", "hidden-auth-alias", "account-change", "plan-mismatch", "missing-used", "null-used", "out-of-range", "duplicate-used", "refresh-request", "auth-notification", "wrong-response", "legacy-conflict"} {
 		t.Run(variant, func(t *testing.T) {
 			client, server := net.Pipe()
 			defer func() { _ = client.Close() }()
@@ -55,6 +55,9 @@ func TestCodexOfficialRPCReadSanitizesAndBracketsIdentity(t *testing.T) {
 						}
 						result = `{"account":{"type":"chatgpt","email":"` + email + `","planType":"pro"},"requiresOpenaiAuth":true}`
 					case "account/rateLimits/read":
+						if variant == "hidden-auth-alias" {
+							_, _ = io.WriteString(server, "{\"method\":\"account/updated\",\"Method\":\"other\",\"params\":{\"authMode\":\"chatgpt\",\"planType\":\"pro\"}}\n")
+						}
 						if variant == "mid-bracket-matching-notification" {
 							_, _ = io.WriteString(server, "{\"method\":\"account/updated\",\"params\":{\"authMode\":\"chatgpt\",\"planType\":\"pro\"}}\n")
 							requests <- methods
@@ -151,6 +154,22 @@ func TestCodexPreferredBucketSupportsByIDOnlyAndLegacyOtherBucket(t *testing.T) 
 		report, err := sanitizeCodexQuota(account, raw, time.Date(2026, 11, 2, 18, 0, 0, 0, time.UTC))
 		if err != nil || report.Primary == nil || report.Primary.UsedPercent != 0 {
 			t.Fatal("preferred supported bucket refused", err)
+		}
+	}
+}
+
+func TestCodexRPCMetadataRejectsCaseAliases(t *testing.T) {
+	if _, err := decodeAccount([]byte(`{"account":{"type":"chatgpt","email":"fixture@example.invalid","Email":"other@example.invalid","planType":"pro"}}`)); err == nil {
+		t.Fatal("email alias changed identity")
+	}
+	account := codexAccount{ref: "openai-email-sha256:" + strings.Repeat("a", 64), plan: "pro"}
+	for _, raw := range []string{
+		`{"rateLimits":{"limitId":"codex","LimitId":"other","primary":{"usedPercent":12}}}`,
+		`{"rateLimits":{"limitId":"codex","planType":"pro","PlanType":"plus","primary":{"usedPercent":12}}}`,
+		`{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"UsedPercent":99}}}`,
+	} {
+		if _, err := sanitizeCodexQuota(account, []byte(raw), time.Now()); err == nil {
+			t.Fatal("quota metadata case alias accepted")
 		}
 	}
 }

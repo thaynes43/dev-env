@@ -112,3 +112,16 @@ func TestPersonalTrustConfigRequiresExplicitNullableScope(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexWindowRejectsCaseAliasesRatherThanOverwriteValidatedValues(t *testing.T) {
+	for _, raw := range []string{
+		`{"usedPercent":12,"UsedPercent":99,"windowDurationMins":10080,"resetsAt":1794224930}`,
+		`{"usedPercent":12,"windowDurationMins":10080,"WindowDurationMins":5,"resetsAt":1794224930}`,
+		`{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1794224930,"ResetsAt":0}`,
+	} {
+		var window CodexWindow
+		if json.Unmarshal([]byte(raw), &window) == nil {
+			t.Fatal("case alias changed canonical source value")
+		}
+	}
+}

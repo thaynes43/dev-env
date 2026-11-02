@@ -7,6 +7,11 @@ observer, schedule, operator route, portal reader or publication. The design is
 Use an explicitly qualified executable. Keep actual account artifacts out of git,
 logs and public CI artifacts. A source document does not register its own account
 as trusted. The aggregate's caller-owned registry is a separate reviewed input.
+The unsalted email hash is private personal metadata, not anonymization. Keep
+actual trust registries and operator configuration private too; never put their
+values in public GitOps arguments/manifests. A private delivery mechanism requires
+its own qualification before activation. Email spelling is preserved exactly;
+a changed spelling requires requalification rather than silent identity merging.
 
 ## Codex official account and quota
 

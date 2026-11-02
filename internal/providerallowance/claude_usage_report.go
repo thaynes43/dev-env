@@ -49,7 +49,7 @@ type ClaudeUsageLabel struct {
 // The envelope's display timestamp is never used as a provider data clock.
 func SanitizeClaudeUsageReport(raw []byte, received time.Time) (ClaudeUsageCapture, error) {
 	fail := func() (ClaudeUsageCapture, error) { return ClaudeUsageCapture{}, ErrClaudeUsageReport }
-	if received.IsZero() || checkDocument(raw, FixtureParseLimits) != nil {
+	if received.IsZero() || checkDocument(raw, FixtureParseLimits) != nil || !CanonicalFieldNames(raw, "type", "error", "aborted", "usage_report") {
 		return fail()
 	}
 	var event struct {
@@ -93,7 +93,7 @@ func SanitizeClaudeUsageReport(raw []byte, received time.Time) (ClaudeUsageCaptu
 	_ = json.Unmarshal(rows, &rawRows)
 	for i, row := range rawRows {
 		var fields map[string]json.RawMessage
-		if json.Unmarshal(row, &fields) != nil || fields == nil {
+		if !CanonicalFieldNames(row, "kind", "group", "percent", "resets_at", "scope", "severity", "is_active") || json.Unmarshal(row, &fields) != nil || fields == nil {
 			return fail()
 		}
 		for _, key := range []string{"kind", "group", "percent", "resets_at", "severity", "is_active"} {
@@ -108,6 +108,22 @@ func SanitizeClaudeUsageReport(raw []byte, received time.Time) (ClaudeUsageCaptu
 		active := string(fields["is_active"])
 		if active != "true" && active != "false" {
 			return fail()
+		}
+		if scope, ok := fields["scope"]; ok && !bytes.Equal(bytes.TrimSpace(scope), []byte("null")) {
+			if !CanonicalFieldNames(scope, "model", "surface") {
+				return fail()
+			}
+			var labels map[string]json.RawMessage
+			_ = json.Unmarshal(scope, &labels)
+			for _, name := range []string{"model", "surface"} {
+				label, ok := labels[name]
+				if !ok {
+					continue
+				}
+				if !bytes.Equal(bytes.TrimSpace(label), []byte("null")) && !CanonicalFieldNames(label, "display_name") {
+					return fail()
+				}
+			}
 		}
 		if !validClaudeUsageLimit(capture.Limits[i]) {
 			return fail()

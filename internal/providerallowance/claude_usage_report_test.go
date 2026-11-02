@@ -53,6 +53,9 @@ func TestClaudeSDKUsageRefusesFalseQuotaAndMissingFields(t *testing.T) {
 	for _, raw := range []string{
 		strings.Replace(sdkUsageFixture, `"type":"assistant"`, `"type":"result"`, 1),
 		strings.Replace(sdkUsageFixture, `"percent":0`, `"percent":"0"`, 1),
+		strings.Replace(sdkUsageFixture, `"percent":0`, `"percent":0,"Percent":99`, 1),
+		strings.Replace(sdkUsageFixture, `"is_active":true`, `"is_active":true,"Is_active":false`, 1),
+		strings.Replace(sdkUsageFixture, `"display_name":"Model fixture"`, `"display_name":"Model fixture","Display_name":"Overwritten"`, 1),
 		strings.Replace(sdkUsageFixture, `"percent":0`, `"percent":null`, 1),
 		strings.Replace(sdkUsageFixture, `"percent":0,`, "", 1),
 		strings.Replace(sdkUsageFixture, `"percent":0`, `"percent":101`, 1),
