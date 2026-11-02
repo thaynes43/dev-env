@@ -85,6 +85,10 @@ type rpcClient struct {
 // CollectCodex performs only initialization, three non-forced account reads and
 // one quota read in an explicitly selected installed official CLI. Account reads
 // bracket the quota read and must agree. No thread/model/auth mutation is sent.
+// PRECONDITION: the selected home must be independently qualified access-only,
+// such as the keeper codexauth projection. A rotating refresh-token login is
+// forbidden: the CLI could refresh internally without a JSON-RPC request. The
+// CLI requires an explicit caller acknowledgement, not an auth-file inspection.
 // The child uses its normal existing authentication; this code opens no auth
 // files and services no credential-refresh requests. It always stops/reaps it.
 func CollectCodex(ctx context.Context, executable string, now func() time.Time) (CodexAccountCapture, error) {

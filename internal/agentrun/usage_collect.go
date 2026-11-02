@@ -64,15 +64,17 @@ func (a *app) usageCollect(ctx context.Context, args []string) error {
 	return err
 }
 
-const usageCodexCollectUsage = "usage collect codex: expected -o json --executable /absolute/official/codex"
+const usageCodexCollectUsage = "usage collect codex: expected -o json --executable /absolute/official/codex --access-only-auth"
 
 func (a *app) usageCollectCodex(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("usage collect codex", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var output, executable string
+	var accessOnly bool
 	fs.StringVar(&output, "o", "", "")
 	fs.StringVar(&executable, "executable", "", "")
-	counts := flagCounts(args, "o", "executable")
+	fs.BoolVar(&accessOnly, "access-only-auth", false, "")
+	counts := flagCounts(args, "o", "executable", "access-only-auth")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, err = io.WriteString(a.env.Stdout, usageCodexCollectUsage+"\n")
@@ -80,7 +82,7 @@ func (a *app) usageCollectCodex(ctx context.Context, args []string) error {
 		}
 		return usageError(usageCodexCollectUsage)
 	}
-	if fs.NArg() != 0 || output != "json" || !filepath.IsAbs(executable) || counts["o"] > 1 || counts["executable"] > 1 {
+	if fs.NArg() != 0 || output != "json" || !filepath.IsAbs(executable) || counts["o"] > 1 || counts["executable"] > 1 || !accessOnly || counts["access-only-auth"] > 1 {
 		return usageError(usageCodexCollectUsage)
 	}
 	fail := func() error { return &exitError{code: ExitFailed, msg: "usage collection unavailable"} }
@@ -116,17 +118,29 @@ func (a *app) usageCollectCodex(ctx context.Context, args []string) error {
 }
 
 func (a *app) usageCollectClaudeReport(ctx context.Context, args []string) error {
-	const usage = "usage collect claude-report: expected -o json --input FILE|-"
+	const usage = "usage collect claude-report: expected -o json --input FILE|- --received-at RFC3339"
 	fs := flag.NewFlagSet("usage collect claude-report", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var output, input string
+	var output, input, receivedAt string
 	fs.StringVar(&output, "o", "", "")
 	fs.StringVar(&input, "input", "", "")
-	counts := flagCounts(args, "o", "input")
+	fs.StringVar(&receivedAt, "received-at", "", "")
+	counts := flagCounts(args, "o", "input", "received-at")
 	if err := fs.Parse(args); err != nil {
 		return usageError(usage)
 	}
-	if fs.NArg() != 0 || output != "json" || input == "" || counts["o"] > 1 || counts["input"] > 1 {
+	if fs.NArg() != 0 || output != "json" || input == "" || counts["o"] > 1 || counts["input"] > 1 || counts["received-at"] > 1 || receivedAt == "" {
+		return usageError(usage)
+	}
+	received, parseErr := time.Parse(time.RFC3339Nano, receivedAt)
+	if parseErr != nil || received.IsZero() {
+		return usageError(usage)
+	}
+	now := time.Now
+	if a.env.Now != nil {
+		now = a.env.Now
+	}
+	if received.After(now()) {
 		return usageError(usage)
 	}
 	fail := func() error { return &exitError{code: ExitFailed, msg: "usage collection unavailable"} }
@@ -136,11 +150,7 @@ func (a *app) usageCollectClaudeReport(ctx context.Context, args []string) error
 	if err != nil {
 		return fail()
 	}
-	now := time.Now
-	if a.env.Now != nil {
-		now = a.env.Now
-	}
-	report, err := providerallowance.SanitizeClaudeUsageReport(raw, now())
+	report, err := providerallowance.SanitizeClaudeUsageReport(raw, received)
 	if err != nil {
 		return fail()
 	}

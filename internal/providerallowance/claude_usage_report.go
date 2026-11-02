@@ -217,7 +217,14 @@ func projectClaudeUsageCapture(raw []byte, captured string) (Observation, error)
 			evidence = append(evidence, f.Field)
 		}
 		percent := string(row.Percent)
-		obs.Measures = append(obs.Measures, Measure{ID: id, Category: CategoryIncluded, Window: window, Unit: UnitPercent, Direction: DirectionUsed, Value: MeasureValue{State: ValueKnown, Decimal: &percent}, ValidationRef: stringRef("claude-sdk:" + id + "-used-percent"), EvidenceFields: evidence})
+		category := CategoryIncluded
+		// This aggregate's included meter is account-wide. Preserve scoped or
+		// unknown server rows as display-only advisory evidence so a model's
+		// zero cannot be rendered as the account's global remaining quota.
+		if row.Scope != nil || (row.Kind != "weekly_all" && row.Kind != "session") {
+			category = CategoryAdvisory
+		}
+		obs.Measures = append(obs.Measures, Measure{ID: id, Category: category, Window: window, Unit: UnitPercent, Direction: DirectionUsed, Value: MeasureValue{State: ValueKnown, Decimal: &percent}, ValidationRef: stringRef("claude-sdk:" + id + "-used-percent"), EvidenceFields: evidence})
 	}
 	return obs, nil
 }

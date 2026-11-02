@@ -17,8 +17,16 @@ a changed spelling requires requalification rather than silent identity merging.
 
 ```sh
 /path/to/qualified/agent-run usage collect codex -o json \
-  --executable /absolute/path/to/installed/codex
+  --executable /absolute/path/to/installed/codex --access-only-auth
 ```
+
+First independently qualify that this HOME receives only access tokens, such as
+the keeper-managed `codexauth` projection. A HOME containing a rotating refresh
+token is forbidden, even for non-forced RPC reads: the official client may
+refresh internally without a JSON-RPC refresh request. `--access-only-auth` is
+an explicit caller acknowledgement of that prerequisite; it does not inspect
+credential files or prove the projection. Missing/false acknowledgement refuses
+before launching the child. Never create a second refresh-token owner.
 
 This starts one official app-server child for bounded read-only methods, using
 its normal existing authentication. It sends no thread, model, login, forced
@@ -39,7 +47,7 @@ Wrap this already received document in a capture-bundle entry with its original
 monotonic sequence. `usage capture -o json --input FILE --trust-file FILE` remains
 pure local assembly. The account reference must match independently selected
 trust. For this qualified personal source the account registry may explicitly
-use `workspaceRef:null` and `workspaceNotApplicable:true`. This is not an invented
+use `workspaceRef:null` and `accountScopeOnly:true`. This is not an invented
 organization workspace or permission to merge another provider's allowance.
 Legacy workspace-bound accounts retain their checks.
 
@@ -78,10 +86,14 @@ sessions are changed. A headless invocation is not assumed to run a UI statuslin
 
 ```sh
 /path/to/qualified/agent-run usage collect claude-report -o json \
-  --input /private/already-received-assistant-envelope.json
+  --input /private/already-received-assistant-envelope.json \
+  --received-at 2026-11-02T12:00:00Z
 ```
 
-This reads one already supplied official SDK assistant `usage_report`; it does
+Supply the actual original local reception time. Formatting a retained input
+does not refresh it; a missing, invalid or future receipt time refuses before
+reading the input. This reads one already supplied official SDK assistant
+`usage_report`; it does
 not launch Claude, send `/usage`, resume a conversation or invoke a model. It
 retains only server rate-limit rows and preserves their order, kind, group,
 percentage, nullable ISO reset, model/surface scope, severity and active marker.
@@ -97,9 +109,10 @@ aborted/error envelopes and session-only usage refuse.
 
 ## Remaining delivery boundaries
 
-Cursor's CLI account/plan metadata is not a remaining-quota source. A supported
-account quota transport or actual authenticated editor/dashboard capture is
-needed; private RPC descriptors, cookies and per-run billing are not substitutes.
+Cursor's CLI account/plan metadata alone is not a remaining-quota source. The
+qualified normal interactive Usage display is supported as retained display
+evidence below; its acquisition runner remains separate. Private RPC descriptors,
+cookies and per-run billing are not substitutes.
 
 A durable service needs a lifetime separate from this coding owner, supported
 transports, schedule/backoff, bounded private retention, exact publisher/readers,
@@ -107,3 +120,21 @@ minimum slot permissions, signed artifacts and rollback. The existing aggregate
 PUT is fenced to one live AgentSession UID. None of these capture commands turns
 that into a deployment-owned publisher or extends any credential's expiry.
 Actual recurring three-provider API/agent/UI acceptance remains separate.
+
+The operator supports an explicit private configuration file with
+`--aggregate-allowance-config-file=/private/mounted/selection.json` together with
+`--enable-aggregate-allowance-reports`. It conflicts with inline configuration.
+The private file must be regular, bounded and inaccessible to world; normal
+projected-volume symlinks are supported. This only reads an already qualified
+private mount at startup. It creates no Secret, slot, permission or collector.
+The portal still needs its independently reviewed private trust configuration.
+
+A sanitized version-pinned normal Cursor Usage capture uses
+`cursor.cli.usage-capture.v1`. It retains the actual local acquisition interval,
+rounded Included display, nullable account ref and literal month/day reset.
+Generic period captions and API fallback zero do not become numeric entitlement
+facts. A displayed Included zero remains unknown unless separately qualified,
+and Auto is not a separate pool. The assembler supports caller-qualified account
+scope with a genuinely null workspace; no cross-provider pool follows from the
+same email. This adapter consumes an already captured display and does not launch
+a CLI or establish recurrence.

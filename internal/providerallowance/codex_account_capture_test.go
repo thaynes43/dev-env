@@ -18,7 +18,7 @@ func personalCaptureFixture(t *testing.T) ([]byte, AggregateTrust, time.Time) {
 	bundle, _ := json.Marshal(map[string]any{"schema": CaptureBundleSchema, "captures": []captureEntry{entry}})
 	ctx := TrustedContext{Provider: "openai", ProducerRef: entry.ProducerRef, ProducerIncarnation: entry.ProducerIncarnation, SourceKind: SourceNativeRPC, SourceVersion: CodexRPCSourceVersion, AccountRef: &account, BindingState: BindingVerified}
 	min, max := "0", "100"
-	registry := RegistryParts{Sources: []SourceRule{{Provider: "openai", Kind: SourceNativeRPC, Version: CodexRPCSourceVersion, CapabilityRef: CodexRPCCapability, AllowNormalizedMeasures: true, AllowDerivations: true, DirectFields: map[string]DirectFieldRule{}}}, Accounts: []AccountRule{{AccountRef: account, WorkspaceNotApplicable: true, ProducerRef: entry.ProducerRef, ProducerIncarnation: entry.ProducerIncarnation}}}
+	registry := RegistryParts{Sources: []SourceRule{{Provider: "openai", Kind: SourceNativeRPC, Version: CodexRPCSourceVersion, CapabilityRef: CodexRPCCapability, AllowNormalizedMeasures: true, AllowDerivations: true, DirectFields: map[string]DirectFieldRule{}}}, Accounts: []AccountRule{{AccountRef: account, AccountScopeOnly: true, ProducerRef: entry.ProducerRef, ProducerIncarnation: entry.ProducerIncarnation}}}
 	for _, name := range []string{"primary", "secondary"} {
 		registry.Metrics = append(registry.Metrics, MetricRule{ValidationRef: "codex-app-server:" + name + "-used-percent", Provider: "openai", SourceKind: SourceNativeRPC, SourceVersion: CodexRPCSourceVersion, Category: CategoryIncluded, Unit: UnitPercent, Direction: DirectionUsed, Windows: []string{"codex-" + name}, Min: &min, Max: &max, ComplementOf: "100", HistoricalOnly: true})
 	}
@@ -69,7 +69,7 @@ func TestPersonalBindingDoesNotBypassWorkspaceOrSourceChecks(t *testing.T) {
 			parts := snapshotRegistry(trust.Registry)
 			switch variant {
 			case "no-personal-rule":
-				parts.Accounts[0].WorkspaceNotApplicable = false
+				parts.Accounts[0].AccountScopeOnly = false
 			case "foreign-account":
 				ctx.AccountRef = stringRef("different-account")
 			case "foreign-workspace":
@@ -102,11 +102,11 @@ func TestPersonalTrustConfigRequiresExplicitNullableScope(t *testing.T) {
 	fixture = strings.ReplaceAll(fixture, "fixture-v1", CodexRPCSourceVersion)
 	fixture = strings.ReplaceAll(fixture, `"workspaceRef":"fixture-workspace"`, `"workspaceRef":null`)
 	// Only the independently supplied account registry gets this explicit fact.
-	fixture = strings.Replace(fixture, `"accounts":[{"accountRef":"fixture-account","workspaceRef":null,`, `"accounts":[{"accountRef":"fixture-account","workspaceRef":null,"workspaceNotApplicable":true,`, 1)
+	fixture = strings.Replace(fixture, `"accounts":[{"accountRef":"fixture-account","workspaceRef":null,`, `"accounts":[{"accountRef":"fixture-account","workspaceRef":null,"accountScopeOnly":true,`, 1)
 	if _, err := ParseAggregateTrust([]byte(fixture)); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{strings.Replace(fixture, `"workspaceNotApplicable":true,`, "", 1), strings.Replace(fixture, `"workspaceNotApplicable":true`, `"workspaceNotApplicable":false`, 1), strings.Replace(fixture, `"workspaceNotApplicable":true`, `"workspaceNotApplicable":null`, 1), strings.Replace(fixture, `"workspaceNotApplicable":true`, `"workspaceNotApplicable":true,"workspaceNotApplicable":true`, 1), strings.ReplaceAll(fixture, CodexRPCSourceVersion, "unqualified-source")} {
+	for _, bad := range []string{strings.Replace(fixture, `"accountScopeOnly":true,`, "", 1), strings.Replace(fixture, `"accountScopeOnly":true`, `"accountScopeOnly":false`, 1), strings.Replace(fixture, `"accountScopeOnly":true`, `"accountScopeOnly":null`, 1), strings.Replace(fixture, `"accountScopeOnly":true`, `"accountScopeOnly":true,"accountScopeOnly":true`, 1), strings.ReplaceAll(fixture, CodexRPCSourceVersion, "unqualified-source")} {
 		if _, err := ParseAggregateTrust([]byte(bad)); err == nil {
 			t.Fatal("missing/unsupported personal scope accepted")
 		}

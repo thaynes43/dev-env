@@ -141,11 +141,17 @@ func projectCodexAccountCapture(raw []byte, captured string) (Observation, error
 
 // A successful official RPC can be recently checked while its underlying
 // provider-data timestamp remains unknown. Neither field replaces the other.
-func officialCollectionFreshness(obs Observation, received string, maxAge time.Duration, now time.Time) *Freshness {
-	if obs.Provider != "openai" || obs.Source.Kind != SourceNativeRPC || obs.Source.Version != CodexRPCSourceVersion || obs.Source.CapabilityRef != CodexRPCCapability {
+func captureCollectionFreshness(obs Observation, received string, maxAge time.Duration, now time.Time) *Freshness {
+	if !accountScopeObservation(obs) {
 		return nil
 	}
 	fresh := &Freshness{State: FreshUnknown, AsOf: obs.CapturedAt, Basis: BasisCapture, Reason: "local successful quota read; provider data time unknown"}
+	if obs.Provider == "anthropic" {
+		fresh.Reason = "local official usage report reception; provider data time unknown"
+	}
+	if obs.Provider == "cursor" {
+		fresh.Reason = "local CLI display acquisition interval; provider data time unknown"
+	}
 	captured, err := time.Parse(time.RFC3339Nano, obs.CapturedAt)
 	receipt, e := time.Parse(time.RFC3339Nano, received)
 	if err != nil || e != nil || now.IsZero() || maxAge <= 0 || captured.After(receipt) || receipt.After(now) {

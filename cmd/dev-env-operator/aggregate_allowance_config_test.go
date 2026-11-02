@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -84,4 +88,54 @@ func aggregateAllowanceJSON(t *testing.T) string {
 		"contexts":[{"provider":"openai","producerRef":"fixture-producer","producerIncarnation":"fixture-incarnation-1","bindingGeneration":0,"accountRef":"fixture-account","workspaceRef":"fixture-workspace","bindingState":"verified","sourceKind":"native_rpc","sourceVersion":"fixture-v1"}],
 		"registry":{"sources":[{"provider":"openai","kind":"native_rpc","version":"fixture-v1","capabilityRef":"synthetic:not-live","allowNormalizedMeasures":true,"allowDerivations":true,"directFields":{}}],"metrics":[{"validationRef":"fixture:verified-field-v1","provider":"openai","sourceKind":"native_rpc","sourceVersion":"fixture-v1","category":"included_quota","unit":"percent","direction":"used","windows":["five-hour-window"],"currency":null,"min":"0","max":"100","allowOverLimit":false,"allowUncapped":false,"complementOf":"","historicalOnly":false,"modelScope":""}],"accounts":[{"accountRef":"fixture-account","workspaceRef":"fixture-workspace","generation":0,"producerRef":"fixture-producer","producerIncarnation":"fixture-incarnation-1"}],"entitlements":[],"projections":[]}
 	}`
+}
+
+func TestAggregatePrivateFileSelectionPreservesEnableAndPrivacyBounds(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "private-selection.json")
+	raw := aggregateAllowanceJSON(t)
+	if err := os.WriteFile(file, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := parseAggregateAllowanceInput(true, "", file, ":8443", "dev-agents")
+	if err != nil || selected == nil {
+		t.Fatal("private source config refused", err)
+	}
+	link := filepath.Join(dir, "projected-selection.json")
+	if err = os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	if selected, err = parseAggregateAllowanceInput(true, "", link, ":8443", "dev-agents"); err != nil || selected == nil {
+		t.Fatal("normal projected volume symlink refused", err)
+	}
+	for _, tc := range []struct {
+		enabled            bool
+		inline, path, addr string
+	}{{false, "", file, ":8443"}, {true, raw, file, ":8443"}, {true, "", "relative", ":8443"}, {true, "", file, "0"}, {true, "", dir, ":8443"}, {true, "", file + "-missing", ":8443"}} {
+		if _, err = parseAggregateAllowanceInput(tc.enabled, tc.inline, tc.path, tc.addr, "dev-agents"); !errors.Is(err, errAggregateAllowanceConfig) {
+			t.Fatal("invalid private configuration accepted", err)
+		}
+	}
+	if err = os.Chmod(file, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = parseAggregateAllowanceInput(true, "", file, ":8443", "dev-agents"); err == nil {
+		t.Fatal("world-readable personal trust config accepted")
+	}
+	if err = os.Chmod(file, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(file, []byte(strings.Repeat("X", aggregateConfigMaxBytes+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = parseAggregateAllowanceInput(true, "", file, ":8443", "dev-agents"); err == nil || strings.Contains(err.Error(), "XXX") {
+		t.Fatal("oversized file accepted or echoed")
+	}
+	fifo := filepath.Join(dir, "fifo")
+	if err = unix.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = parseAggregateAllowanceInput(true, "", fifo, ":8443", "dev-agents"); err == nil {
+		t.Fatal("nonregular config accepted")
+	}
 }

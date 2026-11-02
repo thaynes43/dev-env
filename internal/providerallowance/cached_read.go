@@ -32,7 +32,7 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 			untrusted[provider] = true
 			continue
 		}
-		item.CollectionFreshness = officialCollectionFreshness(item.Observation, item.ReceivedAt, maxAge, now)
+		item.CollectionFreshness = captureCollectionFreshness(item.Observation, item.ReceivedAt, maxAge, now)
 		if !maxAgeSet {
 			item.CollectionFreshness = nil
 		}

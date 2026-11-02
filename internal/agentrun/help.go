@@ -658,8 +658,8 @@ oversized view is unavailable, not zero usage and not a partial receipt list.
 	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current | --publish-file FILE|-]
        agent-run usage capture -o json --input FILE|- --trust-file FILE
        agent-run usage collect claude-statusline --state-dir DIR --producer REF --incarnation REF
-       agent-run usage collect codex -o json --executable /absolute/official/codex
-       agent-run usage collect claude-report -o json --input FILE|-
+       agent-run usage collect codex -o json --executable /absolute/official/codex --access-only-auth
+       agent-run usage collect claude-report -o json --input FILE|- --received-at RFC3339
 
 Without --from-file, --claude-statusline, --read-current, or --publish-file,
 reports local unconfigured acquisition preflight refusals. No provider is
@@ -689,7 +689,8 @@ into a private two-sample journal without changing provider settings. codex
 starts one bounded official app-server child for non-forced personal account
 and quota reads, outputs only sanitized quota/hash metadata and stops it.
 It does not start a thread, model turn, login, forced refresh or recurrence.
-claude-report sanitizes one already supplied SDK assistant usage_report; it
+claude-report requires the original local --received-at timestamp and sanitizes
+one already supplied SDK assistant usage_report; it
 starts no provider or model. Missing rows remain distinct from an empty list.
 No collection mode publishes or opens an operator connection.
 This is not the Codex current-source slot; usage-source

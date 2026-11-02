@@ -143,7 +143,24 @@ func projectCapture(e captureEntry, selected TrustedContext, has bool, received 
 			s.AccountRef = cloneString(selected.AccountRef)
 			s.WorkspaceRef = cloneString(selected.WorkspaceRef)
 		}
-		item, err := CursorDisplayProject(e.Payload, s, received)
+		var schema struct {
+			Schema string `json:"schema"`
+		}
+		if json.Unmarshal(e.Payload, &schema) != nil {
+			return obs, ErrCaptureBundle
+		}
+		var item ReadItem
+		var err error
+		if schema.Schema == CursorCLICaptureSchema {
+			var report CursorCLIUsageCapture
+			_ = json.Unmarshal(e.Payload, &report)
+			if report.CollectionStartedAt != e.CapturedAt || report.ReceivedAt != e.ReceivedAt {
+				return obs, ErrCaptureBundle
+			}
+			item, err = projectCursorCLIUsage(e.Payload, s)
+		} else {
+			item, err = CursorDisplayProject(e.Payload, s, received)
+		}
 		if err != nil || item.Observation.CapturedAt != e.CapturedAt {
 			return obs, ErrCaptureBundle
 		}
@@ -245,4 +262,8 @@ func sanitizedClaudeCapture(raw []byte) bool {
 		}
 	}
 	return true
+}
+
+func captureDigestID(prefix string, raw []byte) string {
+	return fmt.Sprintf("%s-%x", prefix, sha256.Sum256(raw))
 }

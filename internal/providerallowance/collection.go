@@ -591,7 +591,7 @@ func (c collectionView) itemFor(slot *collectionSlot, servedAt time.Time) ReadIt
 	}
 	validation := ValidationRecord{State: validationFor(assessment, slot.hold.accepted), ValidationRefs: validationRefs(obs)}
 	return ReadItem{
-		CollectionFreshness: officialCollectionFreshness(obs, slot.hold.receivedAt, c.bounds.MaxAge, servedAt),
+		CollectionFreshness: captureCollectionFreshness(obs, slot.hold.receivedAt, c.bounds.MaxAge, servedAt),
 		Observation:         obs,
 		ReceivedAt:          slot.hold.receivedAt,
 		Validation:          validation,

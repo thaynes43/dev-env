@@ -303,7 +303,7 @@ func (s CursorDisplaySelection) validate() error {
 			return ErrCursorDisplayBinding
 		}
 	case BindingVerified:
-		if s.AccountRef == nil || s.WorkspaceRef == nil || !cursorDisplayToken(*s.AccountRef) || !cursorDisplayToken(*s.WorkspaceRef) {
+		if s.AccountRef == nil || !cursorDisplayToken(*s.AccountRef) || s.WorkspaceRef != nil && !cursorDisplayToken(*s.WorkspaceRef) {
 			return ErrCursorDisplayBinding
 		}
 		if s.EntitlementRef != nil && !cursorDisplayToken(*s.EntitlementRef) {

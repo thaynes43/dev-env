@@ -153,7 +153,7 @@ func parseTrustContexts(raw json.RawMessage) ([]TrustedContext, bool) {
 		if !knownBinding(state) || !knownSourceKind(kind) {
 			return nil, false
 		}
-		personalSource := doc.Provider == "openai" && kind == SourceNativeRPC && doc.SourceVersion == CodexRPCSourceVersion
+		personalSource := accountScopeSource(doc.Provider, kind, doc.SourceVersion)
 		if state == BindingVerified && (doc.AccountRef == nil || !trustToken(*doc.AccountRef) || doc.WorkspaceRef == nil && !personalSource) {
 			return nil, false
 		}
@@ -367,33 +367,33 @@ func parseTrustAccounts(raw json.RawMessage) ([]AccountRule, bool) {
 	out := make([]AccountRule, 0, len(rows))
 	for _, row := range rows {
 		legacy := []string{"accountRef", "workspaceRef", "generation", "producerRef", "producerIncarnation"}
-		extended := append(append([]string(nil), legacy...), "workspaceNotApplicable")
+		extended := append(append([]string(nil), legacy...), "accountScopeOnly")
 		if !ExactObjectKeys(row, legacy) && !ExactObjectKeys(row, extended) {
 			return nil, false
 		}
 		var doc struct {
-			AccountRef             string  `json:"accountRef"`
-			WorkspaceRef           *string `json:"workspaceRef"`
-			Generation             int64   `json:"generation"`
-			ProducerRef            string  `json:"producerRef"`
-			ProducerIncarnation    string  `json:"producerIncarnation"`
-			WorkspaceNotApplicable bool    `json:"workspaceNotApplicable"`
+			AccountRef          string  `json:"accountRef"`
+			WorkspaceRef        *string `json:"workspaceRef"`
+			Generation          int64   `json:"generation"`
+			ProducerRef         string  `json:"producerRef"`
+			ProducerIncarnation string  `json:"producerIncarnation"`
+			AccountScopeOnly    bool    `json:"accountScopeOnly"`
 		}
 		if strictDecode(row, &doc) != nil || doc.Generation < 0 || !trustToken(doc.AccountRef) || !trustToken(doc.ProducerRef) || !trustToken(doc.ProducerIncarnation) {
 			return nil, false
 		}
 		workspace := ""
 		if doc.WorkspaceRef == nil {
-			if !doc.WorkspaceNotApplicable {
+			if !doc.AccountScopeOnly {
 				return nil, false
 			}
 		} else {
-			if doc.WorkspaceNotApplicable || !trustToken(*doc.WorkspaceRef) {
+			if doc.AccountScopeOnly || !trustToken(*doc.WorkspaceRef) {
 				return nil, false
 			}
 			workspace = *doc.WorkspaceRef
 		}
-		out = append(out, AccountRule{AccountRef: doc.AccountRef, WorkspaceRef: workspace, WorkspaceNotApplicable: doc.WorkspaceNotApplicable, Generation: doc.Generation, ProducerRef: doc.ProducerRef, ProducerIncarnation: doc.ProducerIncarnation})
+		out = append(out, AccountRule{AccountRef: doc.AccountRef, WorkspaceRef: workspace, AccountScopeOnly: doc.AccountScopeOnly, Generation: doc.Generation, ProducerRef: doc.ProducerRef, ProducerIncarnation: doc.ProducerIncarnation})
 	}
 	return out, true
 }

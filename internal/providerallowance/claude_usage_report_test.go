@@ -30,6 +30,9 @@ func TestClaudeSDKUsageSanitizesStructuredRowsWithoutInventingScopeOrTime(t *tes
 	if len(obs.Measures) != 2 || obs.Measures[0].Window.DurationMinutes != nil || obs.Measures[1].Window.DurationMinutes != nil || obs.Measures[1].Window.ResetAt != nil || obs.ProviderObservedAt != nil || obs.Scope.EntitlementRef != nil || obs.Scope.BindingState != BindingUnknown {
 		t.Fatal("scope/period/provider clock invented")
 	}
+	if obs.Measures[0].Category != CategoryIncluded || obs.Measures[1].Category != CategoryAdvisory {
+		t.Fatal("scoped zero promoted into global quota")
+	}
 	if obs.Measures[0].Window.Ref == obs.Measures[1].Window.Ref || len(obs.DirectFields) != 10 {
 		t.Fatal("server row identity/metadata collapsed")
 	}

@@ -474,13 +474,13 @@ func accountListed(parts RegistryParts, obs Observation) bool {
 			continue
 		}
 		if obs.Scope.WorkspaceRef != nil {
-			if account.WorkspaceNotApplicable || account.WorkspaceRef != *obs.Scope.WorkspaceRef {
+			if account.AccountScopeOnly || account.WorkspaceRef != *obs.Scope.WorkspaceRef {
 				continue
 			}
 		} else {
 			// Absence is actionable only with explicit independently supplied personal
 			// scope, the qualified official source and no invented workspace string.
-			if !account.WorkspaceNotApplicable || account.WorkspaceRef != "" || obs.Provider != "openai" || obs.Source.Kind != SourceNativeRPC || obs.Source.Version != CodexRPCSourceVersion || obs.Source.CapabilityRef != CodexRPCCapability {
+			if !account.AccountScopeOnly || account.WorkspaceRef != "" || !accountScopeObservation(obs) {
 				continue
 			}
 		}
@@ -702,4 +702,23 @@ func containsStr(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func accountScopeSource(provider string, kind SourceKind, version string) bool {
+	return provider == "openai" && kind == SourceNativeRPC && version == CodexRPCSourceVersion || provider == "anthropic" && kind == SourceNativeRPC && version == ClaudeSDKSourceVersion || provider == "cursor" && kind == SourceNativeDisplay && version == CursorCLISourceVersion
+}
+func accountScopeObservation(obs Observation) bool {
+	if !accountScopeSource(obs.Provider, obs.Source.Kind, obs.Source.Version) {
+		return false
+	}
+	switch obs.Provider {
+	case "openai":
+		return obs.Source.CapabilityRef == CodexRPCCapability
+	case "anthropic":
+		return obs.Source.CapabilityRef == "claude-sdk:usage-report"
+	case "cursor":
+		return obs.Source.CapabilityRef == CursorCLICapability
+	default:
+		return false
+	}
 }

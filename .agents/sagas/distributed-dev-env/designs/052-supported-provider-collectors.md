@@ -72,7 +72,7 @@ Sources: [Claude statusline](https://code.claude.com/docs/en/statusline),
 ## Reviewed source contract changes
 
 The explicit Codex collector is `usage collect codex -o json --executable
-/absolute/official/codex`. Its fixed official CLI child has a 15-second bound,
+/absolute/official/codex --access-only-auth`. Its fixed official CLI child has a 15-second bound,
 64-message/64-KiB per-message bounds, discarded stderr, cancellation that closes
 pipes, and termination/reaping of its own process group. It initializes, reads
 the personal account twice to establish an initial-notification barrier, reads
@@ -83,19 +83,29 @@ without a legacy bucket and when legacy names a different meter. No refresh
 request is answered. The official client's ordinary existing authentication is
 used; no direct auth-file read, login, alternate credential or forced refresh is
 introduced. Non-forced reads alone do not guarantee the provider never attempts
-automatic refresh; such a request is a failure, never permission to service it.
+automatic refresh. A rotating refresh-token HOME is forbidden: internal client
+refresh may not emit a JSON-RPC request at all. The caller must independently
+qualify an access-only HOME (for example the keeper codexauth projection) and
+explicitly acknowledge it with `--access-only-auth`; missing/false/duplicate
+acknowledgement refuses before launch. This declaration is not credential-file
+inspection or proof of the projection. No second refresh-token owner is allowed.
+An emitted refresh request is a failure, never permission to service it.
 
 The sanitized `codex.app-server.account-capture.v1` preserves both nullable windows,
 local received time, personal plan and a provider-email SHA-256 reference. Raw
 identity and credits/upsell content are discarded. Independently selected
-account rules may explicitly set `workspaceNotApplicable:true` with
-`workspaceRef:null`, only for this personal Codex source. Legacy workspace-bound
-records and mismatch checks remain unchanged. Unknown scope, an organization
+account rules may explicitly set `accountScopeOnly:true` with
+`workspaceRef:null` for the qualified Codex RPC, Claude SDK or version-pinned
+Cursor CLI display source. This selects provider-account scope when workspace
+is genuinely unexposed, without asserting that no organization exists. It cannot
+match another source/capability or a populated workspace. Legacy workspace-bound
+records and mismatch checks remain unchanged. Unknown source scope, an unsupported Codex organization
 plan, a populated invented workspace, wrong account/source/generation or duplicate
 rules never become a verified account-only binding. The registry remains external
 to the capture; a provider's hash cannot register itself as trusted.
 
-Read items from this official RPC may have optional `collectionFreshness`, with
+Read items from the qualified Codex RPC, Claude SDK report and version-pinned
+Cursor display may have optional `collectionFreshness`, with
 `basis:capture_only`, calculated from original capture/receipt and the serving
 clock. The separate existing `freshness` and `providerObservedAt` still describe
 provider data. A recently checked reading can retain known percentage/reset and
@@ -106,7 +116,7 @@ label under caller trust and remove it on mismatch. Older documents without the
 optional field retain their shape. Updated consumers must be installed before
 serving the new optional field to closed older decoders.
 
-`usage collect claude-report -o json --input FILE|-` sanitizes one documented SDK
+`usage collect claude-report -o json --input FILE|- --received-at RFC3339` sanitizes one documented SDK
 assistant `usage_report` already supplied by its legitimate owner. It does not
 invoke `/usage` or start another Claude process. It discards assistant content,
 session tokens/costs and extra-usage billing. Null limits and an empty list remain
@@ -142,3 +152,46 @@ private configuration delivery mechanism before activation. This source creates
 no secret or delivery permission. It preserves the provider's exact email spelling
 rather than silently treating two differently spelled identities as equal; a
 changed spelling must fail the selected account match and be requalified.
+
+Retained SDK report input requires its original `--received-at` timestamp. The
+sanitizer invocation/file mtime is never substituted. Future/invalid/missing or
+duplicated receipt input refuses before IO; old data retains its actual age.
+
+For deployment-owned private trust delivery, `--aggregate-allowance-config-file`
+is an alternative to the inline flag, default empty. Disabled mode, API-off or
+conflicting inline/file input refuses before opening the file. The file must be
+absolute, regular, at most 64 KiB and have no world permission bits; group-readable
+private projected files are supported. Normal Kubernetes projected-volume symlinks
+are followed to one opened descriptor; a nonblocking open and regular-file check
+refuse FIFOs/devices rather than waiting for input. The existing complete closed
+selection parser remains unchanged. Errors never echo paths, content or operating
+system messages. Startup does not create a Secret/ConfigMap, mount, permission,
+collector or route without the same explicit enable and valid configuration.
+Private config provisioning and portal's independent private trust delivery remain
+explicit runtime preflight, never committed actual personal metadata.
+
+Scoped/unknown SDK meter kinds are retained as advisory display evidence in this
+global allowance contract. Only unscoped `weekly_all`/`session` kinds enter its
+included measure category. Their server scope/kind/order remain present, but a
+model-specific zero must never become account-wide remaining allowance.
+
+The version-pinned `cursor.cli.usage-capture.v1` represents the normal installed
+Usage screen and its local acquisition interval. Its renderer must match the
+qualified version. Included percent is rounded display precision, not raw API
+precision; zero can be a UI fallback and therefore normalizes to unknown while
+its literal remains display evidence. Auto is an alias, and API's displayed zero
+may be missing-data fallback: neither becomes another quota meter. The generic
+Monthly caption does not set a duration; the literal month/day reset stays without
+a year, timezone or reset instant. Capture time uses the original conservative
+local acquisition start and receipt uses its actual end, never preparation time.
+The interval is bounded to five minutes. This adapter does not launch a CLI or
+assert recurring acquisition. Normal CLI acquisition and its auth/cache behavior
+still need their explicit bounded source/runtime qualification; no private
+factory, credential extraction, binary injection or browser login is introduced.
+
+`accountScopeOnly` is the unreleased positive registry selector. It deliberately
+names account scope rather than asserting that an unavailable workspace is not
+applicable. It does not ignore any reported workspace: a non-null mismatch still
+refuses, and account-only captures cannot resolve a shared entitlement through
+the workspace-bound shared-pool rules. The deployment selection remains independent
+of the provider payload and its actual account metadata must be qualified.
