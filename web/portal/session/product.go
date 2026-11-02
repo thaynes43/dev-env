@@ -1311,6 +1311,7 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		return
 	}
 	page.ObservedAt = c.Now().UTC().Format(time.RFC3339)
+	page.ClaimsNav = c.Claims != nil
 	// A configured send route turns reachable sessions' boxes into forms bound
 	// to this caller's portal session. Without it, Send stays disabled.
 	if r.URL.Path == SessionsPath && filter.View != "usage" && c.Send != nil {

@@ -189,6 +189,10 @@ func LoadProduction(root string) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, errProductionConfig
 	}
+	claims, err := optionalClaimsSource(root, operatorCA)
+	if err != nil {
+		return Runtime{}, errProductionConfig
+	}
 	store, err := NewPostgresStore(PostgresConfig{Host: productionDBHost, Username: dbUser, Password: password, CA: postgresCA, Key: key, Generation: generation, Now: time.Now, Timeout: 5 * time.Second})
 	if err != nil {
 		return Runtime{}, errProductionConfig
@@ -257,7 +261,7 @@ func LoadProduction(root string) (Runtime, error) {
 		}
 	}
 	closeStore = false
-	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Pages: newPagesSource(pagesEnabled, time.Now, nil), Asks: asks, Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store, questionAudit: questionProject}, nil
+	return Runtime{Handler: productionGate(NewAssembly(AssemblyConfig{Session: engine, Authorizer: authorizer, Reader: portal.UnavailableReader{}, Sessions: sessions, Tasks: tasks, Pages: newPagesSource(pagesEnabled, time.Now, nil), Asks: asks, Claims: claims, Send: send, Launch: launchForms, FreshFor: freshFor, Now: time.Now}), productionHost), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}}, store: store, questionAudit: questionProject}, nil
 }
 
 // loadQuestionAuditProject reads config/question-audit. An absent file is off.

@@ -43,13 +43,8 @@ type ClaimsSource struct {
 
 // config/claims.json is opt-in: exactly {"enabled":true,"project":"dev-env"}.
 // Missing or {"enabled":false} leaves credentials untouched and no source.
-//
-// TODO(DESIGN-045 section 8, after dev-env #850 merges): LoadProduction calls
-// `claims, err := optionalClaimsSource(root, operatorCA)` after the
-// optionalAsksSource block, returns errProductionConfig on err, and sets
-// `Claims: claims,` in the AssemblyConfig literal; serveProduct sets
-// `page.ClaimsNav = c.Claims != nil`. production.go and product.go are frozen
-// by #850, so nothing calls this in production yet.
+// LoadProduction calls it after optionalAsksSource and passes the source as
+// AssemblyConfig.Claims; serveProduct links Claims only when it is set.
 func optionalClaimsSource(root string, ca []byte) (*ClaimsSource, error) {
 	present, err := mountedPresent(filepath.Join(root, "config/claims.json"))
 	if err != nil || !present {

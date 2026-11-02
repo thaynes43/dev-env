@@ -106,6 +106,7 @@ type options struct {
 	portalQuestionProjects        []string
 	taskClaimsEnabled             bool
 	taskClaimReadProjects         []string
+	portalTaskClaims              apiserver.PortalTaskClaimsConfig
 	ownedRootPolicy               string
 	nativeFixtureEnabled          bool
 	nativeFixtureImage            string
@@ -260,6 +261,8 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.taskBudgetsEnabled, "enable-task-budgets", false, "enable retained finite managed task budget authority; native admission requires a separate trusted inspector")
 	fs.BoolVar(&o.taskClaimsEnabled, "enable-task-claims", false, "enable immutable explicit TaskClaim ownership in the separate coordination API group")
 	claimProjects := fs.String("task-claims-read-projects", "", "explicit comma-separated projects for bounded TaskClaim metadata discovery")
+	portalTaskClaimsEnabled := fs.Bool("enable-portal-task-claims", false, "serve GET /v1/portal/task-claims, one page of a project's existing TaskClaims as an allowlist for the portal reader (DESIGN-045); default off and requires the portal reader, task claims and an explicit project subset. Source wiring is not a deployed permission")
+	portalTaskClaimsProjects := fs.String("portal-task-claims-projects", "", "comma-separated projects, a subset of --task-claims-read-projects, whose claims the portal reader may list; empty leaves the route off")
 	fs.BoolVar(&o.contextsEnabled, "enable-published-contexts", false, "enable immutable explicitly published context in the protected coordination API group")
 	fs.BoolVar(&o.directoryEnabled, "enable-session-directory", false, "enable prospective immutable managed-canary session metadata directory")
 	directoryProjects := fs.String("session-directory-projects", "", "explicit prospective directory enrollment projects")
@@ -467,6 +470,9 @@ func parseFlags(args []string) (options, error) {
 		}
 	} else if len(o.taskClaimReadProjects) != 0 {
 		return o, errors.New("task claim read scope requires explicit enable-task-claims")
+	}
+	if o.portalTaskClaims, err = parsePortalTaskClaims(*portalTaskClaimsEnabled, *portalTaskClaimsProjects, o.portalReaderEnabled, o.taskClaimsEnabled, o.taskClaimReadProjects); err != nil {
+		return o, err
 	}
 
 	o.contextReadProjects, err = apiserver.ParseContextReadProjects(*contextProjects)
@@ -907,7 +913,7 @@ func run(args []string) error {
 			PublishedContexts: contexts, ContextReadProjects: o.contextReadProjects,
 			Inbox: inboxStore, InboxProjects: o.inboxProjects, InboxCoordinatorReadProjects: o.inboxCoordinatorReadProjects, InboxQuestions: o.inboxQuestions,
 			PortalQuestionAudit: o.portalQuestionAudit, PortalQuestionProjects: o.portalQuestionProjects,
-			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects,
+			TaskClaims: claims, TaskClaimReadProjects: o.taskClaimReadProjects, PortalTaskClaims: o.portalTaskClaims,
 			Client:      mgr.GetClient(),
 			TaskBudgets: budgets, AssignedTaskBudgets: o.assignedTaskBudgets,
 			NativeOwnerControl: nativeControl,
