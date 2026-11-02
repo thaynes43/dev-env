@@ -181,6 +181,10 @@ var agentdLayout = []historyRule{
 	{"published-context.lock", protocol.HistoryClassNotHistory, kindAny},
 	// Runtime and setup state.
 	{"native-invocation.json", protocol.HistoryClassNotHistory, kindAny},
+	// Local protocol state: this process verified its own exit and the server
+	// end POST did not confirm. Listed, not exported. It is not server
+	// acceptance, a consumption receipt, or permission to start another attempt.
+	{"instruction-end-unconfirmed.json", protocol.HistoryClassNotHistory, kindAny},
 	{"native-started.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"claude-access-generation.json", protocol.HistoryClassNotHistory, kindAny},

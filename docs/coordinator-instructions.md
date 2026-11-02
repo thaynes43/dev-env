@@ -132,7 +132,9 @@ launch records `coordinatorInstructions` only when
 posts the attempt only when that launch flag and the pod setting are both
 set. A legacy or disabled native task makes no instruction request, so a
 missing route does not stop it. An enabled launch with a configured origin
-that fails registration or end is unconfirmed and that native attempt stops.
+that fails registration is unconfirmed and that native attempt stops. An
+unconfirmed end preserves the true CLI exit Wait already reported and records
+`instruction-end-unconfirmed.json`.
 An enabled launch with an empty origin makes no request and does not consume.
 
 `CheckpointInstructions` and `agent-run instruction checkpoint` are a GET of
