@@ -13,7 +13,7 @@ func TestCollectorConfigRefusesUnqualifiedTrustAndPartialOwnership(t *testing.T)
 	now := time.Date(2026, 11, 2, 21, 0, 0, 0, time.UTC)
 	cfg := collectorConfig(t, now)
 	raw, _ := json.Marshal(cfg)
-	for _, mode := range []string{"extra-key", "alias-key", "expired", "future-expiry", "wrong-sa", "wrong-publisher", "wrong-version", "missing-workspace", "wrong-capability", "unverified", "current-metric", "duplicate-account"} {
+	for _, mode := range []string{"extra-key", "alias-key", "future-expiry", "wrong-sa", "wrong-publisher", "wrong-version", "missing-workspace", "wrong-capability", "unverified", "current-metric", "duplicate-account"} {
 		t.Run(mode, func(t *testing.T) {
 			body := append([]byte(nil), raw...)
 			trust := cfg.trust
@@ -25,8 +25,6 @@ func TestCollectorConfigRefusesUnqualifiedTrustAndPartialOwnership(t *testing.T)
 				body = []byte(strings.TrimSuffix(string(body), "}") + `,"canary":"do-not-echo"}`)
 			case "alias-key":
 				body = []byte(strings.Replace(string(body), `"slotUID"`, `"SlotUID"`, 1))
-			case "expired":
-				body = []byte(strings.Replace(string(body), cfg.ValidUntil, now.Format(time.RFC3339Nano), 1))
 			case "future-expiry":
 				body = []byte(strings.Replace(string(body), cfg.ValidUntil, now.Add(8*24*time.Hour).Format(time.RFC3339Nano), 1))
 			case "wrong-sa":

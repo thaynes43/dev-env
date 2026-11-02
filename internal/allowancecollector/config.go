@@ -69,7 +69,10 @@ func ParseConfig(raw []byte, trust providerallowance.AggregateTrust, publisherUI
 		return nil, ErrCollector
 	}
 	until, err := time.Parse(time.RFC3339Nano, cfg.ValidUntil)
-	if err != nil || !until.After(now) || until.After(now.Add(7*24*time.Hour)) || cfg.Version != 1 || !name.MatchString(cfg.Host.Name) || !uuid.MatchString(cfg.Host.SessionUID) || !uuid.MatchString(cfg.Host.PodUID) || cfg.Host.Generation < 1 || cfg.Host.ServiceAccount != "dev-env-workbench" || !image.MatchString(cfg.Host.Image) || !uuid.MatchString(cfg.SlotUID) || cfg.CadenceSeconds < 300 || cfg.CadenceSeconds > 1800 || cfg.BackoffSeconds < cfg.CadenceSeconds || cfg.BackoffSeconds > 3600 || publisherUID != cfg.Host.SessionUID || publisherSA != cfg.Host.ServiceAccount {
+	// Expiry disables acquisition in Runner.Step, including after a restart.
+	// A well-formed expired optional collector must not prevent the core API
+	// from starting. It neither receives a new deadline nor performs host IO.
+	if err != nil || until.IsZero() || until.After(now.Add(7*24*time.Hour)) || cfg.Version != 1 || !name.MatchString(cfg.Host.Name) || !uuid.MatchString(cfg.Host.SessionUID) || !uuid.MatchString(cfg.Host.PodUID) || cfg.Host.Generation < 1 || cfg.Host.ServiceAccount != "dev-env-workbench" || !image.MatchString(cfg.Host.Image) || !uuid.MatchString(cfg.SlotUID) || cfg.CadenceSeconds < 300 || cfg.CadenceSeconds > 1800 || cfg.BackoffSeconds < cfg.CadenceSeconds || cfg.BackoffSeconds > 3600 || publisherUID != cfg.Host.SessionUID || publisherSA != cfg.Host.ServiceAccount {
 		return nil, ErrCollector
 	}
 	if trust.Registry == nil || len(trust.Contexts) != 3 || trust.MaxAge < 1 || trust.MaxAge > 1800 || len(trust.Registry.Sources()) != 3 || len(trust.Registry.Accounts()) != 3 || len(trust.Registry.Entitlements()) != 0 || len(trust.Registry.Projections()) != 0 {

@@ -56,6 +56,9 @@ A replacement pod, image, generation, account or configuration is not silently
 adopted. The private state fingerprint binds configuration and selected trust.
 Changing them after collection requires explicit reconciliation; deleting state
 or extending a deadline to bypass that fence is unsupported.
+Expiry stops collection without host/slot IO, including after an operator
+restart. A well-formed expired collector configuration leaves the core API and
+historical GET service able to start; it does not renew the collection window.
 
 ## Readers and process ownership
 

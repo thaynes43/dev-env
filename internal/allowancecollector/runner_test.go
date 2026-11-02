@@ -382,6 +382,25 @@ func TestOperatorCollectorReportOnlyMutationDuringAcquisitionIsNotOverwritten(t 
 	}
 }
 
+func TestExpiredCollectorConfigurationSurvivesRestartWithoutAnyHostOrSlotIO(t *testing.T) {
+	r, remote, now := collectorFixture(t)
+	raw, _ := json.Marshal(r.Config)
+	raw = []byte(strings.Replace(string(raw), r.Config.ValidUntil, now.Add(-time.Second).Format(time.RFC3339Nano), 1))
+	expired, err := ParseConfig(raw, r.Config.trust, hostUID, "dev-env-workbench", *now)
+	if err != nil || expired == nil || !expired.until.Before(*now) {
+		t.Fatal("expired collector would prevent core API startup", err)
+	}
+	r.Config = expired
+	reads := 0
+	r.Live = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+		reads++
+		return errors.New("must not read")
+	}})
+	if r.Step(context.Background()) == nil || reads != 0 || len(remote.calls) != 0 {
+		t.Fatal("expired configuration performed IO", reads, remote.calls)
+	}
+}
+
 func TestOperatorCollectorRefusesForeignExpiredHostAndReservationConflict(t *testing.T) {
 	if err := (*Runner)(nil).Step(context.Background()); err != nil {
 		t.Fatal(err)
