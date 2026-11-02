@@ -142,11 +142,11 @@ stuck, pending. A row that matches nothing is Unknown. Every other fact stays vi
 |---|---|
 | Unknown | The default. A PR read failed, changed during the read or was cut by a bound; or the repository is not `Read`. Unknown checks block only failed checks, stuck and pending. |
 | held | A `shepherd-vet` comment by `haynes-ops-bot[bot]` with verdict HOLD. For a no-PR row (U6), a `HELD` entry in the holds file at a pinned commit. |
-| failed checks | A complete check read with a run concluded `failure`, `timed_out` or `startup_failure`. |
+| failed checks | A complete check read with a run concluded `failure`, `timed_out` or `startup_failure`. A complete check-runs read with `statuses: Denied` counts, labelled "check runs only" (rule 5). |
 | in progress | A DESIGN-041 join that is Available. Never running checks, a running Job, a label or `predictedOwner`. |
 | manual-only | A vet verdict that is neither AUTO-MERGE nor HOLD; or, after U7, a head-bound classifier record with a manual reason. |
 | stuck | Open more than 7 days (OP317's "old"; Q-360-03) with none of the above. |
-| pending | Open, complete reads, none of the above. |
+| pending | Open, complete reads, none of the above. A complete check-runs read with `statuses: Denied` counts as complete here and for stuck, with the "check runs only" label. |
 
 Under these rules most haynes-ops PRs that are labelled `manual-only` show as stuck or
 pending, with the label beside the state, until U7 lands. That is the true evidence.
