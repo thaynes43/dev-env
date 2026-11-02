@@ -4,19 +4,33 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 func nativeInvocationFixture(t *testing.T) (Settings, protocol.Session, Launch, string) {
+	s, sess, l, path, code, tail, _ := runSyntheticNativeInvocation(t, "")
+	if code != 0 || strings.Contains(tail, "native instruction attempt") {
+		t.Fatalf("initial native invocation refused %d; synthetic pane tail: %q", code, tail)
+	}
+	return s, sess, l, path
+}
+
+func runSyntheticNativeInvocation(t *testing.T, mode string) (Settings, protocol.Session, Launch, string, int, string, []string) {
 	t.Helper()
 	g := newGitFixture(t, "demo")
 	s, runner := g.settings(t)
@@ -41,6 +55,12 @@ if [ "$1" = "resume" ]; then
   exit 0
 fi
 cat >> "$SYNTHETIC_INITIAL_PROMPTS"
+if [ -n "$SYNTHETIC_NATIVE_THREAD_FIRST" ]; then
+  /bin/echo '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}'
+  if [ -n "$SYNTHETIC_NATIVE_INITIAL_RELEASE" ]; then IFS= read -r ready < "$SYNTHETIC_NATIVE_INITIAL_RELEASE"; fi
+  printf '%s\n' '{"type":"turn.started"}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
+  exit 0
+fi
 if [ -n "$SYNTHETIC_NATIVE_INITIAL_RELEASE" ]; then IFS= read -r ready < "$SYNTHETIC_NATIVE_INITIAL_RELEASE"; fi
 printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}' '{"type":"turn.started"}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
 `)
@@ -57,10 +77,13 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 	}
 	t.Cleanup(func() { _ = barrier.Close() })
 	l := Launch{Provider: protocol.AgentCodex, Session: sess.Name, SessionUID: sess.SessionUID, PodUID: s.PodUID,
-		ChildDecisions: true, NativeInvocationID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Argv: []string{cli, "exec", "--json"},
+		ChildDecisions: true, CoordinatorInstructions: mode != "", NativeInvocationID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Argv: []string{cli, "exec", "--json"},
 		Dir: s.WorktreePath(sess.Name), Prompt: "EXACT-SYNTHETIC-INITIAL-PROMPT", BootID: "same-boot", CreatedAt: rescueNow,
 		Env:     []string{"SYNTHETIC_NATIVE_SPAWNS=" + spawns, "SYNTHETIC_INITIAL_PROMPTS=" + prompts, "SYNTHETIC_NATIVE_INITIAL_RELEASE=" + barrierPath},
 		LogPath: s.LogPath(sess.Name), EventsPath: s.statePath(eventsFile)}
+	if mode == "thread-first" {
+		l.Env = append(l.Env, "SYNTHETIC_NATIVE_THREAD_FIRST=1")
+	}
 	if err := admitWorkspaceLaunch(context.Background(), s, sess, &l); err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +99,25 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 	t.Setenv("AGENTD_ENABLE_CODEX_TASKS", "true")
 	t.Setenv("AGENTD_ENABLE_CHILD_DECISIONS", "true")
 	path := writeLaunch(t, s, l)
+	calls := bindSyntheticInstructionAPI(t, mode, l)
 	// The pane holds only agentd messages and the fake CLI's constant synthetic
 	// output, so it is safe to include in failure messages.
 	pane := &syncBuffer{}
 	released := make(chan error, 1)
+	nativeFinished := make(chan struct{})
 	go func() {
+		// A refused registration may stop the child before its startup receipt.
+		// This negative case waits for the actual wrapper exit instead.
+		if mode == "missing" {
+			select {
+			case <-nativeFinished:
+				released <- nil
+			case <-time.After(10 * time.Second):
+				_, _ = barrier.WriteString("ready\n")
+				released <- fmt.Errorf("refused registration did not stop the native task")
+			}
+			return
+		}
 		// The deadline only bounds a failing run; it never gates a passing one.
 		deadline := time.NewTimer(10 * time.Second)
 		defer deadline.Stop()
@@ -104,20 +141,172 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 		}
 	}()
 	code := RunAgent(path, pane, make(chan os.Signal), 20*time.Millisecond)
+	close(nativeFinished)
 	err = <-released
 	// Remove the FIFO so a regression that replays this invocation fails the
 	// fake CLI's read at once instead of blocking until the test times out.
 	_ = os.Remove(barrierPath)
+	tail := paneTail(pane)
 	if err != nil {
-		t.Fatalf("%v; synthetic pane tail: %q", err, paneTail(pane))
-	}
-	if code != 0 {
-		t.Fatalf("initial native invocation refused %d; synthetic pane tail: %q", code, paneTail(pane))
+		t.Fatalf("%v; synthetic pane tail: %q", err, tail)
 	}
 	if err := readJSONFile(path, &l); err != nil {
 		t.Fatal(err)
 	}
-	return s, sess, l, path
+	return s, sess, l, path, code, tail, append([]string(nil), (*calls)...)
+}
+
+func bindSyntheticInstructionAPI(t *testing.T, mode string, l Launch) *[]string {
+	t.Helper()
+	calls := &[]string{}
+	t.Setenv("AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS", "false")
+	if mode == "" {
+		return calls
+	}
+	t.Setenv("AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS", "true")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*calls = append(*calls, r.Method+" "+r.URL.Path)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if mode == "end-unconfirmed" && body["ended"] == true {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"code":"unavailable","message":"synthetic end blip"}}`))
+			return
+		}
+		if mode == "missing" || r.Method != http.MethodPost || r.URL.Path != apiv1.SessionInstructionAttemptPath(l.Session) || body["attemptID"] != l.NativeInvocationID {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"synthetic missing route"}}`))
+			return
+		}
+		phase := apiv1.InstructionPhaseActive
+		if body["ended"] == true {
+			phase = apiv1.InstructionPhaseEnded
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiv1.CoordinatorInstructionAttemptResult{
+			AttemptID: l.NativeInvocationID, Phase: phase, SessionUID: l.SessionUID, PodUID: l.PodUID,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.pem")
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(token, []byte("synthetic-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTD_API_URL", srv.URL)
+	t.Setenv("AGENTD_API_CA_FILE", ca)
+	t.Setenv("AGENTD_API_TOKEN_FILE", token)
+	return calls
+}
+
+func TestSyntheticEnabledInstructionRegistrationFailsClosedWithoutRoute(t *testing.T) {
+	_, _, _, _, code, tail, calls := runSyntheticNativeInvocation(t, "missing")
+	if code == 0 || !strings.Contains(tail, "native instruction attempt is unconfirmed") || len(calls) == 0 {
+		t.Fatalf("enabled missing route was not fail-closed: %d calls %v tail %q", code, calls, tail)
+	}
+}
+
+func TestSyntheticInstructionEndBlipDoesNotFalsifyCLIExit(t *testing.T) {
+	s, _, l, _, code, tail, calls := runSyntheticNativeInvocation(t, "end-unconfirmed")
+	if code != 0 || !strings.Contains(tail, "native instruction attempt end is unconfirmed") || len(calls) < 2 {
+		t.Fatalf("end blip falsified the exit or skipped the post: %d calls %v tail %q", code, calls, tail)
+	}
+	raw, err := os.ReadFile(s.statePath(instructionEndUnconfirmedFile))
+	if err != nil || !strings.Contains(string(raw), l.NativeInvocationID) || !strings.Contains(string(raw), `"serverEnd": "Unconfirmed"`) {
+		t.Fatalf("end uncertainty record %s %v", raw, err)
+	}
+}
+
+func TestSyntheticEnabledInstructionRegistrationCorrelatesAttempt(t *testing.T) {
+	_, _, _, _, code, tail, calls := runSyntheticNativeInvocation(t, "accepted")
+	if code != 0 || strings.Contains(tail, "unconfirmed") || len(calls) < 2 {
+		t.Fatalf("enabled registration did not stay confirmed: %d calls %v tail %q", code, calls, tail)
+	}
+	for _, call := range calls {
+		if !strings.HasPrefix(call, http.MethodPost+" ") || strings.Contains(call, "/consume") || strings.Contains(call, "/instructions") {
+			t.Fatalf("registration consumed or listed: %v", calls)
+		}
+	}
+}
+
+func TestRunAgentRegistrationSnapshotIgnoresLiveThreadMutation(t *testing.T) {
+	const threadID = "12345678-1234-1234-1234-123456789abc"
+	persisted := make(chan struct{})
+	release := make(chan struct{})
+	var persistOnce sync.Once
+	var releaseOnce sync.Once
+	letGo := func() { releaseOnce.Do(func() { close(release) }) }
+	var publishedConversation string
+	var publishedConfirmed bool
+	var publishedInvocation string
+	beforeTaskInstructionPublish = func(got Launch) {
+		defer letGo()
+		select {
+		case <-persisted:
+		case <-time.After(5 * time.Second):
+			t.Errorf("thread identity was not published before registration")
+			return
+		}
+		publishedConversation = got.ConversationID
+		publishedConfirmed = got.NativeThreadConfirmed
+		publishedInvocation = got.NativeInvocationID
+	}
+	afterCodexThreadIdentity = func() {
+		persistOnce.Do(func() { close(persisted) })
+		<-release
+	}
+	t.Cleanup(func() {
+		letGo()
+		beforeTaskInstructionPublish = nil
+		afterCodexThreadIdentity = nil
+	})
+	s, _, l, _, code, tail, calls := runSyntheticNativeInvocation(t, "thread-first")
+	if code != 0 || strings.Contains(tail, "unconfirmed") {
+		t.Fatalf("overlapped registration failed: %d tail %q", code, tail)
+	}
+	if publishedConversation != "" || publishedConfirmed || publishedInvocation != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("registration published the live thread mutation: conversation %q confirmed %v invocation %q", publishedConversation, publishedConfirmed, publishedInvocation)
+	}
+	if !l.NativeThreadConfirmed || l.ConversationID != threadID || l.NativeInvocationID != publishedInvocation || l.Prompt != "EXACT-SYNTHETIC-INITIAL-PROMPT" {
+		t.Fatalf("live thread persistence changed: %+v", l)
+	}
+	var result taskResult
+	if err := readJSONFile(s.statePath(resultFile), &result); err != nil || result.ConversationID != threadID || result.ExitCode != 0 {
+		t.Fatalf("task result lost the persisted thread: %+v %v", result, err)
+	}
+	if len(calls) < 2 {
+		t.Fatalf("register and end were not both posted: %v", calls)
+	}
+}
+
+func TestRunAgentPersistsCodexThreadAcrossInstructionRegistration(t *testing.T) {
+	const threadID = "12345678-1234-1234-1234-123456789abc"
+	s, _, l, _, code, tail, calls := runSyntheticNativeInvocation(t, "accepted")
+	if code != 0 || strings.Contains(tail, "unconfirmed") {
+		t.Fatalf("codex registration run failed: %d tail %q", code, tail)
+	}
+	if !l.NativeThreadConfirmed || l.ConversationID != threadID || l.NativeInvocationID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || l.Prompt != "EXACT-SYNTHETIC-INITIAL-PROMPT" || l.SessionUID == "" || l.PodUID == "" || l.BootID != "same-boot" {
+		t.Fatalf("thread persistence dropped native identity: %+v", l)
+	}
+	var result taskResult
+	if err := readJSONFile(s.statePath(resultFile), &result); err != nil || result.ConversationID != threadID || result.ExitCode != 0 {
+		t.Fatalf("task result lost the persisted thread: %+v %v", result, err)
+	}
+	if _, err := os.Stat(s.statePath(instructionEndUnconfirmedFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("confirmed end wrote an unconfirmed sidecar")
+	}
+	if len(calls) < 2 {
+		t.Fatalf("register and end were not both posted: %v", calls)
+	}
+	for _, call := range calls {
+		if !strings.HasPrefix(call, http.MethodPost+" "+apiv1.SessionInstructionAttemptPath(l.Session)) {
+			t.Fatalf("lifecycle call was not the attempt route: %v", calls)
+		}
+	}
 }
 
 func paneTail(pane *syncBuffer) string {
@@ -219,6 +408,87 @@ func TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation(t *testing.T) 
 	prompt, err := os.ReadFile(s.statePath("synthetic-initial-prompts"))
 	if err != nil || string(prompt) != first.Prompt {
 		t.Fatal("initial prompt changed or replayed", err)
+	}
+}
+
+// TestEnabledChildDecisionContinuationRegistrationRefusalStopsRunTUI is the
+// runTUI boundary for a refused continuation registration. The server ledger
+// check is TestInstructionEndedLedgerRefusesWhenFull: it registers and ends
+// four attempts, then refuses a fifth registration and an ended replay
+// without changing the ledger. This test does not rebuild that ledger or add
+// a fifth registration mirror. It reuses the synthetic continuation fixture,
+// with no provider turn, and answers the continuation's attempt POST with
+// the same not-found refusal. runTUI must stop that continuation.
+func TestEnabledChildDecisionContinuationRegistrationRefusalStopsRunTUI(t *testing.T) {
+	s, sess, first, _ := nativeInvocationFixture(t)
+	var before taskOwner
+	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &before); err != nil || !before.Launched {
+		t.Fatal("initial native finalization missing", err)
+	}
+	next := nextNativeInvocation(t, first)
+	next.CoordinatorInstructions = true
+	calls := bindSyntheticInstructionAPI(t, "missing", next)
+	barrierPath := filepath.Join(t.TempDir(), "resume-release")
+	if err := syscall.Mkfifo(barrierPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	barrier, err := os.OpenFile(barrierPath, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = barrier.Close() })
+	next.Env = append(next.Env, "SYNTHETIC_NATIVE_RESUME_RELEASE="+barrierPath)
+	if err := admitNativeContinuation(context.Background(), s, sess, first, &next); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkspaceJSON(s.statePath(resumeFile), next); err != nil {
+		t.Fatal(err)
+	}
+	pane := &syncBuffer{}
+	nativeFinished := make(chan struct{})
+	released := make(chan error, 1)
+	go func() {
+		select {
+		case <-nativeFinished:
+			released <- nil
+		case <-time.After(10 * time.Second):
+			_, _ = barrier.WriteString("ready\n")
+			released <- fmt.Errorf("refused continuation registration did not stop runTUI")
+		}
+	}()
+	code := RunAgent(s.statePath(resumeFile), pane, make(chan os.Signal), 20*time.Millisecond)
+	close(nativeFinished)
+	tail := paneTail(pane)
+	if err := <-released; err != nil {
+		t.Fatalf("%v; synthetic pane tail: %q", err, tail)
+	}
+	_ = os.Remove(barrierPath)
+	if code == 0 || !strings.Contains(tail, "native instruction attempt is unconfirmed") || strings.Contains(tail, "the TUI exited (0)") {
+		t.Fatalf("enabled continuation registration refusal did not fail closed: %d tail %q", code, tail)
+	}
+	if len(*calls) == 0 {
+		t.Fatal("refused continuation made no registration attempt")
+	}
+	for _, call := range *calls {
+		if !strings.HasPrefix(call, http.MethodPost+" "+apiv1.SessionInstructionAttemptPath(next.Session)) || strings.Contains(call, "/consume") || strings.Contains(call, "/instructions") {
+			t.Fatalf("continuation refusal consumed, listed, or left the attempt route: %v", *calls)
+		}
+	}
+	var stored Launch
+	if err := readJSONFile(s.statePath(resumeFile), &stored); err != nil || !stored.CoordinatorInstructions || !stored.ChildDecisions {
+		t.Fatalf("refusal unenrolled the enabled launch: %+v %v", stored, err)
+	}
+	spawns, err := os.ReadFile(s.statePath("synthetic-native-spawns"))
+	if err != nil || string(spawns) != "exec\nresume\n" {
+		t.Fatalf("continuation was not the single stopped native resume: %v %q", err, spawns)
+	}
+	prompt, err := os.ReadFile(s.statePath("synthetic-initial-prompts"))
+	if err != nil || string(prompt) != first.Prompt {
+		t.Fatal("initial prompt changed or was replayed", err)
+	}
+	var after taskOwner
+	if readWorkspaceJSON(s.ownerPath(sess.Name), &after) != nil || !sameOwner(before, after) {
+		t.Fatal("registration refusal reset the launched writer")
 	}
 }
 

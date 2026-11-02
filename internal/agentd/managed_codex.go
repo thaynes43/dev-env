@@ -205,8 +205,15 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 	if sess.Workspace != nil {
 		guard = sharedGuard(ws, true)
 	}
+	ordinaryInstructions := s.CoordinatorInstructions && !s.ManagedChildDecisions && sess.Workspace == nil && first == nil &&
+		sess.Mode == protocol.ModeTask && protocol.ValidTaskBudgetIdentifier(sess.SessionUID) && protocol.ValidTaskBudgetIdentifier(s.PodUID)
 	if s.ManagedChildDecisions {
 		guard += "\n\n" + managedChildDecisionGuard
+		if s.CoordinatorInstructions {
+			guard += "\n\n" + nativeInstructionPullGuidance
+		}
+	} else if ordinaryInstructions {
+		guard += "\n\n" + ordinaryInstructionPullGuidance
 	}
 	if first != nil {
 		if err := validateCommonResume(s, sess, *first); err != nil {
@@ -229,6 +236,10 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 			return Launch{}, err
 		}
 		l.NativeInvocationID, l.PodUID, l.ChildDecisions = id, s.PodUID, true
+		l.CoordinatorInstructions = s.CoordinatorInstructions
+	} else if ordinaryInstructions {
+		l.PodUID = s.PodUID
+		l.CoordinatorInstructions = true
 	}
 	if sess.CaptureOutput && first == nil {
 		if sess.Validate() != nil || !apiv1.ValidContextUID(s.PodUID) {
@@ -287,6 +298,10 @@ func verifyManagedCodexCLI(l Launch) error {
 	return nil
 }
 
+// afterCodexThreadIdentity is nil in production. Tests use it to pause after
+// the live thread fields change and before the launch file is replaced.
+var afterCodexThreadIdentity func()
+
 // persistCodexThread makes the first launch's native identity durable before
 // acknowledging it in the readable stream. A second, different identity is an
 // ambiguity, never a new conversation or a reason to replay the prompt.
@@ -295,6 +310,11 @@ func persistCodexThread(path string, l *Launch, id string) error {
 		return errors.New("unexpected native Codex thread identity")
 	}
 	l.ConversationID, l.NativeThreadConfirmed = id, true
+	// Nil outside tests. A test can observe that the live fields changed
+	// before the durable write, while registration still holds its snapshot.
+	if afterCodexThreadIdentity != nil {
+		afterCodexThreadIdentity()
+	}
 	if err := writeWorkspaceJSON(path, *l); err != nil {
 		l.ConversationID, l.NativeThreadConfirmed = "", false
 		return fmt.Errorf("native thread receipt is not durable: %w", err)

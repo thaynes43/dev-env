@@ -476,6 +476,19 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 		{"add a profile", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Profile = "dev" }, presence},
 		{"add a tool", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Tools = []string{"blender"} }, presence},
 		{"set a parent", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Parent = "someone-else" }, presence},
+		{"change coordinator instruction parent", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.CoordinatorInstructionParentUID = "parent-uid"
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.CoordinatorInstructionParentUID = "other-uid" }, "coordinator instruction parent UID"},
+		{"drop coordinator instruction parent", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.CoordinatorInstructionParentUID = "parent-uid"
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.CoordinatorInstructionParentUID = "" }, presence},
+		{"add coordinator instruction parent", summonedTask, func(s *v1alpha1.AgentSessionSpec) {
+			s.CoordinatorInstructionParentUID = "parent-uid"
+		}, presence},
 		{"drop the idempotency key", summonedTask, func(s *v1alpha1.AgentSessionSpec) { s.IdempotencyKey = "" }, presence},
 		{"drop the limits", summonedTask, func(s *v1alpha1.AgentSessionSpec) { s.Limits = nil }, presence},
 		{"make Tom's session summoned", remoteSession, func(s *v1alpha1.AgentSessionSpec) {
@@ -1579,4 +1592,176 @@ func TestPrivateHomeExpiryRecordIsBoundAndForwardOnly(t *testing.T) {
 			})
 		}
 	})
+}
+
+func schemaInstruction(key, mark string) v1alpha1.CoordinatorInstructionStatus {
+	return v1alpha1.CoordinatorInstructionStatus{
+		Key:              key,
+		MessageName:      "message." + strings.Repeat(mark, 32) + "." + strings.Repeat("e", 32),
+		MessageUID:       "message-" + key,
+		SenderUID:        "sender-uid",
+		SenderPodUID:     "sender-pod",
+		TargetSessionUID: "target-session",
+		TargetPodUID:     "target-pod",
+		AttemptID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Project:          "sample",
+		Repository:       "alias",
+		TaskKey:          "task:coord-instruction",
+		TextSHA256:       strings.Repeat(mark, 64),
+		Nonce:            strings.Repeat("c", 64),
+		DeliveredAt:      metav1.NewTime(time.Date(2026, 11, 2, 2, 0, 0, 0, time.UTC)),
+	}
+}
+
+func TestCoordinatorInstructionMapListTransitions(t *testing.T) {
+	c := ctx(t)
+	s := taskSession()
+	if err := k8s.Create(c, s); err != nil {
+		t.Fatal(err)
+	}
+	first := schemaInstruction("correction-1", "a")
+	s.Status.CoordinatorInstructions = []v1alpha1.CoordinatorInstructionStatus{first}
+	if err := k8s.Status().Update(c, s); err != nil {
+		t.Fatalf("create delivery: %v", err)
+	}
+	got := get(t, s)
+	second := schemaInstruction("correction-2", "b")
+	got.Status.CoordinatorInstructions = append(got.Status.CoordinatorInstructions, second)
+	if err := k8s.Status().Update(c, got); err != nil {
+		t.Fatalf("append delivery: %v", err)
+	}
+	got = get(t, s)
+	if len(got.Status.CoordinatorInstructions) != 2 || got.Status.CoordinatorInstructions[0].Key != "correction-1" || got.Status.CoordinatorInstructions[1].Key != "correction-2" {
+		t.Fatalf("stored keys %+v", got.Status.CoordinatorInstructions)
+	}
+	consumed := got.Status.CoordinatorInstructions[0]
+	consumed.Consumed = &v1alpha1.CoordinatorInstructionConsumptionStatus{
+		AttemptID: consumed.AttemptID, SessionUID: consumed.TargetSessionUID, PodUID: consumed.TargetPodUID,
+		MessageUID: consumed.MessageUID, Nonce: consumed.Nonce, TextSHA256: consumed.TextSHA256, At: consumed.DeliveredAt,
+	}
+	got.Status.CoordinatorInstructions[0] = consumed
+	if err := k8s.Status().Update(c, got); err != nil {
+		t.Fatalf("first consume: %v", err)
+	}
+	stored := get(t, s)
+	if stored.Status.CoordinatorInstructions[0].Consumed == nil || stored.Status.CoordinatorInstructions[1].Consumed != nil {
+		t.Fatalf("consumption was not one record: %+v", stored.Status.CoordinatorInstructions)
+	}
+	for _, tc := range []struct {
+		name, want string
+		edit       func(*v1alpha1.AgentSession)
+	}{
+		{"immutable delivery change", "immutable", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructions[1].TextSHA256 = strings.Repeat("d", 64)
+		}},
+		{"consumed mutation", "immutable", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructions[0].Consumed.Nonce = strings.Repeat("d", 64)
+		}},
+		{"consumed removal", "immutable", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructions[0].Consumed = nil
+		}},
+		{"old key removal", "removed or replaced", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructions = s.Status.CoordinatorInstructions[1:]
+		}},
+		{"old key replacement", "removed or replaced", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructions[0].Key = "correction-9"
+		}},
+		{"whole list deletion", "removed or replaced", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructions = nil
+		}},
+		{"duplicate key", "uplicate", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructions = append(s.Status.CoordinatorInstructions, s.Status.CoordinatorInstructions[0])
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(bad)
+			wantInvalid(t, k8s.Status().Update(c, bad), tc.want)
+		})
+	}
+	fresh := taskSession()
+	if err := k8s.Create(c, fresh); err != nil {
+		t.Fatal(err)
+	}
+	dup := schemaInstruction("correction-1", "a")
+	fresh.Status.CoordinatorInstructions = []v1alpha1.CoordinatorInstructionStatus{dup, dup}
+	wantInvalid(t, k8s.Status().Update(c, fresh), "uplicate")
+	full := get(t, s)
+	full.Status.CoordinatorInstructions = append(full.Status.CoordinatorInstructions, schemaInstruction("correction-3", "c"), schemaInstruction("correction-4", "d"))
+	if err := k8s.Status().Update(c, full); err != nil {
+		t.Fatalf("append to the bound: %v", err)
+	}
+	over := get(t, s)
+	over.Status.CoordinatorInstructions = append(over.Status.CoordinatorInstructions, schemaInstruction("correction-5", "f"))
+	wantInvalid(t, k8s.Status().Update(c, over), "4")
+}
+
+func TestCoordinatorInstructionEndedAttemptLedger(t *testing.T) {
+	c := ctx(t)
+	s := taskSession()
+	if err := k8s.Create(c, s); err != nil {
+		t.Fatal(err)
+	}
+	hexAttempt := strings.Repeat("ab", 32)
+	s.Status.CoordinatorInstructionAttempt = &v1alpha1.CoordinatorInstructionAttemptStatus{
+		SessionUID: "target-session", PodUID: "target-pod", AttemptID: hexAttempt, Phase: "active",
+	}
+	if err := k8s.Status().Update(c, s); err != nil {
+		t.Fatalf("64-hex attempt: %v", err)
+	}
+	got := get(t, s)
+	got.Status.CoordinatorInstructionAttempt.Phase = "ended"
+	got.Status.CoordinatorInstructionEndedAttempts = []v1alpha1.CoordinatorInstructionEndedAttemptStatus{{
+		AttemptID: hexAttempt, SessionUID: "target-session", PodUID: "target-pod",
+	}}
+	if err := k8s.Status().Update(c, got); err != nil {
+		t.Fatalf("retain ended attempt: %v", err)
+	}
+	for _, tc := range []struct {
+		name, want string
+		edit       func(*v1alpha1.AgentSession)
+	}{
+		{"ledger removal", "removed or rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts = nil
+		}},
+		{"ledger item removal", "removed or rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts = s.Status.CoordinatorInstructionEndedAttempts[:0]
+		}},
+		{"ledger rewrite", "rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts[0].PodUID = "other-pod"
+		}},
+		{"attempt id rewrite", "rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts[0].AttemptID = strings.Repeat("cd", 32)
+		}},
+		{"session uid rewrite", "immutable", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts[0].SessionUID = "other-session"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(bad)
+			wantInvalid(t, k8s.Status().Update(c, bad), tc.want)
+		})
+	}
+	stored := get(t, s)
+	for i := 0; i < 3; i++ {
+		id := strings.Repeat(string(rune('c'+i)), 64)
+		stored.Status.CoordinatorInstructionEndedAttempts = append(stored.Status.CoordinatorInstructionEndedAttempts, v1alpha1.CoordinatorInstructionEndedAttemptStatus{
+			AttemptID: id, SessionUID: "target-session", PodUID: "target-pod",
+		})
+	}
+	if err := k8s.Status().Update(c, stored); err != nil {
+		t.Fatalf("fill ledger: %v", err)
+	}
+	over := get(t, s)
+	over.Status.CoordinatorInstructionEndedAttempts = append(over.Status.CoordinatorInstructionEndedAttempts, v1alpha1.CoordinatorInstructionEndedAttemptStatus{
+		AttemptID: strings.Repeat("f", 64), SessionUID: "target-session", PodUID: "target-pod",
+	})
+	wantInvalid(t, k8s.Status().Update(c, over), "4")
+	dup := get(t, s)
+	dup.Status.CoordinatorInstructionEndedAttempts = append(dup.Status.CoordinatorInstructionEndedAttempts, dup.Status.CoordinatorInstructionEndedAttempts[0])
+	wantInvalid(t, k8s.Status().Update(c, dup), "uplicate")
+	badID := get(t, s)
+	badID.Status.CoordinatorInstructionAttempt.AttemptID = "not-an-attempt"
+	wantInvalid(t, k8s.Status().Update(c, badID), "attemptID")
 }

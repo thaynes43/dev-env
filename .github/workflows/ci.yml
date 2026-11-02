@@ -125,6 +125,13 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Coordinator recovery fixtures
+        env:
+          GOMAXPROCS: "2"
+          GOFLAGS: -p=1
+          GOTOOLCHAIN: local
+          CGO_ENABLED: "0"
+        run: nice -n 19 python3 -I -B scripts/test_coordinator_recovery.py
       # setup-envtest and the kube-apiserver, etcd and kubectl it downloads for
       # the envtest suites (internal/testenv). The Makefile pins both versions.
       - name: Cache setup-envtest and the envtest binaries

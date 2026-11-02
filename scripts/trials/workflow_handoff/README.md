@@ -2,7 +2,7 @@
 
 Offline checker for one coordinator handoff record. It validates the document, replays its events, and prints the recorded state plus the next manual action.
 
-It does not dispatch, poll, grant authority, transfer TaskClaim, call a provider, or write tracker state. Stdlib only. One document, at most 128KiB, at most 48 events.
+The default command, `--watchdog`, and `--checkins` do not dispatch, poll, grant authority, transfer TaskClaim, call a provider, or write tracker state. Stdlib only. One handoff document, at most 128KiB, at most 48 events. Current-head review recovery is the separate Python adapter in `scripts/coordinator-recovery.py`, documented in `docs/coordinator-recovery.md`. It is not a checker mode and it does not start a worker.
 
 ```bash
 GOTOOLCHAIN=local CGO_ENABLED=0 go run . testdata/e-merge.json
@@ -139,3 +139,7 @@ item/context identities. Every report, item, watchdog plan and intent carries
 `dryRun: true`, `executed: false`, and `checkerAuthority: none`. No service,
 scheduler, tracker write, process launch, notification or live subscription is
 part of this mode. Source fixtures do not prove live delivery or #211 acceptance.
+
+## Current-head review recovery
+
+Recovery is not implemented in this checker. `scripts/coordinator-recovery.py` observes `gh pr view`, `agent-run show`, and `agent-run inbox`, then calls this checker on one explicit handoff document. Behavior and limits are in `docs/coordinator-recovery.md`. There is no `--worker` flag and no local message, claim, dispatch, or audit ledger. A passing fixture is not installed acceptance.

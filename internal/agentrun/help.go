@@ -16,6 +16,7 @@ Usage:
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
+  agent-run instruction send|read|checkpoint|consume|address|attempt designated parent delivery and native consumption
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
@@ -218,6 +219,54 @@ still-live guard/Pod/HOME only after independently proven root and child stops.
 The ORIGINAL deadline/effort/failure/checkpoint accounting and receipts remain.
 It cannot extend an exhausted budget, recover a lost Pod or let a model resume
 itself. A lost mutation acknowledgement is not retried.
+`,
+	"instruction": `Usage: agent-run instruction address --session <name>
+       agent-run instruction send --session <name> --key <key> --project <project> --repository <repository> --task-key <task> --expect-uid <uid> --expect-pod <pod> --attempt <id> < correction.txt
+       agent-run instruction read --session <name> --key <key>
+       agent-run instruction checkpoint --session <name>
+       agent-run instruction consume --session <name> --key <key> --attempt <id> --nonce <nonce> --message-uid <uid> --text-sha256 <digest> --expect-uid <uid> --expect-pod <pod>
+       agent-run instruction attempt --session <name> --attempt <id> [--ended]
+
+Address is the designated parent's read of the target's current attempt. It
+returns the attempt ID, phase, session UID and live pod UID. It returns no
+nonce and no instruction text. Copy those three values into send as
+--attempt, --expect-uid and --expect-pod. Address is not a status read and
+not the recipient checkpoint.
+
+Send submits one in-scope correction from the authenticated parent Session.
+The server derives the sender. There is no --from or --sender flag. Scope
+fields must match the target's stored project, repository and task; they do
+not widen it. A newly created receipt has no nonce and consumed false. Send
+does not create consumption. An identical retry returns the stored receipt,
+including consumed true when a separate consume already happened. A changed
+intent conflicts and no new key is chosen.
+
+Read shows one known key. The target session also receives the sender UID,
+text and nonce. An inbox read acknowledgement is reported separately and is
+not consumption. The one-shot native exec does not push this read into the
+running process.
+
+Checkpoint lists pending corrections for the caller's own active attempt.
+It takes no key. Each item includes the server-authored sender UID, text,
+message UID, text digest and nonce. An empty pending list is a confirmed
+read of nothing new. Codex exec has no live steer: the original prompt is
+written to stdin once, and a resumed Codex TUI reads the terminal. Neither
+is interrupted when a correction is stored. A model sees a later correction
+only by running this command. The command does not consume.
+
+Consume is the target task's explicit acknowledgement. --message-uid and
+--text-sha256 must be the values from that checkpoint or read; a nonempty
+acknowledgement with different values is unconfirmed. It is not an inbox
+read ACK, a grant, or a human decision. Retry only the same nonce and
+attempt. A checkpoint, a read, or a file written by the daemon is not
+consumption.
+
+Attempt registers this pod's active native attempt, or --ended for that same
+attempt. A replaced or ended attempt cannot accept a new delivery.
+Registration runs only for a launch built with the instruction capability.
+A legacy or disabled native task does not call this route.
+
+Source tests do not prove an installed operator or a live native task.
 `,
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
        agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt
@@ -598,14 +647,24 @@ separate capability: ordinary show output still omits the ledger. Text and
 --once are refused before a request. A missing, older, disabled, malformed, or
 oversized view is unavailable, not zero usage and not a partial receipt list.
 `,
-	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline]
+	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current]
 
-Without a file, reports local unconfigured acquisition preflight refusals; no
-provider is contacted. --claude-statusline explicitly reads a bounded native
-callback from stdin; its provider freshness and account binding are Unknown.
---from-file reads an untrusted bounded cached read, with
-original observation and served times preserved. It does not configure live
-acquisition or establish provider coverage, account binding or freshness.
+Without --from-file, --claude-statusline, or --read-current, reports local
+unconfigured acquisition preflight refusals. No provider is contacted and no
+operator connection is opened. --claude-statusline explicitly reads a bounded
+native callback from stdin; its provider freshness and account binding are
+Unknown. --from-file reads an untrusted bounded cached read, with original
+observation and served times preserved. It does not configure live acquisition
+or establish provider coverage, account binding or freshness.
+
+--read-current is off unless set. It cannot be combined with --from-file or
+--claude-statusline. It performs one GET /v1/provider-allowances through the
+configured operator client and prints that providerallowance.read.v1 document.
+Redirects are not followed and the GET is not retried. Denial, absence, and an
+invalid or oversized body are not echoed. The serving clock does not refresh
+provider freshness. This is not the Codex current-source slot; usage-source
+--read-current is unchanged. The command does not grant, poll a provider, or
+open a credential.
 `,
 	"usage-source": `Usage: agent-run usage-source -o json --incarnation ID --generation N --max-age 30m (--codex-tool-report FILE|- | --codex-raw-tool-report FILE|- --observed-at RFC3339) [--publish]
        agent-run usage-source -o json --incarnation ID --generation N --max-age 30m --read-current

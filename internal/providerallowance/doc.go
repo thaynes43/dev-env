@@ -23,9 +23,12 @@
 // projection. One present member stays a scalar.
 //
 // UsageJSONCommand documents the existing agent-run -o json convention for a
-// later read command. This package does not register that command, open a
-// connection, or store observations. The seventeen transition fixtures are
-// Packet B1 specifications, not collector results.
+// cached-read command. This package does not register a route or open a network
+// connection. The opt-in Collection keeps an in-memory bounded cache through
+// caller-supplied acquisition, clock, wait and trust inputs; it never starts
+// production collection by itself. Native display/passive adapters preserve
+// source and binding uncertainty. The seventeen original transition fixtures
+// remain Packet B1 specifications, not live collector results.
 //
 // FixtureParseLimits bounds the reviewed fixtures. It is not a production SLO.
 package providerallowance

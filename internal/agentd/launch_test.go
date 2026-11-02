@@ -109,6 +109,26 @@ func TestBuildLaunchTask(t *testing.T) {
 	}
 }
 
+func TestOrdinaryClaudeLaunchNamesCheckpointWithoutAKey(t *testing.T) {
+	s, sess, ws := launchFixture(t)
+	s.CoordinatorInstructions = true
+	s.PodUID = "pod-ordinary"
+	sess.SessionUID = "session-ordinary"
+	l, err := BuildLaunch(s, sess, ws, "boot1", time.Now())
+	joined := strings.Join(l.Argv, "\n")
+	if err != nil || !l.CoordinatorInstructions || l.ChildDecisions || l.UsageSource == nil || len(l.UsageSource.AttemptID) != 64 {
+		t.Fatalf("claude ordinary launch %+v %v", l, err)
+	}
+	if !strings.Contains(joined, "`agent-run instruction checkpoint --session <this-session>`") || !strings.Contains(joined, "no correction key") {
+		t.Fatalf("checkpoint guidance missing: %s", joined)
+	}
+	s.CoordinatorInstructions = false
+	off, err := BuildLaunch(s, sess, ws, "boot1", time.Now())
+	if err != nil || off.CoordinatorInstructions || strings.Contains(strings.Join(off.Argv, "\n"), "instruction checkpoint") {
+		t.Fatalf("disabled claude launch changed: %v", err)
+	}
+}
+
 func TestBuildLaunchRefuses(t *testing.T) {
 	cases := []struct {
 		name   string

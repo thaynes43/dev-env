@@ -215,6 +215,9 @@ type Server struct {
 	// Nil, or RouteEnabled false, leaves both methods unregistered.
 	// Selection.MaxAge does not register the route.
 	ProviderSourceReports *ProviderSourceReports
+	// AggregateAllowanceReports serves GET /v1/provider-allowances.
+	// Nil leaves the route unregistered. It is not the Codex current-source slot.
+	AggregateAllowanceReports *AggregateAllowanceReports
 
 	// createMu serialises this replica's creates, so its idempotency,
 	// child-count, grant-merge and pending-grant checks see each other's writes.
@@ -276,6 +279,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(apiv1.InboxPath, s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInbox, http.MethodGet: s.listInbox}}))
 	mux.Handle(apiv1.InboxPath+"/{message}", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.readInbox}}))
 	mux.Handle(apiv1.InboxPath+"/{message}/ack", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.ackInbox, http.MethodGet: s.readInboxAck}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/instruction-attempt", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.registerInstructionAttempt, http.MethodGet: s.readInstructionAddress}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/instructions", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.publishInstruction, http.MethodGet: s.listPendingInstructions}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/instructions/{key}/consume", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodPost: s.consumeInstruction}}))
+	mux.Handle(apiv1.SessionsPath+"/{name}/instructions/{key}", s.serve(route{inbox: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.readInstruction}}))
 	mux.Handle(apiv1.TaskClaimsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskClaim, http.MethodGet: s.listTaskClaims}}))
 	mux.Handle(apiv1.TaskClaimsPath+"/{claim}", s.serve(route{coordinator: true, methods: map[string]handler{http.MethodGet: s.getTaskClaim}}))
 	mux.Handle(apiv1.TaskBudgetsPath, s.serve(route{coordinator: true, methods: map[string]handler{http.MethodPost: s.createTaskBudget}}))
@@ -368,6 +375,11 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle(ProviderSourceReportPath, s.serve(route{methods: map[string]handler{
 			http.MethodGet: s.ProviderSourceReports.Handle,
 			http.MethodPut: s.ProviderSourceReports.Handle,
+		}}))
+	}
+	if s.AggregateAllowanceReports.RouteEnabled() {
+		mux.Handle(ProviderAllowanceReportsPath, s.serve(route{methods: map[string]handler{
+			http.MethodGet: s.AggregateAllowanceReports.Handle,
 		}}))
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

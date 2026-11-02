@@ -285,6 +285,31 @@ func TestManagedCodexThreadReceiptAndProtocolRefusal(t *testing.T) {
 	}
 }
 
+func TestPersistCodexThreadKeepsPriorSnapshotAndIdentity(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "launch.json")
+	const threadID = "12345678-1234-1234-1234-123456789abc"
+	l := Launch{
+		Provider: protocol.AgentCodex, Session: "task", SessionUID: "session-uid", PodUID: "pod-uid",
+		Prompt: "initial prompt", BootID: "boot-1", NativeInvocationID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		UsageSource: &protocol.UsageSource{SessionUID: "session-uid", PodUID: "pod-uid", Provider: protocol.AgentCodex, RequestedModel: "gpt-6.1-sol", AttemptID: strings.Repeat("ab", 32)},
+	}
+	snapshot := l
+	if err := persistCodexThread(path, &l, threadID); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ConversationID != "" || snapshot.NativeThreadConfirmed || snapshot.UsageSource.RequestedModel != "gpt-6.1-sol" || snapshot.NativeInvocationID != l.NativeInvocationID {
+		t.Fatal("thread persistence changed the registration snapshot")
+	}
+	if l.ConversationID != threadID || !l.NativeThreadConfirmed || l.UsageSource.RequestedModel != "gpt-6.1-sol" || l.Prompt != "initial prompt" || l.PodUID != "pod-uid" {
+		t.Fatal("live launch lost the thread or its original identity")
+	}
+	var saved Launch
+	if readJSONFile(path, &saved) != nil || !saved.NativeThreadConfirmed || saved.ConversationID != threadID || saved.UsageSource == nil || saved.UsageSource.RequestedModel != "gpt-6.1-sol" || saved.NativeInvocationID != l.NativeInvocationID || saved.SessionUID != "session-uid" {
+		t.Fatal("durable thread receipt dropped requested model or native provenance")
+	}
+}
+
 func TestManagedCodexAmbiguousTmuxStartRetainsNoReplayFence(t *testing.T) {
 	s, sess, ws, now := managedCodexFixture(t)
 	l, err := BuildLaunch(s, sess, ws, "first", now)
@@ -420,8 +445,11 @@ cat >/dev/null
 				}
 			}
 			developer, _ := scalar["developer_instructions"].(string)
-			if strings.Contains(developer, managedChildDecisionGuard) != enabled || l.ChildDecisions != enabled {
+			if strings.Contains(developer, managedChildDecisionGuard) != enabled || l.ChildDecisions != enabled || l.CoordinatorInstructions {
 				t.Fatal("guard and runtime feature disagree")
+			}
+			if strings.Contains(developer, "instruction checkpoint") {
+				t.Fatal("instruction checkpoint guidance was injected without the instruction capability")
 			}
 			if enabled && (!strings.Contains(developer, "256 bytes") || strings.Contains(developer, "512 bytes")) {
 				t.Fatal("discovery guard misstated accepted option bound")
