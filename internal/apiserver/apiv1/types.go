@@ -180,6 +180,10 @@ type CreateSessionRequest struct {
 	Name string `json:"name,omitempty"`
 	// Lane is a summoned caller's lane (plan 10).
 	Lane string `json:"lane,omitempty"`
+	// CoordinatorInstructions opts this new ordinary private catalog task into
+	// coordinator instructions. Omission and explicit false stay off. The body
+	// cannot name a parent UID; the API assigns that from the live parent.
+	CoordinatorInstructions bool `json:"coordinatorInstructions,omitempty"`
 }
 
 // Limits caps a task session.

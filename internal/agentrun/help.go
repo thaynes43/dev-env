@@ -386,6 +386,10 @@ Flags:
                              this selects a repository declared in that project.
   --project <name>           a project declared in the operator's accepted catalog
                              (tasks only; cannot combine with rescue restore)
+  --coordinator-instructions explicit opt-in for one new ordinary private project
+                             task child; requires a live authenticated parent and
+                             the dev profile. Default off; does not enroll an
+                             existing Session or grant authority.
   --agent claude             the agent (default claude; codex and opencode arrive
                              in plans 04 and 09)
   --model <id>               a full model id, never an alias such as opus (default
@@ -647,22 +651,27 @@ separate capability: ordinary show output still omits the ledger. Text and
 --once are refused before a request. A missing, older, disabled, malformed, or
 oversized view is unavailable, not zero usage and not a partial receipt list.
 `,
-	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current]
+	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current | --publish-file FILE|-]
 
-Without --from-file, --claude-statusline, or --read-current, reports local
-unconfigured acquisition preflight refusals. No provider is contacted and no
-operator connection is opened. --claude-statusline explicitly reads a bounded
-native callback from stdin; its provider freshness and account binding are
-Unknown. --from-file reads an untrusted bounded cached read, with original
-observation and served times preserved. It does not configure live acquisition
-or establish provider coverage, account binding or freshness.
+Without --from-file, --claude-statusline, --read-current, or --publish-file,
+reports local unconfigured acquisition preflight refusals. No provider is
+contacted and no operator connection is opened. --claude-statusline explicitly
+reads a bounded native callback from stdin; its provider freshness and account
+binding are Unknown. --from-file reads an untrusted bounded cached read, with
+original observation and served times preserved. It does not configure live
+acquisition or establish provider coverage, account binding or freshness.
 
---read-current is off unless set. It cannot be combined with --from-file or
---claude-statusline. It performs one GET /v1/provider-allowances through the
-configured operator client and prints that providerallowance.read.v1 document.
-Redirects are not followed and the GET is not retried. Denial, absence, and an
-invalid or oversized body are not echoed. The serving clock does not refresh
-provider freshness. This is not the Codex current-source slot; usage-source
+--read-current is off unless set. It cannot be combined with --from-file,
+--claude-statusline, or --publish-file. It performs one GET /v1/provider-allowances
+through the configured operator client and prints that providerallowance.read.v1
+document. Redirects are not followed and the GET is not retried. Denial, absence,
+and an invalid or oversized body are not echoed. The serving clock does not
+refresh provider freshness. --publish-file FILE|- is off unless set. It cannot
+be combined with --from-file, --claude-statusline, or --read-current. It reads
+one bounded regular file, or stdin when FILE is -, and performs one PUT
+/v1/provider-allowances. Redirects are not followed and the PUT is not retried.
+A refusal is not echoed. The command does not acquire from a provider.
+This is not the Codex current-source slot; usage-source
 --read-current is unchanged. The command does not grant, poll a provider, or
 open a credential.
 `,

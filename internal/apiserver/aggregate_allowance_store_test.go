@@ -1,0 +1,512 @@
+package apiserver
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/thaynes43/dev-env/internal/providerallowance"
+)
+
+func TestAggregateAllowanceStoreReplayAndRefusals(t *testing.T) {
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := &AggregateAllowanceReportStore{
+		Writer: mem, Live: mem, Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, DataKey: AggregateAllowanceDataKey,
+		Registry: providerallowance.NewStaticRegistry(providerallowance.RegistryParts{}), MaxAge: 30 * time.Minute,
+	}
+	empty, err := store.Read(context.Background())
+	if err != nil || empty.Found || empty.Suppressed || len(empty.Raw) != 0 {
+		t.Fatalf("empty view %+v %v", empty, err)
+	}
+	raw, err := json.Marshal(UnconfiguredAggregateDocument())
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := json.Marshal(again); err != nil || string(second) != string(raw) {
+		t.Fatal("unconfigured document is not canonical")
+	}
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 1 || mem.cm.Data["keep"] != "yes" {
+		t.Fatal(err, mem.updates)
+	}
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 1 {
+		t.Fatal("replay wrote", err, mem.updates)
+	}
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	var missing providerallowance.ReadResponse
+	if err := json.Unmarshal(raw, &missing); err != nil {
+		t.Fatal(err)
+	}
+	filtered := make([]providerallowance.SourceStatus, 0, len(missing.SourceStatuses))
+	for _, status := range missing.SourceStatuses {
+		if status.Provider != "cursor" {
+			filtered = append(filtered, status)
+		}
+	}
+	missing.SourceStatuses = filtered
+	bad := canonicalAllowanceFixture(t, missing)
+	if err := store.Put(context.Background(), bad, now); !errors.Is(err, ErrAggregateRejected) || mem.updates != 1 || mem.cm.Data[AggregateAllowanceDataKey] != held {
+		t.Fatal("missing cursor", err, mem.updates)
+	}
+	fresh := UnconfiguredAggregateDocument()
+	fresh.SourceStatuses[2].Freshness.State = providerallowance.FreshFresh
+	freshRaw := canonicalAllowanceFixture(t, fresh)
+	if err := store.Put(context.Background(), freshRaw, now); !errors.Is(err, ErrAggregateRejected) || mem.cm.Data[AggregateAllowanceDataKey] != held {
+		t.Fatal("fresh gap", err)
+	}
+	mem.cm.Data[AggregateAllowanceDataKey] = "{"
+	if err := store.Put(context.Background(), raw, now); !errors.Is(err, ErrAggregateRejected) || mem.cm.Data[AggregateAllowanceDataKey] != "{" || mem.updates != 1 {
+		t.Fatal("undecodable slot was repaired", err, mem.updates)
+	}
+	mem.cm.Data[AggregateAllowanceDataKey] = held
+	clash := &rvClash{slotMem: mem}
+	moved := UnconfiguredAggregateDocument()
+	moved.ServedAt = "2026-11-02T03:10:00Z"
+	movedRaw := canonicalAllowanceFixture(t, moved)
+	clashStore := *store
+	clashStore.Writer = clash
+	if err := clashStore.Put(context.Background(), movedRaw, now); !errors.Is(err, ErrAggregateConflict) || mem.cm.Data[AggregateAllowanceDataKey] != held {
+		t.Fatal("conflict", err)
+	}
+}
+
+type rvClash struct{ *slotMem }
+
+func canonicalAllowanceFixture(t *testing.T, doc providerallowance.ReadResponse) []byte {
+	t.Helper()
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(again)
+	if err != nil || string(out) != string(raw) {
+		t.Fatal("fixture is not canonical")
+	}
+	return out
+}
+
+func (c rvClash) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	c.cm.ResourceVersion = "999"
+	return c.slotMem.Update(ctx, obj, opts...)
+}
+
+func TestAggregateAllowanceRejectsFutureReceiptAndForeignStatus(t *testing.T) {
+	_, second := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	base := cloneAllowanceReport(t, second)
+	item := allowanceOpenAIItem(t, &base)
+	observedAt, err := time.Parse(time.RFC3339Nano, *item.Observation.ProviderObservedAt)
+	if err != nil || observedAt.After(now) || item.Freshness.State != providerallowance.FreshFresh {
+		t.Fatalf("fixture is not a current provider time <= now: %+v", item.Freshness)
+	}
+	gap := canonicalAllowanceFixture(t, UnconfiguredAggregateDocument())
+	if err := store.Put(context.Background(), gap, now); err != nil || mem.updates != 1 {
+		t.Fatal("honest unknown gap", err, mem.updates)
+	}
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	verifiedGap := UnconfiguredAggregateDocument()
+	other := "other-account"
+	verifiedGap.SourceStatuses[0].Binding = providerallowance.BindingRecord{State: providerallowance.BindingVerified, Generation: 1, AccountRef: &other}
+	refuseAllowancePut(t, store, mem, verifiedGap, now, held)
+
+	future := cloneAllowanceReport(t, second)
+	futureItem := allowanceOpenAIItem(t, &future)
+	futureItem.ReceivedAt = "2099-01-01T00:00:00Z"
+	later := "2099-06-01T00:00:00Z"
+	for i := range futureItem.Observation.Measures {
+		if futureItem.Observation.Measures[i].Window.ResetPrecision == providerallowance.ResetInstant {
+			futureItem.Observation.Measures[i].Window.ResetAt = &later
+		}
+	}
+	futureStatus := allowanceOpenAIStatus(t, &future)
+	if futureStatus.LastGood == nil {
+		t.Fatal("fixture has no last good")
+	}
+	futureStatus.LastGood.ReceivedAt = futureItem.ReceivedAt
+	refuseAllowancePut(t, store, mem, future, now, held)
+
+	foreign := cloneAllowanceReport(t, second)
+	foreignStatus := allowanceOpenAIStatus(t, &foreign)
+	foreignStatus.Binding.AccountRef = &other
+	refuseAllowancePut(t, store, mem, foreign, now, held)
+
+	workspace := cloneAllowanceReport(t, second)
+	workspaceName := "other-workspace"
+	allowanceOpenAIStatus(t, &workspace).Binding.WorkspaceRef = &workspaceName
+	refuseAllowancePut(t, store, mem, workspace, now, held)
+
+	generation := cloneAllowanceReport(t, second)
+	allowanceOpenAIStatus(t, &generation).Binding.Generation = 4
+	refuseAllowancePut(t, store, mem, generation, now, held)
+
+	producer := cloneAllowanceReport(t, second)
+	allowanceOpenAIStatus(t, &producer).ProducerRef = "foreign-producer"
+	refuseAllowancePut(t, store, mem, producer, now, held)
+
+	incarnation := cloneAllowanceReport(t, second)
+	incarnationItem := allowanceOpenAIItem(t, &incarnation)
+	incarnationItem.Observation.ProducerIncarnation = "foreign-incarnation"
+	incarnationItem.Freshness.State = providerallowance.FreshExpired
+	for i := range incarnationItem.CurrentMeasures {
+		incarnationItem.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+		incarnationItem.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+	}
+	incarnationStatus := allowanceOpenAIStatus(t, &incarnation)
+	incarnationStatus.Freshness.State = providerallowance.FreshExpired
+	refuseAllowancePut(t, store, mem, incarnation, now, held)
+
+	good := canonicalAllowanceFixture(t, second)
+	if err := store.Put(context.Background(), good, now); err != nil || mem.updates != 2 {
+		t.Fatal("current report", err, mem.updates)
+	}
+	stored := mem.cm.Data[AggregateAllowanceDataKey]
+	if stored == held || !strings.Contains(stored, "fixture-account") {
+		t.Fatal("current report was not stored")
+	}
+	again := cloneAllowanceReport(t, second)
+	allowanceOpenAIStatus(t, &again).Binding.AccountRef = &other
+	refuseAllowancePut(t, store, mem, again, now, stored)
+}
+
+func repairAllowanceStore(mem *slotMem) *AggregateAllowanceReportStore {
+	account, workspace := "fixture-account", "fixture-workspace"
+	return &AggregateAllowanceReportStore{
+		Writer: mem, Live: mem, Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, DataKey: AggregateAllowanceDataKey,
+		Contexts: []providerallowance.TrustedContext{{
+			Provider: "openai", ProducerRef: "fixture-producer", ProducerIncarnation: "fixture-incarnation-1", BindingGeneration: 0,
+			AccountRef: &account, WorkspaceRef: &workspace, BindingState: providerallowance.BindingVerified,
+			SourceKind: providerallowance.SourceNativeRPC, SourceVersion: "fixture-v1",
+		}},
+		Registry: assemblyRegistry(), MaxAge: 30 * time.Minute,
+	}
+}
+
+func refuseAllowancePut(t *testing.T, store *AggregateAllowanceReportStore, mem *slotMem, doc providerallowance.ReadResponse, now time.Time, held string) {
+	t.Helper()
+	updates := mem.updates
+	raw := canonicalAllowanceFixture(t, doc)
+	if err := store.Put(context.Background(), raw, now); !errors.Is(err, ErrAggregateRejected) || mem.updates != updates || mem.cm.Data[AggregateAllowanceDataKey] != held || mem.cm.Data["keep"] != "yes" {
+		t.Fatalf("put refused as %v updates %d", err, mem.updates)
+	}
+}
+
+func cloneAllowanceReport(t *testing.T, doc providerallowance.ReadResponse) providerallowance.ReadResponse {
+	t.Helper()
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
+
+func allowanceOpenAIItem(t *testing.T, doc *providerallowance.ReadResponse) *providerallowance.ReadItem {
+	t.Helper()
+	for i := range doc.Items {
+		if doc.Items[i].Observation.Provider == "openai" {
+			return &doc.Items[i]
+		}
+	}
+	t.Fatal("missing openai item")
+	return nil
+}
+
+func allowanceOpenAIStatus(t *testing.T, doc *providerallowance.ReadResponse) *providerallowance.SourceStatus {
+	t.Helper()
+	for i := range doc.SourceStatuses {
+		if doc.SourceStatuses[i].Provider == "openai" {
+			return &doc.SourceStatuses[i]
+		}
+	}
+	t.Fatal("missing openai status")
+	return nil
+}
+
+func TestAggregateAllowanceStoreTrustedProducerRestart(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal(err)
+	}
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	before := allowanceOpenAIItem(t, &previous)
+	if before.Observation.Sequence <= 1 {
+		t.Fatal("fixture must precede a counter restart")
+	}
+	restarted := cloneAllowanceReport(t, previous)
+	after := allowanceOpenAIItem(t, &restarted)
+	after.Observation.ObservationID = "fixture-after-restart"
+	after.Observation.ProducerIncarnation = "fixture-incarnation-2"
+	after.Observation.Sequence = 1
+	captured, err := time.Parse(time.RFC3339Nano, before.Observation.CapturedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, err := time.Parse(time.RFC3339Nano, before.ReceivedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !received.After(captured.Add(2 * time.Nanosecond)) {
+		t.Fatal("fixture needs room for a valid newer capture before the prior receipt")
+	}
+	after.Observation.CapturedAt = captured.Add(time.Minute).Format(time.RFC3339Nano)
+	after.ReceivedAt = received.Add(time.Minute).Format(time.RFC3339Nano)
+	good := allowanceOpenAIStatus(t, &restarted).LastGood
+	good.ObservationID, good.CapturedAt, good.ReceivedAt = after.Observation.ObservationID, after.Observation.CapturedAt, after.ReceivedAt
+
+	// A payload alone cannot select a new incarnation.
+	refuseAllowancePut(t, store, mem, restarted, now, held)
+	sameIncarnation := cloneAllowanceReport(t, restarted)
+	allowanceOpenAIItem(t, &sameIncarnation).Observation.ProducerIncarnation = before.Observation.ProducerIncarnation
+	refuseAllowancePut(t, store, mem, sameIncarnation, now, held)
+	store.Contexts[0].ProducerIncarnation = after.Observation.ProducerIncarnation
+	store.Registry = assemblyRegistryForIncarnation(after.Observation.ProducerIncarnation)
+	for _, tc := range []struct {
+		name string
+		edit func(*providerallowance.ReadItem)
+	}{
+		{"equal capture", func(item *providerallowance.ReadItem) { item.Observation.CapturedAt = before.Observation.CapturedAt }},
+		{"earlier capture", func(item *providerallowance.ReadItem) {
+			item.Observation.CapturedAt = captured.Add(-time.Second).Format(time.RFC3339Nano)
+		}},
+		{"equal receipt", func(item *providerallowance.ReadItem) {
+			item.Observation.CapturedAt = captured.Add(time.Nanosecond).Format(time.RFC3339Nano)
+			item.ReceivedAt = before.ReceivedAt
+		}},
+		{"earlier receipt", func(item *providerallowance.ReadItem) {
+			item.Observation.CapturedAt = captured.Add(time.Nanosecond).Format(time.RFC3339Nano)
+			item.ReceivedAt = received.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := cloneAllowanceReport(t, restarted)
+			item := allowanceOpenAIItem(t, &bad)
+			tc.edit(item)
+			last := allowanceOpenAIStatus(t, &bad).LastGood
+			last.CapturedAt, last.ReceivedAt = item.Observation.CapturedAt, item.ReceivedAt
+			refuseAllowancePut(t, store, mem, bad, now, held)
+		})
+	}
+	raw := canonicalAllowanceFixture(t, restarted)
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 2 {
+		t.Fatal("trusted restart did not recover the slot", err, mem.updates)
+	}
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 2 {
+		t.Fatal("restart replay refreshed the slot", err, mem.updates)
+	}
+	refuseAllowancePut(t, store, mem, previous, now, string(raw))
+	for _, change := range []func(*providerallowance.ReadItem){
+		func(item *providerallowance.ReadItem) {
+			item.Observation.Scope.AccountRef = assemblyString("different-account")
+		},
+		func(item *providerallowance.ReadItem) {
+			item.Observation.Scope.WorkspaceRef = assemblyString("different-workspace")
+		},
+	} {
+		bad := cloneAllowanceReport(t, restarted)
+		change(allowanceOpenAIItem(t, &bad))
+		if err := preserveAllowance(previous, bad); !errors.Is(err, ErrAggregateRejected) {
+			t.Fatal("restart bypassed scope preservation", err)
+		}
+	}
+	olderBinding := cloneAllowanceReport(t, previous)
+	allowanceOpenAIItem(t, &olderBinding).Observation.BindingGeneration = 1
+	if err := preserveAllowance(olderBinding, restarted); !errors.Is(err, ErrAggregateRejected) {
+		t.Fatal("restart rolled back the binding generation", err)
+	}
+}
+
+func TestAggregateAllowanceStoreExplicitAccountRebind(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal(err)
+	}
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	next := cloneAllowanceReport(t, previous)
+	item := allowanceOpenAIItem(t, &next)
+	item.Observation.ObservationID = "fixture-rebound"
+	item.Observation.Sequence++
+	account, workspace := "next-account", "next-workspace"
+	item.Observation.Scope.AccountRef, item.Observation.Scope.WorkspaceRef = &account, &workspace
+	item.Binding.AccountRef, item.Binding.WorkspaceRef = &account, &workspace
+	captured, _ := time.Parse(time.RFC3339Nano, item.Observation.CapturedAt)
+	received, _ := time.Parse(time.RFC3339Nano, item.ReceivedAt)
+	item.Observation.CapturedAt = captured.Add(time.Minute).Format(time.RFC3339Nano)
+	item.ReceivedAt = received.Add(time.Minute).Format(time.RFC3339Nano)
+	status := allowanceOpenAIStatus(t, &next)
+	status.Binding = item.Binding
+	status.LastGood.ObservationID, status.LastGood.CapturedAt, status.LastGood.ReceivedAt = item.Observation.ObservationID, item.Observation.CapturedAt, item.ReceivedAt
+	refuseAllowancePut(t, store, mem, next, now, held)
+	store.Contexts[0].AccountRef, store.Contexts[0].WorkspaceRef = &account, &workspace
+	store.Registry = assemblyRegistryForBinding("fixture-incarnation-1", account, workspace, 0)
+	// Selecting another account without advancing its generation still refuses.
+	refuseAllowancePut(t, store, mem, next, now, held)
+	store.Contexts[0].BindingGeneration = 1
+	store.Registry = assemblyRegistryForBinding("fixture-incarnation-1", account, workspace, 1)
+	item.Observation.BindingGeneration, item.Binding.Generation, status.Binding.Generation = 1, 1, 1
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, next), now); err != nil || mem.updates != 2 {
+		t.Fatal("explicit trusted rebind did not recover", err, mem.updates)
+	}
+	refuseAllowancePut(t, store, mem, previous, now, mem.cm.Data[AggregateAllowanceDataKey])
+}
+
+func TestAggregateAllowanceStorePreservesWatermarkAcrossGap(t *testing.T) {
+	first, second := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	raw := canonicalAllowanceFixture(t, second)
+	if err := store.Put(context.Background(), raw, now); err != nil {
+		t.Fatal(err)
+	}
+	refuseAllowancePut(t, store, mem, UnconfiguredAggregateDocument(), now, string(raw))
+	refuseAllowancePut(t, store, mem, first, now, string(raw))
+}
+
+func TestAggregateAllowanceStoreRejectsUnsupportedCurrentAndNoncurrentPoison(t *testing.T) {
+	_, second := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	raw := canonicalAllowanceFixture(t, second)
+	if err := store.Put(context.Background(), raw, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range []func(*providerallowance.ReadItem){
+		func(item *providerallowance.ReadItem) {
+			item.CurrentMeasures[0].State = providerallowance.CurrentUncapped
+			item.CurrentMeasures[0].Value = providerallowance.MeasureValue{State: providerallowance.ValueUncapped}
+		},
+		func(item *providerallowance.ReadItem) { item.CurrentMeasures[0].MeasureID = "invented-current" },
+	} {
+		bad := cloneAllowanceReport(t, second)
+		edit(allowanceOpenAIItem(t, &bad))
+		refuseAllowancePut(t, store, mem, bad, now, string(raw))
+	}
+	for _, foreign := range []bool{false, true} {
+		bad := cloneAllowanceReport(t, second)
+		item := allowanceOpenAIItem(t, &bad)
+		item.Observation.ObservationID = "new-withheld-capture"
+		item.Observation.Sequence++
+		item.Observation.CapturedAt, item.ReceivedAt = "2099-01-01T00:00:00Z", "2099-01-01T00:01:00Z"
+		if foreign {
+			item.Observation.ProducerIncarnation = "unselected"
+		}
+		item.Freshness.State, item.Freshness.Basis = providerallowance.FreshUnknown, providerallowance.BasisNone
+		for i := range item.CurrentMeasures {
+			item.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+			item.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+		}
+		status := allowanceOpenAIStatus(t, &bad)
+		status.Freshness = item.Freshness
+		status.Binding = providerallowance.BindingRecord{State: providerallowance.BindingUnknown}
+		refuseAllowancePut(t, store, mem, bad, now, string(raw))
+		if foreign {
+			item.Observation.CapturedAt, item.ReceivedAt = "2026-11-02T03:07:00Z", "2026-11-02T03:08:00Z"
+			refuseAllowancePut(t, store, mem, bad, now, string(raw))
+		}
+	}
+	if mem.updates != 1 {
+		t.Fatal("refused reports mutated slot", mem.updates)
+	}
+}
+
+func TestAggregateAllowanceStoreAdvancesTrustedUnknownTimeCapture(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	item := allowanceOpenAIItem(t, &previous)
+	item.Observation.ProviderObservedAt = nil
+	item.Freshness.State, item.Freshness.Basis = providerallowance.FreshUnknown, providerallowance.BasisCapture
+	for i := range item.CurrentMeasures {
+		item.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+		item.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+	}
+	status := allowanceOpenAIStatus(t, &previous)
+	status.Freshness = item.Freshness
+	status.LastGood.ProviderObservedAt = nil
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal("first unknown-time capture", err)
+	}
+	next := cloneAllowanceReport(t, previous)
+	after := allowanceOpenAIItem(t, &next)
+	after.Observation.ObservationID = "next-trusted-unknown-time"
+	after.Observation.Sequence++
+	captured, _ := time.Parse(time.RFC3339Nano, after.Observation.CapturedAt)
+	received, _ := time.Parse(time.RFC3339Nano, after.ReceivedAt)
+	after.Observation.CapturedAt, after.ReceivedAt = captured.Add(time.Minute).Format(time.RFC3339Nano), received.Add(time.Minute).Format(time.RFC3339Nano)
+	good := allowanceOpenAIStatus(t, &next).LastGood
+	good.ObservationID, good.CapturedAt, good.ReceivedAt = after.Observation.ObservationID, after.Observation.CapturedAt, after.ReceivedAt
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	erased := cloneAllowanceReport(t, next)
+	allowanceOpenAIStatus(t, &erased).LastGood = nil
+	refuseAllowancePut(t, store, mem, erased, now, held)
+	unrelated := cloneAllowanceReport(t, next)
+	allowanceOpenAIStatus(t, &unrelated).LastGood.ObservationID = "unrelated-history"
+	refuseAllowancePut(t, store, mem, unrelated, now, held)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, next), now); err != nil || mem.updates != 2 {
+		t.Fatal("new trusted unknown-time capture cannot advance", err, mem.updates)
+	}
+}
+
+func TestAggregateAllowanceStoreRetainsHistoryAfterContextRemoval(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal(err)
+	}
+	held := cloneAllowanceReport(t, previous)
+	item := allowanceOpenAIItem(t, &held)
+	item.Freshness.State, item.Freshness.Basis = providerallowance.FreshUnknown, providerallowance.BasisNone
+	item.Binding = providerallowance.BindingRecord{State: providerallowance.BindingUnknown}
+	for i := range item.CurrentMeasures {
+		item.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+		item.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+	}
+	status := allowanceOpenAIStatus(t, &held)
+	status.Freshness, status.Binding = item.Freshness, item.Binding
+	status.Availability = providerallowance.AvailabilityUnavailable
+	status.LastAttempt.Result = providerallowance.AttemptUnavailable
+	for i := range held.SourceStatuses {
+		if held.SourceStatuses[i].Provider == "cursor" {
+			held.SourceStatuses[i].LastAttempt.Result = providerallowance.AttemptUnavailable
+		}
+	}
+	store.Contexts = nil
+	raw := canonicalAllowanceFixture(t, held)
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 2 {
+		t.Fatal("held history blocks other provider status updates", err, mem.updates)
+	}
+	stored, err := decodeCanonicalAllowance(mem.cm.Data[AggregateAllowanceDataKey])
+	if err != nil || !observationsEqual(allowanceOpenAIItem(t, &stored).Observation, allowanceOpenAIItem(t, &previous).Observation) || !lastGoodEqual(allowanceOpenAIStatus(t, &stored).LastGood, allowanceOpenAIStatus(t, &previous).LastGood) {
+		t.Fatal("history changed", err)
+	}
+}

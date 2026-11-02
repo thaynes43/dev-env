@@ -53,6 +53,9 @@ type SessionSource struct {
 	// request and does not assign allowance.
 	allowance     AllowanceReader
 	currentSource *currentSourceConnection
+	// aggregateAllowance reads the common cached-read route for one authorized
+	// Sessions request. Nil unless that config is present and currentSource is unset.
+	aggregateAllowance *aggregateAllowanceConnection
 	// questionAuditProject is the one catalog project for a selected session's
 	// question-audit metadata. Empty performs no audit read.
 	questionAuditProject string
@@ -1278,6 +1281,7 @@ func serveProduct(w http.ResponseWriter, r *http.Request, c AssemblyConfig) {
 		// The slot read runs only after Authorize has accepted this request,
 		// and before the final authorization check can refuse to release it.
 		page = c.Sessions.projectAuthorizedCurrentSource(readCtx, page)
+		page = c.Sessions.projectAuthorizedAggregateAllowance(readCtx, page)
 		cancel()
 		if page.ReadFailure != nil && c.Sessions == nil {
 			page.ReadFailure.ObservedAt = c.Now().UTC().Format(time.RFC3339Nano)

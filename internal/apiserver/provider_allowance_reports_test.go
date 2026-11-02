@@ -259,31 +259,40 @@ func TestAggregateAllowancePortalBoundary(t *testing.T) {
 	id := saIdentity(portalReaderRef)
 	id.PodName, id.PodUID = pod.Name, string(pod.UID)
 	f.auth["tok-portal"] = id
+	if !PortalAggregateAllowanceGET(h.RouteEnabled(), http.MethodGet, ProviderAllowanceReportsPath) || PortalAggregateAllowanceGET(h.RouteEnabled(), http.MethodPut, ProviderAllowanceReportsPath) || PortalAggregateAllowanceGET(false, http.MethodGet, ProviderAllowanceReportsPath) || PortalAggregateAllowanceGET(true, http.MethodGet, ProviderSourceReportPath) {
+		t.Fatal("portal aggregate gate widened")
+	}
 	got := f.do(http.MethodGet, ProviderAllowanceReportsPath, "tok-portal", nil)
-	if got.Code != http.StatusForbidden || !strings.Contains(got.Body.String(), "may only list session summaries") || calls != 0 {
+	if got.Code != http.StatusOK || calls != 1 || strings.Contains(got.Body.String(), "tok-portal") {
 		t.Fatalf("portal route status %d calls %d %s", got.Code, calls, got.Body.String())
 	}
+	if put := f.do(http.MethodPut, ProviderAllowanceReportsPath, "tok-portal", nil); put.Code != http.StatusMethodNotAllowed || calls != 1 {
+		t.Fatalf("portal put status %d calls %d", put.Code, calls)
+	}
+	if unrelated := f.do(http.MethodGet, apiv1.FleetPath, "tok-portal", nil); unrelated.Code != http.StatusForbidden || !strings.Contains(unrelated.Body.String(), "may only list session summaries") || calls != 1 {
+		t.Fatalf("unrelated portal route %d %s", unrelated.Code, unrelated.Body.String())
+	}
 	status, body, err := h.Handle(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, ProviderAllowanceReportsPath, nil), &caller{kind: kindPortalReader, identity: id, pod: pod})
-	if err != nil || status != http.StatusOK || body == nil || calls != 1 {
+	if err != nil || status != http.StatusOK || body == nil || calls != 2 {
 		t.Fatalf("direct portal handle %d %v %d", status, err, calls)
 	}
 	foreign := id
 	foreign.ServiceAccount = "dev-env-v2-portal-other"
-	if _, _, err = h.Handle(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, ProviderAllowanceReportsPath, nil), &caller{kind: kindPortalReader, identity: foreign, pod: pod}); err == nil || calls != 1 {
+	if _, _, err = h.Handle(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, ProviderAllowanceReportsPath, nil), &caller{kind: kindPortalReader, identity: foreign, pod: pod}); err == nil || calls != 2 {
 		t.Fatal("foreign portal identity was accepted", calls)
 	}
 	deleting := pod.DeepCopy()
 	stamp := metav1.NewTime(f.now)
 	deleting.DeletionTimestamp = &stamp
-	if _, _, err = h.Handle(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, ProviderAllowanceReportsPath, nil), &caller{kind: kindPortalReader, identity: id, pod: deleting}); err == nil || calls != 1 {
+	if _, _, err = h.Handle(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, ProviderAllowanceReportsPath, nil), &caller{kind: kindPortalReader, identity: id, pod: deleting}); err == nil || calls != 2 {
 		t.Fatal("deleting portal pod was accepted", calls)
 	}
 	replaced := id
 	replaced.PodUID = "replaced-portal"
-	if _, _, err = h.Handle(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, ProviderAllowanceReportsPath, nil), &caller{kind: kindPortalReader, identity: replaced, pod: pod}); err == nil || calls != 1 {
+	if _, _, err = h.Handle(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, ProviderAllowanceReportsPath, nil), &caller{kind: kindPortalReader, identity: replaced, pod: pod}); err == nil || calls != 2 {
 		t.Fatal("replaced portal pod was accepted", calls)
 	}
-	if f.do(http.MethodGet, ProviderAllowanceReportsPath, token, nil).Code != http.StatusOK || calls != 2 {
+	if f.do(http.MethodGet, ProviderAllowanceReportsPath, token, nil).Code != http.StatusOK || calls != 3 {
 		t.Fatal("allowlisted session read changed", calls)
 	}
 }

@@ -1765,3 +1765,46 @@ func TestCoordinatorInstructionEndedAttemptLedger(t *testing.T) {
 	badID.Status.CoordinatorInstructionAttempt.AttemptID = "not-an-attempt"
 	wantInvalid(t, k8s.Status().Update(c, badID), "attemptID")
 }
+
+// TestCoordinatorInstructionOptInImmutableAndDefaultOff exercises the generated
+// CRD's default-off storage and immutable enrollment through the API server.
+func TestCoordinatorInstructionOptInImmutableAndDefaultOff(t *testing.T) {
+	created := taskSession()
+	if err := k8s.Create(ctx(t), created); err != nil {
+		t.Fatal(err)
+	}
+	if get(t, created).Spec.CoordinatorInstructions {
+		t.Fatal("omitted opt-in was stored as enabled")
+	}
+	legacy := get(t, created)
+	legacy.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if err := k8s.Update(ctx(t), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(t, created); got.Spec.CoordinatorInstructions || got.Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+		t.Fatalf("legacy update changed opt-in or mode: %+v", got.Spec)
+	}
+	enabled := get(t, created)
+	enabled.Spec.CoordinatorInstructions = true
+	wantInvalid(t, k8s.Update(ctx(t), enabled), "coordinator instruction opt-in is immutable")
+
+	opted := taskSession()
+	opted.Spec.CoordinatorInstructions = true
+	if err := k8s.Create(ctx(t), opted); err != nil {
+		t.Fatal(err)
+	}
+	if !get(t, opted).Spec.CoordinatorInstructions {
+		t.Fatal("explicit opt-in was not stored")
+	}
+	cleared := get(t, opted)
+	cleared.Spec.CoordinatorInstructions = false
+	wantInvalid(t, k8s.Update(ctx(t), cleared), "coordinator instruction opt-in is immutable")
+	kept := get(t, opted)
+	kept.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+	if err := k8s.Update(ctx(t), kept); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(t, opted); !got.Spec.CoordinatorInstructions || got.Spec.OperatingMode != v1alpha1.OperatingModeSuspended {
+		t.Fatalf("allowed update did not keep the opt-in: %+v", got.Spec)
+	}
+}

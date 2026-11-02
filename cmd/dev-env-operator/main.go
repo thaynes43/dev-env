@@ -177,6 +177,7 @@ type options struct {
 	standbyProfile, standbyEffort string
 	catalogBinding                *apiserver.CatalogBinding
 	providerSource                *providerSourceSelection
+	aggregateAllowance            *aggregateAllowanceSelection
 }
 
 func parseFlags(args []string) (options, error) {
@@ -289,6 +290,9 @@ func parseFlags(args []string) (options, error) {
 	var providerSourceEnabled bool
 	fs.BoolVar(&providerSourceEnabled, "enable-provider-source-reports", false, "HELD SOURCE ONLY: serve the fixed Codex current-source slot when --provider-source-config is exact; default off, does not enable the API or the portal reader, and max age alone does not enable the route")
 	providerSourceRaw := fs.String("provider-source-config", "", "HELD SOURCE ONLY: inline JSON selection for --enable-provider-source-reports; empty leaves the route off and is not a file path")
+	var aggregateAllowanceEnabled bool
+	fs.BoolVar(&aggregateAllowanceEnabled, "enable-aggregate-allowance-reports", false, "HELD SOURCE ONLY: serve the fixed aggregate allowance slot when --aggregate-allowance-config is exact; default off, does not enable the API or infer enable from max age")
+	aggregateAllowanceRaw := fs.String("aggregate-allowance-config", "", "HELD SOURCE ONLY: inline JSON selection for --enable-aggregate-allowance-reports; empty leaves the route off and is not a file path")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -644,6 +648,9 @@ func parseFlags(args []string) (options, error) {
 	if o.providerSource, err = parseProviderSourceConfig(providerSourceEnabled, *providerSourceRaw, o.apiAddr, o.sessionNamespace); err != nil {
 		return o, err
 	}
+	if o.aggregateAllowance, err = parseAggregateAllowanceConfig(aggregateAllowanceEnabled, *aggregateAllowanceRaw, o.apiAddr, o.sessionNamespace); err != nil {
+		return o, err
+	}
 	return o, nil
 }
 
@@ -883,6 +890,12 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		// Fixed aggregate slot. Nil unless the explicit selection parsed.
+		// Construction does not read, list, or watch the ConfigMap.
+		aggregateReports, err := aggregateAllowanceReports(o.aggregateAllowance, mgr.GetClient(), mgr.GetAPIReader())
+		if err != nil {
+			return err
+		}
 		api := &apiserver.Server{
 			PortalMessageTargets:      o.portalMessageTargets,
 			PortalLaunchRepos:         o.portalLaunchRepos,
@@ -943,6 +956,7 @@ func run(args []string) error {
 			PolicyNamespace:            o.policyNamespace,
 			Asks:                       askStore,
 			ProviderSourceReports:      sourceReports,
+			AggregateAllowanceReports:  aggregateReports,
 		}
 		// The standby session is default off. It is made through the API's own
 		// creation path and found again by its label (Story110 T25, plan 03).

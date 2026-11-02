@@ -336,3 +336,20 @@ window. Absent fields preserve legacy JSON bytes and fingerprints; existing
 documents still decode. Older strict consumers must be upgraded before they
 receive the new fields. This compatibility change supplies no acquisition,
 account or entitlement trust, provider timestamp, or recurring-ingestion proof.
+
+### Configured aggregate assembly — 2026-11-02 (source only)
+
+The [aggregate transport contract](../../../../docs/provider-allowance-aggregate.md)
+connects a bounded collection snapshot to one existing ConfigMap slot through
+the operator, explicit CLI publication/read and an optional portal consumer.
+Both operator and portal assembly default off. Trust comes from caller-owned
+configuration rather than the report. The serving clock may degrade current
+values but cannot refresh original capture/provider/receipt times. Replay does
+not write; invalid stored data is not repaired implicitly. The selected Codex
+slot remains separate.
+
+This closes a source assembly gap. The synthetic roundtrip, focused/race suites,
+independent review and required CI qualify source only. Real upstream coverage,
+account binding, recurring ingestion and native/UI acceptance remain open under
+their existing authorization and holds. No runtime flags, ConfigMap, grants,
+observer, private adapter, worker image or Session are activated by this change.
