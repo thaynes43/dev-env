@@ -325,3 +325,14 @@ users to Usage at `https://grok.com/dashboard`. That is a supported display path
 it does not establish a compatible individual programmatic quota API or native
 authentication selector. Direct xAI API usage and legacy Cursor monthly meters
 must stay separate. No private call follows from this documentation.
+
+The typed reset compatibility change adds optional `Window.resetDisplayDate`
+and `Window.resetDisplayText`. A date is an exact calendar date; text is the
+original English month/day label without an inferred year. They are mutually
+exclusive, require `display_only` precision and a null `resetAt`, and never
+become a reset instant. The portal renders that exact typed label with a
+display-only suffix. Different labels cannot be combined as one derivation
+window. Absent fields preserve legacy JSON bytes and fingerprints; existing
+documents still decode. Older strict consumers must be upgraded before they
+receive the new fields. This compatibility change supplies no acquisition,
+account or entitlement trust, provider timestamp, or recurring-ingestion proof.

@@ -959,6 +959,120 @@ func TestMapProductAllowanceLocalPreflightShapeStaysDisconnected(t *testing.T) {
 	}
 }
 
+func TestMapProductAllowanceTypedResetDisplay(t *testing.T) {
+	doc := allowanceRead()
+	item := &doc.Items[0]
+	item.Observation.Provider = "cursor"
+	item.Observation.Source.Kind = pa.SourceNativeDisplay
+	item.Observation.DirectFields = []pa.DirectField{
+		{Field: "included", LexicalValue: allowanceString("75% used")},
+		{Field: "resetDisplayText", LexicalValue: allowanceString("Oct 28")},
+		{Field: "resetLabel", LexicalValue: allowanceString("Oct 28")},
+	}
+	item.Observation.Measures[0].Window = pa.Window{
+		Ref: "cursor-included-display", DurationMinutes: allowanceMinutes(300),
+		ResetPrecision: pa.ResetDisplayOnly, ResetDisplayDate: allowanceString("2026-12-01"),
+	}
+	got := MapProductAllowance(doc)[2]
+	if got.Value != portal.AllowanceMeasured || len(got.Windows) != 1 {
+		t.Fatalf("date row: %+v", got)
+	}
+	w := got.Windows[0]
+	if w.Reset != "2026-12-01 (display only)" || w.ResetPrecision != "display_only" || w.ResetAt != "" || w.Percent != "62.00% left" || w.Window != "5 hours" || w.WindowKind != "" || strings.Contains(w.Reset, "T00:00:00") || strings.Contains(w.Reset, "Oct 28") || strings.Contains(w.Reset, "75") || strings.Contains(w.Percent, "75") {
+		t.Fatalf("date display: %+v", w)
+	}
+	item.Observation.Measures[0].Window.ResetDisplayDate = nil
+	item.Observation.Measures[0].Window.ResetDisplayText = allowanceString("Feb 29")
+	w = MapProductAllowance(doc)[2].Windows[0]
+	if w.Reset != "Feb 29 (display only)" || w.ResetPrecision != "display_only" || w.ResetAt != "" || strings.Contains(w.Reset, "2024") || strings.Contains(w.Reset, "2026") || strings.Contains(w.Reset, "2028") || strings.Contains(w.Reset, "T00:00:00") {
+		t.Fatalf("yearless display: %+v", w)
+	}
+	item.Observation.Measures[0].Window = pa.Window{
+		Ref: "cursor-included-display", DurationMinutes: allowanceMinutes(300),
+		ResetAt: allowanceString("2026-11-02T14:00:00Z"), ResetPrecision: pa.ResetDisplayOnly,
+	}
+	w = MapProductAllowance(doc)[2].Windows[0]
+	if w.Reset != "2 Nov 14:00 UTC (display only)" || w.ResetPrecision != "display_only" || w.ResetAt != "" || w.Percent != "62.00% left" {
+		t.Fatalf("rfc3339 display-only: %+v", w)
+	}
+	item.Observation.Measures[0].Window = pa.Window{
+		Ref: "cursor-included-display", DurationMinutes: allowanceMinutes(300), ResetPrecision: pa.ResetDisplayOnly,
+	}
+	w = MapProductAllowance(doc)[2].Windows[0]
+	if w.Reset != "Unknown" || w.ResetPrecision != "" || w.ResetAt != "" || strings.Contains(w.Reset, "Oct") || strings.Contains(w.Percent, "75") {
+		t.Fatalf("direct field became a reset: %+v", w)
+	}
+	item.Observation.Measures[0].Value = pa.MeasureValue{State: pa.ValueUnknown}
+	item.CurrentMeasures[0].State = pa.CurrentUnknown
+	item.CurrentMeasures[0].Value = pa.MeasureValue{State: pa.ValueUnknown}
+	item.Observation.Measures[0].Window = pa.Window{
+		Ref: "cursor-included-display", ResetPrecision: pa.ResetDisplayOnly, ResetDisplayText: allowanceString("Nov 4"),
+	}
+	partial := MapProductAllowance(doc)[2]
+	if partial.Value == portal.AllowanceMeasured || partial.Value == portal.AllowanceStale || len(partial.Windows) != 0 || strings.Contains(partial.Reason, "Nov") || strings.Contains(partial.Reason, "75") {
+		t.Fatalf("reset label measured a partial window: %+v", partial)
+	}
+	item.Observation.Availability = pa.AvailabilityConflict
+	item.Observation.Measures[0].Value = pa.MeasureValue{State: pa.ValueKnown, Decimal: allowanceString("62.00")}
+	item.CurrentMeasures[0].State = pa.CurrentKnown
+	item.CurrentMeasures[0].Value = pa.MeasureValue{State: pa.ValueKnown, Decimal: allowanceString("62.00")}
+	conflict := MapProductAllowance(doc)[2]
+	if conflict.Value != portal.AllowanceUnknown || conflict.Reason != "Conflicting allowance reports" || len(conflict.Windows) != 0 || strings.Contains(conflict.Reason, "Nov") {
+		t.Fatalf("conflict: %+v", conflict)
+	}
+	doc = allowanceRead()
+	item = &doc.Items[0]
+	item.Observation.Provider = "cursor"
+	item.Observation.Source.Kind = pa.SourceNativeDisplay
+	item.Observation.Scope.BindingState = pa.BindingUnknown
+	item.Binding.State = pa.BindingUnknown
+	item.Observation.Measures[0].Window.ResetAt = nil
+	item.Observation.Measures[0].Window.ResetPrecision = pa.ResetDisplayOnly
+	item.Observation.Measures[0].Window.ResetDisplayText = allowanceString("Nov 4")
+	unverified := MapProductAllowance(doc)[2]
+	if unverified.Value != portal.AllowanceUnknown || unverified.Reason != "Account binding unverified" || len(unverified.Windows) != 0 || strings.Contains(unverified.Reason, "Nov") {
+		t.Fatalf("unverified: %+v", unverified)
+	}
+	doc = allowanceRead()
+	item = &doc.Items[0]
+	item.Observation.Provider = "cursor"
+	item.Observation.Source.Kind = pa.SourceNativeDisplay
+	item.Observation.Scope.AccountRef = allowanceString("fixture-account")
+	item.Binding.AccountRef = allowanceString("other-account")
+	item.Observation.Measures[0].Window.ResetAt = nil
+	item.Observation.Measures[0].Window.ResetPrecision = pa.ResetDisplayOnly
+	item.Observation.Measures[0].Window.ResetDisplayDate = allowanceString("2026-12-01")
+	mismatch := MapProductAllowance(doc)[2]
+	if mismatch.Value != portal.AllowanceUnknown || mismatch.Reason != "Account identity does not match" || len(mismatch.Windows) != 0 || strings.Contains(mismatch.Reason, "2026") || strings.Contains(mismatch.Reason, "fixture") {
+		t.Fatalf("account: %+v", mismatch)
+	}
+	doc = allowanceRead()
+	item = &doc.Items[0]
+	item.Observation.Provider = "cursor"
+	item.Observation.Source.Kind = pa.SourceNativeDisplay
+	item.Observation.Measures[0].Window = pa.Window{
+		Ref: "cursor-included-display", DurationMinutes: allowanceMinutes(300), ResetPrecision: pa.ResetDisplayOnly,
+		ResetDisplayDate: allowanceString("2026-12-01"), ResetDisplayText: allowanceString("Nov 4"),
+	}
+	both := MapProductAllowance(doc)[2].Windows[0]
+	if both.Reset != "Unknown" || both.ResetAt != "" || both.ResetPrecision != "" || both.Percent != "62.00% left" {
+		t.Fatalf("both labels: %+v", both)
+	}
+	item.Observation.Measures[0].Window = pa.Window{
+		Ref: "cursor-included-display", DurationMinutes: allowanceMinutes(300), ResetPrecision: pa.ResetDisplayOnly,
+		ResetAt: allowanceString("2026-11-02T14:00:00Z"), ResetDisplayText: allowanceString("Nov 4"),
+	}
+	withInstant := MapProductAllowance(doc)[2].Windows[0]
+	if withInstant.Reset != "Unknown" || withInstant.ResetAt != "" || withInstant.ResetPrecision != "" || strings.Contains(withInstant.Reset, "Nov") {
+		t.Fatalf("display field beside instant: %+v", withInstant)
+	}
+	item.Observation.Measures[0].Window.ResetPrecision = pa.ResetInstant
+	invalidInstant := MapProductAllowance(doc)[2].Windows[0]
+	if invalidInstant.Reset != "Unknown" || invalidInstant.ResetAt != "" || invalidInstant.ResetPrecision != "" {
+		t.Fatalf("instant with a display label was accepted: %+v", invalidInstant)
+	}
+}
+
 func allowanceBind(item *pa.ReadItem, account, workspace string, generation int64) {
 	item.Observation.Scope.AccountRef = allowanceString(account)
 	item.Observation.Scope.WorkspaceRef = allowanceString(workspace)

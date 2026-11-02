@@ -248,7 +248,49 @@ func windowShape(w Window, path string) []Issue {
 	if w.DurationMinutes != nil && *w.DurationMinutes < 0 {
 		out = append(out, issue(IssueInvalidCount, path+".durationMinutes", "count is negative"))
 	}
+	if err := windowResetDisplayError(w); err != nil {
+		out = append(out, issue(IssueInvalidTime, path+"."+err.Path, err.Msg))
+	}
 	return out
+}
+
+// windowResetDisplayError accepts a nil date and a nil label. A non-nil date
+// is one real YYYY-MM-DD calendar day. A non-nil label is the existing English
+// month and day text, including February 29 with no year attached. The two
+// cannot both be set. Either one requires display_only precision and a null
+// reset instant. Empty, oversize, and impossible values are rejected.
+func windowResetDisplayError(w Window) *DecodeError {
+	if w.ResetDisplayDate != nil && !rfc3339Date(*w.ResetDisplayDate) {
+		return &DecodeError{Code: "invalid_time", Path: "resetDisplayDate", Msg: "invalid calendar date"}
+	}
+	if w.ResetDisplayText != nil && !cursorDisplayMonthDay(*w.ResetDisplayText) {
+		return &DecodeError{Code: "invalid_time", Path: "resetDisplayText", Msg: "invalid reset display text"}
+	}
+	if w.ResetDisplayDate != nil && w.ResetDisplayText != nil {
+		return &DecodeError{Code: "invalid_type", Path: "resetDisplayDate", Msg: "reset display date and text are mutually exclusive"}
+	}
+	if (w.ResetDisplayDate != nil || w.ResetDisplayText != nil) && (w.ResetAt != nil || w.ResetPrecision != ResetDisplayOnly) {
+		return &DecodeError{Code: "invalid_type", Path: "resetPrecision", Msg: "reset display requires display_only and null resetAt"}
+	}
+	return nil
+}
+
+// ResetDisplayLabel returns the exact calendar date or yearless month/day
+// label on a display-only window. It does not invent a year, a midnight, or
+// an RFC3339 instant. The second result is false when the window has no
+// single accepted display label.
+func ResetDisplayLabel(w Window) (string, bool) {
+	if w.ResetPrecision != ResetDisplayOnly || w.ResetAt != nil {
+		return "", false
+	}
+	switch {
+	case w.ResetDisplayDate != nil && w.ResetDisplayText == nil && rfc3339Date(*w.ResetDisplayDate):
+		return *w.ResetDisplayDate, true
+	case w.ResetDisplayText != nil && w.ResetDisplayDate == nil && cursorDisplayMonthDay(*w.ResetDisplayText):
+		return *w.ResetDisplayText, true
+	default:
+		return "", false
+	}
 }
 
 func valueShape(v MeasureValue, path string) []Issue {

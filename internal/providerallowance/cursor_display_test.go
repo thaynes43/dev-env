@@ -251,6 +251,120 @@ func TestCursorDisplayResetTextPreservesMonthDay(t *testing.T) {
 	}
 }
 
+func TestCursorDisplayTypedResetRoundTripsWithoutInstant(t *testing.T) {
+	now := cursorDisplayNow()
+	plain, err := CursorDisplayProject(cursorDisplayDoc(t, map[string]any{
+		"resetDisplayDate": nil, "resetDisplayText": nil, "usedPercent": nil,
+	}), cursorDisplaySelection(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainRaw, err := json.Marshal(plain.Observation)
+	if err != nil || plain.Observation.Measures[0].Window.ResetDisplayDate != nil || plain.Observation.Measures[0].Window.ResetDisplayText != nil || bytes.Contains(plainRaw, []byte("resetDisplayDate")) || bytes.Contains(plainRaw, []byte("resetDisplayText")) {
+		t.Fatalf("absent labels were serialized: %v %s", err, plainRaw)
+	}
+	dateItem, err := CursorDisplayProject(cursorDisplayDoc(t, nil), cursorDisplaySelection(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dateWindow := dateItem.Observation.Measures[0].Window
+	if dateWindow.ResetDisplayDate == nil || *dateWindow.ResetDisplayDate != "2026-12-01" || dateWindow.ResetDisplayText != nil || dateWindow.ResetAt != nil || dateWindow.ResetPrecision != ResetDisplayOnly || dateItem.Observation.ProviderObservedAt != nil {
+		t.Fatalf("date window = %#v provider=%v", dateWindow, dateItem.Observation.ProviderObservedAt)
+	}
+	dateRaw, err := json.Marshal(dateItem.Observation)
+	if err != nil || bytes.Contains(dateRaw, []byte("2026-12-01T")) || bytes.Contains(dateRaw, []byte("T00:00:00")) {
+		t.Fatalf("date became an instant: %v %s", err, dateRaw)
+	}
+	dateDecoded, err := DecodeObservation(dateRaw, FixtureParseLimits)
+	if err != nil || dateDecoded.Measures[0].Window.ResetDisplayDate == nil || *dateDecoded.Measures[0].Window.ResetDisplayDate != "2026-12-01" || dateDecoded.Measures[0].Window.ResetAt != nil || dateDecoded.ProviderObservedAt != nil {
+		t.Fatalf("observation decode = %v %#v", err, dateDecoded.Measures)
+	}
+	dateSnap, err := CursorDisplaySnapshot([]ReadItem{dateItem}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dateSnapRaw, err := json.Marshal(dateSnap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dateRead, err := DecodeReadResponse(dateSnapRaw, FixtureParseLimits)
+	if err != nil || dateRead.Items[0].Observation.Measures[0].Window.ResetDisplayDate == nil || *dateRead.Items[0].Observation.Measures[0].Window.ResetDisplayDate != "2026-12-01" || dateRead.Items[0].Observation.Measures[0].Window.ResetAt != nil || dateRead.Items[0].Observation.ProviderObservedAt != nil || bytes.Contains(dateSnapRaw, []byte("2026-12-01T")) || bytes.Contains(dateSnapRaw, []byte("T00:00:00")) {
+		t.Fatalf("read decode = %v", err)
+	}
+	dateCollected, dateCollectedRaw := cursorDisplayCollect(t, [][]byte{cursorDisplayObservationBytes(t, dateItem.Observation)})
+	dateKept := cursorDisplayCursorItem(t, dateCollected)
+	if dateKept.Observation.Measures[0].Window.ResetDisplayDate == nil || *dateKept.Observation.Measures[0].Window.ResetDisplayDate != "2026-12-01" || dateKept.Observation.Measures[0].Window.ResetAt != nil || dateKept.Observation.ProviderObservedAt != nil || dateKept.CurrentMeasures[0].State != CurrentUnknown || bytes.Contains(dateCollectedRaw, []byte("2026-12-01T")) || bytes.Contains(dateCollectedRaw, []byte("T00:00:00")) {
+		t.Fatalf("collector snapshot = %#v", dateKept.Observation.Measures[0].Window)
+	}
+	textItem, err := CursorDisplayProject(cursorDisplayDoc(t, map[string]any{
+		"resetDisplayDate": nil, "resetDisplayText": "Feb 29",
+	}), cursorDisplaySelection(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	textWindow := textItem.Observation.Measures[0].Window
+	if textWindow.ResetDisplayText == nil || *textWindow.ResetDisplayText != "Feb 29" || textWindow.ResetDisplayDate != nil || textWindow.ResetAt != nil || textWindow.ResetPrecision != ResetDisplayOnly || textItem.Observation.ProviderObservedAt != nil {
+		t.Fatalf("text window = %#v", textWindow)
+	}
+	textRaw, err := json.Marshal(textItem)
+	if err != nil || bytes.Contains(textRaw, []byte("2024-02-29")) || bytes.Contains(textRaw, []byte("2028-02-29")) || bytes.Contains(textRaw, []byte("T00:00:00")) || !bytes.Contains(textRaw, []byte("Feb 29")) {
+		t.Fatalf("yearless label changed: %v %s", err, textRaw)
+	}
+	textSnap, err := CursorDisplaySnapshot([]ReadItem{textItem}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	textSnapRaw, err := json.Marshal(textSnap)
+	textRead, errRead := DecodeReadResponse(textSnapRaw, FixtureParseLimits)
+	if err != nil || errRead != nil || textRead.Items[0].Observation.Measures[0].Window.ResetDisplayText == nil || *textRead.Items[0].Observation.Measures[0].Window.ResetDisplayText != "Feb 29" || textRead.Items[0].Observation.ProviderObservedAt != nil || bytes.Contains(textSnapRaw, []byte("2024-02-29")) || bytes.Contains(textSnapRaw, []byte("T00:00:00")) {
+		t.Fatalf("yearless read = %v %v", err, errRead)
+	}
+	textCollected, textCollectedRaw := cursorDisplayCollect(t, [][]byte{cursorDisplayObservationBytes(t, textItem.Observation)})
+	textKept := cursorDisplayCursorItem(t, textCollected)
+	if textKept.Observation.Measures[0].Window.ResetDisplayText == nil || *textKept.Observation.Measures[0].Window.ResetDisplayText != "Feb 29" || textKept.Observation.Measures[0].Window.ResetAt != nil || textKept.CurrentMeasures[0].State != CurrentUnknown || bytes.Contains(textCollectedRaw, []byte("2024-02-29")) || bytes.Contains(textCollectedRaw, []byte("2028-02-29")) {
+		t.Fatalf("yearless collector = %#v", textKept.Observation.Measures[0].Window)
+	}
+	verifiedDate, err := CursorDisplayProject(cursorDisplayDoc(t, map[string]any{"accountRef": "fixture-account"}), cursorDisplayVerified("fixture-account"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedText, err := CursorDisplayProject(cursorDisplayDoc(t, map[string]any{
+		"accountRef": "fixture-account", "product": "cursor", "resetDisplayDate": nil, "resetDisplayText": "Feb 29",
+	}), cursorDisplayVerified("fixture-account"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := CursorDisplayPool(
+		[]Observation{verifiedDate.Observation, verifiedText.Observation},
+		[]TrustedContext{cursorDisplayTrust(cursorDisplayVerified("fixture-account"), "cursor"), cursorDisplayTrust(cursorDisplayVerified("fixture-account"), "cursor")},
+		cursorDisplayPoolRegistry(),
+	)
+	if pool.Resolved || pool.Count != 0 || pool.EntitlementRef != "" || verifiedDate.Observation.ProviderObservedAt != nil || verifiedText.Observation.ProviderObservedAt != nil {
+		t.Fatalf("display label resolved a pool: %#v", pool)
+	}
+	kept, err := CursorDisplayDedupe([]ReadItem{verifiedDate, verifiedText})
+	if err != nil || len(kept) != 2 || kept[0].Observation.Scope.AccountRef == nil || *kept[0].Observation.Scope.AccountRef != "fixture-account" || *kept[1].Observation.Scope.AccountRef != "fixture-account" {
+		t.Fatalf("accounts merged = %v %d", err, len(kept))
+	}
+	conflict, err := CursorDisplayProject(cursorDisplayDoc(t, map[string]any{
+		"usedPercent": nil, "availability": "conflict", "resetDisplayDate": nil, "resetDisplayText": "Nov 4",
+	}), cursorDisplaySelection(), now)
+	if err != nil || conflict.Observation.Availability != AvailabilityConflict || conflict.Observation.Measures[0].Value.Decimal != nil || conflict.Observation.Measures[0].Window.ResetDisplayText == nil || *conflict.Observation.Measures[0].Window.ResetDisplayText != "Nov 4" || conflict.Observation.Measures[0].Window.ResetAt != nil || conflict.CurrentMeasures[0].State != CurrentUnknown || conflict.Observation.ProviderObservedAt != nil {
+		t.Fatalf("conflict = %v %#v", err, conflict.Observation)
+	}
+	unknown, err := CursorDisplayProject(cursorDisplayDoc(t, map[string]any{
+		"usedPercent": nil, "errorCode": "display_unknown", "resetDisplayDate": nil, "resetDisplayText": "Nov 4",
+	}), cursorDisplaySelection(), now)
+	if err != nil || unknown.Observation.Availability != AvailabilityPartial || unknown.Observation.Measures[0].Value.Decimal != nil || unknown.CurrentMeasures[0].State != CurrentUnknown || unknown.Observation.Scope.BindingState != BindingUnknown || unknown.Observation.Scope.AccountRef != nil {
+		t.Fatalf("unknown = %v %#v", err, unknown.Observation)
+	}
+	trust := cursorDisplayTrust(cursorDisplayVerified("fixture-account"), "cursor")
+	assessed := ValidateObservation(verifiedText.Observation, trust, cursorDisplayRegistry(true))
+	if !assessed.ShapeOK || assessed.ProviderTimeKnown || assessed.CompleteAllowance || assessed.Measures[0].Actionable || assessed.ServedModel != ServedModelUnknown {
+		t.Fatalf("label became authority: %#v", assessed)
+	}
+}
+
 func TestCursorDisplaySpendStaysSeparateFromQuota(t *testing.T) {
 	now := cursorDisplayNow()
 	item, err := CursorDisplayProject(cursorDisplayDoc(t, map[string]any{

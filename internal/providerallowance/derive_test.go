@@ -178,6 +178,35 @@ func TestSumsStayInsideOneCompatibleWindow(t *testing.T) {
 	}
 }
 
+func TestDerivationRequiresMatchingResetDisplayLabels(t *testing.T) {
+	for _, field := range []string{"date", "yearless"} {
+		t.Run(field, func(t *testing.T) {
+			obs := compatibleSum(t, "0.10", "0.20", "0.30")
+			for i := range obs.Measures {
+				obs.Measures[i].Window.ResetAt = nil
+				obs.Measures[i].Window.ResetPrecision = providerallowance.ResetDisplayOnly
+				if field == "date" {
+					obs.Measures[i].Window.ResetDisplayDate = sp("2026-11-04")
+				} else {
+					obs.Measures[i].Window.ResetDisplayText = sp("Nov 4")
+				}
+			}
+			trust := trustLike(obs, providerallowance.BindingVerified)
+			if got := providerallowance.Derive(obs, trust, reviewedRegistry()); !got.Confirmed {
+				t.Fatalf("matching reset labels refused: %#v", got)
+			}
+			if field == "date" {
+				obs.Measures[1].Window.ResetDisplayDate = sp("2026-11-05")
+			} else {
+				obs.Measures[1].Window.ResetDisplayText = sp("Nov 5")
+			}
+			if got := providerallowance.Derive(obs, trust, reviewedRegistry()); got.Confirmed || !hasCode(got.Issues, providerallowance.IssueDerivationIncompatible) {
+				t.Fatalf("different reset labels combined: %#v", got)
+			}
+		})
+	}
+}
+
 func TestSharedPoolsCountVerifiedAliasesOnce(t *testing.T) {
 	verified := poolRegistry(true)
 	cursorObs, cursorTrust := poolObservation(t, "cursor", "fixture-account")

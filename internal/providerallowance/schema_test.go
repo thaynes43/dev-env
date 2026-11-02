@@ -55,8 +55,8 @@ func instance(t *testing.T, raw []byte) any {
 
 func TestReviewedFixtureHashes(t *testing.T) {
 	want := map[string]string{
-		"observation.schema.json":      "f7222f44f5cbd86c4c68b25edc595ba99b85deba9e0903ea04f7d0e18f5c89fd",
-		"read-response.schema.json":    "0689bd9b20778d06e7aa4327849c08c082d9188178aac687a6fe6003dcbe31e8",
+		"observation.schema.json":      "748c9d5c4e890bbe3e8b8c279cfd23bb737b3b687de8008007cce8fed29ea7cd",
+		"read-response.schema.json":    "b20ca701ea433a66ed0779ca5a200419186612ee387e8eb87af9d88c221a52e5",
 		"examples.json":                "96024fa068dc23f2bebb25499d25d6d5ef1c820a56dfadef41c72bbf253deea1",
 		"read-interface-examples.json": "be5afb0c1500a2c731825174957060e03afcb19f2df4ab52e68237ded0a8bd6e",
 		"transition-fixtures.json":     "98165e4141c635fd350422829c0db4233e3be853e428c542ca3daf71ff9544e4",
