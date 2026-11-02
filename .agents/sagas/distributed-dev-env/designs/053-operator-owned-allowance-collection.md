@@ -43,6 +43,24 @@ nonce clears it. Each reserved
 cycle consumes a monotonic sequence even if acquisition fails. A failed publish
 is confirmed against the same report revision, never recollected as a retry.
 
+## Compatible upgrades and explicit window changes
+
+The stable fingerprint includes host/slot identity, cadence and independently
+selected trust; the separately enforced acquisition deadline is excluded. An
+explicitly authorized deadline change reloads the same lifecycle without
+resetting sequence, last-good clocks or outstanding-work fences. Source support
+for this change grants no window renewal or credential/policy extension. Other
+identity/trust changes have no automatic migration in this version.
+
+The operator journal records each intent's original helper digest. A request
+separates the executing binary digest from that original intent digest; capture
+requires equality. A compatible new helper may reconcile an old exact nonce by
+status only, preserving the old receipt bytes/digest. Its status-miss tombstone
+also names the old intent, blocking late original dispatch. Only a terminal
+cleanup-proven receipt permits a later monotonic cycle with the new helper.
+Uncertain work, corrupt persistence or an unknown protocol is never cleared by
+an image or deadline change. No journal/receipt deletion is a supported upgrade.
+
 ## Persistence and API
 
 The existing named allowance ConfigMap holds the bounded report and separate

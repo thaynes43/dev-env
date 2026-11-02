@@ -26,6 +26,7 @@ type Capture struct {
 type journal struct {
 	Version     int       `json:"version"`
 	Fingerprint string    `json:"fingerprint"`
+	HelperSHA   string    `json:"helperSHA256"`
 	Cycle       int64     `json:"cycle"`
 	Nonce       string    `json:"nonce"`
 	Phase       string    `json:"phase"`
@@ -60,7 +61,7 @@ func readJournal(raw, report []byte, cfg *Config, now time.Time) (journal, error
 		}
 		return journal{Version: 1, Fingerprint: cfg.fingerprint, Phase: "idle", ReportSHA: digest(nil), Captures: []Capture{}}, nil
 	}
-	if len(raw) > journalMaxBytes || !providerallowance.ValidJSONDocument(raw, journalMaxBytes) || !providerallowance.ExactObjectKeys(raw, []string{"version", "fingerprint", "cycle", "nonce", "phase", "startedAt", "notBefore", "reportSHA256", "captures"}) {
+	if len(raw) > journalMaxBytes || !providerallowance.ValidJSONDocument(raw, journalMaxBytes) || !providerallowance.ExactObjectKeys(raw, []string{"version", "fingerprint", "helperSHA256", "cycle", "nonce", "phase", "startedAt", "notBefore", "reportSHA256", "captures"}) {
 		return journal{}, ErrCollector
 	}
 	var children struct {
@@ -77,7 +78,7 @@ func readJournal(raw, report []byte, cfg *Config, now time.Time) (journal, error
 	var held journal
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&held) != nil || dec.Decode(new(any)) != io.EOF || held.Version != 1 || held.Fingerprint != cfg.fingerprint || held.Cycle < 1 || held.Cycle > 1_000_000 || !uuid.MatchString(held.Nonce) || held.ReportSHA != digest(report) || held.Captures == nil || len(held.Captures) > 6 || held.Phase != "idle" && held.Phase != "inflight" {
+	if dec.Decode(&held) != nil || dec.Decode(new(any)) != io.EOF || held.Version != 1 || held.Fingerprint != cfg.fingerprint || !remoteDigest(held.HelperSHA) || held.Cycle < 1 || held.Cycle > 1_000_000 || !uuid.MatchString(held.Nonce) || held.ReportSHA != digest(report) || held.Captures == nil || len(held.Captures) > 6 || held.Phase != "idle" && held.Phase != "inflight" {
 		return journal{}, ErrCollector
 	}
 	started, err := time.Parse(time.RFC3339Nano, held.StartedAt)
@@ -110,8 +111,8 @@ func readJournal(raw, report []byte, cfg *Config, now time.Time) (journal, error
 	return held, nil
 }
 
-func reserve(held journal, cfg *Config, nonce string, now time.Time) (journal, []byte, error) {
-	if cfg == nil || !uuid.MatchString(nonce) || now.IsZero() || held.Phase != "idle" || held.Cycle >= 1_000_000 || held.Nonce == nonce {
+func reserve(held journal, cfg *Config, nonce, helperSHA string, now time.Time) (journal, []byte, error) {
+	if cfg == nil || !uuid.MatchString(nonce) || !remoteDigest(helperSHA) || now.IsZero() || held.Phase != "idle" || held.Cycle >= 1_000_000 || held.Nonce == nonce {
 		return journal{}, nil, ErrCollector
 	}
 	if held.NotBefore != "" {
@@ -121,7 +122,7 @@ func reserve(held journal, cfg *Config, nonce string, now time.Time) (journal, [
 		}
 	}
 	held.Cycle++
-	held.Nonce, held.Phase = nonce, "inflight"
+	held.Nonce, held.Phase, held.HelperSHA = nonce, "inflight", helperSHA
 	held.StartedAt, held.NotBefore = now.UTC().Format(time.RFC3339Nano), now.Add(RemoteLimit+intentMargin).UTC().Format(time.RFC3339Nano)
 	raw, err := json.Marshal(held)
 	if err != nil || len(raw) > journalMaxBytes {

@@ -148,14 +148,17 @@ func ParseConfig(raw []byte, trust providerallowance.AggregateTrust, publisherUI
 			return nil, ErrCollector
 		}
 	}
-	// The fingerprint is private change detection, not anonymization. It covers
-	// caller trust too, so a configuration/account rebind cannot reuse an intent.
+	// The fingerprint binds stable acquisition identity and caller trust. The
+	// separately enforced deadline is excluded: an explicitly approved window
+	// change must preserve sequence, original receipts and uncertain-work fences.
+	fingerprintConfig := cfg
+	fingerprintConfig.ValidUntil = ""
 	canonical, err := json.Marshal(struct {
 		Config   Config
 		Contexts []providerallowance.TrustedContext
 		Registry providerallowance.RegistryParts
 		MaxAge   int64
-	}{cfg, trust.Contexts, providerallowance.RegistryParts{Sources: trust.Registry.Sources(), Metrics: trust.Registry.Metrics(), Accounts: trust.Registry.Accounts(), Entitlements: trust.Registry.Entitlements(), Projections: trust.Registry.Projections()}, trust.MaxAge})
+	}{fingerprintConfig, trust.Contexts, providerallowance.RegistryParts{Sources: trust.Registry.Sources(), Metrics: trust.Registry.Metrics(), Accounts: trust.Registry.Accounts(), Entitlements: trust.Registry.Entitlements(), Projections: trust.Registry.Projections()}, trust.MaxAge})
 	if err != nil {
 		return nil, ErrCollector
 	}

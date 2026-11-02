@@ -88,10 +88,16 @@ func collectorConfig(t *testing.T, now time.Time) *Config {
 
 type fixtureRemote struct {
 	calls []string
+	sha   string
 	run   func(uc.RemoteRequest) ([]byte, error)
 }
 
-func (*fixtureRemote) HelperSHA256() string { return strings.Repeat("c", 64) }
+func (f *fixtureRemote) HelperSHA256() string {
+	if f.sha != "" {
+		return f.sha
+	}
+	return strings.Repeat("c", 64)
+}
 func (f *fixtureRemote) Run(_ context.Context, _ Host, request uc.RemoteRequest) ([]byte, error) {
 	f.calls = append(f.calls, request.Operation)
 	return f.run(request)
@@ -123,7 +129,7 @@ func collectorFixture(t *testing.T) (*Runner, *fixtureRemote, *time.Time) {
 
 func successfulReceipt(t *testing.T, request uc.RemoteRequest, at time.Time) uc.RemoteReceipt {
 	t.Helper()
-	receipt := uc.RemoteReceipt{Version: 1, State: "complete", RootName: request.RootName, SessionUID: request.SessionUID, PodUID: request.PodUID, Fingerprint: request.Fingerprint, Cycle: request.Cycle, Nonce: request.Nonce, HelperSHA: request.HelperSHA, CleanupProven: true, Captures: []uc.RemoteCapture{}, Attempts: []uc.RemoteAttempt{}, Bindings: []uc.ProviderBinding{}}
+	receipt := uc.RemoteReceipt{Version: 1, State: "complete", RootName: request.RootName, SessionUID: request.SessionUID, PodUID: request.PodUID, Fingerprint: request.Fingerprint, Cycle: request.Cycle, Nonce: request.Nonce, HelperSHA: request.IntentHelperSHA, CleanupProven: true, Captures: []uc.RemoteCapture{}, Attempts: []uc.RemoteAttempt{}, Bindings: []uc.ProviderBinding{}}
 	stamp := at.Add(time.Second).UTC().Format(time.RFC3339Nano)
 	for _, binding := range request.Providers {
 		var payload any
@@ -434,5 +440,65 @@ func TestOperatorCollectorRefusesForeignExpiredHostAndReservationConflict(t *tes
 				t.Fatal("unsafe dispatch", remote.calls)
 			}
 		})
+	}
+}
+
+func TestOperatorUpgradeAndApprovedRenewalRecoverOriginalIntentBeforeNewCapture(t *testing.T) {
+	r, remote, now := collectorFixture(t)
+	var original []byte
+	remote.run = func(request uc.RemoteRequest) ([]byte, error) {
+		original, _ = json.Marshal(successfulReceipt(t, request, *now))
+		*now = now.Add(2 * time.Second)
+		return nil, errors.New("lost original output")
+	}
+	if err := r.Step(context.Background()); err == nil {
+		t.Fatal("expected lost result")
+	}
+	next := *r.Config
+	next.ValidUntil = now.Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	raw, _ := json.Marshal(next)
+	renewed, err := ParseConfig(raw, r.Config.trust, hostUID, "dev-env-workbench", *now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Config = renewed
+	remote.sha = strings.Repeat("d", 64)
+	remote.run = func(request uc.RemoteRequest) ([]byte, error) {
+		if request.Operation != "status" || request.HelperSHA != remote.sha || request.IntentHelperSHA != strings.Repeat("c", 64) {
+			t.Fatal("upgrade replayed or relabelled intent")
+		}
+		return original, nil
+	}
+	if err = r.Step(context.Background()); err != nil {
+		t.Fatal("original receipt not recoverable", err)
+	}
+	cm, err := r.slot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := readJournal([]byte(cm.Data[StateKey]), []byte(cm.Data[apiserver.AggregateAllowanceDataKey]), r.Config, *now)
+	if err != nil || held.Cycle != 1 || held.HelperSHA != strings.Repeat("c", 64) || len(held.Captures) != 3 {
+		t.Fatal("original journal lost", err)
+	}
+	*now = now.Add(301 * time.Second)
+	var session v1alpha1.AgentSession
+	key := types.NamespacedName{Namespace: Namespace, Name: r.Config.Host.Name}
+	if r.Client.Get(context.Background(), key, &session) != nil {
+		t.Fatal("session")
+	}
+	session.Status.Agent.LastHeartbeat = &metav1.Time{Time: *now}
+	if r.Client.Update(context.Background(), &session) != nil {
+		t.Fatal("heartbeat")
+	}
+	remote.run = func(request uc.RemoteRequest) ([]byte, error) {
+		if request.Operation != "capture" || request.Cycle != 2 || request.IntentHelperSHA != remote.sha {
+			t.Fatal("next cycle did not bind new helper")
+		}
+		receipt := successfulReceipt(t, request, *now)
+		*now = now.Add(2 * time.Second)
+		return json.Marshal(receipt)
+	}
+	if err = r.Step(context.Background()); err != nil {
+		t.Fatal("next clean cycle blocked", err)
 	}
 }

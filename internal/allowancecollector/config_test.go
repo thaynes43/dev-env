@@ -51,3 +51,21 @@ func TestCollectorConfigRefusesUnqualifiedTrustAndPartialOwnership(t *testing.T)
 		})
 	}
 }
+
+func TestApprovedWindowChangePreservesAcquisitionFingerprint(t *testing.T) {
+	now := time.Date(2026, 11, 2, 21, 0, 0, 0, time.UTC)
+	original := collectorConfig(t, now)
+	next := *original
+	next.ValidUntil = now.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	raw, _ := json.Marshal(next)
+	renewed, err := ParseConfig(raw, original.trust, hostUID, "dev-env-workbench", now)
+	if err != nil || renewed.fingerprint != original.fingerprint || !renewed.until.After(original.until) {
+		t.Fatal("window change discarded stable identity", err)
+	}
+	next.Host.PodUID = "44444444-4444-4444-4444-444444444444"
+	raw, _ = json.Marshal(next)
+	changed, err := ParseConfig(raw, original.trust, hostUID, "dev-env-workbench", now)
+	if err != nil || changed.fingerprint == original.fingerprint {
+		t.Fatal("new host reused original identity", err)
+	}
+}

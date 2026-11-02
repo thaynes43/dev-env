@@ -66,11 +66,11 @@ func RunRemote(ctx context.Context, request RemoteRequest, dir string, acquire f
 		return RemoteReceipt{}, ErrCapture
 	}
 	if exists {
-		if current.RootName != request.RootName || current.SessionUID != request.SessionUID || current.PodUID != request.PodUID || current.Fingerprint != request.Fingerprint || current.HelperSHA != request.HelperSHA {
+		if current.RootName != request.RootName || current.SessionUID != request.SessionUID || current.PodUID != request.PodUID || current.Fingerprint != request.Fingerprint {
 			return RemoteReceipt{}, ErrCapture
 		}
 		if current.Cycle == request.Cycle {
-			if current.Nonce != request.Nonce {
+			if current.Nonce != request.Nonce || current.HelperSHA != request.IntentHelperSHA {
 				return RemoteReceipt{}, ErrCapture
 			}
 			return current, nil
@@ -110,7 +110,7 @@ func RunRemote(ctx context.Context, request RemoteRequest, dir string, acquire f
 }
 
 func receiptFor(request RemoteRequest, state string, clean bool) RemoteReceipt {
-	return RemoteReceipt{Version: RemoteSchemaVersion, State: state, RootName: request.RootName, SessionUID: request.SessionUID, PodUID: request.PodUID, Fingerprint: request.Fingerprint, Cycle: request.Cycle, Nonce: request.Nonce, HelperSHA: request.HelperSHA, CleanupProven: clean, Captures: []RemoteCapture{}, Attempts: []RemoteAttempt{}, Bindings: []ProviderBinding{}}
+	return RemoteReceipt{Version: RemoteSchemaVersion, State: state, RootName: request.RootName, SessionUID: request.SessionUID, PodUID: request.PodUID, Fingerprint: request.Fingerprint, Cycle: request.Cycle, Nonce: request.Nonce, HelperSHA: request.IntentHelperSHA, CleanupProven: clean, Captures: []RemoteCapture{}, Attempts: []RemoteAttempt{}, Bindings: []ProviderBinding{}}
 }
 
 func readRemoteLedger(root *os.Root, request RemoteRequest) (RemoteReceipt, bool, error) {
@@ -129,17 +129,20 @@ func readRemoteLedger(root *os.Root, request RemoteRequest) (RemoteReceipt, bool
 	if err != nil || len(raw) > RemoteMaxBytes {
 		return RemoteReceipt{}, false, ErrCapture
 	}
-	// Decode only the intent coordinates to select the closed parser. All other
+	// Decode only the stored intent coordinates, including its original helper,
+	// to select the closed parser. Identity and advancement are checked by the
+	// caller under the lock. All other
 	// fields, including unknown/duplicate keys, are validated by that parser.
 	var coordinates struct {
-		Cycle int64  `json:"cycle"`
-		Nonce string `json:"nonce"`
+		Cycle     int64  `json:"cycle"`
+		Nonce     string `json:"nonce"`
+		HelperSHA string `json:"helperSHA256"`
 	}
 	if json.Unmarshal(raw, &coordinates) != nil {
 		return RemoteReceipt{}, false, ErrCapture
 	}
-	request.Cycle, request.Nonce = coordinates.Cycle, coordinates.Nonce
-	if request.Cycle < 1 || !remoteUUID.MatchString(request.Nonce) {
+	request.Cycle, request.Nonce, request.IntentHelperSHA = coordinates.Cycle, coordinates.Nonce, coordinates.HelperSHA
+	if request.Cycle < 1 || !remoteUUID.MatchString(request.Nonce) || !remoteHash.MatchString(request.IntentHelperSHA) {
 		return RemoteReceipt{}, false, ErrCapture
 	}
 	held, err := ParseRemoteReceipt(raw, request)

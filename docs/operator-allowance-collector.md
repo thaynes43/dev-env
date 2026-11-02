@@ -52,10 +52,14 @@ no task limits, the selected workbench identity and a nonfuture heartbeat no mor
 than two minutes old. Its exact agent image and existing read-only
 `dev-env-claude-live` / `dev-env-codex-live` access projections must match.
 The operator rechecks live session/pod ownership before and after dispatch.
-A replacement pod, image, generation, account or configuration is not silently
-adopted. The private state fingerprint binds configuration and selected trust.
-Changing them after collection requires explicit reconciliation; deleting state
-or extending a deadline to bypass that fence is unsupported.
+A replacement host pod, host image, generation, account or selected trust is not
+silently adopted. The private state fingerprint binds these identities and
+scheduling/trust settings. Changing them after collection is unsupported by this
+version; preserve the journal and receipt rather than deleting them to bypass a
+fence. The separately enforced `validUntil` is excluded from that fingerprint.
+An explicitly approved window change can reload the same identity without
+resetting sequence or acquiring an unresolved intent again. It does not extend
+credentials, grants or policies, and source support does not authorize renewal.
 Expiry stops collection without host/slot IO, including after an operator
 restart. A well-formed expired collector configuration leaves the core API and
 historical GET service able to start; it does not renew the collection window.
@@ -88,6 +92,25 @@ The Cursor percentage remains rounded display evidence. Its billing month/day
 label does not become a quota-reset instant or countdown. Local successful
 collection recency is separate from the unknown provider measurement clock;
 strict current-capacity fields remain unknown. Failed reads never become zero.
+
+## Helper upgrades and window changes
+
+The durable operator intent records the helper digest that reserved its cycle.
+Every request separately names the executing helper digest and the original
+intent helper digest. Capture requires both to match. After an ordinary reviewed
+operator image upgrade, the new helper can perform status-only reconciliation
+for the exact old nonce and return the old receipt unchanged, including its old
+helper digest and original times. A status miss writes a tombstone for that old
+intent, so late delivery of the original helper cannot acquire it.
+
+Only a clean `complete` or `never_started` receipt permits a higher monotonic
+cycle with the new helper. An uncertain receipt remains blocked across both
+helper upgrades and approved window changes. Unknown protocol versions, changed
+identity/trust, corrupt files or interrupted persistence remain refusals; this is
+not a general state migration or reset path. After a reviewed window change or
+compatible helper upgrade, verify the same slot UID, sequence and original
+receipts before accepting the next cycle. Never remove receipt or journal files
+as an upgrade or renewal procedure.
 
 ## Restart, publication and rollback
 

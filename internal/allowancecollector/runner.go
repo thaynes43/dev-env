@@ -86,7 +86,7 @@ func (r *Runner) Step(ctx context.Context) error {
 			}
 		}
 		var intent []byte
-		held, intent, err = reserve(held, cfg, string(kubeuuid.NewUUID()), now)
+		held, intent, err = reserve(held, cfg, string(kubeuuid.NewUUID()), r.Remote.HelperSHA256(), now)
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func remoteDigest(value string) bool {
 
 func (r *Runner) request(held journal, capture bool) usagecollector.RemoteRequest {
 	cfg := r.Config
-	request := usagecollector.RemoteRequest{Version: usagecollector.RemoteSchemaVersion, Operation: "status", RootName: cfg.Host.Name, SessionUID: cfg.Host.SessionUID, PodUID: cfg.Host.PodUID, Fingerprint: cfg.fingerprint, Cycle: held.Cycle, Nonce: held.Nonce, HelperSHA: r.Remote.HelperSHA256(), ValidUntil: cfg.ValidUntil, Providers: []usagecollector.ProviderBinding{}}
+	request := usagecollector.RemoteRequest{Version: usagecollector.RemoteSchemaVersion, Operation: "status", RootName: cfg.Host.Name, SessionUID: cfg.Host.SessionUID, PodUID: cfg.Host.PodUID, Fingerprint: cfg.fingerprint, Cycle: held.Cycle, Nonce: held.Nonce, HelperSHA: r.Remote.HelperSHA256(), IntentHelperSHA: held.HelperSHA, ValidUntil: cfg.ValidUntil, Providers: []usagecollector.ProviderBinding{}}
 	if capture {
 		request.Operation = "capture"
 		for _, selection := range cfg.trust.Contexts {

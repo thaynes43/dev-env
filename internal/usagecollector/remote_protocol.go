@@ -23,17 +23,18 @@ type ProviderBinding struct {
 // RemoteRequest selects only fixed source readers and public owner metadata.
 // There are no executable, shell, prompt, credential or arbitrary path fields.
 type RemoteRequest struct {
-	Version     int               `json:"version"`
-	Operation   string            `json:"operation"`
-	RootName    string            `json:"rootName"`
-	SessionUID  string            `json:"sessionUID"`
-	PodUID      string            `json:"podUID"`
-	Fingerprint string            `json:"fingerprint"`
-	Cycle       int64             `json:"cycle"`
-	Nonce       string            `json:"nonce"`
-	HelperSHA   string            `json:"helperSHA256"`
-	ValidUntil  string            `json:"validUntil"`
-	Providers   []ProviderBinding `json:"providers"`
+	Version         int               `json:"version"`
+	Operation       string            `json:"operation"`
+	RootName        string            `json:"rootName"`
+	SessionUID      string            `json:"sessionUID"`
+	PodUID          string            `json:"podUID"`
+	Fingerprint     string            `json:"fingerprint"`
+	Cycle           int64             `json:"cycle"`
+	Nonce           string            `json:"nonce"`
+	HelperSHA       string            `json:"helperSHA256"`
+	IntentHelperSHA string            `json:"intentHelperSHA256"`
+	ValidUntil      string            `json:"validUntil"`
+	Providers       []ProviderBinding `json:"providers"`
 }
 
 type RemoteCapture struct {
@@ -74,7 +75,7 @@ var remoteAccount = regexp.MustCompile(`^(openai|anthropic|cursor)-email-sha256:
 
 func ParseRemoteRequest(raw []byte, now time.Time) (RemoteRequest, error) {
 	fail := func() (RemoteRequest, error) { return RemoteRequest{}, ErrCapture }
-	if now.IsZero() || len(raw) > 16<<10 || !providerallowance.ValidJSONDocument(raw, 16<<10) || !providerallowance.ExactObjectKeys(raw, []string{"version", "operation", "rootName", "sessionUID", "podUID", "fingerprint", "cycle", "nonce", "helperSHA256", "validUntil", "providers"}) {
+	if now.IsZero() || len(raw) > 16<<10 || !providerallowance.ValidJSONDocument(raw, 16<<10) || !providerallowance.ExactObjectKeys(raw, []string{"version", "operation", "rootName", "sessionUID", "podUID", "fingerprint", "cycle", "nonce", "helperSHA256", "intentHelperSHA256", "validUntil", "providers"}) {
 		return fail()
 	}
 	var request RemoteRequest
@@ -91,7 +92,7 @@ func ParseRemoteRequest(raw []byte, now time.Time) (RemoteRequest, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&request) != nil || dec.Decode(new(any)) != io.EOF || request.Version != RemoteSchemaVersion || request.Operation != "capture" && request.Operation != "status" || !token.MatchString(request.RootName) || !remoteUUID.MatchString(request.SessionUID) || !remoteUUID.MatchString(request.PodUID) || !remoteHash.MatchString(request.Fingerprint) || request.Cycle < 1 || request.Cycle > 1_000_000 || !remoteUUID.MatchString(request.Nonce) || !remoteHash.MatchString(request.HelperSHA) || request.Providers == nil {
+	if dec.Decode(&request) != nil || dec.Decode(new(any)) != io.EOF || request.Version != RemoteSchemaVersion || request.Operation != "capture" && request.Operation != "status" || !token.MatchString(request.RootName) || !remoteUUID.MatchString(request.SessionUID) || !remoteUUID.MatchString(request.PodUID) || !remoteHash.MatchString(request.Fingerprint) || request.Cycle < 1 || request.Cycle > 1_000_000 || !remoteUUID.MatchString(request.Nonce) || !remoteHash.MatchString(request.HelperSHA) || !remoteHash.MatchString(request.IntentHelperSHA) || request.Operation == "capture" && request.HelperSHA != request.IntentHelperSHA || request.Providers == nil {
 		return fail()
 	}
 	until, err := time.Parse(time.RFC3339Nano, request.ValidUntil)
@@ -164,7 +165,7 @@ func ParseRemoteReceipt(raw []byte, request RemoteRequest) (RemoteReceipt, error
 	var receipt RemoteReceipt
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&receipt) != nil || dec.Decode(new(any)) != io.EOF || receipt.Version != RemoteSchemaVersion || receipt.RootName != request.RootName || receipt.SessionUID != request.SessionUID || receipt.PodUID != request.PodUID || receipt.Fingerprint != request.Fingerprint || receipt.Cycle != request.Cycle || receipt.Nonce != request.Nonce || receipt.HelperSHA != request.HelperSHA || receipt.Captures == nil || receipt.Attempts == nil || receipt.Bindings == nil {
+	if dec.Decode(&receipt) != nil || dec.Decode(new(any)) != io.EOF || receipt.Version != RemoteSchemaVersion || receipt.RootName != request.RootName || receipt.SessionUID != request.SessionUID || receipt.PodUID != request.PodUID || receipt.Fingerprint != request.Fingerprint || receipt.Cycle != request.Cycle || receipt.Nonce != request.Nonce || receipt.HelperSHA != request.IntentHelperSHA || receipt.Captures == nil || receipt.Attempts == nil || receipt.Bindings == nil {
 		return fail()
 	}
 	switch receipt.State {
