@@ -1704,6 +1704,14 @@ type RestartStatus struct {
 // writes it before it deletes the pod the rescue ran in, so a fresh operator
 // sees what the last one decided.
 type RescueStatus struct {
+	// NotificationKey is a notification-only digest of a narrowly qualified
+	// missing-clone failure's closed typed facts (DESIGN-050). Missing or changed
+	// facts cannot inherit an ownership acknowledgment. It never proves rescue
+	// success and is never consulted by removal or preservation guards.
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	// +optional
+	NotificationKey string `json:"notificationKey,omitempty"`
+
 	// SharedProof binds a typed shared rescue to its admitted writer and private
 	// home. Older records without it cannot release a retained private home.
 	// +optional

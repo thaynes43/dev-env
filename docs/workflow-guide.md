@@ -456,6 +456,15 @@ context and a discoverable session record after stop/archive; exact native
 conversation restoration is a separate capability. A receiving agent can start
 a new conversation after reading the predecessor’s context.
 
+A rescue failure alert reports unproved Git preservation, not a failed transcript
+recording. Missing a declared clone does not prove an empty HOME. Even a proven
+interrupted bootstrap remains failed and protected when deletion is pending.
+[DESIGN-050](../.agents/sagas/distributed-dev-env/designs/050-rescue-incident-notifications.md)
+adds source for bounded native notification ownership: unchanged owned incidents
+remain visible, while changed risk or stale/expired native ownership keeps urgent
+visibility. This changes no rescue outcome or removal guard and requires separate
+configuration and rollout qualification.
+
 Two Codex links may expose similarly named project folders backed by different
 local clones. Each link has private enrollment and a stable host identity.
 Choosing the other link must still show who is doing the work and provide

@@ -13,6 +13,38 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
+// The real reconcile path must keep a pending-delete interrupted bootstrap
+// failed and protected; notification identity cannot turn it into preservation.
+func TestBootstrapNotificationPendingDeletionKeepsHoldPVCAndFinalizer(t *testing.T) {
+	op := startOperator(t)
+	s, pod, claim := runningSession(t, "fixture-worker")
+	rescuer.answer(t, s.Name, reportFor(func(name string) protocol.RescueReport {
+		r := interruptedReport()
+		r.Session = name
+		r.NoClone.Repo = s.Spec.Repo
+		return r
+	}))
+	reap(t, s.Name)
+	finishPodDelete(t, pod)
+	hold := waitHoldPod(t, s.Name)
+	got := waitStatus(t, s.Name, "failed bootstrap stays protected", blockedBy("DeleteNeedsRescue"))
+	c := condition(&got.Status, ConditionRescueFailed)
+	if got.DeletionTimestamp.IsZero() || c == nil || c.Reason != "BootstrapInterrupted" || !rescuedFailure(got) || len(got.Finalizers) == 0 {
+		t.Fatalf("pending deletion lost protection: %+v", got.Status)
+	}
+	if len(got.Status.Rescue.NotificationKey) != 64 || hold.UID == pod.UID {
+		t.Fatal("missing typed failure identity or distinct retained hold")
+	}
+	if c := waitClaim(t, s.Name); c.UID != claim.UID || !c.DeletionTimestamp.IsZero() || len(c.Finalizers) == 0 {
+		t.Fatal("failed bootstrap started deleting its PVC")
+	}
+	assertWritesOnly(t, op, "delete *v1.Pod "+pod.Name)
+}
+
+func rescuedFailure(s *v1alpha1.AgentSession) bool {
+	return s.Status.Rescue != nil && s.Status.Rescue.Result == v1alpha1.RescueFailed && !rescued(s)
+}
+
 // interruptedReport is a clone-less rescue: agentd stopped the agent, found no clone, and read
 // a bootstrap record that stopped on the catalog before it reached the repository.
 func interruptedReport() protocol.RescueReport {
@@ -40,7 +72,7 @@ func TestInterruptedBootstrapIsNamedAndStaysFailed(t *testing.T) {
 			if rec.Result != v1alpha1.RescueFailed || reason != "BootstrapInterrupted" {
 				t.Fatalf("result %s reason %s: %s", rec.Result, reason, rec.Message)
 			}
-			for _, want := range []string{"interrupted bootstrap", "~/repos/haynes-ops was never made", "no Git work to rescue", "HOME preserved", "not counted as rescued", "bootstrap record:"} {
+			for _, want := range []string{"interrupted bootstrap", "~/repos/haynes-ops was never made", "Git preservation is not proved", "transcript status is unknown", "HOME preserved", "not counted as rescued", "bootstrap record:"} {
 				if !strings.Contains(rec.Message, want) {
 					t.Errorf("message lacks %q: %s", want, rec.Message)
 				}

@@ -2682,6 +2682,14 @@ spec:
                   message:
                     description: Message says what the rescue saved, or why it failed.
                     type: string
+                  notificationKey:
+                    description: |-
+                      NotificationKey is a notification-only digest of a narrowly qualified
+                      missing-clone failure's closed typed facts (DESIGN-050). Missing or changed
+                      facts cannot inherit an ownership acknowledgment. It never proves rescue
+                      success and is never consulted by removal or preservation guards.
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
                   omittedRefs:
                     description: OmittedRefs is how many refs did not fit in UnpushedRefs.
                     format: int32

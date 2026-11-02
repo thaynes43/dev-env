@@ -68,6 +68,7 @@ func TestSessionCollector(t *testing.T) {
 	got := gather(t, c)
 	want := []string{
 		"dev_env_session_rescue_failed{reason=WorktreeRefused,session=b} 1",
+		"dev_env_session_rescue_notification{owner_uid=,pending_delete=false,reason=WorktreeRefused,risk_key=unclassified,session=b,session_generation=0,session_uid=} 1",
 		"dev_env_sessions{phase=Archived} 0",
 		"dev_env_sessions{phase=Draining} 0",
 		"dev_env_sessions{phase=Failed} 0",
@@ -94,5 +95,39 @@ func TestTerminalTaskReclaimCollectorRetainedCountAndAge(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %s in %s", want, got)
 		}
+	}
+}
+
+func TestRescueNotificationMetricKeepsRetryClockOutOfIdentity(t *testing.T) {
+	s, owner, config, now := notificationFixture(t)
+	collect := func(s, owner *v1alpha1.AgentSession, at time.Time) (string, string) {
+		t.Helper()
+		c := &SessionCollector{Reader: fake.NewClientBuilder().WithScheme(scheme).WithObjects(s, owner).Build(), Namespace: s.Namespace, RescueIncidentOwners: config, Now: func() time.Time { return at }}
+		var notification, attempt string
+		for _, line := range gather(t, c) {
+			if strings.HasPrefix(line, MetricRescueNotification+"{") {
+				notification = line
+			}
+			if strings.HasPrefix(line, MetricRescueLatestAttempt+"{") {
+				attempt = line
+			}
+		}
+		return notification, attempt
+	}
+	first, attempt := collect(s, owner, now)
+	if !strings.Contains(first, "owner_uid="+string(owner.UID)) || attempt == "" {
+		t.Fatal("qualified owner or latest-attempt metric absent", first, attempt)
+	}
+	retry := s.DeepCopy()
+	retry.Status.Rescue.At = &metav1.Time{Time: now.Add(time.Minute)}
+	retry.Status.Rescue.Stamp = "later-retry"
+	retry.Status.Rescue.Message = "different diagnostic retry text"
+	next, nextAttempt := collect(retry, owner, now.Add(time.Minute))
+	if first != next || attempt == nextAttempt {
+		t.Fatal("retry changed incident identity or lost latest attempt clock")
+	}
+	unknown, _ := collect(retry, owner, now.Add(4*time.Minute))
+	if !strings.Contains(unknown, "owner_uid=,") || unknown == first {
+		t.Fatal("stale native owner still lowered notification urgency", unknown)
 	}
 }

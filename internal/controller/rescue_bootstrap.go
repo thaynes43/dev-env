@@ -55,6 +55,6 @@ func interruptedBootstrap(s *v1alpha1.AgentSession, rep protocol.RescueReport) (
 			why += " " + p.RepositoryReason
 		}
 	}
-	return fmt.Sprintf("interrupted bootstrap: the declared clone ~/repos/%s was never made (~/repos and ~/work hold nothing; bootstrap record: %s); "+
-		"no Git work to rescue in the rescue's scope, ~/repos; HOME preserved and the volume is not counted as rescued", s.Spec.Repo, why), true
+	return fmt.Sprintf("interrupted bootstrap: the declared clone ~/repos/%s was never made (the report found no entries in ~/repos or ~/work; bootstrap record: %s); "+
+		"Git preservation is not proved; transcript status is unknown; HOME preserved and the volume is not counted as rescued", s.Spec.Repo, why), true
 }
