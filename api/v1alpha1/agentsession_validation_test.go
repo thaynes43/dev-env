@@ -476,6 +476,19 @@ func TestSpecImmutableExceptOperatingModeAndLifecycle(t *testing.T) {
 		{"add a profile", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Profile = "dev" }, presence},
 		{"add a tool", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Tools = []string{"blender"} }, presence},
 		{"set a parent", remoteSession, func(s *v1alpha1.AgentSessionSpec) { s.Parent = "someone-else" }, presence},
+		{"change coordinator instruction parent", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.CoordinatorInstructionParentUID = "parent-uid"
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.CoordinatorInstructionParentUID = "other-uid" }, "coordinator instruction parent UID"},
+		{"drop coordinator instruction parent", func() *v1alpha1.AgentSession {
+			s := summonedTask()
+			s.Spec.CoordinatorInstructionParentUID = "parent-uid"
+			return s
+		}, func(s *v1alpha1.AgentSessionSpec) { s.CoordinatorInstructionParentUID = "" }, presence},
+		{"add coordinator instruction parent", summonedTask, func(s *v1alpha1.AgentSessionSpec) {
+			s.CoordinatorInstructionParentUID = "parent-uid"
+		}, presence},
 		{"drop the idempotency key", summonedTask, func(s *v1alpha1.AgentSessionSpec) { s.IdempotencyKey = "" }, presence},
 		{"drop the limits", summonedTask, func(s *v1alpha1.AgentSessionSpec) { s.Limits = nil }, presence},
 		{"make Tom's session summoned", remoteSession, func(s *v1alpha1.AgentSessionSpec) {

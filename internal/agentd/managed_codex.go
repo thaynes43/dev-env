@@ -206,7 +206,7 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 		guard = sharedGuard(ws, true)
 	}
 	if s.ManagedChildDecisions {
-		guard += "\n\n" + managedChildDecisionGuard
+		guard += "\n\n" + managedChildDecisionGuard + "\n\n" + nativeInstructionPullGuidance
 	}
 	if first != nil {
 		if err := validateCommonResume(s, sess, *first); err != nil {
