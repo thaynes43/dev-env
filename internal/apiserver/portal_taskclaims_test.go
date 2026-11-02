@@ -271,7 +271,7 @@ func TestPortalTaskClaimsCallersAndRoutes(t *testing.T) {
 
 func TestPortalTaskClaimsQueryStrict(t *testing.T) {
 	f, probe := portalClaimsFixture(t, true, "sample")
-	good, err := encodePortalClaimsCursor(portalClaimsCursor{Continue: "page-1", Limit: 50})
+	good, err := encodePortalClaimsCursor(portalClaimsCursor{Continue: "page-1", Project: "sample", Limit: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,6 +350,28 @@ func TestPortalTaskClaimsUnknownStates(t *testing.T) {
 			}
 		}
 	})
+	t.Run("claim scope is not portal scope", func(t *testing.T) {
+		f, probe := portalClaimsFixture(t, true, "other")
+		owner := addOwnerSession(t, f, "owner-a", "owner-a-uid", v1alpha1.PhaseRunning, &f.now, false)
+		addPortalClaim(t, f, "issue:1", owner)
+		probe.reset()
+		page, body := readPortalClaims(t, f, claimsURL(map[string]string{"project": "sample"}))
+		if page.State != apiv1.PortalTaskClaimsStateUnknown || page.Reason != apiv1.PortalTaskClaimsReasonScopeUnconfirmed || probe.lists != 0 || strings.Contains(body, "task-claim.") {
+			t.Fatalf("sample is readable for claims but not listed for the portal: %+v lists=%d", page, probe.lists)
+		}
+	})
+	t.Run("cursor for another project", func(t *testing.T) {
+		f, probe := portalClaimsFixture(t, true, "sample")
+		other, err := encodePortalClaimsCursor(portalClaimsCursor{Continue: "page-1", Project: "other", Limit: 50})
+		if err != nil {
+			t.Fatal(err)
+		}
+		probe.reset()
+		w := f.do(http.MethodGet, claimsURL(map[string]string{"project": "sample", "cursor": other}), "tok-portal", nil)
+		if w.Code != http.StatusBadRequest || probe.lists != 0 {
+			t.Fatalf("cross-project cursor: %d lists=%d", w.Code, probe.lists)
+		}
+	})
 	t.Run("unavailable", func(t *testing.T) {
 		f, probe := portalClaimsFixture(t, true, "sample")
 		owner := addOwnerSession(t, f, "owner-a", "owner-a-uid", v1alpha1.PhaseRunning, &f.now, false)
@@ -360,7 +382,7 @@ func TestPortalTaskClaimsUnknownStates(t *testing.T) {
 			t.Fatalf("store failure %+v", page)
 		}
 		probe.listErr = nil
-		expired, err := encodePortalClaimsCursor(portalClaimsCursor{Continue: "expired-token", Limit: 50})
+		expired, err := encodePortalClaimsCursor(portalClaimsCursor{Continue: "expired-token", Project: "sample", Limit: 50})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -382,7 +404,7 @@ func TestPortalTaskClaimsEmptyOnlyOnACompleteFirstPage(t *testing.T) {
 		addPortalClaim(t, f, "issue:"+strconv.Itoa(i), owner)
 	}
 	// A continued page with no items is Available/Complete, never Empty.
-	past, err := encodePortalClaimsCursor(portalClaimsCursor{Continue: "page-3", Limit: 50})
+	past, err := encodePortalClaimsCursor(portalClaimsCursor{Continue: "page-3", Project: "sample", Limit: 50})
 	if err != nil {
 		t.Fatal(err)
 	}

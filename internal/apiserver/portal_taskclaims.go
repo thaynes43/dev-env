@@ -47,7 +47,8 @@ func (s *Server) registerPortalTaskClaims(mux *http.ServeMux) {
 
 // portalTaskClaimsRoute admits the portal reader to the exact GET path only.
 func (s *Server) portalTaskClaimsRoute(r *http.Request) bool {
-	return s.portalTaskClaimsEnabled() && r != nil && r.URL != nil && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalTaskClaimsPath
+	return s.portalTaskClaimsEnabled() && r != nil && r.URL != nil && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalTaskClaimsPath &&
+		(r.URL.RawPath == "" || r.URL.RawPath == apiv1.PortalTaskClaimsPath)
 }
 
 // portalTaskClaims reads one store page. It never calls claimCaller or
@@ -98,7 +99,7 @@ func (s *Server) portalTaskClaims(ctx context.Context, _ http.ResponseWriter, r 
 	}
 	switch {
 	case next != "":
-		cursor, cErr := encodePortalClaimsCursor(portalClaimsCursor{Continue: next, Limit: q.limit})
+		cursor, cErr := encodePortalClaimsCursor(portalClaimsCursor{Continue: next, Project: q.project, Limit: q.limit})
 		if cErr != nil {
 			return unknown(apiv1.PortalTaskClaimsReasonUnavailable)
 		}
@@ -218,7 +219,7 @@ func parsePortalTaskClaimsQuery(r *http.Request) (portalTaskClaimsQuery, error) 
 	}
 	if raw, ok := values[apiv1.PortalTaskClaimsQueryCursor]; ok {
 		cursor, cErr := decodePortalClaimsCursor(raw[0])
-		if cErr != nil || cursor.Limit != q.limit {
+		if cErr != nil || cursor.Limit != q.limit || cursor.Project != q.project {
 			return q, bad
 		}
 		q.cont, q.cursor = cursor.Continue, true
@@ -227,9 +228,12 @@ func parsePortalTaskClaimsQuery(r *http.Request) (portalTaskClaimsQuery, error) 
 }
 
 // portalClaimsCursor is the opaque continuation: the store's continue token
-// and the page limit it was issued for.
+// and the project and page limit it was issued for. A cursor for another
+// project or limit is refused, so one project's listing never resumes from
+// another's position.
 type portalClaimsCursor struct {
 	Continue string `json:"continue"`
+	Project  string `json:"project"`
 	Limit    int    `json:"limit"`
 }
 
@@ -246,7 +250,7 @@ func decodePortalClaimsCursor(raw string) (portalClaimsCursor, error) {
 	}
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&cursor) != nil || !portalCursorText(cursor.Continue, 1500) || cursor.Limit < 1 || cursor.Limit > portalPageMax {
+	if dec.Decode(&cursor) != nil || !portalCursorText(cursor.Continue, 1500) || !projectcatalog.ValidName(cursor.Project) || cursor.Limit < 1 || cursor.Limit > portalPageMax {
 		return portalClaimsCursor{}, errPortalClaimsCursor
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
@@ -256,7 +260,7 @@ func decodePortalClaimsCursor(raw string) (portalClaimsCursor, error) {
 }
 
 func encodePortalClaimsCursor(cursor portalClaimsCursor) (string, error) {
-	if !portalCursorText(cursor.Continue, 1500) || cursor.Limit < 1 || cursor.Limit > portalPageMax {
+	if !portalCursorText(cursor.Continue, 1500) || !projectcatalog.ValidName(cursor.Project) || cursor.Limit < 1 || cursor.Limit > portalPageMax {
 		return "", errPortalClaimsCursor
 	}
 	data, err := json.Marshal(cursor)
