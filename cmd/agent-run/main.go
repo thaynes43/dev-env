@@ -11,13 +11,28 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentrun"
+	"github.com/thaynes43/dev-env/internal/usagecollector"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "internal-allowance-capture" {
+		// Independent of the exec stream/operator leader. A hard interruption
+		// leaves a durable uncertain marker and cannot authorize replay.
+		hardStop := time.AfterFunc(115*time.Second, func() { os.Exit(1) })
+		err := usagecollector.RunInternal(ctx, os.Stdin, os.Stdout)
+		hardStop.Stop()
+		stop()
+		if err != nil {
+			_, _ = io.WriteString(os.Stderr, "allowance capture unavailable\n")
+			os.Exit(1)
+		}
+		return
+	}
 	// The image links declare-activity to agent-run (D-66).
 	if filepath.Base(os.Args[0]) == "declare-activity" {
 		args = append([]string{"declare-activity"}, args...)

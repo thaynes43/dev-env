@@ -44,6 +44,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/activity"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/allowancecollector"
 	"github.com/thaynes43/dev-env/internal/apiserver"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/asks"
@@ -183,6 +184,7 @@ type options struct {
 	catalogBinding                *apiserver.CatalogBinding
 	providerSource                *providerSourceSelection
 	aggregateAllowance            *aggregateAllowanceSelection
+	allowanceCollector            *allowancecollector.Config
 }
 
 func parseFlags(args []string) (options, error) {
@@ -303,11 +305,16 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&aggregateAllowanceEnabled, "enable-aggregate-allowance-reports", false, "HELD SOURCE ONLY: serve the fixed aggregate allowance slot when --aggregate-allowance-config is exact; default off, does not enable the API or infer enable from max age")
 	aggregateAllowanceRaw := fs.String("aggregate-allowance-config", "", "HELD SOURCE ONLY: inline JSON selection for --enable-aggregate-allowance-reports; empty leaves the route off and is not a file path")
 	aggregateAllowanceFile := fs.String("aggregate-allowance-config-file", "", "default-off deployment-owned private aggregate selection file; mutually exclusive with inline config; does not create or authorize a private config mount")
+	collectorEnabled := fs.Bool("enable-operator-allowance-collector", false, "default-off elected-operator recurring supported allowance acquisition; requires independent private configuration and existing selected host; grants no access")
+	collectorFile := fs.String("allowance-collector-config-file", "", "absolute private operator-owned collector configuration; requires explicit enable and aggregate selection")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
+	}
+	if !*collectorEnabled && *collectorFile != "" || *collectorEnabled && (!o.leaderElect || !aggregateAllowanceEnabled || *aggregateAllowanceFile == "" || *aggregateAllowanceRaw != "" || !filepath.IsAbs(*collectorFile)) {
+		return o, allowancecollector.ErrCollector
 	}
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" || o.policyNamespace == "" {
 		return o, errors.New("--session-namespace, --templates-namespace, --templates-name and --policy-namespace must not be empty")
@@ -669,6 +676,9 @@ func parseFlags(args []string) (options, error) {
 	if o.aggregateAllowance, err = parseAggregateAllowanceInput(aggregateAllowanceEnabled, *aggregateAllowanceRaw, *aggregateAllowanceFile, o.apiAddr, o.sessionNamespace); err != nil {
 		return o, err
 	}
+	if o.allowanceCollector, err = parseAllowanceCollector(*collectorEnabled, *collectorFile, o.aggregateAllowance, o.leaderElect); err != nil {
+		return o, err
+	}
 	if *rescueOwnersFile != "" {
 		f, err := os.OpenFile(*rescueOwnersFile, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
@@ -935,6 +945,16 @@ func run(args []string) error {
 		aggregateReports, err := aggregateAllowanceReports(o.aggregateAllowance, mgr.GetClient(), mgr.GetAPIReader())
 		if err != nil {
 			return err
+		}
+		if o.allowanceCollector != nil {
+			remote, err := allowancecollector.NewRemote(podExec, "/usr/local/bin/agent-run")
+			if err != nil {
+				return err
+			}
+			aggregateReports.OperatorProducer = true
+			if err = mgr.Add(&allowancecollector.Runner{Config: o.allowanceCollector, Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Remote: remote}); err != nil {
+				return err
+			}
 		}
 		api := &apiserver.Server{
 			CoordinatorInstructionAgentImage: o.coordinatorInstructionAgentImage,

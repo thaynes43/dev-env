@@ -121,6 +121,11 @@ PUT is fenced to one live AgentSession UID. None of these capture commands turns
 that into a deployment-owned publisher or extends any credential's expiry.
 Actual recurring three-provider API/agent/UI acceptance remains separate.
 
+The default-off [operator collector](operator-allowance-collector.md) supplies
+the elected-leader schedule and durable reconciliation source path. It requires
+its own exact host/private configuration, minimum named-slot permission and
+recurring-use qualification. These standalone capture commands do not enable it.
+
 The operator supports an explicit private configuration file with
 `--aggregate-allowance-config-file=/private/mounted/selection.json` together with
 `--enable-aggregate-allowance-reports`. It conflicts with inline configuration.

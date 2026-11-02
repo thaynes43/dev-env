@@ -1,0 +1,130 @@
+package usagecollector
+
+import (
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/thaynes43/dev-env/internal/providerallowance"
+)
+
+// cursorProtocol accepts only the qualified normal interactive builtin. Each
+// input follows a separately observed state. It never submits a model prompt,
+// accepts an authentication dialog, or services a private RPC.
+type cursorProtocol struct {
+	workspace string
+	trust     bool
+	state     int
+	terminal  cursorTerminal
+	dirty     bool
+	total     int
+}
+
+var cursorUsageTitle = regexp.MustCompile(`(?m)Usage\s*[•·]\s*([A-Za-z][A-Za-z0-9_-]{0,63})\b`)
+var cursorUsageReset = regexp.MustCompile(`\bResets ((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [1-9][0-9]?)\b`)
+
+func (p *cursorProtocol) accept(raw []byte) (string, *providerallowance.CursorCLIUsageCapture, error) {
+	p.total += len(raw)
+	if p.total > 256<<10 || p.terminal.feed(raw) != nil {
+		return "", nil, ErrCapture
+	}
+	p.dirty = true
+	return "", nil, nil
+}
+
+// settle may authorize input only after the process has produced no output for
+// the runner's bounded quiet interval. A partial/synchronized frame cannot act.
+func (p *cursorProtocol) settle() (input string, report *providerallowance.CursorCLIUsageCapture, err error) {
+	if !p.dirty {
+		return "", nil, nil
+	}
+	text, complete := p.terminal.visible()
+	if !complete {
+		return "", nil, nil
+	}
+	p.dirty = false
+	lines := map[string]bool{}
+	visibleLines := strings.Split(text, "\n")
+	active := strings.Trim(visibleLines[p.terminal.row], " \t│┃")
+	for row, line := range visibleLines {
+		if row != p.terminal.row {
+			lines[strings.Trim(line, " \t│┃")] = true
+		}
+	}
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"sign in", "log in", "login", "authenticate", "credential", "api key", "permission", "terms", "continue", "confirm", "approve tool", "allow command", "?"} {
+		if strings.Contains(lower, marker) {
+			return "", nil, ErrCapture
+		}
+	}
+	advance := func(state int, value string) (string, *providerallowance.CursorCLIUsageCapture, error) {
+		knownInput := active == "" || active == ">" || active == "→" || p.state == 2 && (active == "/usage" || active == "> /usage" || active == "→ /usage")
+		if !knownInput {
+			return "", nil, ErrCapture
+		}
+		p.state = state
+		return value, nil, nil
+	}
+	switch p.state {
+	case 0:
+		if lines["Workspace Trust Required"] {
+			if !p.trust || !lines[p.workspace] || !lines["[a] Trust this workspace"] || !lines["[q] Quit"] {
+				return "", nil, ErrCapture
+			}
+			return advance(1, "a")
+		}
+		fallthrough
+	case 1:
+		if (lines["Cursor Agent"] && lines["v"+providerallowance.CursorCLIQualifiedVersion] || lines["Cursor Agent v"+providerallowance.CursorCLIQualifiedVersion]) && lines["Plan, search, build anything"] && lines[p.workspace] {
+			return advance(2, "/usage")
+		}
+	case 2:
+		if lines["→ /usage"] && lines["Show plan and on-demand usage"] {
+			return advance(3, "\r")
+		}
+	case 3:
+		// Loading may be transient or absent for a fast/cached builtin. A new,
+		// complete screen after the selected command is display evidence only;
+		// neither Loading nor a new screen establishes provider refresh/time.
+		if lines["Loading usage data..."] || cursorUsageTitle.MatchString(text) {
+			p.state = 4
+		}
+		fallthrough
+	case 4:
+		if p.state != 4 || !lines["Esc to close"] {
+			return "", nil, nil
+		}
+		titles, resets := cursorUsageTitle.FindAllStringSubmatch(text, -1), cursorUsageReset.FindAllStringSubmatch(text, -1)
+		if len(titles) != 1 || len(resets) != 1 || !strings.Contains(text, "Category") || !strings.Contains(text, "Current") {
+			return "", nil, ErrCapture
+		}
+		var included *int
+		rows := map[string]int{}
+		for _, line := range strings.Split(text, "\n") {
+			for _, name := range []string{"Included", "Auto", "API"} {
+				line = strings.Trim(line, " \t│┃")
+				if !strings.HasPrefix(line, name+" ") && !strings.HasPrefix(line, name+"\t") {
+					continue
+				}
+				rows[name]++
+				matches := regexp.MustCompile(`^`+name+`[ \t]+(100|[1-9]?[0-9])% used(?:[ \t]|$)`).FindAllStringSubmatch(line, -1)
+				if len(matches) != 1 {
+					return "", nil, ErrCapture
+				}
+				if name == "Included" {
+					value, _ := strconv.Atoi(matches[0][1])
+					included = &value
+				}
+			}
+		}
+		if rows["Included"] != 1 || rows["Auto"] != 1 || rows["API"] != 1 || included == nil {
+			return "", nil, ErrCapture
+		}
+		p.state = 5
+		reset := resets[0][1]
+		return "", &providerallowance.CursorCLIUsageCapture{Schema: providerallowance.CursorCLICaptureSchema, RendererVersion: providerallowance.CursorCLIQualifiedVersion, Plan: titles[0][1], IncludedPercentDisplay: included, PercentPrecision: "rounded_integer_display", ResetMonthDay: &reset, Period: "not_exposed"}, nil
+	default:
+		return "", nil, ErrCapture
+	}
+	return "", nil, nil
+}

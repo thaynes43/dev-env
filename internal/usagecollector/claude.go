@@ -24,6 +24,10 @@ const ClaudeFile = "claude-captures.json"
 const maxJournalBytes = 16 << 10
 
 var ErrCapture = errors.New("provider capture unavailable")
+
+// ErrCleanup forbids another acquisition until ownership/cleanup is reconciled.
+// It is distinct from an unavailable measurement, which may be retried later.
+var ErrCleanup = errors.New("provider capture cleanup unproven")
 var token = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,127}$`)
 
 type entry struct {
