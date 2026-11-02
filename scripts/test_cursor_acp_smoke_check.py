@@ -1040,18 +1040,22 @@ class CheckerTests(unittest.TestCase):
         self.assertFalse(CHK.context_input_ok({"args": {"path": "./..."}}))
         self.assertFalse(CHK.context_input_ok({"path": {"description": "./..."}}))
 
-    def test_completed_tombstones_bound_later_explicit_context(self):
+    def test_completed_tombstones_preserve_context_and_checker_reject_only(self):
         def fill(live):
             total = ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1
             for index in range(total):
                 self._announce(live, "done-%d" % index, title="Run check %d" % index, status="completed")
 
         explicit = {"toolCallId": "later-explicit", "kind": "execute", "title": "Run benign checks", "rawInput": {"command": "python3", "args": ["check.py"]}}
-        emitted, verdict = self._checked_session(fill, [(41, explicit)])
-        self.assertEqual(emitted[0]["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
-        self.assertNotIn("check.py", json.dumps(emitted[0]["context"]))
-        self.assertNotIn("Run benign", json.dumps(emitted[0]))
-        self.assertEqual(verdict["permissionContexts"], [{"requestID": 41, "permissionContext": "insufficient"}])
+        emitted, verdict = self._checked_session(fill, [(41, explicit), (42, dict(explicit, toolCallId="done-0"))])
+        self.assertEqual(emitted[0]["context"]["state"], "available")
+        self.assertEqual(emitted[0]["context"]["rawInput"]["args"], ["check.py"])
+        self.assertEqual(emitted[1]["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        self.assertNotIn("check.py", json.dumps(emitted[1]["context"]))
+        self.assertEqual(verdict["permissionContexts"], [
+            {"requestID": 41, "permissionContext": "available"},
+            {"requestID": 42, "permissionContext": "insufficient"},
+        ])
         self.assertEqual(verdict["permissionDecisionMeaning"], "client-reject-once-only-not-approval")
         self.assertIs(verdict["permissionCountedAsQuestionReply"], False)
 
