@@ -1,6 +1,7 @@
 package agentrun
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -140,5 +141,20 @@ func TestProjectLocalRefusalsSendNothing(t *testing.T) {
 				t.Fatalf("got %d requests, want zero", got)
 			}
 		})
+	}
+}
+
+func TestHelpRunDeclaredProjectClaudeLocal(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun(ExitOK, "help", "run")
+	output := h.stdout.String()
+	contains(t, "stdout", output, "fresh Claude --local", "not --interactive", "cannot combine with rescue restore")
+	for _, blanket := range []string{
+		"Declared projects take task mode only.",
+		"(tasks only; cannot combine with rescue restore)",
+	} {
+		if strings.Contains(output, blanket) {
+			t.Fatalf("stdout still contains blanket task-only wording %q", blanket)
+		}
 	}
 }

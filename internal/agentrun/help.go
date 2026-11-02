@@ -369,7 +369,7 @@ as soon as it is clear; the session stays Pending and starts when room frees up.
 With --project, the operator selects the repository and rules from its accepted
 project catalog. The task uses a private task worktree and the project rules, and keeps the agent's state in
 its private home. Omit --repo for a project with one repository; select --repo
-for a project with several. Declared projects take task mode only. Their rules
+for a project with several. Declared projects take task mode or a fresh Claude --local session, not --interactive. Their rules
 and catalog revision come from the server.
 
 Flags:
@@ -385,7 +385,7 @@ Flags:
                              or give it as the first argument. With --project,
                              this selects a repository declared in that project.
   --project <name>           a project declared in the operator's accepted catalog
-                             (tasks only; cannot combine with rescue restore)
+                             (tasks or fresh Claude --local, not --interactive; cannot combine with rescue restore)
   --coordinator-instructions explicit opt-in for one new ordinary private project
                              task child; requires a live authenticated parent and
                              the dev profile. Default off; does not enroll an
