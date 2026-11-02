@@ -1308,6 +1308,13 @@ func (c *collector) scanSubmoduleTree(ctx context.Context, worktree string, dept
 		if err := withinDir(worktree, child); err != nil {
 			return err
 		}
+		// An unpopulated submodule directory has no repository to inspect.
+		// Git -C there would otherwise inspect the containing repository.
+		if _, gitErr := os.Lstat(filepath.Join(child, ".git")); os.IsNotExist(gitErr) {
+			continue
+		} else if gitErr != nil {
+			return fmt.Errorf("preservation incomplete: %w", gitErr)
+		}
 		if err := c.refuseUnsafeConfig(ctx, child); err != nil {
 			return err
 		}

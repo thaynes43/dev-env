@@ -180,6 +180,7 @@ func TestSubmoduleConfigIsRefusedBeforeStatus(t *testing.T) {
 	if err := os.MkdirAll(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(child, ".git"), "gitdir: synthetic\n")
 	writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub\n\turl = ../sub\n")
 	git.extra.modulesList = "submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00"
 	git.options.attack = "file:.git/config\x00filter.x.clean\ntouch-attacked\x00"
@@ -225,6 +226,7 @@ func TestUnmappedIndexGitlinkFailsClosedBeforeStatus(t *testing.T) {
 		if err := os.MkdirAll(child, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		writeFile(t, filepath.Join(child, ".git"), "gitdir: synthetic\n")
 		git.extra.indexGitlinks = link("vendor/orphan")
 		git.options.attack = "file:.git/config\x00filter.x.clean\ntouch-attacked\x00"
 		git.options.attackDir = child
@@ -236,6 +238,7 @@ func TestUnmappedIndexGitlinkFailsClosedBeforeStatus(t *testing.T) {
 		if err := os.MkdirAll(child, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		writeFile(t, filepath.Join(child, ".git"), "gitdir: synthetic\n")
 		writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"listed\"]\n\tpath = vendor/listed\n\turl = ../listed\n")
 		git.extra.modulesList = "submodule.listed.path\nvendor/listed\x00submodule.listed.url\n../listed\x00"
 		git.extra.indexGitlinks = link("vendor/orphan")
@@ -250,6 +253,7 @@ func TestUnmappedIndexGitlinkFailsClosedBeforeStatus(t *testing.T) {
 		if err := os.MkdirAll(grandchild, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		writeFile(t, filepath.Join(child, ".git"), "gitdir: synthetic\n")
 		writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub\n\turl = ../sub\n")
 		git.extra.modulesList = "submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00"
 		git.extra.indexGitlinksByDir = map[string]string{
@@ -271,6 +275,7 @@ func TestGitmodulesFileParseKeepsOrdinaryURLAndFailsClosed(t *testing.T) {
 		if err := os.MkdirAll(child, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		writeFile(t, filepath.Join(child, ".git"), "gitdir: synthetic\n")
 		if err := os.MkdirAll(decoy, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -297,6 +302,7 @@ func TestGitmodulesFileParseKeepsOrdinaryURLAndFailsClosed(t *testing.T) {
 		if err := os.MkdirAll(child, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		writeFile(t, filepath.Join(child, ".git"), "gitdir: synthetic\n")
 		writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"quoted\"]\n\tpath = \"vendor/quoted sub\"\n\turl = ../quoted\n")
 		git.extra.modulesList = "submodule.quoted.path\nvendor/quoted sub\x00submodule.quoted.url\n../quoted\x00submodule.quoted.active\ntrue\x00"
 		inventory, err := CollectPreservation(context.Background(), validCollectRequest(f, git.root), git, fixedRevision(f.record.Binding.HomeRevision))
@@ -375,6 +381,7 @@ func TestCoreWorktreeAndIndexFlagsFailClosed(t *testing.T) {
 	if err := os.MkdirAll(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(child, ".git"), "gitdir: synthetic\n")
 	writeFile(t, filepath.Join(childGit.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub\n\turl = ../sub\n")
 	childGit.extra.modulesList = "submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00"
 	childGit.extra.submoduleStatus = " " + strings.Repeat("a", 40) + " vendor/sub\n"
@@ -818,7 +825,7 @@ func TestSubmoduleCleanFilterDoesNotRun(t *testing.T) {
 	checkout := filepath.Join(work, "vendor", "sub")
 	writeFile(t, filepath.Join(checkout, ".gitattributes"), "* filter=attack\n")
 	runGit(t, home, "-C", checkout, "config", "filter.attack.clean", scriptPath)
-	writeFile(t, filepath.Join(checkout, "lib.txt"), "lib\nchanged\n")
+	writeFile(t, filepath.Join(checkout, "lib.txt"), "LIB\n")
 
 	runner, err := NewExecGit()
 	if err != nil {
@@ -934,7 +941,7 @@ func TestDirtyMappedSubmoduleStaysComplete(t *testing.T) {
 	runGit(t, home, "-C", work, "commit", "-m", "synthetic submodule")
 	checkout := filepath.Join(work, "vendor", "sub")
 	embedSyntheticGitDir(t, home, checkout, filepath.Join(root, "saved-vendor-gitfile"))
-	writeFile(t, filepath.Join(checkout, "lib.txt"), "lib\nchanged\n")
+	writeFile(t, filepath.Join(checkout, "lib.txt"), "LIB\n")
 
 	runner := newCollectorGit(t)
 	recorded := &recordingGit{next: runner}
@@ -997,11 +1004,7 @@ func TestNestedEmbeddedSubmoduleStaysWithItsParent(t *testing.T) {
 	runGit(t, home, "-C", nestedSrc, "commit", "-m", "synthetic nested")
 	runGit(t, home, "-C", work, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "vendor", "../sub", "vendor/sub")
 	checkout := filepath.Join(work, "vendor", "sub")
-	relNested, err := filepath.Rel(checkout, nestedSrc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, home, "-C", checkout, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "nested", filepath.ToSlash(relNested), "nested")
+	runGit(t, home, "-C", checkout, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "nested", nestedSrc, "nested")
 	runGit(t, home, "-C", checkout, "commit", "-m", "synthetic nested submodule")
 	runGit(t, home, "-C", work, "add", "vendor/sub")
 	runGit(t, home, "-C", work, "commit", "-m", "synthetic submodule")
@@ -1353,7 +1356,16 @@ func armCleanFilter(t *testing.T, home, repo, script, tracked string) {
 	t.Helper()
 	writeFile(t, filepath.Join(repo, ".gitattributes"), "* filter=attack\n")
 	runGit(t, home, "-C", repo, "config", "filter.attack.clean", script)
-	writeFile(t, filepath.Join(repo, tracked), "changed\n")
+	original, err := os.ReadFile(filepath.Join(repo, tracked))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Equal size forces Git to compare content and exercise the clean filter.
+	changed := strings.ToUpper(string(original))
+	if changed == string(original) {
+		t.Fatal("fixture needs lowercase tracked content")
+	}
+	writeFile(t, filepath.Join(repo, tracked), changed)
 }
 
 func runDefaultStatus(t *testing.T, home, dir string) int {
