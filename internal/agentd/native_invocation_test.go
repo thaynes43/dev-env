@@ -411,6 +411,87 @@ func TestNativeInvocationOwnedWaitAllowsOneSameWriterContinuation(t *testing.T) 
 	}
 }
 
+// TestEnabledChildDecisionContinuationRegistrationRefusalStopsRunTUI is the
+// runTUI boundary for a refused continuation registration. The server ledger
+// check is TestInstructionEndedLedgerRefusesWhenFull: it registers and ends
+// four attempts, then refuses a fifth registration and an ended replay
+// without changing the ledger. This test does not rebuild that ledger or add
+// a fifth registration mirror. It reuses the synthetic continuation fixture,
+// with no provider turn, and answers the continuation's attempt POST with
+// the same not-found refusal. runTUI must stop that continuation.
+func TestEnabledChildDecisionContinuationRegistrationRefusalStopsRunTUI(t *testing.T) {
+	s, sess, first, _ := nativeInvocationFixture(t)
+	var before taskOwner
+	if err := readWorkspaceJSON(s.ownerPath(sess.Name), &before); err != nil || !before.Launched {
+		t.Fatal("initial native finalization missing", err)
+	}
+	next := nextNativeInvocation(t, first)
+	next.CoordinatorInstructions = true
+	calls := bindSyntheticInstructionAPI(t, "missing", next)
+	barrierPath := filepath.Join(t.TempDir(), "resume-release")
+	if err := syscall.Mkfifo(barrierPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	barrier, err := os.OpenFile(barrierPath, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = barrier.Close() })
+	next.Env = append(next.Env, "SYNTHETIC_NATIVE_RESUME_RELEASE="+barrierPath)
+	if err := admitNativeContinuation(context.Background(), s, sess, first, &next); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkspaceJSON(s.statePath(resumeFile), next); err != nil {
+		t.Fatal(err)
+	}
+	pane := &syncBuffer{}
+	nativeFinished := make(chan struct{})
+	released := make(chan error, 1)
+	go func() {
+		select {
+		case <-nativeFinished:
+			released <- nil
+		case <-time.After(10 * time.Second):
+			_, _ = barrier.WriteString("ready\n")
+			released <- fmt.Errorf("refused continuation registration did not stop runTUI")
+		}
+	}()
+	code := RunAgent(s.statePath(resumeFile), pane, make(chan os.Signal), 20*time.Millisecond)
+	close(nativeFinished)
+	tail := paneTail(pane)
+	if err := <-released; err != nil {
+		t.Fatalf("%v; synthetic pane tail: %q", err, tail)
+	}
+	_ = os.Remove(barrierPath)
+	if code == 0 || !strings.Contains(tail, "native instruction attempt is unconfirmed") || strings.Contains(tail, "the TUI exited (0)") {
+		t.Fatalf("enabled continuation registration refusal did not fail closed: %d tail %q", code, tail)
+	}
+	if len(*calls) == 0 {
+		t.Fatal("refused continuation made no registration attempt")
+	}
+	for _, call := range *calls {
+		if !strings.HasPrefix(call, http.MethodPost+" "+apiv1.SessionInstructionAttemptPath(next.Session)) || strings.Contains(call, "/consume") || strings.Contains(call, "/instructions") {
+			t.Fatalf("continuation refusal consumed, listed, or left the attempt route: %v", *calls)
+		}
+	}
+	var stored Launch
+	if err := readJSONFile(s.statePath(resumeFile), &stored); err != nil || !stored.CoordinatorInstructions || !stored.ChildDecisions {
+		t.Fatalf("refusal unenrolled the enabled launch: %+v %v", stored, err)
+	}
+	spawns, err := os.ReadFile(s.statePath("synthetic-native-spawns"))
+	if err != nil || string(spawns) != "exec\nresume\n" {
+		t.Fatalf("continuation was not the single stopped native resume: %v %q", err, spawns)
+	}
+	prompt, err := os.ReadFile(s.statePath("synthetic-initial-prompts"))
+	if err != nil || string(prompt) != first.Prompt {
+		t.Fatal("initial prompt changed or was replayed", err)
+	}
+	var after taskOwner
+	if readWorkspaceJSON(s.ownerPath(sess.Name), &after) != nil || !sameOwner(before, after) {
+		t.Fatal("registration refusal reset the launched writer")
+	}
+}
+
 func TestNativeContinuationRejectsLostUncertainOrForeignCausalResult(t *testing.T) {
 	s, sess, first, _ := nativeInvocationFixture(t)
 	original, err := readNativeInvocation(s)

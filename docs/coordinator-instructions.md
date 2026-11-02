@@ -61,6 +61,20 @@ append-only list of at most four. A retained ID cannot be registered again.
 A full list refuses another attempt. Removing or rewriting a retained ID is
 rejected. The delivery list's per-key immutability rules are unchanged.
 
+For one enrolled session those four entries are the whole native registration
+budget: the initial invocation and three continuations. Each enabled
+child-decision continuation registers its own attempt ID. After four attempts
+have ended, the fifth registration is refused and the ledger is unchanged.
+`TestInstructionEndedLedgerRefusesWhenFull` in
+`internal/apiserver/coordinator_instruction_test.go` registers and ends four
+attempts, then refuses a fifth registration and an ended-ID replay. The
+refusal stays unconfirmed. `runTUI` stops that enabled continuation. The
+session stays enrolled, with no unregistered fallback and no fabricated
+acknowledgement. This is the current source limit. It is not full native
+acceptance, and it is not a claim that an agentic workflow is fully
+unblocked. A disabled or legacy launch makes no registration request and is
+outside this ledger.
+
 `GET /v1/sessions/{name}/instruction-attempt` is the designated parent's
 address read. It returns the current attempt ID, phase, target session UID
 and live pod UID. It returns no nonce and no instruction text. The caller
@@ -145,8 +159,12 @@ launch records `coordinatorInstructions` only when
 posts the attempt only when that launch flag and the pod setting are both
 set. A legacy or disabled native task makes no instruction request, so a
 missing route does not stop it. An enabled launch with a configured origin
-that fails registration is unconfirmed and that native attempt stops. An
-unconfirmed end preserves the true CLI exit Wait already reported and records
+that fails registration is unconfirmed and that native attempt stops. A full
+ended-attempt ledger is that failure for a child-decision continuation: after
+four ended attempts the fifth registration is refused, and `runTUI` stops
+that continuation. The launch stays enrolled. The count and the server test
+are stated with the ended-attempt ledger above. An unconfirmed end preserves
+the true CLI exit Wait already reported and records
 `instruction-end-unconfirmed.json`.
 An enabled launch with an empty origin makes no request and does not consume.
 

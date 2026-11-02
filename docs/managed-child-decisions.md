@@ -54,6 +54,21 @@ unchanged generation. The consumer durably replaces the exact Exited receipt wit
 the next Running invocation before native spawn. It resumes the confirmed UUID as
 an empty-prompt TUI. The original task prompt is never replayed.
 
+When that session is also enrolled for coordinator instructions, registration
+is one attempt per native invocation. The append-only ended-attempt ledger
+admits four registered native invocations in total: the initial invocation
+and three continuations. After those four attempts have ended, a fifth
+registration is refused and the ledger is unchanged. `runTUI` stops that
+enabled continuation. The launch stays enrolled and fail-closes: the refusal
+stays unconfirmed, with no unregistered fallback and no fabricated
+acknowledgement. `TestInstructionEndedLedgerRefusesWhenFull` in
+`internal/apiserver/coordinator_instruction_test.go` registers and ends four
+attempts, then asserts that fifth refusal and the ended-ID replay refusal.
+This is the current source limit. It is not full native acceptance, and it
+is not a claim that an agentic workflow is fully unblocked. A session that
+leaves coordinator instructions disabled makes no registration request and
+is outside this ledger. Both feature flags remain default off.
+
 Answer delivery reserves ResumeStarting, confirms exact owned native startup, then
 rechecks identity and stop under the supervisor and private record locks. Dispatching
 is durable before the owned TUI's bracketed paste and one Enter. Unknown startup,
