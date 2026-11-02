@@ -155,6 +155,7 @@ func TestClaimsSourceMapsEveryOutcome(t *testing.T) {
 		{"unknown item key", strings.Replace(valid, `"repository"`, `"actor":{},"repository"`, 1), 200, "", "", portal.ClaimsUnavailable},
 		{"unknown owner key", strings.Replace(valid, `"freshness"`, `"namespace":"dev-agents","freshness"`, 1), 200, "", "", portal.ClaimsUnavailable},
 		{"missing key", strings.Replace(valid, `"complete":true,`, ``, 1), 200, "", "", portal.ClaimsUnavailable},
+		{"null complete", strings.Replace(valid, `"complete":true`, `"complete":null`, 1), 200, "", "", portal.ClaimsUnavailable},
 		{"duplicate key", strings.Replace(valid, `{"version"`, `{"limit":100,"version"`, 1), 200, "", "", portal.ClaimsUnavailable},
 		{"null heartbeat", strings.Replace(valid, `"heartbeatAt":"2026-11-02T14:59:00Z"`, `"heartbeatAt":null`, 1), 200, "", "", portal.ClaimsUnavailable},
 		{"empty cursor key", strings.Replace(valid, `"complete":true`, `"nextCursor":"","complete":true`, 1), 200, "", "", portal.ClaimsUnavailable},

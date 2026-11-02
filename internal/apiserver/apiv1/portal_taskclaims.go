@@ -164,6 +164,18 @@ func portalClaimOwnerState(state string) bool {
 // ValidatePortalTaskClaims checks one page against the contract: version,
 // state and reason pairs, paging, bounds and every item. It reads no clock;
 // freshness is checked against the page's own ObservedAt.
+//
+// Rules the operator must follow so its pages pass:
+//   - Items is never null: an Unknown or Empty page sends [] with Complete
+//     false (Unknown) and the request's Limit.
+//   - An owner that is Replaced, NotFound or Unknown has Freshness unknown and
+//     no HeartbeatAt: no same-UID Session was read.
+//   - Freshness is computed against the exact ObservedAt the page reports, so
+//     take ObservedAt after the owner reads, or compute against it.
+//   - NextCursor and HeartbeatAt are omitted when absent, never "".
+//   - A complete first page with no items is Empty, not Available.
+//
+// A CreatedAt later than ObservedAt is accepted; the portal shows it as Unknown.
 func ValidatePortalTaskClaims(page PortalTaskClaims) error {
 	if page.Version != PortalTaskClaimsVersion || !portalClaimProject.MatchString(page.Project) || page.ObservedAt.IsZero() ||
 		page.Limit < 1 || page.Limit > PortalTaskClaimsMaxLimit || page.Items == nil || len(page.Items) > page.Limit {

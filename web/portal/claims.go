@@ -267,6 +267,10 @@ func RenderClaims(page ClaimsPage, limit int) ([]byte, string, error) {
 				row.StaleAt, row.StaleLabel = askTime(*item.Owner.HeartbeatAt)
 			}
 			row.CreatedAt, row.CreatedLabel = askTime(item.CreatedAt)
+			if item.CreatedAt.After(read.ObservedAt) {
+				// A creation time after the read is not shown as a time.
+				row.CreatedAt, row.CreatedLabel = "", "Unknown"
+			}
 			row.Age = claimAge(item.CreatedAt, read.ObservedAt)
 			if n, ok := apiv1.PortalClaimIssueNumber(item.TaskKey); ok && apiv1.ValidPortalClaimGitHub(item.GitHub) {
 				row.TrackerHref, row.TrackerText = "https://github.com/"+item.GitHub+"/issues/"+n, "GitHub issue #"+n

@@ -113,7 +113,11 @@ func TestValidatePortalTaskClaims(t *testing.T) {
 			p.State, p.Reason, p.Complete = PortalTaskClaimsStateUnknown, PortalTaskClaimsReasonUnavailable, false
 		},
 		"unknown complete": func(p *PortalTaskClaims) {
-			p.State, p.Reason, p.Items = PortalTaskClaimsStateUnknown, PortalTaskClaimsReasonUnavailable, nil
+			p.State, p.Reason, p.Items, p.Complete = PortalTaskClaimsStateUnknown, PortalTaskClaimsReasonUnavailable, []PortalTaskClaimItem{}, true
+		},
+		"stale but recent": func(p *PortalTaskClaims) {
+			recent := p.ObservedAt.Add(-time.Minute)
+			p.Items[0].Owner.Freshness, p.Items[0].Owner.HeartbeatAt = PortalClaimFreshnessStale, &recent
 		},
 		"complete with cursor":      func(p *PortalTaskClaims) { p.NextCursor = "abc" },
 		"truncated without cursor":  func(p *PortalTaskClaims) { p.Reason, p.Complete = PortalTaskClaimsReasonTruncated, false },

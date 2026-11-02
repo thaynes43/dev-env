@@ -231,6 +231,9 @@ func TestClaimsSinceUsesOnlySourceTimes(t *testing.T) {
 	if !strings.Contains(body, "Held for an unknown time") || !strings.Contains(body, "Held 1d 2h when observed") || !strings.Contains(body, `<time datetime="2026-11-01T12:55:00Z">1 Nov 2026, 12:55 UTC</time>`) {
 		t.Fatal("since column wrong")
 	}
+	if strings.Contains(body, `datetime="2026-11-02T16:00:00Z"`) || strings.Contains(body, `datetime=""`) || !strings.Contains(body, "<span>Unknown</span>") {
+		t.Fatal("a creation time after the read is shown as a time")
+	}
 	if claimAge(claimsObserved.Add(-30*time.Second), claimsObserved) != "Held under a minute when observed" || claimAge(claimsObserved.Add(-75*time.Minute), claimsObserved) != "Held 1h 15m when observed" {
 		t.Fatal("age format")
 	}

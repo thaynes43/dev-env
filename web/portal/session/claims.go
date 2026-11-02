@@ -178,6 +178,9 @@ func decodePortalTaskClaims(raw []byte) (apiv1.PortalTaskClaims, error) {
 			return page, errClaimsContract
 		}
 	}
+	if _, ok := jsonBool(fields["complete"]); !ok {
+		return page, errClaimsContract
+	}
 	rows, ok := jsonArray(fields["items"])
 	if !ok || len(rows) > apiv1.PortalTaskClaimsMaxLimit {
 		return page, errClaimsContract
