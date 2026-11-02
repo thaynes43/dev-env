@@ -514,6 +514,7 @@ func renderAsks(w http.ResponseWriter, r *http.Request, c AssemblyConfig, key Ha
 	}
 	page.PortalHost = origin.Hostname()
 	_, page.CanAnswer = c.Session.config.Store.(commandReceipts)
+	page.ClaimsNav = c.Claims != nil
 	body, policy, err := portal.RenderAsks(page, maximumResponse*7/8)
 	if err != nil {
 		authFailure(w, portal.ErrUnavailable)

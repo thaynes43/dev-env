@@ -22,6 +22,10 @@ type AssemblyConfig struct {
 	Launch     LaunchForms
 	FreshFor   time.Duration
 	Now        func() time.Time
+
+	// Claims is the read-only Claims page (DESIGN-045). Nil serves no Claims
+	// route and links no Claims page.
+	Claims *ClaimsSource
 }
 
 // NewAssembly composes source handlers; it opens no listener. Missing dependencies
@@ -34,6 +38,10 @@ func NewAssembly(c AssemblyConfig) http.Handler {
 	}
 	reads := portal.NewHandler(portal.Dependencies{Authenticator: c.Session, Authorizer: c.Authorizer, Reader: c.Reader, FreshFor: c.FreshFor, Now: c.Now})
 	return contained(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c.Claims != nil && (r.URL.Path == ClaimsPath || strings.HasPrefix(r.URL.Path, ClaimsPath+"/")) {
+			serveClaims(w, c.Session.bind(r), c)
+			return
+		}
 		if r.URL.Path == AsksPath || strings.HasPrefix(r.URL.Path, AsksPath+"/") {
 			serveAsks(w, c.Session.bind(r), c)
 			return
