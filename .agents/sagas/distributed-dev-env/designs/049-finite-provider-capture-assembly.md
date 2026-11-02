@@ -50,7 +50,7 @@ The existing collection projection supplies validation, source status, ordering
 conflict and explicit missing-provider gaps. The command emits one bounded
 providerallowance.read.v1 document; publication remains a separate explicit
 `usage --publish-file` action. It never follows a provider URL or publishes
-implicitly. Invalid input produces a fixed error without payload/path echo.
+implicitly. Input waits are capped at 30 seconds and observe cancellation, including an open stdin pipe. Invalid input produces a fixed error without payload/path echo.
 
 Acceptance needs meaningful local fixtures for all three inputs, provenance
 and clock preservation, fractional/reset precision, unknown binding/freshness,

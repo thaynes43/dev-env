@@ -43,6 +43,39 @@ func TestUsageCaptureIsExplicitLocalAssembly(t *testing.T) {
 	}
 }
 
+func TestUsageCaptureReadsCompleteStdin(t *testing.T) {
+	for _, mode := range []string{"buffer", "pipe"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newHarness(t)
+			input, trust := usageCaptureFixture(t, h)
+			raw, err := os.ReadFile(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "buffer" {
+				h.env.Stdin = strings.NewReader(string(raw))
+			} else {
+				reader, writer, err := os.Pipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+				if _, err := writer.Write(raw); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				h.env.Stdin = reader
+			}
+			h.mustRun(ExitOK, "usage", "capture", "-o", "json", "--input", "-", "--trust-file", trust)
+			if _, err := providerallowance.DecodeReadResponse(bytesWithoutNewline(h.stdout.Bytes()), providerallowance.FixtureParseLimits); err != nil || len(h.api.requests()) != 0 || len(h.ran) != 0 {
+				t.Fatal("complete stdin did not remain local", err)
+			}
+		})
+	}
+}
+
 func bytesWithoutNewline(raw []byte) []byte { return []byte(strings.TrimSuffix(string(raw), "\n")) }
 
 func TestUsageCaptureRejectsUnsafeInputWithoutEcho(t *testing.T) {
