@@ -151,9 +151,22 @@ or durable-copy receipts only when an injected verifier accepts them. It leaves
 `FetchSucceeded` false. Remote-tracking refs and that boolean are not proof.
 Each Git command is capped at 30 seconds even when the caller deadline is
 longer. Unsupported repository config, including filters, diff drivers, hooks,
-and aliases, is refused before a command that could run it. Git does not let an
-alias replace a builtin. Prunable and bare worktrees, ignored nested
-repositories, and `BISECT_START` are not reported as a clean complete tree.
+aliases, and `core.worktree`, is refused before a command that could run it.
+Git does not let an alias replace a builtin. Submodule paths are read with
+Git's file-scoped config parser. Ordinary `.gitmodules` path, url, and active
+entries stay usable. Command-bearing or ambiguous values, and any other key,
+fail closed before `submodule status`. Skip-worktree and assume-unchanged index
+bits fail closed before status is treated as a complete tree. Prunable and bare
+worktrees, ignored nested repositories, and `BISECT_START` are not reported as
+a clean complete tree. `Preflight` does not expire an exact approval on the
+observation clock. Future timestamps, replayed approvals, and stale
+observations, proofs, and receipts are still refused. These reads take no lock.
+The caller-supplied HOME revision and uncached fences stay explicit.
+The `core.worktree` refusal also applies to Git-created submodule configurations.
+Those repositories remain unsupported; this collector does not rewrite their
+configuration. Synthetic nonmutation coverage checks that refusal, then prepares
+a fixture with an embedded `.git` directory and no override before recording its
+baseline.
 `ProjectDecisions` and `RecordOwnerDecision` persist warning and explicit
 owner dispositions through a caller-supplied store. The same binding resumes
 without another write. No production `DecisionStore` adapter is supplied or

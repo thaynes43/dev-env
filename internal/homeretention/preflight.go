@@ -81,9 +81,11 @@ type PreflightReport struct {
 
 // Preflight validates an exact approved UID set against fresh uncached
 // identity, resourceVersion, mount, and writer fences. It also checks proof,
-// required artifacts, and explicit disposition. Stale, mismatched, and
-// replayed approvals are refused. A passing report is still not permission
-// to delete.
+// required artifacts, and explicit disposition. A future timestamp or a
+// replayed approval is refused. The approval batch is not expired on the
+// observation clock: an older unconsumed exact stamp still matches fresh
+// fences, observations, proofs, and receipts. A passing report is still not
+// permission to delete.
 func Preflight(req PreflightRequest) (PreflightReport, error) {
 	report := PreflightReport{Version: Version, DryRun: true, DeleteEnabled: false, ExecutionAuthority: false, Reasons: []PreflightReason{}}
 	if req.Now.IsZero() {
@@ -103,8 +105,6 @@ func Preflight(req PreflightRequest) (PreflightReport, error) {
 		add("", "approval_incomplete")
 	} else if approvedAt.After(req.Now) {
 		add("", "timestamp_future")
-	} else if req.Now.Sub(approvedAt) > req.Policy.ObservationMaxAge {
-		add("", "approval_stale")
 	}
 	for _, used := range req.ConsumedApprovalIDs {
 		if used == approval.ApprovalID && approval.ApprovalID != "" {

@@ -180,12 +180,27 @@ instead of `git status` and `alias.config` does not hide the config scan. The
 collector still refuses `alias.*` because it is not non-executing repository
 data. Before `status`, `ls-files`, or `submodule` in a worktree or submodule, it
 lists local config and worktree config when `extensions.worktreeConfig` is
-true. Any file or blob key outside the small non-executing set (core data,
-user name and email, remote URL and fetch, branch upstream, submodule path, URL,
-and active) fails closed. The scan does not follow symlinks. A nested `.git`
-that status omits because it is ignored is recorded as a nested repository,
-including under an ignored directory. A symlink stops that walk. `BISECT_START`
-is an in-progress operation. The CLI is not wired to the collector.
+true. Any file or blob key outside the small non-executing set (core data other
+than `core.worktree`, user name and email, remote URL and fetch, branch
+upstream, submodule path, URL, and active) fails closed. `core.worktree` is
+refused before those commands, so status and the nested walk cannot observe
+different trees. A normal linked worktree is still discovered from its `.git`
+file when that key is absent. Submodule paths come from one file-scoped
+`git config --file` of the absolute `.gitmodules` path, `--list --null
+--no-includes`, after that file is a regular non-symlink within the output
+bound. Ordinary `submodule.<name>.path`, `url`, and `active` values are kept.
+Any other key, including `update`, `ignore`, `branch`, `include`, `filter`, and
+`diff`, fails closed, as do command-bearing or ambiguous values (`!`, `::`, a
+leading `-`, a path that still contains `#` or quotes, or an `active` value
+other than `true` or `false`). Each existing parsed directory is config-checked
+before `submodule status`. A path this parser reports as absent is skipped.
+`ls-files -v -z` is read before status. Any index tag other than ordinary
+cached `H` fails closed, including skip-worktree and assume-unchanged, so
+status alone is not a complete preservation claim. The scan does not follow
+symlinks. A nested `.git` that status omits because it is ignored is recorded
+as a nested repository, including under an ignored directory. A symlink stops
+that walk. `BISECT_START` is an in-progress operation. The CLI is not wired to
+the collector.
 
 `ProjectDecisions` writes warning and decision rows through a caller-supplied
 `DecisionStore`. The clock is the caller's, including a test clock. Retention
@@ -201,7 +216,11 @@ enabled loop.
 fences: Session, PVC, and Pod UIDs, resourceVersions, writer revision, mounts,
 proof, required artifacts, and `approve_exact_cleanup`. It refuses a replaced
 PVC or Pod, a late write, a new mount, stale or mismatched proof, a replayed
-approval, a future timestamp, and any other approved set. It also reuses
+approval, a future timestamp, and any other approved set. It does not expire
+the approval batch on the observation clock. An older unconsumed
+`approve_exact_cleanup` stamp passes when the fence, observation, proof, and
+per-ref receipts are inside that window and the observation is not before the
+stamp. Refreshing the observation does not require another owner stamp. It also reuses
 `homeSafety` and the preservation inventory check: state must be stopped, hold
 empty, and disposition empty or normal; worktree, ref, stash, and unpushed
 arrays must be present; each worktree head ref must exist; the signed
@@ -224,7 +243,19 @@ adapter is supplied or deployed, so durable persistence remains integration work
 agentd, or dry-run CLI path calls these functions. The layout sentence for this
 package was not edited. A repository config key this collector does not
 recognize fails closed rather than being executed. An ordinary symlink in a
-worktree stops the nested walk instead of being followed.
+worktree stops the nested walk instead of being followed. The config list, the
+index-flag read, and the next Git command are not one snapshot. A concurrent
+writer can change config or index flags after a read and before the next
+command. Nothing here takes a lock. Git-created submodules with `core.worktree`
+are also refused; the collector does not normalize repository configuration.
+The synthetic nonmutation fixture verifies that refusal, then uses an embedded
+`.git` directory without the override as test setup before recording its baseline.
+The collector re-reads the caller-supplied
+HOME revision and fails closed if it changes. `git submodule status` still
+splits paths on whitespace, so a submodule path containing a space is not one
+status field. The file-scoped parser checks that spaced path before status;
+the later status split cannot by itself report a clean complete tree, because
+the walk still sees that directory's `.git` or the split path fails closed.
 
 ## Validation
 

@@ -28,6 +28,39 @@ func TestCleanupPreflightExactSetHasNoExecutionAuthority(t *testing.T) {
 	}
 }
 
+func TestOlderExactApprovalWithFreshEvidencePasses(t *testing.T) {
+	f := newFixture(t)
+	req := baselinePreflight(t, f)
+	req.Approval.ApprovedAt = formatTime(req.Now.Add(-req.Policy.ObservationMaxAge - time.Second))
+	report, err := Preflight(req)
+	if err != nil || len(report.Reasons) != 0 || report.DeleteEnabled || report.ExecutionAuthority || !report.DryRun || hasReason(report, "approval_stale") {
+		t.Fatalf("older exact approval required another stamp: %+v %v", report, err)
+	}
+	req.ConsumedApprovalIDs = []string{req.Approval.ApprovalID}
+	report, err = Preflight(req)
+	if err != nil || !hasReason(report, "approval_replayed") || report.ExecutionAuthority || report.DeleteEnabled {
+		t.Fatalf("replayed older approval was accepted: %+v %v", report, err)
+	}
+	future := baselinePreflight(t, f)
+	future.Approval.ApprovedAt = formatTime(future.Now.Add(time.Minute))
+	report, err = Preflight(future)
+	if err != nil || !hasReason(report, "timestamp_future") || report.ExecutionAuthority {
+		t.Fatalf("future approval was accepted: %+v %v", report, err)
+	}
+	stale := baselinePreflight(t, f)
+	stale.Approval.ApprovedAt = formatTime(stale.Now.Add(-stale.Policy.ObservationMaxAge - time.Second))
+	old := formatTime(stale.Now.Add(-6 * time.Minute))
+	stale.Fences[0].ObservedAt = old
+	payload := stale.Fences[0].Observation.Payload
+	payload.ObservedAt = old
+	stale.Fences[0].Observation.Payload = payload
+	stale.Fences[0].Observation.Signature = f.sign(t, "observation", payload)
+	report, err = Preflight(stale)
+	if err != nil || !hasReason(report, "fence_stale") || hasReason(report, "approval_stale") || report.ExecutionAuthority || report.DeleteEnabled {
+		t.Fatalf("stale observation was treated as an approval expiry: %+v %v", report, err)
+	}
+}
+
 func TestCleanupPreflightRefusesReplacedStaleAndReplayed(t *testing.T) {
 	f := newFixture(t)
 	cases := []struct {

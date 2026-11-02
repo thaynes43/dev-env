@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -58,6 +59,19 @@ func TestReadOnlyGitRefusesMutations(t *testing.T) {
 	}
 	if err := allowedReadOnlyGit([]string{"config", "--get", "filter.x.clean"}); err == nil {
 		t.Fatal("config get was allowlisted")
+	}
+	if err := allowedReadOnlyGit(indexFlagArgs); err != nil {
+		t.Fatal(err)
+	}
+	modules := filepath.Join(t.TempDir(), ".gitmodules")
+	if err := allowedReadOnlyGit([]string{"config", "--file", modules, "--list", "--null", "--no-includes"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := allowedReadOnlyGit([]string{"config", "--file", "relative/.gitmodules", "--list", "--null", "--no-includes"}); err == nil {
+		t.Fatal("relative gitmodules file was allowlisted")
+	}
+	if err := allowedReadOnlyGit([]string{"config", "--file", filepath.Join(t.TempDir(), "config"), "--list", "--null", "--no-includes"}); err == nil {
+		t.Fatal("non-gitmodules file was allowlisted")
 	}
 }
 
@@ -149,15 +163,183 @@ func TestSubmoduleConfigIsRefusedBeforeStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub\n\turl = ../sub\n")
+	git.extra.modulesList = "submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00"
 	git.options.attack = "file:.git/config\x00filter.x.clean\ntouch-attacked\x00"
 	git.options.attackDir = child
 	_, err := CollectPreservation(context.Background(), validCollectRequest(f, git.root), git, fixedRevision(f.record.Binding.HomeRevision))
 	if err == nil || !strings.Contains(err.Error(), "unsupported git config") || git.executed {
 		t.Fatalf("submodule command ran: %v executed=%v", err, git.executed)
 	}
+	if !sawGit(git, "", func(call []string) bool { return allowedFileConfig(call) }) || !sawGit(git, child, func(call []string) bool { return slices.Equal(call, localConfigArgs) }) {
+		t.Fatalf("child config was not listed from git's file parse: %v", git.calls)
+	}
 	for _, call := range git.calls {
 		if call[0] == "submodule" {
 			t.Fatal("submodule status ran")
+		}
+	}
+}
+
+func TestGitmodulesFileParseKeepsOrdinaryURLAndFailsClosed(t *testing.T) {
+	f := newFixture(t)
+	t.Run("inline comment and decoy do not hide a child filter", func(t *testing.T) {
+		git := newScriptGit(t, scriptOptions{})
+		child := filepath.Join(git.root, "vendor", "sub")
+		decoy := filepath.Join(git.root, "vendor", "sub # pin")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(decoy, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub # pin\n\turl = ../sub\n")
+		git.extra.modulesList = "submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00"
+		git.options.attack = "file:.git/config\x00filter.x.clean\ntouch-attacked\x00"
+		git.options.attackDir = child
+		inventory, err := CollectPreservation(context.Background(), validCollectRequest(f, git.root), git, fixedRevision(f.record.Binding.HomeRevision))
+		if err == nil || inventory.Complete || !strings.Contains(err.Error(), "unsupported git config") || git.executed {
+			t.Fatalf("false complete or execution: %+v %v executed=%v", inventory, err, git.executed)
+		}
+		if !sawGit(git, child, func(call []string) bool { return slices.Equal(call, localConfigArgs) }) || sawGit(git, decoy, func([]string) bool { return true }) {
+			t.Fatal("decoy path was scanned or the parsed path was not")
+		}
+		for _, call := range git.calls {
+			if call[0] == "submodule" {
+				t.Fatal("submodule status ran")
+			}
+		}
+	})
+	t.Run("quoted path and url stay ordinary", func(t *testing.T) {
+		git := newScriptGit(t, scriptOptions{})
+		child := filepath.Join(git.root, "vendor", "quoted sub")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"quoted\"]\n\tpath = \"vendor/quoted sub\"\n\turl = ../quoted\n")
+		git.extra.modulesList = "submodule.quoted.path\nvendor/quoted sub\x00submodule.quoted.url\n../quoted\x00submodule.quoted.active\ntrue\x00"
+		inventory, err := CollectPreservation(context.Background(), validCollectRequest(f, git.root), git, fixedRevision(f.record.Binding.HomeRevision))
+		if err != nil || !inventory.Complete || inventory.Repositories[0].FetchSucceeded {
+			t.Fatalf("ordinary submodule file was refused: %+v %v", inventory, err)
+		}
+		if !sawGit(git, "", func(call []string) bool { return allowedFileConfig(call) }) || !sawGit(git, child, func(call []string) bool { return slices.Equal(call, localConfigArgs) }) {
+			t.Fatal("parsed quoted path was not config-checked")
+		}
+	})
+	t.Run("command and ambiguous gitmodules values do not run", func(t *testing.T) {
+		for _, listing := range []string{
+			"submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00filter.x.clean\ntouch-attacked\x00",
+			"submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00submodule.vendor.update\n!touch-attacked\x00",
+			"submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\next::cmd\x00",
+			"submodule.vendor.path\nvendor/sub # pin\x00submodule.vendor.url\n../sub\x00",
+			"submodule.a.path\nvendor/sub\x00submodule.a.url\n../a\x00submodule.b.path\nvendor/sub\x00submodule.b.url\n../b\x00",
+			"submodule.vendor.url\n../sub\x00",
+		} {
+			git := newScriptGit(t, scriptOptions{})
+			writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub\n")
+			git.extra.modulesList = listing
+			inventory, err := CollectPreservation(context.Background(), validCollectRequest(f, git.root), git, fixedRevision(f.record.Binding.HomeRevision))
+			if err == nil || inventory.Complete || git.executed {
+				t.Fatalf("listing %q completed: %+v %v", listing, inventory, err)
+			}
+			for _, call := range git.calls {
+				if call[0] == "submodule" {
+					t.Fatalf("submodule status ran for %q", listing)
+				}
+			}
+		}
+	})
+}
+
+func TestCoreWorktreeAndIndexFlagsFailClosed(t *testing.T) {
+	f := newFixture(t)
+	git := newScriptGit(t, scriptOptions{})
+	git.extra.localConfig = "file:.git/config\x00core.worktree\n/clean\x00"
+	inventory, err := CollectPreservation(context.Background(), validCollectRequest(f, git.root), git, fixedRevision(f.record.Binding.HomeRevision))
+	if err == nil || inventory.Complete || !strings.Contains(err.Error(), "unsupported git config") {
+		t.Fatalf("core.worktree was inventoried: %+v %v", inventory, err)
+	}
+	for _, call := range git.calls {
+		if call[0] == "status" || call[0] == "ls-files" || call[0] == "worktree" {
+			t.Fatalf("tree command ran: %q", call)
+		}
+	}
+	ordinary := newScriptGit(t, scriptOptions{})
+	ordinary.extra.localConfig = "file:.git/config\x00core.bare\nfalse\x00file:.git/config\x00user.email\nsynthetic@example.invalid\x00"
+	inventory, err = CollectPreservation(context.Background(), validCollectRequest(f, ordinary.root), ordinary, fixedRevision(f.record.Binding.HomeRevision))
+	if err != nil || !inventory.Complete {
+		t.Fatalf("ordinary core config was refused: %+v %v", inventory, err)
+	}
+	for _, flags := range []string{"S hidden.txt\x00", "s hidden.txt\x00", "h hidden.txt\x00", "H README\x00S hidden.txt\x00"} {
+		flagged := newScriptGit(t, scriptOptions{})
+		flagged.extra.indexFlags = flags
+		inventory, err = CollectPreservation(context.Background(), validCollectRequest(f, flagged.root), flagged, fixedRevision(f.record.Binding.HomeRevision))
+		if err == nil || inventory.Complete || !strings.Contains(err.Error(), "index flags hide edits") {
+			t.Fatalf("flags %q were preserved: %+v %v", flags, inventory, err)
+		}
+		for _, call := range flagged.calls {
+			if call[0] == "status" {
+				t.Fatalf("status ran with flags %q", flags)
+			}
+		}
+	}
+	clean := newScriptGit(t, scriptOptions{})
+	clean.extra.indexFlags = "H README\x00"
+	inventory, err = CollectPreservation(context.Background(), validCollectRequest(f, clean.root), clean, fixedRevision(f.record.Binding.HomeRevision))
+	if err != nil || !inventory.Complete || !inventory.Repositories[0].Worktrees[0].SubmodulesComplete {
+		t.Fatalf("ordinary index was refused: %+v %v", inventory, err)
+	}
+	childGit := newScriptGit(t, scriptOptions{})
+	child := filepath.Join(childGit.root, "vendor", "sub")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(childGit.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub\n\turl = ../sub\n")
+	childGit.extra.modulesList = "submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00"
+	childGit.extra.submoduleStatus = " " + strings.Repeat("a", 40) + " vendor/sub\n"
+	childGit.extra.indexFlags = "S hidden.txt\x00"
+	childGit.extra.indexFlagDir = child
+	inventory, err = CollectPreservation(context.Background(), validCollectRequest(f, childGit.root), childGit, fixedRevision(f.record.Binding.HomeRevision))
+	if err == nil || inventory.Complete || !strings.Contains(err.Error(), "index flags hide edits") {
+		t.Fatalf("child index flags were preserved: %+v %v", inventory, err)
+	}
+	if sawGit(childGit, child, func(call []string) bool { return call[0] == "status" }) {
+		t.Fatal("child status ran")
+	}
+}
+
+func TestGitmodulesAndIndexAllowlist(t *testing.T) {
+	if supportedRepositoryKey("core.worktree", "/clean") || !supportedRepositoryKey("core.bare", "false") {
+		t.Fatal("core allowlist mismatch")
+	}
+	if !supportedGitmodulesKey("submodule.vendor.path", "vendor/sub") || !supportedGitmodulesKey("submodule.vendor.url", "../sub") || !supportedGitmodulesKey("submodule.vendor.url", "https://example.invalid/sub.git") || !supportedGitmodulesKey("submodule.quoted.path", "vendor/quoted sub") || !supportedGitmodulesKey("submodule.vendor.active", "true") || !supportedGitmodulesKey("submodule.foo.bar.path", "lib/foo") {
+		t.Fatal("ordinary gitmodules key was refused")
+	}
+	for _, tc := range []struct{ key, value string }{
+		{"filter.x.clean", "touch-attacked"},
+		{"include.path", "../other"},
+		{"submodule.vendor.update", "!touch-attacked"},
+		{"submodule.vendor.update", "checkout"},
+		{"submodule.vendor.ignore", "all"},
+		{"submodule.vendor.branch", "main"},
+		{"submodule.vendor.url", "ext::cmd"},
+		{"submodule.vendor.url", "!touch"},
+		{"submodule.vendor.active", "yes"},
+		{"submodule.vendor.path", "vendor/sub # pin"},
+		{"submodule.vendor.path", "\"vendor/sub\""},
+	} {
+		if supportedGitmodulesKey(tc.key, tc.value) {
+			t.Fatalf("allowed %s=%s", tc.key, tc.value)
+		}
+	}
+	if err := rejectHiddenIndexFlags(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectHiddenIndexFlags("H README\x00H vendor/sub\x00"); err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []string{"S hidden.txt\x00", "s hidden.txt\x00", "h README\x00", "M README\x00"} {
+		if err := rejectHiddenIndexFlags(out); err == nil || !strings.Contains(err.Error(), "index flags hide edits") {
+			t.Fatalf("accepted %q: %v", out, err)
 		}
 	}
 }
@@ -411,9 +593,6 @@ func TestCollectSyntheticWorktreeDoesNotMutate(t *testing.T) {
 
 	paths := []string{work, detached, bare, sub, filepath.Join(work, "vendor", "sub")}
 	before := map[string]string{}
-	for _, path := range paths {
-		before[path] = passiveFingerprint(t, home, path)
-	}
 	runner, err := NewExecGit()
 	if err != nil {
 		t.Fatal(err)
@@ -428,6 +607,26 @@ func TestCollectSyntheticWorktreeDoesNotMutate(t *testing.T) {
 	req.Verifier = f.trust
 	req.Publications = scriptPubs{key: f.keys["publication"], allow: map[string]bool{"github:example/project\nrefs/tags/v1": true}, when: formatTime(f.now)}
 	req.SubmoduleIdentities = map[string]string{SubmoduleIdentityKey("github:example/project", "vendor/sub"): "synthetic:vendor"}
+	// Git creates core.worktree for this submodule. The collector deliberately
+	// refuses that override; verify the refusal before preparing the supported
+	// fixture shape. Only test setup changes the synthetic repository config.
+	if _, err := CollectPreservation(context.Background(), req, recorded, fixedRevision(req.Binding.HomeRevision)); err == nil || !strings.Contains(err.Error(), "unsupported git config") {
+		t.Fatalf("Git-created core.worktree was not refused: %v", err)
+	}
+	run("-C", filepath.Join(work, "vendor", "sub"), "config", "--unset", "core.worktree")
+	// An absorbed submodule needs that override when Git enters its separate
+	// git directory. Use the supported embedded .git directory layout instead.
+	modulePath := filepath.Join(work, "vendor", "sub")
+	moduleGitDir := strings.TrimSpace(runGitOutput(t, home, "-C", modulePath, "rev-parse", "--absolute-git-dir"))
+	if err := os.Rename(filepath.Join(modulePath, ".git"), filepath.Join(root, "saved-submodule-gitfile")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(moduleGitDir, filepath.Join(modulePath, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		before[path] = passiveFingerprint(t, home, path)
+	}
 	inventory, err := CollectPreservation(context.Background(), req, recorded, fixedRevision(req.Binding.HomeRevision))
 	if err != nil {
 		t.Fatal(err)
@@ -523,13 +722,23 @@ type scriptOptions struct {
 	attackDir                                                              string
 }
 
+type scriptExtra struct {
+	localConfig     string
+	modulesList     string
+	submoduleStatus string
+	indexFlags      string
+	indexFlagDir    string
+}
+
 type scriptGit struct {
 	t        *testing.T
 	root     string
 	options  scriptOptions
 	calls    [][]string
+	dirs     []string
 	refCalls int
 	executed bool
+	extra    scriptExtra
 }
 
 func newScriptGit(t *testing.T, options scriptOptions) *scriptGit {
@@ -550,6 +759,7 @@ func newScriptGit(t *testing.T, options scriptOptions) *scriptGit {
 
 func (g *scriptGit) Run(_ context.Context, dir string, args []string) (string, int, error) {
 	g.calls = append(g.calls, append([]string(nil), args...))
+	g.dirs = append(g.dirs, dir)
 	attacked := g.options.attack != "" && (g.options.attackDir == "" || dir == g.options.attackDir)
 	if (attacked && args[0] != "config") || (args[0] == "submodule" && g.options.attack != "") {
 		g.executed = true
@@ -557,10 +767,16 @@ func (g *scriptGit) Run(_ context.Context, dir string, args []string) (string, i
 	if g.options.fail && args[0] == "worktree" {
 		return "", -1, errors.New("synthetic read error")
 	}
+	if allowedFileConfig(args) {
+		return g.extra.modulesList, 0, nil
+	}
 	switch strings.Join(args, "\x00") {
 	case strings.Join(localConfigArgs, "\x00"):
 		if attacked {
 			return g.options.attack, 0, nil
+		}
+		if g.extra.localConfig != "" {
+			return g.extra.localConfig, 0, nil
 		}
 		return "", 0, nil
 	case strings.Join([]string{"rev-parse", "--git-common-dir"}, "\x00"):
@@ -602,6 +818,13 @@ func (g *scriptGit) Run(_ context.Context, dir string, args []string) (string, i
 			return "nested/\x00", 0, nil
 		}
 		return "", 0, nil
+	case strings.Join(indexFlagArgs, "\x00"):
+		if g.extra.indexFlagDir == "" || dir == g.extra.indexFlagDir {
+			return g.extra.indexFlags, 0, nil
+		}
+		return "", 0, nil
+	case strings.Join([]string{"submodule", "status", "--recursive"}, "\x00"):
+		return g.extra.submoduleStatus, 0, nil
 	default:
 		g.t.Fatalf("unexpected git in %s: %q", dir, args)
 		return "", -1, errors.New("unexpected git")
@@ -733,6 +956,15 @@ func worktreePaths(repo Repository) []string {
 		paths = append(paths, worktree.Path)
 	}
 	return paths
+}
+
+func sawGit(g *scriptGit, dir string, match func([]string) bool) bool {
+	for i, call := range g.calls {
+		if (dir == "" || g.dirs[i] == dir) && match(call) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsString(values []string, want string) bool {

@@ -34,6 +34,7 @@ const (
 var (
 	localConfigArgs    = []string{"config", "--list", "--local", "--show-origin", "--null"}
 	worktreeConfigArgs = []string{"config", "--list", "--worktree", "--show-origin", "--null"}
+	indexFlagArgs      = []string{"ls-files", "-v", "-z"}
 )
 
 // RepositorySpec is one caller-selected repository. Identity is an
@@ -268,7 +269,11 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 // stash, or otherwise modify a repository. Publication proof comes only from
 // the injected boundary. FetchSucceeded is left false and is not publication
 // evidence. Unsupported repository config is refused before a command that can
-// run a hook, filter, diff driver, or helper.
+// run a hook, filter, diff driver, or helper. core.worktree is unsupported, so
+// status and the nested walk cannot observe different trees. Submodule
+// directories are taken from Git's file-scoped config parse of .gitmodules
+// before submodule status. Index entries whose ls-files -v tag is not ordinary
+// cached H fail closed. Those reads are not an atomic snapshot and take no lock.
 func CollectPreservation(ctx context.Context, req CollectRequest, git GitRunner, revision HomeRevisionSource) (Inventory, error) {
 	if ctx == nil {
 		return Inventory{}, errors.New("context required")
@@ -604,6 +609,9 @@ func (c *collector) readWorktree(ctx context.Context, item porcelainWorktree) (w
 	if err != nil {
 		return worktreeSnapshot{}, err
 	}
+	if err := c.refuseHiddenIndexFlags(ctx, item.Path); err != nil {
+		return worktreeSnapshot{}, err
+	}
 	status, err := c.gitOK(ctx, item.Path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
 		return worktreeSnapshot{}, err
@@ -653,6 +661,9 @@ func (c *collector) readSubmodules(ctx context.Context, worktree string) (string
 		}
 		child := filepath.Clean(filepath.Join(worktree, filepath.FromSlash(sub.Path)))
 		if err := withinDir(worktree, child); err != nil {
+			return "", nil, err
+		}
+		if err := c.refuseHiddenIndexFlags(ctx, child); err != nil {
 			return "", nil, err
 		}
 		status, err := c.gitOK(ctx, child, "status", "--porcelain=v1", "-z", "--untracked-files=all")
@@ -903,7 +914,18 @@ func (c *collector) gitRaw(ctx context.Context, dir string, args ...string) (str
 }
 
 func isConfigList(args []string) bool {
-	return slices.Equal(args, localConfigArgs) || slices.Equal(args, worktreeConfigArgs)
+	return slices.Equal(args, localConfigArgs) || slices.Equal(args, worktreeConfigArgs) || allowedFileConfig(args)
+}
+
+func allowedFileConfig(args []string) bool {
+	if len(args) != 6 || args[0] != "config" || args[1] != "--file" || args[3] != "--list" || args[4] != "--null" || args[5] != "--no-includes" {
+		return false
+	}
+	file := args[2]
+	if file == "" || !filepath.IsAbs(file) || filepath.Clean(file) != file || filepath.Base(file) != ".gitmodules" {
+		return false
+	}
+	return !strings.ContainsAny(file, "\x00\n")
 }
 
 func allowedReadOnlyGit(args []string) error {
@@ -919,7 +941,9 @@ func allowedReadOnlyGit(args []string) error {
 	case slices.Equal(args, []string{"stash", "list", "--format=%H"}):
 	case slices.Equal(args, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}):
 	case slices.Equal(args, []string{"ls-files", "-o", "--exclude-standard", "-z"}):
+	case slices.Equal(args, indexFlagArgs):
 	case slices.Equal(args, []string{"submodule", "status", "--recursive"}):
+	case allowedFileConfig(args):
 	default:
 		return errors.New("read-only git command refused: " + strings.Join(args, " "))
 	}
@@ -1226,7 +1250,7 @@ func (c *collector) scanSubmoduleTree(ctx context.Context, worktree string, dept
 	if depth >= maxCollectDepth {
 		return errors.New("preservation incomplete: submodule depth exceeded")
 	}
-	paths, err := gitmodulesPaths(worktree)
+	paths, err := c.gitmodulesPaths(ctx, worktree)
 	if err != nil || len(paths) == 0 {
 		return err
 	}
@@ -1255,7 +1279,11 @@ func (c *collector) scanSubmoduleTree(ctx context.Context, worktree string, dept
 	return nil
 }
 
-func gitmodulesPaths(worktree string) ([]string, error) {
+// gitmodulesPaths asks Git to parse one regular .gitmodules file. The allowlist
+// keeps ordinary path, url, and active entries, and refuses every other key.
+// A directory Git reports as absent is skipped. A comment left in a value is
+// not treated as a different path.
+func (c *collector) gitmodulesPaths(ctx context.Context, worktree string) ([]string, error) {
 	path := filepath.Join(worktree, ".gitmodules")
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -1264,38 +1292,106 @@ func gitmodulesPaths(worktree string) ([]string, error) {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxGitOutputBytes {
 		return nil, errors.New("preservation incomplete: submodule metadata unreadable")
 	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("preservation incomplete: %w", err)
-	}
-	if bytes.Contains(body, []byte{0}) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, errors.New("preservation incomplete: submodule metadata unreadable")
 	}
-	var paths []string
-	seen := map[string]bool{}
-	for _, line := range bytes.Split(body, []byte{'\n'}) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 || line[0] == '#' || line[0] == ';' || line[0] == '[' {
-			continue
+	out, err := c.gitRaw(ctx, worktree, "config", "--file", path, "--list", "--null", "--no-includes")
+	if err != nil {
+		return nil, err
+	}
+	entries, err := parseFileConfig(out)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	seenKey := map[string]bool{}
+	seenPath := map[string]bool{}
+	names := map[string]bool{}
+	withPath := map[string]bool{}
+	for _, entry := range entries {
+		if seenKey[entry.key] || !supportedGitmodulesKey(entry.key, entry.value) {
+			return nil, errors.New("preservation incomplete: unsupported git config")
 		}
-		key, value, ok := bytes.Cut(line, []byte{'='})
+		seenKey[entry.key] = true
+		name, variable, ok := submoduleVariable(entry.key)
 		if !ok {
-			return nil, errors.New("preservation incomplete: submodule metadata unreadable")
+			return nil, errors.New("preservation incomplete: unsupported git config")
 		}
-		if !bytes.Equal(bytes.ToLower(bytes.TrimSpace(key)), []byte("path")) {
+		names[name] = true
+		if !strings.EqualFold(variable, "path") {
 			continue
 		}
-		rel := string(bytes.TrimSpace(value))
-		if (len(rel) >= 2 && rel[0] == '"' && rel[len(rel)-1] == '"') || !validRelative(rel) || seen[rel] {
+		if seenPath[entry.value] || withPath[name] {
 			return nil, errors.New("preservation incomplete: submodule path unreadable")
 		}
-		seen[rel] = true
-		paths = append(paths, rel)
+		seenPath[entry.value] = true
+		withPath[name] = true
+		paths = append(paths, entry.value)
 		if len(paths) > maxCollectRepositories {
 			return nil, errors.New("preservation incomplete: submodule bound exceeded")
 		}
 	}
+	for name := range names {
+		if !withPath[name] {
+			return nil, errors.New("preservation incomplete: submodule path unreadable")
+		}
+	}
 	return paths, nil
+}
+
+func parseFileConfig(out string) ([]listedConfig, error) {
+	if out == "" {
+		return nil, nil
+	}
+	parts := strings.Split(out, "\x00")
+	if parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 || len(parts) > maxCollectStatus {
+		return nil, errors.New("preservation incomplete: git config unreadable")
+	}
+	entries := make([]listedConfig, 0, len(parts))
+	for _, part := range parts {
+		key, value, ok := strings.Cut(part, "\n")
+		if !ok || key == "" || strings.Contains(key, "\n") || strings.Contains(value, "\n") {
+			return nil, errors.New("preservation incomplete: git config unreadable")
+		}
+		entries = append(entries, listedConfig{origin: "file:", key: key, value: value})
+	}
+	return entries, nil
+}
+
+func submoduleVariable(key string) (string, string, bool) {
+	parts := strings.Split(key, ".")
+	if len(parts) < 3 || !strings.EqualFold(parts[0], "submodule") {
+		return "", "", false
+	}
+	name := strings.Join(parts[1:len(parts)-1], ".")
+	variable := parts[len(parts)-1]
+	if name == "" || variable == "" || strings.ContainsAny(name, " \t\"'#\\") {
+		return "", "", false
+	}
+	return name, variable, true
+}
+
+func supportedGitmodulesKey(key, value string) bool {
+	if strings.ContainsAny(value, "\x00\n\r") || strings.Contains(value, "::") || strings.HasPrefix(value, "!") || strings.HasPrefix(value, "-") {
+		return false
+	}
+	_, variable, ok := submoduleVariable(key)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(variable) {
+	case "path":
+		return validRelative(value) && !strings.ContainsAny(value, "#\"")
+	case "url":
+		return value != "" && !strings.ContainsAny(value, " \t")
+	case "active":
+		return value == "true" || value == "false"
+	default:
+		return false
+	}
 }
 
 func initializedSubmodulePaths(subs []submoduleSnapshot) map[string]bool {
@@ -1362,6 +1458,36 @@ func rejectUnsupportedConfig(entries []listedConfig) error {
 	return nil
 }
 
+// refuseHiddenIndexFlags rejects skip-worktree and assume-unchanged index
+// bits, and any other tag that is not ordinary cached H. Status porcelain is
+// not read until this check passes. The two reads are not atomic.
+func (c *collector) refuseHiddenIndexFlags(ctx context.Context, dir string) error {
+	out, err := c.gitOK(ctx, dir, indexFlagArgs...)
+	if err != nil {
+		return err
+	}
+	return rejectHiddenIndexFlags(out)
+}
+
+func rejectHiddenIndexFlags(out string) error {
+	if out == "" {
+		return nil
+	}
+	parts := strings.Split(out, "\x00")
+	if parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 || len(parts) > maxCollectStatus {
+		return errors.New("preservation incomplete: index flags unreadable")
+	}
+	for _, rec := range parts {
+		if len(rec) < 3 || rec[0] != 'H' || rec[1] != ' ' {
+			return errors.New("preservation incomplete: index flags hide edits")
+		}
+	}
+	return nil
+}
+
 func safetyOverride(key, value string) bool {
 	for _, pair := range gitSafetyConfig() {
 		if strings.EqualFold(pair[0], key) && pair[1] == value {
@@ -1383,11 +1509,13 @@ func supportedRepositoryKey(key, value string) bool {
 	last := strings.ToLower(parts[len(parts)-1])
 	switch section {
 	case "core":
+		// core.worktree is not allowed. Status would follow it while the nested
+		// walk stays on the porcelain worktree path.
 		if len(parts) != 2 {
 			return false
 		}
 		switch last {
-		case "bare", "repositoryformatversion", "filemode", "logallrefupdates", "ignorecase", "precomposeunicode", "symlinks", "worktree":
+		case "bare", "repositoryformatversion", "filemode", "logallrefupdates", "ignorecase", "precomposeunicode", "symlinks":
 			return true
 		}
 	case "user":
