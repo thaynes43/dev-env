@@ -9,10 +9,13 @@ The codex-login artifact is not selected for adoption.
 [haynes-ops#4596](https://github.com/thaynes43/haynes-ops/pull/4596) installed the
 additive AgentSession schema and signed agent 2.88. Its source merge and actual
 Flux readback are separate evidence; existing user sessions retain their pods.
-[haynes-ops#4597](https://github.com/thaynes43/haynes-ops/pull/4597) proposes the
-ordinary operator/portal image adoption with collection default off. Its exact
-current-head CI, independent review, advisory disposition and installed readback
-must be recorded before asserting installation.
+[haynes-ops#4597](https://github.com/thaynes43/haynes-ops/pull/4597) merged as
+`37dbab486a513f551611fe7b8a568ac7951fc0a4` after current-head required checks,
+independent Grok source review and advisory disposition. At 23:22:57 UTC, both
+exact signed image IDs were installed, both deployments had 2/2 ready and updated
+replicas, and both Flux Kustomizations reported that applied revision. All 22
+protected baseline Pod UIDs were preserved. No allowance flags, private mounts,
+report slot or named ConfigMap rule were present. The rollout activity ended.
 
 The requested recurring outcome is **INACTIVE and unaccepted**. Finite authenticated
 provider captures, fixtures, source tests, signed publication and Pod readiness do
