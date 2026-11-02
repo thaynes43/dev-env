@@ -153,7 +153,8 @@ func parseTrustContexts(raw json.RawMessage) ([]TrustedContext, bool) {
 		if !knownBinding(state) || !knownSourceKind(kind) {
 			return nil, false
 		}
-		if state == BindingVerified && (doc.AccountRef == nil || !trustToken(*doc.AccountRef) || doc.WorkspaceRef == nil && !(doc.Provider == "openai" && kind == SourceNativeRPC && doc.SourceVersion == CodexRPCSourceVersion)) {
+		personalSource := doc.Provider == "openai" && kind == SourceNativeRPC && doc.SourceVersion == CodexRPCSourceVersion
+		if state == BindingVerified && (doc.AccountRef == nil || !trustToken(*doc.AccountRef) || doc.WorkspaceRef == nil && !personalSource) {
 			return nil, false
 		}
 		if doc.AccountRef != nil && !trustToken(*doc.AccountRef) || doc.WorkspaceRef != nil && !trustToken(*doc.WorkspaceRef) {

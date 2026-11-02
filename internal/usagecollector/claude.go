@@ -15,8 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/thaynes43/dev-env/internal/providerallowance"
 	"golang.org/x/sys/unix"
+
+	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
 
 const ClaudeFile = "claude-captures.json"

@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thaynes43/dev-env/internal/providerallowance"
 	"golang.org/x/sys/unix"
+
+	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
 
 func TestClaudeCallbacksSanitizeBoundRetentionAndPreserveClocks(t *testing.T) {

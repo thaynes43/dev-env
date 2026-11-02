@@ -82,7 +82,7 @@ type rpcClient struct {
 	bracket  bool
 }
 
-// CollectCodex performs only initialization, two non-forced account reads and
+// CollectCodex performs only initialization, three non-forced account reads and
 // one quota read in an explicitly selected installed official CLI. Account reads
 // bracket the quota read and must agree. No thread/model/auth mutation is sent.
 // The child uses its normal existing authentication; this code opens no auth
