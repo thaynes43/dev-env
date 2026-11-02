@@ -191,6 +191,8 @@ def validate_request(raw):
     window = parse_time(raw.get("windowExpiresAt"))
     if deadline is None or window is None:
         raise ValueError("deadline and windowExpiresAt are required")
+    if window > deadline:
+        raise ValueError("windowExpiresAt must not be later than deadline")
     if not isinstance(raw.get("repository"), str) or not REPO_RE.fullmatch(raw["repository"]):
         raise ValueError("repository is invalid")
     pr = raw.get("pullRequest")
@@ -516,6 +518,7 @@ def observe(req, cache, persist):
     received = list_inbox(req, result, sent=False)
     question_state(req, received, result)
     messages = read_sent(req, sent, result)
+    reconcile_proven_outcome(req, cache, messages, key, text)
     current = find_current(messages, key, text, req, result)
     if current is not None:
         result["message"] = {"name": current["name"], "uid": current["uid"], "key": current["key"]}
@@ -1114,7 +1117,31 @@ def correlation_conflicts(req, family, entry):
     return False
 
 
+def reconcile_proven_outcome(req, cache, messages, key, text):
+    fam = family_key(req)
+    entry = cache["entries"].get(fam)
+    if not isinstance(entry, dict) or entry.get("class") not in {"uncertain", "unconfirmed"}:
+        return
+    if entry.get("intentKey") != key:
+        return
+    digest = entry.get("digest")
+    if not isinstance(digest, str) or hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+        return
+    proved = [
+        item for item in messages
+        if item.get("key") == key
+        and item.get("text") == text
+        and item.get("sender") == req["authenticatedSender"]
+        and item.get("recipient") == req["recipient"]
+    ]
+    if len(proved) != 1:
+        return
+    cache["entries"].pop(fam, None)
+
+
 def publish(req, result, cache, key, text, messages, native, persist):
+    if req["_observed"] >= req["_deadline"]:
+        stop(result, "blocked", "deadline-elapsed")
     if result.get("_renew"):
         renew_window(req, result.get("_listed") or [], result)
     family = [item for item in messages if same_family(req, item)]
