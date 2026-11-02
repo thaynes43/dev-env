@@ -41,7 +41,41 @@ and cannot use this list. The call does not consume.
 
 `POST /v1/sessions/{name}/instruction-attempt` lets the target pod register the
 attempt it is running, or end that same attempt. The server copies the session
-and pod from the token.
+and pod from the token. The attempt ID is either the child-decision UUID or
+the ordinary task's platform initial-usage attempt, 64 lowercase hex
+characters. A different ID is refused while the current attempt is active.
+Ending retains that ID in `status.coordinatorInstructionEndedAttempts`, an
+append-only list of at most four. A retained ID cannot be registered again.
+A full list refuses another attempt. Removing or rewriting a retained ID is
+rejected. The delivery list's per-key immutability rules are unchanged.
+
+`GET /v1/sessions/{name}/instruction-attempt` is the designated parent's
+address read. It returns the current attempt ID, phase, target session UID
+and live pod UID. It returns no nonce and no instruction text. The caller
+must be the session whose UID was stored in
+`spec.coordinatorInstructionParentUID` at the child's create, and both
+sessions must pass the same accepted-project snapshot and single owned task
+claim checks as send. `claimSnapshot` still requires the annotation and still
+rejects `spec.workspace`. An ended attempt, a stale pod, a stopped agent, a
+sibling, a human caller, or a parent with no accepted project snapshot is
+refused. `agent-run instruction address` is that read. Send copies
+`--attempt`, `--expect-uid` and `--expect-pod` from it. The recipient
+checkpoint stays a different route and remains own-only.
+
+## Who can send
+
+The sender is a Session. The parent UID is copied only at the child create,
+from a live read of that authenticated session. A human ServiceAccount, a
+client, or a later session with the same name is not that parent. The sender
+and the child each need an accepted project snapshot: the annotation is
+present, the selected repository equals `spec.repo`, and `spec.workspace` is
+absent. The child owns exactly one task claim for that project and
+repository. Depth follows DESIGN-001 3.4. A depth-0 session may start a
+depth-1 child. A depth-1 session may start a depth-2 child. A depth-2
+session cannot start another session. A legacy depth-0 root with no accepted
+project snapshot fails `claimSnapshot` and cannot publish or address. This
+source does not admit that root, does not drop the snapshot check, and does
+not admit a shared workspace.
 
 `POST .../instructions/{key}/consume` is the target task's consumption
 acknowledgement. It must present the nonce, the live pod and the active
@@ -57,13 +91,27 @@ native task.
 
 ## Native lifecycle and explicit pull
 
-The platform invocation id, session UID and pod UID are the binding already
-written by `beginNativeInvocation`. When instruction registration is enabled,
-`RunAgent` and `runTUI` register that binding after the owned process is
-recorded and the local phase is `Running`. They post the end only after
-`afterWait` has verified `Exited`, leader reaped and process-group absence.
-Both calls use the existing inbox client. An empty `AGENTD_API_URL` does not
-register, does not end, and does not consume.
+A child-decision launch still binds the platform invocation id, session UID
+and pod UID written by `beginNativeInvocation`. An ordinary private task does
+not write `native-invocation.json` and does not enable child decisions. Its
+attempt ID is `Launch.UsageSource.AttemptID` from the initial-usage binding.
+Registration requires that id, the exact `initial-usage/intent.json` launch
+digest, the current private launch, and the live owned `agent.pid` process
+group. The end requires this process's own Wait, the recorded pid no longer
+alive, and process-group absence. A stopped, replaced, or stale attempt is
+refused. The usage source is attempt metadata. It is not allowance ingestion.
+
+When instruction registration is enabled, `RunAgent` and `runTUI` register
+that binding after the owned process is recorded and the local phase is
+running. A child-decision end is posted only after `afterWait` has verified
+`Exited`, leader reaped and process-group absence. An ordinary end is posted
+only after the owned Wait evidence above. Both calls use the existing inbox
+client. An empty `AGENTD_API_URL` does not register, does not end, and does
+not consume. Registration failure still stops that attempt. An end POST that
+does not confirm is recorded as local protocol state
+`instruction-end-unconfirmed.json` and does not change the CLI's exit code.
+That file is not server acceptance, not a consumption receipt, and not
+permission to start another attempt.
 
 Registration is not implied by child decisions or by `AGENTD_API_URL`. The
 launch records `coordinatorInstructions` only when
@@ -94,9 +142,12 @@ original prompt. There is no subscriber, no second prompt, and no steer into
 the running process. A resumed native TUI takes the terminal, which is not a
 coordinator push. Codex exec cannot be interrupted with a later correction.
 Claude Code is not enrolled by this launch and is not interrupted either.
-Guidance for an enabled instruction launch tells the model to run
+Guidance for an enabled instruction launch, including an ordinary private
+task that is not a child-decision launch, tells the model to run
 `agent-run instruction checkpoint` at a meaningful checkpoint: before an
 irreversible step, before declaring the task done, and when resuming work.
+The ordinary guidance names that command and states that it takes no
+correction key. A disabled or legacy launch does not add the guidance.
 The model sees a later correction only by running that command. The guidance
 does not claim the provider will pause or that a stored correction appears
 in the process by itself.

@@ -73,8 +73,9 @@ type Settings struct {
 	// records and same-owner sequential continuation. It defaults off.
 	ManagedChildDecisions bool
 	// CoordinatorInstructions opts this pod into authenticated native
-	// instruction registration. It defaults off. Child-decision tasks that
-	// leave it unset do not call the instruction API. It is not a grant.
+	// instruction registration. It defaults off. Ordinary private tasks and
+	// child-decision tasks that leave it unset do not call the instruction
+	// API. It is not a grant.
 	CoordinatorInstructions bool
 	TaskRepositoryURL       string
 	// PrivateProjectBootstrap is trusted pod configuration, independent of

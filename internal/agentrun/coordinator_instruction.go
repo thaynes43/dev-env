@@ -1,7 +1,9 @@
 package agentrun
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"regexp"
@@ -11,19 +13,19 @@ import (
 )
 
 var instructionKeyPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,118}[a-z0-9])?$`)
-var instructionAttemptPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var instructionAttemptPattern = regexp.MustCompile(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$`)
 var instructionNoncePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var instructionNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 func (a *app) instruction(ctx context.Context, args []string) error {
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		return a.help([]string{"instruction"})
 	}
 	verb, rest := args[0], args[1:]
 	switch verb {
-	case "send", "read", "consume", "attempt", "checkpoint":
+	case "send", "read", "consume", "attempt", "checkpoint", "address":
 	default:
-		return usageError("instruction requires send, read, consume, checkpoint or attempt; see agent-run help instruction")
+		return usageError("instruction requires send, read, consume, checkpoint, address or attempt; see agent-run help instruction")
 	}
 	var session, key, project, repository, taskKey, expectUID, expectPod, attempt, nonce, messageUID, textSHA string
 	var ended bool
@@ -52,6 +54,22 @@ func (a *app) instruction(ctx context.Context, args []string) error {
 		return err
 	}
 	switch verb {
+	case "address":
+		if key != "" || project != "" || repository != "" || taskKey != "" || attempt != "" || nonce != "" || messageUID != "" || textSHA != "" || expectUID != "" || expectPod != "" || ended {
+			return usageError("instruction address requires --session and no key, attempt, nonce or text")
+		}
+		var raw json.RawMessage
+		status, callErr := a.callWith(ctx, c, http.MethodGet, apiv1.SessionInstructionAttemptPath(session), nil, nil, &raw, false)
+		if callErr != nil {
+			return callErr
+		}
+		var got apiv1.CoordinatorInstructionAttemptResult
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if status != http.StatusOK || dec.Decode(&got) != nil || dec.Decode(&struct{}{}) != io.EOF || !instructionAttemptPattern.MatchString(got.AttemptID) || got.Phase != apiv1.InstructionPhaseActive || got.SessionUID == "" || got.PodUID == "" {
+			return fail(ExitUnconfirmed, "instruction address returned an unconfirmed binding; nothing was sent")
+		}
+		return a.printJSON(got)
 	case "attempt":
 		if !instructionAttemptPattern.MatchString(attempt) || key != "" || project != "" || nonce != "" {
 			return usageError("instruction attempt requires --attempt and no key, project or nonce")
@@ -145,7 +163,7 @@ func (a *app) instruction(ctx context.Context, args []string) error {
 		}
 		return a.printJSON(got)
 	default:
-		return usageError("instruction requires send, read, consume, checkpoint or attempt; see agent-run help instruction")
+		return usageError("instruction requires send, read, consume, checkpoint, address or attempt; see agent-run help instruction")
 	}
 }
 

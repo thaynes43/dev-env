@@ -1695,3 +1695,73 @@ func TestCoordinatorInstructionMapListTransitions(t *testing.T) {
 	over.Status.CoordinatorInstructions = append(over.Status.CoordinatorInstructions, schemaInstruction("correction-5", "f"))
 	wantInvalid(t, k8s.Status().Update(c, over), "4")
 }
+
+func TestCoordinatorInstructionEndedAttemptLedger(t *testing.T) {
+	c := ctx(t)
+	s := taskSession()
+	if err := k8s.Create(c, s); err != nil {
+		t.Fatal(err)
+	}
+	hexAttempt := strings.Repeat("ab", 32)
+	s.Status.CoordinatorInstructionAttempt = &v1alpha1.CoordinatorInstructionAttemptStatus{
+		SessionUID: "target-session", PodUID: "target-pod", AttemptID: hexAttempt, Phase: "active",
+	}
+	if err := k8s.Status().Update(c, s); err != nil {
+		t.Fatalf("64-hex attempt: %v", err)
+	}
+	got := get(t, s)
+	got.Status.CoordinatorInstructionAttempt.Phase = "ended"
+	got.Status.CoordinatorInstructionEndedAttempts = []v1alpha1.CoordinatorInstructionEndedAttemptStatus{{
+		AttemptID: hexAttempt, SessionUID: "target-session", PodUID: "target-pod",
+	}}
+	if err := k8s.Status().Update(c, got); err != nil {
+		t.Fatalf("retain ended attempt: %v", err)
+	}
+	for _, tc := range []struct {
+		name, want string
+		edit       func(*v1alpha1.AgentSession)
+	}{
+		{"ledger removal", "removed or rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts = nil
+		}},
+		{"ledger item removal", "removed or rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts = s.Status.CoordinatorInstructionEndedAttempts[:0]
+		}},
+		{"ledger rewrite", "rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts[0].PodUID = "other-pod"
+		}},
+		{"attempt id rewrite", "rewritten", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts[0].AttemptID = strings.Repeat("cd", 32)
+		}},
+		{"session uid rewrite", "immutable", func(s *v1alpha1.AgentSession) {
+			s.Status.CoordinatorInstructionEndedAttempts[0].SessionUID = "other-session"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := get(t, s)
+			tc.edit(bad)
+			wantInvalid(t, k8s.Status().Update(c, bad), tc.want)
+		})
+	}
+	stored := get(t, s)
+	for i := 0; i < 3; i++ {
+		id := strings.Repeat(string(rune('c'+i)), 64)
+		stored.Status.CoordinatorInstructionEndedAttempts = append(stored.Status.CoordinatorInstructionEndedAttempts, v1alpha1.CoordinatorInstructionEndedAttemptStatus{
+			AttemptID: id, SessionUID: "target-session", PodUID: "target-pod",
+		})
+	}
+	if err := k8s.Status().Update(c, stored); err != nil {
+		t.Fatalf("fill ledger: %v", err)
+	}
+	over := get(t, s)
+	over.Status.CoordinatorInstructionEndedAttempts = append(over.Status.CoordinatorInstructionEndedAttempts, v1alpha1.CoordinatorInstructionEndedAttemptStatus{
+		AttemptID: strings.Repeat("f", 64), SessionUID: "target-session", PodUID: "target-pod",
+	})
+	wantInvalid(t, k8s.Status().Update(c, over), "4")
+	dup := get(t, s)
+	dup.Status.CoordinatorInstructionEndedAttempts = append(dup.Status.CoordinatorInstructionEndedAttempts, dup.Status.CoordinatorInstructionEndedAttempts[0])
+	wantInvalid(t, k8s.Status().Update(c, dup), "uplicate")
+	badID := get(t, s)
+	badID.Status.CoordinatorInstructionAttempt.AttemptID = "not-an-attempt"
+	wantInvalid(t, k8s.Status().Update(c, badID), "attemptID")
+}

@@ -494,6 +494,24 @@ type Lifecycle struct {
 	ArchiveAfter *metav1.Duration `json:"archiveAfter,omitempty"`
 }
 
+// CoordinatorInstructionEndedAttemptStatus retains one attempt ID after that
+// attempt has ended. The record is immutable. It grants no delivery, no
+// consumption and no new attempt.
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ended instruction attempt is immutable"
+type CoordinatorInstructionEndedAttemptStatus struct {
+	// +kubebuilder:validation:MinLength=36
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$`
+	AttemptID string `json:"attemptID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ended instruction attempt session UID is immutable"
+	SessionUID string `json:"sessionUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+}
+
 // CoordinatorInstructionAttemptStatus is the recipient pod's current native
 // attempt. The API writes it from that pod's token. It grants no privilege.
 type CoordinatorInstructionAttemptStatus struct {
@@ -504,9 +522,11 @@ type CoordinatorInstructionAttemptStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	PodUID string `json:"podUID"`
+	// AttemptID is a child-decision UUID or the platform initial-usage attempt
+	// (64 lowercase hex). Both name one invocation. Neither is a quota grant.
 	// +kubebuilder:validation:MinLength=36
-	// +kubebuilder:validation:MaxLength=36
-	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$`
 	AttemptID string `json:"attemptID"`
 	// +kubebuilder:validation:Enum=active;ended
 	Phase string `json:"phase"`
@@ -516,9 +536,11 @@ type CoordinatorInstructionAttemptStatus struct {
 // It is not an inbox read acknowledgement and not a grant or human decision.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="native consumption receipt is immutable"
 type CoordinatorInstructionConsumptionStatus struct {
+	// AttemptID is a child-decision UUID or the platform initial-usage attempt
+	// (64 lowercase hex). Both name one invocation. Neither is a quota grant.
 	// +kubebuilder:validation:MinLength=36
-	// +kubebuilder:validation:MaxLength=36
-	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$`
 	AttemptID string `json:"attemptID"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
@@ -570,9 +592,11 @@ type CoordinatorInstructionStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	TargetPodUID string `json:"targetPodUID"`
+	// AttemptID is a child-decision UUID or the platform initial-usage attempt
+	// (64 lowercase hex). Both name one invocation. Neither is a quota grant.
 	// +kubebuilder:validation:MinLength=36
-	// +kubebuilder:validation:MaxLength=36
-	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$`
 	AttemptID string `json:"attemptID"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -604,6 +628,7 @@ type CoordinatorInstructionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.capturedUsage) || has(self.capturedUsage)",message="captured usage ledger cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)",message="directory creation evidence cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructionAttempt) || has(self.coordinatorInstructionAttempt)",message="instruction attempt evidence cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructionEndedAttempts) || (has(self.coordinatorInstructionEndedAttempts) && size(self.coordinatorInstructionEndedAttempts) >= size(oldSelf.coordinatorInstructionEndedAttempts) && oldSelf.coordinatorInstructionEndedAttempts.all(old, self.coordinatorInstructionEndedAttempts.exists(cur, cur.attemptID == old.attemptID && cur.sessionUID == old.sessionUID && cur.podUID == old.podUID)))",message="ended instruction attempts cannot be removed or rewritten"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructions) || (has(self.coordinatorInstructions) && size(self.coordinatorInstructions) >= size(oldSelf.coordinatorInstructions) && oldSelf.coordinatorInstructions.all(old, self.coordinatorInstructions.exists(cur, cur.key == old.key)))",message="instruction delivery records cannot be removed or replaced"
 type AgentSessionStatus struct {
 	// +optional
@@ -738,6 +763,15 @@ type AgentSessionStatus struct {
 	// for instruction delivery. Absence fails closed. It is not a grant.
 	// +optional
 	CoordinatorInstructionAttempt *CoordinatorInstructionAttemptStatus `json:"coordinatorInstructionAttempt,omitempty"`
+
+	// CoordinatorInstructionEndedAttempts is the append-only ledger of attempt
+	// IDs this task has ended. A full ledger refuses another attempt. Removing
+	// or rewriting an entry is rejected. The ledger is not a grant.
+	// +kubebuilder:validation:MaxItems=4
+	// +listType=map
+	// +listMapKey=attemptID
+	// +optional
+	CoordinatorInstructionEndedAttempts []CoordinatorInstructionEndedAttemptStatus `json:"coordinatorInstructionEndedAttempts,omitempty"`
 
 	// CoordinatorInstructions are delivery records for this task. The text lives
 	// in the inbox message. A nested consumption receipt is not an inbox read ACK.

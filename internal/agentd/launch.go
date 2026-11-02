@@ -233,6 +233,11 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	if sess.Workspace != nil {
 		guard = sharedGuard(ws, true)
 	}
+	ordinaryInstructions := s.CoordinatorInstructions && sess.Workspace == nil &&
+		protocol.ValidTaskBudgetIdentifier(sess.SessionUID) && protocol.ValidTaskBudgetIdentifier(s.PodUID)
+	if ordinaryInstructions {
+		guard += "\n\n" + ordinaryInstructionPullGuidance
+	}
 	rules, err := providerProjectArgs(s, sess, guard)
 	if err != nil {
 		return Launch{}, err
@@ -249,6 +254,9 @@ func BuildLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, bootI
 	l.Timeout = sess.TimeoutDuration()
 	if err := bindInitialUsage(&l, sess, s.PodUID); err != nil {
 		return Launch{}, err
+	}
+	if ordinaryInstructions && l.UsageSource != nil && l.UsageSource.Valid() && !l.ChildDecisions {
+		l.CoordinatorInstructions = true
 	}
 	return l, nil
 }

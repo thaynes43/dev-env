@@ -34,7 +34,11 @@ import (
 const instructionMaxText = 8 << 10
 const instructionMaxRecords = 4
 
-var instructionAttemptPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+// instructionEndedAttemptMax is the append-only ledger bound. A full ledger
+// refuses another attempt. It matches the CRD MaxItems on the ended-attempt list.
+const instructionEndedAttemptMax = 4
+
+var instructionAttemptPattern = regexp.MustCompile(`^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$`)
 var instructionKeyPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,118}[a-z0-9])?$`)
 var instructionNoncePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -155,6 +159,11 @@ func (s *Server) registerInstructionAttempt(ctx context.Context, _ http.Response
 		if cur != nil && cur.SessionUID != string(fresh.UID) {
 			return inboxHidden()
 		}
+		// An ended ID stays ended. The current object may repeat its own end.
+		// Any other use of a retained ID, including making it active again, is a replay.
+		if instructionEndedContains(fresh, req.AttemptID) && (cur == nil || cur.AttemptID != req.AttemptID || phase == apiv1.InstructionPhaseActive) {
+			return inboxHidden()
+		}
 		if cur != nil && cur.AttemptID == req.AttemptID {
 			if cur.Phase == apiv1.InstructionPhaseEnded && phase == apiv1.InstructionPhaseActive {
 				return inboxHidden()
@@ -162,10 +171,16 @@ func (s *Server) registerInstructionAttempt(ctx context.Context, _ http.Response
 			if cur.PodUID != string(pod.UID) && phase == apiv1.InstructionPhaseActive {
 				return inboxHidden()
 			}
+			if phase == apiv1.InstructionPhaseEnded && cur.Phase == apiv1.InstructionPhaseEnded && cur.PodUID == string(pod.UID) {
+				return retainEndedAttempt(fresh, cur.AttemptID, cur.PodUID)
+			}
 			if cur.Phase == phase && cur.PodUID == string(pod.UID) {
 				return nil
 			}
 			if phase == apiv1.InstructionPhaseEnded && cur.Phase == apiv1.InstructionPhaseActive && cur.PodUID == string(pod.UID) {
+				if err := retainEndedAttempt(fresh, cur.AttemptID, cur.PodUID); err != nil {
+					return err
+				}
 				next := *cur
 				next.Phase = phase
 				fresh.Status.CoordinatorInstructionAttempt = &next
@@ -174,6 +189,20 @@ func (s *Server) registerInstructionAttempt(ctx context.Context, _ http.Response
 			return inboxHidden()
 		}
 		if req.Ended {
+			return inboxHidden()
+		}
+		// A different ID is a new platform invocation only after the current
+		// ID has ended on this same pod and been retained. An active current
+		// ID cannot be overwritten.
+		if cur != nil {
+			if cur.Phase != apiv1.InstructionPhaseEnded || cur.PodUID != string(pod.UID) {
+				return inboxHidden()
+			}
+			if err := retainEndedAttempt(fresh, cur.AttemptID, cur.PodUID); err != nil {
+				return err
+			}
+		}
+		if instructionEndedContains(fresh, req.AttemptID) || len(fresh.Status.CoordinatorInstructionEndedAttempts) >= instructionEndedAttemptMax {
 			return inboxHidden()
 		}
 		fresh.Status.CoordinatorInstructionAttempt = &v1alpha1.CoordinatorInstructionAttemptStatus{
@@ -189,6 +218,43 @@ func (s *Server) registerInstructionAttempt(ctx context.Context, _ http.Response
 		return 0, nil, instructionUnknown()
 	}
 	return http.StatusOK, apiv1.CoordinatorInstructionAttemptResult{AttemptID: got.AttemptID, Phase: got.Phase, SessionUID: got.SessionUID, PodUID: got.PodUID}, nil
+}
+
+// readInstructionAddress is the designated parent's read of the live attempt.
+// It returns the attempt ID, phase, session UID and live pod UID. It does not
+// return a nonce or instruction text. The recipient checkpoint stays own-only.
+func (s *Server) readInstructionAddress(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
+	if err := s.inboxAvailable(); err != nil {
+		return 0, nil, err
+	}
+	if s.TaskClaims == nil {
+		return 0, nil, newError(http.StatusServiceUnavailable, apiv1.CodeUnavailable, "instruction scope is not enabled")
+	}
+	target, err := s.instructionSession(ctx, r)
+	if err != nil {
+		return 0, nil, err
+	}
+	sender, err := s.inboxSenderCaller(ctx, c)
+	if err != nil || sender.UID == "" || string(sender.UID) != target.Spec.CoordinatorInstructionParentUID || sender.Name != target.Spec.Parent {
+		return 0, nil, inboxHidden()
+	}
+	if target.DeletionTimestamp != nil && !target.DeletionTimestamp.IsZero() {
+		return 0, nil, inboxHidden()
+	}
+	pod, err := s.instructionPod(ctx, target)
+	if err != nil {
+		return 0, nil, err
+	}
+	cur := target.Status.CoordinatorInstructionAttempt
+	if cur == nil || !instructionAttemptLive(target, pod, cur.AttemptID) {
+		return 0, nil, inboxHidden()
+	}
+	if err := s.instructionParentScope(ctx, sender, target); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, apiv1.CoordinatorInstructionAttemptResult{
+		AttemptID: cur.AttemptID, Phase: cur.Phase, SessionUID: cur.SessionUID, PodUID: string(pod.UID),
+	}, nil
 }
 
 func (s *Server) publishInstruction(ctx context.Context, _ http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
@@ -558,6 +624,60 @@ func (s *Server) instructionScope(ctx context.Context, target *v1alpha1.AgentSes
 		return instructionScope{}, inboxHidden()
 	}
 	return instructionScope{project: project, repository: repository, taskKey: taskKey, snapshot: snapshot}, nil
+}
+
+// instructionParentScope applies the same snapshot and single-claim fence as
+// send. The caller does not supply a wider project, repository or task.
+// A parent without an accepted project snapshot, and a shared-workspace
+// parent or child, fail claimSnapshot and are refused.
+func (s *Server) instructionParentScope(ctx context.Context, sender, target *v1alpha1.AgentSession) error {
+	targetSnap, err := claimSnapshot(target)
+	if err != nil {
+		return inboxHidden()
+	}
+	senderSnap, err := claimSnapshot(sender)
+	if err != nil {
+		return inboxHidden()
+	}
+	if senderSnap.Project() != targetSnap.Project() || senderSnap.Selected().Name != targetSnap.Selected().Name {
+		return inboxHidden()
+	}
+	owned, err := s.TaskClaims.ListOwned(ctx, targetSnap.Project(), string(target.UID))
+	if err != nil {
+		return instructionUnknown()
+	}
+	if len(owned) != 1 || owned[0].Spec.Identity.Project != targetSnap.Project() || owned[0].Spec.Identity.Repository != targetSnap.Selected().Name || owned[0].Spec.Owner.UID != string(target.UID) {
+		return inboxHidden()
+	}
+	return nil
+}
+
+func retainEndedAttempt(fresh *v1alpha1.AgentSession, attemptID, podUID string) error {
+	if fresh == nil || !instructionAttemptPattern.MatchString(attemptID) || podUID == "" {
+		return inboxHidden()
+	}
+	if instructionEndedContains(fresh, attemptID) {
+		return nil
+	}
+	if len(fresh.Status.CoordinatorInstructionEndedAttempts) >= instructionEndedAttemptMax {
+		return inboxHidden()
+	}
+	fresh.Status.CoordinatorInstructionEndedAttempts = append(fresh.Status.CoordinatorInstructionEndedAttempts, v1alpha1.CoordinatorInstructionEndedAttemptStatus{
+		AttemptID: attemptID, SessionUID: string(fresh.UID), PodUID: podUID,
+	})
+	return nil
+}
+
+func instructionEndedContains(fresh *v1alpha1.AgentSession, attemptID string) bool {
+	if fresh == nil {
+		return false
+	}
+	for _, ended := range fresh.Status.CoordinatorInstructionEndedAttempts {
+		if ended.AttemptID == attemptID {
+			return true
+		}
+	}
+	return false
 }
 
 func instructionAttemptLive(sess *v1alpha1.AgentSession, pod *corev1.Pod, attempt string) bool {

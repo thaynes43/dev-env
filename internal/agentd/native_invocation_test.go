@@ -93,7 +93,20 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 	// output, so it is safe to include in failure messages.
 	pane := &syncBuffer{}
 	released := make(chan error, 1)
+	nativeFinished := make(chan struct{})
 	go func() {
+		// A refused registration may stop the child before its startup receipt.
+		// This negative case waits for the actual wrapper exit instead.
+		if mode == "missing" {
+			select {
+			case <-nativeFinished:
+				released <- nil
+			case <-time.After(10 * time.Second):
+				_, _ = barrier.WriteString("ready\n")
+				released <- fmt.Errorf("refused registration did not stop the native task")
+			}
+			return
+		}
 		// The deadline only bounds a failing run; it never gates a passing one.
 		deadline := time.NewTimer(10 * time.Second)
 		defer deadline.Stop()
@@ -117,6 +130,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 		}
 	}()
 	code := RunAgent(path, pane, make(chan os.Signal), 20*time.Millisecond)
+	close(nativeFinished)
 	err = <-released
 	// Remove the FIFO so a regression that replays this invocation fails the
 	// fake CLI's read at once instead of blocking until the test times out.
@@ -143,6 +157,11 @@ func bindSyntheticInstructionAPI(t *testing.T, mode string, l Launch) *[]string 
 		*calls = append(*calls, r.Method+" "+r.URL.Path)
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if mode == "end-unconfirmed" && body["ended"] == true {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"code":"unavailable","message":"synthetic end blip"}}`))
+			return
+		}
 		if mode == "missing" || r.Method != http.MethodPost || r.URL.Path != apiv1.SessionInstructionAttemptPath(l.Session) || body["attemptID"] != l.NativeInvocationID {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"synthetic missing route"}}`))
@@ -177,6 +196,17 @@ func TestSyntheticEnabledInstructionRegistrationFailsClosedWithoutRoute(t *testi
 	_, _, _, _, code, tail, calls := runSyntheticNativeInvocation(t, "missing")
 	if code == 0 || !strings.Contains(tail, "native instruction attempt is unconfirmed") || len(calls) == 0 {
 		t.Fatalf("enabled missing route was not fail-closed: %d calls %v tail %q", code, calls, tail)
+	}
+}
+
+func TestSyntheticInstructionEndBlipDoesNotFalsifyCLIExit(t *testing.T) {
+	s, _, l, _, code, tail, calls := runSyntheticNativeInvocation(t, "end-unconfirmed")
+	if code != 0 || !strings.Contains(tail, "native instruction attempt end is unconfirmed") || len(calls) < 2 {
+		t.Fatalf("end blip falsified the exit or skipped the post: %d calls %v tail %q", code, calls, tail)
+	}
+	raw, err := os.ReadFile(s.statePath(instructionEndUnconfirmedFile))
+	if err != nil || !strings.Contains(string(raw), l.NativeInvocationID) || !strings.Contains(string(raw), `"serverEnd": "Unconfirmed"`) {
+		t.Fatalf("end uncertainty record %s %v", raw, err)
 	}
 }
 

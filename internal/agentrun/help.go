@@ -16,7 +16,7 @@ Usage:
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
-  agent-run instruction send|read|checkpoint|consume|attempt designated parent delivery and native consumption
+  agent-run instruction send|read|checkpoint|consume|address|attempt designated parent delivery and native consumption
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
@@ -220,11 +220,18 @@ The ORIGINAL deadline/effort/failure/checkpoint accounting and receipts remain.
 It cannot extend an exhausted budget, recover a lost Pod or let a model resume
 itself. A lost mutation acknowledgement is not retried.
 `,
-	"instruction": `Usage: agent-run instruction send --session <name> --key <key> --project <project> --repository <repository> --task-key <task> --expect-uid <uid> --expect-pod <pod> --attempt <id> < correction.txt
+	"instruction": `Usage: agent-run instruction address --session <name>
+       agent-run instruction send --session <name> --key <key> --project <project> --repository <repository> --task-key <task> --expect-uid <uid> --expect-pod <pod> --attempt <id> < correction.txt
        agent-run instruction read --session <name> --key <key>
        agent-run instruction checkpoint --session <name>
        agent-run instruction consume --session <name> --key <key> --attempt <id> --nonce <nonce> --message-uid <uid> --text-sha256 <digest> --expect-uid <uid> --expect-pod <pod>
        agent-run instruction attempt --session <name> --attempt <id> [--ended]
+
+Address is the designated parent's read of the target's current attempt. It
+returns the attempt ID, phase, session UID and live pod UID. It returns no
+nonce and no instruction text. Copy those three values into send as
+--attempt, --expect-uid and --expect-pod. Address is not a status read and
+not the recipient checkpoint.
 
 Send submits one in-scope correction from the authenticated parent Session.
 The server derives the sender. There is no --from or --sender flag. Scope

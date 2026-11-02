@@ -22,6 +22,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/agentrun"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/projectcatalog"
 )
 
 const instructionAttempt = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -190,6 +191,11 @@ func instructionReady(t *testing.T, parent, child, taskKey string) (*fixture, st
 
 func instructionChild(t *testing.T, f *fixture, name, parent, taskKey string) instructionChildBinding {
 	t.Helper()
+	return instructionBound(t, f, name, parent, taskKey, instructionAttempt)
+}
+
+func instructionBound(t *testing.T, f *fixture, name, parent, taskKey, attempt string) instructionChildBinding {
+	t.Helper()
 	token := claimSession(t, f, name, parent)
 	session := f.session(name)
 	session.Spec.CoordinatorInstructionParentUID = string(f.session(parent).UID)
@@ -204,8 +210,10 @@ func instructionChild(t *testing.T, f *fixture, name, parent, taskKey string) in
 	if w := f.do(http.MethodPost, apiv1.TaskClaimsPath, token, claimRequest(taskKey)); w.Code != http.StatusCreated {
 		t.Fatalf("claim %s %d %s", name, w.Code, w.Body.String())
 	}
-	if w := f.do(http.MethodPost, apiv1.SessionInstructionAttemptPath(name), token, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt}); w.Code != http.StatusOK {
-		t.Fatalf("attempt %s %d %s", name, w.Code, w.Body.String())
+	if attempt != "" {
+		if w := f.do(http.MethodPost, apiv1.SessionInstructionAttemptPath(name), token, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: attempt}); w.Code != http.StatusOK {
+			t.Fatalf("attempt %s %d %s", name, w.Code, w.Body.String())
+		}
 	}
 	var pod corev1.Pod
 	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: name}, &pod); err != nil {
@@ -350,4 +358,143 @@ func TestSyntheticInstructionCheckpointAfterLaunch(t *testing.T) {
 		t.Fatalf("consumed correction stayed pending %+v %v", after, err)
 	}
 	run(parentTok, "", agentrun.ExitNotFound, "instruction", "checkpoint", "--session", "child")
+}
+
+func TestInstructionAttemptRejectsActiveSwitchAndEndedReplay(t *testing.T) {
+	f, _, childTok, _, _ := instructionReady(t, "parent", "child", "task:coord-instruction")
+	path := apiv1.SessionInstructionAttemptPath("child")
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttemptNext}), http.StatusNotFound, apiv1.CodeNotFound)
+	if got := f.session("child").Status.CoordinatorInstructionAttempt; got == nil || got.AttemptID != instructionAttempt || got.Phase != apiv1.InstructionPhaseActive {
+		t.Fatalf("active attempt was replaced: %+v", got)
+	}
+	if w := f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt, Ended: true}); w.Code != http.StatusOK {
+		t.Fatalf("end %d %s", w.Code, w.Body.String())
+	}
+	ended := f.session("child")
+	if ended.Status.CoordinatorInstructionAttempt.Phase != apiv1.InstructionPhaseEnded || !instructionLedgerHas(ended, instructionAttempt) {
+		t.Fatalf("end did not retain the attempt: %+v ledger %+v", ended.Status.CoordinatorInstructionAttempt, ended.Status.CoordinatorInstructionEndedAttempts)
+	}
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt}), http.StatusNotFound, apiv1.CodeNotFound)
+	if w := f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttemptNext}); w.Code != http.StatusOK {
+		t.Fatalf("next attempt %d %s", w.Code, w.Body.String())
+	}
+	if got := f.session("child").Status.CoordinatorInstructionAttempt; got.AttemptID != instructionAttemptNext || got.Phase != apiv1.InstructionPhaseActive || !instructionLedgerHas(f.session("child"), instructionAttempt) {
+		t.Fatalf("switch dropped the ended id: %+v ledger %+v", got, f.session("child").Status.CoordinatorInstructionEndedAttempts)
+	}
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt}), http.StatusNotFound, apiv1.CodeNotFound)
+}
+
+func TestInstructionEndedLedgerRefusesWhenFull(t *testing.T) {
+	f, _, childTok, _, _ := instructionReady(t, "parent", "child", "task:coord-instruction")
+	path := apiv1.SessionInstructionAttemptPath("child")
+	ids := []string{instructionAttempt, instructionAttemptNext, "cccccccc-cccc-cccc-cccc-cccccccccccc", "dddddddd-dddd-dddd-dddd-dddddddddddd"}
+	for i, id := range ids {
+		if i > 0 {
+			if w := f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: id}); w.Code != http.StatusOK {
+				t.Fatalf("register %s %d %s", id, w.Code, w.Body.String())
+			}
+		}
+		if w := f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: id, Ended: true}); w.Code != http.StatusOK {
+			t.Fatalf("end %s %d %s", id, w.Code, w.Body.String())
+		}
+	}
+	if len(f.session("child").Status.CoordinatorInstructionEndedAttempts) != 4 {
+		t.Fatalf("ledger %+v", f.session("child").Status.CoordinatorInstructionEndedAttempts)
+	}
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"}), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt}), http.StatusNotFound, apiv1.CodeNotFound)
+	if len(f.session("child").Status.CoordinatorInstructionEndedAttempts) != 4 {
+		t.Fatal("a refused attempt changed the ledger")
+	}
+}
+
+func TestInstructionAddressUsesParentScopeAndHidesText(t *testing.T) {
+	const text = "addressed correction\n"
+	f, parentTok, childTok, childUID, podUID := instructionReady(t, "parent", "child", "task:coord-instruction")
+	w := f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("child"), parentTok, nil)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "nonce") || strings.Contains(w.Body.String(), "text") {
+		t.Fatalf("address %d %s", w.Code, w.Body.String())
+	}
+	got := decode[apiv1.CoordinatorInstructionAttemptResult](t, w)
+	if got.AttemptID != instructionAttempt || got.Phase != apiv1.InstructionPhaseActive || got.SessionUID != childUID || got.PodUID != podUID {
+		t.Fatalf("address %+v", got)
+	}
+	req := instructionRequest(got.SessionUID, got.PodUID, "from-address", "task:coord-instruction", text)
+	req.AttemptID = got.AttemptID
+	if w := f.do(http.MethodPost, apiv1.SessionInstructionsPath("child"), parentTok, req); w.Code != http.StatusCreated {
+		t.Fatalf("send from address %d %s", w.Code, w.Body.String())
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionsPath("child"), parentTok, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	peer := instructionChild(t, f, "peer", "parent", "task:peer-task")
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("child"), peer.token, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("child"), tokHuman, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("child"), childTok, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	parent := f.session("parent")
+	delete(parent.Annotations, v1alpha1.AnnotationProjectSnapshot)
+	if err := f.c.Update(context.Background(), parent); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("child"), parentTok, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodPost, apiv1.SessionInstructionsPath("child"), parentTok, req), http.StatusNotFound, apiv1.CodeNotFound)
+}
+
+func TestInstructionAddressRefusesEndedStaleAndPlainAttempt(t *testing.T) {
+	f, parentTok, childTok, _, podUID := instructionReady(t, "parent", "child", "task:coord-instruction")
+	hexAttempt := strings.Repeat("ab", 32)
+	hexChild := instructionBound(t, f, "hex-child", "parent", "task:hex-task", hexAttempt)
+	if f.session("hex-child").Status.CoordinatorInstructionAttempt.AttemptID != hexAttempt {
+		t.Fatal("platform attempt was not stored")
+	}
+	w := f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("hex-child"), parentTok, nil)
+	got := decode[apiv1.CoordinatorInstructionAttemptResult](t, w)
+	if w.Code != http.StatusOK || got.AttemptID != hexAttempt || got.PodUID != hexChild.pod || got.SessionUID != hexChild.uid {
+		t.Fatalf("hex address %d %+v", w.Code, got)
+	}
+	wantError(t, f.do(http.MethodPost, apiv1.SessionInstructionAttemptPath("child"), childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: "ABCDEF"}), http.StatusBadRequest, apiv1.CodeBadRequest)
+	session := f.session("child")
+	session.Status.CoordinatorInstructionAttempt.PodUID = "stale-pod-uid"
+	if err := f.c.Status().Update(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("child"), parentTok, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	ended := instructionBound(t, f, "ended-child", "parent", "task:ended-address", instructionAttempt)
+	if w := f.do(http.MethodPost, apiv1.SessionInstructionAttemptPath("ended-child"), ended.token, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt, Ended: true}); w.Code != http.StatusOK {
+		t.Fatalf("end %d %s", w.Code, w.Body.String())
+	}
+	wantError(t, f.do(http.MethodGet, apiv1.SessionInstructionAttemptPath("ended-child"), parentTok, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	if podUID == "" {
+		t.Fatal("missing pod")
+	}
+}
+
+func TestClaimSnapshotStillRejectsMissingAndWorkspace(t *testing.T) {
+	catalog, err := projectcatalog.Parse([]byte(apiProjectCatalog))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := catalog.Snapshot("sample", "alias")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := snap.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{Repo: "alias", Workspace: &v1alpha1.WorkspaceSpec{ID: "projects"}}, Annotations: map[string]string{v1alpha1.AnnotationProjectSnapshot: string(data)}}
+	if _, err := claimSnapshot(shared); err == nil {
+		t.Fatal("shared workspace snapshot was accepted")
+	}
+	missing := &v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{Repo: "alias"}}
+	if _, err := claimSnapshot(missing); err == nil {
+		t.Fatal("missing snapshot was accepted")
+	}
+}
+
+func instructionLedgerHas(s *v1alpha1.AgentSession, id string) bool {
+	for _, ended := range s.Status.CoordinatorInstructionEndedAttempts {
+		if ended.AttemptID == id && ended.SessionUID == string(s.UID) {
+			return true
+		}
+	}
+	return false
 }

@@ -218,4 +218,35 @@ func TestSyntheticInstructionCheckpointDiscoversPostedCorrection(t *testing.T) {
 	h.mustRun(ExitUnconfirmed, "instruction", "checkpoint", "--session", "child")
 }
 
+func TestInstructionAddressCLIReturnsBindingWithoutNonce(t *testing.T) {
+	h := newHarness(t)
+	attempt := strings.Repeat("ab", 32)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Method != http.MethodGet || r.URL.Path != apiv1.SessionInstructionAttemptPath("child") || len(body) != 0 {
+			t.Fatalf("address %s %s %s", r.Method, r.URL.Path, body)
+		}
+		writeTestJSON(w, http.StatusOK, apiv1.CoordinatorInstructionAttemptResult{
+			AttemptID: attempt, Phase: apiv1.InstructionPhaseActive, SessionUID: "session-1", PodUID: "pod-1",
+		})
+	}
+	h.mustRun(ExitOK, "instruction", "address", "--session", "child")
+	if !strings.Contains(h.stdout.String(), attempt) || strings.Contains(h.stdout.String(), "nonce") || strings.Contains(h.stdout.String(), "text") {
+		t.Fatalf("address stdout %s", h.stdout.String())
+	}
+	h.mustRun(ExitUsage, "instruction", "address", "--session", "child", "--attempt", attempt)
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		writeTestJSON(w, http.StatusOK, map[string]any{
+			"attemptID": attempt, "phase": apiv1.InstructionPhaseActive, "sessionUID": "session-1", "podUID": "pod-1", "nonce": strings.Repeat("cd", 32),
+		})
+	}
+	h.stdout.Reset()
+	h.mustRun(ExitUnconfirmed, "instruction", "address", "--session", "child")
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		writeTestJSON(w, http.StatusOK, apiv1.CoordinatorInstructionAttemptResult{
+			AttemptID: attempt, Phase: apiv1.InstructionPhaseEnded, SessionUID: "session-1", PodUID: "pod-1",
+		})
+	}
+	h.mustRun(ExitUnconfirmed, "instruction", "address", "--session", "child")
+}
+
 func methodsString(methods []string) string { return strings.Join(methods, ",") }

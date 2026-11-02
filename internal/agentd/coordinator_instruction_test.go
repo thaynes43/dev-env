@@ -235,6 +235,26 @@ func TestSyntheticNativeInstructionReadAckUsesExactRead(t *testing.T) {
 	}
 }
 
+func TestOrdinaryPrivateLaunchGuidanceDoesNotEnableChildDecisions(t *testing.T) {
+	s, sess, ws, now := managedCodexFixture(t)
+	s.CoordinatorInstructions, s.ManagedChildDecisions, s.PodUID = true, false, "pod-synthetic"
+	sess.Workspace = nil
+	s.CodexBin = fakeCLI(t, t.TempDir(), "exit 0\n")
+	l, err := BuildLaunch(s, sess, ws, "boot", now)
+	joined := strings.Join(l.Argv, "\n")
+	if err != nil || l.ChildDecisions || l.NativeInvocationID != "" || !l.CoordinatorInstructions || l.UsageSource == nil || len(l.UsageSource.AttemptID) != 64 || l.UsageSource.Provider != protocol.AgentCodex {
+		t.Fatalf("ordinary launch %v %+v err %v", l.UsageSource, l, err)
+	}
+	if !strings.Contains(joined, "instruction checkpoint") || !strings.Contains(joined, "no correction key") || strings.Contains(joined, managedChildDecisionGuard) {
+		t.Fatalf("ordinary guidance missing or child decisions leaked: %s", joined)
+	}
+	s.CoordinatorInstructions = false
+	off, err := BuildLaunch(s, sess, ws, "boot", now)
+	if err != nil || off.CoordinatorInstructions || strings.Contains(strings.Join(off.Argv, "\n"), "instruction checkpoint") {
+		t.Fatalf("disabled launch advertised instructions: %v %+v", err, off.Argv)
+	}
+}
+
 func TestSyntheticInstructionGuidanceRequiresExplicitCapability(t *testing.T) {
 	s, sess, ws, now := managedCodexFixture(t)
 	s.ManagedChildDecisions, s.CoordinatorInstructions, s.PodUID = true, true, "pod-synthetic"
