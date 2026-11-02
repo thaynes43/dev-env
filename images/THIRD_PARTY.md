@@ -17,8 +17,8 @@ source.
 
 | Component | License | Notes |
 |---|---|---|
-| `dev-env-operator`, `dev-env-keeper` | MIT | This repo. |
-| Go modules linked into the two binaries | Apache-2.0, BSD-3-Clause, MIT, BSD-2-Clause, ISC | Kubernetes client libraries, controller-runtime and their dependencies, pinned in [`go.mod`](../go.mod) and [`go.sum`](../go.sum). The operator links 63 third-party modules and the keeper 64; their combined inventory has 64 modules. The YAML modules retain both Apache-2.0 and MIT file notices. Each binary's linked license texts are collected during its image build. |
+| `dev-env-operator`, `dev-env-keeper`, `agent-run` | MIT | This repo. `agent-run` supplies the finite allowance capture helper. |
+| Go modules linked into the bundled binaries | Apache-2.0, BSD-3-Clause, MIT, BSD-2-Clause, ISC | Kubernetes client libraries, controller-runtime and their dependencies, pinned in [`go.mod`](../go.mod) and [`go.sum`](../go.sum). `agent-run` links `golang.org/x/sys` under BSD-3-Clause. The YAML modules retain both Apache-2.0 and MIT file notices. The image build collects the combined linked module inventory and license texts for all three binaries. |
 | Go standard library and runtime | BSD-3-Clause | [go.dev/LICENSE](https://go.dev/LICENSE) |
 | Base image `gcr.io/distroless/static:nonroot` | Apache-2.0 (the [distroless](https://github.com/GoogleContainerTools/distroless) project) | Its Debian files (`ca-certificates`, `tzdata`, `base-files`, `netbase`) keep their licenses in `/usr/share/doc/*/copyright` inside the image. |
 
@@ -55,7 +55,7 @@ Claude Code.
 
 | Component | License | Upstream |
 |---|---|---|
-| `agentd`, `agent-run` | MIT | This repo, plus the Go standard library and runtime (BSD-3-Clause, [go.dev/LICENSE](https://go.dev/LICENSE)). `agentd` links `github.com/pelletier/go-toml/v2` under MIT; `agent-run` links no third-party module. Linked module license texts are retained by the image build. |
+| `agentd`, `agent-run` | MIT | This repo, plus the Go standard library and runtime (BSD-3-Clause, [go.dev/LICENSE](https://go.dev/LICENSE)). `agentd` links `github.com/pelletier/go-toml/v2` under MIT; `agent-run` links `golang.org/x/sys` under BSD-3-Clause. Linked module license texts are retained by the image build. |
 | `pve`, `hw-ssh` | MIT | This repo (copies of the v1 scripts from [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT) |
 | `opwork`, `agent-api.py` | MIT | This repo (copies of `scripts/openproject/` in [thaynes43/haynes-ops](https://github.com/thaynes43/haynes-ops), also MIT, the source of truth) |
 | `claude-statusline-usage` | MIT | This repo |
