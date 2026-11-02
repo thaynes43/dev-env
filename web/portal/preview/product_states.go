@@ -54,7 +54,7 @@ func writeProductStates(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "usage-empty.html"), body, 0600); err != nil {
 		return err
 	}
-	for _, state := range []string{"measured", "stale", "seen-varies", "unknown", "not-connected"} {
+	for _, state := range []string{"measured", "stale", "seen-varies", "unknown", "last-reported", "not-connected"} {
 		allowances, err := allowancePreview(state)
 		if err != nil {
 			return err
@@ -370,6 +370,17 @@ func allowancePreview(state string) ([]portal.ProductAllowance, error) {
 		}
 		if state == "unknown" {
 			item.Binding.State = providerallowance.BindingMismatch
+		}
+		// last-reported: a verified reading without a provider time, so its
+		// freshness is not established and its values are not current.
+		if state == "last-reported" {
+			item.Observation.ProviderObservedAt = nil
+			item.Freshness = providerallowance.Freshness{State: providerallowance.FreshUnknown, AsOf: doc.ServedAt, Basis: providerallowance.BasisNone, Reason: "synthetic: provider time not reported"}
+			for i := range item.CurrentMeasures {
+				if item.CurrentMeasures[i].State == providerallowance.CurrentKnown {
+					item.CurrentMeasures[i] = providerallowance.CurrentMeasure{MeasureID: item.CurrentMeasures[i].MeasureID, State: providerallowance.CurrentUnknown, Value: providerallowance.MeasureValue{State: providerallowance.ValueUnknown}, Reason: "freshness not established"}
+				}
+			}
 		}
 		if state == "seen-varies" {
 			other := item

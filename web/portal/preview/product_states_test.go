@@ -241,18 +241,20 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name                                  string
-		percent, stale, unknown, disconnected bool
+		name                                        string
+		percent, stale, unknown, disconnected, last bool
 	}{
-		{"sessions-allowance-measured", true, false, false, false},
-		{"sessions-allowance-stale", true, true, false, false},
-		{"sessions-allowance-unknown", false, false, true, false},
-		{"usage-allowance", true, false, false, false},
-		{"usage-allowance-stale", true, true, false, false},
-		{"usage-allowance-unknown", false, false, true, false},
-		{"usage-allowance-not-connected", false, false, false, true},
-		{"usage", false, false, false, true},
-		{"usage-empty", false, false, false, true},
+		{"sessions-allowance-measured", true, false, false, false, false},
+		{"sessions-allowance-stale", true, true, false, false, false},
+		{"sessions-allowance-unknown", false, false, true, false, false},
+		{"usage-allowance", true, false, false, false, false},
+		{"usage-allowance-stale", true, true, false, false, false},
+		{"usage-allowance-unknown", false, false, true, false, false},
+		{"usage-allowance-last-reported", false, false, false, false, true},
+		{"sessions-allowance-last-reported", false, false, false, false, true},
+		{"usage-allowance-not-connected", false, false, false, true, false},
+		{"usage", false, false, false, true, false},
+		{"usage-empty", false, false, false, true, false},
 	} {
 		body, err := os.ReadFile(filepath.Join(dir, tc.name+".html"))
 		if err != nil {
@@ -267,6 +269,21 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		if block == "" {
 			t.Fatalf("%s: no allowance", tc.name)
 		}
+		// A last-reported value is kept apart from the current state. It
+		// appears only for Unknown, never draws a meter and names its account.
+		last := regexp.MustCompile(`(?s)<div class="allowance-last">.*?</ul></div>`)
+		lastBlocks := last.FindAllString(block, -1)
+		// The compact Sessions strip shows only the state; Usage shows the
+		// lines. A mismatched binding (the unknown fixture) shows none.
+		if (len(lastBlocks) > 0) != (tc.last && strings.HasPrefix(tc.name, "usage")) {
+			t.Errorf("%s: last-reported blocks %d", tc.name, len(lastBlocks))
+		}
+		for _, l := range lastBlocks {
+			if !strings.Contains(l, "Last reported, not current") || !strings.Contains(l, "Account verified") || !strings.Contains(l, "Not current: the provider did not report when it measured this.") || strings.Contains(l, "meter") || strings.Contains(l, "Resets in") {
+				t.Errorf("%s: last-reported block %s", tc.name, l)
+			}
+		}
+		block = last.ReplaceAllString(block, "")
 		if (strings.Contains(block, "62% left") || strings.Contains(block, "62% remaining")) != tc.percent || strings.Contains(block, "Stale") != tc.stale || strings.Contains(block, "Account binding unverified") != tc.unknown || !strings.Contains(block, "Cursor") {
 			t.Errorf("%s: wrong states %s", tc.name, block)
 		}

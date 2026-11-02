@@ -603,6 +603,20 @@ type ProductAllowance struct {
 	// Usage retains each window's metadata when observations or sources vary.
 	Observed, Provenance string
 	SeenVaries           bool
+	// LastReported keeps provider values from an observation the portal does
+	// not trust as current. Only an Unknown account shows them, apart from
+	// its state: they draw no bar and no countdown and are never actionable.
+	LastReported []ProductAllowanceLastReported
+}
+
+// ProductAllowanceLastReported is one percent window as a provider last
+// reported it. ReadAt is when the collector received the reading, not a
+// provider time. Account says whether that reading's account was verified.
+// Why is fixed copy naming the reason it is not current.
+type ProductAllowanceLastReported struct {
+	Percent, Window, Reset string
+	ReadAt, ReadAtExact    string
+	Source, Account, Why   string
 }
 
 // ProductAllowanceWindow holds provider-reported display text and optional
@@ -995,6 +1009,11 @@ func allowanceViews(input []ProductAllowance) []ProductAllowance {
 				continue
 			}
 			a.Observed, a.Provenance, a.SeenVaries = "", "", false
+			var last []ProductAllowanceLastReported
+			if a.Value == AllowanceUnknown {
+				last = a.LastReported
+			}
+			a.LastReported = nil
 			switch a.Value {
 			case AllowanceNotConnected, AllowanceUnknown:
 				a.Windows = nil
@@ -1022,8 +1041,30 @@ func allowanceViews(input []ProductAllowance) []ProductAllowance {
 			}
 			if a.Value == AllowanceUnknown {
 				a.Reason = display(a.Reason)
+				a.LastReported = lastReportedViews(last)
 			}
 			out[i] = a
+			break
+		}
+	}
+	return out
+}
+
+// allowanceLastReportedMax bounds the last-reported lines on one account.
+const allowanceLastReportedMax = 4
+
+// lastReportedViews fills absent text and keeps at most four windows. Any
+// line without a percent is dropped rather than shown as a gap.
+func lastReportedViews(in []ProductAllowanceLastReported) []ProductAllowanceLastReported {
+	var out []ProductAllowanceLastReported
+	for _, l := range in {
+		if l.Percent == "" || l.Percent == "Unknown" {
+			continue
+		}
+		l.Window, l.Reset, l.ReadAt = display(l.Window), display(l.Reset), display(l.ReadAt)
+		l.Source, l.Account, l.Why = display(l.Source), display(l.Account), display(l.Why)
+		out = append(out, l)
+		if len(out) == allowanceLastReportedMax {
 			break
 		}
 	}

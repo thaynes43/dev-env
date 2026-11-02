@@ -102,6 +102,7 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 			statusStale = statusStale || status.Freshness.State == providerallowance.FreshStale
 		}
 		if unavailable {
+			a.LastReported = lastReportedAllowance(doc, provider.id)
 			continue
 		}
 		var windows []portal.ProductAllowanceWindow
@@ -144,8 +145,124 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 				}
 			}
 		}
+		if a.Value == portal.AllowanceUnknown {
+			a.LastReported = lastReportedAllowance(doc, provider.id)
+		}
 	}
 	return out
+}
+
+// lastReportedAllowance keeps one provider's validated percent values when
+// the account cannot be shown as current, usually because freshness is not
+// established. Each line keeps the original observation's value and the time
+// the collector received it; nothing becomes current or actionable, and no
+// provider time is invented. It returns nil when any item or status of that
+// provider conflicts, is unavailable, is unvalidated, is not a provider
+// measurement, has an unparseable receipt time, has a mismatched binding, or
+// names another account. An unverified binding is shown and labelled.
+// Availability, conflict, unconfigured and duplicate refusals return before
+// the caller reaches this function.
+func lastReportedAllowance(doc providerallowance.ReadResponse, provider string) []portal.ProductAllowanceLastReported {
+	var out []portal.ProductAllowanceLastReported
+	var ids []allowanceID
+	for _, item := range doc.Items {
+		o := item.Observation
+		if o.Provider != provider {
+			continue
+		}
+		if allowanceAvailability(o.Availability) != "" {
+			return nil
+		}
+		if item.Validation.State != providerallowance.ValidationSourceFields && item.Validation.State != providerallowance.ValidationDisplayOnly {
+			return nil
+		}
+		source := allowanceSourceLabel(o.Source.Kind)
+		if source == "" {
+			return nil
+		}
+		id, ok := allowanceItemIdentity(item)
+		if !ok {
+			return nil
+		}
+		ids = append(ids, id)
+		read := allowanceRFC3339(&item.ReceivedAt)
+		if read == "" {
+			return nil
+		}
+		currents := map[string]providerallowance.CurrentMeasure{}
+		for _, current := range item.CurrentMeasures {
+			if _, duplicate := currents[current.MeasureID]; duplicate || current.State == providerallowance.CurrentConflict {
+				return nil
+			}
+			currents[current.MeasureID] = current
+		}
+		// A mismatched binding may be another account's reading: never shown.
+		if o.Scope.BindingState == providerallowance.BindingMismatch || item.Binding.State == providerallowance.BindingMismatch {
+			return nil
+		}
+		verified := o.Scope.BindingState == providerallowance.BindingVerified && item.Binding.State == providerallowance.BindingVerified
+		account := "Account verified"
+		if !verified {
+			account = "Account not verified"
+		}
+		why := "Not current: the portal cannot confirm this reading is current."
+		switch {
+		case !verified:
+			why = "Not current: this reading's account is not verified."
+		case o.ProviderObservedAt == nil:
+			why = "Not current: the provider did not report when it measured this."
+		case item.Freshness.State == providerallowance.FreshExpired:
+			why = "Not current: this reading has expired."
+		}
+		for _, m := range o.Measures {
+			// Any disagreement with the current view refuses the provider.
+			if current, ok := currents[m.ID]; ok && m.Value.Decimal != nil && current.Value.Decimal != nil && *m.Value.Decimal != *current.Value.Decimal {
+				return nil
+			}
+			if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
+				continue
+			}
+			if m.Value.State != providerallowance.ValueKnown || m.Value.Decimal == nil || !allowancePercentFits(m.Value.Decimal) {
+				continue
+			}
+			suffix := ""
+			switch m.Direction {
+			case providerallowance.DirectionRemaining:
+				suffix = "% left"
+			case providerallowance.DirectionUsed:
+				suffix = "% used"
+			default:
+				continue
+			}
+			reset := "Reset time not reported."
+			if r := projectMeasure(m, providerallowance.CurrentMeasure{}, false, nil, source, "", false).Reset; r != "Unknown" {
+				reset = "Reported reset: " + r + "."
+			}
+			out = append(out, portal.ProductAllowanceLastReported{
+				Percent: *m.Value.Decimal + suffix, Window: allowanceWindow(m.Window), Reset: reset,
+				ReadAt: allowanceTime(&item.ReceivedAt), ReadAtExact: read,
+				Source: source, Account: account, Why: why,
+			})
+		}
+	}
+	if allowanceIdentityReason(ids, doc.SourceStatuses, provider) != "" {
+		return nil
+	}
+	return out
+}
+
+// allowanceSourceLabel names a provider measurement source, or returns empty.
+func allowanceSourceLabel(kind providerallowance.SourceKind) string {
+	switch kind {
+	case providerallowance.SourceNativeRPC:
+		return "Provider API"
+	case providerallowance.SourceNativeDisplay:
+		return "Provider display"
+	case providerallowance.SourcePassive:
+		return "Passive event"
+	default:
+		return ""
+	}
 }
 
 func allowanceAvailability(a providerallowance.Availability) string {
@@ -185,15 +302,8 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 	if reason := allowanceTrust(item.Validation.State, item.Binding.State, item.Freshness); reason != "" {
 		return nil, reason
 	}
-	source := ""
-	switch o.Source.Kind {
-	case providerallowance.SourceNativeRPC:
-		source = "Provider API"
-	case providerallowance.SourceNativeDisplay:
-		source = "Provider display"
-	case providerallowance.SourcePassive:
-		source = "Passive event"
-	default:
+	source := allowanceSourceLabel(o.Source.Kind)
+	if source == "" {
 		return nil, "Source is not a provider measurement"
 	}
 	// A current conflict refuses the item even without a matching measure.
