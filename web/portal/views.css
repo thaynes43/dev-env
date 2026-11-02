@@ -421,6 +421,20 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .meter-track { fill: var(--soft); }
 .meter-fill { fill: var(--accent); }
 .allowance-meter-note, .allowance-card-line, .allowance-reset, .allowance-fresh, .allowance-source, .allowance-missing, .allowance-confidence, .account-ref { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.glance { padding-bottom: 22px; margin-bottom: 22px; border-bottom: 1px solid var(--line); }
+.glance h2 { margin: 0 0 12px; }
+.glance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.glance-tile { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.glance-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.glance-name { margin: 0; font-size: 14px; font-weight: 650; }
+.glance-windows { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.glance-split { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.glance-split strong { color: var(--ink); font-size: 20px; font-weight: 650; letter-spacing: -.4px; }
+.glance-meter { display: block; width: 100%; height: 8px; }
+.glance-reset, .glance-note { margin: 6px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.glance-reset time { color: var(--ink); }
+.glance-note { margin-top: auto; }
+.glance-empty { margin: 0; color: var(--muted); font-size: 20px; font-weight: 650; letter-spacing: -.4px; }
 .usage-chart { margin: 12px 0; min-width: 0; }
 .usage-chart ul { list-style: none; margin: 8px 0 0; padding: 0; }
 .usage-chart li { margin: 0 0 8px; }
