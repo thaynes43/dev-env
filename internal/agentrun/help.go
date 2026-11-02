@@ -16,6 +16,7 @@ Usage:
   agent-run rc start|status|fresh -o json         launch or observe Remote Control
   agent-run inbox send|ask|reply|list|read|ack|ack-status
                                                   durable inbox
+  agent-run instruction send|read|consume|attempt designated parent delivery and native consumption
   agent-run directory list --project <p> --once [-o json]
                                                   read one authorized directory page
   agent-run canary create --id <id> --once [-o json]
@@ -218,6 +219,34 @@ still-live guard/Pod/HOME only after independently proven root and child stops.
 The ORIGINAL deadline/effort/failure/checkpoint accounting and receipts remain.
 It cannot extend an exhausted budget, recover a lost Pod or let a model resume
 itself. A lost mutation acknowledgement is not retried.
+`,
+	"instruction": `Usage: agent-run instruction send --session <name> --key <key> --project <project> --repository <repository> --task-key <task> --expect-uid <uid> --expect-pod <pod> --attempt <id> < correction.txt
+       agent-run instruction read --session <name> --key <key>
+       agent-run instruction consume --session <name> --key <key> --attempt <id> --nonce <nonce> --message-uid <uid> --text-sha256 <digest> --expect-uid <uid> --expect-pod <pod>
+       agent-run instruction attempt --session <name> --attempt <id> [--ended]
+
+Send submits one in-scope correction from the authenticated parent Session.
+The server derives the sender. There is no --from or --sender flag. Scope
+fields must match the target's stored project, repository and task; they do
+not widen it. A newly created receipt has no nonce and consumed false. Send
+does not create consumption. An identical retry returns the stored receipt,
+including consumed true when a separate consume already happened. A changed
+intent conflicts and no new key is chosen.
+
+Read shows the delivery. The target session also receives the text and nonce.
+An inbox read acknowledgement is reported separately and is not consumption.
+The one-shot native exec does not push this read into the running process.
+
+Consume is the target task's explicit acknowledgement. --message-uid and
+--text-sha256 must be the values from that read; a nonempty acknowledgement
+with different values is unconfirmed. It is not an inbox read ACK, a grant,
+or a human decision. Retry only the same nonce and attempt. A file written
+by the daemon is not consumption.
+
+Attempt registers this pod's active native attempt, or --ended for that same
+attempt. A replaced or ended attempt cannot accept a new delivery.
+
+Source tests do not prove an installed operator or a live native task.
 `,
 	"inbox": `Usage: agent-run inbox send --project <project> --recipient-namespace <namespace> --recipient-name <name> --recipient-uid <uid> --key <key> < message.txt
        agent-run inbox ask --project <project> [--to <session> [--to-uid <uid>]] --key <key> < question.txt

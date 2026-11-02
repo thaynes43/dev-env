@@ -140,7 +140,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.idempotencyKey) || has(self.caller)",message="idempotencyKey is for summoned sessions only: set caller and lane"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || self.mode != 'local'",message="a summoned session runs in task or remote mode, never local"
 // +kubebuilder:validation:XValidation:rule="!has(self.caller) || (has(self.profile) && self.profile != 'full')",message="a summoned session names its profile, and it is never full (D-36)"
-// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
+// +kubebuilder:validation:XValidation:rule="has(self.base) == has(oldSelf.base) && has(self.effort) == has(oldSelf.effort) && has(self.prompt) == has(oldSelf.prompt) && has(self.size) == has(oldSelf.size) && has(self.profile) == has(oldSelf.profile) && has(self.tools) == has(oldSelf.tools) && has(self.llm) == has(oldSelf.llm) && has(self.parent) == has(oldSelf.parent) && has(self.caller) == has(oldSelf.caller) && has(self.lane) == has(oldSelf.lane) && has(self.idempotencyKey) == has(oldSelf.idempotencyKey) && has(self.limits) == has(oldSelf.limits) && has(self.restore) == has(oldSelf.restore) && has(self.workspace) == has(oldSelf.workspace) && has(self.projectCanary) == has(oldSelf.projectCanary) && has(self.commonRules) == has(oldSelf.commonRules) && has(self.sessionDirectory) == has(oldSelf.sessionDirectory) && has(self.privatePilot) == has(oldSelf.privatePilot) && has(self.usageCaptureParentUID) == has(oldSelf.usageCaptureParentUID) && has(self.coordinatorInstructionParentUID) == has(oldSelf.coordinatorInstructionParentUID)",message="immutable after create: no spec field may be added or removed, except operatingMode and lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.projectCanary) || (self.mode == 'task' && self.agent in ['claude', 'codex'] && self.size == 'S' && has(self.parent) && self.parent == self.projectCanary.client && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) <= duration('180s') && (self.agent == 'codex' ? (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) : (has(self.limits.maxTurns) && self.limits.maxTurns > 0 && self.limits.maxTurns <= 3)))",message="project canaries require their fixed private bounded subscription task contract"
 // +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision) || (has(self.privatePilot) && self.privatePilot.commonRevision == self.commonRules.commonRevision) || (!has(self.projectCanary) && !has(self.privatePilot) && !has(self.workspace) && self.mode == 'task' && self.agent in ['claude', 'codex'] && has(self.profile) && self.profile == 'dev' && has(self.parent) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) > duration('0s') && duration(self.limits.timeout) <= duration('45m'))",message="common rules require a matching managed canary or finite private task binding"
 // +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary) || has(self.privatePilot)",message="directory enrollment requires a managed canary"
@@ -274,6 +274,17 @@ type AgentSessionSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="usage capture parent UID is immutable"
 	// +optional
 	UsageCaptureParentUID string `json:"usageCaptureParentUID,omitempty"`
+
+	// CoordinatorInstructionParentUID is the authenticated parent Session UID
+	// captured at create from a live read of that parent. It designates who may
+	// submit in-scope coordinator instructions. It is not a privilege grant, not
+	// a usage-capture permission, and not taken from the request body. Absent
+	// means the task has no instruction binding and submission fails closed.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; coordinator instruction parent UID does not change"
+	// +optional
+	CoordinatorInstructionParentUID string `json:"coordinatorInstructionParentUID,omitempty"`
 
 	// Caller is the CallerPolicy of a summoned session, for example
 	// alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions. A
@@ -483,6 +494,108 @@ type Lifecycle struct {
 	ArchiveAfter *metav1.Duration `json:"archiveAfter,omitempty"`
 }
 
+// CoordinatorInstructionAttemptStatus is the recipient pod's current native
+// attempt. The API writes it from that pod's token. It grants no privilege.
+type CoordinatorInstructionAttemptStatus struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="instruction attempt session UID is immutable"
+	SessionUID string `json:"sessionUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+	// +kubebuilder:validation:MinLength=36
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	AttemptID string `json:"attemptID"`
+	// +kubebuilder:validation:Enum=active;ended
+	Phase string `json:"phase"`
+}
+
+// CoordinatorInstructionConsumptionStatus is the native task's consume receipt.
+// It is not an inbox read acknowledgement and not a grant or human decision.
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="native consumption receipt is immutable"
+type CoordinatorInstructionConsumptionStatus struct {
+	// +kubebuilder:validation:MinLength=36
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	AttemptID string `json:"attemptID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	SessionUID string `json:"sessionUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	PodUID string `json:"podUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]+$`
+	MessageUID string `json:"messageUID"`
+	// +kubebuilder:validation:MinLength=64
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	Nonce string `json:"nonce"`
+	// +kubebuilder:validation:MinLength=64
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	TextSHA256 string `json:"textSHA256"`
+	At         metav1.Time `json:"at"`
+}
+
+// CoordinatorInstructionStatus is one server-authored delivery record. The
+// instruction text stays in the inbox message. Consumption is added once.
+// +kubebuilder:validation:XValidation:rule="!has(self.consumed) || (self.consumed.attemptID == self.attemptID && self.consumed.sessionUID == self.targetSessionUID && self.consumed.podUID == self.targetPodUID && self.consumed.messageUID == self.messageUID && self.consumed.nonce == self.nonce && self.consumed.textSHA256 == self.textSHA256)",message="native consumption must bind this delivery"
+// +kubebuilder:validation:XValidation:rule="self.key == oldSelf.key && self.messageName == oldSelf.messageName && self.messageUID == oldSelf.messageUID && self.senderUID == oldSelf.senderUID && self.senderPodUID == oldSelf.senderPodUID && self.targetSessionUID == oldSelf.targetSessionUID && self.targetPodUID == oldSelf.targetPodUID && self.attemptID == oldSelf.attemptID && self.project == oldSelf.project && self.repository == oldSelf.repository && self.taskKey == oldSelf.taskKey && self.textSHA256 == oldSelf.textSHA256 && self.nonce == oldSelf.nonce && self.deliveredAt == oldSelf.deliveredAt && (!has(oldSelf.consumed) || (has(self.consumed) && self.consumed == oldSelf.consumed))",message="instruction delivery is immutable; consumption is set once"
+type CoordinatorInstructionStatus struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=120
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9._-]{0,118}[a-z0-9])?$`
+	Key string `json:"key"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Pattern=`^message\.[a-f0-9]{32}\.[a-f0-9]{32}$`
+	MessageName string `json:"messageName"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9-]+$`
+	MessageUID string `json:"messageUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	SenderUID string `json:"senderUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	SenderPodUID string `json:"senderPodUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	TargetSessionUID string `json:"targetSessionUID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	TargetPodUID string `json:"targetPodUID"`
+	// +kubebuilder:validation:MinLength=36
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	AttemptID string `json:"attemptID"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Project string `json:"project"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Repository string `json:"repository"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=160
+	TaskKey string `json:"taskKey"`
+	// +kubebuilder:validation:MinLength=64
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	TextSHA256 string `json:"textSHA256"`
+	// +kubebuilder:validation:MinLength=64
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	Nonce       string                                  `json:"nonce"`
+	DeliveredAt metav1.Time                             `json:"deliveredAt"`
+	// +optional
+	Consumed *CoordinatorInstructionConsumptionStatus `json:"consumed,omitempty"`
+}
+
 // AgentSessionStatus is what the operator and agentd observed. Reconcile is
 // level-based (DESIGN-001 5.1): everything a fresh operator needs is here, not
 // in its memory.
@@ -490,6 +603,8 @@ type Lifecycle struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.privateHistory) || has(self.privateHistory)",message="private history retention cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.capturedUsage) || has(self.capturedUsage)",message="captured usage ledger cannot be removed"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionDirectory) || has(self.sessionDirectory)",message="directory creation evidence cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructionAttempt) || has(self.coordinatorInstructionAttempt)",message="instruction attempt evidence cannot be removed"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.coordinatorInstructions) || (has(self.coordinatorInstructions) && size(self.coordinatorInstructions) >= size(oldSelf.coordinatorInstructions))",message="instruction delivery records cannot be removed"
 type AgentSessionStatus struct {
 	// +optional
 	SessionDirectory *SessionDirectoryReceipt `json:"sessionDirectory,omitempty"`
@@ -618,6 +733,18 @@ type AgentSessionStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// CoordinatorInstructionAttempt is the recipient pod's current native attempt
+	// for instruction delivery. Absence fails closed. It is not a grant.
+	// +optional
+	CoordinatorInstructionAttempt *CoordinatorInstructionAttemptStatus `json:"coordinatorInstructionAttempt,omitempty"`
+
+	// CoordinatorInstructions are delivery records for this task. The text lives
+	// in the inbox message. A nested consumption receipt is not an inbox read ACK.
+	// +kubebuilder:validation:MaxItems=4
+	// +listType=atomic
+	// +optional
+	CoordinatorInstructions []CoordinatorInstructionStatus `json:"coordinatorInstructions,omitempty"`
 }
 
 // PrivateHistoryStatus retains private identity independently of live Pod fields.
