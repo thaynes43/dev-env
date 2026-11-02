@@ -80,7 +80,7 @@ func TestAllowanceLastReportedAfterReset(t *testing.T) {
 	}
 	body := allowanceRender(t, page)
 	for _, want := range []string{"No current percent allowance. Nothing is estimated.", "Unknown · No current percent allowance",
-		"The reported reset time has passed; this value is from before it. Not current: a reset has happened since.",
+		"The reported reset time has passed; this value is from before it. Not current: the reported reset time has passed.",
 		`provider measured <time datetime="2026-11-01T09:00:00Z">1 Nov 09:00 UTC</time>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("lacks %q", want)
@@ -132,5 +132,35 @@ func TestLastReportedViewsBoundAndFill(t *testing.T) {
 	}
 	if got, more := lastReportedViews(nil); got != nil || more != 0 {
 		t.Fatal("empty input made lines")
+	}
+}
+
+// A passed reset keeps an unverified account visible in the reason, a future
+// provider time is flagged, and the overview's +N link names its provider.
+func TestAllowanceLastReportedUnverifiedFutureAndMoreLabel(t *testing.T) {
+	asOf := time.Date(2026, 11, 2, 14, 0, 0, 0, time.UTC)
+	passed := lastReportedLine("95% used")
+	passed.Account, passed.ResetAtExact = "Account not verified", "2026-11-02T09:22:00Z"
+	future := lastReportedLine("5% used")
+	future.ProviderAt, future.ProviderAtExact = "9 Nov 00:00 UTC", "2026-11-09T00:00:00Z"
+	extra := lastReportedLine("6% used")
+	page := ProductPage{
+		Title: "Sessions", Connected: true, Complete: true, Filter: ProductFilter{View: "usage"}, AsOf: asOf,
+		Usage: &ProductUsage{Allowance: []ProductAllowance{{Provider: "Codex", Value: AllowanceUnknown, Reason: "Allowance validation unavailable",
+			LastReported: []ProductAllowanceLastReported{passed, future, extra}}}},
+	}
+	body := allowanceRender(t, page)
+	codex := glanceTile(t, glanceSection(t, body), "Codex")
+	for _, want := range []string{
+		"Not current or trusted: the reported reset time has passed and this reading&#39;s account is not verified.",
+		"That observation time is in the future.",
+		`aria-label="Codex: 1 more last-reported value"`,
+	} {
+		if !strings.Contains(codex, want) {
+			t.Errorf("Codex tile lacks %q:\n%s", want, codex)
+		}
+	}
+	if strings.Contains(body, "a reset has happened") {
+		t.Error("copy claims a reset happened")
 	}
 }

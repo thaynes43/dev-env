@@ -25,7 +25,10 @@ Each line in the account section shows:
   otherwise **Account not verified**;
 - the reported reset, as text only, and one fixed sentence saying why the
   value is not current. When a reported exact reset is at or before the page
-  time, the line says the reset has passed and the value is from before it.
+  time, the line says the reset time has passed and the value is from before
+  it. It never says a reset happened: a passed reset time does not establish
+  replenishment. A provider time later than the page time is flagged as in
+  the future.
 
 The At a glance tile shows a compact form: at most two lines with value and
 reason, then "+N more" linking to the account section. The account section

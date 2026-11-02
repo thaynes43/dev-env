@@ -1110,9 +1110,16 @@ func lastReportedViews(in []ProductAllowanceLastReported) ([]ProductAllowanceLas
 		} else {
 			l.ProviderAt = display(l.ProviderAt)
 		}
+		// A passed reset time does not establish replenishment (DESIGN-030).
 		if reset, err := time.Parse(time.RFC3339, l.ResetAtExact); err == nil && !l.AsOf.IsZero() && !reset.After(l.AsOf) {
 			l.Reset = "The reported reset time has passed; this value is from before it."
-			l.Why = "Not current: a reset has happened since."
+			l.Why = "Not current: the reported reset time has passed."
+			if l.Account != "Account verified" {
+				l.Why = "Not current or trusted: the reported reset time has passed and this reading's account is not verified."
+			}
+		}
+		if at, err := time.Parse(time.RFC3339, l.ProviderAtExact); err == nil && !l.AsOf.IsZero() && at.After(l.AsOf) {
+			l.Why += " That observation time is in the future."
 		}
 		out = append(out, l)
 	}
