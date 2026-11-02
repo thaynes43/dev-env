@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -14,14 +15,20 @@ import (
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
 
+const usageAggregateAllowancePath = "/v1/provider-allowances"
+
+const usageCommandUsage = "usage: expected -o json [--from-file FILE|- | --claude-statusline | --read-current]"
+
 func (a *app) usage(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var output, from string
-	var claude bool
+	var claude, readCurrent bool
 	fs.StringVar(&output, "o", "", "")
 	fs.StringVar(&from, "from-file", "", "")
 	fs.BoolVar(&claude, "claude-statusline", false, "")
+	fs.BoolVar(&readCurrent, "read-current", false, "")
+	counts := flagCounts(args, "from-file", "claude-statusline", "read-current")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, err = io.WriteString(a.env.Stdout, commandHelp["usage"])
@@ -35,11 +42,14 @@ func (a *app) usage(ctx context.Context, args []string) error {
 			fromSpecified = true
 		}
 	})
-	if output != "json" || fs.NArg() != 0 || (fromSpecified && from == "") || (fromSpecified && claude) {
-		return usageError("usage: expected -o json [--from-file FILE|- | --claude-statusline]")
+	if counts["read-current"] > 1 || output != "json" || fs.NArg() != 0 || (fromSpecified && from == "") || (fromSpecified && claude) || (readCurrent && (fromSpecified || claude)) {
+		return usageError(usageCommandUsage)
 	}
 	if ctx.Err() != nil {
 		return &exitError{code: ExitFailed, msg: "usage unavailable"}
+	}
+	if readCurrent {
+		return a.readAggregateAllowance(ctx)
 	}
 	var read providerallowance.ReadResponse
 	if from == "" {
@@ -119,4 +129,67 @@ func (a *app) usage(ctx context.Context, args []string) error {
 		return &exitError{code: ExitFailed, msg: "usage output unavailable"}
 	}
 	return nil
+}
+
+// readAggregateAllowance GETs one cached providerallowance.read.v1 document.
+// The default local preflight does not call it. The Codex current-source slot
+// is a different command. Redirects are not followed and the GET is not retried.
+func (a *app) readAggregateAllowance(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return &exitError{code: ExitFailed, msg: "usage unavailable"}
+	}
+	if a.env.Getenv == nil {
+		return &exitError{code: ExitFailed, msg: "usage read unavailable"}
+	}
+	c, err := a.connect(ctx, connOpts{})
+	if err != nil || c == nil || c.http == nil || c.url == "" || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			return &exitError{code: ExitFailed, msg: "usage unavailable"}
+		}
+		var ee *exitError
+		if errors.As(err, &ee) && ee.code == ExitUsage {
+			return ee
+		}
+		return &exitError{code: ExitFailed, msg: "usage read unavailable"}
+	}
+	hc := *c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	one := *c
+	one.http = &hc
+	one.rejectOversizeResponse = true
+	status, raw, err := a.send(ctx, &one, http.MethodGet, c.url+usageAggregateAllowancePath, nil)
+	if err != nil || ctx.Err() != nil {
+		return &exitError{code: ExitFailed, msg: "usage read unavailable"}
+	}
+	if status != http.StatusOK {
+		return usageAggregateStatus(status)
+	}
+	if len(raw) == 0 || len(raw) > providerallowance.FixtureParseLimits.MaxBytes {
+		return &exitError{code: ExitFailed, msg: "usage read unavailable"}
+	}
+	if _, err = providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits); err != nil {
+		return &exitError{code: ExitFailed, msg: "usage read unavailable"}
+	}
+	encoded := raw
+	if encoded[len(encoded)-1] != '\n' {
+		encoded = append(append([]byte(nil), raw...), '\n')
+	}
+	if n, werr := a.env.Stdout.Write(encoded); werr != nil || n != len(encoded) {
+		return &exitError{code: ExitFailed, msg: "usage output unavailable"}
+	}
+	return nil
+}
+
+func usageAggregateStatus(status int) error {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return &exitError{code: ExitAuth, msg: "usage read refused"}
+	case http.StatusNotFound:
+		return &exitError{code: ExitNotFound, msg: "usage read unavailable"}
+	default:
+		if status >= 300 && status < 400 {
+			return &exitError{code: ExitFailed, msg: "usage read refused"}
+		}
+		return &exitError{code: ExitFailed, msg: "usage read unavailable"}
+	}
 }

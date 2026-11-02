@@ -647,14 +647,24 @@ separate capability: ordinary show output still omits the ledger. Text and
 --once are refused before a request. A missing, older, disabled, malformed, or
 oversized view is unavailable, not zero usage and not a partial receipt list.
 `,
-	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline]
+	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current]
 
-Without a file, reports local unconfigured acquisition preflight refusals; no
-provider is contacted. --claude-statusline explicitly reads a bounded native
-callback from stdin; its provider freshness and account binding are Unknown.
---from-file reads an untrusted bounded cached read, with
-original observation and served times preserved. It does not configure live
-acquisition or establish provider coverage, account binding or freshness.
+Without --from-file, --claude-statusline, or --read-current, reports local
+unconfigured acquisition preflight refusals. No provider is contacted and no
+operator connection is opened. --claude-statusline explicitly reads a bounded
+native callback from stdin; its provider freshness and account binding are
+Unknown. --from-file reads an untrusted bounded cached read, with original
+observation and served times preserved. It does not configure live acquisition
+or establish provider coverage, account binding or freshness.
+
+--read-current is off unless set. It cannot be combined with --from-file or
+--claude-statusline. It performs one GET /v1/provider-allowances through the
+configured operator client and prints that providerallowance.read.v1 document.
+Redirects are not followed and the GET is not retried. Denial, absence, and an
+invalid or oversized body are not echoed. The serving clock does not refresh
+provider freshness. This is not the Codex current-source slot; usage-source
+--read-current is unchanged. The command does not grant, poll a provider, or
+open a credential.
 `,
 	"usage-source": `Usage: agent-run usage-source -o json --incarnation ID --generation N --max-age 30m (--codex-tool-report FILE|- | --codex-raw-tool-report FILE|- --observed-at RFC3339) [--publish]
        agent-run usage-source -o json --incarnation ID --generation N --max-age 30m --read-current
