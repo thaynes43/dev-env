@@ -240,9 +240,12 @@ func allowanceItem(item providerallowance.ReadItem) ([]portal.ProductAllowanceWi
 }
 
 // projectMeasure reads typed measure fields only. It does not read direct
-// fields or format a percent by scanning display text. WindowKind stays empty:
-// providerallowance.Window has no kind, and a round number of minutes is not a
-// calendar week or month.
+// fields or format a percent by scanning display text. A display-only
+// resetDisplayText or resetDisplayDate is copied exactly and given a
+// display-only suffix. ResetAt stays empty for that label. An RFC3339
+// display-only ResetAt still formats as a clock time with the same suffix.
+// WindowKind stays empty: providerallowance.Window has no kind, and a round
+// number of minutes is not a calendar week or month.
 func projectMeasure(m providerallowance.Measure, current providerallowance.CurrentMeasure, hasCurrent bool, observed *string, source, accountKey string, validDecimals bool) portal.ProductAllowanceWindow {
 	window := portal.ProductAllowanceWindow{
 		Percent: "Unknown", Window: allowanceWindow(m.Window),
@@ -266,12 +269,23 @@ func projectMeasure(m providerallowance.Measure, current providerallowance.Curre
 	}
 	switch m.Window.ResetPrecision {
 	case providerallowance.ResetInstant:
+		if m.Window.ResetDisplayDate != nil || m.Window.ResetDisplayText != nil {
+			break
+		}
 		window.Reset = allowanceTime(m.Window.ResetAt)
 		if at := allowanceRFC3339(m.Window.ResetAt); at != "" {
 			window.ResetPrecision = "instant"
 			window.ResetAt = at
 		}
 	case providerallowance.ResetDisplayOnly:
+		if label, ok := providerallowance.ResetDisplayLabel(m.Window); ok {
+			window.Reset = label + " (display only)"
+			window.ResetPrecision = "display_only"
+			break
+		}
+		if m.Window.ResetDisplayDate != nil || m.Window.ResetDisplayText != nil {
+			break
+		}
 		window.Reset = allowanceTime(m.Window.ResetAt)
 		if window.Reset != "Unknown" {
 			window.Reset += " (display only)"

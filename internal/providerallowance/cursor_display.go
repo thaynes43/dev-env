@@ -63,10 +63,9 @@ const (
 	cursorDisplayEvidenceXAI    = "cursor-native-display:xai-direct-unknown"
 )
 
-// CursorDisplayResetExtension is the deferred window and direct-field change
-// that would let a calendar date or the exact month/day label survive the
-// portal projection. It is not applied here. Window.ResetAt stays nil.
-const CursorDisplayResetExtension = "Window needs optional resetDisplayDate and resetDisplayText strings, and those values are mutually exclusive. canonicalKeys must treat both as absent-tolerant so existing windows still decode. A non-null resetDisplayDate is a YYYY-MM-DD calendar date, accepted only when resetPrecision is display_only and resetAt is null. Do not expand it to an RFC3339 midnight instant. A non-null resetDisplayText is the exact English month and day label. The capture has no known year or timezone, so the adapter must not invent a year or a midnight. Date-only ISO does not solve the yearless sample. web/portal/session projectMeasure must render the exact text or the calendar date with a display-only suffix and leave ResetAt empty. Until that ACK, this adapter stores the original label in directFields.resetDisplayDate or directFields.resetDisplayText, sets resetAt null and resetPrecision display_only. projectMeasure reads ResetAt only, so the portal reset stays Unknown."
+// CursorDisplayResetExtension records the typed window fields that carry a
+// calendar date or the exact month/day label. Window.ResetAt stays nil.
+const CursorDisplayResetExtension = "Window has optional resetDisplayDate and resetDisplayText strings, and those values are mutually exclusive. canonicalKeys treats both as absent-tolerant so existing windows still decode. A non-null resetDisplayDate is a YYYY-MM-DD calendar date, accepted only when resetPrecision is display_only and resetAt is null. Do not expand it to an RFC3339 midnight instant. A non-null resetDisplayText is the exact English month and day label. The capture has no known year or timezone, so the adapter must not invent a year or a midnight. Date-only ISO does not solve the yearless sample. The original label is stored in directFields.resetDisplayDate or directFields.resetDisplayText and in the typed window fields, with resetAt null and resetPrecision display_only. web/portal/session projectMeasure renders the exact text or the calendar date with a display-only suffix and leaves ResetAt empty."
 
 // CursorDisplayRegistryExtension is the caller-trusted registry addition required
 // before these measures validate. Payload product names do not create a pool.
@@ -149,8 +148,9 @@ type cursorDisplayInput struct {
 
 // CursorDisplayProject maps one sanitized native-display capture into a read item.
 // Capture time stays the original spelling. ProviderObservedAt stays nil.
-// A date-only reset or an exact month/day label is a direct field with ResetAt
-// nil and display_only precision. The provider observation time stays unknown.
+// A date-only reset or an exact month/day label is stored on the typed window
+// and as a direct field. ResetAt stays nil and precision is display_only.
+// The provider observation time stays unknown. No year or midnight is invented.
 // now is the local receipt clock, not a provider refresh.
 func CursorDisplayProject(raw []byte, selected CursorDisplaySelection, now time.Time) (ReadItem, error) {
 	if err := selected.validate(); err != nil {
@@ -643,6 +643,8 @@ func (in cursorDisplayInput) cursorItem(selected CursorDisplaySelection, now tim
 	}
 	if in.reset != nil || in.resetText != nil {
 		window.ResetPrecision = ResetDisplayOnly
+		window.ResetDisplayDate = cloneString(in.reset)
+		window.ResetDisplayText = cloneString(in.resetText)
 	}
 	measure := Measure{
 		ID:             CursorDisplayIncludedMeasure,

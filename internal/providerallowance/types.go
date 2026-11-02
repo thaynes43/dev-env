@@ -218,12 +218,19 @@ type DirectField struct {
 }
 
 // Window is one independent allowance window.
+// ResetDisplayDate and ResetDisplayText are optional. Nil values are omitted
+// from JSON so a legacy window keeps its bytes and digest. A non-nil date is
+// one YYYY-MM-DD calendar date. A non-nil text is the exact English month and
+// day label, with no year. The two are mutually exclusive. Either one requires
+// display_only precision and a null ResetAt, and neither becomes an instant.
 type Window struct {
-	Ref             string         `json:"ref"`
-	DurationMinutes *Count         `json:"durationMinutes"`
-	StartAt         *string        `json:"startAt"`
-	ResetAt         *string        `json:"resetAt"`
-	ResetPrecision  ResetPrecision `json:"resetPrecision"`
+	Ref              string         `json:"ref"`
+	DurationMinutes  *Count         `json:"durationMinutes"`
+	StartAt          *string        `json:"startAt"`
+	ResetAt          *string        `json:"resetAt"`
+	ResetPrecision   ResetPrecision `json:"resetPrecision"`
+	ResetDisplayDate *string        `json:"resetDisplayDate,omitempty"`
+	ResetDisplayText *string        `json:"resetDisplayText,omitempty"`
 }
 
 // MeasureValue keeps a state and, only when known, a lexical decimal.
@@ -490,6 +497,9 @@ func (w *Window) UnmarshalJSON(b []byte) error {
 	if err := validateOptionalDate(next.ResetAt, "resetAt"); err != nil {
 		return err
 	}
+	if err := windowResetDisplayError(next); err != nil {
+		return err
+	}
 	*w = next
 	return nil
 }
@@ -749,7 +759,7 @@ var (
 	scopeKeys       = []string{"accountRef", "workspaceRef", "entitlementRef", "products", "bindingState"}
 	sourceKeys      = []string{"kind", "version", "capabilityRef"}
 	directKeys      = []string{"field", "originalType", "lexicalValue"}
-	windowKeys      = []string{"ref", "durationMinutes", "startAt", "resetAt", "resetPrecision"}
+	windowKeys      = []string{"ref", "durationMinutes", "startAt", "resetAt", "resetPrecision", "resetDisplayDate", "resetDisplayText"}
 	valueKeys       = []string{"state", "decimal"}
 	measureKeys     = []string{"id", "category", "window", "unit", "currency", "direction", "value", "validationRef", "evidenceFields"}
 	derivationKeys  = []string{"id", "formula", "inputRefs", "unit", "precision", "value"}
@@ -923,6 +933,8 @@ func strictInto(b []byte, keys []string, dest any) error {
 // is rejected for every field the schema does not list as nullable, including
 // string-array elements, before encoding/json turns null into an empty string
 // or a nil slice. String values are not compared or rewritten.
+// resetDisplayDate and resetDisplayText may be absent. Every other listed
+// field is still required, and an unknown or case-folded name is still rejected.
 func canonicalKeys(b []byte, keys []string) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
@@ -965,8 +977,12 @@ func canonicalKeys(b []byte, keys []string) error {
 	if end != json.Delim('}') {
 		return &DecodeError{Code: "invalid_json", Msg: "object is not closed"}
 	}
+	optional := optionalFor(keys)
 	for _, key := range keys {
 		if _, ok := seen[key]; !ok {
+			if _, allowAbsent := optional[key]; allowAbsent {
+				continue
+			}
 			return &DecodeError{Code: "missing_field", Path: key, Msg: "required field is missing"}
 		}
 	}
@@ -982,7 +998,7 @@ func policyFor(keys []string) (map[string]struct{}, map[string]struct{}) {
 	case sameKeys(keys, directKeys):
 		return keySet("lexicalValue"), nil
 	case sameKeys(keys, windowKeys):
-		return keySet("durationMinutes", "startAt", "resetAt"), nil
+		return keySet("durationMinutes", "startAt", "resetAt", "resetDisplayDate", "resetDisplayText"), nil
 	case sameKeys(keys, valueKeys):
 		return keySet("decimal"), nil
 	case sameKeys(keys, measureKeys):
@@ -1006,6 +1022,13 @@ func policyFor(keys []string) (map[string]struct{}, map[string]struct{}) {
 	default:
 		return nil, nil
 	}
+}
+
+func optionalFor(keys []string) map[string]struct{} {
+	if sameKeys(keys, windowKeys) {
+		return keySet("resetDisplayDate", "resetDisplayText")
+	}
+	return nil
 }
 
 func sameKeys(a, b []string) bool {

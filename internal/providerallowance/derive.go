@@ -193,6 +193,9 @@ func compatibleInputs(inputs []Measure) bool {
 		if !stringPtrEqual(measure.Window.StartAt, first.Window.StartAt) || !stringPtrEqual(measure.Window.ResetAt, first.Window.ResetAt) {
 			return false
 		}
+		if !stringPtrEqual(measure.Window.ResetDisplayDate, first.Window.ResetDisplayDate) || !stringPtrEqual(measure.Window.ResetDisplayText, first.Window.ResetDisplayText) {
+			return false
+		}
 	}
 	return true
 }
