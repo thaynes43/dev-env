@@ -50,6 +50,7 @@ const (
 	cursorDisplayMaxString      = 256
 	cursorDisplayMaxItems       = 8
 	cursorDisplayMaxMinutes     = 525600
+	cursorDisplayMaxSequence    = 1_000_000
 	cursorDisplayRouteCursor    = "cursor_plan_usage"
 	cursorDisplayRouteXAI       = "xai_direct"
 	cursorDisplayXAICode        = "direct_xai_unknown"
@@ -99,13 +100,16 @@ var cursorDisplayKeys = []string{
 	"usedPercent", "resetDisplayDate", "resetDisplayText", "spendAmount", "spendCurrency",
 }
 
-// CursorDisplaySelection is the caller-supplied producer and binding.
-// It is not read from the capture. Binding stays unknown unless the caller
-// sets BindingVerified and supplies the account and workspace. EntitlementRef
-// is copied only from this selection, never from a payload product.
+// CursorDisplaySelection is the caller-supplied producer, capture sequence, and binding.
+// It is not read from the capture. Sequence is the positive capture sequence owned by
+// the caller for one producer incarnation. A reread keeps that incarnation and does not
+// read a sequence from the provider payload. Binding stays unknown unless the caller
+// sets BindingVerified and supplies the account and workspace. EntitlementRef is copied
+// only from this selection, never from a payload product.
 type CursorDisplaySelection struct {
 	ProducerRef         string
 	ProducerIncarnation string
+	Sequence            int64
 	BindingGeneration   int64
 	BindingState        BindingState
 	AccountRef          *string
@@ -177,9 +181,12 @@ func CursorDisplayProject(raw []byte, selected CursorDisplaySelection, now time.
 	return item, nil
 }
 
-// CursorDisplayDedupe keeps one copy of each source capture.
-// The same observation id with a different body is a conflict.
-// Different accounts, windows, and products are not merged.
+// CursorDisplayDedupe keeps the original receipt of each source capture.
+// The same observation id with a different body is a conflict. A later
+// receipt of that same capture is not a conflict when only derived freshness
+// has aged. The retained item is the earlier receipt, unchanged: its identity
+// and freshness are not rewritten to the later clock. Different accounts,
+// windows, and products are not merged.
 func CursorDisplayDedupe(items []ReadItem) ([]ReadItem, error) {
 	if len(items) == 0 || len(items) > cursorDisplayMaxItems {
 		return nil, ErrCursorDisplayLimit
@@ -194,6 +201,9 @@ func CursorDisplayDedupe(items []ReadItem) ([]ReadItem, error) {
 		if pos, ok := index[id]; ok {
 			if !cursorDisplaySameCapture(out[pos], item) {
 				return nil, ErrCursorDisplayConflict
+			}
+			if cursorDisplayEarlierReceipt(item, out[pos]) {
+				out[pos] = item
 			}
 			continue
 		}
@@ -218,10 +228,7 @@ func CursorDisplaySnapshot(items []ReadItem, now time.Time) (ReadResponse, error
 		SnapshotRevision: cursorDisplayRevision(kept),
 		ServedAt:         now.UTC().Format(time.RFC3339Nano),
 		Items:            kept,
-		SourceStatuses:   make([]SourceStatus, 0, len(kept)),
-	}
-	for _, item := range kept {
-		response.SourceStatuses = append(response.SourceStatuses, cursorDisplayStatus(item))
+		SourceStatuses:   cursorDisplayStatuses(kept),
 	}
 	encoded, err := json.Marshal(response)
 	if err != nil {
@@ -279,6 +286,9 @@ func CursorDisplayTrustedContext(selected CursorDisplaySelection, source CursorD
 
 func (s CursorDisplaySelection) validate() error {
 	if !cursorDisplayToken(s.ProducerRef) || !cursorDisplayToken(s.ProducerIncarnation) {
+		return ErrCursorDisplaySelection
+	}
+	if s.Sequence < 1 || s.Sequence > cursorDisplayMaxSequence {
 		return ErrCursorDisplaySelection
 	}
 	if s.MaxAge <= 0 || s.MaxAge > 24*time.Hour {
@@ -600,7 +610,7 @@ func (in cursorDisplayInput) cursorItem(selected CursorDisplaySelection, now tim
 		ObservationID:       cursorDisplayID("cursor-display-", selected, in, accountLabel),
 		ProducerRef:         selected.ProducerRef,
 		ProducerIncarnation: selected.ProducerIncarnation,
-		Sequence:            1,
+		Sequence:            Count(selected.Sequence),
 		BindingGeneration:   Count(selected.BindingGeneration),
 		Provider:            "cursor",
 		Source: Source{
@@ -719,7 +729,7 @@ func (in cursorDisplayInput) xaiItem(selected CursorDisplaySelection, now time.T
 		ObservationID:       cursorDisplayID("xai-direct-", selected, in, ""),
 		ProducerRef:         selected.ProducerRef,
 		ProducerIncarnation: selected.ProducerIncarnation,
-		Sequence:            1,
+		Sequence:            Count(selected.Sequence),
 		Provider:            "xai",
 		Source: Source{
 			Kind:          SourceNativeDisplay,
@@ -771,10 +781,14 @@ func cursorDisplayFields(in cursorDisplayInput, accountLabel string) []DirectFie
 	return fields
 }
 
+// cursorDisplayID binds the caller sequence into the capture id. The same
+// selection and payload keep the same id when the receipt clock moves. A later
+// sequence is a different capture even when the sanitized screen repeats.
 func cursorDisplayID(prefix string, selected CursorDisplaySelection, in cursorDisplayInput, accountLabel string) string {
 	identity := struct {
 		Producer      string `json:"producer"`
 		Incarnation   string `json:"incarnation"`
+		Sequence      int64  `json:"sequence"`
 		Binding       string `json:"binding"`
 		Generation    int64  `json:"generation"`
 		Account       string `json:"account"`
@@ -798,6 +812,7 @@ func cursorDisplayID(prefix string, selected CursorDisplaySelection, in cursorDi
 	}{
 		Producer:      selected.ProducerRef,
 		Incarnation:   selected.ProducerIncarnation,
+		Sequence:      selected.Sequence,
 		Binding:       string(selected.BindingState),
 		Generation:    selected.BindingGeneration,
 		Account:       cursorDisplayText(selected.AccountRef),
@@ -827,7 +842,25 @@ func cursorDisplayID(prefix string, selected CursorDisplaySelection, in cursorDi
 	return fmt.Sprintf("%s%x", prefix, sum[:12])
 }
 
-func cursorDisplayStatus(item ReadItem) SourceStatus {
+func cursorDisplayStatuses(items []ReadItem) []SourceStatus {
+	statuses := make([]SourceStatus, 0, len(items))
+	prior := make(map[string]LastGood, len(items))
+	for _, item := range items {
+		key := cursorDisplayStatusKey(item)
+		var previous *LastGood
+		if good, ok := prior[key]; ok {
+			previous = cloneLastGood(&good)
+		}
+		status := cursorDisplayStatus(item, previous)
+		if cursorDisplayGoodSample(item) && status.LastGood != nil {
+			prior[key] = *status.LastGood
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses
+}
+
+func cursorDisplayStatus(item ReadItem, previous *LastGood) SourceStatus {
 	completed := item.ReceivedAt
 	status := SourceStatus{
 		Provider:     item.Observation.Provider,
@@ -849,14 +882,61 @@ func cursorDisplayStatus(item ReadItem) SourceStatus {
 	case AvailabilityConflict, AvailabilityUnsupported:
 		status.LastAttempt.Result = AttemptUnknown
 	}
-	if item.Observation.Provider == "cursor" {
-		status.LastGood = &LastGood{
-			ObservationID: item.Observation.ObservationID,
-			CapturedAt:    item.Observation.CapturedAt,
-			ReceivedAt:    item.ReceivedAt,
-		}
+	if cursorDisplayGoodSample(item) {
+		status.LastGood = cursorDisplayLastGood(item)
+		return status
+	}
+	if previous != nil {
+		status.LastGood = cloneLastGood(previous)
 	}
 	return status
+}
+
+// cursorDisplayGoodSample is an accepted Cursor display sample.
+// Unavailable, auth-needed, and conflict captures are attempts, not LastGood.
+func cursorDisplayGoodSample(item ReadItem) bool {
+	if item.Observation.Provider != "cursor" {
+		return false
+	}
+	switch item.Observation.Availability {
+	case AvailabilityUnavailable, AvailabilityAuthNeeded, AvailabilityConflict:
+		return false
+	default:
+		return true
+	}
+}
+
+func cursorDisplayLastGood(item ReadItem) *LastGood {
+	return &LastGood{
+		ObservationID:      item.Observation.ObservationID,
+		CapturedAt:         item.Observation.CapturedAt,
+		ProviderObservedAt: cloneString(item.Observation.ProviderObservedAt),
+		ReceivedAt:         item.ReceivedAt,
+	}
+}
+
+func cloneLastGood(in *LastGood) *LastGood {
+	if in == nil {
+		return nil
+	}
+	return &LastGood{
+		ObservationID:      in.ObservationID,
+		CapturedAt:         in.CapturedAt,
+		ProviderObservedAt: cloneString(in.ProviderObservedAt),
+		ReceivedAt:         in.ReceivedAt,
+	}
+}
+
+func cursorDisplayStatusKey(item ReadItem) string {
+	return strings.Join([]string{
+		item.Observation.Provider,
+		item.Observation.ProducerRef,
+		item.Observation.ProducerIncarnation,
+		string(item.Binding.State),
+		strconv.FormatInt(int64(item.Binding.Generation), 10),
+		cursorDisplayText(item.Binding.AccountRef),
+		cursorDisplayText(item.Binding.WorkspaceRef),
+	}, "\x00")
 }
 
 func cursorDisplayRevision(items []ReadItem) string {
@@ -895,8 +975,128 @@ func cursorDisplaySameCapture(a, b ReadItem) bool {
 	if !cursorDisplaySameObservation(a.Observation, b.Observation) {
 		return false
 	}
+	if cursorDisplayViewEqual(a, b) {
+		return true
+	}
+	earlier, later, ok := cursorDisplayReceiptOrder(a, b)
+	if !ok {
+		return false
+	}
+	return cursorDisplayOnlyAged(earlier, later)
+}
+
+func cursorDisplayViewEqual(a, b ReadItem) bool {
 	left, errA := json.Marshal(cursorDisplayCaptureView(a))
 	right, errB := json.Marshal(cursorDisplayCaptureView(b))
+	return errA == nil && errB == nil && bytes.Equal(left, right)
+}
+
+func cursorDisplayReceiptOrder(a, b ReadItem) (ReadItem, ReadItem, bool) {
+	at, aOK := cursorDisplayTime(a.ReceivedAt)
+	bt, bOK := cursorDisplayTime(b.ReceivedAt)
+	if !aOK || !bOK || (!at.Before(bt) && !bt.Before(at)) {
+		return ReadItem{}, ReadItem{}, false
+	}
+	if bt.Before(at) {
+		return b, a, true
+	}
+	return a, b, true
+}
+
+func cursorDisplayEarlierReceipt(candidate, kept ReadItem) bool {
+	at, aOK := cursorDisplayTime(candidate.ReceivedAt)
+	bt, bOK := cursorDisplayTime(kept.ReceivedAt)
+	if !aOK || !bOK {
+		return false
+	}
+	return at.Before(bt)
+}
+
+// cursorDisplayOnlyAged reports that later is the same capture as earlier
+// after derived freshness aged. The later state must be staler. A fresher
+// later label is not this transition.
+func cursorDisplayOnlyAged(earlier, later ReadItem) bool {
+	if !cursorDisplayReceiptIsAsOf(earlier) || !cursorDisplayReceiptIsAsOf(later) {
+		return false
+	}
+	if !cursorDisplayAgedTransition(earlier.Freshness, later.Freshness) {
+		return false
+	}
+	if !cursorDisplayStableEqual(earlier, later) {
+		return false
+	}
+	return cursorDisplayCurrentsFollowReason(earlier) && cursorDisplayCurrentsFollowReason(later)
+}
+
+func cursorDisplayReceiptIsAsOf(item ReadItem) bool {
+	return item.ReceivedAt != "" && item.Freshness.AsOf == item.ReceivedAt
+}
+
+func cursorDisplayAgedTransition(before, after Freshness) bool {
+	if before.Basis != after.Basis {
+		return false
+	}
+	switch {
+	case before.State == FreshUnknown && before.Reason == cursorDisplayReasonCapture &&
+		after.State == FreshStale && after.Reason == cursorDisplayReasonStale:
+		return true
+	case before.State == FreshStale && before.Reason == cursorDisplayReasonMarked &&
+		after.State == FreshStale && after.Reason == cursorDisplayReasonStale:
+		return true
+	case before.State == FreshUnknown && after.State == FreshStale &&
+		before.Reason == cursorDisplayReasonXAI && after.Reason == cursorDisplayReasonXAI &&
+		before.Basis == BasisNone:
+		return true
+	default:
+		return false
+	}
+}
+
+func cursorDisplayStableEqual(a, b ReadItem) bool {
+	if a.Freshness.Basis != b.Freshness.Basis || !cursorDisplaySameOptional(a.Freshness.PolicyRef, b.Freshness.PolicyRef) {
+		return false
+	}
+	if !cursorDisplayJSONEqual(a.Validation, b.Validation) || !cursorDisplayJSONEqual(a.Binding, b.Binding) {
+		return false
+	}
+	return cursorDisplayCurrentsEqualIgnoringReason(a.CurrentMeasures, b.CurrentMeasures)
+}
+
+func cursorDisplayCurrentsFollowReason(item ReadItem) bool {
+	for _, current := range item.CurrentMeasures {
+		if current.Reason != item.Freshness.Reason {
+			return false
+		}
+	}
+	return true
+}
+
+func cursorDisplayCurrentsEqualIgnoringReason(a, b []CurrentMeasure) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		left := a[i]
+		right := b[i]
+		left.Reason = ""
+		right.Reason = ""
+		if !cursorDisplayJSONEqual(left, right) {
+			return false
+		}
+	}
+	return true
+}
+
+func cursorDisplaySameOptional(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func cursorDisplayJSONEqual(a, b any) bool {
+	left, errA := json.Marshal(a)
+	right, errB := json.Marshal(b)
 	return errA == nil && errB == nil && bytes.Equal(left, right)
 }
 

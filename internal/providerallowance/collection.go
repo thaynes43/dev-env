@@ -49,6 +49,7 @@ const (
 	reasonTimeMissing   = "provider time missing"
 	reasonTimeFuture    = "provider time future"
 	reasonCaptureFuture = "capture time future"
+	reasonReceiptFuture = "receipt time future"
 	reasonTimeStale     = "provider time stale"
 	reasonReset         = "reset passed"
 	reasonHistorical    = "historical only"
@@ -453,6 +454,13 @@ func (c *Collection) accept(slot *collectionSlot, obs Observation, started, fini
 				c.record(slot, started, finished, AttemptError, AvailabilityConflict, codeAcquisitionConflict)
 				return true
 			}
+			// Canonical equality does not accept a capture the trusted caller
+			// binding already rejected. The original receipt stays in place,
+			// and the payload availability is not copied onto the attempt.
+			if !storedCaptureAccepted(slot.hold.accepted, ValidateObservation(obs, slot.spec.Trusted(), c.reg)) {
+				c.record(slot, started, finished, AttemptError, AvailabilityUnavailable, codeAcquisitionRejected)
+				return true
+			}
 			c.record(slot, started, finished, AttemptSuccess, slot.hold.obs.Availability, "")
 			return false
 		}
@@ -564,7 +572,7 @@ func (c collectionView) itemFor(slot *collectionSlot, servedAt time.Time) ReadIt
 			}
 		}
 	}
-	fresh := viewFreshness(obs, slot.hold.receivedAt, servedAt, c.bounds.MaxAge, trust.BindingState)
+	fresh := viewFreshness(obs, slot.hold.receivedAt, servedAt, c.bounds.MaxAge, slot.hold.accepted, assessment)
 	drops := projectionDrops(obs, c.reg)
 	currents := make([]CurrentMeasure, 0, len(obs.Measures))
 	for i, measure := range obs.Measures {
@@ -586,7 +594,7 @@ func (c collectionView) itemFor(slot *collectionSlot, servedAt time.Time) ReadIt
 		Observation:     obs,
 		ReceivedAt:      slot.hold.receivedAt,
 		Validation:      validation,
-		Binding:         bindingFrom(slot.spec),
+		Binding:         servedBinding(slot.spec, obs, slot.hold.accepted, assessment),
 		Freshness:       fresh,
 		CurrentMeasures: currents,
 	}
@@ -695,12 +703,12 @@ func currentFor(measure Measure, judged MeasureAssessment, fresh Freshness, serv
 	return unknown
 }
 
-func viewFreshness(obs Observation, received string, servedAt time.Time, maxAge time.Duration, binding BindingState) Freshness {
+func viewFreshness(obs Observation, received string, servedAt time.Time, maxAge time.Duration, accepted bool, assessment Assessment) Freshness {
 	asOf := obs.CapturedAt
 	if received != "" {
 		asOf = received
 	}
-	if binding != BindingVerified || obs.Scope.BindingState != BindingVerified {
+	if !servingChronologyAllowed(accepted, assessment, obs) {
 		return Freshness{State: FreshUnknown, AsOf: asOf, Basis: BasisCapture, Reason: reasonBinding}
 	}
 	if obs.ProviderObservedAt == nil {
@@ -713,8 +721,13 @@ func viewFreshness(obs Observation, received string, servedAt time.Time, maxAge 
 	// received is the original receipt. A provider or capture timestamp that
 	// was already after that receipt stays non-current when servedAt advances.
 	// A later acquisition stores its own receipt and can become current.
+	// A receipt still ahead of servedAt withholds the current value even when
+	// the provider and capture timestamps are not after servedAt.
 	if future, ok := receiptFuture(obs, received, observed); ok {
 		return future
+	}
+	if ahead, ok := receiptAheadOfServing(received, servedAt); ok {
+		return ahead
 	}
 	if observed.After(servedAt) {
 		return Freshness{State: FreshExpired, AsOf: *obs.ProviderObservedAt, Basis: BasisProvider, Reason: reasonTimeFuture}
@@ -726,6 +739,14 @@ func viewFreshness(obs Observation, received string, servedAt time.Time, maxAge 
 		reason = reasonTimeStale
 	}
 	return Freshness{State: state, AsOf: *obs.ProviderObservedAt, Basis: BasisProvider, Reason: reason}
+}
+
+func receiptAheadOfServing(received string, servedAt time.Time) (Freshness, bool) {
+	receipt, err := time.Parse(time.RFC3339Nano, received)
+	if err != nil || !receipt.After(servedAt) {
+		return Freshness{}, false
+	}
+	return Freshness{State: FreshExpired, AsOf: received, Basis: BasisCapture, Reason: reasonReceiptFuture}, true
 }
 
 func receiptFuture(obs Observation, received string, observed time.Time) (Freshness, bool) {
@@ -901,6 +922,31 @@ func bindingFrom(spec SourceSpec) BindingRecord {
 		AccountRef:   cloneString(spec.AccountRef),
 		WorkspaceRef: cloneString(spec.WorkspaceRef),
 	}
+}
+
+func storedCaptureAccepted(accepted bool, assessment Assessment) bool {
+	return accepted && assessment.ShapeOK && !hasIdentityBlock(assessment.Issues) && !hasPolicyBlock(assessment.Issues)
+}
+
+func servingChronologyAllowed(accepted bool, assessment Assessment, obs Observation) bool {
+	if !storedCaptureAccepted(accepted, assessment) {
+		return false
+	}
+	return assessment.TrustedBinding == BindingVerified && obs.Scope.BindingState == BindingVerified
+}
+
+func servedBinding(spec SourceSpec, obs Observation, accepted bool, assessment Assessment) BindingRecord {
+	if storedCaptureAccepted(accepted, assessment) {
+		return bindingFrom(spec)
+	}
+	if hasIdentityBlock(assessment.Issues) && (spec.BindingState == BindingVerified || !trustedRefsMatch(spec, obs)) {
+		return BindingRecord{State: BindingMismatch, Generation: Count(spec.BindingGeneration)}
+	}
+	return bindingFrom(spec)
+}
+
+func trustedRefsMatch(spec SourceSpec, obs Observation) bool {
+	return stringPtrEqual(spec.AccountRef, obs.Scope.AccountRef) && stringPtrEqual(spec.WorkspaceRef, obs.Scope.WorkspaceRef)
 }
 
 func sourceSelected(obs Observation, spec SourceSpec) bool {

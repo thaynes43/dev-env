@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	kexec "k8s.io/client-go/util/exec"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -29,6 +32,10 @@ import (
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 )
 
+// ownedFixtureChildRaceExit marks a helper that already applied its own
+// atexit delay. It is not a credential and it is not read by production.
+const ownedFixtureChildRaceExit = "OWNED_FIXTURE_CHILD_RACE_EXIT"
+
 // Only these inert subprocess modes bypass the ordinary test runner. They have
 // no provider, enrollment, pairing, credentials or model task implementation.
 func ownedRootFixtureProcess() {
@@ -37,6 +44,19 @@ func ownedRootFixtureProcess() {
 	}
 	switch os.Args[1] {
 	case "owned-codex-host-helper":
+		// The race runtime reads GORACE at process start. Re-exec this same
+		// helper image so its exit delay is zero before production's one-second
+		// Wait. The parent keeps the runner's GORACE. Report and exit options
+		// are copied; the detector stays enabled.
+		if os.Getenv(ownedFixtureChildRaceExit) != "1" && goraceAtexitMS(os.Getenv("GORACE")) != "0" {
+			exe, err := os.Executable()
+			if err != nil {
+				os.Exit(2)
+			}
+			if err = syscall.Exec(exe, os.Args, ownedFixtureChildEnviron(os.Environ())); err != nil {
+				os.Exit(2)
+			}
+		}
 		if hostexecutor.Helper() != nil {
 			os.Exit(2)
 		}
@@ -74,6 +94,99 @@ func ownedRootFixtureProcess() {
 		_ = srv.Serve(listener)
 		os.Exit(2)
 	}
+}
+
+// goraceAtexitMS returns the first atexit_sleep_ms value. An empty result means
+// the race runtime's default one-second exit delay.
+func goraceAtexitMS(existing string) string {
+	for _, field := range strings.Fields(existing) {
+		key, val, ok := strings.Cut(field, "=")
+		if ok && key == "atexit_sleep_ms" {
+			return val
+		}
+	}
+	return ""
+}
+
+// mergeFixtureChildGORACE keeps every runner option except the helper exit
+// delay. log_path, exitcode, halt_on_error and unknown tokens stay in place.
+func mergeFixtureChildGORACE(existing string) string {
+	fields := strings.Fields(existing)
+	out := make([]string, 0, len(fields)+1)
+	seen := false
+	for _, field := range fields {
+		key, _, ok := strings.Cut(field, "=")
+		if ok && key == "atexit_sleep_ms" {
+			if !seen {
+				out = append(out, "atexit_sleep_ms=0")
+				seen = true
+			}
+			continue
+		}
+		out = append(out, field)
+	}
+	if !seen {
+		out = append(out, "atexit_sleep_ms=0")
+	}
+	return strings.Join(out, " ")
+}
+
+func ownedFixtureChildEnviron(base []string) []string {
+	merged := mergeFixtureChildGORACE(environValue(base, "GORACE"))
+	out := make([]string, 0, len(base)+2)
+	sawRace := false
+	sawReady := false
+	for _, kv := range base {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "GORACE":
+			if sawRace {
+				continue
+			}
+			out = append(out, "GORACE="+merged)
+			sawRace = true
+		case ownedFixtureChildRaceExit:
+			if sawReady {
+				continue
+			}
+			out = append(out, ownedFixtureChildRaceExit+"=1")
+			sawReady = true
+		default:
+			out = append(out, kv)
+		}
+	}
+	if !sawRace {
+		out = append(out, "GORACE="+merged)
+	}
+	if !sawReady {
+		out = append(out, ownedFixtureChildRaceExit+"=1")
+	}
+	return out
+}
+
+func environValue(base []string, key string) string {
+	prefix := key + "="
+	for _, kv := range base {
+		if strings.HasPrefix(kv, prefix) {
+			return strings.TrimPrefix(kv, prefix)
+		}
+	}
+	return ""
+}
+
+// ownedPolicyFixtureScheme is private to the synthetic policy client. The live
+// client keeps testScheme. The policy kind is registered here, before any
+// admission goroutine, so fakeClient.Get does not call AddKnownTypeWithName
+// while the live client reads ObjectKinds.
+func ownedPolicyFixtureScheme(t *testing.T, sample *unstructured.Unstructured) *runtime.Scheme {
+	t.Helper()
+	gvk := sample.GroupVersionKind()
+	if gvk.Group == "" || gvk.Version == "" || gvk.Kind == "" {
+		t.Fatal("policy fixture kind")
+	}
+	s := runtime.NewScheme()
+	s.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
+	return s
 }
 
 // The envtest has no kubelet/exec endpoint. This transport adapter performs the
@@ -175,7 +288,7 @@ func prepareOwnedWorkflowNamed(t *testing.T, live client.Client, now func() time
 	if err := live.Create(ctx, cm); err != nil {
 		t.Fatal(err)
 	}
-	reader := ownedWorkflowReader{Reader: live, policy: fake.NewClientBuilder().WithScheme(testScheme).WithObjects(network).Build()}
+	reader := ownedWorkflowReader{Reader: live, policy: fake.NewClientBuilder().WithScheme(ownedPolicyFixtureScheme(t, network)).WithObjects(network).Build()}
 	inspector := &taskbudget.OwnedRootInspector{Reader: reader, Policy: client.ObjectKeyFromObject(cm), Probe: controller.OwnedRootProber{Exec: ownedWorkflowExec{path: filepath.Join(home, ".agentd", hostexecutor.EvidenceSocketName), anchor: os.Getpid()}}, Now: now, AssignedHost: policy.HostID, AssignedTask: policy.TaskUID, AssignedParent: policy.Namespace + "/" + policy.ServiceAccount, AssignedPod: policy.Name}
 	return &ownedWorkflow{policy: policy, home: home, inspector: inspector}
 }

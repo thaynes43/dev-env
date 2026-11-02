@@ -372,6 +372,259 @@ func assertReceiptFutureUnknown(t *testing.T, doc providerallowance.ReadResponse
 	}
 }
 
+func TestCollectionRejectedCrossAccountReplayStaysRejected(t *testing.T) {
+	reg := fixtureOnlyRegistry(t)
+	t.Run("available", func(t *testing.T) {
+		raw := mutateObs(t, collectionObs(t, obsOpts{id: "cross-account", provider: "openai", decimal: "12.5"}), func(obs *providerallowance.Observation) {
+			obs.Scope.AccountRef = sp("other-account")
+		})
+		doc, _ := collectCycles(t, reg, 2, raw, raw)
+		assertRejectedCrossAccount(t, doc, providerallowance.AvailabilityAvailable)
+	})
+	t.Run("partial", func(t *testing.T) {
+		raw := mutateObs(t, collectionObs(t, obsOpts{id: "cross-account-partial", provider: "openai", decimal: "12.5"}), func(obs *providerallowance.Observation) {
+			obs.Scope.AccountRef = sp("other-account")
+			obs.Availability = providerallowance.AvailabilityPartial
+		})
+		doc, _ := collectCycles(t, reg, 2, raw, raw)
+		assertRejectedCrossAccount(t, doc, providerallowance.AvailabilityPartial)
+	})
+	t.Run("accepted-replay-keeps-success", func(t *testing.T) {
+		raw := collectionObs(t, obsOpts{id: "obs-a", provider: "openai", decimal: "11", sequence: 1, captured: "2026-11-02T03:00:00Z"})
+		doc, _ := collectCycles(t, reg, 2, raw, raw)
+		item := onlyItem(t, doc, "openai")
+		status := statusBy(t, doc, "openai")
+		wantReceived := collectionStart.Add(collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+		wantCompleted := collectionStart.Add(2 * collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+		if item.Observation.ObservationID != "obs-a" || item.ReceivedAt != wantReceived || deref(status.LastAttempt.CompletedAt) != wantCompleted {
+			t.Fatalf("accepted replay moved the receipt received=%s completed=%s", item.ReceivedAt, deref(status.LastAttempt.CompletedAt))
+		}
+		if status.LastAttempt.Result != providerallowance.AttemptSuccess || status.Availability != providerallowance.AvailabilityAvailable || deref(status.LastAttempt.Code) != "" || status.LastGood == nil || status.LastGood.ReceivedAt != wantReceived {
+			t.Fatalf("accepted replay was rejected: %+v availability=%s lastGood=%+v", status.LastAttempt, status.Availability, status.LastGood)
+		}
+		if item.Freshness.State != providerallowance.FreshFresh || item.Binding.State != providerallowance.BindingVerified || deref(item.Binding.AccountRef) != "fixture-account" || item.CurrentMeasures[0].State != providerallowance.CurrentKnown || deref(item.CurrentMeasures[0].Value.Decimal) != "11" {
+			t.Fatalf("accepted replay lost the current quota freshness=%+v binding=%+v current=%+v", item.Freshness, item.Binding, item.CurrentMeasures[0])
+		}
+	})
+	t.Run("later-distinct-valid-recovers", func(t *testing.T) {
+		first := mutateObs(t, collectionObs(t, obsOpts{id: "rejected-cross", provider: "openai", decimal: "11", sequence: 1}), func(obs *providerallowance.Observation) {
+			obs.Scope.AccountRef = sp("other-account")
+		})
+		second := collectionObs(t, obsOpts{id: "valid-later", provider: "openai", decimal: "22", sequence: 2, captured: "2026-11-02T03:02:00Z", observed: "2026-11-02T03:01:00Z"})
+		doc, raw := collectCycles(t, reg, 2, first, second)
+		item := onlyItem(t, doc, "openai")
+		status := statusBy(t, doc, "openai")
+		wantReceived := collectionStart.Add(2 * collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+		if item.Observation.ObservationID != "valid-later" || item.Observation.CapturedAt != "2026-11-02T03:02:00Z" || deref(item.Observation.ProviderObservedAt) != "2026-11-02T03:01:00Z" || item.ReceivedAt != wantReceived {
+			t.Fatalf("later valid capture did not recover received=%s obs=%+v", item.ReceivedAt, item.Observation)
+		}
+		if item.Freshness.State != providerallowance.FreshFresh || item.CurrentMeasures[0].State != providerallowance.CurrentKnown || deref(item.CurrentMeasures[0].Value.Decimal) != "22" {
+			t.Fatalf("recovered view freshness=%+v current=%+v", item.Freshness, item.CurrentMeasures[0])
+		}
+		if item.Binding.State != providerallowance.BindingVerified || deref(item.Binding.AccountRef) != "fixture-account" || status.LastGood == nil || status.LastGood.ReceivedAt != wantReceived || status.LastAttempt.Result != providerallowance.AttemptSuccess {
+			t.Fatalf("recovered binding=%+v lastGood=%+v attempt=%+v", item.Binding, status.LastGood, status.LastAttempt)
+		}
+		if strings.Contains(string(raw), "other-account") || strings.Contains(string(raw), "rejected-cross") || strings.Contains(string(raw), `"decimal":"11"`) {
+			t.Fatal("rejected cross-account capture stayed in the snapshot")
+		}
+	})
+	t.Run("same-capture-conflict-keeps-original", func(t *testing.T) {
+		original := collectionObs(t, obsOpts{id: "obs-same", provider: "openai", decimal: "11", sequence: 4})
+		changed := collectionObs(t, obsOpts{id: "obs-same", provider: "openai", decimal: "99", sequence: 4})
+		doc, raw := collectCycles(t, reg, 2, original, changed)
+		item := onlyItem(t, doc, "openai")
+		status := statusBy(t, doc, "openai")
+		wantReceived := collectionStart.Add(collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+		if item.Observation.ObservationID != "obs-same" || deref(item.Observation.Measures[0].Value.Decimal) != "11" || item.ReceivedAt != wantReceived {
+			t.Fatalf("conflict replaced the original receipt or decimal received=%s decimal=%s", item.ReceivedAt, deref(item.Observation.Measures[0].Value.Decimal))
+		}
+		if item.CurrentMeasures[0].State != providerallowance.CurrentConflict || status.Availability != providerallowance.AvailabilityConflict || deref(status.LastAttempt.Code) != "acquisition_conflict" || status.LastAttempt.Result != providerallowance.AttemptError {
+			t.Fatalf("same capture was not a conflict item=%+v status=%+v", item.CurrentMeasures[0], status)
+		}
+		if strings.Contains(string(raw), `"decimal":"99"`) {
+			t.Fatal("conflicting payload was stored")
+		}
+	})
+}
+
+func assertRejectedCrossAccount(t *testing.T, doc providerallowance.ReadResponse, payload providerallowance.Availability) {
+	t.Helper()
+	item := onlyItem(t, doc, "openai")
+	status := statusBy(t, doc, "openai")
+	wantReceived := collectionStart.Add(collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+	wantCompleted := collectionStart.Add(2 * collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+	if item.ReceivedAt != wantReceived || deref(status.LastAttempt.CompletedAt) != wantCompleted {
+		t.Fatalf("replay replaced the receipt received=%s completed=%s", item.ReceivedAt, deref(status.LastAttempt.CompletedAt))
+	}
+	if item.Observation.Availability != payload || deref(item.Observation.Scope.AccountRef) != "other-account" || item.Observation.Scope.BindingState != providerallowance.BindingVerified || deref(item.Observation.Measures[0].Value.Decimal) != "12.5" {
+		t.Fatalf("historical observation changed availability=%s account=%s", item.Observation.Availability, deref(item.Observation.Scope.AccountRef))
+	}
+	if status.LastAttempt.Result != providerallowance.AttemptError || status.Availability != providerallowance.AvailabilityUnavailable || deref(status.LastAttempt.Code) != "acquisition_rejected" || status.LastGood != nil {
+		t.Fatalf("rejected replay laundered the attempt result=%s availability=%s code=%s lastGood=%+v", status.LastAttempt.Result, status.Availability, deref(status.LastAttempt.Code), status.LastGood)
+	}
+	if item.Validation.State != providerallowance.ValidationRejected || item.Freshness.State != providerallowance.FreshUnknown || item.Freshness.State == providerallowance.FreshFresh || item.CurrentMeasures[0].State == providerallowance.CurrentKnown || item.CurrentMeasures[0].Value.Decimal != nil {
+		t.Fatalf("rejected capture became current validation=%s freshness=%+v current=%+v", item.Validation.State, item.Freshness, item.CurrentMeasures[0])
+	}
+	if item.Binding.State != providerallowance.BindingMismatch || item.Binding.AccountRef != nil || item.Binding.WorkspaceRef != nil || status.Binding.State != providerallowance.BindingMismatch || status.Binding.AccountRef != nil || deref(status.Binding.AccountRef) == "fixture-account" {
+		t.Fatalf("trusted binding paired with foreign observation item=%+v status=%+v", item.Binding, status.Binding)
+	}
+}
+
+func TestCollectionRejectedMismatchDoesNotPairTrustedBinding(t *testing.T) {
+	reg := fixtureOnlyRegistry(t)
+	t.Run("cross-account", func(t *testing.T) {
+		raw := mutateObs(t, collectionObs(t, obsOpts{id: "mismatch-binding", provider: "openai", decimal: "12.5", captured: "2026-11-02T03:00:00Z", observed: "2026-11-02T02:59:00Z"}), func(obs *providerallowance.Observation) {
+			obs.Scope.AccountRef = sp("other-account")
+		})
+		doc, _ := collectCycles(t, reg, 1, raw)
+		item := onlyItem(t, doc, "openai")
+		status := statusBy(t, doc, "openai")
+		wantReceived := collectionStart.Add(collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+		if item.ReceivedAt != wantReceived || deref(item.Observation.Scope.AccountRef) != "other-account" || item.Observation.Scope.BindingState != providerallowance.BindingVerified {
+			t.Fatalf("observation account or receipt changed received=%s account=%s binding=%s", item.ReceivedAt, deref(item.Observation.Scope.AccountRef), item.Observation.Scope.BindingState)
+		}
+		if item.Freshness.State != providerallowance.FreshUnknown || item.Freshness.Reason != "binding not actionable" || status.Freshness.State != providerallowance.FreshUnknown || item.Freshness.State == providerallowance.FreshFresh {
+			t.Fatalf("mismatched binding became fresh item=%+v status=%+v", item.Freshness, status.Freshness)
+		}
+		if item.Binding.State != providerallowance.BindingMismatch || item.Binding.AccountRef != nil || item.Binding.WorkspaceRef != nil || status.Binding.State != item.Binding.State || status.Binding.AccountRef != nil {
+			t.Fatalf("trusted binding paired with foreign observation item=%+v status=%+v", item.Binding, status.Binding)
+		}
+		if item.Validation.State != providerallowance.ValidationRejected || item.CurrentMeasures[0].State == providerallowance.CurrentKnown || item.CurrentMeasures[0].Value.Decimal != nil || deref(item.Observation.Measures[0].Value.Decimal) != "12.5" || status.LastGood != nil || deref(status.LastAttempt.Code) != "acquisition_rejected" || status.Availability != providerallowance.AvailabilityUnavailable {
+			t.Fatalf("validation=%s current=%+v attempt=%+v availability=%s", item.Validation.State, item.CurrentMeasures[0], status.LastAttempt, status.Availability)
+		}
+	})
+	t.Run("matching-account-stays-fresh", func(t *testing.T) {
+		raw := collectionObs(t, obsOpts{id: "matched-binding", provider: "openai", decimal: "12.5", captured: "2026-11-02T03:00:00Z", observed: "2026-11-02T02:59:00Z"})
+		doc, _ := collectCycles(t, reg, 1, raw)
+		item := onlyItem(t, doc, "openai")
+		status := statusBy(t, doc, "openai")
+		if item.Freshness.State != providerallowance.FreshFresh || item.Binding.State != providerallowance.BindingVerified || deref(item.Binding.AccountRef) != "fixture-account" || deref(item.Observation.Scope.AccountRef) != "fixture-account" {
+			t.Fatalf("matching account lost its binding freshness=%+v binding=%+v", item.Freshness, item.Binding)
+		}
+		if item.CurrentMeasures[0].State != providerallowance.CurrentKnown || deref(item.CurrentMeasures[0].Value.Decimal) != "12.5" || status.LastGood == nil || status.LastAttempt.Result != providerallowance.AttemptSuccess {
+			t.Fatalf("matching account was withheld current=%+v attempt=%+v", item.CurrentMeasures[0], status.LastAttempt)
+		}
+	})
+	t.Run("workspace-mismatch", func(t *testing.T) {
+		raw := mutateObs(t, collectionObs(t, obsOpts{id: "workspace-mismatch", provider: "openai", decimal: "12.5"}), func(obs *providerallowance.Observation) {
+			obs.Scope.WorkspaceRef = sp("other-workspace")
+		})
+		doc, _ := collectCycles(t, reg, 1, raw)
+		item := onlyItem(t, doc, "openai")
+		status := statusBy(t, doc, "openai")
+		if item.Freshness.State != providerallowance.FreshUnknown || item.Binding.State != providerallowance.BindingMismatch || item.Binding.AccountRef != nil || item.Binding.WorkspaceRef != nil || deref(status.Binding.WorkspaceRef) == "fixture-workspace" {
+			t.Fatalf("workspace mismatch paired the trusted binding freshness=%+v binding=%+v status=%+v", item.Freshness, item.Binding, status.Binding)
+		}
+		if deref(item.Observation.Scope.WorkspaceRef) != "other-workspace" || deref(item.Observation.Scope.AccountRef) != "fixture-account" || item.Validation.State != providerallowance.ValidationRejected || item.CurrentMeasures[0].Value.Decimal != nil || status.LastGood != nil {
+			t.Fatal("workspace mismatch rewrote the observation or published a current value")
+		}
+	})
+}
+
+func TestCollectionReceiptAheadOfServedAtWithholdsCurrent(t *testing.T) {
+	t.Run("served-before-receipt", func(t *testing.T) {
+		clock := &fakeClock{now: collectionStart}
+		raw := collectionObs(t, obsOpts{id: "receipt-ahead", provider: "openai", decimal: "12.5", captured: "2026-11-02T03:04:00Z", observed: "2026-11-02T03:04:00Z"})
+		acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{"openai": {successStep(clock, raw)}}}
+		collection := mustCollection(t, collectionBounds(30*time.Minute, 1), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, fixtureOnlyRegistry(t), clock, &fakeWait{}, acquire)
+		if err := collection.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		calls := acquire.total
+		before, _, err := collection.Snapshot(time.Date(2026, 11, 2, 3, 4, 30, 0, time.UTC))
+		if err != nil {
+			t.Fatal(err)
+		}
+		equalAt := collectionStart.Add(collectionSuccessLatency)
+		equal, _, err := collection.Snapshot(equalAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, _, err := collection.Snapshot(collectionServed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acquire.total != calls {
+			t.Fatal("serving read acquired")
+		}
+		assertReceiptAheadWithheld(t, before)
+		assertReceiptServedCurrent(t, equal, equalAt.UTC().Format(time.RFC3339Nano))
+		assertReceiptServedCurrent(t, after, equalAt.UTC().Format(time.RFC3339Nano))
+	})
+	t.Run("provider-after-receipt-stays-expired", func(t *testing.T) {
+		clock := &fakeClock{now: collectionStart}
+		raw := collectionObs(t, obsOpts{id: "future-provider", provider: "openai", decimal: "11", observed: "2026-11-02T03:07:00Z"})
+		acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{"openai": {successStep(clock, raw)}}}
+		collection := mustCollection(t, collectionBounds(30*time.Minute, 1), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, fixtureOnlyRegistry(t), clock, &fakeWait{}, acquire)
+		if err := collection.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		later := collectionServed.Add(2 * time.Minute)
+		doc, _, err := collection.Snapshot(later)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertReceiptFutureUnknown(t, doc, "11", collectionCaptured, "2026-11-02T03:07:00Z")
+		item := onlyItem(t, doc, "openai")
+		if item.Freshness.State != providerallowance.FreshExpired || item.Freshness.Basis != providerallowance.BasisProvider || item.Freshness.Reason != "provider time future" || item.Freshness.Reason == "receipt time future" {
+			t.Fatalf("provider future was reclassified %+v", item.Freshness)
+		}
+	})
+	t.Run("capture-after-receipt-stays-expired", func(t *testing.T) {
+		clock := &fakeClock{now: collectionStart}
+		raw := collectionObs(t, obsOpts{id: "future-capture", provider: "openai", decimal: "11", captured: "2026-11-02T03:07:00Z", observed: collectionObserved})
+		acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{"openai": {successStep(clock, raw)}}}
+		collection := mustCollection(t, collectionBounds(30*time.Minute, 1), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, fixtureOnlyRegistry(t), clock, &fakeWait{}, acquire)
+		if err := collection.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		later := collectionServed.Add(2 * time.Minute)
+		doc, _, err := collection.Snapshot(later)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertReceiptFutureUnknown(t, doc, "11", "2026-11-02T03:07:00Z", collectionObserved)
+		item := onlyItem(t, doc, "openai")
+		if item.Freshness.State != providerallowance.FreshExpired || item.Freshness.Basis != providerallowance.BasisCapture || item.Freshness.AsOf != "2026-11-02T03:07:00Z" || item.Freshness.Reason != "capture time future" {
+			t.Fatalf("capture future was reclassified %+v", item.Freshness)
+		}
+	})
+}
+
+func assertReceiptAheadWithheld(t *testing.T, doc providerallowance.ReadResponse) {
+	t.Helper()
+	item := onlyItem(t, doc, "openai")
+	status := statusBy(t, doc, "openai")
+	wantReceived := collectionStart.Add(collectionSuccessLatency).UTC().Format(time.RFC3339Nano)
+	if item.ReceivedAt != wantReceived || item.Observation.CapturedAt != "2026-11-02T03:04:00Z" || deref(item.Observation.ProviderObservedAt) != "2026-11-02T03:04:00Z" || deref(item.Observation.Measures[0].Value.Decimal) != "12.5" {
+		t.Fatalf("receipt or historical observation changed received=%s captured=%s observed=%s", item.ReceivedAt, item.Observation.CapturedAt, deref(item.Observation.ProviderObservedAt))
+	}
+	if item.Freshness.State != providerallowance.FreshExpired || item.Freshness.Reason != "receipt time future" || item.Freshness.AsOf != wantReceived || item.Freshness.Basis != providerallowance.BasisCapture || item.Freshness.State == providerallowance.FreshFresh || item.Freshness.State == providerallowance.FreshStale {
+		t.Fatalf("receipt ahead of serving became current %+v", item.Freshness)
+	}
+	if item.CurrentMeasures[0].State != providerallowance.CurrentUnknown || item.CurrentMeasures[0].Value.Decimal != nil || item.CurrentMeasures[0].Reason != "receipt time future" {
+		t.Fatalf("current value was served %+v", item.CurrentMeasures[0])
+	}
+	if item.Validation.State == providerallowance.ValidationRejected || status.LastGood == nil || status.LastGood.ReceivedAt != wantReceived || status.LastAttempt.Result != providerallowance.AttemptSuccess {
+		t.Fatalf("accepted sample was dropped validation=%s lastGood=%+v attempt=%+v", item.Validation.State, status.LastGood, status.LastAttempt)
+	}
+}
+
+func assertReceiptServedCurrent(t *testing.T, doc providerallowance.ReadResponse, wantReceived string) {
+	t.Helper()
+	item := onlyItem(t, doc, "openai")
+	status := statusBy(t, doc, "openai")
+	if item.ReceivedAt != wantReceived || status.LastGood == nil || status.LastGood.ReceivedAt != wantReceived {
+		t.Fatalf("serving moved the receipt item=%s lastGood=%+v", item.ReceivedAt, status.LastGood)
+	}
+	if item.Freshness.State != providerallowance.FreshFresh || item.CurrentMeasures[0].State != providerallowance.CurrentKnown || deref(item.CurrentMeasures[0].Value.Decimal) != "12.5" {
+		t.Fatalf("receipt was still withheld freshness=%+v current=%+v", item.Freshness, item.CurrentMeasures[0])
+	}
+	if item.Observation.CapturedAt != "2026-11-02T03:04:00Z" || deref(item.Observation.ProviderObservedAt) != "2026-11-02T03:04:00Z" {
+		t.Fatal("historical observation changed when the serving clock passed the receipt")
+	}
+}
+
 func TestCollectionAccountChangeDropsQuota(t *testing.T) {
 	clock := &fakeClock{now: collectionStart}
 	raw := collectionObs(t, obsOpts{id: "acct-0", provider: "openai", decimal: "11", sequence: 1})
@@ -1194,6 +1447,53 @@ func remarshalObs(t *testing.T, obs providerallowance.Observation) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func fixtureOnlyRegistry(t *testing.T) *providerallowance.StaticRegistry {
+	t.Helper()
+	reg := testRegistry(t, true)
+	var accounts []providerallowance.AccountRule
+	for _, account := range reg.Accounts() {
+		if account.AccountRef == "fixture-account" && account.Generation == 0 {
+			accounts = append(accounts, account)
+		}
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("fixture account count %d", len(accounts))
+	}
+	return providerallowance.NewStaticRegistry(providerallowance.RegistryParts{
+		Sources: reg.Sources(), Metrics: reg.Metrics(), Accounts: accounts, Entitlements: reg.Entitlements(),
+	})
+}
+
+func collectCycles(t *testing.T, reg providerallowance.Registry, cycles int, raws ...[]byte) (providerallowance.ReadResponse, []byte) {
+	t.Helper()
+	clock := &fakeClock{now: collectionStart}
+	steps := make([]acquireStep, 0, len(raws))
+	for _, raw := range raws {
+		raw := append([]byte(nil), raw...)
+		steps = append(steps, successStep(clock, raw))
+	}
+	acquire := &scriptAcquire{t: t, steps: map[string][]acquireStep{"openai": steps}}
+	collection := mustCollection(t, collectionBounds(30*time.Minute, cycles), []providerallowance.SourceSpec{openaiSpec(sp("fixture-account"))}, reg, clock, &fakeWait{}, acquire)
+	if err := collection.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if acquire.total != len(raws) {
+		t.Fatalf("acquire calls=%d", acquire.total)
+	}
+	doc, raw, err := collection.Snapshot(collectionServed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc, raw
+}
+
+func mutateObs(t *testing.T, raw []byte, fn func(*providerallowance.Observation)) []byte {
+	t.Helper()
+	obs := decodeObs(t, raw)
+	fn(&obs)
+	return remarshalObs(t, obs)
 }
 
 func testRegistry(t *testing.T, verifiedPool bool) *providerallowance.StaticRegistry {
