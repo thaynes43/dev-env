@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -91,6 +92,7 @@ func main() {
 }
 
 type options struct {
+	rescueIncidentOwners             *controller.RescueIncidentOwners
 	coordinatorInstructionAgentImage string
 
 	originalHome                  *homeguard.Binding
@@ -192,6 +194,7 @@ func parseFlags(args []string) (options, error) {
 	}
 	var o options
 	fs := flag.NewFlagSet(binaryName, flag.ContinueOnError)
+	rescueOwnersFile := fs.String("rescue-incident-owners-file", "", "optional deployment-owned bounded native rescue ownership acknowledgments; notification urgency only")
 	fs.Func("original-home-binding", "default-off exact original HOME JSON tuple; restricts existing lifecycle only", func(raw string) error {
 		if o.originalHome != nil {
 			return errors.New("only one original HOME binding is supported")
@@ -665,6 +668,26 @@ func parseFlags(args []string) (options, error) {
 	if o.aggregateAllowance, err = parseAggregateAllowanceConfig(aggregateAllowanceEnabled, *aggregateAllowanceRaw, o.apiAddr, o.sessionNamespace); err != nil {
 		return o, err
 	}
+	if *rescueOwnersFile != "" {
+		f, err := os.OpenFile(*rescueOwnersFile, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return o, errors.New("cannot read rescue incident ownership configuration")
+		}
+		info, statErr := f.Stat()
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() > 32<<10 {
+			_ = f.Close()
+			return o, errors.New("rescue incident ownership configuration must be a bounded regular file")
+		}
+		b, readErr := io.ReadAll(io.LimitReader(f, (32<<10)+1))
+		closeErr := f.Close()
+		if readErr != nil || closeErr != nil {
+			return o, errors.New("cannot read rescue incident ownership configuration")
+		}
+		o.rescueIncidentOwners, err = controller.ParseRescueIncidentOwners(b)
+		if err != nil {
+			return o, err
+		}
+	}
 	return o, nil
 }
 
@@ -823,7 +846,7 @@ func run(args []string) error {
 	}
 	// The sessions' metrics, read from the cache at scrape time on every
 	// replica: the RescueFailed page's source (D-57).
-	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, TerminalTaskReclaim: o.terminalTaskPodReclaim})
+	ctrlmetrics.Registry.MustRegister(&controller.SessionCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, TerminalTaskReclaim: o.terminalTaskPodReclaim, RescueIncidentOwners: o.rescueIncidentOwners})
 	// The HOME expiry's gauges, read from the same cache at scrape time
 	// (DESIGN-025 10).
 	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete})

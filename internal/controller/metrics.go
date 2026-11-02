@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -24,6 +25,8 @@ import (
 // namespace the collector reads (D-02).
 const (
 	MetricRescueFailed            = "dev_env_session_rescue_failed"
+	MetricRescueNotification      = "dev_env_session_rescue_notification"
+	MetricRescueLatestAttempt     = "dev_env_session_rescue_latest_attempt_timestamp_seconds"
 	MetricSessions                = "dev_env_sessions"
 	MetricTerminalTaskRetained    = "dev_env_terminal_task_pods_retained"
 	MetricTerminalTaskRetainedAge = "dev_env_terminal_task_pods_oldest_seconds"
@@ -36,6 +39,11 @@ var (
 	rescueFailedDesc = prometheus.NewDesc(MetricRescueFailed,
 		"1 for each session whose newest rescue failed (condition RescueFailed True): D-10's mark, which keeps the volume and blocks archive until a human looks.",
 		[]string{"session", "reason"}, nil)
+	rescueNotificationDesc = prometheus.NewDesc(MetricRescueNotification,
+		"Notification-only failed rescue identity and bounded native ownership; never preservation or removal authority.",
+		[]string{"session", "session_uid", "session_generation", "reason", "risk_key", "owner_uid", "pending_delete"}, nil)
+	rescueLatestAttemptDesc = prometheus.NewDesc(MetricRescueLatestAttempt,
+		"Newest recorded rescue attempt time, not incident onset or provider/transcript evidence.", []string{"session", "session_uid"}, nil)
 	sessionsDesc = prometheus.NewDesc(MetricSessions,
 		"The number of sessions in each phase. A phase with no session reports 0, so the series exist whenever the operator is scraped.",
 		[]string{"phase"}, nil)
@@ -59,14 +67,17 @@ type SessionCollector struct {
 	// Reader lists sessions; the manager's cache in the operator.
 	Reader client.Reader
 	// Namespace is where the sessions live (dev-agents).
-	Namespace           string
-	TerminalTaskReclaim bool
-	Now                 func() time.Time
+	Namespace            string
+	TerminalTaskReclaim  bool
+	Now                  func() time.Time
+	RescueIncidentOwners *RescueIncidentOwners
 }
 
 // Describe implements prometheus.Collector.
 func (c *SessionCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- rescueFailedDesc
+	ch <- rescueNotificationDesc
+	ch <- rescueLatestAttemptDesc
 	ch <- sessionsDesc
 	ch <- terminalTaskRetainedDesc
 	ch <- terminalTaskRetainedAgeDesc
@@ -116,6 +127,15 @@ func (c *SessionCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		if cond := meta.FindStatusCondition(s.Status.Conditions, ConditionRescueFailed); cond != nil && cond.Status == metav1.ConditionTrue {
 			ch <- prometheus.MustNewConstMetric(rescueFailedDesc, prometheus.GaugeValue, 1, s.Name, cond.Reason)
+			key := "unclassified"
+			if r := s.Status.Rescue; r != nil && rescueKeyPattern.MatchString(r.NotificationKey) {
+				key = r.NotificationKey
+			}
+			ch <- prometheus.MustNewConstMetric(rescueNotificationDesc, prometheus.GaugeValue, 1,
+				s.Name, string(s.UID), strconv.FormatInt(s.Generation, 10), cond.Reason, key, c.RescueIncidentOwners.ownerFor(s, cond, list.Items, now), strconv.FormatBool(!s.DeletionTimestamp.IsZero()))
+			if r := s.Status.Rescue; r != nil && r.At != nil {
+				ch <- prometheus.MustNewConstMetric(rescueLatestAttemptDesc, prometheus.GaugeValue, float64(r.At.Unix()), s.Name, string(s.UID))
+			}
 		}
 	}
 	for phase, n := range counts {

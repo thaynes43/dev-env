@@ -421,6 +421,9 @@ func verdict(s *v1alpha1.AgentSession, pod *corev1.Pod, rep protocol.RescueRepor
 		// typed proof. Their diagnostic verdict still keeps all storage.
 		rec.SharedProof = nil
 		rec.Result = v1alpha1.RescueFailed
+		if len(problems) == 1 {
+			rec.NotificationKey = missingCloneNotificationKey(s, rep, reason)
+		}
 		rec.Message = truncate("the rescue " + rep.Stamp + " failed: " + strings.Join(problems, "; "))
 		return rec, reason
 	case rep.VolumeEmpty:

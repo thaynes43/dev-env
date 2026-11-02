@@ -534,3 +534,5 @@ Explicit Claude RC continuation (OP355, 2026-11-02): [DESIGN-047](designs/047-ex
 Qualified ordinary instruction receiver (OP354, 2026-11-02): [DESIGN-048](designs/048-instruction-receiver-image.md) binds new explicit enrollment to a default-off released receiver image without pilot selectors or a global worker pin. Source qualification remains separate from actual native consumption.
 
 Finite retained-provider capture assembly (OP192/187, 2026-11-02): [DESIGN-049](designs/049-finite-provider-capture-assembly.md) records the bounded local bridge to aggregate transport. It acquires no provider data and preserves unknown account/freshness states; actual captures and runtime acceptance remain open.
+
+Rescue incident notification ownership (OP355, 2026-11-02): [DESIGN-050](designs/050-rescue-incident-notifications.md) separates Git preservation failure, retry clocks and bounded native notification ownership. Failed bootstrap remains protected even during pending deletion; no ownership configuration or rollout is activated by source preparation.
