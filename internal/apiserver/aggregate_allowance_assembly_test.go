@@ -176,6 +176,133 @@ func TestAggregateAllowanceAssemblyPreservesTwoCaptures(t *testing.T) {
 	}
 }
 
+func TestAggregateAllowanceReadCurrentWithholdsPayloadView(t *testing.T) {
+	_, second := assemblyCaptures(t)
+	f := newFixture(t)
+	f.now = time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	pubTok, pubUID := assemblyRunning(t, f, "publisher")
+	readTok, readUID := assemblyRunning(t, f, "reader")
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	account, workspace := "fixture-account", "fixture-workspace"
+	reg := assemblyRegistry()
+	store := &AggregateAllowanceReportStore{
+		Writer: mem, Live: mem, Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, DataKey: AggregateAllowanceDataKey,
+		Contexts: []providerallowance.TrustedContext{{
+			Provider: "openai", ProducerRef: "fixture-producer", ProducerIncarnation: "fixture-incarnation-1", BindingGeneration: 0,
+			AccountRef: &account, WorkspaceRef: &workspace, BindingState: providerallowance.BindingVerified,
+			SourceKind: providerallowance.SourceNativeRPC, SourceVersion: "fixture-v1",
+		}},
+		Registry: reg, MaxAge: 30 * time.Minute,
+	}
+	f.srv.AggregateAllowanceReports = &AggregateAllowanceReports{
+		Enabled: true, Store: store, Live: f.c,
+		SessionNamespace: sessionNS, SessionServiceAccount: controller.ServiceAccountName, SessionUIDs: []types.UID{readUID},
+		PublisherSessionUID: pubUID, PublisherServiceAccount: controller.ServiceAccountName,
+		PortalNamespace: portalReaderNamespace, PortalServiceAccount: portalReaderAccount,
+		Now: func() time.Time { return f.now },
+	}
+	f.h = f.srv.Handler()
+	tlsSrv := httptest.NewTLSServer(f.h)
+	t.Cleanup(tlsSrv.Close)
+	_ = pubTok
+	reader := assemblyEnv(t, tlsSrv, readTok)
+	read := func(doc providerallowance.ReadResponse) (providerallowance.ReadResponse, string) {
+		t.Helper()
+		raw := string(canonicalAllowanceFixture(t, doc))
+		mem.cm.Data[AggregateAllowanceDataKey] = raw
+		updates := mem.updates
+		code, body, errText := assemblyRun(t, reader, "usage", "-o", "json", "--read-current")
+		if code != agentrun.ExitOK || strings.Contains(errText, readTok) {
+			t.Fatalf("read-current %d %s", code, errText)
+		}
+		if mem.updates != updates || mem.cm.Data[AggregateAllowanceDataKey] != raw || mem.cm.Data["keep"] != "yes" {
+			t.Fatal("read rewrote stored history")
+		}
+		return assemblyDecode(t, body), raw
+	}
+
+	future := cloneAllowanceReport(t, second)
+	futureItem := allowanceOpenAIItem(t, &future)
+	observed := *futureItem.Observation.ProviderObservedAt
+	observedAt, err := time.Parse(time.RFC3339Nano, observed)
+	if err != nil || observedAt.After(f.now) {
+		t.Fatal("provider time is after the serving clock")
+	}
+	captured := futureItem.Observation.CapturedAt
+	futureItem.ReceivedAt = "2099-01-01T00:00:00Z"
+	later := "2099-06-01T00:00:00Z"
+	futureItem.Observation.Measures[0].Window.ResetAt = &later
+	planted := "77"
+	futureItem.CurrentMeasures[0].State = providerallowance.CurrentUncapped
+	futureItem.CurrentMeasures[0].Value = providerallowance.MeasureValue{State: providerallowance.ValueUncapped, Decimal: &planted}
+	if futureStatus := allowanceOpenAIStatus(t, &future); futureStatus.LastGood != nil {
+		futureStatus.LastGood.ReceivedAt = futureItem.ReceivedAt
+	}
+	futureGot, futureRaw := read(future)
+	futureServed := assemblyItem(t, futureGot, "openai")
+	if futureServed.ReceivedAt != "2099-01-01T00:00:00Z" || futureServed.Observation.CapturedAt != captured || futureServed.Observation.ProviderObservedAt == nil || *futureServed.Observation.ProviderObservedAt != observed {
+		t.Fatalf("read-current moved history %+v", futureServed)
+	}
+	if futureServed.Observation.Measures[0].Value.Decimal == nil || *futureServed.Observation.Measures[0].Value.Decimal != "55" || futureServed.Freshness.State == providerallowance.FreshFresh || futureServed.Freshness.State == providerallowance.FreshStale {
+		t.Fatalf("future receipt stayed current %+v decimal=%v", futureServed.Freshness, futureServed.Observation.Measures[0].Value.Decimal)
+	}
+	if futureServed.CurrentMeasures[0].State != providerallowance.CurrentUnknown || futureServed.CurrentMeasures[0].Value.Decimal != nil || !strings.Contains(futureRaw, `"77"`) || strings.Contains(futureRaw, readTok) {
+		t.Fatalf("raw document kept the current decimal %+v", futureServed.CurrentMeasures[0])
+	}
+	for _, provider := range []string{"cursor", "anthropic"} {
+		status := assemblyStatus(t, futureGot, provider)
+		if status.Availability != providerallowance.AvailabilityUnconfigured || status.Binding.State == providerallowance.BindingVerified {
+			t.Fatalf("gap promoted %+v", status)
+		}
+	}
+
+	resetAt := "2026-11-02T03:00:00Z"
+	resetDoc := cloneAllowanceReport(t, second)
+	resetItem := allowanceOpenAIItem(t, &resetDoc)
+	resetItem.Observation.Measures[0].Window.ResetAt = &resetAt
+	resetItem.CurrentMeasures[0].State = providerallowance.CurrentUncapped
+	resetItem.CurrentMeasures[0].Value = providerallowance.MeasureValue{State: providerallowance.ValueUncapped, Decimal: &planted}
+	resetGot, _ := read(resetDoc)
+	resetServed := assemblyItem(t, resetGot, "openai")
+	if resetServed.Freshness.State != providerallowance.FreshFresh || resetServed.CurrentMeasures[0].State != providerallowance.CurrentUnknown || resetServed.CurrentMeasures[0].Value.Decimal != nil {
+		t.Fatalf("uncapped reset %+v %+v", resetServed.Freshness, resetServed.CurrentMeasures[0])
+	}
+	if resetServed.Observation.Measures[0].Value.Decimal == nil || *resetServed.Observation.Measures[0].Value.Decimal != "55" || resetServed.Observation.Measures[0].Window.ResetAt == nil || *resetServed.Observation.Measures[0].Window.ResetAt != resetAt {
+		t.Fatal("reset read rewrote the observation")
+	}
+
+	other := "other-account"
+	untrusted := cloneAllowanceReport(t, second)
+	untrustedItem := allowanceOpenAIItem(t, &untrusted)
+	untrustedItem.Observation.Scope.AccountRef = &other
+	untrustedStatus := allowanceOpenAIStatus(t, &untrusted)
+	untrustedStatus.Availability = providerallowance.AvailabilityConflict
+	untrustedStatus.Binding = providerallowance.BindingRecord{State: providerallowance.BindingVerified, Generation: 4, AccountRef: &other}
+	untrustedGot, _ := read(untrusted)
+	untrustedServed := assemblyItem(t, untrustedGot, "openai")
+	untrustedState := assemblyStatus(t, untrustedGot, "openai")
+	if untrustedServed.CurrentMeasures[0].State != providerallowance.CurrentUnknown || untrustedServed.CurrentMeasures[0].Value.Decimal != nil || untrustedServed.Observation.Measures[0].Value.Decimal == nil || *untrustedServed.Observation.Measures[0].Value.Decimal != "55" {
+		t.Fatalf("untrusted raw document %+v obs=%v", untrustedServed.CurrentMeasures[0], untrustedServed.Observation.Measures[0].Value.Decimal)
+	}
+	if untrustedState.Availability != providerallowance.AvailabilityConflict || untrustedState.Binding.State == providerallowance.BindingVerified || untrustedState.Binding.AccountRef != nil {
+		t.Fatalf("conflict status stayed verified %+v", untrustedState.Binding)
+	}
+
+	mismatched := cloneAllowanceReport(t, second)
+	mismatchedStatus := allowanceOpenAIStatus(t, &mismatched)
+	mismatchedStatus.Binding.AccountRef = &other
+	mismatchedStatus.Binding.Generation = 9
+	mismatchedGot, _ := read(mismatched)
+	mismatchedServed := assemblyItem(t, mismatchedGot, "openai")
+	matched := assemblyStatus(t, mismatchedGot, "openai")
+	if mismatchedServed.Freshness.State != providerallowance.FreshFresh || mismatchedServed.CurrentMeasures[0].State != providerallowance.CurrentKnown || mismatchedServed.CurrentMeasures[0].Value.Decimal == nil || *mismatchedServed.CurrentMeasures[0].Value.Decimal != "55" {
+		t.Fatalf("trusted current was withheld %+v %+v", mismatchedServed.Freshness, mismatchedServed.CurrentMeasures[0])
+	}
+	if matched.Binding.State != providerallowance.BindingVerified || matched.Binding.Generation != 0 || matched.Binding.AccountRef == nil || *matched.Binding.AccountRef != "fixture-account" || mismatchedServed.Observation.Scope.AccountRef == nil || *mismatchedServed.Observation.Scope.AccountRef != "fixture-account" {
+		t.Fatalf("status account stayed foreign %+v", matched.Binding)
+	}
+}
+
 func TestAggregateAllowancePublishDoesNotFollowOrRetry(t *testing.T) {
 	hits := 0
 	secret := "PUBLISH-REDIRECT-SECRET"

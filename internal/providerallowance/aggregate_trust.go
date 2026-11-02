@@ -202,7 +202,11 @@ func parseTrustRegistry(raw json.RawMessage) (*StaticRegistry, bool) {
 	if !ok {
 		return nil, false
 	}
-	return NewStaticRegistry(RegistryParts{Sources: sources, Metrics: metrics, Accounts: accounts, Entitlements: ents, Projections: projections}), true
+	parts := RegistryParts{Sources: sources, Metrics: metrics, Accounts: accounts, Entitlements: ents, Projections: projections}
+	if len(registryDuplicates(parts)) != 0 {
+		return nil, false
+	}
+	return NewStaticRegistry(parts), true
 }
 
 func parseTrustSources(raw json.RawMessage) ([]SourceRule, bool) {
@@ -240,14 +244,8 @@ func parseTrustSources(raw json.RawMessage) ([]SourceRule, bool) {
 }
 
 func parseDirectFields(raw json.RawMessage) (map[string]DirectFieldRule, bool) {
-	if !ExactObjectKeys(raw, nil) && !jsonObject(raw) {
-		return nil, false
-	}
-	if !jsonObject(raw) {
-		return nil, false
-	}
-	var rows map[string]json.RawMessage
-	if json.Unmarshal(raw, &rows) != nil || len(rows) > 8 {
+	rows, ok := directFieldRows(raw)
+	if !ok || len(rows) > 8 {
 		return nil, false
 	}
 	if len(rows) == 0 {
@@ -266,6 +264,39 @@ func parseDirectFields(raw json.RawMessage) (map[string]DirectFieldRule, bool) {
 			return nil, false
 		}
 		out[name] = DirectFieldRule{OriginalType: OriginalType(doc.OriginalType), Class: DirectClass(doc.Class)}
+	}
+	return out, true
+}
+
+func directFieldRows(raw json.RawMessage) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	out := map[string]json.RawMessage{}
+	for dec.More() {
+		keyTok, keyErr := dec.Token()
+		key, ok := keyTok.(string)
+		if keyErr != nil || !ok {
+			return nil, false
+		}
+		if _, dup := out[key]; dup {
+			return nil, false
+		}
+		var row json.RawMessage
+		if dec.Decode(&row) != nil {
+			return nil, false
+		}
+		out[key] = append(json.RawMessage(nil), row...)
+	}
+	end, endErr := dec.Token()
+	if endErr != nil || end != json.Delim('}') {
+		return nil, false
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		return nil, false
 	}
 	return out, true
 }
@@ -460,12 +491,6 @@ func jsonArray(raw []byte) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	tok, err := dec.Token()
 	return err == nil && tok == json.Delim('[')
-}
-
-func jsonObject(raw []byte) bool {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	tok, err := dec.Token()
-	return err == nil && tok == json.Delim('{')
 }
 
 func knownProvider(provider string) bool {

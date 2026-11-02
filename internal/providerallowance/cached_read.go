@@ -6,16 +6,20 @@ import (
 )
 
 // ProjectCachedRead degrades one cached read for a serving clock.
-// It changes freshness and current-measure state only. Observation timestamps,
-// receipts, and provider observed times stay as stored. Payload binding and
+// It changes freshness, current-measure state, and derived status binding.
+// Observation timestamps, receipts, provider observed times, and raw
+// observation decimals stay as stored. A receipt ahead of the serving clock
+// expires freshness without moving those originals. Payload binding and
 // freshness labels are not authority: a provider is current only when exactly
-// one caller-owned context validates it. A nil document or a paged document is
-// left unchanged.
+// one caller-owned context validates it. Current known and uncapped values are
+// withheld when trust, freshness, or a passed reset blocks them. A nil
+// document or a paged document is left unchanged.
 func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registry, maxAge time.Duration, maxAgeSet bool, now time.Time) {
 	if doc == nil || doc.NextCursor != nil {
 		return
 	}
 	untrusted := map[string]bool{}
+	trustedStatus := map[string]TrustedContext{}
 	freshHold := map[string]Freshness{}
 	for i := range doc.Items {
 		item := &doc.Items[i]
@@ -23,14 +27,17 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		matched := cachedContexts(contexts, provider)
 		if len(matched) != 1 || !cachedObservationTrusted(item.Observation, matched[0], reg) {
 			cachedMarkItem(item)
+			cachedWithholdCurrent(item)
 			untrusted[provider] = true
 			continue
 		}
+		trustedStatus[provider] = matched[0]
 		cachedAlignTrust(item, matched[0])
 		cachedPreserveConflicts(item)
-		cachedDegrade(&item.Freshness, item.Observation.ProviderObservedAt, maxAge, maxAgeSet, now)
+		cachedDegrade(&item.Freshness, item.Observation.ProviderObservedAt, item.ReceivedAt, maxAge, maxAgeSet, now)
 		if cachedFreshnessBlocks(item.Freshness) {
 			freshHold[provider] = item.Freshness
+			cachedWithholdCurrent(item)
 			continue
 		}
 		cachedExpireResets(item, now)
@@ -40,6 +47,11 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		if untrusted[status.Provider] {
 			cachedMarkStatus(status)
 			continue
+		}
+		if ctx, ok := trustedStatus[status.Provider]; ok {
+			cachedAlignStatus(status, ctx)
+		} else if status.Binding.State == BindingVerified {
+			status.Binding = BindingRecord{State: BindingUnknown}
 		}
 		if held, ok := freshHold[status.Provider]; ok {
 			cachedReleaseUnconfigured(status, held)
@@ -99,6 +111,14 @@ func cachedAlignTrust(item *ReadItem, trusted TrustedContext) {
 	item.Freshness.Reason = ""
 }
 
+func cachedAlignStatus(status *SourceStatus, trusted TrustedContext) {
+	status.ProducerRef = trusted.ProducerRef
+	status.Binding.State = BindingVerified
+	status.Binding.Generation = Count(trusted.BindingGeneration)
+	status.Binding.AccountRef = cloneString(trusted.AccountRef)
+	status.Binding.WorkspaceRef = cloneString(trusted.WorkspaceRef)
+}
+
 func cachedMarkItem(item *ReadItem) {
 	if item.Observation.Availability == AvailabilityUnconfigured {
 		item.Observation.Availability = AvailabilityAvailable
@@ -111,13 +131,16 @@ func cachedMarkItem(item *ReadItem) {
 
 func cachedMarkStatus(status *SourceStatus) {
 	if status.Availability == AvailabilityConflict {
+		if status.Binding.State == BindingVerified {
+			status.Binding = BindingRecord{State: BindingUnknown}
+		}
 		return
 	}
 	if status.Availability == AvailabilityUnconfigured {
 		status.Availability = AvailabilityAvailable
 	}
 	status.Validation.State = ValidationRejected
-	status.Binding.State = BindingMismatch
+	status.Binding = BindingRecord{State: BindingMismatch}
 	status.Freshness.Reason = ""
 }
 
@@ -131,9 +154,13 @@ func cachedReleaseUnconfigured(status *SourceStatus, held Freshness) {
 	status.Freshness.Reason = ""
 }
 
-func cachedDegrade(fresh *Freshness, observed *string, maxAge time.Duration, maxAgeSet bool, now time.Time) {
+func cachedDegrade(fresh *Freshness, observed *string, received string, maxAge time.Duration, maxAgeSet bool, now time.Time) {
 	fresh.Reason = ""
 	if !maxAgeSet || maxAge < 0 || now.IsZero() {
+		cachedExpireLabel(fresh)
+		return
+	}
+	if receipt, ok := cachedTimeString(received); ok && receipt.After(now) {
 		cachedExpireLabel(fresh)
 		return
 	}
@@ -165,6 +192,21 @@ func cachedFreshnessBlocks(fresh Freshness) bool {
 	return fresh.State != FreshFresh && fresh.State != FreshStale
 }
 
+func cachedWithholdCurrent(item *ReadItem) {
+	for j := range item.CurrentMeasures {
+		switch item.CurrentMeasures[j].State {
+		case CurrentKnown, CurrentUncapped:
+			cachedClearCurrent(&item.CurrentMeasures[j])
+		}
+	}
+}
+
+func cachedClearCurrent(current *CurrentMeasure) {
+	current.State = CurrentUnknown
+	current.Value = MeasureValue{State: ValueUnknown}
+	current.Reason = ""
+}
+
 func cachedExpireResets(item *ReadItem, now time.Time) {
 	if now.IsZero() {
 		return
@@ -178,14 +220,20 @@ func cachedExpireResets(item *ReadItem, now time.Time) {
 			continue
 		}
 		for j := range item.CurrentMeasures {
-			if item.CurrentMeasures[j].MeasureID != measure.ID || item.CurrentMeasures[j].State != CurrentKnown {
+			state := item.CurrentMeasures[j].State
+			if item.CurrentMeasures[j].MeasureID != measure.ID || (state != CurrentKnown && state != CurrentUncapped) {
 				continue
 			}
-			item.CurrentMeasures[j].State = CurrentUnknown
-			item.CurrentMeasures[j].Value = MeasureValue{State: ValueUnknown}
-			item.CurrentMeasures[j].Reason = ""
+			cachedClearCurrent(&item.CurrentMeasures[j])
 		}
 	}
+}
+
+func cachedTimeString(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	return cachedTime(&raw)
 }
 
 func cachedTime(raw *string) (time.Time, bool) {

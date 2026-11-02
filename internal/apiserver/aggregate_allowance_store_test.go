@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,4 +103,141 @@ func canonicalAllowanceFixture(t *testing.T, doc providerallowance.ReadResponse)
 func (c rvClash) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
 	c.cm.ResourceVersion = "999"
 	return c.slotMem.Update(ctx, obj, opts...)
+}
+
+func TestAggregateAllowanceRejectsFutureReceiptAndForeignStatus(t *testing.T) {
+	_, second := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	base := cloneAllowanceReport(t, second)
+	item := allowanceOpenAIItem(t, &base)
+	observedAt, err := time.Parse(time.RFC3339Nano, *item.Observation.ProviderObservedAt)
+	if err != nil || observedAt.After(now) || item.Freshness.State != providerallowance.FreshFresh {
+		t.Fatalf("fixture is not a current provider time <= now: %+v", item.Freshness)
+	}
+	gap := canonicalAllowanceFixture(t, UnconfiguredAggregateDocument())
+	if err := store.Put(context.Background(), gap, now); err != nil || mem.updates != 1 {
+		t.Fatal("honest unknown gap", err, mem.updates)
+	}
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	verifiedGap := UnconfiguredAggregateDocument()
+	other := "other-account"
+	verifiedGap.SourceStatuses[0].Binding = providerallowance.BindingRecord{State: providerallowance.BindingVerified, Generation: 1, AccountRef: &other}
+	refuseAllowancePut(t, store, mem, verifiedGap, now, held)
+
+	future := cloneAllowanceReport(t, second)
+	futureItem := allowanceOpenAIItem(t, &future)
+	futureItem.ReceivedAt = "2099-01-01T00:00:00Z"
+	later := "2099-06-01T00:00:00Z"
+	for i := range futureItem.Observation.Measures {
+		if futureItem.Observation.Measures[i].Window.ResetPrecision == providerallowance.ResetInstant {
+			futureItem.Observation.Measures[i].Window.ResetAt = &later
+		}
+	}
+	futureStatus := allowanceOpenAIStatus(t, &future)
+	if futureStatus.LastGood == nil {
+		t.Fatal("fixture has no last good")
+	}
+	futureStatus.LastGood.ReceivedAt = futureItem.ReceivedAt
+	refuseAllowancePut(t, store, mem, future, now, held)
+
+	foreign := cloneAllowanceReport(t, second)
+	foreignStatus := allowanceOpenAIStatus(t, &foreign)
+	foreignStatus.Binding.AccountRef = &other
+	refuseAllowancePut(t, store, mem, foreign, now, held)
+
+	workspace := cloneAllowanceReport(t, second)
+	workspaceName := "other-workspace"
+	allowanceOpenAIStatus(t, &workspace).Binding.WorkspaceRef = &workspaceName
+	refuseAllowancePut(t, store, mem, workspace, now, held)
+
+	generation := cloneAllowanceReport(t, second)
+	allowanceOpenAIStatus(t, &generation).Binding.Generation = 4
+	refuseAllowancePut(t, store, mem, generation, now, held)
+
+	producer := cloneAllowanceReport(t, second)
+	allowanceOpenAIStatus(t, &producer).ProducerRef = "foreign-producer"
+	refuseAllowancePut(t, store, mem, producer, now, held)
+
+	incarnation := cloneAllowanceReport(t, second)
+	incarnationItem := allowanceOpenAIItem(t, &incarnation)
+	incarnationItem.Observation.ProducerIncarnation = "foreign-incarnation"
+	incarnationItem.Freshness.State = providerallowance.FreshExpired
+	for i := range incarnationItem.CurrentMeasures {
+		incarnationItem.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+		incarnationItem.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+	}
+	incarnationStatus := allowanceOpenAIStatus(t, &incarnation)
+	incarnationStatus.Freshness.State = providerallowance.FreshExpired
+	refuseAllowancePut(t, store, mem, incarnation, now, held)
+
+	good := canonicalAllowanceFixture(t, second)
+	if err := store.Put(context.Background(), good, now); err != nil || mem.updates != 2 {
+		t.Fatal("current report", err, mem.updates)
+	}
+	stored := mem.cm.Data[AggregateAllowanceDataKey]
+	if stored == held || !strings.Contains(stored, "fixture-account") {
+		t.Fatal("current report was not stored")
+	}
+	again := cloneAllowanceReport(t, second)
+	allowanceOpenAIStatus(t, &again).Binding.AccountRef = &other
+	refuseAllowancePut(t, store, mem, again, now, stored)
+}
+
+func repairAllowanceStore(mem *slotMem) *AggregateAllowanceReportStore {
+	account, workspace := "fixture-account", "fixture-workspace"
+	return &AggregateAllowanceReportStore{
+		Writer: mem, Live: mem, Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, DataKey: AggregateAllowanceDataKey,
+		Contexts: []providerallowance.TrustedContext{{
+			Provider: "openai", ProducerRef: "fixture-producer", ProducerIncarnation: "fixture-incarnation-1", BindingGeneration: 0,
+			AccountRef: &account, WorkspaceRef: &workspace, BindingState: providerallowance.BindingVerified,
+			SourceKind: providerallowance.SourceNativeRPC, SourceVersion: "fixture-v1",
+		}},
+		Registry: assemblyRegistry(), MaxAge: 30 * time.Minute,
+	}
+}
+
+func refuseAllowancePut(t *testing.T, store *AggregateAllowanceReportStore, mem *slotMem, doc providerallowance.ReadResponse, now time.Time, held string) {
+	t.Helper()
+	updates := mem.updates
+	raw := canonicalAllowanceFixture(t, doc)
+	if err := store.Put(context.Background(), raw, now); !errors.Is(err, ErrAggregateRejected) || mem.updates != updates || mem.cm.Data[AggregateAllowanceDataKey] != held || mem.cm.Data["keep"] != "yes" {
+		t.Fatalf("put refused as %v updates %d", err, mem.updates)
+	}
+}
+
+func cloneAllowanceReport(t *testing.T, doc providerallowance.ReadResponse) providerallowance.ReadResponse {
+	t.Helper()
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
+
+func allowanceOpenAIItem(t *testing.T, doc *providerallowance.ReadResponse) *providerallowance.ReadItem {
+	t.Helper()
+	for i := range doc.Items {
+		if doc.Items[i].Observation.Provider == "openai" {
+			return &doc.Items[i]
+		}
+	}
+	t.Fatal("missing openai item")
+	return nil
+}
+
+func allowanceOpenAIStatus(t *testing.T, doc *providerallowance.ReadResponse) *providerallowance.SourceStatus {
+	t.Helper()
+	for i := range doc.SourceStatuses {
+		if doc.SourceStatuses[i].Provider == "openai" {
+			return &doc.SourceStatuses[i]
+		}
+	}
+	t.Fatal("missing openai status")
+	return nil
 }

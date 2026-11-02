@@ -1766,8 +1766,8 @@ func TestCoordinatorInstructionEndedAttemptLedger(t *testing.T) {
 	wantInvalid(t, k8s.Status().Update(c, badID), "attemptID")
 }
 
-// TestCoordinatorInstructionOptInImmutableAndDefaultOff needs the generated
-// CRD. controller-gen was not run for this source change.
+// TestCoordinatorInstructionOptInImmutableAndDefaultOff exercises the generated
+// CRD's default-off storage and immutable enrollment through the API server.
 func TestCoordinatorInstructionOptInImmutableAndDefaultOff(t *testing.T) {
 	created := taskSession()
 	if err := k8s.Create(ctx(t), created); err != nil {

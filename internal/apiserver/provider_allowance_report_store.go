@@ -197,7 +197,7 @@ func (s *AggregateAllowanceReportStore) accept(doc providerallowance.ReadRespons
 		item, hasItem := items[provider]
 		status := statuses[provider]
 		if !hasItem {
-			if !gapStatus(status) {
+			if !gapStatus(status) || status.Binding.State == providerallowance.BindingVerified {
 				return ErrAggregateRejected
 			}
 			continue
@@ -232,6 +232,25 @@ func (s *AggregateAllowanceReportStore) acceptItem(item providerallowance.ReadIt
 	if current && !lastGoodMatches(status.LastGood, item) {
 		return ErrAggregateRejected
 	}
+	if err := rejectPayloadStatusBinding(status, matched, item); err != nil {
+		return err
+	}
+	return nil
+}
+
+func rejectPayloadStatusBinding(status providerallowance.SourceStatus, trusted providerallowance.TrustedContext, item providerallowance.ReadItem) error {
+	if status.Binding.State != providerallowance.BindingVerified {
+		return nil
+	}
+	if status.ProducerRef != trusted.ProducerRef || item.Observation.ProducerRef != trusted.ProducerRef || item.Observation.ProducerIncarnation != trusted.ProducerIncarnation {
+		return ErrAggregateRejected
+	}
+	if status.Binding.Generation != providerallowance.Count(trusted.BindingGeneration) {
+		return ErrAggregateRejected
+	}
+	if !aggregateStringEqual(status.Binding.AccountRef, trusted.AccountRef) || !aggregateStringEqual(status.Binding.WorkspaceRef, trusted.WorkspaceRef) {
+		return ErrAggregateRejected
+	}
 	return nil
 }
 
@@ -251,7 +270,7 @@ func acceptCurrentItem(item providerallowance.ReadItem, trusted providerallowanc
 		return ErrAggregateRejected
 	}
 	receipt, err := time.Parse(time.RFC3339Nano, item.ReceivedAt)
-	if err != nil {
+	if err != nil || receipt.After(now) {
 		return ErrAggregateRejected
 	}
 	captured, err := time.Parse(time.RFC3339Nano, obs.CapturedAt)

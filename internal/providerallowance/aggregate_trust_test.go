@@ -31,6 +31,38 @@ func TestParseAggregateTrustRefusesPartialAndEcho(t *testing.T) {
 	}
 }
 
+func TestParseAggregateTrustRejectsDuplicateFieldsAndRules(t *testing.T) {
+	canary := "SECRET-FIELD-CANARY"
+	registryCanary := "SECRET-REGISTRY-CANARY"
+	fieldDup := strings.Replace(aggregateTrustFixture(), `"directFields":{}`, `"directFields":{"`+canary+`":{"originalType":"decimal","class":"inventory"},"`+canary+`":{"originalType":"string","class":"display"}}`, 1)
+	escapedKey := `\u0053ECRET-FIELD-CANARY`
+	escaped := strings.Replace(aggregateTrustFixture(), `"directFields":{}`, `"directFields":{"`+canary+`":{"originalType":"decimal","class":"inventory"},"`+escapedKey+`":{"originalType":"string","class":"display"}}`, 1)
+	source := `{"provider":"openai","kind":"native_rpc","version":"` + registryCanary + `","capabilityRef":"synthetic:not-live","allowNormalizedMeasures":true,"allowDerivations":true,"directFields":{}}`
+	registryDup := strings.Replace(aggregateTrustFixture(), `"sources":[{"provider":"openai","kind":"native_rpc","version":"fixture-v1","capabilityRef":"synthetic:not-live","allowNormalizedMeasures":true,"allowDerivations":true,"directFields":{}}]`, `"sources":[`+source+`,`+source+`]`, 1)
+	projection := `{"id":"` + registryCanary + `","provider":"openai","sourceVersion":"fixture-v1","measureIds":["window"]}`
+	projectionDup := strings.Replace(aggregateTrustFixture(), `"projections":[]`, `"projections":[`+projection+`,`+projection+`]`, 1)
+	for _, raw := range []string{fieldDup, escaped, registryDup, projectionDup} {
+		_, err := ParseAggregateTrust([]byte(raw))
+		if !errors.Is(err, ErrAggregateTrust) || strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), registryCanary) || strings.Contains(err.Error(), "directFields") {
+			t.Fatalf("duplicate refused as %v", err)
+		}
+	}
+	unique := strings.Replace(aggregateTrustFixture(), `"directFields":{}`, `"directFields":{"credits":{"originalType":"decimal","class":"inventory"}}`, 1)
+	trust, err := ParseAggregateTrust([]byte(unique))
+	if err != nil || trust.Registry == nil {
+		t.Fatal(err)
+	}
+	sources := trust.Registry.Sources()
+	if len(sources) != 1 || sources[0].DirectFields["credits"].Class != ClassInventory || sources[0].DirectFields["credits"].OriginalType != TypeDecimal {
+		t.Fatalf("unique field %+v", sources)
+	}
+	unknown := strings.Replace(aggregateTrustFixture(), `"bindingState":"verified"`, `"bindingState":"unknown"`, 1)
+	held, err := ParseAggregateTrust([]byte(unknown))
+	if err != nil || len(held.Contexts) != 1 || held.Contexts[0].BindingState != BindingUnknown {
+		t.Fatalf("unknown binding promoted %v %+v", err, held.Contexts)
+	}
+}
+
 func aggregateTrustFixture() string {
 	return `{
 		"maxAgeSeconds":1800,
