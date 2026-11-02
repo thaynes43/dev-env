@@ -164,8 +164,11 @@ pending, with the label beside the state, until U7 lands. That is the true evide
    least N" when any repository is Unknown. Empty requires every listed repository
    `Read`. A missing config or zero PRs does not prove hosted coverage (OP325).
 5. No check runs and no statuses is "No checks", never passing. A contradictory check
-   record (OP317's haynes-ops#3871 shape), denied statuses, or a `cancelled`, `stale`
-   or `action_required` run make checks Unknown.
+   record (OP317's haynes-ops#3871 shape), or a `cancelled`, `stale` or
+   `action_required` run, makes checks Unknown. Denied statuses do not: the row's
+   checks are judged on check runs alone and labelled "Check runs only; commit
+   statuses not readable". A failed check run still proves failed checks, but a row
+   with denied statuses never shows "No checks" or "Passed" as complete.
 6. Times come from GitHub, a TaskClaim or the collector's clock at the read. `since` is
    null when no source event exists. No time is interpolated or taken from the browser.
    A stale snapshot shows its age on every state. An expired one renders states Unknown
@@ -253,7 +256,7 @@ The lead delivers each to Tom one at a time. None blocks U1, which is default of
 
 | ID | Question | Recommendation |
 |---|---|---|
-| Q-360-01 | May the keeper mint a second haynes-dev-bot token, down-scoped to `pull_requests`, `checks`, `issues` and `contents` read, held in memory for the collector only? | Yes. Every permission is a read-level subset of `DefaultDevBotPermissions`. The alternative, reusing the write-capable token, is broader. |
+| Q-360-01 | May the keeper mint a second haynes-dev-bot token, down-scoped to `pull_requests`, `checks`, `issues`, `contents` and `statuses` read, held in memory for the collector only? | Yes. All but `statuses` are read-level subsets of `DefaultDevBotPermissions` (`internal/keeper/github.go`). `statuses` is not in that set, so first confirm the App holds `statuses: read`; a permission it lacks makes the mint fail with 422. Without it, U4 mints without `statuses` and rule 5's "check runs only" label applies. The alternative, reusing the write-capable token, is broader. |
 | Q-360-02 | Which repositories does the pane list? | The OP317 accessible set without the archived one, plus `dev-env-templates`, so its 404 shows as Unknown. Keep the list in GitOps. |
 | Q-360-03 | What cadence and stuck age? | 30-minute passes, stale after 60 minutes, stuck after 7 days (OP317's "old"). |
 | Q-360-04 | May upgrade rows show canonical owners from haynes-ops claims? | Yes, after OP325's producer and Q-325-01, through DESIGN-045's subset-checked portal claim flag with `haynes-ops` listed. No new claim scope. |
