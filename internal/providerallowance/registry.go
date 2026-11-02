@@ -58,6 +58,10 @@ type MetricRule struct {
 // AccountRule is one trusted account generation. The observation does not
 // create this record.
 type AccountRule struct {
+	// AccountScopeOnly explicitly selects provider-account scope when the
+	// qualified source exposes no workspace. It asserts no workspace identity
+	// or shared entitlement and never matches a populated workspace.
+	AccountScopeOnly    bool
 	AccountRef          string
 	WorkspaceRef        string
 	Generation          int64

@@ -86,7 +86,7 @@ func AssembleCaptureBundle(raw []byte, trust AggregateTrust, now time.Time) (Rea
 		if err != nil {
 			return fail()
 		}
-		spec := SourceSpec{Provider: e.Provider, ProducerRef: e.ProducerRef, ProducerIncarnation: e.ProducerIncarnation, BindingState: BindingUnknown, SourceKind: obs.Source.Kind, SourceVersion: obs.Source.Version}
+		spec := SourceSpec{Provider: e.Provider, ProducerRef: e.ProducerRef, ProducerIncarnation: e.ProducerIncarnation, BindingState: BindingUnknown, SourceKind: obs.Source.Kind, SourceVersion: obs.Source.Version, AccountRef: cloneString(obs.Scope.AccountRef), WorkspaceRef: cloneString(obs.Scope.WorkspaceRef)}
 		if has {
 			if selected.ProducerRef != e.ProducerRef || selected.ProducerIncarnation != e.ProducerIncarnation || selected.SourceKind != obs.Source.Kind || selected.SourceVersion != obs.Source.Version {
 				return fail()
@@ -143,12 +143,43 @@ func projectCapture(e captureEntry, selected TrustedContext, has bool, received 
 			s.AccountRef = cloneString(selected.AccountRef)
 			s.WorkspaceRef = cloneString(selected.WorkspaceRef)
 		}
-		item, err := CursorDisplayProject(e.Payload, s, received)
+		var schema struct {
+			Schema string `json:"schema"`
+		}
+		if json.Unmarshal(e.Payload, &schema) != nil {
+			return obs, ErrCaptureBundle
+		}
+		var item ReadItem
+		var err error
+		if schema.Schema == CursorCLICaptureSchema {
+			var report CursorCLIUsageCapture
+			_ = json.Unmarshal(e.Payload, &report)
+			if report.CollectionStartedAt != e.CapturedAt || report.ReceivedAt != e.ReceivedAt {
+				return obs, ErrCaptureBundle
+			}
+			item, err = projectCursorCLIUsage(e.Payload, s)
+		} else {
+			item, err = CursorDisplayProject(e.Payload, s, received)
+		}
 		if err != nil || item.Observation.CapturedAt != e.CapturedAt {
 			return obs, ErrCaptureBundle
 		}
 		obs = item.Observation
 	case "anthropic":
+		var schema struct {
+			Schema string `json:"schema"`
+		}
+		if json.Unmarshal(e.Payload, &schema) != nil {
+			return obs, ErrCaptureBundle
+		}
+		if schema.Schema == ClaudeSDKCaptureSchema {
+			var err error
+			obs, err = projectClaudeUsageCapture(e.Payload, e.CapturedAt)
+			if err != nil {
+				return obs, ErrCaptureBundle
+			}
+			break
+		}
 		if !sanitizedClaudeCapture(e.Payload) {
 			return obs, ErrCaptureBundle
 		}
@@ -163,6 +194,23 @@ func projectCapture(e captureEntry, selected TrustedContext, has bool, received 
 			obs.Measures[i].ValidationRef = stringRef(ClaudeCaptureValidationPrefix + obs.Measures[i].ID + "-used-percent")
 		}
 	case "openai":
+		var schema struct {
+			Schema string `json:"schema"`
+		}
+		if json.Unmarshal(e.Payload, &schema) != nil {
+			return obs, ErrCaptureBundle
+		}
+		if schema.Schema == CodexRPCSchema {
+			var err error
+			obs, err = projectCodexAccountCapture(e.Payload, e.CapturedAt)
+			if err != nil {
+				return obs, ErrCaptureBundle
+			}
+			if has && (!stringPtrEqual(obs.Scope.AccountRef, selected.AccountRef) || selected.WorkspaceRef != nil) {
+				return obs, ErrCaptureBundle
+			}
+			break
+		}
 		report, err := DecodeCurrentSource(e.Payload)
 		if err != nil || report.RetrievedAt != e.CapturedAt || report.ProviderUpdatedAt != nil || ValidateCurrentSource(report, CurrentSourceSelection{PublisherRef: report.PublisherRef, ProducerIncarnation: report.ProducerIncarnation, SourceGeneration: report.SourceGeneration, MaxAge: 24 * time.Hour}, mustCaptureTime(e.CapturedAt)) != nil {
 			return obs, ErrCaptureBundle
@@ -214,4 +262,8 @@ func sanitizedClaudeCapture(raw []byte) bool {
 		}
 	}
 	return true
+}
+
+func captureDigestID(prefix string, raw []byte) string {
+	return fmt.Sprintf("%s-%x", prefix, sha256.Sum256(raw))
 }

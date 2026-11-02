@@ -538,3 +538,5 @@ Finite retained-provider capture assembly (OP192/187, 2026-11-02): [DESIGN-049](
 Rescue incident notification ownership (OP355, 2026-11-02): [DESIGN-050](designs/050-rescue-incident-notifications.md) separates Git preservation failure, retry clocks and bounded native notification ownership. Failed bootstrap remains protected even during pending deletion; no ownership configuration or rollout is activated by source preparation.
 
 Ordinary instruction publisher image qualification (OP354, 2026-11-02): [DESIGN-051](designs/051-ordinary-instruction-publisher-image.md) supplies the current control client to a fresh accepted-project parent without a global worker pin, receiver enrollment or retrofitted legacy parent. Runtime native consumption remains unproved.
+
+Supported provider collectors (OP192, 2026-11-02): [DESIGN-052](designs/052-supported-provider-collectors.md) adds explicit finite official Codex account/quota reads, genuine personal-account scope, separate collection recency, and isolated Claude statusline/SDK sanitization. Persistent activation and actual three-provider API/agent/UI delivery remain separate.

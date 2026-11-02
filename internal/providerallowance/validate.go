@@ -458,21 +458,33 @@ func bindingReady(obs Observation, trusted TrustedContext, parts RegistryParts) 
 	if !stringPtrEqual(trusted.AccountRef, obs.Scope.AccountRef) || !stringPtrEqual(trusted.WorkspaceRef, obs.Scope.WorkspaceRef) {
 		return false
 	}
-	if obs.ProviderObservedAt == nil || obs.Scope.AccountRef == nil || obs.Scope.WorkspaceRef == nil {
+	if obs.ProviderObservedAt == nil || obs.Scope.AccountRef == nil {
 		return false
 	}
 	return accountListed(parts, obs)
 }
 
 func accountListed(parts RegistryParts, obs Observation) bool {
-	if obs.Scope.AccountRef == nil || obs.Scope.WorkspaceRef == nil {
+	if obs.Scope.AccountRef == nil {
 		return false
 	}
 	n := 0
 	for _, account := range parts.Accounts {
-		if account.AccountRef == *obs.Scope.AccountRef && account.WorkspaceRef == *obs.Scope.WorkspaceRef && account.Generation == int64(obs.BindingGeneration) && account.ProducerRef == obs.ProducerRef && account.ProducerIncarnation == obs.ProducerIncarnation {
-			n++
+		if account.AccountRef != *obs.Scope.AccountRef || account.Generation != int64(obs.BindingGeneration) || account.ProducerRef != obs.ProducerRef || account.ProducerIncarnation != obs.ProducerIncarnation {
+			continue
 		}
+		if obs.Scope.WorkspaceRef != nil {
+			if account.AccountScopeOnly || account.WorkspaceRef != *obs.Scope.WorkspaceRef {
+				continue
+			}
+		} else {
+			// Absence is actionable only with explicit independently supplied personal
+			// scope, the qualified official source and no invented workspace string.
+			if !account.AccountScopeOnly || account.WorkspaceRef != "" || !accountScopeObservation(obs) {
+				continue
+			}
+		}
+		n++
 	}
 	return n == 1
 }
@@ -690,4 +702,23 @@ func containsStr(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func accountScopeSource(provider string, kind SourceKind, version string) bool {
+	return provider == "openai" && kind == SourceNativeRPC && version == CodexRPCSourceVersion || provider == "anthropic" && kind == SourceNativeRPC && version == ClaudeSDKSourceVersion || provider == "cursor" && kind == SourceNativeDisplay && version == CursorCLISourceVersion
+}
+func accountScopeObservation(obs Observation) bool {
+	if !accountScopeSource(obs.Provider, obs.Source.Kind, obs.Source.Version) {
+		return false
+	}
+	switch obs.Provider {
+	case "openai":
+		return obs.Source.CapabilityRef == CodexRPCCapability
+	case "anthropic":
+		return obs.Source.CapabilityRef == "claude-sdk:usage-report"
+	case "cursor":
+		return obs.Source.CapabilityRef == CursorCLICapability
+	default:
+		return false
+	}
 }

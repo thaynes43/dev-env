@@ -274,12 +274,14 @@ type ReadResponse struct {
 
 // ReadItem keeps the original observation beside collector-owned fields.
 type ReadItem struct {
-	Observation     Observation      `json:"observation"`
-	ReceivedAt      string           `json:"receivedAt"`
-	Validation      ValidationRecord `json:"validation"`
-	Binding         BindingRecord    `json:"binding"`
-	Freshness       Freshness        `json:"freshness"`
-	CurrentMeasures []CurrentMeasure `json:"currentMeasures"`
+	// CollectionFreshness is local read recency, separate from provider-data freshness.
+	CollectionFreshness *Freshness       `json:"collectionFreshness,omitempty"`
+	Observation         Observation      `json:"observation"`
+	ReceivedAt          string           `json:"receivedAt"`
+	Validation          ValidationRecord `json:"validation"`
+	Binding             BindingRecord    `json:"binding"`
+	Freshness           Freshness        `json:"freshness"`
+	CurrentMeasures     []CurrentMeasure `json:"currentMeasures"`
 }
 
 // ValidationRecord is data on a read document. It is not a trusted registry.
@@ -764,7 +766,7 @@ var (
 	measureKeys     = []string{"id", "category", "window", "unit", "currency", "direction", "value", "validationRef", "evidenceFields"}
 	derivationKeys  = []string{"id", "formula", "inputRefs", "unit", "precision", "value"}
 	readKeys        = []string{"schema", "snapshotRevision", "servedAt", "items", "sourceStatuses", "nextCursor"}
-	itemKeys        = []string{"observation", "receivedAt", "validation", "binding", "freshness", "currentMeasures"}
+	itemKeys        = []string{"observation", "receivedAt", "validation", "binding", "freshness", "currentMeasures", "collectionFreshness"}
 	validationKeys  = []string{"state", "validationRefs"}
 	bindingKeys     = []string{"state", "generation", "accountRef", "workspaceRef"}
 	freshnessKeys   = []string{"state", "asOf", "basis", "policyRef", "reason"}
@@ -1025,6 +1027,9 @@ func policyFor(keys []string) (map[string]struct{}, map[string]struct{}) {
 }
 
 func optionalFor(keys []string) map[string]struct{} {
+	if sameKeys(keys, itemKeys) {
+		return keySet("collectionFreshness")
+	}
 	if sameKeys(keys, windowKeys) {
 		return keySet("resetDisplayDate", "resetDisplayText")
 	}

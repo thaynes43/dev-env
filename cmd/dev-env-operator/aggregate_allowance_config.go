@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -43,6 +47,35 @@ type aggregateAllowanceSelection struct {
 	readerSA     string
 	readerUIDs   []types.UID
 	trust        providerallowance.AggregateTrust
+}
+
+// parseAggregateAllowanceInput selects inline or private file configuration.
+// Disabled/conflicting inputs refuse before opening a file. The final file may
+// use a normal Kubernetes projected-volume symlink, but must be a bounded
+// regular file without world access. Only the existing selected config parser
+// grants route eligibility; supplying a file never creates access or a mount.
+func parseAggregateAllowanceInput(enabled bool, inline, path, apiAddr, sessionNamespace string) (*aggregateAllowanceSelection, error) {
+	if path == "" {
+		return parseAggregateAllowanceConfig(enabled, inline, apiAddr, sessionNamespace)
+	}
+	if !enabled || inline != "" || !filepath.IsAbs(path) || apiAddr == "0" {
+		return nil, errAggregateAllowanceConfig
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, errAggregateAllowanceConfig
+	}
+	file := os.NewFile(uintptr(fd), "aggregate-private-config")
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0007 != 0 || info.Size() > aggregateConfigMaxBytes {
+		return nil, errAggregateAllowanceConfig
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, aggregateConfigMaxBytes+1))
+	if err != nil || len(raw) > aggregateConfigMaxBytes {
+		return nil, errAggregateAllowanceConfig
+	}
+	return parseAggregateAllowanceConfig(true, string(raw), apiAddr, sessionNamespace)
 }
 
 // parseAggregateAllowanceConfig accepts only an explicit enable plus the exact

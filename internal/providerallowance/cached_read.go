@@ -26,10 +26,15 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		provider := item.Observation.Provider
 		matched := cachedContexts(contexts, provider)
 		if len(matched) != 1 || !cachedObservationTrusted(item.Observation, matched[0], reg) {
+			item.CollectionFreshness = nil
 			cachedMarkItem(item)
 			cachedWithholdCurrent(item)
 			untrusted[provider] = true
 			continue
+		}
+		item.CollectionFreshness = captureCollectionFreshness(item.Observation, item.ReceivedAt, maxAge, now)
+		if !maxAgeSet {
+			item.CollectionFreshness = nil
 		}
 		trustedStatus[provider] = matched[0]
 		cachedAlignTrust(item, matched[0])

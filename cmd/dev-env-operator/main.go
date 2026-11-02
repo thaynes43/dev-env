@@ -302,6 +302,7 @@ func parseFlags(args []string) (options, error) {
 	var aggregateAllowanceEnabled bool
 	fs.BoolVar(&aggregateAllowanceEnabled, "enable-aggregate-allowance-reports", false, "HELD SOURCE ONLY: serve the fixed aggregate allowance slot when --aggregate-allowance-config is exact; default off, does not enable the API or infer enable from max age")
 	aggregateAllowanceRaw := fs.String("aggregate-allowance-config", "", "HELD SOURCE ONLY: inline JSON selection for --enable-aggregate-allowance-reports; empty leaves the route off and is not a file path")
+	aggregateAllowanceFile := fs.String("aggregate-allowance-config-file", "", "default-off deployment-owned private aggregate selection file; mutually exclusive with inline config; does not create or authorize a private config mount")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -665,7 +666,7 @@ func parseFlags(args []string) (options, error) {
 	if o.providerSource, err = parseProviderSourceConfig(providerSourceEnabled, *providerSourceRaw, o.apiAddr, o.sessionNamespace); err != nil {
 		return o, err
 	}
-	if o.aggregateAllowance, err = parseAggregateAllowanceConfig(aggregateAllowanceEnabled, *aggregateAllowanceRaw, o.apiAddr, o.sessionNamespace); err != nil {
+	if o.aggregateAllowance, err = parseAggregateAllowanceInput(aggregateAllowanceEnabled, *aggregateAllowanceRaw, *aggregateAllowanceFile, o.apiAddr, o.sessionNamespace); err != nil {
 		return o, err
 	}
 	if *rescueOwnersFile != "" {

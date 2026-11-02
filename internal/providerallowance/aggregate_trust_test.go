@@ -1,7 +1,9 @@
 package providerallowance
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -75,4 +77,25 @@ func aggregateTrustFixture() string {
 			"projections":[]
 		}
 	}`
+}
+
+func TestAggregateDirectFieldRegistryBoundSupportsScopedClaudeRows(t *testing.T) {
+	for _, count := range []int{128, 129} {
+		fields := map[string]any{}
+		for i := 0; i < count; i++ {
+			fields[fmt.Sprintf("scoped-row-field-%03d", i)] = map[string]string{"originalType": "string", "class": "display"}
+		}
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw := strings.Replace(aggregateTrustFixture(), `"directFields":{}`, `"directFields":`+string(encoded), 1)
+		_, err = ParseAggregateTrust([]byte(raw))
+		if count == 128 && err != nil {
+			t.Fatal("bounded scoped metadata registry refused", err)
+		}
+		if count == 129 && err == nil {
+			t.Fatal("oversized scoped metadata registry accepted")
+		}
+	}
 }

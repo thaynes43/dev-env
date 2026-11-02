@@ -155,6 +155,7 @@ internal/projectcatalog/ parses and validates the GitOps project catalog and its
 internal/projectsync/    agentd's bounded, model-free GitOps project management (`agentd project-sync|project-refresh`): actor, API, receipt
 internal/pages/          bounded keeper Pushover page records, Alertmanager snapshots, Gatus current checks and shared existing-order/canonical-claim response projection (DESIGN-031); read-only source interfaces, no production adapters; standard library only
 internal/providerallowance/  typed providerallowance.v1 observation and providerallowance.read.v1 cached-read contract: strict decode, caller-supplied trust, and derivation checks; no collector, adapter, storage, or network
+internal/usagecollector/  explicit bounded official Codex account/quota reads and private isolated Claude callback capture; no settings installation, authentication mutation, automatic recurrence or publication
 internal/usageconsolidation/  bounded pure report projector over caller-authorized allowance reads and initial-invocation observations; no aggregation, collector, provider, clock, authorization, or I/O
 internal/projectcanary/  validates the two finite operator-owned project rule canaries and binds a session to one
 internal/projectcanary/testutil/  synthetic canary fixtures for tests
