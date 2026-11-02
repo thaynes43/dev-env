@@ -308,10 +308,11 @@ func (s *Server) publishInstruction(ctx context.Context, _ http.ResponseWriter, 
 	if !instructionAttemptLive(target, pod, req.AttemptID) {
 		return 0, nil, inboxHidden()
 	}
-	// Refuse a new key before Inbox.Create. The status patch below repeats the
-	// bound, but a create that then loses that check would leave an inbox
-	// message with no instruction record. An existing key already returned
-	// through confirmInstruction and is not subject to this refusal.
+	// Refuse a key when the bound is already full. Concurrent new keys can
+	// still race this check: the status append enforces the bound, but a loser
+	// can leave an ordinary inbox message without an instruction record. Such
+	// a message is ineligible for native checkpoint or consumption. An existing
+	// key already returned through confirmInstruction above.
 	var current v1alpha1.AgentSession
 	if s.Live.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.Name}, &current) != nil || current.UID != target.UID {
 		return 0, nil, instructionUnknown()

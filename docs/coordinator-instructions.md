@@ -23,8 +23,14 @@ delivery key, at most four records. Kubernetes can correlate each item, so
 the delivery fields stay immutable and consumption can be set once. A later
 update cannot drop the list, remove an old key, or replace an old key with a
 different key. Duplicate keys are rejected. A new key is refused when four
-records are already stored, and that refusal happens before an inbox message
-is created. Repeating a key that is already stored still returns that receipt
+records are already stored at the pre-create check, before an inbox message
+is created. Publication is not atomic across the inbox and session status:
+concurrent new keys can both pass that check with three records present.
+One can then receive 429 from the status append after its inbox message was
+created. That message has no instruction status record and cannot appear in
+the native checkpoint or receive a consumption acknowledgement. The four-record
+bound applies to registered instructions, not to every ordinary inbox message.
+Repeating a key that is already stored still returns that receipt
 and does not create another message. The response is a receipt:
 message identity, digest and `consumed: false`. It does not include the nonce
 or the sender. Repeating the same intent returns that receipt.
