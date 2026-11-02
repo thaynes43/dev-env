@@ -169,6 +169,13 @@ spec:
                 - message: immutable after create; coordinator instruction parent
                     UID does not change
                   rule: self == oldSelf
+              coordinatorInstructionPublisher:
+                default: false
+                description: |-
+                  CoordinatorInstructionPublisher selects the qualified control-client image
+                  for a fresh ordinary private project parent (DESIGN-051). It does not enroll
+                  a receiver or change any instruction authorization or depth.
+                type: boolean
               coordinatorInstructions:
                 default: false
                 description: |-
@@ -632,6 +639,12 @@ spec:
                 && self.coordinatorInstructions == oldSelf.coordinatorInstructions)
                 || (!has(oldSelf.coordinatorInstructions) && has(self.coordinatorInstructions)
                 && self.coordinatorInstructions == false)
+            - message: coordinator instruction publisher selection is immutable
+              rule: (!has(self.coordinatorInstructionPublisher) && !has(oldSelf.coordinatorInstructionPublisher))
+                || (has(self.coordinatorInstructionPublisher) && has(oldSelf.coordinatorInstructionPublisher)
+                && self.coordinatorInstructionPublisher == oldSelf.coordinatorInstructionPublisher)
+                || (!has(oldSelf.coordinatorInstructionPublisher) && has(self.coordinatorInstructionPublisher)
+                && self.coordinatorInstructionPublisher == false)
           status:
             description: |-
               AgentSessionStatus is what the operator and agentd observed. Reconcile is

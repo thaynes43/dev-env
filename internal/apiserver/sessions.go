@@ -116,8 +116,14 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 	// Image rollback blocks only new enrollment. An accepted create whose
 	// response was lost must still be recoverable through its same stable key.
 	// Authentication, project and parent binding were checked by newSession.
-	if sess.Spec.CoordinatorInstructions && controller.ValidateInstructionAgentImage(s.CoordinatorInstructionAgentImage) != nil {
+	if (sess.Spec.CoordinatorInstructions || sess.Spec.CoordinatorInstructionPublisher) && controller.ValidateInstructionAgentImage(s.CoordinatorInstructionAgentImage) != nil {
+		if sess.Spec.CoordinatorInstructionPublisher {
+			return 0, nil, invalid(fieldError("coordinatorInstructionPublisher", "a qualified instruction publisher image is not configured"))
+		}
 		return 0, nil, invalid(fieldError("coordinatorInstructions", "a qualified coordinator instruction receiver image is not configured"))
+	}
+	if sess.Spec.CoordinatorInstructionPublisher && controller.ValidateInstructionPublisherImage(s.CoordinatorInstructionAgentImage) != nil {
+		return 0, nil, invalid(fieldError("coordinatorInstructionPublisher", "a qualified instruction publisher image with the per-launch receiver client is not configured"))
 	}
 	if !s.PrivateProjectTasks && sess.Spec.Workspace == nil && sess.Annotations[v1alpha1.AnnotationProjectSnapshot] != "" {
 		return 0, nil, invalid(fieldError("project", "private project tasks are not enabled"))

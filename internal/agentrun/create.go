@@ -58,6 +58,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		maxTurns                                                                                   int
 		wait                                                                                       time.Duration
 		interactive, local, safe, once, coordinatorInstructions                                    bool
+		instructionPublisher                                                                       bool
 	)
 	fs.Func("dry-run", "", func(value string) error {
 		if value != "server" {
@@ -88,6 +89,7 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	fs.BoolVar(&safe, "safe", false, "")
 	fs.BoolVar(&once, "once", false, "")
 	fs.BoolVar(&coordinatorInstructions, "coordinator-instructions", false, "")
+	fs.BoolVar(&instructionPublisher, "coordinator-instruction-publisher", false, "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
 		return err
@@ -108,6 +110,9 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	}
 	if coordinatorInstructions && (restoring || local || interactive || project == "") {
 		return usageError("--coordinator-instructions applies only to a new --project task; it cannot combine with rescue restore, --local or --interactive")
+	}
+	if instructionPublisher && (coordinatorInstructions || restoring || local || interactive || dryRunGiven || project == "") {
+		return usageError("--coordinator-instruction-publisher requires a new --project task without receiver enrollment, restore, --local or --interactive")
 	}
 	if project != "" && (restoring || local || interactive) {
 		return usageError("--project selects a new task; it cannot combine with rescue restore, --local or --interactive")
@@ -256,21 +261,22 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 		hints = restoreHints(rescueID, rescueSession, rr, base != "")
 	}
 	req := apiv1.CreateSessionRequest{
-		Restore:                 rescueID,
-		Repo:                    repo,
-		Project:                 project,
-		Base:                    base,
-		Agent:                   agent,
-		Mode:                    mode,
-		Model:                   model,
-		Effort:                  effort,
-		Prompt:                  prompt,
-		Size:                    size,
-		Profile:                 profile,
-		Limits:                  limits,
-		Lifecycle:               lifecycle,
-		IdempotencyKey:          key,
-		CoordinatorInstructions: coordinatorInstructions,
+		Restore:                         rescueID,
+		Repo:                            repo,
+		Project:                         project,
+		Base:                            base,
+		Agent:                           agent,
+		Mode:                            mode,
+		Model:                           model,
+		Effort:                          effort,
+		Prompt:                          prompt,
+		Size:                            size,
+		Profile:                         profile,
+		Limits:                          limits,
+		Lifecycle:                       lifecycle,
+		IdempotencyKey:                  key,
+		CoordinatorInstructions:         coordinatorInstructions,
+		CoordinatorInstructionPublisher: instructionPublisher,
 	}
 	if dryRunGiven {
 		hc := *c.http

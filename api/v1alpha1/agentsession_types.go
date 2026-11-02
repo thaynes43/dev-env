@@ -148,6 +148,7 @@ const (
 // coordinatorInstructions is default false. An existing object may gain that
 // default once. Any other add, remove, or value change is refused.
 // +kubebuilder:validation:XValidation:rule="(!has(self.coordinatorInstructions) && !has(oldSelf.coordinatorInstructions)) || (has(self.coordinatorInstructions) && has(oldSelf.coordinatorInstructions) && self.coordinatorInstructions == oldSelf.coordinatorInstructions) || (!has(oldSelf.coordinatorInstructions) && has(self.coordinatorInstructions) && self.coordinatorInstructions == false)",message="coordinator instruction opt-in is immutable"
+// +kubebuilder:validation:XValidation:rule="(!has(self.coordinatorInstructionPublisher) && !has(oldSelf.coordinatorInstructionPublisher)) || (has(self.coordinatorInstructionPublisher) && has(oldSelf.coordinatorInstructionPublisher) && self.coordinatorInstructionPublisher == oldSelf.coordinatorInstructionPublisher) || (!has(oldSelf.coordinatorInstructionPublisher) && has(self.coordinatorInstructionPublisher) && self.coordinatorInstructionPublisher == false)",message="coordinator instruction publisher selection is immutable"
 type AgentSessionSpec struct {
 	// PrivatePilot is authored only by the sealed operator route, never a caller override.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="private pilot binding is immutable"
@@ -296,6 +297,12 @@ type AgentSessionSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	CoordinatorInstructions bool `json:"coordinatorInstructions,omitempty"`
+	// CoordinatorInstructionPublisher selects the qualified control-client image
+	// for a fresh ordinary private project parent (DESIGN-051). It does not enroll
+	// a receiver or change any instruction authorization or depth.
+	// +kubebuilder:default=false
+	// +optional
+	CoordinatorInstructionPublisher bool `json:"coordinatorInstructionPublisher,omitempty"`
 
 	// Caller is the CallerPolicy of a summoned session, for example
 	// alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions. A

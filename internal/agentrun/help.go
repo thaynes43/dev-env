@@ -390,6 +390,10 @@ Flags:
                              task child; requires a live authenticated parent and
                              the dev profile. Default off; does not enroll an
                              existing Session or grant authority.
+  --coordinator-instruction-publisher
+                             qualified control client for a fresh ordinary dev
+                             project parent created by a trusted client. Default
+                             off; does not enroll a receiver or change depth.
   --agent claude             the agent (default claude; codex and opencode arrive
                              in plans 04 and 09)
   --model <id>               a full model id, never an alias such as opus (default

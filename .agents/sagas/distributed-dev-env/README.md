@@ -536,3 +536,5 @@ Qualified ordinary instruction receiver (OP354, 2026-11-02): [DESIGN-048](design
 Finite retained-provider capture assembly (OP192/187, 2026-11-02): [DESIGN-049](designs/049-finite-provider-capture-assembly.md) records the bounded local bridge to aggregate transport. It acquires no provider data and preserves unknown account/freshness states; actual captures and runtime acceptance remain open.
 
 Rescue incident notification ownership (OP355, 2026-11-02): [DESIGN-050](designs/050-rescue-incident-notifications.md) separates Git preservation failure, retry clocks and bounded native notification ownership. Failed bootstrap remains protected even during pending deletion; no ownership configuration or rollout is activated by source preparation.
+
+Ordinary instruction publisher image qualification (OP354, 2026-11-02): [DESIGN-051](designs/051-ordinary-instruction-publisher-image.md) supplies the current control client to a fresh accepted-project parent without a global worker pin, receiver enrollment or retrofitted legacy parent. Runtime native consumption remains unproved.
