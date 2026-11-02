@@ -340,11 +340,29 @@ func preserveAllowance(prev, next providerallowance.ReadResponse) error {
 			}
 			continue
 		}
-		if after.Observation.Sequence < before.Observation.Sequence || after.Observation.BindingGeneration < before.Observation.BindingGeneration {
+		if after.Observation.BindingGeneration < before.Observation.BindingGeneration ||
+			!aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) ||
+			!aggregateStringEqual(before.Observation.Scope.WorkspaceRef, after.Observation.Scope.WorkspaceRef) {
 			return ErrAggregateRejected
 		}
-		if after.Observation.Sequence == before.Observation.Sequence || !aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) {
-			return ErrAggregateRejected
+		if before.Observation.ProducerRef == after.Observation.ProducerRef && before.Observation.ProducerIncarnation == after.Observation.ProducerIncarnation {
+			if after.Observation.Sequence <= before.Observation.Sequence {
+				return ErrAggregateRejected
+			}
+			continue
+		}
+		// The new report has already passed the store's caller-owned trust.
+		// A newly selected producer incarnation may restart its counter, but
+		// cannot replay an older capture or refresh its original receipt.
+		for _, stamps := range [][2]string{
+			{before.Observation.CapturedAt, after.Observation.CapturedAt},
+			{before.ReceivedAt, after.ReceivedAt},
+		} {
+			oldAt, oldErr := time.Parse(time.RFC3339Nano, stamps[0])
+			newAt, newErr := time.Parse(time.RFC3339Nano, stamps[1])
+			if oldErr != nil || newErr != nil || !newAt.After(oldAt) {
+				return ErrAggregateRejected
+			}
 		}
 	}
 	return nil

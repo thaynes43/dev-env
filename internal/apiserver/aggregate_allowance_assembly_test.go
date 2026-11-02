@@ -531,6 +531,10 @@ func assemblySameString(a, b *string) bool {
 func assemblyString(value string) *string { return &value }
 
 func assemblyRegistry() *providerallowance.StaticRegistry {
+	return assemblyRegistryForIncarnation("fixture-incarnation-1")
+}
+
+func assemblyRegistryForIncarnation(incarnation string) *providerallowance.StaticRegistry {
 	min, max := "0", "100"
 	return providerallowance.NewStaticRegistry(providerallowance.RegistryParts{
 		Sources: []providerallowance.SourceRule{{
@@ -544,7 +548,7 @@ func assemblyRegistry() *providerallowance.StaticRegistry {
 		}},
 		Accounts: []providerallowance.AccountRule{{
 			AccountRef: "fixture-account", WorkspaceRef: "fixture-workspace", Generation: 0,
-			ProducerRef: "fixture-producer", ProducerIncarnation: "fixture-incarnation-1",
+			ProducerRef: "fixture-producer", ProducerIncarnation: incarnation,
 		}},
 	})
 }

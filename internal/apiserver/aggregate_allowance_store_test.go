@@ -241,3 +241,99 @@ func allowanceOpenAIStatus(t *testing.T, doc *providerallowance.ReadResponse) *p
 	t.Fatal("missing openai status")
 	return nil
 }
+
+func TestAggregateAllowanceStoreTrustedProducerRestart(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal(err)
+	}
+	held := mem.cm.Data[AggregateAllowanceDataKey]
+	before := allowanceOpenAIItem(t, &previous)
+	if before.Observation.Sequence <= 1 {
+		t.Fatal("fixture must precede a counter restart")
+	}
+	restarted := cloneAllowanceReport(t, previous)
+	after := allowanceOpenAIItem(t, &restarted)
+	after.Observation.ObservationID = "fixture-after-restart"
+	after.Observation.ProducerIncarnation = "fixture-incarnation-2"
+	after.Observation.Sequence = 1
+	captured, err := time.Parse(time.RFC3339Nano, before.Observation.CapturedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, err := time.Parse(time.RFC3339Nano, before.ReceivedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !received.After(captured.Add(2 * time.Nanosecond)) {
+		t.Fatal("fixture needs room for a valid newer capture before the prior receipt")
+	}
+	after.Observation.CapturedAt = captured.Add(time.Minute).Format(time.RFC3339Nano)
+	after.ReceivedAt = received.Add(time.Minute).Format(time.RFC3339Nano)
+	good := allowanceOpenAIStatus(t, &restarted).LastGood
+	good.ObservationID, good.CapturedAt, good.ReceivedAt = after.Observation.ObservationID, after.Observation.CapturedAt, after.ReceivedAt
+
+	// A payload alone cannot select a new incarnation.
+	refuseAllowancePut(t, store, mem, restarted, now, held)
+	sameIncarnation := cloneAllowanceReport(t, restarted)
+	allowanceOpenAIItem(t, &sameIncarnation).Observation.ProducerIncarnation = before.Observation.ProducerIncarnation
+	refuseAllowancePut(t, store, mem, sameIncarnation, now, held)
+	store.Contexts[0].ProducerIncarnation = after.Observation.ProducerIncarnation
+	store.Registry = assemblyRegistryForIncarnation(after.Observation.ProducerIncarnation)
+	for _, tc := range []struct {
+		name string
+		edit func(*providerallowance.ReadItem)
+	}{
+		{"equal capture", func(item *providerallowance.ReadItem) { item.Observation.CapturedAt = before.Observation.CapturedAt }},
+		{"earlier capture", func(item *providerallowance.ReadItem) {
+			item.Observation.CapturedAt = captured.Add(-time.Second).Format(time.RFC3339Nano)
+		}},
+		{"equal receipt", func(item *providerallowance.ReadItem) {
+			item.Observation.CapturedAt = captured.Add(time.Nanosecond).Format(time.RFC3339Nano)
+			item.ReceivedAt = before.ReceivedAt
+		}},
+		{"earlier receipt", func(item *providerallowance.ReadItem) {
+			item.Observation.CapturedAt = captured.Add(time.Nanosecond).Format(time.RFC3339Nano)
+			item.ReceivedAt = received.Add(-time.Nanosecond).Format(time.RFC3339Nano)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := cloneAllowanceReport(t, restarted)
+			item := allowanceOpenAIItem(t, &bad)
+			tc.edit(item)
+			last := allowanceOpenAIStatus(t, &bad).LastGood
+			last.CapturedAt, last.ReceivedAt = item.Observation.CapturedAt, item.ReceivedAt
+			refuseAllowancePut(t, store, mem, bad, now, held)
+		})
+	}
+	raw := canonicalAllowanceFixture(t, restarted)
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 2 {
+		t.Fatal("trusted restart did not recover the slot", err, mem.updates)
+	}
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 2 {
+		t.Fatal("restart replay refreshed the slot", err, mem.updates)
+	}
+	refuseAllowancePut(t, store, mem, previous, now, string(raw))
+	for _, change := range []func(*providerallowance.ReadItem){
+		func(item *providerallowance.ReadItem) {
+			item.Observation.Scope.AccountRef = assemblyString("different-account")
+		},
+		func(item *providerallowance.ReadItem) {
+			item.Observation.Scope.WorkspaceRef = assemblyString("different-workspace")
+		},
+	} {
+		bad := cloneAllowanceReport(t, restarted)
+		change(allowanceOpenAIItem(t, &bad))
+		if err := preserveAllowance(previous, bad); !errors.Is(err, ErrAggregateRejected) {
+			t.Fatal("restart bypassed scope preservation", err)
+		}
+	}
+	olderBinding := cloneAllowanceReport(t, previous)
+	allowanceOpenAIItem(t, &olderBinding).Observation.BindingGeneration = 1
+	if err := preserveAllowance(olderBinding, restarted); !errors.Is(err, ErrAggregateRejected) {
+		t.Fatal("restart rolled back the binding generation", err)
+	}
+}
