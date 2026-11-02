@@ -501,3 +501,43 @@ func TestCreateTerraModelAndEffortPreserved(t *testing.T) {
 		t.Fatal("request changed model or effort")
 	}
 }
+
+func TestCreateCoordinatorInstructionsOptIn(t *testing.T) {
+	h := newHarness(t)
+	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "--repo", "haynes-ops", "--project", "sample", "-p", "task", "--coordinator-instructions", "--wait", "0")
+	raw := string(h.api.requests()[0].body)
+	got := decodeCreate(t, h.api.requests()[0].body)
+	if !strings.Contains(raw, `"coordinatorInstructions":true`) || !got.CoordinatorInstructions || got.Project != "sample" || got.Mode != protocol.ModeTask {
+		t.Fatalf("opt-in body %s", raw)
+	}
+
+	h = newHarness(t)
+	serveCreate(h, runningOn(testSession(name, ""), "talosw02"))
+	h.mustRun(ExitOK, "--repo", "haynes-ops", "-p", "task", "--coordinator-instructions=false", "--wait", "0")
+	raw = string(h.api.requests()[0].body)
+	if strings.Contains(raw, "coordinatorInstructions") || decodeCreate(t, []byte(raw)).CoordinatorInstructions {
+		t.Fatalf("explicit false changed the default body: %s", raw)
+	}
+}
+
+func TestCreateCoordinatorInstructionsRejectsUnsupportedLaunch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"no project", []string{"--repo", "haynes-ops", "-p", "task", "--coordinator-instructions"}},
+		{"local", []string{"--repo", "haynes-ops", "--project", "sample", "--local", "--coordinator-instructions"}},
+		{"interactive", []string{"--repo", "haynes-ops", "--project", "sample", "--interactive", "--coordinator-instructions"}},
+		{"restore", []string{"rescue", "restore", "sess/20261006-2104", "--project", "sample", "-p", "task", "--coordinator-instructions"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.mustRun(ExitUsage, tc.args...)
+			contains(t, "stderr", h.stderr.String(), "--coordinator-instructions applies only to a new --project task")
+			if len(h.api.requests()) != 0 {
+				t.Fatalf("sent %#v", h.api.requests())
+			}
+		})
+	}
+}

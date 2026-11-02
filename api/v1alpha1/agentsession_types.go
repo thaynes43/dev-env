@@ -145,6 +145,9 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(self.commonRules) || (has(self.projectCanary) && has(self.projectCanary.commonRevision) && self.projectCanary.commonRevision == self.commonRules.commonRevision) || (has(self.privatePilot) && self.privatePilot.commonRevision == self.commonRules.commonRevision) || (!has(self.projectCanary) && !has(self.privatePilot) && !has(self.workspace) && self.mode == 'task' && self.agent in ['claude', 'codex'] && has(self.profile) && self.profile == 'dev' && has(self.parent) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) > duration('0s') && duration(self.limits.timeout) <= duration('45m'))",message="common rules require a matching managed canary or finite private task binding"
 // +kubebuilder:validation:XValidation:rule="!has(self.sessionDirectory) || has(self.projectCanary) || has(self.privatePilot)",message="directory enrollment requires a managed canary"
 // +kubebuilder:validation:XValidation:rule="!has(self.privatePilot) || (!has(self.projectCanary) && self.repo == 'dev-env' && self.base == 'main' && self.mode == 'task' && self.agent == 'codex' && self.model == 'gpt-6-luna' && self.effort == 'high' && self.size == 'S' && self.profile == 'rule-canary-codex' && self.parent == 'dev/dev-env' && !has(self.workspace) && !has(self.restore) && !has(self.tools) && !has(self.llm) && !has(self.caller) && !has(self.lane) && !has(self.lifecycle) && !has(self.idempotencyKey) && has(self.limits) && has(self.limits.timeout) && duration(self.limits.timeout) == duration('15m') && (!has(self.limits.maxTurns) || self.limits.maxTurns == 0) && has(self.commonRules) && self.commonRules.commonRevision == self.privatePilot.commonRevision && has(self.sessionDirectory) && self.sessionDirectory.version == 1 && self.sessionDirectory.project == 'dev-env')",message="sealed pilots require the fixed private bounded Codex contract and matching retained inputs"
+// coordinatorInstructions is default false. An existing object may gain that
+// default once. Any other add, remove, or value change is refused.
+// +kubebuilder:validation:XValidation:rule="(!has(self.coordinatorInstructions) && !has(oldSelf.coordinatorInstructions)) || (has(self.coordinatorInstructions) && has(oldSelf.coordinatorInstructions) && self.coordinatorInstructions == oldSelf.coordinatorInstructions) || (!has(oldSelf.coordinatorInstructions) && has(self.coordinatorInstructions) && self.coordinatorInstructions == false)",message="coordinator instruction opt-in is immutable"
 type AgentSessionSpec struct {
 	// PrivatePilot is authored only by the sealed operator route, never a caller override.
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="private pilot binding is immutable"
@@ -285,6 +288,14 @@ type AgentSessionSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="immutable after create; coordinator instruction parent UID does not change"
 	// +optional
 	CoordinatorInstructionParentUID string `json:"coordinatorInstructionParentUID,omitempty"`
+
+	// CoordinatorInstructions is the explicit per-new-ordinary-task opt-in.
+	// The API sets it only for an accepted private catalog task child. Omission
+	// and false stay off. It is not a privilege grant, not taken from a parent
+	// UID in the request body, and it does not change an existing Session.
+	// +kubebuilder:default=false
+	// +optional
+	CoordinatorInstructions bool `json:"coordinatorInstructions,omitempty"`
 
 	// Caller is the CallerPolicy of a summoned session, for example
 	// alert-responder (DESIGN-001 3.7). Empty for Tom's own sessions. A

@@ -213,3 +213,35 @@ accepts an acknowledgement only when its message UID and text digest equal the
 A legacy session with no `spec.coordinatorInstructionParentUID` fails closed
 on delivery. The field is copied only at create from a live parent read. This
 slice does not patch an existing spec and does not inherit another claim.
+
+## Per-new-task enrollment (source only)
+
+`agent-run --project P -p "task" --coordinator-instructions` explicitly selects
+instruction enrollment for a new ordinary private task. The request carries
+`coordinatorInstructions: true`; omission or explicit false remains off. Local,
+interactive and restore launches are rejected before a request. The ordinary
+task still needs all existing project, profile, depth and admission checks.
+
+The API accepts this flag only from a live authenticated parent Session for an
+accepted private catalog task child on the `dev` profile. It rejects shared
+workspaces, canaries, sealed pilots, budget-bound launches and unsupported
+scope. The API assigns the parent UID from a live read and checks it again;
+the request body cannot supply that UID. The parent does not need enrollment
+itself. Sending and addressing still require the matching accepted snapshots
+and the recipient's single owned task claim described above.
+
+The generated AgentSession schema defaults the flag false and makes it
+immutable. An existing false or omitted flag cannot become true; true cannot
+be cleared. Ordinary operating-mode changes preserve the stored choice. Only
+the controller's construction of the newly owned eligible recipient Pod sets
+one `AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS=true` value. Duplicate template or
+profile keys cannot widen that selection. Hold Pods and ineligible tasks do
+not enable it; existing Pods are not retrofitted or restarted.
+
+This source includes actual generated schema and focused enrollment tests.
+It does not install that schema or operator, select a worker image, launch a
+parent or recipient, or prove native consumption. A qualified signed agent,
+the corresponding generated schema/operator adoption, a legitimate fresh
+parent route and the receiver's model-issued checkpoint/consume remain needed.
+An ordinary server dry-run must not be used to bypass the separate sealed-pilot
+admission-only route. Existing runtime holds and access boundaries remain.

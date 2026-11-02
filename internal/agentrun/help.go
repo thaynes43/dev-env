@@ -386,6 +386,10 @@ Flags:
                              this selects a repository declared in that project.
   --project <name>           a project declared in the operator's accepted catalog
                              (tasks only; cannot combine with rescue restore)
+  --coordinator-instructions explicit opt-in for one new ordinary private project
+                             task child; requires a live authenticated parent and
+                             the dev profile. Default off; does not enroll an
+                             existing Session or grant authority.
   --agent claude             the agent (default claude; codex and opencode arrive
                              in plans 04 and 09)
   --model <id>               a full model id, never an alias such as opus (default

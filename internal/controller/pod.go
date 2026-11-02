@@ -207,6 +207,50 @@ func sessionTemplateRevision(s *v1alpha1.AgentSession, t *templates.Templates) (
 	return t.Revision(), nil
 }
 
+const coordinatorInstructionsEnv = "AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS"
+
+// coordinatorInstructionEnvEnabled is the new ordinary private recipient only.
+// Default off, a missing parent UID, hold, shared workspace, canary, pilot,
+// and budget do not enable the capability.
+func coordinatorInstructionEnvEnabled(s *v1alpha1.AgentSession, hold bool) bool {
+	if hold || s == nil || !s.Spec.CoordinatorInstructions || s.Spec.CoordinatorInstructionParentUID == "" || s.Spec.Parent == "" {
+		return false
+	}
+	if s.Spec.Workspace != nil || s.Spec.ProjectCanary != nil || s.Spec.PrivatePilot != nil || projectcanary.IsPilot(s) || budgetBound(s) {
+		return false
+	}
+	if s.Spec.Mode != v1alpha1.ModeTask || (s.Spec.Agent != v1alpha1.AgentClaude && s.Spec.Agent != v1alpha1.AgentCodex) || s.Spec.Profile != "dev" {
+		return false
+	}
+	return s.Annotations[v1alpha1.AnnotationProjectSnapshot] != ""
+}
+
+// applyCoordinatorInstructionEnv drops duplicate keys. Absence and false do
+// not add a value, so an existing pod spec stays unchanged. True is one
+// controller-owned value and cannot be widened by template or profile env.
+func applyCoordinatorInstructionEnv(env []corev1.EnvVar, enable bool) []corev1.EnvVar {
+	found := false
+	for _, e := range env {
+		if e.Name == coordinatorInstructionsEnv {
+			found = true
+			break
+		}
+	}
+	if !found && !enable {
+		return env
+	}
+	out := make([]corev1.EnvVar, 0, len(env)+1)
+	for _, e := range env {
+		if e.Name != coordinatorInstructionsEnv {
+			out = append(out, e)
+		}
+	}
+	if enable {
+		out = append(out, corev1.EnvVar{Name: coordinatorInstructionsEnv, Value: "true"})
+	}
+	return out
+}
+
 // buildHoldPod returns the session's rescue pod (D-55): the session's pod with
 // `agentd hold` in place of `agentd run`, the S class's requests and limits,
 // and no agent credentials: no static token, and no profile env or envFrom. It
@@ -351,6 +395,7 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	// Controller-owned feature gate cannot be widened by template/profile env.
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: fmt.Sprint(childDecisions && managedCodex && !hold && s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace != nil)})
+	env = applyCoordinatorInstructionEnv(env, coordinatorInstructionEnvEnabled(s, hold))
 	var args []string
 	if hold {
 		args = append(args, HoldArgs...)

@@ -304,6 +304,12 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 			return nil, forbidden("profile %s runs as a named coordinator identity, which serves the Claude lead; a %s session may not run on it (DESIGN-042 6.4)", spec.Profile, spec.Agent)
 		}
 	}
+	if req.CoordinatorInstructions {
+		if err := s.admitCoordinatorInstructionOptIn(req, c, &spec, snapshot); err != nil {
+			return nil, err
+		}
+		spec.CoordinatorInstructions = true
+	}
 
 	sess := &v1alpha1.AgentSession{
 		ObjectMeta: metav1.ObjectMeta{
@@ -340,7 +346,61 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 	}
 	s.bindUsageCaptureParent(ctx, c, sess)
 	s.bindCoordinatorInstructionParent(ctx, c, sess)
+	if err := s.confirmCoordinatorInstructionParent(ctx, c, sess); err != nil {
+		return nil, err
+	}
 	return sess, nil
+}
+
+// admitCoordinatorInstructionOptIn accepts only an ordinary private catalog
+// task child. The parent UID is not copied here and is not read from the body.
+func (s *Server) admitCoordinatorInstructionOptIn(req apiv1.CreateSessionRequest, c *caller, spec *v1alpha1.AgentSessionSpec, snapshot []byte) error {
+	deny := func(msg string) error {
+		return invalid(fieldError("coordinatorInstructions", "%s", msg))
+	}
+	if c == nil || c.kind != kindSession || c.session == nil || c.session.UID == "" || c.parent == "" || c.session.Name != c.parent || !c.session.DeletionTimestamp.IsZero() || spec == nil || spec.Parent != c.session.Name {
+		return deny("coordinator instruction opt-in requires the live authenticated parent session")
+	}
+	if c.session.Spec.Workspace != nil || spec.Workspace != nil {
+		return deny("coordinator instruction opt-in rejects a shared workspace")
+	}
+	if c.session.Spec.ProjectCanary != nil || spec.ProjectCanary != nil || c.session.Spec.PrivatePilot != nil || spec.PrivatePilot != nil || projectcanary.IsPilot(c.session) || projectcanary.IsPilot(&v1alpha1.AgentSession{Spec: *spec}) || req.CanaryID != "" {
+		return deny("coordinator instruction opt-in rejects a canary or pilot")
+	}
+	if s.callerHasTaskBudget(c) {
+		return deny("coordinator instruction opt-in rejects a budget-bound launch")
+	}
+	if req.Mode != string(v1alpha1.ModeTask) || spec.Mode != v1alpha1.ModeTask || (spec.Agent != v1alpha1.AgentClaude && spec.Agent != v1alpha1.AgentCodex) {
+		return deny("coordinator instruction opt-in rejects an unsupported mode")
+	}
+	if req.Project == "" || len(snapshot) == 0 || spec.Repo == "" || spec.Base == "" || !s.PrivateProjectTasks {
+		return deny("coordinator instruction opt-in requires an accepted project binding")
+	}
+	if spec.Profile != "dev" || req.Restore != "" || len(req.Tools) > 0 || req.Name != "" || req.Lane != "" || spec.Caller != "" || spec.Lane != "" || spec.LLM != nil {
+		return deny("coordinator instruction opt-in rejects unsupported scope")
+	}
+	return nil
+}
+
+// confirmCoordinatorInstructionParent checks the UID the existing server-side
+// binder copied from the live parent. A forged, human, sibling, or stale UID
+// does not match. The parent does not itself need this opt-in.
+func (s *Server) confirmCoordinatorInstructionParent(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	if sess == nil || !sess.Spec.CoordinatorInstructions {
+		return nil
+	}
+	if c == nil || c.kind != kindSession || c.session == nil || c.session.UID == "" || s.Live == nil {
+		return invalid(fieldError("coordinatorInstructions", "coordinator instruction opt-in requires the live authenticated parent session"))
+	}
+	ns := c.session.Namespace
+	if ns == "" {
+		ns = s.Policy.SessionNamespace
+	}
+	var parent v1alpha1.AgentSession
+	if err := s.Live.Get(ctx, types.NamespacedName{Namespace: ns, Name: c.session.Name}, &parent); err != nil || parent.UID == "" || parent.UID != c.session.UID || parent.Name != sess.Spec.Parent || !parent.DeletionTimestamp.IsZero() || sess.Spec.CoordinatorInstructionParentUID != string(parent.UID) {
+		return invalid(fieldError("coordinatorInstructions", "coordinator instruction opt-in requires the live authenticated parent session"))
+	}
+	return nil
 }
 
 // checkAgentd runs agentd's own check on the session, with its final name.
