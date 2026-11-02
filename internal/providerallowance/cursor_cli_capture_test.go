@@ -141,3 +141,15 @@ func TestCursorCLIRefusesUnqualifiedRendererPrecisionAndClockClaims(t *testing.T
 		}
 	}
 }
+
+func TestLegacyCursorDisplayCannotServeVerifiedAccountOnlyBinding(t *testing.T) {
+	selection := cursorDisplaySelection()
+	selection.BindingState = BindingVerified
+	selection.BindingGeneration = 1
+	selection.AccountRef = stringRef("cursor-email-sha256:" + strings.Repeat("a", 64))
+	selection.WorkspaceRef = nil
+	raw := cursorDisplayDoc(t, map[string]any{"accountRef": *selection.AccountRef})
+	if _, err := CursorDisplayProject(raw, selection, cursorDisplayNow()); err != ErrCursorDisplayBinding {
+		t.Fatal("legacy display served account-only verified binding", err)
+	}
+}

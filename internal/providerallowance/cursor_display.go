@@ -103,7 +103,9 @@ var cursorDisplayKeys = []string{
 // It is not read from the capture. Sequence is the positive capture sequence owned by
 // the caller for one producer incarnation. A reread keeps that incarnation and does not
 // read a sequence from the provider payload. Binding stays unknown unless the caller
-// sets BindingVerified and supplies the account and workspace. EntitlementRef is copied
+// sets BindingVerified and supplies the account and workspace. Only the closed,
+// version-qualified CLI adapter supports account-only scope; the legacy exported
+// display projection still requires a workspace. EntitlementRef is copied
 // only from this selection, never from a payload product.
 type CursorDisplaySelection struct {
 	ProducerRef         string
@@ -153,7 +155,11 @@ type cursorDisplayInput struct {
 // The provider observation time stays unknown. No year or midnight is invented.
 // now is the local receipt clock, not a provider refresh.
 func CursorDisplayProject(raw []byte, selected CursorDisplaySelection, now time.Time) (ReadItem, error) {
-	if err := selected.validate(); err != nil {
+	return projectCursorDisplay(raw, selected, now, false)
+}
+
+func projectCursorDisplay(raw []byte, selected CursorDisplaySelection, now time.Time, qualifiedAccountScope bool) (ReadItem, error) {
+	if err := selected.validate(qualifiedAccountScope); err != nil {
 		return ReadItem{}, err
 	}
 	if now.IsZero() {
@@ -284,7 +290,7 @@ func CursorDisplayTrustedContext(selected CursorDisplaySelection, source CursorD
 	}
 }
 
-func (s CursorDisplaySelection) validate() error {
+func (s CursorDisplaySelection) validate(qualifiedAccountScope bool) error {
 	if !cursorDisplayToken(s.ProducerRef) || !cursorDisplayToken(s.ProducerIncarnation) {
 		return ErrCursorDisplaySelection
 	}
@@ -303,7 +309,7 @@ func (s CursorDisplaySelection) validate() error {
 			return ErrCursorDisplayBinding
 		}
 	case BindingVerified:
-		if s.AccountRef == nil || !cursorDisplayToken(*s.AccountRef) || s.WorkspaceRef != nil && !cursorDisplayToken(*s.WorkspaceRef) {
+		if s.AccountRef == nil || !cursorDisplayToken(*s.AccountRef) || s.WorkspaceRef == nil && !qualifiedAccountScope || s.WorkspaceRef != nil && !cursorDisplayToken(*s.WorkspaceRef) {
 			return ErrCursorDisplayBinding
 		}
 		if s.EntitlementRef != nil && !cursorDisplayToken(*s.EntitlementRef) {

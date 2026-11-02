@@ -75,7 +75,7 @@ func projectCursorCLIUsage(raw []byte, selected CursorDisplaySelection) (ReadIte
 	if err != nil {
 		return fail()
 	}
-	item, err := CursorDisplayProject(body, selected, received)
+	item, err := projectCursorDisplay(body, selected, received, true)
 	if err != nil {
 		return fail()
 	}
