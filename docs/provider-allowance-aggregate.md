@@ -24,8 +24,9 @@ echoing its contents. The API must be enabled and the Session namespace must be
 | `contexts`, `registry` | Caller-owned provider/source/account binding and normalization rules, parsed by `ParseAggregateTrust` |
 
 Trust is configured independently of the published report. A payload cannot
-verify its own account, source, measures or freshness. Missing or unconfigured
-providers remain explicit gaps. The separate Codex selected-source slot is
+verify its own account, source, measures or freshness. Providers with no stored
+observation remain explicit gaps. After an observation has been stored, retain
+that history when acquisition or trust becomes unavailable, as described below. The separate Codex selected-source slot is
 unchanged and is not used as an aggregate fallback.
 
 The store updates only `report.json` in an existing ConfigMap. It never creates
@@ -34,6 +35,27 @@ unrelated data and metadata are preserved. Identical replay does not write or
 refresh timestamps. A conflict refuses the write. An uncertain update is
 confirmed only by reading the same bytes at a changed resourceVersion. Invalid
 stored bytes block replacement rather than being silently repaired.
+
+Publishers must preserve each provider's ordering history:
+
+- Within one producer and incarnation, a new capture needs a higher sequence.
+- A caller-selected new incarnation may restart its sequence, with strictly
+  newer capture and receipt times. The payload cannot select its own incarnation.
+- An account or workspace rebind needs a higher binding generation and strictly
+  newer capture and receipt times, validated against caller-owned trust.
+- A provider with a stored item cannot replace it with an itemless gap. Preserve
+  its observation, original receipt and last-good record across failed attempts.
+
+If acquisition stops or its context is removed or unverified, publish the held
+item with unknown freshness, basis `none`, and unknown current measures whose
+values have state `unknown` and no decimal. Keep its raw observation and receipt
+unchanged. Set the source status binding to `unknown` without account/workspace
+claims, preserve last-good, and record the actual last attempt. This update can
+share a document with independent provider updates; it needs no slot reset.
+A later trusted capture resumes ordinary ordering. A newly accepted capture
+without provider time can advance last-good while its current values stay
+unknown. Current known and uncapped values must match an original observed
+measure's ID, state and value.
 
 GET projects freshness at the serving clock while preserving original capture,
 provider and receipt times. It never writes the report. A stale or passed-reset

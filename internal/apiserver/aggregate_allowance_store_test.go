@@ -474,3 +474,39 @@ func TestAggregateAllowanceStoreAdvancesTrustedUnknownTimeCapture(t *testing.T) 
 		t.Fatal("new trusted unknown-time capture cannot advance", err, mem.updates)
 	}
 }
+
+func TestAggregateAllowanceStoreRetainsHistoryAfterContextRemoval(t *testing.T) {
+	_, previous := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	if err := store.Put(context.Background(), canonicalAllowanceFixture(t, previous), now); err != nil {
+		t.Fatal(err)
+	}
+	held := cloneAllowanceReport(t, previous)
+	item := allowanceOpenAIItem(t, &held)
+	item.Freshness.State, item.Freshness.Basis = providerallowance.FreshUnknown, providerallowance.BasisNone
+	item.Binding = providerallowance.BindingRecord{State: providerallowance.BindingUnknown}
+	for i := range item.CurrentMeasures {
+		item.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+		item.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+	}
+	status := allowanceOpenAIStatus(t, &held)
+	status.Freshness, status.Binding = item.Freshness, item.Binding
+	status.Availability = providerallowance.AvailabilityUnavailable
+	status.LastAttempt.Result = providerallowance.AttemptUnavailable
+	for i := range held.SourceStatuses {
+		if held.SourceStatuses[i].Provider == "cursor" {
+			held.SourceStatuses[i].LastAttempt.Result = providerallowance.AttemptUnavailable
+		}
+	}
+	store.Contexts = nil
+	raw := canonicalAllowanceFixture(t, held)
+	if err := store.Put(context.Background(), raw, now); err != nil || mem.updates != 2 {
+		t.Fatal("held history blocks other provider status updates", err, mem.updates)
+	}
+	stored, err := decodeCanonicalAllowance(mem.cm.Data[AggregateAllowanceDataKey])
+	if err != nil || !observationsEqual(allowanceOpenAIItem(t, &stored).Observation, allowanceOpenAIItem(t, &previous).Observation) || !lastGoodEqual(allowanceOpenAIStatus(t, &stored).LastGood, allowanceOpenAIStatus(t, &previous).LastGood) {
+		t.Fatal("history changed", err)
+	}
+}

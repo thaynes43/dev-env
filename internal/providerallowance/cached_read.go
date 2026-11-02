@@ -33,6 +33,7 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		}
 		trustedStatus[provider] = matched[0]
 		cachedAlignTrust(item, matched[0])
+		cachedPreserveKnownConflicts(item)
 		cachedDegrade(&item.Freshness, item.Observation.ProviderObservedAt, item.ReceivedAt, maxAge, maxAgeSet, now)
 		freshHold[provider] = item.Freshness
 		if cachedFreshnessBlocks(item.Freshness) {
@@ -117,6 +118,24 @@ func currentMeasureSupported(current CurrentMeasure, measures []Measure) bool {
 		return current.Value.State == ValueKnown && current.Value.Decimal != nil && measure.Value.State == ValueKnown && measure.Value.Decimal != nil && *current.Value.Decimal == *measure.Value.Decimal
 	}
 	return false
+}
+
+// A known disagreement is evidence of a conflict even after its reset. Keep
+// that conflict visible before applying clock-based withholding.
+func cachedPreserveKnownConflicts(item *ReadItem) {
+	for i := range item.CurrentMeasures {
+		current := &item.CurrentMeasures[i]
+		if current.State != CurrentKnown || current.Value.State != ValueKnown || current.Value.Decimal == nil {
+			continue
+		}
+		for _, measure := range item.Observation.Measures {
+			if measure.ID == current.MeasureID && measure.Value.State == ValueKnown && measure.Value.Decimal != nil && *measure.Value.Decimal != *current.Value.Decimal {
+				current.State = CurrentConflict
+				current.Value = MeasureValue{State: ValueUnknown}
+				break
+			}
+		}
+	}
 }
 
 func cachedPreserveConflicts(item *ReadItem) {
