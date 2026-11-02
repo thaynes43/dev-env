@@ -386,8 +386,11 @@ func TestAllowanceDashboardEdgeTypedCardDoesNotTrustDisplay(t *testing.T) {
 	if !strings.Contains(body, "allowance-card") && !strings.Contains(body, "allowance-meter") {
 		t.Fatal("required allowance card markup is missing")
 	}
-	if strings.Count(body, `<rect class="meter-fill"`) != 1 || !strings.Contains(body, `width="38"`) {
-		t.Fatal("typed remaining 62 did not draw a single 38-wide bar")
+	// One bar in the At a glance tile and one in the card, both for the same
+	// typed Claude window. The untyped Codex percent draws none.
+	fills := regexp.MustCompile(`<rect class="meter-fill"[^>]*width="([^"]*)"`).FindAllStringSubmatch(body, -1)
+	if len(fills) != 2 || fills[0][1] != "38" || fills[1][1] != "38" {
+		t.Fatalf("typed remaining 62 did not draw exactly the glance and card 38-wide bars: %v", fills)
 	}
 	if !strings.Contains(body, "38% used") || !strings.Contains(body, "62% remaining") || strings.Contains(body, "0% used") {
 		t.Fatal("bar labels did not follow the typed complement")
