@@ -532,3 +532,5 @@ Proposed portal read-only views (UI coordinator, 2026-11-02): [DESIGN-045](desig
 Explicit Claude RC continuation (OP355, 2026-11-02): [DESIGN-047](designs/047-explicit-claude-rc-continuation.md) records one supervised pod-local generation and the separate default-off operator adoption plan. Source, publication, installation and real RC acceptance remain separate.
 
 Qualified ordinary instruction receiver (OP354, 2026-11-02): [DESIGN-048](designs/048-instruction-receiver-image.md) binds new explicit enrollment to a default-off released receiver image without pilot selectors or a global worker pin. Source qualification remains separate from actual native consumption.
+
+Finite retained-provider capture assembly (OP192/187, 2026-11-02): [DESIGN-049](designs/049-finite-provider-capture-assembly.md) records the bounded local bridge to aggregate transport. It acquires no provider data and preserves unknown account/freshness states; actual captures and runtime acceptance remain open.

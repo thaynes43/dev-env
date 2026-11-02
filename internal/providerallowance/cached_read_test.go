@@ -1,10 +1,44 @@
 package providerallowance
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestProjectCachedReadRetainsHistoricalSemanticsWithoutPromotingCurrent(t *testing.T) {
+	for _, claimed := range []string{"55", "99"} {
+		obs, ctx, reg := repairAllowanceFixture(t)
+		parts := reg.parts
+		parts.Metrics = reg.Metrics()
+		for i := range parts.Metrics {
+			parts.Metrics[i].HistoricalOnly = true
+		}
+		reg = NewStaticRegistry(parts)
+		doc := repairRead(obs, obs.CapturedAt, "2026-11-02T03:05:00Z", *obs.ProviderObservedAt, CurrentMeasure{MeasureID: "window", State: CurrentKnown, Value: MeasureValue{State: ValueKnown, Decimal: repairStr(claimed)}})
+		before, err := json.Marshal(doc.Items[0].Observation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ProjectCachedRead(&doc, []TrustedContext{ctx}, reg, 30*time.Minute, true, time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC))
+		after, err := json.Marshal(doc.Items[0].Observation)
+		if err != nil || string(before) != string(after) {
+			t.Fatal("validated historical observation was rewritten")
+		}
+		item := doc.Items[0]
+		if item.Binding.State != BindingVerified || item.Validation.State != ValidationSourceFields || item.CurrentMeasures[0].Value.Decimal != nil {
+			t.Fatal("history rejected or current capacity promoted")
+		}
+		want := CurrentUnknown
+		if claimed != "55" {
+			want = CurrentConflict
+		}
+		if item.CurrentMeasures[0].State != want {
+			t.Fatalf("current claim %s became %+v", claimed, item.CurrentMeasures[0])
+		}
+	}
+}
 
 func TestProjectCachedReadDegradesFutureStatusWithoutMovingAsOf(t *testing.T) {
 	asOf := "2099-01-01T00:00:00Z"

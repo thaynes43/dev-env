@@ -102,3 +102,19 @@ observations, reviewed runtime configuration and actual API/native/UI use remain
 acceptance requirements. Private adapters, observers and ingestion activation
 retain their existing holds. This source adds no credentials, grants, network
 policy, template change or Session restart.
+
+## Finite local capture assembly (source only)
+
+[DESIGN-049](../.agents/sagas/distributed-dev-env/designs/049-finite-provider-capture-assembly.md)
+defines `agent-run usage capture -o json --input FILE|- --trust-file FILE`.
+It assembles explicit sanitized Cursor display, Claude passive window callback
+and Codex current-source report inputs into one aggregate read document. The
+separate trust file uses ParseAggregateTrust; provider payloads cannot supply
+that trust. Original capture and receipt times remain distinct. These sources
+supply no independent provider timestamp, so current values stay unknown.
+
+The command performs no acquisition, provider call, schedule or implicit
+publication. A caller may separately submit the result with `--publish-file`
+only under the existing publisher configuration and authority. The server
+independently verifies its own trust, including account binding, before a new
+capture can enter the slot. Missing actual inputs remain acceptance gaps.
