@@ -528,3 +528,5 @@ decision 59.)*
 Proposed reusable RD2 source boundary (OP233): [DESIGN-043](designs/043-reusable-admin-lease.md). Default off; source, tests and live activation remain separate.
 
 Proposed portal read-only views (UI coordinator, 2026-11-02): [DESIGN-045](designs/045-portal-claims-view.md) shared claims view (OP359) and [DESIGN-046](designs/046-portal-upgrades-pane.md) Shepherd/Renovate upgrades pane (OP360). Documentation only; every route is default off, and each runtime or authorization step is its own reviewed PR.
+
+Explicit Claude RC continuation (OP355, 2026-11-02): [DESIGN-047](designs/047-explicit-claude-rc-continuation.md) records one supervised pod-local generation and the separate default-off operator adoption plan. Source, publication, installation and real RC acceptance remain separate.
