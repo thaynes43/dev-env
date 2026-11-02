@@ -73,6 +73,24 @@ func TestReadOnlyGitRefusesMutations(t *testing.T) {
 	if err := allowedReadOnlyGit([]string{"config", "--file", filepath.Join(t.TempDir(), "config"), "--list", "--null", "--no-includes"}); err == nil {
 		t.Fatal("non-gitmodules file was allowlisted")
 	}
+	if err := allowedReadOnlyGit([]string{"submodule", "status"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := allowedReadOnlyGit([]string{"submodule", "status", "--recursive"}); err == nil {
+		t.Fatal("recursive submodule status was allowlisted")
+	}
+	if err := allowedReadOnlyGit([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}); err == nil {
+		t.Fatal("status without ignore-submodules was allowlisted")
+	}
+	if err := allowedReadOnlyGit(statusArgs); err != nil {
+		t.Fatal(err)
+	}
+	if err := allowedReadOnlyGit(gitlinkIndexArgs); err != nil {
+		t.Fatal(err)
+	}
+	if err := allowedReadOnlyGit([]string{"ls-files", "-s"}); err == nil {
+		t.Fatal("unbounded ls-files stage was allowlisted")
+	}
 }
 
 func TestCollectFailClosedBeforeGit(t *testing.T) {
@@ -174,10 +192,74 @@ func TestSubmoduleConfigIsRefusedBeforeStatus(t *testing.T) {
 		t.Fatalf("child config was not listed from git's file parse: %v", git.calls)
 	}
 	for _, call := range git.calls {
-		if call[0] == "submodule" {
-			t.Fatal("submodule status ran")
+		if call[0] == "status" || call[0] == "ls-files" || call[0] == "submodule" {
+			t.Fatalf("status or index inspection ran before descendant config refusal: %q", call)
 		}
 	}
+}
+
+func TestUnmappedIndexGitlinkFailsClosedBeforeStatus(t *testing.T) {
+	f := newFixture(t)
+	sha := strings.Repeat("a", 40)
+	link := func(path string) string {
+		return "160000 " + sha + " 0\t" + path + "\x00"
+	}
+	assertRefused := func(t *testing.T, git *scriptGit, untouched string) {
+		t.Helper()
+		inventory, err := CollectPreservation(context.Background(), validCollectRequest(f, git.root), git, fixedRevision(f.record.Binding.HomeRevision))
+		if err == nil || inventory.Complete || !strings.Contains(err.Error(), "submodule mapping missing") || git.executed {
+			t.Fatalf("unmapped gitlink was inventoried: %+v %v executed=%v calls=%v", inventory, err, git.executed, git.calls)
+		}
+		if untouched != "" && sawGit(git, untouched, func([]string) bool { return true }) {
+			t.Fatalf("unmapped checkout was entered: %s calls=%v", untouched, git.calls)
+		}
+		for _, call := range git.calls {
+			if call[0] == "status" || call[0] == "submodule" {
+				t.Fatalf("status entered a descendant before refusal: %q", call)
+			}
+		}
+	}
+	t.Run("absent gitmodules", func(t *testing.T) {
+		git := newScriptGit(t, scriptOptions{})
+		child := filepath.Join(git.root, "vendor", "orphan")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git.extra.indexGitlinks = link("vendor/orphan")
+		git.options.attack = "file:.git/config\x00filter.x.clean\ntouch-attacked\x00"
+		git.options.attackDir = child
+		assertRefused(t, git, child)
+	})
+	t.Run("gitmodules omits gitlink", func(t *testing.T) {
+		git := newScriptGit(t, scriptOptions{})
+		child := filepath.Join(git.root, "vendor", "orphan")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"listed\"]\n\tpath = vendor/listed\n\turl = ../listed\n")
+		git.extra.modulesList = "submodule.listed.path\nvendor/listed\x00submodule.listed.url\n../listed\x00"
+		git.extra.indexGitlinks = link("vendor/orphan")
+		git.options.attack = "file:.git/config\x00filter.x.clean\ntouch-attacked\x00"
+		git.options.attackDir = child
+		assertRefused(t, git, child)
+	})
+	t.Run("grandchild", func(t *testing.T) {
+		git := newScriptGit(t, scriptOptions{})
+		child := filepath.Join(git.root, "vendor", "sub")
+		grandchild := filepath.Join(child, "nested")
+		if err := os.MkdirAll(grandchild, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(git.root, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor/sub\n\turl = ../sub\n")
+		git.extra.modulesList = "submodule.vendor.path\nvendor/sub\x00submodule.vendor.url\n../sub\x00"
+		git.extra.indexGitlinksByDir = map[string]string{
+			git.root: link("vendor/sub"),
+			child:    link("nested"),
+		}
+		git.options.attack = "file:.git/config\x00filter.x.clean\ntouch-attacked\x00"
+		git.options.attackDir = grandchild
+		assertRefused(t, git, grandchild)
+	})
 }
 
 func TestGitmodulesFileParseKeepsOrdinaryURLAndFailsClosed(t *testing.T) {
@@ -341,6 +423,29 @@ func TestGitmodulesAndIndexAllowlist(t *testing.T) {
 		if err := rejectHiddenIndexFlags(out); err == nil || !strings.Contains(err.Error(), "index flags hide edits") {
 			t.Fatalf("accepted %q: %v", out, err)
 		}
+	}
+	sha := strings.Repeat("c", 40)
+	ordinary := "100644 " + sha + " 0\tREADME\x00"
+	if err := rejectUnmappedGitlinks("", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectUnmappedGitlinks(ordinary, nil); err != nil {
+		t.Fatal(err)
+	}
+	mapped := "160000 " + sha + " 0\tvendor/sub\x00"
+	if err := rejectUnmappedGitlinks(mapped, []string{"vendor/sub"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectUnmappedGitlinks(mapped+"160000 "+sha+" 1\tvendor/sub\x00", []string{"vendor/sub"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []string{mapped, ordinary + "160000 " + sha + " 0\tvendor/orphan\x00"} {
+		if err := rejectUnmappedGitlinks(out, []string{"vendor/listed"}); err == nil || !strings.Contains(err.Error(), "submodule mapping missing") {
+			t.Fatalf("accepted unmapped gitlink %q: %v", out, err)
+		}
+	}
+	if err := rejectUnmappedGitlinks("160000 "+sha+" 0", nil); err == nil || !strings.Contains(err.Error(), "index metadata unreadable") {
+		t.Fatalf("malformed gitlink was accepted: %v", err)
 	}
 }
 
@@ -682,6 +787,297 @@ func TestCollectSyntheticWorktreeDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestSubmoduleCleanFilterDoesNotRun(t *testing.T) {
+	f := newFixture(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "git-home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(root, "work")
+	sub := filepath.Join(root, "sub")
+	sentinel := filepath.Join(root, "clean-filter-sentinel")
+	scriptPath := filepath.Join(root, "clean-filter.sh")
+	if strings.ContainsAny(sentinel, "'\\\n") {
+		t.Fatal("sentinel path is not a safe filter argument")
+	}
+	writeFile(t, scriptPath, "#!/bin/sh\ntouch '"+sentinel+"'\ncat\n")
+	if err := os.Chmod(scriptPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initSyntheticRepo(t, home, work)
+	writeFile(t, filepath.Join(work, "README"), "hello\n")
+	runGit(t, home, "-C", work, "add", "README")
+	runGit(t, home, "-C", work, "commit", "-m", "synthetic initial")
+	initSyntheticRepo(t, home, sub)
+	writeFile(t, filepath.Join(sub, "lib.txt"), "lib\n")
+	runGit(t, home, "-C", sub, "add", "lib.txt")
+	runGit(t, home, "-C", sub, "commit", "-m", "synthetic sub")
+	runGit(t, home, "-C", work, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "vendor", "../sub", "vendor/sub")
+	runGit(t, home, "-C", work, "commit", "-m", "synthetic submodule")
+	checkout := filepath.Join(work, "vendor", "sub")
+	writeFile(t, filepath.Join(checkout, ".gitattributes"), "* filter=attack\n")
+	runGit(t, home, "-C", checkout, "config", "filter.attack.clean", scriptPath)
+	writeFile(t, filepath.Join(checkout, "lib.txt"), "lib\nchanged\n")
+
+	runner, err := NewExecGit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := runner.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	req := validCollectRequest(f, work)
+	req.SubmoduleIdentities = map[string]string{SubmoduleIdentityKey("github:example/project", "vendor/sub"): "synthetic:vendor"}
+	inventory, err := CollectPreservation(context.Background(), req, runner, fixedRevision(req.Binding.HomeRevision))
+	if err == nil || inventory.Complete || !strings.Contains(err.Error(), "unsupported git config") {
+		t.Fatalf("submodule filter was not refused: %+v %v", inventory, err)
+	}
+	assertFilterDidNotRun(t, sentinel)
+	// Production status is only allowlisted with --ignore-submodules=all, so it
+	// cannot prove this premise. The historical argv runs as direct git.
+	assertDefaultStatusRunsFilter(t, home, work, sentinel)
+}
+
+func TestUnmappedPopulatedGitlinkDoesNotRunCleanFilter(t *testing.T) {
+	f := newFixture(t)
+	collectChild := func(t *testing.T, modules bool) {
+		t.Helper()
+		root := t.TempDir()
+		home, script, sentinel := prepareCleanFilter(t, root)
+		work := filepath.Join(root, "work")
+		initSyntheticRepo(t, home, work)
+		writeFile(t, filepath.Join(work, "README"), "hello\n")
+		runGit(t, home, "-C", work, "add", "README")
+		runGit(t, home, "-C", work, "commit", "-m", "synthetic initial")
+		orphan := filepath.Join(work, "vendor", "orphan")
+		initSyntheticRepo(t, home, orphan)
+		writeFile(t, filepath.Join(orphan, "lib.txt"), "lib\n")
+		runGit(t, home, "-C", orphan, "add", "lib.txt")
+		runGit(t, home, "-C", orphan, "commit", "-m", "synthetic orphan")
+		sha := strings.TrimSpace(runGitOutput(t, home, "-C", orphan, "rev-parse", "HEAD"))
+		if modules {
+			writeFile(t, filepath.Join(work, ".gitmodules"), "[submodule \"listed\"]\n\tpath = vendor/listed\n\turl = ../listed\n")
+			runGit(t, home, "-C", work, "add", ".gitmodules")
+		}
+		addSyntheticGitlink(t, home, work, "vendor/orphan", sha)
+		runGit(t, home, "-C", work, "commit", "-m", "synthetic gitlink")
+		armCleanFilter(t, home, orphan, script, "lib.txt")
+		runner := newCollectorGit(t)
+		inventory, err := CollectPreservation(context.Background(), validCollectRequest(f, work), runner, fixedRevision(f.record.Binding.HomeRevision))
+		if err == nil || inventory.Complete || !strings.Contains(err.Error(), "submodule mapping missing") {
+			t.Fatalf("unmapped gitlink was inventoried: %+v %v", inventory, err)
+		}
+		assertFilterDidNotRun(t, sentinel)
+		assertDefaultStatusRunsFilter(t, home, work, sentinel)
+	}
+	t.Run("absent gitmodules", func(t *testing.T) { collectChild(t, false) })
+	t.Run("gitmodules omits gitlink", func(t *testing.T) { collectChild(t, true) })
+	t.Run("grandchild", func(t *testing.T) {
+		root := t.TempDir()
+		home, script, sentinel := prepareCleanFilter(t, root)
+		work := filepath.Join(root, "work")
+		sub := filepath.Join(root, "sub")
+		initSyntheticRepo(t, home, work)
+		writeFile(t, filepath.Join(work, "README"), "hello\n")
+		runGit(t, home, "-C", work, "add", "README")
+		runGit(t, home, "-C", work, "commit", "-m", "synthetic initial")
+		initSyntheticRepo(t, home, sub)
+		writeFile(t, filepath.Join(sub, "lib.txt"), "lib\n")
+		runGit(t, home, "-C", sub, "add", "lib.txt")
+		runGit(t, home, "-C", sub, "commit", "-m", "synthetic sub")
+		runGit(t, home, "-C", work, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "vendor", "../sub", "vendor/sub")
+		runGit(t, home, "-C", work, "commit", "-m", "synthetic submodule")
+		checkout := filepath.Join(work, "vendor", "sub")
+		nested := filepath.Join(checkout, "nested")
+		initSyntheticRepo(t, home, nested)
+		writeFile(t, filepath.Join(nested, "inner.txt"), "inner\n")
+		runGit(t, home, "-C", nested, "add", "inner.txt")
+		runGit(t, home, "-C", nested, "commit", "-m", "synthetic nested")
+		nestedSHA := strings.TrimSpace(runGitOutput(t, home, "-C", nested, "rev-parse", "HEAD"))
+		addSyntheticGitlink(t, home, checkout, "nested", nestedSHA)
+		runGit(t, home, "-C", checkout, "commit", "-m", "synthetic grandchild gitlink")
+		embedSyntheticGitDir(t, home, checkout, filepath.Join(root, "saved-vendor-gitfile"))
+		armCleanFilter(t, home, nested, script, "inner.txt")
+		runner := newCollectorGit(t)
+		req := validCollectRequest(f, work)
+		req.SubmoduleIdentities = map[string]string{SubmoduleIdentityKey("github:example/project", "vendor/sub"): "synthetic:vendor"}
+		inventory, err := CollectPreservation(context.Background(), req, runner, fixedRevision(req.Binding.HomeRevision))
+		if err == nil || inventory.Complete || !strings.Contains(err.Error(), "submodule mapping missing") {
+			t.Fatalf("grandchild gitlink was inventoried: %+v %v", inventory, err)
+		}
+		assertFilterDidNotRun(t, sentinel)
+		assertDefaultStatusRunsFilter(t, home, work, sentinel)
+	})
+}
+
+func TestDirtyMappedSubmoduleStaysComplete(t *testing.T) {
+	f := newFixture(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "git-home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(root, "work")
+	sub := filepath.Join(root, "sub")
+	initSyntheticRepo(t, home, work)
+	writeFile(t, filepath.Join(work, "README"), "hello\n")
+	runGit(t, home, "-C", work, "add", "README")
+	runGit(t, home, "-C", work, "commit", "-m", "synthetic initial")
+	initSyntheticRepo(t, home, sub)
+	writeFile(t, filepath.Join(sub, "lib.txt"), "lib\n")
+	runGit(t, home, "-C", sub, "add", "lib.txt")
+	runGit(t, home, "-C", sub, "commit", "-m", "synthetic sub")
+	runGit(t, home, "-C", work, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "vendor", "../sub", "vendor/sub")
+	runGit(t, home, "-C", work, "commit", "-m", "synthetic submodule")
+	checkout := filepath.Join(work, "vendor", "sub")
+	embedSyntheticGitDir(t, home, checkout, filepath.Join(root, "saved-vendor-gitfile"))
+	writeFile(t, filepath.Join(checkout, "lib.txt"), "lib\nchanged\n")
+
+	runner := newCollectorGit(t)
+	recorded := &recordingGit{next: runner}
+	req := validCollectRequest(f, work)
+	req.SubmoduleIdentities = map[string]string{SubmoduleIdentityKey("github:example/project", "vendor/sub"): "synthetic:vendor"}
+	inventory, err := CollectPreservation(context.Background(), req, recorded, fixedRevision(req.Binding.HomeRevision))
+	if err != nil || !inventory.Complete {
+		t.Fatalf("dirty child was refused: %+v %v", inventory, err)
+	}
+	var parent, vendor Repository
+	for _, repo := range inventory.Repositories {
+		switch repo.Identity {
+		case "github:example/project":
+			parent = repo
+		case "synthetic:vendor":
+			vendor = repo
+		}
+	}
+	main, mainOK := findWorktree(parent, work)
+	child, childOK := findWorktree(vendor, checkout)
+	if parent.Identity == "" || vendor.Identity == "" || !mainOK || !main.SubmodulesComplete || main.SubmodulesClean || !childOK || !child.Unstaged {
+		t.Fatalf("dirty child was dropped: parent=%+v child=%+v", main, child)
+	}
+	sawStatus := false
+	for _, call := range recorded.calls {
+		if call[0] != "status" {
+			continue
+		}
+		sawStatus = true
+		if !slices.Equal(call, statusArgs) {
+			t.Fatalf("collector status can enter a descendant: %q", call)
+		}
+	}
+	if !sawStatus {
+		t.Fatal("collector did not read status")
+	}
+}
+
+func TestNestedEmbeddedSubmoduleStaysWithItsParent(t *testing.T) {
+	f := newFixture(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "git-home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(root, "work")
+	sub := filepath.Join(root, "sub")
+	nestedSrc := filepath.Join(root, "nested-src")
+	initSyntheticRepo(t, home, work)
+	writeFile(t, filepath.Join(work, "README"), "hello\n")
+	runGit(t, home, "-C", work, "add", "README")
+	runGit(t, home, "-C", work, "commit", "-m", "synthetic initial")
+	initSyntheticRepo(t, home, sub)
+	writeFile(t, filepath.Join(sub, "lib.txt"), "lib\n")
+	runGit(t, home, "-C", sub, "add", "lib.txt")
+	runGit(t, home, "-C", sub, "commit", "-m", "synthetic sub")
+	initSyntheticRepo(t, home, nestedSrc)
+	writeFile(t, filepath.Join(nestedSrc, "inner.txt"), "inner\n")
+	runGit(t, home, "-C", nestedSrc, "add", "inner.txt")
+	runGit(t, home, "-C", nestedSrc, "commit", "-m", "synthetic nested")
+	runGit(t, home, "-C", work, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "vendor", "../sub", "vendor/sub")
+	checkout := filepath.Join(work, "vendor", "sub")
+	relNested, err := filepath.Rel(checkout, nestedSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, home, "-C", checkout, "-c", "protocol.file.allow=always", "submodule", "add", "--name", "nested", filepath.ToSlash(relNested), "nested")
+	runGit(t, home, "-C", checkout, "commit", "-m", "synthetic nested submodule")
+	runGit(t, home, "-C", work, "add", "vendor/sub")
+	runGit(t, home, "-C", work, "commit", "-m", "synthetic submodule")
+
+	runner, err := NewExecGit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := runner.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	req := validCollectRequest(f, work)
+	req.SubmoduleIdentities = map[string]string{
+		SubmoduleIdentityKey("github:example/project", "vendor/sub"): "synthetic:vendor",
+		SubmoduleIdentityKey("synthetic:vendor", "nested"):           "synthetic:nested",
+	}
+	if inventory, err := CollectPreservation(context.Background(), req, runner, fixedRevision(req.Binding.HomeRevision)); err == nil || inventory.Complete || !strings.Contains(err.Error(), "unsupported git config") {
+		t.Fatalf("Git-created core.worktree was accepted: %+v %v", inventory, err)
+	}
+	embedSyntheticGitDir(t, home, filepath.Join(checkout, "nested"), filepath.Join(root, "saved-nested-gitfile"))
+	embedSyntheticGitDir(t, home, checkout, filepath.Join(root, "saved-vendor-gitfile"))
+
+	paths := []string{work, checkout, filepath.Join(checkout, "nested")}
+	before := map[string]string{}
+	for _, path := range paths {
+		before[path] = passiveFingerprint(t, home, path)
+	}
+	recorded := &recordingGit{next: runner}
+	inventory, err := CollectPreservation(context.Background(), req, recorded, fixedRevision(req.Binding.HomeRevision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if after := passiveFingerprint(t, home, path); after != before[path] {
+			t.Fatalf("repository changed %s", path)
+		}
+	}
+	for _, call := range recorded.calls {
+		if call[0] == "submodule" && slices.Contains(call, "--recursive") {
+			t.Fatalf("recursive submodule status: %q", call)
+		}
+	}
+	seen := map[string]bool{}
+	for _, repo := range inventory.Repositories {
+		seen[repo.Identity] = true
+	}
+	if !seen["github:example/project"] || !seen["synthetic:vendor"] || !seen["synthetic:nested"] || len(inventory.Repositories) != 3 {
+		t.Fatalf("nested identity was not kept with its parent: %+v", inventory.Repositories)
+	}
+}
+
+func TestImmediateSubmoduleDepthStaysBounded(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	req := CollectRequest{SubmoduleIdentities: map[string]string{SubmoduleIdentityKey("parent", "child"): "child-id"}}
+	snap := repoSnapshot{Worktrees: []worktreeSnapshot{{
+		Path:       root,
+		Submodules: []submoduleSnapshot{{Path: "child", State: " "}},
+	}}}
+	if got, err := submoduleChildren(req, queuedRepo{Identity: "parent", Path: root, Depth: maxCollectDepth - 1}, snap); err == nil || !strings.Contains(err.Error(), "submodule depth exceeded") {
+		t.Fatalf("depth cap: %+v %v", got, err)
+	}
+	got, err := submoduleChildren(req, queuedRepo{Identity: "parent", Path: root, Depth: maxCollectDepth - 2}, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Identity != "child-id" || got[0].Depth != maxCollectDepth-1 || got[0].Path != child {
+		t.Fatalf("immediate child: %+v", got)
+	}
+}
+
 type fixedRevision string
 
 func (r fixedRevision) Current(context.Context) (string, error) { return string(r), nil }
@@ -723,11 +1119,13 @@ type scriptOptions struct {
 }
 
 type scriptExtra struct {
-	localConfig     string
-	modulesList     string
-	submoduleStatus string
-	indexFlags      string
-	indexFlagDir    string
+	localConfig        string
+	modulesList        string
+	submoduleStatus    string
+	indexFlags         string
+	indexFlagDir       string
+	indexGitlinks      string
+	indexGitlinksByDir map[string]string
 }
 
 type scriptGit struct {
@@ -808,7 +1206,7 @@ func (g *scriptGit) Run(_ context.Context, dir string, args []string) (string, i
 		return sha + "\x00commit\x00\x00refs/heads/main\n", 0, nil
 	case strings.Join([]string{"stash", "list", "--format=%H"}, "\x00"):
 		return "", 0, nil
-	case strings.Join([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, "\x00"):
+	case strings.Join(statusArgs, "\x00"):
 		if g.options.dirty {
 			return " M README\x00A  staged.txt\x00?? extra.txt\x00", 0, nil
 		}
@@ -823,7 +1221,14 @@ func (g *scriptGit) Run(_ context.Context, dir string, args []string) (string, i
 			return g.extra.indexFlags, 0, nil
 		}
 		return "", 0, nil
-	case strings.Join([]string{"submodule", "status", "--recursive"}, "\x00"):
+	case strings.Join(headTreeArgs, "\x00"):
+		return "", 0, nil
+	case strings.Join(gitlinkIndexArgs, "\x00"):
+		if g.extra.indexGitlinksByDir != nil {
+			return g.extra.indexGitlinksByDir[dir], 0, nil
+		}
+		return g.extra.indexGitlinks, 0, nil
+	case strings.Join([]string{"submodule", "status"}, "\x00"):
 		return g.extra.submoduleStatus, 0, nil
 	default:
 		g.t.Fatalf("unexpected git in %s: %q", dir, args)
@@ -882,9 +1287,105 @@ func syntheticGitEnv(home string) []string {
 	}
 }
 
+func initSyntheticRepo(t *testing.T, home, path string) {
+	t.Helper()
+	runGit(t, home, "-c", "init.defaultBranch=main", "init", path)
+	runGit(t, home, "-C", path, "config", "user.email", "synthetic@example.invalid")
+	runGit(t, home, "-C", path, "config", "user.name", "Synthetic")
+}
+
+func embedSyntheticGitDir(t *testing.T, home, worktree, savedGitFile string) {
+	t.Helper()
+	runGit(t, home, "-C", worktree, "config", "--unset", "core.worktree")
+	gitFile := filepath.Join(worktree, ".git")
+	gitDir := strings.TrimSpace(runGitOutput(t, home, "-C", worktree, "rev-parse", "--absolute-git-dir"))
+	if err := os.Rename(gitFile, savedGitFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(gitDir, gitFile); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func runGit(t *testing.T, home string, args ...string) {
 	t.Helper()
 	_ = runGitOutput(t, home, args...)
+}
+
+func newCollectorGit(t *testing.T) *ExecGit {
+	t.Helper()
+	runner, err := NewExecGit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := runner.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return runner
+}
+
+func prepareCleanFilter(t *testing.T, root string) (home, script, sentinel string) {
+	t.Helper()
+	home = filepath.Join(root, "git-home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel = filepath.Join(root, "clean-filter-sentinel")
+	script = filepath.Join(root, "clean-filter.sh")
+	if strings.ContainsAny(sentinel, "'\\\n") || strings.ContainsAny(script, "'\\\n") {
+		t.Fatal("filter path is not a safe shell argument")
+	}
+	writeFile(t, script, "#!/bin/sh\ntouch '"+sentinel+"'\ncat\n")
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return home, script, sentinel
+}
+
+func addSyntheticGitlink(t *testing.T, home, repo, path, sha string) {
+	t.Helper()
+	runGit(t, home, "-C", repo, "update-index", "--add", "--cacheinfo", "160000,"+sha+","+path)
+}
+
+func armCleanFilter(t *testing.T, home, repo, script, tracked string) {
+	t.Helper()
+	writeFile(t, filepath.Join(repo, ".gitattributes"), "* filter=attack\n")
+	runGit(t, home, "-C", repo, "config", "filter.attack.clean", script)
+	writeFile(t, filepath.Join(repo, tracked), "changed\n")
+}
+
+func runDefaultStatus(t *testing.T, home, dir string) int {
+	t.Helper()
+	// Historical collector status, outside ExecGit, with no --ignore-submodules.
+	cmd := exec.Command("git", "-C", dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	cmd.Env = syntheticGitEnv(home)
+	_, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	t.Fatal(err)
+	return -1
+}
+
+func assertFilterDidNotRun(t *testing.T, sentinel string) {
+	t.Helper()
+	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("collector executed clean filter: %v", err)
+	}
+}
+
+func assertDefaultStatusRunsFilter(t *testing.T, home, dir, sentinel string) {
+	t.Helper()
+	code := runDefaultStatus(t, home, dir)
+	if _, err := os.Lstat(sentinel); err != nil {
+		t.Fatalf("premise failed: default git status did not run the clean filter (status exit %d): %v", code, err)
+	}
 }
 
 func runGitOutput(t *testing.T, home string, args ...string) string {
@@ -974,4 +1475,111 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestStagedGitlinkComparisonFailsClosed(t *testing.T) {
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	index := func(mode, oid, stage string) string { return mode + " " + oid + " " + stage + "\tsub\x00" }
+	tree := func(mode, kind, oid string) string { return mode + " " + kind + " " + oid + "\tsub\x00" }
+	for _, tc := range []struct{ name, index, head string }{
+		{"modified", index("160000", b, "0"), tree("160000", "commit", a)},
+		{"added", index("160000", a, "0"), ""},
+		{"deleted", "", tree("160000", "commit", a)},
+		{"gitlink to file", index("100644", a, "0"), tree("160000", "commit", a)},
+		{"file to gitlink", index("160000", a, "0"), tree("100644", "blob", a)},
+		{"conflict", index("160000", a, "1"), tree("160000", "commit", a)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := rejectStagedGitlinks(tc.index, tc.head); err == nil {
+				t.Fatal("staged gitlink was clean")
+			}
+		})
+	}
+	if err := rejectStagedGitlinks(index("160000", a, "0"), tree("160000", "commit", a)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyntheticStagedGitlinksAreNotClean(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		level := "parent"
+		if nested {
+			level = "nested child"
+		}
+		for _, change := range []string{"modified", "added", "deleted", "mode", "conflict"} {
+			t.Run(level+"/"+change, func(t *testing.T) {
+				f := newFixture(t)
+				root := t.TempDir()
+				home := filepath.Join(root, "home")
+				if err := os.Mkdir(home, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				work := filepath.Join(root, "work")
+				initSyntheticRepo(t, home, work)
+				writeFile(t, filepath.Join(work, "README"), "root\n")
+				runGit(t, home, "-C", work, "add", "README")
+				runGit(t, home, "-C", work, "commit", "-m", "root")
+				repo := work
+				req := validCollectRequest(f, work)
+				req.SubmoduleIdentities = map[string]string{}
+				if nested {
+					repo = filepath.Join(work, "outer")
+					initSyntheticRepo(t, home, repo)
+					writeFile(t, filepath.Join(repo, "README"), "outer\n")
+					runGit(t, home, "-C", repo, "add", "README")
+					runGit(t, home, "-C", repo, "commit", "-m", "outer")
+					writeFile(t, filepath.Join(work, ".gitmodules"), "[submodule \"outer\"]\n path = outer\n url = ../outer\n")
+					req.SubmoduleIdentities[SubmoduleIdentityKey("github:example/project", "outer")] = "synthetic:outer"
+				}
+				child := filepath.Join(repo, "sub")
+				initSyntheticRepo(t, home, child)
+				writeFile(t, filepath.Join(child, "lib"), "first\n")
+				runGit(t, home, "-C", child, "add", "lib")
+				runGit(t, home, "-C", child, "commit", "-m", "child")
+				sha := strings.TrimSpace(runGitOutput(t, home, "-C", child, "rev-parse", "HEAD"))
+				writeFile(t, filepath.Join(repo, ".gitmodules"), "[submodule \"sub\"]\n path = sub\n url = ../sub\n[submodule \"added\"]\n path = added\n url = ../added\n")
+				runGit(t, home, "-C", repo, "add", ".gitmodules")
+				addSyntheticGitlink(t, home, repo, "sub", sha)
+				runGit(t, home, "-C", repo, "commit", "-m", "mapped child")
+				identity := "github:example/project"
+				if nested {
+					identity = "synthetic:outer"
+					outerSHA := strings.TrimSpace(runGitOutput(t, home, "-C", repo, "rev-parse", "HEAD"))
+					runGit(t, home, "-C", work, "add", ".gitmodules")
+					addSyntheticGitlink(t, home, work, "outer", outerSHA)
+					runGit(t, home, "-C", work, "commit", "-m", "outer child")
+				}
+				req.SubmoduleIdentities[SubmoduleIdentityKey(identity, "sub")] = "synthetic:sub"
+				runner := newCollectorGit(t)
+				if inventory, err := CollectPreservation(context.Background(), req, runner, fixedRevision(req.Binding.HomeRevision)); err != nil || !inventory.Complete {
+					t.Fatalf("clean baseline: %+v %v", inventory, err)
+				}
+				switch change {
+				case "modified":
+					writeFile(t, filepath.Join(child, "lib"), "second\n")
+					runGit(t, home, "-C", child, "add", "lib")
+					runGit(t, home, "-C", child, "commit", "-m", "next child")
+					runGit(t, home, "-C", repo, "add", "sub")
+				case "added":
+					addSyntheticGitlink(t, home, repo, "added", sha)
+				case "deleted":
+					runGit(t, home, "-C", repo, "update-index", "--force-remove", "sub")
+				case "mode":
+					blob := strings.TrimSpace(runGitOutput(t, home, "-C", repo, "rev-parse", "HEAD:README"))
+					runGit(t, home, "-C", repo, "update-index", "--cacheinfo", "100644,"+blob+",sub")
+				case "conflict":
+					cmd := exec.Command("git", "-C", repo, "update-index", "--index-info")
+					cmd.Env = syntheticGitEnv(home)
+					cmd.Stdin = strings.NewReader("0 " + strings.Repeat("0", 40) + "\tsub\n160000 " + sha + " 1\tsub\n160000 " + sha + " 2\tsub\n160000 " + sha + " 3\tsub\n")
+					if out, err := cmd.CombinedOutput(); err != nil {
+						t.Fatalf("fixture conflict: %s %v", out, err)
+					}
+				}
+				inventory, err := CollectPreservation(context.Background(), req, runner, fixedRevision(req.Binding.HomeRevision))
+				if err == nil || inventory.Complete || !(strings.Contains(err.Error(), "staged submodule changes") || strings.Contains(err.Error(), "unmerged index")) {
+					t.Fatalf("staged gitlink was clean: %+v %v", inventory, err)
+				}
+			})
+		}
+	}
 }

@@ -35,6 +35,12 @@ var (
 	localConfigArgs    = []string{"config", "--list", "--local", "--show-origin", "--null"}
 	worktreeConfigArgs = []string{"config", "--list", "--worktree", "--show-origin", "--null"}
 	indexFlagArgs      = []string{"ls-files", "-v", "-z"}
+	gitlinkIndexArgs   = []string{"ls-files", "-s", "-z"}
+	headTreeArgs       = []string{"ls-tree", "-r", "-z", "HEAD"}
+	// statusArgs is the only allowlisted status. --ignore-submodules=all stops
+	// Git from starting a descendant status for an index gitlink. Checked
+	// descendant status is a separate command after that descendant's config check.
+	statusArgs = []string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"}
 )
 
 // RepositorySpec is one caller-selected repository. Identity is an
@@ -269,10 +275,18 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 // stash, or otherwise modify a repository. Publication proof comes only from
 // the injected boundary. FetchSucceeded is left false and is not publication
 // evidence. Unsupported repository config is refused before a command that can
-// run a hook, filter, diff driver, or helper. core.worktree is unsupported, so
-// status and the nested walk cannot observe different trees. Submodule
-// directories are taken from Git's file-scoped config parse of .gitmodules
-// before submodule status. Index entries whose ls-files -v tag is not ordinary
+// run a hook, filter, diff driver, or helper. Descendant submodule config is
+// scanned before status or index inspection. Every status command passes
+// --ignore-submodules=all, so Git does not start a descendant status from a
+// gitlink. An index gitlink whose path is missing from .gitmodules fails
+// closed before that status, including when .gitmodules is absent. A later
+// submodule error cannot undo a filter that already ran. Checked child status
+// is collected separately after that child's config check. core.worktree is
+// unsupported, so status and the nested walk cannot observe different trees.
+// Submodule directories are taken from Git's file-scoped config parse of
+// .gitmodules before submodule status. That status lists immediate children;
+// a nested checkout is queued from the child repository and still stops at
+// maxCollectDepth. Index entries whose ls-files -v tag is not ordinary
 // cached H fail closed. Those reads are not an atomic snapshot and take no lock.
 func CollectPreservation(ctx context.Context, req CollectRequest, git GitRunner, revision HomeRevisionSource) (Inventory, error) {
 	if ctx == nil {
@@ -609,10 +623,15 @@ func (c *collector) readWorktree(ctx context.Context, item porcelainWorktree) (w
 	if err != nil {
 		return worktreeSnapshot{}, err
 	}
+	// Mapped descendant config and any index gitlink that mapping omits are
+	// refused before status. Status itself does not enter a descendant.
+	if err := c.scanSubmoduleTree(ctx, item.Path, 0); err != nil {
+		return worktreeSnapshot{}, err
+	}
 	if err := c.refuseHiddenIndexFlags(ctx, item.Path); err != nil {
 		return worktreeSnapshot{}, err
 	}
-	status, err := c.gitOK(ctx, item.Path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	status, err := c.gitOK(ctx, item.Path, statusArgs...)
 	if err != nil {
 		return worktreeSnapshot{}, err
 	}
@@ -637,12 +656,27 @@ func (c *collector) readSubmodules(ctx context.Context, worktree string) (string
 	}
 	info, err := os.Lstat(filepath.Join(worktree, ".gitmodules"))
 	if os.IsNotExist(err) {
+		// scanSubmoduleTree already refused an index gitlink with no mapping.
+		// An absent file is an empty submodule list only after that check.
 		return "", []submoduleSnapshot{}, nil
 	}
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return "", nil, errors.New("preservation incomplete: submodule metadata unreadable")
 	}
-	raw, err := c.gitOK(ctx, worktree, "submodule", "status", "--recursive")
+	mapped, err := c.gitmodulesPaths(ctx, worktree)
+	if err != nil {
+		return "", nil, err
+	}
+	known := make(map[string]bool, len(mapped))
+	for _, path := range mapped {
+		known[path] = true
+	}
+	// Immediate children only. Recursive status repeats a nested checkout under
+	// this identity and again under the child, which mismatches one git
+	// directory. The child read discovers that nested checkout within
+	// maxCollectDepth. core.worktree stays unsupported on every level.
+	// Child status ignores its own descendants; those are checked separately.
+	raw, err := c.gitOK(ctx, worktree, "submodule", "status")
 	if err != nil {
 		return "", nil, err
 	}
@@ -652,6 +686,9 @@ func (c *collector) readSubmodules(ctx context.Context, worktree string) (string
 	}
 	subs := make([]submoduleSnapshot, 0, len(parsed))
 	for _, sub := range parsed {
+		if !known[sub.Path] {
+			return "", nil, errors.New("preservation incomplete: submodule mapping missing")
+		}
 		if sub.State == "-" {
 			subs = append(subs, submoduleSnapshot{Path: sub.Path, State: "-", Operations: []string{}})
 			continue
@@ -666,7 +703,7 @@ func (c *collector) readSubmodules(ctx context.Context, worktree string) (string
 		if err := c.refuseHiddenIndexFlags(ctx, child); err != nil {
 			return "", nil, err
 		}
-		status, err := c.gitOK(ctx, child, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+		status, err := c.gitOK(ctx, child, statusArgs...)
 		if err != nil {
 			return "", nil, err
 		}
@@ -939,10 +976,12 @@ func allowedReadOnlyGit(args []string) error {
 	case slices.Equal(args, []string{"worktree", "list", "--porcelain"}):
 	case slices.Equal(args, refArgs):
 	case slices.Equal(args, []string{"stash", "list", "--format=%H"}):
-	case slices.Equal(args, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}):
+	case slices.Equal(args, statusArgs):
 	case slices.Equal(args, []string{"ls-files", "-o", "--exclude-standard", "-z"}):
 	case slices.Equal(args, indexFlagArgs):
-	case slices.Equal(args, []string{"submodule", "status", "--recursive"}):
+	case slices.Equal(args, gitlinkIndexArgs):
+	case slices.Equal(args, headTreeArgs):
+	case slices.Equal(args, []string{"submodule", "status"}):
 	case allowedFileConfig(args):
 	default:
 		return errors.New("read-only git command refused: " + strings.Join(args, " "))
@@ -1251,7 +1290,7 @@ func (c *collector) scanSubmoduleTree(ctx context.Context, worktree string, dept
 		return errors.New("preservation incomplete: submodule depth exceeded")
 	}
 	paths, err := c.gitmodulesPaths(ctx, worktree)
-	if err != nil || len(paths) == 0 {
+	if err != nil {
 		return err
 	}
 	for _, rel := range paths {
@@ -1276,7 +1315,10 @@ func (c *collector) scanSubmoduleTree(ctx context.Context, worktree string, dept
 			return err
 		}
 	}
-	return nil
+	// After mapped descendants are config-checked, so a bad child config still
+	// fails before any index read. A gitlink omitted from .gitmodules, or
+	// present when that file is absent, fails here, before the caller status.
+	return c.refuseUnmappedGitlinks(ctx, worktree, paths)
 }
 
 // gitmodulesPaths asks Git to parse one regular .gitmodules file. The allowlist
@@ -1469,6 +1511,24 @@ func (c *collector) refuseHiddenIndexFlags(ctx context.Context, dir string) erro
 	return rejectHiddenIndexFlags(out)
 }
 
+// refuseUnmappedGitlinks reads index modes only. ls-files --stage does not
+// start Git in a gitlink. A mode 160000 path must be one of the paths already
+// parsed from .gitmodules; an empty mapping refuses every gitlink.
+func (c *collector) refuseUnmappedGitlinks(ctx context.Context, worktree string, mapped []string) error {
+	out, err := c.gitOK(ctx, worktree, gitlinkIndexArgs...)
+	if err != nil {
+		return err
+	}
+	if err := rejectUnmappedGitlinks(out, mapped); err != nil {
+		return err
+	}
+	head, err := c.gitOK(ctx, worktree, headTreeArgs...)
+	if err != nil {
+		return err
+	}
+	return rejectStagedGitlinks(out, head)
+}
+
 func rejectHiddenIndexFlags(out string) error {
 	if out == "" {
 		return nil
@@ -1483,6 +1543,40 @@ func rejectHiddenIndexFlags(out string) error {
 	for _, rec := range parts {
 		if len(rec) < 3 || rec[0] != 'H' || rec[1] != ' ' {
 			return errors.New("preservation incomplete: index flags hide edits")
+		}
+	}
+	return nil
+}
+
+func rejectUnmappedGitlinks(out string, mapped []string) error {
+	if out == "" {
+		return nil
+	}
+	known := make(map[string]bool, len(mapped))
+	for _, path := range mapped {
+		known[path] = true
+	}
+	parts := strings.Split(out, "\x00")
+	if parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 || len(parts) > maxCollectStatus {
+		return errors.New("preservation incomplete: index metadata unreadable")
+	}
+	for _, rec := range parts {
+		mode, rest, ok := strings.Cut(rec, " ")
+		if !ok || mode == "" || rest == "" {
+			return errors.New("preservation incomplete: index metadata unreadable")
+		}
+		if mode != "160000" {
+			continue
+		}
+		_, path, ok := strings.Cut(rec, "\t")
+		if !ok || !validRelative(path) {
+			return errors.New("preservation incomplete: index metadata unreadable")
+		}
+		if !known[path] {
+			return errors.New("preservation incomplete: submodule mapping missing")
 		}
 	}
 	return nil
@@ -1604,4 +1698,68 @@ func discoverNestedRepositories(worktree, gitDir string, submodules map[string]b
 		return false, err
 	}
 	return found, nil
+}
+
+// rejectStagedGitlinks keeps status suppression from hiding staged gitlinks.
+// Both inputs describe this repository only; neither command enters a child.
+// Any addition, deletion, object or mode change involving a gitlink refuses
+// completeness. Unmerged index entries also fail closed.
+func rejectStagedGitlinks(index, head string) error {
+	type entry struct{ mode, object string }
+	parse := func(raw string, tree bool) (map[string]entry, error) {
+		entries := map[string]entry{}
+		if raw == "" {
+			return entries, nil
+		}
+		if !strings.HasSuffix(raw, "\x00") {
+			return nil, errors.New("preservation incomplete: gitlink metadata unreadable")
+		}
+		records := strings.Split(strings.TrimSuffix(raw, "\x00"), "\x00")
+		if len(records) > maxCollectStatus {
+			return nil, errors.New("preservation incomplete: gitlink metadata bound exceeded")
+		}
+		for _, record := range records {
+			metadata, path, ok := strings.Cut(record, "\t")
+			fields := strings.Fields(metadata)
+			if !ok || !validRelative(path) || len(fields) != 3 {
+				return nil, errors.New("preservation incomplete: gitlink metadata unreadable")
+			}
+			object := fields[1]
+			if tree {
+				object = fields[2]
+			} else if fields[2] != "0" {
+				return nil, errors.New("preservation incomplete: unmerged index")
+			}
+			if !validObject(object) {
+				return nil, errors.New("preservation incomplete: gitlink object unreadable")
+			}
+			if _, exists := entries[path]; exists {
+				return nil, errors.New("preservation incomplete: duplicate gitlink metadata")
+			}
+			entries[path] = entry{fields[0], object}
+		}
+		return entries, nil
+	}
+	staged, err := parse(index, false)
+	if err != nil {
+		return err
+	}
+	committed, err := parse(head, true)
+	if err != nil {
+		return err
+	}
+	for path, item := range staged {
+		previous, exists := committed[path]
+		if (item.mode == "160000" || previous.mode == "160000") && (!exists || item != previous) {
+			return errors.New("preservation incomplete: staged submodule changes")
+		}
+	}
+	for path, item := range committed {
+		if item.mode == "160000" {
+			if _, exists := staged[path]; !exists {
+				return errors.New("preservation incomplete: staged submodule changes")
+			}
+		}
+	}
+	return nil
 }

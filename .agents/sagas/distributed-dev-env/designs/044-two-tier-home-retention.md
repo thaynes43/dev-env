@@ -196,7 +196,13 @@ other than `true` or `false`). Each existing parsed directory is config-checked
 before `submodule status`. A path this parser reports as absent is skipped.
 `ls-files -v -z` is read before status. Any index tag other than ordinary
 cached `H` fails closed, including skip-worktree and assume-unchanged, so
-status alone is not a complete preservation claim. The scan does not follow
+status alone is not a complete preservation claim. `ls-files -s -z` is
+compared with those parsed paths before status. A mode `160000` index path
+missing from `.gitmodules`, including when that file is absent, fails closed.
+The stage-zero index gitlink objects and modes must also match `ls-tree -r -z HEAD` in both directions. Gitlink additions, changes, deletions and mode changes, plus unmerged index entries, refuse completeness before status. This prevents status suppression from hiding staged gitlink-only work.
+Every collector `status` passes `--ignore-submodules=all`, so Git does not
+start a descendant status. Checked descendant status is read separately,
+after that descendant's config check. The scan does not follow
 symlinks. A nested `.git` that status omits because it is ignored is recorded
 as a nested repository, including under an ignored directory. A symlink stops
 that walk. `BISECT_START` is an in-progress operation. The CLI is not wired to
