@@ -42,11 +42,13 @@ corrections, each with the sender UID, text, message UID, text digest and
 nonce, or an empty pending list. The designated parent is not the recipient
 and cannot use this list. The call does not consume.
 
-`POST /v1/sessions/{name}/instruction-attempt` lets the target pod register the
-attempt it is running, or end that same attempt. The server copies the session
-and pod from the token. The attempt ID is either the child-decision UUID or
-the ordinary task's platform initial-usage attempt, 64 lowercase hex
-characters. A different ID is refused while the current attempt is active.
+`POST /v1/sessions/{name}/instruction-attempt` lets the authenticated target
+pod register an attempt, or end that same attempt. The server copies the
+session and pod from the token. It authenticates that pod-authoritative
+claim. It does not independently attest that the platform selected or ran
+the attempt. The attempt ID is a lowercase UUID or 64 lowercase hex
+characters. That is a shape check. A different ID is refused while the
+current attempt is active.
 An active attempt stays bound to the pod UID that registered it. A later pod
 with the same session name and a new UID is a replacement, not that executor.
 The replacement cannot register a new attempt, cannot register the active
@@ -102,14 +104,25 @@ native task.
 ## Native lifecycle and explicit pull
 
 A child-decision launch still binds the platform invocation id, session UID
-and pod UID written by `beginNativeInvocation`. An ordinary private task does
-not write `native-invocation.json` and does not enable child decisions. Its
+and pod UID written by `beginNativeInvocation`. agentd reads that local file
+before it posts a child-decision attempt. An ordinary private task does not
+write `native-invocation.json` and does not enable child decisions. Its
 attempt ID is `Launch.UsageSource.AttemptID` from the initial-usage binding.
-Registration requires that id, the exact `initial-usage/intent.json` launch
-digest, the current private launch, and the live owned `agent.pid` process
-group. The end requires this process's own Wait, the recorded pid no longer
-alive, and process-group absence. A stopped, replaced, or stale attempt is
-refused. The usage source is attempt metadata. It is not allowance ingestion.
+agentd's local provenance check, before its own post, requires that id, the
+exact `initial-usage/intent.json` launch digest, the current private launch,
+and the live owned `agent.pid` process group. The local end check requires
+this process's own Wait, the recorded pid no longer alive, and process-group
+absence. A stopped, replaced, or stale local record is not posted by that
+path. The registration server does not read the local invocation file, the
+intent digest, or the process.
+The stored attempt ID remains the pod's claim under the registration guards
+above. The usage source is attempt metadata. It is not allowance ingestion.
+
+`agent-run instruction attempt` is the model-facing command. It can register
+or end its own pod record. It posts `--attempt` and optional `--ended` and
+does not run the agentd local provenance check. The server authenticates the
+caller's pod and still applies the attempt guards above. The command does
+not consume.
 
 When instruction registration is enabled, `RunAgent` and `runTUI` register
 that binding after the owned process is recorded and the local phase is
