@@ -308,6 +308,17 @@ func (s *Server) publishInstruction(ctx context.Context, _ http.ResponseWriter, 
 	if !instructionAttemptLive(target, pod, req.AttemptID) {
 		return 0, nil, inboxHidden()
 	}
+	// Refuse a new key before Inbox.Create. The status patch below repeats the
+	// bound, but a create that then loses that check would leave an inbox
+	// message with no instruction record. An existing key already returned
+	// through confirmInstruction and is not subject to this refusal.
+	var current v1alpha1.AgentSession
+	if s.Live.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.Name}, &current) != nil || current.UID != target.UID {
+		return 0, nil, instructionUnknown()
+	}
+	if len(current.Status.CoordinatorInstructions) >= instructionMaxRecords {
+		return 0, nil, tooManyRequests("instruction record bound is full")
+	}
 	spec := coord.InboxMessageSpec{
 		Project: req.Project, Key: instructionInboxKey(req.Key), Sender: sessionIdentity(sender), Recipient: sessionIdentity(target),
 		Actor: inboxActor(c), Provenance: inboxProvenance(scope.snapshot), Repository: scope.repository,

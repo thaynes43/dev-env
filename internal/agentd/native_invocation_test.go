@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -53,6 +55,12 @@ if [ "$1" = "resume" ]; then
   exit 0
 fi
 cat >> "$SYNTHETIC_INITIAL_PROMPTS"
+if [ -n "$SYNTHETIC_NATIVE_THREAD_FIRST" ]; then
+  /bin/echo '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}'
+  if [ -n "$SYNTHETIC_NATIVE_INITIAL_RELEASE" ]; then IFS= read -r ready < "$SYNTHETIC_NATIVE_INITIAL_RELEASE"; fi
+  printf '%s\n' '{"type":"turn.started"}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
+  exit 0
+fi
 if [ -n "$SYNTHETIC_NATIVE_INITIAL_RELEASE" ]; then IFS= read -r ready < "$SYNTHETIC_NATIVE_INITIAL_RELEASE"; fi
 printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123456789abc"}' '{"type":"turn.started"}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}}'
 `)
@@ -73,6 +81,9 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 		Dir: s.WorktreePath(sess.Name), Prompt: "EXACT-SYNTHETIC-INITIAL-PROMPT", BootID: "same-boot", CreatedAt: rescueNow,
 		Env:     []string{"SYNTHETIC_NATIVE_SPAWNS=" + spawns, "SYNTHETIC_INITIAL_PROMPTS=" + prompts, "SYNTHETIC_NATIVE_INITIAL_RELEASE=" + barrierPath},
 		LogPath: s.LogPath(sess.Name), EventsPath: s.statePath(eventsFile)}
+	if mode == "thread-first" {
+		l.Env = append(l.Env, "SYNTHETIC_NATIVE_THREAD_FIRST=1")
+	}
 	if err := admitWorkspaceLaunch(context.Background(), s, sess, &l); err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +229,82 @@ func TestSyntheticEnabledInstructionRegistrationCorrelatesAttempt(t *testing.T) 
 	for _, call := range calls {
 		if !strings.HasPrefix(call, http.MethodPost+" ") || strings.Contains(call, "/consume") || strings.Contains(call, "/instructions") {
 			t.Fatalf("registration consumed or listed: %v", calls)
+		}
+	}
+}
+
+func TestRunAgentRegistrationSnapshotIgnoresLiveThreadMutation(t *testing.T) {
+	const threadID = "12345678-1234-1234-1234-123456789abc"
+	persisted := make(chan struct{})
+	release := make(chan struct{})
+	var persistOnce sync.Once
+	var releaseOnce sync.Once
+	letGo := func() { releaseOnce.Do(func() { close(release) }) }
+	var publishedConversation string
+	var publishedConfirmed bool
+	var publishedInvocation string
+	beforeTaskInstructionPublish = func(got Launch) {
+		defer letGo()
+		select {
+		case <-persisted:
+		case <-time.After(5 * time.Second):
+			t.Errorf("thread identity was not published before registration")
+			return
+		}
+		publishedConversation = got.ConversationID
+		publishedConfirmed = got.NativeThreadConfirmed
+		publishedInvocation = got.NativeInvocationID
+	}
+	afterCodexThreadIdentity = func() {
+		persistOnce.Do(func() { close(persisted) })
+		<-release
+	}
+	t.Cleanup(func() {
+		letGo()
+		beforeTaskInstructionPublish = nil
+		afterCodexThreadIdentity = nil
+	})
+	s, _, l, _, code, tail, calls := runSyntheticNativeInvocation(t, "thread-first")
+	if code != 0 || strings.Contains(tail, "unconfirmed") {
+		t.Fatalf("overlapped registration failed: %d tail %q", code, tail)
+	}
+	if publishedConversation != "" || publishedConfirmed || publishedInvocation != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" {
+		t.Fatalf("registration published the live thread mutation: conversation %q confirmed %v invocation %q", publishedConversation, publishedConfirmed, publishedInvocation)
+	}
+	if !l.NativeThreadConfirmed || l.ConversationID != threadID || l.NativeInvocationID != publishedInvocation || l.Prompt != "EXACT-SYNTHETIC-INITIAL-PROMPT" {
+		t.Fatalf("live thread persistence changed: %+v", l)
+	}
+	var result taskResult
+	if err := readJSONFile(s.statePath(resultFile), &result); err != nil || result.ConversationID != threadID || result.ExitCode != 0 {
+		t.Fatalf("task result lost the persisted thread: %+v %v", result, err)
+	}
+	if len(calls) < 2 {
+		t.Fatalf("register and end were not both posted: %v", calls)
+	}
+}
+
+func TestRunAgentPersistsCodexThreadAcrossInstructionRegistration(t *testing.T) {
+	const threadID = "12345678-1234-1234-1234-123456789abc"
+	s, _, l, _, code, tail, calls := runSyntheticNativeInvocation(t, "accepted")
+	if code != 0 || strings.Contains(tail, "unconfirmed") {
+		t.Fatalf("codex registration run failed: %d tail %q", code, tail)
+	}
+	if !l.NativeThreadConfirmed || l.ConversationID != threadID || l.NativeInvocationID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || l.Prompt != "EXACT-SYNTHETIC-INITIAL-PROMPT" || l.SessionUID == "" || l.PodUID == "" || l.BootID != "same-boot" {
+		t.Fatalf("thread persistence dropped native identity: %+v", l)
+	}
+	var result taskResult
+	if err := readJSONFile(s.statePath(resultFile), &result); err != nil || result.ConversationID != threadID || result.ExitCode != 0 {
+		t.Fatalf("task result lost the persisted thread: %+v %v", result, err)
+	}
+	if _, err := os.Stat(s.statePath(instructionEndUnconfirmedFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("confirmed end wrote an unconfirmed sidecar")
+	}
+	if len(calls) < 2 {
+		t.Fatalf("register and end were not both posted: %v", calls)
+	}
+	for _, call := range calls {
+		if !strings.HasPrefix(call, http.MethodPost+" "+apiv1.SessionInstructionAttemptPath(l.Session)) {
+			t.Fatalf("lifecycle call was not the attempt route: %v", calls)
 		}
 	}
 }

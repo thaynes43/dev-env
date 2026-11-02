@@ -16,7 +16,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 
+	coord "github.com/thaynes43/dev-env/api/coordination/v1alpha1"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -382,6 +384,90 @@ func TestInstructionAttemptRejectsActiveSwitchAndEndedReplay(t *testing.T) {
 		t.Fatalf("switch dropped the ended id: %+v ledger %+v", got, f.session("child").Status.CoordinatorInstructionEndedAttempts)
 	}
 	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt}), http.StatusNotFound, apiv1.CodeNotFound)
+}
+
+func TestInstructionActiveAttemptOnLostPodRefusesReplacement(t *testing.T) {
+	f, _, childTok, _, podUID := instructionReady(t, "parent", "child", "task:coord-instruction")
+	var pod corev1.Pod
+	if err := f.c.Get(context.Background(), types.NamespacedName{Namespace: sessionNS, Name: "child"}, &pod); err != nil || string(pod.UID) != podUID {
+		t.Fatal(err)
+	}
+	replacement := pod.DeepCopy()
+	if err := f.c.Delete(context.Background(), &pod); err != nil {
+		t.Fatal(err)
+	}
+	replacement.ResourceVersion = ""
+	replacement.UID = uuid.NewUUID()
+	if err := f.c.Create(context.Background(), replacement); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.UID == "" || string(replacement.UID) == podUID {
+		t.Fatalf("replacement pod uid %q", replacement.UID)
+	}
+	id := f.auth[childTok]
+	id.PodUID = string(replacement.UID)
+	f.auth[childTok] = id
+	path := apiv1.SessionInstructionAttemptPath("child")
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttemptNext}), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt}), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodPost, path, childTok, apiv1.CoordinatorInstructionAttemptRequest{AttemptID: instructionAttempt, Ended: true}), http.StatusNotFound, apiv1.CodeNotFound)
+	got := f.session("child").Status.CoordinatorInstructionAttempt
+	if got == nil || got.AttemptID != instructionAttempt || got.Phase != apiv1.InstructionPhaseActive || got.PodUID != podUID {
+		t.Fatalf("lost pod attempt was retired or transferred: %+v", got)
+	}
+	if len(f.session("child").Status.CoordinatorInstructionEndedAttempts) != 0 {
+		t.Fatal("replacement wrote an ended attempt for the unknown executor")
+	}
+	if f.session("child").Status.Agent == nil || f.session("child").Status.Agent.Status != protocol.AgentBusy {
+		t.Fatal("replacement changed the recorded agent state")
+	}
+}
+
+func TestInstructionRecordBoundRefusesBeforeInboxCreate(t *testing.T) {
+	f, parentTok, _, childUID, podUID := instructionReady(t, "parent", "child", "task:coord-instruction")
+	var first apiv1.CoordinatorInstructionReceipt
+	for i, key := range []string{"bound-1", "bound-2", "bound-3", "bound-4"} {
+		req := instructionRequest(childUID, podUID, key, "task:coord-instruction", instructionText)
+		w := f.do(http.MethodPost, apiv1.SessionInstructionsPath("child"), parentTok, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s %d %s", key, w.Code, w.Body.String())
+		}
+		if i == 0 {
+			first = decode[apiv1.CoordinatorInstructionReceipt](t, w)
+		}
+	}
+	fifth := instructionRequest(childUID, podUID, "bound-5", "task:coord-instruction", instructionText)
+	wantError(t, f.do(http.MethodPost, apiv1.SessionInstructionsPath("child"), parentTok, fifth), http.StatusTooManyRequests, apiv1.CodeLimitExceeded)
+	if messages := instructionInboxCount(t, f); messages != 4 {
+		t.Fatalf("refused key created an inbox message: %d", messages)
+	}
+	if len(f.session("child").Status.CoordinatorInstructions) != 4 {
+		t.Fatal("refused key stored an instruction record")
+	}
+	replay := instructionRequest(childUID, podUID, "bound-1", "task:coord-instruction", instructionText)
+	w := f.do(http.MethodPost, apiv1.SessionInstructionsPath("child"), parentTok, replay)
+	got := decode[apiv1.CoordinatorInstructionReceipt](t, w)
+	if w.Code != http.StatusOK || got.MessageUID != first.MessageUID || got.Outcome != apiv1.InstructionOutcomeConfirmed || got.Consumed {
+		t.Fatalf("full-record replay %d %+v", w.Code, got)
+	}
+	if messages := instructionInboxCount(t, f); messages != 4 {
+		t.Fatalf("replay created an inbox message: %d", messages)
+	}
+}
+
+func instructionInboxCount(t *testing.T, f *fixture) int {
+	t.Helper()
+	var messages coord.InboxMessageList
+	if err := f.c.List(context.Background(), &messages); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, item := range messages.Items {
+		if strings.HasPrefix(item.Spec.Key, "ci.") {
+			n++
+		}
+	}
+	return n
 }
 
 func TestInstructionEndedLedgerRefusesWhenFull(t *testing.T) {

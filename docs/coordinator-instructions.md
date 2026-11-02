@@ -22,7 +22,10 @@ row. `status.coordinatorInstructions` is a map list keyed by the immutable
 delivery key, at most four records. Kubernetes can correlate each item, so
 the delivery fields stay immutable and consumption can be set once. A later
 update cannot drop the list, remove an old key, or replace an old key with a
-different key. Duplicate keys are rejected. The response is a receipt:
+different key. Duplicate keys are rejected. A new key is refused when four
+records are already stored, and that refusal happens before an inbox message
+is created. Repeating a key that is already stored still returns that receipt
+and does not create another message. The response is a receipt:
 message identity, digest and `consumed: false`. It does not include the nonce
 or the sender. Repeating the same intent returns that receipt.
 A different intent for the same key conflicts. The client does not choose a
@@ -44,6 +47,13 @@ attempt it is running, or end that same attempt. The server copies the session
 and pod from the token. The attempt ID is either the child-decision UUID or
 the ordinary task's platform initial-usage attempt, 64 lowercase hex
 characters. A different ID is refused while the current attempt is active.
+An active attempt stays bound to the pod UID that registered it. A later pod
+with the same session name and a new UID is a replacement, not that executor.
+The replacement cannot register a new attempt, cannot register the active
+attempt again, and cannot end it. The active record is not retired and the
+unknown executor is not marked ended. That refusal stays in place until the
+original pod ends the attempt. This source does not treat the replacement as
+the lost executor.
 Ending retains that ID in `status.coordinatorInstructionEndedAttempts`, an
 append-only list of at most four. A retained ID cannot be registered again.
 A full list refuses another attempt. Removing or rewriting a retained ID is
@@ -111,7 +121,10 @@ not consume. Registration failure still stops that attempt. An end POST that
 does not confirm is recorded as local protocol state
 `instruction-end-unconfirmed.json` and does not change the CLI's exit code.
 That file is not server acceptance, not a consumption receipt, and not
-permission to start another attempt.
+permission to start another attempt. Neither the registration POST nor the
+end POST is retried. An unconfirmed registration is not acceptance: the
+attempt is stopped. An unconfirmed end keeps the CLI exit result that Wait
+already reported.
 
 Registration is not implied by child decisions or by `AGENTD_API_URL`. The
 launch records `coordinatorInstructions` only when

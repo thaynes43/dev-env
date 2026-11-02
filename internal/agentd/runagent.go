@@ -23,6 +23,10 @@ import (
 // drainWait is how long run-agent reads the CLI's output after it exits.
 var drainWait = 5 * time.Second
 
+// beforeTaskInstructionPublish is nil in production. Tests receive the launch
+// value that registration will publish.
+var beforeTaskInstructionPublish func(Launch)
+
 // maxStreamLine is the longest stream-json line run-agent parses.
 var maxStreamLine = 16 << 20
 
@@ -168,6 +172,14 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		return 1
 	}
 
+	// registrationLaunch is taken before the stdout reader can publish a native
+	// Codex thread into l. persistCodexThread writes ConversationID and
+	// NativeThreadConfirmed on that same value. Passing l into registration
+	// would copy those fields while they are being written. The snapshot is
+	// the registration view. Thread persistence, served-model lookup, the end
+	// post, and the task result read l only after that reader has finished.
+	registrationLaunch := l
+	taskTimeout := l.Timeout
 	codex := codexStream{capture: capture}
 	parseFailed := make(chan error, 1)
 	readDone := make(chan struct{})
@@ -229,8 +241,8 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	}
 	exited := make(chan struct{})
 	var timeout <-chan time.Time
-	if l.Timeout > 0 {
-		t := time.NewTimer(l.Timeout)
+	if taskTimeout > 0 {
+		t := time.NewTimer(taskTimeout)
 		defer t.Stop()
 		timeout = t.C
 	}
@@ -245,7 +257,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 				mu.Lock()
 				timedOut = true
 				mu.Unlock()
-				stop("limits.timeout " + l.Timeout.String() + " reached")
+				stop("limits.timeout " + taskTimeout.String() + " reached")
 				timeout = nil
 			}
 		}
@@ -253,7 +265,13 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 
 	// Registration is the live Running record's authenticated attempt. It is
 	// not consumption. An absent API origin leaves the local lifecycle alone.
-	instructionErr := publishTaskInstruction(nativeLease, l, false, nil, pid)
+	// toPublish is the pre-reader snapshot. persistCodexThread may already
+	// have changed l; this value does not alias those fields.
+	toPublish := registrationLaunch
+	if beforeTaskInstructionPublish != nil {
+		beforeTaskInstructionPublish(toPublish)
+	}
+	instructionErr := publishTaskInstruction(nativeLease, toPublish, false, nil, pid)
 	if instructionErr != nil {
 		stop("native instruction attempt is unconfirmed")
 	}
