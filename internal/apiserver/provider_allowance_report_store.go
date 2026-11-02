@@ -316,6 +316,17 @@ func acceptCurrentItem(item providerallowance.ReadItem, trusted providerallowanc
 	if obs.ProviderObservedAt == nil || !providerallowance.CurrentMeasuresSupported(item) {
 		return ErrAggregateRejected
 	}
+	assessment := providerallowance.ValidateObservation(obs, trusted, reg)
+	for _, current := range item.CurrentMeasures {
+		if current.State != providerallowance.CurrentKnown && current.State != providerallowance.CurrentUncapped {
+			continue
+		}
+		for i, measure := range obs.Measures {
+			if measure.ID == current.MeasureID && (i >= len(assessment.Measures) || !assessment.Measures[i].Actionable || assessment.Measures[i].HistoricalOnly) {
+				return ErrAggregateRejected
+			}
+		}
+	}
 	receipt, _ := time.Parse(time.RFC3339Nano, item.ReceivedAt)
 	for _, measure := range obs.Measures {
 		if measure.Window.ResetPrecision != providerallowance.ResetInstant {

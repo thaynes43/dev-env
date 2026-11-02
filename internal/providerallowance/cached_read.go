@@ -34,6 +34,7 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		trustedStatus[provider] = matched[0]
 		cachedAlignTrust(item, matched[0])
 		cachedPreserveKnownConflicts(item)
+		cachedWithholdHistorical(item, matched[0], reg)
 		cachedDegrade(&item.Freshness, item.Observation.ProviderObservedAt, item.ReceivedAt, maxAge, maxAgeSet, now)
 		freshHold[provider] = item.Freshness
 		if cachedFreshnessBlocks(item.Freshness) {
@@ -85,12 +86,30 @@ func cachedObservationTrusted(obs Observation, trusted TrustedContext, reg Regis
 	}
 	for i, measure := range obs.Measures {
 		if measure.Value.State == ValueKnown || measure.Value.State == ValueUncapped {
-			if i >= len(assessment.Measures) || assessment.Measures[i].HistoricalOnly || !assessment.Measures[i].Actionable {
+			if i >= len(assessment.Measures) || !assessment.Measures[i].SemanticsEvidenced || !assessment.Measures[i].InRange {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// A validated historical measure is trusted history, not current capacity.
+// Keep its raw observation/binding for last-reported display while refusing
+// a payload that labels that same measure current, even with provider time.
+func cachedWithholdHistorical(item *ReadItem, trusted TrustedContext, reg Registry) {
+	assessment := ValidateObservation(item.Observation, trusted, reg)
+	for i, measure := range item.Observation.Measures {
+		if i >= len(assessment.Measures) || assessment.Measures[i].Actionable {
+			continue
+		}
+		for j := range item.CurrentMeasures {
+			current := &item.CurrentMeasures[j]
+			if current.MeasureID == measure.ID && (current.State == CurrentKnown || current.State == CurrentUncapped) {
+				cachedClearCurrent(current)
+			}
+		}
+	}
 }
 
 // CurrentMeasuresSupported binds every actionable projection to its original

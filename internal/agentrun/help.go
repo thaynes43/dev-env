@@ -652,6 +652,7 @@ separate capability: ordinary show output still omits the ledger. Text and
 oversized view is unavailable, not zero usage and not a partial receipt list.
 `,
 	"usage": `Usage: agent-run usage -o json [--from-file FILE|- | --claude-statusline | --read-current | --publish-file FILE|-]
+       agent-run usage capture -o json --input FILE|- --trust-file FILE
 
 Without --from-file, --claude-statusline, --read-current, or --publish-file,
 reports local unconfigured acquisition preflight refusals. No provider is
@@ -671,6 +672,11 @@ be combined with --from-file, --claude-statusline, or --read-current. It reads
 one bounded regular file, or stdin when FILE is -, and performs one PUT
 /v1/provider-allowances. Redirects are not followed and the PUT is not retried.
 A refusal is not echoed. The command does not acquire from a provider.
+usage capture explicitly assembles up to six sanitized retained captures using
+a separate bounded caller-owned aggregate trust file. It preserves original
+capture and receipt times and leaves provider observation time/current values
+unknown on these inputs. It opens no operator/provider connection, credential
+or subprocess and never publishes implicitly.
 This is not the Codex current-source slot; usage-source
 --read-current is unchanged. The command does not grant, poll a provider, or
 open a credential.
