@@ -374,3 +374,64 @@ func TestAggregateAllowanceStoreExplicitAccountRebind(t *testing.T) {
 	}
 	refuseAllowancePut(t, store, mem, previous, now, mem.cm.Data[AggregateAllowanceDataKey])
 }
+
+func TestAggregateAllowanceStorePreservesWatermarkAcrossGap(t *testing.T) {
+	first, second := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	raw := canonicalAllowanceFixture(t, second)
+	if err := store.Put(context.Background(), raw, now); err != nil {
+		t.Fatal(err)
+	}
+	refuseAllowancePut(t, store, mem, UnconfiguredAggregateDocument(), now, string(raw))
+	refuseAllowancePut(t, store, mem, first, now, string(raw))
+}
+
+func TestAggregateAllowanceStoreRejectsUnsupportedCurrentAndNoncurrentPoison(t *testing.T) {
+	_, second := assemblyCaptures(t)
+	mem := &slotMem{cm: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: AggregateAllowanceNamespace, Name: AggregateAllowanceName, ResourceVersion: "1"}, Data: map[string]string{"keep": "yes"}}}
+	store := repairAllowanceStore(mem)
+	now := time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC)
+	raw := canonicalAllowanceFixture(t, second)
+	if err := store.Put(context.Background(), raw, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range []func(*providerallowance.ReadItem){
+		func(item *providerallowance.ReadItem) {
+			item.CurrentMeasures[0].State = providerallowance.CurrentUncapped
+			item.CurrentMeasures[0].Value = providerallowance.MeasureValue{State: providerallowance.ValueUncapped}
+		},
+		func(item *providerallowance.ReadItem) { item.CurrentMeasures[0].MeasureID = "invented-current" },
+	} {
+		bad := cloneAllowanceReport(t, second)
+		edit(allowanceOpenAIItem(t, &bad))
+		refuseAllowancePut(t, store, mem, bad, now, string(raw))
+	}
+	for _, foreign := range []bool{false, true} {
+		bad := cloneAllowanceReport(t, second)
+		item := allowanceOpenAIItem(t, &bad)
+		item.Observation.ObservationID = "new-withheld-capture"
+		item.Observation.Sequence++
+		item.Observation.CapturedAt, item.ReceivedAt = "2099-01-01T00:00:00Z", "2099-01-01T00:01:00Z"
+		if foreign {
+			item.Observation.ProducerIncarnation = "unselected"
+		}
+		item.Freshness.State, item.Freshness.Basis = providerallowance.FreshUnknown, providerallowance.BasisNone
+		for i := range item.CurrentMeasures {
+			item.CurrentMeasures[i].State = providerallowance.CurrentUnknown
+			item.CurrentMeasures[i].Value = providerallowance.MeasureValue{State: providerallowance.ValueUnknown}
+		}
+		status := allowanceOpenAIStatus(t, &bad)
+		status.Freshness = item.Freshness
+		status.Binding = providerallowance.BindingRecord{State: providerallowance.BindingUnknown}
+		refuseAllowancePut(t, store, mem, bad, now, string(raw))
+		if foreign {
+			item.Observation.CapturedAt, item.ReceivedAt = "2026-11-02T03:07:00Z", "2026-11-02T03:08:00Z"
+			refuseAllowancePut(t, store, mem, bad, now, string(raw))
+		}
+	}
+	if mem.updates != 1 {
+		t.Fatal("refused reports mutated slot", mem.updates)
+	}
+}

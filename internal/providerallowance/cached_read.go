@@ -33,7 +33,6 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 		}
 		trustedStatus[provider] = matched[0]
 		cachedAlignTrust(item, matched[0])
-		cachedPreserveConflicts(item)
 		cachedDegrade(&item.Freshness, item.Observation.ProviderObservedAt, item.ReceivedAt, maxAge, maxAgeSet, now)
 		freshHold[provider] = item.Freshness
 		if cachedFreshnessBlocks(item.Freshness) {
@@ -41,6 +40,7 @@ func ProjectCachedRead(doc *ReadResponse, contexts []TrustedContext, reg Registr
 			continue
 		}
 		cachedExpireResets(item, now)
+		cachedPreserveConflicts(item)
 	}
 	for i := range doc.SourceStatuses {
 		status := &doc.SourceStatuses[i]
@@ -92,17 +92,39 @@ func cachedObservationTrusted(obs Observation, trusted TrustedContext, reg Regis
 	return true
 }
 
+// CurrentMeasuresSupported binds every actionable projection to its original
+// observation. Withheld measures may remain unknown without inventing capacity.
+func CurrentMeasuresSupported(item ReadItem) bool {
+	for _, current := range item.CurrentMeasures {
+		if !currentMeasureSupported(current, item.Observation.Measures) {
+			return false
+		}
+	}
+	return true
+}
+
+func currentMeasureSupported(current CurrentMeasure, measures []Measure) bool {
+	if current.State != CurrentKnown && current.State != CurrentUncapped {
+		return true
+	}
+	for _, measure := range measures {
+		if measure.ID != current.MeasureID {
+			continue
+		}
+		if current.State == CurrentUncapped {
+			return current.Value.State == ValueUncapped && current.Value.Decimal == nil && measure.Value.State == ValueUncapped && measure.Value.Decimal == nil
+		}
+		return current.Value.State == ValueKnown && current.Value.Decimal != nil && measure.Value.State == ValueKnown && measure.Value.Decimal != nil && *current.Value.Decimal == *measure.Value.Decimal
+	}
+	return false
+}
+
 func cachedPreserveConflicts(item *ReadItem) {
 	for i := range item.CurrentMeasures {
 		current := &item.CurrentMeasures[i]
-		if current.State != CurrentKnown || current.Value.State != ValueKnown || current.Value.Decimal == nil {
-			continue
-		}
-		for _, measure := range item.Observation.Measures {
-			if measure.ID == current.MeasureID && measure.Value.State == ValueKnown && measure.Value.Decimal != nil && *measure.Value.Decimal != *current.Value.Decimal {
-				current.State = CurrentConflict
-				break
-			}
+		if !currentMeasureSupported(*current, item.Observation.Measures) {
+			current.State = CurrentConflict
+			current.Value = MeasureValue{State: ValueUnknown}
 		}
 	}
 }

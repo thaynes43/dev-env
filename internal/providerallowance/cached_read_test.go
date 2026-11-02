@@ -273,3 +273,22 @@ func TestProjectCachedReadDegradesConfiguredStatusWithItem(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectCachedReadWithholdsUnsupportedCurrent(t *testing.T) {
+	for _, current := range []CurrentMeasure{
+		{MeasureID: "window", State: CurrentUncapped, Value: MeasureValue{State: ValueUncapped}},
+		{MeasureID: "invented", State: CurrentKnown, Value: MeasureValue{State: ValueKnown, Decimal: repairStr("55")}},
+		{MeasureID: "window", State: CurrentKnown, Value: MeasureValue{State: ValueKnown, Decimal: repairStr("99")}},
+	} {
+		obs, ctx, reg := repairAllowanceFixture(t)
+		doc := repairRead(obs, obs.CapturedAt, "2026-11-02T03:05:00Z", *obs.ProviderObservedAt, current)
+		ProjectCachedRead(&doc, []TrustedContext{ctx}, reg, 30*time.Minute, true, time.Date(2026, 11, 2, 3, 10, 0, 0, time.UTC))
+		got := doc.Items[0].CurrentMeasures[0]
+		if got.State != CurrentConflict || got.Value.State != ValueUnknown || got.Value.Decimal != nil {
+			t.Fatalf("unsupported current survived: %+v", got)
+		}
+		if *doc.Items[0].Observation.Measures[0].Value.Decimal != "55" {
+			t.Fatal("raw history changed")
+		}
+	}
+}

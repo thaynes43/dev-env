@@ -151,6 +151,28 @@ func (s *AggregateAllowanceReportStore) Put(ctx context.Context, raw []byte, now
 			return err
 		}
 	}
+	// Any newly introduced capture must pass caller-owned provenance and clock
+	// checks even when its current values are withheld. Repeating an existing
+	// capture for a failed attempt keeps the original trusted watermark.
+	previous := map[string]providerallowance.ReadItem{}
+	if existing != "" {
+		prior, _ := decodeCanonicalAllowance(existing)
+		previous, _ = indexAllowanceItems(prior)
+	}
+	for _, item := range doc.Items {
+		if before, ok := previous[item.Observation.Provider]; ok && sameAllowanceCapture(before, item) {
+			continue
+		}
+		var matched *providerallowance.TrustedContext
+		for i := range s.Contexts {
+			if s.Contexts[i].Provider == item.Observation.Provider {
+				matched = &s.Contexts[i]
+			}
+		}
+		if matched == nil || acceptCapture(item, *matched, s.Registry, now) != nil {
+			return ErrAggregateRejected
+		}
+	}
 	priorRV := cm.ResourceVersion
 	if cm.Data == nil {
 		cm.Data = map[string]string{}
@@ -254,9 +276,9 @@ func rejectPayloadStatusBinding(status providerallowance.SourceStatus, trusted p
 	return nil
 }
 
-func acceptCurrentItem(item providerallowance.ReadItem, trusted providerallowance.TrustedContext, reg providerallowance.Registry, now time.Time) error {
+func acceptCapture(item providerallowance.ReadItem, trusted providerallowance.TrustedContext, reg providerallowance.Registry, now time.Time) error {
 	obs := item.Observation
-	if trusted.BindingState != providerallowance.BindingVerified || obs.ProviderObservedAt == nil {
+	if trusted.BindingState != providerallowance.BindingVerified {
 		return ErrAggregateRejected
 	}
 	if obs.ProducerRef != trusted.ProducerRef || obs.ProducerIncarnation != trusted.ProducerIncarnation || obs.Source.Kind != trusted.SourceKind || obs.Source.Version != trusted.SourceVersion {
@@ -266,7 +288,7 @@ func acceptCurrentItem(item providerallowance.ReadItem, trusted providerallowanc
 		return ErrAggregateRejected
 	}
 	assessment := providerallowance.ValidateObservation(obs, trusted, reg)
-	if len(assessment.Issues) != 0 || assessment.TrustedBinding != providerallowance.BindingVerified || assessment.ObservationBinding != providerallowance.BindingVerified || !assessment.ProviderTimeKnown {
+	if len(assessment.Issues) != 0 || assessment.TrustedBinding != providerallowance.BindingVerified || assessment.ObservationBinding != providerallowance.BindingVerified {
 		return ErrAggregateRejected
 	}
 	receipt, err := time.Parse(time.RFC3339Nano, item.ReceivedAt)
@@ -277,10 +299,24 @@ func acceptCurrentItem(item providerallowance.ReadItem, trusted providerallowanc
 	if err != nil || captured.After(receipt) {
 		return ErrAggregateRejected
 	}
-	observed, err := time.Parse(time.RFC3339Nano, *obs.ProviderObservedAt)
-	if err != nil || observed.After(receipt) {
+	if obs.ProviderObservedAt != nil {
+		observed, err := time.Parse(time.RFC3339Nano, *obs.ProviderObservedAt)
+		if err != nil || observed.After(receipt) {
+			return ErrAggregateRejected
+		}
+	}
+	return nil
+}
+
+func acceptCurrentItem(item providerallowance.ReadItem, trusted providerallowance.TrustedContext, reg providerallowance.Registry, now time.Time) error {
+	if err := acceptCapture(item, trusted, reg, now); err != nil {
+		return err
+	}
+	obs := item.Observation
+	if obs.ProviderObservedAt == nil || !providerallowance.CurrentMeasuresSupported(item) {
 		return ErrAggregateRejected
 	}
+	receipt, _ := time.Parse(time.RFC3339Nano, item.ReceivedAt)
 	for _, measure := range obs.Measures {
 		if measure.Window.ResetPrecision != providerallowance.ResetInstant {
 			continue
@@ -325,7 +361,10 @@ func preserveAllowance(prev, next providerallowance.ReadResponse) error {
 	for _, provider := range aggregateProviders {
 		before, hasBefore := prevItems[provider]
 		after, hasAfter := nextItems[provider]
-		if !hasBefore || !hasAfter {
+		if hasBefore && !hasAfter {
+			return ErrAggregateRejected
+		}
+		if !hasBefore {
 			continue
 		}
 		if sameAllowanceCapture(before, after) {
@@ -339,6 +378,9 @@ func preserveAllowance(prev, next providerallowance.ReadResponse) error {
 				return ErrAggregateRejected
 			}
 			continue
+		}
+		if !allowanceClaimsCurrent(after) && !lastGoodEqual(prevStatus[provider].LastGood, nextStatus[provider].LastGood) {
+			return ErrAggregateRejected
 		}
 		rebound := !aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) ||
 			!aggregateStringEqual(before.Observation.Scope.WorkspaceRef, after.Observation.Scope.WorkspaceRef)
