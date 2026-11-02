@@ -22,6 +22,9 @@ const usageCommandUsage = "usage: expected -o json [--from-file FILE|- | --claud
 const usageAggregatePublishedLine = "published provider-allowances status=204\n"
 
 func (a *app) usage(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "collect" {
+		return a.usageCollect(ctx, args[1:])
+	}
 	if len(args) > 0 && args[0] == "capture" {
 		return a.usageCapture(ctx, args[1:])
 	}

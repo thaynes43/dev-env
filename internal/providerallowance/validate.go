@@ -458,21 +458,33 @@ func bindingReady(obs Observation, trusted TrustedContext, parts RegistryParts) 
 	if !stringPtrEqual(trusted.AccountRef, obs.Scope.AccountRef) || !stringPtrEqual(trusted.WorkspaceRef, obs.Scope.WorkspaceRef) {
 		return false
 	}
-	if obs.ProviderObservedAt == nil || obs.Scope.AccountRef == nil || obs.Scope.WorkspaceRef == nil {
+	if obs.ProviderObservedAt == nil || obs.Scope.AccountRef == nil {
 		return false
 	}
 	return accountListed(parts, obs)
 }
 
 func accountListed(parts RegistryParts, obs Observation) bool {
-	if obs.Scope.AccountRef == nil || obs.Scope.WorkspaceRef == nil {
+	if obs.Scope.AccountRef == nil {
 		return false
 	}
 	n := 0
 	for _, account := range parts.Accounts {
-		if account.AccountRef == *obs.Scope.AccountRef && account.WorkspaceRef == *obs.Scope.WorkspaceRef && account.Generation == int64(obs.BindingGeneration) && account.ProducerRef == obs.ProducerRef && account.ProducerIncarnation == obs.ProducerIncarnation {
-			n++
+		if account.AccountRef != *obs.Scope.AccountRef || account.Generation != int64(obs.BindingGeneration) || account.ProducerRef != obs.ProducerRef || account.ProducerIncarnation != obs.ProducerIncarnation {
+			continue
 		}
+		if obs.Scope.WorkspaceRef != nil {
+			if account.WorkspaceNotApplicable || account.WorkspaceRef != *obs.Scope.WorkspaceRef {
+				continue
+			}
+		} else {
+			// Absence is actionable only with explicit independently supplied personal
+			// scope, the qualified official source and no invented workspace string.
+			if !account.WorkspaceNotApplicable || account.WorkspaceRef != "" || obs.Provider != "openai" || obs.Source.Kind != SourceNativeRPC || obs.Source.Version != CodexRPCSourceVersion || obs.Source.CapabilityRef != CodexRPCCapability {
+				continue
+			}
+		}
+		n++
 	}
 	return n == 1
 }

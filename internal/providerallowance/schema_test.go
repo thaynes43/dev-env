@@ -56,7 +56,7 @@ func instance(t *testing.T, raw []byte) any {
 func TestReviewedFixtureHashes(t *testing.T) {
 	want := map[string]string{
 		"observation.schema.json":      "748c9d5c4e890bbe3e8b8c279cfd23bb737b3b687de8008007cce8fed29ea7cd",
-		"read-response.schema.json":    "b20ca701ea433a66ed0779ca5a200419186612ee387e8eb87af9d88c221a52e5",
+		"read-response.schema.json":    "75b90d88ca0cc680f149859d4a955f090d2a2e01a81145177b5b3c32107a4266",
 		"examples.json":                "96024fa068dc23f2bebb25499d25d6d5ef1c820a56dfadef41c72bbf253deea1",
 		"read-interface-examples.json": "be5afb0c1500a2c731825174957060e03afcb19f2df4ab52e68237ded0a8bd6e",
 		"transition-fixtures.json":     "98165e4141c635fd350422829c0db4233e3be853e428c542ca3daf71ff9544e4",
@@ -185,5 +185,38 @@ func TestSchemaSuccessDoesNotProveTrust(t *testing.T) {
 	result = providerallowance.Derive(empty, trustLike(empty, providerallowance.BindingVerified), reviewedRegistry())
 	if result.Confirmed || !hasCode(result.Issues, providerallowance.IssueDerivationInputMissing) {
 		t.Fatalf("%#v", result)
+	}
+}
+
+func TestOptionalCollectionFreshnessWireIsBackwardCompatible(t *testing.T) {
+	_, doc, _ := loadRead(t)
+	if len(doc.Items) == 0 {
+		t.Fatal("fixture has no item")
+	}
+	item := &doc.Items[0]
+	providerTime := item.Observation.ProviderObservedAt
+	item.CollectionFreshness = &providerallowance.Freshness{State: providerallowance.FreshFresh, AsOf: item.ReceivedAt, Basis: providerallowance.BasisCapture, Reason: "successful local collection; provider time unchanged"}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := compileSchema(t, "read-response.schema.json", "urn:dev-env:providerallowance:read:v1:draft")
+	if err = schema.Validate(instance(t, raw)); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := providerallowance.DecodeReadResponse(raw, providerallowance.FixtureParseLimits)
+	if err != nil || decoded.Items[0].CollectionFreshness == nil {
+		t.Fatal("collection clock missing", err)
+	}
+	if (providerTime == nil) != (decoded.Items[0].Observation.ProviderObservedAt == nil) {
+		t.Fatal("provider clock changed")
+	}
+	decoded.Items[0].CollectionFreshness = nil
+	legacy, _ := json.Marshal(decoded)
+	if _, err = providerallowance.DecodeReadResponse(legacy, providerallowance.FixtureParseLimits); err != nil {
+		t.Fatal("legacy shape refused", err)
+	}
+	if err = schema.Validate(instance(t, legacy)); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -25,6 +25,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thaynes43/dev-env/internal/providerallowance"
+	"github.com/thaynes43/dev-env/internal/usagecollector"
 	"github.com/thaynes43/dev-env/internal/version"
 )
 
@@ -64,6 +66,8 @@ const (
 // Env is what the CLI reads from and writes to outside its arguments. Tests
 // replace every part of it.
 type Env struct {
+	// CollectCodex is one bounded official read-only account/quota RPC exchange.
+	CollectCodex   func(context.Context, string, func() time.Time) (providerallowance.CodexAccountCapture, error)
 	Stdout, Stderr io.Writer
 	// Stdin is read by --prompt-file -.
 	Stdin io.Reader
@@ -100,6 +104,7 @@ type Env struct {
 // DefaultEnv is the process's own environment.
 func DefaultEnv() Env {
 	return Env{
+		CollectCodex:      usagecollector.CollectCodex,
 		Stdout:            os.Stdout,
 		Stderr:            os.Stderr,
 		Stdin:             os.Stdin,

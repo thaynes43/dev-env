@@ -58,11 +58,14 @@ type MetricRule struct {
 // AccountRule is one trusted account generation. The observation does not
 // create this record.
 type AccountRule struct {
-	AccountRef          string
-	WorkspaceRef        string
-	Generation          int64
-	ProducerRef         string
-	ProducerIncarnation string
+	// WorkspaceNotApplicable explicitly qualifies a personal Codex account scope.
+	// It never matches a populated workspace or another source family.
+	WorkspaceNotApplicable bool
+	AccountRef             string
+	WorkspaceRef           string
+	Generation             int64
+	ProducerRef            string
+	ProducerIncarnation    string
 }
 
 // EntitlementRule is a verified shared pool. Verified false does not invent
