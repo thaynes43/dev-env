@@ -182,6 +182,9 @@ func LoadProduction(root string) (Runtime, error) {
 	if err := attachCurrentSourceConfig(root, sessions); err != nil {
 		return Runtime{}, errProductionConfig
 	}
+	if err := attachAggregateAllowanceConfig(root, sessions); err != nil {
+		return Runtime{}, errProductionConfig
+	}
 	asks, err := optionalAsksSource(root, operatorCA)
 	if err != nil {
 		return Runtime{}, errProductionConfig

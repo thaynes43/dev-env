@@ -17,18 +17,21 @@ import (
 
 const usageAggregateAllowancePath = "/v1/provider-allowances"
 
-const usageCommandUsage = "usage: expected -o json [--from-file FILE|- | --claude-statusline | --read-current]"
+const usageCommandUsage = "usage: expected -o json [--from-file FILE|- | --claude-statusline | --read-current | --publish-file FILE|-]"
+
+const usageAggregatePublishedLine = "published provider-allowances status=204\n"
 
 func (a *app) usage(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var output, from string
+	var output, from, publishFile string
 	var claude, readCurrent bool
 	fs.StringVar(&output, "o", "", "")
 	fs.StringVar(&from, "from-file", "", "")
+	fs.StringVar(&publishFile, "publish-file", "", "")
 	fs.BoolVar(&claude, "claude-statusline", false, "")
 	fs.BoolVar(&readCurrent, "read-current", false, "")
-	counts := flagCounts(args, "from-file", "claude-statusline", "read-current")
+	counts := flagCounts(args, "from-file", "claude-statusline", "read-current", "publish-file")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, err = io.WriteString(a.env.Stdout, commandHelp["usage"])
@@ -37,16 +40,23 @@ func (a *app) usage(ctx context.Context, args []string) error {
 		return usageError("usage: invalid arguments")
 	}
 	fromSpecified := false
+	publishSpecified := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "from-file" {
 			fromSpecified = true
 		}
+		if f.Name == "publish-file" {
+			publishSpecified = true
+		}
 	})
-	if counts["read-current"] > 1 || output != "json" || fs.NArg() != 0 || (fromSpecified && from == "") || (fromSpecified && claude) || (readCurrent && (fromSpecified || claude)) {
+	if counts["read-current"] > 1 || counts["publish-file"] > 1 || output != "json" || fs.NArg() != 0 || (fromSpecified && from == "") || (publishSpecified && publishFile == "") || (fromSpecified && (claude || publishSpecified)) || (readCurrent && (fromSpecified || claude || publishSpecified)) || (publishSpecified && claude) {
 		return usageError(usageCommandUsage)
 	}
 	if ctx.Err() != nil {
 		return &exitError{code: ExitFailed, msg: "usage unavailable"}
+	}
+	if publishSpecified {
+		return a.publishAggregateAllowance(ctx, publishFile)
 	}
 	if readCurrent {
 		return a.readAggregateAllowance(ctx)
@@ -178,6 +188,88 @@ func (a *app) readAggregateAllowance(ctx context.Context) error {
 		return &exitError{code: ExitFailed, msg: "usage output unavailable"}
 	}
 	return nil
+}
+
+// publishAggregateAllowance sends one canonical cached read. Redirects are not
+// followed and the PUT is not retried. The command does not acquire from a provider.
+func (a *app) publishAggregateAllowance(ctx context.Context, from string) error {
+	if ctx.Err() != nil {
+		return &exitError{code: ExitFailed, msg: "usage unavailable"}
+	}
+	body, err := readUsagePublish(a, from)
+	if err != nil || ctx.Err() != nil {
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+	doc, err := providerallowance.DecodeReadResponse(body, providerallowance.FixtureParseLimits)
+	if err != nil {
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+	canonical, err := json.Marshal(doc)
+	if err != nil || len(canonical) == 0 || len(canonical) > providerallowance.FixtureParseLimits.MaxBytes || canonical[len(canonical)-1] == '\n' {
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+	if _, err = providerallowance.DecodeReadResponse(canonical, providerallowance.FixtureParseLimits); err != nil {
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+	if a.env.Getenv == nil {
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+	c, err := a.connect(ctx, connOpts{})
+	if err != nil || c == nil || c.http == nil || c.url == "" || ctx.Err() != nil {
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+	hc := *c.http
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	one := *c
+	one.http = &hc
+	one.rejectOversizeResponse = true
+	status, _, err := a.send(ctx, &one, http.MethodPut, c.url+usageAggregateAllowancePath, canonical)
+	if err != nil || ctx.Err() != nil {
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+	switch status {
+	case http.StatusNoContent:
+		if n, werr := a.env.Stdout.Write([]byte(usageAggregatePublishedLine)); werr != nil || n != len(usageAggregatePublishedLine) {
+			return &exitError{code: ExitFailed, msg: "usage output unavailable"}
+		}
+		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return &exitError{code: ExitAuth, msg: "usage publication refused"}
+	case http.StatusNotFound:
+		return &exitError{code: ExitNotFound, msg: "usage publication unavailable"}
+	case http.StatusConflict:
+		return &exitError{code: ExitFailed, msg: "usage publication conflict"}
+	default:
+		if status >= 300 && status < 400 {
+			return &exitError{code: ExitFailed, msg: "usage publication refused"}
+		}
+		return &exitError{code: ExitFailed, msg: "usage publication unavailable"}
+	}
+}
+
+func readUsagePublish(a *app, from string) ([]byte, error) {
+	r := a.env.Stdin
+	if from != "-" {
+		fd, err := unix.Open(from, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+		if err != nil {
+			return nil, err
+		}
+		f := os.NewFile(uintptr(fd), "usage-publish")
+		defer func() { _ = f.Close() }()
+		st, err := f.Stat()
+		if err != nil || !st.Mode().IsRegular() {
+			return nil, errors.New("usage publication unavailable")
+		}
+		r = f
+	}
+	if r == nil {
+		return nil, errors.New("usage publication unavailable")
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, int64(providerallowance.FixtureParseLimits.MaxBytes+1)))
+	if err != nil || len(raw) == 0 || len(raw) > providerallowance.FixtureParseLimits.MaxBytes {
+		return nil, errors.New("usage publication unavailable")
+	}
+	return raw, nil
 }
 
 func usageAggregateStatus(status int) error {

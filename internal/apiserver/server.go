@@ -215,8 +215,9 @@ type Server struct {
 	// Nil, or RouteEnabled false, leaves both methods unregistered.
 	// Selection.MaxAge does not register the route.
 	ProviderSourceReports *ProviderSourceReports
-	// AggregateAllowanceReports serves GET /v1/provider-allowances.
+	// AggregateAllowanceReports serves /v1/provider-allowances.
 	// Nil leaves the route unregistered. It is not the Codex current-source slot.
+	// PUT is registered only when PublishEnabled is true.
 	AggregateAllowanceReports *AggregateAllowanceReports
 
 	// createMu serialises this replica's creates, so its idempotency,
@@ -378,9 +379,11 @@ func (s *Server) Handler() http.Handler {
 		}}))
 	}
 	if s.AggregateAllowanceReports.RouteEnabled() {
-		mux.Handle(ProviderAllowanceReportsPath, s.serve(route{methods: map[string]handler{
-			http.MethodGet: s.AggregateAllowanceReports.Handle,
-		}}))
+		methods := map[string]handler{http.MethodGet: s.AggregateAllowanceReports.Handle}
+		if s.AggregateAllowanceReports.PublishEnabled() {
+			methods[http.MethodPut] = s.AggregateAllowanceReports.Handle
+		}
+		mux.Handle(ProviderAllowanceReportsPath, s.serve(route{methods: methods}))
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, notFound("no route %s %s", r.Method, r.URL.Path))
@@ -443,6 +446,7 @@ func (s *Server) serve(rt route) http.Handler {
 				case len(s.PortalConversationTargets) > 0 && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalConversationPrefix+r.PathValue("uid")+"/conversation":
 				case s.portalAskRoute(r):
 				case PortalProviderSourceGET(s.ProviderSourceReports.RouteEnabled(), r.Method, r.URL.Path):
+				case PortalAggregateAllowanceGET(s.AggregateAllowanceReports.RouteEnabled(), r.Method, r.URL.Path):
 				case s.portalQuestionAuditEnabled() && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalQuestionAuditPath:
 				default:
 					return 0, forbidden("the portal reader may only list session summaries")
