@@ -11,20 +11,31 @@ provider measurement time. Freshness is then not established, and the account
 stays **Unknown**. Before this change the reading disappeared. Now the Usage
 view keeps it, in a separate dashed block headed **Last reported, not current**.
 
-Each line shows:
+Each line in the account section shows:
 
 - the percent and its direction, exactly as the provider reported it;
 - the window;
-- **Read** time: when the collector received the reading (`ReceivedAt`). This
-  is not a provider time, and none is invented;
+- **Received** time: when the collector received the reading (`ReceivedAt`),
+  marked "not a provider time". When the provider did report its own
+  measurement time, the line shows "provider measured" with that time
+  instead. No provider time is invented;
 - the source (Provider API, Provider display or Passive event);
-- account confidence: **Account verified** or **Account not verified**;
+- account confidence: **Account verified** only when the observation, the
+  item binding and every source status for that provider are verified;
+  otherwise **Account not verified**;
 - the reported reset, as text only, and one fixed sentence saying why the
-  value is not current.
+  value is not current. When a reported exact reset is at or before the page
+  time, the line says the reset has passed and the value is from before it.
 
-The account badge stays Unknown, and its reason line stays as before. A
-last-reported line draws no meter and no countdown, and it never moves the
-page's "as of" time. The compact Sessions strip shows only the state.
+The At a glance tile shows a compact form: at most two lines with value and
+reason, then "+N more" linking to the account section. The account section
+shows up to four lines and counts any beyond that.
+
+The account badge stays Unknown. If its reason would read "No percent
+allowance reported" above a shown value, it reads "No current percent
+allowance" instead. A last-reported line draws no meter and no countdown, and
+it never moves the page's "as of" time. The compact Sessions strip shows only
+the state.
 
 ## When it is withheld
 
@@ -37,8 +48,14 @@ any of these hold:
 - an item is unavailable, unvalidated or not a provider measurement;
 - the receipt time does not parse;
 - a current value conflicts with, duplicates or differs from the observation;
-- either binding is `mismatch`: such a reading may belong to another account;
+- either item binding, or any source status binding, is `mismatch`: such a
+  reading may belong to another account;
+- a source status validation is `rejected` or `conflict`;
 - the items or source statuses name different accounts.
+
+A measure whose current state is `not_applicable` (an alias of another
+allowance) or `uncapped` is skipped. A later unavailable attempt recorded in
+a source status does not hide the last accepted reading.
 
 An unverified (`unknown`) binding is shown, labelled **Account not verified**.
 At most four lines are shown per account. Measured, Stale and Not connected

@@ -606,17 +606,38 @@ type ProductAllowance struct {
 	// LastReported keeps provider values from an observation the portal does
 	// not trust as current. Only an Unknown account shows them, apart from
 	// its state: they draw no bar and no countdown and are never actionable.
-	LastReported []ProductAllowanceLastReported
+	LastReported []ProductAllowanceLastReported `json:",omitempty"`
+	// LastReportedMore counts lines beyond the shown bound.
+	LastReportedMore int `json:",omitempty"`
+}
+
+// GlanceLastReported is the overview's share of the last-reported lines.
+func (a ProductAllowance) GlanceLastReported() []ProductAllowanceLastReported {
+	if len(a.LastReported) > allowanceGlanceLastMax {
+		return a.LastReported[:allowanceGlanceLastMax]
+	}
+	return a.LastReported
+}
+
+// GlanceLastMore counts last-reported lines the overview leaves to the
+// account section.
+func (a ProductAllowance) GlanceLastMore() int {
+	return len(a.LastReported) - len(a.GlanceLastReported()) + a.LastReportedMore
 }
 
 // ProductAllowanceLastReported is one percent window as a provider last
 // reported it. ReadAt is when the collector received the reading, not a
-// provider time. Account says whether that reading's account was verified.
-// Why is fixed copy naming the reason it is not current.
+// provider time; ProviderAt is the provider's own measurement time, only when
+// the provider reported one. ResetAtExact is set only for an exact reset
+// instant. Account says whether that reading's account was verified. Why is
+// fixed copy naming the reason it is not current. AsOf is the render clock.
 type ProductAllowanceLastReported struct {
-	Percent, Window, Reset string
-	ReadAt, ReadAtExact    string
-	Source, Account, Why   string
+	Percent, Window, Reset      string
+	ReadAt, ReadAtExact         string
+	ProviderAt, ProviderAtExact string
+	ResetAtExact                string
+	Source, Account, Why        string
+	AsOf                        time.Time
 }
 
 // ProductAllowanceWindow holds provider-reported display text and optional
@@ -989,6 +1010,12 @@ func withAllowanceAsOf(in []ProductAllowance, now time.Time) []ProductAllowance 
 				a.Windows[j].AsOf = now
 			}
 		}
+		if len(a.LastReported) > 0 {
+			a.LastReported = append([]ProductAllowanceLastReported(nil), a.LastReported...)
+			for j := range a.LastReported {
+				a.LastReported[j].AsOf = now
+			}
+		}
 		out[i] = a
 	}
 	return out
@@ -1013,7 +1040,7 @@ func allowanceViews(input []ProductAllowance) []ProductAllowance {
 			if a.Value == AllowanceUnknown {
 				last = a.LastReported
 			}
-			a.LastReported = nil
+			a.LastReported, a.LastReportedMore = nil, 0
 			switch a.Value {
 			case AllowanceNotConnected, AllowanceUnknown:
 				a.Windows = nil
@@ -1041,7 +1068,10 @@ func allowanceViews(input []ProductAllowance) []ProductAllowance {
 			}
 			if a.Value == AllowanceUnknown {
 				a.Reason = display(a.Reason)
-				a.LastReported = lastReportedViews(last)
+				a.LastReported, a.LastReportedMore = lastReportedViews(last)
+				if len(a.LastReported) > 0 && a.Reason == "No percent allowance reported" {
+					a.Reason = "No current percent allowance"
+				}
 			}
 			out[i] = a
 			break
@@ -1050,25 +1080,43 @@ func allowanceViews(input []ProductAllowance) []ProductAllowance {
 	return out
 }
 
-// allowanceLastReportedMax bounds the last-reported lines on one account.
-const allowanceLastReportedMax = 4
+// allowanceLastReportedMax bounds the last-reported lines on one account;
+// the overview shows fewer.
+const (
+	allowanceLastReportedMax = 4
+	allowanceGlanceLastMax   = 2
+)
 
-// lastReportedViews fills absent text and keeps at most four windows. Any
-// line without a percent is dropped rather than shown as a gap.
-func lastReportedViews(in []ProductAllowanceLastReported) []ProductAllowanceLastReported {
+// lastReportedViews fills absent text, keeps at most four windows and counts
+// the rest. A line without a percent or a receipt time is dropped rather than
+// shown as a gap. A reported reset instant at or before the render clock
+// replaces the reset and reason text: the value predates that reset.
+func lastReportedViews(in []ProductAllowanceLastReported) ([]ProductAllowanceLastReported, int) {
 	var out []ProductAllowanceLastReported
+	more := 0
 	for _, l := range in {
-		if l.Percent == "" || l.Percent == "Unknown" {
+		l.Percent = display(l.Percent)
+		if l.Percent == "Unknown" || l.ReadAtExact == "" {
+			continue
+		}
+		if len(out) == allowanceLastReportedMax {
+			more++
 			continue
 		}
 		l.Window, l.Reset, l.ReadAt = display(l.Window), display(l.Reset), display(l.ReadAt)
 		l.Source, l.Account, l.Why = display(l.Source), display(l.Account), display(l.Why)
-		out = append(out, l)
-		if len(out) == allowanceLastReportedMax {
-			break
+		if l.ProviderAtExact == "" {
+			l.ProviderAt = ""
+		} else {
+			l.ProviderAt = display(l.ProviderAt)
 		}
+		if reset, err := time.Parse(time.RFC3339, l.ResetAtExact); err == nil && !l.AsOf.IsZero() && !reset.After(l.AsOf) {
+			l.Reset = "The reported reset time has passed; this value is from before it."
+			l.Why = "Not current: a reset has happened since."
+		}
+		out = append(out, l)
 	}
-	return out
+	return out, more
 }
 
 // ProductUsage is the Sessions page's Usage view: headline counts, account

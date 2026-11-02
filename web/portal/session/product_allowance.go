@@ -156,15 +156,27 @@ func MapProductAllowance(doc providerallowance.ReadResponse) []portal.ProductAll
 // the account cannot be shown as current, usually because freshness is not
 // established. Each line keeps the original observation's value and the time
 // the collector received it; nothing becomes current or actionable, and no
-// provider time is invented. It returns nil when any item or status of that
-// provider conflicts, is unavailable, is unvalidated, is not a provider
-// measurement, has an unparseable receipt time, has a mismatched binding, or
-// names another account. An unverified binding is shown and labelled.
+// provider time is invented. It returns nil when any item of that provider is
+// unavailable, unvalidated, not a provider measurement, has an unparseable
+// receipt time or a conflicting current value; when any item or source status
+// has a mismatched binding or a rejected or conflicting validation; or when
+// they name different accounts. A later unavailable attempt in a status does
+// not hide the last accepted item. An unverified binding is shown and labelled.
 // Availability, conflict, unconfigured and duplicate refusals return before
 // the caller reaches this function.
 func lastReportedAllowance(doc providerallowance.ReadResponse, provider string) []portal.ProductAllowanceLastReported {
 	var out []portal.ProductAllowanceLastReported
 	var ids []allowanceID
+	statusVerified := true
+	for _, status := range doc.SourceStatuses {
+		if status.Provider != provider {
+			continue
+		}
+		if status.Binding.State == providerallowance.BindingMismatch || status.Validation.State == providerallowance.ValidationRejected || status.Validation.State == providerallowance.ValidationConflict {
+			return nil
+		}
+		statusVerified = statusVerified && status.Binding.State == providerallowance.BindingVerified
+	}
 	for _, item := range doc.Items {
 		o := item.Observation
 		if o.Provider != provider {
@@ -200,7 +212,7 @@ func lastReportedAllowance(doc providerallowance.ReadResponse, provider string) 
 		if o.Scope.BindingState == providerallowance.BindingMismatch || item.Binding.State == providerallowance.BindingMismatch {
 			return nil
 		}
-		verified := o.Scope.BindingState == providerallowance.BindingVerified && item.Binding.State == providerallowance.BindingVerified
+		verified := statusVerified && o.Scope.BindingState == providerallowance.BindingVerified && item.Binding.State == providerallowance.BindingVerified
 		account := "Account verified"
 		if !verified {
 			account = "Account not verified"
@@ -208,7 +220,7 @@ func lastReportedAllowance(doc providerallowance.ReadResponse, provider string) 
 		why := "Not current: the portal cannot confirm this reading is current."
 		switch {
 		case !verified:
-			why = "Not current: this reading's account is not verified."
+			why = "Not current or trusted: this reading's account is not verified."
 		case o.ProviderObservedAt == nil:
 			why = "Not current: the provider did not report when it measured this."
 		case item.Freshness.State == providerallowance.FreshExpired:
@@ -216,8 +228,13 @@ func lastReportedAllowance(doc providerallowance.ReadResponse, provider string) 
 		}
 		for _, m := range o.Measures {
 			// Any disagreement with the current view refuses the provider.
-			if current, ok := currents[m.ID]; ok && m.Value.Decimal != nil && current.Value.Decimal != nil && *m.Value.Decimal != *current.Value.Decimal {
+			current, hasCurrent := currents[m.ID]
+			if hasCurrent && m.Value.Decimal != nil && current.Value.Decimal != nil && *m.Value.Decimal != *current.Value.Decimal {
 				return nil
+			}
+			// An alias of another allowance, or an uncapped meter, is not its own reading.
+			if hasCurrent && (current.State == providerallowance.CurrentNotApplicable || current.State == providerallowance.CurrentUncapped) {
+				continue
 			}
 			if m.Unit != providerallowance.UnitPercent || (m.Category != providerallowance.CategoryIncluded && m.Category != providerallowance.CategoryRateLimit) {
 				continue
@@ -235,14 +252,22 @@ func lastReportedAllowance(doc providerallowance.ReadResponse, provider string) 
 				continue
 			}
 			reset := "Reset time not reported."
-			if r := projectMeasure(m, providerallowance.CurrentMeasure{}, false, nil, source, "", false).Reset; r != "Unknown" {
-				reset = "Reported reset: " + r + "."
+			projected := projectMeasure(m, providerallowance.CurrentMeasure{}, false, nil, source, "", false)
+			if projected.Reset != "Unknown" {
+				reset = "Reported reset: " + projected.Reset + "."
 			}
-			out = append(out, portal.ProductAllowanceLastReported{
+			line := portal.ProductAllowanceLastReported{
 				Percent: *m.Value.Decimal + suffix, Window: allowanceWindow(m.Window), Reset: reset,
 				ReadAt: allowanceTime(&item.ReceivedAt), ReadAtExact: read,
 				Source: source, Account: account, Why: why,
-			})
+			}
+			if projected.ResetPrecision == "instant" {
+				line.ResetAtExact = projected.ResetAt
+			}
+			if at := allowanceRFC3339(o.ProviderObservedAt); at != "" {
+				line.ProviderAt, line.ProviderAtExact = allowanceTime(o.ProviderObservedAt), at
+			}
+			out = append(out, line)
 		}
 	}
 	if allowanceIdentityReason(ids, doc.SourceStatuses, provider) != "" {
