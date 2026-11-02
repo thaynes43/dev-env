@@ -420,8 +420,11 @@ cat >/dev/null
 				}
 			}
 			developer, _ := scalar["developer_instructions"].(string)
-			if strings.Contains(developer, managedChildDecisionGuard) != enabled || l.ChildDecisions != enabled {
+			if strings.Contains(developer, managedChildDecisionGuard) != enabled || l.ChildDecisions != enabled || l.CoordinatorInstructions {
 				t.Fatal("guard and runtime feature disagree")
+			}
+			if strings.Contains(developer, "instruction checkpoint") {
+				t.Fatal("instruction checkpoint guidance was injected without the instruction capability")
 			}
 			if enabled && (!strings.Contains(developer, "256 bytes") || strings.Contains(developer, "512 bytes")) {
 				t.Fatal("discovery guard misstated accepted option bound")

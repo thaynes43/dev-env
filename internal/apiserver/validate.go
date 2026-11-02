@@ -339,6 +339,7 @@ func (s *Server) newSession(ctx context.Context, req apiv1.CreateSessionRequest,
 		return nil, invalid(fieldError("project", "snapshot exceeds the aggregate annotation bound"))
 	}
 	s.bindUsageCaptureParent(ctx, c, sess)
+	s.bindCoordinatorInstructionParent(ctx, c, sess)
 	return sess, nil
 }
 

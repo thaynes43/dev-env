@@ -72,7 +72,11 @@ type Settings struct {
 	// ManagedChildDecisions opts a managed native task into private decision
 	// records and same-owner sequential continuation. It defaults off.
 	ManagedChildDecisions bool
-	TaskRepositoryURL     string
+	// CoordinatorInstructions opts this pod into authenticated native
+	// instruction registration. It defaults off. Child-decision tasks that
+	// leave it unset do not call the instruction API. It is not a grant.
+	CoordinatorInstructions bool
+	TaskRepositoryURL       string
 	// PrivateProjectBootstrap is trusted pod configuration, independent of
 	// shared workspaces and task admission. The accepted catalog is a named API
 	// resource, never a task-supplied file or snapshot.
@@ -168,6 +172,7 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		APICAFile:               getenv("AGENTD_API_CA_FILE"),
 		Getenv:                  getenv,
 	}
+	s.CoordinatorInstructions = getenv("AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS") == "true"
 	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		s.ClaudeConfigDir = dir
 		s.ClaudeState = filepath.Join(dir, ".claude.json")

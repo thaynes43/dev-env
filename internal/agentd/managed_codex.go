@@ -207,6 +207,9 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 	}
 	if s.ManagedChildDecisions {
 		guard += "\n\n" + managedChildDecisionGuard
+		if s.CoordinatorInstructions {
+			guard += "\n\n" + nativeInstructionPullGuidance
+		}
 	}
 	if first != nil {
 		if err := validateCommonResume(s, sess, *first); err != nil {
@@ -229,6 +232,7 @@ func buildCodexLaunch(s Settings, sess protocol.Session, ws protocol.Workspace, 
 			return Launch{}, err
 		}
 		l.NativeInvocationID, l.PodUID, l.ChildDecisions = id, s.PodUID, true
+		l.CoordinatorInstructions = s.CoordinatorInstructions
 	}
 	if sess.CaptureOutput && first == nil {
 		if sess.Validate() != nil || !apiv1.ValidContextUID(s.PodUID) {

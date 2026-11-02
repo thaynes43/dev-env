@@ -251,6 +251,13 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		}
 	}()
 
+	// Registration is the live Running record's authenticated attempt. It is
+	// not consumption. An absent API origin leaves the local lifecycle alone.
+	instructionErr := publishNativeInstructionLifecycle(nativeLease, l.CoordinatorInstructions, false)
+	if instructionErr != nil {
+		stop("native instruction attempt is unconfirmed")
+	}
+
 	var werr error
 	select {
 	case werr = <-waitDone:
@@ -308,6 +315,14 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		if code == 0 {
 			code = 1
 		}
+	} else if err := publishNativeInstructionLifecycle(nativeLease, l.CoordinatorInstructions, true); err != nil {
+		_, _ = fmt.Fprintln(out, "[agentd] native instruction attempt end is unconfirmed")
+		if code == 0 {
+			code = 1
+		}
+	}
+	if instructionErr != nil && code == 0 {
+		code = 1
 	}
 	writeResult(stateDir, l, started, code, to, res, true)
 	_ = os.Remove(filepath.Join(stateDir, pidFile))
@@ -375,6 +390,16 @@ func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-c
 		note("native startup receipt is unconfirmed")
 		return 1
 	}
+	if err := publishNativeInstructionLifecycle(nativeLease, l.CoordinatorInstructions, false); err != nil {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		if nativeLease.afterWait(l, cmd.ProcessState, pid, time.Now()) == nil {
+			_ = publishNativeInstructionLifecycle(nativeLease, l.CoordinatorInstructions, true)
+		}
+		record(1)
+		note("native instruction attempt is unconfirmed")
+		return 1
+	}
 
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
@@ -407,6 +432,11 @@ func runTUI(l Launch, stateDir string, tty *os.File, pane io.Writer, signals <-c
 	code := exitCode(cmd, werr)
 	if err := nativeLease.afterWait(l, cmd.ProcessState, pid, time.Now()); err != nil {
 		note("native continuation receipt is unconfirmed")
+		if code == 0 {
+			code = 1
+		}
+	} else if err := publishNativeInstructionLifecycle(nativeLease, l.CoordinatorInstructions, true); err != nil {
+		note("native instruction attempt end is unconfirmed")
 		if code == 0 {
 			code = 1
 		}

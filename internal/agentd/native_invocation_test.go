@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,9 +17,18 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 )
 
 func nativeInvocationFixture(t *testing.T) (Settings, protocol.Session, Launch, string) {
+	s, sess, l, path, code, tail, _ := runSyntheticNativeInvocation(t, "")
+	if code != 0 || strings.Contains(tail, "native instruction attempt") {
+		t.Fatalf("initial native invocation refused %d; synthetic pane tail: %q", code, tail)
+	}
+	return s, sess, l, path
+}
+
+func runSyntheticNativeInvocation(t *testing.T, mode string) (Settings, protocol.Session, Launch, string, int, string, []string) {
 	t.Helper()
 	g := newGitFixture(t, "demo")
 	s, runner := g.settings(t)
@@ -57,7 +69,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 	}
 	t.Cleanup(func() { _ = barrier.Close() })
 	l := Launch{Provider: protocol.AgentCodex, Session: sess.Name, SessionUID: sess.SessionUID, PodUID: s.PodUID,
-		ChildDecisions: true, NativeInvocationID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Argv: []string{cli, "exec", "--json"},
+		ChildDecisions: true, CoordinatorInstructions: mode != "", NativeInvocationID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Argv: []string{cli, "exec", "--json"},
 		Dir: s.WorktreePath(sess.Name), Prompt: "EXACT-SYNTHETIC-INITIAL-PROMPT", BootID: "same-boot", CreatedAt: rescueNow,
 		Env:     []string{"SYNTHETIC_NATIVE_SPAWNS=" + spawns, "SYNTHETIC_INITIAL_PROMPTS=" + prompts, "SYNTHETIC_NATIVE_INITIAL_RELEASE=" + barrierPath},
 		LogPath: s.LogPath(sess.Name), EventsPath: s.statePath(eventsFile)}
@@ -76,6 +88,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 	t.Setenv("AGENTD_ENABLE_CODEX_TASKS", "true")
 	t.Setenv("AGENTD_ENABLE_CHILD_DECISIONS", "true")
 	path := writeLaunch(t, s, l)
+	calls := bindSyntheticInstructionAPI(t, mode, l)
 	// The pane holds only agentd messages and the fake CLI's constant synthetic
 	// output, so it is safe to include in failure messages.
 	pane := &syncBuffer{}
@@ -108,16 +121,75 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 	// Remove the FIFO so a regression that replays this invocation fails the
 	// fake CLI's read at once instead of blocking until the test times out.
 	_ = os.Remove(barrierPath)
+	tail := paneTail(pane)
 	if err != nil {
-		t.Fatalf("%v; synthetic pane tail: %q", err, paneTail(pane))
-	}
-	if code != 0 {
-		t.Fatalf("initial native invocation refused %d; synthetic pane tail: %q", code, paneTail(pane))
+		t.Fatalf("%v; synthetic pane tail: %q", err, tail)
 	}
 	if err := readJSONFile(path, &l); err != nil {
 		t.Fatal(err)
 	}
-	return s, sess, l, path
+	return s, sess, l, path, code, tail, append([]string(nil), (*calls)...)
+}
+
+func bindSyntheticInstructionAPI(t *testing.T, mode string, l Launch) *[]string {
+	t.Helper()
+	calls := &[]string{}
+	t.Setenv("AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS", "false")
+	if mode == "" {
+		return calls
+	}
+	t.Setenv("AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS", "true")
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*calls = append(*calls, r.Method+" "+r.URL.Path)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if mode == "missing" || r.Method != http.MethodPost || r.URL.Path != apiv1.SessionInstructionAttemptPath(l.Session) || body["attemptID"] != l.NativeInvocationID {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"synthetic missing route"}}`))
+			return
+		}
+		phase := apiv1.InstructionPhaseActive
+		if body["ended"] == true {
+			phase = apiv1.InstructionPhaseEnded
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiv1.CoordinatorInstructionAttemptResult{
+			AttemptID: l.NativeInvocationID, Phase: phase, SessionUID: l.SessionUID, PodUID: l.PodUID,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.pem")
+	token := filepath.Join(dir, "token")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(token, []byte("synthetic-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTD_API_URL", srv.URL)
+	t.Setenv("AGENTD_API_CA_FILE", ca)
+	t.Setenv("AGENTD_API_TOKEN_FILE", token)
+	return calls
+}
+
+func TestSyntheticEnabledInstructionRegistrationFailsClosedWithoutRoute(t *testing.T) {
+	_, _, _, _, code, tail, calls := runSyntheticNativeInvocation(t, "missing")
+	if code == 0 || !strings.Contains(tail, "native instruction attempt is unconfirmed") || len(calls) == 0 {
+		t.Fatalf("enabled missing route was not fail-closed: %d calls %v tail %q", code, calls, tail)
+	}
+}
+
+func TestSyntheticEnabledInstructionRegistrationCorrelatesAttempt(t *testing.T) {
+	_, _, _, _, code, tail, calls := runSyntheticNativeInvocation(t, "accepted")
+	if code != 0 || strings.Contains(tail, "unconfirmed") || len(calls) < 2 {
+		t.Fatalf("enabled registration did not stay confirmed: %d calls %v tail %q", code, calls, tail)
+	}
+	for _, call := range calls {
+		if !strings.HasPrefix(call, http.MethodPost+" ") || strings.Contains(call, "/consume") || strings.Contains(call, "/instructions") {
+			t.Fatalf("registration consumed or listed: %v", calls)
+		}
+	}
 }
 
 func paneTail(pane *syncBuffer) string {
