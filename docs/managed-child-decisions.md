@@ -65,3 +65,7 @@ journey is a same-Pod proof. Native parent relay, owner phone prompt delivery,
 cross-Pod continuation and real provider acceptance remain required separately.
 The accepted 60-minute no-progress/three-identical-blocker watchdog in issue #154
 is not implemented by this unit.
+
+Ordinary private coordinator instructions are a separate path. They use the
+initial-usage attempt and the owned task process. They do not enable child
+decisions, shared workspace, or this continuation receipt.
