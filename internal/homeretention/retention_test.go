@@ -120,6 +120,27 @@ func requireReason(t *testing.T, report Report, reason string) Entry {
 	return Entry{}
 }
 
+func TestLegacyFetchBooleanDoesNotPublish(t *testing.T) {
+	f := newFixture(t)
+	f.record.Proof.Payload.Inventory.Repositories[0].FetchSucceeded = false
+	f.resign(t)
+	report := f.evaluate(t)
+	if len(report.ImmediateCandidates) != 1 || len(report.StoppedWorkQueue) != 0 || report.DeleteEnabled {
+		t.Fatalf("false legacy bool rejected current receipts: %+v", report)
+	}
+	f = newFixture(t)
+	repo := &f.record.Proof.Payload.Inventory.Repositories[0]
+	repo.FetchSucceeded = true
+	for i := range repo.Refs {
+		repo.Refs[i].Receipts = []Signed[PublicationPayload]{}
+	}
+	f.resign(t)
+	entry := requireReason(t, f.evaluate(t), "publication_receipt_missing_or_invalid")
+	if entry.Status == "immediate_preserved" {
+		t.Fatalf("true legacy bool stood in for receipts: %+v", entry)
+	}
+}
+
 func TestImmediatePreservationAndExplicitEmptyInventory(t *testing.T) {
 	for _, empty := range []bool{false, true} {
 		f := newFixture(t)
@@ -161,7 +182,6 @@ func TestSignedInventoryRefusals(t *testing.T) {
 		{"submodule-incomplete", "submodule_checks_incomplete_or_dirty", func(f *fixture) {
 			f.record.Proof.Payload.Inventory.Repositories[0].Worktrees[0].SubmodulesComplete = false
 		}},
-		{"fetch", "repository_fetch_unverified", func(f *fixture) { f.record.Proof.Payload.Inventory.Repositories[0].FetchSucceeded = false }},
 		{"missing-repositories", "home_inventory_incomplete", func(f *fixture) { f.record.Proof.Payload.Inventory.Repositories = nil }},
 		{"missing-artifacts", "home_inventory_incomplete", func(f *fixture) { f.record.Proof.Payload.Inventory.Artifacts = nil }},
 		{"incomplete-refs", "repository_inventory_incomplete", func(f *fixture) { f.record.Proof.Payload.Inventory.Repositories[0].RefsComplete = false }},

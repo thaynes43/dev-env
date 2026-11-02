@@ -142,3 +142,41 @@ proofs invalidate candidacy. Any separately approved executor would need fresh
 uncached active-mount/identity reads and write fencing immediately before a
 UID/resourceVersion-conditional action. Neither that executor nor its activation
 is implemented here.
+
+The library also has three source-only entry points that this command does not
+call. `CollectPreservation` reads caller-selected Git repositories without
+fetch, checkout, reset, or stash writes. It records worktrees, branches, tags,
+detached HEADs, stashes, and dirty or nested state, and it attaches publication
+or durable-copy receipts only when an injected verifier accepts them. It leaves
+`FetchSucceeded` false. Remote-tracking refs and that boolean are not proof.
+Each Git command is capped at 30 seconds even when the caller deadline is
+longer. Unsupported repository config, including filters, diff drivers, hooks,
+aliases, and `core.worktree`, is refused before a command that could run it.
+Git does not let an alias replace a builtin. Submodule paths are read with
+Git's file-scoped config parser. Ordinary `.gitmodules` path, url, and active
+entries stay usable. Command-bearing or ambiguous values, and any other key,
+fail closed before `submodule status`. Skip-worktree and assume-unchanged index
+bits fail closed before status is treated as a complete tree. Prunable and bare
+worktrees, ignored nested repositories, and `BISECT_START` are not reported as
+a clean complete tree. `Preflight` does not expire an exact approval on the
+observation clock. Future timestamps, replayed approvals, and stale
+observations, proofs, and receipts are still refused. These reads take no lock.
+The caller-supplied HOME revision and uncached fences stay explicit.
+The `core.worktree` refusal also applies to Git-created submodule configurations.
+Those repositories remain unsupported; this collector does not rewrite their
+configuration. Synthetic nonmutation coverage checks that refusal, then prepares
+a fixture with an embedded `.git` directory and no override before recording its
+baseline.
+`ProjectDecisions` and `RecordOwnerDecision` persist warning and explicit
+owner dispositions through a caller-supplied store. The same binding resumes
+without another write. No production `DecisionStore` adapter is supplied or
+deployed; durable persistence and notification delivery remain integration work.
+A new executor or HOME revision starts a pending row
+and does not inherit the previous disposition. `Preflight` checks one exact
+approved UID set against caller-supplied uncached UID, resourceVersion, mount,
+and writer fences, and it reuses the preservation inventory and safety checks.
+A stopped ordinary HOME with complete arrays, head refs, and current per-ref
+receipts can pass with `FetchSucceeded` false. The same boolean set true does
+not pass without those receipts. Its report always has `deleteEnabled: false`
+and `executionAuthority: false`. None of these functions deletes a volume,
+removes a finalizer, starts a notifier, or contacts the cluster.

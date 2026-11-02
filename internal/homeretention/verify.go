@@ -249,7 +249,7 @@ func (store verifier) preservation(record Record, clock Clock, completed, now ti
 			add("current_safety_metadata_mismatch")
 		}
 		observed, ok := parseTime(o.ObservedAt)
-		if !ok || observed.After(now) || now.Sub(observed) > maxAge || !capturedOK || observed.Before(captured) {
+		if !ok || observed.After(now) || now.Sub(observed) > maxAge || !capturedOK || observationBeforeCapture(observed, captured, ok, capturedOK) {
 			add("current_observation_stale_or_invalid")
 		}
 		if !o.Terminal {
@@ -268,17 +268,31 @@ func (store verifier) preservation(record Record, clock Clock, completed, now ti
 	if !p.Inventory.Complete || p.Inventory.Repositories == nil || p.Inventory.Artifacts == nil {
 		add("home_inventory_incomplete")
 	}
+	reasons = append(reasons, store.inventoryReasons(record.Binding, p.Inventory, captured, capturedOK, now, maxAge)...)
+	return reasons
+}
+
+// observationBeforeCapture reports a signed observation that predates proof
+// capture. A missing timestamp is not this condition; callers check presence.
+func observationBeforeCapture(observed, captured time.Time, observedOK, capturedOK bool) bool {
+	return observedOK && capturedOK && observed.Before(captured)
+}
+
+// inventoryReasons checks complete repository arrays, head coverage, per-ref
+// authenticated receipts, and artifact requirements. FetchSucceeded is not read.
+// A legacy true value cannot replace a missing receipt, and a false value does
+// not reject receipts that pass published.
+func (store verifier) inventoryReasons(binding Binding, inventory Inventory, captured time.Time, capturedOK bool, now time.Time, maxAge time.Duration) []string {
+	reasons := []string{}
+	add := func(reason string) { reasons = append(reasons, reason) }
 	seenRepos := map[string]bool{}
-	for _, repo := range p.Inventory.Repositories {
+	for _, repo := range inventory.Repositories {
 		if !validText(repo.Identity) || seenRepos[repo.Identity] {
 			add("repository_identity_invalid_or_duplicate")
 		}
 		seenRepos[repo.Identity] = true
 		if !repo.WorktreesComplete || !repo.RefsComplete || !repo.StashesComplete || repo.Worktrees == nil || repo.Refs == nil || repo.Stashes == nil || repo.UnpushedRefs == nil {
 			add("repository_inventory_incomplete")
-		}
-		if !repo.FetchSucceeded {
-			add("repository_fetch_unverified")
 		}
 		if len(repo.Stashes) > 0 {
 			add("stash_present")
@@ -294,7 +308,7 @@ func (store verifier) preservation(record Record, clock Clock, completed, now ti
 				add("local_ref_invalid_or_duplicate")
 			}
 			refs[ref.Name] = ref
-			if !store.published(record.Binding, repo.Identity, ref, captured, capturedOK, now, maxAge) {
+			if !store.published(binding, repo.Identity, ref, captured, capturedOK, now, maxAge) {
 				add("publication_receipt_missing_or_invalid")
 			}
 		}
@@ -328,13 +342,13 @@ func (store verifier) preservation(record Record, clock Clock, completed, now ti
 			}
 		}
 	}
-	requirements := map[string]string{"handoff": p.Inventory.Requirements.Handoff, "result": p.Inventory.Requirements.Result, "history": p.Inventory.Requirements.History, "recovery": p.Inventory.Requirements.Recovery}
-	if !validText(p.Inventory.Requirements.Source) || !validText(p.Inventory.Requirements.Revision) {
+	requirements := map[string]string{"handoff": inventory.Requirements.Handoff, "result": inventory.Requirements.Result, "history": inventory.Requirements.History, "recovery": inventory.Requirements.Recovery}
+	if !validText(inventory.Requirements.Source) || !validText(inventory.Requirements.Revision) {
 		add("requirements_authority_unknown")
 	}
 	counts := map[string]int{}
 	seenArtifacts := map[string]bool{}
-	for _, artifact := range p.Inventory.Artifacts {
+	for _, artifact := range inventory.Artifacts {
 		if !validText(artifact.ID) || seenArtifacts[artifact.ID] || !validDigest(artifact.SHA256) {
 			add("artifact_identity_or_digest_invalid")
 		}
@@ -343,7 +357,7 @@ func (store verifier) preservation(record Record, clock Clock, completed, now ti
 			add("artifact_requirement_inconsistent")
 		}
 		counts[artifact.Kind]++
-		if !store.copied(record.Binding, artifact, captured, capturedOK, now, maxAge) {
+		if !store.copied(binding, artifact, captured, capturedOK, now, maxAge) {
 			add("durable_copy_receipt_missing_or_invalid")
 		}
 	}
