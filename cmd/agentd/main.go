@@ -81,6 +81,10 @@ Commands:
                            --termination-grace-seconds N from pod configuration,
                             and refuses a busy or uncertain host.
   ctl status               Print the session's status as JSON.
+  ctl explicit-claude-rc-continuation
+                           Start one explicit Claude remote-control continuation
+                           from a bounded JSON request on stdin. Refuses while
+                           the original task owner is live.
   ctl codex-pair           Print a phone pairing code from a Codex --interactive
                            session's daemon (stdout only; never logged or stored).
   ctl rescue [--stop-agent]
@@ -612,6 +616,46 @@ func daemon(ctx context.Context, log *slog.Logger, getenv func(string) string, r
 	return exitOK
 }
 
+func explicitClaudeRCCtl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
+	if len(args) != 0 {
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl explicit-claude-rc-continuation\n", binaryName)
+		return exitUsage
+	}
+	var req agentd.ExplicitClaudeRCRequest
+	dec := json.NewDecoder(io.LimitReader(stdin, 8<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || dec.Decode(&struct{}{}) != io.EOF {
+		_, _ = fmt.Fprintf(stderr, "%s: explicit continuation request is invalid\n", binaryName)
+		return exitFailure
+	}
+	s, err := agentd.LoadSettings(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	sess, err := agentd.LoadSession(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	self, err := os.Executable()
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "agentd: current executable is unavailable")
+		return exitFailure
+	}
+	rec, err := agentd.StartExplicitClaudeRC(ctx, r, s, sess, req, time.Now(), self)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s: %v\n", binaryName, err)
+		return exitFailure
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(rec); err != nil {
+		return exitFailure
+	}
+	return exitOK
+}
+
 func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, r agentd.Runner) int {
 	if len(args) > 0 {
 		switch args[0] {
@@ -658,6 +702,8 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return historyCtl(args, stdin, stdout, stderr, getenv)
 		case "coord-archive":
 			return coordArchiveCtl(args[1:], stdin, stdout, stderr, getenv)
+		case "explicit-claude-rc-continuation":
+			return explicitClaudeRCCtl(ctx, args[1:], stdin, stdout, stderr, getenv, r)
 		}
 	}
 	stopAgent := false
@@ -672,7 +718,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case len(args) == 2 && args[0] == "prepare-restart" && args[1] == "--dry-run":
 		dryRun = true
 	default:
-		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | rescue [--stop-agent] | rescues [--session S] | prune | prepare-restart [--dry-run] | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
+		_, _ = fmt.Fprintf(stderr, "%s: usage: ctl status | explicit-claude-rc-continuation | rescue [--stop-agent] | rescues [--session S] | prune | prepare-restart [--dry-run] | grant-install | grant-remove | grant-list | grant-use\n", binaryName)
 		return exitUsage
 	}
 	switch args[0] {

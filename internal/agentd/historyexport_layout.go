@@ -175,12 +175,16 @@ var agentdLayout = []historyRule{
 	{"codex-host-supervisor.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-access-generation.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"native-invocation.lock", protocol.HistoryClassNotHistory, kindAny},
+	{"explicit-claude-rc.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"workspace-supervisor.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"child-decision.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"common-rules.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"published-context.lock", protocol.HistoryClassNotHistory, kindAny},
 	// Runtime and setup state.
 	{"native-invocation.json", protocol.HistoryClassNotHistory, kindAny},
+	// Pod-local continuation control is retained on HOME, never exported as
+	// authority that a restored session could replay.
+	{"explicit-claude-rc.json", protocol.HistoryClassNotHistory, kindAny},
 	// Local protocol state: this process verified its own exit and the server
 	// end POST did not confirm. Listed, not exported. It is not server
 	// acceptance, a consumption receipt, or permission to start another attempt.

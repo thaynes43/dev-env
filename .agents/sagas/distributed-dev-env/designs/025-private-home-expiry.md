@@ -2377,6 +2377,8 @@ three call sites.
 
 ## 24. Terminal headless task compute reclaim — 2026-10-30 (#291)
 
+**2026-11-02, OP355:** [DESIGN-047](047-explicit-claude-rc-continuation.md) defines a separately explicit supervised Claude RC continuation. Ordinary retained-task automatic resume remains forbidden. Its live or uncertain process cannot supply terminal-task reclaim proof; the original task outcome remains immutable. Replacement-pod adoption and its retention guards are separate integration work.
+
 Source and tests only, authorized by work orders PODRECLAIM291-20261030-01
 and PODRECLAIM291-FIX-20261030-02 (one bounded review correction).
 The phase-1 checkpoint is OpenProject #291 journal 3321. The relevant private
