@@ -120,6 +120,8 @@ type Server struct {
 	// Nil leaves immutable coordination routes disabled. This store always reads Live.
 	TaskClaims            *taskclaim.KubeStore
 	TaskClaimReadProjects []string
+	// PortalTaskClaims serves GET /v1/portal/task-claims (DESIGN-045); default off.
+	PortalTaskClaims PortalTaskClaimsConfig
 	// Nil keeps the first durable ledger unit inactive. Runtime activation also
 	// needs protected storage, independently validated receipts and owned stop.
 	TaskBudgets         *taskbudget.Service
@@ -268,6 +270,7 @@ func (s *Server) Handler() http.Handler {
 	if s.portalQuestionAuditEnabled() {
 		mux.Handle(apiv1.PortalQuestionAuditPath, s.serve(route{methods: map[string]handler{http.MethodGet: s.portalQuestionAudit}}))
 	}
+	s.registerPortalTaskClaims(mux)
 	s.registerCodexRC(mux)
 	s.registerReminders(mux)
 	s.registerAsks(mux)
@@ -448,6 +451,7 @@ func (s *Server) serve(rt route) http.Handler {
 				case PortalProviderSourceGET(s.ProviderSourceReports.RouteEnabled(), r.Method, r.URL.Path):
 				case PortalAggregateAllowanceGET(s.AggregateAllowanceReports.RouteEnabled(), r.Method, r.URL.Path):
 				case s.portalQuestionAuditEnabled() && r.Method == http.MethodGet && r.URL.Path == apiv1.PortalQuestionAuditPath:
+				case s.portalTaskClaimsRoute(r):
 				default:
 					return 0, forbidden("the portal reader may only list session summaries")
 				}

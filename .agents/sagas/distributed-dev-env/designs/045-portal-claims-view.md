@@ -68,8 +68,9 @@ file). Only GET is registered; other methods get 405.
 **Query.** Strict, like `portalPageQuery`. `project` is required and must pass
 `projectcatalog.ValidName`. `limit` is 1 to 100 in canonical decimal, default
 50 (`portalPageDefault`, `portalPageMax`). `cursor` is optional: base64url JSON
-`{continue, limit}`, at most `portalCursorMax` (2048) bytes, refused when its
-limit differs from the request. Any other key, a repeated key, `;` or a
+`{continue, project, limit}`, at most `portalCursorMax` (2048) bytes, refused
+when its project or limit differs from the request (so one project's listing
+never resumes from another's position). Any other key, a repeated key, `;` or a
 non-canonical path is 400. One store page per request, never a refill loop.
 
 **Store.** `s.TaskClaims.List(ctx, project, limit, continue)`: one uncached
@@ -254,9 +255,12 @@ and `web/portal/preview/main.go` (`--claims`).
 | `cmd/dev-env-operator/main.go` | flag registration and the `Server` literal | Add the two flags and the `PortalTaskClaims` field; the parsing lives in the new `portal_taskclaims_config.go`. |
 | `web/portal/session/production.go` | `LoadProduction`, after the `optionalAsksSource` block (lines 185-188) | Add `claims, err := optionalClaimsSource(root, operatorCA)` and its `errProductionConfig` return. |
 | `web/portal/session/production.go` | the `AssemblyConfig` literal (line 257) | Add `Claims: claims,`. |
+| `web/portal/session/product.go` | `serveProduct`, where the page is built | Add `page.ClaimsNav = c.Claims != nil` (released to UI after #850). |
 
-No edit to `apiv1/types.go`, `validate.go`, `product.go` or
-`allowance_reader.go`.
+No edit to `apiv1/types.go`, `validate.go` or `allowance_reader.go`.
+
+*Implemented 2026-11-02:* portal side in #855 (`b7aba1d`), operator route and
+wiring in #856. The `serve()` case also checks `RawPath`.
 
 ## 9. Rollout
 
