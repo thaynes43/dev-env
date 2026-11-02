@@ -137,6 +137,8 @@ type Server struct {
 	CodexRCEnabled        bool
 	CodexRCTarget         *apiv1.CodexRCTarget
 	ManagedChildDecisions bool
+	// Empty keeps new ordinary coordinator-instruction receiver admission off.
+	CoordinatorInstructionAgentImage string
 	// Canaries remain independent of ordinary private task admission. Nil is off.
 	PrivateProjectCanaries  *projectcanary.Policy
 	PrivateHistoryRetention bool

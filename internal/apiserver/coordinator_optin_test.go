@@ -13,6 +13,11 @@ import (
 	"github.com/thaynes43/dev-env/internal/taskbudget"
 )
 
+func bindInstructionCatalogFixture(t *testing.T, f *fixture) {
+	bindCatalogFixture(t, f)
+	f.srv.CoordinatorInstructionAgentImage = "ghcr.io/thaynes43/dev-env:2.86.0@sha256:" + strings.Repeat("a", 64)
+}
+
 func optInRequest() apiv1.CreateSessionRequest {
 	req := coordinatorTask()
 	req.CoordinatorInstructions = true
@@ -21,7 +26,7 @@ func optInRequest() apiv1.CreateSessionRequest {
 
 func TestCoordinatorInstructionOptInBindsLiveParentAndStaysDefaultOff(t *testing.T) {
 	f := newFixture(t)
-	bindCatalogFixture(t, f)
+	bindInstructionCatalogFixture(t, f)
 	token := f.sessionPod("cap-parent", "dev", 0)
 	parent := f.session("cap-parent")
 	if parent.Spec.CoordinatorInstructions || parent.Spec.CoordinatorInstructionParentUID != "" {
@@ -51,7 +56,7 @@ func TestCoordinatorInstructionOptInBindsLiveParentAndStaysDefaultOff(t *testing
 func TestCoordinatorInstructionOptInRejectsForgedParentAndOutOfScope(t *testing.T) {
 	t.Run("forged parent field", func(t *testing.T) {
 		f := newFixture(t)
-		bindCatalogFixture(t, f)
+		bindInstructionCatalogFixture(t, f)
 		token := f.sessionPod("cap-parent", "dev", 0)
 		body := `{"project":"sample","repo":"alias","agent":"claude","mode":"task","model":"claude-opus-5-5","effort":"xhigh","prompt":"fix the docs","profile":"dev","size":"S","coordinatorInstructions":true,"coordinatorInstructionParentUID":"forged"}`
 		wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, body), http.StatusBadRequest, apiv1.CodeBadRequest)
@@ -61,7 +66,7 @@ func TestCoordinatorInstructionOptInRejectsForgedParentAndOutOfScope(t *testing.
 	})
 	t.Run("sibling cannot impersonate", func(t *testing.T) {
 		f := newFixture(t)
-		bindCatalogFixture(t, f)
+		bindInstructionCatalogFixture(t, f)
 		_ = f.sessionPod("cap-parent", "dev", 0)
 		sibling := f.sessionPod("sibling", "dev", 0)
 		w := f.do(http.MethodPost, apiv1.SessionsPath, sibling, optInRequest())
@@ -108,7 +113,7 @@ func TestCoordinatorInstructionOptInRejectsForgedParentAndOutOfScope(t *testing.
 			if tc.token == tokCoordinator {
 				f = coordinatorFixture(t)
 			}
-			bindCatalogFixture(t, f)
+			bindInstructionCatalogFixture(t, f)
 			token := tc.token
 			if token == "parent" || token == tokHuman || token == tokClient || token == tokCoordinator {
 				if token == "parent" {
@@ -129,7 +134,7 @@ func TestCoordinatorInstructionOptInRejectsForgedParentAndOutOfScope(t *testing.
 		for _, kind := range []string{"canary", "pilot"} {
 			t.Run(kind, func(t *testing.T) {
 				f := newFixture(t)
-				bindCatalogFixture(t, f)
+				bindInstructionCatalogFixture(t, f)
 				token := f.sessionPod("cap-parent", "dev", 0)
 				parent := f.session("cap-parent")
 				if kind == "canary" {
@@ -159,7 +164,7 @@ func TestCoordinatorInstructionOptInRejectsForgedParentAndOutOfScope(t *testing.
 	})
 	t.Run("ops profile", func(t *testing.T) {
 		f := newFixture(t)
-		bindCatalogFixture(t, f)
+		bindInstructionCatalogFixture(t, f)
 		token := f.sessionPod("cap-parent", "ops", 0)
 		req := optInRequest()
 		req.Profile = "ops"
@@ -167,7 +172,7 @@ func TestCoordinatorInstructionOptInRejectsForgedParentAndOutOfScope(t *testing.
 	})
 	t.Run("deleted parent", func(t *testing.T) {
 		f := newFixture(t)
-		bindCatalogFixture(t, f)
+		bindInstructionCatalogFixture(t, f)
 		token := f.sessionPod("cap-parent", "dev", 0)
 		if err := f.c.Delete(context.Background(), f.session("cap-parent")); err != nil {
 			t.Fatal(err)
@@ -207,4 +212,20 @@ func sessionNames(t *testing.T, f *fixture) []string {
 		names = append(names, list.Items[i].Name)
 	}
 	return names
+}
+
+func TestCoordinatorInstructionOptInNeedsQualifiedImage(t *testing.T) {
+	for _, image := range []string{"", "ghcr.io/thaynes43/dev-env:latest", "ghcr.io/foreign/dev-env:2.86.0@sha256:" + strings.Repeat("a", 64)} {
+		t.Run(image, func(t *testing.T) {
+			f := newFixture(t)
+			bindInstructionCatalogFixture(t, f)
+			token := f.sessionPod("cap-parent", "dev", 0)
+			f.srv.CoordinatorInstructionAgentImage = image
+			refuseOptIn(t, f, token, optInRequest(), "qualified coordinator instruction receiver image")
+			// Plain catalog tasks keep their existing path while enrollment is off.
+			if w := f.do(http.MethodPost, apiv1.SessionsPath, token, coordinatorTask()); w.Code != http.StatusCreated {
+				t.Fatalf("plain create %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
 }

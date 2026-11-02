@@ -195,6 +195,9 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	applyRemotePilotImage(pod, s, r.RemotePilotAgent)
 	applyPilotImage(pod, s, r.PilotAgent)
 	applyTaskPilotImage(pod, s, r.TaskPilotAgent)
+	if err := r.applyInstructionAgentImage(pod, s); err != nil {
+		return nil, err
+	}
 	return pod, nil
 }
 

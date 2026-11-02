@@ -373,6 +373,9 @@ func (s *Server) admitCoordinatorInstructionOptIn(req apiv1.CreateSessionRequest
 	if req.Mode != string(v1alpha1.ModeTask) || spec.Mode != v1alpha1.ModeTask || (spec.Agent != v1alpha1.AgentClaude && spec.Agent != v1alpha1.AgentCodex) {
 		return deny("coordinator instruction opt-in rejects an unsupported mode")
 	}
+	if controller.ValidateInstructionAgentImage(s.CoordinatorInstructionAgentImage) != nil {
+		return deny("a qualified coordinator instruction receiver image is not configured")
+	}
 	if req.Project == "" || len(snapshot) == 0 || spec.Repo == "" || spec.Base == "" || !s.PrivateProjectTasks {
 		return deny("coordinator instruction opt-in requires an accepted project binding")
 	}
