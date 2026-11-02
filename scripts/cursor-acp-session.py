@@ -167,6 +167,8 @@ PROBE_ROUNDS = 4
 MAX_TOOL_CACHE = 16
 MAX_TOOL_CACHE_BYTES = 8192
 MAX_TOOL_DROPPED = 16
+# Fixed-size retirement filter: collisions refuse context, never revive an id.
+MAX_TOOL_RETIRED_BYTES = 2048
 TOOL_CACHE_TTL = 300.0
 # Command and argv display refuse shell syntax. This does not parse or run a command.
 SHELL_META = re.compile(r"[;&|<>`$(){}]")
@@ -611,6 +613,7 @@ class Session:
         self.clock = time.monotonic if clock is None else clock
         self.tool_cache = {}
         self.tool_dropped = set()
+        self.tool_retired = bytearray(MAX_TOOL_RETIRED_BYTES)
         self.tool_cache_bytes = 0
         self.tool_cache_closed = False
         self.tool_untracked_closed = False
@@ -771,9 +774,33 @@ class Session:
         """Drop correlated tool metadata at prompt completion, failure or process exit."""
         self.tool_cache.clear()
         self.tool_dropped.clear()
+        self.tool_retired = bytearray(MAX_TOOL_RETIRED_BYTES)
         self.tool_cache_bytes = 0
         self.tool_cache_closed = True
         self.tool_untracked_closed = False
+
+    def _retired_positions(self, tool_id):
+        digest = hashlib.sha256(tool_id.encode("utf-8")).digest()
+        bits = MAX_TOOL_RETIRED_BYTES * 8
+        return [int.from_bytes(digest[i:i + 4], "big") % bits for i in range(0, 16, 4)]
+
+    def _is_retired_tool(self, tool_id):
+        # No false negatives for an inserted id. A collision only denies context.
+        return all(self.tool_retired[pos // 8] & (1 << (pos % 8))
+                   for pos in self._retired_positions(tool_id))
+
+    def _retire_terminal_tool(self):
+        # Open entries are never evicted. Closed/poison/conflict/expired identities
+        # remain unavailable after their sanitized metadata slot is reclaimed.
+        for tool_id, entry in self.tool_cache.items():
+            if entry["state"] == "open":
+                continue
+            for pos in self._retired_positions(tool_id):
+                self.tool_retired[pos // 8] |= 1 << (pos % 8)
+            self.tool_cache_bytes -= entry["bytes"]
+            del self.tool_cache[tool_id]
+            return True
+        return False
 
     def _drop_tool(self, tool_id):
         """Remember a bounded set of ids that did not fit. Past that, latch.
@@ -791,7 +818,7 @@ class Session:
     def _install_tool(self, tool_id, state, fields):
         if self.tool_cache_closed or not tool_call_id(tool_id):
             return
-        if self.tool_untracked_closed and tool_id not in self.tool_cache:
+        if tool_id not in self.tool_cache and (self.tool_untracked_closed or self._is_retired_tool(tool_id)):
             return
         current = self.tool_cache.get(tool_id)
         if current and current["state"] != "open":
@@ -805,8 +832,9 @@ class Session:
         if state == "open" and size > MAX_CONTEXT:
             state, fields, size = "poison", {}, 2
         if current is None and len(self.tool_cache) >= MAX_TOOL_CACHE:
-            self._drop_tool(tool_id)
-            return
+            if not self._retire_terminal_tool():
+                self._drop_tool(tool_id)
+                return
         old_bytes = current["bytes"] if current else 0
         if state == "open" and self.tool_cache_bytes - old_bytes + size > MAX_TOOL_CACHE_BYTES:
             if current is None:
@@ -825,7 +853,7 @@ class Session:
                 self._install_tool(tool_id, "expired", {})
                 entry = self.tool_cache.get(tool_id) or {"state": "expired", "fields": {}}
             return entry
-        if tool_id in self.tool_dropped or self.tool_untracked_closed:
+        if tool_id in self.tool_dropped or self.tool_untracked_closed or self._is_retired_tool(tool_id):
             return {"state": "bound", "fields": {}}
         return None
 
@@ -847,7 +875,7 @@ class Session:
         tool_id = update.get("toolCallId")
         if not tool_call_id(tool_id):
             return
-        if tool_id not in self.tool_cache and (tool_id in self.tool_dropped or self.tool_untracked_closed):
+        if tool_id not in self.tool_cache and (tool_id in self.tool_dropped or self.tool_untracked_closed or self._is_retired_tool(tool_id)):
             return
         status = update.get("status")
         # Any present invalid status, including null, tombstones the id.

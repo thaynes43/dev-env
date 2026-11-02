@@ -124,19 +124,22 @@ session with the exact same `toolCallId`. Assistant text, reasoning, tool
 `content`, `rawOutput`, diffs and transcripts are not stored and are not read
 back. No terminal, pane or credential is consulted.
 
-The cache is process memory only: at most 16 entries, 8192 bytes of sanitized
-JSON, and 300 seconds from the last valid update for that id. Ids that do not
-fit are remembered in a dropped set of at most 16. One further uncached id sets
-a saturation latch and is not stored. While that latch is set, every id that is
-not already cached fails closed with `tool-cache-bound`, including a later
-explicit benign permission for an id the cache could not record. The cache is
-not evicted to make room, and the dropped set does not grow. Completion or
-failure discards that call's metadata and retains a closed tombstone, which
-still counts toward the 16 entries until the prompt completes or this process
-exits. Closed ids cannot be resurrected by a later benign update. More than 32
-distinct ids in one prompt can exhaust context availability; permission events
-and correlated `reject_once` replies still work. Prompt completion and process
-exit clear the cache. A later kind or title that disagrees,
+The cache is process memory only: at most 16 entries and 8192 bytes of sanitized
+fields, with a five-minute TTL. When all slots are occupied, a terminal
+(closed, poisoned, conflicting or expired) entry can release its metadata slot.
+Its identity is inserted into a fixed 2048-byte retirement filter using four
+SHA-256-derived bit positions. Retired identities cannot reopen, including via
+an explicit benign permission or later update. Filter collisions can only
+withhold context; they cannot grant permission or revive metadata. A saturated
+filter therefore fails closed. No raw id or tool fields are kept in the filter.
+Open entries are never evicted. When all entries are open, ids that cannot fit
+are remembered in a dropped set of at most 16. One further uncached id sets
+the existing saturation latch; every uncached id then fails closed with
+`tool-cache-bound`. Completion or failure immediately clears that call's fields;
+reclaiming its slot does not recover an older snapshot. Sequential completed
+calls no longer consume every metadata slot for the rest of a prompt. The
+retirement filter is an availability tradeoff, not an unlimited-session promise.
+Prompt completion and process exit clear the cache and retirement filter. A later kind or title that disagrees,
 or any redacted, invalid or oversized update, tombstones the id. A `status`
 that is present and is not a string equal to `pending`, `in_progress`,
 `completed` or `failed` tombstones the id as well, including a list or object;

@@ -1063,43 +1063,62 @@ class ToolCacheTests(unittest.TestCase):
         self.assertEqual(dropped["context"]["reason"], "tool-cache-bound")
         self.assert_reject_only(90)
 
-    def test_completed_tombstones_saturate_and_reject_once_still_sends(self):
-        # More than 32 completed ids: 16 closed tombstones, 16 dropped, then the latch.
-        # A later explicit context is tool-cache-bound. reject_once still sends.
+    def test_long_completed_session_keeps_new_context_without_reviving_ids(self):
         self.ready()
-        total = ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1
-        self.assertGreater(total, 32)
-        for index in range(total):
-            self.announce(f"done-{index}", title=f"Run check {index}", status="completed")
+        # More than the previous 16 cached + 16 dropped ids. Only the final call
+        # is a permission request, keeping protocol request limits unchanged.
+        for index in range(512):
+            self.announce(f"done-{index}", status="completed")
         self.assertEqual(len(self.session.tool_cache), ACP.MAX_TOOL_CACHE)
-        self.assertEqual(len(self.session.tool_dropped), ACP.MAX_TOOL_DROPPED)
-        self.assertTrue(self.session.tool_untracked_closed)
-        for entry in self.session.tool_cache.values():
-            self.assertEqual(entry["state"], "closed")
+        self.assertEqual(self.session.tool_dropped, set())
+        self.assertFalse(self.session.tool_untracked_closed)
+        self.assertEqual(len(self.session.tool_retired), ACP.MAX_TOOL_RETIRED_BYTES)
+        self.assertLessEqual(self.session.tool_cache_bytes, ACP.MAX_TOOL_CACHE_BYTES)
+        for index in range(512):
+            self.announce(f"done-{index}", raw={"command": "python3", "args": ["check.py"]})
+            entry = self.session._cached_tool(f"done-{index}")
+            self.assertIn(entry["state"], {"closed", "bound"})
             self.assertEqual(entry["fields"], {})
-        kept = self.permit(89, {
-            "toolCallId": "done-0",
-            "kind": "execute",
-            "title": "Run benign checks",
-            "rawInput": {"command": "python3", "args": ["check.py"]},
-        })
-        self.assertEqual(kept["context"], {"state": "insufficient-context", "reason": "tool-call-closed"})
-        explicit = {
-            "toolCallId": "later-explicit",
-            "kind": "execute",
-            "title": "Run benign checks",
-            "rawInput": {"command": "python3", "args": ["check.py"]},
-        }
-        later = self.permit(90, explicit)
-        self.assertEqual(later["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
-        for event in (kept, later):
-            encoded = json.dumps(event["context"])
-            self.assertNotIn("check.py", encoded)
-            self.assertNotIn("Run benign", encoded)
-        self.assertEqual(len(self.session.tool_cache), ACP.MAX_TOOL_CACHE)
-        self.assertEqual(len(self.session.tool_dropped), ACP.MAX_TOOL_DROPPED)
-        self.assertTrue(self.session.tool_untracked_closed)
+        self.announce("new-live-call", raw={"command": "python3", "args": ["check.py"]})
+        event = self.permit(89, {"toolCallId": "new-live-call"})
+        self.assertEqual(event["context"]["state"], "available")
+        self.assertEqual(event["context"]["rawInput"]["args"], ["check.py"])
+        self.assert_reject_only(89)
+        replay = self.permit(90, dict(VALID_CONTEXT, toolCallId="done-0"))
+        self.assertEqual(replay["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
         self.assert_reject_only(90)
+
+    def test_retired_poison_conflict_and_expiry_cannot_reopen(self):
+        self.ready()
+        self.announce("poisoned", raw={"command": "echo", "args": ["Bearer PRIVATE"]})
+        self.announce("conflicted")
+        self.announce("conflicted", title="Different title")
+        self.announce("expired")
+        self.clock.now += ACP.TOOL_CACHE_TTL + 1
+        self.assertEqual(self.session._cached_tool("expired")["state"], "expired")
+        for index in range(ACP.MAX_TOOL_CACHE + 4):
+            self.announce(f"closed-{index}", status="completed")
+        for index, ident in enumerate(("poisoned", "conflicted", "expired")):
+            self.announce(ident, title="Fresh benign title")
+            event = self.permit(90 + index, dict(VALID_CONTEXT, toolCallId=ident))
+            self.assertEqual(event["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
+        self.assertNotIn("PRIVATE", json.dumps(self.events))
+        self.assertNotIn("Bearer", json.dumps(self.session.tool_cache))
+
+    def test_retirement_filter_collision_saturation_and_clear_fail_closed(self):
+        self.ready()
+        self.announce("still-open")
+        self.session.tool_retired[:] = bytes([255]) * ACP.MAX_TOOL_RETIRED_BYTES
+        self.announce("unseen-call")
+        event = self.permit(90, dict(VALID_CONTEXT, toolCallId="unseen-call"))
+        self.assertEqual(event["context"]["reason"], "tool-cache-bound")
+        self.assertEqual(self.permit(91, {"toolCallId": "still-open"})["context"]["state"], "available")
+        self.assert_reject_only(90)
+        self.session.close_tool_cache()
+        self.assertFalse(any(self.session.tool_retired))
+        self.assertEqual(len(self.session.tool_retired), ACP.MAX_TOOL_RETIRED_BYTES)
+        self.announce("after-close")
+        self.assertEqual(self.session.tool_cache, {})
 
     def test_prompt_completion_clears_cache_and_question_ack_is_unchanged(self):
         self.ready()
@@ -1377,7 +1396,7 @@ class StructuralDiagnosticTests(unittest.TestCase):
     def test_cache_drop_and_latch_are_fixed_flags(self):
         for index in range(ACP.MAX_TOOL_CACHE + ACP.MAX_TOOL_DROPPED + 1):
             # Direct cache updates keep this fixture below diagnostic record cap.
-            self.session._install_tool(f"call-{index}", "closed", {})
+            self.session._install_tool(f"call-{index}", "open", {})
         self.permission({"toolCallId": f"call-{ACP.MAX_TOOL_CACHE}"})
         record = self.records()[-1]
         self.assertTrue(record["cache"]["dropped"])
