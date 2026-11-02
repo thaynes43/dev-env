@@ -53,6 +53,20 @@ Unknown, with the reason "No percent allowance reported" and no windows. That
 is the Cursor result for a document that only carries Claude or Codex. Not
 connected is the unconfigured availability. Neither state invents a Cursor quota.
 
+### At a glance
+
+The Usage view opens with one tile per provider, always Claude, Codex, then
+Cursor. Each tile shows the provider's state badge and up to two reported
+windows. A window gets a full-width bar only when its typed percent and
+direction are known; a display-only percent is shown as text with no bar.
+The reset line counts down only to an exact future instant. A display-only
+label stays a label, a passed instant says it is waiting for a new report,
+and a missing reset says so. The last line repeats the freshness state:
+measured, stale (the last trusted reading), selected source, or the Unknown
+reason. Not connected and Unknown tiles show "No percent reported" and
+"Nothing is estimated." The tiles reuse the cards' typed methods, so they
+never show a figure the cards below would refuse.
+
 The optional cached reader is a separate lane. This chart path does not
 collect, fetch, or inject allowance, and it does not claim a live allowance.
 

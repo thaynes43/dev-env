@@ -912,6 +912,55 @@ func (a ProductAllowance) CompactWindows() []ProductAllowanceWindow {
 
 func (a ProductAllowance) More() int { return len(a.Windows) - len(a.CompactWindows()) }
 
+// GlanceTone is the Usage overview badge tone. Only a measured report is ok;
+// stale and selected-source reports wait; every gap stays muted.
+func (a ProductAllowance) GlanceTone() string {
+	switch a.Value {
+	case AllowanceMeasured:
+		return "ok"
+	case AllowanceStale, AllowanceCurrentSource:
+		return "wait"
+	default:
+		return "muted"
+	}
+}
+
+// GlanceNote is the Usage overview's one freshness or gap line. It repeats
+// typed state and metadata only; it never estimates a missing figure.
+func (a ProductAllowance) GlanceNote() string {
+	seen := ""
+	switch {
+	case a.SeenVaries:
+		seen = " Observation time or source varies by window."
+	case a.Observed != "" && a.Observed != "Unknown":
+		seen = " Seen " + a.Observed + "."
+	case len(a.Windows) > 0:
+		seen = " Observation time not reported."
+	}
+	for _, w := range a.Windows {
+		if w.ObservedStatus().State == "future" {
+			seen += " An observation time is in the future."
+			break
+		}
+	}
+	switch a.Value {
+	case AllowanceMeasured:
+		return "Measured provider report." + seen
+	case AllowanceStale:
+		return "Last trusted reading, not live." + seen
+	case AllowanceCurrentSource:
+		return "Selected source report. Stable account identity is unavailable." + seen
+	case AllowanceUnknown:
+		reason := a.Reason
+		if reason == "" || reason == "Unknown" {
+			reason = "Reason not reported"
+		}
+		return reason + ". Nothing is estimated."
+	default:
+		return "No account view is connected. Nothing is estimated."
+	}
+}
+
 // withAllowanceAsOf copies windows and sets the render clock used for
 // countdowns. A zero clock leaves the windows unchanged.
 func withAllowanceAsOf(in []ProductAllowance, now time.Time) []ProductAllowance {
