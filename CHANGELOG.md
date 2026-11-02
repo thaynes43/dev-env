@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.87.0](https://github.com/thaynes43/dev-env/compare/v2.86.0...v2.87.0) (2026-11-02)
+
+
+### Features
+
+* **agentd:** journal one explicit Claude RC continuation ([#857](https://github.com/thaynes43/dev-env/issues/857)) ([d477722](https://github.com/thaynes43/dev-env/commit/d4777224ebbe6172c516078d90bd5abeda44df70))
+* connect aggregate transport and per-task instruction enrollment ([#850](https://github.com/thaynes43/dev-env/issues/850)) ([e5c93e4](https://github.com/thaynes43/dev-env/commit/e5c93e421bdde9e4cc75787db859f5308d6a3dcf))
+* **operator:** qualify bounded rescue notification ownership ([#861](https://github.com/thaynes43/dev-env/issues/861)) ([d96e069](https://github.com/thaynes43/dev-env/commit/d96e069d430aed0907e1e81c36dc66da616d83d9))
+* **operator:** qualify ordinary instruction receiver images ([#858](https://github.com/thaynes43/dev-env/issues/858)) ([59260af](https://github.com/thaynes43/dev-env/commit/59260af47f4457400983b7b1829cffc8bb0de96f))
+* **operator:** serve read-only portal task claims and wire the Claims page (DESIGN-045, OP359) ([#856](https://github.com/thaynes43/dev-env/issues/856)) ([27d29af](https://github.com/thaynes43/dev-env/commit/27d29af919c470f9fe5e54be9a73102478515645))
+* **portal:** add an At a glance allowance overview to Usage ([#848](https://github.com/thaynes43/dev-env/issues/848)) ([071f20c](https://github.com/thaynes43/dev-env/commit/071f20c23c1ad78d65400fca0aa5529934063653))
+* **portal:** add the default-off read-only Claims page (DESIGN-045, OP359) ([#855](https://github.com/thaynes43/dev-env/issues/855)) ([b7aba1d](https://github.com/thaynes43/dev-env/commit/b7aba1d7b0fd24f24e105bd39fd736a984ba8dee))
+* **portal:** show last-reported allowance apart from current (OP358) ([#853](https://github.com/thaynes43/dev-env/issues/853)) ([0a335ad](https://github.com/thaynes43/dev-env/commit/0a335ad1de54889f84fe16b4a390b4d0504e9c48))
+* **retention:** add inactive collection, decisions and cleanup preflight ([#852](https://github.com/thaynes43/dev-env/issues/852)) ([db27732](https://github.com/thaynes43/dev-env/commit/db27732f206a1710f41c82b58742a07c43a3c638))
+* **usage:** assemble bounded retained provider captures ([#860](https://github.com/thaynes43/dev-env/issues/860)) ([2a235bb](https://github.com/thaynes43/dev-env/commit/2a235bbc80ac5dda395465de9a9358bc9eede969))
+
 ## [2.86.0](https://github.com/thaynes43/dev-env/compare/v2.85.0...v2.86.0) (2026-11-02)
 
 
