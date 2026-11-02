@@ -794,7 +794,10 @@ class Session:
         # remain unavailable after their sanitized metadata slot is reclaimed.
         for tool_id, entry in self.tool_cache.items():
             if entry["state"] == "open":
-                continue
+                if self.clock() - entry["at"] <= TOOL_CACHE_TTL:
+                    continue
+                self._install_tool(tool_id, "expired", {})
+                entry = self.tool_cache[tool_id]
             for pos in self._retired_positions(tool_id):
                 self.tool_retired[pos // 8] |= 1 << (pos % 8)
             self.tool_cache_bytes -= entry["bytes"]

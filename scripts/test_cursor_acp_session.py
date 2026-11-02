@@ -1088,6 +1088,18 @@ class ToolCacheTests(unittest.TestCase):
         self.assertEqual(replay["context"], {"state": "insufficient-context", "reason": "tool-cache-bound"})
         self.assert_reject_only(90)
 
+    def test_abandoned_open_calls_expire_before_reclaim(self):
+        self.ready()
+        for index in range(ACP.MAX_TOOL_CACHE):
+            self.announce(f"abandoned-{index}")
+        self.clock.now += ACP.TOOL_CACHE_TTL + 1
+        self.announce("after-expiry")
+        self.assertEqual(self.permit(89, {"toolCallId": "after-expiry"})["context"]["state"], "available")
+        replay = self.permit(90, dict(VALID_CONTEXT, toolCallId="abandoned-0"))
+        self.assertEqual(replay["context"]["reason"], "tool-cache-bound")
+        self.assertLessEqual(self.session.tool_cache_bytes, ACP.MAX_TOOL_CACHE_BYTES)
+        self.assert_reject_only(90)
+
     def test_retired_poison_conflict_and_expiry_cannot_reopen(self):
         self.ready()
         self.announce("poisoned", raw={"command": "echo", "args": ["Bearer PRIVATE"]})

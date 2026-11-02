@@ -132,7 +132,8 @@ SHA-256-derived bit positions. Retired identities cannot reopen, including via
 an explicit benign permission or later update. Filter collisions can only
 withhold context; they cannot grant permission or revive metadata. A saturated
 filter therefore fails closed. No raw id or tool fields are kept in the filter.
-Open entries are never evicted. When all entries are open, ids that cannot fit
+Unexpired open entries are never evicted. Expiry is also checked when a new
+call needs a metadata slot. When all entries are open, ids that cannot fit
 are remembered in a dropped set of at most 16. One further uncached id sets
 the existing saturation latch; every uncached id then fails closed with
 `tool-cache-bound`. Completion or failure immediately clears that call's fields;
