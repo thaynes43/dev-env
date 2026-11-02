@@ -229,3 +229,30 @@ func TestCoordinatorInstructionOptInNeedsQualifiedImage(t *testing.T) {
 		})
 	}
 }
+
+func TestCoordinatorInstructionImageRollbackPreservesAcceptedCreateRetry(t *testing.T) {
+	f := newFixture(t)
+	bindInstructionCatalogFixture(t, f)
+	token := f.sessionPod("cap-parent", "dev", 0)
+	req := optInRequest()
+	req.IdempotencyKey = "instruction-receiver-once"
+	first := f.do(http.MethodPost, apiv1.SessionsPath, token, req)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first create %d %s", first.Code, first.Body.String())
+	}
+	created := decode[apiv1.Session](t, first)
+	before := sessionNames(t, f)
+	f.srv.CoordinatorInstructionAgentImage = ""
+	retry := f.do(http.MethodPost, apiv1.SessionsPath, token, req)
+	if retry.Code != http.StatusOK || decode[apiv1.Session](t, retry).Name != created.Name {
+		t.Fatalf("rollback lost accepted result: %d %s", retry.Code, retry.Body.String())
+	}
+	changed := req
+	changed.Prompt += " different intent"
+	wantError(t, f.do(http.MethodPost, apiv1.SessionsPath, token, changed), http.StatusConflict, apiv1.CodeConflict)
+	req.IdempotencyKey = "fresh-instruction-receiver"
+	refuseOptIn(t, f, token, req, "qualified coordinator instruction receiver image")
+	if after := sessionNames(t, f); len(after) != len(before) {
+		t.Fatalf("rollback made another child: %v -> %v", before, after)
+	}
+}
