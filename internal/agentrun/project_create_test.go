@@ -50,7 +50,7 @@ func TestProjectSelectionUsageRefusalsSendNoRequest(t *testing.T) {
 		{"--project", "../dev-env", "--repo", "dev-env", "-p", "task"},
 		{"--project", "Dev-Env", "--repo", "dev-env", "-p", "task"},
 		{"--project", strings.Repeat("a", 64), "--repo", "dev-env", "-p", "task"},
-		{"--project", "dev-env", "--local", "--repo", "dev-env"},
+		{"--project", "dev-env", "--agent", "codex", "--local", "--repo", "dev-env"},
 		{"--project", "dev-env", "--interactive", "--repo", "dev-env"},
 		{"rescue", "restore", "dev-env-1006-120000/20261009-1200", "--project", "dev-env", "-p", "task"},
 	} {

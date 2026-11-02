@@ -114,8 +114,8 @@ func (a *app) createSession(ctx context.Context, args []string, restoring bool) 
 	if instructionPublisher && (coordinatorInstructions || restoring || local || interactive || dryRunGiven || project == "") {
 		return usageError("--coordinator-instruction-publisher requires a new --project task without receiver enrollment, restore, --local or --interactive")
 	}
-	if project != "" && (restoring || local || interactive) {
-		return usageError("--project selects a new task; it cannot combine with rescue restore, --local or --interactive")
+	if project != "" && (restoring || interactive || (local && agent != protocol.AgentClaude)) {
+		return usageError("--project selects a new task or a fresh claude --local session; it cannot combine with rescue restore, --interactive, or non-claude --local")
 	}
 
 	var rescueID, rescueSession string

@@ -641,7 +641,7 @@ func TestRCStatusRejectsUnboundedModelMetadata(t *testing.T) {
 func TestRCDoesNotWidenOrdinaryProjectFlags(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitUsage, "run", "--project", "sample", "--interactive", "--repo", "haynes-ops")
-	if h.stderr.String() != "agent-run: --project selects a new task; it cannot combine with rescue restore, --local or --interactive\n" {
+	if h.stderr.String() != "agent-run: --project selects a new task or a fresh claude --local session; it cannot combine with rescue restore, --interactive, or non-claude --local\n" {
 		t.Fatal("ordinary create failed for the wrong reason", h.stderr.String())
 	}
 	if len(h.api.requests()) != 0 {
