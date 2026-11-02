@@ -42,21 +42,21 @@ draws no allowance countdown. Preview code does not call `time.Now`.
 
 ## Account allowance is not this chart
 
-Production has no allowance reader and no bound provider observation. The live
-Usage page shows Claude, Codex, and Cursor as Not connected. Session tokens and
-cost are not turned into a percent or a quota.
+The default configuration selects no allowance reader or bound provider
+observation. That path renders Claude, Codex, and Cursor as Not connected.
+Optional readers are described below; source support does not establish a live
+provider observation. Session tokens and cost are not turned into a quota.
 
 `MapProductAllowance` can project a decoded `providerallowance.read.v1`
 document when a caller already has one. A provider with no source stays
 Unknown, with the reason "No percent allowance reported" and no windows. That
 is the Cursor result for a document that only carries Claude or Codex. Not
-connected is the unconfigured availability, which is what the live page shows
-today because it does not call the mapper. Neither state invents a Cursor quota.
+connected is the unconfigured availability. Neither state invents a Cursor quota.
 
 The optional cached reader is a separate lane. This chart path does not
 collect, fetch, or inject allowance, and it does not claim a live allowance.
 
-## Minimum production wiring still needed
+## Source wiring and remaining acceptance
 
 The separate [selected Codex source adapter](provider-usage-current-source.md)
 now sanitizes an explicitly supplied retained tool observation and projects it as
@@ -65,13 +65,15 @@ complement. Its local CLI and projector do not activate a production transport
 or establish a stable account identity. The strict bound reader below remains
 unchanged.
 
-The cached reader is implemented, but the portal assembly does not select a
-retained source or inject a reader. This release does not establish a current
-provider account or activate collection.
+The [aggregate transport](provider-allowance-aggregate.md) adds an optional
+operator slot, explicit CLI publication/read and portal assembly selected by
+`config/provider-allowances.json`. The selected Codex consumer uses its separate
+configuration and slot; both consumers cannot be selected together. Neither
+configuration is enabled by its source implementation. This work does not
+establish a current provider account or activate collection.
 
-The smallest next engineering change is a source-specific retained observation
-selector in the existing portal assembly, with an explicitly owned trusted
-configuration. That configuration must identify the selected producer and source,
+A configured retained observation reader needs explicitly owned trusted
+configuration identifying the selected producer and source,
 its incarnation and binding generation, selected current account scope, and the
 invalidation rule on source/account change. AccountRef is an opaque configured
 reference, not necessarily a provider account ID. A selected current source is
@@ -86,14 +88,16 @@ provider identity. The present contract/validation needs a reviewed representati
 of those semantics before an unattributed report can become a bound allowance.
 
 Use a bounded sanitized retained document, a fixed maximum age, and the existing
-providerallowance.read.v1 validator and account registry. The portal consumer should
-read only that declared artifact, without provider calls or per-request commands.
-Retention must expire stale observations and invalidate changed binding generations.
-No source selector or trusted configuration has been provided for this release.
+providerallowance.read.v1 validator and account registry. The optional portal
+consumer reads only its declared operator slot, without provider calls or
+per-request commands. Reads must degrade stale current measures and invalidate
+changed bindings while preserving the original reported observation and times.
+Real upstream capture, reviewed runtime configuration and actual API/native/UI
+acceptance remain separate from the synthetic transport fixtures.
 
-Ordinary source work can add this assembly/configuration and its tests once the
-source-specific semantics and artifact are defined. Existing authorized metadata
-may support that design. A new private provider probe, credential, read boundary,
+The source assembly and its tests do not activate runtime configuration.
+Existing authorized metadata may support source qualification. A new private
+provider probe, credential, read boundary,
 or held observer activation is a separate exact decision; this document grants
 none. There is no evidence that a new credential or human-only step is inherently
 required merely because a meter lacks an account ID. Raw observations and fixture
