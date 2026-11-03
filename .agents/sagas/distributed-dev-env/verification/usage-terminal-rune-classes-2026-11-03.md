@@ -40,10 +40,10 @@ that matches it, not to a block it happens to sit in.
 | 15 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
 | 16 | `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only
 
-Dash and quote are the smallest and most guessable classes (a few dozen characters each); the label still names a class, never a character, and no finer split is made.
+Class sizes are not uniform. The checkmark class is the smallest and most guessable (8 code points: U+2705, U+2714 to U+2718, U+274C, U+274E), then quote (about 22), dash (about 26) and star (about 45); the others are larger by an order of magnitude or more. A label still names a class of at least that many characters, never one character. This round makes the split below the earlier dash and quote classes deliberately, because the refusal sits in a family where no coarser label can find the glyph; a finer split than the checkmark class is not made.
 
 The existing precedence is unchanged: encoding, combining, spacing, format and
-the fixed dot set come first. Every label covers many characters, so it cannot
+the fixed dot set come first. Every label covers at least several characters (the checkmark class, 8, is the smallest), so it cannot
 identify the one seen. No rune, code point, text, count, hash or extra field is
 emitted: the same five JSON fields, Cursor-only provider, builtin-only stage and
 empty `clientVersion` remain mandatory (the decoder rejects any change). The
@@ -72,8 +72,8 @@ U+1F000 that the earlier rows (letters, numbers, punctuation, C1 controls, shape
 math and currency) did not take. The client binary is not part of this
 repository's image and Root's private client is out of reach, so the next step is
 to narrow the same class further with labels only. The pictograph label is split
-into the four sub-classes above plus the emoji remainder. Each still covers many
-characters, still emits no character, code point or count, and qualifies nothing:
+into the four sub-classes above plus the emoji remainder. Each still covers at least several
+characters (the smallest, checkmark, covers 8), still emits no character, code point or count, and qualifies nothing:
 a refusal remains a refusal until evidence supports accepting a specific glyph.
 
 Not covered by any pictograph-family label, by design: symbols outside U+2600 to
