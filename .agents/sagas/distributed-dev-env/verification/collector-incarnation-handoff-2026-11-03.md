@@ -40,8 +40,9 @@ it, including the next-cycle and lost-ack paths.
 
 The human-directed parent coordinator session supplies a private snapshot of
 both exact configurations, selected trust, named slot UID and resource version, original journal and report, their
-hashes, cycle and nonce, the known helper digest, and the authenticated archived
-old Pod. Preparation parses both configurations and the journal, verifies the
+hashes, cycle and nonce, the known helper digest, and the authenticated old-Pod
+eviction evidence (an archived Pod object, or an eviction observation; see the
+last section). Preparation parses both configurations and the journal, verifies the
 old Pod's eviction identity and the unchanged logical-stream policy, and
 hashes the whole proposed transition. That session, not the operator binary,
 independently verifies the snapshot provenance and eviction and obtains exact
