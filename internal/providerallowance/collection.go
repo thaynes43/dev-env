@@ -461,7 +461,11 @@ func (c *Collection) accept(slot *collectionSlot, obs Observation, started, fini
 				c.record(slot, started, finished, AttemptError, AvailabilityUnavailable, codeAcquisitionRejected)
 				return true
 			}
-			c.record(slot, started, finished, AttemptSuccess, slot.hold.obs.Availability, "")
+			availability := slot.hold.obs.Availability
+			if emptyClaudeQuota(slot.hold.obs) {
+				availability = AvailabilityUnavailable
+			}
+			c.record(slot, started, finished, AttemptSuccess, availability, "")
 			return false
 		}
 		if prevOK && sameCaptureIdentity(slot.hold.obs, obs) {

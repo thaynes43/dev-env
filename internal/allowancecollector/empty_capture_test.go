@@ -267,3 +267,54 @@ func TestClaudeKnownZeroLastGoodCannotBeErased(t *testing.T) {
 		t.Fatal("refused erasure mutated report")
 	}
 }
+
+func TestClaudeExactEmptyArrayReplayRemainsUnavailable(t *testing.T) {
+	r, remote, now := collectorFixture(t)
+	remote.run = func(request uc.RemoteRequest) ([]byte, error) {
+		receipt := successfulReceipt(t, request, *now)
+		replaceClaudeLimits(t, &receipt, []pa.ClaudeUsageLimit{})
+		*now = now.Add(2 * time.Second)
+		return json.Marshal(receipt)
+	}
+	if err := r.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, _, held := claudeStoredReport(t, r)
+	beforeRaw, _ := bundle(held.Captures)
+	before, err := pa.AssembleCaptureBundle(beforeRaw, r.Config.trust, *now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capture := range held.Captures {
+		if capture.Provider == "anthropic" {
+			held.Captures = append(held.Captures, capture)
+			break
+		}
+	}
+	afterRaw, _ := bundle(held.Captures)
+	after, err := pa.AssembleCaptureBundle(afterRaw, r.Config.trust, *now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original, replay pa.ReadItem
+	for _, item := range before.Items {
+		if item.Observation.Provider == "anthropic" {
+			original = item
+		}
+	}
+	for _, item := range after.Items {
+		if item.Observation.Provider == "anthropic" {
+			replay = item
+		}
+	}
+	a, _ := json.Marshal(original)
+	b, _ := json.Marshal(replay)
+	if string(a) != string(b) {
+		t.Fatal("exact replay changed observation, clock or receipt")
+	}
+	for _, status := range after.SourceStatuses {
+		if status.Provider == "anthropic" && (status.Availability != pa.AvailabilityUnavailable || status.LastGood != nil) {
+			t.Fatal("exact empty replay became available or last good")
+		}
+	}
+}
