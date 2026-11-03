@@ -70,7 +70,7 @@ func PrepareHandoff(in HandoffInput) (*PreparedHandoff, error) {
 		return nil, ErrCollector
 	}
 	held, err := readJournal(in.Journal, in.Report, old, in.Now)
-	if err != nil || held.Phase != "idle" || held.Cycle != in.ExpectedCycle || held.Nonce != in.ExpectedNonce || !remoteDigest(in.ExpectedHelperSHA) || held.HelperSHA != in.ExpectedHelperSHA || !validEvictionWitness(in.EvictedPod, old.Host, in.Now) {
+	if err != nil || held.Phase != "idle" || held.Cycle != in.ExpectedCycle || held.Nonce != in.ExpectedNonce || !remoteDigest(in.ExpectedHelperSHA) || held.HelperSHA != in.ExpectedHelperSHA || !validEvictionWitness(in.EvictedPod, old.Host, in.Now, journalStart(held.StartedAt)) {
 		return nil, ErrCollector
 	}
 	before, after := []byte(`"`+old.fingerprint+`"`), []byte(`"`+next.fingerprint+`"`)
@@ -396,4 +396,13 @@ func fiSys(fi os.FileInfo) (*syscall.Stat_t, bool) {
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	return st, ok
+}
+
+// journalStart parses a journal's cycle start; a zero time fails closed.
+func journalStart(raw string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }

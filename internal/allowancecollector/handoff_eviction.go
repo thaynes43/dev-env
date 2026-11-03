@@ -43,14 +43,21 @@ type evictionObservation struct {
 // observation. An observation carries no owner UID, service account, image or
 // resource version: those stay bound by the fingerprinted old configuration and
 // the live Session checks, and the observation is not a Pod object.
-func validEvictionWitness(raw []byte, old Host, now time.Time) bool {
+// floor is the held journal's last cycle start: the old Pod cannot have failed
+// before it ran the cycle that the idle journal records.
+func validEvictionWitness(raw []byte, old Host, now, floor time.Time) bool {
 	if len(raw) > 0 && len(raw) <= evictionObservationMax && providerallowance.ValidJSONDocument(raw, evictionObservationMax) && providerallowance.ExactObjectKeys(raw, evictionObservationKeys) {
-		return validEvictionObservation(raw, old, now)
+		return validEvictionObservation(raw, old, now, floor)
 	}
 	return validEvictedPod(raw, old)
 }
 
-func validEvictionObservation(raw []byte, old Host, now time.Time) bool {
+func validEvictionObservation(raw []byte, old Host, now, floor time.Time) bool {
+	// Exact, case-sensitive keys without duplicates; the decoder alone is
+	// case-insensitive and would take the last of a repeated key.
+	if len(raw) == 0 || len(raw) > evictionObservationMax || !providerallowance.ValidJSONDocument(raw, evictionObservationMax) || !providerallowance.ExactObjectKeys(raw, evictionObservationKeys) {
+		return false
+	}
 	var o evictionObservation
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -59,7 +66,7 @@ func validEvictionObservation(raw []byte, old Host, now time.Time) bool {
 	}
 	failed, e1 := time.Parse(time.RFC3339, o.FailedSince)
 	seen, e2 := time.Parse(time.RFC3339, o.ObservedAt)
-	if e1 != nil || e2 != nil || now.IsZero() || failed.After(seen) || seen.After(now) {
+	if e1 != nil || e2 != nil || now.IsZero() || floor.IsZero() || failed.Before(floor) || failed.After(seen) || seen.After(now) {
 		return false
 	}
 	if o.Schema != EvictionObservationSchema || o.Source != "kube-state-metrics" || o.Namespace != Namespace || o.Name != old.Name || o.PodUID != old.PodUID || o.Phase != "Failed" || o.Reason != "Evicted" || o.OwnerKind != "AgentSession" || o.OwnerName != old.Name || len(o.Series) != len(evictionSeries) {

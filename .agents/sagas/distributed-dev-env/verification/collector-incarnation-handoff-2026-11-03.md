@@ -142,7 +142,9 @@ host, and the three series it came from (`kube_pod_info`,
 Checked: exact keys and bounded size; every identity field equals the old
 configuration's host (namespace, name, Pod UID, owner name); the Pod UID is the
 old incarnation, never the live one; the phase and reason; `failedSince` is not
-after `observedAt` and `observedAt` is not after the plan's time. The bytes are
+before the held journal's cycle start (the old Pod cannot have failed before the
+cycle the idle journal records), not after `observedAt`, and `observedAt` is not
+after the plan's time. The bytes are
 part of the prepared hash, so a different witness is a different plan.
 
 Not carried: the owner UID, service account, image and resource version of the
@@ -154,3 +156,9 @@ the observation proves neither who produced it nor human approval. The
 qualifying coordinator still has to establish provenance, for example by
 running the stated queries against the cluster's Prometheus and recording the
 returned samples. A hand-built document is not a witness.
+
+Be plain about the strength. Every field except the two times is derivable from
+the public old configuration, and the series list carries no sample values. The
+shape check therefore stops mistakes, not forgery. The safety property rests on
+the coordinator reproducing the queries and recording the returned samples, and
+that record must exist outside the document before a live step.

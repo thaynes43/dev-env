@@ -9,7 +9,7 @@ import (
 
 func evictionObservationFixture(t *testing.T, host Host, now time.Time) map[string]any {
 	t.Helper()
-	return map[string]any{"schema": EvictionObservationSchema, "source": "kube-state-metrics", "namespace": Namespace, "name": host.Name, "podUID": host.PodUID, "phase": "Failed", "reason": "Evicted", "ownerKind": "AgentSession", "ownerName": host.Name, "failedSince": now.Add(-time.Hour).Format(time.RFC3339), "observedAt": now.Add(-time.Minute).Format(time.RFC3339), "series": []string{"kube_pod_info", "kube_pod_status_phase", "kube_pod_status_reason"}}
+	return map[string]any{"schema": EvictionObservationSchema, "source": "kube-state-metrics", "namespace": Namespace, "name": host.Name, "podUID": host.PodUID, "phase": "Failed", "reason": "Evicted", "ownerKind": "AgentSession", "ownerName": host.Name, "failedSince": now.Add(-30 * time.Second).Format(time.RFC3339), "observedAt": now.Add(-10 * time.Second).Format(time.RFC3339), "series": []string{"kube_pod_info", "kube_pod_status_phase", "kube_pod_status_reason"}}
 }
 
 func TestEvictionObservationIsAcceptedAsWitnessAndBoundByHash(t *testing.T) {
@@ -25,7 +25,7 @@ func TestEvictionObservationIsAcceptedAsWitnessAndBoundByHash(t *testing.T) {
 	}
 	// The witness bytes are part of the approved hash.
 	other := evictionObservationFixture(t, old.Host, in.Now)
-	other["failedSince"] = in.Now.Add(-2 * time.Hour).Format(time.RFC3339)
+	other["failedSince"] = in.Now.Add(-45 * time.Second).Format(time.RFC3339)
 	in2 := in
 	in2.EvictedPod, _ = json.Marshal(other)
 	p2, err := PrepareHandoff(in2)
@@ -78,4 +78,78 @@ func TestEvictionObservationRefusals(t *testing.T) {
 			t.Fatal("accepted oversize observation")
 		}
 	})
+}
+
+// Direct checks of the observation form, so a refusal cannot be a fall-through
+// to the Pod-object path.
+func TestEvictionObservationDirect(t *testing.T) {
+	in := handoffFixture(t)
+	old, err := ParseConfig(in.OldConfig, in.Trust, in.PublisherUID, in.PublisherSA, in.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now, floor := in.Now, in.Now.Add(-2*time.Hour)
+	build := func(edit func(map[string]any)) []byte {
+		m := evictionObservationFixture(t, old.Host, now)
+		if edit != nil {
+			edit(m)
+		}
+		raw, _ := json.Marshal(m)
+		return raw
+	}
+	for name, tc := range map[string]struct {
+		raw  []byte
+		want bool
+	}{
+		"baseline":               {build(nil), true},
+		"failed equals observed": {build(func(m map[string]any) { m["failedSince"] = m["observedAt"] }), true},
+		"observed equals now":    {build(func(m map[string]any) { m["observedAt"] = now.Format(time.RFC3339) }), true},
+		"failed equals floor":    {build(func(m map[string]any) { m["failedSince"] = floor.Format(time.RFC3339) }), true},
+		"offset and fractions": {build(func(m map[string]any) {
+			m["failedSince"] = now.Add(-time.Hour).In(time.FixedZone("x", 3600)).Format(time.RFC3339Nano)
+		}), true},
+		"failed before floor": {build(func(m map[string]any) { m["failedSince"] = floor.Add(-time.Second).Format(time.RFC3339) }), false},
+		"year one":            {build(func(m map[string]any) { m["failedSince"] = "0001-01-01T00:00:00Z" }), false},
+		"missing key":         {build(func(m map[string]any) { delete(m, "reason") }), false},
+		"extra key":           {build(func(m map[string]any) { m["x"] = 1 }), false},
+		"case variant key":    {build(func(m map[string]any) { m["Schema"] = m["schema"]; delete(m, "schema") }), false},
+		"duplicate series": {build(func(m map[string]any) {
+			m["series"] = []string{"kube_pod_info", "kube_pod_info", "kube_pod_status_phase"}
+		}), false},
+		"fourth series": {build(func(m map[string]any) {
+			m["series"] = []string{"kube_pod_info", "kube_pod_status_phase", "kube_pod_status_reason", "x"}
+		}), false},
+		"null series":   {build(func(m map[string]any) { m["series"] = nil }), false},
+		"empty name":    {build(func(m map[string]any) { m["name"] = "" }), false},
+		"trailing data": {append(build(nil), []byte(" {}")...), false},
+		"duplicate key": {[]byte(strings.Replace(string(build(nil)), `"phase":"Failed"`, `"phase":"Failed","phase":"Failed"`, 1)), false},
+		"zero floor":    {build(nil), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := floor
+			if name == "zero floor" {
+				f = time.Time{}
+			}
+			if got := validEvictionObservation(tc.raw, old.Host, now, f); got != tc.want {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+	// The dispatcher sends a 4 KiB-plus document to the Pod path, which refuses it.
+	big := build(func(m map[string]any) { m["source"] = strings.Repeat("x", evictionObservationMax) })
+	if validEvictionWitness(big, old.Host, now, floor) {
+		t.Fatal("oversize accepted")
+	}
+}
+
+// A witness whose failure predates the held cycle is refused through the plan.
+func TestPrepareRefusesObservationOlderThanHeldCycle(t *testing.T) {
+	in := handoffFixture(t)
+	old, _ := ParseConfig(in.OldConfig, in.Trust, in.PublisherUID, in.PublisherSA, in.Now)
+	m := evictionObservationFixture(t, old.Host, in.Now)
+	m["failedSince"] = in.Now.Add(-10 * time.Minute).Format(time.RFC3339)
+	in.EvictedPod, _ = json.Marshal(m)
+	if _, err := PrepareHandoff(in); err == nil {
+		t.Fatal("accepted a failure older than the held cycle")
+	}
 }
