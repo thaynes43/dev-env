@@ -163,20 +163,20 @@ on its way; or NeedsLogin when the access has expired for longer and the keeper
 has published nothing newer, or the login itself has lapsed), the generation, when the
 access expires and how long is left, and, for Codex, the keeper's last refresh.
 A login the pod does not follow prints NotConfigured. For Claude, a Ready row
-becomes Rejected (exit 1) when this pod's agentd saw the provider refuse the
-generation shown, before its access expiry: the marker is
-~/.agentd/claude-rejected.json (generation and time only, no token). Rejected
-means the keeper's next generation is pending and no sign-in is needed unless it
-stays unpublished; ten minutes on, the reason says to check the keeper. Age never
-turns it back into Ready: a newer generation, or an assistant turn that carries a
-real model response after the refusal, clears it, and an expired access token
-shows as NeedsLogin as always. A newer generation is not shown as proven healthy,
-only as not yet observed. A marker that exists but cannot be read or believed
-makes the row Unknown (exit 2, "cannot tell"), never Ready.
-
-Exit 1 on a Rejected row does not mean "renew the login": a newer generation can
-still arrive and the reason says no sign-in is needed. A script that treats exit 1
-as "renew" should read the state first.
+becomes Rejected when this pod's agentd saw the provider reject the generation it
+applied, while that access token was still unexpired (marker:
+~/.agentd/claude-rejected.json, generation and time only, no token). A 401 cannot
+say whether the keeper is late or the login was revoked: a newer generation may or
+may not arrive, this tool requests no sign-in, and after ten minutes the reason
+says to check the keeper. Age never turns it back into Ready: a newer generation,
+or an assistant turn that carries a real model response after the rejection,
+clears it, and an expired access token keeps its Refreshing or NeedsLogin state
+with the rejection added to the reason. A newer generation is not shown as proven
+healthy, only as not yet observed. A marker that exists but cannot be read or
+believed makes the row Unknown ("cannot tell"), never Ready. Rejected exits 1,
+which does not mean "renew the login": a script that treats exit 1 as "renew"
+should read the state first. The marker is read for the pod's own projection only;
+with another --claude-file, or no HOME, a note on stderr says it was not applied.
 
 For Claude it also prints when the whole login lapses (about 30 days after each sign-in) and the days left,
 from the non-secret login.json the keeper publishes beside the projection. A
@@ -192,10 +192,10 @@ Flags:
   -o json              print the rows as JSON
 
 Exit codes, as claude-login-check: 0 every configured login is ready, 1 one has
-expired (Refreshing included, so a script still sees a login it cannot use right now)
-or is inside the warning window, or the Claude login has 7 whole days or fewer left
-(rounded down, so 7d23h counts as 7) or has lapsed, 2 cannot tell (a file missing, unreadable or invalid, or
-nothing configured). An Unknown lapse date does not change the exit code.
+expired (Refreshing included, so a script still sees a login it cannot use right now),
+is Rejected (not "renew the login": see above) or is inside the warning window, or the Claude login has 7 whole days or fewer left
+(rounded down, so 7d23h counts as 7) or has lapsed, 2 cannot tell (a file missing, unreadable or invalid, a rejection
+record that cannot be believed, or nothing configured). An Unknown lapse date does not change the exit code.
 `,
 	"budget": `Usage: agent-run budget create <task-uid> --success "RESULT" [flags]
        agent-run budget show <task-uid> [-o json]

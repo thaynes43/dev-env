@@ -19,11 +19,13 @@ import (
 // agentd package: this is the reader's copy of the shape.
 //
 // Rules, which match agentd's readers (design choices, not proved prevention):
-//   - a marker for the generation shown is Rejected, however old; age changes
+//   - a marker for the generation agentd applied is Rejected, however old; age changes
 //     only the sentence. The expired-token display takes over only when the
 //     access token itself has expired (the row is then NeedsLogin already);
-//   - a marker for an older generation is ignored: the newer one says nothing
-//     has been observed yet, which is not "proved accepted";
+//   - a marker for an older generation than the applied one is ignored: the
+//     newer one says nothing has been observed yet, which is not "proved accepted";
+//   - the binding is agentd's applied receipt generation, as in agentd's readers,
+//     not the generation shown in the projection;
 //   - a marker that exists but cannot be read or believed (oversize, unknown
 //     field, future-dated, not a regular file, a generation above the one shown)
 //     makes the row Unknown, "cannot tell", never Ready; so does a marker with no
@@ -70,15 +72,15 @@ func applyRejection(row *authRow, markerPath string, now time.Time) {
 	default:
 		return
 	}
-	verdict, m := readRejectionVerdict(row.Generation, markerPath, now)
+	verdict, m, applied := readRejectionVerdict(markerPath, now)
 	if verdict == rejectNone {
 		return
 	}
 	age := max(0, now.Sub(m.ObservedAt)).Round(time.Second)
 	if row.State != authReady {
-		note := fmt.Sprintf("the provider had refused generation %d %s ago", m.Generation, age)
+		note := fmt.Sprintf("the provider had rejected generation %d %s ago", m.Generation, age)
 		if verdict == rejectCannotTell {
-			note = "this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the keeper's login"
+			note = "this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider rejected the keeper's login"
 		}
 		row.Reason += "; " + note
 		return
@@ -87,9 +89,14 @@ func applyRejection(row *authRow, markerPath string, now time.Time) {
 		cannotTellRejection(row)
 		return
 	}
-	note := fmt.Sprintf("the provider refused generation %d %s ago; the keeper's next generation is pending; no sign-in is needed unless it stays unpublished", m.Generation, age)
+	// A 401 cannot tell a keeper delay from a revoked login, so the text states
+	// only what is known: the applied token was rejected while it was unexpired.
+	note := fmt.Sprintf("the provider rejected generation %d %s ago while its access token was still unexpired; a newer generation may or may not arrive; this tool requests no sign-in", m.Generation, age)
 	if age >= authRejectPending {
-		note = fmt.Sprintf("the provider refused generation %d %s ago and no newer generation has arrived; check the keeper (a keeper delay, not a lapsed login)", m.Generation, age)
+		note = fmt.Sprintf("the provider rejected generation %d %s ago and no newer generation has arrived; check the keeper; this tool requests no sign-in", m.Generation, age)
+	}
+	if row.Generation > applied {
+		note += fmt.Sprintf("; generation %d is published but this pod has applied %d", row.Generation, applied)
 	}
 	if row.Reason != "" {
 		note += "; " + row.Reason
@@ -103,22 +110,24 @@ type rejectionMarker struct {
 	ObservedAt time.Time `json:"observedAt"`
 }
 
-// readRejectionVerdict reads the marker for the generation the row shows.
-func readRejectionVerdict(shown uint64, markerPath string, now time.Time) (rejectionVerdict, rejectionMarker) {
+// readRejectionVerdict reads the marker against agentd's applied generation (the
+// receipt beside it), the one binding both readers share. The projection's shown
+// generation is not used: if apply is stuck at N with N+1 published, the marker
+// for N still describes what the pod holds.
+func readRejectionVerdict(markerPath string, now time.Time) (rejectionVerdict, rejectionMarker, uint64) {
 	var m rejectionMarker
 	fi, err := os.Lstat(markerPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return rejectNone, m
+		return rejectNone, m, 0
 	}
 	if err != nil {
-		return rejectCannotTell, m
+		return rejectCannotTell, m, 0
 	}
-	// The stable reference is agentd's receipt beside the marker (the generation
-	// it applied and when). A Secret volume's mtimes are not stable: a pod restart
-	// resets them.
+	// A Secret volume's mtimes are not stable (a pod restart resets them); the
+	// receipt's generation and mtime are.
 	rg, rt, ok := readAppliedReceipt(filepath.Join(filepath.Dir(markerPath), authReceiptFile))
 	if !ok {
-		return rejectCannotTell, m
+		return rejectCannotTell, m, 0
 	}
 	valid := fi.Mode().IsRegular() && fi.Size() <= authRejectMaxBytes
 	if valid {
@@ -129,21 +138,22 @@ func readRejectionVerdict(shown uint64, markerPath string, now time.Time) (rejec
 			!m.ObservedAt.IsZero() && !m.ObservedAt.After(now.Add(authRejectSkew))
 	}
 	if !valid {
-		// agentd has not applied the generation shown, so it cannot have written a
-		// marker for it; or the file was last written before agentd applied the
-		// generation it would describe.
-		if shown > rg || fi.ModTime().Before(rt) {
-			return rejectNone, m
+		// A file last written before agentd applied the generation it would
+		// describe cannot be about it. Any other unbelievable file: cannot tell
+		// (this includes the few seconds while a newly published generation is not
+		// yet applied; it fails closed).
+		if fi.ModTime().Before(rt) {
+			return rejectNone, m, rg
 		}
-		return rejectCannotTell, m
+		return rejectCannotTell, m, rg
 	}
 	switch {
-	case m.Generation < shown:
-		return rejectNone, m
-	case m.Generation > shown:
-		return rejectCannotTell, m
+	case m.Generation < rg:
+		return rejectNone, m, rg
+	case m.Generation > rg:
+		return rejectCannotTell, m, rg
 	}
-	return rejectRefused, m
+	return rejectRefused, m, rg
 }
 
 // readAppliedReceipt reads agentd's generation receipt: the generation applied
@@ -195,7 +205,7 @@ func uniqueMembers(raw []byte) bool {
 
 // cannotTellRejection: the pod's rejection record exists but cannot be believed.
 func cannotTellRejection(row *authRow) {
-	note := "this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the keeper's login"
+	note := "this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider rejected the keeper's login"
 	if row.Reason != "" {
 		note += "; " + row.Reason
 	}

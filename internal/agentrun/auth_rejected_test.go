@@ -61,7 +61,7 @@ func TestAuthStatusRejectedWhileLocalAccessUnexpired(t *testing.T) {
 	h := rejectedHarness(t, 3, rejectionDoc(3, testNow.Add(-2*time.Minute)))
 	h.mustRun(1, "auth", "status")
 	out := h.stdout.String()
-	for _, want := range []string{"claude  Rejected", "generation 3", "5h0m0s left", "the provider refused generation 3 2m0s ago", "next generation is pending", "no sign-in is needed unless it stays unpublished"} {
+	for _, want := range []string{"claude  Rejected", "generation 3", "5h0m0s left", "the provider rejected generation 3 2m0s ago", "while its access token was still unexpired", "may or may not arrive", "this tool requests no sign-in"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
@@ -81,7 +81,7 @@ func TestAuthStatusRejectedClearsWhenNextGenerationIsVisible(t *testing.T) {
 	// not "proved accepted".
 	h := rejectedHarness(t, 3, rejectionDoc(2, testNow.Add(-59*time.Second)))
 	h.mustRun(ExitOK, "auth", "status")
-	if out := h.stdout.String(); !strings.Contains(out, "claude  Ready") || strings.Contains(out, "Rejected") || strings.Contains(out, "refused") {
+	if out := h.stdout.String(); !strings.Contains(out, "claude  Ready") || strings.Contains(out, "Rejected") || strings.Contains(out, "rejected generation") {
 		t.Errorf("stdout:\n%s", out)
 	}
 }
@@ -177,12 +177,15 @@ func TestAuthStatusRejectedUnbelievableMarkerIsCannotTell(t *testing.T) {
 			t.Errorf("failed open after a Secret mtime reset:\n%s", out)
 		}
 	})
+	// Finding D: the applied receipt generation is the one binding. With a newer
+	// generation published but not applied, an unbelievable marker could be about
+	// the applied one: cannot tell (fails closed; transient while apply is working).
 	t.Run("corrupt marker, newer generation published but not yet applied", func(t *testing.T) {
-		h := rejectedHarness(t, 4, "not json") // projection 4, receipt written for 4 by the helper
+		h := rejectedHarness(t, 4, "not json")
 		writeReceipt(t, h, "home/.agentd", 3, time.Now().Add(-time.Hour))
-		h.mustRun(ExitOK, "auth", "status")
-		if out := h.stdout.String(); !strings.Contains(out, "claude  Ready") {
-			t.Errorf("a marker agentd could only have written for generation 3 changed generation 4:\n%s", out)
+		h.mustRun(2, "auth", "status")
+		if out := h.stdout.String(); !strings.Contains(out, "claude  Unknown") {
+			t.Errorf("stdout:\n%s", out)
 		}
 	})
 	t.Run("marker with no receipt", func(t *testing.T) {
@@ -226,8 +229,8 @@ func TestAuthStatusRejectedPastThePendingWindowSaysCheckTheKeeper(t *testing.T) 
 	if !strings.Contains(out, "claude  Rejected") || !strings.Contains(out, "no newer generation") || !strings.Contains(out, "check the keeper") {
 		t.Errorf("stdout:\n%s", out)
 	}
-	if strings.Contains(out, "NeedsLogin") {
-		t.Errorf("a keeper delay must not read as a login to renew:\n%s", out)
+	if strings.Contains(out, "NeedsLogin") || strings.Contains(out, "keeper delay") || strings.Contains(out, "is pending") {
+		t.Errorf("the text claims a cause or a state it cannot know:\n%s", out)
 	}
 }
 
@@ -287,7 +290,7 @@ func TestAuthStatusRejectedMergedWithTheExpiredTokenDisplay(t *testing.T) {
 			if !strings.Contains(out, "claude  "+row.state) {
 				t.Errorf("want state %s:\n%s", row.state, out)
 			}
-			if has := strings.Contains(out, "refused generation 3"); has != row.refused {
+			if has := strings.Contains(out, "rejected generation 3"); has != row.refused {
 				t.Errorf("rejection mentioned = %v, want %v:\n%s", has, row.refused, out)
 			}
 			if row.marker && strings.Contains(out, "claude  Ready") {
@@ -320,4 +323,66 @@ func statFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return fmt.Sprintf("%d %d %s", fi.Size(), fi.Mode(), fi.ModTime().Format(time.RFC3339Nano))
+}
+
+// Finding D: both readers bind to the applied receipt generation.
+func TestAuthStatusRejectedBindsToTheAppliedGeneration(t *testing.T) {
+	t.Run("apply stuck: marker for the applied generation, a newer one published", func(t *testing.T) {
+		h := rejectedHarness(t, 4, rejectionDoc(3, testNow.Add(-time.Minute)))
+		writeReceipt(t, h, "home/.agentd", 3, time.Now().Add(-time.Hour))
+		h.mustRun(1, "auth", "status")
+		out := h.stdout.String()
+		if !strings.Contains(out, "claude  Rejected") || !strings.Contains(out, "rejected generation 3") || !strings.Contains(out, "generation 4 is published but this pod has applied 3") {
+			t.Errorf("stdout:\n%s", out)
+		}
+	})
+	t.Run("marker above the receipt, equal to the shown generation: cannot tell", func(t *testing.T) {
+		h := rejectedHarness(t, 4, rejectionDoc(4, testNow.Add(-time.Minute)))
+		writeReceipt(t, h, "home/.agentd", 3, time.Now().Add(-time.Hour))
+		h.mustRun(2, "auth", "status")
+		if out := h.stdout.String(); !strings.Contains(out, "claude  Unknown") || strings.Contains(out, "Rejected") {
+			t.Errorf("stdout:\n%s", out)
+		}
+	})
+	t.Run("marker for an older generation than the applied one", func(t *testing.T) {
+		h := rejectedHarness(t, 4, rejectionDoc(2, testNow.Add(-time.Minute)))
+		writeReceipt(t, h, "home/.agentd", 3, time.Now().Add(-time.Hour))
+		h.mustRun(ExitOK, "auth", "status")
+		if out := h.stdout.String(); !strings.Contains(out, "claude  Ready") {
+			t.Errorf("stdout:\n%s", out)
+		}
+	})
+}
+
+// Finding F: the pod's marker is not silently skipped or misapplied.
+func TestAuthStatusRejectedSaysWhenItDidNotCheckTheMarker(t *testing.T) {
+	t.Run("HOME unset", func(t *testing.T) {
+		h := rejectedHarness(t, 3, "")
+		h.mustRun(ExitOK, "auth", "status")
+		if !strings.Contains(h.stderr.String(), "rejection record was not checked") {
+			t.Errorf("stderr:\n%s", h.stderr.String())
+		}
+		h.mustRun(ExitOK, "auth", "status", "-o", "json")
+		if !strings.Contains(h.stderr.String(), "rejection record was not checked") || strings.Contains(h.stdout.String(), "checked") {
+			t.Errorf("stdout %q stderr %q", h.stdout.String(), h.stderr.String())
+		}
+	})
+	t.Run("a --claude-file that is not this pod's projection", func(t *testing.T) {
+		h := rejectedHarness(t, 3, rejectionDoc(3, testNow.Add(-time.Minute)))
+		other := h.write("other/claude.json", authClaudeDoc(3, testNow.Add(5*time.Hour)))
+		h.mustRun(ExitOK, "auth", "status", "--claude-file", other)
+		out := h.stdout.String()
+		if !strings.Contains(out, "claude  Ready") || strings.Contains(out, "Rejected") {
+			t.Errorf("the pod's marker was applied to another file:\n%s", out)
+		}
+		if !strings.Contains(h.stderr.String(), "not applied to a --claude-file") {
+			t.Errorf("stderr:\n%s", h.stderr.String())
+		}
+		// An explicit marker path is the caller's statement that it applies.
+		h.mustRun(1, "auth", "status", "--claude-file", other, "--rejected-file", filepath.Join(h.dir, "home/.agentd/claude-rejected.json"))
+	})
+	t.Run("the pod's own file given by flag is the pod's file", func(t *testing.T) {
+		h := rejectedHarness(t, 3, rejectionDoc(3, testNow.Add(-time.Minute)))
+		h.mustRun(1, "auth", "status", "--claude-file", h.vars["AGENTD_CLAUDE_LIVE_FILE"])
+	})
 }

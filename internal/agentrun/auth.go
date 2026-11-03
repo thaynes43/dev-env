@@ -120,8 +120,14 @@ func (a *app) auth(_ context.Context, args []string) error {
 	// Only Claude's keeper login has a known lapse date; Codex's refresh token
 	// carries none, so it stays Unknown.
 	addLoginLapse(&rows[0], claudeFile, now)
-	if rejectedFile == "" {
-		if home := a.env.Getenv("HOME"); home != "" {
+	if rejectedFile == "" && claudeFile != "" {
+		// The pod's marker describes the pod's own projection only.
+		switch home := a.env.Getenv("HOME"); {
+		case claudeFile != a.env.Getenv("AGENTD_CLAUDE_LIVE_FILE"):
+			_, _ = fmt.Fprintln(a.env.Stderr, BinaryName+": note: the pod's rejection record was not applied to a --claude-file that is not this pod's projection; pass --rejected-file to apply one")
+		case home == "":
+			_, _ = fmt.Fprintln(a.env.Stderr, BinaryName+": note: the pod's rejection record was not checked (HOME is unset); pass --rejected-file")
+		default:
 			rejectedFile = filepath.Join(home, ".agentd", authRejectedFile)
 		}
 	}

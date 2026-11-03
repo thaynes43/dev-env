@@ -22,7 +22,7 @@ import (
 //	{"version":1,"generation":N,"observedAt":"<RFC3339 UTC>"}
 //
 // N is the keeper generation applied when the rejection was seen; observedAt is
-// the time of the refused turn in the pod's own transcript. The marker holds no
+// the time of the rejected turn in the pod's own transcript. The marker holds no
 // token, no hash, no error text and no transcript text. agentd's poll is its
 // only writer, under a non-blocking file lock. It never sends, never touches the
 // continue receipt and never changes a state word: the text rides in the
@@ -62,6 +62,9 @@ const (
 // rejectionAfterRead is a test seam: called inside the critical section right
 // after the marker is read. Nil in production.
 var rejectionAfterRead func()
+
+// rejectionFlock is syscall.Flock; a test seam for lock errors.
+var rejectionFlock = func(fd, how int) error { return syscall.Flock(fd, how) }
 
 type claudeRejection struct {
 	Version    int       `json:"version"`
@@ -106,7 +109,7 @@ type rejectionKind int
 
 const (
 	rejectionNone         rejectionKind = iota // no rejection applies to the current generation
-	rejectionRejected                          // the provider refused the current generation
+	rejectionRejected                          // the provider rejected the current generation
 	rejectionUnverifiable                      // a marker exists that cannot be believed: cannot tell
 )
 
@@ -141,46 +144,64 @@ func lookupRejection(s Settings, now time.Time) (claudeRejection, rejectionKind)
 	}
 }
 
-// rejectionText is the status sentence for a refused current generation. It
+// rejectionText is the status sentence for a rejected current generation. It
 // names the fixed observation time, not an age, so the heartbeat text does not
 // change on every beat; it changes once, when the pending window passes.
 func rejectionText(m claudeRejection, now time.Time) string {
 	at := m.ObservedAt.UTC().Format(time.RFC3339)
 	if now.Sub(m.ObservedAt) >= rejectionPendingWindow {
-		return fmt.Sprintf("login-rejected: the provider refused keeper generation %d at %s and no newer generation has arrived; check the keeper; no login is run in this pod", m.Generation, at)
+		return fmt.Sprintf("login-rejected: the provider rejected keeper generation %d at %s and no newer generation has arrived; check the keeper; no login is run in this pod", m.Generation, at)
 	}
-	return fmt.Sprintf("login-rejected: the provider refused keeper generation %d at %s; waiting for the keeper's next generation; no login is run in this pod", m.Generation, at)
+	return fmt.Sprintf("login-rejected: the provider rejected keeper generation %d at %s while its access token was unexpired; a newer generation may or may not arrive; no login is run in this pod", m.Generation, at)
 }
 
-const rejectionUnverifiableText = "login-unverified: this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the keeper's login; no login is run in this pod"
+const rejectionUnverifiableText = "login-unverified: this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider rejected the keeper's login; no login is run in this pod"
 
-// rejectionStatusText is the text for a status surface, or "" when none applies.
-// An expired access token is the expired-token display's to report.
-func rejectionStatusText(s Settings, now time.Time) string {
-	if s.ClaudeLiveFile == "" || !checkProjectedLogin(s).Usable(now) {
+// rejectionHeartbeatText is the agent message for a running session when a
+// rejection (or a cannot-tell marker) applies, at every boundary of the access
+// token: login-rejected while it is unexpired, otherwise the expiry text
+// (refreshing, login-required) with the rejection appended. "" when none applies.
+func rejectionHeartbeatText(s Settings, now time.Time) string {
+	if s.ClaudeLiveFile == "" {
 		return ""
 	}
+	if _, kind := lookupRejection(s, now); kind == rejectionNone {
+		return ""
+	}
+	return projectionLoginStatus(s, now)
+}
+
+// rejectionUsableText is the text for an unexpired token, or "". extra is a
+// rejection agentd saw but could not write (nil otherwise).
+func rejectionUsableText(s Settings, now time.Time, extra *claudeRejection) string {
 	m, kind := lookupRejection(s, now)
-	switch kind {
-	case rejectionRejected:
+	switch {
+	case kind == rejectionRejected:
 		return rejectionText(m, now)
-	case rejectionUnverifiable:
+	case kind == rejectionUnverifiable:
 		return rejectionUnverifiableText
+	case extra != nil:
+		return rejectionText(*extra, now)
 	}
 	return ""
 }
 
 // rejectionExpiredNote is appended to the expired-token text.
-func rejectionExpiredNote(s Settings, now time.Time) string {
+func rejectionExpiredNote(s Settings, now time.Time, extra *claudeRejection) string {
 	if s.ClaudeLiveFile == "" {
 		return ""
 	}
+	note := func(m claudeRejection) string {
+		return fmt.Sprintf("; the provider had rejected keeper generation %d at %s", m.Generation, m.ObservedAt.UTC().Format(time.RFC3339))
+	}
 	m, kind := lookupRejection(s, now)
-	switch kind {
-	case rejectionRejected:
-		return fmt.Sprintf("; the provider had refused keeper generation %d at %s", m.Generation, m.ObservedAt.UTC().Format(time.RFC3339))
-	case rejectionUnverifiable:
-		return "; this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the login"
+	switch {
+	case kind == rejectionRejected:
+		return note(m)
+	case kind == rejectionUnverifiable:
+		return "; this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider rejected the login"
+	case extra != nil:
+		return note(*extra)
 	}
 	return ""
 }
@@ -193,11 +214,14 @@ func lockRejection(s Settings) (unlock func(), busy bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	if err := rejectionFlock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, true, nil
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, true, nil // another writer holds it: normal
+		}
+		return nil, false, err // any other errno is a lock failure, logged by class
 	}
-	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, false, nil
+	return func() { _ = rejectionFlock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, false, nil
 }
 
 // rejectionFault logs one fixed line when a failure class begins and again
@@ -224,7 +248,8 @@ func (d *Daemon) removeRejection(path string) {
 }
 
 // overlayRejection puts a rejection that could not be written into the
-// heartbeat, so a full volume does not turn it into "logged in".
+// heartbeat, at every boundary of the access token, so a full volume does not
+// turn it into "logged in". It is in memory only: an agentd restart loses it.
 func (d *Daemon) overlayRejection(st *protocol.Status) {
 	if d.unpersisted == nil || !d.projectsClaude() || st.Agent.Error != "" {
 		return
@@ -235,11 +260,8 @@ func (d *Daemon) overlayRejection(st *protocol.Status) {
 		return
 	}
 	now := d.now()
-	if !checkProjectedLogin(d.S).Usable(now) {
-		return
-	}
 	if _, kind := lookupRejection(d.S, now); kind == rejectionNone {
-		st.Agent.Error = rejectionText(*d.unpersisted, now)
+		st.Agent.Error = projectionStatusWith(d.S, now, d.unpersisted)
 	}
 }
 
@@ -299,7 +321,7 @@ func (d *Daemon) observeClaudeRejection() {
 	}
 	// Explicit proof only: the most recent assistant turn, looking past trailing
 	// user and tool_result entries, carries a real model response (Accepted) and
-	// is dated after the refused turn. User entries alone prove nothing.
+	// is dated after the rejected turn. User entries alone prove nothing.
 	proof := func(since time.Time) bool {
 		a := classifyLastAssistant(tail)
 		return a.Accepted && !a.At.IsZero() && a.At.After(since)
@@ -313,7 +335,10 @@ func (d *Daemon) observeClaudeRejection() {
 		}
 		return
 	}
-	turn := classifyTranscript(tail)
+	// The most recent assistant turn, past trailing user and tool_result entries
+	// (mirrors the clear rule): a user entry inside the poll window does not lose
+	// the refusal, and a later accepted turn supersedes it.
+	turn := classifyLastAssistant(tail)
 	if !turn.Revoked || turn.At.IsZero() || turn.At.After(now.Add(rejectionSkew)) {
 		return
 	}

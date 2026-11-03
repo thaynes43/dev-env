@@ -307,8 +307,8 @@ func (r *rcRun) observe(v apiv1.Session) string {
 		if authCode == "" && (strings.Contains(msg, "auth_projection_unavailable") || strings.Contains(msg, "claude authentication requires a current keeper projection") || strings.Contains(msg, "login-required: waiting for the keeper's claude projection")) {
 			authCode = "auth_projection_unavailable"
 		}
-		// agentd's fixed prefix for a login the provider refused while the keeper's
-		// next generation is pending. Information only: no gate, no new outcome.
+		// agentd's fixed prefix for a login the provider rejected while its access
+		// token was unexpired. Information only: no gate, no new outcome.
 		if strings.HasPrefix(strings.TrimSpace(msg), "login-rejected:") {
 			r.unobserved("provider_auth_ok", "session_agent_status", "login_rejected_pending")
 		} else if strings.HasPrefix(strings.TrimSpace(msg), "login-unverified:") {

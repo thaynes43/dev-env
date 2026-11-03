@@ -18,7 +18,7 @@ import (
 
 // A provider revokes the keeper's login while the applied access token has not
 // expired. The pod records one local, credential-free marker so the status
-// text can say "rejected, next generation pending" instead of "logged in".
+// text can say "the provider rejected the applied token" instead of "logged in".
 // Every time is relative to one injected clock.
 //
 // RED evidence: the file cannot compile on main (the feature does not exist).
@@ -139,7 +139,7 @@ func TestRejectionRecordedWhileLocalTokenUnexpired(t *testing.T) {
 		t.Fatal("the fixture's local token must still be unexpired")
 	}
 	text := rr.text()
-	for _, want := range []string{"login-rejected:", "generation 1", "next generation", "no login is run in this pod"} {
+	for _, want := range []string{"login-rejected:", "rejected keeper generation 1", "may or may not arrive", "no login is run in this pod"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("status text %q lacks %q", text, want)
 		}
@@ -294,7 +294,7 @@ func TestRejectionNeverAgesIntoReady(t *testing.T) {
 	}
 	first, _ := rr.marker()
 	pending := rr.text()
-	if !strings.Contains(pending, "next generation") || strings.Contains(pending, "check the keeper") {
+	if !strings.Contains(pending, "may or may not arrive") || strings.Contains(pending, "check the keeper") {
 		t.Errorf("text inside the window = %q", pending)
 	}
 	rr.advance(rejectionPendingWindow + time.Second)
@@ -369,7 +369,7 @@ func TestRejectionMergedWithTheExpiredTokenDisplay(t *testing.T) {
 			if !strings.HasPrefix(got, row.prefix) {
 				t.Errorf("text %q; want prefix %q", got, row.prefix)
 			}
-			if has := strings.Contains(got, "refused keeper generation 1"); has != (row.marker && (row.prefix == "login-rejected:" || row.refuse)) {
+			if has := strings.Contains(got, "rejected keeper generation 1"); has != (row.marker && (row.prefix == "login-rejected:" || row.refuse)) {
 				t.Errorf("text %q: rejection mentioned = %v", got, has)
 			}
 			if row.marker && strings.HasPrefix(got, "logged in") {
@@ -544,11 +544,6 @@ func TestRejectionNotRecordedWhenNotAttributable(t *testing.T) {
 			rr.publishGeneration(1)
 			rr.advance(time.Minute)
 			rr.transcript(entry("assistant", time.Time{}, `,"isApiErrorMessage":true,"apiErrorStatus":401`, `[{"type":"text","text":"API Error"}]`))
-		},
-		"last turn is a user turn": func(rr *rejectionRig) {
-			rr.publishGeneration(1)
-			rr.advance(time.Minute)
-			rr.transcript(revokedTurn(rr.clk), userTurn(rr.clk.Add(time.Second)))
 		},
 		"agent not running": func(rr *rejectionRig) {
 			_ = os.Remove(rr.s.statePath(pidFile))
@@ -989,5 +984,200 @@ func TestRejectionSecondWriterIsExcludedWhileTheFirstIsInsideItsCriticalSection(
 	rr.d.observeClaudeRejection() // A
 	if m, ok := rr.marker(); !ok || m.Generation != 2 {
 		t.Errorf("after A: marker %+v %v; want generation 2", m, ok)
+	}
+}
+
+// Finding A: a RUNNING session's heartbeat (status.agent.error) carries the
+// rejection at every boundary of the access token, with the expiry state, through
+// the status path rather than projectionLoginStatus alone.
+func TestRejectionRunningSessionHeartbeatAtEveryBoundary(t *testing.T) {
+	expiry := loginNow.Add(9 * time.Hour)
+	lapsed, err := claudeauth.EncodeLogin(expiry.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct {
+		name   string
+		at     time.Time
+		lapse  []byte
+		prefix string
+	}{
+		{"unexpired", expiry.Add(-time.Second), nil, "login-rejected:"},
+		{"expired 1s", expiry.Add(time.Second), nil, "refreshing:"},
+		{"expired just inside 3m", expiry.Add(claudePendingWindow - time.Second), nil, "refreshing:"},
+		{"expired exactly 3m", expiry.Add(claudePendingWindow), nil, "login-required:"},
+		{"expired 1s, login lapsed", expiry.Add(time.Second), lapsed, "login-required:"},
+		{"unexpired, login lapsed", expiry.Add(-time.Second), lapsed, "login-rejected:"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			rr := revokedCase(t)
+			if err := writeJSONFile(rr.s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady}); err != nil {
+				t.Fatal(err)
+			}
+			if row.lapse != nil {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(rr.s.ClaudeLiveFile), claudeauth.LoginKey), row.lapse, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st := CollectStatus(context.Background(), rr.r, rr.s, rr.session, row.at)
+			if st.Agent.State != protocol.AgentBusy {
+				t.Fatalf("state word changed: %q", st.Agent.State)
+			}
+			if !strings.HasPrefix(st.Agent.Error, row.prefix) || !strings.Contains(st.Agent.Error, "rejected keeper generation 1") {
+				t.Errorf("heartbeat message %q; want prefix %q and the rejection", st.Agent.Error, row.prefix)
+			}
+		})
+	}
+	t.Run("no marker: an expired running session stays blank", func(t *testing.T) {
+		rr := revokedCase(t)
+		_ = os.Remove(rr.markerPath())
+		if err := writeJSONFile(rr.s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady}); err != nil {
+			t.Fatal(err)
+		}
+		st := CollectStatus(context.Background(), rr.r, rr.s, rr.session, expiry.Add(time.Second))
+		if st.Agent.Error != "" {
+			t.Errorf("message %q", st.Agent.Error)
+		}
+	})
+	t.Run("a rejection that could not be written survives the expiry", func(t *testing.T) {
+		rr := revokedCase(t)
+		m, _ := rr.marker()
+		_ = os.Remove(rr.markerPath())
+		rr.d.unpersisted = &m
+		var beats []protocol.Status
+		rr.d.Send = func(_ context.Context, st protocol.Status) error { beats = append(beats, st); return nil }
+		if err := writeJSONFile(rr.s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady}); err != nil {
+			t.Fatal(err)
+		}
+		rr.clk = expiry.Add(time.Second)
+		rr.d.beat(context.Background())
+		if len(beats) != 1 || !strings.HasPrefix(beats[0].Agent.Error, "refreshing:") || !strings.Contains(beats[0].Agent.Error, "rejected keeper generation 1") {
+			t.Errorf("beats %+v", beats)
+		}
+	})
+}
+
+// Finding D: one binding for both readers, the applied receipt generation.
+func TestRejectionReadersAgreeWhenApplyIsStuckOrTheMarkerIsAboveTheReceipt(t *testing.T) {
+	t.Run("apply stuck at N+1, marker for N: agentd says rejected", func(t *testing.T) {
+		rr := revokedCase(t) // marker and receipt: generation 1
+		publish(t, rr.live, projAccess(2, rr.life))
+		// agentd does not apply generation 2 (sync failing): the receipt stays at 1.
+		if !rr.rejected() {
+			t.Errorf("text %q", rr.text())
+		}
+	})
+	t.Run("marker above the receipt: cannot tell", func(t *testing.T) {
+		rr := revokedCase(t)
+		if err := writeJSONFile(rr.markerPath(), claudeRejection{Version: 1, Generation: 2, ObservedAt: rr.clk}); err != nil {
+			t.Fatal(err)
+		}
+		if !rr.unverified() {
+			t.Errorf("text %q", rr.text())
+		}
+	})
+}
+
+// Finding E6a: record on the most recent assistant 401 even if a user or
+// tool_result entry follows (mirrors the clear rule).
+func TestRejectionRecordedEvenWhenUserEntriesFollowTheRefusal(t *testing.T) {
+	for name, after := range map[string]func(at time.Time) []string{
+		"user":        func(at time.Time) []string { return []string{userTurn(at)} },
+		"tool_result": func(at time.Time) []string { return []string{toolResult(at)} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rr := newRejectionRig(t)
+			rr.publishGeneration(1)
+			rr.advance(time.Minute)
+			lines := append([]string{userTurn(rr.clk.Add(-time.Second)), revokedTurn(rr.clk)}, after(rr.clk.Add(time.Second))...)
+			rr.transcript(lines...)
+			rr.poll()
+			if m, ok := rr.marker(); !ok || m.Generation != 1 || !m.ObservedAt.Equal(rr.clk) {
+				t.Errorf("marker %+v %v", m, ok)
+			}
+		})
+	}
+	t.Run("an accepted turn after the refusal records nothing", func(t *testing.T) {
+		rr := newRejectionRig(t)
+		rr.publishGeneration(1)
+		rr.advance(time.Minute)
+		rr.transcript(userTurn(rr.clk.Add(-time.Second)), revokedTurn(rr.clk), userTurn(rr.clk.Add(time.Second)), acceptedTurn(rr.clk.Add(2*time.Second)))
+		rr.poll()
+		if rr.markerExists() {
+			t.Error("recorded a refusal that a later accepted turn supersedes")
+		}
+	})
+}
+
+// Finding E (pinned limits, behaviour stated rather than fixed).
+func TestRejectionPinnedAttributionLimits(t *testing.T) {
+	apply := func(t *testing.T) (*rejectionRig, time.Time) {
+		rr := newRejectionRig(t)
+		rr.publishGeneration(1)
+		applied := rr.clk
+		rr.advance(time.Minute)
+		return rr, applied
+	}
+	t.Run("untimestamped nearest user entry: falls back to the failure time", func(t *testing.T) {
+		rr, applied := apply(t)
+		noStamp := `{"type":"user","isSidechain":false,"message":{"role":"user","content":"hi"}}`
+		// The older, timestamped user entry predates the apply, the nearest one has
+		// no timestamp: the request time is unknown and the failure time decides.
+		rr.transcript(userTurn(applied.Add(-time.Minute)), noStamp, revokedTurn(applied.Add(30*time.Second)))
+		rr.poll()
+		if m, ok := rr.marker(); !ok || m.Generation != 1 {
+			t.Errorf("pinned: recorded on the failure time; marker %+v %v", m, ok)
+		}
+	})
+	t.Run("a queued user entry ahead of an old-token 401 is charged to the new generation", func(t *testing.T) {
+		rr, applied := apply(t)
+		rr.transcript(userTurn(applied.Add(-time.Minute)), userTurn(applied.Add(10*time.Second)), revokedTurn(applied.Add(30*time.Second)))
+		rr.poll()
+		if _, ok := rr.marker(); !ok {
+			t.Error("pinned: the nearest user entry is after the apply, so it is recorded")
+		}
+	})
+	t.Run("a credentials write that failed and later succeeds: failures meanwhile are charged to the new generation", func(t *testing.T) {
+		// The receipt is written before the credentials. Between the two the CLI
+		// still holds the old token; its 401 is dated after the receipt.
+		rr, applied := apply(t)
+		rr.transcript(userTurn(applied.Add(5*time.Second)), revokedTurn(applied.Add(10*time.Second)))
+		rr.poll()
+		if _, ok := rr.marker(); !ok {
+			t.Error("pinned: attribution cannot see which token a request used")
+		}
+	})
+	t.Run("a backward clock step loses the observation", func(t *testing.T) {
+		rr, applied := apply(t)
+		// The refused turn is stamped before the receipt's mtime (the clock stepped back).
+		rr.transcript(revokedTurn(applied.Add(-time.Second)))
+		rr.poll()
+		if rr.markerExists() {
+			t.Error("pinned: a failure stamped before the apply time is never recorded")
+		}
+	})
+}
+
+// Finding F: a flock failure that is not "busy" is logged in fixed words.
+func TestRejectionFlockErrorIsLoggedAndBusyIsNot(t *testing.T) {
+	old := rejectionFlock
+	t.Cleanup(func() { rejectionFlock = old })
+	rr := newRejectionRig(t)
+	rr.publishGeneration(1)
+	rejectionFlock = func(int, int) error { return syscall.ENOLCK }
+	rr.d.observeClaudeRejection()
+	rr.d.observeClaudeRejection()
+	if got := strings.Count(rr.logs.String(), "Claude rejection record could not be locked"); got != 1 {
+		t.Errorf("lock error logged %d times:\n%s", got, rr.logs.String())
+	}
+	if strings.Contains(rr.logs.String(), "ENOLCK") || strings.Contains(rr.logs.String(), "no locks") {
+		t.Errorf("the log carries error text:\n%s", rr.logs.String())
+	}
+	rr.logs.Reset()
+	rejectionFlock = func(int, int) error { return syscall.EWOULDBLOCK }
+	rr.d.observeClaudeRejection()
+	if rr.logs.Len() != 0 {
+		t.Errorf("a busy lock was logged:\n%s", rr.logs.String())
 	}
 }

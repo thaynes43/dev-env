@@ -2,8 +2,7 @@
 
 Scope: the pod side only (agentd, agent-run). Source and synthetic tests. Nothing under
 `internal/keeper`; no wire, CRD, operator or standby change. Not installed, not accepted.
-Builds on the display fix in PR 891 (expired token shown as refreshing); this branch is from
-main and does not contain it.
+Rebased on main after PR 891 (the Refreshing display) merged; the merged-state rules are below.
 
 ## The case
 
@@ -13,8 +12,8 @@ message all read ready or logged in until the local expiry.
 
 ## What the pod can see
 
-One signal: the session transcript's last turn is a 401 API-error entry (the classifier the
-continue already uses). No refresh, CLI login, or credential read is added.
+One signal: the most recent assistant turn in the session transcript is a 401 API-error entry (the
+classifier the continue already uses; user and tool_result entries after it do not hide it). No refresh, CLI login, or credential read is added.
 
 ## The marker
 
@@ -96,13 +95,36 @@ is waited out; the keeper's next generation and the existing one-time continue a
 as `agent_start_timeout` if it outlasts agent start. `refreshing:` still maps to `auth_refresh_pending`
 and `login-required:` to `auth_projection_unavailable`, with the rejection appended.
 
+## Revision 4 rules (re-review of a151204)
+
+- The running-session heartbeat (`status.agent.error`) shows the rejection at every boundary of the
+  access token, through the status path: `login-rejected:` while unexpired, then `refreshing:` (3
+  minutes) or `login-required:` with the rejection appended. A rejection that could not be written
+  (memory only) follows the same rules.
+- The wording states only what is known: the provider rejected the applied token while it was
+  unexpired; a newer generation may or may not arrive; this tool requests no sign-in; check the keeper
+  if none arrives. A 401 cannot tell a keeper delay from a revoked login, so neither is claimed.
+- One binding for both readers: agentd's applied receipt generation. If apply is stuck at N with N+1
+  published, both say Rejected for a marker for N (agent-run adds "generation N+1 is published but this
+  pod has applied N"). A marker above the receipt generation is cannot-tell in both.
+- Recording uses the most recent assistant turn, as clearing does: a user or tool_result entry inside
+  the poll window no longer loses the 401; a later accepted turn supersedes it.
+- A flock failure other than "busy" is logged (fixed words, no errno text); busy stays silent.
+- agent-run does not apply the pod's marker to a `--claude-file` that is not the pod's projection, and
+  says so on stderr; with HOME unset and no `--rejected-file` it says the record was not checked.
+
 ## Exit code meaning (scripts)
 
-`agent-run auth status` exits 1 for a Rejected row. Exit 1 was documented as expiring or expired. A
-script that treats 1 as "renew the login" would misfire: the reason says no sign-in is needed while a
-newer generation can still arrive. docs/v2-quickstart.md section 6 and the auth help now say so.
+`agent-run auth status` exits 1 for a Rejected row, and exit 1 was documented as expiring or expired.
+Exit 1 here does not mean "renew the login": a script that treats 1 as "renew" would misfire. The
+quickstart, the help (including its Exit codes paragraph) and the reason text say so.
 
 ## RED evidence (names and fixed-word failures)
+
+Honesty note: the 91a2c03 and 77ff879 runs below were made against earlier heads of this branch; those
+commits were squashed and rebased, so those RED runs cannot be reproduced from the branch history. The
+revision 4 RED run (below) was made in place on a151204 before the changes and is the only one a
+reviewer can reproduce, by checking out a151204 and applying the new tests.
 
 Method: for the 91a2c03 run, a scratch worktree of that head with the new test file and a one-line shim
 for a new constant. For the 77ff879 run, the new tests were run in place against that head's code before
@@ -130,6 +152,17 @@ newer than the marker` (exit 0, want 2), `newer generation published but not yet
 flock already excluded; it now holds a writer inside its critical section through a test seam).
 `LoopingWritersLeaveAWholeMarker` proves atomic replace and convergence only, not exclusion.
 
+Against a151204 (revision 4 tests): agentd `RunningSessionHeartbeatAtEveryBoundary` (wording at the
+unexpired row; blank message at the expired rows is the finding itself, the rows asserting
+`refreshing:` / `login-required:` plus the rejection), `...a rejection that could not be written
+survives the expiry`, `RecordedEvenWhenUserEntriesFollowTheRefusal` (2 subtests: no marker),
+`FlockErrorIsLoggedAndBusyIsNot` (no log line), and the wording expectations
+(`RecordedWhileLocalTokenUnexpired`, `NeverAgesIntoReady`, `MergedWithTheExpiredTokenDisplay`); agent-run
+`BindsToTheAppliedGeneration` (2 subtests), `SaysWhenItDidNotCheckTheMarker` (2 subtests), the corrupt
+marker with a newer generation published, and the wording and merged-state tests. Guards that passed
+before (pinned behaviour, not RED): `PinnedAttributionLimits` (4 subtests), agentd's reader already
+bound to the receipt.
+
 ## Limits
 
 - Detection needs a 401 as the last assistant turn at a poll (every 5 s). A 401 followed by a retry that
@@ -149,3 +182,20 @@ flock already excluded; it now holds a writer inside its critical section throug
 - The marker needs a TUI session with a transcript. A headless task has none and shows no marker.
 - Every rule here (generation-only binding, no age-out, cannot-tell fallback, acceptance proof) is a
   design choice, not proved prevention.
+- Attribution (pinned by `PinnedAttributionLimits`): (a) the receipt is written before the credentials,
+  so a 401 for an old-token request, failing after the receipt and before a failed credentials write is
+  retried, is charged to the new generation; attribution cannot see which token a request used. A
+  credentials-file mtime would be a conservative guard but the CLI also touches that file, which would
+  lose real rejections (fail open), so it is not used. (b) A queued user entry dated after the apply and
+  ahead of an old-token 401 makes the request look new. (c) If the nearest user entry has no timestamp,
+  the failure's own time decides. (d) A backward clock step (the 401 stamped before the apply time) loses
+  the observation. (e) Clearing trusts the response time while attribution uses the request time.
+- A 401 followed by a retry inside one 5 s poll window is never seen; a 401 more than 256 KiB from the
+  end of the transcript is not read.
+- The heartbeat overlay for a rejection that could not be written is in memory: an agentd restart loses
+  it, and `agent-run auth status` and `agentd ctl status` read files only.
+- agent-run reads the receipt and marker at different moments from agentd's clear: a proof-clear race can
+  show Unknown for a moment (it fails closed), as can the few seconds while a newly published generation
+  is not yet applied and the marker is unreadable.
+- I could not map "limits 1, 4, 5 and 9" of the review literally (that numbering was not in the message
+  I received); every limit raised in the re-review is covered above.

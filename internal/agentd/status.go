@@ -224,7 +224,7 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 	if sess.Agent == protocol.AgentClaude && st.Agent.Error == "" {
 		switch st.Agent.State {
 		case protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting:
-			st.Agent.Error = rejectionStatusText(s, now)
+			st.Agent.Error = rejectionHeartbeatText(s, now)
 		}
 	}
 	return st

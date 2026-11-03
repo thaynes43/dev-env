@@ -767,8 +767,8 @@ func TestRCStageTimeoutCodeUsesTheLastObservedRefreshStatus(t *testing.T) {
 // text is information, never a new gate.
 func TestRCRejectedLoginIsAPhaseReasonOnly(t *testing.T) {
 	for name, c := range map[string][2]string{
-		"pending":     {"login-rejected: the provider refused keeper generation 3 1m0s ago; waiting for the keeper's next generation; no login is run in this pod", "login_rejected_pending"},
-		"late":        {"login-rejected: the provider refused keeper generation 3 11m0s ago and no newer generation has arrived; check the keeper; no login is run in this pod", "login_rejected_pending"},
+		"pending":     {"login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod", "login_rejected_pending"},
+		"late":        {"login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z and no newer generation has arrived; check the keeper; no login is run in this pod", "login_rejected_pending"},
 		"cannot tell": {"login-unverified: this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the keeper's login; no login is run in this pod", "login_rejection_unverifiable"},
 	} {
 		msg, reason := c[0], c[1]
@@ -797,7 +797,7 @@ func TestRCRejectedLoginIsAPhaseReasonOnly(t *testing.T) {
 // projection outage), recovers when the status clears, and if it never clears
 // ends with the ordinary agent-start timeout, not an auth code.
 func TestRCRejectedLoginDuringAgentStartIsNotAnOwnerAction(t *testing.T) {
-	const msg = "login-rejected: the provider refused keeper generation 3 at 2026-10-06T20:59:00Z; waiting for the keeper's next generation; no login is run in this pod"
+	const msg = "login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod"
 	t.Run("recovers", func(t *testing.T) {
 		h := newHarness(t)
 		rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
