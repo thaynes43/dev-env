@@ -67,7 +67,7 @@ func validEvictionObservation(raw []byte, old Host, now, floor time.Time) bool {
 	}
 	// These are range-evaluation instants, not scrape times or the transition:
 	// the last evaluation that returned the Pod Running and the first that
-	// returned it Failed. The Failed sample lies in (lastRunning, firstFailed].
+	// returned it Failed. They say nothing about the physical eviction time.
 	running, e0 := time.Parse(time.RFC3339, o.LastRunning)
 	failed, e1 := time.Parse(time.RFC3339, o.FirstFailed)
 	seen, e2 := time.Parse(time.RFC3339, o.ObservedAt)

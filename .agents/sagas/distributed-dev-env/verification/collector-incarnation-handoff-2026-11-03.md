@@ -144,9 +144,9 @@ configuration's host (namespace, name, Pod UID, owner name); the Pod UID is the
 old incarnation, never the live one; the phase and reason; `lastReturnedRunning` is not before the held journal's cycle start (the old Pod
 was seen Running during the cycle the idle journal records) and is before
 `firstReturnedFailed`, which is not after `observedAt`; `observedAt` is not
-after the plan's time. Both instants are evaluation instants of a range query,
-not scrape times and not the transition: the Failed sample lies after the last
-Running evaluation and no later than the first Failed one. The bytes are
+after the plan's time. Both instants are evaluation states of a range query over a bounded window.
+They do not establish the physical eviction time, the scrape time or any lag
+between them, and they are not a transition time. The bytes are
 part of the prepared hash, so a different witness is a different plan.
 
 Not carried: the owner UID, service account, image and resource version of the
