@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -356,7 +358,7 @@ func TestClaudeWorkerNewerLeaderJournalIsNotOverwritten(t *testing.T) {
 	f.tr.Run = func(call int, old secretValue) (claudeTokens, error) {
 		// While our POST is in flight a newer leader recovers the intent.
 		other := &claudeWorker{Journal: f.w.Journal, Fence: func(context.Context, time.Duration) error { return nil }, Clock: f.clk, Log: logr.Discard()}
-		other.needsLogin(context.Background())
+		other.needsLogin(context.Background(), f.journal(t).AttemptUID)
 		return rotated(call, old)
 	}
 	f.tick()
@@ -522,5 +524,264 @@ func TestClaudeRunnableOffByDefault(t *testing.T) {
 	}
 	if p, ok := w.Publisher.(*claudePublicSecret); !ok || p.Secret != (types.NamespacedName{Namespace: "agents", Name: DefaultClaudeLiveSecret}) {
 		t.Fatal("projection must go to the live Secret in the public namespace")
+	}
+}
+
+// A stale POST callback must not tombstone or report another leader's intent.
+func TestClaudeStaleRefreshDoesNotTombstoneNewIntent(t *testing.T) {
+	f := newClaudeFix(t)
+	f.w.Obs = NewLoginHub(ProviderClaude)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	f.tr.Run = func(_ int, _ secretValue) (claudeTokens, error) {
+		next := f.journal(t)
+		next.AttemptUID = "22222222-2222-4222-8222-222222222222"
+		f.seed(t, next)
+		return claudeTokens{}, errors.New("synthetic uncertain failure")
+	}
+	f.tick()
+	got := f.journal(t)
+	if got.Stage != claudeIntent || got.AttemptUID != "22222222-2222-4222-8222-222222222222" {
+		t.Error("stale callback changed the new leader's intent")
+	}
+	if f.w.last == "needs-login" || f.w.Obs.Snapshot()[ProviderClaude].State == LoginNeedsLogin {
+		t.Error("stale callback reported a false needs-login state")
+	}
+}
+
+func TestClaudeIntentObservationRequiresFencedVerifiedCAS(t *testing.T) {
+	for _, mode := range []string{"fence", "read", "cas"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newClaudeFix(t)
+			f.w.Obs = NewLoginHub(ProviderClaude)
+			r := syntheticClaudeRecord(1)
+			r.Stage, r.AttemptUID = claudeIntent, claudeUID
+			f.seed(t, r)
+			switch mode {
+			case "fence":
+				f.w.Fence = func(context.Context, time.Duration) error { return errors.New("synthetic") }
+			case "read":
+				f.c.Gets.Store(0)
+				f.c.FailGetAt = 2 // tick sees intent, verification load fails
+			case "cas":
+				f.c.Fail.Store(true)
+			}
+			f.tick()
+			if f.w.last == "needs-login" || f.w.Obs.Snapshot()[ProviderClaude].State == LoginNeedsLogin {
+				t.Fatal("unverified intent reported as needs-login")
+			}
+			f.c.Fail.Store(false)
+			f.c.FailGetAt = 0
+			if f.journal(t).Stage != claudeIntent {
+				t.Fatal("failed transition changed the intent")
+			}
+		})
+	}
+}
+
+func TestClaudeUnsentRollbackBackoffAndRestart(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	f.tr.Run = func(int, secretValue) (claudeTokens, error) { return claudeTokens{}, errClaudeNotSent }
+	f.tick()
+	if f.journal(t).Stage != claudeReady || f.tr.Calls != 1 {
+		t.Fatal("unsent intent was not rolled back")
+	}
+	f.tick()
+	if f.tr.Calls != 1 {
+		t.Fatal("unsent attempt retried without backoff")
+	}
+	f.clk.Step(time.Minute)
+	f.tick()
+	if f.tr.Calls != 2 || f.journal(t).Stage != claudeReady {
+		t.Fatal("bounded retry did not preserve ready record")
+	}
+	other := &claudeWorker{Journal: f.w.Journal, Transport: f.tr, Publisher: f.w.Publisher, Fence: f.w.Fence, Clock: f.clk, Log: logr.Discard()}
+	if _, r, err := other.load(context.Background()); err != nil || r.Stage != claudeReady {
+		t.Fatal("rollback did not persist across worker restart")
+	}
+}
+
+type claudeLostAckClient struct {
+	client.Client
+	patches int
+	loseAt  int
+}
+
+func (c *claudeLostAckClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if err := c.Client.Patch(ctx, obj, patch, opts...); err != nil {
+		return err
+	}
+	c.patches++
+	if c.patches == c.loseAt {
+		return errors.New("synthetic lost acknowledgement")
+	}
+	return nil
+}
+
+func TestClaudeNeedsLoginLostAckDoesNotReportBeforeRead(t *testing.T) {
+	f := newClaudeFix(t)
+	f.w.Obs = NewLoginHub(ProviderClaude)
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.AttemptUID = claudeIntent, claudeUID
+	f.seed(t, r)
+	f.w.Journal.Client = &claudeLostAckClient{Client: f.c, loseAt: 1}
+	f.tick()
+	if f.w.last == "needs-login" || f.w.Obs.Snapshot()[ProviderClaude].State == LoginNeedsLogin {
+		t.Fatal("ambiguous write was reported")
+	}
+	if f.journal(t).Stage != claudeNeedsLogin {
+		t.Fatal("expected committed tombstone")
+	}
+	f.tick()
+	if f.w.Obs.Snapshot()[ProviderClaude].State != LoginNeedsLogin {
+		t.Fatal("persisted tombstone was not observed on later tick")
+	}
+}
+
+func TestClaudeReplacementLostAckSurvivesRestartAndGenerationFloor(t *testing.T) {
+	f := newClaudeFix(t)
+	a := syntheticClaudeAccess(7, claudeNow, 8*time.Hour)
+	if err := f.w.Publisher.publish(context.Background(), a, time.Time{}, claudeNow); err != nil {
+		t.Fatal(err)
+	}
+	f.seed(t, syntheticClaudeRecord(1))
+	f.w.Journal.Client = &claudeLostAckClient{Client: f.c, loseAt: 2}
+	f.clk.Step(6 * time.Hour)
+	f.tick()
+	if f.tr.Calls != 1 || f.journal(t).Access.Generation != 8 || f.liveGeneration(t) != 7 {
+		t.Fatal("lost acknowledgement did not preserve the replacement before publication")
+	}
+	other := &claudeWorker{Journal: f.w.Journal, Transport: f.tr, Publisher: f.w.Publisher, Fence: f.w.Fence, Clock: f.clk, Log: logr.Discard()}
+	other.tick(context.Background())
+	if f.tr.Calls != 1 || f.liveGeneration(t) != 8 {
+		t.Fatal("restart failed to publish saved replacement without replay")
+	}
+}
+
+func TestClaudeConcurrentWorkersDoNotOverwriteNewAdoption(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	f.tr.Run = func(int, secretValue) (claudeTokens, error) {
+		close(started)
+		<-release
+		return claudeTokens{}, errors.New("synthetic uncertain")
+	}
+	go func() { defer close(done); f.tick() }()
+	<-started
+	other := &claudeWorker{Journal: f.w.Journal, Fence: f.w.Fence, Clock: f.clk, Log: logr.Discard()}
+	other.tick(context.Background())
+	adopted := syntheticClaudeRecord(2)
+	f.seed(t, adopted)
+	close(release)
+	<-done
+	got := f.journal(t)
+	if got.Stage != claudeReady || got.Access.Generation != 2 || got.Refresh.Empty() {
+		t.Fatal("stale callback overwrote newer adoption")
+	}
+}
+
+func TestClaudePreDispatchCancellationRollsBack(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fences := 0
+	f.w.Fence = func(context.Context, time.Duration) error {
+		fences++
+		if fences == 2 {
+			cancel()
+		}
+		return nil
+	}
+	tr := newClaudeHTTPRefresh()
+	tr.endpoint = "https://example.invalid/token"
+	tr.Client = &http.Client{Transport: claudeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Error("request was dispatched")
+		return nil, errors.New("synthetic")
+	})}
+	f.w.Transport = tr
+	f.w.tick(ctx)
+	if f.journal(t).Stage != claudeReady {
+		t.Fatal("proven unsent request did not roll back")
+	}
+}
+
+type claudeBeforePatchClient struct {
+	client.Client
+	before func()
+}
+
+func (c *claudeBeforePatchClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if c.before != nil {
+		run := c.before
+		c.before = nil
+		run()
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func TestClaudeIntentCASCannotOverwriteNewerIntent(t *testing.T) {
+	f := newClaudeFix(t)
+	f.w.Obs = NewLoginHub(ProviderClaude)
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.AttemptUID = claudeIntent, claudeUID
+	f.seed(t, r)
+	f.w.Journal.Client = &claudeBeforePatchClient{Client: f.c, before: func() {
+		j := &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}
+		_, next, err := j.load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		next.AttemptUID = "22222222-2222-4222-8222-222222222222"
+		saveClaude(t, j, next)
+	}}
+	f.tick()
+	got := f.journal(t)
+	if got.Stage != claudeIntent || got.AttemptUID != "22222222-2222-4222-8222-222222222222" {
+		t.Fatal("stale CAS overwrote new intent")
+	}
+	if f.w.last == "needs-login" || f.w.Obs.Snapshot()[ProviderClaude].State == LoginNeedsLogin {
+		t.Fatal("failed CAS was reported")
+	}
+}
+
+func TestClaudeIntentReadbackFailureDoesNotReport(t *testing.T) {
+	f := newClaudeFix(t)
+	f.w.Obs = NewLoginHub(ProviderClaude)
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.AttemptUID = claudeIntent, claudeUID
+	f.seed(t, r)
+	f.c.Gets.Store(0)
+	f.c.FailGetAt = 3
+	f.tick()
+	if f.w.last == "needs-login" || f.w.Obs.Snapshot()[ProviderClaude].State == LoginNeedsLogin {
+		t.Fatal("unverified CAS was reported")
+	}
+	f.c.FailGetAt = 0
+	if f.journal(t).Stage != claudeNeedsLogin {
+		t.Fatal("expected committed tombstone")
+	}
+}
+
+func TestClaudeFailureLogRedactsTransportError(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	var log string
+	f.w.Log = funcr.New(func(prefix, args string) { log += prefix + args }, funcr.Options{})
+	f.tr.Run = func(int, secretValue) (claudeTokens, error) {
+		return claudeTokens{}, errors.New("PRIVATE_SENTINEL https://example.invalid/PRIVATE_SENTINEL")
+	}
+	f.tick()
+	if strings.Contains(log, "PRIVATE_SENTINEL") || strings.Contains(log, claudeOldRefreshCanary) || strings.Contains(log, claudeUID) {
+		t.Fatal("sensitive data escaped into log")
+	}
+	if !strings.Contains(log, "possibly-spent") || !strings.Contains(log, "duration_ms") || !strings.Contains(log, "phase") {
+		t.Fatal("closed failure fields missing")
 	}
 }

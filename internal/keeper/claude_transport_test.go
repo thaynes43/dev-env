@@ -311,3 +311,77 @@ func assertNoClaudeCanary(t *testing.T, texts ...string) {
 		}
 	}
 }
+
+type claudeRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f claudeRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type claudeFailReader struct{}
+
+func (claudeFailReader) Read([]byte) (int, error) { return 0, errors.New("PRIVATE_SENTINEL") }
+func (claudeFailReader) Close() error             { return nil }
+
+func TestClaudeRefreshDispatchBoundaryAndPrivacy(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		cancelBefore bool
+		roundTrip    claudeRoundTripFunc
+		phase, class string
+	}{
+		{"pre-cancel", true, func(*http.Request) (*http.Response, error) {
+			t.Error("dispatched cancelled request")
+			return nil, errors.New("PRIVATE_SENTINEL")
+		}, "prepare", "not-sent"},
+		{"post-cancel", false, func(r *http.Request) (*http.Response, error) { return nil, context.Canceled }, "dispatch", "possibly-spent"},
+		{"dial", false, func(*http.Request) (*http.Response, error) { return nil, errors.New("PRIVATE_SENTINEL") }, "dispatch", "possibly-spent"},
+		{"status", false, func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 401, Body: io.NopCloser(strings.NewReader("PRIVATE_SENTINEL")), Header: make(http.Header)}, nil
+		}, "response", "status"},
+		{"read", false, func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: claudeFailReader{}, Header: make(http.Header)}, nil
+		}, "response", "read"},
+		{"parse", false, func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("PRIVATE_SENTINEL")), Header: make(http.Header)}, nil
+		}, "response", "invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancelBefore {
+				cancel()
+			}
+			tr := newClaudeHTTPRefresh()
+			tr.endpoint = "https://example.invalid/PRIVATE_SENTINEL"
+			tr.Client = &http.Client{Transport: tc.roundTrip}
+			_, err := tr.refresh(ctx, newSecretValue("PRIVATE_SENTINEL"), nil)
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			phase, class := claudeFailureLabels(err)
+			if phase != tc.phase || class != tc.class || errors.Is(err, errClaudeNotSent) != tc.cancelBefore {
+				t.Fatalf("classification %s/%s", phase, class)
+			}
+			if strings.Contains(err.Error()+phase+class, "PRIVATE_SENTINEL") {
+				t.Fatal("sensitive value escaped")
+			}
+		})
+	}
+}
+
+func TestClaudeCancellationAfterDispatchIsPossiblySpent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	tr := newClaudeHTTPRefresh()
+	tr.endpoint = "https://example.invalid/token"
+	tr.Client = &http.Client{Transport: claudeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		cancel()
+		return nil, r.Context().Err()
+	})}
+	_, err := tr.refresh(ctx, newSecretValue(claudeOldRefreshCanary), nil)
+	phase, class := claudeFailureLabels(err)
+	if calls != 1 || errors.Is(err, errClaudeNotSent) || phase != "dispatch" || class != "possibly-spent" {
+		t.Fatal("post-dispatch cancellation was treated as unsent")
+	}
+}

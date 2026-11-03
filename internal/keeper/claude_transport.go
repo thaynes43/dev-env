@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -35,9 +36,38 @@ const (
 )
 
 var (
-	errClaudeRefresh = errors.New("claude refresh requires a fresh login")
-	errClaudeProfile = errors.New("claude profile is unavailable")
+	errClaudeRefresh  = errors.New("claude refresh requires a fresh login")
+	errClaudeProfile  = errors.New("claude profile is unavailable")
+	errClaudeNotSent  = claudeNotSent{}
+	errClaudeDispatch = fmt.Errorf("claude refresh dispatch: %w", errClaudeRefresh)
+	errClaudeStatus   = fmt.Errorf("claude refresh status: %w", errClaudeRefresh)
+	errClaudeRead     = fmt.Errorf("claude refresh read: %w", errClaudeRefresh)
+	errClaudeParse    = fmt.Errorf("claude refresh validation: %w", errClaudeRefresh)
 )
+
+// claudeNotSent is emitted only before invoking Client.Do.
+type claudeNotSent struct{}
+
+func (claudeNotSent) Error() string        { return "claude refresh was not sent" }
+func (claudeNotSent) Is(target error) bool { return target == errClaudeRefresh }
+
+// Labels are selected from a closed set; errors and response data never enter logs.
+func claudeFailureLabels(err error) (string, string) {
+	switch {
+	case errors.Is(err, errClaudeNotSent):
+		return "prepare", "not-sent"
+	case errors.Is(err, errClaudeDispatch):
+		return "dispatch", "possibly-spent"
+	case errors.Is(err, errClaudeStatus):
+		return "response", "status"
+	case errors.Is(err, errClaudeRead):
+		return "response", "read"
+	case errors.Is(err, errClaudeParse):
+		return "response", "invalid"
+	default:
+		return "unknown", "possibly-spent"
+	}
+}
 
 // claudeTokens is one validated refresh response. Refresh is empty when the
 // provider did not rotate it; the caller then keeps the old one.
@@ -109,22 +139,25 @@ func (t *claudeHTTPRefresh) refresh(ctx context.Context, token secretValue, scop
 	defer cancel()
 	req, err := http.NewRequestWithContext(c, http.MethodPost, t.endpoint, strings.NewReader(string(raw)))
 	if err != nil {
-		return claudeTokens{}, errClaudeRefresh
+		return claudeTokens{}, errClaudeNotSent
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// One POST only. No redirect, retry or response-body logging, even on a
 	// network error: the old refresh token may already be spent.
+	if c.Err() != nil {
+		return claudeTokens{}, errClaudeNotSent
+	}
 	resp, err := t.Client.Do(req)
 	if err != nil {
-		return claudeTokens{}, errClaudeRefresh
+		return claudeTokens{}, errClaudeDispatch
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return claudeTokens{}, errClaudeRefresh
+		return claudeTokens{}, errClaudeStatus
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, claudeauth.MaxBytes+1))
 	if err != nil || len(data) > claudeauth.MaxBytes {
-		return claudeTokens{}, errClaudeRefresh
+		return claudeTokens{}, errClaudeRead
 	}
 	// Unknown members are ignored: by now the provider has accepted the POST and
 	// spent the old refresh token, so refusing a 200 over an extra member would
@@ -132,11 +165,11 @@ func (t *claudeHTTPRefresh) refresh(ctx context.Context, token secretValue, scop
 	// access_token and expires_in are still enforced; present fields are validated.
 	var w claudeTokenWire
 	if codexauth.DecodeTolerant(data, &w) != nil {
-		return claudeTokens{}, errClaudeRefresh
+		return claudeTokens{}, errClaudeParse
 	}
 	out, ok := validClaudeTokens(w)
 	if !ok {
-		return claudeTokens{}, errClaudeRefresh
+		return claudeTokens{}, errClaudeParse
 	}
 	return out, nil
 }

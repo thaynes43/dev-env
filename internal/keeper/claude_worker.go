@@ -66,10 +66,11 @@ type claudeWorker struct {
 
 	// mu serializes a refresh tick with every control request, so an adoption
 	// never overlaps a refresh in flight. Everything below is guarded by it.
-	mu        sync.Mutex
-	published uint64        // last generation this process published
-	last      string        // last state logged
-	attempt   claudeAttempt // the one staging directory a helper may have open
+	mu         sync.Mutex
+	published  uint64        // last generation this process published
+	last       string        // last state logged
+	attempt    claudeAttempt // the one staging directory a helper may have open
+	retryAfter time.Time     // bounded delay after a provably unsent attempt
 }
 
 func (*claudeWorker) NeedLeaderElection() bool { return true }
@@ -125,16 +126,18 @@ func (w *claudeWorker) tick(ctx context.Context) {
 		w.note("journal-unavailable")
 		return
 	}
-	w.observe(r)
+	if r.Stage != claudeIntent {
+		w.observe(r)
+	}
 	switch r.Stage {
 	case claudeIntent:
-		w.needsLogin(ctx)
+		w.needsLogin(ctx, r.AttemptUID)
 		return
 	case claudeNeedsLogin:
 		w.note("needs-login")
 		return
 	}
-	if w.due(r) {
+	if w.due(r) && !w.Clock.Now().Before(w.retryAfter) {
 		if r, err = w.refresh(ctx); err != nil {
 			return
 		}
@@ -174,7 +177,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	}
 	gen, err := nextClaudeGeneration(prev.Access.Generation, floor)
 	if err != nil {
-		w.note("needs-login")
+		w.note("generation-unavailable")
 		return claudeRecord{}, err
 	}
 	// Leadership with room for the POST and the save, before anything is written.
@@ -197,14 +200,25 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		w.abandon(ctx, prev, intent.AttemptUID)
 		return claudeRecord{}, errClaudeJournal
 	}
+	requestCtx, cancelRequest := context.WithDeadline(ctx, time.Now().Add(claudeRequestTime))
+	defer cancelRequest()
 	if w.Fence(ctx, claudeRequestBudget) != nil {
 		w.abandon(ctx, prev, intent.AttemptUID)
 		w.note("leadership-unavailable")
 		return claudeRecord{}, errClaudeLeadership
 	}
-	resp, err := w.Transport.refresh(ctx, prev.Refresh, prev.Access.Scopes)
+	started := time.Now()
+	resp, err := w.Transport.refresh(requestCtx, prev.Refresh, prev.Access.Scopes)
 	if err != nil {
-		w.needsLogin(ctx)
+		phase, class := claudeFailureLabels(err)
+		w.Log.Info("claude refresh failed", "phase", phase, "class", class, "duration_ms", time.Since(started).Milliseconds())
+		if errors.Is(err, errClaudeNotSent) {
+			if w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID) {
+				w.retryAfter = w.Clock.Now().Add(time.Minute)
+			}
+			return claudeRecord{}, errClaudeRefresh
+		}
+		w.needsLogin(context.WithoutCancel(ctx), intent.AttemptUID)
 		return claudeRecord{}, errClaudeRefresh
 	}
 	// The provider has accepted the POST and spent the old refresh token. From
@@ -213,12 +227,14 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	// publish) carries its own 2 s timeout, which bounds the whole.
 	ctx = context.WithoutCancel(ctx)
 	if resp.AccountUUID != "" && resp.AccountUUID != prev.Access.AccountUUID {
-		w.needsLogin(ctx)
+		w.Log.Info("claude refresh failed", "phase", "validate", "class", "account-mismatch", "duration_ms", time.Since(started).Milliseconds())
+		w.needsLogin(ctx, intent.AttemptUID)
 		return claudeRecord{}, errClaudeAccount
 	}
 	next, err := applyClaudeRefresh(prev, resp, gen, w.Clock.Now())
 	if err != nil || next.Access.Validate(w.Clock.Now()) != nil {
-		w.needsLogin(ctx)
+		w.Log.Info("claude refresh failed", "phase", "validate", "class", "invalid", "duration_ms", time.Since(started).Milliseconds())
+		w.needsLogin(ctx, intent.AttemptUID)
 		return claudeRecord{}, errClaudeRefresh
 	}
 	// The replacement is stored BEFORE anything is published, and with no Lease
@@ -230,6 +246,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	// replacement); the next tick marks the first NeedsLogin and never repeats
 	// the POST.
 	if w.Journal.save(ctx, secret, next) != nil {
+		w.Log.Info("claude refresh failed", "phase", "save", "class", "unavailable", "duration_ms", time.Since(started).Milliseconds())
 		w.note("journal-unavailable")
 		return claudeRecord{}, errClaudeJournal
 	}
@@ -250,28 +267,36 @@ func (w *claudeWorker) observe(r claudeRecord) {
 // abandon returns an intent that was never sent to Ready, if this attempt's
 // intent is still what the journal holds and leadership can still write. When
 // it cannot, the intent stays and the next tick marks NeedsLogin.
-func (w *claudeWorker) abandon(ctx context.Context, ready claudeRecord, uid string) {
+func (w *claudeWorker) abandon(ctx context.Context, ready claudeRecord, uid string) bool {
 	secret, r, err := w.load(ctx)
 	if err != nil || r.Stage != claudeIntent || r.AttemptUID != uid || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
-		return
+		return false
 	}
-	_ = w.Journal.save(ctx, secret, ready)
+	return w.Journal.save(ctx, secret, ready) == nil
 }
 
 // needsLogin tombstones an interrupted attempt: the stage becomes NeedsLogin
 // and the refresh credential, which may be spent, is dropped.
-func (w *claudeWorker) needsLogin(ctx context.Context) {
-	w.note("needs-login")
-	w.Obs.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
-	if w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
+func (w *claudeWorker) needsLogin(ctx context.Context, uid string) {
+	if uid == "" || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
 		return
 	}
 	secret, r, err := w.load(ctx)
-	if err != nil || r.Stage != claudeIntent {
+	if err != nil || r.Stage != claudeIntent || r.AttemptUID != uid || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
 		return
 	}
 	r.Stage, r.AttemptUID, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, "", secretValue{}, time.Time{}
-	_ = w.Journal.save(ctx, secret, r)
+	if w.Journal.save(ctx, secret, r) != nil {
+		return
+	}
+	// Do not publish an observation if a newer adoption or intent won since
+	// the CAS, or if the committed state cannot be verified.
+	_, current, err := w.load(ctx)
+	if err != nil || current.Stage != claudeNeedsLogin || current.Access.Generation != r.Access.Generation || !sameClaudeAccess(current.Access, r.Access) {
+		return
+	}
+	w.note("needs-login")
+	w.Obs.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
 }
 
 // claudeRunnable is the worker Run registers, or nil when the flag is off.
