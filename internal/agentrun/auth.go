@@ -37,9 +37,10 @@ const (
 	authMaxBytes       = 64 << 10
 	authDefaultWarning = 30 * time.Minute
 	// authPendingWindow: an access token that expired this recently is a pending
-	// refresh, not a login to renew. The keeper refreshes ahead of expiry and the
-	// Secret volume trails it by about a minute (kubelet sync). Past the window,
-	// or once the login's own lapse has passed, the row is NeedsLogin as before.
+	// refresh, not a login to renew. The keeper refreshes ahead of expiry; the
+	// Secret volume is assumed (not proven) to trail it by about a minute (kubelet
+	// sync). Past the window, or once the login's own lapse has passed, the row is
+	// NeedsLogin as before.
 	authPendingWindow = 3 * time.Minute
 	authReady         = "Ready"
 	authRefreshing    = "Refreshing"

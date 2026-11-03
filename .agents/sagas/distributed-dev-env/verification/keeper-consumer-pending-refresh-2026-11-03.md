@@ -16,8 +16,7 @@ not spend that recovery. Synthetic injected-clock tests (revocation then a
 generation at +59 s, publish delays of 30 s, 119 s and 10 min, a stale
 generation, four concurrent readers, a restart inside the gap) pin that existing
 behavior; they pass on current main and are characterization, not a found defect.
-The roughly 59 s is the keeper's cadence plus the Secret volume update delay,
-neither of which is visible or fixable from this repository.
+What accounts for the roughly 59 s is a hypothesis, not an established cause: it may be the keeper's cadence plus the Secret volume update delay, but neither is visible from this repository and nothing here proves it.
 
 ## The defect this change fixes (display, plus one deliberate rc behavior change)
 
@@ -44,7 +43,7 @@ covered by two rc tests (recovers while refreshing; still ends in owner action
 after the window) and by a mutation that restores the old matching.
 
 The 3-minute window is a heuristic: the keeper refreshes ahead of expiry and the
-Secret volume trails the keeper by about a minute. It is two constants,
+Secret volume is assumed (unproven) to trail the keeper by about a minute. It is two constants,
 `claudePendingWindow` and `authPendingWindow`.
 
 ## What this does NOT fix (limits to preserve)

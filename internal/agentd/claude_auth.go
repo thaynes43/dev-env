@@ -210,9 +210,11 @@ func checkProjectedLogin(s Settings) loginCheck {
 
 // claudePendingWindow is how long after its expiry an applied access token is
 // reported as a pending refresh rather than a login to renew. The keeper
-// refreshes ahead of expiry and a Secret volume trails the keeper by about a
-// minute (kubelet sync), so a successor can be that late. Past the window the
-// wait is reported as before. It changes no behaviour, only the status text.
+// refreshes ahead of expiry; a Secret volume is ASSUMED (not proven) to trail
+// the keeper by about a minute (kubelet sync), so a successor may be that late.
+// Past the window the wait is reported as before. Beyond the status text this
+// changes `agent-run rc start --wait`: it waits through the window instead of
+// asking for owner action after 30 seconds of the old login-required text.
 const claudePendingWindow = 3 * time.Minute
 
 // projectionLoginStatus is the one plain status line in projection mode. An
