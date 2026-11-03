@@ -20,7 +20,7 @@ The old runtime ledger is not reconstructed or waived. An independently
 authenticated historical old-Pod eviction snapshot, bound into the plan, plus
 fresh checks of the replacement session, Pod and HOME, fences the executor.
 The source helper validates their shape and identity but cannot authenticate an
-archived snapshot or a human approval. Root must independently qualify those
+archived snapshot or a human approval. The parent coordinator must independently qualify those
 facts and the exact prepared hash before any invocation; a hash is not approval.
 
 The helper prepares offline with the real collector parser and permits only the
@@ -42,7 +42,7 @@ trust, named slot UID and resource version, original journal and report, their
 hashes, cycle and nonce, the known helper digest, and the authenticated archived
 old Pod. Preparation parses both configurations and the journal, verifies the
 old Pod's eviction identity and the unchanged logical-stream policy, and
-hashes the whole proposed transition. Root independently verifies the snapshot
+hashes the whole proposed transition. The parent coordinator independently verifies the snapshot
 provenance, eviction and approval; none can be established by the caller's
 bytes alone.
 
