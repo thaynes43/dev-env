@@ -727,3 +727,37 @@ func sinceMs(p apiv1.RCLaunchPhase) int64 {
 	}
 	return *p.SinceRequestMs
 }
+
+// Both timeout sites (the deadline check and a request still in flight at the
+// budget) use one classification, so the last observed status decides the reason.
+func TestRCStageTimeoutCodeUsesTheLastObservedRefreshStatus(t *testing.T) {
+	agent, podReady := -1, -1
+	for i, s := range rcStages {
+		switch s.phase {
+		case "agent_started":
+			agent = i
+		case "pod_ready":
+			podReady = i
+		}
+	}
+	if agent < 0 || podReady < 0 {
+		t.Fatal("stage table changed")
+	}
+	for name, tc := range map[string]struct {
+		stage    int
+		authCode string
+		atWait   bool
+		want     string
+	}{
+		"refresh pending at agent start":       {agent, "auth_refresh_pending", false, "auth_refresh_pending"},
+		"global wait wins over the reason":     {agent, "auth_refresh_pending", true, "launch_deadline"},
+		"no auth status keeps the stage code":  {agent, "", false, "agent_start_timeout"},
+		"projection wait keeps the stage code": {agent, "auth_projection_unavailable", false, "agent_start_timeout"},
+		"other stages never take the reason":   {podReady, "auth_refresh_pending", false, "pod_ready_timeout"},
+		"global wait in any stage":             {podReady, "", true, "launch_deadline"},
+	} {
+		if got := rcStageTimeoutCode(tc.stage, tc.authCode, tc.atWait); got != tc.want {
+			t.Errorf("%s: got %q want %q", name, got, tc.want)
+		}
+	}
+}
