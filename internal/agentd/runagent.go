@@ -277,9 +277,10 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 	}
 
 	var werr error
+	var perr error
 	select {
 	case werr = <-waitDone:
-	case perr := <-parseFailed:
+	case perr = <-parseFailed:
 		why := "native Codex protocol refused"
 		if perr != nil {
 			why += ": " + perr.Error()
@@ -306,12 +307,31 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		}
 	}
 	_ = pr.Close()
+	if perr == nil {
+		select {
+		case perr = <-parseFailed:
+		default:
+		}
+	}
 	code := exitCode(cmd, werr)
-	if l.Provider == protocol.AgentCodex && (protocolRefused || !codex.thread || !codex.terminal) {
+	if l.Provider == protocol.AgentCodex && (protocolRefused || perr != nil || !codex.thread || !codex.terminal) {
 		res.Seen, res.IsError, res.Subtype = true, true, "native_protocol_refused"
 		if code == 0 {
 			code = 1
 		}
+		cause := "parser_refused"
+		if perr != nil {
+			if codex.terminal {
+				if errors.Is(perr, errSecondCodexTerminal) || errors.Is(perr, errInvalidCodexCompletion) {
+					cause = "second_terminal"
+				}
+			}
+		} else if !codex.thread {
+			cause = "missing_thread"
+		} else if !codex.terminal {
+			cause = "missing_terminal"
+		}
+		_, _ = fmt.Fprintf(out, "[agentd] native Codex protocol cause: %s\n", cause)
 	}
 	if l.Provider == protocol.AgentCodex && codex.failed && code == 0 {
 		code = 1
