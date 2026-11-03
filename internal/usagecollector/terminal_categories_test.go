@@ -29,7 +29,14 @@ func TestCursorRefusedStandardCategoriesArePrivateAndNeverAct(t *testing.T) {
 		{"builtin_terminal_math_unqualified", []string{"×", "±", "≠"}},
 		{"builtin_terminal_currency_unqualified", []string{"€", "£", "¥"}},
 		{"builtin_terminal_shape_unqualified", []string{"■", "▲", "●", "\u25a0", "\u25b7", "\u25ff"}},
-		{"builtin_terminal_pictograph_unqualified", []string{"⚠", "★", "🔥", "\u2600", "\u27bf", "\U0001f000"}},
+		{"builtin_terminal_number_unqualified", []string{"\u2776", "\u2793", "\U0001f100"}},
+		{"builtin_terminal_math_unqualified", []string{"\u266f", "\U0001f8d0"}},
+		{"builtin_terminal_pictograph_unqualified", []string{"🔥", "\U0001f000", "\U0001f600", "\U0001f9ff"}},
+		{"builtin_terminal_checkmark_unqualified", []string{"\u2714", "\u2715", "\u2717", "\u2718", "\u2705", "\u274c", "\u274e"}},
+		{"builtin_terminal_symbol_unqualified", []string{"\u2b50", "\u231a", "\u2b1b"}},
+		{"builtin_terminal_star_unqualified", []string{"★", "☆", "\u2721", "\u2722", "\u2733", "\u273b", "\u273d", "\u274b"}},
+		{"builtin_terminal_miscsymbol_unqualified", []string{"⚠", "\u2600", "\u2603", "\u26a1", "\u26ff", "\u2604", "\u2607"}},
+		{"builtin_terminal_dingbat_unqualified", []string{"\u2700", "\u2719", "\u271d", "\u274f", "\u2794", "\u27a4", "\u27bf", "\u2712", "\u2720", "\u274d"}},
 		{"builtin_terminal_c1_unqualified", []string{"\u0080", "\u009b", "\u009f"}},
 		{"builtin_terminal_symbol_unqualified", []string{"©", "°", "™"}},
 	} {
@@ -131,5 +138,13 @@ func TestCursorGenericRuneReasonKeepsOnlyUnclassifiedRunes(t *testing.T) {
 		if bytes.Contains(out.Bytes(), []byte(sample)) || bytes.Contains(out.Bytes(), []byte("PRIVATE-SENTINEL")) {
 			t.Fatal("generic reason disclosed input")
 		}
+	}
+}
+
+// U+2713 is accepted before any class label is chosen, so it must never be refused.
+func TestCursorAcceptsTheQualifiedCheckMark(t *testing.T) {
+	p := cursorProtocol{}
+	if _, _, err := p.accept([]byte("\u2713")); err != nil {
+		t.Fatal("qualified check mark refused", err)
 	}
 }
