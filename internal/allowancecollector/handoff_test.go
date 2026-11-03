@@ -340,3 +340,29 @@ func TestPublicApplyRejectsUnqualifiedEvidence(t *testing.T) {
 		t.Fatal("unqualified public apply accepted")
 	}
 }
+
+func TestPrepareRejectsUnqualifiedEvictionWitness(t *testing.T) {
+	for label, change := range map[string]func(*corev1.Pod){
+		"wrong UID":             func(p *corev1.Pod) { p.UID = types.UID(slotUID) },
+		"wrong name":            func(p *corev1.Pod) { p.Name = "other" },
+		"wrong namespace":       func(p *corev1.Pod) { p.Namespace = "other" },
+		"wrong service account": func(p *corev1.Pod) { p.Spec.ServiceAccountName = "other" },
+		"not evicted":           func(p *corev1.Pod) { p.Status.Reason = "Error" },
+		"running":               func(p *corev1.Pod) { p.Status.Phase = corev1.PodRunning },
+		"no resource version":   func(p *corev1.Pod) { p.ResourceVersion = "" },
+		"wrong owner":           func(p *corev1.Pod) { p.OwnerReferences[0].UID = types.UID(slotUID) },
+	} {
+		t.Run(label, func(t *testing.T) {
+			in := handoffFixture(t)
+			var pod corev1.Pod
+			if json.Unmarshal(in.EvictedPod, &pod) != nil {
+				t.Fatal("fixture")
+			}
+			change(&pod)
+			in.EvictedPod, _ = json.Marshal(pod)
+			if _, err := PrepareHandoff(in); err == nil {
+				t.Fatal("accepted invalid eviction witness")
+			}
+		})
+	}
+}
