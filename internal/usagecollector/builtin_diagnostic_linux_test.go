@@ -189,7 +189,8 @@ func TestScheduledFailureBranchesHaveClosedSubreasons(t *testing.T) {
 		{"mode", "\x1b[?9999hPRIVATE-SENTINEL", "builtin_terminal_mode_unqualified"},
 		{"params", "\x1b[99999APRIVATE-SENTINEL", "builtin_terminal_params_unqualified"},
 		{"operation", "\x1b[1XPRIVATE-SENTINEL", "builtin_terminal_operation_unqualified"},
-		{"rune", "☃PRIVATE-SENTINEL", "builtin_terminal_rune_unqualified"},
+		{"rune", "☃PRIVATE-SENTINEL", "builtin_terminal_pictograph_unqualified"},
+		{"rune-private-use", "\ue000PRIVATE-SENTINEL", "builtin_terminal_rune_unqualified"},
 		{"control", "\x00PRIVATE-SENTINEL", "builtin_terminal_control_unqualified"},
 		{"bounds", strings.Repeat("x", 181) + "PRIVATE-SENTINEL", "builtin_terminal_bounds_unqualified"},
 	} {
@@ -275,13 +276,13 @@ func TestCursorDotSetMembershipIsIndistinguishableAndStillRefused(t *testing.T) 
 }
 
 func TestCursorDotSetDiagnosticKeepsUnknownAndFragmentFences(t *testing.T) {
-	for _, text := range []string{"⠁", "☃", "界", "😀"} {
+	for text, reason := range map[string]string{"⠁": "builtin_terminal_symbol_unqualified", "☃": "builtin_terminal_pictograph_unqualified", "界": "builtin_terminal_letter_unqualified", "😀": "builtin_terminal_pictograph_unqualified", "\ue000": "builtin_terminal_rune_unqualified"} {
 		p := cursorProtocol{}
 		input, report, err := p.accept([]byte(text))
 		if input != "" || report != nil {
 			t.Fatal("other rune authorized input/capture")
 		}
-		requireBuiltinReason(t, "cursor", err, "builtin_terminal_rune_unqualified")
+		requireBuiltinReason(t, "cursor", err, reason)
 	}
 	for _, text := range []string{"\x00", "\x7f", "\x07"} {
 		p := cursorProtocol{}
