@@ -475,6 +475,12 @@ func (c *Collection) accept(slot *collectionSlot, obs Observation, started, fini
 		c.record(slot, started, finished, AttemptError, AvailabilityUnavailable, codeAcquisitionRejected)
 		return true
 	}
+	// A valid empty SDK envelope describes an unavailable attempt, not a new
+	// last report. Keep the original bound observation and its receipt intact.
+	if !blocked && emptyClaudeQuota(obs) && slot.hold != nil && slot.hold.accepted && !emptyClaudeQuota(slot.hold.obs) {
+		c.record(slot, started, finished, AttemptSuccess, AvailabilityUnavailable, "")
+		return false
+	}
 	cloned, ok := cloneObservationValue(obs, c.bounds.Parse)
 	if !ok {
 		c.record(slot, started, finished, AttemptError, AvailabilityUnavailable, codeAcquisitionRejected)
@@ -590,7 +596,7 @@ func (c collectionView) itemFor(slot *collectionSlot, servedAt time.Time) ReadIt
 		currents = nil
 	}
 	validation := ValidationRecord{State: validationFor(assessment, slot.hold.accepted), ValidationRefs: validationRefs(obs)}
-	return ReadItem{
+	item := ReadItem{
 		CollectionFreshness: captureCollectionFreshness(obs, slot.hold.receivedAt, c.bounds.MaxAge, servedAt),
 		Observation:         obs,
 		ReceivedAt:          slot.hold.receivedAt,
@@ -599,6 +605,14 @@ func (c collectionView) itemFor(slot *collectionSlot, servedAt time.Time) ReadIt
 		Freshness:           fresh,
 		CurrentMeasures:     currents,
 	}
+	if slot.spec.Provider == "anthropic" && slot.spec.SourceVersion == ClaudeSDKSourceVersion && slot.attempt != nil && slot.attempt.result == AttemptSuccess && slot.attempt.availability == AvailabilityUnavailable {
+		cachedWithholdCurrent(&item)
+	}
+	return item
+}
+
+func emptyClaudeQuota(obs Observation) bool {
+	return obs.Provider == "anthropic" && obs.Source.Version == ClaudeSDKSourceVersion && obs.Availability == AvailabilityUnavailable && len(obs.Measures) == 0
 }
 
 func (c collectionView) statusFor(slot *collectionSlot, served string, servedAt time.Time) SourceStatus {
@@ -640,7 +654,7 @@ func (c collectionView) statusFor(slot *collectionSlot, served string, servedAt 
 		status.Availability = AvailabilityConflict
 		status.Validation.State = ValidationConflict
 	}
-	if slot.hold.accepted {
+	if slot.hold.accepted && !emptyClaudeQuota(slot.hold.obs) {
 		status.LastGood = &LastGood{
 			ObservationID:      slot.hold.obs.ObservationID,
 			CapturedAt:         slot.hold.obs.CapturedAt,

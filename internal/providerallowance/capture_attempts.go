@@ -29,6 +29,19 @@ func AssembleCaptureAttempts(raw []byte, trust AggregateTrust, attempts []Captur
 	if err != nil {
 		return fail()
 	}
+	// Assembly may retain an older usable observation when the newest envelope
+	// is empty. Check successful attempt chronology against the actual latest
+	// supplied capture, never against that retained historical receipt.
+	var supplied struct {
+		Captures []captureEntry `json:"captures"`
+	}
+	if json.Unmarshal(raw, &supplied) != nil {
+		return fail()
+	}
+	latest := map[string]captureEntry{}
+	for _, capture := range supplied.Captures {
+		latest[capture.Provider] = capture
+	}
 	seen := map[string]bool{}
 	for _, attempt := range attempts {
 		if seen[attempt.Provider] || attempt.StartedAt.IsZero() || attempt.CompletedAt.Before(attempt.StartedAt) || attempt.CompletedAt.After(now) || attempt.CompletedAt.Sub(attempt.StartedAt) > 2*time.Minute {
@@ -54,8 +67,9 @@ func AssembleCaptureAttempts(raw []byte, trust AggregateTrust, attempts []Captur
 			if held == nil {
 				return fail()
 			}
-			received, e := time.Parse(time.RFC3339Nano, held.ReceivedAt)
-			if e != nil || received.Before(attempt.StartedAt) || received.After(attempt.CompletedAt) {
+			capture, ok := latest[attempt.Provider]
+			received, e := time.Parse(time.RFC3339Nano, capture.ReceivedAt)
+			if !ok || capture.ProducerRef != attempt.ProducerRef || capture.ProducerIncarnation != attempt.ProducerIncarnation || e != nil || received.Before(attempt.StartedAt) || received.After(attempt.CompletedAt) {
 				return fail()
 			}
 		}
@@ -68,13 +82,14 @@ func AssembleCaptureAttempts(raw []byte, trust AggregateTrust, attempts []Captur
 		if status == nil {
 			return fail()
 		}
+		availability := status.Availability
 		status.ProducerRef = attempt.ProducerRef
 		started, completed := attempt.StartedAt.UTC().Format(time.RFC3339Nano), attempt.CompletedAt.UTC().Format(time.RFC3339Nano)
 		status.LastAttempt = LastAttempt{AttemptedAt: started, CompletedAt: &completed, Result: AttemptError, Code: codePtr(codeAcquisitionUnavailable)}
 		status.Availability = AvailabilityUnavailable
 		if attempt.Success {
 			status.LastAttempt.Result, status.LastAttempt.Code = AttemptSuccess, nil
-			status.Availability = held.Observation.Availability
+			status.Availability = availability
 		}
 	}
 	doc.SnapshotRevision = collectionRevision(doc.Items, doc.SourceStatuses)

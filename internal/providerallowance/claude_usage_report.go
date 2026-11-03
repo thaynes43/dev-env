@@ -172,7 +172,7 @@ func projectClaudeUsageCapture(raw []byte, captured string) (Observation, error)
 	var rows []json.RawMessage
 	_ = json.Unmarshal(root["limits"], &rows)
 	obs := Observation{Schema: SchemaObservation, Provider: "anthropic", CapturedAt: captured, Source: Source{Kind: SourceNativeRPC, Version: ClaudeSDKSourceVersion, CapabilityRef: "claude-sdk:usage-report"}, Scope: Scope{Products: []string{"claude"}, BindingState: BindingUnknown}, Availability: AvailabilityPartial, Completeness: CompletenessPartial, DirectFields: []DirectField{}, Measures: []Measure{}, Derivations: []Derivation{}, EvidenceRefs: []string{}}
-	if report.Limits == nil {
+	if len(report.Limits) == 0 {
 		obs.Availability = AvailabilityUnavailable
 		return obs, nil
 	}
