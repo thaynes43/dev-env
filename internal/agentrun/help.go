@@ -162,8 +162,23 @@ less than 3 minutes ago, because the keeper's next generation is probably still
 on its way; or NeedsLogin when the access has expired for longer and the keeper
 has published nothing newer, or the login itself has lapsed), the generation, when the
 access expires and how long is left, and, for Codex, the keeper's last refresh.
-A login the pod does not follow prints NotConfigured. For Claude it also prints
-when the whole login lapses (about 30 days after each sign-in) and the days left,
+A login the pod does not follow prints NotConfigured. For Claude, a Ready row
+becomes Rejected (exit 1) when this pod's agentd saw the provider refuse the
+generation shown, before its access expiry: the marker is
+~/.agentd/claude-rejected.json (generation and time only, no token). Rejected
+means the keeper's next generation is pending and no sign-in is needed unless it
+stays unpublished; ten minutes on, the reason says to check the keeper. Age never
+turns it back into Ready: a newer generation, or an assistant turn that carries a
+real model response after the refusal, clears it, and an expired access token
+shows as NeedsLogin as always. A newer generation is not shown as proven healthy,
+only as not yet observed. A marker that exists but cannot be read or believed
+makes the row Unknown (exit 2, "cannot tell"), never Ready.
+
+Exit 1 on a Rejected row does not mean "renew the login": a newer generation can
+still arrive and the reason says no sign-in is needed. A script that treats exit 1
+as "renew" should read the state first.
+
+For Claude it also prints when the whole login lapses (about 30 days after each sign-in) and the days left,
 from the non-secret login.json the keeper publishes beside the projection. A
 login whose date the keeper did not publish prints "login lapses Unknown"; the
 date is never guessed. Codex's login has no known lapse date.
@@ -171,6 +186,7 @@ date is never guessed. Codex's login has no known lapse date.
 Flags:
   --warn <duration>    report exit 1 when access ends within this window (default 30m)
   --claude-file <path> read this file instead of AGENTD_CLAUDE_LIVE_FILE
+  --rejected-file <path> read the rejection marker here instead of $HOME/.agentd/claude-rejected.json
   --codex-file <path>  read this file instead of AGENTD_CODEX_ACCESS_FILE (or, when that
                        is unset, /opt/dev-env/codex-access/access.json if it exists)
   -o json              print the rows as JSON

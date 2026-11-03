@@ -135,7 +135,7 @@ start, while inventory must pass before any conversation mutation. `Running`,
 | `pod_scheduled` | Current session-owned Pod UID, `PodScheduled=True` and node binding | Pod condition transition time plus API observation time; add transport to the RC receipt |
 | `pod_ready` | Same Pod UID, `PodReady=True`, current generation | Pod transition time plus observation time; current session condition view omits timing |
 | `agent_started` | Fresh current-boot launch/process evidence, conversation ID for Claude or live daemon identity for Codex | Agentd start time/boot ID plus observation; carry existing start evidence through the API |
-| `provider_auth_ok` | Provider accepted the RC connection under the intended account; local access validation is separately `credential_ready` evidence | Registration/connection observation, never credential contents; expiry checks alone are insufficient. Inference entitlement/served model remain separate |
+| `provider_auth_ok` | (The shipped phase stays unknown. Its reason names a refused or unverifiable keeper login when agentd reports one: `login_rejected_pending`, `login_rejection_unverifiable`.) Provider accepted the RC connection under the intended account; local access validation is separately `credential_ready` evidence | Registration/connection observation, never credential contents; expiry checks alone are insufficient. Inference entitlement/served model remain separate |
 | `rc_ready` | Claude current-process bridge registration plus a supported current provider/client connection witness; Codex current-daemon remote connection plus supported client/host readiness evidence | Provider event time when supplied, otherwise first fresh observation; the current Claude collector lacks a connection witness and registration timestamp |
 | `link_available` | Validated provider link for the new conversation, bound to the intended host/project/thread | First availability observation separately from CLI delivery time; Codex thread links are not currently supplied by this repo |
 | `pairing_required` | Supported client says the selected host needs pairing; otherwise report pairing knowledge `unknown` | Time the action was detected. `required` is an actionable stop, never successful pairing; `pair-code-issued` does not satisfy it |
@@ -639,7 +639,7 @@ Add internal/agentrun/rc.go with:
   - project_inventory_ok: the response echoes the accepted repo and base; a 422 on the project is project_unavailable;
   - pod_scheduled and pod_ready: from the view's conditions;
   - agent_started: agent running with a non-empty conversationId;
-  - provider_auth_ok: always unknown, reason provider_readiness_unavailable;
+  - provider_auth_ok: always unknown, reason provider_readiness_unavailable, or login_rejected_pending / login_rejection_unverifiable while the agent message starts with `login-rejected:` / `login-unverified:` (agentd's rejected-login marker, verification/keeper-consumer-rejected-lease-2026-11-03.md). Reason text only: no new gate, outcome, exit or error code;
   - rc_ready: unknown, plus rcRegistered true when the RC state is registered;
   - link_available: the URL matches apiv1.PortalRemoteControlURLPattern;
   - pairing_required: not_applicable;

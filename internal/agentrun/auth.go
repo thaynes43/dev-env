@@ -85,10 +85,11 @@ type authReport struct {
 
 func (a *app) auth(_ context.Context, args []string) error {
 	cmd := newCommand("auth", outputJSON)
-	var claudeFile, codexFile string
+	var claudeFile, codexFile, rejectedFile string
 	warn := authDefaultWarning
 	cmd.fs.StringVar(&claudeFile, "claude-file", "", "")
 	cmd.fs.StringVar(&codexFile, "codex-file", "", "")
+	cmd.fs.StringVar(&rejectedFile, "rejected-file", "", "")
 	cmd.fs.DurationVar(&warn, "warn", authDefaultWarning, "")
 	pos, err := cmd.parse(a, args)
 	if err != nil {
@@ -119,6 +120,12 @@ func (a *app) auth(_ context.Context, args []string) error {
 	// Only Claude's keeper login has a known lapse date; Codex's refresh token
 	// carries none, so it stays Unknown.
 	addLoginLapse(&rows[0], claudeFile, now)
+	if rejectedFile == "" {
+		if home := a.env.Getenv("HOME"); home != "" {
+			rejectedFile = filepath.Join(home, ".agentd", authRejectedFile)
+		}
+	}
+	applyRejection(&rows[0], rejectedFile, now)
 	rows[1].LoginLapse = authUnknown
 	code := authExitCode(rows)
 	if cmd.c.output == outputJSON {

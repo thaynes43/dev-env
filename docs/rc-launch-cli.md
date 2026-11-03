@@ -45,7 +45,7 @@ recover a previous invocation's timing or handoff receipt.
 | `pod_scheduled` | Session conditions: PodScheduled true, PodReady true, or a node-bound PodReady false condition reporting Starting/container startup; 60s |
 | `pod_ready` | PodReady condition true; 120s after `api_accepted`, including scheduling time |
 | `agent_started` | Agent running with nonempty conversation ID; 90s |
-| `provider_auth_ok` | Always unknown: `provider_readiness_unavailable` |
+| `provider_auth_ok` | Always unknown. Reason `provider_readiness_unavailable`, or, while the session's agent message starts with `login-rejected:` or `login-unverified:` (agentd saw the provider refuse the applied keeper generation, or cannot tell), `login_rejected_pending` or `login_rejection_unverifiable`. Information only: no gate, no new outcome, exit code or error code; the one handoff attempt is unchanged |
 | `rc_ready` | Always unknown: `provider_readiness_unavailable`; `rcRegistered` separately records registration; 90s |
 | `link_available` | URL matches the existing portal Remote Control URL pattern; 10s after registration |
 | `pairing_required` | Not applicable for Claude |

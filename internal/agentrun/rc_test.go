@@ -761,3 +761,33 @@ func TestRCStageTimeoutCodeUsesTheLastObservedRefreshStatus(t *testing.T) {
 		}
 	}
 }
+
+// A refused login is shown in the provider_auth_ok phase only. rc keeps its
+// outcome, exit code and one-shot handoff exactly as without the message: the
+// text is information, never a new gate.
+func TestRCRejectedLoginIsAPhaseReasonOnly(t *testing.T) {
+	for name, c := range map[string][2]string{
+		"pending":     {"login-rejected: the provider refused keeper generation 3 1m0s ago; waiting for the keeper's next generation; no login is run in this pod", "login_rejected_pending"},
+		"late":        {"login-rejected: the provider refused keeper generation 3 11m0s ago and no newer generation has arrived; check the keeper; no login is run in this pod", "login_rejected_pending"},
+		"cannot tell": {"login-unverified: this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the keeper's login; no login is run in this pod", "login_rejection_unverifiable"},
+	} {
+		msg, reason := c[0], c[1]
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+				v := rcView(5)
+				v.AgentStatus = &apiv1.AgentStatus{State: "running", ConversationID: "c1", Message: msg}
+				return v
+			}, http.StatusAccepted)
+			h.mustRun(ExitOK, rcArgs(h)...)
+			r := rcResult(t, h)
+			ph := r.Phases["provider_auth_ok"]
+			if ph.State != "unknown" || ph.Reason != reason || ph.EvidenceSource != "session_agent_status" {
+				t.Errorf("provider_auth_ok = %+v", ph)
+			}
+			if r.Outcome != "link_available" || r.Error != nil || rcCountMessages(h) != 1 {
+				t.Errorf("rc changed course: outcome %q error %v messages %d", r.Outcome, r.Error, rcCountMessages(h))
+			}
+		})
+	}
+}

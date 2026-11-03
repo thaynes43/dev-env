@@ -542,7 +542,14 @@ nobody signs in per session.
 - **Check.** In any v2 session, `agent-run auth status` shows each login's
   state (Ready, Refreshing for up to 3 minutes after the access token expired while the keeper's next generation is pending, or NeedsLogin), its generation and the time left on the current
   access token. Exit 0 is fine, 1 is expiring or expired, 2 means it cannot
-  tell. Proven from a session. Since 2.39.0 it also shows when the Claude login
+  tell. A third state, **Rejected** (exit 1, Claude only), means this pod saw
+  the provider refuse the generation it holds before that token expired. It is
+  NOT "renew the login": the keeper's next generation is on its way and no
+  sign-in is needed while one can still arrive, so a script that treats exit 1
+  as "renew" will misfire. The Reason says so, and after ten minutes says to
+  check the keeper. Age alone never turns it back into Ready. If the pod's
+  rejection record is unreadable or inconsistent the row is **Unknown** (exit 2).
+  A newer generation is shown as Ready only in the sense "no rejection seen". Proven from a session. Since 2.39.0 it also shows when the Claude login
   lapses (see "Lapse date and notices" below).
 - **Refresh is automatic.** The keeper renews the Claude access token at about
   two thirds of its 8-hour life. Proven at 00:29 on 2026-10-20: generation 2

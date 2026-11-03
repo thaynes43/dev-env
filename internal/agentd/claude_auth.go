@@ -228,6 +228,9 @@ func projectionLoginStatus(s Settings, now time.Time) string {
 	if data, err := readClaudeCredentials(s); err == nil && claudeauth.HoldsRefreshToken(data) {
 		return ErrClaudeLoginConflict.Error()
 	}
+	if text := rejectionStatusText(s, now); text != "" {
+		return text
+	}
 	if c := checkProjectedLogin(s); c.Usable(now) {
 		return "logged in on the keeper's projection, access token lapses " + c.Expires.Format(time.RFC3339)
 	} else if c.Present && !c.Expires.IsZero() && !projectedLoginLapsed(s, now) {
