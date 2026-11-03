@@ -22,16 +22,25 @@ func privateHash(prefix, value string) (string, error) {
 // Normal supported metadata commands may expose additional fields. Only these
 // positive identity fields survive; provider messages and raw identities do not.
 func cursorMetadata(raw []byte) (accountMetadata, error) {
-	if !providerallowance.ValidJSONDocument(raw, 16<<10) || !providerallowance.CanonicalFieldNames(raw, "cliVersion", "subscriptionTier", "userEmail") {
-		return accountMetadata{}, ErrCapture
+	if !providerallowance.ValidJSONDocument(raw, 16<<10) {
+		return accountMetadata{}, refused("metadata_not_json", ErrCapture)
+	}
+	if !providerallowance.CanonicalFieldNames(raw, "cliVersion", "subscriptionTier", "userEmail") {
+		return accountMetadata{}, refused("metadata_unqualified", ErrCapture)
 	}
 	var value struct {
 		Version string `json:"cliVersion"`
 		Plan    string `json:"subscriptionTier"`
 		Email   string `json:"userEmail"`
 	}
-	if json.Unmarshal(raw, &value) != nil || value.Version != providerallowance.CursorCLIQualifiedVersion || !token.MatchString(strings.ToLower(value.Plan)) || !strings.Contains(value.Email, "@") {
-		return accountMetadata{}, ErrCapture
+	if json.Unmarshal(raw, &value) != nil {
+		return accountMetadata{}, refused("metadata_unqualified", ErrCapture)
+	}
+	if value.Version != providerallowance.CursorCLIQualifiedVersion {
+		return accountMetadata{}, unqualifiedVersion(value.Version)
+	}
+	if !token.MatchString(strings.ToLower(value.Plan)) || !strings.Contains(value.Email, "@") {
+		return accountMetadata{}, refused("metadata_unqualified", ErrCapture)
 	}
 	ref, err := privateHash("cursor-email-sha256:", value.Email)
 	if err != nil {
@@ -41,19 +50,28 @@ func cursorMetadata(raw []byte) (accountMetadata, error) {
 }
 
 func claudeMetadata(raw []byte) (accountMetadata, error) {
-	if !providerallowance.ValidJSONDocument(raw, 16<<10) || !providerallowance.CanonicalFieldNames(raw, "loggedIn", "authMethod", "apiProvider", "subscriptionType", "email", "orgId") {
-		return accountMetadata{}, ErrCapture
+	if !providerallowance.ValidJSONDocument(raw, 16<<10) {
+		return accountMetadata{}, refused("metadata_not_json", ErrCapture)
+	}
+	if !providerallowance.CanonicalFieldNames(raw, "loggedIn", "authMethod", "apiProvider", "subscriptionType", "email", "orgId") {
+		return accountMetadata{}, refused("metadata_unqualified", ErrCapture)
 	}
 	var value struct {
-		LoggedIn     bool   `json:"loggedIn"`
+		LoggedIn     *bool  `json:"loggedIn"`
 		AuthMethod   string `json:"authMethod"`
 		APIProvider  string `json:"apiProvider"`
 		Subscription string `json:"subscriptionType"`
 		Email        string `json:"email"`
 		OrgID        string `json:"orgId"`
 	}
-	if json.Unmarshal(raw, &value) != nil || !value.LoggedIn || value.AuthMethod != "claude.ai" || value.APIProvider != "firstParty" || value.Subscription != "max" || !strings.Contains(value.Email, "@") {
-		return accountMetadata{}, ErrCapture
+	if json.Unmarshal(raw, &value) != nil || value.LoggedIn == nil {
+		return accountMetadata{}, refused("metadata_unqualified", ErrCapture)
+	}
+	if !*value.LoggedIn {
+		return accountMetadata{}, refused("not_logged_in", ErrCapture)
+	}
+	if value.AuthMethod != "claude.ai" || value.APIProvider != "firstParty" || value.Subscription != "max" || !strings.Contains(value.Email, "@") {
+		return accountMetadata{}, refused("metadata_unqualified", ErrCapture)
 	}
 	ref, err := privateHash("anthropic-email-sha256:", value.Email)
 	if err != nil {

@@ -33,6 +33,26 @@ There is no persistent quota-reader process or untracked installed provider.
 The helper creates and removes only its own fresh empty Cursor workspace and PTY.
 Raw terminal/SDK output and credentials never enter logs or stored reports.
 
+The scheduled helper's stderr is a separate best-effort diagnostic channel,
+not a receipt, journal or provider-output channel. At most three newline-terminated
+JSON frames use schema `dev-env.allowance-diagnostic.v1`, with exact keys `schema`,
+`provider`, `stage`, `reason`, `clientVersion`. Providers, stages and reasons are
+closed enums enforced by `DecodeAcquisitionDiagnostics`; only a strictly shaped
+public version may accompany `version_unqualified`. Raw vendor stderr and error
+strings remain discarded. Unknown keys/codes, malformed or incomplete frames,
+extra lines or more than 2048 bytes discard the entire diagnostic channel without
+logging its bytes. Overflow is consumed and discarded, preserving the existing
+machine-output/transport result. The internal command adds no plain-text error
+line on failure. A nonzero exit still refuses acquisition; a decoded diagnostic
+cannot clear cleanup uncertainty or promote a failed capture.
+
+The operator logs only validated diagnostic fields and the existing cycle number.
+There is no additional vendor invocation, retry or durable state. Older operators
+discard the side channel; older helpers may emit no frames (or their old generic
+error line, which newer operators discard). Stdout request/receipt and durable
+journal schemas remain unchanged. This source-compatible diagnostic change grants
+no version enrollment, account qualification, login, permission or runtime window.
+
 An operator restart resumes the next scheduled acquisition from durable state;
 it does not resume a provider/native task. An ambiguous outstanding operation is
 never replayed based on elapsed time. A status-only check under the same private

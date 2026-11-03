@@ -91,6 +91,11 @@ acknowledgement refuses before launch. This declaration is not credential-file
 inspection or proof of the projection. No second refresh-token owner is allowed.
 An emitted refresh request is a failure, never permission to service it.
 
+Discarded stderr above refers to the vendor child. The separate operator-owned
+scheduled helper may emit only the bounded closed-code diagnostics specified in
+DESIGN-053. Vendor output and error strings are never forwarded into that channel;
+the explicit finite collector command's stdout contract is unchanged.
+
 The sanitized `codex.app-server.account-capture.v1` preserves both nullable windows,
 local received time, personal plan and a provider-email SHA-256 reference. Raw
 identity and credits/upsell content are discarded. Independently selected

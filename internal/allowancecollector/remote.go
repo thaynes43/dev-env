@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"sync"
 
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
 	"github.com/thaynes43/dev-env/internal/usagecollector"
 )
 
@@ -83,7 +85,13 @@ func (p *podRemote) Run(ctx context.Context, host Host, request usagecollector.R
 		return nil, ErrCollector
 	}
 	out := &boundedBuffer{max: usagecollector.RemoteMaxBytes}
-	err = p.exec.Run(ctx, Namespace, host.Name, "agent", []string{"/usr/bin/python3", "-c", bootstrap, strconv.Itoa(len(p.binary)), p.sha}, io.MultiReader(bytes.NewReader(p.binary), bytes.NewReader(raw)), out, io.Discard)
+	diagnostics := &boundedBuffer{max: usagecollector.DiagnosticMaxBytes, discardOverflow: true}
+	err = p.exec.Run(ctx, Namespace, host.Name, "agent", []string{"/usr/bin/python3", "-c", bootstrap, strconv.Itoa(len(p.binary)), p.sha}, io.MultiReader(bytes.NewReader(p.binary), bytes.NewReader(raw)), out, diagnostics)
+	if !diagnostics.failed {
+		for _, d := range usagecollector.DecodeAcquisitionDiagnostics(diagnostics.Bytes()) {
+			log.FromContext(ctx).Info("allowance acquisition diagnostic", "cycle", request.Cycle, "provider", d.Provider, "stage", d.Stage, "reason", d.Reason, "clientVersion", d.ClientVersion)
+		}
+	}
 	if err != nil || out.failed {
 		return nil, ErrCollector
 	}
@@ -92,17 +100,27 @@ func (p *podRemote) Run(ctx context.Context, host Host, request usagecollector.R
 
 type boundedBuffer struct {
 	sync.Mutex
-	bytes.Buffer
-	max    int
-	failed bool
+	buffer          bytes.Buffer
+	max             int
+	failed          bool
+	discardOverflow bool
 }
 
 func (b *boundedBuffer) Write(raw []byte) (int, error) {
 	b.Lock()
 	defer b.Unlock()
-	if len(raw) > b.max-b.Len() {
+	if b.failed || len(raw) > b.max-b.buffer.Len() {
 		b.failed = true
+		if b.discardOverflow {
+			return len(raw), nil
+		}
 		return 0, ErrCollector
 	}
-	return b.Buffer.Write(raw)
+	return b.buffer.Write(raw)
+}
+
+func (b *boundedBuffer) Bytes() []byte {
+	b.Lock()
+	defer b.Unlock()
+	return append([]byte(nil), b.buffer.Bytes()...)
 }

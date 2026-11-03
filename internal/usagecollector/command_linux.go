@@ -4,6 +4,7 @@ package usagecollector
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -37,11 +38,11 @@ func runMetadata(ctx context.Context, executable string, args []string, claude b
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, ErrCapture
+		return nil, refused("command_start_failed", ErrCapture)
 	}
 	if cmd.Start() != nil {
 		_ = out.Close()
-		return nil, ErrCapture
+		return nil, refused("command_start_failed", ErrCapture)
 	}
 	finished, watcher := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -54,8 +55,9 @@ func runMetadata(ctx context.Context, executable string, args []string, claude b
 	}()
 	raw, err = io.ReadAll(io.LimitReader(out, (16<<10)+1))
 	_ = out.Close()
+	var waitErr error
 	if err == nil && len(raw) <= 16<<10 && ctx.Err() == nil {
-		err = waitOwnedExit(ctx, cmd)
+		waitErr = waitOwnedExit(ctx, cmd)
 	}
 	// Kill before Wait: retain the zombie leader's group identity until every
 	// descendant has received termination, then reap the direct child.
@@ -65,8 +67,20 @@ func runMetadata(ctx context.Context, executable string, args []string, claude b
 	if !clean {
 		return nil, ErrCleanup
 	}
-	if err != nil || len(raw) > 16<<10 || ctx.Err() != nil || !cmd.ProcessState.Success() {
-		return nil, ErrCapture
+	switch {
+	case ctx.Err() != nil:
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, refused("cancelled", ErrCapture)
+		}
+		return nil, refused("deadline", ErrCapture)
+	case len(raw) > 16<<10:
+		return nil, refused("command_output_oversized", ErrCapture)
+	case err != nil:
+		return nil, refused("command_read_failed", ErrCapture)
+	case waitErr != nil:
+		return nil, refused("command_wait_failed", ErrCapture)
+	case !cmd.ProcessState.Success():
+		return nil, refused("command_failed", ErrCapture)
 	}
 	return raw, nil
 }
