@@ -2,6 +2,7 @@ package usagecollector
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -37,6 +38,20 @@ func (e *diagnosticError) Unwrap() error { return e.cause }
 
 func refused(reason string, cause error) error {
 	return &diagnosticError{reason: reason, cause: cause}
+}
+
+// A cancelled command closes its pipes too. Observe the context before calling
+// that a terminal or stream fault; cleanup uncertainty is handled separately.
+func refusedWithContext(ctx context.Context, reason string) error {
+	if ctx != nil {
+		switch {
+		case errors.Is(ctx.Err(), context.Canceled):
+			reason = "cancelled"
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			reason = "deadline"
+		}
+	}
+	return refused(reason, ErrCapture)
 }
 
 func unqualifiedVersion(version string) error {

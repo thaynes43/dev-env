@@ -51,3 +51,14 @@ previously accepted zero breakdown stays accepted; unqualified object-valued
 top-level token fields stay refused. This closes a source safety gap, not a
 known live failure. Current API documentation alone does not qualify additional
 objects for the pinned CLI result protocol.
+
+## Context failures and diagnostic priority
+
+The available advisory review identified that cancellation closes the Cursor
+terminal too, so a terminal/read error could be labelled as the cause of a real
+timeout. Owned idle-process tests reproduced deadline and explicit cancellation
+misclassification for both Cursor and Claude (RED 0.105s each). Context failure
+now takes priority over terminal/stream diagnostics, using the existing closed
+`deadline` and `cancelled` codes. Cleanup uncertainty still takes priority over
+both. The focused process regressions passed in 0.206s. No timeout or process
+cleanup mechanism changed.

@@ -29,7 +29,7 @@ type CursorOptions struct {
 // for binding, rather than copying caller assertions into provider evidence.
 func CollectCursor(ctx context.Context, options CursorOptions, now func() time.Time) (capture providerallowance.CursorCLIUsageCapture, captureErr error) {
 	fail := func() (providerallowance.CursorCLIUsageCapture, error) {
-		return providerallowance.CursorCLIUsageCapture{}, ErrCapture
+		return providerallowance.CursorCLIUsageCapture{}, refusedWithContext(ctx, "capture_refused")
 	}
 	if ctx == nil || ctx.Err() != nil || now == nil || !filepath.IsAbs(options.Executable) || !filepath.IsAbs(options.Workspace) || filepath.Clean(options.Workspace) != options.Workspace {
 		return fail()
@@ -50,7 +50,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 	defer cancel()
 	master, slave, err := cursorPTY()
 	if err != nil {
-		return capture, refused("builtin_terminal_unavailable", ErrCapture)
+		return capture, refusedWithContext(ctx, "builtin_terminal_unavailable")
 	}
 	defer func() { _ = master.Close() }()
 	defer func() { _ = slave.Close() }()
@@ -67,7 +67,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 	}
 	started := now()
 	if started.IsZero() || cmd.Start() != nil {
-		return capture, refused("command_start_failed", ErrCapture)
+		return capture, refusedWithContext(ctx, "command_start_failed")
 	}
 	_ = slave.Close()
 	masterFD := int32(master.Fd())
@@ -92,7 +92,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 		fds := []unix.PollFd{{Fd: masterFD, Events: unix.POLLIN}}
 		ready, pollErr := unix.Poll(fds, 100)
 		if pollErr != nil || ctx.Err() != nil {
-			return capture, refused("builtin_terminal_unavailable", ErrCapture)
+			return capture, refusedWithContext(ctx, "builtin_terminal_unavailable")
 		}
 		var input string
 		var report *providerallowance.CursorCLIUsageCapture
@@ -105,19 +105,19 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 				input, report, protocolErr = protocol.accept(buffer[:n])
 			}
 			if readErr != nil {
-				return capture, refused("builtin_stream_failed", ErrCapture)
+				return capture, refusedWithContext(ctx, "builtin_stream_failed")
 			}
-		}
-		if protocolErr != nil {
-			return capture, protocolErr
 		}
 		if ctx.Err() != nil {
 			return fail()
 		}
+		if protocolErr != nil {
+			return capture, protocolErr
+		}
 		if input != "" {
 			written, e := master.WriteString(input)
 			if e != nil || written != len(input) {
-				return capture, refused("builtin_write_failed", ErrCapture)
+				return capture, refusedWithContext(ctx, "builtin_write_failed")
 			}
 		}
 		if report != nil {
@@ -128,7 +128,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 			report.CollectionStartedAt = started.UTC().Format(time.RFC3339Nano)
 			report.ReceivedAt = received.UTC().Format(time.RFC3339Nano)
 			if _, e := providerallowance.MarshalCursorCLIUsage(*report); e != nil {
-				return capture, refused("builtin_display_unqualified", ErrCapture)
+				return capture, refusedWithContext(ctx, "builtin_display_unqualified")
 			}
 			return *report, nil
 		}

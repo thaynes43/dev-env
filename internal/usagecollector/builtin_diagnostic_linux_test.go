@@ -114,3 +114,45 @@ func TestClaudeBuiltinNestedTokenCountersCannotContradictZeroTotals(t *testing.T
 		t.Fatal("unqualified token-bearing object became accepted")
 	}
 }
+
+func TestCursorBuiltinContextFailureDoesNotBecomeTerminalFault(t *testing.T) {
+	testBuiltinContextFailure(t, "cursor", func(ctx context.Context, executable, workspace string) error {
+		_, err := CollectCursor(ctx, CursorOptions{Executable: executable, Workspace: workspace}, time.Now)
+		return err
+	})
+}
+
+func TestClaudeBuiltinContextFailureDoesNotBecomeStreamFault(t *testing.T) {
+	testBuiltinContextFailure(t, "anthropic", func(ctx context.Context, executable, _ string) error {
+		_, err := collectClaudeBuiltin(ctx, executable, time.Now)
+		return err
+	})
+}
+
+func testBuiltinContextFailure(t *testing.T, provider string, read func(context.Context, string, string) error) {
+	t.Helper()
+	for _, reason := range []string{"deadline", "cancelled"} {
+		t.Run(reason, func(t *testing.T) {
+			dir := t.TempDir()
+			workspace := filepath.Join(dir, "workspace")
+			if err := os.Mkdir(workspace, 0700); err != nil {
+				t.Fatal(err)
+			}
+			executable := filepath.Join(dir, "idle-cursor")
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\nexec /bin/sleep 60\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if reason == "deadline" {
+				ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+			} else {
+				ctx, cancel = context.WithCancel(context.Background())
+				timer := time.AfterFunc(50*time.Millisecond, cancel)
+				defer timer.Stop()
+			}
+			defer cancel()
+			requireBuiltinReason(t, provider, read(ctx, executable, workspace), reason)
+		})
+	}
+}

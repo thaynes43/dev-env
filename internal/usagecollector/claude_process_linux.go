@@ -36,11 +36,11 @@ func collectClaudeBuiltin(ctx context.Context, executable string, now func() tim
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return capture, refused("command_start_failed", ErrCapture)
+		return capture, refusedWithContext(ctx, "command_start_failed")
 	}
 	if cmd.Start() != nil {
 		_ = out.Close()
-		return capture, refused("command_start_failed", ErrCapture)
+		return capture, refusedWithContext(ctx, "command_start_failed")
 	}
 	finished, watcher := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -61,6 +61,8 @@ func collectClaudeBuiltin(ctx context.Context, executable string, now func() tim
 		<-watcher
 		if !clean {
 			capture, retErr = providerallowance.ClaudeUsageCapture{}, ErrCleanup
+		} else if ctx.Err() != nil {
+			capture, retErr = providerallowance.ClaudeUsageCapture{}, refusedWithContext(ctx, "capture_refused")
 		} else if retErr == nil && !cmd.ProcessState.Success() {
 			capture, retErr = providerallowance.ClaudeUsageCapture{}, refused("command_failed", ErrCapture)
 		}
