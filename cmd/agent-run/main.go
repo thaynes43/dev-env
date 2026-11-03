@@ -28,7 +28,8 @@ func main() {
 		hardStop.Stop()
 		stop()
 		if err != nil {
-			_, _ = io.WriteString(os.Stderr, "allowance capture unavailable\n")
+			// Acquisition already emitted any closed diagnostic frames. An
+			// unrelated text line would invalidate that strict side channel.
 			os.Exit(1)
 		}
 		return

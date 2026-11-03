@@ -33,8 +33,17 @@ reach logs and that machine output stays unchanged. One test exposed promoted
 keeps optimized string/copy paths within the same bound. Tests also retain strict
 receipt compatibility and the cleanup stop.
 
-Both `internal/usagecollector` and `internal/allowancecollector` race suites
-passed with two CPUs and one package at a time (2.271s and 2.248s). These are source
+The available advisory review found that the internal command's existing generic
+error line would invalidate closed cleanup diagnostics. A subprocess regression
+failed against that actual command error exit, then passed when the extra line
+was removed. Its supplied closed frame is synthetic; empty stdin refuses before
+provider IO. The existing batch test independently proves cleanup stops later
+providers. Oversized stderr is consumed and discarded, so the diagnostic channel
+cannot introduce a new acquisition failure. DESIGN-052/053 record the contract.
+
+The `cmd/agent-run`, `internal/usagecollector` and `internal/allowancecollector`
+race suites passed with two CPUs and one package at a time (1.064s, 2.257s and
+2.253s). These are source
 and synthetic transport results, not live failure localization or successful
 three-provider recurrence. Publication, reviewed installation and diagnostics
 from a real scheduled cycle remain separate evidence.

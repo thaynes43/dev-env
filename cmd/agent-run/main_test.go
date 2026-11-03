@@ -2,13 +2,40 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/thaynes43/dev-env/internal/agentrun"
+	"github.com/thaynes43/dev-env/internal/usagecollector"
 )
+
+// Exercise the real command's error exit after a closed cleanup diagnostic.
+// Empty stdin refuses before provider IO; the command must not append a plain
+// error line that makes the strict operator decoder discard the whole channel.
+func TestInternalCaptureErrorPreservesClosedStderr(t *testing.T) {
+	const frame = "{\"schema\":\"dev-env.allowance-diagnostic.v1\",\"provider\":\"anthropic\",\"stage\":\"builtin\",\"reason\":\"cleanup_unproven\",\"clientVersion\":\"\"}\n"
+	if os.Getenv("DEV_ENV_TEST_CAPTURE_ERROR") == "1" {
+		_, _ = os.Stderr.WriteString(frame)
+		os.Args = []string{"agent-run", "internal-allowance-capture"}
+		main()
+		os.Exit(0)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestInternalCaptureErrorPreservesClosedStderr$")
+	cmd.Env = append(os.Environ(), "DEV_ENV_TEST_CAPTURE_ERROR=1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err == nil || cmd.ProcessState.ExitCode() != 1 || stdout.Len() != 0 {
+		t.Fatal("internal failure exit changed", err)
+	}
+	if stderr.String() != frame || len(usagecollector.DecodeAcquisitionDiagnostics(stderr.Bytes())) != 1 {
+		t.Fatal("internal error exit corrupted the closed stderr channel")
+	}
+}
 
 // versionLine matches "agent-run <version> (commit <commit>, <go>, <os>/<arch>)".
 var versionLine = regexp.MustCompile(`^agent-run \S+ \(commit \S+, go\S+, [a-z0-9]+/[a-z0-9]+\)\n$`)

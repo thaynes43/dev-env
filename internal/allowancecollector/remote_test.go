@@ -71,7 +71,7 @@ func TestRemoteLogsOnlyClosedDiagnosticsAndKeepsMachineOutput(t *testing.T) {
 		{"private-provider-error\n", false, false},
 		{good + "private-provider-error\n", false, false},
 		{strings.Replace(good, "2.1.312", "private-provider-error", 1), false, false},
-		{strings.Repeat("private-provider-error", usagecollector.DiagnosticMaxBytes), false, true},
+		{strings.Repeat("private-provider-error", usagecollector.DiagnosticMaxBytes), false, false},
 	} {
 		var lines []string
 		logger := funcr.New(func(prefix, args string) { lines = append(lines, prefix+args) }, funcr.Options{})
@@ -103,5 +103,17 @@ func TestRemoteBufferLimitIncludesOptimizedStringAndCopyPaths(t *testing.T) {
 		if err := write(buf); err == nil || !buf.failed || len(buf.Bytes()) > 8 {
 			t.Fatal("optimized IO bypassed remote byte limit")
 		}
+	}
+}
+
+func TestDiagnosticOverflowConsumesLaterWritesWithoutChangingTransport(t *testing.T) {
+	buf := &boundedBuffer{max: 8, discardOverflow: true}
+	for _, raw := range []string{"prefix", "too-long", "later-frame"} {
+		if n, err := io.WriteString(buf, raw); n != len(raw) || err != nil {
+			t.Fatal("optional diagnostics failed transport", n, err)
+		}
+	}
+	if !buf.failed || string(buf.Bytes()) != "prefix" {
+		t.Fatal("overflow was not sticky and bounded")
 	}
 }

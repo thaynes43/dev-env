@@ -85,7 +85,7 @@ func (p *podRemote) Run(ctx context.Context, host Host, request usagecollector.R
 		return nil, ErrCollector
 	}
 	out := &boundedBuffer{max: usagecollector.RemoteMaxBytes}
-	diagnostics := &boundedBuffer{max: usagecollector.DiagnosticMaxBytes}
+	diagnostics := &boundedBuffer{max: usagecollector.DiagnosticMaxBytes, discardOverflow: true}
 	err = p.exec.Run(ctx, Namespace, host.Name, "agent", []string{"/usr/bin/python3", "-c", bootstrap, strconv.Itoa(len(p.binary)), p.sha}, io.MultiReader(bytes.NewReader(p.binary), bytes.NewReader(raw)), out, diagnostics)
 	if !diagnostics.failed {
 		for _, d := range usagecollector.DecodeAcquisitionDiagnostics(diagnostics.Bytes()) {
@@ -100,16 +100,20 @@ func (p *podRemote) Run(ctx context.Context, host Host, request usagecollector.R
 
 type boundedBuffer struct {
 	sync.Mutex
-	buffer bytes.Buffer
-	max    int
-	failed bool
+	buffer          bytes.Buffer
+	max             int
+	failed          bool
+	discardOverflow bool
 }
 
 func (b *boundedBuffer) Write(raw []byte) (int, error) {
 	b.Lock()
 	defer b.Unlock()
-	if len(raw) > b.max-b.buffer.Len() {
+	if b.failed || len(raw) > b.max-b.buffer.Len() {
 		b.failed = true
+		if b.discardOverflow {
+			return len(raw), nil
+		}
 		return 0, ErrCollector
 	}
 	return b.buffer.Write(raw)
