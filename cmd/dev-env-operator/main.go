@@ -185,6 +185,8 @@ type options struct {
 	providerSource                *providerSourceSelection
 	aggregateAllowance            *aggregateAllowanceSelection
 	allowanceCollector            *allowancecollector.Config
+	allowanceHandoff              *allowanceHandoffSelection
+	allowanceHandoffRefused       bool
 }
 
 func parseFlags(args []string) (options, error) {
@@ -307,6 +309,7 @@ func parseFlags(args []string) (options, error) {
 	aggregateAllowanceFile := fs.String("aggregate-allowance-config-file", "", "default-off deployment-owned private aggregate selection file; mutually exclusive with inline config; does not create or authorize a private config mount")
 	collectorEnabled := fs.Bool("enable-operator-allowance-collector", false, "default-off elected-operator recurring supported allowance acquisition; requires independent private configuration and existing selected host; grants no access")
 	collectorFile := fs.String("allowance-collector-config-file", "", "absolute private operator-owned collector configuration; requires explicit enable and aggregate selection")
+	handoffFile := fs.String("allowance-handoff-file", "", "absolute private file with one human-approved allowance handoff request, applied once by the elected operator that already holds the slot write authority; requires the enabled collector; an unreadable or invalid file is refused and logged without stopping the operator")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -314,6 +317,9 @@ func parseFlags(args []string) (options, error) {
 		return o, fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
 	if !*collectorEnabled && *collectorFile != "" || *collectorEnabled && (!o.leaderElect || !aggregateAllowanceEnabled || *aggregateAllowanceFile == "" || *aggregateAllowanceRaw != "" || !filepath.IsAbs(*collectorFile)) {
+		return o, allowancecollector.ErrCollector
+	}
+	if *handoffFile != "" && (!*collectorEnabled || !filepath.IsAbs(*handoffFile)) {
 		return o, allowancecollector.ErrCollector
 	}
 	if o.sessionNamespace == "" || o.templatesNamespace == "" || o.templatesName == "" || o.policyNamespace == "" {
@@ -679,6 +685,10 @@ func parseFlags(args []string) (options, error) {
 	if o.allowanceCollector, err = parseAllowanceCollector(*collectorEnabled, *collectorFile, o.aggregateAllowance, o.leaderElect); err != nil {
 		return o, err
 	}
+	// Optional maintenance must not take the core API down with a bad file.
+	if o.allowanceHandoff, err = parseAllowanceHandoff(*handoffFile, o.allowanceCollector, o.aggregateAllowance); err != nil {
+		o.allowanceHandoff, o.allowanceHandoffRefused = nil, true
+	}
 	if *rescueOwnersFile != "" {
 		f, err := os.OpenFile(*rescueOwnersFile, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 		if err != nil {
@@ -954,6 +964,20 @@ func run(args []string) error {
 			aggregateReports.OperatorProducer = true
 			if err = mgr.Add(&allowancecollector.Runner{Config: o.allowanceCollector, Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Remote: remote}); err != nil {
 				return err
+			}
+			if o.allowanceHandoffRefused {
+				log.Info("allowance handoff file refused; no handoff will be attempted")
+			}
+			if o.allowanceHandoff != nil {
+				// Uncached: the handoff reads the live slot, host and home volume.
+				direct, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+				if err != nil {
+					return err
+				}
+				handoffLog := ctrl.Log.WithName("allowance-handoff")
+				if err = mgr.Add(&allowancecollector.HandoffRunner{Approved: o.allowanceHandoff.approved, Snapshot: o.allowanceHandoff.snapshot, Running: o.allowanceCollector, Trust: o.aggregateAllowance.trust, PublisherUID: string(o.aggregateAllowance.publisherUID), PublisherSA: o.aggregateAllowance.publisherSA, Client: direct, Logf: func(s string) { handoffLog.Info(s) }}); err != nil {
+					return err
+				}
 			}
 		}
 		api := &apiserver.Server{

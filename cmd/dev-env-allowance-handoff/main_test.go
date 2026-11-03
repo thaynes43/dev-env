@@ -257,3 +257,7 @@ func TestCLIQualifiedSyntheticPrepareAndApply(t *testing.T) {
 		t.Fatal("backup bytes differ")
 	}
 }
+
+type snapshot = allowancecollector.HandoffSnapshot
+
+var snapshotKeys = []string{"oldConfig", "newConfig", "trust", "publisherUID", "publisherSA", "slotUID", "resourceVersion", "homeUID", "journal", "report", "evictedPod", "helperSHA256", "journalSHA256", "reportSHA256", "cycle", "nonce"}

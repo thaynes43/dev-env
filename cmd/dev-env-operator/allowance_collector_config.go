@@ -21,19 +21,29 @@ func parseAllowanceCollector(enabled bool, path string, sel *aggregateAllowanceS
 	if sel == nil || !leader || !filepath.IsAbs(path) {
 		return nil, allowancecollector.ErrCollector
 	}
+	raw, err := readOperatorPrivateFile(path, 8<<10)
+	if err != nil {
+		return nil, allowancecollector.ErrCollector
+	}
+	return allowancecollector.ParseConfig(raw, sel.trust, string(sel.publisherUID), sel.publisherSA, time.Now())
+}
+
+// readOperatorPrivateFile reads one bounded regular file that is not readable
+// or writable by others. It never follows a name into a FIFO or device.
+func readOperatorPrivateFile(path string, limit int64) ([]byte, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, allowancecollector.ErrCollector
 	}
-	f := os.NewFile(uintptr(fd), "allowance-collector-config")
+	f := os.NewFile(uintptr(fd), "allowance-private-file")
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0007 != 0 || info.Size() > 8<<10 {
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0007 != 0 || info.Size() > limit {
 		return nil, allowancecollector.ErrCollector
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, (8<<10)+1))
-	if err != nil || len(raw) > 8<<10 {
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(raw)) > limit {
 		return nil, allowancecollector.ErrCollector
 	}
-	return allowancecollector.ParseConfig(raw, sel.trust, string(sel.publisherUID), sel.publisherSA, time.Now())
+	return raw, nil
 }

@@ -3,9 +3,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,7 +14,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,27 +27,6 @@ import (
 )
 
 var errRefused = errors.New("allowance handoff refused")
-
-type snapshot struct {
-	OldConfig       []byte `json:"oldConfig"`
-	NewConfig       []byte `json:"newConfig"`
-	Trust           []byte `json:"trust"`
-	PublisherUID    string `json:"publisherUID"`
-	PublisherSA     string `json:"publisherSA"`
-	SlotUID         string `json:"slotUID"`
-	ResourceVersion string `json:"resourceVersion"`
-	HomeUID         string `json:"homeUID"`
-	Journal         []byte `json:"journal"`
-	Report          []byte `json:"report"`
-	EvictedPod      []byte `json:"evictedPod"`
-	HelperSHA       string `json:"helperSHA256"`
-	JournalSHA      string `json:"journalSHA256"`
-	ReportSHA       string `json:"reportSHA256"`
-	Cycle           int64  `json:"cycle"`
-	Nonce           string `json:"nonce"`
-}
-
-var snapshotKeys = []string{"oldConfig", "newConfig", "trust", "publisherUID", "publisherSA", "slotUID", "resourceVersion", "homeUID", "journal", "report", "evictedPod", "helperSHA256", "journalSHA256", "reportSHA256", "cycle", "nonce"}
 
 type clientFactory func(string, string) (client.Client, error)
 
@@ -81,20 +57,18 @@ func run(args []string, out io.Writer, clock func() time.Time, factory clientFac
 		return errRefused
 	}
 	raw, err := readPrivate(*input, 512<<10)
-	if err != nil || !utf8.Valid(raw) || !providerallowance.ExactObjectKeys(raw, snapshotKeys) {
+	if err != nil {
 		return errRefused
 	}
-	var snap snapshot
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&snap) != nil || dec.Decode(new(any)) != io.EOF {
+	snap, err := allowancecollector.DecodeHandoffSnapshot(raw)
+	if err != nil {
 		return errRefused
 	}
 	trust, err := providerallowance.ParseAggregateTrust(snap.Trust)
 	if err != nil {
 		return errRefused
 	}
-	in := allowancecollector.HandoffInput{OldConfig: snap.OldConfig, NewConfig: snap.NewConfig, Trust: trust, PublisherUID: snap.PublisherUID, PublisherSA: snap.PublisherSA, SlotUID: snap.SlotUID, ResourceVersion: snap.ResourceVersion, HomeUID: snap.HomeUID, KubeconfigPath: *kubeconfig, KubeContext: *kubecontext, Journal: snap.Journal, Report: snap.Report, EvictedPod: snap.EvictedPod, ExpectedHelperSHA: snap.HelperSHA, ExpectedJournalSHA: snap.JournalSHA, ExpectedReportSHA: snap.ReportSHA, ExpectedCycle: snap.Cycle, ExpectedNonce: snap.Nonce, Now: clock().UTC()}
+	in := snap.Input(trust, snap.PublisherUID, snap.PublisherSA, *kubeconfig, *kubecontext, clock().UTC())
 	plan, err := allowancecollector.PrepareHandoff(in)
 	if err != nil {
 		return errRefused
