@@ -42,7 +42,7 @@ func TestClaudeBuiltinClosedReasonsPreserveRefusals(t *testing.T) {
 		{"error", quota + "\n" + strings.Replace(result, `"is_error":false`, `"is_error":true`, 1) + "\n", "builtin_result_error"},
 		{"turns", quota + "\n" + strings.Replace(result, `"num_turns":0`, `"num_turns":1`, 1) + "\n", "builtin_turns_unqualified"},
 		{"cost", quota + "\n" + strings.Replace(result, `"total_cost_usd":0`, `"total_cost_usd":1`, 1) + "\n", "builtin_cost_unqualified"},
-		{"tokens", quota + "\n" + strings.Replace(result, `"input_tokens":0`, `"input_tokens":1`, 1) + "\n", "builtin_tokens_unqualified"},
+		{"tokens", quota + "\n" + strings.Replace(result, `"input_tokens":0`, `"input_tokens":1`, 1) + "\n", "builtin_required_tokens_unqualified"},
 		{"extra", finiteClaudeStream + quota + "\n", "builtin_extra_event"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestCursorBuiltinClosedReasonsPreserveInputFences(t *testing.T) {
 		name, frame, reason string
 		state               int
 	}{
-		{"terminal", "\x1b?PRIVATE-SENTINEL", "builtin_terminal_unqualified", 0},
+		{"terminal", "\x1b?PRIVATE-SENTINEL", "builtin_terminal_escape_unqualified", 0},
 		{"prompt", "Sign in PRIVATE-SENTINEL\n", "builtin_prompt_refused", 0},
 		{"workspace", "Workspace Trust Required\n/PRIVATE-SENTINEL\n[a] Trust this workspace\n[q] Quit\n", "builtin_workspace_unqualified", 0},
 		{"input", cursorReady("/private/empty") + "PRIVATE-SENTINEL", "builtin_input_unqualified", 1},
@@ -87,7 +87,7 @@ func TestCursorOwnedProcessKeepsProtocolDiagnostic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err := CollectCursor(ctx, CursorOptions{Executable: executable, Workspace: workspace}, time.Now)
-	requireBuiltinReason(t, "cursor", err, "builtin_terminal_unqualified")
+	requireBuiltinReason(t, "cursor", err, "builtin_terminal_escape_unqualified")
 }
 
 func TestClaudeBuiltinNestedTokenCountersCannotContradictZeroTotals(t *testing.T) {
@@ -101,15 +101,15 @@ func TestClaudeBuiltinNestedTokenCountersCannotContradictZeroTotals(t *testing.T
 		if err == nil {
 			t.Fatal("nested token counters escaped the zero-token guard")
 		}
-		requireBuiltinReason(t, "anthropic", err, "builtin_tokens_unqualified")
+		requireBuiltinReason(t, "anthropic", err, "builtin_nested_tokens_unqualified")
 	}
 	zero := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},`, 1)
 	if _, err := readClaudeBuiltin(strings.NewReader(zero), time.Now); err != nil {
 		t.Fatal("a previously accepted all-zero breakdown was refused", err)
 	}
-	// An object-valued token field has no pinned-protocol qualification. Do not
-	// turn the separate conditional audit finding into new accepted input.
-	unknown := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"thinking_tokens":0},`, 1)
+	// Only the exact pinned thinking-counter object is qualified. Another
+	// object-valued token shape remains refused even when its counter is zero.
+	unknown := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"unknown_tokens":0},`, 1)
 	if _, err := readClaudeBuiltin(strings.NewReader(unknown), time.Now); err == nil {
 		t.Fatal("unqualified token-bearing object became accepted")
 	}
@@ -154,5 +154,77 @@ func testBuiltinContextFailure(t *testing.T, provider string, read func(context.
 			defer cancel()
 			requireBuiltinReason(t, provider, read(ctx, executable, workspace), reason)
 		})
+	}
+}
+
+func TestScheduledFailureBranchesHaveClosedSubreasons(t *testing.T) {
+	for _, test := range []struct{ name, field, reason string }{
+		{"required", `"input_tokens":1,`, "builtin_required_tokens_unqualified"},
+		{"extra", `"PRIVATE-SENTINEL_tokens":{},`, "builtin_extra_tokens_unqualified"},
+		{"nested", `"PRIVATE-SENTINEL":{"input_tokens":1},`, "builtin_nested_tokens_unqualified"},
+	} {
+		t.Run("claude-"+test.name, func(t *testing.T) {
+			stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{`+test.field, 1)
+			if test.name == "required" {
+				stream = strings.Replace(finiteClaudeStream, `"input_tokens":0,`, test.field, 1)
+			}
+			_, err := readClaudeBuiltin(strings.NewReader(stream), time.Now)
+			requireBuiltinReason(t, "anthropic", err, test.reason)
+		})
+	}
+	for _, test := range []struct{ name, frame, reason string }{
+		{"escape", "\x1b?PRIVATE-SENTINEL", "builtin_terminal_escape_unqualified"},
+		{"mode", "\x1b[?9999hPRIVATE-SENTINEL", "builtin_terminal_mode_unqualified"},
+		{"params", "\x1b[99999APRIVATE-SENTINEL", "builtin_terminal_params_unqualified"},
+		{"operation", "\x1b[1XPRIVATE-SENTINEL", "builtin_terminal_operation_unqualified"},
+		{"rune", "☃PRIVATE-SENTINEL", "builtin_terminal_rune_unqualified"},
+		{"control", "\x00PRIVATE-SENTINEL", "builtin_terminal_control_unqualified"},
+		{"bounds", strings.Repeat("x", 181) + "PRIVATE-SENTINEL", "builtin_terminal_bounds_unqualified"},
+	} {
+		t.Run("cursor-"+test.name, func(t *testing.T) {
+			p := cursorProtocol{}
+			input, report, err := p.accept([]byte(test.frame))
+			if input != "" || report != nil {
+				t.Fatal("terminal failure authorized input/capture")
+			}
+			requireBuiltinReason(t, "cursor", err, test.reason)
+		})
+	}
+}
+
+// The SRI-verified official2.1.296 platform source declares this exact
+// zero-usage object. It is a typed zero counter, never a null/object coercion.
+func TestClaudePinnedZeroThinkingCounterObject(t *testing.T) {
+	stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"thinking_tokens":0},`, 1)
+	if _, err := readClaudeBuiltin(strings.NewReader(stream), time.Now); err != nil {
+		t.Fatal("pinned explicit zero thinking counter refused", err)
+	}
+}
+
+func TestClaudeThinkingCounterObjectKeepsStrictShapeAndZeroGuards(t *testing.T) {
+	for _, detail := range []string{`null`, `{}`, `[]`, `0`, `false`, `{"thinking_tokens":1}`, `{"thinking_tokens":"0"}`, `{"thinking_tokens":null}`, `{"thinking_tokens":0,"PRIVATE-SENTINEL_tokens":0}`, `{"thinking_tokens":0,"other":0}`, `{"unknown_tokens":0}`, `{"Thinking_Tokens":0}`} {
+		stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":`+detail+`,`, 1)
+		_, err := readClaudeBuiltin(strings.NewReader(stream), time.Now)
+		requireBuiltinReason(t, "anthropic", err, "builtin_extra_tokens_unqualified")
+	}
+	// A known zero detail does not override required or nested positive tokens.
+	for _, field := range []string{`"input_tokens":1`, `"cache_creation":{"ephemeral_5m_input_tokens":1}`} {
+		stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"thinking_tokens":0},`, 1)
+		if strings.HasPrefix(field, `"input_tokens"`) {
+			stream = strings.Replace(stream, `"input_tokens":0`, field, 1)
+		} else {
+			stream = strings.Replace(stream, `"usage":{`, `"usage":{`+field+`,`, 1)
+		}
+		if _, err := readClaudeBuiltin(strings.NewReader(stream), time.Now); err == nil {
+			t.Fatal("known zero object masked positive tokens")
+		}
+	}
+}
+
+func TestClaudeUnknownCaseTokenFieldsCannotHideActivity(t *testing.T) {
+	for _, field := range []string{`"Output_Tokens_Details":{"thinking_tokens":0}`, `"output_TOKENS_details":{"thinking_tokens":0}`, `"PRIVATE_TOKENS":1`} {
+		stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{`+field+`,`, 1)
+		_, err := readClaudeBuiltin(strings.NewReader(stream), time.Now)
+		requireBuiltinReason(t, "anthropic", err, "builtin_extra_tokens_unqualified")
 	}
 }

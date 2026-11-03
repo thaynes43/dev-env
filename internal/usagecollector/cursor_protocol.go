@@ -20,6 +20,8 @@ type cursorProtocol struct {
 	total     int
 }
 
+const cursorUsageDashboardLabel = "View in dashboard: cursor.com/dashboard?tab=usage"
+
 var cursorUsageTitle = regexp.MustCompile(`(?m)Usage\s*[•·]\s*([A-Za-z][A-Za-z0-9_-]{0,63})\b`)
 var cursorUsageReset = regexp.MustCompile(`\bResets ((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [1-9][0-9]?)\b`)
 var cursorInlineUsageMenu = regexp.MustCompile(`^→ /usage[ \t]+Show plan and on-demand usage$`)
@@ -29,8 +31,8 @@ func (p *cursorProtocol) accept(raw []byte) (string, *providerallowance.CursorCL
 	if p.total > 256<<10 {
 		return "", nil, refused("command_output_oversized", ErrCapture)
 	}
-	if p.terminal.feed(raw) != nil {
-		return "", nil, refused("builtin_terminal_unqualified", ErrCapture)
+	if err := p.terminal.feed(raw); err != nil {
+		return "", nil, err
 	}
 	p.dirty = true
 	return "", nil, nil
@@ -50,12 +52,16 @@ func (p *cursorProtocol) settle() (input string, report *providerallowance.Curso
 	lines := map[string]bool{}
 	inlineUsageRows := 0
 	selectedRows := 0
+	dashboardFooterRows := 0
 	visibleLines := strings.Split(text, "\n")
 	active := strings.Trim(visibleLines[p.terminal.row], " \t│┃")
 	for row, line := range visibleLines {
 		if row != p.terminal.row {
 			line = strings.Trim(line, " \t│┃")
 			lines[line] = true
+			if line == cursorUsageDashboardLabel {
+				dashboardFooterRows++
+			}
 			if strings.HasPrefix(line, "→") {
 				selectedRows++
 			}
@@ -65,8 +71,18 @@ func (p *cursorProtocol) settle() (input string, report *providerallowance.Curso
 		}
 	}
 	lower := strings.ToLower(text)
-	for _, marker := range []string{"sign in", "log in", "login", "authenticate", "credential", "api key", "permission", "terms", "continue", "confirm", "approve tool", "allow command", "?"} {
+	for _, marker := range []string{"sign in", "log in", "login", "authenticate", "credential", "api key", "permission", "terms", "continue", "confirm", "approve tool", "allow command"} {
 		if strings.Contains(lower, marker) {
+			return "", nil, refused("builtin_prompt_refused", ErrCapture)
+		}
+	}
+	// The qualified final display contains one literal query marker in its
+	// inactive dashboard footer. Exempt only that exact row and only after the
+	// selected builtin has produced a complete usage display. Count every other
+	// question mark, including active, adjacent and duplicate footer text.
+	if questions := strings.Count(text, "?"); questions != 0 {
+		knownFooter := questions == 1 && dashboardFooterRows == 1 && (p.state == 3 || p.state == 4) && lines["Esc to close"] && cursorUsageTitle.MatchString(text)
+		if !knownFooter {
 			return "", nil, refused("builtin_prompt_refused", ErrCapture)
 		}
 	}
