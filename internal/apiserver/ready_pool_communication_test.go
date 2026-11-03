@@ -131,15 +131,15 @@ func TestReadyPoolLostReplyAckRetryPreservesCorrelation(t *testing.T) {
 	resumeInboxPod(t, f, bystander)
 	liveBystanderUID := f.auth[bystander].PodUID
 	if liveBystanderUID == "" {
-		t.Fatal("replaced bystander proof is empty")
+		t.Fatal("outsider pod proof is empty")
 	}
 	setPodUID(bystander, askerUID)
-	reject(bystander, "transplanted pod uid", r)
+	reject(bystander, "outsider denial with asker pod uid", r)
 	if f.auth[child].PodUID != askerUID {
 		t.Fatal("transplant rewrote the asker proof")
 	}
 	setPodUID(bystander, liveBystanderUID)
-	reject(bystander, "replaced bystander pod", r)
+	reject(bystander, "outsider denial with own pod uid", r)
 	hold()
 	assertCorrelated(apiv1.InboxStateAnswered, r.Name, "child")
 	assertUnanswered()
@@ -174,14 +174,18 @@ func TestReadyPoolLostReplyAckRetryPreservesCorrelation(t *testing.T) {
 	conflict := replyReq
 	conflict.Text = "other-base"
 	cw := f.do(http.MethodPost, apiv1.InboxPath, lead, conflict)
-	if cw.Code == http.StatusCreated || cw.Code >= 500 {
-		t.Fatalf("conflicting reply text status %d %s", cw.Code, cw.Body.String())
+	if cw.Code != http.StatusConflict {
+		t.Fatalf("status=%d want %d", cw.Code, http.StatusConflict)
 	}
-	if cw.Code/100 == 2 {
-		got := decode[apiv1.InboxResult](t, cw).Message
-		if got.Name != r.Name || got.UID != r.UID || got.InReplyTo == nil || got.InReplyTo.Name != q.Name || got.InReplyTo.UID != q.UID {
-			t.Fatalf("conflicting text changed correlation %+v", got)
-		}
+	got := decode[apiv1.InboxResult](t, cw)
+	if got.Outcome != "Conflict" {
+		t.Fatalf("outcome=%q want Conflict", got.Outcome)
+	}
+	if got.Message.Name != r.Name || got.Message.UID != r.UID {
+		t.Fatalf("message=%s/%s want %s/%s", got.Message.Name, got.Message.UID, r.Name, r.UID)
+	}
+	if got.Message.InReplyTo == nil || got.Message.InReplyTo.Name != q.Name || got.Message.InReplyTo.UID != q.UID {
+		t.Fatalf("inReplyTo=%+v want %s/%s", got.Message.InReplyTo, q.Name, q.UID)
 	}
 	hold()
 	readReply(r, apiv1.InboxStateAnswered)
@@ -250,7 +254,7 @@ func TestReadyPoolLostReplyAckRetryPreservesCorrelation(t *testing.T) {
 	hold()
 	assertAckViews(r.Name)
 	assertUnanswered()
-	reject(bystander, "post-ack replaced bystander", r)
+	reject(bystander, "post-ack outsider denial", r)
 	assertAckViews(r.Name)
 	assertUnanswered()
 	readReply(r, apiv1.InboxStateAcknowledged)
