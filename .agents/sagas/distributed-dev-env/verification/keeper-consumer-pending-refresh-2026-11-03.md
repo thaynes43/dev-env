@@ -1,0 +1,60 @@
+# Consumer view of a pending keeper refresh, 2026-11-03
+
+## Observation (generic, relative timing only)
+
+One live interactive session saw an OAuth revocation. The keeper's next login
+generation arrived about 59 seconds later and an automatic retry about 1 second
+after that succeeded. The login had been valid earlier the same day. Retry
+recovery does not prove prevention.
+
+## What the consumer does today (public source, synthetic tests)
+
+agentd reads the keeper's projection from local files every 5 seconds and calls
+no API, so the consumer adds at most one or two polls to any gap. It already
+sends one `continue` per newly visible generation, and a stale generation does
+not spend that recovery. Synthetic injected-clock tests (revocation then a
+generation at +59 s, publish delays of 30 s, 119 s and 10 min, a stale
+generation, four concurrent readers, a restart inside the gap) pin that existing
+behavior; they pass on current main and are characterization, not a found defect.
+The roughly 59 s is the keeper's cadence plus the Secret volume update delay,
+neither of which is visible or fixable from this repository.
+
+## The defect this change fixes (display only)
+
+An applied access token that has just expired, while the keeper's next
+generation is not yet visible, was shown as `NeedsLogin` by `agent-run auth
+status` and as `login-required` in agentd's status text, as if a person had to
+sign in. Now an access token that expired less than 3 minutes ago is shown as
+`Refreshing` (and `refreshing:` in the status text) with the time since expiry.
+Past the window, or when `login.json` shows the whole login lapsed, the state is
+`NeedsLogin` / `login-required` as before. Exit codes, the wire state word and
+every `continue` fence are unchanged; a script still sees exit 1.
+
+The 3-minute window is a heuristic: the keeper refreshes ahead of expiry and the
+Secret volume trails the keeper by about a minute. It is two constants,
+`claudePendingWindow` and `authPendingWindow`.
+
+## What this does NOT fix (limits to preserve)
+
+- The original revoked-but-not-yet-expired case. A token the provider revoked
+  while its local expiry is still in the future reads as `Ready` everywhere,
+  because the consumer persists no rejection signal. An honest "rejected, next
+  generation pending" state needs a persisted marker, a status reader and
+  probably a new wire state word (touching `internal/standby` metrics and the
+  protocol enum). That is an open design decision, not done here.
+- The wire state for an unstarted remote session still reads `login-required`;
+  only its text changes.
+- Reading a refresh marker published by the keeper would need the held keeper
+  candidate's files (PR 885, candidate 5d6640c), which this change does not
+  touch, copy or publish.
+- This change does not claim reliable refresh or prevention of false status. It
+  narrows one false display. Installed behavior and any real session are
+  unverified.
+
+## Evidence
+
+On current main the three Pending rows in `TestAuthStatusPendingRefreshIsNotNeedsLogin`
+and the two agentd tests (`TestProjectionStatusSeparatesPendingRefreshFromLapse`,
+`TestPendingRefreshReachesTheStatusAndClearsOnTheNextGeneration`) fail; they pass
+with the change. One older codex row (1 minute expired) was moved to 10 minutes
+because 1 minute is now inside the window.
