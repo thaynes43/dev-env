@@ -13,6 +13,7 @@ import (
 	"errors"
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver"
+	"github.com/thaynes43/dev-env/internal/providerallowance"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,7 +171,7 @@ func TestHandoffRunnerContinuationAndLostAcknowledgement(t *testing.T) {
 
 	// Refusals must happen before any ConfigMap update, even when a caller
 	// recomputes a syntactically valid plan for a mismatched live fence.
-	for _, mode := range []string{"hash", "home", "resource-version", "expiry", "backup"} {
+	for _, mode := range []string{"hash", "home", "resource-version", "expiry", "backup", "old-pod-current"} {
 		t.Run(mode, func(t *testing.T) {
 			candidate := in
 			hash := plan.Hash
@@ -187,6 +188,24 @@ func TestHandoffRunnerContinuationAndLostAcknowledgement(t *testing.T) {
 				testClock = func() time.Time { return time.Date(2026, 11, 4, 15, 33, 23, 0, time.UTC) }
 			case "backup":
 				testBackup = filepath.Join(backup, "absent")
+			case "old-pod-current":
+				var current corev1.Pod
+				if r.Client.Get(ctx, hostKey, &current) != nil {
+					t.Fatal("get pod")
+				}
+				current.UID = types.UID(r.Config.Host.PodUID)
+				if r.Client.Update(ctx, &current) != nil {
+					t.Fatal("old pod fixture")
+				}
+				defer func() {
+					if r.Client.Get(ctx, hostKey, &current) != nil {
+						t.Fatal("restore get")
+					}
+					current.UID = types.UID(next.Host.PodUID)
+					if r.Client.Update(ctx, &current) != nil {
+						t.Fatal("restore pod")
+					}
+				}()
 			}
 			if mode == "home" || mode == "resource-version" {
 				other, err := PrepareHandoff(candidate)
@@ -433,5 +452,14 @@ func TestPublicApplyQualifiedSyntheticWitness(t *testing.T) {
 	}
 	if r.Client.Get(ctx, cmKey, &cm) != nil || cm.Data[StateKey] != string(plan.NewJournal) || cm.Data[apiserver.AggregateAllowanceDataKey] != string(in.Report) {
 		t.Fatal("unexpected public apply result")
+	}
+}
+
+func TestPrepareRejectsChangedLogicalStreamTrust(t *testing.T) {
+	in := handoffFixture(t)
+	in.Trust.Contexts = append([]providerallowance.TrustedContext(nil), in.Trust.Contexts...)
+	in.Trust.Contexts[0].ProducerIncarnation = "other-stream"
+	if _, err := PrepareHandoff(in); err == nil {
+		t.Fatal("accepted changed stream trust")
 	}
 }
