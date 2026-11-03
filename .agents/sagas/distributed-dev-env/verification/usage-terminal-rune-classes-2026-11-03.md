@@ -8,6 +8,11 @@ refused character is unknown. The existing finer reasons (encoding, combining,
 spacing, format, dot-set) did not match, so the character is a visible,
 non-spinner character outside the qualified set.
 
+The earlier dot-set note (`usage-dotset-refusal-diagnostic-2026-11-03.md`) says every
+other unqualified character keeps its existing coarse reason; this change refines
+that coarse bucket and supersedes that sentence, leaving the dot-set label itself
+unchanged.
+
 This change adds closed labels for the remaining Unicode classes, so the next
 natural cycle can localize the refusal without disclosing the character:
 
