@@ -86,6 +86,7 @@ including a rejected or unconfirmed handoff.
 | `scheduling_timeout`, `pod_ready_timeout`, `agent_start_timeout` | Corresponding stage budget expired |
 | `login_conflict` | Recognized agent conflict requires immediate owner action; no login is attempted |
 | `auth_projection_unavailable` | Keeper projection warning persisted for 30s within agent startup; a transient warning can clear; one status read cannot establish persistence |
+| `auth_refresh_pending` | The pod reported `refreshing:` (the access token expired under 3 minutes ago and the keeper's next generation is pending) when the 90s agent-start budget ended; outcome `timed_out`, exit pending, session handle retained. While the status is `refreshing:` the 30s owner-action rule does not run, and no sign-in is requested; if the status returns to the login-required text, that rule runs from that moment, and only within the remaining agent-start budget |
 | `rc_registration_timeout`, `link_unavailable` | Registration or validated link did not appear in its budget |
 | `session_ended` | Session is Failed, Suspended, Archived or being reaped; start/status return `failed`, exit 1, even with a retained link |
 | `handoff_rejected` | Message refused, including 409 when not addressable |

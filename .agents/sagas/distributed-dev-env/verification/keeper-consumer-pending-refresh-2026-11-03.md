@@ -33,14 +33,23 @@ every `continue` fence are unchanged; a script still sees exit 1.
 **This is not purely a display change.** `agent-run rc start --wait` recognized the
 old `login-required: waiting for the keeper's Claude projection` text and turned
 30 seconds of it into `action_required` (ask the owner to act). The new
-`refreshing:` text does not match, so `rc start` now keeps waiting through the
-pending window instead of asking for action while the keeper is already
-refreshing, and the 30-second rule runs from the moment the text returns to
-`login-required`. That is the intended behavior (asking a person to act during a
-pending refresh is the false-login symptom), at the cost of up to the window
-(3 minutes) longer before an owner action when the generation never lands. It is
-covered by two rc tests (recovers while refreshing; still ends in owner action
-after the window) and by a mutation that restores the old matching.
+`refreshing:` text does not match, so `rc start` now keeps waiting while the
+status is `refreshing:` instead of asking for action while the keeper is already
+refreshing (asking a person to act during a pending refresh is the false-login
+symptom). Two bounds apply, and they are not the same as the 3-minute window:
+
+- If the status returns to the old `login-required` text, the 30-second
+  owner-action rule runs from that moment, within the rest of the 90-second
+  agent-start budget.
+- If a `refreshing:` status lasts until the 90-second agent-start budget ends
+  (the window is longer than the budget), the launch ends as `timed_out` with the
+  specific code `auth_refresh_pending`, session handle retained, and no sign-in
+  requested. It is not reported as `action_required`.
+
+It is covered by four rc tests (recovers while refreshing; owner action after a
+return to login-required; a refresh outlasting the budget times out with its own
+reason; login-required alone still ends in owner action) and by a mutation that
+restores the old matching and one that drops the specific reason.
 
 The 3-minute window is a heuristic: the keeper refreshes ahead of expiry and the
 Secret volume is assumed (unproven) to trail the keeper by about a minute. It is two constants,

@@ -214,7 +214,10 @@ func checkProjectedLogin(s Settings) loginCheck {
 // the keeper by about a minute (kubelet sync), so a successor may be that late.
 // Past the window the wait is reported as before. Beyond the status text this
 // changes `agent-run rc start --wait`: it waits through the window instead of
-// asking for owner action after 30 seconds of the old login-required text.
+// asking for owner action after 30 seconds of the old login-required text. The
+// window (3 minutes) is longer than rc's 90 second agent-start budget, so a refresh
+// that never lands ends there as timed_out / auth_refresh_pending, not as an
+// owner action.
 const claudePendingWindow = 3 * time.Minute
 
 // projectionLoginStatus is the one plain status line in projection mode. An

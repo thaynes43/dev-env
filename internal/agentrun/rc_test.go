@@ -393,6 +393,38 @@ func TestRCPendingRefreshThenLapseStillEndsInOwnerAction(t *testing.T) {
 	}
 }
 
+// A refresh that never lands is not an owner action either: the 90 second
+// agent-start budget ends first (the pending window is longer), so the launch is
+// reported as timed out for that specific reason, with the handle retained.
+func TestRCPendingRefreshOutlastingTheAgentStartBudgetTimesOutWithItsOwnReason(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(5)
+		v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h)...)
+	r := rcResult(t, h)
+	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "auth_refresh_pending" || r.Link == nil || rcCountMessages(h) != 0 {
+		t.Fatal("a pending refresh outlasting the budget was not reported with its own reason", r)
+	}
+}
+
+// The same long wait with the old login-required text is still the owner action
+// after 30 seconds, and a different stage keeps its own timeout code.
+func TestRCLoginRequiredStillEndsInOwnerActionNotTheRefreshReason(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(5)
+		v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h)...)
+	if r := rcResult(t, h); r.Outcome != "action_required" || r.Error == nil || r.Error.Code != "auth_projection_unavailable" {
+		t.Fatal("login-required lost its owner action", r)
+	}
+}
+
 func TestRCLocalValidationAndCodexNoRequests(t *testing.T) {
 	for name, value := range map[string]string{"empty": "", "whitespace": "\n\t ", "utf8": "\xff", "large": strings.Repeat("x", 8193), "esc": "unsafe\x1b", "cr": "unsafe\r", "del": "unsafe\x7f", "c1": "unsafe\u0085"} {
 		t.Run(name, func(t *testing.T) {
