@@ -1,11 +1,12 @@
 # Refused Cursor dot-set membership diagnostic, 2026-11-03
 
-Scheduled new-helper cycle41 on signed operator312/f538 produced real,
+Scheduled new-helper cycle 41 on signed operator
+`ghcr.io/thaynes43/dev-env-operator:sha-312c52e@sha256:f5383629d01be12dc809fe0cfe116a68f1298396fb1eb9d684764822cf8399a5` produced real,
 account-bound usable quota captures for Codex and Claude. Cursor still refused at `builtin_terminal_rune_unqualified`. The
 actual rejected character is unknown. An already-retained manual final screen
 contained no unsupported characters; a transient frame is only a hypothesis.
 
-The exact pinned public Cursor archive fetch returned HTTP403Forbidden and is
+The exact pinned public Cursor archive fetch returned HTTP 403 Forbidden and is
 stopped. This change does not fetch that archive through another route, read
 Root's denied private client/controller/history/artifact, run a provider or
 install a client/model. It uses a different, explicitly authorized engineering
@@ -27,17 +28,17 @@ codepoint, text, value, count, hash, extra field or per-character label is emitt
 Every member produces byte-identical diagnostic output, so the bucket cannot
 identify which member was seen. Other vendor input never enters the payload.
 
-Regressions first failed against the old generic label (0.004s), then passed
-with the membership label (0.004s). They exercise all members, exact five-key
+Regressions first failed against the old generic label (0.004 seconds), then passed
+with the membership label (0.004 seconds). They exercise all members, exact five-key
 payloads, byte-identical output, private-sentinel absence, other/bidi/combining/
 wide/control/invalid UTF8 boundaries, fragmented UTF8, no protocol advance and
-an actual owned synthetic subprocess. A separate RED0.003s exposed an
+an actual owned synthetic subprocess. A separate RED test failure (0.003 seconds) exposed an
 initially unconstrained provider label; the final decoder restricts this new
 reason to Cursor and rejects added rune/codepoint/value/count fields. No real
 provider client was invoked.
 
-Independent privacy/security review and current CI are required before source
-publication and operator-only adoption. The scheduled result must match this
+Independent privacy/security review and current CI are required before merge, signed
+release and operator-only adoption. The scheduled result must match this
 fully tested set before any separate acceptance candidate may be merged or
 activated. This release accepts none of these characters. It is diagnosis,
 not Cursor recovery or an all-three-success cycle. Original expiry, cadence,
