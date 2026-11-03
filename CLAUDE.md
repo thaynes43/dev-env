@@ -91,6 +91,7 @@ cmd/agentd/              the in-pod supervisor: `run`, `home-verify` (the origin
                          D-48, D-58), `ctl deliver|log` (D-65), `ctl codex-pair` (Story110 T17), `ctl login url|code|status` (remote sessions), `ctl rescues|hold-rescue|prune` (D-67),
                          `ctl grant-install|grant-remove|grant-list|grant-use` (D-63),
                          `ctl history-export|history-archive` (DESIGN-025 H4), `ctl coord-archive put [--mark]|mark|lookup|get` (DESIGN-024 R2; journal grace, recorded-time or pinned get)
+cmd/dev-env-allowance-handoff/  explicitly invoked one-time collector fingerprint handoff preparation and guarded apply
 cmd/agent-run/           the CLI, one static binary (CGO_ENABLED=0, D-06); commands in internal/agentrun, fixed internal allowance helper in internal/usagecollector
 cmd/home-retention-dry-run/  standalone bounded offline HOME policy report (DESIGN-044); no collector, runtime integration or deletion
 internal/version/        the build identity every binary's `version` prints

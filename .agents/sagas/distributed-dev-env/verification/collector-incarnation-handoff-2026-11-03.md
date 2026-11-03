@@ -57,10 +57,9 @@ only with the matching backup. A changed slot, journal, report, host, deadline,
 trust or evidence refuses. Existing runners on either mismatched fingerprint
 cannot reach provider execution. No other state keys or report bytes are changed.
 
-The source check `make check-layout` also requires a `CLAUDE.md` Layout entry
-for this new command. The five-file source assignment excludes that file; the
-check remains blocked pending explicit scope acknowledgement. A separate design
-file is likewise outside that assignment; this record documents the proposed
-behavior pending any broader authorized design update.
+The source check `make check-layout` requires a `CLAUDE.md` Layout entry for
+this new command. The parent authorized exactly that one additional row. A
+separate design file remains outside the assignment; this record documents the
+proposed behavior pending independent review and any broader scope direction.
 
 The approved host delta permits a different valid digest-pinned image. The fresh replacement Pod must match the newly selected image exactly.
