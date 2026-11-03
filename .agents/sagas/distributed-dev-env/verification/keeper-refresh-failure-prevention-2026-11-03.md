@@ -47,3 +47,37 @@ keeper race with exclusions `a48f6523d5fdff9ace71103aa8f67598d8a75fd528b30880fa2
 and Claude race `91edcd4b3ef9aad799a4ffb8de646f8a923639290852af12931475324f378d47`.
 Independent review and CI are still required; this source change is not merged,
 installed, deployed, or accepted.
+
+### Observation ordering: source repair in progress
+
+The Claude hub uses the record's access generation and terminal stage as a
+logical observation version. Under the current writers, Ready can become a
+NeedsLogin tombstone in the same generation; returning to Ready after a
+committed tombstone requires a new generation. Intent is not reported. The
+hub rejects an older logical version under its mutex; Kubernetes resource
+versions remain opaque and are not ordered numerically. This orders reports
+only within one hub, after that hub has received the newer report.
+
+The synthetic same-hub readback and tick interleavings pass with this source
+change, including a delayed Ready after a same-generation tombstone and the
+actual staged-adoption method with synthetic material. A notifier that sees
+NeedsLogin now takes an uncached journal snapshot before deciding: a separate
+synthetic two-hub test passes when the new Ready committed before that read.
+Unavailable and in-flight records become Unknown for that decision; a current
+committed tombstone still produces a synthetic notice.
+
+The notifier checks the usual leader budget, reads the authoritative journal,
+and uses that read as the decision's linearization point. It retains the opaque
+resourceVersion and local read-start/read-finish bounds in the decision, without
+logging them or using them as metric labels. It treats a failed fence, failed
+read, or in-flight record as Unknown, and checks cancellation before acting.
+The notifier passes the context through delivery; cancellation is best effort.
+
+A synthetic regression pauses after the authoritative read captured a valid
+tombstone, commits a new Ready, and resumes delivery. With a live context the
+earlier decision may still send; with a canceled context it does not start the
+send. Root's 2026-11-03 read-linearized decision accepts that overlap: the
+external sender does not atomically order delivery with journal adoption. No
+universal cross-process delivery ordering, complete false-notification
+prevention, deployment, or journal overwrite is established. Current-head
+independent review remains open.

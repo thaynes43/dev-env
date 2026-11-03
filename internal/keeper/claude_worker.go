@@ -257,11 +257,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 
 // observe hands the journal's state to the gauges: words and a time, no token.
 func (w *claudeWorker) observe(r claudeRecord) {
-	if r.Stage == claudeReady {
-		w.Obs.Report(ProviderClaude, LoginReady, r.RefreshExpiresAt)
-		return
-	}
-	w.Obs.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	w.Obs.reportClaude(r.Access.Generation, r.Stage != claudeReady, r.RefreshExpiresAt)
 }
 
 // abandon returns an intent that was never sent to Ready, if this attempt's
@@ -296,7 +292,7 @@ func (w *claudeWorker) needsLogin(ctx context.Context, uid string) {
 		return
 	}
 	w.note("needs-login")
-	w.Obs.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	w.observe(current)
 }
 
 // claudeRunnable is the worker Run registers, or nil when the flag is off.

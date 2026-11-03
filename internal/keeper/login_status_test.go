@@ -206,3 +206,33 @@ func TestCodexWorkerReportsALapsedCeremonyWithNothingToResumeAsNeedsLogin(t *tes
 		t.Fatalf("after the reservation lapsed = %+v, want NeedsLogin", s)
 	}
 }
+
+func TestClaudeObservationVersionOrdering(t *testing.T) {
+	h := NewLoginHub(ProviderClaude, ProviderCodex)
+	lapse := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	// The logical order is generation first; within a generation a committed
+	// NeedsLogin tombstone follows Ready. Resource versions remain opaque.
+	h.reportClaude(1, false, lapse)
+	h.reportClaude(1, true, time.Time{})
+	h.reportClaude(1, false, lapse)
+	if got := h.Snapshot()[ProviderClaude].State; got != LoginNeedsLogin {
+		t.Fatalf("older Ready displaced same-generation tombstone: %s", got)
+	}
+	h.reportClaude(2, false, lapse)
+	h.reportClaude(1, true, time.Time{})
+	if got := h.Snapshot()[ProviderClaude].State; got != LoginReady {
+		t.Fatalf("older generation displaced new Ready: %s", got)
+	}
+	// Legacy unversioned Codex observations remain independent.
+	h.Report(ProviderCodex, LoginInProgress, time.Time{})
+	if got := h.Snapshot()[ProviderCodex].State; got != LoginInProgress {
+		t.Fatalf("Codex compatibility: %s", got)
+	}
+	// An unversioned legacy report starts a new ordering domain; it cannot
+	// carry or compare the preceding journal watermark.
+	h.Report(ProviderClaude, LoginUnknown, time.Time{})
+	h.reportClaude(2, false, lapse)
+	if got := h.Snapshot()[ProviderClaude].State; got != LoginReady {
+		t.Fatalf("legacy report prevented re-establishing observation: %s", got)
+	}
+}

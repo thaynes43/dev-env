@@ -210,6 +210,14 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 		if err != nil {
 			return err
 		}
+		if o.ClaudeAuth.Enabled {
+			name := o.ClaudeAuth.JournalSecret
+			if name == "" {
+				name = DefaultClaudeJournalSecret
+			}
+			nf.VerifyClaude = verifyClaudeJournal(&claudeJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: name}})
+			nf.ClaudeFence = credentialFence.CheckBudget
+		}
 		if err := mgr.Add(nf); err != nil {
 			return err
 		}

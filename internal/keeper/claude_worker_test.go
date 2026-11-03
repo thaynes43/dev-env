@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/thaynes43/dev-env/internal/claudeauth"
+	"github.com/thaynes43/dev-env/internal/claudelogin"
 )
 
 type claudeTestTransport struct {
@@ -783,5 +784,343 @@ func TestClaudeFailureLogRedactsTransportError(t *testing.T) {
 	}
 	if !strings.Contains(log, "possibly-spent") || !strings.Contains(log, "duration_ms") || !strings.Contains(log, "phase") {
 		t.Fatal("closed failure fields missing")
+	}
+}
+
+// pauseClaudeReadback returns a snapshot and pauses before the old worker can
+// consume it, allowing a new leader's journal adoption to interleave.
+type pauseClaudeReadback struct {
+	client.Client
+	reads   atomic.Int32
+	pauseAt int32
+	paused  chan struct{}
+	resume  chan struct{}
+}
+
+func (c *pauseClaudeReadback) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	err := c.Client.Get(ctx, key, obj, opts...)
+	if err == nil && key.Name == DefaultClaudeJournalSecret && c.reads.Add(1) == c.pauseAt {
+		close(c.paused)
+		<-c.resume
+	}
+	return err
+}
+
+func TestClaudeObservationDoesNotOutliveNewLeaderAdoption(t *testing.T) {
+	f := newClaudeFix(t)
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.AttemptUID = claudeIntent, claudeUID
+	f.seed(t, r)
+	f.holdLease(t, "old")
+	f.w.Fence = f.leaseFence(t, "old")
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 2, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.w.needsLogin(context.Background(), claudeUID) }()
+	<-paused.paused
+	f.holdLease(t, "new")
+	adopted := syntheticClaudeRecord(2)
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: hub, Fence: f.leaseFence(t, "new"), Clock: f.clk, Log: logr.Discard()}
+	secret, _, err := newWorker.load(context.Background())
+	if err != nil || newWorker.Fence(context.Background(), claudeSaveTimeout+claudeSafetyMargin) != nil || newWorker.Journal.save(context.Background(), secret, adopted) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic adoption failed")
+	}
+	newWorker.observe(adopted)
+	close(paused.resume)
+	<-done
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginReady {
+		t.Fatalf("stale observation after newer adoption: got %s, want Ready", got)
+	}
+}
+
+// A persisted tombstone loaded by tick can also become stale before observe.
+func TestClaudeTickObservationDoesNotOutliveNewLeaderAdoption(t *testing.T) {
+	f := newClaudeFix(t)
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, secretValue{}, time.Time{}
+	f.seed(t, r)
+	f.holdLease(t, "old")
+	f.w.Fence = f.leaseFence(t, "old")
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 1, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.tick() }()
+	<-paused.paused
+	f.holdLease(t, "new")
+	adopted := syntheticClaudeRecord(2)
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: hub, Fence: f.leaseFence(t, "new"), Clock: f.clk, Log: logr.Discard()}
+	secret, _, err := newWorker.load(context.Background())
+	if err != nil || newWorker.Fence(context.Background(), claudeSaveTimeout+claudeSafetyMargin) != nil || newWorker.Journal.save(context.Background(), secret, adopted) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic adoption failed")
+	}
+	newWorker.observe(adopted)
+	close(paused.resume)
+	<-done
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginReady {
+		t.Fatalf("stale tick observation after newer adoption: got %s, want Ready", got)
+	}
+}
+
+// Each keeper process owns its own hub. A newer observation in one hub must
+// not be mistaken for ordering information available to the other hub.
+func TestClaudeObservationIndependentHubsAfterAdoption(t *testing.T) {
+	f := newClaudeFix(t)
+	oldHub, newHub := NewLoginHub(ProviderClaude), NewLoginHub(ProviderClaude)
+	f.w.Obs = oldHub
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.AttemptUID = claudeIntent, claudeUID
+	f.seed(t, r)
+	f.holdLease(t, "old")
+	f.w.Fence = f.leaseFence(t, "old")
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 2, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.w.needsLogin(context.Background(), claudeUID) }()
+	<-paused.paused
+	// The old notifier has begun a pass while it still holds leadership.
+	notices := newNoticeFix(t, time.Date(2026, 11, 3, 16, 0, 0, 0, time.UTC))
+	notices.n.Hub = oldHub
+	notices.n.VerifyClaude = verifyClaudeJournal(&claudeJournal{Client: f.c, Secret: f.w.Journal.Secret})
+	notifierPaused, notifierResume, notifierDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	notices.n.Enabled = func() bool { close(notifierPaused); <-notifierResume; return true }
+	go func() { defer close(notifierDone); notices.tick() }()
+	<-notifierPaused
+	f.holdLease(t, "new")
+	adopted := syntheticClaudeRecord(2)
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: newHub, Fence: f.leaseFence(t, "new"), Clock: f.clk, Log: logr.Discard()}
+	secret, _, err := newWorker.load(context.Background())
+	if err != nil || newWorker.Journal.save(context.Background(), secret, adopted) != nil {
+		close(paused.resume)
+		<-done
+		close(notifierResume)
+		<-notifierDone
+		t.Fatal("synthetic adoption failed")
+	}
+	newWorker.observe(adopted)
+	close(paused.resume)
+	<-done
+	close(notifierResume)
+	<-notifierDone
+	if notices.fake.count() != 0 {
+		t.Fatal("stale old-process observation sent an actionable notification after adoption")
+	}
+}
+
+// Within one generation, the terminal observation must supersede an earlier
+// Ready read even when the reader is paused across the terminal write.
+func TestClaudeOldReadyObservationDoesNotOutliveTombstone(t *testing.T) {
+	f := newClaudeFix(t)
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	f.seed(t, syntheticClaudeRecord(1))
+	f.holdLease(t, "old")
+	f.w.Fence = f.leaseFence(t, "old")
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 1, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.tick() }()
+	<-paused.paused
+	f.holdLease(t, "new")
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: hub, Fence: f.leaseFence(t, "new"), Clock: f.clk, Log: logr.Discard()}
+	secret, intent, err := newWorker.load(context.Background())
+	intent.Stage, intent.AttemptUID = claudeIntent, claudeUID
+	if err != nil || newWorker.Journal.save(context.Background(), secret, intent) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic intent failed")
+	}
+	newWorker.needsLogin(context.Background(), claudeUID)
+	close(paused.resume)
+	<-done
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginNeedsLogin {
+		t.Fatalf("stale Ready after tombstone: got %s, want NeedsLogin", got)
+	}
+}
+
+// This uses only synthetic staged bytes and fake transport, but exercises the
+// actual adoption method rather than a direct call to observe.
+func TestClaudeStagedAdoptionOrdersOldTombstoneInSharedHub(t *testing.T) {
+	f := newClaudeFix(t)
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.AttemptUID = claudeIntent, claudeUID
+	f.seed(t, r)
+	f.holdLease(t, "old")
+	f.w.Fence = f.leaseFence(t, "old")
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 2, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.w.needsLogin(context.Background(), claudeUID) }()
+	<-paused.paused
+	f.holdLease(t, "new")
+	dir := t.TempDir()
+	stagedDir := filepath.Join(dir, claudeUID, ".claude")
+	if err := os.MkdirAll(stagedDir, 0o700); err != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic staging setup failed")
+	}
+	if err := os.WriteFile(filepath.Join(dir, claudeUID, claudelogin.StagedCredentials), loginCredentials(t, nil), 0o600); err != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic staging setup failed")
+	}
+	f.tr.Prof = &claudeProfile{AccountUUID: r.Access.AccountUUID, OrganizationUUID: r.Access.OrganizationUUID}
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Transport: f.tr, Publisher: f.w.Publisher,
+		Obs: hub, Fence: f.leaseFence(t, "new"), Clock: f.clk, Log: logr.Discard(), LoginDir: dir,
+		attempt: claudeAttempt{uid: claudeUID, until: f.clk.Now().Add(time.Minute)}}
+	result := newWorker.adopt(context.Background(), claudeUID)
+	close(paused.resume)
+	<-done
+	if !result.OK || result.Generation != 2 {
+		t.Fatal("synthetic staged adoption failed")
+	}
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginReady {
+		t.Fatalf("old tombstone displaced adopted Ready: %s", got)
+	}
+}
+
+func TestClaudeNotifierVerifiesJournalBeforeNeedsLogin(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		stage   string
+		missing bool
+		want    int
+	}{
+		{name: "current ready", stage: claudeReady},
+		{name: "current tombstone", stage: claudeNeedsLogin, want: 1},
+		{name: "in flight", stage: claudeIntent},
+		{name: "unavailable", stage: claudeNeedsLogin, missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClaudeFix(t)
+			r := syntheticClaudeRecord(1)
+			r.Stage = tc.stage
+			if tc.stage == claudeNeedsLogin {
+				r.Refresh, r.RefreshExpiresAt = secretValue{}, time.Time{}
+			}
+			if tc.stage == claudeIntent {
+				r.AttemptUID = claudeUID
+			}
+			f.seed(t, r)
+			notices := newNoticeFix(t, claudeNow)
+			notices.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+			name := f.w.Journal.Secret
+			if tc.missing {
+				name.Name = "missing-synthetic-journal"
+			}
+			notices.n.VerifyClaude = verifyClaudeJournal(&claudeJournal{Client: f.c, Secret: name})
+			notices.tick()
+			if got := notices.fake.count(); got != tc.want {
+				t.Fatalf("synthetic notice count = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// Once the authoritative read has linearized, a later adoption may overlap
+// delivery. Cancellation still prevents a not-yet-started send.
+func TestClaudeNotifierDecisionBeforeAdoptionDeliveryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cancel bool
+		want   int
+	}{
+		{name: "live context may deliver", want: 1},
+		{name: "canceled context suppresses", cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClaudeFix(t)
+			r := syntheticClaudeRecord(1)
+			r.Stage, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, secretValue{}, time.Time{}
+			f.seed(t, r)
+			notices := newNoticeFix(t, claudeNow)
+			notices.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+			paused := &pauseClaudeReadback{Client: f.c, pauseAt: 1, paused: make(chan struct{}), resume: make(chan struct{})}
+			notices.n.VerifyClaude = verifyClaudeJournal(&claudeJournal{Client: paused, Secret: f.w.Journal.Secret})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan struct{})
+			go func() { defer close(done); notices.n.Tick(ctx) }()
+			<-paused.paused
+			newHub := NewLoginHub(ProviderClaude)
+			newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: newHub, Clock: f.clk, Log: logr.Discard()}
+			secret, _, err := newWorker.load(context.Background())
+			adopted := syntheticClaudeRecord(2)
+			if err != nil || newWorker.Journal.save(context.Background(), secret, adopted) != nil {
+				close(paused.resume)
+				<-done
+				t.Fatal("synthetic adoption failed")
+			}
+			newWorker.observe(adopted)
+			if tc.cancel {
+				cancel()
+			}
+			close(paused.resume)
+			<-done
+			if got := notices.fake.count(); got != tc.want {
+				t.Fatalf("synthetic delivery count = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudeNotifierDecisionMetadataAndFence(t *testing.T) {
+	f := newClaudeFix(t)
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, secretValue{}, time.Time{}
+	f.seed(t, r)
+	d := verifyClaudeJournal(f.w.Journal)(context.Background())
+	if d.status.State != LoginNeedsLogin || d.resourceVersion == "" || d.readStarted.IsZero() || d.readFinished.Before(d.readStarted) {
+		t.Fatal("decision is missing its opaque record identity or read bounds")
+	}
+	notices := newNoticeFix(t, claudeNow)
+	notices.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	notices.n.VerifyClaude = verifyClaudeJournal(f.w.Journal)
+	notices.n.ClaudeFence = func(context.Context, time.Duration) error { return errClaudeLeadership }
+	notices.tick()
+	if notices.fake.count() != 0 {
+		t.Fatal("notification escaped a failed leader fence")
+	}
+}
+
+// The notifier must not act on its old hub snapshot when a newer Ready is
+// committed before the authoritative journal decision read starts.
+func TestClaudeNotifierOldSnapshotThenNewReadyBeforeDecision(t *testing.T) {
+	f := newClaudeFix(t)
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, secretValue{}, time.Time{}
+	f.seed(t, r)
+	notices := newNoticeFix(t, claudeNow)
+	notices.hub.Report(ProviderClaude, LoginNeedsLogin, time.Time{})
+	decision := verifyClaudeJournal(f.w.Journal)
+	snapshotTaken, resume := make(chan struct{}), make(chan struct{})
+	notices.n.VerifyClaude = func(ctx context.Context) claudeNoticeDecision {
+		close(snapshotTaken)
+		<-resume
+		return decision(ctx)
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); notices.tick() }()
+	<-snapshotTaken
+	secret, _, err := f.w.Journal.load(context.Background())
+	if err != nil || f.w.Journal.save(context.Background(), secret, syntheticClaudeRecord(2)) != nil {
+		close(resume)
+		<-done
+		t.Fatal("synthetic adoption failed")
+	}
+	close(resume)
+	<-done
+	if notices.fake.count() != 0 {
+		t.Fatal("old hub snapshot caused a notice after Ready committed before decision")
 	}
 }

@@ -49,8 +49,10 @@ type LoginStatus struct {
 // usable; a nil *LoginHub accepts and ignores every call, so a worker built
 // without one (tests, a disabled provider) needs no checks.
 type LoginHub struct {
-	mu sync.Mutex
-	m  map[string]LoginStatus
+	mu               sync.Mutex
+	m                map[string]LoginStatus
+	claudeVersion    claudeObservationVersion
+	claudeVersionSet bool
 }
 
 // NewLoginHub registers providers in the Unknown state, so their state gauge
@@ -84,6 +86,45 @@ func (h *LoginHub) Report(provider, state string, lapsesAt time.Time) {
 		h.m = map[string]LoginStatus{}
 	}
 	h.m[provider] = LoginStatus{State: state, LapsesAt: lapsesAt.UTC()}
+	// The legacy unversioned API has no ordering token. If it is used for
+	// Claude, a later versioned report must establish a fresh watermark.
+	// Production Claude journal observations use reportClaude instead.
+	if provider == ProviderClaude {
+		h.claudeVersionSet = false
+	}
+}
+
+// claudeObservationVersion orders the states emitted by the Claude worker.
+// Within one access generation, Ready may become NeedsLogin, but only a new
+// generation can return a tombstone to Ready. Intent itself is not reported.
+// It is a logical record version, not an ordering of opaque Kubernetes resource
+// versions. This watermark applies to this hub only, not other processes.
+type claudeObservationVersion struct {
+	generation uint64
+	terminal   bool
+}
+
+func (h *LoginHub) reportClaude(generation uint64, terminal bool, lapsesAt time.Time) {
+	if h == nil {
+		return
+	}
+	v := claudeObservationVersion{generation: generation, terminal: terminal}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	old := h.claudeVersion
+	if h.claudeVersionSet && (v.generation < old.generation ||
+		(v.generation == old.generation && (old.terminal || !v.terminal))) {
+		return
+	}
+	if h.m == nil {
+		h.m = map[string]LoginStatus{}
+	}
+	state := LoginReady
+	if terminal {
+		state, lapsesAt = LoginNeedsLogin, time.Time{}
+	}
+	h.m[ProviderClaude] = LoginStatus{State: state, LapsesAt: lapsesAt.UTC()}
+	h.claudeVersion, h.claudeVersionSet = v, true
 }
 
 // Snapshot is a copy of every observation.
