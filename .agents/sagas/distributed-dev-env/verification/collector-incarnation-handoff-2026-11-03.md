@@ -62,3 +62,5 @@ for this new command. The five-file source assignment excludes that file; the
 check remains blocked pending explicit scope acknowledgement. A separate design
 file is likewise outside that assignment; this record documents the proposed
 behavior pending any broader authorized design update.
+
+The approved host delta permits a different valid digest-pinned image. The fresh replacement Pod must match the newly selected image exactly.
