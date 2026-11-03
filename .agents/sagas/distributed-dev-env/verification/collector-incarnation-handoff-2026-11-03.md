@@ -1,37 +1,30 @@
 # Collector incarnation handoff: source qualification
 
-Status: incomplete source preparation. Public apply is deliberately closed.
-This record grants no runtime authority and is not evidence of an actual capture,
-deployment, approval, or acceptance.
+This source-only maintenance proposal grants no runtime authority. Its tests use
+synthetic objects and do not establish provider quota, historical witness
+provenance, deployment, approval, or runtime acceptance.
 
-DESIGN-049 defines capture headers as caller-owned provenance, and says sequence
-is stable per producer and incarnation. The aggregate contract permits a
-caller-selected new incarnation; neither document equates that value with a Pod
-UID. DESIGN-053 separately binds the collector fingerprint to its selected host
-and trust. Accordingly this draft treats a retained producer incarnation as the
-same caller-selected logical stream only when the entire selected trust and
-account/workspace scope are unchanged and sequence continues; it does not infer
-that a physical Pod is the producer incarnation.
+DESIGN-049 assigns capture headers to the caller and makes sequence stable per
+producer and incarnation. Neither that contract nor the aggregate contract
+requires an incarnation to equal a Pod UID. The same logical stream is retained
+only with identical selected trust, accounts and workspaces. Historical captures,
+timestamps and sequence numbers are preserved.
 
-The collector's helper has a separate per-Pod runtime ledger under
-`XDG_RUNTIME_DIR`; its receipt is bound to Pod UID and fingerprint. The durable
-ConfigMap journal is not a copy of that receipt. A successful existing runner
-transition to idle follows a validated cleanup-proven terminal receipt, but the
-journal itself does not retain that receipt. Because the old Pod was replaced,
-this source-only session cannot independently re-read that old runtime ledger.
-No evidence of the old ledger or old Pod termination has been inspected here.
-An independently qualified terminal old-ledger witness and a way to validate it
-are unresolved. No timeout, empty new runtime directory, hash, or approval file
-is treated as proof. Public apply therefore refuses, and the CLI refuses before opening a kubeconfig.
-No PR is offered as a complete implementation.
+A trusted named ConfigMap's validated idle journal is transitive terminal
+cleanup evidence: Runner checks the host and expiry after remote execution,
+validates the matching terminal receipt and its cleanup proof, then atomically
+commits journal and report. This inference depends on independently qualifying
+that journal's provenance, fingerprint, exact bytes, cycle, nonce, report and
+known helper; an arbitrary supplied snapshot does not establish provenance.
+The old runtime ledger is not reconstructed or waived. An independently
+authenticated historical old-Pod eviction snapshot, bound into the plan, plus
+fresh checks of the replacement session, Pod and HOME, fences the executor.
+The source helper validates their shape and identity but cannot authenticate an
+archived snapshot or a human approval. Root must independently qualify those
+facts and the exact prepared hash before any invocation; a hash is not approval.
 
-The offline preparation draft parses both configurations with the real
-collector parser, fences the original journal and report, and computes the
-replacement fingerprint without changing other journal bytes. Its internal
-apply prototype is reachable only from synthetic tests while public apply is
-closed. The test runs the existing Runner with fake objects across an idle
-cycle-56 handoff, including a simulated lost update acknowledgement, restart without replay,
-one natural subsequent cycle, and refusal of the old plan afterward. It also exercises selected policy, UID, expiry,
-backup, and version refusals. Tests are synthetic and do not establish provider
-quota, old-ledger state, cluster permissions, or runtime acceptance. CLI and
-recovery coverage remains incomplete.
+The helper prepares offline with the real collector parser and permits only the
+specified host and deadline changes. Its apply route checks the named slot and
+fresh host, fsyncs a private full backup, replaces only the fingerprint with a
+resource-version CAS, and checks exact readback. No deployment or live apply is
+authorized by this source work. Synthetic tests are not runtime acceptance.

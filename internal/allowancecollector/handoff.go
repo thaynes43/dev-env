@@ -29,7 +29,8 @@ type HandoffInput struct {
 	PublisherUID, PublisherSA             string
 	SlotUID, ResourceVersion              string
 	HomeUID, KubeconfigPath, KubeContext  string
-	Journal, Report                       []byte
+	Journal, Report, EvictedPod           []byte
+	ExpectedHelperSHA                     string
 	ExpectedJournalSHA, ExpectedReportSHA string
 	ExpectedCycle                         int64
 	ExpectedNonce                         string
@@ -66,7 +67,7 @@ func PrepareHandoff(in HandoffInput) (*PreparedHandoff, error) {
 		return nil, ErrCollector
 	}
 	held, err := readJournal(in.Journal, in.Report, old, in.Now)
-	if err != nil || held.Phase != "idle" || held.Cycle != in.ExpectedCycle || held.Nonce != in.ExpectedNonce {
+	if err != nil || held.Phase != "idle" || held.Cycle != in.ExpectedCycle || held.Nonce != in.ExpectedNonce || !remoteDigest(in.ExpectedHelperSHA) || held.HelperSHA != in.ExpectedHelperSHA || !validEvictedPod(in.EvictedPod, old.Host) {
 		return nil, ErrCollector
 	}
 	before, after := []byte(`"`+old.fingerprint+`"`), []byte(`"`+next.fingerprint+`"`)
@@ -81,10 +82,10 @@ func PrepareHandoff(in HandoffInput) (*PreparedHandoff, error) {
 	// Bind all input bytes and trusted policy as well as the exact proposed output.
 	// The parser-owned fingerprint commits to trust, policy and the host identity.
 	envelope, err := json.Marshal(struct {
-		Domain               string
-		OldConfig, NewConfig []byte
-		Plan                 *PreparedHandoff
-	}{"dev-env.allowance-handoff.prepare.v1", in.OldConfig, in.NewConfig, p})
+		Domain                           string
+		OldConfig, NewConfig, EvictedPod []byte
+		Plan                             *PreparedHandoff
+	}{"dev-env.allowance-handoff.prepare.v1", in.OldConfig, in.NewConfig, in.EvictedPod, p})
 	if err != nil {
 		return nil, ErrCollector
 	}
@@ -97,9 +98,7 @@ func PrepareHandoff(in HandoffInput) (*PreparedHandoff, error) {
 // human approval of the exact prepared hash. A matching hash proves neither.
 // The supplied client must be uncached and must target that exact context.
 func ApplyHandoff(ctx context.Context, c client.Client, in HandoffInput, approvedHash, backupDir string) error {
-	// The old per-Pod receipt ledger is not retained in the journal. Until
-	// terminal old-ledger evidence can be verified, public apply stays closed.
-	return ErrCollector
+	return applyHandoff(ctx, c, in, approvedHash, backupDir, time.Now)
 }
 
 func applyHandoff(ctx context.Context, c client.Client, in HandoffInput, approvedHash, backupDir string, clock func() time.Time) error {
@@ -158,6 +157,20 @@ func applyHandoff(ctx context.Context, c client.Client, in HandoffInput, approve
 	// retry the mutation; this is the same already-completed operation.
 	_ = updateErr
 	return nil
+}
+
+// validEvictedPod checks the identity and terminal shape of an archived API
+// object. Its authenticity is an external precondition, not proved by JSON.
+func validEvictedPod(raw []byte, old Host) bool {
+	if len(raw) == 0 || len(raw) > 256<<10 || !providerallowance.ValidJSONDocument(raw, 256<<10) {
+		return false
+	}
+	var pod corev1.Pod
+	if json.Unmarshal(raw, &pod) != nil || pod.APIVersion != "v1" || pod.Kind != "Pod" || pod.Namespace != Namespace || pod.Name != old.Name || string(pod.UID) != old.PodUID || pod.ResourceVersion == "" || pod.Spec.ServiceAccountName != old.ServiceAccount || pod.Status.Phase != corev1.PodFailed || pod.Status.Reason != "Evicted" {
+		return false
+	}
+	session := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: old.Name, UID: types.UID(old.SessionUID)}}
+	return exactHandoffOwner(pod.OwnerReferences, session)
 }
 
 func validHandoffSlot(cm *corev1.ConfigMap, uid string) bool {

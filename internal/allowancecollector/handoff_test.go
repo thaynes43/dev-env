@@ -20,6 +20,17 @@ import (
 	"time"
 )
 
+func evictedFixture(t *testing.T, host Host) []byte {
+	t.Helper()
+	yes := true
+	pod := corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Namespace: Namespace, Name: host.Name, UID: types.UID(host.PodUID), ResourceVersion: "42", OwnerReferences: []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(), Kind: "AgentSession", Name: host.Name, UID: types.UID(host.SessionUID), Controller: &yes}}}, Spec: corev1.PodSpec{ServiceAccountName: host.ServiceAccount}, Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"}}
+	raw, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func handoffFixture(t *testing.T) HandoffInput {
 	t.Helper()
 	now := time.Date(2026, 11, 3, 15, 0, 0, 0, time.UTC)
@@ -33,7 +44,7 @@ func handoffFixture(t *testing.T) HandoffInput {
 	report := []byte{}
 	j := journal{Version: 1, Fingerprint: old.fingerprint, HelperSHA: strings.Repeat("c", 64), Cycle: 56, Nonce: "55555555-5555-5555-5555-555555555555", Phase: "idle", StartedAt: now.Add(-time.Minute).Format(time.RFC3339Nano), NotBefore: now.Add(time.Minute).Format(time.RFC3339Nano), ReportSHA: digest(report), Captures: []Capture{}}
 	raw, _ := json.Marshal(j)
-	return HandoffInput{OldConfig: oldRaw, NewConfig: nextRaw, Trust: old.trust, PublisherUID: hostUID, PublisherSA: "dev-env-workbench", SlotUID: slotUID, ResourceVersion: "7", HomeUID: "66666666-6666-6666-6666-666666666666", KubeconfigPath: "/fixture/kubeconfig", KubeContext: "fixture", Journal: raw, Report: report, ExpectedJournalSHA: digest(raw), ExpectedReportSHA: digest(report), ExpectedCycle: 56, ExpectedNonce: j.Nonce, Now: now}
+	return HandoffInput{OldConfig: oldRaw, NewConfig: nextRaw, Trust: old.trust, PublisherUID: hostUID, PublisherSA: "dev-env-workbench", SlotUID: slotUID, ResourceVersion: "7", HomeUID: "66666666-6666-6666-6666-666666666666", KubeconfigPath: "/fixture/kubeconfig", KubeContext: "fixture", Journal: raw, Report: report, EvictedPod: evictedFixture(t, old.Host), ExpectedHelperSHA: j.HelperSHA, ExpectedJournalSHA: digest(raw), ExpectedReportSHA: digest(report), ExpectedCycle: 56, ExpectedNonce: j.Nonce, Now: now}
 }
 func TestPrepareHandoffPreservesJournalBytes(t *testing.T) {
 	in := handoffFixture(t)
@@ -52,6 +63,7 @@ func TestPrepareHandoffPreservesJournalBytes(t *testing.T) {
 }
 func TestPrepareHandoffRejectsFences(t *testing.T) {
 	for name, edit := range map[string]func(*HandoffInput){
+		"unknown helper": func(i *HandoffInput) { i.ExpectedHelperSHA = strings.Repeat("d", 64) }, "missing eviction": func(i *HandoffInput) { i.EvictedPod = nil },
 		"slot": func(i *HandoffInput) { i.SlotUID = hostUID }, "rv": func(i *HandoffInput) { i.ResourceVersion = "" },
 		"journal": func(i *HandoffInput) { i.Journal = append(i.Journal, ' ') }, "report": func(i *HandoffInput) { i.Report = []byte("x") },
 		"cycle": func(i *HandoffInput) { i.ExpectedCycle = 55 }, "nonce": func(i *HandoffInput) { i.ExpectedNonce = hostUID },
@@ -128,7 +140,7 @@ func TestHandoffRunnerContinuationAndLostAcknowledgement(t *testing.T) {
 	if err = r.Client.Create(ctx, pvc); err != nil {
 		t.Fatal(err)
 	}
-	in := HandoffInput{OldConfig: oldConfig, NewConfig: nextRaw, Trust: r.Config.trust, PublisherUID: hostUID, PublisherSA: "dev-env-workbench", SlotUID: slotUID, ResourceVersion: cm.ResourceVersion, HomeUID: homeUID, KubeconfigPath: "/fixture/kubeconfig", KubeContext: "fixture", Journal: oldJournal, Report: report, ExpectedJournalSHA: digest(oldJournal), ExpectedReportSHA: digest(report), ExpectedCycle: 56, ExpectedNonce: held.Nonce, Now: *now}
+	in := HandoffInput{OldConfig: oldConfig, NewConfig: nextRaw, Trust: r.Config.trust, PublisherUID: hostUID, PublisherSA: "dev-env-workbench", SlotUID: slotUID, ResourceVersion: cm.ResourceVersion, HomeUID: homeUID, KubeconfigPath: "/fixture/kubeconfig", KubeContext: "fixture", Journal: oldJournal, Report: report, EvictedPod: evictedFixture(t, r.Config.Host), ExpectedHelperSHA: held.HelperSHA, ExpectedJournalSHA: digest(oldJournal), ExpectedReportSHA: digest(report), ExpectedCycle: 56, ExpectedNonce: held.Nonce, Now: *now}
 	plan, err := PrepareHandoff(in)
 	if err != nil {
 		t.Fatal(err)
@@ -320,14 +332,11 @@ func (c *countHandoffUpdates) Update(ctx context.Context, obj client.Object, opt
 	return c.Client.Update(ctx, obj, opts...)
 }
 
-func TestPublicApplyRemainsClosedWithoutOldLedgerEvidence(t *testing.T) {
+func TestPublicApplyRejectsUnqualifiedEvidence(t *testing.T) {
 	spy := &countHandoffUpdates{}
 	in := handoffFixture(t)
-	plan, err := PrepareHandoff(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ApplyHandoff(context.Background(), spy, in, plan.Hash, t.TempDir()) == nil || spy.calls != 0 {
-		t.Fatal("public apply did not remain closed")
+	in.EvictedPod = nil
+	if ApplyHandoff(context.Background(), spy, in, strings.Repeat("a", 64), t.TempDir()) == nil || spy.calls != 0 {
+		t.Fatal("unqualified public apply accepted")
 	}
 }
