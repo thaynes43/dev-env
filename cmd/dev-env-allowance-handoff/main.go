@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -80,7 +81,7 @@ func run(args []string, out io.Writer, clock func() time.Time, factory clientFac
 		return errRefused
 	}
 	raw, err := readPrivate(*input, 512<<10)
-	if err != nil || !providerallowance.ValidJSONDocument(raw, 512<<10) || !providerallowance.ExactObjectKeys(raw, snapshotKeys) {
+	if err != nil || !utf8.Valid(raw) || !providerallowance.ExactObjectKeys(raw, snapshotKeys) {
 		return errRefused
 	}
 	var snap snapshot

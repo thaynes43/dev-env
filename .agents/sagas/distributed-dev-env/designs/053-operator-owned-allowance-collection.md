@@ -117,3 +117,35 @@ native agent GET and UI refresh/stale/error behavior. A successful API response,
 PodReady, source merge or one finite read does not satisfy those criteria.
 Disable the collector/reader configuration to roll back; preserve the last report
 as historical evidence and retain original credential/grant expiries.
+
+## One-time replacement handoff (2026-11-03)
+
+An explicitly invoked maintenance operator may prepare the particular
+cycle-56 host replacement and deadline 2026-11-04T15:33:23Z. This is not an
+automatic host adoption or a general identity migration. Producer incarnation
+remains the same caller-selected logical stream: trust, account and workspace
+bindings, captures, sequences and historical times remain unchanged. Only the
+host Pod UID, generation, image and the approved deadline may change.
+
+The maintenance operator independently authenticates the exact named
+ConfigMap UID and original bytes, old fingerprint, idle cycle, nonce, report,
+captures, known helper and archived old-Pod eviction evidence, and obtains
+approval of the exact prepared hash. A supplied snapshot or hash is not proof of
+provenance or human approval. A trusted idle journal from the existing Runner
+is transitive terminal cleanup evidence because that Runner commits idle only
+after a validated cleanup-proven terminal receipt and atomic report/journal
+update. No old runtime ledger is fabricated or bypassed.
+
+Preparation uses the existing config and journal parsers and binds the
+original and replacement configurations, evidence and proposed exact bytes.
+Apply uses the specifically selected uncached Kubernetes client, verifies the
+fresh replacement session, Pod, image, service account, owner references,
+heartbeat and bound HOME, and fences the named mutable slot and original
+resource version. It fsyncs a private full old-config, journal and report
+backup before rechecking those guards and changing only the journal fingerprint
+with a single CAS. Exact readback resolves an ambiguous acknowledgement and an
+identical retry requires the same backup. Contradictory state, changed trust or
+identity, non-idle work, expiry or replay refuses. Old and new runners with a
+mismatched fingerprint refuse before provider operations. Runtime invocation
+requires separately qualified actual evidence, exact approval and review; this
+source design and synthetic tests confer none of those.
