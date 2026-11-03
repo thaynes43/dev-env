@@ -134,17 +134,19 @@ The plan requires a witness that the old Pod incarnation is terminal. The first
 form is an archived Pod API object. Once a Session replaces its Pod the object
 is gone, and a summarized note is not an object. A second form is therefore
 accepted: an `eviction-observation.v1` document recording what the cluster's
-kube-state-metrics retained for the old Pod UID: namespace and name, phase
-`Failed` since a time, reason `Evicted`, controller `AgentSession` named like the
+kube-state-metrics retained for the old Pod UID: namespace and name, last and first range-evaluation instants at which the series returned the Pod
+`Running` and then `Failed`, reason `Evicted`, controller `AgentSession` named like the
 host, and the three series it came from (`kube_pod_info`,
 `kube_pod_status_phase`, `kube_pod_status_reason`, in that order).
 
 Checked: exact keys and bounded size; every identity field equals the old
 configuration's host (namespace, name, Pod UID, owner name); the Pod UID is the
-old incarnation, never the live one; the phase and reason; `failedSince` is not
-before the held journal's cycle start (the old Pod cannot have failed before the
-cycle the idle journal records), not after `observedAt`, and `observedAt` is not
-after the plan's time. The bytes are
+old incarnation, never the live one; the phase and reason; `lastReturnedRunning` is not before the held journal's cycle start (the old Pod
+was seen Running during the cycle the idle journal records) and is before
+`firstReturnedFailed`, which is not after `observedAt`; `observedAt` is not
+after the plan's time. Both instants are evaluation instants of a range query,
+not scrape times and not the transition: the Failed sample lies after the last
+Running evaluation and no later than the first Failed one. The bytes are
 part of the prepared hash, so a different witness is a different plan.
 
 Not carried: the owner UID, service account, image and resource version of the

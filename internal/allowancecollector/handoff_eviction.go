@@ -19,7 +19,7 @@ const EvictionObservationSchema = "dev-env.allowance-handoff.eviction-observatio
 
 const evictionObservationMax = 4 << 10
 
-var evictionObservationKeys = []string{"schema", "source", "namespace", "name", "podUID", "phase", "reason", "ownerKind", "ownerName", "failedSince", "observedAt", "series"}
+var evictionObservationKeys = []string{"schema", "source", "namespace", "name", "podUID", "phase", "reason", "ownerKind", "ownerName", "lastReturnedRunning", "firstReturnedFailed", "observedAt", "series"}
 
 // evictionSeries is the exact retained evidence set, in order.
 var evictionSeries = []string{"kube_pod_info", "kube_pod_status_phase", "kube_pod_status_reason"}
@@ -34,7 +34,8 @@ type evictionObservation struct {
 	Reason      string   `json:"reason"`
 	OwnerKind   string   `json:"ownerKind"`
 	OwnerName   string   `json:"ownerName"`
-	FailedSince string   `json:"failedSince"`
+	LastRunning string   `json:"lastReturnedRunning"`
+	FirstFailed string   `json:"firstReturnedFailed"`
 	ObservedAt  string   `json:"observedAt"`
 	Series      []string `json:"series"`
 }
@@ -43,8 +44,8 @@ type evictionObservation struct {
 // observation. An observation carries no owner UID, service account, image or
 // resource version: those stay bound by the fingerprinted old configuration and
 // the live Session checks, and the observation is not a Pod object.
-// floor is the held journal's last cycle start: the old Pod cannot have failed
-// before it ran the cycle that the idle journal records.
+// floor is the held journal's last cycle start: the old Pod must have been
+// seen Running at or after it, the cycle the idle journal records.
 func validEvictionWitness(raw []byte, old Host, now, floor time.Time) bool {
 	if len(raw) > 0 && len(raw) <= evictionObservationMax && providerallowance.ValidJSONDocument(raw, evictionObservationMax) && providerallowance.ExactObjectKeys(raw, evictionObservationKeys) {
 		return validEvictionObservation(raw, old, now, floor)
@@ -64,9 +65,13 @@ func validEvictionObservation(raw []byte, old Host, now, floor time.Time) bool {
 	if dec.Decode(&o) != nil || dec.Decode(new(any)) != io.EOF {
 		return false
 	}
-	failed, e1 := time.Parse(time.RFC3339, o.FailedSince)
+	// These are range-evaluation instants, not scrape times or the transition:
+	// the last evaluation that returned the Pod Running and the first that
+	// returned it Failed. The Failed sample lies in (lastRunning, firstFailed].
+	running, e0 := time.Parse(time.RFC3339, o.LastRunning)
+	failed, e1 := time.Parse(time.RFC3339, o.FirstFailed)
 	seen, e2 := time.Parse(time.RFC3339, o.ObservedAt)
-	if e1 != nil || e2 != nil || now.IsZero() || floor.IsZero() || failed.Before(floor) || failed.After(seen) || seen.After(now) {
+	if e0 != nil || e1 != nil || e2 != nil || now.IsZero() || floor.IsZero() || running.Before(floor) || !running.Before(failed) || failed.After(seen) || seen.After(now) {
 		return false
 	}
 	if o.Schema != EvictionObservationSchema || o.Source != "kube-state-metrics" || o.Namespace != Namespace || o.Name != old.Name || o.PodUID != old.PodUID || o.Phase != "Failed" || o.Reason != "Evicted" || o.OwnerKind != "AgentSession" || o.OwnerName != old.Name || len(o.Series) != len(evictionSeries) {
