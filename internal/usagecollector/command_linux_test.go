@@ -53,12 +53,12 @@ func testFiniteCommandNaturalExit(t *testing.T, output string, run func(context.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer readyFile.Close()
+	defer func() { _ = readyFile.Close() }()
 	releaseFile, err := os.OpenFile(release, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer releaseFile.Close()
+	defer func() { _ = releaseFile.Close() }()
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 	executable := filepath.Join(dir, "metadata-fixture")
 	body := fmt.Sprintf("#!/bin/sh\nprintf '%%s' %s\nprintf r > %s\nexec 1>&-\nIFS= read -r ignored < %s\nexit 0\n", quote(output), quote(ready), quote(release))
