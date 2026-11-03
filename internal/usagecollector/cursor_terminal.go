@@ -3,6 +3,7 @@ package usagecollector
 import (
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -93,7 +94,16 @@ func (t *cursorTerminal) feed(raw []byte) error {
 			qualified := r < 128 || r == '•' || r == '·' || r == '…' || r >= 0x2190 && r <= 0x21ff || r >= 0x2500 && r <= 0x259f || r == '✓'
 			if r == utf8.RuneError || !qualified {
 				reason := "builtin_terminal_rune_unqualified"
-				if strings.ContainsRune(cursorDotSpinnerDiagnosticSet, r) {
+				switch {
+				case r == utf8.RuneError:
+					reason = "builtin_terminal_encoding_unqualified"
+				case unicode.IsMark(r):
+					reason = "builtin_terminal_combining_unqualified"
+				case unicode.IsSpace(r):
+					reason = "builtin_terminal_spacing_unqualified"
+				case unicode.Is(unicode.Cf, r):
+					reason = "builtin_terminal_format_unqualified"
+				case strings.ContainsRune(cursorDotSpinnerDiagnosticSet, r):
 					reason = "builtin_terminal_dotset_unqualified"
 				}
 				return refused(reason, ErrCapture)

@@ -131,8 +131,9 @@ func reserve(held journal, cfg *Config, nonce, helperSHA string, now time.Time) 
 	return held, raw, nil
 }
 
-// appendCapture retains only the last two original samples per provider. The
-// assembler checks clocks, producer identity, sequence and payload agreement.
+// appendCapture retains at most two original samples per provider. Empty Claude
+// envelopes retain the latest prior nonempty sample rather than evicting it on
+// repeated empty reads. Assembly still validates every retained payload/binding.
 func appendCapture(held []Capture, capture Capture) []Capture {
 	out := append(append([]Capture(nil), held...), capture)
 	count := 0
@@ -144,10 +145,28 @@ func appendCapture(held []Capture, capture Capture) []Capture {
 	if count <= 2 {
 		return out
 	}
+	keep := -1
+	if emptyClaudeCapture(capture) {
+		for i, item := range out[:len(out)-1] {
+			if item.Provider == capture.Provider && !emptyClaudeCapture(item) {
+				keep = i
+			}
+		}
+	}
 	for i, item := range out {
-		if item.Provider == capture.Provider {
+		if item.Provider == capture.Provider && i != keep {
 			return append(out[:i:i], out[i+1:]...)
 		}
 	}
 	return out
+}
+
+// This is only an eviction preference, never payload validation or trust.
+// The incoming capture remains in the bundle and must pass strict assembly.
+func emptyClaudeCapture(capture Capture) bool {
+	if capture.Provider != "anthropic" {
+		return false
+	}
+	var payload providerallowance.ClaudeUsageCapture
+	return json.Unmarshal(capture.Payload, &payload) == nil && payload.Schema == providerallowance.ClaudeSDKCaptureSchema && len(payload.Limits) == 0
 }
