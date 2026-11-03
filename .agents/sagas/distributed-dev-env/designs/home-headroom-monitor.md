@@ -15,7 +15,7 @@ Add one statfs-based sample of the filesystem holding $HOME (Settings.Home) and 
 `homeHeadroom` on the existing agentd Status (heartbeat body and `agentd ctl status`). No new
 route, no new metric endpoint, no directory scan.
 
-Reported: measured numbers (bytes total/available, inodes total/free) and a closed state word.
+Reported: measured numbers (bytes total/available, inodes total/available) and a closed state word.
 Never an action, never a path, never an error string, never file names or contents.
 
 ## Files
