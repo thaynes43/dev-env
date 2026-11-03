@@ -86,7 +86,7 @@ func (t *cursorTerminal) feed(raw []byte) error {
 				return nil
 			}
 			r, size := utf8.DecodeRune(t.pending[i:])
-			qualified := r < 128 || r == '•' || r == '·' || r >= 0x2190 && r <= 0x21ff || r >= 0x2500 && r <= 0x259f || r == '✓'
+			qualified := r < 128 || r == '•' || r == '·' || r == '…' || r >= 0x2190 && r <= 0x21ff || r >= 0x2500 && r <= 0x259f || r == '✓'
 			if r == utf8.RuneError || !qualified {
 				return refused("builtin_terminal_rune_unqualified", ErrCapture)
 			}

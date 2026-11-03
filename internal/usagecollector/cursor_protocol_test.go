@@ -240,3 +240,38 @@ func TestCursorCompleteScreenMaySkipTransientLoadingButNeedsNewOutput(t *testing
 		t.Fatal("oldframecreatedanothercapture")
 	}
 }
+
+func TestCursorTerminalRetainedAutocompleteEllipsis(t *testing.T) {
+	const description = "Create custom subagents for specialized AI…"
+	var terminal cursorTerminal
+	if err := terminal.feed([]byte(description + "\r\n")); err != nil {
+		t.Fatal("retained printable ellipsis refused", err)
+	}
+	visible, ok := terminal.visible()
+	if !ok || !strings.Contains(visible, description) {
+		t.Fatal("ellipsis text was hidden or changed")
+	}
+	p := cursorProtocol{state: 2}
+	input, report, err := feedCursorFrame(&p, cursorSingleRowMenu+description+"\r\n")
+	if err != nil || input != "\r" || report != nil {
+		t.Fatal("unselected ellipsis description prevented exact usage selection", err)
+	}
+}
+
+func TestCursorEllipsisKeepsTerminalAndPromptFences(t *testing.T) {
+	for _, text := range []string{"界", "😀", "\u202e", "e\u0301", "☃", "\x00", "\xff"} {
+		p := cursorProtocol{state: 2}
+		input, report, err := feedCursorFrame(&p, cursorSingleRowMenu+text+"\r\n")
+		if err == nil || input != "" || report != nil {
+			t.Fatal("unqualified wide, bidi, combining, unknown or control text authorized input")
+		}
+	}
+	p := cursorProtocol{state: 2}
+	if input, report, err := feedCursorFrame(&p, cursorSingleRowMenu+"Continue? … [y/N]\r\n"); err == nil || input != "" || report != nil {
+		t.Fatal("ellipsis hid a confirmation prompt")
+	}
+	p = cursorProtocol{state: 2}
+	if input, report, err := p.accept([]byte(cursorSingleRowMenu + strings.Repeat("x", 179) + "…Confirm")); err == nil || input != "" || report != nil {
+		t.Fatal("ellipsis bypassed terminal bounds")
+	}
+}
