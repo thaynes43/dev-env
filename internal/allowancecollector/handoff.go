@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -100,20 +101,63 @@ func PrepareHandoff(in HandoffInput) (*PreparedHandoff, error) {
 // human approval of the exact prepared hash. A matching hash proves neither.
 // The supplied client must be uncached and must target that exact context.
 func ApplyHandoff(ctx context.Context, c client.Client, in HandoffInput, approvedHash, backupDir string) error {
+	if backupDir == "" {
+		return ErrCollector
+	}
 	return applyHandoff(ctx, c, in, approvedHash, backupDir, time.Now)
+}
+
+// handoffSlotBackupMax bounds the whole slot after an in-slot backup is added.
+// A ConfigMap is limited to 1 MiB; leave room for metadata and a later report.
+const handoffSlotBackupMax = 900 << 10
+
+const handoffBackupPrefix = "handoff-backup-"
+
+// Refusal reasons for the operator's log. Both wrap ErrCollector and carry no
+// slot bytes. A stale snapshot or a hash that no longer matches both mean the
+// request must be prepared again; any other refusal may clear by itself.
+var (
+	ErrHandoffHash  = errors.Join(ErrCollector, errors.New("approved hash does not match the prepared plan"))
+	ErrHandoffStale = errors.Join(ErrCollector, errors.New("slot changed since the snapshot"))
+)
+
+// HandoffBackupKey is the slot entry that carries the full pre-image of an
+// in-slot handoff, named by the approved prepared hash.
+func HandoffBackupKey(hash string) string { return handoffBackupPrefix + hash + ".json" }
+
+// ApplyHandoffInSlot is ApplyHandoff for a caller with no durable directory,
+// such as the elected operator. The full pre-image is written into the slot
+// object itself in the same compare-and-swap update as the journal change, so
+// it is durable exactly when the new journal is and can never be missing after
+// it. The same fences apply. A second call after the collector has advanced is
+// acknowledged only when the exact backup entry is present and the current
+// journal parses under the new configuration; it never writes again.
+func ApplyHandoffInSlot(ctx context.Context, c client.Client, in HandoffInput, approvedHash string) error {
+	return applyHandoff(ctx, c, in, approvedHash, "", time.Now)
+}
+
+func handoffBackupBytes(in HandoffInput) ([]byte, error) {
+	return json.Marshal(struct {
+		Schema                     string
+		OldConfig, Journal, Report []byte
+	}{"dev-env.allowance-handoff.backup.v1", in.OldConfig, in.Journal, in.Report})
 }
 
 func applyHandoff(ctx context.Context, c client.Client, in HandoffInput, approvedHash, backupDir string, clock func() time.Time) error {
 	if clock == nil {
 		return ErrCollector
 	}
+	inSlot := backupDir == ""
 	in.Now = clock().UTC()
 	if ctx == nil || c == nil || ctx.Err() != nil || !remoteDigest(approvedHash) {
 		return ErrCollector
 	}
 	p, err := PrepareHandoff(in)
-	if err != nil || p.Hash != approvedHash {
+	if err != nil {
 		return ErrCollector
+	}
+	if p.Hash != approvedHash {
+		return ErrHandoffHash
 	}
 	next, err := ParseConfig(in.NewConfig, in.Trust, in.PublisherUID, in.PublisherSA, in.Now)
 	if err != nil {
@@ -127,18 +171,50 @@ func applyHandoff(ctx context.Context, c client.Client, in HandoffInput, approve
 	if c.Get(ctx, key, &cm) != nil || !validHandoffSlot(&cm, in.SlotUID) {
 		return ErrCollector
 	}
+	backupRaw, err := handoffBackupBytes(in)
+	if err != nil {
+		return ErrCollector
+	}
+	backupKey := HandoffBackupKey(p.Hash)
 	// A previously completed identical operation may be acknowledged only with
 	// its matching durable backup and exact report; no second write is made.
 	if cm.Data[StateKey] == string(p.NewJournal) && cm.Data[apiserver.AggregateAllowanceDataKey] == string(in.Report) && cm.ResourceVersion != in.ResourceVersion {
+		if inSlot {
+			if cm.Data[backupKey] != string(backupRaw) {
+				return ErrCollector
+			}
+			return nil
+		}
 		if checkHandoffBackup(backupDir, p.Hash, in, false) != nil {
 			return ErrCollector
 		}
 		return nil
 	}
-	if cm.ResourceVersion != in.ResourceVersion || cm.Data[StateKey] != string(in.Journal) || cm.Data[apiserver.AggregateAllowanceDataKey] != string(in.Report) {
+	// The collector may already have run natural cycles under the new
+	// configuration. That is the same completed operation only with the exact
+	// backup this plan wrote and a journal the new configuration still accepts.
+	if inSlot && cm.Data[backupKey] == string(backupRaw) && cm.ResourceVersion != in.ResourceVersion {
+		if _, e := readJournal([]byte(cm.Data[StateKey]), []byte(cm.Data[apiserver.AggregateAllowanceDataKey]), next, in.Now); e == nil {
+			return nil
+		}
 		return ErrCollector
 	}
-	if checkHandoffBackup(backupDir, p.Hash, in, true) != nil {
+	if cm.ResourceVersion != in.ResourceVersion || cm.Data[StateKey] != string(in.Journal) || cm.Data[apiserver.AggregateAllowanceDataKey] != string(in.Report) {
+		return ErrHandoffStale
+	}
+	if inSlot {
+		total := len(backupRaw)
+		for k, v := range cm.Data {
+			if strings.HasPrefix(k, handoffBackupPrefix) {
+				// Any earlier backup entry means another operation; this one is single-use.
+				return ErrCollector
+			}
+			total += len(k) + len(v)
+		}
+		if total > handoffSlotBackupMax {
+			return ErrCollector
+		}
+	} else if checkHandoffBackup(backupDir, p.Hash, in, true) != nil {
 		return ErrCollector
 	}
 	in.Now = clock().UTC()
@@ -150,9 +226,12 @@ func applyHandoff(ctx context.Context, c client.Client, in HandoffInput, approve
 		return ErrCollector
 	}
 	fresh.Data[StateKey] = string(p.NewJournal)
+	if inSlot {
+		fresh.Data[backupKey] = string(backupRaw)
+	}
 	updateErr := c.Update(ctx, &fresh)
 	var confirmed corev1.ConfigMap
-	if c.Get(ctx, key, &confirmed) != nil || !validHandoffSlot(&confirmed, in.SlotUID) || confirmed.ResourceVersion == in.ResourceVersion || confirmed.Data[StateKey] != string(p.NewJournal) || confirmed.Data[apiserver.AggregateAllowanceDataKey] != string(in.Report) {
+	if c.Get(ctx, key, &confirmed) != nil || !validHandoffSlot(&confirmed, in.SlotUID) || confirmed.ResourceVersion == in.ResourceVersion || confirmed.Data[StateKey] != string(p.NewJournal) || confirmed.Data[apiserver.AggregateAllowanceDataKey] != string(in.Report) || inSlot && confirmed.Data[backupKey] != string(backupRaw) {
 		return ErrCollector
 	}
 	// An error with exact changed-RV readback is a lost acknowledgement. Never
@@ -265,10 +344,7 @@ func checkHandoffBackup(dir, hash string, in HandoffInput, create bool) error {
 		return ErrCollector
 	}
 	defer func() { _ = root.Close() }()
-	raw, err := json.Marshal(struct {
-		Schema                     string
-		OldConfig, Journal, Report []byte
-	}{"dev-env.allowance-handoff.backup.v1", in.OldConfig, in.Journal, in.Report})
+	raw, err := handoffBackupBytes(in)
 	if err != nil {
 		return ErrCollector
 	}

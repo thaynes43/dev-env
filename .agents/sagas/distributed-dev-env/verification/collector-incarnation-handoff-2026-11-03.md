@@ -63,3 +63,67 @@ records these preconditions and fences.
 
 The approved host delta permits a different valid digest-pinned image. The fresh
 replacement Pod must match the newly selected image exactly.
+
+## Operator-native execution route (source, 2026-11-03)
+
+The standalone CLI needs a caller that can Update the slot. The Root session's
+caller cannot, and the borrowed-identity alternatives are not allowed. The
+elected operator already holds `get, update` on exactly the slot ConfigMap and
+nothing else in `dev-env-system` (haynes-ops `rbac/app/operator.yaml`: no
+`create`), so it can run the same operation without a new permission.
+
+**Flag.** `--allowance-handoff-file=<abs path>` is off by default and requires
+the enabled collector. The file is private (no access for others, at most 512
+KiB) and holds exactly `{"approvedHash": ..., "snapshot": {...}}`. The snapshot
+is the CLI's snapshot. An unreadable or invalid file is refused and logged with
+a fixed message; it never stops the operator, because the collector and the API
+do not depend on it.
+
+**Fences, in order.** `HandoffRunner` (leader-only) makes an attempt about
+every minute until it is acknowledged, the new window ends or the operator
+stops:
+
+1. The snapshot's new configuration must parse to exactly the configuration
+   this process is running (fingerprint, host, slot, deadline). The trust and
+   publisher come from the operator's own aggregate selection, not the file.
+2. `PrepareHandoff` must reproduce the approved hash. The hash binds both
+   configurations, the evicted-Pod witness, the journal and report digests, the
+   cycle, nonce and helper, and both fingerprints. It also binds a kubeconfig
+   path and context; for the operator these are the fixed values
+   `allowancecollector.OperatorKubeconfigPath` and `OperatorKubeContext`, so
+   the approver reproduces the hash with `dev-env-allowance-handoff prepare
+   --kubeconfig /var/run/secrets/kubernetes.io/serviceaccount --context
+   in-cluster:dev-env-operator`. Prepare opens neither value.
+3. The replacement session, Pod and HOME checks use an uncached client.
+4. The slot must have the exact old resource version, journal and report.
+5. One update writes the new journal and the backup together.
+
+**Backup.** There is no durable directory in the operator, and `/tmp` there is
+an emptyDir. The full pre-image (old configuration, journal and report) is
+therefore written to the slot object itself, under
+`handoff-backup-<prepared hash>.json`, in the same compare-and-swap update as
+the journal change. It is durable in etcd exactly when the new journal is, and
+it cannot be missing after the journal changed. No other key or report byte
+changes. The route refuses when any earlier backup entry exists (the operation
+is single-use) or when the slot would pass 900 KiB (a ConfigMap is capped at
+1 MiB; journal, report and configuration can reach about 390 KiB). The entry is
+never pruned by the collector. Export it with the usual read access before any
+later cleanup.
+
+**Lost acknowledgement and restart.** A failed update is judged by exact
+readback of a changed resource version, journal, report and backup; the update
+is never retried. After success, the collector's own cycles move the journal on,
+so an operator restart acknowledges the handoff only when the exact backup entry
+is present and the current journal still parses under the new configuration. It
+then writes nothing.
+
+**Zero provider I/O.** Until the handoff lands, a collector on either
+fingerprint refuses before it reserves or dispatches. The tests count
+`Remote.Run` calls across both collectors and a refused handoff.
+
+**What this does not do.** It does not authenticate the evicted-Pod snapshot or
+the approval; the human-directed coordinator still qualifies both before the
+file is mounted. It grants no permission, deploys nothing and applies nothing.
+Mounting the file, pinning an operator image that has this route and the new
+collector configuration are GitOps changes that remain held for the owner's
+approval. After the acknowledgement, remove the file and flag in a later change.

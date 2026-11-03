@@ -120,6 +120,8 @@ as historical evidence and retain original credential/grant expiries.
 
 ## One-time replacement handoff (2026-11-03)
 
+*Execution route.* The standalone helper needs a caller that can update the slot. The elected operator already holds that authority, so source also adds a default-off `--allowance-handoff-file` route with an in-slot full backup; see [the verification record](../verification/collector-incarnation-handoff-2026-11-03.md#operator-native-execution-route-source-2026-11-03). It adds no permission and applies nothing by itself.
+
 The human-directed parent coordinator session may explicitly invoke the
 maintenance helper to prepare the particular cycle-56 host replacement and
 deadline 2026-11-04T15:33:23Z. This is not an automatic host adoption or a
