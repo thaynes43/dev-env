@@ -1,6 +1,7 @@
 package allowancecollector
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -151,5 +152,39 @@ func TestPrepareRefusesObservationOlderThanHeldCycle(t *testing.T) {
 	in.EvictedPod, _ = json.Marshal(m)
 	if _, err := PrepareHandoff(in); err == nil {
 		t.Fatal("accepted a failure older than the held cycle")
+	}
+}
+
+// The operator route applies a handoff whose witness is an observation, with the
+// same single write and in-slot backup as the Pod-object form.
+func TestInSlotHandoffAppliesWithEvictionObservation(t *testing.T) {
+	h := newSlotHandoff(t)
+	start, err := time.Parse(time.RFC3339Nano, h.held.StartedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := evictionObservationFixture(t, h.r.Config.Host, *h.now)
+	m["failedSince"] = start.Add(time.Second).UTC().Format(time.RFC3339)
+	m["observedAt"] = h.now.Add(-time.Second).UTC().Format(time.RFC3339)
+	h.in.EvictedPod, _ = json.Marshal(m)
+	if h.plan, err = PrepareHandoff(h.in); err != nil {
+		t.Fatal("observation refused", err)
+	}
+	spy := &countHandoffUpdates{Client: h.r.Client}
+	run := h.handoffRunner()
+	run.Snapshot.EvictedPod = h.in.EvictedPod
+	run.Client = spy
+	if err = run.Attempt(context.Background()); err != nil || spy.calls != 1 {
+		t.Fatal("apply with observation", err, spy.calls)
+	}
+	if h.slotNow(t).Data[StateKey] != string(h.plan.NewJournal) {
+		t.Fatal("journal not replaced")
+	}
+	// The same document with a failure before the held cycle is refused and writes nothing.
+	h2 := newSlotHandoff(t)
+	m["failedSince"] = start.Add(-time.Hour).UTC().Format(time.RFC3339)
+	h2.in.EvictedPod, _ = json.Marshal(m)
+	if _, err = PrepareHandoff(h2.in); err == nil {
+		t.Fatal("stale observation accepted")
 	}
 }
