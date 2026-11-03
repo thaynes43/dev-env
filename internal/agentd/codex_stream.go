@@ -44,9 +44,13 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 		return errors.New("native Codex JSONL is not UTF-8")
 	}
 	var e struct {
-		Type     string `json:"type"`
-		ThreadID string `json:"thread_id"`
-		Item     struct {
+		Type     string  `json:"type"`
+		ThreadID string  `json:"thread_id"`
+		Message  *string `json:"message"`
+		Error    *struct {
+			Message *string `json:"message"`
+		} `json:"error"`
+		Item struct {
 			Type             string `json:"type"`
 			Text             string `json:"text"`
 			AggregatedOutput string `json:"aggregated_output"`
@@ -124,9 +128,22 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 		u.CacheReadInputTokens, u.CacheCreationInputTokens = reportedTokens(e.Usage.Cached), reportedTokens(e.Usage.CacheWrite)
 		codexServedModel(&u, e.Model)
 		*result = streamResult{Seen: true, Subtype: "success", NumTurns: 1, Usage: legacyUsage(u), Observation: u}
-	case "turn.failed", "error":
+	case "error":
+		// The pinned producer emits diagnostic notifications while the turn
+		// is still running. Its later turn.failed/completed is the terminal.
 		if s.terminal {
 			return errSecondCodexTerminal
+		}
+		if e.Message == nil {
+			return errors.New("malformed native Codex diagnostic")
+		}
+		_, _ = fmt.Fprintln(out, "[agentd] native Codex provider diagnostic")
+	case "turn.failed":
+		if s.terminal {
+			return errSecondCodexTerminal
+		}
+		if e.Error == nil || e.Error.Message == nil {
+			return errors.New("malformed native Codex failure")
 		}
 		s.terminal, s.failed = true, true
 		u := protocol.UnknownUsage()
@@ -135,8 +152,14 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 			u.CacheReadInputTokens, u.CacheCreationInputTokens = reportedTokens(e.Usage.Cached), reportedTokens(e.Usage.CacheWrite)
 		}
 		codexServedModel(&u, e.Model)
-		*result = streamResult{Seen: true, Subtype: "provider_error", IsError: true, Observation: u, Usage: legacyUsage(u)}
-		_, _ = fmt.Fprintln(out, "[agentd] native Codex turn failed")
+		subtype := "provider_error"
+		// This exact pinned-vendor message identifies a reason, not account
+		// quota, authorization, retryability or permission to resume a task.
+		if *e.Error.Message == "Selected model is at capacity. Please try a different model." {
+			subtype = "provider_capacity"
+		}
+		*result = streamResult{Seen: true, Subtype: subtype, IsError: true, Observation: u, Usage: legacyUsage(u)}
+		_, _ = fmt.Fprintf(out, "[agentd] native Codex turn failed: %s\n", subtype)
 	default:
 		return errors.New("unknown pinned native Codex event")
 	}
