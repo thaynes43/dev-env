@@ -32,9 +32,13 @@ that matches it, not to a block it happens to sit in.
 | 7 | `builtin_terminal_shape_unqualified` | any symbol in U+25A0 to U+25FF, including its math symbols |
 | 8 | `builtin_terminal_math_unqualified` | math symbols (Sm) outside the shape block (for example U+266F is math, not pictograph) |
 | 9 | `builtin_terminal_currency_unqualified` | currency symbols (Sc) |
-| 10 | `builtin_terminal_pictograph_unqualified` | the remaining symbols in U+2600 to U+27BF and from U+1F000 up (what is left of the miscellaneous symbols, dingbats and emoji after rows 2, 8 and 9) |
-| 11 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
-| 12 | `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only
+| 10 | `builtin_terminal_checkmark_unqualified` | the remaining check and cross marks: U+2714 to U+2718, U+2705, U+274C, U+274E (the already-qualified U+2713 never reaches a label) |
+| 11 | `builtin_terminal_star_unqualified` | stars, asterisks and flower dingbats: U+2605, U+2606, U+2721 to U+274B (spinner-style asterisks included) |
+| 12 | `builtin_terminal_miscsymbol_unqualified` | what is left of the Miscellaneous Symbols block, U+2600 to U+26FF (weather, warning, hearts, and so on) |
+| 13 | `builtin_terminal_dingbat_unqualified` | what is left of the Dingbats block, U+2700 to U+27BF (ornaments, crosses, dingbat arrows) |
+| 14 | `builtin_terminal_pictograph_unqualified` | symbols from U+1F000 up (emoji and other pictographs) |
+| 15 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
+| 16 | `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only
 
 Dash and quote are the smallest and most guessable classes (a few dozen characters each); the label still names a class, never a character, and no finer split is made.
 
@@ -57,3 +61,15 @@ This is diagnostics only. It qualifies no character, widens no input and runs no
 provider. Qualifying a character, if the evidence supports it, is a separate
 reviewed change with its own evidence. Installed behavior, usable Cursor rows and
 two complete all-provider cycles remain unproven.
+
+## Round 2 (after the first natural cycle with the class labels)
+
+Cycle 64, on operator `sha-84fa61c`, read Claude and Codex (known last-reported
+values, provider clock unknown) and refused Cursor at
+`builtin_terminal_pictograph_unqualified`: a symbol in U+2600 to U+27BF or from
+U+1F000, after numbers, math and currency. The client binary is not part of this
+repository's image and Root's private client is out of reach, so the next step is
+to narrow the same class further with labels only. The pictograph label is split
+into the four sub-classes above plus the emoji remainder. Each still covers many
+characters, still emits no character, code point or count, and qualifies nothing:
+a refusal remains a refusal until evidence supports accepting a specific glyph.
