@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // runMetadata owns a finite normal vendor command and all same-group children.
@@ -52,6 +54,9 @@ func runMetadata(ctx context.Context, executable string, args []string, claude b
 	}()
 	raw, err = io.ReadAll(io.LimitReader(out, (16<<10)+1))
 	_ = out.Close()
+	if err == nil && len(raw) <= 16<<10 && ctx.Err() == nil {
+		err = waitOwnedExit(ctx, cmd)
+	}
 	// Kill before Wait: retain the zombie leader's group identity until every
 	// descendant has received termination, then reap the direct child.
 	clean := stopOwnedGroup(cmd)
@@ -64,6 +69,27 @@ func runMetadata(ctx context.Context, executable string, args []string, claude b
 		return nil, ErrCapture
 	}
 	return raw, nil
+}
+
+// waitOwnedExit observes a finite command's natural exit without reaping its
+// leader. EOF alone does not mean the process has exited. Keeping the zombie
+// until stopOwnedGroup runs also retains the owned process-group identity while
+// descendants are terminated. CommandContext's existing finite deadline and
+// group cancellation bound this wait; no new command or retry is started.
+func waitOwnedExit(ctx context.Context, cmd *exec.Cmd) error {
+	if ctx == nil || ctx.Err() != nil || cmd == nil || cmd.Process == nil {
+		return ErrCapture
+	}
+	for {
+		var info unix.Siginfo
+		err := unix.Waitid(unix.P_PID, cmd.Process.Pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if err != unix.EINTR {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ErrCapture
+		}
+	}
 }
 
 // This matches the existing Remote Control launch's static-token exclusion.
