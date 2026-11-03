@@ -14,6 +14,60 @@ func cursorReady(workspace string) string {
 const cursorMenu = "→ /usage\r\nShow plan and on-demand usage\r\n"
 const cursorScreen = "Loading usage data...\r\nUsage • fixture-tier\r\nResets Nov 6\r\nMonthly plan and on-demand usage\r\nCategory Current Usage\r\nIncluded 61% used\r\nAuto 61% used\r\nAPI 0% used\r\nEsc to close\r\n"
 
+const cursorSingleRowMenu = "→ /usage    Show plan and on-demand usage\r\n"
+
+func TestCursorProtocolSingleInactiveAutocompleteRow(t *testing.T) {
+	p := cursorProtocol{workspace: "/private/empty"}
+	if input, _, err := feedCursorFrame(&p, cursorReady(p.workspace)); err != nil || input != "/usage" {
+		t.Fatal("qualified ready state failed", err)
+	}
+	input, report, err := feedCursorFrame(&p, cursorSingleRowMenu)
+	if err != nil || input != "\r" || report != nil || p.state != 3 {
+		t.Fatal("one selected inactive command/description row could not advance", err, p.state)
+	}
+	input, report, err = feedCursorFrame(&p, cursorScreen)
+	if err != nil || input != "" || report == nil || *report.IncludedPercentDisplay != 61 {
+		t.Fatal("single-row command lost the separate usage display", err)
+	}
+}
+
+func TestCursorSingleRowMenuKeepsInputAndModalFences(t *testing.T) {
+	for _, frame := range []string{
+		strings.Replace(cursorSingleRowMenu, "/usage ", "/usage-other ", 1),
+		strings.Replace(cursorSingleRowMenu, "Show plan and on-demand usage", "Run another command", 1),
+		strings.TrimSuffix(cursorSingleRowMenu, "\r\n"), // Active row is not a menu.
+		cursorSingleRowMenu + "→ /usage-other",
+		cursorSingleRowMenu + cursorSingleRowMenu,
+		cursorSingleRowMenu + cursorMenu,
+		cursorSingleRowMenu + "Continue? [y/N]\r\n",
+		strings.Replace(cursorSingleRowMenu, "usage\r\n", "usage PRIVATE-SENTINEL\r\n", 1),
+	} {
+		p := cursorProtocol{state: 2}
+		input, report, _ := feedCursorFrame(&p, frame)
+		if input != "" || report != nil || p.state != 2 {
+			t.Fatal("foreign, active, ambiguous or modal menu authorized input")
+		}
+	}
+}
+
+func TestCursorInlineMenuRejectsInactiveCompetingSelections(t *testing.T) {
+	for _, test := range []struct{ name, row string }{
+		{"foreign-selected", "→ /other    Another command\r\n"},
+		{"partial-legacy-selector", "→ /usage\r\n"},
+		{"partial-legacy-description", "Show plan and on-demand usage\r\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := cursorProtocol{state: 2}
+			// Both candidate rows end before the active blank row. An active
+			// foreign-input guard cannot mask selection ambiguity here.
+			input, report, _ := feedCursorFrame(&p, cursorSingleRowMenu+test.row)
+			if input != "" || report != nil || p.state != 2 {
+				t.Fatal("competing inactive selection authorized Enter")
+			}
+		})
+	}
+}
+
 func TestCursorProtocolOnlySendsAfterDistinctQualifiedStates(t *testing.T) {
 	p := cursorProtocol{workspace: "/private/empty", trust: true}
 	trust := "Workspace Trust Required\n/private/empty\n[a] Trust this workspace\n[q] Quit\n"
