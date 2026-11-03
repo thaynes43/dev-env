@@ -829,7 +829,7 @@ func TestClaudeObservationDoesNotOutliveNewLeaderAdoption(t *testing.T) {
 		<-done
 		t.Fatal("synthetic adoption failed")
 	}
-	newWorker.observe(adopted)
+	newWorker.observe(context.Background(), string(secret.UID), adopted)
 	close(paused.resume)
 	<-done
 	if got := hub.Snapshot()[ProviderClaude].State; got != LoginReady {
@@ -861,7 +861,7 @@ func TestClaudeTickObservationDoesNotOutliveNewLeaderAdoption(t *testing.T) {
 		<-done
 		t.Fatal("synthetic adoption failed")
 	}
-	newWorker.observe(adopted)
+	newWorker.observe(context.Background(), string(secret.UID), adopted)
 	close(paused.resume)
 	<-done
 	if got := hub.Snapshot()[ProviderClaude].State; got != LoginReady {
@@ -904,7 +904,7 @@ func TestClaudeObservationIndependentHubsAfterAdoption(t *testing.T) {
 		<-notifierDone
 		t.Fatal("synthetic adoption failed")
 	}
-	newWorker.observe(adopted)
+	newWorker.observe(context.Background(), string(secret.UID), adopted)
 	close(paused.resume)
 	<-done
 	close(notifierResume)
@@ -1061,7 +1061,7 @@ func TestClaudeNotifierDecisionBeforeAdoptionDeliveryBoundary(t *testing.T) {
 				<-done
 				t.Fatal("synthetic adoption failed")
 			}
-			newWorker.observe(adopted)
+			newWorker.observe(context.Background(), string(secret.UID), adopted)
 			if tc.cancel {
 				cancel()
 			}
@@ -1122,5 +1122,142 @@ func TestClaudeNotifierOldSnapshotThenNewReadyBeforeDecision(t *testing.T) {
 	<-done
 	if notices.fake.count() != 0 {
 		t.Fatal("old hub snapshot caused a notice after Ready committed before decision")
+	}
+}
+
+// A recreated journal is a new incarnation: its empty record must be visible
+// even if this hub has already observed a high generation from the old UID.
+func TestClaudeRecreatedJournalSupersedesOldIncarnation(t *testing.T) {
+	f := newClaudeFix(t)
+	ctx := context.Background()
+	var old corev1.Secret
+	if f.c.Get(ctx, f.w.Journal.Secret, &old) != nil {
+		t.Fatal("synthetic journal missing")
+	}
+	old.UID = types.UID("synthetic-old-journal")
+	if f.c.Update(ctx, &old) != nil {
+		t.Fatal("synthetic UID setup failed")
+	}
+	f.seed(t, syntheticClaudeRecord(7))
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	f.tick()
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 1, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.tick() }()
+	<-paused.paused
+	if f.c.Delete(ctx, &old) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic deletion failed")
+	}
+	fresh := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: old.Namespace, Name: old.Name, UID: types.UID("synthetic-new-journal")}}
+	if f.c.Create(ctx, fresh) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic recreation failed")
+	}
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: hub, Clock: f.clk, Log: logr.Discard()}
+	newWorker.tick(ctx)
+	close(paused.resume)
+	<-done
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginNeedsLogin {
+		t.Fatalf("recreated journal and delayed old read: got %s, want NeedsLogin", got)
+	}
+	notices := newNoticeFix(t, claudeNow)
+	notices.n.Hub = hub
+	notices.n.VerifyClaude = verifyClaudeJournal(newWorker.Journal)
+	notices.tick()
+	if notices.fake.count() != 1 {
+		t.Fatal("new empty journal did not reach notifier")
+	}
+}
+
+// The old incarnation need not have produced an earlier hub observation: the
+// paused read itself can be its first callback.
+func TestClaudeUnseenOldIncarnationCannotReplaceRecreatedJournal(t *testing.T) {
+	f := newClaudeFix(t)
+	ctx := context.Background()
+	var old corev1.Secret
+	if f.c.Get(ctx, f.w.Journal.Secret, &old) != nil {
+		t.Fatal("synthetic journal missing")
+	}
+	old.UID = types.UID("synthetic-unseen-old")
+	if f.c.Update(ctx, &old) != nil {
+		t.Fatal("synthetic UID setup failed")
+	}
+	f.seed(t, syntheticClaudeRecord(7))
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 1, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.tick() }()
+	<-paused.paused
+	if f.c.Delete(ctx, &old) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic deletion failed")
+	}
+	fresh := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: old.Namespace, Name: old.Name, UID: types.UID("synthetic-new")}}
+	if f.c.Create(ctx, fresh) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic recreation failed")
+	}
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: hub, Clock: f.clk, Log: logr.Discard()}
+	newWorker.tick(ctx)
+	close(paused.resume)
+	<-done
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginNeedsLogin {
+		t.Fatalf("unseen old incarnation displaced new: %s", got)
+	}
+}
+
+// A previously unseen old UID must not replace a current new UID, even when
+// read-start order and snapshot order do not provide an ordering token.
+func TestClaudeCrossedReadStartsCannotResurrectOldIncarnation(t *testing.T) {
+	f := newClaudeFix(t)
+	ctx := context.Background()
+	var old corev1.Secret
+	if f.c.Get(ctx, f.w.Journal.Secret, &old) != nil {
+		t.Fatal("synthetic journal missing")
+	}
+	old.UID = types.UID("synthetic-crossed-old")
+	if f.c.Update(ctx, &old) != nil {
+		t.Fatal("synthetic UID setup failed")
+	}
+	f.seed(t, syntheticClaudeRecord(7))
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	paused := &pauseClaudeReadback{Client: f.c, pauseAt: 1, paused: make(chan struct{}), resume: make(chan struct{})}
+	f.w.Journal.Client = paused
+	done := make(chan struct{})
+	go func() { defer close(done); f.tick() }()
+	<-paused.paused
+	if f.c.Delete(ctx, &old) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic deletion failed")
+	}
+	fresh := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: old.Namespace, Name: old.Name, UID: types.UID("synthetic-crossed-new")}}
+	if f.c.Create(ctx, fresh) != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic recreation failed")
+	}
+	newWorker := &claudeWorker{Journal: &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}, Obs: hub, Clock: f.clk, Log: logr.Discard()}
+	secret, record, err := newWorker.load(ctx)
+	if err != nil {
+		close(paused.resume)
+		<-done
+		t.Fatal("synthetic read failed")
+	}
+	newWorker.observe(ctx, string(secret.UID), record)
+	close(paused.resume)
+	<-done
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginNeedsLogin {
+		t.Fatalf("crossed read resurrected old incarnation: %s", got)
 	}
 }

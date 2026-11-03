@@ -53,6 +53,8 @@ type LoginHub struct {
 	m                map[string]LoginStatus
 	claudeVersion    claudeObservationVersion
 	claudeVersionSet bool
+	claudeUID        string
+	claudeRetired    map[string]struct{}
 }
 
 // NewLoginHub registers providers in the Unknown state, so their state gauge
@@ -91,6 +93,8 @@ func (h *LoginHub) Report(provider, state string, lapsesAt time.Time) {
 	// Production Claude journal observations use reportClaude instead.
 	if provider == ProviderClaude {
 		h.claudeVersionSet = false
+		h.claudeUID = ""
+		h.claudeRetired = nil
 	}
 }
 
@@ -98,19 +102,41 @@ func (h *LoginHub) Report(provider, state string, lapsesAt time.Time) {
 // Within one access generation, Ready may become NeedsLogin, but only a new
 // generation can return a tombstone to Ready. Intent itself is not reported.
 // It is a logical record version, not an ordering of opaque Kubernetes resource
-// versions. This watermark applies to this hub only, not other processes.
+// versions. UIDs distinguish recreated journals; seen prior UIDs are retired
+// when a new incarnation is observed. This is local to one hub, not a
+// cross-process ordering. An incarnation change requires an authoritative
+// UID witness under this hub's mutex, including for previously unseen UIDs.
 type claudeObservationVersion struct {
 	generation uint64
 	terminal   bool
 }
 
-func (h *LoginHub) reportClaude(generation uint64, terminal bool, lapsesAt time.Time) {
+func (h *LoginHub) reportClaude(uid string, generation uint64, terminal bool, lapsesAt time.Time) {
+	h.reportClaudeAt(uid, generation, terminal, lapsesAt, nil)
+}
+
+// reportClaudeAt serializes an incarnation change with its authoritative UID
+// witness. The witness must not log or expose journal material.
+func (h *LoginHub) reportClaudeAt(uid string, generation uint64, terminal bool, lapsesAt time.Time, witness func() bool) {
 	if h == nil {
 		return
 	}
 	v := claudeObservationVersion{generation: generation, terminal: terminal}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.claudeVersionSet && uid != h.claudeUID {
+		if _, retired := h.claudeRetired[uid]; retired {
+			return
+		}
+		if witness == nil || !witness() {
+			return
+		}
+		if h.claudeRetired == nil {
+			h.claudeRetired = make(map[string]struct{})
+		}
+		h.claudeRetired[h.claudeUID] = struct{}{}
+		h.claudeVersionSet = false
+	}
 	old := h.claudeVersion
 	if h.claudeVersionSet && (v.generation < old.generation ||
 		(v.generation == old.generation && (old.terminal || !v.terminal))) {
@@ -124,7 +150,7 @@ func (h *LoginHub) reportClaude(generation uint64, terminal bool, lapsesAt time.
 		state, lapsesAt = LoginNeedsLogin, time.Time{}
 	}
 	h.m[ProviderClaude] = LoginStatus{State: state, LapsesAt: lapsesAt.UTC()}
-	h.claudeVersion, h.claudeVersionSet = v, true
+	h.claudeUID, h.claudeVersion, h.claudeVersionSet = uid, v, true
 }
 
 // Snapshot is a copy of every observation.

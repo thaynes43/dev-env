@@ -121,13 +121,13 @@ func (w *claudeWorker) due(r claudeRecord) bool {
 func (w *claudeWorker) tick(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	_, r, err := w.load(ctx)
+	secret, r, err := w.load(ctx)
 	if err != nil {
 		w.note("journal-unavailable")
 		return
 	}
 	if r.Stage != claudeIntent {
-		w.observe(r)
+		w.observe(ctx, string(secret.UID), r)
 	}
 	switch r.Stage {
 	case claudeIntent:
@@ -251,13 +251,16 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		return claudeRecord{}, errClaudeJournal
 	}
 	w.note("refreshed")
-	w.observe(next)
+	w.observe(ctx, string(secret.UID), next)
 	return next, nil
 }
 
 // observe hands the journal's state to the gauges: words and a time, no token.
-func (w *claudeWorker) observe(r claudeRecord) {
-	w.Obs.reportClaude(r.Access.Generation, r.Stage != claudeReady, r.RefreshExpiresAt)
+func (w *claudeWorker) observe(ctx context.Context, uid string, r claudeRecord) {
+	w.Obs.reportClaudeAt(uid, r.Access.Generation, r.Stage != claudeReady, r.RefreshExpiresAt, func() bool {
+		current, _, err := w.load(ctx)
+		return err == nil && string(current.UID) == uid
+	})
 }
 
 // abandon returns an intent that was never sent to Ready, if this attempt's
@@ -287,12 +290,12 @@ func (w *claudeWorker) needsLogin(ctx context.Context, uid string) {
 	}
 	// Do not publish an observation if a newer adoption or intent won since
 	// the CAS, or if the committed state cannot be verified.
-	_, current, err := w.load(ctx)
+	committed, current, err := w.load(ctx)
 	if err != nil || current.Stage != claudeNeedsLogin || current.Access.Generation != r.Access.Generation || !sameClaudeAccess(current.Access, r.Access) {
 		return
 	}
 	w.note("needs-login")
-	w.observe(current)
+	w.observe(ctx, string(committed.UID), current)
 }
 
 // claudeRunnable is the worker Run registers, or nil when the flag is off.

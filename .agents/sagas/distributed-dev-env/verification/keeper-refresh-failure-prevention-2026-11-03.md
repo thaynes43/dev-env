@@ -54,7 +54,11 @@ The Claude hub uses the record's access generation and terminal stage as a
 logical observation version. Under the current writers, Ready can become a
 NeedsLogin tombstone in the same generation; returning to Ready after a
 committed tombstone requires a new generation. Intent is not reported. The
-hub rejects an older logical version under its mutex; Kubernetes resource
+hub rejects an older logical version under its mutex. Journal UID distinguishes
+recreated records: an incarnation change requires an uncached UID witness while
+the hub mutex is held, and previously observed UIDs are retired. If the witness
+fails, the old observation remains until a later tick can retry. The mutex is
+not held across adoption saves or notification delivery. Kubernetes resource
 versions remain opaque and are not ordered numerically. This orders reports
 only within one hub, after that hub has received the newer report.
 
