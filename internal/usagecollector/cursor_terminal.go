@@ -93,7 +93,7 @@ func (t *cursorTerminal) feed(raw []byte) error {
 			r, size := utf8.DecodeRune(t.pending[i:])
 			qualified := r < 128 || r == '•' || r == '·' || r == '…' || r >= 0x2190 && r <= 0x21ff || r >= 0x2500 && r <= 0x259f || r == '✓'
 			if r == utf8.RuneError || !qualified {
-				reason := "builtin_terminal_rune_unqualified"
+				var reason string
 				switch {
 				case r == utf8.RuneError:
 					reason = "builtin_terminal_encoding_unqualified"
@@ -105,6 +105,8 @@ func (t *cursorTerminal) feed(raw []byte) error {
 					reason = "builtin_terminal_format_unqualified"
 				case strings.ContainsRune(cursorDotSpinnerDiagnosticSet, r):
 					reason = "builtin_terminal_dotset_unqualified"
+				default:
+					reason = cursorRuneClassReason(r)
 				}
 				return refused(reason, ErrCapture)
 			}
@@ -222,4 +224,35 @@ func (t *cursorTerminal) visible() (string, bool) {
 		lines = append(lines, strings.TrimRight(line.String(), " "))
 	}
 	return strings.Join(lines, "\n"), true
+}
+
+// cursorRuneClassReason names the Unicode class of a refused character with one
+// closed label per class. Many characters share each label, so the label cannot
+// identify which character was seen; the character, its code point and its
+// count are never emitted. Private-use and unassigned code points keep the
+// generic reason.
+func cursorRuneClassReason(r rune) string {
+	switch {
+	case unicode.IsLetter(r):
+		return "builtin_terminal_letter_unqualified"
+	case unicode.IsNumber(r):
+		return "builtin_terminal_number_unqualified"
+	case unicode.Is(unicode.Pd, r):
+		return "builtin_terminal_dash_unqualified"
+	case unicode.Is(unicode.Pi, r) || unicode.Is(unicode.Pf, r):
+		return "builtin_terminal_quote_unqualified"
+	case unicode.IsPunct(r):
+		return "builtin_terminal_punct_unqualified"
+	case unicode.Is(unicode.Sm, r):
+		return "builtin_terminal_math_unqualified"
+	case unicode.Is(unicode.Sc, r):
+		return "builtin_terminal_currency_unqualified"
+	case unicode.IsSymbol(r) && r >= 0x25a0 && r <= 0x25ff:
+		return "builtin_terminal_shape_unqualified"
+	case unicode.IsSymbol(r) && (r >= 0x2600 && r <= 0x27bf || r >= 0x1f000):
+		return "builtin_terminal_pictograph_unqualified"
+	case unicode.IsSymbol(r):
+		return "builtin_terminal_symbol_unqualified"
+	}
+	return "builtin_terminal_rune_unqualified"
 }

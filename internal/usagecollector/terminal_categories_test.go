@@ -21,6 +21,16 @@ func TestCursorRefusedStandardCategoriesArePrivateAndNeverAct(t *testing.T) {
 		{"builtin_terminal_combining_unqualified", []string{"\u0301", "\u20dd"}},
 		{"builtin_terminal_spacing_unqualified", []string{"\u00a0", "\u202f", "\u2003"}},
 		{"builtin_terminal_format_unqualified", []string{"\u202e", "\u200d"}},
+		{"builtin_terminal_letter_unqualified", []string{"é", "Ж", "日"}},
+		{"builtin_terminal_number_unqualified", []string{"²", "½", "٣"}},
+		{"builtin_terminal_dash_unqualified", []string{"—", "–", "‐"}},
+		{"builtin_terminal_quote_unqualified", []string{"‘", "’", "“", "”"}},
+		{"builtin_terminal_punct_unqualified", []string{"¿", "¡", "§", "、"}},
+		{"builtin_terminal_math_unqualified", []string{"×", "±", "≠"}},
+		{"builtin_terminal_currency_unqualified", []string{"€", "£", "¥"}},
+		{"builtin_terminal_shape_unqualified", []string{"■", "▲", "●"}},
+		{"builtin_terminal_pictograph_unqualified", []string{"⚠", "★", "🔥"}},
+		{"builtin_terminal_symbol_unqualified", []string{"©", "°", "™"}},
 	} {
 		var first []byte
 		for _, sample := range group.samples {
@@ -101,6 +111,24 @@ func TestCursorCategoryUTF8FragmentsNeverSettleEarly(t *testing.T) {
 			} else if err == nil {
 				t.Fatal("complete unsupported rune accepted")
 			}
+		}
+	}
+}
+
+// Private-use and unassigned code points belong to no named class and keep the
+// generic reason. Like every refusal it acts on nothing and discloses nothing.
+func TestCursorGenericRuneReasonKeepsOnlyUnclassifiedRunes(t *testing.T) {
+	for _, sample := range []string{"", "\U000f0000", "͸"} {
+		p := cursorProtocol{}
+		input, capture, err := p.accept([]byte(sample + "PRIVATE-SENTINEL"))
+		if input != "" || capture != nil {
+			t.Fatal("refusal acted")
+		}
+		requireBuiltinReason(t, "cursor", err, "builtin_terminal_rune_unqualified")
+		var out bytes.Buffer
+		emitAcquisitionDiagnostic(&out, "cursor", atAcquisitionStage("builtin", err))
+		if bytes.Contains(out.Bytes(), []byte(sample)) || bytes.Contains(out.Bytes(), []byte("PRIVATE-SENTINEL")) {
+			t.Fatal("generic reason disclosed input")
 		}
 	}
 }
