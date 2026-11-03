@@ -208,13 +208,27 @@ func checkProjectedLogin(s Settings) loginCheck {
 	return c
 }
 
-// projectionLoginStatus is the one plain status line in projection mode.
+// claudePendingWindow is how long after its expiry an applied access token is
+// reported as a pending refresh rather than a login to renew. The keeper
+// refreshes ahead of expiry and a Secret volume trails the keeper by about a
+// minute (kubelet sync), so a successor can be that late. Past the window the
+// wait is reported as before. It changes no behaviour, only the status text.
+const claudePendingWindow = 3 * time.Minute
+
+// projectionLoginStatus is the one plain status line in projection mode. An
+// applied token that expired within claudePendingWindow is "refreshing": the
+// keeper's next generation is pending and no login is needed. Anything else
+// that is not usable is "login-required", as before.
 func projectionLoginStatus(s Settings, now time.Time) string {
 	if data, err := readClaudeCredentials(s); err == nil && claudeauth.HoldsRefreshToken(data) {
 		return ErrClaudeLoginConflict.Error()
 	}
 	if c := checkProjectedLogin(s); c.Usable(now) {
 		return "logged in on the keeper's projection, access token lapses " + c.Expires.Format(time.RFC3339)
+	} else if c.Present && !c.Expires.IsZero() {
+		if ago := now.Sub(c.Expires); ago >= 0 && ago < claudePendingWindow {
+			return "refreshing: the access token lapsed " + ago.Round(time.Second).String() + " ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"
+		}
 	}
 	return "login-required: waiting for the keeper's Claude projection; no login is run in this pod"
 }

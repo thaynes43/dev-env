@@ -398,7 +398,7 @@ func (d *Daemon) waitForLogin() (Step, string) {
 	d.remote.waiting = true
 	notes := []string{"login-required: no usable Claude login in this pod; no login is started until agent-run login asks for it"}
 	if d.projectsClaude() {
-		notes = []string{"login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+		notes = []string{projectionLoginStatus(d.S, d.now())}
 	}
 	return newStep("agent", notes, nil), ""
 }

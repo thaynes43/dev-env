@@ -36,10 +36,16 @@ const (
 	authLapseWarnDays  = 7
 	authMaxBytes       = 64 << 10
 	authDefaultWarning = 30 * time.Minute
-	authReady          = "Ready"
-	authNeedsLogin     = "NeedsLogin"
-	authUnknown        = "Unknown"
-	authNotConfigured  = "NotConfigured"
+	// authPendingWindow: an access token that expired this recently is a pending
+	// refresh, not a login to renew. The keeper refreshes ahead of expiry and the
+	// Secret volume trails it by about a minute (kubelet sync). Past the window,
+	// or once the login's own lapse has passed, the row is NeedsLogin as before.
+	authPendingWindow = 3 * time.Minute
+	authReady         = "Ready"
+	authRefreshing    = "Refreshing"
+	authNeedsLogin    = "NeedsLogin"
+	authUnknown       = "Unknown"
+	authNotConfigured = "NotConfigured"
 )
 
 // authProjection holds the members of both projection documents that status
@@ -187,6 +193,10 @@ func readAuthRow(provider, path, expiryKey string, now time.Time, warn time.Dura
 		row.LastRefresh = &lr
 	}
 	switch {
+	case left <= 0 && time.Duration(-left)*time.Second < authPendingWindow:
+		// Exit code 1 stays: a script still sees a token that cannot be used now.
+		row.State, row.code = authRefreshing, 1
+		row.Reason = "access expired " + (time.Duration(-left) * time.Second).String() + " ago; the keeper's next generation is pending"
 	case left <= 0:
 		row.State, row.Reason, row.code = authNeedsLogin, "access has expired and the keeper has published no newer generation", 1
 	case time.Duration(left)*time.Second <= warn:
@@ -224,6 +234,10 @@ func addLoginLapse(row *authRow, accessFile string, now time.Time) {
 	row.LoginLapse, row.LoginLapsesAt, row.LoginDaysLeft = lapse.Format(time.RFC3339), &lapse, &days
 	if left <= 0 || days <= authLapseWarnDays {
 		row.code = 1
+		if left <= 0 && row.State == authRefreshing {
+			// The login itself has lapsed: refreshing cannot succeed.
+			row.State, row.Reason = authNeedsLogin, "access has expired and the keeper has published no newer generation"
+		}
 		note := "login lapses in 7 days or fewer: renew from the standby (agent-run keeper-login claude url)"
 		if left <= 0 {
 			note = "login has lapsed: renew from the standby (agent-run keeper-login claude url)"
