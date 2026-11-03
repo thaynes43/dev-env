@@ -86,7 +86,7 @@ func acquireOne(ctx context.Context, binding ProviderBinding, now func() time.Ti
 		if err != nil {
 			return RemoteCapture{}, atAcquisitionStage("version", err)
 		}
-		if strings.TrimSpace(string(version)) != "2.1.296 (Claude Code)" {
+		if !qualifiedClaudeVersion(string(version)) {
 			return RemoteCapture{}, atAcquisitionStage("version", unqualifiedVersion(string(version)))
 		}
 		before, err := readMetadata(ctx, binding.Provider)
@@ -163,4 +163,16 @@ func readMetadata(ctx context.Context, provider string) (accountMetadata, error)
 		return cursorMetadata(raw)
 	}
 	return claudeMetadata(raw)
+}
+
+// qualifiedClaudeVersions is the exact set of client versions whose zero-turn
+// /usage stream shape has been qualified. A version is added only with its own
+// recorded evidence; there is no range, prefix or semantic comparison.
+var qualifiedClaudeVersions = map[string]bool{
+	"2.1.296 (Claude Code)": true,
+	"2.1.312 (Claude Code)": true,
+}
+
+func qualifiedClaudeVersion(output string) bool {
+	return qualifiedClaudeVersions[strings.TrimSpace(output)]
 }

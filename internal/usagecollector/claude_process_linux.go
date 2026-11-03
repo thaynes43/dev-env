@@ -85,7 +85,7 @@ func readClaudeBuiltin(out io.Reader, now func() time.Time) (providerallowance.C
 		if done {
 			return capture, refused("builtin_extra_event", ErrCapture)
 		}
-		if !providerallowance.ValidJSONDocument(raw, 64<<10) || !providerallowance.CanonicalFieldNames(raw, "type", "subtype", "is_error", "num_turns", "usage", "total_cost_usd", "usage_report") {
+		if !providerallowance.ValidJSONDocument(raw, 64<<10) || !providerallowance.CanonicalFieldNames(raw, "type", "subtype", "is_error", "num_turns", "usage", "total_cost_usd", "usage_report", "model_usage_since_last_result") {
 			return capture, refused("builtin_event_invalid", ErrCapture)
 		}
 		var event struct {
@@ -117,6 +117,10 @@ func readClaudeBuiltin(out io.Reader, now func() time.Time) (providerallowance.C
 				Turns   *int                       `json:"num_turns"`
 				Cost    *json.Number               `json:"total_cost_usd"`
 				Usage   map[string]json.RawMessage `json:"usage"`
+				// Added in 2.1.312: per-model usage since the last result. A
+				// zero-turn /usage makes no model call, so it must be absent,
+				// null or an empty object; anything else contradicts zero turns.
+				ModelUsage json.RawMessage `json:"model_usage_since_last_result"`
 			}
 			if !seen {
 				return capture, refused("builtin_report_missing", ErrCapture)
@@ -135,6 +139,9 @@ func readClaudeBuiltin(out io.Reader, now func() time.Time) (providerallowance.C
 			}
 			if !zeroJSON([]byte(*result.Cost)) {
 				return capture, refused("builtin_cost_unqualified", ErrCapture)
+			}
+			if len(result.ModelUsage) != 0 && !emptyJSONObjectOrNull(result.ModelUsage) {
+				return capture, refused("builtin_model_usage_unqualified", ErrCapture)
 			}
 			// Every token counter, including cache counters, must explicitly be
 			// numeric zero. Other result usage metadata is not quota evidence.
@@ -165,7 +172,8 @@ func readClaudeBuiltin(out io.Reader, now func() time.Time) (providerallowance.C
 	return capture, nil
 }
 
-// The pinned2.1.296 zero-usage constructor includes exactly this counter object.
+// The pinned 2.1.296 and 2.1.312 zero-usage constructors include exactly this
+// counter object (byte-identical in both public packages).
 // Require its explicit numeric zero; missing/null/extra fields are not zero.
 // Other token-bearing objects have no qualified shape and still refuse.
 func zeroClaudeTokenField(key string, raw json.RawMessage) bool {
@@ -219,4 +227,14 @@ func zeroJSON(raw []byte) bool {
 	}
 	value, ok := new(big.Rat).SetString(string(number))
 	return ok && value.Sign() == 0
+}
+
+// emptyJSONObjectOrNull accepts only JSON null or an object with no members.
+func emptyJSONObjectOrNull(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return true
+	}
+	var object map[string]json.RawMessage
+	return json.Unmarshal(trimmed, &object) == nil && object != nil && len(object) == 0
 }

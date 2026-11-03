@@ -45,6 +45,17 @@ func TestClaudeBuiltinClosedReasonsPreserveRefusals(t *testing.T) {
 		{"cost", quota + "\n" + strings.Replace(result, `"total_cost_usd":0`, `"total_cost_usd":1`, 1) + "\n", "builtin_cost_unqualified"},
 		{"tokens", quota + "\n" + strings.Replace(result, `"input_tokens":0`, `"input_tokens":1`, 1) + "\n", "builtin_required_tokens_unqualified"},
 		{"extra", finiteClaudeStream + quota + "\n", "builtin_extra_event"},
+		{"model-usage", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":{"claude-sonnet-5-5":{"inputTokens":0}},"usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-scalar", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":0,"usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-array", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":[],"usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-null-string", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":"null","usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-empty-string", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":"","usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-false", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":false,"usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-nested-empty", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":{"a":{}},"usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-duplicate", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":{},"model_usage_since_last_result":{},"usage":{`, 1) + "\n", "builtin_event_invalid"},
+		{"model-usage-escaped-duplicate", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":{},"model_usage_since_last_resu\u006ct":{},"usage":{`, 1) + "\n", "builtin_event_invalid"},
+		{"model-usage-lone-variant", quota + "\n" + strings.Replace(result, `"usage":{`, `"Model_Usage_Since_Last_Result":{},"usage":{`, 1) + "\n", "builtin_event_invalid"},
+		{"model-usage-case", quota + "\n" + strings.Replace(result, `"usage":{`, `"Model_Usage_Since_Last_Result":{},"model_usage_since_last_result":{},"usage":{`, 1) + "\n", "builtin_event_invalid"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := readClaudeBuiltin(strings.NewReader(test.stream), time.Now)
@@ -326,6 +337,21 @@ func TestCursorDotSetDiagnosticCannotAdvanceAnyProtocolState(t *testing.T) {
 		requireBuiltinReason(t, "cursor", err, "builtin_terminal_dotset_unqualified")
 		if p.state != state {
 			t.Fatal("refused member changed protocol state")
+		}
+	}
+}
+
+// The 2.1.312 result record may carry an empty per-model usage object; a zero-turn
+// /usage makes no model call, so absent, null and empty are the only accepted forms.
+func TestClaudeBuiltinAcceptsEmptyModelUsageOnly(t *testing.T) {
+	quota, result, _ := strings.Cut(strings.TrimSuffix(finiteClaudeStream, "\n"), "\n")
+	for name, field := range map[string]string{"absent": "", "empty": `"model_usage_since_last_result":{},`, "null": `"model_usage_since_last_result":null,`, "spaced": `"model_usage_since_last_result": { },`} {
+		stream := quota + "\n" + strings.Replace(result, `"usage":{`, field+`"usage":{`, 1) + "\n"
+		if field != "" && !strings.Contains(stream, field) {
+			t.Fatal("fixture did not carry the field", name)
+		}
+		if _, err := readClaudeBuiltin(strings.NewReader(stream), time.Now); err != nil {
+			t.Fatal("qualified shape refused", name, err)
 		}
 	}
 }

@@ -73,10 +73,17 @@ or provider is installed in the host. Raw provider streams and stderr never
 enter the report or operator logs.
 
 The helper accepts only the qualified versions: Codex 0.160.1, Claude Code
-2.1.296 and Cursor 2026.10.22-27dcf5f. Other versions refuse. Codex uses its
+2.1.296 or 2.1.312, and Cursor 2026.10.22-27dcf5f. The Claude versions are an
+exact set of full `--version` strings, not a range: each is added only with its
+own recorded evidence (see the verification notes), and every other version
+refuses. Codex uses its
 official account/quota RPC with non-forced matching account barriers. Claude
 uses normal `auth status` before/after the isolated local `/usage` builtin;
-the result must explicitly report success with zero turns, tokens and cost.
+the result must explicitly report success with zero turns, tokens and cost. A
+2.1.312 result may also carry the optional per-model usage field
+`model_usage_since_last_result`, but only when it is absent, null or an empty
+object, because a zero-turn read makes no model call; any other value refuses
+with the closed reason `builtin_model_usage_unqualified`.
 The static Claude OAuth environment token is excluded from that child, matching
 the existing Remote Control launch's keeper-owned login path.
 
