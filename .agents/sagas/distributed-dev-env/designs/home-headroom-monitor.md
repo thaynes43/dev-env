@@ -29,7 +29,7 @@ Never an action, never a path, never an error string, never file names or conten
 - NEW docs: this design as .agents/sagas/distributed-dev-env/designs/home-headroom-monitor.md.
 
 Not touched, by design: tmp_usage.go and DESIGN-035 (both rewritten by held candidate 1c5a537),
-status.go, CRDs, operator, keeper, haynes-ops.
+CRDs, operator, keeper, haynes-ops. (internal/agentd/protocol/status.go gains the one optional `homeHeadroom` field; see above.)
 
 ### Exact overlaps
 - Held candidate 1c5a537 (tracker #370): tracked.patch hunk headers show daemon.go `@@ -488,6`
@@ -59,7 +59,7 @@ homeHeadroom: {
   reason: (only for unknown/unreadable) closed enum,
   observedAt: <UTC>,
   bytes:  { state: ok|low|exhausted, total, available }   // omitted when not measurable
-  inodes: { state: ok|low|exhausted, total, free }        // omitted when not measurable
+  inodes: { state: ok|low|exhausted, total, available }   // omitted when not measurable
 }
 ```
 - Absent `homeHeadroom` means not measured (old agentd, or none taken yet). It is never zeros.
