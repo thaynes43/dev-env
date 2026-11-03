@@ -49,7 +49,9 @@ type PreparedHandoff struct {
 }
 
 // PrepareHandoff validates the old journal with the real collector parser and
-// changes only the unique fingerprint value in its original byte stream.
+// changes only the unique fingerprint value in its original byte stream. This
+// maintenance operation is intentionally single-use: it accepts cycle 56 and
+// the specifically approved 2026-11-04T15:33:23Z deadline only.
 func PrepareHandoff(in HandoffInput) (*PreparedHandoff, error) {
 	old, err := ParseConfig(in.OldConfig, in.Trust, in.PublisherUID, in.PublisherSA, in.Now)
 	if err != nil {

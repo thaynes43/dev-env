@@ -28,3 +28,37 @@ specified host and deadline changes. Its apply route checks the named slot and
 fresh host, fsyncs a private full backup, replaces only the fingerprint with a
 resource-version CAS, and checks exact readback. No deployment or live apply is
 authorized by this source work. Synthetic tests are not runtime acceptance.
+
+## Proposed one-time handoff design
+
+This operation is deliberately specific to cycle 56 and the approved deadline
+2026-11-04T15:33:23Z; it is not a general incarnation migration facility.
+The wall-clock public-apply fixture is necessarily skipped outside that fixed
+window. The clock-injected apply and real Runner fixtures remain runnable after
+it, including the next-cycle and lost-ack paths.
+
+The operator supplies a private snapshot of both exact configurations, selected
+trust, named slot UID and resource version, original journal and report, their
+hashes, cycle and nonce, the known helper digest, and the authenticated archived
+old Pod. Preparation parses both configurations and the journal, verifies the
+old Pod's eviction identity and the unchanged logical-stream policy, and
+hashes the whole proposed transition. Root independently verifies the snapshot
+provenance, eviction and approval; none can be established by the caller's
+bytes alone.
+
+Apply revalidates the proposed hash and reads the new session, current Pod and
+HOME using the selected uncached client. It requires the selected generation,
+Pod UID, image, service account, owner references, bound HOME and fresh
+heartbeat. It then checks the named mutable ConfigMap and exact old bytes,
+fsyncs a private full old configuration, journal and report backup, rechecks the
+host and slot, and makes one resource-version-guarded fingerprint replacement.
+Exact readback resolves a lost acknowledgement and permits an identical retry
+only with the matching backup. A changed slot, journal, report, host, deadline,
+trust or evidence refuses. Existing runners on either mismatched fingerprint
+cannot reach provider execution. No other state keys or report bytes are changed.
+
+The source check `make check-layout` also requires a `CLAUDE.md` Layout entry
+for this new command. The five-file source assignment excludes that file; the
+check remains blocked pending explicit scope acknowledgement. A separate design
+file is likewise outside that assignment; this record documents the proposed
+behavior pending any broader authorized design update.
