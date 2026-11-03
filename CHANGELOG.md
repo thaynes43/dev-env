@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.89.0](https://github.com/thaynes43/dev-env/compare/v2.88.0...v2.89.0) (2026-11-03)
+
+
+### Features
+
+* **operator:** schedule supported allowance collection ([#865](https://github.com/thaynes43/dev-env/issues/865)) ([ce6edc5](https://github.com/thaynes43/dev-env/commit/ce6edc599fef4fc50a145760247561eadb3bbb00))
+
+
+### Bug Fixes
+
+* **agentd:** retain safe native protocol failure causes ([#872](https://github.com/thaynes43/dev-env/issues/872)) ([fa68dbe](https://github.com/thaynes43/dev-env/commit/fa68dbe2e1c1163a7d8a8141d920b9a2016f12ce))
+* allow declared-project Claude local sessions ([#867](https://github.com/thaynes43/dev-env/issues/867)) ([9b474c6](https://github.com/thaynes43/dev-env/commit/9b474c69d9afa2bb70fa8b230f83be538eb72f80))
+
 ## [2.88.0](https://github.com/thaynes43/dev-env/compare/v2.87.0...v2.88.0) (2026-11-02)
 
 
