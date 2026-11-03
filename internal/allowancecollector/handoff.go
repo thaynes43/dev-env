@@ -170,7 +170,19 @@ func validEvictedPod(raw []byte, old Host) bool {
 		return false
 	}
 	session := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: old.Name, UID: types.UID(old.SessionUID)}}
-	return exactHandoffOwner(pod.OwnerReferences, session)
+	if !exactHandoffOwner(pod.OwnerReferences, session) {
+		return false
+	}
+	agents := 0
+	for _, container := range pod.Spec.Containers {
+		if container.Name == "agent" {
+			if container.Image != old.Image {
+				return false
+			}
+			agents++
+		}
+	}
+	return agents == 1
 }
 
 func validHandoffSlot(cm *corev1.ConfigMap, uid string) bool {

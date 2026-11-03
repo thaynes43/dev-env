@@ -23,7 +23,7 @@ import (
 func evictedFixture(t *testing.T, host Host) []byte {
 	t.Helper()
 	yes := true
-	pod := corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Namespace: Namespace, Name: host.Name, UID: types.UID(host.PodUID), ResourceVersion: "42", OwnerReferences: []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(), Kind: "AgentSession", Name: host.Name, UID: types.UID(host.SessionUID), Controller: &yes}}}, Spec: corev1.PodSpec{ServiceAccountName: host.ServiceAccount}, Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"}}
+	pod := corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Namespace: Namespace, Name: host.Name, UID: types.UID(host.PodUID), ResourceVersion: "42", OwnerReferences: []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(), Kind: "AgentSession", Name: host.Name, UID: types.UID(host.SessionUID), Controller: &yes}}}, Spec: corev1.PodSpec{ServiceAccountName: host.ServiceAccount, Containers: []corev1.Container{{Name: "agent", Image: host.Image}}}, Status: corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted"}}
 	raw, err := json.Marshal(pod)
 	if err != nil {
 		t.Fatal(err)
@@ -347,6 +347,7 @@ func TestPrepareRejectsUnqualifiedEvictionWitness(t *testing.T) {
 		"wrong name":            func(p *corev1.Pod) { p.Name = "other" },
 		"wrong namespace":       func(p *corev1.Pod) { p.Namespace = "other" },
 		"wrong service account": func(p *corev1.Pod) { p.Spec.ServiceAccountName = "other" },
+		"wrong image":           func(p *corev1.Pod) { p.Spec.Containers[0].Image = "wrong" },
 		"not evicted":           func(p *corev1.Pod) { p.Status.Reason = "Error" },
 		"running":               func(p *corev1.Pod) { p.Status.Phase = corev1.PodRunning },
 		"no resource version":   func(p *corev1.Pod) { p.ResourceVersion = "" },
