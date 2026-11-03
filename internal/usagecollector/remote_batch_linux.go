@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -18,10 +19,14 @@ const cursorExecutable = "/home/dev/.local/bin/cursor-agent"
 // acquireBatch has no arbitrary executable/argument hooks. Every selected source
 // uses the existing normal client and independently brackets its account.
 func acquireBatch(ctx context.Context, request RemoteRequest) (RemoteReceipt, error) {
-	return acquireBatchUsing(ctx, request, acquireOne)
+	return acquireBatchReporting(ctx, request, acquireOne, os.Stderr)
 }
 
 func acquireBatchUsing(ctx context.Context, request RemoteRequest, read func(context.Context, ProviderBinding, func() time.Time) (RemoteCapture, error)) (RemoteReceipt, error) {
+	return acquireBatchReporting(ctx, request, read, io.Discard)
+}
+
+func acquireBatchReporting(ctx context.Context, request RemoteRequest, read func(context.Context, ProviderBinding, func() time.Time) (RemoteCapture, error), diagnostics io.Writer) (RemoteReceipt, error) {
 	until, err := time.Parse(time.RFC3339Nano, request.ValidUntil)
 	if err != nil {
 		return RemoteReceipt{}, ErrCapture
@@ -35,6 +40,9 @@ func acquireBatchUsing(ctx context.Context, request RemoteRequest, read func(con
 		err := ErrCapture
 		if started.Before(until) {
 			capture, err = read(ctx, binding, time.Now)
+		}
+		if err != nil {
+			emitAcquisitionDiagnostic(diagnostics, binding.Provider, err)
 		}
 		if errors.Is(err, ErrCleanup) {
 			return RemoteReceipt{}, ErrCleanup
@@ -60,69 +68,69 @@ func acquireOne(ctx context.Context, binding ProviderBinding, now func() time.Ti
 	case "openai":
 		version, err := runMetadata(ctx, codexExecutable, []string{"--version"}, false)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("version", err)
 		}
 		if strings.TrimSpace(string(version)) != "codex-cli 0.160.1" {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("version", unqualifiedVersion(string(version)))
 		}
 		report, err := CollectCodex(ctx, codexExecutable, now)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("builtin", err)
 		}
 		if report.AccountRef != binding.AccountRef || binding.WorkspaceRef != nil {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("binding_after", ErrCapture)
 		}
 		payload, captured, received = report, report.ReceivedAt, report.ReceivedAt
 	case "anthropic":
 		version, err := runMetadata(ctx, claudeExecutable, []string{"--version"}, true)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("version", err)
 		}
 		if strings.TrimSpace(string(version)) != "2.1.296 (Claude Code)" {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("version", unqualifiedVersion(string(version)))
 		}
 		before, err := readMetadata(ctx, binding.Provider)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("identity_before", err)
 		}
 		if !before.matches(binding) {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("binding_before", ErrCapture)
 		}
 		report, err := collectClaudeBuiltin(ctx, claudeExecutable, now)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("builtin", err)
 		}
 		after, err := readMetadata(ctx, binding.Provider)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("identity_after", err)
 		}
 		if before != after || !after.matches(binding) {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("binding_after", ErrCapture)
 		}
 		payload, captured, received = report, report.ReceivedAt, report.ReceivedAt
 	case "cursor":
 		before, err := readMetadata(ctx, binding.Provider)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("identity_before", err)
 		}
 		if !before.matches(binding) {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("binding_before", ErrCapture)
 		}
 		workspace, err := os.MkdirTemp("/tmp", "dev-env-allowance-cursor-")
 		if err != nil {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("workspace", ErrCapture)
 		}
 		defer func() { _ = os.RemoveAll(workspace) }()
 		report, err := CollectCursor(ctx, CursorOptions{Executable: cursorExecutable, Workspace: workspace, AllowWorkspaceTrust: true}, now)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("builtin", err)
 		}
 		after, err := readMetadata(ctx, binding.Provider)
 		if err != nil {
-			return RemoteCapture{}, err
+			return RemoteCapture{}, atAcquisitionStage("identity_after", err)
 		}
 		if before != after || !after.matches(binding) || report.Plan != before.plan {
-			return RemoteCapture{}, ErrCapture
+			return RemoteCapture{}, atAcquisitionStage("binding_after", ErrCapture)
 		}
 		ref := before.account
 		report.AccountRef = &ref
