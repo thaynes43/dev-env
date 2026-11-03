@@ -127,3 +127,30 @@ file is mounted. It grants no permission, deploys nothing and applies nothing.
 Mounting the file, pinning an operator image that has this route and the new
 collector configuration are GitOps changes that remain held for the owner's
 approval. After the acknowledgement, remove the file and flag in a later change.
+
+## Eviction observation witness (source, 2026-11-03)
+
+The plan requires a witness that the old Pod incarnation is terminal. The first
+form is an archived Pod API object. Once a Session replaces its Pod the object
+is gone, and a summarized note is not an object. A second form is therefore
+accepted: an `eviction-observation.v1` document recording what the cluster's
+kube-state-metrics retained for the old Pod UID: namespace and name, phase
+`Failed` since a time, reason `Evicted`, controller `AgentSession` named like the
+host, and the three series it came from (`kube_pod_info`,
+`kube_pod_status_phase`, `kube_pod_status_reason`, in that order).
+
+Checked: exact keys and bounded size; every identity field equals the old
+configuration's host (namespace, name, Pod UID, owner name); the Pod UID is the
+old incarnation, never the live one; the phase and reason; `failedSince` is not
+after `observedAt` and `observedAt` is not after the plan's time. The bytes are
+part of the prepared hash, so a different witness is a different plan.
+
+Not carried: the owner UID, service account, image and resource version of the
+old Pod. The first three stay bound by the fingerprinted old configuration and
+the live Session, Pod and HOME checks; the resource version is not needed to
+establish that the incarnation is terminal. This weakens nothing a Pod object
+established beyond those fields, and it adds no provenance: like a Pod object,
+the observation proves neither who produced it nor human approval. The
+qualifying coordinator still has to establish provenance, for example by
+running the stated queries against the cluster's Prometheus and recording the
+returned samples. A hand-built document is not a witness.

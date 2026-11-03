@@ -70,7 +70,7 @@ func PrepareHandoff(in HandoffInput) (*PreparedHandoff, error) {
 		return nil, ErrCollector
 	}
 	held, err := readJournal(in.Journal, in.Report, old, in.Now)
-	if err != nil || held.Phase != "idle" || held.Cycle != in.ExpectedCycle || held.Nonce != in.ExpectedNonce || !remoteDigest(in.ExpectedHelperSHA) || held.HelperSHA != in.ExpectedHelperSHA || !validEvictedPod(in.EvictedPod, old.Host) {
+	if err != nil || held.Phase != "idle" || held.Cycle != in.ExpectedCycle || held.Nonce != in.ExpectedNonce || !remoteDigest(in.ExpectedHelperSHA) || held.HelperSHA != in.ExpectedHelperSHA || !validEvictionWitness(in.EvictedPod, old.Host, in.Now) {
 		return nil, ErrCollector
 	}
 	before, after := []byte(`"`+old.fingerprint+`"`), []byte(`"`+next.fingerprint+`"`)
