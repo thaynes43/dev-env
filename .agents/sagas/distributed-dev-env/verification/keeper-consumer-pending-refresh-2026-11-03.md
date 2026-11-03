@@ -19,16 +19,29 @@ behavior; they pass on current main and are characterization, not a found defect
 The roughly 59 s is the keeper's cadence plus the Secret volume update delay,
 neither of which is visible or fixable from this repository.
 
-## The defect this change fixes (display only)
+## The defect this change fixes (display, plus one deliberate rc behavior change)
 
 An applied access token that has just expired, while the keeper's next
 generation is not yet visible, was shown as `NeedsLogin` by `agent-run auth
 status` and as `login-required` in agentd's status text, as if a person had to
 sign in. Now an access token that expired less than 3 minutes ago is shown as
 `Refreshing` (and `refreshing:` in the status text) with the time since expiry.
-Past the window, or when `login.json` shows the whole login lapsed, the state is
+Past the window, when the token has under a second left, or when `login.json`
+shows the whole login lapsed (both `auth status` and agentd read it), the state is
 `NeedsLogin` / `login-required` as before. Exit codes, the wire state word and
 every `continue` fence are unchanged; a script still sees exit 1.
+
+**This is not purely a display change.** `agent-run rc start --wait` recognized the
+old `login-required: waiting for the keeper's Claude projection` text and turned
+30 seconds of it into `action_required` (ask the owner to act). The new
+`refreshing:` text does not match, so `rc start` now keeps waiting through the
+pending window instead of asking for action while the keeper is already
+refreshing, and the 30-second rule runs from the moment the text returns to
+`login-required`. That is the intended behavior (asking a person to act during a
+pending refresh is the false-login symptom), at the cost of up to the window
+(3 minutes) longer before an owner action when the generation never lands. It is
+covered by two rc tests (recovers while refreshing; still ends in owner action
+after the window) and by a mutation that restores the old matching.
 
 The 3-minute window is a heuristic: the keeper refreshes ahead of expiry and the
 Secret volume trails the keeper by about a minute. It is two constants,
@@ -48,8 +61,8 @@ Secret volume trails the keeper by about a minute. It is two constants,
   candidate's files (PR 885, candidate 5d6640c), which this change does not
   touch, copy or publish.
 - This change does not claim reliable refresh or prevention of false status. It
-  narrows one false display. Installed behavior and any real session are
-  unverified.
+  narrows one false display and one dependent wait. The original reliable-refresh
+  gap stays open. Installed behavior and any real session are unverified.
 
 ## Evidence
 
