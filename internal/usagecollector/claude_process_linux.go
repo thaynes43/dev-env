@@ -52,6 +52,9 @@ func collectClaudeBuiltin(ctx context.Context, executable string, now func() tim
 	}()
 	defer func() {
 		_ = out.Close()
+		if retErr == nil && waitOwnedExit(ctx, cmd) != nil {
+			capture, retErr = providerallowance.ClaudeUsageCapture{}, ErrCapture
+		}
 		clean := stopOwnedGroup(cmd)
 		close(finished)
 		<-watcher
