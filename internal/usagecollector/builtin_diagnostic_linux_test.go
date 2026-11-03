@@ -107,9 +107,9 @@ func TestClaudeBuiltinNestedTokenCountersCannotContradictZeroTotals(t *testing.T
 	if _, err := readClaudeBuiltin(strings.NewReader(zero), time.Now); err != nil {
 		t.Fatal("a previously accepted all-zero breakdown was refused", err)
 	}
-	// An object-valued token field has no pinned-protocol qualification. Do not
-	// turn the separate conditional audit finding into new accepted input.
-	unknown := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"thinking_tokens":0},`, 1)
+	// Only the exact pinned thinking-counter object is qualified. Another
+	// object-valued token shape remains refused even when its counter is zero.
+	unknown := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"unknown_tokens":0},`, 1)
 	if _, err := readClaudeBuiltin(strings.NewReader(unknown), time.Now); err == nil {
 		t.Fatal("unqualified token-bearing object became accepted")
 	}
@@ -189,5 +189,42 @@ func TestScheduledFailureBranchesHaveClosedSubreasons(t *testing.T) {
 			}
 			requireBuiltinReason(t, "cursor", err, test.reason)
 		})
+	}
+}
+
+// The SRI-verified official2.1.296 platform source declares this exact
+// zero-usage object. It is a typed zero counter, never a null/object coercion.
+func TestClaudePinnedZeroThinkingCounterObject(t *testing.T) {
+	stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"thinking_tokens":0},`, 1)
+	if _, err := readClaudeBuiltin(strings.NewReader(stream), time.Now); err != nil {
+		t.Fatal("pinned explicit zero thinking counter refused", err)
+	}
+}
+
+func TestClaudeThinkingCounterObjectKeepsStrictShapeAndZeroGuards(t *testing.T) {
+	for _, detail := range []string{`null`, `{}`, `[]`, `0`, `false`, `{"thinking_tokens":1}`, `{"thinking_tokens":"0"}`, `{"thinking_tokens":null}`, `{"thinking_tokens":0,"PRIVATE-SENTINEL_tokens":0}`, `{"thinking_tokens":0,"other":0}`, `{"unknown_tokens":0}`, `{"Thinking_Tokens":0}`} {
+		stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":`+detail+`,`, 1)
+		_, err := readClaudeBuiltin(strings.NewReader(stream), time.Now)
+		requireBuiltinReason(t, "anthropic", err, "builtin_extra_tokens_unqualified")
+	}
+	// A known zero detail does not override required or nested positive tokens.
+	for _, field := range []string{`"input_tokens":1`, `"cache_creation":{"ephemeral_5m_input_tokens":1}`} {
+		stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{"output_tokens_details":{"thinking_tokens":0},`, 1)
+		if strings.HasPrefix(field, `"input_tokens"`) {
+			stream = strings.Replace(stream, `"input_tokens":0`, field, 1)
+		} else {
+			stream = strings.Replace(stream, `"usage":{`, `"usage":{`+field+`,`, 1)
+		}
+		if _, err := readClaudeBuiltin(strings.NewReader(stream), time.Now); err == nil {
+			t.Fatal("known zero object masked positive tokens")
+		}
+	}
+}
+
+func TestClaudeUnknownCaseTokenFieldsCannotHideActivity(t *testing.T) {
+	for _, field := range []string{`"Output_Tokens_Details":{"thinking_tokens":0}`, `"output_TOKENS_details":{"thinking_tokens":0}`, `"PRIVATE_TOKENS":1`} {
+		stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{`+field+`,`, 1)
+		_, err := readClaudeBuiltin(strings.NewReader(stream), time.Now)
+		requireBuiltinReason(t, "anthropic", err, "builtin_extra_tokens_unqualified")
 	}
 }

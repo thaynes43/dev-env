@@ -14,8 +14,9 @@ characters, control bytes and bounds. These branches need distinct fixed codes
 before a change to accepted protocol can be justified.
 
 The diagnostic changes only label those existing refusal branches. The separate
-qualified Cursor compatibility changes below accept one additional printable
-character and one exact final dashboard footer. All other acceptance predicates,
+qualified compatibility changes below accept one additional printable character,
+one exact final dashboard footer, and one typed explicit zero-counter object.
+All other acceptance predicates,
 command arguments, process ownership and cleanup, account/version fences,
 terminal screen semantics, stderr/frame size bounds, and collection cadence stay
 unchanged. The new codes contain no vendor field names, values, characters,
@@ -77,3 +78,39 @@ trust and selection states; active or duplicate footers; adjacent, active,
 prefixed and suffixed questions; foreign hosts/query/prefixes; incomplete
 displays; confirmation and authentication text. The full71136 review remains
 immutable; the amended head needs an independent current delta review and CI.
+
+
+## Pinned Claude explicit zero-counter contract
+
+The official public NPM platform package `@anthropic-ai/claude-code-linux-x64`
+version2.1.296 contains readable embedded source. Its tarball SRI was verified
+without installing or executing the client. Archive SHA256:
+`eef5a2e2b09a5e7d2ce784d1b3ba335ae7fc6c7f6256c802a0ebf2c21e4fd0e1`;
+native member SHA256:
+`24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de`.
+Public source:
+<https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.296.tgz>.
+
+At binary byte offset208145935 the usage schema declares
+`output_tokens_details` as an optional/nullable object with an optional integer
+`thinking_tokens` counter. This schema alone does not make absent/null counters
+zero. At offset213965714 the pinned zero-usage constructor explicitly sets
+`output_tokens_details` to an object containing numeric-zero `thinking_tokens`,
+alongside all four numeric-zero aggregate token counters. That exact known
+structure fails the former blanket object rejection (real reader RED0.003s).
+
+Allow only this exact top-level field, with exactly one `thinking_tokens` key
+whose value independently passes numeric-zero validation. Missing, null, empty,
+scalar, array, extra-field, string and positive variants refuse. Unknown
+object-valued token fields still refuse; the nested counter walk still rejects
+contradictory counters. Case-insensitive token-key detection also prevents an
+unknown capitalized token field from hiding activity. Required aggregate
+counters, zero turns/cost and cleanup/binding/version guards remain mandatory.
+The focused known-object and strict-negative regressions passed (0.004s).
+
+This qualifies a concrete pinned-version compatibility defect without a
+provider command, model call, login, private history or raw provider frame.
+The public artifact is not an attestation of Root's running binary hash, and it
+does not prove which counter branch caused cycle30. Current source/review/CI
+must be refreshed; installed actual captures, usable quota rows and TWO complete
+all-provider cycles/API/native/UI remain unproven.

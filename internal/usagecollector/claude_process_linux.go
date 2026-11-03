@@ -144,7 +144,7 @@ func readClaudeBuiltin(out io.Reader, now func() time.Time) (providerallowance.C
 				}
 			}
 			for key, value := range result.Usage {
-				if bytes.Contains([]byte(key), []byte("tokens")) && !zeroJSON(value) {
+				if strings.Contains(strings.ToLower(key), "tokens") && !zeroClaudeTokenField(key, value) {
 					return capture, refused("builtin_extra_tokens_unqualified", ErrCapture)
 				}
 				if !zeroNestedTokenCounters(value) {
@@ -165,9 +165,24 @@ func readClaudeBuiltin(out io.Reader, now func() time.Time) (providerallowance.C
 	return capture, nil
 }
 
+// The pinned2.1.296 zero-usage constructor includes exactly this counter object.
+// Require its explicit numeric zero; missing/null/extra fields are not zero.
+// Other token-bearing objects have no qualified shape and still refuse.
+func zeroClaudeTokenField(key string, raw json.RawMessage) bool {
+	if key != "output_tokens_details" {
+		return zeroJSON(raw)
+	}
+	if !providerallowance.ExactObjectKeys(raw, []string{"thinking_tokens"}) {
+		return false
+	}
+	var detail struct {
+		Thinking json.RawMessage `json:"thinking_tokens"`
+	}
+	return json.Unmarshal(raw, &detail) == nil && zeroJSON(detail.Thinking)
+}
+
 // Nested breakdowns cannot contradict the required zero aggregate counters.
-// This only adds refusals: the existing top-level token-field check above still
-// rejects unqualified object-valued token fields, including all-zero objects.
+// This walk only adds refusals; qualified top-level objects are checked above.
 func zeroNestedTokenCounters(raw json.RawMessage) bool {
 	var root any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
