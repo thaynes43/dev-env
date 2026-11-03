@@ -34,3 +34,27 @@ This only adds a cause line on failures that already fail. It is not a default-o
 Six synthetic fakeCLI process cases were RED on unchanged code, then GREEN in 0.096s against the existing strict stdout and fail-closed baseline. That result is source-test evidence only. It is not installed runtime or provider acceptance, and it is not proof of the cause of a historical 143 failure. Source packaging, image, and adoption belong to the normal existing owner. No release or runtime state is claimed.
 
 No new ADR, policy, or speculative architecture.
+
+## Provider diagnostic notifications (OP355)
+
+The pinned vendor JSONL producer emits a top-level `error` notification while
+execution is still running. The actual final event is `turn.failed` or
+`turn.completed`. Treating the notification as final wrongly rejects a supported
+`error` followed by `turn.failed` as a second terminal and can stop the child.
+See the pinned [event types](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/exec/src/exec_events.rs)
+and [JSONL producer](https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/exec/src/event_processor_with_jsonl_output.rs).
+
+The bounded correction validates diagnostic `message` and failed-terminal
+`error.message` strings, without rendering their contents. Only the actual
+terminal sets the result. The pinned exact capacity message on a failed terminal
+maps to the fixed subtype `provider_capacity`; other supported failures remain
+`provider_error`. An earlier capacity notification cannot override a later
+successful turn or a different terminal failure. Unknown quota, authorization and
+retryability remain unknown. Missing or malformed messages, missing terminal,
+unknown events and true second finals still refuse.
+
+This does not retry a turn, resume a completed private task, change credentials,
+renew a deadline or establish the full mechanics of any historical exit 143.
+Focused synthetic parser/process regressions and the existing strict protocol
+and private-task resume checks qualify source behavior. Publication, installation
+and actual runtime acceptance remain separate.

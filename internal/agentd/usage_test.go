@@ -79,7 +79,11 @@ func TestUsageCodexTokenOnlyAndPartial(t *testing.T) {
 			path := writeLaunch(t, s, l)
 			stream := codexStream{}
 			var result streamResult
-			for _, line := range []string{`{"type":"thread.started","thread_id":"` + captureConversation + `"}`, `{"type":"turn.started"}`, `{"type":"` + terminal + `","usage":{"input_tokens":0,"cached_input_tokens":7}}`} {
+			failure := ""
+			if terminal == "turn.failed" {
+				failure = `,"error":{"message":"synthetic provider failure"}`
+			}
+			for _, line := range []string{`{"type":"thread.started","thread_id":"` + captureConversation + `"}`, `{"type":"turn.started"}`, `{"type":"` + terminal + `","usage":{"input_tokens":0,"cached_input_tokens":7}` + failure + `}`} {
 				if err := stream.line([]byte(line), path, &l, io.Discard, &result); err != nil {
 					t.Fatal(err)
 				}
