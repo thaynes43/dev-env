@@ -105,7 +105,7 @@ func TestBuiltinDiagnosticCodesDoNotExpandStageOrVersionPayload(t *testing.T) {
 		"builtin_event_invalid", "builtin_event_unsupported", "builtin_system_unqualified",
 		"builtin_report_repeated", "builtin_report_unqualified", "builtin_report_missing",
 		"builtin_result_unqualified", "builtin_result_error", "builtin_turns_unqualified",
-		"builtin_cost_unqualified", "builtin_tokens_unqualified", "builtin_extra_event",
+		"builtin_cost_unqualified", "builtin_model_usage_unqualified", "builtin_tokens_unqualified", "builtin_extra_event",
 		"builtin_incomplete", "builtin_stream_failed", "builtin_terminal_unqualified",
 		"builtin_terminal_unavailable", "builtin_prompt_refused", "builtin_input_unqualified",
 		"builtin_display_unqualified", "builtin_workspace_unqualified", "builtin_state_unqualified",

@@ -45,6 +45,9 @@ func TestClaudeBuiltinClosedReasonsPreserveRefusals(t *testing.T) {
 		{"cost", quota + "\n" + strings.Replace(result, `"total_cost_usd":0`, `"total_cost_usd":1`, 1) + "\n", "builtin_cost_unqualified"},
 		{"tokens", quota + "\n" + strings.Replace(result, `"input_tokens":0`, `"input_tokens":1`, 1) + "\n", "builtin_required_tokens_unqualified"},
 		{"extra", finiteClaudeStream + quota + "\n", "builtin_extra_event"},
+		{"model-usage", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":{"claude-sonnet-5-5":{"inputTokens":0}},"usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-scalar", quota + "\n" + strings.Replace(result, `"usage":{`, `"model_usage_since_last_result":0,"usage":{`, 1) + "\n", "builtin_model_usage_unqualified"},
+		{"model-usage-case", quota + "\n" + strings.Replace(result, `"usage":{`, `"Model_Usage_Since_Last_Result":{},"model_usage_since_last_result":{},"usage":{`, 1) + "\n", "builtin_event_invalid"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := readClaudeBuiltin(strings.NewReader(test.stream), time.Now)
@@ -326,6 +329,18 @@ func TestCursorDotSetDiagnosticCannotAdvanceAnyProtocolState(t *testing.T) {
 		requireBuiltinReason(t, "cursor", err, "builtin_terminal_dotset_unqualified")
 		if p.state != state {
 			t.Fatal("refused member changed protocol state")
+		}
+	}
+}
+
+// The 2.1.312 result record may carry an empty per-model usage object; a zero-turn
+// /usage makes no model call, so absent, null and empty are the only accepted forms.
+func TestClaudeBuiltinAcceptsEmptyModelUsageOnly(t *testing.T) {
+	quota, result, _ := strings.Cut(strings.TrimSuffix(finiteClaudeStream, "\n"), "\n")
+	for name, field := range map[string]string{"absent": "", "empty": `"model_usage_since_last_result":{},`, "null": `"model_usage_since_last_result":null,`, "spaced": `"model_usage_since_last_result": { },`} {
+		stream := quota + "\n" + strings.Replace(result, `"usage":{`, field+`"usage":{`, 1) + "\n"
+		if _, err := readClaudeBuiltin(strings.NewReader(stream), time.Now); err != nil {
+			t.Fatal("qualified shape refused", name, err)
 		}
 	}
 }
