@@ -396,7 +396,8 @@ func TestInSlotHandoffRejectedUpdateAllowsExactlyOneLaterWrite(t *testing.T) {
 	if run.Attempt(ctx) == nil || h.slotNow(t).Data[StateKey] != string(h.in.Journal) {
 		t.Fatal("rejected update was treated as applied")
 	}
-	if run.Attempt(ctx) != nil || run.Attempt(ctx) != nil || spy.applied != 1 {
+	first, again := run.Attempt(ctx), run.Attempt(ctx)
+	if first != nil || again != nil || spy.applied != 1 {
 		t.Fatal("retry did not write exactly once", spy.applied)
 	}
 }
