@@ -497,7 +497,11 @@ func (c *Collection) accept(slot *collectionSlot, obs Observation, started, fini
 		c.record(slot, started, finished, AttemptError, AvailabilityUnavailable, codeAcquisitionRejected)
 		return true
 	}
-	c.record(slot, started, finished, AttemptSuccess, cloned.Availability, "")
+	availability := cloned.Availability
+	if emptyClaudeQuota(cloned) {
+		availability = AvailabilityUnavailable
+	}
+	c.record(slot, started, finished, AttemptSuccess, availability, "")
 	return false
 }
 
@@ -612,7 +616,7 @@ func (c collectionView) itemFor(slot *collectionSlot, servedAt time.Time) ReadIt
 }
 
 func emptyClaudeQuota(obs Observation) bool {
-	return obs.Provider == "anthropic" && obs.Source.Version == ClaudeSDKSourceVersion && obs.Availability == AvailabilityUnavailable && len(obs.Measures) == 0
+	return obs.Provider == "anthropic" && obs.Source.Version == ClaudeSDKSourceVersion && (obs.Availability == AvailabilityUnavailable || obs.Availability == AvailabilityPartial) && len(obs.Measures) == 0
 }
 
 func (c collectionView) statusFor(slot *collectionSlot, served string, servedAt time.Time) SourceStatus {

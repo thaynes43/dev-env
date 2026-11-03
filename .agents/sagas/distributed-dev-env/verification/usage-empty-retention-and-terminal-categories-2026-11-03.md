@@ -5,7 +5,9 @@ remain unavailable without replacing an earlier, account-bound last report or
 borrowing its timestamps. Retain the most recent usable capture alongside the
 latest empty envelope in the existing two-capture journal bound. Assembly keeps
 the original usable observation and receipt, records the actual empty attempt,
-and withholds its current quota. Zero is a reported value, not an empty result.
+and withholds its current quota. Zero is a reported value, not an empty result. The raw null/empty-array
+distinction and historical observation labels stay unchanged; source status
+reports that either empty result has no available quota.
 An empty-only history must never acquire a last-good reference. This change
 does not restore captures already evicted from a running journal.
 
@@ -40,8 +42,21 @@ The retention fix prevents loss of history; it does not establish or repair the
 upstream reason a valid envelope has no quota. Credential fencing is unchanged.
 
 Focused stateful tests first failed (0.078 seconds) and category tests first
-failed (0.003 seconds). The empty-array case exposed an additional partial
-availability classification; both null and empty arrays now project unavailable.
+failed (0.003 seconds). The empty-array case exposed a raw partial
+availability label with no rows; both null and empty arrays now make source
+status unavailable, without rewriting historical raw observations.
 The focused regression suites pass (collector 0.109 seconds, helper 0.006 seconds),
 including owned PTY encoding refusal and real zero data. Full race validation
 and current independent review remain required before delivery.
+
+A legacy stored document may already call an empty SDK envelope last-good.
+The existing history guard would otherwise block the next natural publication
+when that erroneous reference is removed. The correction is restricted to
+data-free Claude SDK observations under the same verified producer, capability,
+account/workspace and binding generation. It changes no raw observation or
+clock. A zero-valued row is data and cannot use this correction. Stateful tests
+cover legacy null and empty-array reports followed by another empty completion
+or an acquisition failure, plus rejected erasure of a genuine zero report.
+The legacy regression failed before this correction (0.066 seconds) and passes
+with the other focused retention tests (0.185 seconds). No live journal editing,
+restoration of evicted samples, credential recovery or retry is authorized.

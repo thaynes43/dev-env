@@ -378,11 +378,12 @@ func preserveAllowance(prev, next providerallowance.ReadResponse) error {
 		if !hasBefore {
 			continue
 		}
+		emptyCorrection := emptyClaudeLastGoodCorrection(before, after, prevStatus[provider], nextStatus[provider])
 		if sameAllowanceCapture(before, after) {
 			if before.ReceivedAt != after.ReceivedAt || !observationsEqual(before.Observation, after.Observation) {
 				return ErrAggregateRejected
 			}
-			if !lastGoodEqual(prevStatus[provider].LastGood, nextStatus[provider].LastGood) {
+			if !lastGoodEqual(prevStatus[provider].LastGood, nextStatus[provider].LastGood) && !emptyCorrection {
 				return ErrAggregateRejected
 			}
 			if freshRank(after.Freshness) > freshRank(before.Freshness) || currentPromoted(before, after) {
@@ -390,7 +391,7 @@ func preserveAllowance(prev, next providerallowance.ReadResponse) error {
 			}
 			continue
 		}
-		if !allowanceClaimsCurrent(after) && !lastGoodEqual(prevStatus[provider].LastGood, nextStatus[provider].LastGood) && !lastGoodMatches(nextStatus[provider].LastGood, after) {
+		if !allowanceClaimsCurrent(after) && !lastGoodEqual(prevStatus[provider].LastGood, nextStatus[provider].LastGood) && !lastGoodMatches(nextStatus[provider].LastGood, after) && !emptyCorrection {
 			return ErrAggregateRejected
 		}
 		rebound := !aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) ||
@@ -554,6 +555,36 @@ func lastGoodMatches(good *providerallowance.LastGood, item providerallowance.Re
 		return false
 	}
 	return good.ObservationID == item.Observation.ObservationID && good.CapturedAt == item.Observation.CapturedAt && good.ReceivedAt == item.ReceivedAt && aggregateStringEqual(good.ProviderObservedAt, item.Observation.ProviderObservedAt)
+}
+
+// Older SDK assembly incorrectly called an empty envelope last-good. Permit
+// removing only that data-free reference under the same verified identity.
+// No usable value, source selection, clock, raw observation or history is reset.
+func emptyClaudeLastGoodCorrection(before, after providerallowance.ReadItem, prev, next providerallowance.SourceStatus) bool {
+	if next.LastGood != nil || next.Availability != providerallowance.AvailabilityUnavailable || !lastGoodMatches(prev.LastGood, before) {
+		return false
+	}
+	for _, item := range []providerallowance.ReadItem{before, after} {
+		obs := item.Observation
+		if obs.Provider != "anthropic" || obs.Source.Kind != providerallowance.SourceNativeRPC || obs.Source.Version != providerallowance.ClaudeSDKSourceVersion {
+			return false
+		}
+		if obs.ProviderObservedAt != nil || len(obs.Measures) != 0 || len(obs.Derivations) != 0 || len(obs.DirectFields) != 0 || len(item.Validation.ValidationRefs) != 0 {
+			return false
+		}
+		if item.Validation.State != providerallowance.ValidationSourceFields || item.Binding.State != providerallowance.BindingVerified || obs.Scope.BindingState != providerallowance.BindingVerified {
+			return false
+		}
+		if obs.Availability != providerallowance.AvailabilityUnavailable && obs.Availability != providerallowance.AvailabilityPartial {
+			return false
+		}
+	}
+	return before.Observation.ProducerRef == after.Observation.ProducerRef &&
+		before.Observation.ProducerIncarnation == after.Observation.ProducerIncarnation &&
+		before.Observation.Source.CapabilityRef == after.Observation.Source.CapabilityRef &&
+		before.Observation.BindingGeneration == after.Observation.BindingGeneration && before.Binding.Generation == after.Binding.Generation &&
+		aggregateStringEqual(before.Observation.Scope.AccountRef, after.Observation.Scope.AccountRef) &&
+		aggregateStringEqual(before.Observation.Scope.WorkspaceRef, after.Observation.Scope.WorkspaceRef)
 }
 
 func lastGoodEqual(a, b *providerallowance.LastGood) bool {
