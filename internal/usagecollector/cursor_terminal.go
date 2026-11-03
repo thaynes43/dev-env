@@ -257,7 +257,9 @@ func cursorRuneClassReason(r rune) string {
 	case unicode.IsSymbol(r) && (r == 0x2605 || r == 0x2606 || r >= 0x2721 && r <= 0x274b):
 		return "builtin_terminal_star_unqualified"
 	case unicode.IsSymbol(r) && r >= 0x2600 && r <= 0x26ff:
-		return "builtin_terminal_miscsymbol_unqualified"
+		// Miscellaneous Symbols, in eight aligned windows of 32 code points. A label names
+		// the window, never the character; the table in the verification note maps them.
+		return cursorMiscWindows[(r-0x2600)>>5]
 	case unicode.IsSymbol(r) && r >= 0x2700 && r <= 0x27bf:
 		return "builtin_terminal_dingbat_unqualified"
 	case unicode.IsSymbol(r) && r >= 0x1f000:
@@ -266,4 +268,12 @@ func cursorRuneClassReason(r rune) string {
 		return "builtin_terminal_symbol_unqualified"
 	}
 	return "builtin_terminal_rune_unqualified"
+}
+
+// cursorMiscWindows labels U+2600 to U+26FF in eight windows of 32 code points each.
+var cursorMiscWindows = [8]string{
+	"builtin_terminal_miscwin1_unqualified", "builtin_terminal_miscwin2_unqualified",
+	"builtin_terminal_miscwin3_unqualified", "builtin_terminal_miscwin4_unqualified",
+	"builtin_terminal_miscwin5_unqualified", "builtin_terminal_miscwin6_unqualified",
+	"builtin_terminal_miscwin7_unqualified", "builtin_terminal_miscwin8_unqualified",
 }

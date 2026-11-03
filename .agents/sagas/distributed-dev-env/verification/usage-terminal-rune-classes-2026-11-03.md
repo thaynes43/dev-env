@@ -34,7 +34,7 @@ that matches it, not to a block it happens to sit in.
 | 9 | `builtin_terminal_currency_unqualified` | currency symbols (Sc) |
 | 10 | `builtin_terminal_checkmark_unqualified` | the remaining check and cross marks: U+2714 to U+2718, U+2705, U+274C, U+274E (U+2713 is accepted earlier and is never refused) |
 | 11 | `builtin_terminal_star_unqualified` | stars, asterisks and flower dingbats: U+2605, U+2606, U+2721 to U+274B (spinner-style asterisks included) |
-| 12 | `builtin_terminal_miscsymbol_unqualified` | what is left of the Miscellaneous Symbols block, U+2600 to U+26FF (weather, warning, hearts, and so on) |
+| 12 | `builtin_terminal_miscwin1_unqualified` ... `builtin_terminal_miscwin8_unqualified` | what is left of the Miscellaneous Symbols block (U+2600 to U+26FF) in eight aligned windows of 32 code points, after rows 2, 8 and 9 and the star and check rows: win1 U+2600 to U+261F, win2 U+2620 to U+263F, win3 U+2640 to U+265F, win4 U+2660 to U+267F, win5 U+2680 to U+269F, win6 U+26A0 to U+26BF, win7 U+26C0 to U+26DF, win8 U+26E0 to U+26FF |
 | 13 | `builtin_terminal_dingbat_unqualified` | what is left of the Dingbats block, U+2700 to U+27BF (ornaments, crosses, dingbat arrows) |
 | 14 | `builtin_terminal_pictograph_unqualified` | the remaining symbols from U+1F000 up (emoji and other pictographs; the number and math code points in that range, such as U+1F100 and U+1F8D0, are taken by rows 2 and 8) |
 | 15 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
@@ -56,7 +56,7 @@ protocol advance in any state, provider/stage/payload boundaries, and the
 generic label for private-use and unassigned code points. Older tests that
 asserted a coarser label for a snowman and a few other characters now assert
 their classes (the snowman moved from the generic label to pictograph in the first
-round and to miscsymbol in this one).
+round and to a Miscellaneous Symbols window in the third round).
 
 This is diagnostics only. It qualifies no character, widens no input and runs no
 provider. Qualifying a character, if the evidence supports it, is a separate
@@ -80,3 +80,17 @@ Not covered by any pictograph-family label, by design: symbols outside U+2600 to
 U+27BF and below U+1F000 that are not shapes, math or currency (for example
 U+2B50, U+231A, U+2B1B). They reach `builtin_terminal_symbol_unqualified`, so a
 future refusal at that label points outside this family.
+
+## Round 3 (after cycle 71)
+
+Cycle 71 on operator `sha-1365b60` refused Cursor at `builtin_terminal_miscsymbol_unqualified`: the
+glyph is a symbol in the Miscellaneous Symbols block (U+2600 to U+26FF) that the earlier rows (numbers,
+math, currency, stars, check marks) did not take. That label is replaced by eight window labels that
+split the block into aligned runs of 32 code points. A window label names a run, never a character, a
+single code point or a count; every window still holds many assigned symbols (the smallest after the
+star and math exclusions still has dozens). Window ranges are public in the table above and are not
+secret; they are fixed code-point boundaries, not a lookup of the character seen. Nothing is qualified or
+widened: an unqualified character still refuses before it is rendered, and the acceptance predicate is
+unchanged. A glyph, once localized, is qualified only by a separate reviewed change with its own evidence.
+Cycle 70 stopped earlier, at `identity_before` with reason `deadline`, which is a different stage and
+looks transient; it is not addressed here.
