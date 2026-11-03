@@ -251,7 +251,7 @@ func checkHandoffBackup(dir, hash string, in HandoffInput, create bool) error {
 	if err != nil {
 		return ErrCollector
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	di, err := d.Stat()
 	if err != nil || !di.IsDir() || di.Mode().Perm() != 0700 {
 		return ErrCollector
@@ -264,7 +264,7 @@ func checkHandoffBackup(dir, hash string, in HandoffInput, create bool) error {
 	if err != nil {
 		return ErrCollector
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	raw, err := json.Marshal(struct {
 		Schema                     string
 		OldConfig, Journal, Report []byte
@@ -284,7 +284,7 @@ func checkHandoffBackup(dir, hash string, in HandoffInput, create bool) error {
 	if err != nil {
 		return ErrCollector
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	st, ok := fiSys(fi)
 	if err != nil || !ok || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0600 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {

@@ -28,7 +28,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/providerallowance"
 )
 
-var refused = errors.New("allowance handoff refused")
+var errRefused = errors.New("allowance handoff refused")
 
 type snapshot struct {
 	OldConfig       []byte `json:"oldConfig"`
@@ -55,14 +55,14 @@ type clientFactory func(string, string) (client.Client, error)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, time.Now, makeClient); err != nil {
-		fmt.Fprintln(os.Stderr, refused)
+		fmt.Fprintln(os.Stderr, errRefused)
 		os.Exit(1)
 	}
 }
 
 func run(args []string, out io.Writer, clock func() time.Time, factory clientFactory) error {
 	if len(args) < 1 || out == nil || clock == nil || factory == nil || args[0] != "prepare" && args[0] != "apply" {
-		return refused
+		return errRefused
 	}
 	flags := flag.NewFlagSet("handoff", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -74,46 +74,46 @@ func run(args []string, out io.Writer, clock func() time.Time, factory clientFac
 	approved := flags.String("approved-hash", "", "")
 	backup := flags.String("backup-dir", "", "")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || !filepath.IsAbs(*input) || !filepath.IsAbs(*kubeconfig) || *kubecontext == "" || *namespace != apiserver.AggregateAllowanceNamespace || *slot != apiserver.AggregateAllowanceName {
-		return refused
+		return errRefused
 	}
 	if args[0] == "prepare" && (*approved != "" || *backup != "") || args[0] == "apply" && (*approved == "" || !filepath.IsAbs(*backup)) {
-		return refused
+		return errRefused
 	}
 	raw, err := readPrivate(*input, 512<<10)
 	if err != nil || !providerallowance.ValidJSONDocument(raw, 512<<10) || !providerallowance.ExactObjectKeys(raw, snapshotKeys) {
-		return refused
+		return errRefused
 	}
 	var snap snapshot
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if dec.Decode(&snap) != nil || dec.Decode(new(any)) != io.EOF {
-		return refused
+		return errRefused
 	}
 	trust, err := providerallowance.ParseAggregateTrust(snap.Trust)
 	if err != nil {
-		return refused
+		return errRefused
 	}
 	in := allowancecollector.HandoffInput{OldConfig: snap.OldConfig, NewConfig: snap.NewConfig, Trust: trust, PublisherUID: snap.PublisherUID, PublisherSA: snap.PublisherSA, SlotUID: snap.SlotUID, ResourceVersion: snap.ResourceVersion, HomeUID: snap.HomeUID, KubeconfigPath: *kubeconfig, KubeContext: *kubecontext, Journal: snap.Journal, Report: snap.Report, EvictedPod: snap.EvictedPod, ExpectedHelperSHA: snap.HelperSHA, ExpectedJournalSHA: snap.JournalSHA, ExpectedReportSHA: snap.ReportSHA, ExpectedCycle: snap.Cycle, ExpectedNonce: snap.Nonce, Now: clock().UTC()}
 	plan, err := allowancecollector.PrepareHandoff(in)
 	if err != nil {
-		return refused
+		return errRefused
 	}
 	if args[0] == "prepare" {
 		_, err = fmt.Fprintln(out, plan.Hash)
 		return err
 	}
 	if *approved != plan.Hash {
-		return refused
+		return errRefused
 	}
 	// No client or kubeconfig is opened before the exact prepared hash matches.
 	c, err := factory(*kubeconfig, *kubecontext)
 	if err != nil {
-		return refused
+		return errRefused
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if allowancecollector.ApplyHandoff(ctx, c, in, *approved, *backup) != nil {
-		return refused
+		return errRefused
 	}
 	_, err = fmt.Fprintln(out, plan.Hash)
 	return err
@@ -121,25 +121,25 @@ func run(args []string, out io.Writer, clock func() time.Time, factory clientFac
 
 func readPrivate(path string, limit int64) ([]byte, error) {
 	if filepath.Clean(path) != path {
-		return nil, refused
+		return nil, errRefused
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil || resolved != path {
-		return nil, refused
+		return nil, errRefused
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, refused
+		return nil, errRefused
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	st, ok := infoSys(info)
 	if err != nil || !ok || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() < 1 || info.Size() > limit {
-		return nil, refused
+		return nil, errRefused
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil || int64(len(raw)) > limit || int64(len(raw)) != info.Size() {
-		return nil, refused
+		return nil, errRefused
 	}
 	return raw, nil
 }
@@ -147,25 +147,25 @@ func readPrivate(path string, limit int64) ([]byte, error) {
 func makeClient(path, selected string) (client.Client, error) {
 	config, err := clientcmd.LoadFromFile(path)
 	if err != nil {
-		return nil, refused
+		return nil, errRefused
 	}
 	selectedContext := config.Contexts[selected]
 	if selectedContext == nil {
-		return nil, refused
+		return nil, errRefused
 	}
 	cluster := config.Clusters[selectedContext.Cluster]
 	auth := config.AuthInfos[selectedContext.AuthInfo]
 	if cluster == nil || auth == nil || cluster.ProxyURL != "" || cluster.InsecureSkipTLSVerify || auth.Exec != nil || auth.AuthProvider != nil {
-		return nil, refused
+		return nil, errRefused
 	}
 	rest, err := clientcmd.NewNonInteractiveClientConfig(*config, selected, &clientcmd.ConfigOverrides{}, nil).ClientConfig()
 	if err != nil {
-		return nil, refused
+		return nil, errRefused
 	}
 	rest.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	scheme := runtime.NewScheme()
 	if corev1.AddToScheme(scheme) != nil || v1alpha1.AddToScheme(scheme) != nil {
-		return nil, refused
+		return nil, errRefused
 	}
 	return client.New(rest, client.Options{Scheme: scheme})
 }
