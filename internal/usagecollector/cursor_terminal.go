@@ -8,6 +8,10 @@ import (
 
 const cursorRows, cursorCols = 50, 180
 
+// One fixed public multi-member vocabulary for refusal diagnostics only.
+// Membership never makes a rune eligible for rendering or input/capture.
+const cursorDotSpinnerDiagnosticSet = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
 // cursorTerminal is the bounded visible screen, not a transcript accumulator.
 // Unsupported terminal operations refuse instead of leaving erased text eligible
 // to authorize input. Partial UTF8/escape and synchronized redraws cannot settle.
@@ -88,7 +92,11 @@ func (t *cursorTerminal) feed(raw []byte) error {
 			r, size := utf8.DecodeRune(t.pending[i:])
 			qualified := r < 128 || r == '•' || r == '·' || r == '…' || r >= 0x2190 && r <= 0x21ff || r >= 0x2500 && r <= 0x259f || r == '✓'
 			if r == utf8.RuneError || !qualified {
-				return refused("builtin_terminal_rune_unqualified", ErrCapture)
+				reason := "builtin_terminal_rune_unqualified"
+				if strings.ContainsRune(cursorDotSpinnerDiagnosticSet, r) {
+					reason = "builtin_terminal_dotset_unqualified"
+				}
+				return refused(reason, ErrCapture)
 			}
 			if t.col >= cursorCols {
 				return refused("builtin_terminal_bounds_unqualified", ErrCapture)
