@@ -120,15 +120,16 @@ as historical evidence and retain original credential/grant expiries.
 
 ## One-time replacement handoff (2026-11-03)
 
-An explicitly invoked maintenance operator may prepare the particular
-cycle-56 host replacement and deadline 2026-11-04T15:33:23Z. This is not an
-automatic host adoption or a general identity migration. Producer incarnation
+The human-directed parent coordinator session may explicitly invoke the
+maintenance helper to prepare the particular cycle-56 host replacement and
+deadline 2026-11-04T15:33:23Z. This is not an automatic host adoption or a
+general identity migration. Producer incarnation
 remains the same caller-selected logical stream: trust, account and workspace
 bindings, captures, sequences and historical times remain unchanged. Only the
 host Pod UID, generation, image and the approved deadline may change.
 
-The maintenance operator independently authenticates the exact named
-ConfigMap UID and original bytes, old fingerprint, idle cycle, nonce, report,
+The human-directed parent coordinator session, not the operator binary,
+independently authenticates the exact named ConfigMap UID and original bytes, old fingerprint, idle cycle, nonce, report,
 captures, known helper and archived old-Pod eviction evidence, and obtains
 approval of the exact prepared hash. A supplied snapshot or hash is not proof of
 provenance or human approval. A trusted idle journal from the existing Runner

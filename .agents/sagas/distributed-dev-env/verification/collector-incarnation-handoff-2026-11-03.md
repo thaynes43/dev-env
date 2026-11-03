@@ -20,8 +20,9 @@ The old runtime ledger is not reconstructed or waived. An independently
 authenticated historical old-Pod eviction snapshot, bound into the plan, plus
 fresh checks of the replacement session, Pod and HOME, fences the executor.
 The source helper validates their shape and identity but cannot authenticate an
-archived snapshot or a human approval. The parent coordinator must independently qualify those
-facts and the exact prepared hash before any invocation; a hash is not approval.
+archived snapshot or a human approval. The human-directed parent coordinator
+session must independently qualify those facts and the exact prepared hash
+before any invocation; a hash is not approval.
 
 The helper prepares offline with the real collector parser and permits only the
 specified host and deadline changes. Its apply route checks the named slot and
@@ -37,14 +38,14 @@ The wall-clock public-apply fixture is necessarily skipped outside that fixed
 window. The clock-injected apply and real Runner fixtures remain runnable after
 it, including the next-cycle and lost-ack paths.
 
-The operator supplies a private snapshot of both exact configurations, selected
-trust, named slot UID and resource version, original journal and report, their
+The human-directed parent coordinator session supplies a private snapshot of
+both exact configurations, selected trust, named slot UID and resource version, original journal and report, their
 hashes, cycle and nonce, the known helper digest, and the authenticated archived
 old Pod. Preparation parses both configurations and the journal, verifies the
 old Pod's eviction identity and the unchanged logical-stream policy, and
-hashes the whole proposed transition. The parent coordinator independently verifies the snapshot
-provenance, eviction and approval; none can be established by the caller's
-bytes alone.
+hashes the whole proposed transition. That session, not the operator binary,
+independently verifies the snapshot provenance and eviction and obtains exact
+prepared-hash approval; none can be established by the caller's bytes alone.
 
 Apply revalidates the proposed hash and reads the new session, current Pod and
 HOME using the selected uncached client. It requires the selected generation,
@@ -57,9 +58,8 @@ only with the matching backup. A changed slot, journal, report, host, deadline,
 trust or evidence refuses. Existing runners on either mismatched fingerprint
 cannot reach provider execution. No other state keys or report bytes are changed.
 
-The source check `make check-layout` requires a `CLAUDE.md` Layout entry for
-this new command. The parent authorized exactly that one additional row. A
-separate design file remains outside the assignment; this record documents the
-proposed behavior pending independent review and any broader scope direction.
+The [DESIGN-053 one-time replacement handoff](../designs/053-operator-owned-allowance-collection.md#one-time-replacement-handoff-2026-11-03)
+records these preconditions and fences.
 
-The approved host delta permits a different valid digest-pinned image. The fresh replacement Pod must match the newly selected image exactly.
+The approved host delta permits a different valid digest-pinned image. The fresh
+replacement Pod must match the newly selected image exactly.
