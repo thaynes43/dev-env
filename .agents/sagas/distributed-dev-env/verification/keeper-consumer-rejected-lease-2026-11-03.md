@@ -82,6 +82,20 @@ exactly one send across the gap and that observing a rejection leaves the receip
   on every heartbeat; it changes once when the ten-minute window passes. agent-run computes its relative
   age on read.
 
+## Merge with the pending-refresh display (PR 891, merged)
+
+Precedence, tested at the boundaries in both readers (unexpired, expired 1 s, just inside 3 min, exactly
+3 min, lapsed login, no marker): a recorded rejection for the current generation while the token is
+unexpired is Rejected / `login-rejected:`. Once the token has expired the expiry state stands
+(Refreshing for the 3 minute window, then NeedsLogin / `login-required:`, or NeedsLogin when the login
+lapsed) with the exit code it had, and the rejection is appended to the Reason / text, so it is never
+hidden by Refreshing and the row is never Ready. A cannot-tell marker is appended the same way.
+
+rc: `login-rejected:` keeps the phase-reason-only behaviour and is not an owner action (a refused login
+is waited out; the keeper's next generation and the existing one-time continue are the recovery); it ends
+as `agent_start_timeout` if it outlasts agent start. `refreshing:` still maps to `auth_refresh_pending`
+and `login-required:` to `auth_projection_unavailable`, with the rejection appended.
+
 ## Exit code meaning (scripts)
 
 `agent-run auth status` exits 1 for a Rejected row. Exit 1 was documented as expiring or expired. A

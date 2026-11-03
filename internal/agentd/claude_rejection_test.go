@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/claudeauth"
 )
 
 // A provider revokes the keeper's login while the applied access token has not
@@ -322,16 +324,58 @@ func TestRejectionNeverAgesIntoReady(t *testing.T) {
 	}
 }
 
-// Only the access token's own expiry hands the display back to the expired-token path.
-func TestRejectionYieldsToTheExpiredTokenDisplayOnlyWhenTheTokenExpires(t *testing.T) {
-	rr := revokedCase(t) // access life 9h from loginNow
-	rr.clk = loginNow.Add(9*time.Hour - time.Second)
-	if !rr.rejected() {
-		t.Errorf("one second before expiry: %q", rr.text())
+// Merged state with the pending-refresh display: a rejection recorded for the
+// current generation while the token is unexpired is login-rejected; once the
+// token has expired the expiry text stands (refreshing for the pending window,
+// login-required after or when the login lapsed) and the recorded rejection is
+// appended, never hidden and never shown as logged in.
+func TestRejectionMergedWithTheExpiredTokenDisplay(t *testing.T) {
+	expiry := loginNow.Add(9 * time.Hour) // projAccess(g, 9h)
+	lapsed, err := claudeauth.EncodeLogin(expiry.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
 	}
-	rr.clk = loginNow.Add(9*time.Hour + time.Second)
-	if got := rr.text(); strings.Contains(got, "login-rejected") || !strings.HasPrefix(got, "login-required:") {
-		t.Errorf("after the token expired: %q; want the existing expired-token display", got)
+	rows := []struct {
+		name   string
+		at     time.Time
+		lapse  []byte
+		marker bool
+		prefix string
+		refuse bool
+	}{
+		{"unexpired + marker", expiry.Add(-time.Second), nil, true, "login-rejected:", false},
+		{"expired 1s + marker", expiry.Add(time.Second), nil, true, "refreshing:", true},
+		{"expired just inside 3m + marker", expiry.Add(claudePendingWindow - time.Second), nil, true, "refreshing:", true},
+		{"expired exactly 3m + marker", expiry.Add(claudePendingWindow), nil, true, "login-required:", true},
+		{"expired 1s + login lapsed + marker", expiry.Add(time.Second), lapsed, true, "login-required:", true},
+		{"unexpired + login lapsed + marker", expiry.Add(-time.Second), lapsed, true, "login-rejected:", false},
+		{"unexpired, no marker", expiry.Add(-time.Second), nil, false, "logged in", false},
+		{"expired 1s, no marker", expiry.Add(time.Second), nil, false, "refreshing:", false},
+		{"expired exactly 3m, no marker", expiry.Add(claudePendingWindow), nil, false, "login-required:", false},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			rr := revokedCase(t)
+			if !row.marker {
+				_ = os.Remove(rr.markerPath())
+			}
+			loginPath := filepath.Join(filepath.Dir(rr.s.ClaudeLiveFile), claudeauth.LoginKey)
+			if row.lapse != nil {
+				if err := os.WriteFile(loginPath, row.lapse, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := projectionLoginStatus(rr.s, row.at)
+			if !strings.HasPrefix(got, row.prefix) {
+				t.Errorf("text %q; want prefix %q", got, row.prefix)
+			}
+			if has := strings.Contains(got, "refused keeper generation 1"); has != (row.marker && (row.prefix == "login-rejected:" || row.refuse)) {
+				t.Errorf("text %q: rejection mentioned = %v", got, has)
+			}
+			if row.marker && strings.HasPrefix(got, "logged in") {
+				t.Errorf("a recorded rejection read as logged in: %q", got)
+			}
+		})
 	}
 }
 

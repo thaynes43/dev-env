@@ -170,6 +170,21 @@ func rejectionStatusText(s Settings, now time.Time) string {
 	return ""
 }
 
+// rejectionExpiredNote is appended to the expired-token text.
+func rejectionExpiredNote(s Settings, now time.Time) string {
+	if s.ClaudeLiveFile == "" {
+		return ""
+	}
+	m, kind := lookupRejection(s, now)
+	switch kind {
+	case rejectionRejected:
+		return fmt.Sprintf("; the provider had refused keeper generation %d at %s", m.Generation, m.ObservedAt.UTC().Format(time.RFC3339))
+	case rejectionUnverifiable:
+		return "; this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the login"
+	}
+	return ""
+}
+
 // lockRejection takes the marker's lock without blocking. busy means another
 // writer is in its critical section (normal: this poll does nothing); err is a
 // failure to open the lock at all.

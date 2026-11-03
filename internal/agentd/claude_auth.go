@@ -228,17 +228,24 @@ func projectionLoginStatus(s Settings, now time.Time) string {
 	if data, err := readClaudeCredentials(s); err == nil && claudeauth.HoldsRefreshToken(data) {
 		return ErrClaudeLoginConflict.Error()
 	}
-	if text := rejectionStatusText(s, now); text != "" {
-		return text
-	}
-	if c := checkProjectedLogin(s); c.Usable(now) {
+	c := checkProjectedLogin(s)
+	if c.Usable(now) {
+		// Unexpired: a rejection recorded for this generation (or a marker that
+		// cannot be believed) outranks "logged in".
+		if text := rejectionStatusText(s, now); text != "" {
+			return text
+		}
 		return "logged in on the keeper's projection, access token lapses " + c.Expires.Format(time.RFC3339)
-	} else if c.Present && !c.Expires.IsZero() && !projectedLoginLapsed(s, now) {
+	}
+	// Expired: the expiry text stands (refreshing inside the pending window,
+	// login-required after, or when the login itself lapsed), with the recorded
+	// rejection appended so it is never hidden by "refreshing".
+	if c.Present && !c.Expires.IsZero() && !projectedLoginLapsed(s, now) {
 		if ago := now.Sub(c.Expires); ago >= 0 && ago < claudePendingWindow {
-			return "refreshing: the access token lapsed " + ago.Round(time.Second).String() + " ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"
+			return "refreshing: the access token lapsed " + ago.Round(time.Second).String() + " ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished" + rejectionExpiredNote(s, now)
 		}
 	}
-	return "login-required: waiting for the keeper's Claude projection; no login is run in this pod"
+	return "login-required: waiting for the keeper's Claude projection; no login is run in this pod" + rejectionExpiredNote(s, now)
 }
 
 // projectedLoginLapsed reports whether the non-secret login.json the keeper

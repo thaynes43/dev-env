@@ -245,15 +245,58 @@ func TestAuthStatusRejectedFileFlagAndNoHome(t *testing.T) {
 	}
 }
 
-func TestAuthStatusRejectedDoesNotMaskExpiryOrLapse(t *testing.T) {
-	h := newHarness(t)
-	hermeticAuth(t, h)
-	h.vars["AGENTD_CLAUDE_LIVE_FILE"] = h.write("claude.json", authClaudeDoc(3, testNow.Add(-time.Minute)))
-	h.vars["HOME"] = filepath.Join(h.dir, "home")
-	h.write("home/.agentd/claude-rejected.json", rejectionDoc(3, testNow.Add(-time.Minute)))
-	h.mustRun(1, "auth", "status")
-	if out := h.stdout.String(); !strings.Contains(out, "claude  NeedsLogin") {
-		t.Errorf("an expired access token must stay NeedsLogin:\n%s", out)
+// Merged state with the pending-refresh display (PR 891): a recorded rejection
+// for the generation shown while the token is unexpired is Rejected; once it has
+// expired the expiry state stands (Refreshing inside the pending window,
+// NeedsLogin after or when the login lapsed) and the Reason carries the
+// rejection. It is never hidden and the row is never Ready.
+func TestAuthStatusRejectedMergedWithTheExpiredTokenDisplay(t *testing.T) {
+	rows := []struct {
+		name     string
+		expiry   time.Duration // access expires at testNow+expiry
+		lapsed   bool
+		marker   bool
+		state    string
+		refused  bool
+		exitCode int
+	}{
+		{"unexpired + marker", time.Hour, false, true, "Rejected", true, 1},
+		{"expired 1s + marker", -time.Second, false, true, "Refreshing", true, 1},
+		{"expired just inside 3m + marker", -(authPendingWindow - time.Second), false, true, "Refreshing", true, 1},
+		{"expired exactly 3m + marker", -authPendingWindow, false, true, "NeedsLogin", true, 1},
+		{"expired 1s + login lapsed + marker", -time.Second, true, true, "NeedsLogin", true, 1},
+		{"unexpired + login lapsed + marker", time.Hour, true, true, "Rejected", true, 1},
+		{"unexpired, no marker", time.Hour, false, false, "Ready", false, 0},
+		{"expired 1s, no marker", -time.Second, false, false, "Refreshing", false, 1},
+		{"expired exactly 3m, no marker", -authPendingWindow, false, false, "NeedsLogin", false, 1},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			marker := ""
+			if row.marker {
+				marker = rejectionDoc(3, testNow.Add(-2*time.Minute))
+			}
+			h := rejectedHarness(t, 3, marker)
+			proj := h.write("claude.json", authClaudeDoc(3, testNow.Add(row.expiry)))
+			h.vars["AGENTD_CLAUDE_LIVE_FILE"] = proj
+			if row.lapsed {
+				h.write("login.json", authLoginDoc(testNow.Add(-time.Hour)))
+			}
+			h.mustRun(row.exitCode, "auth", "status")
+			out := h.stdout.String()
+			if !strings.Contains(out, "claude  "+row.state) {
+				t.Errorf("want state %s:\n%s", row.state, out)
+			}
+			if has := strings.Contains(out, "refused generation 3"); has != row.refused {
+				t.Errorf("rejection mentioned = %v, want %v:\n%s", has, row.refused, out)
+			}
+			if row.marker && strings.Contains(out, "claude  Ready") {
+				t.Errorf("a recorded rejection read as Ready:\n%s", out)
+			}
+			if row.lapsed && !strings.Contains(out, "login has lapsed") {
+				t.Errorf("the login lapse is hidden:\n%s", out)
+			}
+		})
 	}
 }
 

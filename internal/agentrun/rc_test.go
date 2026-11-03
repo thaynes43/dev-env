@@ -791,3 +791,39 @@ func TestRCRejectedLoginIsAPhaseReasonOnly(t *testing.T) {
 		})
 	}
 }
+
+// `login-rejected:` is information, not an owner action. While agent start waits,
+// rc start does not ask for action after 30 seconds (unlike a persistent
+// projection outage), recovers when the status clears, and if it never clears
+// ends with the ordinary agent-start timeout, not an auth code.
+func TestRCRejectedLoginDuringAgentStartIsNotAnOwnerAction(t *testing.T) {
+	const msg = "login-rejected: the provider refused keeper generation 3 at 2026-10-06T20:59:00Z; waiting for the keeper's next generation; no login is run in this pod"
+	t.Run("recovers", func(t *testing.T) {
+		h := newHarness(t)
+		rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+			v := rcView(5)
+			if poll < 25 {
+				v.AgentStatus = &apiv1.AgentStatus{Message: msg}
+			}
+			return v
+		}, http.StatusAccepted)
+		h.mustRun(ExitOK, rcArgs(h)...)
+		r := rcResult(t, h)
+		if r.Outcome != "link_available" || r.Error != nil || r.TotalMs < 30000 {
+			t.Fatal("a refused login was treated as an owner action", r)
+		}
+	})
+	t.Run("never clears", func(t *testing.T) {
+		h := newHarness(t)
+		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+			v := rcView(5)
+			v.AgentStatus = &apiv1.AgentStatus{Message: msg}
+			return v
+		}, http.StatusAccepted)
+		h.mustRun(ExitPending, rcArgs(h)...)
+		r := rcResult(t, h)
+		if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "agent_start_timeout" || rcCountMessages(h) != 0 {
+			t.Fatal("a refused login produced an auth outcome", r)
+		}
+	})
+}
