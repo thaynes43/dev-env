@@ -119,7 +119,7 @@ func TestCursorCategoryUTF8FragmentsNeverSettleEarly(t *testing.T) {
 // Private-use and unassigned code points belong to no named class and keep the
 // generic reason. Like every refusal it acts on nothing and discloses nothing.
 func TestCursorGenericRuneReasonKeepsOnlyUnclassifiedRunes(t *testing.T) {
-	for _, sample := range []string{"", "\U000f0000", "͸"} {
+	for _, sample := range []string{"\ue000", "\U000f0000", "\u0378", "\ufffe", "\uffff", "\U0010ffff"} {
 		p := cursorProtocol{}
 		input, capture, err := p.accept([]byte(sample + "PRIVATE-SENTINEL"))
 		if input != "" || capture != nil {
