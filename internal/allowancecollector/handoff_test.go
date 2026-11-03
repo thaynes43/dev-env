@@ -367,3 +367,71 @@ func TestPrepareRejectsUnqualifiedEvictionWitness(t *testing.T) {
 		})
 	}
 }
+
+// The public entry point uses wall time, so this time-bounded approval fixture
+// is applicable only inside its original policy window.
+func TestPublicApplyQualifiedSyntheticWitness(t *testing.T) {
+	now := time.Now().UTC()
+	if !now.Before(time.Date(2026, 11, 4, 15, 33, 23, 0, time.UTC)) || now.Before(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)) {
+		t.Skip("outside fixed approval window")
+	}
+	in := handoffFixture(t)
+	in.Now = now
+	var j journal
+	if json.Unmarshal(in.Journal, &j) != nil {
+		t.Fatal("journal fixture")
+	}
+	j.StartedAt = now.Add(-time.Minute).Format(time.RFC3339Nano)
+	j.NotBefore = now.Add(time.Minute).Format(time.RFC3339Nano)
+	in.Journal, _ = json.Marshal(j)
+	in.ExpectedJournalSHA = digest(in.Journal)
+	r, _, _ := collectorFixture(t)
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: Namespace, Name: "fixture-owner"}
+	var session v1alpha1.AgentSession
+	var pod corev1.Pod
+	if r.Client.Get(ctx, key, &session) != nil || r.Client.Get(ctx, key, &pod) != nil {
+		t.Fatal("host fixture")
+	}
+	session.Generation = 2
+	session.Status.Agent.LastHeartbeat = &metav1.Time{Time: now.Add(-time.Second)}
+	if r.Client.Update(ctx, &session) != nil {
+		t.Fatal("session fixture")
+	}
+	pod.UID = types.UID("44444444-4444-4444-4444-444444444444")
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{Name: "home", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "home-fixture-owner"}}})
+	pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "home", MountPath: "/home/dev"})
+	if r.Client.Update(ctx, &pod) != nil {
+		t.Fatal("pod fixture")
+	}
+	yes := true
+	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: Namespace, Name: "home-fixture-owner", UID: types.UID(in.HomeUID), OwnerReferences: []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(), Kind: "AgentSession", Name: session.Name, UID: session.UID, Controller: &yes}}}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
+	if r.Client.Create(ctx, pvc) != nil {
+		t.Fatal("home fixture")
+	}
+	cmKey := types.NamespacedName{Namespace: apiserver.AggregateAllowanceNamespace, Name: apiserver.AggregateAllowanceName}
+	var cm corev1.ConfigMap
+	if r.Client.Get(ctx, cmKey, &cm) != nil {
+		t.Fatal("slot fixture")
+	}
+	cm.Data[StateKey] = string(in.Journal)
+	cm.Data[apiserver.AggregateAllowanceDataKey] = string(in.Report)
+	if r.Client.Update(ctx, &cm) != nil || r.Client.Get(ctx, cmKey, &cm) != nil {
+		t.Fatal("slot setup")
+	}
+	in.ResourceVersion = cm.ResourceVersion
+	plan, err := PrepareHandoff(in)
+	if err != nil {
+		t.Fatal("prepare", err)
+	}
+	backup := t.TempDir()
+	if os.Chmod(backup, 0700) != nil {
+		t.Fatal("backup fixture")
+	}
+	if err := ApplyHandoff(ctx, r.Client, in, plan.Hash, backup); err != nil {
+		t.Fatal("public apply", err)
+	}
+	if r.Client.Get(ctx, cmKey, &cm) != nil || cm.Data[StateKey] != string(plan.NewJournal) || cm.Data[apiserver.AggregateAllowanceDataKey] != string(in.Report) {
+		t.Fatal("unexpected public apply result")
+	}
+}
