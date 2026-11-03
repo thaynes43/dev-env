@@ -96,8 +96,31 @@ At binary byte offset208145935 the usage schema declares
 `thinking_tokens` counter. This schema alone does not make absent/null counters
 zero. At offset213965714 the pinned zero-usage constructor explicitly sets
 `output_tokens_details` to an object containing numeric-zero `thinking_tokens`,
-alongside all four numeric-zero aggregate token counters. That exact known
-structure fails the former blanket object rejection (real reader RED0.003s).
+alongside all four numeric-zero aggregate token counters.
+
+The constructor-to-result connection is explicit in the same artifact. The SDK
+result factory `eFn` at offset213991063 imports `uf` from
+`chunk-srmqtve7.js` (import at213968657), copies it into the result's `usage`
+field, and sets cost zero. Its no-outcome branch returns success with
+`is_error:false` and `num_turns:0`. The SDK/bridge `sendResult` call site at
+231696637 calls that factory and passes the result to `Tr`; this is an explicit
+zero-turn result publication path, not just an unused schema or constant.
+This identifies an SDK/bridge path; it does not assert that Root's print command
+used this particular path.
+
+There is also a complete engine aggregation path. At224362006 the engine imports
+that same `uf`. Its `ns` function at224437667 spreads `uf` and explicitly builds
+`output_tokens_details.thinking_tokens` from a per-model sum with initial value
+zero. At224426459 the final-result common fields set `usage:ns()`; the success
+branch passes those fields and its turn count to `M7`, then yields the result
+via `j(gr,Rs)`. The `M7` builder at208139610 copies the common fields into a
+`type:"result"` record. Thus the qualified object is carried into result records,
+including the explicit zero-turn factory path above. The earlier233421572
+excerpt only showed `usage:Z.usage`; that excerpt alone did not establish the
+constructor connection and is not used as the sole qualification.
+
+That exact known structure fails the former blanket object rejection (real
+reader RED0.003s).
 
 Allow only this exact top-level field, with exactly one `thinking_tokens` key
 whose value independently passes numeric-zero validation. Missing, null, empty,
