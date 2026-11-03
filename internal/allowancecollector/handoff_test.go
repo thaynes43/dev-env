@@ -305,7 +305,7 @@ func TestPrepareRejectsChangedPolicyAndUncertainJournal(t *testing.T) {
 		"generation":      func(c *Config) { c.Host.Generation = 1 },
 		"pod":             func(c *Config) { c.Host.PodUID = podUID },
 		"service account": func(c *Config) { c.Host.ServiceAccount = "other" },
-		"image":           func(c *Config) { c.Host.Image = "unqualified" },
+		"invalid image":   func(c *Config) { c.Host.Image = "unqualified" },
 		"slot":            func(c *Config) { c.SlotUID = hostUID },
 		"cadence":         func(c *Config) { c.CadenceSeconds = 600 },
 		"backoff":         func(c *Config) { c.BackoffSeconds = 900 },
@@ -461,5 +461,18 @@ func TestPrepareRejectsChangedLogicalStreamTrust(t *testing.T) {
 	in.Trust.Contexts[0].ProducerIncarnation = "other-stream"
 	if _, err := PrepareHandoff(in); err == nil {
 		t.Fatal("accepted changed stream trust")
+	}
+}
+
+func TestPrepareAllowsApprovedReplacementImage(t *testing.T) {
+	in := handoffFixture(t)
+	var next Config
+	if json.Unmarshal(in.NewConfig, &next) != nil {
+		t.Fatal("fixture")
+	}
+	next.Host.Image = "ghcr.io/thaynes43/dev-env:replacement@sha256:" + strings.Repeat("b", 64)
+	in.NewConfig, _ = json.Marshal(next)
+	if _, err := PrepareHandoff(in); err != nil {
+		t.Fatal("valid replacement image refused", err)
 	}
 }
