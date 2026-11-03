@@ -51,7 +51,64 @@ type HomeHeadroom struct {
 }
 
 // Valid reports whether h uses only the closed words, pairs a reason exactly
-// with an unknown or unreadable state, and has self-consistent figures.
+// with an unknown or unreadable state, has self-consistent figures, and names
+// the state that its figures and missing dimensions imply.
 func (h HomeHeadroom) Valid() bool {
-	return false // RED stub
+	if h.Version != HomeHeadroomVersion || h.ObservedAt.IsZero() {
+		return false
+	}
+	for _, f := range []*HeadroomFigure{h.Bytes, h.Inodes} {
+		if f != nil && !f.valid() {
+			return false
+		}
+	}
+	switch h.State {
+	case HeadroomUnreadable:
+		switch h.Reason {
+		case HeadroomReasonPermission, HeadroomReasonNotFound, HeadroomReasonIO, HeadroomReasonTimeout, HeadroomReasonOther:
+		default:
+			return false
+		}
+		return h.Bytes == nil && h.Inodes == nil
+	case HeadroomOK, HeadroomLow, HeadroomExhausted, HeadroomUnknown:
+	default:
+		return false
+	}
+	want := HeadroomOK
+	for _, f := range []*HeadroomFigure{h.Bytes, h.Inodes} {
+		switch {
+		case f == nil:
+			if want == HeadroomOK {
+				want = HeadroomUnknown
+			}
+		case f.State == HeadroomExhausted:
+			want = HeadroomExhausted
+		case f.State == HeadroomLow && want != HeadroomExhausted:
+			want = HeadroomLow
+		}
+	}
+	if h.State != want {
+		return false
+	}
+	if h.State != HeadroomUnknown {
+		return h.Reason == ""
+	}
+	switch h.Reason {
+	case HeadroomReasonBytesInvalid:
+		return h.Bytes == nil && h.Inodes != nil
+	case HeadroomReasonInodesInvalid:
+		return h.Inodes == nil && h.Bytes != nil
+	case HeadroomReasonBothInvalid:
+		return h.Bytes == nil && h.Inodes == nil
+	}
+	return false
+}
+
+func (f HeadroomFigure) valid() bool {
+	switch f.State {
+	case HeadroomOK, HeadroomLow, HeadroomExhausted:
+	default:
+		return false
+	}
+	return f.Total > 0 && f.Available <= f.Total
 }

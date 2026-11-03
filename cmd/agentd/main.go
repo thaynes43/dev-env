@@ -734,6 +734,7 @@ func ctl(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return exitFailure
 		}
 		st := agentd.CollectStatus(ctx, r, s, sess, time.Now())
+		st.HomeHeadroom = agentd.SampleHomeHeadroom(s.Home, time.Now())
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(st); err != nil {

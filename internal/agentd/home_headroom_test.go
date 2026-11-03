@@ -258,23 +258,38 @@ func TestHomeHeadroomHugeFilesystemDoesNotOverflowThePercentTest(t *testing.T) {
 func TestHomeHeadroomCadenceAndCache(t *testing.T) {
 	f := healthy()
 	m := newMonitor(f)
-	first := sample(t, m, time.Time{}) // a zero clock must still sample once and then cache
+	base := headroomT0
+	first := sample(t, m, base)
 	if f.count() != 1 {
 		t.Fatal("first sample")
 	}
-	again := sample(t, m, time.Time{}.Add(homeHeadroomEvery-time.Nanosecond))
+	again := sample(t, m, base.Add(homeHeadroomEvery-time.Nanosecond))
 	if f.count() != 1 || !again.ObservedAt.Equal(first.ObservedAt) {
 		t.Fatalf("sampled sooner than %v: calls %d", homeHeadroomEvery, f.count())
 	}
 	f.set(func(s *syscall.Statfs_t) { s.Bfree, s.Bavail = 100, 100 })
-	cached := sample(t, m, time.Time{}.Add(homeHeadroomEvery-time.Nanosecond))
+	cached := sample(t, m, base.Add(homeHeadroomEvery-time.Nanosecond))
 	if cached.State != protocol.HeadroomOK {
 		t.Fatal("the cached observation must be returned inside the interval")
 	}
-	at := time.Time{}.Add(homeHeadroomEvery)
+	cached.Bytes.State = protocol.HeadroomExhausted // a caller's edit must not reach the cache
+	if sample(t, m, base.Add(time.Second)).Bytes.State != protocol.HeadroomOK {
+		t.Fatal("the cache was aliased")
+	}
+	at := base.Add(homeHeadroomEvery)
 	fresh := sample(t, m, at)
 	if f.count() != 2 || fresh.State != protocol.HeadroomExhausted || !fresh.ObservedAt.Equal(at) {
 		t.Fatalf("calls %d %+v", f.count(), fresh)
+	}
+}
+
+func TestHomeHeadroomZeroClockStillRateLimits(t *testing.T) {
+	f := healthy()
+	m := newMonitor(f)
+	m.Sample(secretHome, time.Time{}, discard())
+	m.Sample(secretHome, time.Time{}.Add(time.Second), discard())
+	if f.count() != 1 {
+		t.Fatalf("a zero clock sampled %d times", f.count())
 	}
 }
 

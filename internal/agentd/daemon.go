@@ -651,6 +651,7 @@ func (d *Daemon) beat(ctx context.Context) {
 	}
 	st := CollectStatus(ctx, d.R, d.S, d.Session, d.now())
 	st.ConversationUsage = d.conversationUsage()
+	st.HomeHeadroom = d.homeHeadroom.Sample(d.S.Home, d.now(), d.Log)
 	d.sendHeartbeat(ctx, st)
 }
 
