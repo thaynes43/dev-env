@@ -109,7 +109,7 @@ func TestCtl(t *testing.T) {
 	}
 	// The one-shot status carries the same HOME headroom as the heartbeat, and
 	// never the HOME path itself.
-	if !strings.Contains(out, `"homeHeadroom": {`) || !strings.Contains(out, `"version": 1`) || strings.Contains(out, home) {
+	if !strings.Contains(out, `"homeHeadroom": {`) || !strings.Contains(out, `"bytes": {`) || !strings.Contains(out, `"inodes": {`) || strings.Contains(out, home) {
 		t.Errorf("ctl status lacks a path-free homeHeadroom: %s", out)
 	}
 	if code, _, _ := runArgs([]string{"ctl", "status"}, map[string]string{"HOME": home}); code != exitFailure {

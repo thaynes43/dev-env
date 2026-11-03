@@ -44,7 +44,7 @@ status.go, CRDs, operator, keeper, haynes-ops.
 ## Cadence and cost
 - One statfs(2) per sample on a single path. No readdir, no stat of entries, no walk.
 - Minimum interval 30 s between real samples (`homeHeadroomEvery`); the heartbeat is 60 s, so in
-  practice one per beat. Extra callers (boot beats, ctl status in another process) never stack.
+  practice one per beat. Extra callers in this process (boot beats) never stack; `agentd ctl status` runs in another process with its own guard, so a second statfs can run beside the daemon's.
 - The statfs runs in a goroutine with a 3 s wait. A hung mount (NFS/Ceph stall) yields
   `unreadable/timeout` after 3 s and the heartbeat continues. At most one statfs is ever outstanding;
   while it is stuck no second one is started and the sample stays `unreadable/timeout`.
@@ -125,4 +125,19 @@ reservation. Unverified: behavior on a real hung mount (only a fake hang is test
 Note on reach: the boot-time heartbeat (daemon.go, the `CollectStatus` call before the supervise
 loop) does not carry the field; the first supervised beat does, then every 60 s. `agentd ctl status`
 takes its own one-shot sample. The operator ignores the field today (non-strict heartbeat decode,
-covered by TestHeartbeatBodyAcceptsUnknownFieldsFromANewerAgent); persisting it is follow-up 1.
+covered by TestHeartbeatBodyAcceptsUnknownFieldsFromANewerAgent and, with a real body, TestHeartbeatBodyAcceptsTheHomeHeadroomField); persisting it is follow-up 1.
+
+## Review notes (added after independent review of 6f446ee)
+
+- A cold hung HOME blocks the beat that calls the sampler for up to the 3 s bound (and
+  holds its mutex); the supervise loop is delayed by the same amount once per hang, and a
+  final beat on shutdown has that much less of its 5 s budget. Later samples return
+  `timeout` immediately because at most one statfs is outstanding.
+- A filesystem that reports zero inodes can never reach `ok`: bytes decide `low` or the
+  state is `unknown` with an inode reason. When bytes are low and inodes are unmeasurable the
+  overall state is `low` with no reason, so a consumer cannot tell the inode half was invalid.
+- With a monotonic production clock a wall-clock step backwards does not trigger the
+  resample branch; that branch is exercised with injected clocks only.
+- There is no hysteresis: a value hovering at a threshold logs on every transition.
+- `Valid()` is a contract for tests and consumers; the closed set holds by construction in
+  the sampler, not by a check at the send boundary.

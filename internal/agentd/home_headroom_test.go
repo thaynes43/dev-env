@@ -449,9 +449,10 @@ func TestHomeHeadroomVanishingHomeAndEntryChurn(t *testing.T) {
 	}
 }
 
-func TestHomeHeadroomNeverReadsDirectoryContents(t *testing.T) {
-	// A HOME that is a file, with unreadable content, still gets a sample from
-	// statfs alone; nothing opens or lists it.
+func TestHomeHeadroomNeedsNoReadPermissionOnHome(t *testing.T) {
+	// A HOME that is a file with mode 0 still gets a sample: statfs needs no read
+	// permission. This does NOT prove the code never lists a directory (an os.Stat
+	// would also pass); that property rests on the code using statfs only.
 	dir := t.TempDir()
 	f := filepath.Join(dir, "regular")
 	if err := os.WriteFile(f, []byte("data"), 0o000); err != nil {
