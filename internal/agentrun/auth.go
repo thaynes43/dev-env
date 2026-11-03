@@ -193,10 +193,11 @@ func readAuthRow(provider, path, expiryKey string, now time.Time, warn time.Dura
 		row.LastRefresh = &lr
 	}
 	switch {
-	case left <= 0 && time.Duration(-left)*time.Second < authPendingWindow:
+	case left < 0 && time.Duration(-left)*time.Second < authPendingWindow:
+		// Strictly expired: a token with under a second left is not "refreshing".
 		// Exit code 1 stays: a script still sees a token that cannot be used now.
 		row.State, row.code = authRefreshing, 1
-		row.Reason = "access expired " + (time.Duration(-left) * time.Second).String() + " ago; the keeper's next generation is pending"
+		row.Reason = "the keeper's next generation is pending; no sign-in is needed unless it stays unpublished"
 	case left <= 0:
 		row.State, row.Reason, row.code = authNeedsLogin, "access has expired and the keeper has published no newer generation", 1
 	case time.Duration(left)*time.Second <= warn:

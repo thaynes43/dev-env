@@ -225,10 +225,22 @@ func projectionLoginStatus(s Settings, now time.Time) string {
 	}
 	if c := checkProjectedLogin(s); c.Usable(now) {
 		return "logged in on the keeper's projection, access token lapses " + c.Expires.Format(time.RFC3339)
-	} else if c.Present && !c.Expires.IsZero() {
+	} else if c.Present && !c.Expires.IsZero() && !projectedLoginLapsed(s, now) {
 		if ago := now.Sub(c.Expires); ago >= 0 && ago < claudePendingWindow {
 			return "refreshing: the access token lapsed " + ago.Round(time.Second).String() + " ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"
 		}
 	}
 	return "login-required: waiting for the keeper's Claude projection; no login is run in this pod"
+}
+
+// projectedLoginLapsed reports whether the non-secret login.json the keeper
+// publishes beside the projection says the whole login has lapsed. A missing,
+// oversized or invalid document is "not known to have lapsed", as in auth status.
+func projectedLoginLapsed(s Settings, now time.Time) bool {
+	raw, err := readBounded(filepath.Join(filepath.Dir(s.ClaudeLiveFile), claudeauth.LoginKey), 1<<10)
+	if err != nil {
+		return false
+	}
+	lapse, err := claudeauth.DecodeLogin(raw)
+	return err == nil && !lapse.After(now)
 }

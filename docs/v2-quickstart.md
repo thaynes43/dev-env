@@ -87,7 +87,7 @@ agent-run --repo haynes-ops --interactive --model claude-opus-5-5
   the shared login refuses `login`.
 - To check from a terminal: `agent-run show <name> -o json` has
   `remoteControl.state`. `registered` means it is on your phone.
-  `login-required` means the shared login has lapsed (section 6).
+  `login-required` means the shared login has lapsed (section 6); its message reads `refreshing:` for the first 3 minutes after the access token expires while the keeper's next generation is still on its way, and no sign-in is needed then.
 - During boot, `agentStatus.boot=booting` and `agentStatus.state=pending`; `agentStatus.message` names the current step (rendering configuration, bootstrapping projects with counts, or preparing the repo) until the agent can check its login.
 - After 72 hours idle it suspends itself, and its phone entry is archived.
   `agent-run resume <name>` brings back the same entry and the same conversation.
@@ -540,7 +540,7 @@ never the refresh token. So sessions cannot break each other's login, and
 nobody signs in per session.
 
 - **Check.** In any v2 session, `agent-run auth status` shows each login's
-  state (Ready or NeedsLogin), its generation and the time left on the current
+  state (Ready, Refreshing for up to 3 minutes after the access token expired while the keeper's next generation is pending, or NeedsLogin), its generation and the time left on the current
   access token. Exit 0 is fine, 1 is expiring or expired, 2 means it cannot
   tell. Proven from a session. Since 2.39.0 it also shows when the Claude login
   lapses (see "Lapse date and notices" below).

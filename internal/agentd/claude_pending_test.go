@@ -2,11 +2,14 @@ package agentd
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
+	"github.com/thaynes43/dev-env/internal/claudeauth"
 )
 
 // An access token that lapses before the keeper's next generation is visible
@@ -72,5 +75,45 @@ func TestPendingRefreshReachesTheStatusAndClearsOnTheNextGeneration(t *testing.T
 	}
 	if got := projectionLoginStatus(s, at.Add(time.Second)); !strings.HasPrefix(got, "logged in on the keeper's projection") {
 		t.Errorf("after generation 2: %q", got)
+	}
+}
+
+// agentd reads the same login.json as `agent-run auth status`: a lapsed login is
+// never "refreshing", a missing or invalid document is "not known to have lapsed",
+// and a lapse still in the future changes nothing.
+func TestProjectionStatusHonorsTheLoginLapse(t *testing.T) {
+	s, t0 := pendingHome(t)
+	at := t0.Add(59 * time.Second)
+	write := func(raw []byte) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(filepath.Dir(s.ClaudeLiveFile), claudeauth.LoginKey), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lapsed, err := claudeauth.EncodeLogin(at.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	future, err := claudeauth.EncodeLogin(at.Add(20 * 24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		doc  []byte
+		want string
+	}{
+		"lapsed":    {lapsed, "login-required:"},
+		"future":    {future, "refreshing:"},
+		"invalid":   {[]byte(`{"version":2}`), "refreshing:"},
+		"oversized": {[]byte(strings.Repeat("x", 2048)), "refreshing:"},
+	} {
+		write(tc.doc)
+		if got := projectionLoginStatus(s, at); !strings.HasPrefix(got, tc.want) {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	_ = os.Remove(filepath.Join(filepath.Dir(s.ClaudeLiveFile), claudeauth.LoginKey))
+	if got := projectionLoginStatus(s, at); !strings.HasPrefix(got, "refreshing:") {
+		t.Errorf("missing document: %q", got)
 	}
 }

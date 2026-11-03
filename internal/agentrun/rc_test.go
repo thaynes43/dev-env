@@ -354,6 +354,45 @@ func TestRCAuthProjectionRecoversAfterOnePoll(t *testing.T) {
 	}
 }
 
+// While the keeper's next generation is pending the pod reports `refreshing:`,
+// not a login a person must act on: rc start keeps waiting instead of asking for
+// action after 30 seconds, and recovers on the generation that lands.
+func TestRCPendingKeeperRefreshIsNotAnOwnerActionAndRecovers(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+		v := rcView(5)
+		if poll < 25 {
+			v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
+		}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitOK, rcArgs(h)...)
+	r := rcResult(t, h)
+	if r.Outcome != "link_available" || r.Error != nil || r.TotalMs < 30000 {
+		t.Fatal("a pending refresh was treated as an owner action or never waited", r)
+	}
+}
+
+// If the generation never lands the status returns to login-required after the
+// pending window, and the 30 second owner-action rule then runs from that point.
+func TestRCPendingRefreshThenLapseStillEndsInOwnerAction(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+		v := rcView(5)
+		if poll < 10 {
+			v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation"}
+		} else {
+			v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+		}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h)...)
+	r := rcResult(t, h)
+	if r.Outcome != "action_required" || r.Error == nil || r.Error.Code != "auth_projection_unavailable" || r.TotalMs < 30000+10*2000 {
+		t.Fatal("owner action did not follow the pending window", r)
+	}
+}
+
 func TestRCLocalValidationAndCodexNoRequests(t *testing.T) {
 	for name, value := range map[string]string{"empty": "", "whitespace": "\n\t ", "utf8": "\xff", "large": strings.Repeat("x", 8193), "esc": "unsafe\x1b", "cr": "unsafe\r", "del": "unsafe\x7f", "c1": "unsafe\u0085"} {
 		t.Run(name, func(t *testing.T) {
