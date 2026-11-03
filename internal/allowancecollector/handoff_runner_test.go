@@ -3,6 +3,7 @@ package allowancecollector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver"
@@ -183,8 +185,25 @@ func TestInSlotHandoffLostAcknowledgement(t *testing.T) {
 func TestInSlotHandoffRefusalsWriteNothing(t *testing.T) {
 	for name, edit := range map[string]func(*testing.T, *slotHandoff, *HandoffRunner){
 		"hash": func(_ *testing.T, _ *slotHandoff, r *HandoffRunner) { r.Approved = strings.Repeat("a", 64) },
-		"home": func(_ *testing.T, _ *slotHandoff, r *HandoffRunner) {
-			r.Snapshot.HomeUID = "77777777-7777-7777-7777-777777777777"
+		// A matching hash for the wrong home volume: the host check, not the hash,
+		// must refuse it.
+		"home": func(t *testing.T, h *slotHandoff, r *HandoffRunner) {
+			h.in.HomeUID = "77777777-7777-7777-7777-777777777777"
+			other, err := PrepareHandoff(h.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Snapshot.HomeUID, r.Approved = h.in.HomeUID, other.Hash
+		},
+		"running host differs": func(_ *testing.T, h *slotHandoff, r *HandoffRunner) {
+			c := *h.next
+			c.Host.Image = "ghcr.io/thaynes43/dev-env:other@sha256:" + strings.Repeat("c", 64)
+			r.Running = &c
+		},
+		"running slot differs": func(_ *testing.T, h *slotHandoff, r *HandoffRunner) {
+			c := *h.next
+			c.SlotUID = hostUID
+			r.Running = &c
 		},
 		"stale resource version": func(t *testing.T, h *slotHandoff, _ *HandoffRunner) {
 			cm := h.slotNow(t)
@@ -312,5 +331,108 @@ func TestDecodeHandoffRequestExactKeys(t *testing.T) {
 		if _, _, err := DecodeHandoffRequest([]byte(raw)); err == nil {
 			t.Fatal("accepted", name)
 		}
+	}
+}
+
+// The acknowledgement branches must not accept look-alike states.
+func TestInSlotHandoffDoesNotAcknowledgeLookAlikes(t *testing.T) {
+	for name, seed := range map[string]func(*slotHandoff, *corev1.ConfigMap){
+		"new journal without the backup": func(h *slotHandoff, cm *corev1.ConfigMap) {
+			cm.Data[StateKey] = string(h.plan.NewJournal)
+		},
+		"backup with other content": func(h *slotHandoff, cm *corev1.ConfigMap) {
+			cm.Data[StateKey] = string(h.plan.NewJournal)
+			cm.Data[HandoffBackupKey(h.plan.Hash)] = `{"Schema":"other"}`
+		},
+		"backup but old fingerprint journal": func(h *slotHandoff, cm *corev1.ConfigMap) {
+			raw, _ := handoffBackupBytes(h.in)
+			cm.Data[HandoffBackupKey(h.plan.Hash)] = string(raw)
+		},
+		"backup and new journal but changed report": func(h *slotHandoff, cm *corev1.ConfigMap) {
+			raw, _ := handoffBackupBytes(h.in)
+			cm.Data[StateKey] = string(h.plan.NewJournal)
+			cm.Data[HandoffBackupKey(h.plan.Hash)] = string(raw)
+			cm.Data[apiserver.AggregateAllowanceDataKey] = "{}"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newSlotHandoff(t)
+			cm := h.slotNow(t)
+			seed(h, &cm)
+			if h.r.Client.Update(context.Background(), &cm) != nil {
+				t.Fatal("seed")
+			}
+			spy := &countHandoffUpdates{Client: h.r.Client}
+			run := h.handoffRunner()
+			run.Client = spy
+			if run.Attempt(context.Background()) == nil || spy.calls != 0 {
+				t.Fatal("look-alike acknowledged or written")
+			}
+		})
+	}
+}
+
+// failFirstUpdate rejects the first update without applying it.
+type failFirstUpdate struct {
+	countHandoffUpdates
+	applied int
+}
+
+func (c *failFirstUpdate) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	c.calls++
+	if c.calls == 1 {
+		return errors.New("synthetic rejected update")
+	}
+	c.applied++
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+func TestInSlotHandoffRejectedUpdateAllowsExactlyOneLaterWrite(t *testing.T) {
+	h := newSlotHandoff(t)
+	spy := &failFirstUpdate{countHandoffUpdates: countHandoffUpdates{Client: h.r.Client}}
+	run := h.handoffRunner()
+	run.Client = spy
+	ctx := context.Background()
+	if run.Attempt(ctx) == nil || h.slotNow(t).Data[StateKey] != string(h.in.Journal) {
+		t.Fatal("rejected update was treated as applied")
+	}
+	if run.Attempt(ctx) != nil || run.Attempt(ctx) != nil || spy.applied != 1 {
+		t.Fatal("retry did not write exactly once", spy.applied)
+	}
+}
+
+func TestHandoffRunnerStartLogsFixedReasons(t *testing.T) {
+	h := newSlotHandoff(t)
+	var logs []string
+	run := h.handoffRunner()
+	run.Logf = func(s string) { logs = append(logs, s) }
+	if run.Start(context.Background()) != nil || len(logs) != 1 || logs[0] != "allowance handoff acknowledged" {
+		t.Fatal("success path", logs)
+	}
+	for want, edit := range map[string]func(*slotHandoff, *HandoffRunner){
+		"approved hash does not match": func(_ *slotHandoff, r *HandoffRunner) { r.Approved = strings.Repeat("a", 64) },
+		"slot changed since":           func(h *slotHandoff, _ *HandoffRunner) { h.bumpSlot(t) },
+	} {
+		h := newSlotHandoff(t)
+		run := h.handoffRunner()
+		edit(h, run)
+		var got []string
+		run.Logf = func(s string) { got = append(got, s) }
+		run.Retry = time.Millisecond
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		_ = run.Start(ctx)
+		cancel()
+		if len(got) == 0 || !strings.Contains(got[0], want) {
+			t.Fatal("reason", want, got)
+		}
+	}
+}
+
+func (h *slotHandoff) bumpSlot(t *testing.T) {
+	t.Helper()
+	cm := h.slotNow(t)
+	cm.Data["other"] = "x"
+	if h.r.Client.Update(context.Background(), &cm) != nil {
+		t.Fatal("bump")
 	}
 }

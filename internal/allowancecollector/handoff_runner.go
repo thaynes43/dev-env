@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"time"
 	"unicode/utf8"
@@ -148,11 +149,18 @@ func (r *HandoffRunner) Start(ctx context.Context) error {
 		wait = time.Minute
 	}
 	for ctx.Err() == nil && r.now().Before(r.Running.until) {
-		if r.Attempt(ctx) == nil {
+		err := r.Attempt(ctx)
+		switch {
+		case err == nil:
 			r.logf("allowance handoff acknowledged")
 			return nil
+		case errors.Is(err, ErrHandoffHash):
+			r.logf("allowance handoff refused: approved hash does not match; prepare it again")
+		case errors.Is(err, ErrHandoffStale):
+			r.logf("allowance handoff refused: slot changed since the snapshot; prepare it again")
+		default:
+			r.logf("allowance handoff refused")
 		}
-		r.logf("allowance handoff refused")
 		select {
 		case <-ctx.Done():
 		case <-time.After(wait):

@@ -309,7 +309,7 @@ func parseFlags(args []string) (options, error) {
 	aggregateAllowanceFile := fs.String("aggregate-allowance-config-file", "", "default-off deployment-owned private aggregate selection file; mutually exclusive with inline config; does not create or authorize a private config mount")
 	collectorEnabled := fs.Bool("enable-operator-allowance-collector", false, "default-off elected-operator recurring supported allowance acquisition; requires independent private configuration and existing selected host; grants no access")
 	collectorFile := fs.String("allowance-collector-config-file", "", "absolute private operator-owned collector configuration; requires explicit enable and aggregate selection")
-	handoffFile := fs.String("allowance-handoff-file", "", "absolute private file with one human-approved allowance handoff request, applied once by the elected operator that already holds the slot write authority; requires the enabled collector; an unreadable or invalid file is refused and logged without stopping the operator")
+	handoffFile := fs.String("allowance-handoff-file", "", "absolute private file with one human-approved allowance handoff request, applied once by the elected operator that already holds the slot write authority; requires the enabled collector and an absolute path (a misuse of the flag is a startup error); an unreadable or invalid file is refused and logged without stopping the operator")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}

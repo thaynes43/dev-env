@@ -113,6 +113,14 @@ const handoffSlotBackupMax = 900 << 10
 
 const handoffBackupPrefix = "handoff-backup-"
 
+// Refusal reasons for the operator's log. Both wrap ErrCollector and carry no
+// slot bytes. A stale snapshot or a hash that no longer matches both mean the
+// request must be prepared again; any other refusal may clear by itself.
+var (
+	ErrHandoffHash  = errors.Join(ErrCollector, errors.New("approved hash does not match the prepared plan"))
+	ErrHandoffStale = errors.Join(ErrCollector, errors.New("slot changed since the snapshot"))
+)
+
 // HandoffBackupKey is the slot entry that carries the full pre-image of an
 // in-slot handoff, named by the approved prepared hash.
 func HandoffBackupKey(hash string) string { return handoffBackupPrefix + hash + ".json" }
@@ -145,8 +153,11 @@ func applyHandoff(ctx context.Context, c client.Client, in HandoffInput, approve
 		return ErrCollector
 	}
 	p, err := PrepareHandoff(in)
-	if err != nil || p.Hash != approvedHash {
+	if err != nil {
 		return ErrCollector
+	}
+	if p.Hash != approvedHash {
+		return ErrHandoffHash
 	}
 	next, err := ParseConfig(in.NewConfig, in.Trust, in.PublisherUID, in.PublisherSA, in.Now)
 	if err != nil {
@@ -189,7 +200,7 @@ func applyHandoff(ctx context.Context, c client.Client, in HandoffInput, approve
 		return ErrCollector
 	}
 	if cm.ResourceVersion != in.ResourceVersion || cm.Data[StateKey] != string(in.Journal) || cm.Data[apiserver.AggregateAllowanceDataKey] != string(in.Report) {
-		return ErrCollector
+		return ErrHandoffStale
 	}
 	if inSlot {
 		total := len(backupRaw)
