@@ -29,8 +29,8 @@ func (p *cursorProtocol) accept(raw []byte) (string, *providerallowance.CursorCL
 	if p.total > 256<<10 {
 		return "", nil, refused("command_output_oversized", ErrCapture)
 	}
-	if p.terminal.feed(raw) != nil {
-		return "", nil, refused("builtin_terminal_unqualified", ErrCapture)
+	if err := p.terminal.feed(raw); err != nil {
+		return "", nil, err
 	}
 	p.dirty = true
 	return "", nil, nil

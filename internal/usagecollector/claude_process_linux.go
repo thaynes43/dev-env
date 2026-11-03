@@ -140,15 +140,15 @@ func readClaudeBuiltin(out io.Reader, now func() time.Time) (providerallowance.C
 			// numeric zero. Other result usage metadata is not quota evidence.
 			for _, key := range []string{"input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"} {
 				if !zeroJSON(result.Usage[key]) {
-					return capture, refused("builtin_tokens_unqualified", ErrCapture)
+					return capture, refused("builtin_required_tokens_unqualified", ErrCapture)
 				}
 			}
 			for key, value := range result.Usage {
 				if bytes.Contains([]byte(key), []byte("tokens")) && !zeroJSON(value) {
-					return capture, refused("builtin_tokens_unqualified", ErrCapture)
+					return capture, refused("builtin_extra_tokens_unqualified", ErrCapture)
 				}
 				if !zeroNestedTokenCounters(value) {
-					return capture, refused("builtin_tokens_unqualified", ErrCapture)
+					return capture, refused("builtin_nested_tokens_unqualified", ErrCapture)
 				}
 			}
 			done = true

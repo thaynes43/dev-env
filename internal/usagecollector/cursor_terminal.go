@@ -21,7 +21,7 @@ type cursorTerminal struct {
 func (t *cursorTerminal) feed(raw []byte) error {
 	t.pending = append(t.pending, raw...)
 	if len(t.pending) > 8<<10 {
-		return ErrCapture
+		return refused("builtin_terminal_bounds_unqualified", ErrCapture)
 	}
 	i := 0
 	for i < len(t.pending) {
@@ -45,7 +45,7 @@ func (t *cursorTerminal) feed(raw []byte) error {
 				continue
 			}
 			if t.pending[i+1] != '[' {
-				return ErrCapture
+				return refused("builtin_terminal_escape_unqualified", ErrCapture)
 			}
 			end := i + 2
 			for end < len(t.pending) && t.pending[end] >= 0x20 && t.pending[end] <= 0x3f {
@@ -54,8 +54,11 @@ func (t *cursorTerminal) feed(raw []byte) error {
 			if end >= len(t.pending) {
 				break
 			}
-			if end-i > 64 || t.pending[end] < 0x40 || t.pending[end] > 0x7e || t.control(string(t.pending[i+2:end]), t.pending[end]) != nil {
-				return ErrCapture
+			if end-i > 64 || t.pending[end] < 0x40 || t.pending[end] > 0x7e {
+				return refused("builtin_terminal_escape_unqualified", ErrCapture)
+			}
+			if err := t.control(string(t.pending[i+2:end]), t.pending[end]); err != nil {
+				return err
 			}
 			i = end + 1
 			continue
@@ -76,7 +79,7 @@ func (t *cursorTerminal) feed(raw []byte) error {
 			t.col = max(0, t.col-1)
 		default:
 			if b < 0x20 || b == 0x7f {
-				return ErrCapture
+				return refused("builtin_terminal_control_unqualified", ErrCapture)
 			}
 			if !utf8.FullRune(t.pending[i:]) {
 				t.pending = append([]byte(nil), t.pending[i:]...)
@@ -85,10 +88,10 @@ func (t *cursorTerminal) feed(raw []byte) error {
 			r, size := utf8.DecodeRune(t.pending[i:])
 			qualified := r < 128 || r == '•' || r == '·' || r >= 0x2190 && r <= 0x21ff || r >= 0x2500 && r <= 0x259f || r == '✓'
 			if r == utf8.RuneError || !qualified {
-				return ErrCapture
+				return refused("builtin_terminal_rune_unqualified", ErrCapture)
 			}
 			if t.col >= cursorCols {
-				return ErrCapture
+				return refused("builtin_terminal_bounds_unqualified", ErrCapture)
 			}
 			t.cells[t.row][t.col] = r
 			t.col++
@@ -110,7 +113,7 @@ func (t *cursorTerminal) control(raw string, final byte) error {
 			t.synchronized = final == 'h'
 			return nil
 		default:
-			return ErrCapture
+			return refused("builtin_terminal_mode_unqualified", ErrCapture)
 		}
 	}
 	var params []int
@@ -122,7 +125,7 @@ func (t *cursorTerminal) control(raw string, final byte) error {
 			}
 			n, err := strconv.Atoi(value)
 			if err != nil || n < 0 || n > 10000 {
-				return ErrCapture
+				return refused("builtin_terminal_params_unqualified", ErrCapture)
 			}
 			params = append(params, n)
 		}
@@ -135,7 +138,7 @@ func (t *cursorTerminal) control(raw string, final byte) error {
 		first = params[0]
 	}
 	if len(params) > 2 || len(params) > 1 && final != 'H' && final != 'f' {
-		return ErrCapture
+		return refused("builtin_terminal_params_unqualified", ErrCapture)
 	}
 	switch final {
 	case 'A':
@@ -163,7 +166,7 @@ func (t *cursorTerminal) control(raw string, final byte) error {
 			mode = params[0]
 		}
 		if mode > 2 {
-			return ErrCapture
+			return refused("builtin_terminal_params_unqualified", ErrCapture)
 		}
 		for row := range t.cells {
 			if final == 'K' && row != t.row {
@@ -180,7 +183,7 @@ func (t *cursorTerminal) control(raw string, final byte) error {
 	case 'u':
 		t.row, t.col = t.saveRow, t.saveCol
 	default:
-		return ErrCapture
+		return refused("builtin_terminal_operation_unqualified", ErrCapture)
 	}
 	return nil
 }

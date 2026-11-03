@@ -110,6 +110,10 @@ func TestBuiltinDiagnosticCodesDoNotExpandStageOrVersionPayload(t *testing.T) {
 		"builtin_terminal_unavailable", "builtin_prompt_refused", "builtin_input_unqualified",
 		"builtin_display_unqualified", "builtin_workspace_unqualified", "builtin_state_unqualified",
 		"builtin_write_failed",
+		"builtin_required_tokens_unqualified", "builtin_extra_tokens_unqualified", "builtin_nested_tokens_unqualified",
+		"builtin_terminal_escape_unqualified", "builtin_terminal_mode_unqualified", "builtin_terminal_params_unqualified",
+		"builtin_terminal_operation_unqualified", "builtin_terminal_rune_unqualified",
+		"builtin_terminal_control_unqualified", "builtin_terminal_bounds_unqualified",
 	} {
 		d := AcquisitionDiagnostic{diagnosticSchema, "cursor", "builtin", reason, ""}
 		raw, err := json.Marshal(d)
