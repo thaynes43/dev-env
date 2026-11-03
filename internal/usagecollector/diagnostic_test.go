@@ -14,10 +14,10 @@ import (
 
 func TestAcquisitionDiagnosticsDropUnknownAndPrivateOutput(t *testing.T) {
 	var out bytes.Buffer
-	emitAcquisitionDiagnostic(&out, "anthropic", atAcquisitionStage("version", unqualifiedVersion("2.1.312 (Claude Code)")))
+	emitAcquisitionDiagnostic(&out, "anthropic", atAcquisitionStage("version", unqualifiedVersion("2.1.313 (Claude Code)")))
 	good := out.String()
 	parsed := DecodeAcquisitionDiagnostics([]byte(good))
-	if len(parsed) != 1 || parsed[0].ClientVersion != "2.1.312" || parsed[0].Reason != "version_unqualified" {
+	if len(parsed) != 1 || parsed[0].ClientVersion != "2.1.313" || parsed[0].Reason != "version_unqualified" {
 		t.Fatal("safe public version diagnostic lost")
 	}
 	for _, raw := range []string{
@@ -25,7 +25,7 @@ func TestAcquisitionDiagnosticsDropUnknownAndPrivateOutput(t *testing.T) {
 		strings.Replace(good, `"stage":"version"`, `"stage":"private-provider-error"`, 1),
 		strings.Replace(good, `"reason":"version_unqualified"`, `"reason":"private-provider-error"`, 1),
 		strings.Replace(good, `"provider":"anthropic"`, `"provider":"person@example.invalid"`, 1),
-		strings.Replace(good, `"clientVersion":"2.1.312"`, `"clientVersion":"private-provider-error"`, 1),
+		strings.Replace(good, `"clientVersion":"2.1.313"`, `"clientVersion":"private-provider-error"`, 1),
 		strings.Replace(good, `"schema":`, `"Schema":`, 1),
 		strings.Replace(good, `"schema":`, `"schema":"duplicate","schema":`, 1),
 		strings.Replace(good, `"provider":`, `"extra":"private-provider-error","provider":`, 1),
@@ -35,7 +35,7 @@ func TestAcquisitionDiagnosticsDropUnknownAndPrivateOutput(t *testing.T) {
 			t.Fatal("unknown or private stderr accepted")
 		}
 	}
-	for _, value := range []string{"person@example.invalid", "private-provider-error", "https://example.invalid/secret", "2.1.312\nprivate-provider-error"} {
+	for _, value := range []string{"person@example.invalid", "private-provider-error", "https://example.invalid/secret", "2.1.313\nprivate-provider-error"} {
 		out.Reset()
 		emitAcquisitionDiagnostic(&out, "anthropic", atAcquisitionStage("version", unqualifiedVersion(value)))
 		if strings.Contains(out.String(), value) {
