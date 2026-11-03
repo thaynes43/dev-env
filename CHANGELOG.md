@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.89.1](https://github.com/thaynes43/dev-env/compare/v2.89.0...v2.89.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **agentd:** distinguish provider diagnostics from turn failures ([#873](https://github.com/thaynes43/dev-env/issues/873)) ([c2735dd](https://github.com/thaynes43/dev-env/commit/c2735ddadafceb044d0378734d52fc904338c4f0))
+
 ## [2.89.0](https://github.com/thaynes43/dev-env/compare/v2.88.0...v2.89.0) (2026-11-03)
 
 
