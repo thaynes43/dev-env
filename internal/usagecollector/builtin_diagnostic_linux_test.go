@@ -5,6 +5,7 @@ package usagecollector
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -226,5 +227,105 @@ func TestClaudeUnknownCaseTokenFieldsCannotHideActivity(t *testing.T) {
 		stream := strings.Replace(finiteClaudeStream, `"usage":{`, `"usage":{`+field+`,`, 1)
 		_, err := readClaudeBuiltin(strings.NewReader(stream), time.Now)
 		requireBuiltinReason(t, "anthropic", err, "builtin_extra_tokens_unqualified")
+	}
+}
+
+func TestCursorDotSetMembershipIsIndistinguishableAndStillRefused(t *testing.T) {
+	// Fixed external cli-spinners dots vocabulary, not an acceptance whitelist.
+	const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	var first []byte
+	for _, frame := range frames {
+		p := cursorProtocol{workspace: "/private/empty"}
+		input, report, err := p.accept([]byte(cursorReady(p.workspace) + string(frame) + " PRIVATE-SENTINEL"))
+		if input != "" || report != nil {
+			t.Fatal("refused membership authorized input/capture")
+		}
+		requireBuiltinReason(t, "cursor", err, "builtin_terminal_dotset_unqualified")
+		var out bytes.Buffer
+		emitAcquisitionDiagnostic(&out, "cursor", atAcquisitionStage("builtin", err))
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(out.Bytes(), &fields) != nil || len(fields) != 5 {
+			t.Fatal("diagnostic schema expanded")
+		}
+		for _, key := range []string{"schema", "provider", "stage", "reason", "clientVersion"} {
+			if _, ok := fields[key]; !ok {
+				t.Fatal("diagnostic field changed")
+			}
+		}
+		if first == nil {
+			first = append([]byte(nil), out.Bytes()...)
+		} else if !bytes.Equal(first, out.Bytes()) {
+			t.Fatal("membership output distinguishes individual frame")
+		}
+		if strings.Contains(out.String(), string(frame)) || strings.Contains(out.String(), "PRIVATE-SENTINEL") {
+			t.Fatal("vendor data entered diagnostic")
+		}
+	}
+}
+
+func TestCursorDotSetDiagnosticKeepsUnknownAndFragmentFences(t *testing.T) {
+	for _, text := range []string{"⠁", "☃", "界", "😀", "\u202e", "e\u0301", "\xff", "�"} {
+		p := cursorProtocol{}
+		input, report, err := p.accept([]byte(text))
+		if input != "" || report != nil {
+			t.Fatal("other rune authorized input/capture")
+		}
+		requireBuiltinReason(t, "cursor", err, "builtin_terminal_rune_unqualified")
+	}
+	for _, text := range []string{"\x00", "\x7f", "\x07"} {
+		p := cursorProtocol{}
+		input, report, err := p.accept([]byte(text))
+		if input != "" || report != nil {
+			t.Fatal("control authorized input/capture")
+		}
+		requireBuiltinReason(t, "cursor", err, "builtin_terminal_control_unqualified")
+	}
+	p := cursorProtocol{}
+	raw := []byte("⠋")
+	for i, b := range raw {
+		input, report, err := p.accept([]byte{b})
+		if input != "" || report != nil {
+			t.Fatal("fragment authorized input/capture")
+		}
+		if i < len(raw)-1 {
+			if err != nil {
+				t.Fatal("partial UTF8 classified too early")
+			}
+			if input, report, _ := p.settle(); input != "" || report != nil {
+				t.Fatal("partial UTF8 settled")
+			}
+		} else {
+			requireBuiltinReason(t, "cursor", err, "builtin_terminal_dotset_unqualified")
+		}
+	}
+}
+
+func TestCursorOwnedProcessDotSetDiagnosticDoesNotDiscloseFrame(t *testing.T) {
+	dir := t.TempDir()
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(dir, "synthetic-spinner-cursor")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf '⠋PRIVATE-SENTINEL'\n/bin/sleep 60\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := CollectCursor(ctx, CursorOptions{Executable: executable, Workspace: workspace}, time.Now)
+	requireBuiltinReason(t, "cursor", err, "builtin_terminal_dotset_unqualified")
+}
+
+func TestCursorDotSetDiagnosticCannotAdvanceAnyProtocolState(t *testing.T) {
+	for state := 0; state <= 4; state++ {
+		p := cursorProtocol{workspace: "/private/empty", trust: true, state: state}
+		input, report, err := p.accept([]byte(cursorReady(p.workspace) + cursorSingleRowMenu + cursorScreen + "⠋PRIVATE-SENTINEL"))
+		if input != "" || report != nil {
+			t.Fatal("diagnostic membership advanced protocol state")
+		}
+		requireBuiltinReason(t, "cursor", err, "builtin_terminal_dotset_unqualified")
+		if p.state != state {
+			t.Fatal("refused member changed protocol state")
+		}
 	}
 }

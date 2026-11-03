@@ -114,6 +114,7 @@ func TestBuiltinDiagnosticCodesDoNotExpandStageOrVersionPayload(t *testing.T) {
 		"builtin_terminal_escape_unqualified", "builtin_terminal_mode_unqualified", "builtin_terminal_params_unqualified",
 		"builtin_terminal_operation_unqualified", "builtin_terminal_rune_unqualified",
 		"builtin_terminal_control_unqualified", "builtin_terminal_bounds_unqualified",
+		"builtin_terminal_dotset_unqualified",
 	} {
 		d := AcquisitionDiagnostic{diagnosticSchema, "cursor", "builtin", reason, ""}
 		raw, err := json.Marshal(d)
@@ -127,6 +128,32 @@ func TestBuiltinDiagnosticCodesDoNotExpandStageOrVersionPayload(t *testing.T) {
 		d.Stage, d.ClientVersion = "builtin", "2.1.296"
 		if d.valid() {
 			t.Fatal("builtin code introduced another payload", reason)
+		}
+	}
+}
+
+func TestDotSetDiagnosticHasNoAdditionalFieldOrProviderChannel(t *testing.T) {
+	d := AcquisitionDiagnostic{diagnosticSchema, "cursor", "builtin", "builtin_terminal_dotset_unqualified", ""}
+	for _, provider := range []string{"openai", "anthropic"} {
+		d.Provider = provider
+		raw, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(DecodeAcquisitionDiagnostics(append(raw, '\n'))) != 0 {
+			t.Fatal("membership class crossed provider boundary")
+		}
+	}
+	d.Provider = "cursor"
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"rune":"PRIVATE-SENTINEL"`, `"codepoint":123`, `"value":"PRIVATE-SENTINEL"`, `"count":10`} {
+		extended := append([]byte(nil), raw[:len(raw)-1]...)
+		extended = append(extended, []byte(","+field+"}\n")...)
+		if len(DecodeAcquisitionDiagnostics(extended)) != 0 {
+			t.Fatal("membership diagnostic admitted extra payload")
 		}
 	}
 }
