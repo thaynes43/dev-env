@@ -16,20 +16,25 @@ unchanged.
 This change adds closed labels for the remaining Unicode classes, so the next
 natural cycle can localize the refusal without disclosing the character:
 
-| reason | class |
-|---|---|
-| `builtin_terminal_letter_unqualified` | any letter |
-| `builtin_terminal_number_unqualified` | any number |
-| `builtin_terminal_dash_unqualified` | dash punctuation (Pd) |
-| `builtin_terminal_quote_unqualified` | initial/final quote punctuation (Pi, Pf) |
-| `builtin_terminal_punct_unqualified` | other punctuation |
-| `builtin_terminal_math_unqualified` | other math symbols (Sm) |
-| `builtin_terminal_currency_unqualified` | currency symbol (Sc) |
-| `builtin_terminal_c1_unqualified` | C1 control characters (U+0080 to U+009F; C0 and DEL are refused earlier as control bytes) |
-| `builtin_terminal_shape_unqualified` | any symbol in U+25A0 to U+25FF, including its math symbols (checked before math) |
-| `builtin_terminal_pictograph_unqualified` | U+2600 to U+27BF and U+1F000 up (misc symbols, dingbats, emoji) |
-| `builtin_terminal_symbol_unqualified` | any other symbol (including braille patterns outside the dot set) |
-| `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only |
+Labels are assigned in this order, first match wins (after the older encoding,
+combining, spacing, format and dot-set labels, which come first). Each row covers
+only what the earlier rows did not take, so a character belongs to the first class
+that matches it, not to a block it happens to sit in.
+
+| order | reason | what it covers (after the earlier rows) |
+|---|---|---|
+| 1 | `builtin_terminal_letter_unqualified` | any letter |
+| 2 | `builtin_terminal_number_unqualified` | any number, wherever it sits (for example U+2776 to U+2793 dingbat digits are numbers) |
+| 3 | `builtin_terminal_dash_unqualified` | dash punctuation (Pd) |
+| 4 | `builtin_terminal_quote_unqualified` | initial and final quote punctuation (Pi, Pf) |
+| 5 | `builtin_terminal_punct_unqualified` | all other punctuation |
+| 6 | `builtin_terminal_c1_unqualified` | C1 control characters (U+0080 to U+009F; C0 and DEL are refused earlier as control bytes) |
+| 7 | `builtin_terminal_shape_unqualified` | any symbol in U+25A0 to U+25FF, including its math symbols |
+| 8 | `builtin_terminal_math_unqualified` | math symbols (Sm) outside the shape block (for example U+266F is math, not pictograph) |
+| 9 | `builtin_terminal_currency_unqualified` | currency symbols (Sc) |
+| 10 | `builtin_terminal_pictograph_unqualified` | the remaining symbols in U+2600 to U+27BF and from U+1F000 up (what is left of the miscellaneous symbols, dingbats and emoji after rows 2, 8 and 9) |
+| 11 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
+| 12 | `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only
 
 Dash and quote are the smallest and most guessable classes (a few dozen characters each); the label still names a class, never a character, and no finer split is made.
 
