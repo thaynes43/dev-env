@@ -22,10 +22,10 @@ One diagnostic line is added. It prints a single fixed cause and does not copy t
 
 - `perr == nil` and no thread latch: `missing_thread`
 - `perr == nil`, thread set, no terminal latch: `missing_terminal`
-- `perr != nil`, terminal latch set, and the error is exactly `native Codex emitted a second terminal event` or `invalid native Codex completion`: `second_terminal`
+- `perr != nil`, terminal latch set, and `errors.Is` matches `errSecondCodexTerminal` or `errInvalidCodexCompletion`: `second_terminal`
 - otherwise, including a first invalid completion and unknown-after-success: `parser_refused`
 
-`second_terminal` requires the actual terminal latch plus one of those known errors. Any other parser error remains `parser_refused`.
+`second_terminal` requires the actual terminal latch plus sentinel identity (`errors.Is` on `errSecondCodexTerminal` or `errInvalidCodexCompletion`). The `Error()` strings `invalid native Codex completion` and `native Codex emitted a second terminal event` are display words, not the classification contract. A first invalid completion leaves the terminal latch unset and stays `parser_refused`. Any other parser error remains `parser_refused`.
 
 This only adds a cause line on failures that already fail. It is not a default-off feature, not an extra controller, and it does not auto-replay, restart, or grant authority.
 

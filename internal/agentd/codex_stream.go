@@ -11,6 +11,11 @@ import (
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
+var (
+	errInvalidCodexCompletion = errors.New("invalid native Codex completion")
+	errSecondCodexTerminal    = errors.New("native Codex emitted a second terminal event")
+)
+
 type codexStream struct {
 	capture  *managedCapture
 	thread   bool
@@ -103,13 +108,13 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 		}
 	case "turn.completed":
 		if !s.turn || s.terminal || e.Usage == nil {
-			return errors.New("invalid native Codex completion")
+			return errInvalidCodexCompletion
 		}
 		// Preserve the pinned protocol's refusal of explicitly negative counts.
 		for _, raw := range []json.RawMessage{e.Usage.Input, e.Usage.Output, e.Usage.Cached, e.Usage.CacheWrite} {
 			var n int64
 			if json.Unmarshal(raw, &n) == nil && n < 0 {
-				return errors.New("invalid native Codex completion")
+				return errInvalidCodexCompletion
 			}
 		}
 		s.terminal = true
@@ -121,7 +126,7 @@ func (s *codexStream) line(raw []byte, path string, l *Launch, out io.Writer, re
 		*result = streamResult{Seen: true, Subtype: "success", NumTurns: 1, Usage: legacyUsage(u), Observation: u}
 	case "turn.failed", "error":
 		if s.terminal {
-			return errors.New("native Codex emitted a second terminal event")
+			return errSecondCodexTerminal
 		}
 		s.terminal, s.failed = true, true
 		u := protocol.UnknownUsage()

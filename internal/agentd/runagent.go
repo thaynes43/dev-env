@@ -322,8 +322,7 @@ func RunAgent(launchPath string, pane io.Writer, signals <-chan os.Signal, stopG
 		cause := "parser_refused"
 		if perr != nil {
 			if codex.terminal {
-				switch perr.Error() {
-				case "native Codex emitted a second terminal event", "invalid native Codex completion":
+				if errors.Is(perr, errSecondCodexTerminal) || errors.Is(perr, errInvalidCodexCompletion) {
 					cause = "second_terminal"
 				}
 			}
