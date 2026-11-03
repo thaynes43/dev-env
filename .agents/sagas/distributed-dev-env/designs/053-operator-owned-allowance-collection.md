@@ -132,7 +132,10 @@ host Pod UID, generation, image and the approved deadline may change.
 
 The human-directed parent coordinator session, not the operator binary,
 independently authenticates the exact named ConfigMap UID and original bytes, old fingerprint, idle cycle, nonce, report,
-captures, known helper and archived old-Pod eviction evidence, and obtains
+captures, known helper and old-Pod eviction evidence (an archived Pod object, or
+when none was retained an `eviction-observation.v1` document built from the
+cluster's retained kube-state-metrics series; see [the verification record](../verification/collector-incarnation-handoff-2026-11-03.md#eviction-observation-witness-source-2026-11-03)
+for what it does and does not establish), and obtains
 approval of the exact prepared hash. A supplied snapshot or hash is not proof of
 provenance or human approval. A trusted idle journal from the existing Runner
 is transitive terminal cleanup evidence because that Runner commits idle only
