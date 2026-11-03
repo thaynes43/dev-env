@@ -50,6 +50,24 @@ func TestCursorSingleRowMenuKeepsInputAndModalFences(t *testing.T) {
 	}
 }
 
+func TestCursorInlineMenuRejectsInactiveCompetingSelections(t *testing.T) {
+	for _, test := range []struct{ name, row string }{
+		{"foreign-selected", "→ /other    Another command\r\n"},
+		{"partial-legacy-selector", "→ /usage\r\n"},
+		{"partial-legacy-description", "Show plan and on-demand usage\r\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := cursorProtocol{state: 2}
+			// Both candidate rows end before the active blank row. An active
+			// foreign-input guard cannot mask selection ambiguity here.
+			input, report, _ := feedCursorFrame(&p, cursorSingleRowMenu+test.row)
+			if input != "" || report != nil || p.state != 2 {
+				t.Fatal("competing inactive selection authorized Enter")
+			}
+		})
+	}
+}
+
 func TestCursorProtocolOnlySendsAfterDistinctQualifiedStates(t *testing.T) {
 	p := cursorProtocol{workspace: "/private/empty", trust: true}
 	trust := "Workspace Trust Required\n/private/empty\n[a] Trust this workspace\n[q] Quit\n"

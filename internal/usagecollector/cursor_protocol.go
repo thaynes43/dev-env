@@ -49,12 +49,16 @@ func (p *cursorProtocol) settle() (input string, report *providerallowance.Curso
 	p.dirty = false
 	lines := map[string]bool{}
 	inlineUsageRows := 0
+	selectedRows := 0
 	visibleLines := strings.Split(text, "\n")
 	active := strings.Trim(visibleLines[p.terminal.row], " \t│┃")
 	for row, line := range visibleLines {
 		if row != p.terminal.row {
 			line = strings.Trim(line, " \t│┃")
 			lines[line] = true
+			if strings.HasPrefix(line, "→") {
+				selectedRows++
+			}
 			if cursorInlineUsageMenu.MatchString(line) {
 				inlineUsageRows++
 			}
@@ -92,7 +96,7 @@ func (p *cursorProtocol) settle() (input string, report *providerallowance.Curso
 		// Autocomplete can put the exact selected command and description
 		// on one inactive row. Never accept an active row, another command,
 		// extra text, or multiple selected rows. The input fence still runs.
-		if inlineUsageRows > 1 || inlineUsageRows > 0 && twoRows {
+		if inlineUsageRows > 0 && (inlineUsageRows != 1 || selectedRows != 1 || lines["Show plan and on-demand usage"]) {
 			return "", nil, refused("builtin_input_unqualified", ErrCapture)
 		}
 		if twoRows || inlineUsageRows == 1 {

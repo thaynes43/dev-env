@@ -62,3 +62,12 @@ now takes priority over terminal/stream diagnostics, using the existing closed
 `deadline` and `cancelled` codes. Cleanup uncertainty still takes priority over
 both. The focused process regressions passed in 0.206s. No timeout or process
 cleanup mechanism changed.
+
+The independent full source review also found that counting only matching inline
+rows missed an inactive foreign selection or incomplete legacy row. All three
+counterexamples failed against the real parser in 0.003s. Inline acceptance now
+requires exactly one inactive selected row of any command and rejects a separate
+legacy description. The new tests keep both rows inactive, so the active-input
+guard cannot hide ambiguity. The pre-existing legacy-only matching behavior is
+outside this correction; its duplicate-row behavior is not attributed to the new
+inline change.
