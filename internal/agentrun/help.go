@@ -157,8 +157,10 @@ follows them. It reads the access projections mounted in this pod
 (AGENTD_CLAUDE_LIVE_FILE and AGENTD_CODEX_ACCESS_FILE) and calls no API. They
 hold no refresh token, and no token value is ever printed.
 
-For each login it prints the state (Ready, or NeedsLogin when the access has
-expired and the keeper has published nothing newer), the generation, when the
+For each login it prints the state (Ready; Refreshing when the access expired
+less than 3 minutes ago, because the keeper's next generation is probably still
+on its way; or NeedsLogin when the access has expired for longer and the keeper
+has published nothing newer, or the login itself has lapsed), the generation, when the
 access expires and how long is left, and, for Codex, the keeper's last refresh.
 A login the pod does not follow prints NotConfigured. For Claude it also prints
 when the whole login lapses (about 30 days after each sign-in) and the days left,
@@ -174,7 +176,8 @@ Flags:
   -o json              print the rows as JSON
 
 Exit codes, as claude-login-check: 0 every configured login is ready, 1 one has
-expired or is inside the warning window, or the Claude login has 7 whole days or fewer left
+expired (Refreshing included, so a script still sees a login it cannot use right now)
+or is inside the warning window, or the Claude login has 7 whole days or fewer left
 (rounded down, so 7d23h counts as 7) or has lapsed, 2 cannot tell (a file missing, unreadable or invalid, or
 nothing configured). An Unknown lapse date does not change the exit code.
 `,

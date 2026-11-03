@@ -73,7 +73,7 @@ func TestAuthStatus(t *testing.T) {
 			name:   "expired outranks missing",
 			claude: func(h *harness) string { return filepath.Join(h.dir, "absent.json") },
 			cdx: func(h *harness) string {
-				return h.write("codex.json", authCodexDoc(3, testNow.Add(-time.Minute), testNow.Add(-time.Hour)))
+				return h.write("codex.json", authCodexDoc(3, testNow.Add(-10*time.Minute), testNow.Add(-time.Hour)))
 			},
 			want:         1,
 			wantContains: []string{"claude  Unknown", "projection file is missing", "codex   NeedsLogin"},

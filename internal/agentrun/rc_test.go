@@ -354,6 +354,77 @@ func TestRCAuthProjectionRecoversAfterOnePoll(t *testing.T) {
 	}
 }
 
+// While the keeper's next generation is pending the pod reports `refreshing:`,
+// not a login a person must act on: rc start keeps waiting instead of asking for
+// action after 30 seconds, and recovers on the generation that lands.
+func TestRCPendingKeeperRefreshIsNotAnOwnerActionAndRecovers(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+		v := rcView(5)
+		if poll < 25 {
+			v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
+		}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitOK, rcArgs(h)...)
+	r := rcResult(t, h)
+	if r.Outcome != "link_available" || r.Error != nil || r.TotalMs < 30000 {
+		t.Fatal("a pending refresh was treated as an owner action or never waited", r)
+	}
+}
+
+// If the generation never lands the status returns to login-required after the
+// pending window, and the 30 second owner-action rule then runs from that point.
+func TestRCPendingRefreshThenLapseStillEndsInOwnerAction(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+		v := rcView(5)
+		if poll < 10 {
+			v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation"}
+		} else {
+			v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+		}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h)...)
+	r := rcResult(t, h)
+	if r.Outcome != "action_required" || r.Error == nil || r.Error.Code != "auth_projection_unavailable" || r.TotalMs < 30000+10*2000 {
+		t.Fatal("owner action did not follow the pending window", r)
+	}
+}
+
+// A refresh that never lands is not an owner action either: the 90 second
+// agent-start budget ends first (the pending window is longer), so the launch is
+// reported as timed out for that specific reason, with the handle retained.
+func TestRCPendingRefreshOutlastingTheAgentStartBudgetTimesOutWithItsOwnReason(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(5)
+		v.AgentStatus = &apiv1.AgentStatus{Message: "refreshing: the access token lapsed 59s ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h)...)
+	r := rcResult(t, h)
+	if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "auth_refresh_pending" || r.Link == nil || rcCountMessages(h) != 0 {
+		t.Fatal("a pending refresh outlasting the budget was not reported with its own reason", r)
+	}
+}
+
+// The same long wait with the old login-required text is still the owner action
+// after 30 seconds, and a different stage keeps its own timeout code.
+func TestRCLoginRequiredStillEndsInOwnerActionNotTheRefreshReason(t *testing.T) {
+	h := newHarness(t)
+	rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+		v := rcView(5)
+		v.AgentStatus = &apiv1.AgentStatus{Message: "login-required: waiting for the keeper's Claude projection; no login is run in this pod"}
+		return v
+	}, http.StatusAccepted)
+	h.mustRun(ExitPending, rcArgs(h)...)
+	if r := rcResult(t, h); r.Outcome != "action_required" || r.Error == nil || r.Error.Code != "auth_projection_unavailable" {
+		t.Fatal("login-required lost its owner action", r)
+	}
+}
+
 func TestRCLocalValidationAndCodexNoRequests(t *testing.T) {
 	for name, value := range map[string]string{"empty": "", "whitespace": "\n\t ", "utf8": "\xff", "large": strings.Repeat("x", 8193), "esc": "unsafe\x1b", "cr": "unsafe\r", "del": "unsafe\x7f", "c1": "unsafe\u0085"} {
 		t.Run(name, func(t *testing.T) {
@@ -655,4 +726,38 @@ func sinceMs(p apiv1.RCLaunchPhase) int64 {
 		return -1
 	}
 	return *p.SinceRequestMs
+}
+
+// Both timeout sites (the deadline check and a request still in flight at the
+// budget) use one classification, so the last observed status decides the reason.
+func TestRCStageTimeoutCodeUsesTheLastObservedRefreshStatus(t *testing.T) {
+	agent, podReady := -1, -1
+	for i, s := range rcStages {
+		switch s.phase {
+		case "agent_started":
+			agent = i
+		case "pod_ready":
+			podReady = i
+		}
+	}
+	if agent < 0 || podReady < 0 {
+		t.Fatal("stage table changed")
+	}
+	for name, tc := range map[string]struct {
+		stage    int
+		authCode string
+		atWait   bool
+		want     string
+	}{
+		"refresh pending at agent start":       {agent, "auth_refresh_pending", false, "auth_refresh_pending"},
+		"global wait wins over the reason":     {agent, "auth_refresh_pending", true, "launch_deadline"},
+		"no auth status keeps the stage code":  {agent, "", false, "agent_start_timeout"},
+		"projection wait keeps the stage code": {agent, "auth_projection_unavailable", false, "agent_start_timeout"},
+		"other stages never take the reason":   {podReady, "auth_refresh_pending", false, "pod_ready_timeout"},
+		"global wait in any stage":             {podReady, "", true, "launch_deadline"},
+	} {
+		if got := rcStageTimeoutCode(tc.stage, tc.authCode, tc.atWait); got != tc.want {
+			t.Errorf("%s: got %q want %q", name, got, tc.want)
+		}
+	}
 }

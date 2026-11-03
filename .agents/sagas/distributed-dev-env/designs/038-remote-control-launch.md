@@ -542,6 +542,7 @@ No remedy grants permission to perform an otherwise unauthorized action.
 | `pod_ready_timeout` / 120s after acceptance | `Pod U was scheduled but is not Ready within 120s: REASON.` | Inspect the bound pod's startup/image/PVC reason; retain the existing session. |
 | `agent_start_timeout` / 90s after PodReady | `Pod U is Ready but the provider process has not started within 90s: STEP.` | Inspect the fixed boot/repository/auth reason. Preserve WIP; repair only in a separately authorized scope. |
 | `auth_projection_unavailable` / 30s settling | `No current keeper access projection was accepted; RC start is held.` | Authorized workbench operator checks existing keeper auth status; renewal, if needed, is a separate ceremony. |
+| `auth_refresh_pending` / agent-start budget (90s) | `The keeper's next login generation was still pending when the agent-start budget ended; no sign-in was requested.` | The pod reported `refreshing:` (its access token expired under 3 minutes ago). Wait and run `rc status`; if the status becomes `login-required` the 30s owner-action rule applies. No session login or refresh. |
 | `login_conflict` / immediate | `This pod has a pod-owned Claude login while keeper projection mode is configured; launch stopped.` | Owner resolves the login-mode conflict separately. Do not overwrite or delete credentials. |
 | `provider_auth_rejected` / RC/auth 90s maximum | `Provider rejected the RC connection; a local access file did not establish provider auth.` | Report the fixed provider reason; authorized keeper owner diagnoses. No session login, refresh or paid/provider/model fallback. |
 | `rc_ready_timeout` / 90s after agent start | `Provider process started, but current RC registration/connection was not confirmed within 90s.` | Preserve the host/session; inspect supported connection status, not terminal output. |
@@ -648,7 +649,7 @@ Add internal/agentrun/rc.go with:
   are capped by --wait.
 - Errors: invalid_input, unauthenticated, launch_forbidden (403, including the coordinator refusal), project_unavailable, request_conflict (409
   for a reused key with a changed request), scheduling_timeout, pod_ready_timeout, agent_start_timeout, login_conflict and
-  auth_projection_unavailable (from the agent message), rc_registration_timeout, link_unavailable, handoff_rejected (409 not addressable),
+  auth_projection_unavailable and auth_refresh_pending (from the agent message), rc_registration_timeout, link_unavailable, handoff_rejected (409 not addressable),
   handoff_unconfirmed (exit 6; never resent), launch_deadline (exit 7), session_ended (exit 1: the Session reached Failed, Suspended or Archived,
   or is being reaped), status_unavailable.
 - `rc status` of an active Session that has no link yet reports outcome `accepted` with exit 7 (ExitPending); it makes one GET and never

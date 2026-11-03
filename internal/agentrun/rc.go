@@ -104,6 +104,7 @@ var rcErrorMessages = map[string]string{
 	"agent_start_timeout":           "Agent startup exceeded its budget",
 	"login_conflict":                "A login conflict requires owner action",
 	"auth_projection_unavailable":   "The keeper authentication projection remained unavailable for 30 seconds during agent startup",
+	"auth_refresh_pending":          "The keeper's next login generation was still pending when the agent-start budget ended; no sign-in was requested",
 	"rc_registration_timeout":       "Remote Control registration exceeded its budget",
 	"link_unavailable":              "A valid Remote Control link was not observed within its budget",
 	"session_ended":                 "The session has ended or is being reaped",
@@ -298,6 +299,11 @@ func (r *rcRun) observe(v apiv1.Session) string {
 		if strings.Contains(msg, "login-conflict") || strings.Contains(msg, "login_conflict") {
 			authCode = "login_conflict"
 		}
+		// The pod reports a just-expired access token as a pending refresh (the
+		// keeper's next generation is on its way). Not an owner action.
+		if authCode == "" && strings.HasPrefix(msg, "refreshing:") {
+			authCode = "auth_refresh_pending"
+		}
 		if authCode == "" && (strings.Contains(msg, "auth_projection_unavailable") || strings.Contains(msg, "claude authentication requires a current keeper projection") || strings.Contains(msg, "login-required: waiting for the keeper's claude projection")) {
 			authCode = "auth_projection_unavailable"
 		}
@@ -376,11 +382,7 @@ func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff
 		}
 		end := min(r.wait, stageStart+rcStages[stage].budget)
 		if r.elapsed() >= end {
-			code := rcStages[stage].timeout
-			if end == r.wait {
-				code = "launch_deadline"
-			}
-			return r.finish("timed_out", code, rcStages[stage].phase, ExitPending)
+			return r.finish("timed_out", rcStageTimeoutCode(stage, authCode, end == r.wait), rcStages[stage].phase, ExitPending)
 		}
 		if r.a.env.Sleep(ctx, min(pollInterval, end-r.elapsed())) != nil {
 			return r.finish("timed_out", "launch_deadline", rcStages[stage].phase, ExitPending)
@@ -396,11 +398,9 @@ func (r *rcRun) follow(ctx context.Context, c *conn, view apiv1.Session, handoff
 		callErr := callCtx.Err()
 		cancel()
 		if callErr != nil {
-			code := rcStages[stage].timeout
-			if end == r.wait || ctx.Err() != nil {
-				code = "launch_deadline"
-			}
-			return r.finish("timed_out", code, rcStages[stage].phase, ExitPending)
+			// A request still in flight when the budget ends is classified like the
+			// deadline check above, so the last observed status decides the reason.
+			return r.finish("timed_out", rcStageTimeoutCode(stage, authCode, end == r.wait || ctx.Err() != nil), rcStages[stage].phase, ExitPending)
 		}
 		if r.elapsed() >= end || ctx.Err() != nil {
 			continue
@@ -535,4 +535,17 @@ func (r *rcRun) status(ctx context.Context, args []string) error {
 		return r.finish("link_available", "", "", ExitOK)
 	}
 	return r.finish("accepted", "", "", ExitPending)
+}
+
+// rcStageTimeoutCode names why a stage budget ended. The global wait always wins.
+// During agent start, a status that still said "refreshing:" (the keeper's next
+// login generation pending) is reported as such, not as a bare startup timeout.
+func rcStageTimeoutCode(stage int, authCode string, atWait bool) string {
+	if atWait {
+		return "launch_deadline"
+	}
+	if rcStages[stage].phase == "agent_started" && authCode == "auth_refresh_pending" {
+		return "auth_refresh_pending"
+	}
+	return rcStages[stage].timeout
 }

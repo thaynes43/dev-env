@@ -208,13 +208,44 @@ func checkProjectedLogin(s Settings) loginCheck {
 	return c
 }
 
-// projectionLoginStatus is the one plain status line in projection mode.
+// claudePendingWindow is how long after its expiry an applied access token is
+// reported as a pending refresh rather than a login to renew. The keeper
+// refreshes ahead of expiry; a Secret volume is ASSUMED (not proven) to trail
+// the keeper by about a minute (kubelet sync), so a successor may be that late.
+// Past the window the wait is reported as before. Beyond the status text this
+// changes `agent-run rc start --wait`: it waits through the window instead of
+// asking for owner action after 30 seconds of the old login-required text. The
+// window (3 minutes) is longer than rc's 90 second agent-start budget, so a refresh
+// that never lands ends there as timed_out / auth_refresh_pending, not as an
+// owner action.
+const claudePendingWindow = 3 * time.Minute
+
+// projectionLoginStatus is the one plain status line in projection mode. An
+// applied token that expired within claudePendingWindow is "refreshing": the
+// keeper's next generation is pending and no login is needed. Anything else
+// that is not usable is "login-required", as before.
 func projectionLoginStatus(s Settings, now time.Time) string {
 	if data, err := readClaudeCredentials(s); err == nil && claudeauth.HoldsRefreshToken(data) {
 		return ErrClaudeLoginConflict.Error()
 	}
 	if c := checkProjectedLogin(s); c.Usable(now) {
 		return "logged in on the keeper's projection, access token lapses " + c.Expires.Format(time.RFC3339)
+	} else if c.Present && !c.Expires.IsZero() && !projectedLoginLapsed(s, now) {
+		if ago := now.Sub(c.Expires); ago >= 0 && ago < claudePendingWindow {
+			return "refreshing: the access token lapsed " + ago.Round(time.Second).String() + " ago; waiting for the keeper's next generation; no login is needed unless it stays unpublished"
+		}
 	}
 	return "login-required: waiting for the keeper's Claude projection; no login is run in this pod"
+}
+
+// projectedLoginLapsed reports whether the non-secret login.json the keeper
+// publishes beside the projection says the whole login has lapsed. A missing,
+// oversized or invalid document is "not known to have lapsed", as in auth status.
+func projectedLoginLapsed(s Settings, now time.Time) bool {
+	raw, err := readBounded(filepath.Join(filepath.Dir(s.ClaudeLiveFile), claudeauth.LoginKey), 1<<10)
+	if err != nil {
+		return false
+	}
+	lapse, err := claudeauth.DecodeLogin(raw)
+	return err == nil && !lapse.After(now)
 }
