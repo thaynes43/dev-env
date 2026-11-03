@@ -28,8 +28,9 @@ func TestCursorRefusedStandardCategoriesArePrivateAndNeverAct(t *testing.T) {
 		{"builtin_terminal_punct_unqualified", []string{"¿", "¡", "§", "、"}},
 		{"builtin_terminal_math_unqualified", []string{"×", "±", "≠"}},
 		{"builtin_terminal_currency_unqualified", []string{"€", "£", "¥"}},
-		{"builtin_terminal_shape_unqualified", []string{"■", "▲", "●"}},
-		{"builtin_terminal_pictograph_unqualified", []string{"⚠", "★", "🔥"}},
+		{"builtin_terminal_shape_unqualified", []string{"■", "▲", "●", "\u25a0", "\u25b7", "\u25ff"}},
+		{"builtin_terminal_pictograph_unqualified", []string{"⚠", "★", "🔥", "\u2600", "\u27bf", "\U0001f000"}},
+		{"builtin_terminal_c1_unqualified", []string{"\u0080", "\u009b", "\u009f"}},
 		{"builtin_terminal_symbol_unqualified", []string{"©", "°", "™"}},
 	} {
 		var first []byte

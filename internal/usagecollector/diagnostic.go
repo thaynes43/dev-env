@@ -86,7 +86,7 @@ func (d AcquisitionDiagnostic) valid() bool {
 		return false
 	}
 	switch d.Reason {
-	case "builtin_terminal_letter_unqualified", "builtin_terminal_number_unqualified", "builtin_terminal_dash_unqualified", "builtin_terminal_quote_unqualified", "builtin_terminal_punct_unqualified", "builtin_terminal_math_unqualified", "builtin_terminal_currency_unqualified", "builtin_terminal_shape_unqualified", "builtin_terminal_pictograph_unqualified", "builtin_terminal_symbol_unqualified", "builtin_terminal_dotset_unqualified", "builtin_terminal_encoding_unqualified", "builtin_terminal_combining_unqualified", "builtin_terminal_spacing_unqualified", "builtin_terminal_format_unqualified":
+	case "builtin_terminal_c1_unqualified", "builtin_terminal_letter_unqualified", "builtin_terminal_number_unqualified", "builtin_terminal_dash_unqualified", "builtin_terminal_quote_unqualified", "builtin_terminal_punct_unqualified", "builtin_terminal_math_unqualified", "builtin_terminal_currency_unqualified", "builtin_terminal_shape_unqualified", "builtin_terminal_pictograph_unqualified", "builtin_terminal_symbol_unqualified", "builtin_terminal_dotset_unqualified", "builtin_terminal_encoding_unqualified", "builtin_terminal_combining_unqualified", "builtin_terminal_spacing_unqualified", "builtin_terminal_format_unqualified":
 		return d.Provider == "cursor" && d.Stage == "builtin" && d.ClientVersion == ""
 	case "capture_refused", "command_start_failed", "command_read_failed", "command_output_oversized", "command_wait_failed", "command_failed", "deadline", "cancelled", "cleanup_unproven", "version_unqualified", "metadata_not_json", "metadata_unqualified", "not_logged_in":
 		return d.ClientVersion == "" || d.Reason == "version_unqualified"

@@ -18,12 +18,15 @@ natural cycle can localize the refusal without disclosing the character:
 | `builtin_terminal_dash_unqualified` | dash punctuation (Pd) |
 | `builtin_terminal_quote_unqualified` | initial/final quote punctuation (Pi, Pf) |
 | `builtin_terminal_punct_unqualified` | other punctuation |
-| `builtin_terminal_math_unqualified` | math symbol (Sm) |
+| `builtin_terminal_math_unqualified` | other math symbols (Sm) |
 | `builtin_terminal_currency_unqualified` | currency symbol (Sc) |
-| `builtin_terminal_shape_unqualified` | geometric shapes U+25A0 to U+25FF |
+| `builtin_terminal_c1_unqualified` | C1 control characters (U+0080 to U+009F; C0 and DEL are refused earlier as control bytes) |
+| `builtin_terminal_shape_unqualified` | any symbol in U+25A0 to U+25FF, including its math symbols (checked before math) |
 | `builtin_terminal_pictograph_unqualified` | U+2600 to U+27BF and U+1F000 up (misc symbols, dingbats, emoji) |
 | `builtin_terminal_symbol_unqualified` | any other symbol (including braille patterns outside the dot set) |
-| `builtin_terminal_rune_unqualified` | private-use and unassigned code points only |
+| `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only |
+
+Dash and quote are the smallest and most guessable classes (a few dozen characters each); the label still names a class, never a character, and no finer split is made.
 
 The existing precedence is unchanged: encoding, combining, spacing, format and
 the fixed dot set come first. Every label covers many characters, so it cannot
