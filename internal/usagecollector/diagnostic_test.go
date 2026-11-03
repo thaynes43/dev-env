@@ -99,3 +99,30 @@ func TestMetadataDiagnosticsDoNotMistakeMissingIdentityForSignedOut(t *testing.T
 		}
 	}
 }
+
+func TestBuiltinDiagnosticCodesDoNotExpandStageOrVersionPayload(t *testing.T) {
+	for _, reason := range []string{
+		"builtin_event_invalid", "builtin_event_unsupported", "builtin_system_unqualified",
+		"builtin_report_repeated", "builtin_report_unqualified", "builtin_report_missing",
+		"builtin_result_unqualified", "builtin_result_error", "builtin_turns_unqualified",
+		"builtin_cost_unqualified", "builtin_tokens_unqualified", "builtin_extra_event",
+		"builtin_incomplete", "builtin_stream_failed", "builtin_terminal_unqualified",
+		"builtin_terminal_unavailable", "builtin_prompt_refused", "builtin_input_unqualified",
+		"builtin_display_unqualified", "builtin_workspace_unqualified", "builtin_state_unqualified",
+		"builtin_write_failed",
+	} {
+		d := AcquisitionDiagnostic{diagnosticSchema, "cursor", "builtin", reason, ""}
+		raw, err := json.Marshal(d)
+		if err != nil || len(DecodeAcquisitionDiagnostics(append(raw, '\n'))) != 1 {
+			t.Fatal("closed builtin code refused", reason)
+		}
+		d.Stage = "identity_before"
+		if d.valid() {
+			t.Fatal("builtin diagnostic moved to another stage", reason)
+		}
+		d.Stage, d.ClientVersion = "builtin", "2.1.296"
+		if d.valid() {
+			t.Fatal("builtin code introduced another payload", reason)
+		}
+	}
+}

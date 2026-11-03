@@ -73,6 +73,8 @@ func (d AcquisitionDiagnostic) valid() bool {
 	switch d.Reason {
 	case "capture_refused", "command_start_failed", "command_read_failed", "command_output_oversized", "command_wait_failed", "command_failed", "deadline", "cancelled", "cleanup_unproven", "version_unqualified", "metadata_not_json", "metadata_unqualified", "not_logged_in":
 		return d.ClientVersion == "" || d.Reason == "version_unqualified"
+	case "builtin_event_invalid", "builtin_event_unsupported", "builtin_system_unqualified", "builtin_report_repeated", "builtin_report_unqualified", "builtin_report_missing", "builtin_result_unqualified", "builtin_result_error", "builtin_turns_unqualified", "builtin_cost_unqualified", "builtin_tokens_unqualified", "builtin_extra_event", "builtin_incomplete", "builtin_stream_failed", "builtin_terminal_unqualified", "builtin_terminal_unavailable", "builtin_prompt_refused", "builtin_input_unqualified", "builtin_display_unqualified", "builtin_workspace_unqualified", "builtin_state_unqualified", "builtin_write_failed":
+		return d.ClientVersion == "" && d.Stage == "builtin"
 	}
 	return false
 }

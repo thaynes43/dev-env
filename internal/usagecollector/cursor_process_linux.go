@@ -50,7 +50,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 	defer cancel()
 	master, slave, err := cursorPTY()
 	if err != nil {
-		return fail()
+		return capture, refused("builtin_terminal_unavailable", ErrCapture)
 	}
 	defer func() { _ = master.Close() }()
 	defer func() { _ = slave.Close() }()
@@ -67,7 +67,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 	}
 	started := now()
 	if started.IsZero() || cmd.Start() != nil {
-		return fail()
+		return capture, refused("command_start_failed", ErrCapture)
 	}
 	_ = slave.Close()
 	masterFD := int32(master.Fd())
@@ -92,7 +92,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 		fds := []unix.PollFd{{Fd: masterFD, Events: unix.POLLIN}}
 		ready, pollErr := unix.Poll(fds, 100)
 		if pollErr != nil || ctx.Err() != nil {
-			return fail()
+			return capture, refused("builtin_terminal_unavailable", ErrCapture)
 		}
 		var input string
 		var report *providerallowance.CursorCLIUsageCapture
@@ -105,16 +105,19 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 				input, report, protocolErr = protocol.accept(buffer[:n])
 			}
 			if readErr != nil {
-				return fail()
+				return capture, refused("builtin_stream_failed", ErrCapture)
 			}
 		}
-		if protocolErr != nil || ctx.Err() != nil {
+		if protocolErr != nil {
+			return capture, protocolErr
+		}
+		if ctx.Err() != nil {
 			return fail()
 		}
 		if input != "" {
 			written, e := master.WriteString(input)
 			if e != nil || written != len(input) {
-				return fail()
+				return capture, refused("builtin_write_failed", ErrCapture)
 			}
 		}
 		if report != nil {
@@ -125,7 +128,7 @@ func CollectCursor(ctx context.Context, options CursorOptions, now func() time.T
 			report.CollectionStartedAt = started.UTC().Format(time.RFC3339Nano)
 			report.ReceivedAt = received.UTC().Format(time.RFC3339Nano)
 			if _, e := providerallowance.MarshalCursorCLIUsage(*report); e != nil {
-				return fail()
+				return capture, refused("builtin_display_unqualified", ErrCapture)
 			}
 			return *report, nil
 		}
