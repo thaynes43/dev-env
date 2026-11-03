@@ -14,8 +14,8 @@ characters, control bytes and bounds. These branches need distinct fixed codes
 before a change to accepted protocol can be justified.
 
 The diagnostic changes only label those existing refusal branches. The separate
-qualified Cursor compatibility change below accepts one additional printable
-character. All other acceptance predicates,
+qualified Cursor compatibility changes below accept one additional printable
+character and one exact final dashboard footer. All other acceptance predicates,
 command arguments, process ownership and cleanup, account/version fences,
 terminal screen semantics, stderr/frame size bounds, and collection cadence stay
 unchanged. The new codes contain no vendor field names, values, characters,
@@ -54,3 +54,26 @@ runtime evidence remains necessary. Claude's actual path has already accepted
 an assistant usage report, a successful result, zero turns and zero cost before
 refusing a usage-token counter; the three fixed subreasons preserve those guards
 without treating unknown, missing, null or object values as numeric zero.
+
+
+## Retained Cursor dashboard footer counterexample
+
+Parent Root supplied the exact retained visible footer
+` View in dashboard: cursor.com/dashboard?tab=usage`. The global question-mark
+fence rejects its literal query marker even after the separately observed
+ready, selected command and final quota screen states. A regression through
+those real state-machine transitions reproduced this refusal (RED0.003s).
+
+Exempt exactly one question mark on exactly one inactive row matching this
+literal dashboard label, only in final usage-display states3/4 with a usage
+title and inactive `Esc to close` row. Retain the entire visible text for all
+other guards and quota validation. Any additional question mark still refuses;
+no arbitrary URL is skipped. The final display still passes its existing
+unique-title, reset, category and quota-row checks. This is a second concrete
+visible-contract compatibility defect, not proof of the earlier cycle30 cause.
+
+The meaningful regression passed (0.004s) together with negatives for ready,
+trust and selection states; active or duplicate footers; adjacent, active,
+prefixed and suffixed questions; foreign hosts/query/prefixes; incomplete
+displays; confirmation and authentication text. The full71136 review remains
+immutable; the amended head needs an independent current delta review and CI.

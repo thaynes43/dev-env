@@ -275,3 +275,54 @@ func TestCursorEllipsisKeepsTerminalAndPromptFences(t *testing.T) {
 		t.Fatal("ellipsis bypassed terminal bounds")
 	}
 }
+
+const cursorDashboardFooter = " View in dashboard: cursor.com/dashboard?tab=usage\r\n"
+
+func TestCursorRetainedDashboardFooterAfterDistinctStates(t *testing.T) {
+	p := cursorProtocol{workspace: "/private/empty"}
+	for _, step := range []struct{ frame, input string }{{cursorReady(p.workspace), "/usage"}, {cursorSingleRowMenu, "\r"}} {
+		input, report, err := feedCursorFrame(&p, step.frame)
+		if err != nil || input != step.input || report != nil {
+			t.Fatal("prior distinct state refused", err)
+		}
+	}
+	input, report, err := feedCursorFrame(&p, cursorScreen+cursorDashboardFooter)
+	if err != nil || input != "" || report == nil || *report.IncludedPercentDisplay != 61 {
+		t.Fatal("exact retained inactive dashboard footer refused", err)
+	}
+	visible, complete := p.terminal.visible()
+	if !complete || !strings.Contains(visible, "cursor.com/dashboard?tab=usage") {
+		t.Fatal("footer text was hidden or rewritten")
+	}
+}
+
+func TestCursorDashboardFooterDoesNotHideQuestionsOrAuthorizeInput(t *testing.T) {
+	for _, test := range []struct {
+		name, frame string
+		state       int
+	}{
+		{"ready", cursorReady("/private/empty") + cursorDashboardFooter, 0},
+		{"trust", "Workspace Trust Required\r\n/private/empty\r\n[a] Trust this workspace\r\n[q] Quit\r\n" + cursorDashboardFooter, 0},
+		{"selection", cursorSingleRowMenu + cursorDashboardFooter, 2},
+		{"active", cursorScreen + strings.TrimSuffix(cursorDashboardFooter, "\r\n"), 3},
+		{"duplicate", cursorScreen + cursorDashboardFooter + cursorDashboardFooter, 3},
+		{"adjacent", cursorScreen + cursorDashboardFooter + "Another question?\r\n", 3},
+		{"active-question", cursorScreen + cursorDashboardFooter + "> Another question?", 3},
+		{"prefix", cursorScreen + "Approve?" + cursorDashboardFooter, 3},
+		{"suffix", cursorScreen + strings.TrimSuffix(cursorDashboardFooter, "\r\n") + " Another question?\r\n", 3},
+		{"foreign-host", cursorScreen + strings.Replace(cursorDashboardFooter, "cursor.com", "other.example", 1), 3},
+		{"foreign-query", cursorScreen + strings.Replace(cursorDashboardFooter, "tab=usage", "tab=another", 1), 3},
+		{"foreign-prefix", cursorScreen + "PRIVATE-SENTINEL" + cursorDashboardFooter, 3},
+		{"incomplete-display", strings.Replace(cursorScreen, "Esc to close", "Other footer", 1) + cursorDashboardFooter, 3},
+		{"confirm", cursorScreen + cursorDashboardFooter + "Confirm action\r\n", 3},
+		{"auth", cursorScreen + cursorDashboardFooter + "Sign in\r\n", 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := cursorProtocol{workspace: "/private/empty", trust: true, state: test.state}
+			input, report, err := feedCursorFrame(&p, test.frame)
+			if err == nil || input != "" || report != nil {
+				t.Fatal("footer hid a question or authorized input/capture")
+			}
+		})
+	}
+}
