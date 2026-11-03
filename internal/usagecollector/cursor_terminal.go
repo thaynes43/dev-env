@@ -252,7 +252,7 @@ func cursorRuneClassReason(r rune) string {
 		return "builtin_terminal_math_unqualified"
 	case unicode.Is(unicode.Sc, r):
 		return "builtin_terminal_currency_unqualified"
-	case unicode.IsSymbol(r) && (r >= 0x2713 && r <= 0x2718 || r == 0x2705 || r == 0x274c || r == 0x274e):
+	case unicode.IsSymbol(r) && (r >= 0x2714 && r <= 0x2718 || r == 0x2705 || r == 0x274c || r == 0x274e):
 		return "builtin_terminal_checkmark_unqualified"
 	case unicode.IsSymbol(r) && (r == 0x2605 || r == 0x2606 || r >= 0x2721 && r <= 0x274b):
 		return "builtin_terminal_star_unqualified"
