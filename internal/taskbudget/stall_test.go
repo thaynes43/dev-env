@@ -507,3 +507,82 @@ func TestStallSignalNeverTakesTheLastHistorySlots(t *testing.T) {
 		t.Fatal("stall took the reserved intent's consume slot", err)
 	}
 }
+
+// evaluate returns early once latched. A policy-threshold latch (Checkpoint,
+// RepeatedFailure, or a Stalled latch from an older operator) must not mask an
+// authorized budget cap reached later: the stop is then recorded as the cap.
+// A safety hold and a proven owner stop keep their reasons. Nothing unlatches,
+// and no counter, deadline, epoch, worker or escalation changes.
+func TestAdvisoryLatchNeverMasksAHardCap(t *testing.T) {
+	cases := []struct {
+		name                        string
+		overall, effort, checkpoint time.Duration
+		latchAt, capAt              time.Duration
+		first, want                 string
+	}{
+		{"checkpoint-then-deadline", 30 * time.Minute, 8 * time.Hour, 10 * time.Minute, 10 * time.Minute, 30 * time.Minute, "Checkpoint", "OverallBudget"},
+		{"checkpoint-then-effort", 3 * time.Hour, 20 * time.Minute, 10 * time.Minute, 10 * time.Minute, 20 * time.Minute, "Checkpoint", "EffortBudget"},
+		{"repeated-failure-then-deadline", 30 * time.Minute, 8 * time.Hour, 20 * time.Minute, time.Minute, 30 * time.Minute, "RepeatedFailure", "OverallBudget"},
+		{"legacy-stalled-then-effort", 3 * time.Hour, 70 * time.Minute, 2 * time.Hour, StallLimit, 70 * time.Minute, "Stalled", "EffortBudget"},
+		{"safety-hold-keeps-its-reason", 30 * time.Minute, 8 * time.Hour, 20 * time.Minute, time.Minute, 30 * time.Minute, "NativeAuthorityUnavailable", "NativeAuthorityUnavailable"},
+		{"owner-stop-keeps-its-reason", 30 * time.Minute, 8 * time.Hour, 20 * time.Minute, 5 * time.Minute, 30 * time.Minute, "NativeRootStopped", "NativeRootStopped"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, m, now, b := setup(t, tc.overall, tc.effort, tc.checkpoint)
+			auth := &stallAuthority{}
+			s.NativeInspector, s.Validator = auth, stallValidator{}
+			if _, err := s.Admit(ctx, b); err != nil {
+				t.Fatal(err)
+			}
+			created := *now
+			*now = created.Add(tc.latchAt)
+			switch tc.first {
+			case "RepeatedFailure":
+				for i := 1; i <= 3; i++ {
+					if _, err := s.Record(ctx, failureEvent(b, fmt.Sprintf("f%d", i), fmt.Sprintf("attempt-%d", i), "blocker")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "Stalled":
+				l, rv, _ := m.Read(ctx, b.TaskUID)
+				l.latch(*now, "Stalled")
+				if err := m.Update(ctx, l, rv); err != nil {
+					t.Fatal(err)
+				}
+			case "NativeAuthorityUnavailable":
+				auth.continuation = ErrUnavailable
+				_, _ = s.ObserveNative(ctx, b)
+			case "NativeRootStopped":
+				if _, err := s.Record(ctx, ownedStop(b)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			first, err := s.Observe(ctx, b)
+			if err != nil || !first.Latched || first.Reason != tc.first || first.Escalation == nil {
+				t.Fatalf("first latch: latched=%t reason=%q %v", first.Latched, first.Reason, err)
+			}
+			*now = created.Add(tc.capAt)
+			l, err := s.Observe(ctx, b)
+			if err != nil || !l.Latched || l.Reason != tc.want {
+				t.Fatalf("after the cap: latched=%t reason=%q, want %q (%v)", l.Latched, l.Reason, tc.want, err)
+			}
+			if *l.Escalation != *first.Escalation || l.Binding != b || l.Spec != first.Spec || l.EffortCeilingMilliseconds != first.EffortCeilingMilliseconds ||
+				!l.StallAnchor.Equal(first.StallAnchor) || !l.NextCheckpoint.Equal(first.NextCheckpoint) || len(l.Workers) != len(first.Workers) ||
+				l.Workers[0].Active != first.Workers[0].Active || l.Status().StopConfirmed != first.Status().StopConfirmed || len(l.Status().Blockers) != len(first.Status().Blockers) {
+				t.Fatal("recording the cap changed more than the latch reason")
+			}
+			if _, err = s.Admit(ctx, b); !errors.Is(err, ErrDenied) {
+				t.Fatal("admitted past a cap", err)
+			}
+			if _, err = s.Continue(ctx, apiv1.ContinueTaskBudgetRequest{Binding: b, DecisionID: "after-cap"}, "owner"); !errors.Is(err, ErrDenied) {
+				t.Fatal("continued past a cap", err)
+			}
+			stored, _, _ := m.Read(ctx, b.TaskUID)
+			if stored.Reason != tc.want || stored.Binding != b || len(stored.Continuations) != 0 {
+				t.Fatalf("stored reason %q", stored.Reason)
+			}
+		})
+	}
+}
