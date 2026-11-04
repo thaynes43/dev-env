@@ -745,6 +745,21 @@ def answer_locked(args, choice, raw, lines):
     answers = state.get("answers") if isinstance(state.get("answers"), list) else []
     state["answers"] = (answers + [record])[-MAX_ANSWERS:]
     clear_receipt(path, state)
+    # The writes above take time. Look at the pane again right before the key:
+    # same pane and process, the same capture as verified, and the same prompt.
+    try:
+        again = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
+        require_same_pane(state, again)
+        text_again, truncated_again = read_capture(state["tmux"], state["pane_id"])
+        if snapshot_hash(again, text_again, truncated_again) != digest:
+            raise Refusal("stale-receipt", "Pane capture changed after the approval was spent.")
+        current_prompt(text_again, truncated_again, again["cursor_y"], again["height"], args.expect_kind, lines)
+    except Refusal as refusal:
+        record["outcome"] = entry["outcome"] = "not-sent"
+        write_state(path, state)
+        write_state(ledger, entry)
+        raise Refusal("prompt-changed", "The pane changed after the approval was spent (" + refusal.state + "). "
+                      "Nothing was sent. The approval stays spent; a new approval is needed.")
     try:
         sent = run([state["tmux"], "send-keys", "-t", state["pane_id"], "-l", "--", choice])
         failed = sent.returncode != 0

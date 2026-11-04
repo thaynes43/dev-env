@@ -179,7 +179,8 @@ receipt with the same prompt still showing do not allow a second answer.
 The entry records `answered_at` (UTC), `approval_ref`, `name`, `kind`,
 `choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner` and
 `outcome`. The task's state file keeps the same record in `answers` (the last
-32). `outcome` is `sent`, or `uncertain` when tmux failed or timed out. An
+32). `outcome` is `sent`; `not-sent` when the pane changed after the spend
+(below); or `uncertain` when tmux failed or timed out. An
 entry still at `sending` means the process ended before it recorded the
 outcome; treat it as uncertain. An uncertain answer stays uncertain until a
 supported observation settles it; it is never answered again under the same
@@ -210,17 +211,31 @@ worktree, session, command and owner marker, and a capture unchanged since
 that inspect (a changed screen, including someone typing, is `stale-receipt`).
 
 Limits: this rule reads tmux text only. A prompt whose phrasing is not in the
-helper's phrase list is not answerable. If tmux does not print the blank rows
-at the bottom of the pane, the visible screen cannot be established and the
-answer is refused. A prompt drawn with a composer below it is refused even if
-it is live. When the helper cannot tell which prompt is current, it refuses.
+helper's phrase list is not answerable. Taking the last `pane_height` rows as
+the visible screen assumes tmux prints every visible row, blank ones included.
+If it did not, a capture with fewer rows than the pane is refused, but with
+history above, the window would shift up into history and an old prompt there
+could be judged current; this has not been checked against a real tmux. A
+prompt drawn with a composer below it is refused even if it is live. When the
+helper cannot tell which prompt is current, it refuses.
 
 ### Sending and after
 
-The helper spends the approval, then the receipt, then sends exactly
-`tmux send-keys -t <pane> -l -- <key>`, without Enter or any other key. After
-an answer, inspect again: old prompt text can stay in the captured rows, and
-`reply` keeps refusing while it is there.
+The helper spends the approval, then the receipt. Those writes take time, so it
+then reads the pane once more, right before the key: the same pane id, pid,
+cwd, session, command and owner marker, a capture identical to the one it
+verified, and the same current-prompt rules. If anything differs, it sends
+nothing, records `outcome: not-sent` in the ledger and the state, and refuses
+with `prompt-changed`. The approval stays spent: a new approval is needed.
+
+Only then does it send exactly `tmux send-keys -t <pane> -l -- <key>`, without
+Enter or any other key. tmux has no compare-and-send, so a short window
+remains between that last capture and the key: the time to start one tmux
+process. A change inside that window can still receive the key. The helper
+narrows the window; it cannot close it.
+
+After an answer, inspect again: old prompt text can stay in the captured rows,
+and `reply` keeps refusing while it is there.
 
 This command is source only. It is not deployed to any host. Using it on a
 live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
@@ -263,6 +278,7 @@ closed as `pane-replaced`.
 | `sent` | 0 | Literal text went to the matching pane. `submitted` says whether one Enter followed. |
 | `answered` | 0 | One approved prompt key went to the matching pane, without Enter, and was recorded. |
 | `modal-mismatch`, `no-modal`, `stale-prompt`, `prompt-unclear`, `approval-spent`, `lock-busy` | 2 | `answer` sent nothing: the prompt kind or text did not match, no prompt is showing, the expected prompt is not the current screen, the screen is unclear, the approval was already used, or another helper call holds the lock. |
+| `prompt-changed` | 2 | `answer` sent nothing: the pane changed after the approval was spent. The approval stays spent and its outcome is `not-sent`; a new approval is needed. |
 | `answer-unconfirmed` | 3 | The answer key's outcome is unknown and is recorded as `uncertain`. The approval and the receipt are spent; do not retry or send another key. |
 | `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui` | 2 | Nothing was sent. Correct the input or re-inspect. |
 | `launch-unconfirmed`, `client-not-running`, `inspect-unconfirmed`, `send-unconfirmed` | 3 | The outcome is unknown or the pane did not stay up. Do not retry automatically. |
