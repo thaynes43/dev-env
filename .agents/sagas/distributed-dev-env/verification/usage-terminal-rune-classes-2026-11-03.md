@@ -110,5 +110,5 @@ Open anomaly, cause not identified. On operator image `sha-2828fa9` the slot rep
 `sourceStatuses[cursor]` showed `freshness.reason` "source not configured" (basis `none`, `asOf`
 2026-11-04T14:20:25Z in a read at 14:33Z) beside a real `lastAttempt` (result `error`, code
 `acquisition_unavailable`, 14:30:41Z). `statusFor` in `internal/providerallowance/collection.go`, as
-read at that image, does not produce that combination, so another path did. No explanation is offered
+read at that image, does not produce that combination, so the report came from a path not identified. No explanation is offered
 here; tracing it is a later item.
