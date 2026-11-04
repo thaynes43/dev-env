@@ -346,3 +346,61 @@ func TestScheduledWorkReleasePagesWithinTheCap(t *testing.T) {
 	}
 	f.wantReleasePage(t, v1alpha1.PageEventResult, 3)
 }
+
+// pageRecordRaced writes the item once, as another writer would, just before
+// the releaser's first page record write reaches the API server, so that
+// write meets a conflict.
+type pageRecordRaced struct {
+	client.Client
+	raced atomic.Bool
+}
+
+func (c *pageRecordRaced) Status() client.SubResourceWriter {
+	return pageRecordRace{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type pageRecordRace struct {
+	client.SubResourceWriter
+	c *pageRecordRaced
+}
+
+func (s pageRecordRace) Update(ctx context.Context, o client.Object, opts ...client.SubResourceUpdateOption) error {
+	if w, ok := o.(*v1alpha1.ScheduledWork); ok && !s.c.raced.Load() {
+		for _, occ := range w.Status.Occurrences {
+			if slices.ContainsFunc(occ.Pages, func(p v1alpha1.ScheduledWorkPage) bool { return p.Reminder != "" || p.State != "" }) {
+				s.c.raced.Store(true)
+				var live v1alpha1.ScheduledWork
+				if err := k8s.Get(ctx, client.ObjectKeyFromObject(w), &live); err != nil {
+					return err
+				}
+				if live.Annotations == nil {
+					live.Annotations = map[string]string{}
+				}
+				live.Annotations["test.dev-env.haynesops.com/raced"] = "yes"
+				if err := k8s.Update(ctx, &live); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+	return s.SubResourceWriter.Update(ctx, o, opts...)
+}
+
+// A page record write that meets a conflict reads the item again and writes
+// once more: the page is recorded under the one Reminder.
+func TestScheduledWorkReleasePageRecordRetriesAConflict(t *testing.T) {
+	var racing *pageRecordRaced
+	startOperator(t, func(r *Reconciler) {
+		racing = &pageRecordRaced{Client: r.Client}
+		r.Client = racing
+	})
+	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDelivered)
+	s := releaseFixtureSession(t, f, suspendedAtCreate)
+	f.waitOccurrence(t, v1alpha1.OccurrenceEnded)
+	waitReleased(t, s.Name)
+	if !racing.raced.Load() {
+		t.Fatal("the page record write never met the race")
+	}
+	f.wantReleasePage(t, v1alpha1.PageEventResult, 0)
+}
