@@ -168,9 +168,9 @@ policy limits the keeper's writes to it.
 - The commit and a successor's rollback are compare-and-swaps on the same
   resourceVersion, so only one wins: when the successor wins, the owner's
   commit fails and nothing is sent. A lost acknowledgement on the commit is
-  read back: the commit holds only if the journal still holds this intent
-  and no marker, and the request is then sent and the replacement saved on
-  the Secret as read.
+  read back: the commit holds only if the same Secret (same UID) still holds
+  this intent and no marker, and the request is then sent and the replacement
+  saved on the Secret as read.
 - Lease budget. The fence before the commit needs `claudeRequestBudget`
   (7 s), which covers the commit's 2 s save and the 2 s margin. A third fence
   after the commit needs 7 s again: the 3 s request, the 2 s replacement save
@@ -225,9 +225,11 @@ round-3 independent review):
   `state.json`, which may hold a spent token. The journal is trusted state;
   this generalises RES-6.
 - RES-10. Any other write to the journal Secret between the intent's re-read
-  and the commit fails the commit's compare-and-swap. The read back still
-  finds the marker, nothing is sent, and the intent rolls back with the
-  1-minute retry delay: availability only.
+  and the commit fails the commit's compare-and-swap, and nothing is sent. If
+  that write left this attempt's intent in place, the read back still finds
+  the marker and the intent rolls back with the 1-minute retry delay:
+  availability only. If it replaced the intent, nothing is rolled back and
+  the next tick handles what the journal then holds.
 - RES-11. On a downgrade to a keeper without this change, the older keeper
   tombstones marked intents, as before, and leaves stale markers behind. They
   name old attempts and are harmless.

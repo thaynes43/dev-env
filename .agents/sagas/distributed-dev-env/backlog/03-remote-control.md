@@ -271,8 +271,8 @@ The cycle, per refresh:
 4. The transport runs every check that can prove the request unsent, then
    calls the dispatch commit: one compare-and-swap, on the Secret as re-read in
    step 3, that removes the marker. A lost acknowledgement is read back: the
-   commit holds only if the journal still holds this attempt's intent and no
-   marker.
+   commit holds only if the same Secret (same UID) still holds this attempt's
+   intent and no marker.
 5. Lease fence with 7 s again: the 3 s request, the 2 s replacement save and
    the 2 s margin. Each fence budget is under the fence's 10-second freshness
    bound.
@@ -310,9 +310,15 @@ What a tick does with a `RefreshIntent` it finds:
 Unchanged from increment 4: every failure after the commit is possibly spent
 and tombstones; nothing possibly sent, spent or unknown is ever sent again; a
 rolled-back token is sent again only through a new intent with a new attempt
-UID, and after a not-sent rollback only after a 1-minute backoff. Also in this change: refresh failures are
-fenced by the originating attempt, and the notifier checks a hub `NeedsLogin`
-against the durable journal behind the leader fence before it pages.
+UID. The 1-minute backoff is set only after two rollbacks: the one that follows
+the transport's not-sent result (which includes a refused commit or a refused
+fence after it), and a successful retry from the tick. The three earlier
+unsent exits (the intent save fails, the re-read does not match, the fence
+before the commit refuses) roll back without it, so the next due tick, at most
+30 s later, may write a new intent; that is safe because the token was never
+sent. Also in this change: refresh failures are fenced by the originating
+attempt, and the notifier checks a hub `NeedsLogin` against the durable
+journal behind the leader fence before it pages.
 
 Residuals, as in the verification record:
 
@@ -340,8 +346,10 @@ Residuals, as in the verification record:
 - RES-9. Anyone who can patch the journal Secret can forge or copy a marker
   naming the current intent. The journal is trusted state.
 - RES-10. Any other write to the journal Secret between the intent's re-read
-  and the commit fails the commit: nothing is sent, and the intent rolls back
-  with the 1-minute delay (availability only).
+  and the commit fails the commit, and nothing is sent. If that write left
+  this attempt's intent in place, the intent rolls back with the 1-minute
+  delay (availability only); if it replaced the intent, nothing is rolled
+  back and the next tick handles what the journal then holds.
 - RES-11. On a downgrade, an older keeper tombstones marked intents and
   leaves stale markers, which name old attempts and are harmless.
 
