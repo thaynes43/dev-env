@@ -228,6 +228,11 @@ type ScheduledWorkApproval struct {
 	By       string    `json:"by"`
 	At       time.Time `json:"at"`
 	SpecHash string    `json:"specHash"`
+	// TemplateDigest is the digest of the dispatch template the spec named
+	// when the human approved it, for display. The API reads the template and
+	// records it; no request carries it. The approval is void once the
+	// template's digest differs, as it is once the spec's hash does.
+	TemplateDigest string `json:"templateDigest,omitempty"`
 }
 
 // ScheduledWorkCounts counts occurrences by outcome over the item's life. A
