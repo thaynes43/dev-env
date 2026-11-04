@@ -97,7 +97,7 @@ status:
   nextDue: ...                               # as DESIGN-032
   planHash: ...                              # as DESIGN-032; an edit re-plans from now
   counts: {succeeded, failed, parked, skipped, ended, ambiguous, cancelled}  # lifetime; skipped adds `missed`
-  occurrences:                               # newest 50 terminal ones kept; non-terminal ones are never pruned
+  occurrences:                               # a map keyed by `at`; newest 50 terminal ones kept; non-terminal ones are never pruned
   - at: "2026-12-03T14:00:00Z"
     state: Pending|Claimed|Dispatched|Delivered|Opened|Running|Succeeded|Failed|Ended|Parked|Skipped|Ambiguous|Cancelled
     delivery: accepted|refused|ambiguous     # interactive work-order delivery; a note, not a state
@@ -129,6 +129,16 @@ only while `spec.editor` is that basis's own principal. So an edit by anyone but
 the owner turns the item into one that needs Tom's approval for that exact spec. A haynes-ops ValidatingAdmissionPolicy
 admits create, update and status writes on `scheduledworks` from the operator's
 ServiceAccount only. The keeper and every other identity get no write.
+
+**Schema guards (S2).** The CRD itself enforces these, so a buggy executor cannot
+break them: a terminal occurrence state never changes; an occurrence's `session`,
+`specHash` and `reported` are set once; `attempt` never decreases and is at most 3;
+`retriedAt` needs `attempt` > 0; `missed` only on `Skipped`; at most 8 pages per
+occurrence, keyed by (event, attempt), trimmed by `AppendPage`, which drops the
+oldest attempt first and never fails; interactive work needs at least one `notify`
+target; `owner` and `editor` match `^(human|client|coordinator|session)/[^/]+/[^/]+$`.
+That `delivery` appears only on interactive work is left to the executor, because an
+occurrence rule cannot read the mode at claim time.
 
 **Dispatch templates** are GitOps data in their own ConfigMap,
 `dev-env-system/dev-env-scheduled-work`, not in `dev-env-templates`. Putting them
@@ -392,7 +402,10 @@ every later failure parks it:
 5. The normal session creation limits for the chosen basis (above).
 
 A parked occurrence pages Tom with the reason and waits for a human approve, retry
-or cancel. A human approve or retry sets `retriedAt` and opens a fresh window for
+or cancel. An occurrence keeps the `specHash` it was claimed with (set once). If the
+spec has changed since that claim, a retry of the parked occurrence is refused, and
+the occurrence is `Skipped` ("spec changed after claim"). An approval of the edited
+spec applies from the next occurrence. A human approve or retry sets `retriedAt` and opens a fresh window for
 that occurrence only. Its grace, the claim-without-session rule and the start
 deadline passed to agentd all count from `retriedAt`, not from the due time. A
 person can therefore run parked work late on purpose, which the "missed

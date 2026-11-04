@@ -39,7 +39,8 @@ type Occurrence struct {
 	At time.Time
 }
 
-// Schedule is a parsed, validated ReminderSpec schedule.
+// Schedule is a parsed, validated schedule: the due time, zone and recurrence
+// that a Reminder and a ScheduledWork (DESIGN-054) share.
 type Schedule struct {
 	loc          *time.Location
 	y            int
@@ -55,20 +56,33 @@ type Schedule struct {
 	hasRecurrent bool
 }
 
-// ScheduleOf parses the schedule fields of a spec. It is the one validation the
-// API and the scheduler share, so a spec the API accepted is one the scheduler
-// can plan.
+// ScheduleOf parses the schedule fields of a reminder spec. It is the one
+// validation the API and the scheduler share, so a spec the API accepted is one
+// the scheduler can plan.
 func ScheduleOf(spec v1alpha1.ReminderSpec) (*Schedule, error) {
-	loc, err := time.LoadLocation(spec.TimeZone)
-	if err != nil || spec.TimeZone == "" || spec.TimeZone == "Local" {
-		return nil, fmt.Errorf("timeZone %q is not an IANA zone name such as America/New_York", spec.TimeZone)
+	return NewSchedule(spec.Due, spec.TimeZone, spec.Recurrence)
+}
+
+// ScheduleOfWork parses the schedule fields of a ScheduledWork spec with the
+// same rules as a reminder's. NotAfter is not a schedule field: the executor
+// bounds the series by it, so the schedule and its RRULE stay exactly what the
+// owner wrote.
+func ScheduleOfWork(spec v1alpha1.ScheduledWorkSpec) (*Schedule, error) {
+	return NewSchedule(spec.Due, spec.TimeZone, spec.Recurrence)
+}
+
+// NewSchedule parses and validates the shared schedule fields: a local wall
+// time in DueLayout, an IANA zone and an optional recurrence.
+func NewSchedule(due, timeZone string, rec *v1alpha1.ReminderRecurrence) (*Schedule, error) {
+	loc, err := time.LoadLocation(timeZone)
+	if err != nil || timeZone == "" || timeZone == "Local" {
+		return nil, fmt.Errorf("timeZone %q is not an IANA zone name such as America/New_York", timeZone)
 	}
-	t, err := time.Parse(DueLayout, spec.Due)
+	t, err := time.Parse(DueLayout, due)
 	if err != nil {
-		return nil, fmt.Errorf("due %q is not a local time such as 2026-11-02T09:00", spec.Due)
+		return nil, fmt.Errorf("due %q is not a local time such as 2026-11-02T09:00", due)
 	}
-	s := &Schedule{loc: loc, y: t.Year(), mo: t.Month(), d: t.Day(), h: t.Hour(), mi: t.Minute(), zone: spec.TimeZone, due: spec.Due}
-	rec := spec.Recurrence
+	s := &Schedule{loc: loc, y: t.Year(), mo: t.Month(), d: t.Day(), h: t.Hour(), mi: t.Minute(), zone: timeZone, due: due}
 	if rec == nil {
 		return s, nil
 	}
@@ -260,9 +274,14 @@ func (s *Schedule) RRule() string {
 
 // PlanHash identifies the schedule fields: when it changes, NextDue is stale.
 func PlanHash(spec v1alpha1.ReminderSpec) string {
-	r := spec.Recurrence
+	return PlanHashOf(spec.Due, spec.TimeZone, spec.Recurrence)
+}
+
+// PlanHashOf identifies the shared schedule fields, so a Reminder and a
+// ScheduledWork with the same schedule have the same hash.
+func PlanHashOf(due, timeZone string, r *v1alpha1.ReminderRecurrence) string {
 	var parts []string
-	parts = append(parts, spec.Due, spec.TimeZone)
+	parts = append(parts, due, timeZone)
 	if r != nil {
 		by := slices.Clone(r.ByDay)
 		slices.Sort(by)
