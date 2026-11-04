@@ -36,6 +36,19 @@ func startDeadlineRefusal(raw string, launched bool, now time.Time) string {
 	return ""
 }
 
+// firstLaunchRefusal is the start-deadline check of a boot, or of a remote
+// agent the boot held, before the session's first launch. A Codex remote
+// session is exempt, as the controller exempts it by refusing the annotation:
+// its agent is the phone daemon and agentd keeps no launch record for it, so
+// the check could not tell a late first boot from a later one, and a value
+// that reached the pod some other way would refuse every boot.
+func (d *Daemon) firstLaunchRefusal() string {
+	if codexRemoteSession(d.Session) {
+		return ""
+	}
+	return startDeadlineRefusal(d.S.StartDeadline, firstLaunchRecorded(d.S), d.now())
+}
+
 // firstLaunchRecorded reports whether the session has a first-launch record
 // (launch.json, which StartAgent writes before the agent starts). Only its
 // proven absence counts as never launched. A record agentd cannot stat counts
