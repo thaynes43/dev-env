@@ -158,3 +158,15 @@ func TestDotSetDiagnosticHasNoAdditionalFieldOrProviderChannel(t *testing.T) {
 		}
 	}
 }
+
+func TestRetiredAndOutOfRangeMiscWindowCodesAreRefused(t *testing.T) {
+	for _, reason := range []string{
+		"builtin_terminal_miscsymbol_unqualified", "builtin_terminal_miscwin0_unqualified",
+		"builtin_terminal_miscwin9_unqualified", "builtin_terminal_miscwin10_unqualified",
+	} {
+		raw, err := json.Marshal(AcquisitionDiagnostic{diagnosticSchema, "cursor", "builtin", reason, ""})
+		if err != nil || DecodeAcquisitionDiagnostics(append(raw, '\n')) != nil {
+			t.Fatal("a retired or out-of-range window code was accepted", reason)
+		}
+	}
+}

@@ -40,7 +40,7 @@ that matches it, not to a block it happens to sit in.
 | 15 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
 | 16 | `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only
 
-Class sizes are not uniform. The checkmark class is the smallest and most guessable (8 code points: U+2705, U+2714 to U+2718, U+274C, U+274E), then quote (about 22), dash (about 26) and star (about 45); the others are larger by an order of magnitude or more. A label still names a class of at least that many characters, never one character. This round makes the split below the earlier dash and quote classes deliberately, because the refusal sits in a family where no coarser label can find the glyph; a finer split than the checkmark class is not made.
+Class sizes are not uniform. The checkmark class is the smallest and most guessable (8 code points: U+2705, U+2714 to U+2718, U+274C, U+274E), then quote (about 22), dash (about 26) and star (about 45). The eight Miscellaneous Symbols windows hold 30 to 32 characters each (window 1 loses the two stars, window 4 loses U+266F); the remaining classes are larger. A label still names a class of at least that many characters, never one character. This round makes the split below the earlier dash and quote classes deliberately, because the refusal sits in a family where no coarser label can find the glyph; a finer split than the checkmark class is not made.
 
 The existing precedence is unchanged: encoding, combining, spacing, format and
 the fixed dot set come first. Every label covers at least several characters (the checkmark class, 8, is the smallest), so it cannot
@@ -56,7 +56,7 @@ protocol advance in any state, provider/stage/payload boundaries, and the
 generic label for private-use and unassigned code points. Older tests that
 asserted a coarser label for a snowman and a few other characters now assert
 their classes (the snowman moved from the generic label to pictograph in the first
-round and to a Miscellaneous Symbols window in the third round).
+round, to the broad Miscellaneous Symbols label in the second round and to a window in the third round).
 
 This is diagnostics only. It qualifies no character, widens no input and runs no
 provider. Qualifying a character, if the evidence supports it, is a separate
@@ -88,7 +88,7 @@ glyph is a symbol in the Miscellaneous Symbols block (U+2600 to U+26FF) that the
 math, currency, stars, check marks) did not take. That label is replaced by eight window labels that
 split the block into aligned runs of 32 code points. A window label names a run, never a character, a
 single code point or a count; every window still holds many assigned symbols (the smallest after the
-star and math exclusions still has dozens). Window ranges are public in the table above and are not
+star and math exclusions still holds 30, in window 1). Window ranges are public in the table above and are not
 secret; they are fixed code-point boundaries, not a lookup of the character seen. Nothing is qualified or
 widened: an unqualified character still refuses before it is rendered, and the acceptance predicate is
 unchanged. A glyph, once localized, is qualified only by a separate reviewed change with its own evidence.
