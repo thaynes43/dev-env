@@ -127,6 +127,8 @@ class CursorInteractiveTests(unittest.TestCase):
                     "--model", "grok-4.7-high", "--name", self.name, "--observe-seconds", "0", *extra]
         elif command == "inspect":
             args = ["inspect", "--tmux", self.tmux, "--name", self.name, *extra]
+        elif command == "answer":
+            args = ["answer", "--tmux", self.tmux, "--name", self.name, *extra]
         else:
             args = ["reply", "--tmux", self.tmux, "--name", self.name, *extra]
         merged = dict(self.env, FAKE_MODE=mode)
@@ -522,6 +524,262 @@ class CursorInteractiveTests(unittest.TestCase):
         code, stale = self.invoke("reply", extra)
         self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
         self.assertEqual(sum(args[0] == "send-keys" for args in self.commands("tmux")), 1)
+
+
+TRUST_CAPTURE = (
+    "Tip: You can start the Cursor CLI with `agent`.\n"
+    "  \u256d\u2500\u2500\u2500\u2500\u256e\n"
+    "  \u2502  \u26a0 Workspace Trust Required                      \u2502\n"
+    "  \u2502  Cursor Agent can execute code and access files.   \u2502\n"
+    "  \u2502  Do you trust the contents of this directory?      \u2502\n"
+    "  \u2502    /home/dev/work/example-task                      \u2502\n"
+    "  \u2502  \u25b6 [a] Trust this workspace                       \u2502\n"
+    "  \u2502    [q] Quit                                        \u2502\n"
+    "  \u2570\u2500\u2500\u2500\u2500\u256f\n"
+)
+TRUST_EXPECT = (
+    "Workspace Trust Required\n"
+    "Do you trust the contents of this directory?\n"
+    "/home/dev/work/example-task\n"
+    "[a] Trust this workspace\n"
+)
+APPROVAL = "OP399-approval-2026-11-04T21:40:00Z"
+
+
+class AnswerFixture(unittest.TestCase):
+    """Reuses the fake tmux fixture without re-running the reply tests."""
+
+
+for _name in ("setUp", "invoke", "calls", "commands", "start_and_inspect", "send_barrier", "await_send"):
+    setattr(AnswerFixture, _name, CursorInteractiveTests.__dict__[_name])
+
+
+class AnswerTests(AnswerFixture):
+    """The answer command: one approved, specific prompt choice under the helper lock."""
+
+    def setUp(self):
+        super().setUp()
+        self.expect_path = self.root / "expect"
+        self.expect_path.write_text(TRUST_EXPECT)
+
+    def state(self):
+        return json.loads((self.root / "state" / "cursor-interactive-session" / self.name).read_text())
+
+    def answer_args(self, receipt, choice="a", kind="modal-trust", approval=APPROVAL, expect=None):
+        return ["--receipt", receipt, "--approval-ref", approval, "--expect-kind", kind,
+                "--expect-text-file", str(expect or self.expect_path), "--choice", choice]
+
+    def sends(self):
+        return [args for args in self.commands("tmux") if args[0] == "send-keys"]
+
+    def test_answer_sends_exactly_one_key_and_records_it(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        self.assertEqual(inspected["classification"], "modal-trust")
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, answered["state"]), (0, "answered"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "a"]])
+        self.assertEqual((answered["choice"], answered["kind"], answered["approval_ref"]),
+                         ("a", "modal-trust", APPROVAL))
+        record = self.state()["answers"][-1]
+        self.assertEqual({key: record[key] for key in ("approval_ref", "kind", "choice", "pane_id", "pane_pid", "outcome")},
+                         {"approval_ref": APPROVAL, "kind": "modal-trust", "choice": "a",
+                          "pane_id": "%7", "pane_pid": "123", "outcome": "sent"})
+        self.assertRegex(record["answered_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(record["expected_text_sha256"],
+                         __import__("hashlib").sha256(TRUST_EXPECT.encode("utf-8")).hexdigest())
+        self.assertEqual(self.state()["receipt_id"], "")
+        self.assertNotIn("Do you trust", json.dumps(answered))
+        code, again = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, again["state"]), (2, "stale-receipt"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_answer_refuses_prompt_text_mismatch_without_spending(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        variants = {
+            "other path": TRUST_EXPECT.replace("example-task", "other-task"),
+            "missing line": TRUST_EXPECT + "Allow network access\n",
+            "reordered": "Do you trust the contents of this directory?\nWorkspace Trust Required\n[a] Trust this workspace\n",
+        }
+        for label, text in variants.items():
+            with self.subTest(label=label):
+                expect = self.root / ("expect-" + label.replace(" ", "-"))
+                expect.write_text(text)
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect))
+                self.assertEqual((code, refused["state"]), (2, "modal-mismatch"))
+                self.assertEqual(self.sends(), [])
+        self.assertNotEqual(self.state()["receipt_id"], "")
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, answered["state"]), (0, "answered"))
+
+    def test_answer_refuses_kind_mismatch(self):
+        cases = (
+            (TRUST_CAPTURE, "modal-approval"),
+            ("Allow this command: git push [y] Yes [n] No\n>", "modal-trust"),
+            ("Are you sure? [y] Yes\n>", "modal-approval"),
+            ("Permission required to continue [a] Allow\n>", "modal-trust"),
+        )
+        for capture, kind in cases:
+            with self.subTest(kind=kind, capture=capture[:20]):
+                self.log.unlink(missing_ok=True)
+                (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
+                inspected = self.start_and_inspect(capture)
+                expect = self.root / "expect-kind"
+                expect.write_text(capture.splitlines()[0].strip() + "\n")
+                choice = "a" if "[a]" in capture else "y"
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice,
+                                                                        kind=kind, expect=expect))
+                self.assertEqual((code, refused["state"]), (2, "modal-mismatch"))
+                self.assertEqual(self.sends(), [])
+
+    def test_answer_refuses_when_no_prompt_is_showing(self):
+        cases = {
+            "active": ("S8 answered\n>", {}),
+            "draft": ("S8 answered\n> typed [a] text", {}),
+            "unclassified": ("S8 answered\n[a] Trust this workspace", {"FAKE_CURSOR_Y": "0"}),
+        }
+        for label, (capture, env) in cases.items():
+            with self.subTest(label=label):
+                self.log.unlink(missing_ok=True)
+                (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
+                inspected = self.start_and_inspect(capture, env)
+                expect = self.root / "expect-none"
+                expect.write_text("[a] Trust this workspace\n" if "Trust" in capture else "[a]\n")
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect),
+                                            env=env)
+                self.assertEqual((code, refused["state"]), (2, "no-modal"))
+                self.assertEqual(self.sends(), [])
+
+    def test_answer_refuses_stale_receipt_and_changed_pane(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        self.capture.write_text(TRUST_CAPTURE + "someone typed here\n")
+        code, stale = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.capture.write_text(TRUST_CAPTURE)
+        code, newer = self.invoke("inspect")
+        self.assertEqual(code, 0)
+        code, rotated = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, rotated["state"]), (2, "stale-receipt"))
+        for mode, expected in (("replaced", "pane-replaced"), ("new-pane", "pane-replaced"),
+                               ("foreign-command", "pane-replaced"), ("foreign-owner", "not-owned"),
+                               ("dead", "pane-dead"), ("gone", "pane-missing"), ("copy-mode", "pane-in-mode")):
+            with self.subTest(mode=mode):
+                code, refused = self.invoke("answer", self.answer_args(newer["receipt"]), mode=mode)
+                self.assertEqual((code, refused["state"]), (2, expected))
+        code, missing = self.invoke("answer", ["--name", "missing-task", *self.answer_args(newer["receipt"])])
+        self.assertEqual((code, missing["state"]), (2, "not-owned"))
+        self.assertEqual(self.sends(), [])
+
+    def test_answer_validates_input_before_any_tmux_call(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        bad_expect = {
+            "empty": b"", "blank": b"\n \n", "control": b"Workspace Trust Required\x1b[2J\n",
+            "not-utf8": b"\xff\xfe\n", "oversize": b"x" * 4097,
+        }
+        cases = [
+            ("approval empty", self.answer_args(inspected["receipt"], approval="")),
+            ("approval short", self.answer_args(inspected["receipt"], approval="tom-ok")),
+            ("approval spaces", self.answer_args(inspected["receipt"], approval="Tom approved it")),
+            ("approval long", self.answer_args(inspected["receipt"], approval="a" * 201)),
+            ("kind unknown", self.answer_args(inspected["receipt"], kind="modal-unknown")),
+            ("kind other", self.answer_args(inspected["receipt"], kind="active")),
+            ("choice empty", self.answer_args(inspected["receipt"], choice="")),
+            ("choice two", self.answer_args(inspected["receipt"], choice="ab")),
+            ("choice space", self.answer_args(inspected["receipt"], choice=" ")),
+            ("choice escape", self.answer_args(inspected["receipt"], choice="\x1b")),
+            ("choice key name", self.answer_args(inspected["receipt"], choice="Enter")),
+            ("choice not offered", self.answer_args(inspected["receipt"], choice="q")),
+            ("choice not bracketed", self.answer_args(inspected["receipt"], choice="T")),
+            ("bad receipt", self.answer_args("v1:not-a-receipt")),
+            ("missing expect file", self.answer_args(inspected["receipt"], expect=self.root / "absent")),
+        ]
+        for label, data in bad_expect.items():
+            path = self.root / ("bad-expect-" + label)
+            path.write_bytes(data)
+            cases.append(("expect " + label, self.answer_args(inspected["receipt"], expect=path)))
+        for label, extra in cases:
+            with self.subTest(label=label):
+                self.log.write_text("")
+                code, refused = self.invoke("answer", extra)
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.commands("tmux"), [])
+        self.assertNotEqual(self.state()["receipt_id"], "")
+
+    def test_answer_refuses_when_the_lock_is_held(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        lock = self.root / "state" / "cursor-interactive-session" / (self.name + ".lock")
+        descriptor = os.open(lock, os.O_RDWR)
+        try:
+            helper.fcntl.flock(descriptor, helper.fcntl.LOCK_EX)
+            self.log.write_text("")
+            code, busy = self.invoke("answer", self.answer_args(inspected["receipt"]))
+            self.assertEqual((code, busy["state"]), (2, "lock-busy"))
+            self.assertEqual(self.commands("tmux"), [])
+        finally:
+            os.close(descriptor)
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, answered["state"]), (0, "answered"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_concurrent_answers_send_one_key(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        extra = self.answer_args(inspected["receipt"])
+        descriptor, gate, barrier = self.send_barrier()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(self.invoke, "answer", extra, env=barrier)
+            self.await_send(descriptor)
+            try:
+                code, second = self.invoke("answer", extra)
+                self.assertEqual((code, second["state"]), (2, "lock-busy"))
+            finally:
+                with gate.open("wb", buffering=0) as handle:
+                    handle.write(b"1")
+            self.assertEqual(first.result(timeout=10)[1]["state"], "answered")
+        code, third = self.invoke("answer", extra)
+        self.assertEqual((code, third["state"]), (2, "stale-receipt"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "a"]])
+
+    def test_failed_answer_send_is_unconfirmed_and_spent(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        code, failed = self.invoke("answer", self.answer_args(inspected["receipt"]), mode="send-fail")
+        self.assertEqual((code, failed["state"]), (3, "answer-unconfirmed"))
+        self.assertEqual(self.state()["answers"][-1]["outcome"], "unconfirmed")
+        code, retried = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, retried["state"]), (2, "stale-receipt"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_answer_timeout_is_unconfirmed(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
+                                  approval_ref=APPROVAL, expect_kind="modal-trust",
+                                  expect_text_file=str(self.expect_path), choice="a")
+        original_run = helper.run
+        calls = []
+
+        def timeout_send(argv):
+            calls.append(argv)
+            if argv[1] == "send-keys":
+                raise subprocess.TimeoutExpired(argv, 5)
+            return original_run(argv)
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(helper, "run", timeout_send):
+            with self.assertRaises(helper.Refusal) as caught:
+                helper.answer_session(args)
+        self.assertEqual((caught.exception.state, caught.exception.code), ("answer-unconfirmed", 3))
+        self.assertEqual([call for call in calls if call[1] == "send-keys"],
+                         [[self.tmux, "send-keys", "-t", "%7", "-l", "--", "a"]])
+        self.assertEqual(self.state()["answers"][-1]["outcome"], "unconfirmed")
+
+    def test_reply_still_refuses_while_answered_prompt_text_remains(self):
+        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual(code, 0)
+        code, after = self.invoke("inspect")
+        self.assertEqual((code, after["classification"]), (0, "modal-trust"))
+        self.text_path.write_text("continue")
+        code, refused = self.invoke("reply", ["--receipt", after["receipt"], "--text-file", str(self.text_path),
+                                              "--submit", "--observed-ready"])
+        self.assertEqual((code, refused["state"]), (2, "modal-trust"))
+        self.assertEqual(len(self.sends()), 1)
 
 
 if __name__ == "__main__":
