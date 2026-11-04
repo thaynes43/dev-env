@@ -115,7 +115,7 @@ func TestBuiltinDiagnosticCodesDoNotExpandStageOrVersionPayload(t *testing.T) {
 		"builtin_terminal_operation_unqualified", "builtin_terminal_rune_unqualified",
 		"builtin_terminal_control_unqualified", "builtin_terminal_bounds_unqualified",
 		"builtin_terminal_dotset_unqualified", "builtin_terminal_encoding_unqualified", "builtin_terminal_combining_unqualified", "builtin_terminal_spacing_unqualified", "builtin_terminal_format_unqualified",
-		"builtin_terminal_checkmark_unqualified", "builtin_terminal_star_unqualified", "builtin_terminal_miscsymbol_unqualified", "builtin_terminal_dingbat_unqualified", "builtin_terminal_c1_unqualified", "builtin_terminal_letter_unqualified", "builtin_terminal_number_unqualified", "builtin_terminal_dash_unqualified", "builtin_terminal_quote_unqualified", "builtin_terminal_punct_unqualified", "builtin_terminal_math_unqualified", "builtin_terminal_currency_unqualified", "builtin_terminal_shape_unqualified", "builtin_terminal_pictograph_unqualified", "builtin_terminal_symbol_unqualified",
+		"builtin_terminal_checkmark_unqualified", "builtin_terminal_star_unqualified", "builtin_terminal_miscwin1_unqualified", "builtin_terminal_miscwin2_unqualified", "builtin_terminal_miscwin3_unqualified", "builtin_terminal_miscwin4_unqualified", "builtin_terminal_miscwin5_unqualified", "builtin_terminal_miscwin6_unqualified", "builtin_terminal_miscwin7_unqualified", "builtin_terminal_miscwin8_unqualified", "builtin_terminal_dingbat_unqualified", "builtin_terminal_c1_unqualified", "builtin_terminal_letter_unqualified", "builtin_terminal_number_unqualified", "builtin_terminal_dash_unqualified", "builtin_terminal_quote_unqualified", "builtin_terminal_punct_unqualified", "builtin_terminal_math_unqualified", "builtin_terminal_currency_unqualified", "builtin_terminal_shape_unqualified", "builtin_terminal_pictograph_unqualified", "builtin_terminal_symbol_unqualified",
 	} {
 		d := AcquisitionDiagnostic{diagnosticSchema, "cursor", "builtin", reason, ""}
 		raw, err := json.Marshal(d)
@@ -155,6 +155,18 @@ func TestDotSetDiagnosticHasNoAdditionalFieldOrProviderChannel(t *testing.T) {
 		extended = append(extended, []byte(","+field+"}\n")...)
 		if len(DecodeAcquisitionDiagnostics(extended)) != 0 {
 			t.Fatal("membership diagnostic admitted extra payload")
+		}
+	}
+}
+
+func TestRetiredAndOutOfRangeMiscWindowCodesAreRefused(t *testing.T) {
+	for _, reason := range []string{
+		"builtin_terminal_miscsymbol_unqualified", "builtin_terminal_miscwin0_unqualified",
+		"builtin_terminal_miscwin9_unqualified", "builtin_terminal_miscwin10_unqualified",
+	} {
+		raw, err := json.Marshal(AcquisitionDiagnostic{diagnosticSchema, "cursor", "builtin", reason, ""})
+		if err != nil || DecodeAcquisitionDiagnostics(append(raw, '\n')) != nil {
+			t.Fatal("a retired or out-of-range window code was accepted", reason)
 		}
 	}
 }

@@ -261,3 +261,15 @@ func TestHeartbeatBodyAcceptsUnknownFieldsFromANewerAgent(t *testing.T) {
 		t.Fatalf("an unknown field refused the heartbeat: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// A real homeHeadroom body from a newer agentd (numbers and a closed state word)
+// is accepted by the heartbeat route and the agent state still lands.
+func TestHeartbeatBodyAcceptsTheHomeHeadroomField(t *testing.T) {
+	f := newFixture(t)
+	const name = "home-headroom"
+	token := f.sessionPod(name, "full", 0)
+	body := `{"session":"` + name + `","agent":{"state":"busy"},"homeHeadroom":{"version":1,"state":"ok","observedAt":"2026-11-03T22:00:00Z","bytes":{"state":"ok","total":21474836480,"available":9663676416},"inodes":{"state":"ok","total":1310720,"available":1120779}}}`
+	if w := f.do(http.MethodPost, protocol.HeartbeatPath(name), token, body); w.Code != http.StatusNoContent {
+		t.Fatalf("a homeHeadroom body refused the heartbeat: %d %s", w.Code, w.Body.String())
+	}
+}
