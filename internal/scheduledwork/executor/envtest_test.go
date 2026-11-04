@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,7 +28,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -461,4 +464,150 @@ func counted(t *testing.T, c prometheus.Counter) float64 {
 		t.Fatal(err)
 	}
 	return m.GetCounter().GetValue()
+}
+
+var crdGVK = schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}
+
+// installOldCRD replaces the installed ScheduledWork CRD with one whose
+// occurrences lack ending and sessionUID (and the rules that read them), as an
+// operator rolled ahead of its CRD would find, and waits until the API server
+// prunes them. The cleanup puts the original back and waits until it keeps
+// them again.
+func installOldCRD(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	c := cluster(t)
+	read := func() *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(crdGVK)
+		if err := c.Get(ctx, client.ObjectKey{Name: scheduledWorkCRD}, u); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	orig := read()
+	saved, _, _ := unstructured.NestedSlice(orig.Object, "spec", "versions")
+	versions, _, _ := unstructured.NestedSlice(orig.DeepCopy().Object, "spec", "versions")
+	for i, v := range versions {
+		version := v.(map[string]any)
+		path := []string{"schema", "openAPIV3Schema", "properties", "status", "properties", "occurrences", "items"}
+		items, _, _ := unstructured.NestedMap(version, path...)
+		props := items["properties"].(map[string]any)
+		delete(props, "ending")
+		delete(props, "sessionUID")
+		var kept []any
+		for _, r := range items["x-kubernetes-validations"].([]any) {
+			rule := r.(map[string]any)["rule"].(string)
+			if !strings.Contains(rule, "ending") && !strings.Contains(rule, "sessionUID") {
+				kept = append(kept, r)
+			}
+		}
+		items["x-kubernetes-validations"] = kept
+		if err := unstructured.SetNestedMap(version, items, path...); err != nil {
+			t.Fatal(err)
+		}
+		versions[i] = version
+	}
+	setVersions := func(vs []any) {
+		eventuallyT(t, "update the ScheduledWork CRD", func() error {
+			u := read()
+			if err := unstructured.SetNestedSlice(u.Object, vs, "spec", "versions"); err != nil {
+				return err
+			}
+			return c.Update(ctx, u)
+		})
+	}
+	setVersions(versions)
+	probe := newProbe(t)
+	eventuallyT(t, "the API server prunes the ending mark", func() error {
+		if probe.keepsEnding() {
+			return errors.New("ending is still stored")
+		}
+		return nil
+	})
+	t.Cleanup(func() {
+		setVersions(saved)
+		eventuallyT(t, "the API server keeps the ending mark again", func() error {
+			if !probe.keepsEnding() {
+				return errors.New("ending is still pruned")
+			}
+			return nil
+		})
+	})
+}
+
+// probe is a ScheduledWork in its own namespace that tells whether the API
+// server stores an occurrence's ending mark.
+type probe struct {
+	t   *testing.T
+	key types.NamespacedName
+	n   int
+}
+
+func newProbe(t *testing.T) *probe {
+	t.Helper()
+	c := cluster(t)
+	ns := fmt.Sprintf("sw-crd-probe-%d", nsSeq.Add(1))
+	if err := c.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	w := &v1alpha1.ScheduledWork{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "probe"}, Spec: spec()}
+	if err := c.Create(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	return &probe{t: t, key: client.ObjectKeyFromObject(w)}
+}
+
+// keepsEnding writes a fresh occurrence with the mark and reads it back.
+func (p *probe) keepsEnding() bool {
+	p.t.Helper()
+	ctx := context.Background()
+	c := cluster(p.t)
+	var w v1alpha1.ScheduledWork
+	if err := c.Get(ctx, p.key, &w); err != nil {
+		p.t.Fatal(err)
+	}
+	p.n++
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(day0.Add(time.Duration(p.n) * time.Minute)), State: v1alpha1.OccurrenceClaimed, Ending: true}}
+	if err := c.Status().Update(ctx, &w); err != nil {
+		return false
+	}
+	var back v1alpha1.ScheduledWork
+	if err := c.Get(ctx, p.key, &back); err != nil {
+		p.t.Fatal(err)
+	}
+	return len(back.Status.Occurrences) == 1 && back.Status.Occurrences[0].Ending
+}
+
+// eventuallyT retries f for up to 20 seconds.
+func eventuallyT(t *testing.T, what string, f func() error) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		err := f()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: %v", what, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// prunedReader answers every ScheduledWork read without the occurrences'
+// ending mark and session UID, as an API server whose CRD prunes them stores
+// and returns the item.
+type prunedReader struct{ client.Reader }
+
+func (r prunedReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := r.Reader.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if w, ok := obj.(*v1alpha1.ScheduledWork); ok {
+		for i := range w.Status.Occurrences {
+			w.Status.Occurrences[i].Ending, w.Status.Occurrences[i].SessionUID = false, ""
+		}
+	}
+	return nil
 }

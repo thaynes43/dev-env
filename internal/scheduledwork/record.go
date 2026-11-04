@@ -63,9 +63,10 @@ func Record(w *v1alpha1.ScheduledWork, at time.Time, session string, t Terminal)
 			return OtherSession
 		}
 		state, reason := t.State, t.Reason
-		if o.Ending && t.NeverLaunched {
+		if o.Ending && t.NeverLaunched && !dispatchedOrLater(o.State) {
 			// The executor was ending the occurrence when this late session
-			// was refused before its launch: the mark's reason stands.
+			// was refused before its launch: the mark's reason stands. Once
+			// the occurrence was Dispatched, the outcome is the normal one.
 			state, reason = EndingState(o.Reason), o.Reason
 		}
 		o.State, o.Reason = state, clip(reason, maxReason)
@@ -104,6 +105,15 @@ const (
 	ReasonCancelledAtRevalidation = "cancelled at revalidation"
 	ReasonCancelledWhileParked    = "cancelled while parked"
 )
+
+// dispatchedOrLater reports an occurrence state at or after Dispatched.
+func dispatchedOrLater(state string) bool {
+	switch state {
+	case v1alpha1.OccurrenceDispatched, v1alpha1.OccurrenceDelivered, v1alpha1.OccurrenceOpened, v1alpha1.OccurrenceRunning:
+		return true
+	}
+	return false
+}
 
 // EndingState is the final state an ending mark's reason stands for:
 // Cancelled for a cancel reason, else Skipped.

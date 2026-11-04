@@ -50,6 +50,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -255,6 +257,11 @@ type Executor struct {
 	Now func() time.Time
 
 	kindLogged bool
+	// The schema preflight's last verdict, the CRD resourceVersion and time
+	// it was judged at, and whether a verdict was logged.
+	schemaOK, schemaLogged bool
+	schemaRV               string
+	schemaAt               time.Time
 }
 
 // NeedLeaderElection makes the executor run in the leader only.
@@ -322,6 +329,9 @@ func (e *Executor) Tick(ctx context.Context) {
 		return
 	}
 	e.kindLogged = false
+	if !e.schemaReady(ctx) {
+		return
+	}
 	items := list.Items
 	slices.SortFunc(items, func(a, b v1alpha1.ScheduledWork) int {
 		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
@@ -812,10 +822,7 @@ func (p *pass) end(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.S
 		if err := p.e.write(ctx, w); err != nil {
 			return true, err
 		}
-		if stored := scheduledwork.Find(w, at); stored == nil || !stored.Ending {
-			return true, p.schemaMissing(lg, "ending")
-		}
-		return true, nil
+		return true, p.storedHas(ctx, w, at, "ending", lg)
 	}
 	o.State, o.Reason = state, reason
 	if state == v1alpha1.OccurrenceCancelled {
@@ -941,10 +948,117 @@ func (p *pass) dispatched(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1a
 	if err := p.e.write(ctx, w); err != nil {
 		return true, err
 	}
-	if stored := scheduledwork.Find(w, at); uid != "" && (stored == nil || stored.SessionUID == "") {
-		return true, p.schemaMissing(lg, "sessionUID")
+	if uid == "" {
+		return true, nil
 	}
-	return true, nil
+	return true, p.storedHas(ctx, w, at, "sessionUID", lg)
+}
+
+// storedHas reads the item again from the API server, into a fresh object,
+// and checks that the occurrence at carries the field just written. The
+// written copy cannot show it: the client decodes the answer into the
+// existing occurrences in place, so a field the API server pruned keeps its
+// written value there. The schema preflight is the first check; this one
+// catches a CRD that changed between it and the write. A failed read stops
+// the item's pass too: the next pass reads the item from scratch.
+func (p *pass) storedHas(ctx context.Context, w *v1alpha1.ScheduledWork, at time.Time, field string, lg logr.Logger) error {
+	fresh := &v1alpha1.ScheduledWork{}
+	if err := p.e.Reader.Get(ctx, client.ObjectKeyFromObject(w), fresh); err != nil {
+		lg.Error(err, "read the ScheduledWork back after a write", "field", field)
+		return errSchemaMissing
+	}
+	o := scheduledwork.Find(fresh, at)
+	switch {
+	case field == "ending" && o != nil && o.Ending:
+		return nil
+	case field == "sessionUID" && o != nil && o.SessionUID != "":
+		return nil
+	}
+	return p.schemaMissing(lg, field)
+}
+
+// SchemaResync is how long a verified CRD schema is trusted before the
+// executor reads the CRD in full again; a changed resourceVersion is read at
+// once.
+const SchemaResync = 5 * time.Minute
+
+// scheduledWorkCRD is the CustomResourceDefinition the preflight reads; S6
+// grants get on this one object.
+const scheduledWorkCRD = "scheduledworks.dev-env.haynesops.com"
+
+var crdKind = schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"}
+
+// schemaReady is the schema preflight, run before any work in a pass. It
+// reads the ScheduledWork CRD uncached and requires its served v1alpha1 status
+// schema to carry the occurrence fields the guarantee rests on, ending and
+// sessionUID. An older CRD would prune them silently: the two-phase end would
+// become one phase and the session UID would be lost. Without them, or when
+// the CRD cannot be read, the pass does nothing at all; a missing field is
+// counted on every such pass and logged once. A verified schema is trusted
+// until the CRD's resourceVersion changes or SchemaResync passes.
+func (e *Executor) schemaReady(ctx context.Context) bool {
+	key := client.ObjectKey{Name: scheduledWorkCRD}
+	head := &metav1.PartialObjectMetadata{}
+	head.SetGroupVersionKind(crdKind)
+	if err := e.Reader.Get(ctx, key, head); err != nil {
+		e.schemaVerdict(false, "the ScheduledWork CRD cannot be read; dispatching nothing", "error", err.Error())
+		return false
+	}
+	now := e.now()
+	if e.schemaOK && head.ResourceVersion == e.schemaRV && now.Sub(e.schemaAt) < SchemaResync {
+		return true
+	}
+	crd := &unstructured.Unstructured{}
+	crd.SetGroupVersionKind(crdKind)
+	if err := e.Reader.Get(ctx, key, crd); err != nil {
+		e.schemaVerdict(false, "the ScheduledWork CRD cannot be read; dispatching nothing", "error", err.Error())
+		return false
+	}
+	e.schemaRV, e.schemaAt = crd.GetResourceVersion(), now
+	if missing := missingStatusFields(crd); len(missing) > 0 {
+		if e.SchemaMissing != nil {
+			e.SchemaMissing.Inc()
+		}
+		e.schemaVerdict(false, "the installed ScheduledWork CRD lacks occurrence fields the executor needs; dispatching nothing", "missing", missing)
+		return false
+	}
+	e.schemaVerdict(true, "the installed ScheduledWork CRD carries the occurrence fields the executor needs")
+	return true
+}
+
+// schemaVerdict records the preflight's verdict and logs it when it changes.
+func (e *Executor) schemaVerdict(ok bool, msg string, kv ...any) {
+	if ok != e.schemaOK || !e.schemaLogged {
+		if ok {
+			e.Log.Info(msg, kv...)
+		} else {
+			e.Log.Error(errSchemaMissing, msg, kv...)
+		}
+		e.schemaLogged = true
+	}
+	e.schemaOK = ok
+}
+
+// missingStatusFields lists the occurrence fields the served v1alpha1 status
+// schema of crd lacks.
+func missingStatusFields(crd *unstructured.Unstructured) []string {
+	want := []string{"ending", "sessionUID"}
+	versions, _, _ := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	for _, v := range versions {
+		version, ok := v.(map[string]any)
+		if !ok || version["name"] != v1alpha1.GroupVersion.Version {
+			continue
+		}
+		props, _, _ := unstructured.NestedMap(version, "schema", "openAPIV3Schema", "properties", "status", "properties", "occurrences", "items", "properties")
+		var missing []string
+		for _, f := range want {
+			if _, ok := props[f]; !ok {
+				missing = append(missing, f)
+			}
+		}
+		return missing
+	}
+	return want
 }
 
 // errSchemaMissing stops an item's pass: the API server's stored object

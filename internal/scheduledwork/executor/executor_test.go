@@ -580,11 +580,7 @@ func TestAnEndingOccurrenceEndsWithItsReasonForARefusedSession(t *testing.T) {
 			// it: the session fails before its first pod.
 			hook := func() {
 				f.otherLeaderCreates(key, day0)
-				s := f.session(f.derived(key, day0))
-				s.Status.Phase = v1alpha1.PhaseFailed
-				if err := cluster(t).Status().Update(context.Background(), s); err != nil {
-					t.Fatal(err)
-				}
+				f.refuse(f.derived(key, day0), true)
 			}
 			f.beforeWriteAt.Store(f.writes.Load() + 1)
 			f.beforeWrite.Store(&hook)
@@ -612,10 +608,72 @@ func TestAnEndingOccurrenceEndsWithItsReasonForARefusedSession(t *testing.T) {
 	}
 }
 
-// Against an older CRD that prunes the ending mark or the session UID, the
-// executor fails closed: when the stored object it gets back lacks the field,
-// it counts it and writes nothing more for the item in that pass.
-func TestAMissingSchemaFieldStopsTheItem(t *testing.T) {
+// Missing telemetry is not proof that a late session never ran: one that is
+// Failed with no agent report but no refusal by the reconciler is adopted as
+// usual, and its outcome is the normal one.
+func TestAnEndingOccurrenceAdoptsAFailedSessionWithoutARefusal(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.create.hooks(func() error { return errTransient }, nil)
+	f.at(f.executor(), day0)
+	f.create.hooks(nil, nil)
+	f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
+	hook := func() {
+		f.otherLeaderCreates(key, day0)
+		f.refuse(f.derived(key, day0), false)
+	}
+	f.beforeWriteAt.Store(f.writes.Load() + 1)
+	f.beforeWrite.Store(&hook)
+	f.at(f.executor(), day0.Add(time.Minute))
+	if o := f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, ""); o.Session != f.derived(key, day0) {
+		t.Fatalf("occurrence %+v", o)
+	}
+	f.clock.Set(pastHold)
+	f.release(f.derived(key, day0), false)
+	f.wantOcc(key, day0, v1alpha1.OccurrenceFailed, scheduledwork.ReasonNoTaskResult)
+}
+
+// refuse marks a session Failed. With refused, also as the reconciler's
+// launch gate refuses one before its first pod: PodReady SessionInvalid and
+// no pod recorded.
+func (f *fixture) refuse(name string, refused bool) {
+	f.t.Helper()
+	s := f.session(name)
+	s.Status.Phase = v1alpha1.PhaseFailed
+	if refused {
+		s.Status.Conditions = []metav1.Condition{{Type: scheduledwork.PodReadyCondition, Status: metav1.ConditionFalse,
+			Reason: scheduledwork.SessionInvalidReason, Message: "the scheduled session cannot start", LastTransitionTime: metav1.Now()}}
+	}
+	if err := cluster(f.t).Status().Update(context.Background(), s); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// Against an older CRD that lacks the ending mark and the session UID, the
+// API server prunes both silently. The schema preflight reads the CRD and
+// dispatches nothing: no plan, no claim, no final record, no session; it
+// counts each such pass. Once the CRD carries the fields again, work goes on.
+func TestAnOldCRDDispatchesNothing(t *testing.T) {
+	f := newFixture(t)
+	installOldCRD(t)
+	key := f.item("audit", spec())
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.at(f.executor(), day0)
+	w := f.get(key)
+	if len(w.Status.Occurrences) != 0 || w.Status.NextDue != nil {
+		t.Fatalf("the executor wrote against an old CRD: nextDue %v occurrences %v", w.Status.NextDue, w.Status.Occurrences)
+	}
+	if calls, _, _ := f.create.counts(); calls != 0 || len(f.sessionsOf()) != 0 || counted(t, f.schemaMissing) < 2 {
+		t.Fatalf("calls %d sessions %d counted %v", calls, len(f.sessionsOf()), counted(t, f.schemaMissing))
+	}
+}
+
+// The read back after a write is the second check, for a CRD that changed
+// after the preflight: when the item read from the API server lacks the field
+// just written, the executor counts it and writes nothing more for the item
+// in that pass, so the two-phase end never becomes one phase.
+func TestAFieldMissingFromTheStoredItemStopsIt(t *testing.T) {
 	t.Run("the ending mark", func(t *testing.T) {
 		f := newFixture(t)
 		key := f.item("audit", spec())
@@ -624,14 +682,10 @@ func TestAMissingSchemaFieldStopsTheItem(t *testing.T) {
 		f.at(f.executor(), day0)
 		f.create.hooks(nil, nil)
 		f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
-		strip := func(obj client.Object) {
-			for i := range obj.(*v1alpha1.ScheduledWork).Status.Occurrences {
-				obj.(*v1alpha1.ScheduledWork).Status.Occurrences[i].Ending = false
-			}
-		}
-		f.afterWrite.Store(&strip)
+		e := f.executor()
+		e.Reader = prunedReader{Reader: cluster(t)}
 		sent := f.writes.Load()
-		f.at(f.executor(), day0.Add(time.Minute))
+		f.at(e, day0.Add(time.Minute))
 		if n := f.writes.Load() - sent; n != 1 || counted(t, f.schemaMissing) != 1 {
 			t.Fatalf("%d status writes, %v counted; want the one mark write, then a stop", n, counted(t, f.schemaMissing))
 		}
@@ -641,13 +695,9 @@ func TestAMissingSchemaFieldStopsTheItem(t *testing.T) {
 		f := newFixture(t)
 		key := f.item("audit", daily(spec()))
 		f.at(f.executor(), day0.Add(-time.Minute))
-		strip := func(obj client.Object) {
-			for i := range obj.(*v1alpha1.ScheduledWork).Status.Occurrences {
-				obj.(*v1alpha1.ScheduledWork).Status.Occurrences[i].SessionUID = ""
-			}
-		}
-		f.afterWrite.Store(&strip)
-		f.at(f.executor(), day0)
+		e := f.executor()
+		e.Reader = prunedReader{Reader: cluster(t)}
+		f.at(e, day0)
 		if counted(t, f.schemaMissing) != 1 {
 			t.Fatalf("%v counted", counted(t, f.schemaMissing))
 		}

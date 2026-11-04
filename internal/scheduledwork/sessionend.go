@@ -111,9 +111,10 @@ type Terminal struct {
 	Reported *v1alpha1.TaskOutcomeRecordStatus
 	// SessionUID is the UID of the session the record comes from.
 	SessionUID string
-	// NeverLaunched is a session that failed before any agent report
+	// NeverLaunched is a session the reconciler refused before its first pod
 	// (RefusedBeforeLaunch). Into an occurrence that carries the ending mark
-	// its record is the mark's, not Failed: the session never ran.
+	// and was not yet Dispatched, its record is the mark's, not Failed: the
+	// session never ran.
 	NeverLaunched bool
 }
 

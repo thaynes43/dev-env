@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -422,5 +423,14 @@ func TestScheduledWorkReleaseCollectorCountsHeldSessions(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != 6 {
 		t.Fatalf("blocked %v, want [6]", got)
+	}
+}
+
+// scheduledwork reads the reconciler's refusal by these names, and cannot
+// import this package.
+func TestScheduledWorkReadsTheReconcilersRefusal(t *testing.T) {
+	phase, ready := podPhase(&v1alpha1.AgentSession{}, observation{pod: owned[*corev1.Pod]{missing: true}, buildErr: sessionInvalidError{errors.New("x")}})
+	if scheduledwork.PodReadyCondition != ConditionPodReady || phase != v1alpha1.PhaseFailed || ready.Reason != scheduledwork.SessionInvalidReason {
+		t.Errorf("condition %q reason %q, scheduledwork reads %q %q", ConditionPodReady, ready.Reason, scheduledwork.PodReadyCondition, scheduledwork.SessionInvalidReason)
 	}
 }

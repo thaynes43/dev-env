@@ -179,9 +179,27 @@ func LaunchRefusal(s *v1alpha1.AgentSession, w *v1alpha1.ScheduledWork) (string,
 	return "", false
 }
 
-// RefusedBeforeLaunch reports a session that failed before any agent report:
-// refused by the launch gate (or invalid) before its first pod, or a pod that
-// failed before agentd reported. Its agent never ran.
+// The reconciler's condition and reason for a session it refused to start
+// (controller.ConditionPodReady, "SessionInvalid"); a controller test pins
+// them to the reconciler's.
+const (
+	PodReadyCondition    = "PodReady"
+	SessionInvalidReason = "SessionInvalid"
+)
+
+// RefusedBeforeLaunch reports positive evidence that a session's agent never
+// ran: the reconciler refused it before its first pod (the launch gate, or a
+// session agentd would refuse), so it is Failed, its PodReady condition gives
+// the reason SessionInvalid, and no pod is recorded. Missing telemetry alone
+// (no agent report) is not that evidence.
 func RefusedBeforeLaunch(s *v1alpha1.AgentSession) bool {
-	return s.Status.Phase == v1alpha1.PhaseFailed && s.Status.Agent == nil
+	if s.Status.Phase != v1alpha1.PhaseFailed || s.Status.PodName != "" {
+		return false
+	}
+	for i := range s.Status.Conditions {
+		if c := &s.Status.Conditions[i]; c.Type == PodReadyCondition {
+			return c.Reason == SessionInvalidReason
+		}
+	}
+	return false
 }
