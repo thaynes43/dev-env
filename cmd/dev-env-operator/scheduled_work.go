@@ -8,6 +8,7 @@ import (
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
 )
 
@@ -53,13 +54,22 @@ func (o scheduledWorkOptions) validate(apiAddr string, leaderElect bool) error {
 // false flag returns nil, so the operator adds no runnable. It reads the
 // ScheduledWorks in the operator's own namespace, where the releaser reads
 // them (Reconciler.ScheduledWorkNamespace), with the uncached reader only, and
-// creates through creator, the API's fixed-name entry. Until S3b2 it has no
-// authority or template source: DenyAll and NoTemplates park every claimed
-// occurrence and nothing dispatches, so the flag must stay off until S3b2:
-// with it on, every real occurrence is recorded Parked and then Skipped.
+// creates through creator, the API's fixed-name entry. Its authority and
+// template source is executor.Sources (DESIGN-054 S3b2) over the same
+// uncached reader: the dispatch templates ConfigMap
+// (authority.TemplatesConfigMap) in that namespace, and the owner session and
+// its pod in the sessions' namespace. Without that ConfigMap, or without a
+// basis the template admits, an occurrence parks and nothing dispatches.
 func newScheduledWorkExecutor(o options, c client.Client, reader client.Reader, creator executor.Creator, log logr.Logger) *executor.Executor {
 	if !o.scheduledWork.enabled {
 		return nil
+	}
+	sources := &executor.Sources{
+		Reader:             reader,
+		SessionNamespace:   o.sessionNamespace,
+		TemplatesNamespace: o.templatesNamespace,
+		TemplatesName:      authority.TemplatesConfigMap,
+		StaleAfter:         authority.DefaultHeartbeatStaleAfter,
 	}
 	return &executor.Executor{
 		Client:             c,
@@ -67,8 +77,8 @@ func newScheduledWorkExecutor(o options, c client.Client, reader client.Reader, 
 		Namespace:          o.templatesNamespace,
 		SessionNamespace:   o.sessionNamespace,
 		Creator:            creator,
-		Authorizer:         executor.DenyAll{},
-		Templates:          executor.NoTemplates{},
+		Authorizer:         sources,
+		Templates:          sources,
 		HeadlessGrace:      o.scheduledWork.headlessGrace,
 		InteractiveGrace:   o.scheduledWork.interactiveGrace,
 		MaxHeadless:        o.scheduledWork.maxHeadless,

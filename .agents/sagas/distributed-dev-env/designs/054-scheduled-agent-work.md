@@ -174,6 +174,38 @@ One invalid template refuses the whole document, so nothing dispatches until it 
 fixed. An absent ConfigMap is no templates. `internal/scheduledwork/authority`
 parses it.
 
+**How the executor reads them (S3b2).** `executor.Sources` is the operator's
+Authorizer and TemplateResolver. At each due-time check it reads, with the uncached
+API reader:
+
+- the ConfigMap `dev-env-scheduled-work` in the operator's namespace. NotFound,
+  an invalid document or an unknown name is a refusal that parks the occurrence;
+  any other read error is retried within the grace;
+- for a session owner, the AgentSession of the owner's name and its pod of the same
+  name, in the sessions' namespace. NotFound is no session or no pod; any other
+  read error is retried.
+
+It decides with `authority.Decide` and `authority.Choose` against the template's
+`admits`, and takes the template digest from the same read. The build that follows
+(revalidation check 3) reads the template again, and if that template's digest is
+not the one the decision used, it retries rather than build from a template the
+decision did not see. A session owner's child runs on the owner's profile, so a
+template that admits `session` dispatches only for owners on the profile it names.
+
+**RBAC the executor needs (S6).** Read from haynes-ops `main`
+(`kubernetes/main/apps/dev-env-system/rbac/app/operator.yaml`, last changed
+2026-11-03, 7200fcb0):
+
+- `get` on `agentsessions` and `pods` in `dev-agents`, for owner liveness: already
+  granted (the `dev-agents` Role has get, list and watch on both).
+- `get` on `configmaps` named `dev-env-scheduled-work` in `dev-env-system`: **not yet
+  granted**. That Role grants configmaps only by name (`dev-env-templates`,
+  `dev-env-provider-allowances` and the owned-root inputs), so S6 adds
+  `resourceNames: [dev-env-scheduled-work]` with `verbs: [get]`. Without it every
+  read fails with Forbidden, a read error the executor retries until grace ends,
+  and nothing dispatches.
+- The `scheduledworks` rules and the CRD `get` are S6's, as listed in "Delivery".
+
 **An approval binds the template as well as the spec.** A template edit can change
 what an approved spec runs with, such as another model, a longer maximum duration
 or another profile, and the spec hash does not see it. So S5's approve route
@@ -778,7 +810,7 @@ library only.
 | S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, approve of a Parked occurrence after grace running from retriedAt, an unapproved Parked occurrence expiring to Skipped, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
-| S6 | haynes-ops: CRD copy, Roles, a ClusterRole with `get` on the one `customresourcedefinitions` object `scheduledworks.dev-env.haynesops.com` (resourceNames), needed by both the releaser and the executor's schema preflight (a failed preflight read dispatches nothing and is counted in `dev_env_scheduled_work_schema_read_failures_total`), the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag. **Do not enable `--enable-scheduled-work` before S3b2**: S3b1 wires `DenyAll` and `NoTemplates`, so every real occurrence would be recorded `Parked` and then `Skipped`. S6's admission policy also pins a scheduled session's scheduled-work label and annotations (name, occurrence, start deadline) against any edit after the Create, since the releaser and the launch gate rely on them | Tom approves activation |
+| S6 | haynes-ops: CRD copy, Roles, a ClusterRole with `get` on the one `customresourcedefinitions` object `scheduledworks.dev-env.haynesops.com` (resourceNames), needed by both the releaser and the executor's schema preflight (a failed preflight read dispatches nothing and is counted in `dev_env_scheduled_work_schema_read_failures_total`), the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag. S3b2 wires the real authority and template sources (`executor.Sources`), so with the flag on an occurrence dispatches only with the templates ConfigMap present and a basis its template admits; the Role in `dev-env-system` must first grant `get` on `configmaps` `dev-env-scheduled-work` by name (see "Dispatch templates"). S6's admission policy also pins a scheduled session's scheduled-work label and annotations (name, occurrence, start deadline) against any edit after the Create, since the releaser and the launch gate rely on them | Tom approves activation |
 | S7 | live: one headless and one interactive test occurrence | Tom approves the first real run |
 | C1 | real calendar adapter | Tom provisions the DWD identity (OP206) |
 

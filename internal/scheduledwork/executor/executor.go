@@ -28,9 +28,10 @@
 // headless session's end (Running and the terminal states) is the releaser's.
 //
 // The authority basis and the dispatch templates come in through Authorizer
-// and TemplateResolver. Until S3b2 implements them, the operator wires DenyAll
-// and NoTemplates, so even with the flag on every occurrence parks with a
-// reason and nothing is dispatched.
+// and TemplateResolver. The operator wires Sources (S3b2) for both: the
+// dispatch templates ConfigMap and the owner session, read uncached, decided
+// by internal/scheduledwork/authority. Without the ConfigMap, or without a
+// basis its template admits, an occurrence parks and nothing is dispatched.
 package executor
 
 import (
@@ -143,7 +144,7 @@ type Authority struct {
 }
 
 // Authorizer decides an item's authority basis at the due time, from what is
-// true now, never from anything stored at creation (DESIGN-054 R7). S3b2
+// true now, never from anything stored at creation (DESIGN-054 R7). Sources
 // implements it.
 type Authorizer interface {
 	// Authorize returns w's basis at now. An error is a failed read, not a
@@ -171,8 +172,8 @@ type Template struct {
 	Modes []string
 }
 
-// TemplateResolver reads a dispatch template at the due time. S3b2 implements
-// it over the dev-env-scheduled-work ConfigMap.
+// TemplateResolver reads a dispatch template at the due time. Sources
+// implements it over the dev-env-scheduled-work ConfigMap.
 type TemplateResolver interface {
 	// Resolve returns the named template. A missing or invalid templates
 	// document, or a missing or invalid template in it, is a *Refusal, which
@@ -195,9 +196,9 @@ type Creator interface {
 	CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (name string, uid types.UID, adopted bool, err error)
 }
 
-// DenyAll is the production Authorizer until S3b2 wires the real checks: it
-// grants no basis, so every claimed occurrence parks with its reason and
-// nothing is dispatched.
+// DenyAll grants no basis, so every claimed occurrence parks with its reason
+// and nothing is dispatched. It was the operator's Authorizer before S3b2
+// wired Sources, and stays for tests.
 type DenyAll struct{}
 
 // DenyAllReason is the reason DenyAll gives.
@@ -208,9 +209,9 @@ func (DenyAll) Authorize(context.Context, *v1alpha1.ScheduledWork, time.Time) (A
 	return Authority{Reason: DenyAllReason}, nil
 }
 
-// NoTemplates is the production TemplateResolver until S3b2 reads the
-// dev-env-scheduled-work ConfigMap: with no ConfigMap the executor dispatches
-// nothing.
+// NoTemplates refuses every template, so the executor dispatches nothing. It
+// was the operator's TemplateResolver before S3b2 wired Sources, and stays for
+// tests.
 type NoTemplates struct{}
 
 // NoTemplatesReason is the refusal NoTemplates gives.
@@ -884,8 +885,9 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 	}
 	// Check 3: the template, its basis, its mode and its repo, now. The create checks
 	// the profile against dev-env-templates and the model id's form and
-	// effort; that the model is one the template still allows is the
-	// resolver's (TODO(S3b2)).
+	// effort; the resolver (Sources) reads the template now and refuses a
+	// model that is not a full id, so the model is the one the template
+	// holds at the due time.
 	t, err := e.Templates.Resolve(ctx, w.Spec.Work.Template)
 	var refusal *Refusal
 	switch {
