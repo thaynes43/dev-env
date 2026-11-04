@@ -56,6 +56,7 @@ func TestSpecHash(t *testing.T) {
 func TestCreatedFor(t *testing.T) {
 	at := time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC)
 	s := &v1alpha1.AgentSession{}
+	s.Finalizers = []string{v1alpha1.ScheduledWorkFinalizer}
 	s.Labels = map[string]string{v1alpha1.LabelScheduledWork: "uid-1"}
 	s.Annotations = map[string]string{v1alpha1.AnnotationScheduledWorkName: "audit", v1alpha1.AnnotationScheduledWorkOccurrence: OccurrenceAnnotation(at)}
 	if !CreatedFor(s, "audit", "uid-1", at) {
@@ -66,6 +67,7 @@ func TestCreatedFor(t *testing.T) {
 		"other item":       CreatedFor(s, "other", "uid-1", at),
 		"other occurrence": CreatedFor(s, "audit", "uid-1", at.Add(time.Minute)),
 		"no uid":           CreatedFor(s, "audit", "", at),
+		"no finalizer":     CreatedFor(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Labels: s.Labels, Annotations: s.Annotations}}, "audit", "uid-1", at),
 	} {
 		if ok {
 			t.Errorf("%s matched", name)

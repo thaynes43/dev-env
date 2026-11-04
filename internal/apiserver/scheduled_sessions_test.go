@@ -94,7 +94,7 @@ func TestCreateScheduledSession(t *testing.T) {
 func TestCreateScheduledSessionCollision(t *testing.T) {
 	foreign := func(name string, mutate func(*v1alpha1.AgentSession)) *v1alpha1.AgentSession {
 		s := &v1alpha1.AgentSession{
-			ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name,
+			ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name, Finalizers: []string{v1alpha1.ScheduledWorkFinalizer},
 				Labels:      map[string]string{v1alpha1.LabelScheduledWork: string(swUID)},
 				Annotations: map[string]string{v1alpha1.AnnotationScheduledWorkName: "audit", v1alpha1.AnnotationScheduledWorkOccurrence: "1906725600"}},
 			Spec: v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p", Parent: humanSA},
@@ -113,6 +113,7 @@ func TestCreateScheduledSessionCollision(t *testing.T) {
 			s.Annotations[v1alpha1.AnnotationScheduledWorkOccurrence] = "1906729200"
 		}},
 		{"no label at all", func(s *v1alpha1.AgentSession) { s.Labels = nil }},
+		{"no finalizer", func(s *v1alpha1.AgentSession) { s.Finalizers = nil }},
 	} {
 		t.Run("read first: "+c.what, func(t *testing.T) {
 			f := newFixture(t, foreign(name, c.mutate))
@@ -247,7 +248,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 		wantRefused(t, err, "unfinished claude children")
 		// The occurrence's own session, made before the cap filled, is
 		// adopted, not refused.
-		mine := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: swName,
+		mine := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: swName, Finalizers: []string{v1alpha1.ScheduledWorkFinalizer},
 			Labels:      map[string]string{v1alpha1.LabelScheduledWork: string(swUID)},
 			Annotations: map[string]string{v1alpha1.AnnotationScheduledWorkName: "audit", v1alpha1.AnnotationScheduledWorkOccurrence: "1906725600"}},
 			Spec: v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p", Parent: "owner"}}
@@ -265,6 +266,8 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 	}{
 		{"a private pilot", func(s *v1alpha1.AgentSession) { s.Annotations = map[string]string{projectcanary.PilotAnnotation: "x"} }, "cannot create another executor"},
 		{"a task budget", func(s *v1alpha1.AgentSession) { s.Annotations = map[string]string{TaskBudgetUIDAnnotation: "task-1"} }, "task budget"},
+		{"a managed canary", func(s *v1alpha1.AgentSession) { s.Spec.ProjectCanary = &v1alpha1.ProjectCanaryBinding{} }, "cannot create another executor"},
+		{"suspended", func(s *v1alpha1.AgentSession) { s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended }, "not live"},
 	} {
 		t.Run("the owner is "+c.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -278,6 +281,16 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 			wantRefused(t, err, c.says)
 		})
 	}
+	t.Run("the owner is being deleted", func(t *testing.T) {
+		f := newFixture(t)
+		f.sessionPod("owner", "dev", 0)
+		d := owned(f, "owner")
+		if err := f.c.Delete(ctx, f.session("owner")); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := f.srv.CreateScheduledSession(ctx, childReq(), d)
+		wantRefused(t, err, "not live")
+	})
 	t.Run("the owner has no pod", func(t *testing.T) {
 		f := newFixture(t)
 		f.sessionPod("owner", "dev", 0)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -91,12 +92,16 @@ func StartDeadlineAnnotation(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// CreatedFor reports whether s carries the scheduled-work label and
+// CreatedFor reports whether s carries the scheduled-work finalizer, label and
 // annotations of the occurrence at of the item named itemName with UID itemUID,
 // as the fixed-name entry sets them in its atomic Create. Only such a session
-// of the derived name is adopted; any other is a collision.
+// of the derived name is adopted; any other is a collision. A session without
+// the finalizer is not adopted even when its label and annotations match: the
+// releaser acts only on finalizer holders, so its outcome would never be
+// recorded and the occurrence would hold its slot for good.
 func CreatedFor(s *v1alpha1.AgentSession, itemName string, itemUID types.UID, at time.Time) bool {
 	return itemUID != "" && itemName != "" &&
+		controllerutil.ContainsFinalizer(s, v1alpha1.ScheduledWorkFinalizer) &&
 		s.Labels[v1alpha1.LabelScheduledWork] == string(itemUID) &&
 		s.Annotations[v1alpha1.AnnotationScheduledWorkName] == itemName &&
 		s.Annotations[v1alpha1.AnnotationScheduledWorkOccurrence] == OccurrenceAnnotation(at)

@@ -185,6 +185,11 @@ func (s *Server) scheduledCaller(ctx context.Context, d scheduledwork.Dispatch) 
 	if c.kind != kindSession || c.session == nil || c.session.Name != d.Owner.Name || c.session.UID != d.Owner.UID {
 		return nil, forbidden("pod %s does not speak for the owner session %s", pod.Name, d.Owner.Name)
 	}
+	// The Authorizer proves the owner live before the claim; a session or
+	// pod going away, or a suspended session, is refused here as well.
+	if !pod.DeletionTimestamp.IsZero() || !c.session.DeletionTimestamp.IsZero() || c.session.Spec.OperatingMode == v1alpha1.OperatingModeSuspended {
+		return nil, forbidden("the owner session %s is being deleted or suspended, so it is not live", d.Owner.Name)
+	}
 	return c, nil
 }
 

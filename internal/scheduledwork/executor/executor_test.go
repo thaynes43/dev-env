@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -367,6 +368,123 @@ func TestStaleListingIsNotTrusted(t *testing.T) {
 	f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, "")
 	if calls, _, _ := f.create.counts(); calls != 1 || len(f.sessionsOf()) != 0 {
 		t.Errorf("calls %d sessions %d: a stale listing created a reaped session again", calls, len(f.sessionsOf()))
+	}
+}
+
+// Two overlapping leaders can disagree: one parks or ends an occurrence
+// while the other's create lands. A Parked occurrence adopts the session of
+// its derived name, and a final record is written only after a last read
+// shows there is still none, so the session's outcome is recorded.
+func TestALateSessionIsAdoptedNotLeftUnrecorded(t *testing.T) {
+	t.Run("parked", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("audit", spec())
+		ex := func() *Executor { e := f.executor(); e.Authorizer = DenyAll{}; return e }
+		f.at(ex(), day0.Add(-time.Minute))
+		f.at(ex(), day0)
+		f.wantOcc(key, day0, v1alpha1.OccurrenceParked, DenyAllReason)
+		f.otherLeaderCreates(key, day0)
+		f.at(ex(), day0.Add(time.Minute))
+		if o := f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, ""); o.Session != f.derived(key, day0) {
+			t.Errorf("occurrence %+v", o)
+		}
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("audit", spec())
+		f.at(f.executor(), day0.Add(-time.Minute))
+		f.create.hooks(func() error { return errTransient }, nil)
+		f.at(f.executor(), day0)
+		f.wantOcc(key, day0, v1alpha1.OccurrenceClaimed, "")
+		f.create.hooks(nil, nil)
+		f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
+		e := f.executor()
+		var landed atomic.Bool
+		e.Reader = lateSession{Reader: cluster(t), name: f.derived(key, day0), miss: func() {
+			if landed.CompareAndSwap(false, true) {
+				f.otherLeaderCreates(key, day0)
+			}
+		}}
+		f.at(e, day0.Add(time.Minute))
+		if o := f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, ""); o.Session != f.derived(key, day0) || !landed.Load() {
+			t.Errorf("occurrence %+v (the other leader's create landed: %v)", o, landed.Load())
+		}
+	})
+}
+
+// otherLeaderCreates creates the occurrence's session through the real
+// fixed-name entry, as another leader's create would, without recording it.
+func (f *fixture) otherLeaderCreates(key types.NamespacedName, at time.Time) {
+	f.t.Helper()
+	w := f.get(key)
+	req, reason := request(w, opsAudit)
+	if reason != "" {
+		f.t.Fatal(reason)
+	}
+	d := scheduledwork.Dispatch{ItemName: w.Name, ItemUID: w.UID, At: at, StartDeadline: at.Add(grace)}
+	if _, _, err := f.create.srv.CreateScheduledSession(context.Background(), req, d); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// lateSession answers the first read of one session name that finds nothing
+// as the API server did, and then calls miss, which lands another leader's
+// create right after that read.
+type lateSession struct {
+	client.Reader
+	name string
+	miss func()
+}
+
+func (l lateSession) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	err := l.Reader.Get(ctx, key, obj, opts...)
+	if _, ok := obj.(*v1alpha1.AgentSession); ok && key.Name == l.name && apierrors.IsNotFound(err) {
+		l.miss()
+	}
+	return err
+}
+
+// An edit of the schedule re-plans from now. An occurrence that was due and
+// not yet decided gets a Skipped record, so it is not lost without one.
+func TestEditRecordsTheDueOccurrence(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("daily", daily(spec()))
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.clock.Set(day0.Add(time.Minute))
+	f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Due = "2030-06-03T15:00" })
+	f.at(f.executor(), day0.Add(time.Minute))
+	f.wantOcc(key, day0, v1alpha1.OccurrenceSkipped, ReasonReplanned)
+	w := f.get(key)
+	if w.Status.NextDue == nil || !w.Status.NextDue.Time.Equal(day0.Add(time.Hour)) || w.Status.Counts.Skipped != 1 || len(f.sessionsOf()) != 0 {
+		t.Errorf("nextDue %v counts %+v sessions %d", w.Status.NextDue, w.Status.Counts, len(f.sessionsOf()))
+	}
+}
+
+// A new item plans from the minute it was created: an occurrence from before
+// it existed is never run, and one due in its creation minute is.
+func TestANewItemPlansFromItsCreation(t *testing.T) {
+	f := newFixture(t)
+	sp := spec()
+	sp.Due = "2099-01-01T00:00"
+	before, now := f.item("before", sp), f.item("now", sp)
+	created := f.get(now).CreationTimestamp.Truncate(time.Minute)
+	if c := f.get(before).CreationTimestamp.Truncate(time.Minute); !c.Equal(created) {
+		t.Skipf("the two items were created in different minutes (%s, %s); the case needs one", c, created)
+	}
+	notAfter := metav1.NewTime(created.Add(30 * 24 * time.Hour))
+	f.edit(before, func(s *v1alpha1.ScheduledWorkSpec) {
+		s.Due, s.NotAfter = created.Add(-5*time.Minute).UTC().Format("2006-01-02T15:04"), notAfter
+	})
+	f.edit(now, func(s *v1alpha1.ScheduledWorkSpec) {
+		s.Due, s.NotAfter = created.UTC().Format("2006-01-02T15:04"), notAfter
+	})
+	f.at(f.executor(), created.Add(time.Minute))
+	if w := f.get(before); w.Status.NextDue != nil || len(w.Status.Occurrences) != 0 {
+		t.Errorf("an occurrence from before the item existed: nextDue %v occurrences %v", w.Status.NextDue, w.Status.Occurrences)
+	}
+	f.wantOcc(now, created, v1alpha1.OccurrenceDispatched, "")
+	if n := len(f.sessionsOf()); n != 1 {
+		t.Errorf("%d sessions", n)
 	}
 }
 

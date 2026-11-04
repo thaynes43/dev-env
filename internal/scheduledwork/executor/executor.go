@@ -103,6 +103,7 @@ const (
 	ReasonParkedExpired           = "parked, not approved in time"
 	ReasonCollision               = "a session of the derived name exists that this occurrence did not create"
 	ReasonNoAuthority             = "no standing authority"
+	ReasonReplanned               = "the schedule was edited before it was claimed"
 )
 
 // Basis is the authority an occurrence dispatches on (DESIGN-054
@@ -433,7 +434,7 @@ func (p *pass) step(ctx context.Context, w *v1alpha1.ScheduledWork, lg logr.Logg
 		sch = nil
 	}
 	if sch != nil && w.Status.PlanHash != planHash(w.Spec) {
-		plan(w, sch, now, grace)
+		plan(w, sch, now)
 		lg.Info("planned the next occurrence", "nextDue", timeOrNone(w.Status.NextDue))
 		return true, e.write(ctx, w)
 	}
@@ -642,24 +643,40 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		return true, nil
 	}
 	hash := scheduledwork.SpecHash(w.Spec)
+	var state, reason string
 	switch {
 	case now.After(windowStart(o).Add(grace)):
-		o.State, o.Reason = v1alpha1.OccurrenceSkipped, ReasonNotCreated
-		w.Status.Counts.Skipped++
+		state, reason = v1alpha1.OccurrenceSkipped, ReasonNotCreated
 	// Check 1 ends the occurrence; a later check parks it.
 	case w.Spec.Cancelled:
-		o.State, o.Reason = v1alpha1.OccurrenceCancelled, ReasonCancelledAtRevalidation
-		w.Status.Counts.Cancelled++
+		state, reason = v1alpha1.OccurrenceCancelled, ReasonCancelledAtRevalidation
 	case now.After(w.Spec.NotAfter.Time):
-		o.State, o.Reason = v1alpha1.OccurrenceSkipped, ReasonNotAfter
-		w.Status.Counts.Skipped++
+		state, reason = v1alpha1.OccurrenceSkipped, ReasonNotAfter
 	case o.SpecHash != "" && o.SpecHash != hash:
 		// The occurrence runs on the spec it was claimed with, which is no
 		// longer stored; an edit applies from the next occurrence.
-		o.State, o.Reason = v1alpha1.OccurrenceSkipped, ReasonSpecChanged
-		w.Status.Counts.Skipped++
+		state, reason = v1alpha1.OccurrenceSkipped, ReasonSpecChanged
 	default:
 		return p.create(ctx, w, o, name, hash, now, grace, lg)
+	}
+	// A final record is written only while there is still no session: a
+	// second leader may have created one since the read above, and a final
+	// record would leave that session unrecorded.
+	err = e.Reader.Get(ctx, types.NamespacedName{Namespace: e.SessionNamespace, Name: name}, &sess)
+	switch {
+	case err == nil:
+		// The next step adopts it, or records the collision.
+		return true, nil
+	case !apierrors.IsNotFound(err):
+		lg.Error(err, "read the occurrence's session again", "session", name)
+		p.tried[at.Unix()] = true
+		return false, nil
+	}
+	o.State, o.Reason = state, reason
+	if state == v1alpha1.OccurrenceCancelled {
+		w.Status.Counts.Cancelled++
+	} else {
+		w.Status.Counts.Skipped++
 	}
 	logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 	return true, e.write(ctx, w)
@@ -694,8 +711,10 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 	case a.Basis == BasisSession && a.Owner == nil:
 		return parked("the live owner session is not named")
 	}
-	// Check 3: the template, its repo and its basis, now. Its model and
-	// profile are checked against dev-env-templates by the create.
+	// Check 3: the template, its repo and its basis, now. The create checks
+	// the profile against dev-env-templates and the model id's form and
+	// effort; that the model is one the template still allows is the
+	// resolver's (TODO(S3b2)).
 	t, err := e.Templates.Resolve(ctx, w.Spec.Work.Template)
 	var refusal *Refusal
 	switch {
@@ -756,6 +775,21 @@ func (p *pass) dispatched(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1a
 // occurrence is due, whichever comes first.
 func (p *pass) parked(ctx context.Context, w *v1alpha1.ScheduledWork, at time.Time, sch *reminders.Schedule, now time.Time, lg logr.Logger) (bool, error) {
 	o := scheduledwork.Find(w, at)
+	// A second leader's create can land after this occurrence parked: its
+	// session is adopted, so the releaser records it and it holds its slot.
+	if name, err := scheduledwork.SessionName(string(w.UID), at); err == nil {
+		var sess v1alpha1.AgentSession
+		err := p.e.Reader.Get(ctx, types.NamespacedName{Namespace: p.e.SessionNamespace, Name: name}, &sess)
+		switch {
+		case err == nil && scheduledwork.CreatedFor(&sess, w.Name, w.UID, at):
+			lg.Info("a parked occurrence has its session; adopting it", "occurrence", at.UTC().Format(time.RFC3339), "session", name)
+			o.Session, o.State, o.Reason = name, v1alpha1.OccurrenceDispatched, ""
+			return true, p.e.write(ctx, w)
+		case err != nil && !apierrors.IsNotFound(err):
+			lg.Error(err, "read the parked occurrence's session", "session", name)
+			return false, nil
+		}
+	}
 	switch {
 	case w.Spec.Cancelled:
 		o.State, o.Reason = v1alpha1.OccurrenceCancelled, ReasonCancelledWhileParked
@@ -806,7 +840,8 @@ func (e *Executor) write(ctx context.Context, w *v1alpha1.ScheduledWork) error {
 }
 
 // park parks an occurrence with a reason; a human approve, retry or cancel,
-// or the end of its decision window, decides it.
+// or the end of its decision window, decides it. counts.parked counts each
+// time an occurrence parks: an expired park is then counted Skipped too.
 func park(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, reason string) {
 	o.State, o.Reason = v1alpha1.OccurrenceParked, clip(reason, 256)
 	w.Status.Counts.Parked++
@@ -865,13 +900,18 @@ func record(w *v1alpha1.ScheduledWork, o v1alpha1.ScheduledWorkOccurrence) {
 }
 
 // plan computes NextDue after an edit of the schedule or notAfter, or for an
-// item never planned. A new item plans from its creation less the grace, so
-// the occurrences missed while the executor was down are found; an edit
-// re-plans from now.
-func plan(w *v1alpha1.ScheduledWork, sch *reminders.Schedule, now time.Time, grace time.Duration) {
+// item never planned. A new item plans from the minute it was created, so the
+// occurrences missed while the executor was down are found and none from
+// before the item existed is run. An edit re-plans from now; an occurrence
+// that was due and not yet decided is recorded Skipped first, so every
+// occurrence keeps a record.
+func plan(w *v1alpha1.ScheduledWork, sch *reminders.Schedule, now time.Time) {
 	notBefore := now
 	if w.Status.PlanHash == "" {
-		notBefore = w.CreationTimestamp.Add(-grace)
+		notBefore = w.CreationTimestamp.Truncate(time.Minute)
+	} else if d := w.Status.NextDue; d != nil && !d.After(now) && scheduledwork.Find(w, d.Time) == nil {
+		record(w, v1alpha1.ScheduledWorkOccurrence{At: *d.DeepCopy(), State: v1alpha1.OccurrenceSkipped, Reason: ReasonReplanned})
+		w.Status.Counts.Skipped++
 	}
 	w.Status.PlanHash = planHash(w.Spec)
 	next, ok := firstFrom(w, sch, notBefore)
