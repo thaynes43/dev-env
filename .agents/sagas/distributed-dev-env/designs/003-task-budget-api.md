@@ -58,6 +58,17 @@ In the API pilot (45 minutes overall, a checkpoint of at most 10 minutes and no
 production progress validator), `Checkpoint` or `OverallBudget` still fires
 before 60 minutes, so this change does not alter what stops a pilot campaign.
 
+A latch is first-wins, and evaluation stops at it. A policy-threshold latch
+(`Checkpoint`, `RepeatedFailure`, or `Stalled` from an older operator) must
+not hide an authorized budget cap reached later. When the overall deadline
+passes or the effort budget is spent while one of those is latched, the
+latch reason becomes `OverallBudget` or `EffortBudget`. The latch stays. The
+pending escalation keeps the reason it was raised for, and counters,
+deadline, epoch and workers are unchanged. `NativeAuthorityUnavailable` and
+`NativeRootStopped` keep their reasons: a safety hold and a proven stop are
+not relabelled, and `Continue` re-evaluates every limit before it advances
+an epoch.
+
 A ledger that an operator from before this change already latched `Stalled`
 stays latched. Nothing is unlatched automatically. During a rolling upgrade
 an older replica can still latch `Stalled`; that latch also stays (fail

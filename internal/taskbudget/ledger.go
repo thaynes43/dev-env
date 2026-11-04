@@ -250,15 +250,42 @@ func (l *Ledger) latch(now time.Time, reason string) {
 		Epoch: l.Binding.Epoch, Reason: reason, At: now, Delivery: "Pending"}
 }
 
-func (l *Ledger) evaluate(now time.Time) {
-	if l.Latched {
-		return
-	}
+// hardCap names the authorized budget limit reached at now: the overall
+// deadline or the effort budget. Empty when neither is reached.
+func (l *Ledger) hardCap(now time.Time) string {
 	switch {
 	case !now.Before(l.Binding.Deadline):
-		l.latch(now, "OverallBudget")
+		return "OverallBudget"
 	case l.EffortMilliseconds >= l.EffortCeilingMilliseconds:
-		l.latch(now, "EffortBudget")
+		return "EffortBudget"
+	}
+	return ""
+}
+
+// policyLatch reports a latch reason that records a policy threshold rather
+// than an exhausted budget, a safety hold or a proven stop. Stalled comes
+// only from an operator before saga decision 94.
+func policyLatch(reason string) bool {
+	return reason == "Stalled" || reason == "Checkpoint" || reason == "RepeatedFailure"
+}
+
+func (l *Ledger) evaluate(now time.Time) {
+	if l.Latched {
+		// A policy-threshold latch never masks a budget cap reached later: the
+		// stop is then recorded as the exhausted budget. The latch stays, and
+		// the escalation, counters, deadline, epoch and workers are unchanged.
+		// Safety holds and proven stops keep their reasons; Continue still
+		// re-evaluates every limit.
+		if policyLatch(l.Reason) {
+			if r := l.hardCap(now); r != "" {
+				l.Reason = r
+			}
+		}
+		return
+	}
+	switch r := l.hardCap(now); {
+	case r != "":
+		l.latch(now, r)
 	case !now.Before(l.NextCheckpoint):
 		l.latch(now, "Checkpoint")
 	case l.historyEvents() >= MaxEvents || len(l.Workers) >= MaxWorkers:
