@@ -62,7 +62,8 @@ evidence reference:
 4. first work: a commit on the claimed branch, such as the RED test (section 2);
 5. reviewed artifact: the deliverable at an exact head, read by QA (section 5);
 6. PR on that head;
-7. required CI on that head;
+7. required CI on that head: the repository's required checks, or "no required
+   checks configured" recorded as not met, never an advisory review in its place;
 8. delivery or native return (section 7).
 
 A rung proves only itself. Exit 0, `Running` or a final message is not a
@@ -77,7 +78,7 @@ Keep each command's own exit status in the evidence. A test run piped into
 log and read `$?` straight after the command:
 
 ```bash
-go test ./internal/agentrun/ > "$log" 2>&1; rc=$?
+GOMAXPROCS=2 nice -n 19 go test -p 2 ./internal/agentrun/ > "$log" 2>&1; rc=$?
 echo "go test exit=$rc log=$log"
 ```
 

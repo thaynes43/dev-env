@@ -90,9 +90,11 @@ may not reach. So:
 - **Provenance.** Keep, from that same `show -o json` read: `uid`, `parent`,
   `agent`, `model` and `effort` (requested launch settings), `repo`, `base`,
   `revision` and `createdAt`; and later the child's branch and head
-  (`agentStatus.branch`, `agentStatus.head`). The served model is the `Actual
-  model` row, Unknown until the provider reports it. Never copy the requested
-  model into the served model.
+  (`agentStatus.branch`, `agentStatus.head`). Keep three model facts apart:
+  requested (the Session's `model`), configured (a template, default or UI
+  setting) and served (the `Actual model` row, Unknown until the provider
+  reports it). Never copy a requested or configured model into the served
+  model; a synthetic fixture cannot attest one either.
 - **A child on the other provider.** Start it as a managed project task:
   `agent-run --project P --agent codex --model <full id> --prompt-file F ...`.
   The [workflow guide](../../../docs/workflow-guide.md#launch-a-project-bound-child-on-another-provider)
@@ -138,8 +140,15 @@ evidence reference.
 | 4. First work | A commit on the claimed branch, or the first piece of the deliverable | `git ls-remote`, the child's branch and head in `show`, the artifact |
 | 5. Reviewed artifact | The deliverable exists at a stated head and you read it. For a review, that is its `review.md` | read the file at that head |
 | 6. PR | The PR is open on the claimed branch with the exact head | `gh pr view N --json headRefOid,state` |
-| 7. Required CI | `CI - Success` passed on that exact head | `gh pr view N --json statusCheckRollup` |
+| 7. Required CI | The repository's required checks passed on that exact head (in dev-env: `CI - Success`) | `gh pr view N --json statusCheckRollup`; the branch rules (`gh api repos/OWNER/REPO/rules/branches/main`) |
 | 8. Delivery or native return | The authorized merge at that head, or, for work that is not merged here, the result returned: a native subagent's final result, or a headless child's task exit, verdict and retained outcome | `gh pr view N --json mergedAt,mergeCommit`; the subagent's notification; `agent-run show NAME` |
+
+A repository with **no required checks** cannot reach rung 7. Record "no
+required checks configured" with the evidence (the empty branch rules and the
+check rollup), not a pass, and say in the report that rung 7 was not met. An
+advisory review is never rung 7, and its green does not replace a check. Your
+own verification of the deliverable (rung 5) still stands; state the gap
+beside it.
 
 Exit 0, `Running` or a final message is not a successful review. Only the
 accepted deliverable is (rung 5 and above). The
@@ -185,7 +194,9 @@ or background until-loop that has a deadline (timer-checkin, section 1), and
   successor can continue from it.
 - **Final outcome.** When the child ends, read `agent-run show` (task exit,
   verdict, retained outcome), the log while its pod still runs, and the PR.
-  Then check the deliverable itself (rung 5).
+  Copy them into the custody record at once: once a reap releases the Session,
+  `show` answers 404 and the outcome is gone with it. Then check the
+  deliverable itself (rung 5).
 
 ## 5. Steer live
 

@@ -36,25 +36,32 @@ deadline is unbounded even when it greps for a phase: a task's phase stays
 Running after its task ends, and there is no Succeeded phase, so such a loop
 can wait forever.
 
-A bounded wait for one headless child. It ends when the child ends, when reads
-keep failing, or at the deadline, and prints one line for each of those and for
-each failed read, so a `Monitor` filter on `END|READ-FAIL` sees failures too:
+A bounded wait for one headless child. It ends when the child ends or stops,
+when reads keep failing or are refused, at the deadline, or at once when its
+own inputs are bad. It prints one `END` line for each way it ends and one
+`READ-FAIL` line for each failed read, so a `Monitor` filter on
+`END|READ-FAIL` sees failures too:
 
 ```bash
 # The deadline is absolute, from the custody record, so a re-armed wait keeps it.
-child=CHILD-NAME; dir=$HOME/work/OP000; deadline=$(date -u -d 2026-11-04T15:00:00Z +%s); fails=0
+child=CHILD-NAME; dir=$HOME/work/OP000; fails=0
+deadline=$(date -u -d 2026-11-04T15:00:00Z +%s 2>/dev/null)
+case "$deadline" in '' | *[!0-9]*) echo "END bad deadline"; exit 2 ;; esac
+mkdir -p "$dir" || { echo "END bad dir $dir"; exit 2; }
 while :; do
   if agent-run show "$child" -o json > "$dir/child.json.tmp"; then
     fails=0; mv "$dir/child.json.tmp" "$dir/child.json"
     st=$(jq -r '.agentStatus.state // "none"' "$dir/child.json")
     ph=$(jq -r '.phase // "none"' "$dir/child.json")
-    case "$st/$ph" in
-      exited/* | failed/* | interrupted/* | */Failed | */Suspended | */Archived)
-        echo "END child state=$st phase=$ph"; exit 0 ;;
+    case "$st" in
+      exited | failed | interrupted) echo "END child ended state=$st phase=$ph"; exit 0 ;;
+    esac
+    case "$ph" in
+      Failed | Suspended | Archived) echo "END child stopped state=$st phase=$ph"; exit 0 ;;
     esac
   else
     rc=$?; fails=$((fails + 1)); echo "READ-FAIL exit=$rc count=$fails"
-    case "$rc" in 3 | 4) echo "END read refused exit=$rc"; exit 3 ;; esac
+    case "$rc" in 2 | 3 | 4) echo "END read refused exit=$rc"; exit 3 ;; esac
     [ "$fails" -ge 5 ] && { echo "END reads failing exit=$rc"; exit 3; }
   fi
   [ "$(date +%s)" -ge "$deadline" ] && { echo "END deadline state=${st:-unknown}"; exit 4; }
@@ -65,12 +72,33 @@ done
 Save it as a script and run it with `bash` through Bash `run_in_background`,
 which reports once when it exits, or under a `Monitor` for at most 30 minutes,
 then re-arm it with the same deadline. Never run it in the foreground
-(section 4). Take the deadline from the work order. The script's
-exit is its own: 0 means the child ended, not that it succeeded. Read the
-child's task exit, verdict and outcome from `child.json` next, then the
-deliverable (supervised-dispatch, section 4). The states and phases it stops
-on are in `internal/agentd/protocol/status.go` and
-`api/v1alpha1/agentsession_types.go`.
+(section 4). Take the deadline from the work order. What its exits mean:
+
+- **0** the child ended or stopped. `END child ended` means agentd reported the
+  task's end (`exited`), or that it could not start (`failed`), or that its
+  process is gone without a result (`interrupted`). `END child stopped` means
+  the pod stopped or failed, or the Session was suspended or archived, while
+  the task had not reported an end: not that the task finished. Neither means
+  the task succeeded.
+- **2** its own inputs are bad: a deadline that does not parse, or a directory
+  it cannot make. It never called agent-run. Fix the input; never run it
+  without a deadline.
+- **3** reads were refused or kept failing. agent-run exit 2 (a usage error,
+  such as a bad name), 3 (auth or 403) and 4 (not found) do not get better on
+  retry, so they end it at once. Other exits are counted, five in a row.
+- **4** the deadline passed. That ends the wait, not the work: run a check-in.
+
+Then read the child's task exit, verdict and outcome from `child.json`, then
+the deliverable (supervised-dispatch, section 4). The states and phases it
+stops on are in `internal/agentd/protocol/status.go:26-42` and
+`api/v1alpha1/agentsession_types.go:90`.
+
+**Demonstrated and source only.** This script was run against a stub
+`agent-run` that answers from a file, never against the API. Its re-arm, and
+recovery of the wait after a coordinator restart or resume, are not
+demonstrated. A Session that a reap releases answers 404, which ends the wait
+with exit 3: keep the child's outcome, PR and head in the custody record
+before that ([where the retained outcome lives](../../../docs/workflow-guide.md#where-the-retained-outcome-lives)).
 
 **The tool reality, in Claude Code 2.1.312 as installed here (2026-11-04).** The
 coordinator's own session has `CronCreate` and `ScheduleWakeup`. A native

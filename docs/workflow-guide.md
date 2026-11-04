@@ -412,10 +412,14 @@ is its own Session in its own pod, with its own record, project rules, timeout
 and retained result.
 
 ```bash
+# The flags used in the OP402 launch on 2026-11-04:
 agent-run --project haynes-studio --agent codex \
   --model gpt-6-astra --effort max \
-  --prompt-file work-order.md --timeout 2h \
-  --idempotency-key op401-codex-review-1 --wait 3m
+  --prompt-file work-order.md --wait 3m
+
+# Optional extras, valid in source but not exercised in that launch:
+#   --timeout 2h                       stop the task after this long
+#   --idempotency-key op000-review-1   a repeat finds the first Session
 ```
 
 | Flag | What it does | Source |
@@ -430,9 +434,23 @@ agent-run --project haynes-studio --agent codex \
 
 Record the printed name. Then read `agent-run show NAME -o json` once and keep
 `uid`, `parent`, `agent`, `model`, `effort`, `repo`, `base`, `revision` and
-`createdAt` in the status record. `model` is the requested model, a launch
-setting. The `Actual model` row of `show` stays Unknown until the provider
-reports a served model (`internal/agentrun/sessions.go:299`).
+`createdAt` in the status record.
+
+Keep three model facts apart:
+
+- **Requested:** `model` and `effort` on the Session, what the create asked
+  for. For Claude an omitted `--model` takes `$DEV_ENV_CLAUDE_MODEL`, then the
+  built-in default (`internal/agentrun/create.go:185-200`).
+- **Configured:** what a template, a default or a client UI says the provider
+  should use. It is not evidence of what served the task.
+- **Served:** what the provider itself reported, kept in the Session's usage
+  observation. `show` prints it as `Actual model ... (provider reported)` and
+  otherwise `Unknown` (`internal/agentrun/sessions.go:299,365-373`). For Codex,
+  agentd takes it from the turn's own event (`internal/agentd/codex_stream.go:130`).
+
+Never copy a requested or configured model into the served model. A synthetic
+test fixture cannot attest a real served model either: the OP402 tests use
+fixtures with no served model, and `show` prints `Unknown` for them.
 
 #### Refusals and what to do
 
@@ -447,7 +465,7 @@ switch to another route.
 | What agent-run prints | Exit | What it means | What to do |
 | --- | --- | --- | --- |
 | `the API refused the request (422 invalid):` then `--agent: managed codex tasks require the enabled feature and an accepted project snapshot` | 1 | The Codex task has no accepted project snapshot: `--project` is missing, the mode is not task, or the operator's managed-Codex feature is off (`validate.go:149-150`). A request with `--repo` and no `--project` gets this. | Add `--project` only when the work record names an authorized project. If the project is right and this still appears, the feature is off: record it and stop this launch. Never try to turn a feature on, change the profile or use another host. |
-| `the API refused the request (422 invalid):` then `project: accepted project/repository is unavailable or invalid`, or `project: accepted project catalog is not configured` | 1 | The operator's catalog does not have that project, or does not have that repository in it, or no catalog is configured (`validate.go:105-114`). | Stop this launch. The fix is the reviewed catalog path: a haynes-ops pull request that changes only `kubernetes/main/apps/dev-env-system/projects/app/catalog.json`, which kustomize turns into the `dev-env-project-catalog` ConfigMap the operator reads ([shared project catalog](shared-project-catalog.md)). haynes-ops #4645 added `haynes-studio` that way. Open it only inside the story's authorized scope. Once it is merged and Flux has applied it, the launch is a new attempt with the cause fixed. `--repo`, a local clone or a reachable repository is not a substitute. |
+| `the API refused the request (422 invalid):` then `project: accepted project/repository is unavailable or invalid`, or `project: accepted project catalog is not configured` | 1 | The operator's catalog does not have that project, or does not have that repository in it, or no catalog is configured (`validate.go:105-114`). The same message covers a catalog the operator cannot read or parse, a repository outside the clone owner, and a snapshot over its size bound (`internal/apiserver/catalog.go:30-55`). | Stop this launch. The fix is the reviewed catalog path: a haynes-ops pull request that changes only `kubernetes/main/apps/dev-env-system/projects/app/catalog.json`, which kustomize turns into the `dev-env-project-catalog` ConfigMap the operator reads ([shared project catalog](shared-project-catalog.md)). haynes-ops #4645 added `haynes-studio` that way. Open it only inside the story's authorized scope. Once it is merged and Flux has applied it, the launch is a new attempt with the cause fixed. `--repo`, a local clone or a reachable repository is not a substitute. |
 | `not allowed (403 forbidden): dry-run requires a configured exact sealed pilot request` | 3 | `--dry-run=server` posts to `/v1/private-pilot/preflight` (`create.go:281-305`, `internal/apiserver/apiv1/types.go:21`). The server answers there only for the one configured sealed private pilot. Without that configuration it refuses every request with 403 (`internal/apiserver/sessions.go:66-67`). Exit 3 means retrying the same call will not help. | Keep the refusal as evidence and do not retry it. It says nothing about whether your create would be admitted. |
 
 **`--dry-run=server` is not a general preflight.** It is for the exact sealed
@@ -471,29 +489,43 @@ managed session and never stands in for one:
 
 In the OP402 incident, an in-pod `codex exec --sandbox workspace-write` hit a
 bwrap namespace failure. It reported exit 0 and wrote no files; its final
-response said it was blocked. Use the managed route above. If that route is
-refused, the refusal is the answer: handle it as the table says. The global
-rules say the same: do not start a cross-provider session as a fallback, and
-start a separate session with `agent-run` (haynes-ops
+response said it was blocked. When a child on the other provider is
+authorized, use the managed route above. If that route is refused, the refusal
+is the answer: handle it as the table says.
+
+This page does not make a cross-provider child a requirement. The global rules
+(haynes-ops
 `kubernetes/main/apps/dev-env-system/session-config/app/config/claude/CLAUDE.md`,
-"Subagent dispatch rules"). Managed Codex execution is not a fallback route
-either ([launch-profile preflight](launch-profile-preflight.md#managed-codex-task-admission)).
+"Subagent dispatch rules", lines 559-561) say: "Stay within the driving
+provider: Claude Code delegates to Claude Code, and Codex to Codex. Do not start
+a cross-provider session as a quota or complexity fallback. Start a separate
+session with `agent-run` only when the task calls for one, or Tom asks." A
+separate `agent-run` session is a permission for those cases. An in-pod run of
+the other provider is never one of them. Managed Codex execution is not a
+fallback route either
+([launch-profile preflight](launch-profile-preflight.md#managed-codex-task-admission)).
 
 #### Read how the child ended
 
 Four facts can each look like "done". Keep them apart:
 
 1. **The provider process or turn completed.** agentd records the provider's
-   real exit code, or 128 plus the signal when a signal ended it
-   (`internal/agentd/runagent.go:507-555`). The heartbeat carries it into the
-   Session's status (`internal/apiserver/heartbeat.go:187`), which keeps it
-   after the pod is gone. `agent-run show` prints it as `task: exit N at ...`
-   and the verdict as `task result:` (`internal/agentrun/sessions.go:192-194,227-235`,
+   exit code, or 128 plus the signal when a signal ended it
+   (`internal/agentd/runagent.go:507-555`). For Codex it does not keep a 0 that
+   hides a failure: a failed turn, or a protocol it refuses, that exits 0 is
+   recorded as exit 1 with an error (`runagent.go:316-337`). The heartbeat
+   carries the result into the Session's status
+   (`internal/apiserver/heartbeat.go:187`). `agent-run show` prints it as
+   `task: exit N at ...` and the verdict as `task result:`
+   (`internal/agentrun/sessions.go:192-194,227-235`,
    `internal/apiserver/apiv1/types.go:385-428`). In JSON it is
    `agentStatus.task.exitCode`. This proves the process ended, and how.
-2. **A tool command failed inside the turn.** A provider can end its turn with
-   exit 0 after one of its own commands failed. Exit 0 then means only that the
-   provider ended normally.
+2. **A tool command failed inside the turn.** A provider can end its turn
+   normally after one of its own commands failed. The verdict then reads
+   `Succeeded`: for Codex, agentd records a completed turn as `success`
+   whatever its commands did, and prints a command's output without tracking
+   its status (`internal/agentd/codex_stream.go:104-130`). `Succeeded` means
+   the turn completed, not that its commands or the deliverable did.
 3. **A wrapper masked the exit.** `cmd | tail` returns `tail`'s status, and a
    trailing `echo` returns 0. Then even the process exit is lost. Use the
    pattern below.
@@ -511,10 +543,13 @@ keeps running after its task ends, until the idle suspend. Watch
 `agentStatus.state`: `exited` means the task finished and `agentStatus.task`
 says how; `failed` means agentd could not start it; `interrupted` means its
 process is gone without a result (`internal/agentd/protocol/status.go:26-42`).
-`show` reports the child's exit as data and itself exits 0
-(`TestShowReportsAFailedTaskChildsRealExitAndRetainedOutcome` in
-`internal/agentrun/task_exit_test.go`). agent-run does not turn a child's exit
-into its own exit code: read it.
+`show` reports the child's exit as data and itself exits 0. agent-run does not
+turn a child's exit into its own exit code: read it. The test that pins this,
+`TestShowReportsAFailedTaskChildsRealExitAndRetainedOutcome`
+(`internal/agentrun/task_exit_test.go`), runs against a fake API. It covers
+`show`'s formatting, the outcome opt-in header and exit handling. It is not
+evidence of persistence, of retrieval after a reap, or of recovery after a
+restart; for those see [where the retained outcome lives](#where-the-retained-outcome-lives).
 
 Keep each command's own exit status:
 
@@ -534,6 +569,68 @@ fi
 set -o pipefail
 agent-run log "$CHILD" --tail 40 | tail -n 20; rc=$?
 ```
+
+#### Where the retained outcome lives
+
+*OpenProject #402, round 2. Source refs at this branch; the tests named below
+ran against a real kube-apiserver (envtest) with synthetic fixtures.*
+
+**Write path.** At the initial task's exit, agentd reads and validates
+`~/work/<session>.outcome.json` (`internal/agentd/task_outcome.go:14`,
+`internal/agentd/runagent.go:544`) and offers it in every later heartbeat
+(`internal/agentd/status.go:74`). The API's heartbeat route writes it last and
+best-effort (`internal/apiserver/heartbeat.go:137`) through
+`recordTaskOutcome` (`internal/apiserver/task_outcome.go:18-57`). That writes
+only when no outcome is stored yet, only for a task Session, and only when the
+outcome, the bound task exit and the initial usage observation all name this
+Session and the pod that sent it. It uses an optimistic lock, and a schema
+refusal means no record. The record is `status.taskOutcome` on the
+AgentSession. The CRD refuses to change it (`api/v1alpha1/task_outcome_types.go:4`)
+or erase it (`api/v1alpha1/agentsession_types.go:1853`).
+
+**Read path.** `GET /v1/sessions/NAME` (`internal/apiserver/sessions.go:420-437`)
+builds the view (`internal/apiserver/view.go:108`,
+`internal/apiserver/task_outcome.go:59-69`) and strips the outcome unless the
+reader sends `X-Dev-Env-Task-Outcome: v1` (`internal/apiserver/server.go:468-470`).
+agent-run sends it on every request (`internal/agentrun/client.go:219`).
+
+**What the envtest proves** (`TestEnvtestTaskOutcomeRetention` in
+`internal/apiserver/task_outcome_envtest_test.go`; the suite plays the
+operator's pod, phase and finalizer steps by hand, as envtest has no
+reconciler or kubelet):
+
+- an outcome sent by the original pod's real heartbeat is in the store, and a
+  second API server, with a new manager, cache and listener over the same
+  store, still serves it; the real agent-run `show` prints it;
+- it is still served after the pod is deleted and with the phase Suspended,
+  then Archived, and during a reap while the finalizer holds;
+- no outcome file means no outcome and no outcome row; a summary-only outcome
+  shows only the summary; a failed exit with an outcome that claims readiness
+  reads `Failed (TaskExitedNonZero)` beside it;
+- a later heartbeat with a different record, and a direct status write that
+  replaces or erases the record, do not change it;
+- once the reaped Session is released, `GET` answers 404 and `show` exits 4.
+
+Not proved there: a real operator restart, the real reconciler's reap and
+release, a real pod's agentd, the timing of any of them, or any served model.
+
+**After a reap, the outcome can be gone.** The Session object is its only
+durable copy. When a reaped Session has no pod and no volume left, the
+controller lifts its finalizer (`internal/controller/reconciler.go:1150-1197`)
+and the object, with its outcome, is deleted. Then `show` answers 404, exit 4.
+A Session under private-history protection stays until its HOME expiry allows
+release (`internal/controller/private_history.go:34-45`). Copy the outcome, PR
+and head into your custody record before a reap.
+
+**Gap and proposal.** No supported route serves a released Session's outcome.
+The skipped `TestEnvtestTaskOutcomeAfterReleaseGap` records it; unskipped, it
+fails with 404. A bounded fix, not built here: when the operator records
+`status.taskOutcome`, also copy the same validated record (at most 2048 bytes,
+set once) into the Session's existing SessionDirectory record, which already
+keeps original metadata without a source owner or expiry
+(`api/coordination/v1alpha1/sessiondirectory_types.go:5,145`), and show it on
+the authorized directory read. That needs its own design, CRD change and
+review.
 
 ## 4. The everyday workflow
 
@@ -837,9 +934,10 @@ merged:
 - **The global rules**, `~/.claude/CLAUDE.md`, come from haynes-ops GitOps
   (`kubernetes/main/apps/dev-env-system/session-config/app/config/claude/CLAUDE.md`).
   At haynes-ops `83df979c` that file is byte-identical to the checked pod's
-  copy. Its lines 534-551 make a Remote Control session a coordinator, and lines
-  559-561 forbid a cross-provider session as a fallback and send a separate
-  session through `agent-run`. Its launcher table (lines 321-328) has no
+  copy. Its lines 534-551 make a Remote Control session a coordinator. Lines
+  559-561 keep delegation within the driving provider, forbid a cross-provider
+  session as a quota or complexity fallback, and allow a separate `agent-run`
+  session only when the task calls for one or Tom asks. Its launcher table (lines 321-328) has no
   `--project` and still lists `--agent codex` under "plan 04". Its Traps section
   (lines 594-597) says how to run `codex exec` from a tool shell without a hang,
   and does not say that this never stands in for a managed session. The
