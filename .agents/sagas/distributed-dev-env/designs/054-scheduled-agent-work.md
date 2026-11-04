@@ -755,9 +755,18 @@ receiver session would route agent-written text into sessions the owner does not
   `scheduledworks`, so it cannot keep sync state there. With `calendar:` set, the
   executor keeps one companion `Reminder` per ScheduledWork, with a calendar-only
   target and the same schedule. It updates the Reminder when the item is edited and
-  cancels it when the item is cancelled. Its `until` is capped at `notAfter`. A
-  count-based series is first converted to the `until` of its last occurrence,
-  because DESIGN-032 refuses `count` and `until` together. Today a
+  cancels it when the item is cancelled. A projection Reminder always has an
+  `until`, set to the item's `notAfter`, one-shot items included. A `notAfter`
+  before the first occurrence is refused. The Reminder stays pending until that
+  `until` or a cancel. That is its retention end. The calendar event's
+  own series still ends at the last occurrence. A count-based series is first
+  converted to the end of its last occurrence, because DESIGN-032 refuses `count`
+  and `until` together. That conversion sets the event's series end, not the
+  Reminder's retention. So an edit or cancel between the last occurrence and
+  `notAfter` still reaches the event. When `until` passes, the scheduler deletes
+  the event and finishes the Reminder itself. The `projection` marker cannot change
+  after creation. (Rulings for G1, PR 917, 2026-11-04, from its independent review
+  F1 to F5.) Today a
   Reminder with no Pushover target finishes at its last occurrence, and a finished
   Reminder can be neither edited nor cancelled, nor does its calendar entry sync. So
   S4 amends DESIGN-032 with a **projection** Reminder: calendar targets only, it stays
