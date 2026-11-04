@@ -757,22 +757,22 @@ receiver session would route agent-written text into sessions the owner does not
   target and the same schedule. It updates the Reminder when the item is edited and
   cancels it when the item is cancelled. **Ruling 2026-11-04 for G1 (PR 917), not yet
   implemented:**
-  - R1: a projection Reminder carries a separate retention end, `projection.retainUntil`,
+  - G1-R1: a projection Reminder carries a separate retention end, `spec.projectionRetainUntil`,
     always set to the item's `notAfter`, one-shot items included. A `notAfter` before the
     first occurrence is refused. `recurrence.until` (when there is a recurrence) stays the
     calendar event's own series end, the end of the last occurrence; a count-based series is
     converted to it, because DESIGN-032 refuses `count` and `until` together.
-  - R2: the Reminder stays pending until `projection.retainUntil` or a cancel, so an edit or
+  - G1-R2: the Reminder stays pending until `projectionRetainUntil` or a cancel, so an edit or
     cancel between the last occurrence and `notAfter` still reaches the event.
-  - R3: when `retainUntil` passes, the scheduler deletes the event and finishes the Reminder
+  - G1-R3: when `projectionRetainUntil` passes, the scheduler deletes the event and finishes the Reminder
     itself. This intentionally removes past runs from the calendar at the end of the item's
     window.
-  - R4: the `projection` marker cannot change after creation.
+  - G1-R4: `spec.projection` (the boolean that marks a projection Reminder) cannot change after creation. The retention end is a separate field, `spec.projectionRetainUntil`; `projection` stays a boolean.
   Today a
   Reminder with no Pushover target finishes at its last occurrence, and a finished
   Reminder can be neither edited nor cancelled, nor does its calendar entry sync. So
   S4 amends DESIGN-032 with a **projection** Reminder: calendar targets only, it stays
-  pending until it is cancelled or its `until` passes, and the scheduler keeps
+  pending until it is cancelled or its `spec.projectionRetainUntil` passes (G1-R2), and the scheduler keeps
   syncing and deleting its event. DESIGN-032's scheduler then owns the event:
   one event per series, with an RRULE, keyed by the Reminder's namespace and name.
   The event ID, spec hash, failure backoff and delete-on-cancel stay in the
