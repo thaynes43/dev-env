@@ -642,12 +642,14 @@ threshold, or a required safety or permission decision, each with specific
 evidence. The agent-loop skills in [`.agents/skills/`](../.agents/skills/) apply
 this rule.
 
-*Adopted 2026-11-04 as decision 94, on Tom's words relayed by the parent
-coordinator as trusted conversation evidence: "...work in a loop where it doesn't
-stop until the requirements are met via some test feedback... not fire and forget
-sets of instructions that do not have goals the agents have to demonstrate to
-stop working" and "Power through harden the mvp test and fix on a loop". It
-supersedes the stop clause of decision 55 (Q-23, 2026-10-09), which stopped
+*Adopted 2026-11-04 and recorded as decision 94, on Tom's words relayed by
+session dev-env-1027-010058 (parent coordinator) as trusted conversation
+evidence, original timestamp not available; coordinator dev-env-1104-010332
+applied them to the decision 55 stop clause, which they do not name: "...work
+in a loop where it doesn't stop until the requirements are met via some test
+feedback... not fire and forget sets of instructions that do not have goals the
+agents have to demonstrate to stop working" and "Power through harden the mvp
+test and fix on a loop". It supersedes the stop clause of decision 55 (Q-23, 2026-10-09), which stopped
 further attempts at a threshold and asked one owner question. Decision 55's
 ledger, budget history, carried counters and child accounting stay. Decision 55,
 its [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)

@@ -1,7 +1,11 @@
 # ADR-019: Stalled-work thresholds trigger diagnosis and steering, not stopping
 
-- **Status:** Accepted 2026-11-04 (Tom, relayed by the parent coordinator as
-  trusted conversation evidence). Saga decision 94.
+- **Status:** Recorded 2026-11-04, saga decision 94. Tom's words, relayed by
+  session dev-env-1027-010058 (parent coordinator) as trusted conversation
+  evidence; original message timestamp not available to this session. Tom did
+  not answer the owner question about Q-23 directly. The quotes do not name
+  Q-23: applying them to the stop clause of decision 55 / Q-23 was the
+  acceptance of coordinator dev-env-1104-010332.
 - **Amends:** [ADR-003](003-session-coordination-private-repositories.md), the
   sentence "The accepted 60-minute stall/three-failure policy remains in force",
   in its stop clause only.
@@ -18,7 +22,8 @@
 
 ## Context
 
-Tom, 2026-11-04, in his own words as relayed by the parent coordinator:
+Tom's words on 2026-11-04, as relayed by session dev-env-1027-010058 (the parent
+coordinator); the author of this ADR did not see them at their source:
 
 > "That's a bad excuese, if I start an Opus session and simply give it
 > instructions to work in a loop where it doesn't stop until the requirements are
@@ -47,6 +52,10 @@ specific evidence.
 The time and attempt thresholds trigger diagnosis, steering, a checkpoint and
 continuity. One owner question is asked only when real input or a permission
 decision is missing.
+
+The rest of the budget contract still applies: one outstanding question per task
+and no model polling while waiting (item 5), and limits enforced by the
+platform's deterministic API, controllers and supervisor (item 6).
 
 ## Consequences
 
