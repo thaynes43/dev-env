@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -635,5 +636,43 @@ func TestEnsureVerifiesUnderItsOwnDeadline(t *testing.T) {
 	// About 3 seconds: short, so a dead API server cannot hold the caller.
 	if !readHadDeadline || readDeadline <= 0 || readDeadline > 3*time.Second {
 		t.Errorf("the verifying read had deadline %v (set %v), want one within 3s", readDeadline, readHadDeadline)
+	}
+}
+
+// An invalid call (an unknown event, or an attempt outside
+// 0..ScheduledWorkMaxAttempt) leaves the pages list unchanged: its clamped,
+// skipped entry would otherwise replace a real page of the same event and
+// attempt, and drop that page's Reminder name.
+func TestEnsureIntoKeepsRealPagesFromAnInvalidCall(t *testing.T) {
+	p := &Pager{Client: fakeClient(t, interceptor.Funcs{})}
+	w := item("pushover:default")
+	real := []v1alpha1.ScheduledWorkPage{
+		{Event: v1alpha1.PageEventParked, Attempt: 3, Reminder: "swp-real-parked-3", State: "sent"},
+		{Event: v1alpha1.PageEventSkipped, Attempt: 1, Reminder: "swp-real-skipped-1", State: "sent"},
+	}
+	for _, c := range []struct {
+		name    string
+		event   string
+		attempt int32
+	}{
+		{"attempt past the last", v1alpha1.PageEventParked, v1alpha1.ScheduledWorkMaxAttempt + 2},
+		{"negative attempt", v1alpha1.PageEventParked, -1},
+		{"unknown event", "bogus", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in := slices.Clone(real)
+			got := p.EnsureInto(context.Background(), in, w, occAt, c.event, c.attempt, "t", "b", nowAt)
+			if !slices.Equal(got, real) || !slices.Equal(in, real) {
+				t.Fatalf("pages = %+v, want the real pages unchanged %+v", got, real)
+			}
+		})
+	}
+	if n := len(list(t, p.Client)); n != 0 {
+		t.Fatalf("%d reminders created by invalid calls", n)
+	}
+	// A valid call still records.
+	got := p.EnsureInto(context.Background(), slices.Clone(real), w, occAt, v1alpha1.PageEventDue, 2, "Due", "b", nowAt)
+	if len(got) != 3 || got[2].Reminder != Key(w, occAt, v1alpha1.PageEventDue, 2) {
+		t.Fatalf("a valid call: %+v", got)
 	}
 }
