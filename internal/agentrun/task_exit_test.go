@@ -11,20 +11,25 @@ import (
 )
 
 // A coordinator learns how a headless child ended by reading it: show prints
-// the child's real exit, the task verdict and the child's retained outcome, in
-// every phase, after its pod is gone too (OP402). The read itself exits 0,
-// because the child's failure is data, not a failure of show.
+// the child's exit, the task verdict and the child's retained outcome, in each
+// phase the API reports (OP402). The read itself exits 0, because the child's
+// failure is data, not a failure of show.
 //
 // The fake API serves taskOutcome only to a reader that asks for it, as the
 // operator does (internal/apiserver/server.go, withoutTaskOutcome). So this
 // test also fails if agent-run stops sending that header.
+//
+// This test covers show's formatting, the opt-in header and exit handling. It
+// is not evidence of persistence, of retrieval after a reap, or of recovery
+// after a restart: TestEnvtestTaskOutcomeRetention in internal/apiserver runs
+// those against a real kube-apiserver.
 func TestShowReportsAFailedTaskChildsRealExitAndRetainedOutcome(t *testing.T) {
 	head := strings.Repeat("b", 40)
 	pr := "https://github.com/thaynes43/dev-env/pull/402"
-	for _, phase := range []string{"Running", "Suspended", "Reclaimed", "Archived"} {
+	for _, phase := range []string{"Running", "Suspended", "Archived", "Failed"} {
 		t.Run(phase, func(t *testing.T) {
 			h := newHarness(t)
-			s := testSession("child-1104-151051", phase)
+			s := testSession("child-task-1", phase)
 			s.Agent, s.Model, s.Effort = "codex", "gpt-6-astra", "max"
 			s.AgentStatus = &apiv1.AgentStatus{State: "exited", Task: &apiv1.TaskResult{
 				ExitCode: 3, FinishedAt: testNow.Add(-time.Minute), Subtype: "error_during_execution", IsError: true, NumTurns: 1,
