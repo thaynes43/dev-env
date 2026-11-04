@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -519,4 +520,59 @@ func TestScheduledWorkReleaseNoPageWhenOnlyTheReportIsAdded(t *testing.T) {
 	if !slices.Contains(op.writes.orderLog(), "update status *v1alpha1.ScheduledWork "+f.key.Name) {
 		t.Errorf("the reported outcome write did not happen: %v", op.writes.orderLog())
 	}
+}
+
+// reminderReadsFail fails every Reminder read while fail is set; every other
+// read goes through.
+type reminderReadsFail struct {
+	client.Reader
+	fail *atomic.Bool
+}
+
+func (r reminderReadsFail) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.Reminder); ok && r.fail.Load() {
+		return apierrors.NewServiceUnavailable("injected: the Reminder read failed")
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+// A page whose Reminder already exists but cannot be read back is left
+// pending, not settled skipped; a later pass, while the finalizer still holds
+// the derived name, records the Reminder. No second Reminder is created.
+func TestScheduledWorkReleaseKeepsAnUnconfirmedPagePending(t *testing.T) {
+	var ahead atomic.Int64
+	var readFails atomic.Bool
+	readFails.Store(true)
+	op := startOperator(t, aheadClock(&ahead), func(r *Reconciler) { r.APIReader = reminderReadsFail{Reader: r.APIReader, fail: &readFails} })
+	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDelivered)
+	w := f.item(t)
+	earlier, err := pages.Build(w, f.at, v1alpha1.PageEventResult, 0, "Scheduled work ended: "+w.Spec.Title, f.key.Name+" "+f.name+": an earlier create", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Create(context.Background(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second).Truncate(time.Second)
+	s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
+		suspendedAtCreate(s)
+		s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
+	})
+	f.waitOccurrence(t, v1alpha1.OccurrenceEnded)
+	holdsFinalizer(t, s.Name, time.Second, op.passes.held(s.Name, func(p releasePass) bool { return p.requeue > scheduledwork.ReleaseMargin }))
+	if p := releasePage(f.occurrence(t), v1alpha1.PageEventResult, 0); p == nil || p.Reminder != "" || p.State != "" {
+		t.Fatalf("an unconfirmed page was settled: %+v", f.occurrence(t).Pages)
+	}
+	readFails.Store(false)
+	poke(t, s.Name)
+	eventually(t, "the page recorded once the read works", func() error {
+		if p := releasePage(f.occurrence(t), v1alpha1.PageEventResult, 0); p == nil || p.Reminder != earlier.Name {
+			return fmt.Errorf("pages %+v", f.occurrence(t).Pages)
+		}
+		return nil
+	})
+	ahead.Store(int64(time.Until(deadline) + scheduledwork.ReleaseMargin + 10*time.Second))
+	poke(t, s.Name)
+	waitReleased(t, s.Name)
+	f.wantReleasePage(t, v1alpha1.PageEventResult, 0)
 }

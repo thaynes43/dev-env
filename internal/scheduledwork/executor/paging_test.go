@@ -634,3 +634,61 @@ func TestAPageCallIsBounded(t *testing.T) {
 		f.wantReminders(0)
 	})
 }
+
+// reminderReadFails fails every Reminder read while fail is set; every other
+// read goes through.
+type reminderReadFails struct {
+	client.Reader
+	fail *atomic.Bool
+}
+
+func (r reminderReadFails) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.Reminder); ok && r.fail.Load() {
+		return apierrors.NewServiceUnavailable("injected: the Reminder read failed")
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+// A page whose Reminder already exists (a create whose record was lost) but
+// cannot be read back is left pending, not settled skipped: it is tried once
+// in the pass, and a later pass whose read works records the Reminder. No
+// second Reminder is created.
+func TestAnUnconfirmedPageStaysPending(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.paging(), day0.Add(-time.Minute))
+	w := f.get(key)
+	earlier, err := pages.Build(w, day0, v1alpha1.PageEventDue, 0, "Scheduled work started: "+w.Spec.Title, key.Name+": an earlier create", day0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster(t).Create(context.Background(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	var readFails atomic.Bool
+	readFails.Store(true)
+	var creates atomic.Int32
+	ex := func() *Executor {
+		e := f.executor()
+		writer := interceptor.NewClient(e.Client.(client.WithWatch), interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.Reminder); ok {
+				creates.Add(1)
+			}
+			return c.Create(ctx, obj, opts...)
+		}})
+		e.Pager = NewPager(writer, reminderReadFails{Reader: e.Reader, fail: &readFails})
+		return e
+	}
+	f.at(ex(), day0)
+	o := f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, "")
+	if p := pageOf(o, v1alpha1.PageEventDue, 0); p == nil || !pendingPage(*p) {
+		t.Fatalf("an unconfirmed page was settled: %+v", o.Pages)
+	}
+	if n := creates.Load(); n != 1 {
+		t.Errorf("%d Reminder creates in one pass, want 1", n)
+	}
+	readFails.Store(false)
+	f.at(ex(), day0.Add(time.Minute))
+	f.wantPage(key, day0, v1alpha1.PageEventDue, 0)
+	f.wantReminders(1)
+}
