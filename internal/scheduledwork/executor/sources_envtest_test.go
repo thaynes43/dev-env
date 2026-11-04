@@ -128,8 +128,8 @@ func TestSourcesHumanOwnerDispatches(t *testing.T) {
 }
 
 // A human approval of the exact spec dispatches a client-owned item only
-// while its recorded template digest is the template's: with none recorded
-// (until S5 adds the field) it is void.
+// while its recorded template digest (here set through the test hook) is the
+// template's: with none recorded it is void.
 func TestSourcesApprovedItem(t *testing.T) {
 	for _, c := range []struct {
 		name     string
