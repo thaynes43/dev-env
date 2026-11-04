@@ -604,8 +604,10 @@ reconciler or kubelet):
   store, still serves it; the real agent-run `show` prints it;
 - it is still served after the pod is deleted and with the phase Suspended,
   then Archived, and during a reap while the finalizer holds;
-- no outcome file means no outcome and no outcome row; a summary-only outcome
-  shows only the summary; a failed exit with an outcome that claims readiness
+- a heartbeat that carries no outcome leaves no outcome and no outcome row (a
+  missing or invalid outcome file is agentd's case: it then offers none,
+  `internal/agentd/task_outcome.go:14`; the envtest only sends the heartbeat
+  without one); a summary-only outcome shows only the summary; a failed exit with an outcome that claims readiness
   reads `Failed (TaskExitedNonZero)` beside it;
 - a later heartbeat with a different record, and a direct status write that
   replaces or erases the record, do not change it;
@@ -633,18 +635,24 @@ durable copy. When a reaped Session has no pod and no volume left, the
 controller lifts its finalizer (`internal/controller/reconciler.go:1150-1197`)
 and the object, with its outcome, is deleted. Then `show` answers 404, exit 4.
 A Session under private-history protection stays until its HOME expiry allows
-release (`internal/controller/private_history.go:34-45`). Copy the outcome, PR
-and head into your custody record before a reap.
+release (`internal/controller/private_history.go:34-45`,
+`internal/controller/reconciler.go:1150-1157`). Copy the outcome, PR and head
+into your custody record before a reap.
+
+**Live mitigation.** The live operator runs with
+`--enable-private-history-retention=true` (read from the `dev-env-operator`
+Deployment on 2026-11-04 at 17:00Z). With it, a task Session without a
+workspace is protected, so a reap does not release it, or delete its outcome,
+until its HOME expiry allows it. The one exception is the never-started reap
+(DESIGN-025 section 23), which has no outcome to lose.
 
 **Gap and proposal.** No supported route serves a released Session's outcome.
 The skipped `TestEnvtestTaskOutcomeAfterReleaseGap` records it; unskipped, it
-fails with 404. A bounded fix, not built here: when the operator records
-`status.taskOutcome`, also copy the same validated record (at most 2048 bytes,
-set once) into the Session's existing SessionDirectory record, which already
-keeps original metadata without a source owner or expiry
-(`api/coordination/v1alpha1/sessiondirectory_types.go:5,145`), and show it on
-the authorized directory read. That needs its own design, CRD change and
-review.
+fails with 404. Keeping an outcome beyond its Session would need a new retained
+record or store with its own design, schema, retention and review; no existing
+record holds it. This is a proposal only: an unsupported contract, recorded as
+an OP402 follow-up, that blocks acceptance only if acceptance requires
+retrieval after release.
 
 ## 4. The everyday workflow
 

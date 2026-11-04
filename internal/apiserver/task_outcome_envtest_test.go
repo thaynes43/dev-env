@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -276,7 +277,14 @@ func TestEnvtestTaskOutcomeRetention(t *testing.T) {
 				}
 			}
 		}
-		contains("task result:", "Succeeded (TaskSucceeded)", "Task outcome:", outcomeSummary, outcomePR, outcomeHead, "Actual model:", "Unknown", "Requested model:", task().Model)
+		contains("task result:", "Succeeded (TaskSucceeded)", "Task outcome:", outcomeSummary, outcomePR, outcomeHead)
+		// The fixture's usage has no served model: the Actual model row itself
+		// must say Unknown, beside the requested model's own row.
+		for _, row := range []*regexp.Regexp{regexp.MustCompile(`(?m)^Actual model:\s+Unknown$`), regexp.MustCompile(`(?m)^Requested model:\s+` + regexp.QuoteMeta(task().Model) + `$`)} {
+			if !row.MatchString(out) {
+				t.Errorf("show lacks the row %s:\n%s", row, out)
+			}
+		}
 	})
 
 	// (b) The pod is deleted, then the phase moves to Suspended and Archived.
@@ -299,6 +307,9 @@ func TestEnvtestTaskOutcomeRetention(t *testing.T) {
 	})
 
 	// (c) Missing, partial and contradicted evidence reads as exactly that.
+	// "Missing" here is a heartbeat that carries no outcome. A missing or
+	// invalid outcome file is agentd's case (internal/agentd/task_outcome.go):
+	// it then offers none, which is what this heartbeat models.
 	t.Run("missing, partial and failed evidence stays honest", func(t *testing.T) {
 		v := l.awaitView(missing.name, human, func(code int, s apiv1.Session) bool { return code == http.StatusOK })
 		if v.TaskOutcome != nil {
@@ -397,7 +408,7 @@ func TestEnvtestTaskOutcomeRetention(t *testing.T) {
 // still serves its retained outcome. The Session object is the only durable
 // copy (status.taskOutcome); releaseSession (internal/controller/reconciler.go)
 // lifts the last finalizer and the object, with the outcome, is deleted. The
-// bounded proposal is in docs/workflow-guide.md, "Where the retained outcome
+// proposal is in docs/workflow-guide.md, "Where the retained outcome
 // lives". Unskip this when a supported route keeps it.
 func TestEnvtestTaskOutcomeAfterReleaseGap(t *testing.T) {
 	t.Skip("gap (OP402): a released Session's retained outcome is deleted with it; no supported route serves it after release")

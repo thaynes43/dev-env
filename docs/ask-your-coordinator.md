@@ -183,8 +183,10 @@ reaching the parent. These routes need no inbox, no enrollment and no grant:
    finalizer holds ([where the retained outcome lives](workflow-guide.md#where-the-retained-outcome-lives)).
    **Once a reap releases a Session that is not under private-history
    protection, the Session and its outcome are deleted, and `show` answers
-   404** (`internal/controller/reconciler.go:1150-1197`). Copy what you need
-   before that. A session can read any Session by name; a configured
+   404** (`internal/controller/reconciler.go:1150-1197`). On the live operator,
+   private-history retention keeps task Sessions until their HOME expiry
+   ([live mitigation](workflow-guide.md#where-the-retained-outcome-lives)).
+   Copy what you need before a reap anyway. A session can read any Session by name; a configured
    coordinator host can read only its own children
    (`internal/apiserver/sessions.go:420-437`).
 2. **`agent-run log CHILD --tail 200`**, while the child's pod is running and
@@ -210,8 +212,11 @@ order. Track the wait with a custody record and a bounded wait
 ([timer-checkin](../.agents/skills/timer-checkin/SKILL.md)).
 
 **Demonstrated and source only.** Reported in the OP402 incident record (agent
-reports, not re-verified here): the child's semantic ACK, its review files, a
-PR, and the parent consuming the findings. Shown only by source and by envtest
+reports, not re-verified here): the child's semantic ACK, its review files and
+a PR. An investigator read the child's log and relayed the findings to the
+parent with `agent-run msg`; the parent then consumed them. The parent itself
+made neither the log read nor the relay, and did not use this return route.
+Shown only by source and by envtest
 with synthetic fixtures: retrieval after pod deletion, suspend, archive or
 reap, and after a restart of the API. Not shown anywhere: recovery after a real
 operator restart or a resumed coordinator, a persisted timer, and a child's
