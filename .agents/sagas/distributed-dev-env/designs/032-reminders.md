@@ -50,6 +50,11 @@ Each one needs its own action-specific approval from Tom. None is part of this c
    limited to the Calendar events scope, impersonating one calendar owner; or an OAuth
    client with a refresh token for that owner. A refresh token needs a single owner, as
    with the Claude and Codex logins.
+   *2026-11-04:* Tom chose the method, a DWD service account on `calendar.events`
+   impersonating admin@haynesnetwork.com (OpenProject #206 comment 5604; recorded in
+   [DESIGN-054](054-scheduled-agent-work.md#calendar-r2-r3)). That is a method choice
+   only. No such identity exists yet, live access is Unknown, and items 2 to 6 below
+   are still open.
 2. **Calendar.** The calendar ID of the haynesnetwork.com calendar, a reference name
    such as `calendar:haynesnetwork` in the operator flag `--reminder-calendar-refs`, and
    the real ID in the keeper's configuration, never in a request.
