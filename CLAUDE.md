@@ -68,6 +68,7 @@ historical first-build order. Deploys remain GitOps.
 ```
 .agents/HANDOFF.md       the front door: state, next steps, rulings, inside vs outside
 .agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
+.agents/skills/          repo-native agent skills, one SKILL.md each: supervised-dispatch, worker-qa-loop, timer-checkin
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), publish-git-wait.yml (the git-wait trial fixture's
                          git-wait-sha-<sha> tag from main, signed), release-please.yml, Claude review + @claude
 .github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
@@ -125,7 +126,7 @@ internal/scheduledwork/authority/  DESIGN-054 S3b2's pure authority and template
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
                          HistoryReader, the history archive's reads for the API (DESIGN-025 8)
-internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), maintenance check, pages list|show (offline, DESIGN-031); finds the API and a token in a session
+internal/agentrun/       agent-run's commands (D-50, D-58, D-60, D-65, D-66, D-67): -p, --local, list, show, log, msg, reap, suspend, resume, rescue list|restore, history list|show|read (DESIGN-025), declare-activity, attach, detach, login, fleet, rc start|status (DESIGN-038, client observations), maintenance check, pages list|show (offline, DESIGN-031), schedule create|list|show|edit|cancel|approve|retry (DESIGN-054); finds the API and a token in a session
                          pod, in another pod (a minted token) or from flags; imports the standard library, apiv1 and
                          agentd's protocol, and the standard-library helpers maintenancecontract, pages, version, and tokenfile (`make build` checks the binary does not link Kubernetes); tests run against an httptest TLS server
 internal/keeper/         the keeper (D-52), including the default-off Ask notifier (DESIGN-034): mints the haynes-dev-bot token into dev-agents/dev-env-gh-token every 40 minutes
@@ -319,6 +320,13 @@ AgentSession CRD rollout.
 - **Worktree per task, never push to main.** Branch `agent/<task>`, open a ready PR,
   squash-merge it yourself once required checks are green and the review findings
   are handled.
+- **Agent-loop skills.** Before you dispatch or supervise long-running work, read
+  [`.agents/skills/supervised-dispatch/SKILL.md`](.agents/skills/supervised-dispatch/SKILL.md).
+  A coordinator that runs coding workers and QA reads
+  [`.agents/skills/worker-qa-loop/SKILL.md`](.agents/skills/worker-qa-loop/SKILL.md).
+  Timed check-ins follow
+  [`.agents/skills/timer-checkin/SKILL.md`](.agents/skills/timer-checkin/SKILL.md).
+  No provider is known to load these files automatically: open them yourself.
 - **Plain writing.** Short sentences, concrete nouns, no filler. Use Mermaid for editable
   engineering diagrams; SVG/PNG workflow drawings are also supported.
 

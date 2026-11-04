@@ -616,11 +616,52 @@ Each unit states the owner problem, acceptance evidence, current task owner,
 source/rule revision and time/attempt budget. Reports distinguish built, deployed
 and accepted; a passing source test does not prove a phone or native-host journey.
 
-The default is **60 minutes without progress or three failed attempts at the
-same blocker**. Stop further attempts, preserve work and evidence, and ask one
-actionable owner question with a concrete bounded next option. Counters carry
-across agents, pods, methods and resumes. Observed progress must describe a
-useful result; restarting a tool is not progress by itself.
+The stall thresholds are **60 minutes without progress or three failed attempts
+at the same blocker**
+([saga decision 94](../.agents/sagas/distributed-dev-env/README.md),
+[ADR-019](../.agents/sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)).
+Counters carry across agents, pods, methods and resumes. Observed progress must
+describe a useful result; restarting a tool is not progress by itself.
+
+Reaching a threshold does not end the work. While authorized repair remains, it
+triggers:
+
+1. **Diagnosis:** read the evidence and name the blocker.
+2. **Steering:** a correction to the owner that changes the approach. Repeating
+   the same failed attempt is not steering.
+3. **A checkpoint:** work, evidence and the next step preserved in the status
+   record and the tracker.
+4. **Continuity:** the same owner continues, or a fresh worker starts from the
+   handoff when the owner's context or session is gone.
+
+Ask one actionable owner question, with a concrete bounded next option, only when
+real input or a permission decision is missing. Work stops only on a demonstrated
+outcome, Tom's cancellation or pause (or his verified coordinator's), a genuine
+unresolvable blocker, an exhausted authorized budget (its recorded budget spent,
+or a budget checkpoint or stop threshold recorded on the story reached; never a
+stall threshold, [ADR-019](../.agents/sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)),
+or a required safety or permission decision, each with specific evidence. A
+latch the platform has actually set, read with
+`agent-run budget show <task-uid>` (`latched: true` and its reason), is a
+platform denial that agents never bypass; an expected or estimated latch is not
+a stop. The agent-loop skills in [`.agents/skills/`](../.agents/skills/) apply
+this rule.
+
+*Adopted 2026-11-04 and recorded as decision 94, on Tom's words relayed by
+session dev-env-1027-010058 (parent coordinator) as trusted conversation
+evidence, original timestamp not available; coordinator dev-env-1104-010332
+applied them to the decision 55 stop clause, which they do not name: "...work
+in a loop where it doesn't stop until the requirements are met via some test
+feedback... not fire and forget sets of instructions that do not have goals the
+agents have to demonstrate to stop working" and "Power through harden the mvp
+test and fix on a loop". It supersedes the stop clause of decision 55 (Q-23, 2026-10-09), which stopped
+further attempts at a threshold and asked one owner question. Decision 55's
+ledger, budget history, carried counters and child accounting stay. Decision 55,
+its [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
+and ADR-003 are not edited; ADR-019 amends ADR-003's restatement. Source that
+latches the old stop, `internal/taskbudget`'s 60-minute `Stalled` and
+three-failure `RepeatedFailure` latches, changes only by its own reviewed PR
+(#400).*
 
 The stopped NFS helper and observer remain historical. They demonstrated
 problems in our test tooling, not a NAS failure. Shared-Git trials no longer gate
