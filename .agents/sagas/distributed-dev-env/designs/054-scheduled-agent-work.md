@@ -156,6 +156,7 @@ stateDiagram-v2
   Claimed --> Skipped: no session and grace ended before a create
   Claimed --> Ambiguous: derived-name session lacks the matching UID label or occurrence annotation
   Dispatched --> Running: headless session Running
+  Dispatched --> Failed: not Running (headless) or Ready (interactive) by due + grace
   Running --> Succeeded: headless agent ended, outcome read
   Running --> Failed: agent failed, maxDuration, or session reaped
   Dispatched --> Failed: session Failed or reaped before Running
@@ -236,9 +237,14 @@ stateDiagram-v2
      the exit for every non-terminal state, including `Delivered` and a delivery
      marked `ambiguous`;
   3. if the ScheduledWork no longer exists (a person deleted it; the API offers only
-     cancel), or the ScheduledWork kind is not served at all (the CRD was removed:
-     `NoKindMatch` or a discovery error, not NotFound), there is nothing to record,
-     and nothing can redispatch it. It logs that and goes on;
+     cancel), there is nothing to record, and nothing can redispatch it. It logs that
+     and goes on. If the read fails because the kind is not served (`NoKindMatch` or a
+     discovery error), that is **not** proof the objects are gone. It releases only
+     when **both** of these hold: the occurrence's due time plus grace (from the
+     session's occurrence annotation and the template) has passed, so no executor
+     will create for it again; and an uncached read of the CustomResourceDefinition
+     returns NotFound. On any other error it keeps the finalizer and raises the
+     blocked metric;
   4. removes the finalizer.
 
   A periodic sweep in the same reconciler lists sessions by the label (uncached) so
@@ -277,6 +283,15 @@ stateDiagram-v2
   unfinished (no reliance on it); a stale cached listing (the uncached read is used);
   two leaders overlapping (one create wins, the other adopts); and an executor
   restart at every state.
+- **Start deadline.** If the session is not Running (headless), or its pod is not
+  Ready (interactive), by the due time plus grace, the occurrence is `Failed`
+  ("not started before grace ended"), and Tom is paged. An unschedulable pod or a
+  stuck image pull can cause this, since session pods never preempt. The executor
+  then suspends that session through the normal suspend path (rescue first). This is
+  its one session write besides create: only on a session that carries its label
+  and finalizer, only before that session has started, and never a delete. The
+  releaser then ends the occurrence as usual. So "no work starts later than due plus
+  grace" holds, and the occurrence frees its item and the global slot.
 - **Missed occurrences.** An occurrence found more than a grace period late (default
   15 minutes for headless, 2 hours for interactive) is `Skipped` with a reason, and
   is not run late without a person. This deliberately differs from DESIGN-032,
@@ -356,7 +371,9 @@ receiver session would route agent-written text into sessions the owner does not
   `scheduledworks`, so it cannot keep sync state there. With `calendar:` set, the
   executor keeps one companion `Reminder` per ScheduledWork, with a calendar-only
   target and the same schedule. It updates the Reminder when the item is edited and
-  cancels it when the item is cancelled. Its `until` is capped at `notAfter`. Today a
+  cancels it when the item is cancelled. Its `until` is capped at `notAfter`. A
+  count-based series is first converted to the `until` of its last occurrence,
+  because DESIGN-032 refuses `count` and `until` together. Today a
   Reminder with no Pushover target finishes at its last occurrence, and a finished
   Reminder can be neither edited nor cancelled, nor does its calendar entry sync. So
   S4 amends DESIGN-032 with a **projection** Reminder: calendar targets only, it stays
@@ -414,8 +431,8 @@ library only.
 |---|---|---|
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
-| S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release. Shipped in a release before S3b | PR, CI, native review, release |
-| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim) | PR, CI, native review |
+| S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), and the kind unserved before and after due plus grace. Shipped in a release before S3b | PR, CI, native review, release |
+| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, the start deadline suspending an unstarted session) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
 | S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
