@@ -139,9 +139,9 @@ staged where the custodian can read it, and nothing is sent.
 
 ## 3. Prove single-writer custody
 
-- **Owner.** The tracker, the status record and the ACK name one custodian. You
-  deliver only as that custodian or on its explicit handoff (timer-checkin,
-  section 5). Otherwise stop with `custody` (closed error `other-custodian`, or
+- **Owner.** The task records name one custodian, and the target session must
+  be it. You deliver only as that custodian, as its recorded supervisor or
+  driver, or on its explicit handoff (timer-checkin, section 5). Otherwise stop with `custody` (closed error `other-custodian`, or
   `custodian-unrecorded` when no record names one): stage the correction and
   give it to your parent, who routes it to the custodian through that
   custodian's recorded channel (its tracker item, its PR, or `agent-run inbox`).
@@ -190,12 +190,17 @@ authorized work-order file. Do not read other panes or scrollback history.
    unless a recorded rule delegates it), for exactly that answer and exactly
    that path, through a verified channel. A work order's handoff gate, a custody
    ACK, a launch authorization or a coordinator's recommendation never
-   authorizes accepting a trust or permission prompt. Until the approval
-   arrives, record the modal as a pending blocker and send nothing; the
-   handoff is not complete.
-3. Answer it once, in the same verified pane, with the single choice it shows,
-   for example `tmux send-keys -t <pane-id> a`. The helper's `reply` refuses
-   modals by design; this key press is the one step outside it.
+   authorizes accepting a trust or permission prompt. Send the exact question to
+   your parent: the session with Tom's phone route asks him, one question at a
+   time (CLAUDE.md). Say what the choice allows and whether it persists after
+   this session; if the provider does not document that, say it is unknown.
+   Until the approval arrives, record the modal as a pending blocker and send
+   nothing; the handoff is not complete.
+3. Read the pane again (`inspect`) just before answering, and confirm the same
+   modal, pane, pid and owner marker. Then answer it once, in that pane, with the
+   single choice it shows, for example `tmux send-keys -t <pane-id> a`. The
+   helper's `reply` refuses modals by design; this key press is the one step
+   outside it.
 4. Record the decision: who authorized it, the exact path, the choice, the pane
    and the time.
 5. Read the pane again (`inspect`, for a helper-started session) and confirm the
@@ -233,3 +238,7 @@ another route unless the work order authorizes it. Retry a step only on
 materially new evidence. A blocked handoff is an exact blocker under
 supervised-dispatch section 5: end this handoff and its check-in timer, if one
 exists, record who can act, and keep doing independent authorized work.
+
+Behavior scenarios for an evaluator: [no terminal from a v2 pod](scenarios/no-terminal-from-v2-pod.md),
+[completed cloud agent](scenarios/completed-cloud-agent.md) and
+[workspace trust modal](scenarios/workspace-trust-modal.md).
