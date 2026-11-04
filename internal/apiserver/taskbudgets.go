@@ -363,3 +363,9 @@ func (s *Server) continueTaskBudget(ctx context.Context, w http.ResponseWriter, 
 	}
 	return http.StatusOK, l.Status(), nil
 }
+
+// withoutTaskBudgetStall is the body for a client that did not ask for the
+// stall field with apiv1.TaskBudgetStallHeader.
+func withoutTaskBudgetStall(body any) any {
+	return body
+}
