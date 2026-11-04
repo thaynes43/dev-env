@@ -281,7 +281,10 @@ type Executor struct {
 	Pager *pages.Pager
 	// PageTimeout bounds one page's Ensure; zero is DefaultPageTimeout.
 	PageTimeout time.Duration
-	Log         logr.Logger
+	// MaxUnconfirmedPageTries bounds the passes an unconfirmed page is tried
+	// in; zero is DefaultMaxUnconfirmedPageTries.
+	MaxUnconfirmedPageTries int
+	Log                     logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 

@@ -742,3 +742,71 @@ func TestAnUnconfirmedPageIsTriedOncePerPass(t *testing.T) {
 		t.Errorf("the unconfirmed page was tried %d times in one pass, want 1", n)
 	}
 }
+
+// An unconfirmed page is not tried for ever: after
+// Executor.MaxUnconfirmedPageTries passes it is settled skipped, with the
+// best-effort meaning (no Reminder recorded), and is tried no more.
+func TestAnUnconfirmedPageIsSettledAfterItsCap(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.paging(), day0.Add(-time.Minute))
+	w := f.get(key)
+	earlier, err := pages.Build(w, day0, v1alpha1.PageEventDue, 0, "Scheduled work started: "+w.Spec.Title, key.Name, day0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster(t).Create(context.Background(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	var readFails atomic.Bool
+	readFails.Store(true)
+	var creates atomic.Int32
+	e := f.executor()
+	writer := interceptor.NewClient(e.Client.(client.WithWatch), interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if _, ok := obj.(*v1alpha1.Reminder); ok {
+			creates.Add(1)
+		}
+		return c.Create(ctx, obj, opts...)
+	}})
+	e.Pager = NewPager(writer, reminderReadFails{Reader: e.Reader, fail: &readFails})
+	e.MaxUnconfirmedPageTries = 3
+	for i := range 2 {
+		f.at(e, day0.Add(time.Duration(i)*time.Minute))
+		if p := pageOf(f.occ(key, day0), v1alpha1.PageEventDue, 0); p == nil || !pendingPage(*p) {
+			t.Fatalf("pass %d: the page was settled before its cap: %+v", i+1, f.occ(key, day0).Pages)
+		}
+	}
+	f.at(e, day0.Add(2*time.Minute))
+	if p := pageOf(f.occ(key, day0), v1alpha1.PageEventDue, 0); p == nil || p.State != "skipped" || p.Reminder != "" {
+		t.Fatalf("after the cap the page should be settled skipped: %+v", f.occ(key, day0).Pages)
+	}
+	f.at(e, day0.Add(3*time.Minute))
+	if n := creates.Load(); n != 3 {
+		t.Errorf("%d Reminder creates, want 3: one per pass up to the cap, none after", n)
+	}
+}
+
+// A page whose item lost its notify target after the intent was stored is
+// settled skipped at once: pages.Build refuses it, which is a settled
+// answer, not an unconfirmed one.
+func TestANotifyRemovedAfterTheIntentSettlesIt(t *testing.T) {
+	f := newFixture(t)
+	sp := spec()
+	key := f.item("audit", sp)
+	f.at(f.paging(), day0.Add(-time.Minute))
+	w := f.get(key)
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(day0.Add(-24 * time.Hour)), State: v1alpha1.OccurrenceSkipped,
+		Reason: ReasonPreviousRunning, Pages: []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventSkipped}}}}
+	if err := cluster(t).Status().Update(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Notify = nil })
+	e := f.paging()
+	e.MaxUnconfirmedPageTries = 100
+	f.at(e, day0.Add(-30*time.Second))
+	o := f.occ(key, day0.Add(-24*time.Hour))
+	if p := pageOf(o, v1alpha1.PageEventSkipped, 0); p == nil || p.State != "skipped" || p.Reminder != "" {
+		t.Fatalf("pages %+v: a Build refusal should settle the page at once", o.Pages)
+	}
+	f.wantReminders(0)
+}

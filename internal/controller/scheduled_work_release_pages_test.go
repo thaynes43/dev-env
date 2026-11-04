@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -522,15 +523,16 @@ func TestScheduledWorkReleaseNoPageWhenOnlyTheReportIsAdded(t *testing.T) {
 	}
 }
 
-// reminderReadsFail fails every Reminder read while fail is set; every other
-// read goes through.
+// reminderReadsFail fails every Reminder read (only the one named name, when
+// set) while fail is set; every other read goes through.
 type reminderReadsFail struct {
 	client.Reader
 	fail *atomic.Bool
+	name string
 }
 
 func (r reminderReadsFail) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if _, ok := obj.(*v1alpha1.Reminder); ok && r.fail.Load() {
+	if _, ok := obj.(*v1alpha1.Reminder); ok && r.fail.Load() && (r.name == "" || key.Name == r.name) {
 		return apierrors.NewServiceUnavailable("injected: the Reminder read failed")
 	}
 	return r.Reader.Get(ctx, key, obj, opts...)
@@ -575,4 +577,66 @@ func TestScheduledWorkReleaseKeepsAnUnconfirmedPagePending(t *testing.T) {
 	poke(t, s.Name)
 	waitReleased(t, s.Name)
 	f.wantReleasePage(t, v1alpha1.PageEventResult, 0)
+}
+
+// Within one pass, an unconfirmed page is tried once even when the pass
+// writes again: here a second pending page is recorded, its write meets a
+// conflict and the pass reads the item again, and the unconfirmed page (its
+// Reminder exists, the read back fails) is not created a second time.
+func TestScheduledWorkReleaseTriesAnUnconfirmedPageOncePerPass(t *testing.T) {
+	var readFails atomic.Bool
+	readFails.Store(true)
+	var racing *pageRecordRaced
+	var mu sync.Mutex
+	creates := map[string]int{}
+	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDelivered)
+	w := f.item(t)
+	unread := pages.Key(w, f.at, v1alpha1.PageEventResult, 0)
+	startOperator(t, func(r *Reconciler) {
+		r.APIReader = reminderReadsFail{Reader: r.APIReader, fail: &readFails, name: unread}
+		racing = &pageRecordRaced{Client: &reminderCreateCount{Client: r.Client, mu: &mu, creates: creates}}
+		r.Client = racing
+	})
+	earlier, err := pages.Build(w, f.at, v1alpha1.PageEventResult, 0, "Scheduled work ended: "+w.Spec.Title, f.key.Name+" "+f.name, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.Create(context.Background(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	// A second pending releaser page on the occurrence, which can be created.
+	f.setStatus(t, func(st *v1alpha1.ScheduledWorkStatus) {
+		st.Occurrences[0].Pages = []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventFailed}}
+	})
+	s := releaseFixtureSession(t, f, suspendedAtCreate)
+	f.waitOccurrence(t, v1alpha1.OccurrenceEnded)
+	waitReleased(t, s.Name)
+	if !racing.raced.Load() {
+		t.Fatal("the page record write never met the race")
+	}
+	o := f.occurrence(t)
+	if p := releasePage(o, v1alpha1.PageEventFailed, 0); p == nil || p.Reminder == "" {
+		t.Errorf("the second page was not recorded: %+v", o.Pages)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if n := creates[earlier.Name]; n != 1 {
+		t.Errorf("the unconfirmed page was created %d times in one pass, want 1", n)
+	}
+}
+
+// reminderCreateCount counts the Reminder creates by name.
+type reminderCreateCount struct {
+	client.Client
+	mu      *sync.Mutex
+	creates map[string]int
+}
+
+func (c *reminderCreateCount) Create(ctx context.Context, o client.Object, opts ...client.CreateOption) error {
+	if r, ok := o.(*v1alpha1.Reminder); ok {
+		c.mu.Lock()
+		c.creates[r.Name]++
+		c.mu.Unlock()
+	}
+	return c.Client.Create(ctx, o, opts...)
 }

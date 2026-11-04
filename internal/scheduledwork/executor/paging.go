@@ -42,6 +42,11 @@ import (
 // zero. The pager's verifying read has its own pages.VerifyTimeout.
 const DefaultPageTimeout = 10 * time.Second
 
+// DefaultMaxUnconfirmedPageTries bounds, when
+// Executor.MaxUnconfirmedPageTries is zero, the passes in which a page whose
+// Ensure cannot be confirmed is tried before it is settled skipped.
+const DefaultMaxUnconfirmedPageTries = 5
+
 // NewPager returns the executor's page Reminder creator. It creates through
 // c, the operator's writing client, and makes its one read (the existing
 // Reminder after AlreadyExists) through r, the uncached API reader, so it

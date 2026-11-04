@@ -804,3 +804,17 @@ func TestEnsureCheckedReportsAnUnconfirmedRead(t *testing.T) {
 		})
 	}
 }
+
+// A page Build refuses (the item has no notify target any more) is settled:
+// nothing is created, and there is nothing to read again.
+func TestEnsureCheckedSettlesABuildRefusal(t *testing.T) {
+	creates := 0
+	p := &Pager{Client: fakeClient(t, interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+		creates++
+		return cl.Create(ctx, o, opts...)
+	}})}
+	got, settled := p.EnsureChecked(context.Background(), item(), occAt, v1alpha1.PageEventSkipped, 0, "Skipped", "body", nowAt)
+	if !settled || got != (v1alpha1.ScheduledWorkPage{Event: "skipped", Attempt: 0, State: "skipped"}) || creates != 0 {
+		t.Fatalf("EnsureChecked = %+v, settled %v, %d creates", got, settled, creates)
+	}
+}
