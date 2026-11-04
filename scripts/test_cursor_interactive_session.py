@@ -537,6 +537,8 @@ TRUST_CAPTURE = (
     "  \u2502    [q] Quit                                        \u2502\n"
     "  \u2570\u2500\u2500\u2500\u2500\u256f\n"
 )
+# The visible screen as tmux prints it: the prompt box, then blank rows.
+TRUST_SCREEN = TRUST_CAPTURE + "\n\n"
 TRUST_EXPECT = (
     "Workspace Trust Required\n"
     "Do you trust the contents of this directory?\n"
@@ -544,6 +546,7 @@ TRUST_EXPECT = (
     "[a] Trust this workspace\n"
 )
 APPROVAL = "OP399-approval-2026-11-04T21:40:00Z"
+SECOND_APPROVAL = "OP399-approval-2026-11-04T21:55:00Z"
 
 
 class AnswerFixture(unittest.TestCase):
@@ -561,9 +564,22 @@ class AnswerTests(AnswerFixture):
         super().setUp()
         self.expect_path = self.root / "expect"
         self.expect_path.write_text(TRUST_EXPECT)
+        self.screen(TRUST_SCREEN)
 
-    def state(self):
-        return json.loads((self.root / "state" / "cursor-interactive-session" / self.name).read_text())
+    def screen(self, capture, visible=None, cursor=None):
+        """Write a capture. The last `visible` rows are the pane (default: all rows)."""
+        self.capture.write_text(capture)
+        rows = len(capture.splitlines())
+        height = rows if visible is None else visible
+        self.env["FAKE_HEIGHT"] = str(height)
+        self.env["FAKE_CURSOR_Y"] = str(height - 1 if cursor is None else cursor)
+
+    def state(self, name=None):
+        return json.loads((self.root / "state" / "cursor-interactive-session" / (name or self.name)).read_text())
+
+    def ledger(self, approval=APPROVAL):
+        digest = __import__("hashlib").sha256(approval.encode("utf-8")).hexdigest()
+        return self.root / "state" / "cursor-interactive-session" / "approvals" / digest
 
     def answer_args(self, receipt, choice="a", kind="modal-trust", approval=APPROVAL, expect=None):
         return ["--receipt", receipt, "--approval-ref", approval, "--expect-kind", kind,
@@ -572,8 +588,17 @@ class AnswerTests(AnswerFixture):
     def sends(self):
         return [args for args in self.commands("tmux") if args[0] == "send-keys"]
 
+    def inspect_now(self):
+        code, inspected = self.invoke("inspect")
+        self.assertEqual((code, inspected["state"]), (0, "inspected"))
+        return inspected
+
+    def restart_case(self):
+        self.log.unlink(missing_ok=True)
+        (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
+
     def test_answer_sends_exactly_one_key_and_records_it(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        inspected = self.start_and_inspect()
         self.assertEqual(inspected["classification"], "modal-trust")
         code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual((code, answered["state"]), (0, "answered"))
@@ -590,11 +615,11 @@ class AnswerTests(AnswerFixture):
         self.assertEqual(self.state()["receipt_id"], "")
         self.assertNotIn("Do you trust", json.dumps(answered))
         code, again = self.invoke("answer", self.answer_args(inspected["receipt"]))
-        self.assertEqual((code, again["state"]), (2, "stale-receipt"))
+        self.assertIn((code, again["state"]), {(2, "stale-receipt"), (2, "approval-spent")})
         self.assertEqual(len(self.sends()), 1)
 
     def test_answer_refuses_prompt_text_mismatch_without_spending(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        inspected = self.start_and_inspect()
         variants = {
             "other path": TRUST_EXPECT.replace("example-task", "other-task"),
             "missing line": TRUST_EXPECT + "Allow network access\n",
@@ -608,21 +633,22 @@ class AnswerTests(AnswerFixture):
                 self.assertEqual((code, refused["state"]), (2, "modal-mismatch"))
                 self.assertEqual(self.sends(), [])
         self.assertNotEqual(self.state()["receipt_id"], "")
+        self.assertFalse(self.ledger().exists())
         code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual((code, answered["state"]), (0, "answered"))
 
     def test_answer_refuses_kind_mismatch(self):
         cases = (
-            (TRUST_CAPTURE, TRUST_EXPECT, "a", "modal-approval"),
+            (TRUST_SCREEN, TRUST_EXPECT, "a", "modal-approval"),
             ("Allow this command: git push [y] Yes [n] No\n>", "Allow this command: git push [y] Yes\n", "y", "modal-trust"),
             ("Are you sure? [y] Yes\n>", "Are you sure? [y] Yes\n", "y", "modal-approval"),
             ("Permission required to continue [a] Allow\n>", "Permission required to continue [a] Allow\n", "a", "modal-trust"),
         )
         for capture, text, choice, kind in cases:
             with self.subTest(kind=kind, capture=capture[:20]):
-                self.log.unlink(missing_ok=True)
-                (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
-                inspected = self.start_and_inspect(capture)
+                self.restart_case()
+                self.screen(capture)
+                inspected = self.start_and_inspect()
                 expect = self.root / "expect-kind"
                 expect.write_text(text)
                 code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice,
@@ -632,30 +658,28 @@ class AnswerTests(AnswerFixture):
 
     def test_answer_refuses_when_no_prompt_is_showing(self):
         cases = {
-            "active": ("S8 answered\n>", {}),
-            "draft": ("S8 answered\n> typed [a] text", {}),
-            "unclassified": ("S8 answered\n[a] Apply the change", {"FAKE_CURSOR_Y": "0"}),
+            "active": ("S8 answered\n>", None),
+            "draft": ("S8 answered\n> typed [a] text", None),
+            "unclassified": ("S8 answered\n[a] Apply the change", 0),
         }
-        for label, (capture, env) in cases.items():
+        for label, (capture, cursor) in cases.items():
             with self.subTest(label=label):
-                self.log.unlink(missing_ok=True)
-                (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
-                inspected = self.start_and_inspect(capture, env)
+                self.restart_case()
+                self.screen(capture, cursor=cursor)
+                inspected = self.start_and_inspect()
                 expect = self.root / "expect-none"
                 expect.write_text("[a] Apply the change\n" if "Apply" in capture else "[a]\n")
-                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect),
-                                            env=env)
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect))
                 self.assertEqual((code, refused["state"]), (2, "no-modal"))
                 self.assertEqual(self.sends(), [])
 
     def test_answer_refuses_stale_receipt_and_changed_pane(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
-        self.capture.write_text(TRUST_CAPTURE + "someone typed here\n")
+        inspected = self.start_and_inspect()
+        self.screen(TRUST_SCREEN + "someone typed here\n")
         code, stale = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
-        self.capture.write_text(TRUST_CAPTURE)
-        code, newer = self.invoke("inspect")
-        self.assertEqual(code, 0)
+        self.screen(TRUST_SCREEN)
+        newer = self.inspect_now()
         code, rotated = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual((code, rotated["state"]), (2, "stale-receipt"))
         for mode, expected in (("replaced", "pane-replaced"), ("new-pane", "pane-replaced"),
@@ -667,9 +691,10 @@ class AnswerTests(AnswerFixture):
         code, missing = self.invoke("answer", ["--name", "missing-task", *self.answer_args(newer["receipt"])])
         self.assertEqual((code, missing["state"]), (2, "not-owned"))
         self.assertEqual(self.sends(), [])
+        self.assertFalse(self.ledger().exists())
 
     def test_answer_validates_input_before_any_tmux_call(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        inspected = self.start_and_inspect()
         bad_expect = {
             "empty": b"", "blank": b"\n \n", "control": b"Workspace Trust Required\x1b[2J\n",
             "not-utf8": b"\xff\xfe\n", "oversize": b"x" * 4097,
@@ -704,7 +729,7 @@ class AnswerTests(AnswerFixture):
         self.assertNotEqual(self.state()["receipt_id"], "")
 
     def test_answer_refuses_when_the_lock_is_held(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        inspected = self.start_and_inspect()
         lock = self.root / "state" / "cursor-interactive-session" / (self.name + ".lock")
         descriptor = os.open(lock, os.O_RDWR)
         try:
@@ -715,12 +740,13 @@ class AnswerTests(AnswerFixture):
             self.assertEqual(self.commands("tmux"), [])
         finally:
             os.close(descriptor)
+        self.assertFalse(self.ledger().exists())
         code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual((code, answered["state"]), (0, "answered"))
         self.assertEqual(len(self.sends()), 1)
 
     def test_concurrent_answers_send_one_key(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
+        inspected = self.start_and_inspect()
         extra = self.answer_args(inspected["receipt"])
         descriptor, gate, barrier = self.send_barrier()
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -734,20 +760,20 @@ class AnswerTests(AnswerFixture):
                     handle.write(b"1")
             self.assertEqual(first.result(timeout=10)[1]["state"], "answered")
         code, third = self.invoke("answer", extra)
-        self.assertEqual((code, third["state"]), (2, "stale-receipt"))
+        self.assertIn((code, third["state"]), {(2, "stale-receipt"), (2, "approval-spent")})
         self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "a"]])
 
-    def test_failed_answer_send_is_unconfirmed_and_spent(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
+    def test_failed_answer_send_is_uncertain_and_spent(self):
+        inspected = self.start_and_inspect()
         code, failed = self.invoke("answer", self.answer_args(inspected["receipt"]), mode="send-fail")
         self.assertEqual((code, failed["state"]), (3, "answer-unconfirmed"))
-        self.assertEqual(self.state()["answers"][-1]["outcome"], "unconfirmed")
+        self.assertEqual(self.state()["answers"][-1]["outcome"], "uncertain")
         code, retried = self.invoke("answer", self.answer_args(inspected["receipt"]))
-        self.assertEqual((code, retried["state"]), (2, "stale-receipt"))
+        self.assertIn((code, retried["state"]), {(2, "stale-receipt"), (2, "approval-spent")})
         self.assertEqual(len(self.sends()), 1)
 
-    def test_answer_timeout_is_unconfirmed(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
+    def test_answer_timeout_is_uncertain(self):
+        inspected = self.start_and_inspect()
         args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
                                   approval_ref=APPROVAL, expect_kind="modal-trust",
                                   expect_text_file=str(self.expect_path), choice="a")
@@ -766,19 +792,126 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((caught.exception.state, caught.exception.code), ("answer-unconfirmed", 3))
         self.assertEqual([call for call in calls if call[1] == "send-keys"],
                          [[self.tmux, "send-keys", "-t", "%7", "-l", "--", "a"]])
-        self.assertEqual(self.state()["answers"][-1]["outcome"], "unconfirmed")
+        self.assertEqual(self.state()["answers"][-1]["outcome"], "uncertain")
 
     def test_reply_still_refuses_while_answered_prompt_text_remains(self):
-        inspected = self.start_and_inspect(TRUST_CAPTURE)
-        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        inspected = self.start_and_inspect()
+        code, _answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertEqual(code, 0)
-        code, after = self.invoke("inspect")
-        self.assertEqual((code, after["classification"]), (0, "modal-trust"))
+        after = self.inspect_now()
+        self.assertEqual(after["classification"], "modal-trust")
         self.text_path.write_text("continue")
         code, refused = self.invoke("reply", ["--receipt", after["receipt"], "--text-file", str(self.text_path),
                                               "--submit", "--observed-ready"])
         self.assertEqual((code, refused["state"]), (2, "modal-trust"))
         self.assertEqual(len(self.sends()), 1)
+
+    # Adversarial rules (parent feedback, 2026-11-04). Each was RED against 082170ef.
+
+    def test_one_answer_per_approval_across_receipts_and_tasks(self):
+        inspected = self.start_and_inspect()
+        code, failed = self.invoke("answer", self.answer_args(inspected["receipt"]), mode="send-fail")
+        self.assertEqual((code, failed["state"]), (3, "answer-unconfirmed"))
+        entry = json.loads(self.ledger().read_text())
+        self.assertEqual({key: entry[key] for key in ("approval_ref", "name", "pane_id", "choice", "outcome")},
+                         {"approval_ref": APPROVAL, "name": self.name, "pane_id": "%7", "choice": "a",
+                          "outcome": "uncertain"})
+        self.assertEqual(self.ledger().stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.ledger().parent.stat().st_mode & 0o777, 0o700)
+        self.assertNotIn("Do you trust", self.ledger().read_text())
+        # A new inspect with the same prompt still showing gives a new receipt, not a new answer.
+        newer = self.inspect_now()
+        self.log.write_text("")
+        code, spent = self.invoke("answer", self.answer_args(newer["receipt"]))
+        self.assertEqual((code, spent["state"]), (2, "approval-spent"))
+        self.assertEqual(self.commands("tmux"), [])
+        # Another task name (a new session after a restart) cannot reuse the approval either.
+        self.name, self.env["FAKE_SESSION"] = "task-unique-2", "task-unique-2"
+        other = self.start_and_inspect()
+        code, spent_elsewhere = self.invoke("answer", self.answer_args(other["receipt"]))
+        self.assertEqual((code, spent_elsewhere["state"]), (2, "approval-spent"))
+        self.assertEqual(len(self.sends()), 0)
+        self.assertEqual(json.loads(self.ledger().read_text())["outcome"], "uncertain")
+        code, fresh = self.invoke("answer", self.answer_args(other["receipt"], approval=SECOND_APPROVAL))
+        self.assertEqual((code, fresh["state"]), (0, "answered"))
+
+    def test_reused_approval_after_a_sent_answer_is_refused(self):
+        inspected = self.start_and_inspect()
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, answered["state"]), (0, "answered"))
+        self.assertEqual(json.loads(self.ledger().read_text())["outcome"], "sent")
+        newer = self.inspect_now()
+        code, spent = self.invoke("answer", self.answer_args(newer["receipt"]))
+        self.assertEqual((code, spent["state"]), (2, "approval-spent"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_stale_prompt_text_above_the_visible_screen_is_refused(self):
+        # After one answer, the old prompt can stay in the captured history while the
+        # visible screen (the last pane_height rows) is a normal composer.
+        inspected = self.start_and_inspect()
+        code, _answered = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual(code, 0)
+        self.screen(TRUST_SCREEN + "S8 answered\n>", visible=2)
+        newer = self.inspect_now()
+        code, refused = self.invoke("answer", self.answer_args(newer["receipt"], approval=SECOND_APPROVAL))
+        self.assertEqual((code, refused["state"]), (2, "stale-prompt"))
+        self.assertEqual(len(self.sends()), 1)
+
+    def test_active_composer_under_an_old_prompt_is_refused(self):
+        cases = {
+            "composer is the bottom row": (TRUST_CAPTURE + "> ", None),
+            "cursor sits on a composer row": (TRUST_CAPTURE + ">\n\n", len(TRUST_CAPTURE.splitlines())),
+        }
+        for label, (capture, cursor) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, cursor=cursor)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"]))
+                self.assertEqual((code, refused["state"]), (2, "stale-prompt"))
+                self.assertEqual(self.sends(), [])
+        self.assertFalse(self.ledger().exists())
+
+    def test_a_different_current_prompt_is_refused(self):
+        approval_box = "  Allow this command: git push origin main [y] Yes [n] No\n\n"
+        cases = {
+            "old trust in history, approval visible": (TRUST_CAPTURE + approval_box, 2, "modal-mismatch"),
+            "two kinds on the visible screen": (TRUST_CAPTURE + approval_box, None, "prompt-unclear"),
+            "a new trust prompt for another path": (
+                TRUST_CAPTURE + TRUST_SCREEN.replace("example-task", "other-task"),
+                len(TRUST_SCREEN.splitlines()), "stale-prompt"),
+        }
+        for label, (capture, visible, expected) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"]))
+                self.assertEqual((code, refused["state"]), (2, expected))
+                self.assertEqual(self.sends(), [])
+        self.assertFalse(self.ledger().exists())
+
+    def test_unestablished_visible_screen_is_refused(self):
+        cases = {
+            "fewer rows than the pane": (TRUST_SCREEN, len(TRUST_SCREEN.splitlines()) + 5),
+            "pane taller than the bounded capture": (("history line\n" * 120) + TRUST_SCREEN, 90),
+        }
+        for label, (capture, visible) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible)
+                inspected = self.start_and_inspect()
+                code, refused = self.invoke("answer", self.answer_args(inspected["receipt"]))
+                self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
+                self.assertEqual(self.sends(), [])
+
+    def test_help_says_the_caller_owns_the_approval(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,
+                                text=True, timeout=10)
+        self.assertEqual(result.returncode, 0)
+        text = " ".join(result.stdout.split())
+        self.assertIn("The caller is responsible for a verified approval", text)
+        self.assertIn("does not verify", text)
 
 
 if __name__ == "__main__":
