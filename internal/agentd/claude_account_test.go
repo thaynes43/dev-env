@@ -221,14 +221,15 @@ func TestClaudeAccountRecordWriteFailureStillMergesButSendsNoContinue(t *testing
 }
 
 // failAccountWrites makes only the account record's write fail, leaving the credentials
-// and the receipt writable, and restores it afterwards.
-func failAccountWrites(t *testing.T, fail bool) {
+// and the receipt writable. The returned function restores the write early; the seam is
+// always restored when the test ends.
+func failAccountWrites(t *testing.T) func() {
 	t.Helper()
 	old := recordAccountWrite
-	if fail {
-		recordAccountWrite = func(string, []byte) error { return ErrClaudeAccess }
-	}
-	t.Cleanup(func() { recordAccountWrite = old })
+	recordAccountWrite = func(string, []byte) error { return ErrClaudeAccess }
+	restore := func() { recordAccountWrite = old }
+	t.Cleanup(restore)
+	return restore
 }
 
 // A VALID but STALE record (kept at generation 2 while generation 3 for another account
@@ -239,7 +240,7 @@ func TestClaudeAccountStaleValidRecordSendsNoContinue(t *testing.T) {
 	rg.publishAs(2, projAccount)
 	rg.revoke(2 * time.Hour)
 	rg.pollProduction()
-	failAccountWrites(t, true)
+	failAccountWrites(t)
 	rg.publishAs(3, otherAccount)
 	rg.pollProduction()
 	rg.pollProduction()
@@ -262,14 +263,13 @@ func TestClaudeAccountWritableAgainSendsExactlyOneContinue(t *testing.T) {
 	rg.publishAs(2, projAccount)
 	rg.revoke(2 * time.Hour)
 	rg.pollProduction()
-	old := recordAccountWrite
-	recordAccountWrite = func(string, []byte) error { return ErrClaudeAccess }
+	restore := failAccountWrites(t)
 	rg.publishAs(3, projAccount)
 	rg.pollProduction()
 	if rg.continues() != 0 {
 		t.Fatal("a continue was sent without a current record")
 	}
-	recordAccountWrite = old
+	restore()
 	rg.pollProduction()
 	if rg.continues() != 1 {
 		t.Fatalf("continues once the record was writable again: %d", rg.continues())
