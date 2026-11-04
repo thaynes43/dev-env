@@ -1,0 +1,10 @@
+{
+  "claude-local": "8776eabb4e32da1359b40d65d7b4491c87da2bbaf5b55ea9351683fe2aff137a",
+  "claude-remote": "e9138a131663d8aa7b8f03e87de0bade8b4bc673d1adfa6c5bd36c938483594a",
+  "claude-task": "5b27adad13c2a8391a1727fc3bf48f832893fa9a9ad56d8dd19a26e599e10e45",
+  "claude-task-no-api": "c91e28583563011e5e83da0056e2965be4d79bc44212d4dafd2d494029e75e1c",
+  "codex-remote": "4e25f7f1adac3b747680c97d1187fb8e4955e9d164e977b4eba2cd59455ca629",
+  "codex-task-managed": "8ef5bcfb02fc3cc83479a42614adf9935cd7d1b02c35f4f3cecd6dd86dfa26b1",
+  "coordinator-opt-in": "a861d0993ae0f806555716111a1039b96cab905b5761f8a6d1e034b8297d6904",
+  "hold": "2286a1ca2bfed9a93ab0e9115c2fecc67faefab54419d4b66ef912c5fbd12b94"
+}
