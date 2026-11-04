@@ -196,6 +196,8 @@ type fixture struct {
 	create   *creator
 	// failStatus fails the next n status writes of the executor's client.
 	failStatus atomic.Int32
+	// writes counts the status writes the executors' clients sent.
+	writes atomic.Int32
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -245,6 +247,7 @@ func (f *fixture) executor() *Executor {
 			return errors.New("no cached reads")
 		},
 		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			f.writes.Add(1)
 			if f.failStatus.Load() > 0 {
 				f.failStatus.Add(-1)
 				return apierrors.NewServiceUnavailable("injected status write failure")

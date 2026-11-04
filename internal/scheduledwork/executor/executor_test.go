@@ -113,10 +113,11 @@ func TestOverlappingLeadersCreateOneSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		e1.Tick(context.Background())
-		// e2 works from the listing it took before e1's claim: its claim's
-		// compare-and-set fails, it reads the item again and finds it
-		// Dispatched.
+		// e2 works from the listing it took before e1's claim, a little
+		// later: its claim's compare-and-set fails, it reads the item again
+		// and finds it Dispatched, and e1's claim stands.
 		claimed := f.occ(key, day0).ClaimedAt
+		f.clock.Set(day0.Add(10 * time.Second))
 		e2 := f.executor()
 		reads := &atomic.Int32{}
 		e2.Reader = staleList{Reader: cluster(t), list: &stale, reads: reads}
@@ -580,10 +581,10 @@ func TestRestartAtEveryStateIsIdempotent(t *testing.T) {
 	}
 	steady := func(when time.Time, what string) {
 		t.Helper()
-		before := versions()
+		before, sent := versions(), f.writes.Load()
 		f.at(ex(), when)
-		if after := versions(); after != before {
-			t.Fatalf("%s: a restarted executor wrote again: %v then %v", what, before, after)
+		if after := versions(); after != before || f.writes.Load() != sent {
+			t.Fatalf("%s: a restarted executor wrote again (%d status writes): %v then %v", what, f.writes.Load()-sent, before, after)
 		}
 	}
 
