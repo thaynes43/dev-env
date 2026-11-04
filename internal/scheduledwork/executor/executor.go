@@ -279,7 +279,9 @@ type Executor struct {
 	// Pager creates the page Reminders (DESIGN-054 Decision 5, S4b); NewPager
 	// builds the operator's. Nil pages nothing and records no page.
 	Pager *pages.Pager
-	Log   logr.Logger
+	// PageTimeout bounds one page's Ensure; zero is DefaultPageTimeout.
+	PageTimeout time.Duration
+	Log         logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 

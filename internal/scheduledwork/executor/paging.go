@@ -32,11 +32,12 @@ import (
 //
 // An item with no notify target, or an executor with no Pager, records no
 // intent and so pages nothing. Neither step updates or deletes a Reminder.
-// Each Ensure gets its own PageTimeout, so a slow API server cannot hold the
-// pass.
+// Each Ensure gets its own deadline (Executor.PageTimeout), so a slow API
+// server cannot hold the pass.
 
-// PageTimeout bounds one Ensure: its create and its one read.
-const PageTimeout = 10 * time.Second
+// DefaultPageTimeout bounds one Ensure's create when Executor.PageTimeout is
+// zero. The pager's verifying read has its own pages.VerifyTimeout.
+const DefaultPageTimeout = 10 * time.Second
 
 // NewPager returns the executor's page Reminder creator. It creates through
 // c, the operator's writing client, and makes its one read (the existing
@@ -146,7 +147,7 @@ func (p *pass) deliver(ctx context.Context, w *v1alpha1.ScheduledWork, now time.
 				continue
 			}
 			title, body := pageText(w, o, pg.Event)
-			pctx, cancel := context.WithTimeout(ctx, PageTimeout)
+			pctx, cancel := context.WithTimeout(ctx, DefaultPageTimeout)
 			got := p.e.Pager.Ensure(pctx, w, o.At.Time, pg.Event, pg.Attempt, title, body, now)
 			cancel()
 			o.Pages = settle(o.Pages, pg, got)

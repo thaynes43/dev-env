@@ -515,3 +515,122 @@ func TestAReplayedTransitionSendsNoSecondPage(t *testing.T) {
 	}
 	f.wantReminders(0)
 }
+
+// raceCancel makes e's status write that first carries an occurrence at at
+// in state, as the transition writes it, lose to a cancel of the item stored
+// just before it: the write then meets a conflict and is never stored.
+func (f *fixture) raceCancel(e *Executor, key types.NamespacedName, at time.Time, state string) *atomic.Bool {
+	var raced atomic.Bool
+	e.Client = interceptor.NewClient(e.Client.(client.WithWatch), interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if w, ok := obj.(*v1alpha1.ScheduledWork); ok && !raced.Load() {
+				if o := scheduledwork.Find(w, at); o != nil && o.State == state {
+					raced.Store(true)
+					f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
+				}
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+	return &raced
+}
+
+// No page goes out for a transition that was never stored: its status write
+// loses to a cancel, so the occurrence is Cancelled instead, and no Reminder
+// is created for the park or skip that never happened.
+func TestANeverStoredTransitionPagesNothing(t *testing.T) {
+	counting := func(n *atomic.Int32) func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		return func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.Reminder); ok {
+				n.Add(1)
+			}
+			return c.Create(ctx, obj, opts...)
+		}
+	}
+	t.Run("a park", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("audit", spec())
+		f.at(f.paging(), day0.Add(-time.Minute))
+		var creates atomic.Int32
+		e := f.pagingWith(counting(&creates))
+		e.Templates = NoTemplates{}
+		raced := f.raceCancel(e, key, day0, v1alpha1.OccurrenceParked)
+		f.at(e, day0)
+		if !raced.Load() {
+			t.Fatal("the park's write never met the cancel")
+		}
+		o := f.wantOcc(key, day0, v1alpha1.OccurrenceCancelled, ReasonCancelledAtRevalidation)
+		if len(o.Pages) != 0 || creates.Load() != 0 {
+			t.Errorf("pages %+v, %d Reminder creates", o.Pages, creates.Load())
+		}
+		f.wantReminders(0)
+	})
+	t.Run("a skip", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("daily", daily(spec()))
+		f.at(f.paging(), day0.Add(-time.Minute))
+		f.at(f.paging(), day0)
+		f.wantReminders(1)
+		day1 := day0.Add(24 * time.Hour)
+		var creates atomic.Int32
+		e := f.pagingWith(counting(&creates))
+		raced := f.raceCancel(e, key, day1, v1alpha1.OccurrenceSkipped)
+		f.at(e, day1)
+		if !raced.Load() {
+			t.Fatal("the skip's write never met the cancel")
+		}
+		o := f.wantOcc(key, day1, v1alpha1.OccurrenceCancelled, ReasonCancelledBeforeClaim)
+		if len(o.Pages) != 0 || creates.Load() != 0 {
+			t.Errorf("pages %+v, %d Reminder creates", o.Pages, creates.Load())
+		}
+		f.wantReminders(1)
+	})
+}
+
+// Each page's Ensure has its own deadline: by default within
+// DefaultPageTimeout, and a create that hangs is cut off at
+// Executor.PageTimeout, recorded skipped, and holds the pass no longer.
+func TestAPageCallIsBounded(t *testing.T) {
+	t.Run("default deadline", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("audit", spec())
+		f.at(f.paging(), day0.Add(-time.Minute))
+		var left atomic.Int64
+		e := f.pagingWith(func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.Reminder); ok {
+				if dl, ok := ctx.Deadline(); ok {
+					left.Store(int64(time.Until(dl)))
+				}
+			}
+			return c.Create(ctx, obj, opts...)
+		})
+		f.at(e, day0)
+		f.wantPage(key, day0, v1alpha1.PageEventDue, 0)
+		if d := time.Duration(left.Load()); d <= 0 || d > DefaultPageTimeout {
+			t.Errorf("the page create had %v left, want a deadline within %v", d, DefaultPageTimeout)
+		}
+	})
+	t.Run("a hanging create", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("audit", spec())
+		f.at(f.paging(), day0.Add(-time.Minute))
+		e := f.pagingWith(func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.Reminder); ok {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return c.Create(ctx, obj, opts...)
+		})
+		e.PageTimeout = 300 * time.Millisecond
+		start := time.Now()
+		f.at(e, day0)
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("the pass took %v with a hanging page create; the page should be cut off at %v", took, e.PageTimeout)
+		}
+		o := f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, "")
+		if p := pageOf(o, v1alpha1.PageEventDue, 0); p == nil || p.State != "skipped" || p.Reminder != "" {
+			t.Errorf("pages %+v", o.Pages)
+		}
+		f.wantReminders(0)
+	})
+}
