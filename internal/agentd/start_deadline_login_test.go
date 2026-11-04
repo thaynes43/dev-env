@@ -83,12 +83,24 @@ func (f *loginRaceTmux) finishCeremony() {
 // on, creating its window, and returns once it has released the lock.
 func openLogin(t *testing.T, f *loginRaceTmux, d *Daemon) (finish func()) {
 	t.Helper()
-	done := make(chan error, 1)
+	done, exited := make(chan error, 1), make(chan struct{})
 	r := f.openerRunner()
 	go func() {
+		defer close(exited)
 		_, err := LoginURL(context.Background(), r, d.S, d.Session, d.now)
 		done <- err
 	}()
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(f.gate) }) }
+	// A test that fails before finish still lets the opener go and waits for
+	// it, so no goroutine is left holding the lock.
+	t.Cleanup(func() {
+		letGo()
+		select {
+		case <-exited:
+		case <-time.After(10 * time.Second):
+		}
+	})
 	select {
 	case <-f.reached:
 	case <-time.After(10 * time.Second):
@@ -96,7 +108,7 @@ func openLogin(t *testing.T, f *loginRaceTmux, d *Daemon) (finish func()) {
 	}
 	return func() {
 		t.Helper()
-		close(f.gate)
+		letGo()
 		select {
 		case err := <-done:
 			if err != nil {
@@ -204,6 +216,7 @@ func TestRefusedHeldLaunchStopsTheWindowOfAnOpenerHoldingTheLock(t *testing.T) {
 			clock.Set(deadline.Add(time.Second))
 			pollWithin(t, d)
 			assertLaunchRefused(t, d, daemonTmux)
+			stopsWhileHeld := countLines(daemonTmux, "tmux kill-session")
 
 			// The opener goes on under its lock, creates its window and
 			// releases the lock; then the ceremony finishes in that window.
@@ -220,6 +233,16 @@ func TestRefusedHeldLaunchStopsTheWindowOfAnOpenerHoldingTheLock(t *testing.T) {
 				t.Fatalf("a login window outlived the refused launch (windows started %d, stop calls %d)", started, stopped)
 			}
 			assertLaunchRefused(t, d, daemonTmux)
+			// The one stop came after the opener released the lock.
+			if n := countLines(daemonTmux, "tmux kill-session -t ="+LoginTmuxSession); stopsWhileHeld != 0 || n != 1 {
+				t.Fatalf("daemon stops: %d while the opener held the lock, %d in all; want 0 and 1", stopsWhileHeld, n)
+			}
+
+			// A later request for a login (the user retries login url) opens
+			// no window: the session will never launch.
+			if _, err := LoginURL(context.Background(), f.runner(), d.S, d.Session, d.now); err == nil || !strings.Contains(err.Error(), protocol.StartDeadlinePassed) || f.window() {
+				t.Fatalf("login url after the refusal: %v, window %v", err, f.window())
+			}
 		})
 	}
 }
@@ -277,6 +300,54 @@ func TestRefusedHeldLaunchInProjectionModeStopsNoLoginWindow(t *testing.T) {
 			assertLaunchRefused(t, d, daemonTmux)
 			if n := countLines(daemonTmux, "tmux kill-session"); n != 0 {
 				t.Fatalf("a projection-mode refusal stopped a login window: %d stops", n)
+			}
+		})
+	}
+}
+
+// agentd ctl login url opens no login window for a session whose first launch
+// is refused: past or invalid start deadline, no launch record. A session
+// that launched, one still before its deadline and a Codex remote session
+// (exempt, as at boot) are not affected.
+func TestLoginURLRefusesASessionWhoseFirstLaunchIsRefused(t *testing.T) {
+	passed := deadlineNow.Add(-time.Second).Format(time.RFC3339)
+	for _, c := range []struct {
+		name, deadline string
+		launched       bool
+		codex          bool
+		refused        string
+	}{
+		{name: "no-deadline"},
+		{name: "before-deadline", deadline: deadlineNow.Add(time.Minute).Format(time.RFC3339)},
+		{name: "deadline-passed", deadline: passed, refused: protocol.StartDeadlinePassed},
+		{name: "deadline-at-now", deadline: deadlineNow.Format(time.RFC3339), refused: protocol.StartDeadlinePassed},
+		{name: "deadline-invalid", deadline: "tomorrow", refused: protocol.StartDeadlineInvalid},
+		{name: "launched", deadline: passed, launched: true},
+		{name: "codex-remote", deadline: passed, codex: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newLoginRaceTmux()
+			opener := f.runner()
+			d, _, _ := loginRaceDaemon(t, opener)
+			d.S.StartDeadline = c.deadline
+			if c.launched {
+				writeFile(t, d.S.statePath(launchFile), "{}")
+			}
+			if c.codex {
+				d.Session.Agent, d.Session.Model = protocol.AgentCodex, "gpt-6-luna"
+			}
+			u, err := LoginURL(context.Background(), opener, d.S, d.Session, d.now)
+			if c.refused != "" {
+				if err == nil || !strings.Contains(err.Error(), c.refused) || u != "" {
+					t.Fatalf("login url: link returned %v, error %v, want a refusal naming %q", u != "", err, c.refused)
+				}
+				if f.window() || countLines(opener, "tmux") != 0 {
+					t.Fatalf("a refused login ran tmux: %q", opener.lines())
+				}
+				return
+			}
+			if err != nil || u == "" || !f.window() {
+				t.Fatalf("login url: link returned %v, error %v, window %v", u != "", err, f.window())
 			}
 		})
 	}

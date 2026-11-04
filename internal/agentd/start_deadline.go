@@ -43,10 +43,18 @@ func startDeadlineRefusal(raw string, launched bool, now time.Time) string {
 // the check could not tell a late first boot from a later one, and a value
 // that reached the pod some other way would refuse every boot.
 func (d *Daemon) firstLaunchRefusal() string {
-	if codexRemoteSession(d.Session) {
+	return firstLaunchRefusal(d.S, d.Session, d.now())
+}
+
+// firstLaunchRefusal is the same check for a process other than the daemon:
+// agentd ctl login url opens no login window for a session that cannot
+// launch, so a ceremony requested after a refused held launch leaves nothing
+// behind (remote.go, LoginURL).
+func firstLaunchRefusal(s Settings, sess protocol.Session, now time.Time) string {
+	if codexRemoteSession(sess) {
 		return ""
 	}
-	return startDeadlineRefusal(d.S.StartDeadline, firstLaunchRecorded(d.S), d.now())
+	return startDeadlineRefusal(s.StartDeadline, firstLaunchRecorded(s), now)
 }
 
 // firstLaunchRecorded reports whether the session has a first-launch record

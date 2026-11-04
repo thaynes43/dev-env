@@ -532,6 +532,9 @@ func (d *Daemon) refuseHeldLaunchPastDeadline(ctx context.Context, w *remoteWait
 	if why == "" {
 		return false
 	}
+	// The refusal leaves writerRefused unset: the supervise loop skips
+	// pollRemoteLogin, and with it a pending login-window stop, for an
+	// observational daemon.
 	d.remote = nil
 	if !d.projectsClaude() {
 		d.loginStopPending = true

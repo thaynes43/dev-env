@@ -211,6 +211,14 @@ func LoginURL(ctx context.Context, r Runner, s Settings, sess protocol.Session, 
 		return "", err
 	}
 	defer release()
+	// A session whose first launch is refused (DESIGN-054: its start deadline
+	// passed, or is invalid, with no launch record) never starts its agent, so
+	// a login would only leave a window behind. The daemon stops a refused
+	// launch's window under this lock, after any opener already past this
+	// check; checked here, under the same lock, no later opener makes one.
+	if why := firstLaunchRefusal(s, sess, now()); why != "" {
+		return "", errors.New("this session's first launch was refused (" + why + "), so no login is opened")
+	}
 	// One owner per rotating refresh token: never a second CLI on this HOME
 	// while the agent's CLI runs, even if its login file reads as absent. A
 	// login that still reads as usable may be renewed or replaced (a renewal
