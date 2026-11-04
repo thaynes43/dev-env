@@ -189,6 +189,16 @@ func (s *Scheduler) tickOne(ctx context.Context, r *v1alpha1.Reminder) {
 	if s.syncCalendar(ctx, r, now) {
 		changed = true
 	}
+	// A projection stays pending through its last occurrence. It leaves pending
+	// only once until is strictly in the past, and the calendar event stays:
+	// delete remains the cancel path.
+	if r.Spec.Projection && projectionUntilPassed(r, now) {
+		r.Status.State = v1alpha1.ReminderSkipped
+		r.Status.NextDue = nil
+		r.Status.Message = ProjectionUntilMessage
+		s.write(ctx, r)
+		return
+	}
 	if changed && !s.write(ctx, r) {
 		return
 	}
@@ -227,6 +237,12 @@ func (s *Scheduler) plan(r *v1alpha1.Reminder, now time.Time) {
 	}
 	occ, ok := sch.Next(notBefore)
 	if !ok {
+		if r.Spec.Projection {
+			r.Status.State = v1alpha1.ReminderPending
+			r.Status.NextDue = nil
+			r.Status.Message = ProjectionPendingMessage
+			return
+		}
 		s.fail(r, "no occurrence remains at or after "+notBefore.UTC().Format(time.RFC3339))
 		return
 	}
@@ -267,6 +283,22 @@ func pushoverTargets(spec v1alpha1.ReminderSpec) []string {
 		}
 	}
 	return out
+}
+
+// pageTargets are the Pushover targets a fire may claim. A projection reminder
+// is calendar-only: it never pages, even if a Pushover target was stored.
+func pageTargets(spec v1alpha1.ReminderSpec) []string {
+	if spec.Projection {
+		return nil
+	}
+	return pushoverTargets(spec)
+}
+
+func projectionUntilPassed(r *v1alpha1.Reminder, now time.Time) bool {
+	if r.Spec.Recurrence == nil || r.Spec.Recurrence.Until == nil {
+		return false
+	}
+	return now.After(r.Spec.Recurrence.Until.Time)
 }
 
 func syncEntry(r *v1alpha1.Reminder, target string) *v1alpha1.ReminderCalendarSync {
@@ -452,7 +484,7 @@ func (s *Scheduler) fire(ctx context.Context, r *v1alpha1.Reminder, now time.Tim
 		s.finish(ctx, r, now, "missed")
 		return
 	}
-	for _, target := range pushoverTargets(r.Spec) {
+	for _, target := range pageTargets(r.Spec) {
 		d := findDelivery(r, target, occ)
 		stamp := metav1.NewTime(now.UTC())
 		switch {
@@ -551,7 +583,7 @@ func (s *Scheduler) record(ctx context.Context, r *v1alpha1.Reminder, target str
 // occurrenceDone reports whether every pushover target of the occurrence has a
 // final delivery.
 func occurrenceDone(r *v1alpha1.Reminder, occ int32) bool {
-	for _, target := range pushoverTargets(r.Spec) {
+	for _, target := range pageTargets(r.Spec) {
 		d := findDelivery(r, target, occ)
 		if d == nil {
 			return false
@@ -601,6 +633,14 @@ func (s *Scheduler) finish(ctx context.Context, r *v1alpha1.Reminder, now time.T
 		}
 	}
 	r.Status.PlanHash = curPlan
+	if r.Spec.Projection && !more {
+		r.Status.State = v1alpha1.ReminderPending
+		r.Status.NextDue = nil
+		r.Status.Deliveries = nil
+		r.Status.Message = ProjectionPendingMessage
+		s.write(ctx, r)
+		return
+	}
 	raw := outcome
 	if outcome == "skipped" || outcome == "superseded" {
 		outcome += " (nothing was delivered)"

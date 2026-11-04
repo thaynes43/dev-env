@@ -113,6 +113,8 @@ type ReminderRecurrence struct {
 }
 
 // ReminderSpec is what the owner asked for.
+// A projection reminder (DESIGN-054 S4) is a calendar image only.
+// +kubebuilder:validation:XValidation:rule="!has(self.projection) || !self.projection || self.targets.all(t, t.startsWith('calendar:'))",message="a projection reminder has calendar targets only"
 type ReminderSpec struct {
 	// Title is the notification and calendar title.
 	// +kubebuilder:validation:MinLength=1
@@ -164,6 +166,13 @@ type ReminderSpec struct {
 	// cancelled state and removes the calendar entry.
 	// +optional
 	Cancelled bool `json:"cancelled,omitempty"`
+
+	// Projection marks a calendar projection of scheduled work (DESIGN-054 S4).
+	// The CRD allows calendar targets only. The scheduler keeps the reminder
+	// pending until it is cancelled or its until passes, and does not finish
+	// it at the last occurrence.
+	// +optional
+	Projection bool `json:"projection,omitempty"`
 }
 
 // ReminderDelivery is one target's delivery of the current occurrence.

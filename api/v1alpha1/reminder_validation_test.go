@@ -49,6 +49,26 @@ func TestReminderAccepts(t *testing.T) {
 	if err := k8s.Create(ctx(t), monthly); err != nil {
 		t.Fatalf("a monthly recurrence: %v", err)
 	}
+	projection := reminder()
+	projection.Spec.Projection = true
+	projection.Spec.Targets = []string{"calendar:haynesnetwork"}
+	if err := k8s.Create(ctx(t), projection); err != nil {
+		t.Fatalf("a projection reminder: %v", err)
+	}
+}
+
+func TestProjectionReminderRefusesPushover(t *testing.T) {
+	for name, targets := range map[string][]string{
+		"pushover only": {"pushover:default"},
+		"mixed":         {"calendar:haynesnetwork", "pushover:default"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := reminder()
+			r.Spec.Projection = true
+			r.Spec.Targets = targets
+			wantInvalid(t, k8s.Create(ctx(t), r), "a projection reminder has calendar targets only")
+		})
+	}
 }
 
 func TestReminderRefuses(t *testing.T) {
