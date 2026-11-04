@@ -190,10 +190,12 @@ const (
 // RefusedBeforeLaunch reports positive evidence that a session's agent never
 // ran: the reconciler refused it before its first pod (the launch gate, or a
 // session agentd would refuse), so it is Failed, its PodReady condition gives
-// the reason SessionInvalid, and no pod is recorded. Missing telemetry alone
-// (no agent report) is not that evidence.
+// the reason SessionInvalid, no pod is recorded now, and no agent report was
+// ever made. The pod name holds only the current pod, so a session whose
+// earlier pod ran and reported, refused on a rebuild, is not this. Missing
+// telemetry alone (no agent report) is not that evidence either.
 func RefusedBeforeLaunch(s *v1alpha1.AgentSession) bool {
-	if s.Status.Phase != v1alpha1.PhaseFailed || s.Status.PodName != "" {
+	if s.Status.Phase != v1alpha1.PhaseFailed || s.Status.PodName != "" || s.Status.Agent != nil {
 		return false
 	}
 	for i := range s.Status.Conditions {

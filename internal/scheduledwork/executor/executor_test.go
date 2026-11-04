@@ -669,6 +669,23 @@ func TestAnOldCRDDispatchesNothing(t *testing.T) {
 	}
 }
 
+// A preflight that cannot read the CRD (a missing grant, for example)
+// dispatches nothing, and counts each failed read.
+func TestAnUnreadableCRDDispatchesNothing(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	ex := func() *Executor { e := f.executor(); e.Reader = crdDenied{Reader: cluster(t)}; return e }
+	sent := f.writes.Load()
+	f.at(ex(), day0.Add(-time.Minute))
+	f.at(ex(), day0)
+	if w := f.get(key); len(w.Status.Occurrences) != 0 || w.Status.NextDue != nil || f.writes.Load() != sent {
+		t.Fatalf("the executor wrote without a readable CRD: nextDue %v occurrences %v", w.Status.NextDue, w.Status.Occurrences)
+	}
+	if n := counted(t, f.schemaReadFailures); n != 2 || counted(t, f.schemaMissing) != 0 {
+		t.Fatalf("read failures %v, schema missing %v; want 2 and 0", n, counted(t, f.schemaMissing))
+	}
+}
+
 // The read back after a write is the second check, for a CRD that changed
 // after the preflight: when the item read from the API server lacks the field
 // just written, the executor counts it and writes nothing more for the item

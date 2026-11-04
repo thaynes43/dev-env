@@ -339,12 +339,18 @@ func TestRecordIntoAnEndingOccurrence(t *testing.T) {
 	noTelemetry.Status.Phase = v1alpha1.PhaseFailed
 	hadPod := refusedSession(name, "uid-pod")
 	hadPod.Status.PodName = name
+	// An earlier pod ran and reported, then the session lost it and was
+	// refused on a rebuild: no pod now, but it did run.
+	ranThenRefused := refusedSession(name, "uid-ran")
+	hb := metav1.NewTime(at)
+	ranThenRefused.Status.Agent = &v1alpha1.AgentStatus{Status: "running", LastHeartbeat: &hb}
 	for what, c := range map[string]struct {
 		s     *v1alpha1.AgentSession
 		state string
 	}{
 		"failed with no agent report, no refusal condition": {noTelemetry, v1alpha1.OccurrenceClaimed},
 		"refused, but a pod is recorded":                    {hadPod, v1alpha1.OccurrenceClaimed},
+		"refused on a rebuild after an agent report":        {ranThenRefused, v1alpha1.OccurrenceClaimed},
 		"refused, but the occurrence was Dispatched":        {refusedSession(name, "uid-late"), v1alpha1.OccurrenceDispatched},
 	} {
 		w := &v1alpha1.ScheduledWork{}

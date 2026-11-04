@@ -31,7 +31,7 @@ func TestScheduledWorkFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	ex := newScheduledWorkExecutor(o, nil, nil, nil, logr.Discard())
-	if ex == nil || !ex.NeedLeaderElection() || ex.SchemaMissing == nil {
+	if ex == nil || !ex.NeedLeaderElection() || ex.SchemaMissing == nil || ex.SchemaReadFailures == nil {
 		t.Fatalf("the flag on: %+v", ex)
 	}
 	if ex.Namespace != o.templatesNamespace || ex.SessionNamespace != o.sessionNamespace {

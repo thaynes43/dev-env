@@ -212,8 +212,9 @@ type fixture struct {
 	// the API server; beforeWriteAt zero is the next write.
 	beforeWrite   atomic.Pointer[func()]
 	beforeWriteAt atomic.Int32
-	// schemaMissing is the executors' MetricSchemaMissing counter.
-	schemaMissing prometheus.Counter
+	// schemaMissing and schemaReadFailures are the executors' schema
+	// counters.
+	schemaMissing, schemaReadFailures prometheus.Counter
 	// afterWrite, when set, edits the object a successful status write
 	// returns, as an older CRD's pruning would.
 	afterWrite atomic.Pointer[func(client.Object)]
@@ -225,7 +226,7 @@ func newFixture(t *testing.T) *fixture {
 	n := nsSeq.Add(1)
 	f := &fixture{t: t, items: fmt.Sprintf("sw-items-%d", n), sessions: fmt.Sprintf("sw-sessions-%d", n),
 		clock: &clock{now: day0.Add(-time.Hour)}, auth: &authorizer{}, tmpl: resolver{"ops-audit": opsAudit},
-		schemaMissing: NewSchemaMissingCounter()}
+		schemaMissing: NewSchemaMissingCounter(), schemaReadFailures: NewSchemaReadFailuresCounter()}
 	for _, ns := range []string{f.items, f.sessions} {
 		if err := c.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
 			t.Fatal(err)
@@ -290,8 +291,8 @@ func (f *fixture) executor() *Executor {
 		Client: writer, Reader: cluster(f.t),
 		Namespace: f.items, SessionNamespace: f.sessions,
 		Creator: f.create, Authorizer: f.auth, Templates: f.tmpl,
-		SchemaMissing: f.schemaMissing,
-		Log:           logr.Discard(), Now: f.clock.Now,
+		SchemaMissing: f.schemaMissing, SchemaReadFailures: f.schemaReadFailures,
+		Log: logr.Discard(), Now: f.clock.Now,
 	}
 }
 
@@ -610,4 +611,15 @@ func (r prunedReader) Get(ctx context.Context, key client.ObjectKey, obj client.
 		}
 	}
 	return nil
+}
+
+// crdDenied refuses every read of a CustomResourceDefinition, as a reader
+// without the get grant on it is refused.
+type crdDenied struct{ client.Reader }
+
+func (r crdDenied) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if obj.GetObjectKind().GroupVersionKind().Kind == "CustomResourceDefinition" {
+		return apierrors.NewForbidden(schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, key.Name, errors.New("injected: no get grant"))
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
 }

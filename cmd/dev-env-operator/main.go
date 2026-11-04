@@ -1087,7 +1087,7 @@ func run(args []string) error {
 		// The scheduled-work executor is default off (DESIGN-054 S3b). It
 		// creates through the API's fixed-name entry, so it needs the API.
 		if ex := newScheduledWorkExecutor(o, mgr.GetClient(), mgr.GetAPIReader(), api, ctrl.Log.WithName("scheduled-work")); ex != nil {
-			ctrlmetrics.Registry.MustRegister(ex.SchemaMissing)
+			ctrlmetrics.Registry.MustRegister(ex.SchemaMissing, ex.SchemaReadFailures)
 			if err := mgr.Add(ex); err != nil {
 				return err
 			}

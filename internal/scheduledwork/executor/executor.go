@@ -249,10 +249,13 @@ type Executor struct {
 	// DecisionWindow is how long a Parked occurrence waits; zero is
 	// DefaultDecisionWindow.
 	DecisionWindow time.Duration
-	// SchemaMissing counts the writes whose stored object lacked a field the
-	// executor wrote (MetricSchemaMissing); nil counts nothing.
-	SchemaMissing prometheus.Counter
-	Log           logr.Logger
+	// SchemaMissing counts the passes and writes that found the CRD or the
+	// stored item without a field the executor needs (MetricSchemaMissing);
+	// SchemaReadFailures the preflight's failed CRD reads
+	// (MetricSchemaReadFailures). Nil counts nothing.
+	SchemaMissing      prometheus.Counter
+	SchemaReadFailures prometheus.Counter
+	Log                logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 
@@ -1001,7 +1004,7 @@ func (e *Executor) schemaReady(ctx context.Context) bool {
 	head := &metav1.PartialObjectMetadata{}
 	head.SetGroupVersionKind(crdKind)
 	if err := e.Reader.Get(ctx, key, head); err != nil {
-		e.schemaVerdict(false, "the ScheduledWork CRD cannot be read; dispatching nothing", "error", err.Error())
+		e.schemaReadFailed(err)
 		return false
 	}
 	now := e.now()
@@ -1011,7 +1014,7 @@ func (e *Executor) schemaReady(ctx context.Context) bool {
 	crd := &unstructured.Unstructured{}
 	crd.SetGroupVersionKind(crdKind)
 	if err := e.Reader.Get(ctx, key, crd); err != nil {
-		e.schemaVerdict(false, "the ScheduledWork CRD cannot be read; dispatching nothing", "error", err.Error())
+		e.schemaReadFailed(err)
 		return false
 	}
 	e.schemaRV, e.schemaAt = crd.GetResourceVersion(), now
@@ -1024,6 +1027,15 @@ func (e *Executor) schemaReady(ctx context.Context) bool {
 	}
 	e.schemaVerdict(true, "the installed ScheduledWork CRD carries the occurrence fields the executor needs")
 	return true
+}
+
+// schemaReadFailed counts a failed read of the CRD (a missing grant, for
+// example), logs it once, and leaves the verdict not ready.
+func (e *Executor) schemaReadFailed(err error) {
+	if e.SchemaReadFailures != nil {
+		e.SchemaReadFailures.Inc()
+	}
+	e.schemaVerdict(false, "the ScheduledWork CRD cannot be read; dispatching nothing", "error", err.Error())
 }
 
 // schemaVerdict records the preflight's verdict and logs it when it changes.
@@ -1080,6 +1092,19 @@ func (p *pass) schemaMissing(lg logr.Logger, field string) error {
 // MetricSchemaMissing counts the writes whose stored object lacked a field the
 // executor wrote (an older CRD).
 const MetricSchemaMissing = "dev_env_scheduled_work_schema_missing_total"
+
+// MetricSchemaReadFailures counts the schema preflight's failed reads of the
+// ScheduledWork CRD.
+const MetricSchemaReadFailures = "dev_env_scheduled_work_schema_read_failures_total"
+
+// NewSchemaReadFailuresCounter returns the counter of
+// MetricSchemaReadFailures. Register it once per process.
+func NewSchemaReadFailuresCounter() prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name: MetricSchemaReadFailures,
+		Help: "Failed reads of the ScheduledWork CRD by the scheduled-work executor's schema preflight, such as a missing get grant (DESIGN-054). The executor dispatches nothing in such a pass.",
+	})
+}
 
 // NewSchemaMissingCounter returns the counter of MetricSchemaMissing.
 // Register it once per process.
