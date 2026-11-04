@@ -262,3 +262,40 @@ shows".
 Fixed: `acceptedResponse` now requires a non-zero token count, so an unflagged error entry with a real model name and zero or empty usage is not proof of acceptance (new cases in the synthetic-entry table); the in-memory overlay stays visible when the applied receipt cannot be read (fail closed, RED before the fix).
 
 Known limitation, not fixed here: the receipt is written before the credentials. If the credentials write fails after a new receipt generation N+1 is written, a marker for N reads as older while the pod still holds N's rejected token, so `agent-run auth status` can show Ready for N+1 until the credentials sync succeeds. Also: a session view with no agent status resets the rc reason (state stays unknown, gates nothing); `beat()` reads the marker twice across CollectStatus and overlayRejection (single writer, not reachable today).
+
+## Revision 7 (2026-11-04): consumer-side account guard (CG-7)
+
+The consumer used to merge whatever generation the keeper projected, including one for another account,
+and send an automatic continue for it. The account fence lived only on the publisher side.
+
+agentd now keeps `claude-access-account.json` in its state directory: a fingerprint (SHA-256) of the
+account and organization identifiers, the applied generation and, when set, the generation at which the
+account differed. No identifier is stored. It is a file of its own because `claude-access-generation.json`
+is strict-decoded: a new member there would make a rolled-back older agentd refuse the receipt. An older
+agentd ignores the new file.
+
+- No file: seeded from the applied generation, never flagged (an earlier account is unknown).
+- Same fingerprint at a later generation: a change mark clears.
+- A different fingerprint at a later generation, or an unreadable file: that generation is marked changed
+  (unreadable is shown as "unconfirmed"). No automatic continue is sent for it, its continue receipt reads
+  `account-changed`, and the status line says so. Later generations do not retry the old account's error.
+- A flip back (A, B, A) is another change; only a later generation that matches the recorded account clears.
+- The organization is part of the fingerprint: the same account under another organization is a change.
+- A record that cannot be written does not fail the sync (a failed sync stops the pod following new
+  generations and reads as login-required). The credentials and the generation receipt still merge, the
+  record stays behind the receipt, and the status says "account unconfirmed". Only the automatic continue
+  stays off: it needs a record that is current for the applied generation. A record that is
+  valid but behind the receipt is not confirmed either, and a later generation whose fingerprint matches such
+  a record is still marked (a failed write can hide a hop: A, then B while writes fail, then A again;
+  found by the advisory review of the final head). The same holds when the writes recover while the latest
+  generation is re-synced and the receipt already equals the incoming one (found by QA round 4): the record
+  must be at most one generation behind. Not covered, tamper-only: a deleted generation receipt takes away
+  the receipt's own rollback fence as well, so the account guard reads a pod with no receipt as a first run. A record gone when a NEW generation arrives is
+  seeded again and marks that generation unconfirmed ("missing"), so its continue is skipped; the same
+  holds for an agentd upgraded in place when a new generation arrives before its first poll. A record gone
+  while the receipt's own generation is current is read as a first run and seeded without a mark.
+- Same-account behaviour is unchanged. The only existing test changed is the #915 characterization of the
+  old behaviour, inverted on purpose.
+
+Not covered: `agent-run auth status` does not show the mark (agentd status only); a stricter guard grants
+no access. Source only until a release and an agent image rollout.

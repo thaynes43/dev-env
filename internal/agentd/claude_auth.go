@@ -131,6 +131,11 @@ func SyncClaudeAccess(s Settings, now time.Time) error {
 		return ErrClaudeAccess
 	}
 
+	// A record that cannot be written must not stop the pod following new
+	// generations: the credentials still merge, and the missing record keeps the
+	// automatic continue off until a later poll writes it.
+	_ = recordClaudeAccount(s, a)
+
 	// Persist the generation fence first: if the credentials write fails, an
 	// older projection cannot overwrite the newer generation on restart. The
 	// same generation is always safe to apply again.
@@ -239,9 +244,9 @@ func projectionStatusWith(s Settings, now time.Time, v rejectionView) string {
 		// Unexpired: a rejection recorded for this generation (or a marker that
 		// cannot be believed) outranks "logged in".
 		if text := rejectionUsableText(v, now); text != "" {
-			return text
+			return text + accountStatusNote(s)
 		}
-		return "logged in on the keeper's projection, access token lapses " + c.Expires.Format(time.RFC3339)
+		return "logged in on the keeper's projection, access token lapses " + c.Expires.Format(time.RFC3339) + accountStatusNote(s)
 	}
 	// Expired: the expiry text stands (refreshing inside the pending window,
 	// login-required after, or when the login itself lapsed), with the recorded

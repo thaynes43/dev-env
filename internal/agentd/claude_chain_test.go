@@ -165,12 +165,11 @@ func TestClaudeChainRefusedMaterialNeverRetries(t *testing.T) {
 	})
 }
 
-// Characterization, not a requirement: the consumer has no account binding of its
-// own. It merges whatever generation the keeper projects, so a higher generation
-// for another account is applied and starts one continue. The account fence lives
-// on the publisher side (the keeper refuses another account). If the consumer
-// should bind the account too, that is a new decision with its own change.
-func TestClaudeChainConsumerFollowsTheKeeperAccount(t *testing.T) {
+// CG-7: the consumer used to follow whatever account the keeper projected and send a
+// continue for it (pinned here as a characterization until the guard landed). It now
+// records the account and sends no automatic continue for a generation of another
+// account; same-account behaviour is unchanged (every other chain test).
+func TestClaudeChainStopsAtAnAccountChange(t *testing.T) {
 	rg := newContinueRig(t, protocol.ModeRemote, true, true)
 	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
 	publish(t, rg.live, projAccess(2, 9*time.Hour))
@@ -182,11 +181,8 @@ func TestClaudeChainConsumerFollowsTheKeeperAccount(t *testing.T) {
 	other.AccountUUID = "33333333-3333-4333-8333-333333333333"
 	publish(t, rg.live, other)
 	rg.pollProduction()
-	if rg.continues() != 1 {
-		t.Fatalf("expected the current behaviour (one continue after a merged generation): %d", rg.continues())
-	}
 	rg.pollProduction()
-	if rg.continues() != 1 {
-		t.Error("a second continue for the same generation")
+	if rg.continues() != 0 {
+		t.Fatalf("a continue was sent for a generation of another account: %d", rg.continues())
 	}
 }
