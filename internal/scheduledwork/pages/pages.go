@@ -306,15 +306,27 @@ func (p *Pager) stored(ctx context.Context, want *v1alpha1.Reminder) (v1alpha1.S
 }
 
 // EnsureInto is Ensure, recorded in pages with v1alpha1.AppendPage. It returns
-// the new list and leaves pages unchanged. An unknown event or an attempt
-// outside 0..ScheduledWorkMaxAttempt records nothing and returns pages as
-// they are: Ensure's held, skipped entry for it would replace a real page of
-// the same event and attempt, and drop that page's Reminder name.
+// the new list and leaves pages unchanged. Two cases record nothing and
+// return pages as they are, because Ensure's skipped entry would replace a
+// real page of the same event and attempt and drop its Reminder name:
+//
+//   - an unknown event or an attempt outside 0..ScheduledWorkMaxAttempt;
+//   - a skipped entry (no Reminder) for an event and attempt whose recorded
+//     entry already names a Reminder: a replay whose Create met AlreadyExists
+//     and whose verifying read failed. An unconfirmed read is no evidence
+//     against a Reminder already recorded, so the entry keeps its name and its
+//     last known state; a later replay whose read succeeds updates it.
 func (p *Pager) EnsureInto(ctx context.Context, pages []v1alpha1.ScheduledWorkPage, work *v1alpha1.ScheduledWork, at time.Time, event string, attempt int32, title, body string, now time.Time) []v1alpha1.ScheduledWorkPage {
 	if !slices.Contains(events, event) || attempt < 0 || attempt > v1alpha1.ScheduledWorkMaxAttempt {
 		return pages
 	}
-	return v1alpha1.AppendPage(pages, p.Ensure(ctx, work, at, event, attempt, title, body, now))
+	got := p.Ensure(ctx, work, at, event, attempt, title, body, now)
+	if got.Reminder == "" && slices.ContainsFunc(pages, func(pg v1alpha1.ScheduledWorkPage) bool {
+		return pg.Event == got.Event && pg.Attempt == got.Attempt && pg.Reminder != ""
+	}) {
+		return pages
+	}
+	return v1alpha1.AppendPage(pages, got)
 }
 
 // Refresh copies the state of the page's Reminder onto the page, with one

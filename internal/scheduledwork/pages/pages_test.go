@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -674,5 +675,64 @@ func TestEnsureIntoKeepsRealPagesFromAnInvalidCall(t *testing.T) {
 	got := p.EnsureInto(context.Background(), slices.Clone(real), w, occAt, v1alpha1.PageEventDue, 2, "Due", "b", nowAt)
 	if len(got) != 3 || got[2].Reminder != Key(w, occAt, v1alpha1.PageEventDue, 2) {
 		t.Fatalf("a valid call: %+v", got)
+	}
+}
+
+// A replay of a recorded page whose Reminder exists (Create gives
+// AlreadyExists) but whose verifying read fails keeps the recorded entry as
+// it is: an unconfirmed read is no evidence against a Reminder already named,
+// so its name and state are never dropped for a skipped entry. A read that
+// confirms the Reminder still updates the entry.
+func TestEnsureIntoKeepsARecordedPageWhenTheReadFails(t *testing.T) {
+	w := item("pushover:default")
+	existing, err := Build(w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing.Status.State = v1alpha1.ReminderSent
+	// Recorded while the Reminder was pending; it has been sent since.
+	recorded := []v1alpha1.ScheduledWorkPage{
+		{Event: v1alpha1.PageEventDue, Attempt: 1, Reminder: existing.Name},
+		{Event: v1alpha1.PageEventParked, Attempt: 0, Reminder: "swp-other", State: "sent"},
+	}
+	var readFails atomic.Bool
+	readFails.Store(true)
+	creates := 0
+	p := &Pager{Client: fakeClient(t, interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+			creates++
+			return cl.Create(ctx, o, opts...)
+		},
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+			if readFails.Load() {
+				return apierrors.NewServiceUnavailable("injected: the verifying read failed")
+			}
+			return cl.Get(ctx, key, o, opts...)
+		},
+	}, existing)}
+	got := p.EnsureInto(context.Background(), slices.Clone(recorded), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt)
+	if creates != 1 {
+		t.Fatalf("%d creates, want the one that met AlreadyExists", creates)
+	}
+	if !slices.Equal(got, recorded) {
+		t.Fatalf("pages = %+v, want the recorded page kept with its name and state %+v", got, recorded)
+	}
+	// Only an entry of the same event and attempt that names a Reminder is
+	// kept: a stored intent (no name yet) is settled skipped, and another
+	// page's entry does not stop this one being recorded.
+	intent := []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventDue, Attempt: 1}}
+	if got := p.EnsureInto(context.Background(), intent, w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); !slices.Equal(got, []v1alpha1.ScheduledWorkPage{{Event: "due", Attempt: 1, State: "skipped"}}) {
+		t.Errorf("a stored intent with the read failing: %+v", got)
+	}
+	other := recorded[1:]
+	if got := p.EnsureInto(context.Background(), slices.Clone(other), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); len(got) != 2 || got[1] != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}) {
+		t.Errorf("another page's entry kept this one from being recorded: %+v", got)
+	}
+	// With the read working, the replay confirms the Reminder and records its
+	// state.
+	readFails.Store(false)
+	got = p.EnsureInto(context.Background(), slices.Clone(recorded), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt)
+	if want := (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, Reminder: existing.Name, State: "sent"}); len(got) != 2 || got[0] != want {
+		t.Fatalf("a confirmed replay: %+v, want %+v first", got, want)
 	}
 }
