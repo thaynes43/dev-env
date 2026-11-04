@@ -102,6 +102,7 @@ status:
     delivery: accepted|refused|ambiguous     # interactive work-order delivery; a note, not a state
     reason: "..."
     claimedAt: ...
+    retriedAt: ...                           # set by a human approve or retry of a Parked occurrence
     session: sw-1a2b3c4d5e6f-202612031400
     specHash: <sha256>                       # the authority-carrying spec fields at claim (as approval.specHash)
     execution: {state, reason}               # headless: copied from Session status.taskResult (Succeeded|Failed|TimedOut|Unknown)
@@ -178,7 +179,8 @@ stateDiagram-v2
   Delivered --> Failed: Remote Control state login-required
   Delivered --> Ended: session ended (never registered)
   Opened --> Ended: session ended
-  Parked --> Claimed: human approves or retries
+  Parked --> Claimed: human approves or retries (opens a fresh window from retriedAt)
+  Parked --> Skipped: no human action within the decision window
 ```
 
 - **Headless results come from `status.taskResult`, never from the phase.** A
@@ -339,7 +341,7 @@ stateDiagram-v2
   page is harmless, a stale task is not. When the executor starts after an outage,
   all the missed occurrences of one item collapse into one `Skipped` record with a
   count and one page.
-- **Concurrency.** One unfinished occurrence per ScheduledWork; a later occurrence
+- **Concurrency.** One unfinished occurrence per ScheduledWork (`Parked` does not count as unfinished, so a parked occurrence never blocks the next one); a later occurrence
   that comes due while one runs is `Skipped` ("previous still running"). Separate
   global caps: `--scheduled-work-max-headless` (default 2) and
   `--scheduled-work-max-interactive` (default 1). The cap is checked **before** the
@@ -371,7 +373,15 @@ Before dispatch, the claimer checks, in order, and parks on the first failure:
    the session's own reason. It is not predicted.
 5. The normal session creation limits for the chosen basis (above).
 
-A parked occurrence pages Tom with the reason and waits for a human retry or cancel.
+A parked occurrence pages Tom with the reason and waits for a human approve, retry
+or cancel. A human approve or retry sets `retriedAt` and opens a fresh window for
+that occurrence only. Its grace, the claim-without-session rule and the start
+deadline passed to agentd all count from `retriedAt`, not from the due time. A
+person can therefore run parked work late on purpose, which the "missed
+occurrences" rule otherwise never does. A parked occurrence no one acts on within the
+decision window (default 24 hours, or until the item's next occurrence is due,
+whichever comes first) becomes `Skipped` ("parked, not approved in time"). Parked
+entries therefore never pile up, even though non-terminal entries are never pruned.
 
 ## Interactive and headless (R4)
 
@@ -472,7 +482,7 @@ library only.
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
 | S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), the kind unserved before and after due plus grace, a page Reminder that cannot be created (release not blocked), and a never-launched agent past its start deadline reaching the end rule through the pod-age proof. Shipped in a release before S3b | PR, CI, native review, release |
-| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
+| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, approve of a Parked occurrence after grace running from retriedAt, an unapproved Parked occurrence expiring to Skipped, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
 | S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
