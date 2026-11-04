@@ -10,7 +10,7 @@ scheduled work).
 
 | Layer | State |
 |---|---|
-| Design | this document, proposed; revision 2 after a native independent review |
+| Design | this document, proposed; revised after native independent and advisory reviews |
 | Source | none yet; increments in "Delivery" below |
 | Installed / usable | no. Nothing here is deployed, scheduled or sent |
 
@@ -103,7 +103,9 @@ status:
     reason: "..."
     claimedAt: ...
     session: sw-1a2b3c4d5e6f-202612031400
-    result: {summary, prURLs, headSHAs}      # from the session's retained outcome (headless)
+    specHash: <sha256>                       # the authority-carrying spec fields at claim (as approval.specHash)
+    execution: {state, reason}               # headless: copied from Session status.taskResult (Succeeded|Failed|TimedOut|Unknown)
+    reported: {summary, prURLs, headSHAs}    # headless: the agent's own retained outcome; a claim, not validated
     pages:                                   # at most 4, one per event
     - {event: due|link|parked|failed|result, reminder: <name>, state: sent|failed|ambiguous|skipped}
 ```
@@ -163,9 +165,12 @@ stateDiagram-v2
   Claimed --> Ambiguous: derived-name session lacks the matching UID label or occurrence annotation
   Dispatched --> Running: headless session Running
   Dispatched --> Failed: not Running (headless) or Ready (interactive) by due + grace
-  Running --> Succeeded: headless agent ended, outcome read
-  Running --> Failed: agent failed, maxDuration, or session reaped
-  Dispatched --> Failed: session Failed or reaped before Running
+  Dispatched --> Succeeded: headless taskResult Succeeded (also a fast task never seen Running)
+  Running --> Succeeded: headless taskResult Succeeded
+  Dispatched --> Failed: headless taskResult Failed or TimedOut, or session reaped with no taskResult
+  Running --> Failed: headless taskResult Failed or TimedOut, or session reaped with no taskResult
+  Dispatched --> Ended: headless taskResult Unknown (exit 0 with no success event)
+  Running --> Ended: headless taskResult Unknown
   Dispatched --> Delivered: interactive, delivery attempted (accepted or ambiguous)
   Dispatched --> Failed: interactive delivery refused (409) for 10 minutes after Dispatched
   Dispatched --> Ended: interactive session ended before delivery
@@ -176,6 +181,17 @@ stateDiagram-v2
   Parked --> Claimed: human approves or retries
 ```
 
+- **Headless results come from `status.taskResult`, never from the phase.** A
+  session's phase is its pod's: a session whose pod ended is `Failed` whatever its
+  task did (D-44). So a fast task that succeeds before `Running` is ever observed
+  shows phase Failed. The occurrence's terminal state follows `taskResult.state`:
+  `Succeeded`, `Failed` or `TimedOut` map to `Succeeded`, `Failed`, `Failed`, and
+  `Unknown` (exit 0 with no success event) maps to `Ended`. A session that ended or
+  was reaped with no `taskResult` is `Failed` ("ended without a task result").
+  `Succeeded` means only that the task process reported success. The agent's
+  retained outcome (`reported`) is its own claim about the work. The executor copies
+  it and does not validate it; the receiver judges the work. A page for a result
+  says "reported", never "done".
 - **Claim.** The leader changes `Pending` to `Claimed` with a compare-and-set on the
   object's resourceVersion, as DESIGN-032 claims a reminder occurrence.
 - **Exactly-once dispatch.** The session name is derived, not generated:
@@ -184,7 +200,9 @@ stateDiagram-v2
   create and a new leader's create cannot both succeed; the loser adopts the
   winner's session. The session also carries the label
   `dev-env.haynesops.com/scheduled-work=<full uid>` and the annotation
-  `dev-env.haynesops.com/scheduled-work-occurrence=<unix seconds>`. Adoption checks
+  `dev-env.haynesops.com/scheduled-work-occurrence=<unix seconds>`, and the
+  annotation `dev-env.haynesops.com/scheduled-work-name=<ScheduledWork name>` that
+  the releaser reads, all set in the atomic Create. Adoption checks
   both. A derived-name session whose label or annotation does not match (a prefix
   collision) is never adopted: the occurrence is `Ambiguous`. A matching session
   found while its occurrence is already terminal is left alone (no redispatch; the
@@ -284,7 +302,8 @@ stateDiagram-v2
   limit. A haynes-ops admission rule (S6) admits removal of this finalizer from the
   operator's ServiceAccount only, so a person must first override that rule.
 - **Acceptance tests (S3).** Envtest cases for: a lost create response
-  (`AlreadyExists` → adopt); a session completed and reaped inside the retry window
+  (`AlreadyExists` → adopt); a session completed and reaped inside the occurrence's
+  grace (counted from the due time)
   (outcome recorded first, no second create); session idempotence only while
   unfinished (no reliance on it); a stale cached listing (the uncached read is used);
   two leaders overlapping (one create wins, the other adopts); and an executor
@@ -362,7 +381,7 @@ A parked occurrence pages Tom with the reason and waits for a human retry or can
 | Work order | the prompt | delivered after the pod is Ready through the existing message route. A 409 while it boots is retried for 10 minutes from `Dispatched`, then the occurrence is `Failed`. An exec error marks the delivery `ambiguous` and it is not re-sent; the page says so, and the occurrence still ends through the session |
 | Tom | not needed | paged: title, session name and the session's claude.ai link once `status.remoteControl.url` is set. The work order says the session waits for Tom before it acts |
 | Ends | agent exits; outcome file read from Session status | the session ends by the session-end rule (Tom ends or suspends it, or the template's idle suspend), or it is reaped |
-| Result | `summary`, `prURLs`, `headSHAs` copied to the occurrence; paged per `notify` | `Ended`, with the result `participation not observed`. The session's own handoff is the work's result. There is no outcome capture (task mode only) |
+| Result | `execution` from `taskResult`; `reported` (`summary`, `prURLs`, `headSHAs`) copied from the retained outcome as the agent's claim, unvalidated; paged per `notify` | `Ended`, with the result `participation not observed`. The session's own handoff is the work's result. There is no outcome capture (task mode only) |
 
 **What the executor can observe about interactive work.** The platform has no
 signal that Tom joined. `status.remoteControl.state` is Remote Control
@@ -453,7 +472,7 @@ library only.
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
 | S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), the kind unserved before and after due plus grace, a page Reminder that cannot be created (release not blocked), and a never-launched agent past its start deadline reaching the end rule through the pod-age proof. Shipped in a release before S3b | PR, CI, native review, release |
-| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
+| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
 | S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
