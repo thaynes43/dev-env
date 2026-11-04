@@ -180,8 +180,10 @@ The entry records `answered_at` (UTC), `approval_ref`, `name`, `kind`,
 `choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner` and
 `outcome`. The task's state file keeps the same record in `answers` (the last
 32). `outcome` is `sent`, or `uncertain` when tmux failed or timed out. An
-uncertain answer stays uncertain until a supported observation settles it; it
-is never answered again under the same approval. No prompt text or
+entry still at `sending` means the process ended before it recorded the
+outcome; treat it as uncertain. An uncertain answer stays uncertain until a
+supported observation settles it; it is never answered again under the same
+approval. No prompt text or
 instruction is stored or printed.
 
 ### The prompt must be the current screen
