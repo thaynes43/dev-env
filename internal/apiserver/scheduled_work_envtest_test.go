@@ -171,3 +171,71 @@ func mustZone(t *testing.T, name string) *time.Location {
 	}
 	return loc
 }
+
+// approve --at and retry against the real CRD's rules: Parked to Pending
+// with attempt+1 and retriedAt is admitted three times, and a fourth retry is
+// refused by the API before the schema would be asked. (Adopted from the
+// independent review's probe.)
+func TestEnvtestScheduledWorkRetryAgainstTheCRD(t *testing.T) {
+	l := startLiveWith(t, func(s *Server) { s.ScheduledWork = ScheduledWorkAPI(true, swNS) })
+	ctx := context.Background()
+	human := l.token(humanSA, []string{apiv1.TokenAudience}, nil)
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: swNS, Name: authority.TemplatesConfigMap}, Data: map[string]string{authority.TemplatesKey: swTemplatesDoc}}
+	if err := l.k8s.Create(ctx, cm); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		var list v1alpha1.ScheduledWorkList
+		if err := l.k8s.List(ctx, &list, client.InNamespace(swNS)); err == nil {
+			for i := range list.Items {
+				_ = l.k8s.Delete(ctx, &list.Items[i])
+			}
+		}
+		_ = l.k8s.Delete(ctx, cm)
+	})
+	req := newWork()
+	req.Key = "envtest-retry"
+	req.Due = time.Now().Add(48 * time.Hour).In(mustZone(t, "America/New_York")).Format("2006-01-02T15:04")
+	req.NotAfter = time.Now().Add(30 * 24 * time.Hour).UTC().Truncate(time.Second)
+	created := unmarshal[apiv1.ScheduledWork](t, l.want(http.MethodPost, apiv1.ScheduledWorkPath, human, req, http.StatusCreated))
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Minute)
+	read := func() v1alpha1.ScheduledWork {
+		t.Helper()
+		var sw v1alpha1.ScheduledWork
+		if err := l.k8s.Get(ctx, client.ObjectKey{Namespace: swNS, Name: created.Name}, &sw); err != nil {
+			t.Fatal(err)
+		}
+		return sw
+	}
+	// park parks the occurrence again, as the executor would.
+	park := func() {
+		t.Helper()
+		sw := read()
+		if len(sw.Status.Occurrences) == 0 {
+			sw.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceParked, Reason: "no standing authority"}}
+		} else {
+			sw.Status.Occurrences[0].State = v1alpha1.OccurrenceParked
+			sw.Status.Occurrences[0].Reason = "parked again"
+		}
+		if err := l.k8s.Status().Update(ctx, &sw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	park()
+	l.want(http.MethodPost, apiv1.ScheduledWorkApprovePath(created.Name), human, apiv1.ApproveScheduledWorkRequest{SpecHash: created.SpecHash, At: &at}, http.StatusOK)
+	if sw := read(); sw.Status.Occurrences[0].State != v1alpha1.OccurrencePending || sw.Status.Occurrences[0].Attempt != 1 || sw.Status.Occurrences[0].RetriedAt == nil || sw.Status.Approval == nil {
+		t.Fatalf("after approve --at: %+v", sw.Status)
+	}
+	for want := int32(2); want <= 3; want++ {
+		park()
+		l.want(http.MethodPost, apiv1.ScheduledWorkRetryPath(created.Name), human, apiv1.RetryScheduledWorkRequest{At: at, SpecHash: created.SpecHash}, http.StatusOK)
+		if o := read().Status.Occurrences[0]; o.State != v1alpha1.OccurrencePending || o.Attempt != want || o.RetriedAt == nil {
+			t.Fatalf("after retry %d: %+v", want, o)
+		}
+	}
+	park()
+	l.want(http.MethodPost, apiv1.ScheduledWorkRetryPath(created.Name), human, apiv1.RetryScheduledWorkRequest{At: at, SpecHash: created.SpecHash}, http.StatusConflict)
+	if o := read().Status.Occurrences[0]; o.State != v1alpha1.OccurrenceParked || o.Attempt != 3 {
+		t.Fatalf("a fourth retry changed it: %+v", o)
+	}
+}

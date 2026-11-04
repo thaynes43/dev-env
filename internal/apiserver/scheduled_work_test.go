@@ -1033,3 +1033,167 @@ func TestScheduledWorkRetry(t *testing.T) {
 	decode[apiv1.ScheduledWork](t, c.do(http.MethodPost, apiv1.ScheduledWorkCancelPath(item.Name), tokHuman, nil))
 	wantError(t, c.do(http.MethodPost, apiv1.ScheduledWorkRetryPath(item.Name), tokHuman, req), http.StatusConflict, apiv1.CodeConflict)
 }
+
+// cancel carries the resourceVersion it read: an edit that lands between
+// its read and its write is not overwritten. (Adopted from the independent
+// review's probes, as are the next three.)
+func TestScheduledWorkCancelIsCompareAndSet(t *testing.T) {
+	f := scheduledWorkFixture(t)
+	one := f.sessionPod("s-one", "full", 0)
+	item := f.create(one, newWork())
+	f.gets.Store(0)
+	f.afterGet = func(name string) {
+		cur := f.stored(name)
+		cur.Spec.Title = "raced"
+		if err := f.c.Update(context.Background(), cur); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, apiv1.ScheduledWorkCancelPath(item.Name), one, nil))
+	if s := f.stored(item.Name).Spec; s.Title != "raced" || !s.Cancelled {
+		t.Fatalf("cancel overwrote a concurrent edit: %+v", s)
+	}
+}
+
+// A spec edit between approve's read and its status write: the write
+// conflicts, the second read sees another hash, and approve answers 409
+// with no approval stored.
+func TestScheduledWorkApproveRefusesASpecEditBetweenReadAndWrite(t *testing.T) {
+	f := scheduledWorkFixture(t)
+	item := f.create(tokClient, newWork())
+	f.gets.Store(0)
+	f.afterGet = func(name string) {
+		cur := f.stored(name)
+		cur.Spec.Work.Prompt = "something Tom never saw"
+		if err := f.c.Update(context.Background(), cur); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(item.Name), tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash}), http.StatusConflict, apiv1.CodeConflict)
+	if a := f.stored(item.Name).Status.Approval; a != nil {
+		t.Fatalf("an approval of a spec edited after it was shown was stored: %+v", a)
+	}
+}
+
+// A template edit after approve read the ConfigMap but before its write
+// lands: the approval records the digest it read, which the executor's rule
+// then refuses against the current template (fail closed), and show says so.
+func TestScheduledWorkTemplateEditDuringApproveFailsClosed(t *testing.T) {
+	f := scheduledWorkFixture(t)
+	item := f.create(tokClient, newWork())
+	before := f.templateDigest("ops-audit")
+	f.onStatus = func(*v1alpha1.ScheduledWork) error {
+		f.onStatus = nil
+		f.setTemplates(strings.Replace(swTemplatesDoc, "effort: xhigh", "effort: high", 1))
+		return nil
+	}
+	decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(item.Name), tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash}))
+	stored := f.stored(item.Name)
+	after := f.templateDigest("ops-audit")
+	if stored.Status.Approval.TemplateDigest != before || after == before {
+		t.Fatalf("recorded %s, before %s, after %s", stored.Status.Approval.TemplateDigest, before, after)
+	}
+	if d := authority.Decide(stored, authority.OwnerState{}, authority.TemplateBinding{Current: after, Recorded: stored.Status.Approval.TemplateDigest}, f.now, time.Minute); d.Approved {
+		t.Fatal("an approval under the template it read holds against the edited one")
+	}
+	shown := decode[apiv1.ScheduledWork](t, f.do(http.MethodGet, apiv1.ScheduledWorkItemPath(item.Name), tokHuman, nil))
+	if !strings.Contains(shown.Message, "another version of template") {
+		t.Errorf("show: %q", shown.Message)
+	}
+}
+
+// A client may not list everyone's; a coordinator owner may edit its own item
+// and stays its editor, but cannot approve it; a client cannot cancel or edit
+// the coordinator's item, nor learn that it exists.
+func TestScheduledWorkCallerClassesBeyondTheOwner(t *testing.T) {
+	f := scheduledWorkFixture(t)
+	coord := f.coordinator()
+	wantError(t, f.do(http.MethodGet, apiv1.ScheduledWorkPath+"?all=true", tokClient, nil), http.StatusForbidden, apiv1.CodeForbidden)
+	own := f.create(coord, newWork())
+	title := "coordinator's own"
+	v := decode[apiv1.ScheduledWork](t, f.do(http.MethodPatch, apiv1.ScheduledWorkItemPath(own.Name), coord, apiv1.EditScheduledWorkRequest{Title: &title}))
+	if v.Spec.Editor != "coordinator/"+coordinatorSA || v.Spec.Owner != "coordinator/"+coordinatorSA {
+		t.Fatalf("coordinator self-edit: %+v", v.Spec)
+	}
+	wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(own.Name), coord, apiv1.ApproveScheduledWorkRequest{SpecHash: v.SpecHash}), http.StatusForbidden, apiv1.CodeForbidden)
+	wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkCancelPath(own.Name), tokClient, nil), http.StatusNotFound, apiv1.CodeNotFound)
+	wantError(t, f.do(http.MethodPatch, apiv1.ScheduledWorkItemPath(own.Name), tokClient, apiv1.EditScheduledWorkRequest{Title: &title}), http.StatusNotFound, apiv1.CodeNotFound)
+	if f.stored(own.Name).Spec.Cancelled {
+		t.Fatal("cancelled by a stranger")
+	}
+}
+
+// The next occurrence bounds the decision window when it comes first, with a
+// period that is not the window: a 30-hour window on a daily item, and the
+// default 24-hour window across a DST spring-forward day, whose next
+// occurrence is 23 hours on.
+func TestScheduledWorkDecisionWindowEndsAtTheNextOccurrence(t *testing.T) {
+	t.Run("a 30-hour window on a daily item", func(t *testing.T) {
+		f := scheduledWorkFixture(t)
+		item := parkedItem(t, f, nil)
+		f.srv.ScheduledWork.DecisionWindow = 30 * time.Hour
+		f.now = parkedAt.Add(25 * time.Hour)
+		e := wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkRetryPath(item.Name), tokHuman, apiv1.RetryScheduledWorkRequest{At: parkedAt, SpecHash: item.SpecHash}), http.StatusConflict, apiv1.CodeConflict)
+		if !strings.Contains(e.Message, "waited for a decision until 2026-10-07T13:00:00Z") {
+			t.Errorf("refusal %q", e.Message)
+		}
+	})
+	t.Run("a DST spring-forward day", func(t *testing.T) {
+		f := scheduledWorkFixture(t)
+		req := newWork()
+		req.Due, req.Recurrence = "2027-03-13T09:00", &apiv1.ReminderRecurrence{Freq: "daily"}
+		req.NotAfter = time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC)
+		item := f.create(tokClient, req)
+		// 09:00 EST on Saturday 13 March; the next is 09:00 EDT on Sunday
+		// 14 March, 13:00Z, 23 hours on.
+		at := time.Date(2027, 3, 13, 14, 0, 0, 0, time.UTC)
+		f.setStatus(item.Name, func(st *v1alpha1.ScheduledWorkStatus) {
+			st.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceParked, Reason: "no standing authority"}}
+		})
+		retry := apiv1.RetryScheduledWorkRequest{At: at, SpecHash: item.SpecHash}
+		f.now = time.Date(2027, 3, 14, 13, 30, 0, 0, time.UTC)
+		e := wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkRetryPath(item.Name), tokHuman, retry), http.StatusConflict, apiv1.CodeConflict)
+		if !strings.Contains(e.Message, "waited for a decision until 2027-03-14T13:00:00Z") {
+			t.Errorf("refusal %q", e.Message)
+		}
+		// Just before the next occurrence, the retry is still taken.
+		f.now = time.Date(2027, 3, 14, 12, 59, 0, 0, time.UTC)
+		if o := decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, apiv1.ScheduledWorkRetryPath(item.Name), tokHuman, retry)).Occurrences[0]; o.State != apiv1.ScheduledOccurrencePending {
+			t.Errorf("a retry inside the window: %+v", o)
+		}
+	})
+}
+
+// An approval may pin the template digest the client showed: a match records
+// it, a mismatch is a 409 that writes nothing, a malformed one a 422; without
+// one the API binds the template as it reads it.
+func TestScheduledWorkApprovePinsTheTemplateDigest(t *testing.T) {
+	f := scheduledWorkFixture(t)
+	item := f.create(tokClient, newWork())
+	digest := f.templateDigest("ops-audit")
+	path := apiv1.ScheduledWorkApprovePath(item.Name)
+	e := wantError(t, f.do(http.MethodPost, path, tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash, TemplateDigest: strings.ToUpper(digest)}), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantField(t, e, "templateDigest")
+	e = wantError(t, f.do(http.MethodPost, path, tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash, TemplateDigest: strings.Repeat("ab", 32)}), http.StatusConflict, apiv1.CodeConflict)
+	if !strings.Contains(e.Message, "changed after it was shown: its digest is now "+digest) {
+		t.Errorf("refusal %q", e.Message)
+	}
+	if f.statusWrites.Load() != 0 || f.stored(item.Name).Status.Approval != nil {
+		t.Fatal("a refused pin wrote")
+	}
+	v := decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, path, tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash, TemplateDigest: digest}))
+	if v.Approval == nil || v.Approval.TemplateDigest != digest {
+		t.Fatalf("a matching pin: %+v", v.Approval)
+	}
+	// The template changes after the client read it: the old pin is refused,
+	// and an approval without a pin binds the new template.
+	f.setTemplates(strings.Replace(swTemplatesDoc, "maxDuration: 2h", "maxDuration: 3h", 1))
+	wantError(t, f.do(http.MethodPost, path, tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash, TemplateDigest: digest}), http.StatusConflict, apiv1.CodeConflict)
+	if got := f.stored(item.Name).Status.Approval.TemplateDigest; got != digest {
+		t.Fatalf("a refused pin changed the approval to %s", got)
+	}
+	decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, path, tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash}))
+	if got := f.stored(item.Name).Status.Approval.TemplateDigest; got != f.templateDigest("ops-audit") || got == digest {
+		t.Fatalf("an unpinned approval recorded %s", got)
+	}
+}

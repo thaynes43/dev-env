@@ -182,6 +182,13 @@ type ApproveScheduledWorkRequest struct {
 	// nothing. Absent, the approval applies from the next occurrence and no
 	// Parked one is retried.
 	At *time.Time `json:"at,omitempty"`
+	// TemplateDigest, optional, is the digest of the dispatch template the
+	// client showed. When set, the API refuses the approval with 409 unless
+	// it equals the digest of the template the spec names as the API reads
+	// it now, so a template edit made after the client fetched it is never
+	// approved. Absent, the API binds the template as it reads it. Either
+	// way the approval records the digest the API read.
+	TemplateDigest string `json:"templateDigest,omitempty"`
 }
 
 // RetryScheduledWorkRequest is the body of POST .../retry: run one Parked

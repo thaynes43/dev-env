@@ -397,7 +397,10 @@ func (s *Server) createScheduledWork(ctx context.Context, w http.ResponseWriter,
 	}
 	// A retried create answers with what the first one made, before the
 	// checks that depend on the clock: its due time may have passed since.
-	// Another spec under the key is a 409 whether or not it would pass.
+	// Another spec under the key is a 409 even when its schedule, notAfter or
+	// other fields would fail the checks below; only the key's length and the
+	// recurrence's integers, checked above, are refused first (a wrapped
+	// integer must not match a stored spec).
 	switch {
 	case existing != nil && sameScheduledWork(existing.Spec, spec):
 		return http.StatusOK, s.scheduledWorkAnswer(existing, now), nil
@@ -623,7 +626,8 @@ func inFlightOccurrence(state string) bool {
 // approveScheduledWork serves POST /v1/scheduled-work/{name}/approve, a human
 // only. status.approval records the authenticated human, the current spec's
 // hash, which the request must name, and the digest of the dispatch template
-// the spec names, read now: an edit of either voids it (authority.Decide).
+// the spec names, read now, which the request may pin too: an edit of either
+// voids it (authority.Decide).
 // With at, the same write retries that Parked occurrence. A refusal writes
 // nothing.
 func (s *Server) approveScheduledWork(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller) (int, any, error) {
@@ -644,6 +648,9 @@ func (s *Server) approveScheduledWork(ctx context.Context, w http.ResponseWriter
 	if req.At != nil && req.At.IsZero() {
 		return 0, nil, invalid(fieldError("at", "a zero time names no occurrence"))
 	}
+	if req.TemplateDigest != "" && !swHash.MatchString(req.TemplateDigest) {
+		return 0, nil, invalid(fieldError("templateDigest", "the 64 lowercase hex characters of the template digest shown, or absent"))
+	}
 	if err := s.scheduledWorkSchemaReady(ctx); err != nil {
 		return 0, nil, err
 	}
@@ -659,6 +666,9 @@ func (s *Server) approveScheduledWork(ctx context.Context, w http.ResponseWriter
 		digest, err := s.scheduledWorkTemplate(ctx, &sw.Spec)
 		if err != nil {
 			return 0, nil, err
+		}
+		if req.TemplateDigest != "" && req.TemplateDigest != digest {
+			return 0, nil, conflict("template %s changed after it was shown: its digest is now %s, not %s; nothing was approved", sw.Spec.Work.Template, digest, req.TemplateDigest)
 		}
 		now := s.now()
 		var o *v1alpha1.ScheduledWorkOccurrence
