@@ -350,3 +350,26 @@ func TestCreateScheduledSessionTransientErrors(t *testing.T) {
 		wantRefused(t, err, "")
 	})
 }
+
+// Past the start deadline, by the API's clock just before the Create, the
+// entry creates nothing: a session that late could not launch its agent, and
+// the releaser frees a derived name only after the deadline plus the margin.
+// An existing session of the occurrence is still adopted.
+func TestCreateScheduledSessionPastTheStartDeadline(t *testing.T) {
+	f := newFixture(t)
+	d := swDispatch()
+	d.At, d.StartDeadline = f.now.Add(-20*time.Minute), f.now.Add(-time.Second)
+	_, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
+	if !errors.Is(err, scheduledwork.ErrPastStartDeadline) || f.sessionCount() != 0 {
+		t.Fatalf("err %v, %d sessions; want ErrPastStartDeadline and none", err, f.sessionCount())
+	}
+	d.StartDeadline = f.now.Add(time.Minute)
+	name, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
+	if err != nil || adopted {
+		t.Fatalf("inside the deadline: %q %v %v", name, adopted, err)
+	}
+	d.StartDeadline = f.now.Add(-time.Second)
+	if again, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d); err != nil || !adopted || again != name {
+		t.Errorf("an existing session past the deadline: %q adopted %v err %v", again, adopted, err)
+	}
+}

@@ -55,7 +55,8 @@ func (o scheduledWorkOptions) validate(apiAddr string, leaderElect bool) error {
 // them (Reconciler.ScheduledWorkNamespace), with the uncached reader only, and
 // creates through creator, the API's fixed-name entry. Until S3b2 it has no
 // authority or template source: DenyAll and NoTemplates park every claimed
-// occurrence and nothing dispatches.
+// occurrence and nothing dispatches, so the flag must stay off until S3b2:
+// with it on, every real occurrence is recorded Parked and then Skipped.
 func newScheduledWorkExecutor(o options, c client.Client, reader client.Reader, creator executor.Creator, log logr.Logger) *executor.Executor {
 	if !o.scheduledWork.enabled {
 		return nil

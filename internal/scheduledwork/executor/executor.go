@@ -318,9 +318,9 @@ func (e *Executor) Tick(ctx context.Context) {
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
-	p := &pass{e: e, slots: map[types.UID]slots{}}
+	p := &pass{e: e, slots: map[types.UID]slots{}, modes: e.sessionModes(ctx)}
 	for i := range items {
-		p.slots[items[i].UID] = slotsOf(&items[i])
+		p.slots[items[i].UID] = slotsOf(&items[i], p.modes)
 	}
 	for i := range items {
 		if ctx.Err() != nil {
@@ -332,23 +332,69 @@ func (e *Executor) Tick(ctx context.Context) {
 
 // slots counts an item's occurrences that hold a cap slot: claimed and not
 // ended. Pending holds none (it waits for one) and Parked none (it never
-// blocks the next occurrence). The item's current mode decides which cap;
-// an edit applies from the next occurrence, so the count can lag one edit.
+// blocks the next occurrence). An occurrence with a session counts in its
+// session's own mode (modes, by session name); one without a session yet in
+// the item's current mode.
 type slots struct{ headless, interactive int }
 
-func slotsOf(w *v1alpha1.ScheduledWork) slots {
+func slotsOf(w *v1alpha1.ScheduledWork, modes map[string]v1alpha1.SessionMode) slots {
 	var s slots
 	for i := range w.Status.Occurrences {
-		if !holdsSlot(w.Status.Occurrences[i].State) {
+		o := &w.Status.Occurrences[i]
+		if !holdsSlot(o.State) {
 			continue
 		}
-		if w.Spec.Mode == v1alpha1.ScheduledWorkInteractive {
+		interactive := w.Spec.Mode == v1alpha1.ScheduledWorkInteractive
+		if m, ok := modes[o.Session]; ok && o.Session != "" {
+			interactive = m != v1alpha1.ModeTask
+		}
+		if interactive {
 			s.interactive++
 		} else {
 			s.headless++
 		}
 	}
 	return s
+}
+
+// sessionModes lists the scheduled sessions from the API server and returns
+// each one's mode by name. A failed list returns nil: the slots then count in
+// each item's current mode.
+func (e *Executor) sessionModes(ctx context.Context) map[string]v1alpha1.SessionMode {
+	var list v1alpha1.AgentSessionList
+	if err := e.Reader.List(ctx, &list, client.InNamespace(e.SessionNamespace), client.HasLabels{v1alpha1.LabelScheduledWork}); err != nil {
+		e.Log.Error(err, "list the scheduled sessions for the caps")
+		return nil
+	}
+	modes := make(map[string]v1alpha1.SessionMode, len(list.Items))
+	for i := range list.Items {
+		modes[list.Items[i].Name] = list.Items[i].Spec.Mode
+	}
+	return modes
+}
+
+// slotFree reports whether a claim (or an adoption) of an occurrence in mode
+// fits the cap, counted from a listing of every item and scheduled session
+// read from the API server just before the claim's compare-and-set, not the
+// pass's earlier listing: another leader may have claimed since. Two leaders
+// that check at the same moment can still each take the last slot, so the cap
+// can be exceeded by one per overlapping leader. A failed listing is not
+// free.
+func (p *pass) slotFree(ctx context.Context, mode string, lg logr.Logger) bool {
+	var list v1alpha1.ScheduledWorkList
+	if err := p.e.Reader.List(ctx, &list, client.InNamespace(p.e.Namespace)); err != nil {
+		lg.Error(err, "list the scheduled work again before a claim")
+		return false
+	}
+	p.modes = p.e.sessionModes(ctx)
+	if p.modes == nil {
+		return false
+	}
+	p.slots = map[types.UID]slots{}
+	for i := range list.Items {
+		p.slots[list.Items[i].UID] = slotsOf(&list.Items[i], p.modes)
+	}
+	return p.used(mode) < p.e.limit(mode)
 }
 
 func holdsSlot(state string) bool {
@@ -366,6 +412,7 @@ func holdsSlot(state string) bool {
 type pass struct {
 	e     *Executor
 	slots map[types.UID]slots
+	modes map[string]v1alpha1.SessionMode
 	tried map[int64]bool
 }
 
@@ -402,7 +449,7 @@ func (p *pass) item(ctx context.Context, w *v1alpha1.ScheduledWork) {
 				return
 			}
 			*w = *fresh
-			p.slots[w.UID] = slotsOf(w)
+			p.slots[w.UID] = slotsOf(w, p.modes)
 			continue
 		case apierrors.IsNotFound(err):
 			return
@@ -410,7 +457,7 @@ func (p *pass) item(ctx context.Context, w *v1alpha1.ScheduledWork) {
 			lg.Error(err, "write the ScheduledWork status")
 			return
 		}
-		p.slots[w.UID] = slotsOf(w)
+		p.slots[w.UID] = slotsOf(w, p.modes)
 		if !wrote {
 			return
 		}
@@ -520,6 +567,8 @@ func (p *pass) due(ctx context.Context, w *v1alpha1.ScheduledWork, sch *reminder
 	default:
 		if reason, blocked := p.preClaim(ctx, w, now, lg); blocked {
 			rec.State, rec.Reason = v1alpha1.OccurrencePending, reason
+		} else if !p.slotFree(ctx, w.Spec.Mode, lg) {
+			rec.State, rec.Reason = v1alpha1.OccurrencePending, ReasonAtCapacity
 		} else {
 			claimedAt := metav1.NewTime(now)
 			rec.State, rec.ClaimedAt, rec.SpecHash = v1alpha1.OccurrenceClaimed, &claimedAt, scheduledwork.SpecHash(w.Spec)
@@ -574,6 +623,9 @@ func (p *pass) pending(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		w.Status.Counts.Skipped++
 	default:
 		reason, blocked := p.preClaim(ctx, w, now, lg)
+		if !blocked && !p.slotFree(ctx, w.Spec.Mode, lg) {
+			reason, blocked = ReasonAtCapacity, true
+		}
 		hash := scheduledwork.SpecHash(w.Spec)
 		switch {
 		case blocked && reason == o.Reason:
@@ -659,10 +711,19 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 	default:
 		return p.create(ctx, w, o, name, hash, now, grace, lg)
 	}
-	// A final record is written only while there is still no session: a
-	// second leader may have created one since the read above, and a final
-	// record would leave that session unrecorded.
-	err = e.Reader.Get(ctx, types.NamespacedName{Namespace: e.SessionNamespace, Name: name}, &sess)
+	return p.end(ctx, w, o, name, state, reason, lg)
+}
+
+// end writes a final record without a session (Skipped or Cancelled) for a
+// Claimed occurrence, only while there is still no session of its derived
+// name: a second leader may have created one since the earlier read, and a
+// final record would leave that session unrecorded. A create that lands after
+// this read is refused at its first pod (scheduledwork.LaunchRefusal), and the
+// releaser counts it.
+func (p *pass) end(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, name, state, reason string, lg logr.Logger) (bool, error) {
+	at := o.At.Time
+	var sess v1alpha1.AgentSession
+	err := p.e.Reader.Get(ctx, types.NamespacedName{Namespace: p.e.SessionNamespace, Name: name}, &sess)
 	switch {
 	case err == nil:
 		// The next step adopts it, or records the collision.
@@ -679,7 +740,7 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		w.Status.Counts.Skipped++
 	}
 	logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
-	return true, e.write(ctx, w)
+	return true, p.e.write(ctx, w)
 }
 
 // create runs revalidation checks 2 to 5 and creates the session.
@@ -748,6 +809,8 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 		return retry(fmt.Errorf("the creation entry returned session %q, not the derived %q", got, name), "create the occurrence's session")
 	case err == nil:
 		return p.dispatched(ctx, w, o, name, adopted, lg)
+	case errors.Is(err, scheduledwork.ErrPastStartDeadline):
+		return p.end(ctx, w, o, name, v1alpha1.OccurrenceSkipped, ReasonNotCreated, lg)
 	case errors.Is(err, scheduledwork.ErrCollision):
 		ambiguous(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
@@ -782,6 +845,17 @@ func (p *pass) parked(ctx context.Context, w *v1alpha1.ScheduledWork, at time.Ti
 		err := p.e.Reader.Get(ctx, types.NamespacedName{Namespace: p.e.SessionNamespace, Name: name}, &sess)
 		switch {
 		case err == nil && scheduledwork.CreatedFor(&sess, w.Name, w.UID, at):
+			mode := v1alpha1.ScheduledWorkHeadless
+			if sess.Spec.Mode != v1alpha1.ModeTask {
+				mode = v1alpha1.ScheduledWorkInteractive
+			}
+			if !p.slotFree(ctx, mode, lg) {
+				// Adopting takes a slot. At the cap the occurrence stays
+				// Parked, and does not expire while its session exists: the
+				// releaser records the session's outcome into it either way.
+				lg.Info("a parked occurrence has its session; adopting it waits for a free slot", "occurrence", at.UTC().Format(time.RFC3339), "session", name)
+				return false, nil
+			}
 			lg.Info("a parked occurrence has its session; adopting it", "occurrence", at.UTC().Format(time.RFC3339), "session", name)
 			o.Session, o.State, o.Reason = name, v1alpha1.OccurrenceDispatched, ""
 			return true, p.e.write(ctx, w)

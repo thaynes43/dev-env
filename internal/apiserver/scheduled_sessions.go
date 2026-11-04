@@ -36,6 +36,9 @@ const ScheduledWorkParent = "dev-env-system/scheduled-work"
 // item's name, the occurrence (Unix seconds) and the start deadline (RFC 3339
 // UTC), so the session can never vanish before its occurrence is recorded.
 //
+// Past d.StartDeadline, checked by the API's clock just before the Create, it
+// creates nothing and returns scheduledwork.ErrPastStartDeadline.
+//
 // A session of the derived name that already exists comes first, as a repeated
 // idempotency key does: one that carries this occurrence's label and
 // annotations is adopted (adopted true), so a create whose response was lost,
@@ -112,6 +115,13 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 	}
 	if err := checkAgentd(sess); err != nil {
 		return "", false, scheduledRefusal(err)
+	}
+	// Last, right before the Create: past the start deadline no session is
+	// created. The releaser frees the derived name only after the deadline
+	// plus scheduledwork.ReleaseMargin, so a late create can never reuse it
+	// in time to launch an agent.
+	if s.now().After(d.StartDeadline) {
+		return "", false, scheduledwork.ErrPastStartDeadline
 	}
 	err = s.Client.Create(ctx, sess)
 	if apierrors.IsAlreadyExists(err) {

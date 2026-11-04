@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -140,7 +141,8 @@ func (f swFixture) waitOccurrence(t *testing.T, state string) v1alpha1.Scheduled
 
 // scheduledSession creates the session the executor would dispatch for f: the
 // derived name, the label, the three annotations and the finalizer, all in the
-// Create. Its start deadline is an hour away unless edit changes it.
+// Create. Its start deadline passed an hour ago, so the release margin does
+// not hold it, unless edit changes it.
 func releaseFixtureSession(t *testing.T, f swFixture, edit func(*v1alpha1.AgentSession)) *v1alpha1.AgentSession {
 	t.Helper()
 	return newSession(t, func(s *v1alpha1.AgentSession) {
@@ -149,7 +151,7 @@ func releaseFixtureSession(t *testing.T, f swFixture, edit func(*v1alpha1.AgentS
 		s.Annotations = map[string]string{
 			v1alpha1.AnnotationScheduledWorkName:          f.key.Name,
 			v1alpha1.AnnotationScheduledWorkOccurrence:    strconv.FormatInt(f.at.Unix(), 10),
-			v1alpha1.AnnotationScheduledWorkStartDeadline: time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			v1alpha1.AnnotationScheduledWorkStartDeadline: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
 		}
 		s.Finalizers = []string{v1alpha1.ScheduledWorkFinalizer}
 		if f.mode == v1alpha1.ScheduledWorkInteractive {
@@ -159,6 +161,11 @@ func releaseFixtureSession(t *testing.T, f swFixture, edit func(*v1alpha1.AgentS
 			edit(s)
 		}
 	})
+}
+
+// aheadClock gives the reconciler a clock ahead of the real one by ahead.
+func aheadClock(ahead *atomic.Int64) func(*Reconciler) {
+	return func(r *Reconciler) { r.Now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) } }
 }
 
 func suspendedAtCreate(s *v1alpha1.AgentSession) {
@@ -596,7 +603,8 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 	discoveryDown := &apiutil.ErrResourceDiscoveryFailed{v1alpha1.GroupVersion: errors.New("the server is currently unable to handle the request")}
 	t.Run("before and after the start deadline", func(t *testing.T) {
 		blocked := NewScheduledWorkReleaseHoldsCounter()
-		startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
+		var ahead atomic.Int64
+		startOperator(t, withBlockedCounter(blocked), aheadClock(&ahead), func(r *Reconciler) {
 			r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: noKind, crdGone: true}
 		})
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
@@ -608,6 +616,9 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
 		})
 		holdsFinalizer(t, s.Name, 2*time.Second, counted(blocked, releaseBlockedKindUnserved))
+		// Past the deadline, the release margin still holds the name; the
+		// releaser's clock moves past both before its requeue at the deadline.
+		ahead.Store(int64(scheduledwork.ReleaseMargin + time.Minute))
 		waitReleased(t, s.Name)
 		if time.Now().Before(deadline) {
 			t.Error("released before the start deadline")
@@ -622,7 +633,8 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 	t.Run("the item NotFound with its CRD gone, before and after the start deadline", func(t *testing.T) {
 		blocked := NewScheduledWorkReleaseHoldsCounter()
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-		startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
+		var ahead atomic.Int64
+		startOperator(t, withBlockedCounter(blocked), aheadClock(&ahead), func(r *Reconciler) {
 			r.APIReader = &unservedReader{Reader: r.APIReader, crdGone: true,
 				itemErr: apierrors.NewNotFound(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "scheduledworks"}, f.key.Name)}
 		})
@@ -632,6 +644,9 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
 		})
 		holdsFinalizer(t, s.Name, 2*time.Second, counted(blocked, releaseBlockedKindUnserved))
+		// Past the deadline, the release margin still holds the name; the
+		// releaser's clock moves past both before its requeue at the deadline.
+		ahead.Store(int64(scheduledwork.ReleaseMargin + time.Minute))
 		waitReleased(t, s.Name)
 		if time.Now().Before(deadline) {
 			t.Error("released before the start deadline")
@@ -1033,5 +1048,142 @@ func stripScheduledWorkFinalizer(t *testing.T, name string) {
 			return nil
 		}
 		return k8s.Update(context.Background(), s)
+	})
+}
+
+// The finalizer keeps the derived name until the session's start deadline
+// plus scheduledwork.ReleaseMargin, whatever the reason the releaser may
+// release (DESIGN-054): a session that is recorded and being deleted keeps it
+// before that time and loses it after. So a stalled leader's late create of
+// the same name cannot succeed until agentd would refuse its first launch.
+func TestScheduledWorkReleaseHoldsTheNameUntilTheDeadline(t *testing.T) {
+	var ahead atomic.Int64
+	op := startOperator(t, aheadClock(&ahead))
+	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+	deadline := time.Now().Add(30 * time.Second).Truncate(time.Second)
+	s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
+		suspendedAtCreate(s)
+		s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
+	})
+	waitStatus(t, s.Name, "Suspended", phaseIs(v1alpha1.PhaseSuspended))
+	if err := k8s.Delete(context.Background(), session(t, s.Name)); err != nil {
+		t.Fatal(err)
+	}
+	// Recorded at once; the release waits for the deadline plus the margin.
+	if o := f.waitOccurrence(t, v1alpha1.OccurrenceFailed); o.Session != s.Name {
+		t.Errorf("occurrence %+v", o)
+	}
+	holdsFinalizer(t, s.Name, 3*time.Second, op.passes.held(s.Name, func(p releasePass) bool { return p.requeue > scheduledwork.ReleaseMargin }))
+	if live := session(t, s.Name); live.DeletionTimestamp.IsZero() {
+		t.Fatal("the session is not being deleted")
+	}
+	ahead.Store(int64(time.Until(deadline) + scheduledwork.ReleaseMargin + 10*time.Second))
+	poke(t, s.Name)
+	waitReleased(t, s.Name)
+}
+
+// poke changes an unrelated annotation of the session, so the reconciler
+// judges it again now.
+func poke(t *testing.T, name string) {
+	t.Helper()
+	eventually(t, "poke "+name, func() error {
+		live := session(t, name)
+		orig := live.DeepCopy()
+		if live.Annotations == nil {
+			live.Annotations = map[string]string{}
+		}
+		live.Annotations["test.dev-env/poke"] = time.Now().Format(time.RFC3339Nano)
+		return k8s.Patch(context.Background(), live, client.MergeFrom(orig))
+	})
+}
+
+// gateFixture is newScheduledWork with the occurrence's state and session
+// chosen, for the launch gate.
+func gateFixture(t *testing.T, state, sessionName string) swFixture {
+	t.Helper()
+	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrencePending)
+	return f.withOccurrence(t, state, sessionName)
+}
+
+// withOccurrence replaces the fixture with a fresh item whose one occurrence
+// has the given state and session: an occurrence's session is set once, so it
+// is chosen in the first status write.
+func (f swFixture) withOccurrence(t *testing.T, state, sessionName string) swFixture {
+	t.Helper()
+	seq++
+	w := &v1alpha1.ScheduledWork{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("work-%d", seq), Namespace: systemNS}, Spec: f.item(t).Spec}
+	if err := k8s.Create(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	g := swFixture{key: client.ObjectKeyFromObject(w), uid: w.UID, at: f.at.Add(time.Duration(seq) * time.Hour), mode: f.mode}
+	g.name = derivedName(w.UID, g.at)
+	if sessionName == "self" {
+		sessionName = g.name
+	}
+	g.setStatus(t, func(st *v1alpha1.ScheduledWorkStatus) {
+		st.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(g.at), State: state, Session: sessionName}}
+	})
+	return g
+}
+
+// DESIGN-054's launch gate. Before the first pod of a labelled session the
+// reconciler reads its ScheduledWork uncached. A session whose occurrence is
+// already final without it (a create that landed after another leader's final
+// record), or that names another session, fails as invalid: no pod and no
+// volume, so its agent never launches unrecorded. The first is counted as a
+// late session when it is released. An open occurrence with no session yet,
+// as the executor leaves it between its create and its Dispatched record,
+// starts its pod as before.
+func TestScheduledWorkLaunchGate(t *testing.T) {
+	late := NewScheduledWorkLateSessionsCounter()
+	startOperator(t, func(r *Reconciler) { r.ScheduledWorkLateSessions = late })
+	refused := func(t *testing.T, f swFixture, says string) *v1alpha1.AgentSession {
+		t.Helper()
+		s := releaseFixtureSession(t, f, nil)
+		got := waitStatus(t, s.Name, "refused as invalid", func(st *v1alpha1.AgentSessionStatus) error {
+			if c := condition(st, ConditionPodReady); st.Phase != v1alpha1.PhaseFailed || c == nil || c.Reason != "SessionInvalid" || !strings.Contains(c.Message, says) {
+				return fmt.Errorf("phase %q condition %+v", st.Phase, c)
+			}
+			return nil
+		})
+		if _, err := get(t, sessionNS, s.Name, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+			t.Errorf("a refused session got a pod: %v", err)
+		}
+		if _, err := get(t, sessionNS, HomeClaimName(s.Name), &corev1.PersistentVolumeClaim{}); !apierrors.IsNotFound(err) {
+			t.Errorf("a refused session got a volume: %v", err)
+		}
+		return got
+	}
+	t.Run("final without it", func(t *testing.T) {
+		f := gateFixture(t, v1alpha1.OccurrenceCancelled, "")
+		s := refused(t, f, "already Cancelled without it")
+		waitReleased(t, s.Name)
+		eventually(t, "the late session counted", func() error {
+			var m dto.Metric
+			if err := late.Write(&m); err != nil {
+				return err
+			}
+			if n := m.GetCounter().GetValue(); n != 1 {
+				return fmt.Errorf("late sessions %v, want 1", n)
+			}
+			return nil
+		})
+		if o := f.occurrence(t); o.State != v1alpha1.OccurrenceCancelled || o.Session != "" {
+			t.Errorf("the final occurrence changed: %+v", o)
+		}
+	})
+	t.Run("names another session", func(t *testing.T) {
+		f := gateFixture(t, v1alpha1.OccurrenceDispatched, "sw-ffffffffffff-209901010000")
+		refused(t, f, "names session sw-ffffffffffff-209901010000")
+	})
+	t.Run("open, with no session yet", func(t *testing.T) {
+		f := gateFixture(t, v1alpha1.OccurrenceClaimed, "")
+		s := releaseFixtureSession(t, f, nil)
+		waitPod(t, s.Name)
+	})
+	t.Run("final and naming it", func(t *testing.T) {
+		f := gateFixture(t, v1alpha1.OccurrenceSucceeded, "self")
+		s := releaseFixtureSession(t, f, nil)
+		waitPod(t, s.Name)
 	})
 }

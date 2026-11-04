@@ -198,6 +198,9 @@ type fixture struct {
 	failStatus atomic.Int32
 	// writes counts the status writes the executors' clients sent.
 	writes atomic.Int32
+	// beforeWrite, when set, runs once before the next status write of an
+	// executor's client reaches the API server.
+	beforeWrite atomic.Pointer[func()]
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -248,6 +251,9 @@ func (f *fixture) executor() *Executor {
 		},
 		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 			f.writes.Add(1)
+			if hook := f.beforeWrite.Swap(nil); hook != nil {
+				(*hook)()
+			}
 			if f.failStatus.Load() > 0 {
 				f.failStatus.Add(-1)
 				return apierrors.NewServiceUnavailable("injected status write failure")
@@ -360,14 +366,17 @@ func (f *fixture) finish(name string, state v1alpha1.TaskResultState) {
 
 // release plays the releaser for an ended session: it records the
 // occurrence's terminal outcome with scheduledwork.Record and Outcome, as
-// controller.releaseScheduledWork does, then lifts the finalizer. With reap
-// set, the session is deleted first, so it is gone afterwards.
-func (f *fixture) release(name string, reap bool) {
+// controller.releaseScheduledWork does, and then lifts the finalizer, but, as
+// the releaser, only once the fixture's clock is past
+// scheduledwork.ReleaseHeldUntil: until then the finalizer keeps the derived
+// name. With reap set, the session is deleted first (again if it already is),
+// so it is gone once the finalizer goes. It reports whether it lifted it.
+func (f *fixture) release(name string, reap bool) bool {
 	f.t.Helper()
 	ctx := context.Background()
 	c := cluster(f.t)
 	s := f.session(name)
-	if reap {
+	if reap && s.DeletionTimestamp.IsZero() {
 		if err := c.Delete(ctx, s); err != nil {
 			f.t.Fatal(err)
 		}
@@ -387,12 +396,23 @@ func (f *fixture) release(name string, reap bool) {
 	default:
 		f.t.Fatalf("the releaser's record of %s: %s", name, r)
 	}
+	until, err := scheduledwork.ReleaseHeldUntil(s)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if !f.clock.Now().After(until) {
+		return false
+	}
 	orig := s.DeepCopy()
 	controllerutil.RemoveFinalizer(s, v1alpha1.ScheduledWorkFinalizer)
 	if err := c.Patch(ctx, s, client.MergeFrom(orig)); err != nil {
 		f.t.Fatal(err)
 	}
+	return true
 }
+
+// pastHold is a time past day0's start deadline plus the release margin.
+var pastHold = day0.Add(grace + scheduledwork.ReleaseMargin + time.Minute)
 
 // derived is the session name of an item's occurrence.
 func (f *fixture) derived(key types.NamespacedName, at time.Time) string {

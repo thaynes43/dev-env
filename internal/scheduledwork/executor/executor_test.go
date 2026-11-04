@@ -293,50 +293,51 @@ func TestClaimedWithoutSessionRetriesInsideGrace(t *testing.T) {
 	})
 }
 
-// A session that completed and was reaped inside the occurrence's grace is
-// never created again: the releaser records the outcome before it lifts the
-// finalizer, so the executor finds a terminal occurrence, even when its own
-// Dispatched record was lost and the occurrence was still Claimed.
+// A session that completed and was reaped is never created again. The
+// releaser records the outcome at once but keeps the finalizer, and with it
+// the derived name, until the start deadline plus the release margin; after
+// that the executor still finds a terminal occurrence and creates nothing,
+// even when its own Dispatched record was lost and the occurrence was still
+// Claimed.
 func TestReapedSessionIsNeverRecreated(t *testing.T) {
-	t.Run("after Dispatched", func(t *testing.T) {
-		f := newFixture(t)
-		key := f.item("audit", spec())
-		f.at(f.executor(), day0.Add(-time.Minute))
-		f.at(f.executor(), day0)
-		name := f.derived(key, day0)
-		f.finish(name, v1alpha1.TaskResultSucceeded)
-		f.release(name, true)
-		f.at(f.executor(), day0.Add(time.Minute))
-		f.at(f.executor(), day0.Add(2*time.Minute))
-		f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, "")
-		if calls, _, _ := f.create.counts(); calls != 1 || len(f.sessionsOf()) != 0 {
-			t.Errorf("calls %d sessions %d", calls, len(f.sessionsOf()))
+	for _, lost := range []bool{false, true} {
+		name := "after Dispatched"
+		if lost {
+			name = "while still Claimed"
 		}
-	})
-	t.Run("while still Claimed", func(t *testing.T) {
-		f := newFixture(t)
-		key := f.item("audit", spec())
-		f.at(f.executor(), day0.Add(-time.Minute))
-		f.create.hooks(nil, func(name string, adopted bool, err error) (string, bool, error) {
-			f.failStatus.Store(1)
-			return name, adopted, err
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			key := f.item("audit", spec())
+			f.at(f.executor(), day0.Add(-time.Minute))
+			if lost {
+				f.create.hooks(nil, func(name string, adopted bool, err error) (string, bool, error) {
+					f.failStatus.Store(1)
+					return name, adopted, err
+				})
+			}
+			f.at(f.executor(), day0)
+			f.create.hooks(nil, nil)
+			name := f.derived(key, day0)
+			f.finish(name, v1alpha1.TaskResultSucceeded)
+			f.clock.Set(day0.Add(time.Minute))
+			if f.release(name, true) {
+				t.Fatal("the finalizer was lifted before the start deadline plus the margin")
+			}
+			f.at(f.executor(), day0.Add(2*time.Minute))
+			if o := f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, ""); o.Session != name {
+				t.Errorf("recorded occurrence %+v", o)
+			}
+			f.clock.Set(pastHold)
+			if !f.release(name, true) {
+				t.Fatal("the finalizer was kept past the start deadline plus the margin")
+			}
+			f.at(f.executor(), pastHold.Add(time.Minute))
+			f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, "")
+			if calls, _, _ := f.create.counts(); calls != 1 || len(f.sessionsOf()) != 0 {
+				t.Errorf("calls %d sessions %d: a reaped session was created again", calls, len(f.sessionsOf()))
+			}
 		})
-		f.at(f.executor(), day0)
-		f.wantOcc(key, day0, v1alpha1.OccurrenceClaimed, "")
-		name := f.derived(key, day0)
-		f.finish(name, v1alpha1.TaskResultSucceeded)
-		f.release(name, true)
-		f.create.hooks(nil, nil)
-		// Inside grace, with no session of the derived name: only the
-		// recorded outcome stops a second create.
-		f.at(f.executor(), day0.Add(2*time.Minute))
-		if o := f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, ""); o.Session != name {
-			t.Errorf("recorded occurrence %+v", o)
-		}
-		if calls, _, _ := f.create.counts(); calls != 1 || len(f.sessionsOf()) != 0 {
-			t.Errorf("calls %d sessions %d: a reaped session was created again", calls, len(f.sessionsOf()))
-		}
-	})
+	}
 }
 
 // A pass starts from a listing that can be older than the releaser's record.
@@ -361,13 +362,213 @@ func TestStaleListingIsNotTrusted(t *testing.T) {
 	}
 	name := f.derived(key, day0)
 	f.finish(name, v1alpha1.TaskResultSucceeded)
-	f.release(name, true)
-	e := f.executor()
-	e.Reader = staleList{Reader: cluster(t), list: &stale, reads: &atomic.Int32{}}
-	f.at(e, day0.Add(2*time.Minute))
-	f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, "")
-	if calls, _, _ := f.create.counts(); calls != 1 || len(f.sessionsOf()) != 0 {
-		t.Errorf("calls %d sessions %d: a stale listing created a reaped session again", calls, len(f.sessionsOf()))
+	for _, when := range []time.Time{day0.Add(2 * time.Minute), pastHold} {
+		f.clock.Set(when)
+		f.release(name, true)
+		e := f.executor()
+		e.Reader = staleList{Reader: cluster(t), list: &stale, reads: &atomic.Int32{}}
+		f.at(e, when.Add(time.Second))
+		f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, "")
+		if calls, _, _ := f.create.counts(); calls != 1 {
+			t.Errorf("at %s: calls %d: a stale listing created a reaped session again", when.Format(time.RFC3339), calls)
+		}
+	}
+	if n := len(f.sessionsOf()); n != 0 {
+		t.Errorf("%d sessions after the hold", n)
+	}
+}
+
+// Two overlapping leaders: the second's create is still in flight after the
+// first's session was created, recorded and reaped (a stalled or deposed
+// leader). Inside the start deadline the finalizer still holds the derived
+// name, so the late create adopts the reaped session instead of making a
+// second one. Once the finalizer can go, the deadline has passed, and the
+// fixed-name entry refuses the create: a second agent launch is not possible
+// (agentd would refuse one on its node clock too).
+func TestReapedWinnerIsNotRecreatedByTheLoser(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		release time.Time
+		lifted  bool
+		left    int
+	}{
+		{"reaped inside the deadline", day0.Add(time.Minute), false, 1},
+		{"released after the deadline plus the margin", pastHold, true, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			key := f.item("audit", spec())
+			e1, e2 := f.executor(), f.executor()
+			f.at(e1, day0.Add(-time.Minute))
+			f.clock.Set(day0)
+			var once atomic.Bool
+			f.create.hooks(func() error {
+				if once.CompareAndSwap(false, true) {
+					e2.Tick(context.Background())
+					f.clock.Set(c.release)
+					if lifted := f.release(f.derived(key, day0), true); lifted != c.lifted {
+						t.Fatalf("the finalizer lifted %v, want %v", lifted, c.lifted)
+					}
+				}
+				return nil
+			}, nil)
+			e1.Tick(context.Background())
+			calls, created, _ := f.create.counts()
+			if created != 1 || calls != 2 || len(f.sessionsOf()) != c.left {
+				t.Fatalf("calls %d created %d sessions %d: one occurrence got a second session", calls, created, len(f.sessionsOf()))
+			}
+			f.wantOcc(key, day0, v1alpha1.OccurrenceFailed, scheduledwork.ReasonReaped)
+		})
+	}
+}
+
+// A create that reaches the fixed-name entry after the start deadline (a
+// stall between the executor's grace check and the Create) is refused by the
+// entry, and the occurrence is Skipped, not retried or parked.
+func TestACreatePastTheDeadlineIsSkipped(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.create.hooks(func() error {
+		f.clock.Set(day0.Add(grace + time.Second))
+		return nil
+	}, nil)
+	f.at(f.executor(), day0)
+	f.wantOcc(key, day0, v1alpha1.OccurrenceSkipped, ReasonNotCreated)
+	if calls, created, _ := f.create.counts(); calls != 1 || created != 0 || len(f.sessionsOf()) != 0 {
+		t.Errorf("calls %d created %d sessions %d", calls, created, len(f.sessionsOf()))
+	}
+}
+
+// A stalled or deposed leader's create can land after the live leader's
+// final record without a session. The session then exists, but its
+// occurrence is final without naming it, so the launch gate refuses its first
+// pod and its agent never starts unrecorded.
+func TestALateCreateAfterAFinalRecordCannotStart(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.create.hooks(func() error { return errTransient }, nil)
+	f.at(f.executor(), day0)
+	f.wantOcc(key, day0, v1alpha1.OccurrenceClaimed, "")
+	f.create.hooks(nil, nil)
+	f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
+	// The live leader's last session read finds none; the other leader's
+	// create lands right before its final record reaches the API server.
+	hook := func() { f.otherLeaderCreates(key, day0) }
+	f.beforeWrite.Store(&hook)
+	f.at(f.executor(), day0.Add(time.Minute))
+	if o := f.wantOcc(key, day0, v1alpha1.OccurrenceCancelled, ReasonCancelledAtRevalidation); o.Session != "" {
+		t.Fatalf("occurrence %+v", o)
+	}
+	s := f.session(f.derived(key, day0))
+	reason, refuse := scheduledwork.LaunchRefusal(s, f.get(key))
+	if !refuse || !strings.Contains(reason, "already Cancelled without it") {
+		t.Errorf("the late session may start: refuse %v, %q", refuse, reason)
+	}
+}
+
+// Two overlapping leaders and a cap of two: one leader's pass is held up
+// (its authority read fails for two items) while the other claims, and then
+// claims the rest from its old listing. The count right before each claim is
+// read again from the API server, so the cap holds; the remaining bound is one
+// extra per leader that checks at the same moment.
+func TestOverlappingLeadersStayWithinTheCap(t *testing.T) {
+	f := newFixture(t)
+	keys := []string{"a1", "a2", "b1", "b2"}
+	for _, k := range keys {
+		f.item(k, spec())
+	}
+	e1, e2 := f.executor(), f.executor()
+	f.at(e1, day0.Add(-time.Minute))
+	f.clock.Set(day0)
+	var hooked atomic.Bool
+	e2.Authorizer = authFunc(func(w *v1alpha1.ScheduledWork) (Authority, error) {
+		switch w.Name {
+		case "a1", "a2":
+			return Authority{}, errors.New("injected: the authority read failed")
+		case "b1":
+			if hooked.CompareAndSwap(false, true) {
+				e1.Tick(context.Background())
+			}
+		}
+		return Authority{Basis: BasisHuman}, nil
+	})
+	e2.Tick(context.Background())
+	n := 0
+	for _, k := range keys {
+		w := f.get(types.NamespacedName{Namespace: f.items, Name: k})
+		for _, o := range w.Status.Occurrences {
+			if holdsSlot(o.State) {
+				n++
+			}
+		}
+	}
+	if n > DefaultMaxHeadless {
+		t.Fatalf("%d unfinished headless occurrences with a cap of %d", n, DefaultMaxHeadless)
+	}
+}
+
+type authFunc func(*v1alpha1.ScheduledWork) (Authority, error)
+
+func (a authFunc) Authorize(_ context.Context, w *v1alpha1.ScheduledWork, _ time.Time) (Authority, error) {
+	return a(w)
+}
+
+// The cap counts an occurrence with a session in its session's own mode, not
+// its item's current one: a headless task whose item was edited to
+// interactive while it ran still fills the headless cap and not the
+// interactive one.
+func TestCapCountsTheSessionsOwnMode(t *testing.T) {
+	f := newFixture(t)
+	a := f.item("edited", spec())
+	ex := func() *Executor { e := f.executor(); e.MaxHeadless, e.MaxInteractive = 1, 1; return e }
+	f.at(ex(), day0.Add(-time.Minute))
+	f.at(ex(), day0)
+	f.wantOcc(a, day0, v1alpha1.OccurrenceDispatched, "")
+	f.edit(a, func(s *v1alpha1.ScheduledWorkSpec) { s.Mode = v1alpha1.ScheduledWorkInteractive })
+	later := day0.Add(time.Hour)
+	headless, interactive := spec(), spec()
+	headless.Due = later.Format("2006-01-02T15:04")
+	interactive.Due, interactive.Mode = headless.Due, v1alpha1.ScheduledWorkInteractive
+	h, i := f.item("headless", headless), f.item("interactive", interactive)
+	f.at(ex(), later.Add(-time.Minute))
+	f.at(ex(), later)
+	f.wantOcc(h, later, v1alpha1.OccurrencePending, ReasonAtCapacity)
+	f.wantOcc(i, later, v1alpha1.OccurrenceDispatched, "")
+}
+
+// Adopting a late session into a Parked occurrence takes a slot, so it waits
+// for a free one. Meanwhile the Parked occurrence does not expire, because
+// its session's outcome is still recorded into it.
+func TestParkedAdoptionChecksTheCap(t *testing.T) {
+	f := newFixture(t)
+	p := f.item("parked", spec())
+	busy := spec()
+	busy.Due = day0.Add(time.Minute).Format("2006-01-02T15:04")
+	q := f.item("busy", busy)
+	f.auth.set(func(w *v1alpha1.ScheduledWork) (Authority, error) {
+		if w.Name == p.Name {
+			return Authority{Reason: ReasonNoAuthority}, nil
+		}
+		return Authority{Basis: BasisHuman}, nil
+	})
+	ex := func() *Executor { e := f.executor(); e.MaxHeadless = 1; return e }
+	f.at(ex(), day0.Add(-time.Minute))
+	f.at(ex(), day0)
+	f.wantOcc(p, day0, v1alpha1.OccurrenceParked, ReasonNoAuthority)
+	f.at(ex(), day0.Add(time.Minute))
+	f.wantOcc(q, day0.Add(time.Minute), v1alpha1.OccurrenceDispatched, "")
+	f.otherLeaderCreates(p, day0)
+	f.at(ex(), day0.Add(2*time.Minute))
+	f.wantOcc(p, day0, v1alpha1.OccurrenceParked, ReasonNoAuthority)
+	f.at(ex(), day0.Add(DefaultDecisionWindow+time.Minute))
+	f.wantOcc(p, day0, v1alpha1.OccurrenceParked, ReasonNoAuthority)
+	f.finish(f.derived(q, day0.Add(time.Minute)), v1alpha1.TaskResultSucceeded)
+	f.release(f.derived(q, day0.Add(time.Minute)), false)
+	f.at(ex(), day0.Add(DefaultDecisionWindow+2*time.Minute))
+	if o := f.wantOcc(p, day0, v1alpha1.OccurrenceDispatched, ""); o.Session != f.derived(p, day0) {
+		t.Errorf("occurrence %+v", o)
 	}
 }
 
@@ -756,7 +957,8 @@ func TestRestartAtEveryStateIsIdempotent(t *testing.T) {
 	f.wantOcc(b, day0, v1alpha1.OccurrenceDispatched, "")
 	steady(day0.Add(4*time.Minute), "Succeeded, Dispatched and Parked")
 
-	if calls, created, _ := f.create.counts(); calls != 3 || created != 2 || len(f.sessionsOf()) != 1 {
+	// a's session is reaped but still held by the release margin.
+	if calls, created, _ := f.create.counts(); calls != 3 || created != 2 || len(f.sessionsOf()) != 2 {
 		t.Errorf("calls %d created %d sessions %d; want each occurrence created once", calls, created, len(f.sessionsOf()))
 	}
 }

@@ -34,7 +34,7 @@ func TestScheduledWorkReleaseGuardTable(t *testing.T) {
 		// Suspended: ended by the session-end rule.
 		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name,
 			Labels:      map[string]string{v1alpha1.LabelScheduledWork: "item-uid"},
-			Annotations: map[string]string{v1alpha1.AnnotationScheduledWorkStartDeadline: now.Add(-time.Minute).Format(time.RFC3339)},
+			Annotations: map[string]string{v1alpha1.AnnotationScheduledWorkStartDeadline: now.Add(-10 * time.Minute).Format(time.RFC3339)},
 			Finalizers:  []string{Finalizer, v1alpha1.ScheduledWorkFinalizer}},
 			Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask, OperatingMode: v1alpha1.OperatingModeSuspended}}
 		if edit != nil {
@@ -108,6 +108,21 @@ func TestScheduledWorkReleaseGuardTable(t *testing.T) {
 			scheduledWorkRelease{why: swReleaseKindGone, read: itemKindGone, now: now}, false},
 		{"kind gone, but the item is missing only", session(nil), scheduledWorkRelease{why: swReleaseKindGone, read: itemMissing, now: now}, false},
 		{"no reason", session(nil), scheduledWorkRelease{read: itemFound, work: work("", occ(v1alpha1.OccurrenceSucceeded, name))}, false},
+		// Every reason waits for the start deadline plus the release margin.
+		{"recorded, inside the margin after the deadline", session(func(s *v1alpha1.AgentSession) {
+			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = now.Add(-time.Minute).Format(time.RFC3339)
+		}), scheduledWorkRelease{why: swReleaseRecorded, read: itemFound, work: work("", occ(v1alpha1.OccurrenceSucceeded, name))}, false},
+		{"recorded, just past the margin", session(func(s *v1alpha1.AgentSession) {
+			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = now.Add(-scheduledwork.ReleaseMargin - time.Second).Format(time.RFC3339)
+		}), scheduledWorkRelease{why: swReleaseRecorded, read: itemFound, work: work("", occ(v1alpha1.OccurrenceSucceeded, name))}, true},
+		{"recorded, no deadline", session(func(s *v1alpha1.AgentSession) { s.Annotations = nil }),
+			scheduledWorkRelease{why: swReleaseRecorded, read: itemFound, work: work("", occ(v1alpha1.OccurrenceSucceeded, name))}, false},
+		{"item gone, before the deadline", session(func(s *v1alpha1.AgentSession) {
+			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = now.Add(time.Minute).Format(time.RFC3339)
+		}), scheduledWorkRelease{why: swReleaseItemGone, read: itemMissing}, false},
+		{"replaced, before the deadline", session(func(s *v1alpha1.AgentSession) {
+			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = now.Add(time.Minute).Format(time.RFC3339)
+		}), scheduledWorkRelease{why: swReleaseReplaced, read: itemFound, work: work("other-uid")}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			c.ev.at, c.ev.now = at, now
@@ -378,6 +393,20 @@ func TestScheduledWorkReleaseCollectorCountsHeldSessions(t *testing.T) {
 			s.Labels = nil
 			s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 		}),
+		// Held by the release margin, as expected: not blocked.
+		mk("deleting-inside-the-margin", true, func(s *v1alpha1.AgentSession) {
+			s.DeletionTimestamp = &deleted
+			s.Annotations = map[string]string{v1alpha1.AnnotationScheduledWorkStartDeadline: now.Add(-time.Minute).Format(time.RFC3339)}
+		}),
+		mk("suspended-before-the-deadline", true, func(s *v1alpha1.AgentSession) {
+			s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+			s.Annotations = map[string]string{v1alpha1.AnnotationScheduledWorkStartDeadline: now.Add(time.Hour).Format(time.RFC3339)}
+		}),
+		// Past the margin it counts again.
+		mk("deleting-past-the-margin", true, func(s *v1alpha1.AgentSession) {
+			s.DeletionTimestamp = &deleted
+			s.Annotations = map[string]string{v1alpha1.AnnotationScheduledWorkStartDeadline: now.Add(-scheduledwork.ReleaseMargin - time.Second).Format(time.RFC3339)}
+		}),
 	).Build()
 	c := &ScheduledWorkReleaseCollector{Reader: reader, Namespace: sessionNS, Now: func() time.Time { return now }}
 	ch := make(chan prometheus.Metric, 4)
@@ -391,7 +420,7 @@ func TestScheduledWorkReleaseCollectorCountsHeldSessions(t *testing.T) {
 		}
 		got = append(got, d.GetGauge().GetValue())
 	}
-	if len(got) != 1 || got[0] != 5 {
-		t.Fatalf("blocked %v, want [5]", got)
+	if len(got) != 1 || got[0] != 6 {
+		t.Fatalf("blocked %v, want [6]", got)
 	}
 }

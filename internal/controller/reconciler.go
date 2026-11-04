@@ -231,6 +231,10 @@ type Reconciler struct {
 	// back (MetricScheduledWorkReleaseHolds, DESIGN-054 S3a); nil counts
 	// nothing. The releaser itself always runs: it has no flag.
 	ScheduledWorkReleaseHolds *prometheus.CounterVec
+	// ScheduledWorkLateSessions counts the releases of a session whose
+	// occurrence was already final without naming it
+	// (MetricScheduledWorkLateSessions); nil counts nothing.
+	ScheduledWorkLateSessions prometheus.Counter
 	// SessionNamespace is where the sessions live. The scheduled-work sweep
 	// lists the labelled sessions there from the API server; empty, or with no
 	// APIReader, the sweep does not run and the releaser still acts on every
@@ -1241,6 +1245,17 @@ func (r *Reconciler) ensure(ctx context.Context, s *v1alpha1.AgentSession, t *te
 		if err := r.admitPrivateHistory(ctx, s); err != nil {
 			obs.removalBlocked = err
 			return nil
+		}
+	}
+	if obs.claim.missing {
+		// The first pod of a scheduled session (DESIGN-054 launch gate);
+		// any other session reads nothing here.
+		if err := r.scheduledLaunchGate(ctx, s); err != nil {
+			if errors.As(err, new(sessionInvalidError)) {
+				obs.buildErr = err
+				return nil
+			}
+			return err
 		}
 	}
 	pod, err := r.sessionPod(s, t)

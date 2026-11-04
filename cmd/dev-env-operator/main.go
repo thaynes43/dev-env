@@ -230,7 +230,7 @@ func parseFlags(args []string) (options, error) {
 	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
-	fs.BoolVar(&o.scheduledWork.enabled, "enable-scheduled-work", false, "run the leader-only scheduled-work executor (DESIGN-054 S3b): it claims each due ScheduledWork occurrence with a compare-and-set and creates its session through the API's creation path under a derived name; default off; needs the API and leader election. Until S3b2 wires the authority and dispatch-template sources it has none: every claimed occurrence parks with its reason and nothing dispatches, even with this flag on")
+	fs.BoolVar(&o.scheduledWork.enabled, "enable-scheduled-work", false, "run the leader-only scheduled-work executor (DESIGN-054 S3b): it claims each due ScheduledWork occurrence with a compare-and-set and creates its session through the API's creation path under a derived name; default off; needs the API and leader election. Until S3b2 wires the authority and dispatch-template sources it has none: every claimed occurrence parks with its reason and nothing dispatches, even with this flag on. Do not enable it before S3b2: every real occurrence would be recorded Parked and then Skipped")
 	fs.IntVar(&o.scheduledWork.maxHeadless, "scheduled-work-max-headless", executor.DefaultMaxHeadless, "most unfinished headless scheduled-work occurrences at once (1 to 16), checked before the claim; one at the cap stays Pending until its grace ends, then is Skipped")
 	fs.IntVar(&o.scheduledWork.maxInteractive, "scheduled-work-max-interactive", executor.DefaultMaxInteractive, "most unfinished interactive scheduled-work occurrences at once (1 to 16), checked before the claim")
 	fs.DurationVar(&o.scheduledWork.headlessGrace, "scheduled-work-headless-grace", executor.DefaultHeadlessGrace, "how late a headless scheduled-work occurrence may still start (1m to 12h); later it is Skipped, and it is the session's start deadline")
@@ -833,6 +833,8 @@ func run(args []string) error {
 	// counter is always there.
 	releaseHolds := controller.NewScheduledWorkReleaseHoldsCounter()
 	ctrlmetrics.Registry.MustRegister(releaseHolds)
+	lateSessions := controller.NewScheduledWorkLateSessionsCounter()
+	ctrlmetrics.Registry.MustRegister(lateSessions)
 	// The API's log and message routes run agentd in a session's pod (D-65),
 	// and the HOME expiry's relay runs the history export there and the
 	// archive commands in the shelf (DESIGN-025 6.4).
@@ -864,6 +866,7 @@ func run(args []string) error {
 	r.PrivateExecutorStops = stopCounter
 	r.HomeExpiryCounters = expiryCounters
 	r.ScheduledWorkReleaseHolds = releaseHolds
+	r.ScheduledWorkLateSessions = lateSessions
 	r.SessionNamespace = o.sessionNamespace
 	r.ScheduledWorkNamespace = o.templatesNamespace
 	r.HistoryRelay = &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots}

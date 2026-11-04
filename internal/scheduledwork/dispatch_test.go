@@ -5,6 +5,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -76,5 +77,54 @@ func TestCreatedFor(t *testing.T) {
 	got, err := OccurrenceAt(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Annotations: s.Annotations}})
 	if err != nil || !got.Equal(at) || StartDeadlineAnnotation(at.Add(15*time.Minute+500*time.Millisecond)) != "2030-06-03T14:15:00Z" {
 		t.Errorf("annotations do not round-trip: %v %v", got, err)
+	}
+}
+
+// The launch gate refuses a session whose occurrence would never record it,
+// and lets an open occurrence, or one naming the session, start it.
+func TestLaunchRefusal(t *testing.T) {
+	at := time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-203006031400"
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name,
+		Labels:      map[string]string{v1alpha1.LabelScheduledWork: "uid-1"},
+		Annotations: map[string]string{v1alpha1.AnnotationScheduledWorkOccurrence: OccurrenceAnnotation(at)}}}
+	item := func(uid, state, session string) *v1alpha1.ScheduledWork {
+		w := &v1alpha1.ScheduledWork{ObjectMeta: metav1.ObjectMeta{UID: types.UID(uid)}}
+		if state != "" {
+			w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: state, Session: session}}
+		}
+		return w
+	}
+	for _, c := range []struct {
+		name   string
+		w      *v1alpha1.ScheduledWork
+		refuse bool
+	}{
+		{"claimed, no session yet", item("uid-1", v1alpha1.OccurrenceClaimed, ""), false},
+		{"dispatched to it", item("uid-1", v1alpha1.OccurrenceDispatched, name), false},
+		{"parked, no session", item("uid-1", v1alpha1.OccurrenceParked, ""), false},
+		{"final and naming it", item("uid-1", v1alpha1.OccurrenceSucceeded, name), false},
+		{"final without it", item("uid-1", v1alpha1.OccurrenceSkipped, ""), true},
+		{"cancelled without it", item("uid-1", v1alpha1.OccurrenceCancelled, ""), true},
+		{"names another session", item("uid-1", v1alpha1.OccurrenceDispatched, "sw-ffffffffffff-203006031400"), true},
+		{"no occurrence", item("uid-1", "", ""), true},
+		{"another item", item("uid-2", v1alpha1.OccurrenceClaimed, ""), true},
+		{"the item is gone", nil, true},
+	} {
+		if reason, refuse := LaunchRefusal(s, c.w); refuse != c.refuse {
+			t.Errorf("%s: refuse %v (%q), want %v", c.name, refuse, reason, c.refuse)
+		}
+	}
+	if _, refuse := LaunchRefusal(&v1alpha1.AgentSession{}, item("uid-1", v1alpha1.OccurrenceClaimed, "")); !refuse {
+		t.Error("a session without its occurrence annotation may start")
+	}
+	deadline := "2030-06-03T14:15:00Z"
+	s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline
+	if until, err := ReleaseHeldUntil(s); err != nil || !until.Equal(at.Add(15*time.Minute+ReleaseMargin)) {
+		t.Errorf("held until %v, %v", until, err)
+	}
+	delete(s.Annotations, v1alpha1.AnnotationScheduledWorkStartDeadline)
+	if _, err := ReleaseHeldUntil(s); err == nil {
+		t.Error("no deadline gave a release time")
 	}
 }
