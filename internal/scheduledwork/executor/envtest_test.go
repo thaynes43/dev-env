@@ -42,6 +42,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/controller"
 	"github.com/thaynes43/dev-env/internal/scheduledwork"
+	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
 	"github.com/thaynes43/dev-env/internal/templates"
 	"github.com/thaynes43/dev-env/internal/testenv"
 )
@@ -102,21 +103,39 @@ func (c *clock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now
 
 func (c *clock) Set(t time.Time) { c.mu.Lock(); defer c.mu.Unlock(); c.now = t }
 
-// authorizer is the fake Authorizer: it answers basis, or what fn says.
+// authorizer is the fake Authorizer: it answers basis, or what fn says. Its
+// answer carries the real digest of the item's template in tmpl, as Sources'
+// does, unless it set one itself; with no tmpl it carries none.
 type authorizer struct {
 	mu    sync.Mutex
 	fn    func(*v1alpha1.ScheduledWork) (Authority, error)
 	calls int
+	tmpl  resolver
 }
 
 func (a *authorizer) Authorize(_ context.Context, w *v1alpha1.ScheduledWork, _ time.Time) (Authority, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls++
-	if a.fn == nil {
-		return Authority{Basis: BasisHuman}, nil
+	got, err := Authority{Basis: BasisHuman}, error(nil)
+	if a.fn != nil {
+		got, err = a.fn(w)
 	}
-	return a.fn(w)
+	if t, ok := a.tmpl[w.Spec.Work.Template]; ok && err == nil && got.TemplateDigest == "" {
+		got.TemplateDigest = fakeDigest(t)
+	}
+	return got, err
+}
+
+// fakeDigest is a test template's real digest: authority.TemplateDigest of
+// the same template.
+func fakeDigest(t Template) string {
+	admits := make([]authority.Basis, 0, len(t.Admits))
+	for _, b := range t.Admits {
+		admits = append(admits, authority.Basis(b))
+	}
+	return authority.TemplateDigest(authority.Template{Agent: t.Agent, Model: t.Model, Effort: t.Effort, Size: t.Size, Profile: t.Profile,
+		Repos: t.Repos, Modes: t.Modes, MaxDuration: t.MaxDuration, IdleSuspendAfter: t.IdleSuspendAfter, Admits: admits})
 }
 
 func (a *authorizer) set(fn func(*v1alpha1.ScheduledWork) (Authority, error)) {
@@ -125,13 +144,17 @@ func (a *authorizer) set(fn func(*v1alpha1.ScheduledWork) (Authority, error)) {
 	a.fn = fn
 }
 
-// resolver is the fake TemplateResolver over a fixed map.
+// resolver is the fake TemplateResolver over a fixed map. A template
+// without a digest gets its real one, as Sources gives.
 type resolver map[string]Template
 
 func (r resolver) Resolve(_ context.Context, name string) (Template, error) {
 	t, ok := r[name]
 	if !ok {
 		return Template{}, &Refusal{Reason: "no such template"}
+	}
+	if t.Digest == "" {
+		t.Digest = fakeDigest(t)
 	}
 	return t, nil
 }
@@ -225,8 +248,9 @@ func newFixture(t *testing.T) *fixture {
 	c := cluster(t)
 	n := nsSeq.Add(1)
 	f := &fixture{t: t, items: fmt.Sprintf("sw-items-%d", n), sessions: fmt.Sprintf("sw-sessions-%d", n),
-		clock: &clock{now: day0.Add(-time.Hour)}, auth: &authorizer{}, tmpl: resolver{"ops-audit": opsAudit},
+		clock: &clock{now: day0.Add(-time.Hour)}, tmpl: resolver{"ops-audit": opsAudit},
 		schemaMissing: NewSchemaMissingCounter(), schemaReadFailures: NewSchemaReadFailuresCounter()}
+	f.auth = &authorizer{tmpl: f.tmpl}
 	for _, ns := range []string{f.items, f.sessions} {
 		if err := c.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
 			t.Fatal(err)

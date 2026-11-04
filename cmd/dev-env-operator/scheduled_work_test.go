@@ -5,13 +5,17 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
 )
 
 // The scheduled-work executor is default off: with the flag off the operator
-// adds no runnable. On, it needs the API and leader election, and until S3b2
-// it is wired with DenyAll and NoTemplates, so nothing dispatches.
+// adds no runnable. On, it needs the API and leader election, and its
+// authority and templates are one executor.Sources over the uncached reader:
+// the dev-env-scheduled-work ConfigMap in the operator's namespace and the
+// owner sessions in the sessions' namespace (DESIGN-054 S3b2).
 func TestScheduledWorkFlags(t *testing.T) {
 	o, err := parseFlags(nil)
 	if err != nil || o.scheduledWork.enabled {
@@ -30,18 +34,24 @@ func TestScheduledWorkFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex := newScheduledWorkExecutor(o, nil, nil, nil, logr.Discard())
+	reader := fake.NewClientBuilder().Build()
+	ex := newScheduledWorkExecutor(o, nil, reader, nil, logr.Discard())
 	if ex == nil || !ex.NeedLeaderElection() || ex.SchemaMissing == nil || ex.SchemaReadFailures == nil {
 		t.Fatalf("the flag on: %+v", ex)
 	}
 	if ex.Namespace != o.templatesNamespace || ex.SessionNamespace != o.sessionNamespace {
 		t.Errorf("namespaces: items %q sessions %q", ex.Namespace, ex.SessionNamespace)
 	}
-	if _, ok := ex.Authorizer.(executor.DenyAll); !ok {
-		t.Errorf("authorizer %T, want DenyAll until S3b2", ex.Authorizer)
+	src, ok := ex.Authorizer.(*executor.Sources)
+	if !ok {
+		t.Fatalf("authorizer %T, want *executor.Sources", ex.Authorizer)
 	}
-	if _, ok := ex.Templates.(executor.NoTemplates); !ok {
-		t.Errorf("templates %T, want NoTemplates until S3b2", ex.Templates)
+	if tmpl, ok := ex.Templates.(*executor.Sources); !ok || tmpl != src {
+		t.Errorf("templates %T: want the authorizer's own Sources, so a decision and its template are one read", ex.Templates)
+	}
+	if src.Reader != reader || src.SessionNamespace != o.sessionNamespace || src.TemplatesNamespace != o.templatesNamespace ||
+		src.TemplatesName != authority.TemplatesConfigMap || src.StaleAfter != authority.DefaultHeartbeatStaleAfter {
+		t.Errorf("sources: %+v", src)
 	}
 	if ex.MaxHeadless != 3 || ex.MaxInteractive != 2 || ex.HeadlessGrace != 20*time.Minute || ex.InteractiveGrace != 3*time.Hour {
 		t.Errorf("limits: %d %d %s %s", ex.MaxHeadless, ex.MaxInteractive, ex.HeadlessGrace, ex.InteractiveGrace)

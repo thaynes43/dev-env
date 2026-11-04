@@ -28,9 +28,10 @@
 // headless session's end (Running and the terminal states) is the releaser's.
 //
 // The authority basis and the dispatch templates come in through Authorizer
-// and TemplateResolver. Until S3b2 implements them, the operator wires DenyAll
-// and NoTemplates, so even with the flag on every occurrence parks with a
-// reason and nothing is dispatched.
+// and TemplateResolver. The operator wires Sources (S3b2) for both: the
+// dispatch templates ConfigMap and the owner session, read uncached, decided
+// by internal/scheduledwork/authority. Without the ConfigMap, or without a
+// basis its template admits, an occurrence parks and nothing is dispatched.
 package executor
 
 import (
@@ -108,6 +109,9 @@ const (
 	ReasonCollision               = "a session of the derived name exists that this occurrence did not create"
 	ReasonNoAuthority             = "no standing authority"
 	ReasonReplanned               = "the schedule was edited before it was claimed"
+	// ReasonNoTemplateDigest parks an occurrence whose decision or template
+	// carries no digest: the two cannot be matched, so nothing is built.
+	ReasonNoTemplateDigest = "no template digest to match the decision against"
 )
 
 // Basis is the authority an occurrence dispatches on (DESIGN-054
@@ -140,10 +144,17 @@ type Authority struct {
 	Unproven bool
 	// Reason says why there is no basis, for the Parked record.
 	Reason string
+	// TemplateDigest is the digest of the template the basis was decided
+	// under (Template.Digest). Revalidation check 3 builds the session only
+	// from a template of the same, non-empty digest: it tries again when they
+	// differ, so an edit between the two reads never builds from a template
+	// the decision did not see, and it parks when either is empty
+	// (ReasonNoTemplateDigest). An Authority with no basis needs none.
+	TemplateDigest string
 }
 
 // Authorizer decides an item's authority basis at the due time, from what is
-// true now, never from anything stored at creation (DESIGN-054 R7). S3b2
+// true now, never from anything stored at creation (DESIGN-054 R7). Sources
 // implements it.
 type Authorizer interface {
 	// Authorize returns w's basis at now. An error is a failed read, not a
@@ -169,10 +180,15 @@ type Template struct {
 	// interactive, or both (v1alpha1.ScheduledWorkHeadless and
 	// ScheduledWorkInteractive). An item whose mode is not among them parks.
 	Modes []string
+	// Digest identifies the template's content (authority.TemplateDigest).
+	// It is required: check 3 builds only when it equals the Authority's
+	// TemplateDigest, parks the occurrence (ReasonNoTemplateDigest) when
+	// either is empty, and tries again when they differ.
+	Digest string
 }
 
-// TemplateResolver reads a dispatch template at the due time. S3b2 implements
-// it over the dev-env-scheduled-work ConfigMap.
+// TemplateResolver reads a dispatch template at the due time. Sources
+// implements it over the dev-env-scheduled-work ConfigMap.
 type TemplateResolver interface {
 	// Resolve returns the named template. A missing or invalid templates
 	// document, or a missing or invalid template in it, is a *Refusal, which
@@ -195,9 +211,9 @@ type Creator interface {
 	CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (name string, uid types.UID, adopted bool, err error)
 }
 
-// DenyAll is the production Authorizer until S3b2 wires the real checks: it
-// grants no basis, so every claimed occurrence parks with its reason and
-// nothing is dispatched.
+// DenyAll grants no basis, so every claimed occurrence parks with its reason
+// and nothing is dispatched. It was the operator's Authorizer before S3b2
+// wired Sources, and stays for tests.
 type DenyAll struct{}
 
 // DenyAllReason is the reason DenyAll gives.
@@ -208,9 +224,9 @@ func (DenyAll) Authorize(context.Context, *v1alpha1.ScheduledWork, time.Time) (A
 	return Authority{Reason: DenyAllReason}, nil
 }
 
-// NoTemplates is the production TemplateResolver until S3b2 reads the
-// dev-env-scheduled-work ConfigMap: with no ConfigMap the executor dispatches
-// nothing.
+// NoTemplates refuses every template, so the executor dispatches nothing. It
+// was the operator's TemplateResolver before S3b2 wired Sources, and stays for
+// tests.
 type NoTemplates struct{}
 
 // NoTemplatesReason is the refusal NoTemplates gives.
@@ -884,8 +900,9 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 	}
 	// Check 3: the template, its basis, its mode and its repo, now. The create checks
 	// the profile against dev-env-templates and the model id's form and
-	// effort; that the model is one the template still allows is the
-	// resolver's (TODO(S3b2)).
+	// effort; the resolver (Sources) reads the template now and refuses a
+	// model that is not a full id, so the model is the one the template
+	// holds at the due time.
 	t, err := e.Templates.Resolve(ctx, w.Spec.Work.Template)
 	var refusal *Refusal
 	switch {
@@ -893,6 +910,13 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 		return parked(fmt.Sprintf("template %s: %s", w.Spec.Work.Template, refusal.Reason))
 	case err != nil:
 		return retry(err, "read the dispatch template")
+	case t.Digest == "" || a.TemplateDigest == "":
+		// A source that cannot name its template's content is a defect, not
+		// an edit: it parks with the reason rather than retry until grace.
+		return parked(fmt.Sprintf("template %s: %s", w.Spec.Work.Template, ReasonNoTemplateDigest))
+	case t.Digest != a.TemplateDigest:
+		// An edit between the decision and this read: decide again.
+		return retry(fmt.Errorf("template %s changed after the authority was decided", w.Spec.Work.Template), "check the dispatch template against the decision")
 	case !slices.Contains(t.Admits, a.Basis):
 		return parked(fmt.Sprintf("template %s does not admit %s work", w.Spec.Work.Template, a.Basis))
 	case !slices.Contains(t.Modes, w.Spec.Mode):

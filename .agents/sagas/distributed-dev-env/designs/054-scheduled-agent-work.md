@@ -174,6 +174,44 @@ One invalid template refuses the whole document, so nothing dispatches until it 
 fixed. An absent ConfigMap is no templates. `internal/scheduledwork/authority`
 parses it.
 
+**How the executor reads them (S3b2).** `executor.Sources` is the operator's
+Authorizer and TemplateResolver. At each due-time check it reads, with the uncached
+API reader:
+
+- the ConfigMap `dev-env-scheduled-work` in the operator's namespace. NotFound,
+  an invalid document or an unknown name is a refusal that parks the occurrence;
+  any other read error is retried within the grace;
+- for a session owner, the AgentSession of the owner's name and its pod of the same
+  name, in the sessions' namespace. NotFound is no session or no pod; any other
+  read error is retried.
+
+It decides with `authority.Decide` and `authority.Choose` against the template's
+`admits`, and takes the template digest from the same read. A template refusal
+(absent, invalid or unknown) is no basis, with the template's reason, so the
+occurrence parks at once and never waits on an owner it could not run for. The
+decision carries its template's digest (`Authority.TemplateDigest`), and the build
+that follows (revalidation check 3) reads the template again with its own digest
+(`Template.Digest`). When the two differ, the executor retries rather than build
+from a template the decision did not see. When either is empty, it parks the
+occurrence ("no template digest to match the decision against"): a source that
+cannot name its template's content is a defect, not an edit, and two empty
+digests never match. `Sources` keeps no state between calls. A session owner's child runs on the owner's profile, so a
+template that admits `session` dispatches only for owners on the profile it names.
+
+**RBAC the executor needs (S6).** Read from haynes-ops `main`
+(`kubernetes/main/apps/dev-env-system/rbac/app/operator.yaml`, last changed
+2026-11-03, 7200fcb0):
+
+- `get` on `agentsessions` and `pods` in `dev-agents`, for owner liveness: already
+  granted (the `dev-agents` Role has get, list and watch on both).
+- `get` on `configmaps` named `dev-env-scheduled-work` in `dev-env-system`: **not yet
+  granted**. That Role grants configmaps only by name (`dev-env-templates`,
+  `dev-env-provider-allowances` and the owned-root inputs), so S6 adds
+  `resourceNames: [dev-env-scheduled-work]` with `verbs: [get]`. Without it every
+  read fails with Forbidden, a read error the executor retries until grace ends,
+  and nothing dispatches.
+- The `scheduledworks` rules and the CRD `get` are S6's, as listed in "Delivery".
+
 **An approval binds the template as well as the spec.** A template edit can change
 what an approved spec runs with, such as another model, a longer maximum duration
 or another profile, and the spec hash does not see it. So S5's approve route
@@ -660,9 +698,13 @@ every later failure parks it:
 
 A parked occurrence pages Tom with the reason and waits for a human approve, retry
 or cancel. An occurrence keeps the `specHash` it was claimed with (set once). If the
-spec has changed since that claim, a retry of the parked occurrence is refused, and
-the occurrence is `Skipped` ("spec changed after claim"). An approval of the edited
-spec applies from the next occurrence. S5 must not move a retried attempt's start deadline past the deadline of a
+spec has changed since that claim, a retry of the parked occurrence, by `retry` or
+by `approve` with `at`, is refused with 409, and agent-run refuses it before it
+sends anything. A refused retry never changes the occurrence: it stays `Parked`
+until its decision window ends, and is then `Skipped` like any parked occurrence
+no one acts on. An occurrence parked before any claim has no claim hash and may be
+retried. An approval of the edited spec, sent without `at`, applies from the next
+occurrence. S5 must not move a retried attempt's start deadline past the deadline of a
 session that still holds the occurrence's derived name: the finalizer's hold is measured from that session's own
 deadline, which bounds a late create. A retry waits until no session of the derived name is held, and it never
 reopens an occurrence that carries the `ending` mark. A human approve or retry sets `retriedAt` and opens a fresh window for
@@ -764,8 +806,41 @@ receiver session would route agent-written text into sessions the owner does not
 
 `/v1/scheduled-work` with the reminder routes' shape (create, list, show, edit,
 cancel). `POST /v1/scheduled-work/{name}/approve` and `.../retry` are for humans
-only. `agent-run schedule create|list|show|edit|cancel|approve|retry`, standard
-library only.
+only. The wire types are `internal/apiserver/apiv1/scheduledwork.go`, standard
+library only. S5a ships them with the client; S5b serves the routes.
+
+| Route | Caller | Body and answer |
+|---|---|---|
+| `POST /v1/scheduled-work` | any | the spec's fields except owner, editor and cancelled, plus `key`. The server sets owner and editor from the token. The same key and spec answer the first item; another spec under that key is 409 |
+| `GET /v1/scheduled-work` | the caller's own items; `all=true` for a human or coordinator | a list, which may leave out occurrences |
+| `GET .../{name}` | owner, human or coordinator | the stored spec (every field), `specHash` of exactly that spec, state, `nextDue`, counts, approval, every non-terminal occurrence and the recent terminal ones |
+| `PATCH .../{name}` | owner or human | the changed fields; the server sets `editor` in the same write |
+| `POST .../{name}/cancel` | owner, human or coordinator | an item already cancelled answers 200 |
+| `POST .../{name}/approve` | human only | `{specHash, at?}`: 409 unless `specHash` is the current spec's. With `at`, it also retries that occurrence: 409 unless it is Parked and under 3 attempts, and 409 when it was claimed with an earlier spec (an occurrence parked before any claim may be retried). A refusal records nothing; a plain approve with no `at` approves the spec for future occurrences. agent-run refuses the earlier-spec case before it asks. `status.approval.by` is the authenticated caller, never a body value |
+| `POST .../{name}/retry` | human only | `{at, specHash}`, with the same checks, and 409 when the occurrence was claimed with an earlier spec; an occurrence parked before any claim has no claim hash and may be retried. agent-run refuses the earlier-spec case before it asks. It grants no authority |
+
+`agent-run schedule create|list|show|edit|cancel|approve|retry` mirrors
+`agent-run remind`, with the standard library only. It checks a request before
+it sends anything: the required flags, the due time and zone, `--not-after`, the
+repeat rule, the work order (at most 8 KiB of UTF-8), the notify and calendar
+references, and a notify target for interactive work. A create always sends a
+key, so a retried create makes no second item. `show` prints every spec field,
+the spec hash and each occurrence, with control, format and invisible
+characters from the API escaped.
+
+**The consent gate.** `approve` and `retry` print the exact spec and its hash,
+then need one of two things: a y/N answered on a terminal, with the whole
+decision and the question on stderr; or `--yes` with `--spec-hash <hash>`, the
+hash the person read with `schedule show`. With `--yes`, `retry` also needs
+`--at`, because the hash pins the spec, not the occurrence. Without a terminal
+or `--yes`, both refuse before any request. `approve` retries a parked
+occurrence only when `--at` names it. Neither `approve --at` nor `retry` sends a
+retry of an occurrence claimed with an earlier spec. Each is sent once: a lost answer is
+reported, not repeated. The hash binds the decision to the spec shown, so an
+edit made after the fetch is never approved. Neither the hash nor the terminal
+proves anything about who decided: the API authenticates the human from the
+token and refuses approve and retry from any other caller. The approval's
+template digest (Data contract) is S5b's, with the route.
 
 ## Delivery
 
@@ -778,7 +853,7 @@ library only.
 | S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, approve of a Parked occurrence after grace running from retriedAt, an unapproved Parked occurrence expiring to Skipped, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
-| S6 | haynes-ops: CRD copy, Roles, a ClusterRole with `get` on the one `customresourcedefinitions` object `scheduledworks.dev-env.haynesops.com` (resourceNames), needed by both the releaser and the executor's schema preflight (a failed preflight read dispatches nothing and is counted in `dev_env_scheduled_work_schema_read_failures_total`), the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag. **Do not enable `--enable-scheduled-work` before S3b2**: S3b1 wires `DenyAll` and `NoTemplates`, so every real occurrence would be recorded `Parked` and then `Skipped`. S6's admission policy also pins a scheduled session's scheduled-work label and annotations (name, occurrence, start deadline) against any edit after the Create, since the releaser and the launch gate rely on them | Tom approves activation |
+| S6 | haynes-ops: CRD copy, Roles, a ClusterRole with `get` on the one `customresourcedefinitions` object `scheduledworks.dev-env.haynesops.com` (resourceNames), needed by both the releaser and the executor's schema preflight (a failed preflight read dispatches nothing and is counted in `dev_env_scheduled_work_schema_read_failures_total`), the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag. S3b2 wires the real authority and template sources (`executor.Sources`), so with the flag on an occurrence dispatches only with the templates ConfigMap present and a basis its template admits; the Role in `dev-env-system` must first grant `get` on `configmaps` `dev-env-scheduled-work` by name (see "Dispatch templates"). S6's admission policy also pins a scheduled session's scheduled-work label and annotations (name, occurrence, start deadline) against any edit after the Create, since the releaser and the launch gate rely on them | Tom approves activation |
 | S7 | live: one headless and one interactive test occurrence | Tom approves the first real run |
 | C1 | real calendar adapter | Tom provisions the DWD identity (OP206) |
 

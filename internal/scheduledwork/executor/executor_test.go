@@ -1093,8 +1093,8 @@ func TestRevalidationCancelAndNotAfterEndTheOccurrence(t *testing.T) {
 	})
 }
 
-// The production wiring until S3b2, DenyAll and NoTemplates, parks every
-// occurrence with its reason and dispatches nothing; a Parked occurrence that
+// DenyAll and NoTemplates, the operator's wiring before S3b2, park every
+// occurrence with its reason and dispatch nothing; a Parked occurrence that
 // nobody approves expires to Skipped at the end of its decision window.
 func TestProductionDefaultsParkAndDispatchNothing(t *testing.T) {
 	t.Run("deny all", func(t *testing.T) {
