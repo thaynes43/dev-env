@@ -31,7 +31,11 @@ import (
 //     and a skipped entry is final. An answer Ensure cannot confirm (its
 //     Reminder may exist but the read back failed, Pager.EnsureChecked) is
 //     not recorded: the intent stays pending, is tried once per pass, and a
-//     later pass whose read works records the Reminder.
+//     later pass whose read works records the Reminder. After
+//     Executor.MaxUnconfirmedPageTries such passes it is settled skipped,
+//     with the usual best-effort meaning. The count lives in the executor
+//     process only, so a restart or a new leader starts it again: still a
+//     bound, per process.
 //
 // An item with no notify target, or an executor with no Pager, records no
 // intent and so pages nothing. Neither step updates or deletes a Reminder.
@@ -159,12 +163,19 @@ func (p *pass) deliver(ctx context.Context, w *v1alpha1.ScheduledWork, now time.
 			pctx, cancel := context.WithTimeout(ctx, positiveOr(p.e.PageTimeout, DefaultPageTimeout))
 			got, settled := p.e.Pager.EnsureChecked(pctx, w, o.At.Time, pg.Event, pg.Attempt, title, body, now)
 			cancel()
+			p.pagesTried[key] = true
+			tries := string(w.UID) + "/" + key
+			p.e.pagesSeen[tries] = true
 			if !settled {
-				// The Reminder may exist; a later pass reads it again.
-				p.pagesTried[key] = true
-				lg.Info("a page Reminder could not be confirmed; it is tried again next pass", "occurrence", o.At.UTC().Format(time.RFC3339), "event", pg.Event)
-				continue
+				p.e.unconfirmed[tries]++
+				if p.e.unconfirmed[tries] < positiveOr(p.e.MaxUnconfirmedPageTries, DefaultMaxUnconfirmedPageTries) {
+					// The Reminder may exist; a later pass reads it again.
+					lg.Info("a page Reminder could not be confirmed; it is tried again next pass", "occurrence", o.At.UTC().Format(time.RFC3339), "event", pg.Event, "tries", p.e.unconfirmed[tries])
+					continue
+				}
+				lg.Info("a page Reminder could not be confirmed in the passes allowed; it is settled skipped", "occurrence", o.At.UTC().Format(time.RFC3339), "event", pg.Event, "tries", p.e.unconfirmed[tries])
 			}
+			delete(p.e.unconfirmed, tries)
 			o.Pages = settle(o.Pages, pg, got)
 			sent++
 		}

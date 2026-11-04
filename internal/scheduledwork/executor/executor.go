@@ -294,6 +294,13 @@ type Executor struct {
 	schemaOK, schemaLogged bool
 	schemaRV               string
 	schemaAt               time.Time
+
+	// unconfirmed counts, per item UID and page, the passes whose Ensure
+	// could not be confirmed (MaxUnconfirmedPageTries); pagesSeen are the
+	// pages tried in the current Tick, so the counts of pages no longer
+	// pending are dropped at its end.
+	unconfirmed map[string]int
+	pagesSeen   map[string]bool
 }
 
 // NeedLeaderElection makes the executor run in the leader only.
@@ -364,6 +371,17 @@ func (e *Executor) Tick(ctx context.Context) {
 	if !e.schemaReady(ctx) {
 		return
 	}
+	if e.unconfirmed == nil {
+		e.unconfirmed = map[string]int{}
+	}
+	e.pagesSeen = map[string]bool{}
+	defer func() {
+		for k := range e.unconfirmed {
+			if !e.pagesSeen[k] {
+				delete(e.unconfirmed, k)
+			}
+		}
+	}()
 	items := list.Items
 	slices.SortFunc(items, func(a, b v1alpha1.ScheduledWork) int {
 		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
