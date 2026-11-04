@@ -139,6 +139,23 @@ func TestBudgetShowLatchedDoesNotAdmitOrReset(t *testing.T) {
 	}
 }
 
+// agent-run decodes the stall signal, so it asks for it (OpenProject #385, C3).
+// An operator that negotiates the field sends it only then.
+func TestBudgetShowAsksForTheStallField(t *testing.T) {
+	h := newHarness(t)
+	st := budgetReceipt()
+	since := st.LastProgress
+	h.api.handle = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		out := st
+		if r.Header.Get(apiv1.TaskBudgetStallHeader) == apiv1.TaskBudgetStallV1 {
+			out.Stall = &apiv1.TaskBudgetStall{ID: "stall:1", Since: since, At: since.Add(time.Hour), Signals: 2}
+		}
+		writeTestJSON(w, http.StatusOK, out)
+	}
+	h.mustRun(ExitOK, "budget", "show", "campaign-a")
+	contains(t, "stall line", h.stdout.String(), "stall: since "+since.UTC().Format(time.RFC3339Nano)+", signals 2")
+}
+
 // Ambiguous or absent safety fields must never become a zero-value authority.
 func TestBudgetRejectsAmbiguousReceipts(t *testing.T) {
 	raw := mustJSON(t, budgetReceipt())
