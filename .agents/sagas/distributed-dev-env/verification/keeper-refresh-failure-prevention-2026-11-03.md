@@ -183,14 +183,47 @@ policy limits the keeper's writes to it.
   The journal UID check in the rollback is defence in depth and is now
   pinned too (G4): a recreated journal with copied data is not rolled back.
 
-Residuals, recorded:
+Residuals, recorded (RES-7 to RES-11 and the RES-6 widening come from the
+round-3 independent review):
 
-- A crash, or any stop that is not a not-sent path, after the dispatch
-  commit is stored and before the POST: the journal then says the attempt
-  may have been sent, and a successor tombstones a token that may be
-  unspent. A test pins this behaviour.
-- A lost acknowledgement on the commit whose read back also fails: nothing
-  is sent, and the proving worker rolls back from its own proof; a restart
-  before that rollback finds no marker and tombstones.
-- The provider has no idempotency for the refresh, so nothing on the keeper
-  side can close the first residual.
+- RES-1. A crash, or any stop that is not a not-sent path, after the
+  dispatch commit is stored and before the POST: the journal then says the
+  attempt may have been sent, and a successor tombstones a token that may
+  be unspent. A test pins this behaviour.
+- RES-2. A lost acknowledgement on the commit whose read back also fails:
+  nothing is sent, and the proving worker rolls back from its own proof; a
+  restart before that rollback finds no marker and tombstones.
+- RES-3. The Lease fence after the commit refuses: nothing is sent, and, as
+  in RES-2, only the proving process can roll back.
+- RES-4. The provider has no idempotency for the refresh, so nothing on the
+  keeper side can close RES-1.
+- RES-5. The 5-minute proof bound is per process: a keeper restarted within
+  it takes the marker as a fresh proof and retries for up to 5 more minutes
+  before the tombstone and the page.
+- RES-6. Restoring an old copy of the journal Secret in place, with the same
+  UID, can bring back an old token. Before this round only an old Ready copy
+  could do that; now an old marked RefreshIntent copy can too, because a
+  keeper rolls it back to the record it holds. A recreated Secret, with a
+  new UID, is refused.
+- RES-7. A process stall (garbage collection, CPU throttling, a stopped
+  process) longer than the remaining fence budget, between the fence after
+  the commit and the end of the POST: the POST can complete after the Lease
+  is lost, because the provider takes no fencing token. Not new here. A
+  successor finds no marker and tombstones, never reusing the token, and the
+  stale owner's replacement compare-and-swap fails.
+- RES-8. Every failure after the commit, including dial, DNS and TLS
+  failures before any byte is written and 429 or 5xx answers, tombstones and
+  pages although the token may be unspent. Unchanged here, and still the
+  main remaining source of a false login-required.
+- RES-9. Any principal that can patch the journal Secret (the keeper's
+  ServiceAccount, cluster administrators) can write or copy a marker that
+  names the current intent; a keeper would then roll back to the record in
+  `state.json`, which may hold a spent token. The journal is trusted state;
+  this generalises RES-6.
+- RES-10. Any other write to the journal Secret between the intent's re-read
+  and the commit fails the commit's compare-and-swap. The read back still
+  finds the marker, nothing is sent, and the intent rolls back with the
+  1-minute retry delay: availability only.
+- RES-11. On a downgrade to a keeper without this change, the older keeper
+  tombstones marked intents, as before, and leaves stale markers behind. They
+  name old attempts and are harmless.
