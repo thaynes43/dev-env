@@ -89,6 +89,33 @@ closed). An older agent or `agent-run` binary refuses a status with the new
 `stall` field as an unknown field, so it fails closed while an unlatched
 campaign is stalled. Upgrade the task image and the CLI with the operator.
 
+**Negotiated field, 2026-11-04 (OpenProject #385, C3; supersedes the
+upgrade-together instruction above).** The operator sends `stall` only to a
+client that sends the request header `X-Dev-Env-Task-Budget-Stall: v1`
+(`apiv1.TaskBudgetStallHeader`), the same way `X-Dev-Env-Task-Outcome`
+negotiates the task outcome. Every other client gets the status without the
+field, so agentd and `agent-run` up to 2.89.x decode it and no longer fail
+closed during a stall. Nothing else changes: the ledger records the same stall
+signal, and `latched`, `reason` and every other field are the same for every
+reader. `agent-run` sends the header from this change on; the 2.90.0 client
+does not, so its `budget show` prints `stall: -` against an operator with this
+change. agentd does not read `stall` and does not ask for it.
+
+Which mixes are safe for this field:
+
+- An operator with this change, with any agentd or `agent-run`: safe. A client
+  that does not ask never gets `stall`.
+- An operator from before decision 94 (for example the deployed `sha-2828fa9`,
+  which does not contain #909), with any client: safe. It never sends `stall`;
+  a new client that asks gets nothing extra.
+- An operator built from main after #909 and before this change: **not safe**.
+  It sends `stall` to every client, and agentd or `agent-run` up to 2.89.x
+  fails closed while an unlatched campaign is stalled. Do not deploy one.
+- During a rolling update the API is served by every replica. A replica that
+  runs such an in-between build is unsafe in the same way, so a rollout must go
+  from a build without #909 straight to one with this change, never through an
+  in-between build.
+
 One logical campaign is assigned externally to one host. The API cannot replace
 that assignment, delete the ledger, reset history, extend its own deadline or
 automatically rearm a stopped host. `TaskUID`, epoch, deadline, HostID and exact
@@ -180,7 +207,8 @@ counts. There is no native owner-decision adapter in this source unit.
 
 Status includes `observed`, `admitted`, exact `binding`, `latched`, `reason`,
 `effortMilliseconds`, `usageAccounting`, `lastProgress`, `nextCheckpoint`,
-`escalation`, `stall` (decision 94, above), `stopConfirmed`, blocker counts and
+`escalation`, `stall` (decision 94, above; only for a client that asks with
+`X-Dev-Env-Task-Budget-Stall: v1`), `stopConfirmed`, blocker counts and
 last evidence. HTTP success alone
 does not admit work: the client checks positive exact binding confirmation and
 `observed`; Admit additionally requires `admitted` and an unlatched ledger.

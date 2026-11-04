@@ -217,6 +217,9 @@ func (a *app) send(ctx context.Context, c *conn, method, target string, payload 
 	// an older operator ignores the header.
 	req.Header.Set(apiv1.AttributionHeader, apiv1.AttributionProvider)
 	req.Header.Set(apiv1.TaskOutcomeHeader, apiv1.TaskOutcomeV1)
+	// This client decodes the task budget stall signal (decision 94); an
+	// older operator ignores the header and an older client never sends it.
+	req.Header.Set(apiv1.TaskBudgetStallHeader, apiv1.TaskBudgetStallV1)
 	if ctx.Value(grantTaskClaimsHeader{}) != nil {
 		req.Header.Set(apiv1.GrantTaskClaimsHeader, apiv1.GrantTaskClaimsV1)
 	}

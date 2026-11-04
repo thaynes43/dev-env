@@ -102,6 +102,13 @@ type TaskBudgetStatus struct {
 	LastEvidence        *TaskBudgetEvidence   `json:"lastEvidence,omitempty"`
 }
 
+// TaskBudgetStallHeader negotiates TaskBudgetStatus.Stall with strict older
+// readers. agentd and agent-run up to 2.89.x decode a budget status with
+// unknown fields refused, so the server sends the stall field only to a client
+// that sends this header with TaskBudgetStallV1 (OpenProject #385, C3).
+const TaskBudgetStallHeader = "X-Dev-Env-Task-Budget-Stall"
+const TaskBudgetStallV1 = "v1"
+
 // TaskBudgetStall is present while the stall limit has passed since the last
 // independently validated progress (saga decision 94). It is a diagnostic and
 // checkpoint signal for the supervisor. It is never a latch, a stop or an
