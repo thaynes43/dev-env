@@ -76,7 +76,8 @@ minutes :00 and :30. The keeper pilot (OP385) uses `7,27,47 * * * *`.
 1. Read the state file and the status record. Trust the files and fresh reads,
    not memory.
 2. Check the evidence (see supervised-dispatch, section 5). Steer or correct.
-   Quiet time or repeated failures mean diagnose and steer, not stop.
+   Quiet time or repeated failures trigger the stall rule in
+   supervised-dispatch, section 5. They never end supervision or the timer.
 3. Update `lastCheck`, `nextCheck`, `stage` and the evidence references.
 4. Mirror a meaningful change on the tracker.
 
@@ -112,12 +113,15 @@ the work:
    section 2).
 2. The old custodian runs `CronDelete` on its own job and records that.
 3. The successor re-creates the timer under its own session, writes the new job
-   ID, and reports to the parent: the new custodian, the job ID and the next check.
+   ID, and reports to the parent (or, for a top-level coordinator, to Tom or his
+   verified coordinator): the new custodian, the job ID and the next check.
 4. Until that report arrives, the parent treats custody as in transit and checks
    it at its own next check-in.
 
 If the custodian's session ended before step 1, the parent names the successor
-and records the transfer. No session takes custody or creates a timer on its own.
+and records the transfer. A top-level coordinator has no parent session, so Tom
+or his verified coordinator names its successor. No session takes custody or
+creates a timer on its own.
 
 ## 6. Complete or pause
 
@@ -126,8 +130,8 @@ evidence: a proved outcome, a genuine cancellation, a pause, stop or hold from T
 or his verified coordinator (including "wait for Meatball"), an exhausted
 authorized budget or its recorded stop threshold, or a permission or input
 barrier. Quiet time, failed attempts, a full context window and a 7-day expiry
-never end the timer. They trigger diagnosis and steering, and the job is re-armed
-or re-created. Waiting for an event a check can observe, such as a natural keeper
+never end the timer. They trigger the stall rule in supervised-dispatch section
+5, and the job is re-armed or re-created. Waiting for an event a check can observe, such as a natural keeper
 refresh, is pending, not blocked: keep the timer and report it pending. When the
 work ends or pauses:
 

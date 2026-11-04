@@ -617,8 +617,17 @@ source/rule revision and time/attempt budget. Reports distinguish built, deploye
 and accepted; a passing source test does not prove a phone or native-host journey.
 
 The stall thresholds are **60 minutes without progress or three failed attempts
-at the same blocker**. Reaching one does not end the work. While authorized
-repair remains, it triggers:
+at the same blocker**. Counters carry across agents, pods, methods and resumes.
+Observed progress must describe a useful result; restarting a tool is not
+progress by itself.
+
+**Current rule.** Until Tom rules, Q-23 (saga decision 55, ADR-003) governs. At a
+threshold, stop further attempts at that blocker and ask one owner question.
+Supervision, the timer and independent work continue meanwhile. The question
+names the blocker and offers a concrete bounded next option.
+
+**Proposed (pending Tom's ruling on Q-23).** Reaching a threshold does not end
+the work. While authorized repair remains, it triggers:
 
 1. **Diagnosis:** read the evidence and name the blocker.
 2. **Steering:** a correction to the owner that changes the approach. Repeating
@@ -628,25 +637,23 @@ repair remains, it triggers:
 4. **Authorized continuity:** the same owner continues, or a fresh worker starts
    from the handoff when the owner's context or session is gone.
 
-Ask one actionable owner question, with a concrete bounded next option, only when
-a real input or permission is missing. Work stops only on a proved outcome, a
-genuine cancellation, a pause, stop or hold from Tom or his verified
-coordinator, an exhausted authorized budget or its recorded stop threshold, or a
-permission or input barrier, each with specific evidence. Counters carry across
-agents, pods, methods and resumes. Observed progress must describe a useful
-result; restarting a tool is not progress by itself. The agent-loop skills in
-[`.agents/skills/`](../.agents/skills/) apply this rule.
+Under the proposal, one actionable owner question, with a concrete bounded next
+option, is asked only when a real input or permission is missing. Under either
+rule, work stops only on a proved outcome, a genuine cancellation, a pause, stop
+or hold from Tom or his verified coordinator, an exhausted authorized budget or
+its recorded stop threshold, or a permission or input barrier, each with
+specific evidence. The agent-loop skills in [`.agents/skills/`](../.agents/skills/)
+follow the current rule until Tom rules.
 
-*Amended 2026-11-04, on Tom's direction as relayed by the coordinator:
+*Proposed 2026-11-04, on Tom's direction as relayed by the coordinator:
 "...work in a loop where it doesn't stop until the requirements are met via some
 test feedback... not fire and forget sets of instructions that do not have goals
-the agents have to demonstrate to stop working". The 2026-10-09 Q-23 default
+the agents have to demonstrate to stop working". The Q-23 records
 ([saga decision 55](../.agents/sagas/distributed-dev-env/README.md), its
 [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md),
-restated by ADR-003) said to stop further attempts at a threshold and ask one
-owner question. Those records are not edited here. Tom's own confirmation that
-this amendment supersedes them is pending; the question is recorded on PR #908.
-Record his ruling here.*
+ADR-003) are not edited here. Tom's ruling is pending; the question is recorded
+on PR #908. Record his ruling here. If he accepts the proposal, a new saga
+decision supersedes decision 55.*
 
 The stopped NFS helper and observer remain historical. They demonstrated
 problems in our test tooling, not a NAS failure. Shared-Git trials no longer gate

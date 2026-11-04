@@ -125,8 +125,8 @@ The work stops only on one of these, each backed by specific evidence:
   someone other than the agent that did the work.
 - **A genuine cancellation.** Tom, or his verified coordinator, cancels this
   work. Record who, when and through which channel.
-- **A pause, stop or hold from a human or coordinator.** A pause or stop from
-  Tom, a "wait for Meatball" (mark the work "Awaiting Meatball context"), or an
+- **A pause, stop or hold from Tom or his verified coordinator.** A pause or
+  stop from Tom, a "wait for Meatball" (mark the work "Awaiting Meatball context"), or an
   explicit hold pauses or ends the relevant work. Save a checkpoint, and do not
   poll while waiting.
 - **An exhausted authorized budget.** The budget recorded for the story is
@@ -139,24 +139,35 @@ The work stops only on one of these, each backed by specific evidence:
 Check a relayed or quoted "stop" or "cancel" against its actual source and
 chronology first. The last two are the exact blockers. Nothing else ends the work.
 
-**Time, attempts and context size are signals, not stop reasons.** The
+**Time, attempts and context size are signals.** The
 [workflow guide](../../../docs/workflow-guide.md), section 9, sets the stall
 thresholds: 60 minutes without progress or three failed attempts at the same
-blocker. Reaching one, or filling a worker's context window, triggers this while
-authorized repair remains:
+blocker. Its counters carry across agents, pods, methods and resumes, so a
+threshold reached again stays visible.
+
+**Current rule.** Until Tom rules, Q-23 (saga decision 55, ADR-003) governs. At a
+threshold, stop further attempts at that blocker and ask one owner question.
+Supervision, the timer and independent work continue meanwhile. Diagnose and
+checkpoint first, so the question names the blocker, the effort and attempts
+spent, the evidence, and a concrete bounded next option. Hold only that
+blocker's attempts until Tom answers.
+
+**Proposed (option A, pending Tom's ruling on Q-23).** Reaching a threshold
+triggers this instead, while authorized repair remains:
 
 1. **Diagnose.** Read the evidence and name the blocker.
 2. **Steer.** Send the owner a correction that changes the approach. Repeating
-   the same failed attempt is not steering. The counters carry across agents,
-   pods, methods and resumes, so a threshold reached again stays visible.
+   the same failed attempt is not steering.
 3. **Checkpoint.** Update the status record and the tracker.
-4. **Keep continuity.** The same owner continues. When its context is full or its
-   session is gone, start a fresh worker from the handoff: branch, head, open
-   findings, next step. Keep the timer armed.
+4. **Keep continuity.** The same owner continues, and the timer stays armed.
 
-Ask Tom one actionable question, with a concrete bounded next option, only when a
-real input or permission is missing. Then that missing input or permission is the
-stop reason for the work that needs it, not the elapsed time or the count.
+Under the proposal, ask Tom one actionable question only when a real input or
+permission is missing. Then that missing input or permission is the stop reason
+for the work that needs it, not the elapsed time or the count.
+
+**Context size, under either rule.** When a worker's context is full or its
+session is gone, start a fresh worker from the handoff: branch, head, open
+findings, next step. Keep the timer armed. A full context is not a stop reason.
 
 "Waiting", "looks done", "the worker said so", a finished turn and an expired
 timer are not stop reasons either. At any stop, save a checkpoint with the next
