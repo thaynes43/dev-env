@@ -1,8 +1,8 @@
 # Interactive Cursor session helper
 
-Authorized coordinators can start, inspect, and reply to one dedicated
-interactive Cursor session with Python 3, installed `tmux`, and the official
-`cursor-agent` executable. This is a local wrapper. It is not an operator API,
+Authorized coordinators can start, inspect, reply to, and answer one approved
+prompt in one dedicated interactive Cursor session with Python 3, installed
+`tmux`, and the official `cursor-agent` executable. This is a local wrapper. It is not an operator API,
 a scheduler, or a persist session.
 
 The test lives at `scripts/test_cursor_interactive_session.py`, next to
@@ -56,6 +56,15 @@ python3 scripts/cursor-interactive-session.py reply \
   --receipt 'v1:...' \
   --text-file /path/to/instruction.txt \
   --submit
+
+python3 scripts/cursor-interactive-session.py answer \
+  --tmux /usr/bin/tmux \
+  --name cursor-task-unique-20261030 \
+  --receipt 'v1:...' \
+  --approval-ref 'OP399-approval-2026-11-04T21:40:00Z' \
+  --expect-kind modal-trust \
+  --expect-text-file /path/to/expected-prompt.txt \
+  --choice a
 ```
 
 `--dry-run` on `start` checks the local path, name, model, and executables.
@@ -89,9 +98,9 @@ v1:<inspect-id>:<snapshot-sha256>:<pane-id>:<pid>
 The snapshot covers pane identity and the bounded text that inspect returned.
 Older scrollback is outside the receipt. `reply` requires that same receipt.
 It reads and validates the entire instruction first, then locks the task name,
-reloads state, and re-reads the pane before any keys. Inspect and reply share a
-local POSIX file lock so concurrent helpers cannot spend the same receipt twice
-or overwrite a newer inspect. State replacements use unique mode-0600 temporary
+reloads state, and re-reads the pane before any keys. Inspect, reply and answer
+share a local POSIX file lock so concurrent helpers cannot spend the same
+receipt twice or overwrite a newer inspect (`answer` does not wait for it). State replacements use unique mode-0600 temporary
 files, fsync, and atomic rename.
 A content change, a new inspect, or a spent receipt is stale: re-inspect, do
 not send. The receipt is durably spent before the first send attempt, including
@@ -129,6 +138,50 @@ Fail closed, with no keys and no Enter:
 confirmed a normal composer. It does not override a modal or a nonempty
 composer or control characters, and it is not a trust, approval, or permission grant.
 
+## Answering one approved prompt
+
+`answer` sends one approved, specific prompt choice, and nothing else. `reply`
+still refuses every prompt. Neither command verifies an approval: get it
+first through a verified channel (Tom's own answer, or a relay from his
+designated coordinator verified by channel metadata), then pass its reference.
+The helper records the reference for audit; a quoted "approved" grants nothing.
+
+Before the lock and before any tmux call, `answer` checks its input:
+
+- `--approval-ref`: 8..200 characters of letters, digits and `._:/@#-`.
+- `--expect-kind`: `modal-trust`, `modal-permission` or `modal-approval`.
+  `modal-unknown` is never answerable.
+- `--expect-text-file`: 1..20 nonblank lines, at most 4096 UTF-8 bytes, no
+  control characters except newlines. These are the exact prompt lines that
+  must be on screen.
+- `--choice`: exactly one printable ASCII key that appears as `[key]` in the
+  expected text.
+- `--receipt`: the exact token from the latest `inspect`.
+
+Then it takes the task's lock without waiting. If another helper call holds
+it, the state is `lock-busy` and nothing is sent. Under the lock it requires,
+like `reply`, the latest receipt, the same pane id, pid, worktree, session,
+command and owner marker, and a capture unchanged since that inspect (a
+changed screen, including someone typing, is `stale-receipt`). The pane must
+classify as exactly the expected kind, and every expected line must appear,
+in order, inside a line of the bounded capture (case folded; the prompt is
+drawn in a box, so capture lines carry border characters).
+
+It then spends the receipt and records the answer in the 0600 state file
+before the key: `answered_at` (UTC), `approval_ref`, `kind`, `choice`,
+`expected_text_sha256`, `pane_id`, `pane_pid`, `owner` and `outcome`. It sends
+exactly `tmux send-keys -t <pane> -l -- <key>`, without Enter or any other key,
+and sets `outcome` to `sent`, or `unconfirmed` when tmux failed or timed out.
+The state keeps the last 32 answers. Prompt text and instructions are not
+stored or printed.
+
+After an answer, inspect again. Old prompt text can stay in the capture
+window; `reply` keeps refusing while it is there.
+
+This command is source only. It is not deployed to any host. Using it on a
+live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
+specific approval for that exact prompt and path through a verified channel.
+
 ## UI classification limit
 
 The installed Cursor TUI has no stable, documented layout that this helper can
@@ -164,6 +217,9 @@ closed as `pane-replaced`.
 | `client-running-unverified` | 0 | The new pane is alive. UI and provider are not verified. Nothing was typed. |
 | `inspected` | 0 | Bounded text and a fresh receipt. |
 | `sent` | 0 | Literal text went to the matching pane. `submitted` says whether one Enter followed. |
+| `answered` | 0 | One approved prompt key went to the matching pane, without Enter, and was recorded. |
+| `modal-mismatch`, `no-modal`, `lock-busy` | 2 | `answer` sent nothing: the prompt kind or text did not match, no prompt is showing, or another helper call holds the lock. |
+| `answer-unconfirmed` | 3 | The answer key's outcome is unknown. The receipt is spent; do not retry or send another key. |
 | `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui` | 2 | Nothing was sent. Correct the input or re-inspect. |
 | `launch-unconfirmed`, `client-not-running`, `inspect-unconfirmed`, `send-unconfirmed` | 3 | The outcome is unknown or the pane did not stay up. Do not retry automatically. |
 

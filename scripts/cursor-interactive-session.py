@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Start, inspect, and reply to one dedicated interactive Cursor session.
+"""Start, inspect, reply to, and answer one prompt in a dedicated interactive Cursor session.
 
 Uses tmux and the installed cursor-agent executable. It does not call persist,
 does not pass trust or approval flags, and does not claim the served model.
+`answer` sends one approved prompt choice; it does not verify the approval.
 """
 
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
@@ -24,6 +26,11 @@ MAX_TEXT = 4096
 MAX_CAPTURE = 8192
 MAX_LINES = 80
 MAX_COMMAND_BYTES = 8192
+MAX_EXPECT = 4096
+MAX_EXPECT_LINES = 20
+MAX_ANSWERS = 32
+ANSWER_KINDS = ("modal-trust", "modal-permission", "modal-approval")
+APPROVAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@#-]{7,199}")
 COMMAND_TIMEOUT = 5
 OWNER_OPTION = "@cursor_interactive_owner"
 IDENTITY_FORMAT = (
@@ -102,7 +109,7 @@ def state_directory(path):
 
 
 @contextmanager
-def state_lock(name):
+def state_lock(name, wait=True):
     validate_name(name)
     path = state_path(name)
     state_directory(path)
@@ -110,7 +117,10 @@ def state_lock(name):
     descriptor = os.open(path.with_name(path.name + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
     try:
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refusal("lock-busy", "Another helper call holds this task's lock. Nothing was sent. Inspect again later.")
         yield
     finally:
         os.close(descriptor)
@@ -574,6 +584,114 @@ def reply_locked(args, instruction):
     }
 
 
+def read_expected(path):
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_EXPECT + 1)
+    except OSError:
+        raise Refusal("invalid-input", "Expected prompt text file cannot be read. Nothing was sent.")
+    if len(raw) > MAX_EXPECT:
+        raise Refusal("invalid-input", "Expected prompt text must be at most 4096 UTF-8 bytes. Nothing was sent.")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError:
+        raise Refusal("invalid-input", "Expected prompt text must be UTF-8. Nothing was sent.")
+    if any((ord(character) < 32 and character != "\n") or 127 <= ord(character) <= 159 for character in text):
+        raise Refusal("invalid-input", "Expected prompt text must have no control characters except newlines. Nothing was sent.")
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines or len(lines) > MAX_EXPECT_LINES:
+        raise Refusal("invalid-input", "Expected prompt text must have 1..20 nonblank lines. Nothing was sent.")
+    return raw, lines
+
+
+def validate_answer(args):
+    if not APPROVAL_RE.fullmatch(args.approval_ref or ""):
+        raise Refusal("invalid-input", "Approval reference must be 8..200 characters of letters, digits and ._:/@#-. Nothing was sent.")
+    if args.expect_kind not in ANSWER_KINDS:
+        raise Refusal("invalid-input", "Expected kind must be modal-trust, modal-permission or modal-approval. Nothing was sent.")
+    choice = args.choice or ""
+    if len(choice) != 1 or not 33 <= ord(choice) <= 126:
+        raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key. Nothing was sent.")
+    raw, lines = read_expected(args.expect_text_file)
+    if not any("[" + choice + "]" in line for line in lines):
+        raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. Nothing was sent.")
+    parse_receipt(args.receipt)
+    return choice, raw, lines
+
+
+def expected_lines_shown(text, lines):
+    shown = [line.casefold() for line in text.splitlines()]
+    position = 0
+    for expected in lines:
+        folded = expected.casefold()
+        while position < len(shown) and folded not in shown[position]:
+            position += 1
+        if position == len(shown):
+            return False
+        position += 1
+    return True
+
+
+def utc_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def answer_session(args):
+    # Read and validate every input before the lock and before any tmux call.
+    choice, raw, lines = validate_answer(args)
+    with state_lock(args.name, wait=False):
+        return answer_locked(args, choice, raw, lines)
+
+
+def answer_locked(args, choice, raw, lines):
+    path, state = load_owned(args.name, args.tmux)
+    receipt = parse_receipt(args.receipt)
+    if not state.get("receipt_id") or receipt["id"] != state["receipt_id"]:
+        raise Refusal("stale-receipt", "Pane receipt is stale or is not the latest inspect. Re-inspect. Nothing was sent.")
+    if receipt["pane"] != state["pane_id"] or receipt["pid"] != state["pane_pid"] or receipt["digest"] != state["snapshot_sha256"]:
+        raise Refusal("stale-receipt", "Pane receipt does not match the stored inspect. Re-inspect. Nothing was sent.")
+    ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
+    require_same_pane(state, ident)
+    text, truncated = read_capture(state["tmux"], state["pane_id"])
+    digest = snapshot_hash(ident, text, truncated)
+    if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
+        raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
+    kind = classify(text, ident["cursor_y"], ident["height"])
+    if not kind.startswith("modal-"):
+        raise Refusal("no-modal", "No prompt is showing in the inspected pane. Nothing was sent.")
+    if kind != args.expect_kind:
+        raise Refusal("modal-mismatch", "The pane shows " + kind + ", not " + args.expect_kind + ". Nothing was sent.")
+    if not expected_lines_shown(text, lines):
+        raise Refusal("modal-mismatch", "The expected prompt text is not shown, in order, in the inspected pane. Nothing was sent.")
+    record = {
+        "answered_at": utc_now(), "approval_ref": args.approval_ref, "kind": kind, "choice": choice,
+        "expected_text_sha256": hashlib.sha256(raw).hexdigest(), "pane_id": ident["pane"],
+        "pane_pid": ident["pid"], "owner": state["owner"], "outcome": "sending",
+    }
+    answers = state.get("answers") if isinstance(state.get("answers"), list) else []
+    state["answers"] = (answers + [record])[-MAX_ANSWERS:]
+    # Spend the receipt and record the answer before the key is sent.
+    clear_receipt(path, state)
+    try:
+        sent = run([state["tmux"], "send-keys", "-t", state["pane_id"], "-l", "--", choice])
+        failed = sent.returncode != 0
+    except (subprocess.TimeoutExpired, OSError, UnicodeError):
+        failed = True
+    record["outcome"] = "unconfirmed" if failed else "sent"
+    write_state(path, state)
+    if failed:
+        raise Refusal("answer-unconfirmed", "The key's outcome is unknown. Do not retry this receipt or send another key. Re-inspect.", 3)
+    return {
+        "state": "answered", "name": state["name"], "kind": kind, "choice": choice,
+        "approval_ref": args.approval_ref, "answered_at": record["answered_at"],
+        "detail": (
+            "One key was sent to the owned pane whose receipt matched; Enter was not sent. "
+            "The helper recorded the approval reference but did not verify the approval. "
+            "This receipt is now spent. Inspect again before any reply."
+        ),
+    }
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -599,6 +717,16 @@ def build_parser():
     reply.add_argument("--submit", action="store_true", help="send one Enter after literal text")
     reply.add_argument("--observed-ready", action="store_true",
                        help="manual confirmation of this exact unclassified receipt; not a Cursor trust flag")
+
+    answer = sub.add_parser("answer", help="send one approved prompt choice to the inspected pane")
+    answer.add_argument("--name", required=True)
+    answer.add_argument("--tmux", required=True)
+    answer.add_argument("--receipt", required=True)
+    answer.add_argument("--approval-ref", required=True,
+                        help="reference to an approval obtained through a verified channel; recorded, not verified")
+    answer.add_argument("--expect-kind", required=True, help="modal-trust, modal-permission or modal-approval")
+    answer.add_argument("--expect-text-file", required=True, help="exact prompt lines that must be shown, in order")
+    answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text")
     return parser
 
 
@@ -611,6 +739,8 @@ def main(argv=None):
             payload = start_session(args)
         elif args.command == "inspect":
             payload = inspect_session(args)
+        elif args.command == "answer":
+            payload = answer_session(args)
         else:
             payload = reply_session(args)
     except Refusal as error:

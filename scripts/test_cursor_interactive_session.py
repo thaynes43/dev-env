@@ -613,19 +613,18 @@ class AnswerTests(AnswerFixture):
 
     def test_answer_refuses_kind_mismatch(self):
         cases = (
-            (TRUST_CAPTURE, "modal-approval"),
-            ("Allow this command: git push [y] Yes [n] No\n>", "modal-trust"),
-            ("Are you sure? [y] Yes\n>", "modal-approval"),
-            ("Permission required to continue [a] Allow\n>", "modal-trust"),
+            (TRUST_CAPTURE, TRUST_EXPECT, "a", "modal-approval"),
+            ("Allow this command: git push [y] Yes [n] No\n>", "Allow this command: git push [y] Yes\n", "y", "modal-trust"),
+            ("Are you sure? [y] Yes\n>", "Are you sure? [y] Yes\n", "y", "modal-approval"),
+            ("Permission required to continue [a] Allow\n>", "Permission required to continue [a] Allow\n", "a", "modal-trust"),
         )
-        for capture, kind in cases:
+        for capture, text, choice, kind in cases:
             with self.subTest(kind=kind, capture=capture[:20]):
                 self.log.unlink(missing_ok=True)
                 (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
                 inspected = self.start_and_inspect(capture)
                 expect = self.root / "expect-kind"
-                expect.write_text(capture.splitlines()[0].strip() + "\n")
-                choice = "a" if "[a]" in capture else "y"
+                expect.write_text(text)
                 code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], choice=choice,
                                                                         kind=kind, expect=expect))
                 self.assertEqual((code, refused["state"]), (2, "modal-mismatch"))
@@ -635,7 +634,7 @@ class AnswerTests(AnswerFixture):
         cases = {
             "active": ("S8 answered\n>", {}),
             "draft": ("S8 answered\n> typed [a] text", {}),
-            "unclassified": ("S8 answered\n[a] Trust this workspace", {"FAKE_CURSOR_Y": "0"}),
+            "unclassified": ("S8 answered\n[a] Apply the change", {"FAKE_CURSOR_Y": "0"}),
         }
         for label, (capture, env) in cases.items():
             with self.subTest(label=label):
@@ -643,7 +642,7 @@ class AnswerTests(AnswerFixture):
                 (self.root / "state" / "cursor-interactive-session" / self.name).unlink(missing_ok=True)
                 inspected = self.start_and_inspect(capture, env)
                 expect = self.root / "expect-none"
-                expect.write_text("[a] Trust this workspace\n" if "Trust" in capture else "[a]\n")
+                expect.write_text("[a] Apply the change\n" if "Apply" in capture else "[a]\n")
                 code, refused = self.invoke("answer", self.answer_args(inspected["receipt"], expect=expect),
                                             env=env)
                 self.assertEqual((code, refused["state"]), (2, "no-modal"))
