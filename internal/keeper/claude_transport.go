@@ -90,7 +90,13 @@ type claudeProfile struct {
 }
 
 type claudeRefreshTransport interface {
-	refresh(ctx context.Context, refresh secretValue, scopes []string) (claudeTokens, error)
+	// refresh sends at most one refresh request. It runs every check that can
+	// prove the request unsent, then calls commit immediately before the
+	// dispatch; if commit fails, nothing is sent and the result is
+	// errClaudeNotSent. After commit succeeds nothing is errClaudeNotSent, and
+	// the request runs detached from ctx's cancellation within its own time
+	// bound, so a shutdown cannot strand a committed attempt unsent.
+	refresh(ctx context.Context, refresh secretValue, scopes []string, commit func() error) (claudeTokens, error)
 	profile(ctx context.Context, access secretValue) (claudeProfile, error)
 }
 
@@ -129,7 +135,7 @@ type claudeTokenWire struct {
 	Organization     *claudeOrgWire     `json:"organization,omitempty"`
 }
 
-func (t *claudeHTTPRefresh) refresh(ctx context.Context, token secretValue, scopes []string) (claudeTokens, error) {
+func (t *claudeHTTPRefresh) refresh(ctx context.Context, token secretValue, scopes []string, commit func() error) (claudeTokens, error) {
 	body := map[string]string{"grant_type": "refresh_token", "refresh_token": token.Reveal(), "client_id": claudeClientID}
 	if len(scopes) > 0 {
 		body["scope"] = strings.Join(scopes, " ")
@@ -144,10 +150,12 @@ func (t *claudeHTTPRefresh) refresh(ctx context.Context, token secretValue, scop
 	req.Header.Set("Content-Type", "application/json")
 	// One POST only. No redirect, retry or response-body logging, even on a
 	// network error: the old refresh token may already be spent.
-	if c.Err() != nil {
+	if c.Err() != nil || commit == nil || commit() != nil {
 		return claudeTokens{}, errClaudeNotSent
 	}
-	resp, err := t.Client.Do(req)
+	d, cancelDo := context.WithTimeout(context.WithoutCancel(ctx), claudeRequestTime)
+	defer cancelDo()
+	resp, err := t.Client.Do(req.WithContext(d))
 	if err != nil {
 		return claudeTokens{}, errClaudeDispatch
 	}

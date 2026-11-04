@@ -22,9 +22,19 @@ const (
 	DefaultClaudeJournalSecret = "dev-env-keeper-claude-auth"
 	DefaultClaudeLiveSecret    = "dev-env-claude-live"
 	claudeJournalKey           = "state.json"
-	claudeReady                = "Ready"
-	claudeIntent               = "RefreshIntent"
-	claudeNeedsLogin           = "NeedsLogin"
+	// claudeUnsentKey is a second data key in the same journal Secret: the
+	// unsent marker. refresh writes it in the same compare-and-swap as its
+	// RefreshIntent and removes it in one more fenced compare-and-swap, the
+	// dispatch commit, immediately before the POST. While the marker names
+	// the journal's own incarnation and the intent's attempt, nothing has been
+	// dispatched for that attempt, so any keeper may return the intent to
+	// Ready without a provider call. Older keepers never write it and their
+	// merge patches leave it alone, so their intents are always tombstoned; a
+	// stale marker names an old attempt, which never equals a fresh UUID.
+	claudeUnsentKey  = "unsent-attempt"
+	claudeReady      = "Ready"
+	claudeIntent     = "RefreshIntent"
+	claudeNeedsLogin = "NeedsLogin"
 )
 
 var (
@@ -149,29 +159,95 @@ func decodeClaudeRecord(raw []byte) (claudeRecord, error) {
 // unchanged generation. The stored record survives a keeper restart, so the
 // generation stays strictly increasing across restarts (increment 1 review:
 // a reset makes every HOME that holds a receipt refuse forever).
+//
+// Every save removes the unsent marker: only saveIntent writes one.
 func (j *claudeJournal) save(ctx context.Context, original *corev1.Secret, r claudeRecord) error {
-	if ctx.Err() != nil || original == nil || original.ResourceVersion == "" || !validClaudeRecord(r) {
+	_, err := j.write(ctx, original, r, nil)
+	return err
+}
+
+// saveIntent writes refresh's RefreshIntent and its unsent marker in one
+// compare-and-swap. A journal without a UID cannot carry a marker; its intent
+// is then saved without one and is tombstoned if it is ever found.
+func (j *claudeJournal) saveIntent(ctx context.Context, original *corev1.Secret, r claudeRecord) error {
+	if r.Stage != claudeIntent || original == nil {
 		return errClaudeJournal
+	}
+	var marker []byte
+	if original.UID != "" {
+		marker, _ = json.Marshal(claudeUnsentWire{Version: 1, JournalUID: string(original.UID), AttemptUID: r.AttemptUID})
+	}
+	_, err := j.write(ctx, original, r, marker)
+	return err
+}
+
+// clearUnsent is the dispatch commit: one compare-and-swap that removes the
+// unsent marker and leaves the record as it is. It returns the Secret as
+// stored, for the replacement's compare-and-swap.
+func (j *claudeJournal) clearUnsent(ctx context.Context, original *corev1.Secret) (*corev1.Secret, error) {
+	if ctx.Err() != nil || original == nil || original.ResourceVersion == "" {
+		return nil, errClaudeJournal
+	}
+	return j.patch(ctx, original, map[string]any{claudeUnsentKey: nil})
+}
+
+// claudeUnsentWire is the marker's value. It holds no credential.
+type claudeUnsentWire struct {
+	Version    int    `json:"version"`
+	JournalUID string `json:"journalUID"`
+	AttemptUID string `json:"attemptUID"`
+}
+
+// claudeUnsentMarked reports whether secret's marker proves that r, a
+// RefreshIntent loaded from that same Secret, was never dispatched: the marker
+// must name this Secret's UID and r's attempt UID.
+func claudeUnsentMarked(secret *corev1.Secret, r claudeRecord) bool {
+	if secret == nil || secret.UID == "" || r.Stage != claudeIntent || !validUID(r.AttemptUID) {
+		return false
+	}
+	raw := secret.Data[claudeUnsentKey]
+	var w claudeUnsentWire
+	if len(raw) == 0 || len(raw) > 1024 || codexauth.DecodeStrict(raw, &w) != nil || w.Version != 1 {
+		return false
+	}
+	return w.JournalUID == string(secret.UID) && w.AttemptUID == r.AttemptUID
+}
+
+// write saves r with the generation guard, and sets the unsent marker to
+// marker (nil removes it), in one compare-and-swap.
+func (j *claudeJournal) write(ctx context.Context, original *corev1.Secret, r claudeRecord, marker []byte) (*corev1.Secret, error) {
+	if ctx.Err() != nil || original == nil || original.ResourceVersion == "" || !validClaudeRecord(r) {
+		return nil, errClaudeJournal
 	}
 	stored, err := decodeClaudeRecord(original.Data[claudeJournalKey])
 	if err != nil || r.Access.Generation < stored.Access.Generation {
-		return errClaudeJournal
+		return nil, errClaudeJournal
 	}
 	if r.Access.Generation == stored.Access.Generation && stored.Access.Generation != 0 && !sameClaudeAccess(stored.Access, r.Access) {
-		return errClaudeJournal
+		return nil, errClaudeJournal
 	}
 	raw, err := json.Marshal(claudeWire(r))
 	if err != nil || len(raw) > claudeauth.MaxBytes {
-		return errClaudeJournal
+		return nil, errClaudeJournal
 	}
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]string{"resourceVersion": original.ResourceVersion}, "data": map[string][]byte{claudeJournalKey: raw}})
+	data := map[string]any{claudeJournalKey: raw, claudeUnsentKey: nil}
+	if marker != nil {
+		data[claudeUnsentKey] = marker
+	}
+	return j.patch(ctx, original, data)
+}
+
+// patch is one JSON merge patch of data, conditional on original's
+// resourceVersion, with no retry. A nil value removes that key.
+func (j *claudeJournal) patch(ctx context.Context, original *corev1.Secret, data map[string]any) (*corev1.Secret, error) {
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]string{"resourceVersion": original.ResourceVersion}, "data": data})
 	target := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: j.Secret.Namespace, Name: j.Secret.Name}}
 	c, cancel := context.WithTimeout(ctx, claudeSaveTimeout)
 	defer cancel()
 	if j.Client.Patch(c, target, client.RawPatch(types.MergePatchType, patch), client.FieldOwner(FieldOwner)) != nil {
-		return errClaudeJournal
+		return nil, errClaudeJournal
 	}
-	return nil
+	return target, nil
 }
 
 func sameClaudeAccess(a, b claudeauth.Access) bool {

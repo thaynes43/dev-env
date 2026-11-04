@@ -52,7 +52,7 @@ func okClaudeBody(extra string) string {
 
 func TestClaudeRefreshRequestShape(t *testing.T) {
 	tr, cap := claudeTokenServer(t, 200, okClaudeBody(""))
-	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), []string{"user:profile", "user:inference"}); err != nil {
+	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), []string{"user:profile", "user:inference"}, claudeNoCommit); err != nil {
 		t.Fatal(err)
 	}
 	if cap.Method != http.MethodPost || cap.Path != "/v1/oauth/token" || cap.ContentType != "application/json" || cap.Calls.Load() != 1 {
@@ -71,7 +71,7 @@ func TestClaudeRefreshRequestShape(t *testing.T) {
 		t.Fatal("pinned endpoint or client id changed")
 	}
 	// No scopes known: the member is omitted.
-	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil); err != nil {
+	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := cap.Body["scope"]; ok {
@@ -82,7 +82,7 @@ func TestClaudeRefreshRequestShape(t *testing.T) {
 func TestClaudeRefreshRotatedAndAbsentRefreshToken(t *testing.T) {
 	full := okClaudeBody(`,"refresh_token":"` + claudeNewRefreshCanary + `","refresh_token_expires_in":2592000,"token_type":"Bearer","scope":"user:profile user:inference","account":{"uuid":"acct-1","email_address":"synthetic@example.invalid"},"organization":{"uuid":"org-1"}`)
 	tr, _ := claudeTokenServer(t, 200, full)
-	got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil)
+	got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,13 +92,13 @@ func TestClaudeRefreshRotatedAndAbsentRefreshToken(t *testing.T) {
 	}
 	// Absent refresh_token: success, with no replacement (the caller keeps the old one).
 	tr, _ = claudeTokenServer(t, 200, okClaudeBody(""))
-	got, err = tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil)
+	got, err = tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit)
 	if err != nil || !got.Refresh.Empty() || got.RefreshExpiresIn != 0 || got.Scopes != nil || got.AccountUUID != "" {
 		t.Fatal("absent refresh_token must succeed with no replacement")
 	}
 	// An unchanged refresh_token is also fine, unlike the Codex transport.
 	tr, _ = claudeTokenServer(t, 200, okClaudeBody(`,"refresh_token":"`+claudeOldRefreshCanary+`"`))
-	if got, err = tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil); err != nil || got.Refresh.Reveal() != claudeOldRefreshCanary {
+	if got, err = tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); err != nil || got.Refresh.Reveal() != claudeOldRefreshCanary {
 		t.Fatal("unchanged refresh_token must be accepted")
 	}
 }
@@ -109,7 +109,7 @@ func TestClaudeRefreshToleratesUnknownMembers(t *testing.T) {
 	body := `{"surprise":{"deep":[1,2]},"access_token":"` + claudeAccessCanary + `","token_type":"Bearer","expires_in":28800,"refresh_token":"` + claudeNewRefreshCanary +
 		`","account":{"uuid":"acct-1","email_address":"synthetic@example.invalid","phone":"1"},"organization":{"uuid":"org-1","name":"Synthetic Org","role":"x"},"future":true}`
 	tr, cap := claudeTokenServer(t, 200, body)
-	got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil)
+	got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit)
 	if err != nil {
 		t.Fatalf("unknown members discarded a 200: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestClaudeRefreshToleratesUnknownMembers(t *testing.T) {
 	// Unknown members never rescue a missing required one.
 	for _, b := range []string{`{"extra":1,"expires_in":28800}`, `{"extra":1,"access_token":"` + claudeAccessCanary + `"}`} {
 		tr, _ := claudeTokenServer(t, 200, b)
-		if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil); !errors.Is(err, errClaudeRefresh) {
+		if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); !errors.Is(err, errClaudeRefresh) {
 			t.Fatal("a missing required member was accepted")
 		}
 	}
@@ -163,7 +163,7 @@ func TestClaudeRefreshErrorClasses(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			tr, cap := claudeTokenServer(t, c.status, c.body)
-			got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil)
+			got, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit)
 			if !errors.Is(err, errClaudeRefresh) {
 				t.Fatalf("want the fixed error, got %v", err)
 			}
@@ -190,7 +190,7 @@ func TestClaudeRefreshNoRedirectNoRetryNetworkError(t *testing.T) {
 	defer redirector.Close()
 	tr := newClaudeHTTPRefresh()
 	tr.endpoint = redirector.URL
-	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil); !errors.Is(err, errClaudeRefresh) {
+	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); !errors.Is(err, errClaudeRefresh) {
 		t.Fatalf("redirect: %v", err)
 	}
 	if posts.Load() != 1 || hits.Load() != 0 {
@@ -207,7 +207,7 @@ func TestClaudeRefreshNoRedirectNoRetryNetworkError(t *testing.T) {
 	tr = newClaudeHTTPRefresh()
 	tr.endpoint = hang.URL
 	tr.Client.Timeout = 50 * time.Millisecond
-	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil); !errors.Is(err, errClaudeRefresh) {
+	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); !errors.Is(err, errClaudeRefresh) {
 		t.Fatalf("timeout: %v", err)
 	}
 	if slow.Load() != 1 {
@@ -219,17 +219,20 @@ func TestClaudeRefreshNoRedirectNoRetryNetworkError(t *testing.T) {
 	dead.Close()
 	tr = newClaudeHTTPRefresh()
 	tr.endpoint = deadURL
-	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil); !errors.Is(err, errClaudeRefresh) {
+	if _, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); !errors.Is(err, errClaudeRefresh) {
 		t.Fatalf("network error: %v", err)
 	}
 	// A cancelled context never reaches the server.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	tr, cap := claudeTokenServer(t, 200, okClaudeBody(""))
-	if _, err := tr.refresh(ctx, newSecretValue(claudeOldRefreshCanary), nil); !errors.Is(err, errClaudeRefresh) || cap.Calls.Load() != 0 {
+	if _, err := tr.refresh(ctx, newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit); !errors.Is(err, errClaudeRefresh) || cap.Calls.Load() != 0 {
 		t.Fatal("cancelled context reached the provider")
 	}
 }
+
+// claudeNoCommit is a dispatch commit that always succeeds.
+func claudeNoCommit() error { return nil }
 
 func TestClaudeRefreshBudgetCoversRequestAndSave(t *testing.T) {
 	if claudeRequestBudget < claudeRequestTime+claudeSaveTimeout || claudeRequestTime > 5*time.Second {
@@ -353,7 +356,7 @@ func TestClaudeRefreshDispatchBoundaryAndPrivacy(t *testing.T) {
 			tr := newClaudeHTTPRefresh()
 			tr.endpoint = "https://example.invalid/PRIVATE_SENTINEL"
 			tr.Client = &http.Client{Transport: tc.roundTrip}
-			_, err := tr.refresh(ctx, newSecretValue("PRIVATE_SENTINEL"), nil)
+			_, err := tr.refresh(ctx, newSecretValue("PRIVATE_SENTINEL"), nil, claudeNoCommit)
 			if err == nil {
 				t.Fatal("expected failure")
 			}
@@ -377,11 +380,68 @@ func TestClaudeCancellationAfterDispatchIsPossiblySpent(t *testing.T) {
 	tr.Client = &http.Client{Transport: claudeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		cancel()
-		return nil, r.Context().Err()
+		return nil, context.Canceled
 	})}
-	_, err := tr.refresh(ctx, newSecretValue(claudeOldRefreshCanary), nil)
+	_, err := tr.refresh(ctx, newSecretValue(claudeOldRefreshCanary), nil, claudeNoCommit)
 	phase, class := claudeFailureLabels(err)
 	if calls != 1 || errors.Is(err, errClaudeNotSent) || phase != "dispatch" || class != "possibly-spent" {
 		t.Fatal("post-dispatch cancellation was treated as unsent")
+	}
+}
+
+// The transport runs the dispatch commit after every check that can prove the
+// request unsent and immediately before sending. A failed or missing commit,
+// or a context cancelled before it, sends nothing and is errClaudeNotSent.
+func TestClaudeRefreshCommitsImmediatelyBeforeDispatch(t *testing.T) {
+	t.Run("commit precedes the request", func(t *testing.T) {
+		tr, cap := claudeTokenServer(t, 200, okClaudeBody(""))
+		commits, seenBefore := 0, int32(-1)
+		_, err := tr.refresh(context.Background(), newSecretValue(claudeOldRefreshCanary), nil, func() error {
+			commits++
+			seenBefore = cap.Calls.Load()
+			return nil
+		})
+		if err != nil || commits != 1 || seenBefore != 0 || cap.Calls.Load() != 1 {
+			t.Fatalf("err=%v commits=%d requests before commit=%d after=%d", err, commits, seenBefore, cap.Calls.Load())
+		}
+	})
+	for _, tc := range []struct {
+		name   string
+		cancel bool
+		commit func() error
+	}{
+		{name: "commit fails", commit: func() error { return errors.New("synthetic commit failure") }},
+		{name: "no commit"},
+		{name: "cancelled before the commit", cancel: true, commit: func() error {
+			t.Error("committed a cancelled request")
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr, cap := claudeTokenServer(t, 200, okClaudeBody(""))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			if _, err := tr.refresh(ctx, newSecretValue(claudeOldRefreshCanary), nil, tc.commit); !errors.Is(err, errClaudeNotSent) || cap.Calls.Load() != 0 {
+				t.Fatalf("err=%v requests=%d, want not sent and none", err, cap.Calls.Load())
+			}
+		})
+	}
+}
+
+// After the commit nothing is provably unsent, so a shutdown that begins then
+// does not stop the request; it keeps its own time bound.
+func TestClaudeRefreshAfterCommitIgnoresShutdown(t *testing.T) {
+	tr, cap := claudeTokenServer(t, 200, okClaudeBody(""))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got, err := tr.refresh(ctx, newSecretValue(claudeOldRefreshCanary), nil, func() error {
+		cancel()
+		return nil
+	})
+	if err != nil || cap.Calls.Load() != 1 || got.Access.Reveal() != claudeAccessCanary {
+		t.Fatalf("err=%v requests=%d: a committed request was stopped by shutdown", err, cap.Calls.Load())
 	}
 }

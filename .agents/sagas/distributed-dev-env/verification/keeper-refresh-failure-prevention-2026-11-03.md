@@ -129,9 +129,68 @@ by mutation. This round adds tests for them and fixes one false-login path.
   within a 6-second deadline, and the Lease fence refuses it past the lease
   budget. Tests cover the retry, the lost acknowledgement and each bound.
 
-One case stays conservative by design: a keeper that did not itself see the
-not-sent outcome (a restart or another leader) has no proof, so it marks
-NeedsLogin for an intent whose rollback never committed. Rolling that intent
-back would need durable proof written after the not-sent outcome, which is
-the write that failed. No provider, login, credential, cluster or deployment
-was exercised.
+A keeper that did not itself see the not-sent outcome (a restart or another
+leader) had no proof in this round, so it marked NeedsLogin for an intent
+whose rollback never committed. Round 1 said that closing this would need new
+RBAC or a second store; the 2026-11-04 independent review refuted that, and
+round 2 below closes it with a marker in the existing journal Secret. No
+provider, login, credential, cluster or deployment was exercised.
+
+### 2026-11-04 correction round 2 (source only)
+
+The independent review of round 1 passed the source and found four gaps
+(G1 to G4). Its read-only check of haynes-ops `d481703e` found that the
+keeper Role already has get and patch on the named journal Secret, that Flux
+creates that Secret once and never applies it again, and that no admission
+policy limits the keeper's writes to it.
+
+- Durable proof that an attempt was never sent (G3). The journal Secret gets
+  a second data key, `unsent-attempt`. `state.json` is unchanged, so older
+  keepers still decode it. Refresh writes the intent and the marker (this
+  Secret's UID and the attempt UID) in one compare-and-swap. The transport
+  runs every check that can prove the request unsent, then calls the
+  dispatch commit: one more fenced compare-and-swap that removes the marker,
+  on the Secret as re-read after the intent. Only then is the POST sent, on
+  a context that shutdown does not cancel, within its own 3-second bound.
+  Any keeper that finds an intent whose marker names that Secret's UID and
+  the intent's attempt returns it to Ready by compare-and-swap, with no
+  provider call. The rollback re-reads the journal and requires the marker
+  again. An intent with no marker, a marker for another attempt or another
+  Secret UID, or a corrupt marker is tombstoned as before. Older keepers
+  never write the marker, so their intents are always tombstoned; their
+  merge patches leave the key alone, and a stale marker names an old attempt
+  that never equals a fresh UUID. Every save other than the intent removes
+  the marker.
+- The commit and a successor's rollback are compare-and-swaps on the same
+  resourceVersion, so only one wins: when the successor wins, the owner's
+  commit fails and nothing is sent. A lost acknowledgement on the commit is
+  read back: the commit holds only if the journal still holds this intent
+  and no marker, and the request is then sent and the replacement saved on
+  the Secret as read.
+- Lease budget. The fence before the commit needs `claudeRequestBudget`
+  (7 s), which covers the commit's 2 s save and the 2 s margin. A third fence
+  after the commit needs 7 s again: the 3 s request, the 2 s replacement save
+  and the 2 s margin. Each is under the fence's 10-second freshness bound. A
+  test pins the constants and the order: fence, intent, fence, commit, fence,
+  request, replacement. If the fence after the commit refuses, nothing is
+  sent and the proving worker rolls back from its own proof.
+- The in-memory proof's 5-minute bound holds under repeated rollback
+  failure (G2): at the first tick at or after the bound the intent is
+  tombstoned, even with its marker still there, and the NeedsLogin page
+  follows. A worker does not take that attempt's marker as a proof again.
+- The rollback's 6-second deadline and its Lease budget are pinned (G1): with
+  less than 4 s of Lease left the rollback is refused and the proof kept.
+  The journal UID check in the rollback is defence in depth and is now
+  pinned too (G4): a recreated journal with copied data is not rolled back.
+
+Residuals, recorded:
+
+- A crash, or any stop that is not a not-sent path, after the dispatch
+  commit is stored and before the POST: the journal then says the attempt
+  may have been sent, and a successor tombstones a token that may be
+  unspent. A test pins this behaviour.
+- A lost acknowledgement on the commit whose read back also fails: nothing
+  is sent, and the proving worker rolls back from its own proof; a restart
+  before that rollback finds no marker and tombstones.
+- The provider has no idempotency for the refresh, so nothing on the keeper
+  side can close the first residual.

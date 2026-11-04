@@ -28,15 +28,44 @@ import (
 	"github.com/thaynes43/dev-env/internal/claudelogin"
 )
 
+// claudeTestTransport follows the transport contract: Prepare stands for the
+// checks that can prove a request unsent, then commit, then the request.
+// Calls counts dispatched requests only.
 type claudeTestTransport struct {
-	Calls int
-	Run   func(call int, refresh secretValue) (claudeTokens, error)
-	Prof  *claudeProfile // the profile answer; nil answers errClaudeProfile
+	Calls    int
+	Attempts int // every call, dispatched or not
+	Run      func(call int, refresh secretValue) (claudeTokens, error)
+	Prepare  func(attempt int) error // a failure before the dispatch commit; nil prepares
+	Prof     *claudeProfile          // the profile answer; nil answers errClaudeProfile
 }
 
-func (t *claudeTestTransport) refresh(_ context.Context, r secretValue, _ []string) (claudeTokens, error) {
+func (t *claudeTestTransport) refresh(_ context.Context, r secretValue, _ []string, commit func() error) (claudeTokens, error) {
+	t.Attempts++
+	if t.Prepare != nil {
+		if err := t.Prepare(t.Attempts); err != nil {
+			return claudeTokens{}, err
+		}
+	}
+	if commit == nil || commit() != nil {
+		return claudeTokens{}, errClaudeNotSent
+	}
 	t.Calls++
-	return t.Run(t.Calls, r)
+	tokens, err := t.Run(t.Calls, r)
+	if errors.Is(err, errClaudeNotSent) {
+		panic("synthetic transport: nothing is provably unsent after the dispatch commit")
+	}
+	return tokens, err
+}
+
+// notSent makes every attempt fail before the dispatch commit, as a proven
+// unsent request does. hook, if set, runs first.
+func (f *claudeFix) notSent(hook func()) {
+	f.tr.Prepare = func(int) error {
+		if hook != nil {
+			hook()
+		}
+		return errClaudeNotSent
+	}
 }
 
 func (t *claudeTestTransport) profile(context.Context, secretValue) (claudeProfile, error) {
@@ -285,9 +314,11 @@ func TestClaudeWorkerLeaseLostBeforePOST(t *testing.T) {
 		if f.tr.Calls != 0 || f.journal(t).Stage != claudeIntent {
 			t.Fatal("expected an unsent RefreshIntent left in the journal")
 		}
-		f.successorWorker().tick(context.Background()) // the next leader has no proof and refuses to replay it
-		if r := f.journal(t); f.tr.Calls != 0 || r.Stage != claudeNeedsLogin || !r.Refresh.Empty() {
-			t.Fatal("a recovered intent must become NeedsLogin without a POST")
+		// The next leader has no proof of its own, but the journal's unsent
+		// marker proves nothing was dispatched: it rolls back, without a POST.
+		f.successorWorker().tick(context.Background())
+		if r := f.journal(t); f.tr.Calls != 0 || r.Stage != claudeReady || r.Refresh.Reveal() != claudeOldRefreshCanary || r.Access.Generation != 1 {
+			t.Fatal("a marked unsent intent must return to Ready without a POST")
 		}
 	})
 	t.Run("lost after the intent, the same process leads again", func(t *testing.T) {
@@ -605,18 +636,18 @@ func TestClaudeUnsentRollbackBackoffAndRestart(t *testing.T) {
 	f := newClaudeFix(t)
 	f.seed(t, syntheticClaudeRecord(1))
 	f.clk.Step(6 * time.Hour)
-	f.tr.Run = func(int, secretValue) (claudeTokens, error) { return claudeTokens{}, errClaudeNotSent }
+	f.notSent(nil)
 	f.tick()
-	if f.journal(t).Stage != claudeReady || f.tr.Calls != 1 {
+	if f.journal(t).Stage != claudeReady || f.tr.Attempts != 1 || f.tr.Calls != 0 {
 		t.Fatal("unsent intent was not rolled back")
 	}
 	f.tick()
-	if f.tr.Calls != 1 {
+	if f.tr.Attempts != 1 {
 		t.Fatal("unsent attempt retried without backoff")
 	}
 	f.clk.Step(time.Minute)
 	f.tick()
-	if f.tr.Calls != 2 || f.journal(t).Stage != claudeReady {
+	if f.tr.Attempts != 2 || f.tr.Calls != 0 || f.journal(t).Stage != claudeReady {
 		t.Fatal("bounded retry did not preserve ready record")
 	}
 	other := &claudeWorker{Journal: f.w.Journal, Transport: f.tr, Publisher: f.w.Publisher, Fence: f.w.Fence, Clock: f.clk, Log: logr.Discard()}
@@ -669,7 +700,8 @@ func TestClaudeReplacementLostAckSurvivesRestartAndGenerationFloor(t *testing.T)
 		t.Fatal(err)
 	}
 	f.seed(t, syntheticClaudeRecord(1))
-	f.w.Journal.Client = &claudeLostAckClient{Client: f.c, loseAt: 2}
+	// Journal patches: the intent, the dispatch commit, then the replacement.
+	f.w.Journal.Client = &claudeLostAckClient{Client: f.c, loseAt: 3}
 	f.clk.Step(6 * time.Hour)
 	f.tick()
 	if f.tr.Calls != 1 || f.journal(t).Access.Generation != 8 || f.liveGeneration(t) != 7 {

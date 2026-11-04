@@ -237,30 +237,30 @@ func TestClaudeUnsentRollbackWriteFailureKeepsTheProof(t *testing.T) {
 	before := syntheticClaudeRecord(1)
 	f.seed(t, before)
 	f.clk.Step(6 * time.Hour)
-	f.tr.Run = func(call int, r secretValue) (claudeTokens, error) {
-		if call == 1 {
+	f.tr.Prepare = func(attempt int) error {
+		if attempt == 1 {
 			f.c.Fail.Store(true) // the rollback write fails once
-			return claudeTokens{}, errClaudeNotSent
+			return errClaudeNotSent
 		}
-		return rotated(call, r)
+		return nil
 	}
 	f.tick()
 	f.c.Fail.Store(false)
-	if r := f.journal(t); f.tr.Calls != 1 || r.Stage != claudeIntent {
-		t.Fatalf("setup: calls=%d stage=%s", f.tr.Calls, r.Stage)
+	if r := f.journal(t); f.tr.Attempts != 1 || f.tr.Calls != 0 || r.Stage != claudeIntent {
+		t.Fatalf("setup: attempts=%d calls=%d stage=%s", f.tr.Attempts, f.tr.Calls, r.Stage)
 	}
 	f.tick()
 	r := f.journal(t)
-	if f.tr.Calls != 1 || r.Stage != claudeReady || r.AttemptUID != "" || r.Refresh.Reveal() != before.Refresh.Reveal() || r.Access.Generation != 1 {
+	if f.tr.Attempts != 1 || f.tr.Calls != 0 || r.Stage != claudeReady || r.AttemptUID != "" || r.Refresh.Reveal() != before.Refresh.Reveal() || r.Access.Generation != 1 {
 		t.Fatalf("proven-unsent attempt was not rolled back on the next tick: calls=%d stage=%s", f.tr.Calls, r.Stage)
 	}
 	f.tick()
-	if f.tr.Calls != 1 {
+	if f.tr.Attempts != 1 {
 		t.Fatal("rolled-back attempt retried without the unsent backoff")
 	}
 	f.clk.Step(time.Minute)
 	f.tick()
-	if r := f.journal(t); f.tr.Calls != 2 || r.Stage != claudeReady || r.Access.Generation != 2 {
+	if r := f.journal(t); f.tr.Attempts != 2 || f.tr.Calls != 1 || r.Stage != claudeReady || r.Access.Generation != 2 {
 		t.Fatalf("refresh after the backoff failed: calls=%d stage=%s", f.tr.Calls, r.Stage)
 	}
 	if got := hub.Snapshot()[ProviderClaude].State; got != LoginReady {
@@ -276,7 +276,7 @@ func TestClaudeUnsentRollbackLostAckReadsBackReady(t *testing.T) {
 	f.seed(t, before)
 	f.clk.Step(6 * time.Hour)
 	f.w.Journal = &claudeJournal{Client: &claudeLostAckClient{Client: f.c, loseAt: 2}, Secret: f.w.Journal.Secret}
-	f.tr.Run = func(int, secretValue) (claudeTokens, error) { return claudeTokens{}, errClaudeNotSent }
+	f.notSent(nil)
 	f.tick()
 	if r := f.journal(t); r.Stage != claudeReady || f.w.unsent.attempt == "" {
 		t.Fatalf("setup: stage=%s proof kept=%v", r.Stage, f.w.unsent.attempt != "")
@@ -287,9 +287,32 @@ func TestClaudeUnsentRollbackLostAckReadsBackReady(t *testing.T) {
 	}
 }
 
-// Without the proof the worker stays conservative: a restarted worker, a proof
-// that outlived its bound, a recreated journal, or another attempt UID each
-// tombstone the intent. A fence that refuses leaves the intent untouched.
+// unmarkedProof leaves an intent whose marker the dispatch commit already
+// removed, with only this process's proof that it was never sent: the Lease
+// fence after the commit refuses, and so does the rollback's.
+func (f *claudeFix) unmarkedProof(t *testing.T) {
+	t.Helper()
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	fences := 0
+	f.w.Fence = func(context.Context, time.Duration) error {
+		if fences++; fences >= 3 {
+			return errors.New("synthetic leadership loss after the commit")
+		}
+		return nil
+	}
+	f.tick()
+	f.w.Fence = func(context.Context, time.Duration) error { return nil }
+	s, r, err := f.w.Journal.load(context.Background())
+	if err != nil || r.Stage != claudeIntent || len(s.Data[claudeUnsentKey]) != 0 || f.w.unsent.attempt != r.AttemptUID || f.w.unsent.marked || f.tr.Calls != 0 {
+		t.Fatal("setup: no committed intent with an in-memory proof")
+	}
+}
+
+// Without durable proof the worker stays conservative: a restarted worker, a
+// proof that outlived its bound, or a proof for another journal UID or attempt
+// each tombstone the intent. A fence that refuses leaves it untouched; the
+// proving worker itself rolls it back.
 func TestClaudeUnsentProofBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -301,11 +324,11 @@ func TestClaudeUnsentProofBounds(t *testing.T) {
 			f.clk.Step(claudeUnsentProofLife)
 			return f.w
 		}},
-		{name: "recreated journal", want: claudeNeedsLogin, then: func(t *testing.T, f *claudeFix) *claudeWorker {
+		{name: "proof for another journal", want: claudeNeedsLogin, then: func(t *testing.T, f *claudeFix) *claudeWorker {
 			f.w.unsent.journal = "another-synthetic-incarnation"
 			return f.w
 		}},
-		{name: "another attempt", want: claudeNeedsLogin, then: func(t *testing.T, f *claudeFix) *claudeWorker {
+		{name: "proof for another attempt", want: claudeNeedsLogin, then: func(t *testing.T, f *claudeFix) *claudeWorker {
 			f.w.unsent.attempt = "another-synthetic-attempt"
 			return f.w
 		}},
@@ -313,23 +336,14 @@ func TestClaudeUnsentProofBounds(t *testing.T) {
 			f.w.Fence = func(context.Context, time.Duration) error { return errors.New("synthetic leadership loss") }
 			return f.w
 		}},
+		{name: "the proving worker rolls back", want: claudeReady, then: func(t *testing.T, f *claudeFix) *claudeWorker { return f.w }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newClaudeFix(t)
-			f.seed(t, syntheticClaudeRecord(1))
-			f.clk.Step(6 * time.Hour)
-			f.tr.Run = func(int, secretValue) (claudeTokens, error) {
-				f.c.Fail.Store(true)
-				return claudeTokens{}, errClaudeNotSent
-			}
-			f.tick()
-			f.c.Fail.Store(false)
-			if f.journal(t).Stage != claudeIntent || f.w.unsent.attempt == "" {
-				t.Fatal("setup: no retained proof")
-			}
+			f.unmarkedProof(t)
 			tc.then(t, f).tick(context.Background())
-			if got := f.journal(t).Stage; got != tc.want || f.tr.Calls != 1 {
-				t.Fatalf("stage=%s calls=%d, want %s and no second request", got, f.tr.Calls, tc.want)
+			if got := f.journal(t).Stage; got != tc.want || f.tr.Calls != 0 {
+				t.Fatalf("stage=%s calls=%d, want %s and no request", got, f.tr.Calls, tc.want)
 			}
 		})
 	}
