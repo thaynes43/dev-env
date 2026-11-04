@@ -59,9 +59,14 @@ From that statement and OP206/OP396/OP397:
    never holds or reuses a caller's token. It never dispatches with more reach than
    the owner could have used itself at the due time (see "Authority").
 5. **Pages go through Reminders.** The operator has no Pushover sender; the keeper
-   does. The executor creates a keyed one-shot `Reminder` for each page, and the
-   keeper sends it with DESIGN-032's claim-before-send. The occurrence records the
-   Reminder name and copies its delivery state (`sent`, `failed`, `ambiguous`).
+   does. Each page is its own one-shot `Reminder`, keyed by (occurrence, event):
+   `due`, `link`, `parked`, `failed` or `result`. A sent Reminder is final and is
+   never reused. The keeper sends it with DESIGN-032's claim-before-send. The
+   occurrence keeps a bounded `pages` list with each Reminder's name and delivery
+   state (`sent`, `failed`, `ambiguous`). **Pages are best-effort.** Failing to
+   create a page Reminder, or the Reminder kind not being served (the releaser runs
+   even with the flag off), is recorded as `skipped` on the occurrence. It never holds
+   a finalizer, a claim or a state change.
 
 ## Data contract
 
@@ -99,7 +104,8 @@ status:
     claimedAt: ...
     session: sw-1a2b3c4d5e6f-202612031400
     result: {summary, prURLs, headSHAs}      # from the session's retained outcome (headless)
-    page: {reminder: <name>, state: sent|failed|ambiguous|skipped}
+    pages:                                   # at most 4, one per event
+    - {event: due|link|parked|failed|result, reminder: <name>, state: sent|failed|ambiguous|skipped}
 ```
 
 `approval` is in **status**, not spec. Only the operator's `POST .../approve`
@@ -287,14 +293,21 @@ stateDiagram-v2
   session with a start deadline, the due time plus grace, as a session annotation.
   The controller passes it into the pod as it passes the task-budget deadline
   (`controller/pod.go`). agentd checks it **before any boot side effect**, as
-  `armTaskBudgetDeadline` does (`agentd/task_budget.go`). If the deadline has
-  passed, agentd never launches the agent, does not exit (so the pod does not
-  crash-loop), and reports the agent ended with reason `start deadline passed`. The
+  `armTaskBudgetDeadline` does (`agentd/task_budget.go`). It applies **only to the
+  first launch**: agentd checks it only when the session has no launch record yet
+  (`~/.agentd/launch.json` on the persistent volume, `agentd/launch.go`). A session
+  that started in time and boots again later (a drain onto a new revision, a
+  preempted pod, Tom resuming it after an idle suspend) is never refused. If the
+  deadline has passed before the first launch, agentd never launches the agent and
+  does not exit, so the pod does not crash-loop. It reports boot as complete and the
+  agent state as `failed` with reason `start deadline passed`, so `AgentEnded`
+  (which is false while boot reads `booting`) and the session-end rule see an end
+  once the 5-minute pod-age proof holds. The
   guarantee therefore holds without a running executor: flag off, operator down or
   rolled back. A pod that was unschedulable or stuck pulling its image until after
   the deadline starts no work. The session-end rule sees an ended agent, and the
-  releaser records `Failed` ("not started before grace ended") and pages through
-  the occurrence's page Reminder. The executor, when it is running, does the same
+  releaser records `Failed` ("not started before grace ended") and pages
+  (best-effort; see "Pages" below). The executor, when it is running, does the same
   earlier: at the deadline it first suspends the unstarted session through the
   normal suspend path (rescue first), then records `Failed`. If it dies between the
   two writes, agentd's check still stops the late start. Suspending is its one
@@ -439,8 +452,8 @@ library only.
 |---|---|---|
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
-| S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), and the kind unserved before and after due plus grace. Shipped in a release before S3b | PR, CI, native review, release |
-| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, the start deadline: suspend before the Failed record; agentd refusing a late start with no executor running) | PR, CI, native review |
+| S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), the kind unserved before and after due plus grace, a page Reminder that cannot be created (release not blocked), and a never-launched agent past its start deadline reaching the end rule through the pod-age proof. Shipped in a release before S3b | PR, CI, native review, release |
+| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
 | S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
