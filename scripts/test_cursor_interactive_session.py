@@ -766,8 +766,14 @@ class AnswerTests(AnswerFixture):
                 code, second = self.invoke("answer", extra)
                 self.assertEqual((code, second["state"]), (2, "lock-busy"))
             finally:
-                with gate.open("wb", buffering=0) as handle:
-                    handle.write(b"1")
+                # Never block here: if the first call already gave up waiting, the gate has no reader.
+                try:
+                    handle = os.open(gate, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:
+                    pass
+                else:
+                    os.write(handle, b"1")
+                    os.close(handle)
             self.assertEqual(first.result(timeout=10)[1]["state"], "answered")
         code, third = self.invoke("answer", extra)
         self.assertIn((code, third["state"]), {(2, "stale-receipt"), (2, "approval-spent")})
