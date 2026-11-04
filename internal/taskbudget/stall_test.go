@@ -680,4 +680,13 @@ func TestStallRecordsStopAtTheirCap(t *testing.T) {
 	if err != nil || l.Latched || l.Status().Stall == nil || l.Status().Stall.Signals != MaxStallSignals || len(stallRecords(l)) != MaxStallSignals || m.updates != writes || l.historyEvents() != 1 {
 		t.Fatalf("cap: %+v records=%d writes=%d %v", l.Status().Stall, len(stallRecords(l)), m.updates-writes, err)
 	}
+	if _, err = encodeLedger(l); err != nil {
+		t.Fatal("ledger at the stall cap refused", err)
+	}
+	over := *l
+	id := fmt.Sprintf("stall:%d", created.Add(-time.Hour).UnixNano())
+	over.Events = append(append([]Event(nil), l.Events...), Event{At: created, Request: apiv1.TaskBudgetEvent{Binding: b, ID: id, Kind: "activity", Evidence: apiv1.TaskBudgetEvidence{ID: id, Kind: "stall-signal"}}})
+	if _, err = encodeLedger(&over); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("store accepted more stall records than the cap", err)
+	}
 }
