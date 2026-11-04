@@ -284,8 +284,11 @@ agentd ignores the new file.
 - A record that cannot be written does not fail the sync (a failed sync stops the pod following new
   generations and reads as login-required). The credentials and the generation receipt still merge, the
   record stays behind the receipt, and the status says "account unconfirmed". Only the automatic continue
-  stays off: it needs a record that is current for the applied generation. A record the operator deletes
-  is read as a first run and seeded, so a change that happened while the record was missing is not seen.
+  stays off: it needs a record that is current for the applied generation. A record that is
+  valid but behind the receipt is not confirmed either. A record gone when a NEW generation arrives is
+  seeded again and marks that generation unconfirmed ("missing"), so its continue is skipped; the same
+  holds for an agentd upgraded in place when a new generation arrives before its first poll. A record gone
+  while the receipt's own generation is current is read as a first run and seeded without a mark.
 - Same-account behaviour is unchanged. The only existing test changed is the #915 characterization of the
   old behaviour, inverted on purpose.
 

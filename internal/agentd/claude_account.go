@@ -19,7 +19,8 @@ import (
 //
 // The file holds only a fingerprint of the account and organization, never the
 // identifiers. Rules, applied when a generation is merged:
-//   - no file: seed it from this generation; an unknown earlier account is not a change;
+//   - no file: seed it from this generation; an unknown earlier account is not a change
+//     (but a file that is gone when a NEW generation arrives marks that generation);
 //   - same fingerprint at a later generation: the change mark clears;
 //   - a different fingerprint at a later generation, or an unreadable file: the
 //     generation is marked changed. A flip back (A, B, A) is another change, never
@@ -33,14 +34,18 @@ const (
 	continueOutcomeAccountChanged = "account-changed"
 )
 
+// recordAccountWrite is a test seam for the one write this file makes.
+var recordAccountWrite = writeClaudePrivateAtomic
+
 type claudeAccount struct {
 	Version     int    `json:"version"`
 	Fingerprint string `json:"fingerprint"`
 	Generation  uint64 `json:"generation"`
 	// Changed is the generation at which the account differed, or 0.
 	Changed uint64 `json:"changedGeneration"`
-	// Basis is "changed" (a different fingerprint) or "unreadable" (the earlier
-	// record could not be believed); empty when Changed is 0.
+	// Basis is "changed" (a different fingerprint), "unreadable" (the earlier
+	// record could not be believed) or "missing" (it was gone when a new
+	// generation arrived); empty when Changed is 0.
 	Basis string `json:"basis,omitempty"`
 }
 
@@ -68,7 +73,7 @@ func readAccountFile(s Settings) (claudeAccount, accountState) {
 	}
 	var m claudeAccount
 	if codexauth.DecodeStrict(raw, &m) != nil || m.Version != 1 || len(m.Fingerprint) != 64 || m.Generation == 0 ||
-		(m.Changed != 0 && (m.Changed > m.Generation || (m.Basis != "changed" && m.Basis != "unreadable"))) ||
+		(m.Changed != 0 && (m.Changed > m.Generation || (m.Basis != "changed" && m.Basis != "unreadable" && m.Basis != "missing"))) ||
 		(m.Changed == 0 && m.Basis != "") {
 		return claudeAccount{}, accountInvalid
 	}
@@ -83,6 +88,13 @@ func recordClaudeAccount(s Settings, a claudeauth.Access) error {
 	next := claudeAccount{Version: 1, Fingerprint: fp, Generation: a.Generation}
 	switch {
 	case state == accountAbsent:
+		// A record that is gone when a NEW generation arrives hides whether the account
+		// changed: seed it, but mark that generation so its continue is skipped. With no
+		// receipt, or the receipt's own generation, this is a first run and nothing is flagged.
+		var old claudeReceipt
+		if readJSONFile(s.statePath("claude-access-generation.json"), &old) == nil && old.Generation != 0 && old.Generation < a.Generation {
+			next.Changed, next.Basis = a.Generation, "missing"
+		}
 	case state == accountInvalid:
 		next.Changed, next.Basis = a.Generation, "unreadable"
 	case a.Generation <= cur.Generation:
@@ -94,7 +106,7 @@ func recordClaudeAccount(s Settings, a claudeauth.Access) error {
 	if err != nil {
 		return ErrClaudeAccess
 	}
-	if writeClaudePrivateAtomic(s.statePath(accountFile), raw) != nil {
+	if recordAccountWrite(s.statePath(accountFile), raw) != nil {
 		return ErrClaudeAccess
 	}
 	return nil
@@ -133,6 +145,8 @@ func accountStatusNote(s Settings) string {
 	switch {
 	case verdict == accountUnconfirmed:
 		return "; account unconfirmed: the account record is not current for generation " + strconv.FormatUint(receipt.Generation, 10) + ", so no automatic continue is sent"
+	case verdict == accountChanged && cur.Basis == "missing":
+		return "; account unconfirmed since generation " + g + ": the account record was missing when it arrived, so no automatic continue is sent for it"
 	case verdict == accountChanged && cur.Basis == "unreadable":
 		return "; account unconfirmed since generation " + g + ": the earlier account record could not be read, so no automatic continue is sent for it"
 	case verdict == accountChanged:

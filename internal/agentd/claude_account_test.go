@@ -219,3 +219,91 @@ func TestClaudeAccountRecordWriteFailureStillMergesButSendsNoContinue(t *testing
 		t.Errorf("the missing record is not shown: %q", rg.status())
 	}
 }
+
+// failAccountWrites makes only the account record's write fail, leaving the credentials
+// and the receipt writable, and restores it afterwards.
+func failAccountWrites(t *testing.T, fail bool) {
+	t.Helper()
+	old := recordAccountWrite
+	if fail {
+		recordAccountWrite = func(string, []byte) error { return ErrClaudeAccess }
+	}
+	t.Cleanup(func() { recordAccountWrite = old })
+}
+
+// A VALID but STALE record (kept at generation 2 while generation 3 for another account
+// is applied) is not a confirmed record: no continue, and the status says unconfirmed.
+func TestClaudeAccountStaleValidRecordSendsNoContinue(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	rg.revoke(2 * time.Hour)
+	rg.pollProduction()
+	failAccountWrites(t, true)
+	rg.publishAs(3, otherAccount)
+	rg.pollProduction()
+	rg.pollProduction()
+	if rg.d.claudeSyncErr != nil {
+		t.Fatalf("the sync failed: %v", rg.d.claudeSyncErr)
+	}
+	if rg.continues() != 0 {
+		t.Fatal("a continue was sent under another account with a stale record")
+	}
+	if !strings.Contains(rg.status(), "account unconfirmed") {
+		t.Errorf("a stale record is not shown as unconfirmed: %q", rg.status())
+	}
+}
+
+// Once the record is writable again, a pending error of the SAME account gets exactly
+// one continue.
+func TestClaudeAccountWritableAgainSendsExactlyOneContinue(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	rg.revoke(2 * time.Hour)
+	rg.pollProduction()
+	old := recordAccountWrite
+	recordAccountWrite = func(string, []byte) error { return ErrClaudeAccess }
+	rg.publishAs(3, projAccount)
+	rg.pollProduction()
+	if rg.continues() != 0 {
+		t.Fatal("a continue was sent without a current record")
+	}
+	recordAccountWrite = old
+	rg.pollProduction()
+	if rg.continues() != 1 {
+		t.Fatalf("continues once the record was writable again: %d", rg.continues())
+	}
+	for i := 0; i < 3; i++ {
+		rg.pollProduction()
+	}
+	if rg.continues() != 1 {
+		t.Errorf("more than one continue for one generation: %d", rg.continues())
+	}
+	if strings.Contains(rg.status(), "account") {
+		t.Errorf("the status still mentions the account: %q", rg.status())
+	}
+}
+
+// A record that is gone when a NEW generation arrives hides whether the account changed:
+// it is seeded again, and that generation's continue is skipped.
+func TestClaudeAccountMissingRecordAtANewGenerationSkipsThatContinue(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	rg.revoke(2 * time.Hour)
+	rg.pollProduction()
+	if err := os.Remove(rg.s.statePath(testAccountFile)); err != nil {
+		t.Fatal(err)
+	}
+	rg.publishAs(3, projAccount)
+	rg.pollProduction()
+	if rg.continues() != 0 || !strings.Contains(rg.status(), "account unconfirmed since generation 3") {
+		t.Errorf("a missing record at a new generation: %d %q", rg.continues(), rg.status())
+	}
+	rg.publishAs(4, projAccount)
+	rg.pollProduction()
+	if strings.Contains(rg.status(), "account") {
+		t.Errorf("the mark did not clear on the next generation: %q", rg.status())
+	}
+}
