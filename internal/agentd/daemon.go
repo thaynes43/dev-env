@@ -649,11 +649,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			if err := d.dispatchDecision(ctx); err != nil {
 				d.Log.Warn("managed child decision continuation is unavailable or uncertain")
 			}
-			d.syncClaudeAccess()
-			d.observeClaudeRejection()
-			d.pollRemoteLogin(ctx)
-			d.pollCodexRemote(ctx)
-			d.continueAfterRenewal(ctx)
+			d.pollClaude(ctx)
 			if m := newestMtime(d.S.statePath(resultFile), d.S.statePath(tuiExitFile)); !m.Equal(last) {
 				last = m
 				d.Log.Info("the agent exited")
@@ -667,6 +663,18 @@ func (d *Daemon) supervise(ctx context.Context) error {
 // projectsClaude: this session follows the keeper's Claude login projection.
 func (d *Daemon) projectsClaude() bool {
 	return d.S.ClaudeLiveFile != "" && d.Session.Agent == protocol.AgentClaude
+}
+
+// pollClaude runs the per-poll steps that follow the Codex sync and the decision
+// dispatch, in a fixed order: merge a published Claude generation, observe a
+// provider rejection, poll the remote logins, then continue after a renewal. The
+// continue must run after the merge of the same poll.
+func (d *Daemon) pollClaude(ctx context.Context) {
+	d.syncClaudeAccess()
+	d.observeClaudeRejection()
+	d.pollRemoteLogin(ctx)
+	d.pollCodexRemote(ctx)
+	d.continueAfterRenewal(ctx)
 }
 
 // syncClaudeAccess follows the keeper's newest generation on each poll. It
