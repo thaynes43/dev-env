@@ -184,8 +184,9 @@ type ApproveScheduledWorkRequest struct {
 // authority: the occurrence is checked again as at its due time.
 type RetryScheduledWorkRequest struct {
 	// At names the Parked occurrence. The API refuses it with 409 unless that
-	// occurrence is Parked, under MaxScheduledWorkAttempt, and claimed with the
-	// current spec.
+	// occurrence is Parked and under MaxScheduledWorkAttempt, and with 409 when
+	// it was claimed with an earlier spec; an occurrence parked before any
+	// claim has no claim hash and may be retried.
 	At time.Time `json:"at"`
 	// SpecHash is the hash of the spec the client showed. It binds the retry
 	// to that spec: the API refuses it with 409 unless it equals the current

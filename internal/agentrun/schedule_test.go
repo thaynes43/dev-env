@@ -962,6 +962,18 @@ func TestScheduleRetry(t *testing.T) {
 			t.Error("retried past the attempt limit")
 		}
 	})
+	t.Run("parked before any claim can be retried", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork()}
+		d.view.Occurrences[2].SpecHash, d.view.Occurrences[2].ClaimedAt = "", nil
+		d.handle(t, h)
+		h.mustRun(ExitOK, decideArgs("retry", "--at", "2026-10-06T19:00:00Z")...)
+		req := decodeAs[apiv1.RetryScheduledWorkRequest](t, d.retry)
+		if !req.At.Equal(testParkedAt) || req.SpecHash != testSpecHash {
+			t.Errorf("retry request %+v", req)
+		}
+		contains(t, "stdout", h.stdout.String(), "retried sched-0123456789abcdef0123", "the occurrence at 2026-10-06T19:00:00Z is now Claimed")
+	})
 	// The API refuses a retry of an occurrence claimed with an earlier spec
 	// (RetryScheduledWorkRequest), so no y/N is asked and nothing is sent.
 	for name, args := range map[string][]string{
