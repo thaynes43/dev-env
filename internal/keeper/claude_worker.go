@@ -189,7 +189,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	intent.Stage, intent.AttemptUID = claudeIntent, string(uuid.NewUUID())
 	if w.Journal.save(ctx, secret, intent) != nil {
 		// A lost acknowledgement may still have stored the intent.
-		w.abandon(ctx, prev, intent.AttemptUID)
+		w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID)
 		return claudeRecord{}, errClaudeJournal
 	}
 	// Re-read the stored intent and the Lease; POST only if both still hold.
@@ -197,13 +197,13 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	if err != nil || stored.Stage != claudeIntent || stored.AttemptUID != intent.AttemptUID {
 		// Nothing has been sent yet: return our own intent to Ready if it is
 		// still what the journal holds.
-		w.abandon(ctx, prev, intent.AttemptUID)
+		w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID)
 		return claudeRecord{}, errClaudeJournal
 	}
 	requestCtx, cancelRequest := context.WithDeadline(ctx, time.Now().Add(claudeRequestTime))
 	defer cancelRequest()
 	if w.Fence(ctx, claudeRequestBudget) != nil {
-		w.abandon(ctx, prev, intent.AttemptUID)
+		w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID)
 		w.note("leadership-unavailable")
 		return claudeRecord{}, errClaudeLeadership
 	}
@@ -265,7 +265,11 @@ func (w *claudeWorker) observe(ctx context.Context, uid string, r claudeRecord) 
 
 // abandon returns an intent that was never sent to Ready, if this attempt's
 // intent is still what the journal holds and leadership can still write. When
-// it cannot, the intent stays and the next tick marks NeedsLogin.
+// it cannot, the intent stays and the next tick marks NeedsLogin. Callers pass
+// a context detached from cancellation: the outcome is proven unsent, so a
+// shutdown must not leave the intent for a successor to tombstone. Each step
+// (load, fence, save) carries its own 2 s timeout, and the fence still refuses
+// a writer that has lost leadership.
 func (w *claudeWorker) abandon(ctx context.Context, ready claudeRecord, uid string) bool {
 	secret, r, err := w.load(ctx)
 	if err != nil || r.Stage != claudeIntent || r.AttemptUID != uid || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {

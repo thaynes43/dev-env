@@ -85,3 +85,39 @@ external sender does not atomically order delivery with journal adoption. No
 universal cross-process delivery ordering, complete false-notification
 prevention, deployment, or journal overwrite is established. Current-head
 independent review remains open.
+
+### 2026-11-04 correction round 1 (source only)
+
+An independent QA review of 5d6640c passed the source and found test gaps
+by mutation. This round adds tests for them and fixes one false-login path.
+
+- Shutdown before dispatch (fix). Three exits that prove nothing was sent
+  (intent save with a lost acknowledgement, a failed intent re-read, and a
+  failed pre-dispatch fence) returned the intent to Ready on the worker's
+  context. During shutdown that context is cancelled, the Lease fence and
+  the journal save refuse it, and the intent stayed; the successor then
+  marked NeedsLogin although the refresh token was unspent. These rollbacks
+  now run on a context detached from cancellation, like the existing
+  not-sent rollback. Load, fence and save keep their own 2 s timeouts, and
+  the fence still refuses a writer that lost leadership. A synthetic test
+  cancels at each exit with the real Lease fence: before the fix the journal
+  held RefreshIntent; after it, Ready, and the successor does not mark
+  NeedsLogin.
+- After dispatch nothing changes. A worker table test drives every
+  post-dispatch class (dispatch, status, read, parse, a wrapped status and an
+  unclassified error): each tombstones, and neither the worker nor a
+  restarted one sends the token again past the unsent-retry backoff and the
+  due time. A second table cancels the context inside the transport before
+  such a failure: the tombstone is written at once.
+- The notifier construction moved unchanged from Run into `loginNotifier`.
+  A test builds it there and checks that a stale hub NeedsLogin with a Ready
+  journal sends nothing, a tombstone sends one notice, a named journal is
+  the one read, and another Lease holder sends nothing.
+- The fixture journal now has a synthetic UID, so ordinary observation tests
+  reach the hub's incarnation checks, and a test pins that an adoption
+  reports under the journal's UID.
+
+Still open: when a proven-unsent rollback write itself fails, the intent
+stays and the next tick marks NeedsLogin. Detaching the context does not
+change that; it needs an owner decision. No provider, login, credential,
+cluster or deployment was exercised.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/internal/claudelogin"
 )
@@ -142,5 +143,86 @@ func TestClaudeAdoptionReportsTheJournalIncarnation(t *testing.T) {
 	hub.mu.Unlock()
 	if uid != claudeFixJournalUID {
 		t.Fatal("adoption was not reported under the journal's incarnation")
+	}
+}
+
+// claudeShutdownClient starts a shutdown at one journal call: the numbered Get
+// fails, or the numbered Patch commits and then loses its acknowledgement.
+type claudeShutdownClient struct {
+	client.Client
+	name           string
+	cancel         func()
+	getAt, patchAt int
+	gets, patches  int
+}
+
+func (c *claudeShutdownClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if key.Name == c.name {
+		c.gets++
+		if c.gets == c.getAt {
+			c.cancel()
+			return errors.New("synthetic get failure")
+		}
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *claudeShutdownClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if err := c.Client.Patch(ctx, obj, patch, opts...); err != nil || obj.GetName() != c.name {
+		return err
+	}
+	c.patches++
+	if c.patches == c.patchAt {
+		c.cancel()
+		return errors.New("synthetic lost acknowledgement")
+	}
+	return nil
+}
+
+// A shutdown that stops an attempt before its request is dispatched must still
+// return the intent to Ready: nothing was sent, so a successor must not mark
+// NeedsLogin. Each case cancels the worker's context at one proven-unsent exit.
+func TestClaudeShutdownBeforeDispatchRecordsTheRollback(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		getAt, patchAt int // journal calls counted from the tick's first load
+		fenceAt        int // fence calls counted from the tick
+	}{
+		{name: "intent save loses its acknowledgement", patchAt: 1},
+		{name: "intent re-read fails", getAt: 3},
+		{name: "pre-dispatch fence fails", fenceAt: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClaudeFix(t)
+			before := syntheticClaudeRecord(1)
+			f.seed(t, before)
+			f.clk.Step(6 * time.Hour)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f.w.Journal = &claudeJournal{Client: &claudeShutdownClient{Client: f.c, name: f.w.Journal.Secret.Name, cancel: cancel, getAt: tc.getAt, patchAt: tc.patchAt},
+				Secret: f.w.Journal.Secret}
+			// The real Lease fence, which also refuses a cancelled context.
+			f.holdLease(t, "keeper-a")
+			lease, fences := f.leaseFence(t, "keeper-a"), 0
+			f.w.Fence = func(c context.Context, budget time.Duration) error {
+				fences++
+				if fences == tc.fenceAt {
+					cancel()
+					return errors.New("synthetic shutdown")
+				}
+				return lease(c, budget)
+			}
+			f.w.tick(ctx)
+			r := f.journal(t)
+			if f.tr.Calls != 0 || r.Stage != claudeReady || r.AttemptUID != "" || r.Refresh.Reveal() != before.Refresh.Reveal() || r.Access.Generation != 1 {
+				t.Fatalf("proven-unsent attempt was not rolled back: calls=%d stage=%s", f.tr.Calls, r.Stage)
+			}
+			successor := f.successorWorker()
+			successor.Journal = &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}
+			successor.tick(context.Background())
+			if r := f.journal(t); r.Stage != claudeReady {
+				t.Fatalf("successor marked an unsent attempt: stage=%s", r.Stage)
+			}
+		})
 	}
 }
