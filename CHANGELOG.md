@@ -1,5 +1,43 @@
 # Changelog
 
+## [2.90.0](https://github.com/thaynes43/dev-env/compare/v2.89.1...v2.90.0) (2026-11-04)
+
+
+### Features
+
+* **agent-run:** scheduled-work wire types and agent-run schedule (DESIGN-054 S5a) ([#906](https://github.com/thaynes43/dev-env/issues/906)) ([f50afa6](https://github.com/thaynes43/dev-env/commit/f50afa693072e6ce6adc24e859af86a959385b5c))
+* **agentd:** refuse a scheduled session's late first launch (DESIGN-054 S3c) ([#900](https://github.com/thaynes43/dev-env/issues/900)) ([fcef77c](https://github.com/thaynes43/dev-env/commit/fcef77cda637c74ae4b6f70e5d605e0bb1e3420a))
+* **agentd:** report bounded HOME bytes and inodes headroom (reporting only) ([#894](https://github.com/thaynes43/dev-env/issues/894)) ([df065ff](https://github.com/thaynes43/dev-env/commit/df065ff4952205872d76a84bf13ba97926de3f4a))
+* **api:** ScheduledWork CRD types and shared schedule (DESIGN-054 S2) ([#898](https://github.com/thaynes43/dev-env/issues/898)) ([ef2802b](https://github.com/thaynes43/dev-env/commit/ef2802b88b52ae0f3c08ce4389c257fc0b27ae13))
+* **auth:** show a provider-rejected Claude login before its local expiry ([#896](https://github.com/thaynes43/dev-env/issues/896)) ([a6d0c9f](https://github.com/thaynes43/dev-env/commit/a6d0c9fd71b2e5460620d3da0f70cdb9a6b23890))
+* **controller:** scheduled-work session-end rule and releaser (DESIGN-054 S3a) ([#901](https://github.com/thaynes43/dev-env/issues/901)) ([e0d5f2d](https://github.com/thaynes43/dev-env/commit/e0d5f2dab674bd368ab1c34fa27b78eab077a728))
+* **operator:** scheduled-work executor core, default off (DESIGN-054 S3b1) ([#903](https://github.com/thaynes43/dev-env/issues/903)) ([dfc2ca8](https://github.com/thaynes43/dev-env/commit/dfc2ca8bea44b45ca61aeb6d137f821ad8f62c7f))
+* **scheduledwork:** authority and template decisions, pure package (DESIGN-054 S3b2 phase 1) ([#904](https://github.com/thaynes43/dev-env/issues/904)) ([150f8ff](https://github.com/thaynes43/dev-env/commit/150f8fff2424c23949f7ee3da50340c53dbf5cb4))
+* **scheduledwork:** page Reminders package (DESIGN-054 S4a) ([#907](https://github.com/thaynes43/dev-env/issues/907)) ([ae20567](https://github.com/thaynes43/dev-env/commit/ae205672d5ba635cd4d231b2938ebf833b2323f5))
+* **scheduledwork:** wire the real authority and template sources (DESIGN-054 S3b2 phase 2) ([#905](https://github.com/thaynes43/dev-env/issues/905)) ([cfbe0db](https://github.com/thaynes43/dev-env/commit/cfbe0db6d5f0a97a2fb3db24c3eb3937dd289645))
+* **taskbudget:** the 60-minute stall is a signal, not a stop (decision 94, OP400) ([#909](https://github.com/thaynes43/dev-env/issues/909)) ([384d6e8](https://github.com/thaynes43/dev-env/commit/384d6e8a86e592055711e3ef13aa4e155ff4e579))
+* **usage:** accept a retained eviction observation as the old-Pod witness ([#888](https://github.com/thaynes43/dev-env/issues/888)) ([2d42e72](https://github.com/thaynes43/dev-env/commit/2d42e7211c88b1aac97451b10fb288c95830471b))
+* **usage:** classify refused Cursor terminal characters by Unicode class ([#889](https://github.com/thaynes43/dev-env/issues/889)) ([84fa61c](https://github.com/thaynes43/dev-env/commit/84fa61c36a6a75f04aa32e601174978103f27023))
+* **usage:** narrow the Cursor pictograph refusal class ([#893](https://github.com/thaynes43/dev-env/issues/893)) ([1365b60](https://github.com/thaynes43/dev-env/commit/1365b60ad18ae3d85688ae807da99dfc6074ff36))
+* **usage:** operator-native allowance handoff with in-slot backup ([#887](https://github.com/thaynes43/dev-env/issues/887)) ([821c69a](https://github.com/thaynes43/dev-env/commit/821c69af6438a84e78194485fb4d6def6da02853))
+* **usage:** qualify Claude Code 2.1.312 for the zero-turn usage read ([#890](https://github.com/thaynes43/dev-env/issues/890)) ([6fd5ce1](https://github.com/thaynes43/dev-env/commit/6fd5ce1fb4c0ceb80073201776b31e05f24ebe2c))
+* **usage:** split Cursor misc-symbol refusal into eight windows ([#895](https://github.com/thaynes43/dev-env/issues/895)) ([2828fa9](https://github.com/thaynes43/dev-env/commit/2828fa9f0deb6762461d6d31c448349f46b068fe))
+* **usage:** split Cursor terminal window 6 into four labels ([#910](https://github.com/thaynes43/dev-env/issues/910)) ([7ade673](https://github.com/thaynes43/dev-env/commit/7ade6730d2bb492b0fb8e8f21c71c1770226807b))
+
+
+### Bug Fixes
+
+* **agentd:** stop a refused held launch's login window under the login lock (DESIGN-054) ([#902](https://github.com/thaynes43/dev-env/issues/902)) ([193bd78](https://github.com/thaynes43/dev-env/commit/193bd780e03a0b51b62a1c0610fa40d130f263f5))
+* **auth:** show a just-expired access token as Refreshing and let rc start wait through it ([#891](https://github.com/thaynes43/dev-env/issues/891)) ([4c3c28d](https://github.com/thaynes43/dev-env/commit/4c3c28d16054ce344eb8fed03805f7667986857d))
+* **deps:** update module github.com/go-jose/go-jose/v4 to v4.1.8 ([#877](https://github.com/thaynes43/dev-env/issues/877)) ([6b91c45](https://github.com/thaynes43/dev-env/commit/6b91c4584e432470b5391d5e70583cc1e016306d))
+* **usage:** a failed attempt with no capture is not 'source not configured' ([#913](https://github.com/thaynes43/dev-env/issues/913)) ([cbab06b](https://github.com/thaynes43/dev-env/commit/cbab06b998316000838c8ff8cad04cd001ad6d92))
+* **usage:** classify refused dot-set membership without disclosure ([#883](https://github.com/thaynes43/dev-env/issues/883)) ([ae21128](https://github.com/thaynes43/dev-env/commit/ae211287c25fa4ac99fa80a9f667f9f0bd4f1bba))
+* **usage:** expose bounded scheduled acquisition failure codes ([#880](https://github.com/thaynes43/dev-env/issues/880)) ([7da5b93](https://github.com/thaynes43/dev-env/commit/7da5b93d5357ff268a4d54329a30c51cd95e73ca))
+* **usage:** handle inline usage menus and preserve builtin refusals ([#881](https://github.com/thaynes43/dev-env/issues/881)) ([1322f53](https://github.com/thaynes43/dev-env/commit/1322f531f0f46b5345694686ed492e901463b32f))
+* **usage:** qualify provider display and zero-counter contracts ([#882](https://github.com/thaynes43/dev-env/issues/882)) ([312c52e](https://github.com/thaynes43/dev-env/commit/312c52e4c41ab5eee5a04b7ce0b72f30e82ae669))
+* **usage:** retain Claude quota history and classify terminal refusals ([1e2c814](https://github.com/thaynes43/dev-env/commit/1e2c814cd634c43f9bb387b02cedc50f88b8775c))
+* **usage:** wait for finite commands to exit before cleanup ([#879](https://github.com/thaynes43/dev-env/issues/879)) ([a8a64ed](https://github.com/thaynes43/dev-env/commit/a8a64ede01cb6a11c5af2035e6ff74ab190bb060))
+
 ## [2.89.1](https://github.com/thaynes43/dev-env/compare/v2.89.0...v2.89.1) (2026-11-03)
 
 
