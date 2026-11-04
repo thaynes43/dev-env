@@ -2,110 +2,23 @@ package controller
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
 	"slices"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 	"github.com/thaynes43/dev-env/internal/templates"
 )
 
-// DESIGN-054 S3c. A pod is never updated after create, and a change in a pod's
-// shape drains idle sessions onto the new shape, so running sessions are
-// sacred: a session without the scheduled-work start-deadline annotation must
-// get exactly the pod it got before the deadline existed.
-
-// legacyPodsGolden holds the SHA-256 of each pod below, marshaled to JSON, as
-// the controller built it before S3c (main ef2802b): equal digests are equal
-// bytes. Regenerate it only for a pod change that is meant to reach every
-// session:
-//
-//	DEV_ENV_UPDATE_GOLDEN=1 go test ./internal/controller -run TestPodsWithoutStartDeadlineAreUnchanged
-const legacyPodsGolden = "testdata/legacy-pods.sha256.json"
-
-// legacyPods are pods of each kind the controller builds: every agent and mode
-// pair, the managed Codex task, a session with other annotations and the
-// coordinator opt-in, a pod without an API, and a rescue (hold) pod.
-func legacyPods(t *testing.T) map[string]*corev1.Pod {
-	t.Helper()
-	tmpl := exampleTemplates(t)
-	const api = "https://dev-env-operator.dev-env-system.svc:8443"
-	build := func(pod *corev1.Pod, err error) *corev1.Pod {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return pod
-	}
-	interactive := func(agent v1alpha1.AgentKind, mode v1alpha1.SessionMode, model string) *corev1.Pod {
-		s := taskSession()
-		s.Spec.Agent, s.Spec.Mode, s.Spec.Model = agent, mode, model
-		s.Spec.Prompt, s.Spec.Limits = "", nil
-		return build(buildPod(s, tmpl, api))
-	}
-	codexTask := taskSession()
-	codexTask.Spec.Agent, codexTask.Spec.Model = v1alpha1.AgentCodex, "gpt-6-astra"
-	optIn := ordinaryOptInSession(t)
-	optIn.Spec.CoordinatorInstructions = true
-	return map[string]*corev1.Pod{
-		"claude-task":        build(buildPod(taskSession(), tmpl, api)),
-		"claude-task-no-api": build(buildPod(taskSession(), tmpl, "")),
-		"claude-local":       interactive(v1alpha1.AgentClaude, v1alpha1.ModeLocal, "claude-opus-5-5"),
-		"claude-remote":      interactive(v1alpha1.AgentClaude, v1alpha1.ModeRemote, "claude-opus-5-5"),
-		"codex-remote":       interactive(v1alpha1.AgentCodex, v1alpha1.ModeRemote, "gpt-6-astra"),
-		"codex-task-managed": build(buildPod(codexTask, tmpl, api, true)),
-		"coordinator-opt-in": build(buildPod(optIn, tmpl, api)),
-		"hold":               build(buildHoldPod(taskSession(), tmpl)),
-	}
-}
-
-func TestPodsWithoutStartDeadlineAreUnchanged(t *testing.T) {
-	got := map[string]string{}
-	pods := legacyPods(t)
-	for name, pod := range pods {
-		b, err := json.Marshal(pod)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sum := sha256.Sum256(b)
-		got[name] = hex.EncodeToString(sum[:])
-	}
-	if os.Getenv("DEV_ENV_UPDATE_GOLDEN") == "1" {
-		b, err := json.MarshalIndent(got, "", "  ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(legacyPodsGolden, append(b, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	raw, err := os.ReadFile(legacyPodsGolden)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want map[string]string
-	if err := json.Unmarshal(raw, &want); err != nil {
-		t.Fatal(err)
-	}
-	if len(want) != len(got) {
-		t.Fatalf("golden has %d pods, the test builds %d", len(want), len(got))
-	}
-	for name, sum := range got {
-		if want[name] != sum {
-			t.Errorf("%s: the pod is not byte-identical to its pre-S3c golden; a session without the start-deadline annotation must keep its pod", name)
-		}
-	}
-}
+// DESIGN-054 S3c: the scheduled-work start deadline in the pod. The pods of
+// sessions without it are pinned by legacy_pods_golden_test.go.
 
 func scheduledSession(s *v1alpha1.AgentSession, deadline string) *v1alpha1.AgentSession {
 	if s.Annotations == nil {
@@ -185,22 +98,57 @@ func TestStartDeadlineStaysOutOfTheHoldPod(t *testing.T) {
 	}
 }
 
-// A bad value refuses the pod, as an invalid task budget binding does: the
-// session stays Pending (PodSpecInvalid) and never boots without its deadline.
-// A Codex remote session records no first launch (its agent is the phone
-// daemon), so agentd could not tell a late first boot from a later one.
+// A bad value refuses the pod as a session agentd would refuse: the spec and
+// its annotation are fixed, so the session could never start, and it fails
+// (SessionInvalid) instead of staying Pending, which would never end its
+// occurrence. A Codex remote session records no first launch (its agent is the
+// phone daemon), so agentd could not tell a late first boot from a later one.
+// The API's precheck refuses both before a create.
 func TestAnInvalidStartDeadlineRefusesThePod(t *testing.T) {
 	tmpl := exampleTemplates(t)
-	for _, deadline := range []string{"", "tomorrow", "2026-11-04T10:05:00", "2026-11-04T11:05:00+01:00", "2026-11-04T10:05:00+00:00", " 2026-11-04T10:05:00Z"} {
-		pod, err := buildPod(scheduledSession(taskSession(), deadline), tmpl, "https://api")
-		if err == nil || pod != nil || !strings.Contains(err.Error(), "start deadline") || errors.As(err, new(sessionInvalidError)) {
-			t.Errorf("%q: built %v, %v", deadline, pod != nil, err)
-		}
-	}
 	codex := remoteSession()
 	codex.Spec.Agent, codex.Spec.Model = v1alpha1.AgentCodex, "gpt-6-astra"
-	if pod, err := buildPod(scheduledSession(codex, "2026-11-04T10:05:00Z"), tmpl, "https://api"); err == nil || pod != nil {
-		t.Errorf("a Codex remote session got a start deadline: %v", err)
+	cases := map[string]struct {
+		session *v1alpha1.AgentSession
+		want    string
+	}{
+		"codex remote": {scheduledSession(codex, "2026-11-04T10:05:00Z"), "a scheduled-work start deadline needs a first launch record, which a Codex remote session does not keep"},
+	}
+	for _, deadline := range []string{"", "tomorrow", "2026-11-04T10:05:00", "2026-11-04T11:05:00+01:00", "2026-11-04T10:05:00+00:00", " 2026-11-04T10:05:00Z"} {
+		cases["value "+deadline] = struct {
+			session *v1alpha1.AgentSession
+			want    string
+		}{scheduledSession(taskSession(), deadline), "invalid scheduled-work start deadline: start deadline is not an RFC 3339 UTC time"}
+	}
+	for name, c := range cases {
+		pod, err := buildPod(c.session, tmpl, "https://api")
+		if err == nil || pod != nil || err.Error() != c.want || !errors.As(err, new(sessionInvalidError)) {
+			t.Errorf("%s: built %v, %v; want the session refused as invalid with %q", name, pod != nil, err, c.want)
+		}
+		if err := CheckAgentdSession(c.session); err == nil || err.Error() != c.want || !errors.As(err, new(sessionInvalidError)) {
+			t.Errorf("%s: the API precheck: %v; want %q", name, err, c.want)
+		}
+	}
+	if err := CheckAgentdSession(scheduledSession(taskSession(), "2026-11-04T10:05:00Z")); err != nil {
+		t.Errorf("the API precheck refused a valid start deadline: %v", err)
+	}
+}
+
+// The reconciler fails such a session at once, with no pod and no volume.
+func TestASessionWithAnInvalidStartDeadlineFails(t *testing.T) {
+	startOperator(t)
+	s := newSession(t, func(s *v1alpha1.AgentSession) {
+		s.Annotations = map[string]string{v1alpha1.AnnotationScheduledWorkStartDeadline: "tomorrow"}
+	})
+	st := waitStatus(t, s.Name, "Failed", phaseIs(v1alpha1.PhaseFailed)).Status
+	if c := condition(&st, ConditionPodReady); c == nil || c.Reason != "SessionInvalid" || !strings.Contains(c.Message, "start deadline") {
+		t.Errorf("PodReady %+v", c)
+	}
+	if _, err := get(t, sessionNS, s.Name, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Errorf("an invalid session got a pod: %v", err)
+	}
+	if _, err := get(t, sessionNS, HomeClaimName(s.Name), &corev1.PersistentVolumeClaim{}); !apierrors.IsNotFound(err) {
+		t.Errorf("an invalid session got a volume: %v", err)
 	}
 }
 
@@ -209,5 +157,44 @@ func TestAnInvalidStartDeadlineRefusesThePod(t *testing.T) {
 func TestTheStartDeadlineIsReserved(t *testing.T) {
 	if !slices.Contains(templates.ReservedEnv, protocol.StartDeadlineEnv) {
 		t.Fatalf("%s is not reserved", protocol.StartDeadlineEnv)
+	}
+}
+
+// A pilot or instruction image may predate S3c and so lack agentd's deadline
+// check. A scheduled session runs on the templates image, which the rollout
+// rule keeps at S3c or later; an override that would select another image for
+// it refuses the session as invalid instead.
+func TestAScheduledSessionRefusesAnImageOverride(t *testing.T) {
+	tmpl := exampleTemplates(t)
+	const deadline = "2026-11-04T10:05:00Z"
+	instructionImage := "ghcr.io/thaynes43/dev-env:2.86.0@sha256:" + strings.Repeat("a", 64)
+	for name, c := range map[string]struct {
+		r       *Reconciler
+		session func() *v1alpha1.AgentSession
+	}{
+		"pilot":      {&Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}, pilotTestSession},
+		"task pilot": {&Reconciler{APIURL: "https://api", ManagedCodexTasks: true, TaskPilotAgent: pilotTestAgent()}, func() *v1alpha1.AgentSession { return taskPilotSession(t) }},
+		"instruction receiver": {&Reconciler{APIURL: "https://api", CoordinatorInstructionAgentImage: instructionImage}, func() *v1alpha1.AgentSession {
+			s := ordinaryOptInSession(t)
+			s.Spec.CoordinatorInstructions = true
+			return s
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if pod, err := c.r.sessionPod(c.session(), tmpl); err != nil || pod.Spec.Containers[0].Image == tmpl.Image {
+				t.Fatalf("the fixture does not select an override: %v", err)
+			}
+			pod, err := c.r.sessionPod(scheduledSession(c.session(), deadline), tmpl)
+			if err == nil || pod != nil || !errors.As(err, new(sessionInvalidError)) || !strings.Contains(err.Error(), "templates image") {
+				t.Fatalf("a scheduled session took an image override: pod %v, %v", pod != nil, err)
+			}
+		})
+	}
+	// Not selected: the scheduled session builds on the templates image.
+	other := scheduledSession(pilotTestSession(), deadline)
+	other.Labels[v1alpha1.LabelIdempotencyKey] = "another-key"
+	pod, err := (&Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}).sessionPod(other, tmpl)
+	if err != nil || pod.Spec.Containers[0].Image != tmpl.Image || len(startDeadlineValues(pod)) != 1 {
+		t.Fatalf("an unselected scheduled session: %v", err)
 	}
 }

@@ -189,6 +189,7 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err != nil {
 		return nil, err
 	}
+	templatesImage := agentImage(pod)
 	// Legacy selectors retain their precedence on overlap; startup flags refuse
 	// equal parent/key tuples where applicable. Task and remote selectors are
 	// disjoint by mode. Explicit instruction enrollment instead refuses an
@@ -200,7 +201,24 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err := r.applyInstructionAgentImage(pod, s); err != nil {
 		return nil, err
 	}
+	// A scheduled session's start deadline needs agentd's check, which the
+	// templates image carries by the rollout rule (DESIGN-054 S3c). A pilot or
+	// instruction image may predate it, so a scheduled session never runs on
+	// one: the session is refused as invalid, which ends its occurrence.
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && agentImage(pod) != templatesImage {
+		return nil, sessionInvalidError{errors.New("a scheduled-work session runs only on the templates image, which carries the start-deadline check; a pilot or instruction image override is refused")}
+	}
 	return pod, nil
+}
+
+// agentImage is the image of the pod's agent container, or "" without one.
+func agentImage(pod *corev1.Pod) string {
+	for _, c := range pod.Spec.Containers {
+		if c.Name == ContainerName {
+			return c.Image
+		}
+	}
+	return ""
 }
 
 // Finite reviewed executors retain their full review identity for directory and
@@ -566,18 +584,20 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 // keeps its bytes; a hold pod runs no agent and never gets one, so a bad value
 // cannot keep a volume from its rescue. A value agentd would not parse, or a
 // session whose agentd records no first launch (a Codex remote session's agent
-// is the phone daemon), refuses the pod as an invalid task budget does: the
-// session stays Pending and never boots without its deadline.
+// is the phone daemon), is a session agentd would refuse: the annotation is
+// fixed at create, so the session fails (SessionInvalid) instead of staying
+// Pending, which would never end its occurrence, and the API's precheck
+// refuses it before a create.
 func startDeadlineEnv(s *v1alpha1.AgentSession, hold bool) (string, error) {
 	raw, ok := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]
 	if !ok || hold {
 		return "", nil
 	}
 	if _, err := protocol.ParseStartDeadline(raw); err != nil {
-		return "", fmt.Errorf("invalid scheduled-work start deadline: %w", err)
+		return "", sessionInvalidError{fmt.Errorf("invalid scheduled-work start deadline: %w", err)}
 	}
 	if s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeRemote {
-		return "", errors.New("a scheduled-work start deadline needs a first launch record, which a Codex remote session does not keep")
+		return "", sessionInvalidError{errors.New("a scheduled-work start deadline needs a first launch record, which a Codex remote session does not keep")}
 	}
 	return raw, nil
 }
@@ -678,7 +698,10 @@ func (e sessionInvalidError) Unwrap() error { return e.err }
 // session that could never start is refused to its caller instead of failing
 // later.
 func CheckAgentdSession(s *v1alpha1.AgentSession) error {
-	_, err := sessionDocument(s, false)
+	if _, err := sessionDocument(s, false); err != nil {
+		return err
+	}
+	_, err := startDeadlineEnv(s, false)
 	return err
 }
 
