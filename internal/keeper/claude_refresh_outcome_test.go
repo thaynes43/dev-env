@@ -453,3 +453,40 @@ func TestClaudeRollbackRequiresTheSameJournalIncarnation(t *testing.T) {
 		t.Fatalf("rolled back a different journal incarnation: stage=%s", r.Stage)
 	}
 }
+
+// A rollback that keeps failing is retried only within claudeUnsentProofLife.
+// At the first tick at or after the bound the intent is tombstoned, even
+// though its marker is still there, and the usual page follows (G2).
+func TestClaudeUnsentProofExpiresUnderRepeatedRollbackFailure(t *testing.T) {
+	f := newClaudeFix(t)
+	notices := newNoticeFix(t, claudeNow)
+	f.w.Obs = notices.hub
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	failing := &claudeFailReadyClient{Client: f.c, name: f.w.Journal.Secret.Name, fail: true}
+	f.w.Journal = &claudeJournal{Client: failing, Secret: f.w.Journal.Secret}
+	f.notSent(nil)
+	f.tick() // the attempt: proved unsent, its rollback fails; the proof starts now
+	f.tr.Prepare = nil
+	start := f.clk.Now()
+	if r := f.journal(t); r.Stage != claudeIntent || !claudeUnsentMarked(f.journalSecret(t), r) {
+		t.Fatal("setup: no marked intent")
+	}
+	for f.clk.Now().Sub(start) < claudeUnsentProofLife-claudePollInterval {
+		f.clk.Step(claudePollInterval)
+		f.tick()
+		if r := f.journal(t); r.Stage != claudeIntent {
+			t.Fatalf("tombstoned %v after the proof, before its bound: %s", f.clk.Now().Sub(start), r.Stage)
+		}
+	}
+	f.clk.Step(claudePollInterval) // now at start + claudeUnsentProofLife
+	f.tick()
+	if r := f.journal(t); r.Stage != claudeNeedsLogin || !r.Refresh.Empty() || f.tr.Calls != 0 {
+		t.Fatalf("at the bound: stage=%s calls=%d, want NeedsLogin and no request", r.Stage, f.tr.Calls)
+	}
+	notices.n.VerifyClaude = verifyClaudeJournal(&claudeJournal{Client: f.c, Secret: f.w.Journal.Secret})
+	notices.tick()
+	if got := notices.fake.count(); got != 1 {
+		t.Fatalf("synthetic notice count = %d, want the NeedsLogin page", got)
+	}
+}
