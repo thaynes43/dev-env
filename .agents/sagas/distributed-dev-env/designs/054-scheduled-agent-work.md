@@ -392,7 +392,11 @@ stateDiagram-v2
   boot holds its agent (no usable login, or a login ceremony opening) has no
   launch record yet. The login poll checks the deadline while it holds; past it,
   agentd records the same failed boot (`start deadline passed`) and starts
-  nothing, even when a login lands later. Codex remote sessions never write
+  nothing, even when a login lands later. Past the deadline, with no launch
+  record, `agentd ctl login url` refuses and `login status` names the refusal.
+  agentd stops a refused session's login window under the login lock: while a
+  ceremony opener holds the lock the stop is deferred, and the next poll makes
+  it once the lock is free. Codex remote sessions never write
   `launch.json`, so the controller refuses the annotation on them and agentd skips
   the check for them: scheduled sessions are Claude, or Codex task mode. The value
   must be RFC 3339 UTC ending in `Z`, at most 64 bytes, parsed by one shared

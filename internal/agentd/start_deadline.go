@@ -43,10 +43,18 @@ func startDeadlineRefusal(raw string, launched bool, now time.Time) string {
 // the check could not tell a late first boot from a later one, and a value
 // that reached the pod some other way would refuse every boot.
 func (d *Daemon) firstLaunchRefusal() string {
-	if codexRemoteSession(d.Session) {
+	return firstLaunchRefusal(d.S, d.Session, d.now())
+}
+
+// firstLaunchRefusal is the same check for a process other than the daemon:
+// agentd ctl login url opens no login window for a session that cannot
+// launch, so a ceremony requested after a refused held launch leaves nothing
+// behind (remote.go, LoginURL).
+func firstLaunchRefusal(s Settings, sess protocol.Session, now time.Time) string {
+	if codexRemoteSession(sess) {
 		return ""
 	}
-	return startDeadlineRefusal(d.S.StartDeadline, firstLaunchRecorded(d.S), d.now())
+	return startDeadlineRefusal(s.StartDeadline, firstLaunchRecorded(s), now)
 }
 
 // firstLaunchRecorded reports whether the session has a first-launch record
@@ -68,9 +76,15 @@ func firstLaunchRecorded(s Settings) bool {
 // heartbeat reports an ended agent and the session-end rule sees it once the
 // pod-age proof holds. The daemon stays observational, as after a refused
 // workspace admission. The record names no daemon process, so no side binary
-// starts a continuation under it.
+// starts a continuation under it. A remote session's login window is the one
+// thing it ends: a ceremony opener that passed its own check just before the
+// deadline may create one, so the supervise loop stops it under the login
+// lock once that lock is free (stopRefusedLoginWindow).
 func (d *Daemon) refuseFirstLaunch(ctx context.Context, why string) error {
 	d.writerRefused = true
+	if d.Session.Mode == protocol.ModeRemote && !d.projectsClaude() {
+		d.loginStopPending = true
+	}
 	d.Log.Warn("first launch refused", "session", d.Session.Name, "reason", why)
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)
