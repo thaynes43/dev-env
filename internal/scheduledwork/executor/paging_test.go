@@ -119,12 +119,44 @@ func TestPagesTheDueEventOnce(t *testing.T) {
 	if !strings.Contains(r.Spec.Body, o.Session) || !strings.HasPrefix(r.Spec.Title, "Scheduled work started") {
 		t.Errorf("due page title %q body %q", r.Spec.Title, r.Spec.Body)
 	}
-	before := f.get(key).ResourceVersion
+	before, writes := f.get(key).ResourceVersion, f.writes.Load()
 	f.at(f.paging(), day0.Add(time.Minute))
 	f.at(f.paging(), day0.Add(2*time.Minute))
 	f.wantReminders(1)
-	if w := f.get(key); w.ResourceVersion != before || len(scheduledwork.Find(w, day0).Pages) != 1 {
-		t.Errorf("later passes wrote the item again: pages %+v", scheduledwork.Find(w, day0).Pages)
+	if w := f.get(key); w.ResourceVersion != before || f.writes.Load() != writes || len(scheduledwork.Find(w, day0).Pages) != 1 {
+		t.Errorf("later passes wrote the item again (%d writes): pages %+v", f.writes.Load()-writes, scheduledwork.Find(w, day0).Pages)
+	}
+}
+
+// The executor sends only the pages it records. A session outcome's result
+// or failed page is the releaser's, sent once the agent's reported outcome
+// is in, so a stored intent of one is left alone; so is a failed intent on
+// any state but Ambiguous.
+func TestTheExecutorLeavesTheReleasersPages(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", daily(spec()))
+	f.at(f.paging(), day0.Add(-time.Minute))
+	w := f.get(key)
+	claimed := metav1.NewTime(day0)
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{
+		{At: metav1.NewTime(day0.Add(-48 * time.Hour)), State: v1alpha1.OccurrenceSucceeded, ClaimedAt: &claimed,
+			Pages: []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventResult}}},
+		{At: metav1.NewTime(day0.Add(-24 * time.Hour)), State: v1alpha1.OccurrenceFailed, ClaimedAt: &claimed,
+			Pages: []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventFailed}}},
+	}
+	if err := cluster(t).Status().Update(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	writes := f.writes.Load()
+	f.at(f.paging(), day0.Add(-30*time.Second))
+	f.wantReminders(0)
+	if f.writes.Load() != writes {
+		t.Errorf("the executor wrote the item %d times", f.writes.Load()-writes)
+	}
+	for _, o := range f.get(key).Status.Occurrences {
+		if len(o.Pages) != 1 || !pendingPage(o.Pages[0]) {
+			t.Errorf("occurrence %s pages %+v: the releaser's intent was touched", o.At.Format(time.RFC3339), o.Pages)
+		}
 	}
 }
 
