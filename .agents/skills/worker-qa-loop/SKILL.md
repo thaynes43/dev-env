@@ -131,9 +131,10 @@ the findings through `agent-run inbox` or its PR, and through `agent-run msg` on
 for a live TUI session when delivery is safe, never while a native question
 prompt is pending. A coding owner in an existing provider CLI session in tmux
 gets them by [tmux-cli-handoff](../tmux-cli-handoff/SKILL.md). Do not fix it
-yourself and do not add a second writer. The owner adds a test for each finding (RED, then GREEN), commits and reports the new
-head. QA then re-reviews that exact new head: the delta and every earlier
-finding. Repeat until no finding is open.
+yourself and do not add a second writer. The owner adds a test for each finding
+(RED, then GREEN), commits and reports the new head. QA then re-reviews that
+exact new head: the delta and every earlier finding. Repeat until no finding is
+open.
 
 Failed tests and repeated findings are the loop working, not a reason to stop.
 When the same blocker fails three times, the stall rule in supervised-dispatch,
