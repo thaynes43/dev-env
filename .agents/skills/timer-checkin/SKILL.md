@@ -128,8 +128,9 @@ creates a timer on its own.
 Stop the timer only for a stop reason in supervised-dispatch section 5
 (saga decision 94), backed by evidence: a demonstrated outcome, a cancellation or
 pause from Tom or his verified coordinator (including "wait for Meatball" and an
-explicit hold), an exhausted authorized budget or its recorded stop threshold, a
-genuine unresolvable blocker, or a required safety or permission decision.
+explicit hold), an exhausted authorized budget (including a budget checkpoint or
+stop threshold recorded on the story, never a stall threshold), a genuine
+unresolvable blocker, or a required safety or permission decision.
 Quiet time, failed attempts, a full context window and a 7-day expiry never end
 the timer. They trigger the stall rule in supervised-dispatch section 5, and the
 job is re-armed or re-created. Waiting for an event a check can observe, such as

@@ -637,10 +637,12 @@ triggers:
 Ask one actionable owner question, with a concrete bounded next option, only when
 real input or a permission decision is missing. Work stops only on a demonstrated
 outcome, Tom's cancellation or pause (or his verified coordinator's), a genuine
-unresolvable blocker, an exhausted authorized budget or its recorded stop
-threshold, or a required safety or permission decision, each with specific
-evidence. The agent-loop skills in [`.agents/skills/`](../.agents/skills/) apply
-this rule.
+unresolvable blocker, an exhausted authorized budget (its recorded budget spent,
+or a budget checkpoint or stop threshold recorded on the story reached; never a
+stall threshold, [ADR-019](../.agents/sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)),
+or a required safety or permission decision, each with specific evidence. A
+limit the platform enforces is a stop that agents never bypass. The agent-loop
+skills in [`.agents/skills/`](../.agents/skills/) apply this rule.
 
 *Adopted 2026-11-04 and recorded as decision 94, on Tom's words relayed by
 session dev-env-1027-010058 (parent coordinator) as trusted conversation

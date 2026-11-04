@@ -10,7 +10,9 @@ All names, numbers and SHAs below are synthetic.
 
 - Story: "Add a parser for the example config format." Acceptance:
   `TestParseExample` passes on the exact PR head, and `CI - Success` is green on
-  that head. Recorded budget: 4 hours elapsed. Used so far: 1 hour 40 minutes.
+  that head. Recorded budget: 4 hours elapsed, with no budget checkpoint or
+  stop threshold recorded. Used so far: 1 hour 40 minutes. The work does not run
+  in a platform budget campaign, so no platform latch applies.
 - The coordinator dispatched a native `opus-worker` with the task title
   "Implement example parser". Its ACK file arrived. Its branch has two commits;
   the newest is 65 minutes old. No RESULT file yet.

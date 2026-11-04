@@ -11,7 +11,8 @@ and the [workflow guide](../../../../docs/workflow-guide.md), section 9. All nam
   `TestDuplicateOccurrenceRefused` and the package's existing tests pass on the
   exact PR head, an independent QA review has no open finding on that head, and
   `CI - Success` is green on that head. Recorded budget: 6 hours elapsed, no
-  separate stop threshold. Used so far: 2 hours.
+  budget checkpoint or stop threshold. Used so far: 2 hours. The work does not
+  run in a platform budget campaign, so no platform latch applies.
 - One coding worker, "Implement duplicate refusal", owns the claimed files. One
   independent QA agent, "QA duplicate refusal", reviews.
 - QA ran the acceptance test on three heads in a row. Each run failed the same

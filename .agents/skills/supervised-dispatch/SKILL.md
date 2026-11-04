@@ -33,8 +33,10 @@ Write down:
 - **Boundaries.** Repositories, worktrees, files and runtime resources the
   coordinator may change. Everything else is out of scope.
 - **Budget.** The authorized elapsed time, usage or cost cap, concurrency, and any
-  checkpoint or stop threshold, as recorded on the story. Record an unknown
-  amount as unknown.
+  budget checkpoint or stop threshold, as recorded on the story. A decision 55
+  stall threshold is never one of these
+  ([ADR-019](../../sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)).
+  Record an unknown amount as unknown.
 - **Holds and stops.** Every hold that applies, and the stop rules in section 5.
 
 If you cannot name a check that fails today and passes when the work is done, the
@@ -131,9 +133,11 @@ The work stops only on one of these, each backed by specific evidence:
   when and through which channel. Save a checkpoint, and do not poll while
   waiting.
 - **An exhausted authorized budget.** The budget recorded for the story is
-  actually spent, or its recorded budget stop threshold is reached, read from
-  its record (ADR-019). A decision 55 stall threshold is never a budget stop
-  threshold. A feared or estimated overrun is not exhaustion.
+  actually spent, or a budget checkpoint or stop threshold recorded on the story
+  is reached, read from its record (ADR-019). A decision 55 stall threshold is
+  never a budget checkpoint or stop threshold. A limit the platform enforces,
+  such as a budget campaign latch, is a stop you never bypass. A feared or
+  estimated overrun is not exhaustion.
 - **A genuine unresolvable blocker.** An input only someone else can supply, with
   no authorized repair left. Record the missing artifact and why no repair
   remains.
