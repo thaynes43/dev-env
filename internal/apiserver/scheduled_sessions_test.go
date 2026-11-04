@@ -63,16 +63,25 @@ func (f *fixture) sessionCount() int {
 // annotations in the one Create, as the fixed client at depth 0, and a repeat
 // adopts the same session rather than making a second.
 func TestCreateScheduledSession(t *testing.T) {
-	f := newFixture(t)
+	// The API server assigns a UID on create; the fake client does not.
+	f := newFixtureWith(t, interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if obj.GetUID() == "" {
+			obj.SetUID("5e55105e-0000-4000-8000-000000000001")
+		}
+		return cl.Create(ctx, obj, opts...)
+	}})
 	ctx := context.Background()
 	if name, err := scheduledwork.SessionName(string(swUID), swAt); err != nil || name != swName {
 		t.Fatalf("derived name %q, %v", name, err)
 	}
-	name, adopted, err := f.srv.CreateScheduledSession(ctx, swRequest(), swDispatch())
+	name, uid, adopted, err := f.srv.CreateScheduledSession(ctx, swRequest(), swDispatch())
 	if err != nil || adopted || name != swName {
 		t.Fatalf("create: %q adopted %v err %v", name, adopted, err)
 	}
 	s := f.session(name)
+	if uid == "" || uid != s.UID {
+		t.Errorf("the entry returned UID %q, the session's is %q", uid, s.UID)
+	}
 	if !controllerutil.ContainsFinalizer(s, v1alpha1.ScheduledWorkFinalizer) || s.Labels[v1alpha1.LabelScheduledWork] != string(swUID) ||
 		s.Annotations[v1alpha1.AnnotationScheduledWorkName] != "audit" ||
 		s.Annotations[v1alpha1.AnnotationScheduledWorkOccurrence] != "1906725600" ||
@@ -82,7 +91,7 @@ func TestCreateScheduledSession(t *testing.T) {
 	if s.Spec.Parent != ScheduledWorkParent || s.Labels[v1alpha1.LabelDepth] != "0" || s.Spec.Profile != "dev" || s.Labels[v1alpha1.LabelIdempotencyKey] != "" {
 		t.Errorf("spec %+v labels %v", s.Spec, s.Labels)
 	}
-	again, adopted, err := f.srv.CreateScheduledSession(ctx, swRequest(), swDispatch())
+	again, _, adopted, err := f.srv.CreateScheduledSession(ctx, swRequest(), swDispatch())
 	if err != nil || !adopted || again != name || f.sessionCount() != 1 {
 		t.Errorf("repeat: %q adopted %v err %v, %d sessions", again, adopted, err, f.sessionCount())
 	}
@@ -117,7 +126,7 @@ func TestCreateScheduledSessionCollision(t *testing.T) {
 	} {
 		t.Run("read first: "+c.what, func(t *testing.T) {
 			f := newFixture(t, foreign(name, c.mutate))
-			_, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
+			_, _, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
 			if !errors.Is(err, scheduledwork.ErrCollision) {
 				t.Fatalf("err %v, want ErrCollision", err)
 			}
@@ -141,7 +150,7 @@ func TestCreateScheduledSessionCollision(t *testing.T) {
 				}
 				return cl.Create(ctx, obj, opts...)
 			}})
-			got, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
+			got, _, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
 			if c.adopted {
 				if err != nil || !adopted || got != name {
 					t.Fatalf("%q adopted %v err %v, want the other leader's session adopted", got, adopted, err)
@@ -187,7 +196,7 @@ func TestCreateScheduledSessionRunsTheCreateChecks(t *testing.T) {
 			if c.d != nil {
 				c.d(&d)
 			}
-			_, _, err := f.srv.CreateScheduledSession(context.Background(), req, d)
+			_, _, _, err := f.srv.CreateScheduledSession(context.Background(), req, d)
 			wantRefused(t, err, c.says)
 			if n := f.sessionCount(); n != 0 {
 				t.Errorf("%d sessions created", n)
@@ -213,7 +222,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 	t.Run("a child", func(t *testing.T) {
 		f := newFixture(t)
 		f.sessionPod("owner", "ops", 1)
-		name, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
+		name, _, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -225,13 +234,13 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 	t.Run("another profile than the owner's", func(t *testing.T) {
 		f := newFixture(t)
 		f.sessionPod("owner", "ops", 0)
-		_, _, err := f.srv.CreateScheduledSession(ctx, swRequest(), owned(f, "owner"))
+		_, _, _, err := f.srv.CreateScheduledSession(ctx, swRequest(), owned(f, "owner"))
 		wantRefused(t, err, "parent's profile")
 	})
 	t.Run("past the depth limit", func(t *testing.T) {
 		f := newFixture(t)
 		f.sessionPod("owner", "dev", 2)
-		_, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
+		_, _, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
 		wantRefused(t, err, "two levels is the limit")
 	})
 	t.Run("at the child cap, and adoption first", func(t *testing.T) {
@@ -244,7 +253,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		_, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
+		_, _, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
 		wantRefused(t, err, "unfinished claude children")
 		// The occurrence's own session, made before the cap filled, is
 		// adopted, not refused.
@@ -255,7 +264,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 		if err := f.c.Create(ctx, mine); err != nil {
 			t.Fatal(err)
 		}
-		if name, adopted, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner")); err != nil || !adopted || name != mine.Name {
+		if name, _, adopted, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner")); err != nil || !adopted || name != mine.Name {
 			t.Errorf("%q adopted %v err %v", name, adopted, err)
 		}
 	})
@@ -277,7 +286,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 			if err := f.c.Update(ctx, s); err != nil {
 				t.Fatal(err)
 			}
-			_, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
+			_, _, _, err := f.srv.CreateScheduledSession(ctx, childReq(), owned(f, "owner"))
 			wantRefused(t, err, c.says)
 		})
 	}
@@ -288,7 +297,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 		if err := f.c.Delete(ctx, f.session("owner")); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := f.srv.CreateScheduledSession(ctx, childReq(), d)
+		_, _, _, err := f.srv.CreateScheduledSession(ctx, childReq(), d)
 		wantRefused(t, err, "not live")
 	})
 	t.Run("the owner has no pod", func(t *testing.T) {
@@ -296,7 +305,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 		f.sessionPod("owner", "dev", 0)
 		d := owned(f, "owner")
 		d.Owner.Name = "gone"
-		_, _, err := f.srv.CreateScheduledSession(ctx, childReq(), d)
+		_, _, _, err := f.srv.CreateScheduledSession(ctx, childReq(), d)
 		wantRefused(t, err, "has no pod")
 	})
 	t.Run("the owner was recreated under its name", func(t *testing.T) {
@@ -304,7 +313,7 @@ func TestCreateScheduledSessionAsTheOwnersChild(t *testing.T) {
 		f.sessionPod("owner", "dev", 0)
 		d := owned(f, "owner")
 		d.Owner.UID = "a-different-uid"
-		_, _, err := f.srv.CreateScheduledSession(ctx, childReq(), d)
+		_, _, _, err := f.srv.CreateScheduledSession(ctx, childReq(), d)
 		wantRefused(t, err, "does not speak for the owner session")
 	})
 }
@@ -320,7 +329,7 @@ func TestCreateScheduledSessionTransientErrors(t *testing.T) {
 			}
 			return cl.Get(ctx, key, obj, opts...)
 		}})
-		_, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
+		_, _, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
 		var refused *scheduledwork.RefusedError
 		if err == nil || errors.As(err, &refused) || errors.Is(err, scheduledwork.ErrCollision) {
 			t.Fatalf("err %v, want a plain failed read", err)
@@ -333,7 +342,7 @@ func TestCreateScheduledSessionTransientErrors(t *testing.T) {
 			}
 			return cl.Create(ctx, obj, opts...)
 		}})
-		_, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
+		_, _, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
 		var refused *scheduledwork.RefusedError
 		if err == nil || errors.As(err, &refused) {
 			t.Fatalf("err %v, want a plain failed write", err)
@@ -346,7 +355,7 @@ func TestCreateScheduledSessionTransientErrors(t *testing.T) {
 			}
 			return cl.Create(ctx, obj, opts...)
 		}})
-		_, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
+		_, _, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), swDispatch())
 		wantRefused(t, err, "")
 	})
 }
@@ -359,17 +368,17 @@ func TestCreateScheduledSessionPastTheStartDeadline(t *testing.T) {
 	f := newFixture(t)
 	d := swDispatch()
 	d.At, d.StartDeadline = f.now.Add(-20*time.Minute), f.now.Add(-time.Second)
-	_, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
+	_, _, _, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
 	if !errors.Is(err, scheduledwork.ErrPastStartDeadline) || f.sessionCount() != 0 {
 		t.Fatalf("err %v, %d sessions; want ErrPastStartDeadline and none", err, f.sessionCount())
 	}
 	d.StartDeadline = f.now.Add(time.Minute)
-	name, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
+	name, _, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d)
 	if err != nil || adopted {
 		t.Fatalf("inside the deadline: %q %v %v", name, adopted, err)
 	}
 	d.StartDeadline = f.now.Add(-time.Second)
-	if again, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d); err != nil || !adopted || again != name {
+	if again, _, adopted, err := f.srv.CreateScheduledSession(context.Background(), swRequest(), d); err != nil || !adopted || again != name {
 		t.Errorf("an existing session past the deadline: %q adopted %v err %v", again, adopted, err)
 	}
 }

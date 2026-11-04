@@ -85,7 +85,7 @@ func TestCreatedFor(t *testing.T) {
 func TestLaunchRefusal(t *testing.T) {
 	at := time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC)
 	const name = "sw-0123456789ab-203006031400"
-	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name,
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, UID: "session-uid-1",
 		Labels:      map[string]string{v1alpha1.LabelScheduledWork: "uid-1"},
 		Annotations: map[string]string{v1alpha1.AnnotationScheduledWorkOccurrence: OccurrenceAnnotation(at)}}}
 	item := func(uid, state, session string) *v1alpha1.ScheduledWork {
@@ -110,10 +110,21 @@ func TestLaunchRefusal(t *testing.T) {
 		{"no occurrence", item("uid-1", "", ""), true},
 		{"another item", item("uid-2", v1alpha1.OccurrenceClaimed, ""), true},
 		{"the item is gone", nil, true},
+		{"dispatched to this session object", withUID(item("uid-1", v1alpha1.OccurrenceDispatched, name), "session-uid-1"), false},
+		{"recorded for another session object of the name", withUID(item("uid-1", v1alpha1.OccurrenceFailed, name), "session-uid-0"), true},
+		{"dispatched to another session object of the name", withUID(item("uid-1", v1alpha1.OccurrenceDispatched, name), "session-uid-0"), true},
+		{"ending without a session", ending(item("uid-1", v1alpha1.OccurrenceClaimed, "")), true},
+		{"parked and ending without a session", ending(item("uid-1", v1alpha1.OccurrenceParked, "")), true},
+		{"ending, adopted by this session", ending(item("uid-1", v1alpha1.OccurrenceDispatched, name)), false},
 	} {
 		if reason, refuse := LaunchRefusal(s, c.w); refuse != c.refuse {
 			t.Errorf("%s: refuse %v (%q), want %v", c.name, refuse, reason, c.refuse)
 		}
+	}
+	failed := s.DeepCopy()
+	failed.Status.Phase = v1alpha1.PhaseFailed
+	if _, refuse := LaunchRefusal(failed, withUID(item("uid-1", v1alpha1.OccurrenceFailed, name), "session-uid-1")); !refuse {
+		t.Error("a session refused before may start once its occurrence names it")
 	}
 	if _, refuse := LaunchRefusal(&v1alpha1.AgentSession{}, item("uid-1", v1alpha1.OccurrenceClaimed, "")); !refuse {
 		t.Error("a session without its occurrence annotation may start")
@@ -127,4 +138,14 @@ func TestLaunchRefusal(t *testing.T) {
 	if _, err := ReleaseHeldUntil(s); err == nil {
 		t.Error("no deadline gave a release time")
 	}
+}
+
+func withUID(w *v1alpha1.ScheduledWork, uid string) *v1alpha1.ScheduledWork {
+	w.Status.Occurrences[0].SessionUID = uid
+	return w
+}
+
+func ending(w *v1alpha1.ScheduledWork) *v1alpha1.ScheduledWork {
+	w.Status.Occurrences[0].Ending = true
+	return w
 }

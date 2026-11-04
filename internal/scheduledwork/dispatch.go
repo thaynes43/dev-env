@@ -140,10 +140,14 @@ var ErrPastStartDeadline = errors.New("the start deadline has passed, so the ses
 // uncached by the session's name annotation, or nil when the item or its kind
 // is gone. It refuses, with a reason, a session whose occurrence would never
 // record it: the item is gone or was recreated under the name, it records no
-// occurrence at the session's instant, the occurrence names another session,
-// or the occurrence is already final without naming this one (a create that
-// landed after another leader's final record). A refused session never gets a
-// pod, so its agent never launches unrecorded.
+// occurrence at the session's instant, the occurrence names another session or
+// records another session object of this name (sessionUID: a second create,
+// which can land only after the first session was recorded and deleted), the
+// occurrence is already final without naming this one, or it carries the
+// ending mark without naming this one (a create that landed after another
+// leader decided to end it). A refused session never gets a pod, so its agent
+// never launches unrecorded, and a session already Failed before its first pod
+// stays refused: once its end is recorded its occurrence names it.
 func LaunchRefusal(s *v1alpha1.AgentSession, w *v1alpha1.ScheduledWork) (string, bool) {
 	at, err := OccurrenceAt(s)
 	switch {
@@ -160,8 +164,17 @@ func LaunchRefusal(s *v1alpha1.AgentSession, w *v1alpha1.ScheduledWork) (string,
 		return "its ScheduledWork records no occurrence at " + at.Format(time.RFC3339), true
 	case o.Session != "" && o.Session != s.Name:
 		return "its occurrence names session " + o.Session, true
+	case o.SessionUID != "" && o.SessionUID != string(s.UID):
+		return "its occurrence records another session object of this name, UID " + o.SessionUID, true
 	case v1alpha1.OccurrenceTerminal(o.State) && o.Session != s.Name:
 		return "its occurrence is already " + o.State + " without it", true
+	case o.Ending && o.Session != s.Name:
+		return "its occurrence is ending without it", true
+	case s.Status.Phase == v1alpha1.PhaseFailed:
+		// Refused before (or invalid): the refusal stands, even once the
+		// releaser has recorded the refused session's end into its
+		// occurrence, which then names it.
+		return "it already failed before its first pod", true
 	}
 	return "", false
 }

@@ -356,6 +356,9 @@ type ScheduledWorkExecution struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.attempt) ? self.attempt : 0) >= (has(oldSelf.attempt) ? oldSelf.attempt : 0)",message="an occurrence's attempt never decreases"
 // +kubebuilder:validation:XValidation:rule="!has(self.retriedAt) || (has(self.attempt) && self.attempt > 0)",message="retriedAt is set only on a retried attempt, attempt 1 or more"
 // +kubebuilder:validation:XValidation:rule="!has(self.missed) || self.state == 'Skipped'",message="missed is set only on a Skipped occurrence"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sessionUID) || (has(self.sessionUID) && self.sessionUID == oldSelf.sessionUID)",message="an occurrence's sessionUID never changes once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.ending) || !oldSelf.ending || (has(self.ending) && self.ending)",message="an occurrence's ending mark is never removed"
+// +kubebuilder:validation:XValidation:rule="!has(self.ending) || !self.ending || (has(oldSelf.ending) && oldSelf.ending) || !(oldSelf.state in ['Succeeded', 'Failed', 'Ended', 'Skipped', 'Ambiguous', 'Cancelled'])",message="an occurrence is marked ending only while it is not final"
 type ScheduledWorkOccurrence struct {
 	// At is the occurrence's instant, its due time resolved in the zone.
 	At metav1.Time `json:"at"`
@@ -407,6 +410,25 @@ type ScheduledWorkOccurrence struct {
 	// +kubebuilder:validation:Pattern=`^sw-[0-9a-f]{12}-[0-9]{12}$`
 	// +optional
 	Session string `json:"session,omitempty"`
+
+	// SessionUID is the UID of the session object the occurrence records:
+	// set once, by the executor's Dispatched record or the releaser's
+	// terminal record. A session of the same name with another UID (a second
+	// create after the first was deleted, which comes only after its record)
+	// is refused at its first pod by the launch gate.
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	SessionUID string `json:"sessionUID,omitempty"`
+
+	// Ending marks an occurrence the executor is about to end without a
+	// session: written, by itself and while the occurrence is not final,
+	// before the executor's last read of the session, and followed by the
+	// final record. The launch gate refuses a session that such an
+	// occurrence does not name, so a create that lands after the mark never
+	// starts, and one that lands before it is found by that last read and
+	// adopted. It is never removed.
+	// +optional
+	Ending bool `json:"ending,omitempty"`
 
 	// SpecHash is the hash of the spec the occurrence was claimed with, in the
 	// form of status.approval.specHash. An edit applies from the next

@@ -230,38 +230,67 @@ stateDiagram-v2
   everything `createSessionMode` runs (canary and pilot refusal, named-coordinator
   admission, depth and child caps), not only `newSession`, which is all
   `CreateStandby` calls.
-- **The guarantee is at most one agent launch per occurrence** (S3b1 review,
+- **The guarantee is at most one agent launch per occurrence** (S3b1 reviews,
   2026-11-04). Two overlapping leaders can both reach the create: a stalled or
-  deposed leader's create can be in flight for as long as it stalls. The derived
-  name alone stops a second create only while a session holds it. So:
-  1. The releaser never lifts the finalizer before the session's start deadline
-     plus a release margin (`scheduledwork.ReleaseMargin`, 2 minutes), whatever
-     the reason for the release. It writes the occurrence's record at once; only
-     the release waits. The blocked gauge leaves this expected wait out.
-  2. The fixed-name entry checks the API's clock right before the Create. Past
-     the start deadline it creates nothing (`ErrPastStartDeadline`), and the
-     occurrence is `Skipped` ("not created before grace ended").
-  3. agentd refuses a first launch past the deadline, by the node's clock (S3c).
+  deposed leader's create can be in flight for as long as it stalls. So a
+  second session *object* of the derived name can exist, but it never starts an
+  agent:
+  1. **The session's UID is in the record.** The executor's Dispatched write
+     and the releaser's terminal record set the occurrence's `sessionUID` (set
+     once, a schema rule). The first session can be deleted only after its
+     record, and a second create of the name can succeed only after that
+     deletion. So when the second object reaches the launch gate, its UID
+     differs from the recorded one, and the gate refuses it. This holds
+     without any clock: it covers creators with different grace settings (a
+     flag rollout) and any clock skew.
+  2. **The finalizer keeps the name until the start deadline plus a release
+     margin** (`scheduledwork.ReleaseMargin`, 2 minutes), whatever the reason
+     for the release. It writes the record at once; only the release waits.
+     This is defence in depth: a late create of the name inside the window
+     finds it taken and adopts that session.
+  3. **The fixed-name entry checks the API's clock right before the Create.**
+     Past the start deadline it creates nothing (`ErrPastStartDeadline`), and
+     the occurrence is `Skipped` ("not created before grace ended").
+  4. **agentd refuses a first launch past the deadline**, by the node's clock
+     (S3c).
 
-  A late create therefore either finds the name taken and adopts that session,
-  or comes after the deadline plus the margin, when agentd refuses its launch.
-  This holds while the operator-to-node clock skew is under the margin. It is
-  not "exactly one create": a second session object can exist and fail to
-  start, and it is recorded like any session that ended.
+  It is not "exactly one create". A second, refused session object ends like
+  any session, and the releaser counts it in
+  `dev_env_scheduled_work_late_sessions_total`.
+- **A final record without a session is written in two steps.** When the
+  executor ends a Claimed or Parked occurrence without a session (Skipped or
+  Cancelled):
+  1. It writes the occurrence's `ending` mark by itself, carrying the final
+     reason. The mark is set once, only while the occurrence is not final, and
+     commits it to end.
+  2. It reads the session of the derived name again, uncached, and adopts one
+     it finds.
+  3. Only when that read finds none does it write the final record.
+
+  The launch gate refuses a session that an occurrence with the mark does not
+  name. A gate read after the mark refuses. A gate read before it means the
+  create came before the leader's read after the mark, so the leader adopts
+  the session. If the releaser records a refused session's end into the open
+  occurrence first, the final state is that record (`Failed`).
 - **Launch gate.** Before the first pod of a session that carries the
   scheduled-work label (its volume does not exist yet), the reconciler reads the
   ScheduledWork uncached. It refuses the session as invalid (`SessionInvalid`:
   phase Failed, no pod, no volume) when its occurrence would never record it:
   - the item is gone or was recreated;
   - it records no occurrence at that instant;
-  - the occurrence names another session;
-  - the occurrence is already final without naming this one.
+  - the occurrence names another session, or records another session object of
+    this name (`sessionUID`);
+  - it is already final without naming this one;
+  - it carries the `ending` mark without naming this one.
 
-  The last case is a stalled leader's create that landed after the live leader's
-  final record. A failed read leaves the session waiting. No session without the
-  label is read, and pods are unchanged. When such a session is released, the
-  releaser logs it and counts it in `dev_env_scheduled_work_late_sessions_total`
-  (`AlreadyTerminal` with an empty `session`).
+  A refusal stands: a session already Failed before its first pod is never
+  given one, even after the releaser records its end into the occurrence. A
+  failed read is counted in `dev_env_scheduled_work_launch_gate_read_failures_total`
+  and the session waits. Once its start deadline plus the release margin has
+  passed, the session fails as invalid, since agentd would refuse its launch.
+  No session without the label is read, and pods are unchanged. When a refused
+  session is released, the releaser logs it and counts it in
+  `dev_env_scheduled_work_late_sessions_total`.
 - **A created session cannot vanish unrecorded.** The session is created with the
   finalizer `dev-env.haynesops.com/scheduled-work-retained` in the same atomic
   Create, as `ProjectCanaryFinalizer` does (`apiserver/project_canaries.go`). It is
@@ -371,7 +400,12 @@ stateDiagram-v2
   the finalizer, with or without the label, after it ended or while being deleted.
   The end is judged with the cached pod where the session-end rule needs one, so an
   agent end the pod-age proof shows is counted) and
-  `dev_env_scheduled_work_release_holds_total{reason}` (diagnosis only).
+  `dev_env_scheduled_work_release_holds_total{reason}` (diagnosis only). The
+  gauge leaves out a session still inside its start deadline plus the release
+  margin, the expected hold. So a session that is really blocked there (a
+  status write that keeps failing, for example) shows on the gauge only once
+  that time has passed. The holds counter still counts each held attempt
+  meanwhile.
   Pages from the releaser are S4; S3a creates no Reminders. The releaser starts **no** watch or
   informer on ScheduledWork: S3a ships before S6 installs the CRD, and a watch on an
   absent kind would stop the manager from starting. The guard test that pins every finalizer
@@ -483,14 +517,17 @@ stateDiagram-v2
   all the missed occurrences of one item collapse into one `Skipped` record whose
   `missed` field holds the count (so `counts.skipped` grows by `missed`), with a
   count and one page.
-- **Caps across leaders (S3b1 review).** The cap is counted right before each
+- **Caps across leaders (S3b1 reviews).** The cap is counted right before each
   claim's compare-and-set, from a fresh uncached listing of every item and every
-  labelled session, not from the pass's earlier listing. An occurrence with a
-  session counts in its session's own mode; one without a session yet counts in
-  the item's current mode. Adopting a late session into a Parked occurrence also
-  takes a slot, so it waits for a free one. While it waits, the Parked
-  occurrence does not expire, because its session's outcome is still recorded
-  into it. The remaining bound: leaders that check at the same moment can each
+  labelled session, not from the pass's earlier listing.
+  - An occurrence with a session counts in its session's own mode; one without
+    a session yet counts in the item's current mode.
+  - A labelled session that has not ended by the session-end rule, and that no
+    slot-holding occurrence covers, counts too: one waiting to be adopted into
+    a Parked occurrence, or one that slipped past its record.
+  - Adopting a late session into a Parked occurrence waits while the cap is
+    exceeded with it. Meanwhile the Parked occurrence does not expire, because
+    its session's outcome is still recorded into it. The remaining bound: leaders that check at the same moment can each
   take the last slot, so the cap can be exceeded by about one per overlapping
   leader.
 - **Concurrency.** One unfinished occurrence per ScheduledWork (`Parked` does not count as unfinished, so a parked occurrence never blocks the next one); a later occurrence
@@ -534,7 +571,8 @@ spec has changed since that claim, a retry of the parked occurrence is refused, 
 the occurrence is `Skipped` ("spec changed after claim"). An approval of the edited
 spec applies from the next occurrence. S5 must not move a retried attempt's start deadline past the deadline of a
 session that still holds the occurrence's derived name: the finalizer's hold is measured from that session's own
-deadline, which bounds a late create. A retry waits until no session of the derived name is held. A human approve or retry sets `retriedAt` and opens a fresh window for
+deadline, which bounds a late create. A retry waits until no session of the derived name is held, and it never
+reopens an occurrence that carries the `ending` mark. A human approve or retry sets `retriedAt` and opens a fresh window for
 that occurrence only. Its grace, the claim-without-session rule and the start
 deadline passed to agentd all count from `retriedAt`, not from the due time. A
 person can therefore run parked work late on purpose, which the "missed
@@ -647,7 +685,7 @@ library only.
 | S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, approve of a Parked occurrence after grace running from retriedAt, an unapproved Parked occurrence expiring to Skipped, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
-| S6 | haynes-ops: CRD copy, Roles, a ClusterRole with `get` on the one `customresourcedefinitions` object `scheduledworks.dev-env.haynesops.com` (resourceNames) for the releaser, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag. **Do not enable `--enable-scheduled-work` before S3b2**: S3b1 wires `DenyAll` and `NoTemplates`, so every real occurrence would be recorded `Parked` and then `Skipped` | Tom approves activation |
+| S6 | haynes-ops: CRD copy, Roles, a ClusterRole with `get` on the one `customresourcedefinitions` object `scheduledworks.dev-env.haynesops.com` (resourceNames) for the releaser, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag. **Do not enable `--enable-scheduled-work` before S3b2**: S3b1 wires `DenyAll` and `NoTemplates`, so every real occurrence would be recorded `Parked` and then `Skipped`. S6's admission policy also pins a scheduled session's scheduled-work label and annotations (name, occurrence, start deadline) against any edit after the Create, since the releaser and the launch gate rely on them | Tom approves activation |
 | S7 | live: one headless and one interactive test occurrence | Tom approves the first real run |
 | C1 | real calendar adapter | Tom provisions the DWD identity (OP206) |
 

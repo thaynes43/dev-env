@@ -235,6 +235,9 @@ type Reconciler struct {
 	// occurrence was already final without naming it
 	// (MetricScheduledWorkLateSessions); nil counts nothing.
 	ScheduledWorkLateSessions prometheus.Counter
+	// ScheduledWorkGateReadFailures counts the launch gate's failed reads
+	// (MetricScheduledWorkGateReadFailures); nil counts nothing.
+	ScheduledWorkGateReadFailures prometheus.Counter
 	// SessionNamespace is where the sessions live. The scheduled-work sweep
 	// lists the labelled sessions there from the API server; empty, or with no
 	// APIReader, the sweep does not run and the releaser still acts on every

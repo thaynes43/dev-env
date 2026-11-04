@@ -22,7 +22,8 @@ const (
 	// session, and prunes only terminal ones, so the session is not one the
 	// item tracks (or its record was pruned long after it ended).
 	NoOccurrence RecordResult = "no occurrence"
-	// OtherSession: the occurrence names another session. Nothing changed.
+	// OtherSession: the occurrence names another session, or another session
+	// object of this name (its sessionUID). Nothing changed.
 	OtherSession RecordResult = "other session"
 	// ReportedAdded: the occurrence was already terminal for this session and
 	// had no reported outcome; the session's outcome, which landed after the
@@ -50,19 +51,23 @@ func Record(w *v1alpha1.ScheduledWork, at time.Time, session string, t Terminal)
 		if !o.At.Time.Equal(at) {
 			continue
 		}
+		otherObject := o.SessionUID != "" && t.SessionUID != "" && o.SessionUID != t.SessionUID
 		if v1alpha1.OccurrenceTerminal(o.State) {
-			if o.Session == session && o.Reported == nil && t.Reported != nil {
+			if o.Session == session && !otherObject && o.Reported == nil && t.Reported != nil {
 				o.Reported = t.Reported.DeepCopy()
 				return ReportedAdded
 			}
 			return AlreadyTerminal
 		}
-		if o.Session != "" && o.Session != session {
+		if (o.Session != "" && o.Session != session) || otherObject {
 			return OtherSession
 		}
 		o.State, o.Reason = t.State, clip(t.Reason, maxReason)
 		if o.Session == "" && sessionNamePattern.MatchString(session) {
 			o.Session = session
+		}
+		if o.SessionUID == "" && o.Session == session {
+			o.SessionUID = t.SessionUID
 		}
 		if t.Execution != nil {
 			o.Execution = t.Execution.DeepCopy()

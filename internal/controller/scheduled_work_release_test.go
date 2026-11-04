@@ -1099,16 +1099,16 @@ func poke(t *testing.T, name string) {
 
 // gateFixture is newScheduledWork with the occurrence's state and session
 // chosen, for the launch gate.
-func gateFixture(t *testing.T, state, sessionName string) swFixture {
+func gateFixture(t *testing.T, state, sessionName string, edit ...func(*v1alpha1.ScheduledWorkOccurrence)) swFixture {
 	t.Helper()
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrencePending)
-	return f.withOccurrence(t, state, sessionName)
+	return f.withOccurrence(t, state, sessionName, edit...)
 }
 
 // withOccurrence replaces the fixture with a fresh item whose one occurrence
 // has the given state and session: an occurrence's session is set once, so it
 // is chosen in the first status write.
-func (f swFixture) withOccurrence(t *testing.T, state, sessionName string) swFixture {
+func (f swFixture) withOccurrence(t *testing.T, state, sessionName string, edit ...func(*v1alpha1.ScheduledWorkOccurrence)) swFixture {
 	t.Helper()
 	seq++
 	w := &v1alpha1.ScheduledWork{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("work-%d", seq), Namespace: systemNS}, Spec: f.item(t).Spec}
@@ -1122,6 +1122,9 @@ func (f swFixture) withOccurrence(t *testing.T, state, sessionName string) swFix
 	}
 	g.setStatus(t, func(st *v1alpha1.ScheduledWorkStatus) {
 		st.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(g.at), State: state, Session: sessionName}}
+		for _, e := range edit {
+			e(&st.Occurrences[0])
+		}
 	})
 	return g
 }
@@ -1176,6 +1179,27 @@ func TestScheduledWorkLaunchGate(t *testing.T) {
 		f := gateFixture(t, v1alpha1.OccurrenceDispatched, "sw-ffffffffffff-209901010000")
 		refused(t, f, "names session sw-ffffffffffff-209901010000")
 	})
+	t.Run("another session object of the name", func(t *testing.T) {
+		f := gateFixture(t, v1alpha1.OccurrenceFailed, "self", func(o *v1alpha1.ScheduledWorkOccurrence) { o.SessionUID = "0f0e0d0c-0b0a-0908-0706-050403020100" })
+		refused(t, f, "records another session object of this name")
+	})
+	t.Run("ending without it", func(t *testing.T) {
+		f := gateFixture(t, v1alpha1.OccurrenceClaimed, "", func(o *v1alpha1.ScheduledWorkOccurrence) { o.Ending = true })
+		// The releaser may record its end before the first look, and the
+		// refusal's reason then reads "already failed before its first pod".
+		s := refused(t, f, "cannot start")
+		// The releaser records the refused session's end into the open
+		// occurrence, which then names it; the refusal still stands.
+		if o := f.waitOccurrence(t, v1alpha1.OccurrenceFailed); o.Session != s.Name {
+			t.Fatalf("occurrence %+v", o)
+		}
+		poke(t, s.Name)
+		for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+			if _, err := get(t, sessionNS, s.Name, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("a refused session got a pod once its occurrence named it: %v", err)
+			}
+		}
+	})
 	t.Run("open, with no session yet", func(t *testing.T) {
 		f := gateFixture(t, v1alpha1.OccurrenceClaimed, "")
 		s := releaseFixtureSession(t, f, nil)
@@ -1186,4 +1210,103 @@ func TestScheduledWorkLaunchGate(t *testing.T) {
 		s := releaseFixtureSession(t, f, nil)
 		waitPod(t, s.Name)
 	})
+}
+
+// A launch gate whose read of the ScheduledWork fails counts the failure and
+// keeps the session waiting with no pod; once the session's start deadline
+// plus the release margin has passed, agentd would refuse it anyway, so it
+// fails as invalid.
+func TestScheduledWorkLaunchGateReadFailures(t *testing.T) {
+	failures := NewScheduledWorkGateReadFailuresCounter()
+	startOperator(t, func(r *Reconciler) {
+		r.ScheduledWorkGateReadFailures = failures
+		r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: errors.New("injected: the ScheduledWork read failed")}
+	})
+	counted := func() float64 {
+		var m dto.Metric
+		if err := failures.Write(&m); err != nil {
+			t.Fatal(err)
+		}
+		return m.GetCounter().GetValue()
+	}
+	t.Run("before the deadline plus the margin", func(t *testing.T) {
+		f := gateFixture(t, v1alpha1.OccurrenceClaimed, "")
+		s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
+			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+		})
+		eventually(t, "a counted gate read failure", func() error {
+			if counted() == 0 {
+				return errors.New("none counted")
+			}
+			return nil
+		})
+		for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+			if _, err := get(t, sessionNS, s.Name, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("a session whose gate read failed got a pod: %v", err)
+			}
+			if live := session(t, s.Name); live.Status.Phase == v1alpha1.PhaseFailed {
+				t.Fatal("failed before its start deadline")
+			}
+		}
+	})
+	t.Run("past the deadline plus the margin", func(t *testing.T) {
+		before := counted()
+		f := gateFixture(t, v1alpha1.OccurrenceClaimed, "")
+		s := releaseFixtureSession(t, f, nil)
+		waitStatus(t, s.Name, "failed as invalid", func(st *v1alpha1.AgentSessionStatus) error {
+			if c := condition(st, ConditionPodReady); st.Phase != v1alpha1.PhaseFailed || c == nil || c.Reason != "SessionInvalid" || !strings.Contains(c.Message, "could not be read") {
+				return fmt.Errorf("phase %q condition %+v", st.Phase, c)
+			}
+			return nil
+		})
+		if counted() <= before {
+			t.Error("the failed read was not counted")
+		}
+		if _, err := get(t, sessionNS, s.Name, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+			t.Errorf("got a pod: %v", err)
+		}
+	})
+}
+
+// swReadSpy records the names of the ScheduledWorks read through it.
+type swReadSpy struct {
+	client.Reader
+	mu    sync.Mutex
+	names []string
+}
+
+func (r *swReadSpy) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*v1alpha1.ScheduledWork); ok {
+		r.mu.Lock()
+		r.names = append(r.names, key.Name)
+		r.mu.Unlock()
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (r *swReadSpy) read(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Contains(r.names, name)
+}
+
+// A session without the scheduled-work label is reconciled as before and
+// never reads a ScheduledWork, even when it carries the item-name annotation:
+// the launch gate and the releaser act only on labelled sessions.
+func TestAnUnlabelledSessionReadsNoScheduledWork(t *testing.T) {
+	spy := &swReadSpy{}
+	startOperator(t, func(r *Reconciler) {
+		spy.Reader = r.APIReader
+		r.APIReader = spy
+	})
+	s := newSession(t, func(s *v1alpha1.AgentSession) {
+		s.Annotations = map[string]string{v1alpha1.AnnotationScheduledWorkName: "unlabelled-probe"}
+	})
+	waitPod(t, s.Name)
+	waitClaim(t, s.Name)
+	poke(t, s.Name)
+	time.Sleep(time.Second)
+	if spy.read("unlabelled-probe") {
+		t.Error("an unlabelled session read a ScheduledWork")
+	}
 }

@@ -109,6 +109,8 @@ type Terminal struct {
 	// Reported is a headless agent's retained outcome, copied as its own claim
 	// and not validated; nil when there is none.
 	Reported *v1alpha1.TaskOutcomeRecordStatus
+	// SessionUID is the UID of the session the record comes from.
+	SessionUID string
 }
 
 // Outcome maps a session that ended, or that is being deleted, to its
@@ -139,7 +141,7 @@ type Terminal struct {
 // agent did not launch.
 func Outcome(s *v1alpha1.AgentSession, now time.Time) Terminal {
 	headless := s.Spec.Mode == v1alpha1.ModeTask
-	var t Terminal
+	t := Terminal{SessionUID: string(s.UID)}
 	if headless {
 		t.Reported = reported(s)
 	}

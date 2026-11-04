@@ -285,3 +285,29 @@ func TestAwaitsReportStopsForAFarFutureFinish(t *testing.T) {
 		t.Fatalf("still waits at t0+%v, until %v, for a finish an hour ahead", ReportWait+time.Second, until)
 	}
 }
+
+// The record names the session object by its UID: it is set with the record,
+// and a session object of the same name with another UID (a second create
+// after the first was deleted) records nothing and copies no outcome.
+func TestRecordKeepsTheSessionObject(t *testing.T) {
+	at := time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-203006031400"
+	first := Terminal{State: v1alpha1.OccurrenceSucceeded, Reason: "done", SessionUID: "uid-first"}
+	w := &v1alpha1.ScheduledWork{}
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceClaimed}}
+	if r := Record(w, at, name, first); r != Recorded || w.Status.Occurrences[0].SessionUID != "uid-first" || w.Status.Occurrences[0].Session != name {
+		t.Fatalf("%s: %+v", r, w.Status.Occurrences[0])
+	}
+	second := Terminal{State: v1alpha1.OccurrenceFailed, Reason: "refused", SessionUID: "uid-second", Reported: &v1alpha1.TaskOutcomeRecordStatus{Summary: "not mine"}}
+	if r := Record(w, at, name, second); r != AlreadyTerminal || w.Status.Occurrences[0].Reported != nil {
+		t.Errorf("a second session object: %s, %+v", r, w.Status.Occurrences[0])
+	}
+	open := &v1alpha1.ScheduledWork{}
+	open.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceDispatched, Session: name, SessionUID: "uid-first"}}
+	if r := Record(open, at, name, second); r != OtherSession || open.Status.Occurrences[0].State != v1alpha1.OccurrenceDispatched {
+		t.Errorf("a second session object on an open occurrence: %s, %+v", r, open.Status.Occurrences[0])
+	}
+	if o := Outcome(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{UID: "uid-x"}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeRemote}}, at); o.SessionUID != "uid-x" {
+		t.Errorf("Outcome's session UID %q", o.SessionUID)
+	}
+}

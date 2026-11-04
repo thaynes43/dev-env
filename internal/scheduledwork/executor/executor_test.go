@@ -453,9 +453,11 @@ func TestALateCreateAfterAFinalRecordCannotStart(t *testing.T) {
 	f.wantOcc(key, day0, v1alpha1.OccurrenceClaimed, "")
 	f.create.hooks(nil, nil)
 	f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
-	// The live leader's last session read finds none; the other leader's
-	// create lands right before its final record reaches the API server.
+	// The live leader writes the ending mark, its last session read finds
+	// none, and the other leader's create lands right before the final
+	// record (the pass's second status write) reaches the API server.
 	hook := func() { f.otherLeaderCreates(key, day0) }
+	f.beforeWriteAt.Store(f.writes.Load() + 2)
 	f.beforeWrite.Store(&hook)
 	f.at(f.executor(), day0.Add(time.Minute))
 	if o := f.wantOcc(key, day0, v1alpha1.OccurrenceCancelled, ReasonCancelledAtRevalidation); o.Session != "" {
@@ -466,6 +468,113 @@ func TestALateCreateAfterAFinalRecordCannotStart(t *testing.T) {
 	if !refuse || !strings.Contains(reason, "already Cancelled without it") {
 		t.Errorf("the late session may start: refuse %v, %q", refuse, reason)
 	}
+}
+
+// The gate's own window: the other leader's create lands, and its first pod
+// is judged, before the live leader's ending mark reaches the API server, so
+// the gate lets it start. The live leader's session read after the mark then
+// finds it and adopts it: the occurrence records the session that runs,
+// instead of being final without it.
+func TestAGateReadBeforeTheEndingMarkIsAdopted(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.create.hooks(func() error { return errTransient }, nil)
+	f.at(f.executor(), day0)
+	f.create.hooks(nil, nil)
+	f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
+	var passed atomic.Bool
+	hook := func() {
+		f.otherLeaderCreates(key, day0)
+		s := f.session(f.derived(key, day0))
+		if _, refuse := scheduledwork.LaunchRefusal(s, f.get(key)); !refuse {
+			passed.Store(true)
+		}
+	}
+	f.beforeWriteAt.Store(0)
+	f.beforeWrite.Store(&hook)
+	f.at(f.executor(), day0.Add(time.Minute))
+	o := f.occ(key, day0)
+	if !passed.Load() {
+		t.Fatal("the probe's gate read did not pass before the mark")
+	}
+	if o.State != v1alpha1.OccurrenceDispatched || o.Session != f.derived(key, day0) || !o.Ending {
+		t.Fatalf("occurrence %s %q session %q ending %v: a session passed the gate and was not adopted", o.State, o.Reason, o.Session, o.Ending)
+	}
+	if s := f.session(o.Session); o.SessionUID != string(s.UID) {
+		t.Errorf("sessionUID %q, want %q", o.SessionUID, s.UID)
+	}
+}
+
+// A second session object of the derived name can exist only after the first
+// was recorded and deleted, whatever the creators' clocks or graces: a leader
+// whose clock lags the releaser's by more than the margin, or one with a
+// longer grace (a flag change across overlapping leaders), can create it. The
+// first session's UID is in the occurrence, so the launch gate refuses the
+// second: it never starts an agent.
+func TestASecondSessionObjectIsRefusedAtTheGate(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		grace     time.Duration
+		lagClock  bool
+		wantGrace time.Duration
+	}{
+		{"a creator's clock behind by more than the margin", 0, true, 0},
+		{"two leaders with different graces", 2 * time.Hour, false, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			key := f.item("audit", spec())
+			e1, e2 := f.executor(), f.executor()
+			e1.HeadlessGrace = c.grace
+			f.at(e1, day0.Add(-time.Minute))
+			f.clock.Set(day0)
+			var once atomic.Bool
+			f.create.hooks(func() error {
+				if once.CompareAndSwap(false, true) {
+					e2.Tick(context.Background())
+					f.clock.Set(pastHold)
+					if !f.release(f.derived(key, day0), true) {
+						t.Fatal("not lifted past the hold")
+					}
+					if c.lagClock {
+						f.clock.Set(day0.Add(time.Minute))
+					}
+				}
+				return nil
+			}, nil)
+			e1.Tick(context.Background())
+			_, created, _ := f.create.counts()
+			o := f.occ(key, day0)
+			if created != 2 {
+				t.Fatalf("created %d; the probe needs the second create", created)
+			}
+			s := f.session(f.derived(key, day0))
+			reason, refuse := scheduledwork.LaunchRefusal(s, f.get(key))
+			if !refuse || o.SessionUID == "" || o.SessionUID == string(s.UID) {
+				t.Fatalf("the second session object may start: refuse %v %q; occurrence sessionUID %q, second session %q", refuse, reason, o.SessionUID, s.UID)
+			}
+		})
+	}
+}
+
+// The cap counts a running scheduled session that no slot-holding record
+// covers: here one whose item is cancelled, so its occurrence was never
+// recorded. It fills the cap like any claimed occurrence.
+func TestCapCountsARunningSessionWithoutASlotRecord(t *testing.T) {
+	f := newFixture(t)
+	slipped := spec()
+	slipped.Cancelled = true
+	r := f.item("slipped", slipped)
+	f.otherLeaderCreates(r, day0)
+	q := f.item("next", spec())
+	ex := func() *Executor { e := f.executor(); e.MaxHeadless = 1; return e }
+	f.at(ex(), day0.Add(-time.Minute))
+	f.at(ex(), day0)
+	f.wantOcc(q, day0, v1alpha1.OccurrencePending, ReasonAtCapacity)
+	f.finish(f.derived(r, day0), v1alpha1.TaskResultSucceeded)
+	f.at(ex(), day0.Add(time.Minute))
+	f.wantOcc(q, day0, v1alpha1.OccurrenceDispatched, "")
 }
 
 // Two overlapping leaders and a cap of two: one leader's pass is held up
@@ -623,7 +732,7 @@ func (f *fixture) otherLeaderCreates(key types.NamespacedName, at time.Time) {
 		f.t.Fatal(reason)
 	}
 	d := scheduledwork.Dispatch{ItemName: w.Name, ItemUID: w.UID, At: at, StartDeadline: at.Add(grace)}
-	if _, _, err := f.create.srv.CreateScheduledSession(context.Background(), req, d); err != nil {
+	if _, _, _, err := f.create.srv.CreateScheduledSession(context.Background(), req, d); err != nil {
 		f.t.Fatal(err)
 	}
 }

@@ -58,7 +58,19 @@ const (
 	// MetricScheduledWorkLateSessions counts the releases of a session whose
 	// occurrence was already final without naming it.
 	MetricScheduledWorkLateSessions = "dev_env_scheduled_work_late_sessions_total"
+	// MetricScheduledWorkGateReadFailures counts the launch gate's failed
+	// reads of a scheduled session's ScheduledWork.
+	MetricScheduledWorkGateReadFailures = "dev_env_scheduled_work_launch_gate_read_failures_total"
 )
+
+// NewScheduledWorkGateReadFailuresCounter returns the counter of
+// MetricScheduledWorkGateReadFailures. Register it once per process.
+func NewScheduledWorkGateReadFailuresCounter() prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name: MetricScheduledWorkGateReadFailures,
+		Help: "Failed reads of a scheduled session's ScheduledWork by the launch gate before its first pod (DESIGN-054). The session waits, and fails as invalid once its start deadline plus the release margin has passed.",
+	})
+}
 
 // NewScheduledWorkLateSessionsCounter returns the counter of
 // MetricScheduledWorkLateSessions. Register it once per process.
@@ -208,7 +220,7 @@ func scheduledWorkReleaseAllowed(s *v1alpha1.AgentSession, ev scheduledWorkRelea
 		}
 	case swReleaseNotTracked:
 		if matching {
-			if o := scheduledwork.Find(ev.work, ev.at); o == nil || (o.Session != "" && o.Session != s.Name) {
+			if o := scheduledwork.Find(ev.work, ev.at); o == nil || (o.Session != "" && o.Session != s.Name) || (o.SessionUID != "" && o.SessionUID != string(s.UID)) {
 				return nil
 			}
 		}
@@ -398,11 +410,11 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 	if ev.work != nil {
 		if o := scheduledwork.Find(ev.work, at); o != nil {
 			state = o.State
-			if result == scheduledwork.AlreadyTerminal && o.Session == "" {
-				// A create that landed after another leader's final record:
-				// the occurrence never names this session. The launch gate
-				// refuses its first pod; one that started anyway ran
-				// unrecorded.
+			if (result == scheduledwork.AlreadyTerminal && o.Session == "") || (o.SessionUID != "" && o.SessionUID != string(s.UID)) {
+				// A create that landed after another leader's final record,
+				// or a second session object of the name: the occurrence
+				// never records this session. The launch gate refuses its
+				// first pod; one that started anyway ran unrecorded.
 				lg.Info("released a scheduled session whose occurrence was already final without it; its run, if any, is not recorded", "occurrence", at.Format(time.RFC3339), "state", o.State)
 				if r.ScheduledWorkLateSessions != nil {
 					r.ScheduledWorkLateSessions.Inc()
@@ -665,8 +677,10 @@ func (c *ScheduledWorkReleaseCollector) cachedPod(ctx context.Context, s *v1alph
 // agentd would refuse (sessionInvalidError: phase Failed, no pod, no volume),
 // when its occurrence would never record it (scheduledwork.LaunchRefusal). A
 // session without the label is not read and its pod is unchanged. A read that
-// fails, or a kind whose CRD still exists but is not served, is returned so
-// the reconcile retries; nothing starts in the meantime.
+// fails, or a kind whose CRD still exists but is not served, is counted and
+// returned so the reconcile retries; nothing starts in the meantime. Once the
+// session's start deadline plus the release margin has passed, such a session
+// fails as invalid: agentd would refuse its first launch anyway.
 func (r *Reconciler) scheduledLaunchGate(ctx context.Context, s *v1alpha1.AgentSession) error {
 	if _, ok := s.Labels[v1alpha1.LabelScheduledWork]; !ok {
 		return nil
@@ -680,6 +694,14 @@ func (r *Reconciler) scheduledLaunchGate(ctx context.Context, s *v1alpha1.AgentS
 	}
 	w, read, err := r.readScheduledWork(ctx, r.scheduledWorkNamespace(), name)
 	if err != nil {
+		if r.ScheduledWorkGateReadFailures != nil {
+			r.ScheduledWorkGateReadFailures.Inc()
+		}
+		// Past the start deadline plus the margin agentd would refuse the
+		// launch anyway; the session fails instead of waiting for good.
+		if until, uerr := scheduledwork.ReleaseHeldUntil(s); uerr == nil && r.clock().After(until) {
+			return sessionInvalidError{fmt.Errorf("the scheduled session cannot start: its ScheduledWork could not be read before its start deadline plus the release margin passed: %w", err)}
+		}
 		return fmt.Errorf("the launch gate of a scheduled session: %w", err)
 	}
 	if read != itemFound {

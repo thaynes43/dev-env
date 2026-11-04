@@ -148,17 +148,17 @@ type creator struct {
 	calls, created, adopted int
 }
 
-func (c *creator) CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (string, bool, error) {
+func (c *creator) CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (string, types.UID, bool, error) {
 	c.mu.Lock()
 	before, after := c.before, c.after
 	c.calls++
 	c.mu.Unlock()
 	if before != nil {
 		if err := before(); err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
 	}
-	name, adopted, err := c.srv.CreateScheduledSession(ctx, req, d)
+	name, uid, adopted, err := c.srv.CreateScheduledSession(ctx, req, d)
 	c.mu.Lock()
 	switch {
 	case err == nil && adopted:
@@ -168,9 +168,12 @@ func (c *creator) CreateScheduledSession(ctx context.Context, req apiv1.CreateSe
 	}
 	c.mu.Unlock()
 	if after != nil {
-		return after(name, adopted, err)
+		name, adopted, err = after(name, adopted, err)
+		if err != nil {
+			uid = ""
+		}
 	}
-	return name, adopted, err
+	return name, uid, adopted, err
 }
 
 func (c *creator) hooks(before func() error, after func(string, bool, error) (string, bool, error)) {
@@ -198,9 +201,11 @@ type fixture struct {
 	failStatus atomic.Int32
 	// writes counts the status writes the executors' clients sent.
 	writes atomic.Int32
-	// beforeWrite, when set, runs once before the next status write of an
-	// executor's client reaches the API server.
-	beforeWrite atomic.Pointer[func()]
+	// beforeWrite, when set, runs once before the status write of an
+	// executor's client numbered beforeWriteAt (counted in writes) reaches
+	// the API server; beforeWriteAt zero is the next write.
+	beforeWrite   atomic.Pointer[func()]
+	beforeWriteAt atomic.Int32
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -250,9 +255,11 @@ func (f *fixture) executor() *Executor {
 			return errors.New("no cached reads")
 		},
 		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
-			f.writes.Add(1)
-			if hook := f.beforeWrite.Swap(nil); hook != nil {
-				(*hook)()
+			n := f.writes.Add(1)
+			if at := f.beforeWriteAt.Load(); at == 0 || at == n {
+				if hook := f.beforeWrite.Swap(nil); hook != nil {
+					(*hook)()
+				}
 			}
 			if f.failStatus.Load() > 0 {
 				f.failStatus.Add(-1)

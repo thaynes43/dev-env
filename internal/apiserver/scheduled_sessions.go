@@ -57,22 +57,22 @@ const ScheduledWorkParent = "dev-env-system/scheduled-work"
 // project, canary or coordinator instructions, and is never charged to a task
 // budget: a budget-bound caller is refused rather than dispatched outside its
 // reservation.
-func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (name string, adopted bool, err error) {
+func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSessionRequest, d scheduledwork.Dispatch) (name string, uid types.UID, adopted bool, err error) {
 	name, err = scheduledwork.SessionName(string(d.ItemUID), d.At)
 	if err != nil {
-		return "", false, &scheduledwork.RefusedError{Reason: err.Error()}
+		return "", "", false, &scheduledwork.RefusedError{Reason: err.Error()}
 	}
 	switch {
 	case d.ItemName == "":
-		return "", false, &scheduledwork.RefusedError{Reason: "the ScheduledWork's name is empty"}
+		return "", "", false, &scheduledwork.RefusedError{Reason: "the ScheduledWork's name is empty"}
 	case !d.StartDeadline.After(d.At):
-		return "", false, &scheduledwork.RefusedError{Reason: "the start deadline is not after the occurrence"}
+		return "", "", false, &scheduledwork.RefusedError{Reason: "the start deadline is not after the occurrence"}
 	case req.IdempotencyKey != "" || req.Restore != "" || req.Project != "" || req.CanaryID != "" ||
 		req.CoordinatorInstructions || req.CoordinatorInstructionPublisher:
-		return "", false, &scheduledwork.RefusedError{Reason: "a scheduled session takes no idempotency key, restore, project, canary or coordinator instructions: its derived name is its key"}
+		return "", "", false, &scheduledwork.RefusedError{Reason: "a scheduled session takes no idempotency key, restore, project, canary or coordinator instructions: its derived name is its key"}
 	}
 	if s.Live == nil {
-		return "", false, errors.New("the API has no uncached reader")
+		return "", "", false, errors.New("the API has no uncached reader")
 	}
 
 	s.createMu.Lock()
@@ -80,26 +80,26 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 
 	if existing, err := s.scheduledSession(ctx, name); err != nil || existing != nil {
 		if err != nil {
-			return "", false, err
+			return "", "", false, err
 		}
 		return adoptScheduledSession(existing, d)
 	}
 	c, err := s.scheduledCaller(ctx, d)
 	if err != nil {
-		return "", false, scheduledRefusal(err)
+		return "", "", false, scheduledRefusal(err)
 	}
 	if err := refuseRetainedExecutor(c); err != nil {
-		return "", false, scheduledRefusal(err)
+		return "", "", false, scheduledRefusal(err)
 	}
 	sess, err := s.newSession(ctx, req, c)
 	if err != nil {
-		return "", false, scheduledRefusal(err)
+		return "", "", false, scheduledRefusal(err)
 	}
 	if sess.Labels[templates.CoordinatorIdentityLabel] != "" {
-		return "", false, &scheduledwork.RefusedError{Reason: fmt.Sprintf("profile %s runs as a named coordinator identity; a scheduled session never does", sess.Spec.Profile)}
+		return "", "", false, &scheduledwork.RefusedError{Reason: fmt.Sprintf("profile %s runs as a named coordinator identity; a scheduled session never does", sess.Spec.Profile)}
 	}
 	if s.callerHasTaskBudget(c) {
-		return "", false, &scheduledwork.RefusedError{Reason: fmt.Sprintf("%s is bound to a task budget; scheduled work is not dispatched outside its reservation", c)}
+		return "", "", false, &scheduledwork.RefusedError{Reason: fmt.Sprintf("%s is bound to a task budget; scheduled work is not dispatched outside its reservation", c)}
 	}
 	sess.Name = name
 	controllerutil.AddFinalizer(sess, v1alpha1.ScheduledWorkFinalizer)
@@ -111,36 +111,36 @@ func (s *Server) CreateScheduledSession(ctx context.Context, req apiv1.CreateSes
 	sess.Annotations[v1alpha1.AnnotationScheduledWorkOccurrence] = scheduledwork.OccurrenceAnnotation(d.At)
 	sess.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = scheduledwork.StartDeadlineAnnotation(d.StartDeadline)
 	if err := s.admitCreate(ctx, c, sess); err != nil {
-		return "", false, scheduledRefusal(err)
+		return "", "", false, scheduledRefusal(err)
 	}
 	if err := checkAgentd(sess); err != nil {
-		return "", false, scheduledRefusal(err)
+		return "", "", false, scheduledRefusal(err)
 	}
 	// Last, right before the Create: past the start deadline no session is
 	// created. The releaser frees the derived name only after the deadline
 	// plus scheduledwork.ReleaseMargin, so a late create can never reuse it
 	// in time to launch an agent.
 	if s.now().After(d.StartDeadline) {
-		return "", false, scheduledwork.ErrPastStartDeadline
+		return "", "", false, scheduledwork.ErrPastStartDeadline
 	}
 	err = s.Client.Create(ctx, sess)
 	if apierrors.IsAlreadyExists(err) {
 		existing, err := s.scheduledSession(ctx, name)
 		switch {
 		case err != nil:
-			return "", false, err
+			return "", "", false, err
 		case existing == nil:
-			return "", false, fmt.Errorf("session %s already existed at the create and is gone now", name)
+			return "", "", false, fmt.Errorf("session %s already existed at the create and is gone now", name)
 		}
 		return adoptScheduledSession(existing, d)
 	}
 	if err != nil {
-		return "", false, scheduledRefusal(fromKubeError(err, "create the scheduled session"))
+		return "", "", false, scheduledRefusal(fromKubeError(err, "create the scheduled session"))
 	}
 	s.Log.Info("scheduled session created", "session", sess.Name, "caller", c.String(), "scheduledWork", d.ItemName,
 		"occurrence", d.At.UTC().Format("2006-01-02T15:04:05Z"), "repo", sess.Spec.Repo, "agent", sess.Spec.Agent,
 		"mode", sess.Spec.Mode, "model", sess.Spec.Model, "depth", c.depth)
-	return name, false, nil
+	return name, sess.UID, false, nil
 }
 
 // scheduledSession reads the session of that name from the API server; nil when
@@ -160,11 +160,11 @@ func (s *Server) scheduledSession(ctx context.Context, name string) (*v1alpha1.A
 // adoptScheduledSession returns an existing session of the derived name when
 // it carries this occurrence's label and annotations, and a collision
 // otherwise.
-func adoptScheduledSession(existing *v1alpha1.AgentSession, d scheduledwork.Dispatch) (string, bool, error) {
+func adoptScheduledSession(existing *v1alpha1.AgentSession, d scheduledwork.Dispatch) (string, types.UID, bool, error) {
 	if !scheduledwork.CreatedFor(existing, d.ItemName, d.ItemUID, d.At) {
-		return "", false, fmt.Errorf("session %s: %w", existing.Name, scheduledwork.ErrCollision)
+		return "", "", false, fmt.Errorf("session %s: %w", existing.Name, scheduledwork.ErrCollision)
 	}
-	return existing.Name, true, nil
+	return existing.Name, existing.UID, true, nil
 }
 
 // scheduledCaller is who a scheduled session is created as: the fixed client

@@ -835,6 +835,8 @@ func run(args []string) error {
 	ctrlmetrics.Registry.MustRegister(releaseHolds)
 	lateSessions := controller.NewScheduledWorkLateSessionsCounter()
 	ctrlmetrics.Registry.MustRegister(lateSessions)
+	gateReadFailures := controller.NewScheduledWorkGateReadFailuresCounter()
+	ctrlmetrics.Registry.MustRegister(gateReadFailures)
 	// The API's log and message routes run agentd in a session's pod (D-65),
 	// and the HOME expiry's relay runs the history export there and the
 	// archive commands in the shelf (DESIGN-025 6.4).
@@ -867,6 +869,7 @@ func run(args []string) error {
 	r.HomeExpiryCounters = expiryCounters
 	r.ScheduledWorkReleaseHolds = releaseHolds
 	r.ScheduledWorkLateSessions = lateSessions
+	r.ScheduledWorkGateReadFailures = gateReadFailures
 	r.SessionNamespace = o.sessionNamespace
 	r.ScheduledWorkNamespace = o.templatesNamespace
 	r.HistoryRelay = &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots}
