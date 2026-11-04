@@ -212,7 +212,9 @@ At every check-in (see [timer-checkin](../timer-checkin/SKILL.md)):
    Continue a native subagent with `SendMessage`. For a session in another pod,
    prefer `agent-run inbox`. Use `agent-run msg SESSION -` only for a live TUI
    session when delivery is safe, and never while a native question prompt is
-   pending in it. A headless task takes no messages.
+   pending in it. A headless task takes no messages. For an existing provider CLI
+   session in tmux (Cursor, Codex, Claude), follow
+   [tmux-cli-handoff](../tmux-cli-handoff/SKILL.md).
 
 The stop rule is [saga decision 94](../../sagas/distributed-dev-env/README.md)
 ([ADR-019](../../sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)).

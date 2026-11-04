@@ -129,8 +129,9 @@ Send the findings to the same coding owner as a correction. Continue that subage
 with `SendMessage`, so it keeps its context. A coding owner in another pod gets
 the findings through `agent-run inbox` or its PR, and through `agent-run msg` only
 for a live TUI session when delivery is safe, never while a native question
-prompt is pending. Do not fix it yourself and do not add a second writer. The
-owner adds a test for each finding (RED, then GREEN), commits and reports the new
+prompt is pending. A coding owner in an existing provider CLI session in tmux
+gets them by [tmux-cli-handoff](../tmux-cli-handoff/SKILL.md). Do not fix it
+yourself and do not add a second writer. The owner adds a test for each finding (RED, then GREEN), commits and reports the new
 head. QA then re-reviews that exact new head: the delta and every earlier
 finding. Repeat until no finding is open.
 

@@ -900,7 +900,8 @@ latch the platform has actually set, read with
 `agent-run budget show <task-uid>` (`latched: true` and its reason), is a
 platform denial that agents never bypass; an expected or estimated latch is not
 a stop. The agent-loop skills in [`.agents/skills/`](../.agents/skills/) apply
-this rule.
+this rule. Steering an existing provider CLI session in tmux follows
+[tmux-cli-handoff](../.agents/skills/tmux-cli-handoff/SKILL.md).
 
 *Adopted 2026-11-04 and recorded as decision 94, on Tom's words relayed by
 session dev-env-1027-010058 (parent coordinator) as trusted conversation

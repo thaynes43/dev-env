@@ -181,7 +181,9 @@ minutes :00 and :30. The keeper pilot (OP385) uses `7,27,47 * * * *`.
 
 1. Read the state file and the status record. Trust the files and fresh reads,
    not memory.
-2. Check the evidence (see supervised-dispatch, section 5). Steer or correct.
+2. Check the evidence (see supervised-dispatch, section 5). Steer or correct; a
+   correction into an existing provider CLI session in tmux follows
+   [tmux-cli-handoff](../tmux-cli-handoff/SKILL.md).
    Quiet time or repeated failures trigger the stall rule in
    supervised-dispatch, section 5. They never end supervision or the timer.
    For a child in another pod, read `agent-run show NAME -o json` into a file
