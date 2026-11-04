@@ -294,10 +294,18 @@ func TestEnsureNeverUpdatesOrDeletes(t *testing.T) {
 	var calls []string
 	record := func(verb string) error { calls = append(calls, verb); return errors.New("forbidden " + verb) }
 	c := fakeClient(t, interceptor.Funcs{
-		Update:      func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error { return record("update") },
-		Patch:       func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error { return record("patch") },
-		Delete:      func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error { return record("delete") },
-		DeleteAllOf: func(context.Context, client.WithWatch, client.Object, ...client.DeleteAllOfOption) error { return record("deleteallof") },
+		Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error {
+			return record("update")
+		},
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return record("patch")
+		},
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+			return record("delete")
+		},
+		DeleteAllOf: func(context.Context, client.WithWatch, client.Object, ...client.DeleteAllOfOption) error {
+			return record("deleteallof")
+		},
 		SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
 			return record("status update")
 		},
