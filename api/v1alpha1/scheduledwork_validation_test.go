@@ -250,7 +250,7 @@ func TestScheduledWorkStatusAccepts(t *testing.T) {
 	}
 	now := metav1.NewTime(time.Now().Truncate(time.Second))
 	w.Status = v1alpha1.ScheduledWorkStatus{
-		Approval: &v1alpha1.ScheduledWorkApproval{By: "human/dev-env-system/tom", At: now, SpecHash: swHash},
+		Approval: &v1alpha1.ScheduledWorkApproval{By: "human/dev-env-system/tom", At: now, SpecHash: swHash, TemplateDigest: swDigest},
 		NextDue:  &now,
 		PlanHash: strings.Repeat("a", 32),
 		Counts:   v1alpha1.ScheduledWorkCounts{Succeeded: 1, Failed: 2, Parked: 3, Skipped: 4},
@@ -295,7 +295,19 @@ func TestScheduledWorkStatusAccepts(t *testing.T) {
 	if err := k8s.Status().Update(ctx(t), w); err != nil {
 		t.Fatalf("a full status of %d occurrences: %v", v1alpha1.ScheduledWorkMaxOccurrences, err)
 	}
+	// The approval's template digest is stored as written, not pruned.
+	var got v1alpha1.ScheduledWork
+	if err := k8s.Get(ctx(t), client.ObjectKeyFromObject(w), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Approval == nil || got.Status.Approval.TemplateDigest != swDigest {
+		t.Fatalf("the stored approval %+v lost its template digest", got.Status.Approval)
+	}
 }
+
+// swDigest is a template digest in the form status.approval.templateDigest
+// takes: 64 lowercase hex characters.
+var swDigest = strings.Repeat("0123456789abcdef", 4)
 
 func TestScheduledWorkStatusRefuses(t *testing.T) {
 	for name, c := range map[string]struct {
@@ -308,6 +320,15 @@ func TestScheduledWorkStatusRefuses(t *testing.T) {
 		"a short approval hash": {func(s *v1alpha1.ScheduledWorkStatus) {
 			s.Approval.SpecHash = swHash[:32]
 		}, "status.approval.specHash"},
+		"an uppercase template digest": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Approval.TemplateDigest = strings.ToUpper(swDigest)
+		}, "status.approval.templateDigest"},
+		"a short template digest": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Approval.TemplateDigest = swDigest[:63]
+		}, "status.approval.templateDigest"},
+		"a long template digest": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Approval.TemplateDigest = swDigest + "0"
+		}, "status.approval.templateDigest"},
 		"a negative count": {func(s *v1alpha1.ScheduledWorkStatus) { s.Counts.Failed = -1 }, "status.counts.failed"},
 		"a long plan hash": {func(s *v1alpha1.ScheduledWorkStatus) { s.PlanHash = strings.Repeat("a", 65) }, "status.planHash"},
 		"65 occurrences": {func(s *v1alpha1.ScheduledWorkStatus) {

@@ -5,7 +5,9 @@ import "time"
 // The scheduled-work routes (DESIGN-054 S5, OpenProject #397). A scheduled
 // item is agent work that starts at a due time: a headless task session or an
 // interactive remote session. These are the wire types only; the operator
-// serves the routes (S5b), and every route answers 404 until it does.
+// serves the routes (S5b, internal/apiserver/scheduled_work.go) only when its
+// Server is given a scheduled-work config, which a proposed, default-off
+// --enable-scheduled-work-api flag sets; without it every route answers 404.
 //
 //	POST   /v1/scheduled-work                  create one; the owner and editor are the caller's token
 //	GET    /v1/scheduled-work                  the caller's own (all=true: a human's or coordinator's, everyone's)
@@ -180,6 +182,13 @@ type ApproveScheduledWorkRequest struct {
 	// nothing. Absent, the approval applies from the next occurrence and no
 	// Parked one is retried.
 	At *time.Time `json:"at,omitempty"`
+	// TemplateDigest, optional, is the digest of the dispatch template the
+	// client showed. When set, the API refuses the approval with 409 unless
+	// it equals the digest of the template the spec names as the API reads
+	// it now, so a template edit made after the client fetched it is never
+	// approved. Absent, the API binds the template as it reads it. Either
+	// way the approval records the digest the API read.
+	TemplateDigest string `json:"templateDigest,omitempty"`
 }
 
 // RetryScheduledWorkRequest is the body of POST .../retry: run one Parked
@@ -228,6 +237,11 @@ type ScheduledWorkApproval struct {
 	By       string    `json:"by"`
 	At       time.Time `json:"at"`
 	SpecHash string    `json:"specHash"`
+	// TemplateDigest is the digest of the dispatch template the spec named
+	// when the human approved it, for display. The API reads the template and
+	// records it; no request carries it. The approval is void once the
+	// template's digest differs, as it is once the spec's hash does.
+	TemplateDigest string `json:"templateDigest,omitempty"`
 }
 
 // ScheduledWorkCounts counts occurrences by outcome over the item's life. A
