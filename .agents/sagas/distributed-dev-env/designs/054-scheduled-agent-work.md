@@ -95,7 +95,7 @@ status:
     specHash: <sha256 of owner, mode, work, schedule, notAfter>
   nextDue: ...                               # as DESIGN-032
   planHash: ...                              # as DESIGN-032; an edit re-plans from now
-  counts: {succeeded: 0, failed: 0, parked: 0, skipped: 0}
+  counts: {succeeded, failed, parked, skipped, ended, ambiguous, cancelled}  # lifetime; skipped adds `missed`
   occurrences:                               # newest 50 terminal ones kept; non-terminal ones are never pruned
   - at: "2026-12-03T14:00:00Z"
     state: Pending|Claimed|Dispatched|Delivered|Opened|Running|Succeeded|Failed|Ended|Parked|Skipped|Ambiguous|Cancelled
@@ -103,12 +103,14 @@ status:
     reason: "..."
     claimedAt: ...
     retriedAt: ...                           # set by a human approve or retry of a Parked occurrence
+    attempt: 0                               # 0, then +1 on each approve or retry
+    missed: 1                                # how many due times one Skipped record stands for (outage collapse)
     session: sw-1a2b3c4d5e6f-202612031400
     specHash: <sha256>                       # the authority-carrying spec fields at claim (as approval.specHash)
     execution: {state, reason}               # headless: copied from Session status.taskResult (Succeeded|Failed|TimedOut|Unknown)
     reported: {summary, prURLs, headSHAs}    # headless: the agent's own retained outcome; a claim, not validated
-    pages:                                   # at most 4, one per event
-    - {event: due|link|parked|failed|result, reminder: <name>, state: sent|failed|ambiguous|skipped}
+    pages:                                   # at most 8, keyed by (event, attempt)
+    - {event: due|link|parked|failed|result|skipped, attempt: 0, reminder: <name>, state: sent|failed|ambiguous|skipped}
 ```
 
 `approval` is in **status**, not spec. Only the operator's `POST .../approve`
@@ -143,7 +145,7 @@ An occurrence dispatches on exactly one of these, checked at the due time:
 |---|---|---|
 | **Human owner** | `spec.editor` is the owner, and the template admits `human` | the operator's client identity `client/dev-env-system/scheduled-work`, within the template's fixed bounds |
 | **Human approval** | `status.approval.specHash` equals the current spec's hash, and the template admits the owner's class | the same client identity |
-| **Live session owner** | `spec.editor` is the owner; the owner session (by UID) is **proven live**: operating mode Running, phase Running or Idle, a heartbeat within the staleness bound, and not ended by the session-end rule below. A drain onto a new revision is neither live nor ended: the occurrence waits in `Pending` within grace, then parks. An unproven state never grants authority; the template admits `session` | **a child of the owner**, through the same validation as if the owner created it now: its profile, depth, per-parent child cap and mode rules all apply |
+| **Live session owner** | `spec.editor` is the owner; the owner session (by UID) is **proven live**: operating mode Running, phase Running or Idle, a heartbeat within the staleness bound, and not ended by the session-end rule below. A drain onto a new revision is neither live nor ended. This basis is checked **before the claim**, like the caps: while the owner is unproven the occurrence stays `Pending`, and when grace ends it goes to `Parked`. An unproven state never grants authority; the template admits `session` | **a child of the owner**, through the same validation as if the owner created it now: its profile, depth, per-parent child cap and mode rules all apply |
 
 Anything else parks with reason `no standing authority`, and Tom is paged. He can
 approve it, which binds his approval to the spec he saw. A suspended or ended
@@ -157,7 +159,8 @@ without approval dispatches as its own child.
 ```mermaid
 stateDiagram-v2
   [*] --> Pending
-  Pending --> Claimed: due, CAS on resourceVersion
+  Pending --> Claimed: due, caps free and the authority basis holds; CAS on resourceVersion
+  Pending --> Parked: grace ended while the live-owner basis stayed unproven
   Pending --> Cancelled: cancel before claim
   Pending --> Skipped: missed beyond grace, notAfter passed, previous still running, or at capacity until grace ends
   Claimed --> Parked: revalidation fails
@@ -333,13 +336,17 @@ stateDiagram-v2
   normal suspend path (rescue first), then records `Failed`. If it dies between the
   two writes, agentd's check still stops the late start. Suspending is its one
   session write besides create. It applies only to a session with its label and
-  finalizer, only before that session has started, and is never a delete.
+  finalizer, only while its agent container has never started (no `startedAt` and
+  a restart count of 0 in the pod's container status, read uncached), and is never a
+  delete. If that read cannot prove the container never started, the executor does
+  not suspend; agentd's first-launch check is the guarantee either way.
 - **Missed occurrences.** An occurrence found more than a grace period late (default
   15 minutes for headless, 2 hours for interactive) is `Skipped` with a reason, and
   is not run late without a person. This deliberately differs from DESIGN-032,
   whose reminders fire up to 6 hours late and whose one-shots always fire: a stale
   page is harmless, a stale task is not. When the executor starts after an outage,
-  all the missed occurrences of one item collapse into one `Skipped` record with a
+  all the missed occurrences of one item collapse into one `Skipped` record whose
+  `missed` field holds the count (so `counts.skipped` grows by `missed`), with a
   count and one page.
 - **Concurrency.** One unfinished occurrence per ScheduledWork (`Parked` does not count as unfinished, so a parked occurrence never blocks the next one); a later occurrence
   that comes due while one runs is `Skipped` ("previous still running"). Separate
@@ -360,7 +367,7 @@ stateDiagram-v2
 Before dispatch, the claimer checks, in order, and parks on the first failure:
 
 1. The item is not cancelled and `notAfter` has not passed.
-2. The authority basis above.
+2. The authority basis above, checked again after the claim (the live-owner basis is also a pre-claim condition).
 3. The template still exists. Its repo, model id and profile are still in it, and
    in `dev-env-templates` now, not at creation.
 4. **Provider availability, honestly bounded.** Headless Claude tasks run on the
@@ -404,8 +411,9 @@ It binds to the agentd protocol's state constants (`registered`,
 `login-required`), not to free text; the CRD's values are still marked
 `TODO(plan 03)`, so S4 pins them in a test. It never records that Tom joined or
 that the work succeeded, and it does not read the session's conversation to find
-out. The interactive cap counts an occurrence until `Ended`. The executor itself
-does not suspend a session, because it cannot tell whether Tom joined; the
+out. The interactive cap counts an occurrence until `Ended`. Once a session has
+started, the executor never suspends it (its only suspend is the start-deadline
+one above, before any start), because it cannot tell whether Tom joined; the
 template's `idleSuspendAfter` bounds how long an unjoined session holds the slot. A real participation signal would be a separate
 item, and none is assumed here.
 
@@ -485,7 +493,7 @@ library only.
 | S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, approve of a Parked occurrence after grace running from retriedAt, an unapproved Parked occurrence expiring to Skipped, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
-| S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
+| S6 | haynes-ops: CRD copy, Roles, a ClusterRole with `get` on the one `customresourcedefinitions` object `scheduledworks.dev-env.haynesops.com` (resourceNames) for the releaser, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
 | S7 | live: one headless and one interactive test occurrence | Tom approves the first real run |
 | C1 | real calendar adapter | Tom provisions the DWD identity (OP206) |
 
