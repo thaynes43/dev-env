@@ -422,7 +422,7 @@ agent-run --project haynes-studio --agent codex \
 | --- | --- | --- |
 | `--project <name>` | Names a project in the operator's accepted catalog. The client sends only the name; the server picks the repository, base and rules. A managed Codex task needs it. | `internal/agentrun/create.go:74,108-118`; `internal/apiserver/validate.go:105-120,149-150` |
 | `--repo <name>` | Optional. Picks one repository of a project that has several. | `internal/agentrun/help.go:393-397` |
-| `--agent codex --model <id>` | Codex needs a full model ID. The server checks the model and the effort. | `create.go:201-205`; `internal/agentd/protocol/session.go:316-344`; `validate.go:190-194` |
+| `--agent codex --model <id>` | Codex needs a full model ID. The server checks the model and the effort. | `create.go:201-205`; `internal/agentd/protocol/session.go:316-347`; `validate.go:190-194` |
 | `--prompt-file <path>` | Reads the work order from a file, or from stdin with `-`. At most 64 KiB. | `create.go:163-176,381-395` |
 | `--timeout <d>` | Stops the task after this long. Leave out `--max-turns`: the server refuses it for Codex. | `create.go:215-226`; `validate.go:227` |
 | `--idempotency-key <k>` | The same command run again with the same key returns the first Session instead of starting a second one, while that Session is unfinished. A different request under the same key is refused with 409. | `create.go:242-248,327-328`; `internal/apiserver/sessions.go:98-111` |
@@ -485,7 +485,7 @@ Four facts can each look like "done". Keep them apart:
 
 1. **The provider process or turn completed.** agentd records the provider's
    real exit code, or 128 plus the signal when a signal ended it
-   (`internal/agentd/runagent.go:507-549`). The heartbeat carries it into the
+   (`internal/agentd/runagent.go:507-555`). The heartbeat carries it into the
    Session's status (`internal/apiserver/heartbeat.go:187`), which keeps it
    after the pod is gone. `agent-run show` prints it as `task: exit N at ...`
    and the verdict as `task result:` (`internal/agentrun/sessions.go:192-194,227-235`,
