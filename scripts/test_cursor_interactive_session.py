@@ -753,6 +753,20 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, answered["state"]), (0, "answered"))
         self.assertEqual(len(self.sends()), 1)
 
+    def test_bad_receipt_is_refused_before_the_lock(self):
+        inspected = self.start_and_inspect()
+        lock = self.root / "state" / "cursor-interactive-session" / (self.name + ".lock")
+        descriptor = os.open(lock, os.O_RDWR)
+        try:
+            helper.fcntl.flock(descriptor, helper.fcntl.LOCK_EX)
+            self.log.write_text("")
+            code, refused = self.invoke("answer", self.answer_args("v1:not-a-receipt"))
+            self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+            self.assertEqual(self.commands("tmux"), [])
+        finally:
+            os.close(descriptor)
+        self.assertEqual(self.state()["receipt_id"], helper.parse_receipt(inspected["receipt"])["id"])
+
     def test_concurrent_answers_send_one_key(self):
         inspected = self.start_and_inspect()
         extra = self.answer_args(inspected["receipt"])
