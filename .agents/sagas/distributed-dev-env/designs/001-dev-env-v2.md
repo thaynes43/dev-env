@@ -1465,7 +1465,7 @@ sign of activity; the operator's timers judge the window.**
 | interactive or remote session idle | suspended after 3 days | v1's sweep window (Tom, 2026-09-25) |
 | suspended session | archived after 7 days | resume window; RBD is thin, so a parked volume costs only its written bytes |
 | rescue bundle | kept 30 days, and as long as its session exists (D-67) | long enough to notice a loss |
-| outdated revision | drained at the next idle moment (Q-03); summoned sessions are never drained | section 5.2, 3.7 |
+| outdated revision | drained at the next idle moment (Q-03); summoned sessions are never drained; none is drained while the templates hold the rollout for their image (`rollout.newSessionsOnlyImage`, 2026-11-04) | section 5.2, 3.7 |
 | summoned session, outcome `done` | kept joinable 1 day, then rescued and reaped | V-15 (3.7) |
 | summoned session, outcome `failed` or `escalated` | kept joinable 7 days, then rescued and reaped | V-15: Tom joins failures after the fact |
 | summoned session, no activity and no `working` report | closed as its policy's `onUnreported` after its lane's limit (180 min for upgrades; the timeout for `task`) | V-11 (3.7) |

@@ -218,7 +218,7 @@ type Rollout struct {
 // NewSessionsOnly reports that the templates hold automatic revision drain
 // for their image (DESIGN-001 5.2, 2026-11-04 note).
 func (t *Templates) NewSessionsOnly() bool {
-	return false
+	return t != nil && t.Rollout != nil && t.Rollout.NewSessionsOnlyImage != "" && t.Rollout.NewSessionsOnlyImage == t.Image
 }
 
 // Workspace names a retained, pre-provisioned claim. The operator only mounts it.
@@ -411,6 +411,8 @@ func (t *Templates) computeRevision() (string, error) {
 func (t *Templates) ReviewRevision() (string, error) {
 	c := *t
 	c.Lifecycle = nil
+	// A rollout hold decides nothing about a pod either (DESIGN-001 5.2).
+	c.Rollout = nil
 	// Marshal sorts map keys, so equal content gives equal bytes.
 	b, err := json.Marshal(&c)
 	if err != nil {
@@ -485,6 +487,13 @@ func (t *Templates) Validate() error {
 		add("image is empty")
 	} else if !strings.Contains(t.Image, "@sha256:") {
 		add("image %q is not pinned by digest (name:tag@sha256:...)", t.Image)
+	}
+	if r := t.Rollout; r != nil {
+		if r.NewSessionsOnlyImage == "" {
+			add("rollout.newSessionsOnlyImage is empty")
+		} else if !strings.Contains(r.NewSessionsOnlyImage, "@sha256:") {
+			add("rollout.newSessionsOnlyImage %q is not pinned by digest (name:tag@sha256:...)", r.NewSessionsOnlyImage)
+		}
 	}
 
 	for _, class := range []v1alpha1.SizeClass{v1alpha1.SizeS, v1alpha1.SizeM, v1alpha1.SizeL} {

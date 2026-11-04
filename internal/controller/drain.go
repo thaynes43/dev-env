@@ -78,18 +78,20 @@ func drainEligible(s *v1alpha1.AgentSession, pod *corev1.Pod, currentRevision st
 	return sessionIdle(s, pod)
 }
 
-// templateRevision is the current template hash, or empty when the templates
-// did not load. An unknown revision is not outdated (DESIGN-001 5.2).
+// templateRevision is the revision the drain phase compares a pod against
+// (drainRevision of the observed templates).
 func templateRevision(obs observation) string {
-	if obs.templates == nil {
-		return ""
-	}
-	return obs.templates.Revision()
+	return drainRevision(obs.templates)
 }
 
-// drainRevision is the revision automatic drain compares a pod against.
+// drainRevision is the revision automatic drain compares a pod against: the
+// current template hash, or empty when the templates did not load or hold
+// automatic drain for their image (rollout.newSessionsOnlyImage, DESIGN-001
+// 5.2, 2026-11-04 note). An empty revision is not outdated, so nothing is
+// marked Draining and a pending mark without a recorded stop is cancelled.
+// The Outdated condition still reports the real revision.
 func drainRevision(t *templates.Templates) string {
-	if t == nil {
+	if t == nil || t.NewSessionsOnly() {
 		return ""
 	}
 	return t.Revision()
@@ -137,7 +139,7 @@ func (r *Reconciler) drainIdle(ctx context.Context, s *v1alpha1.AgentSession, t 
 	if s != nil && s.Status.Phase == v1alpha1.PhaseDraining && drainStopRecorded(s, pod) {
 		return r.finishDrain(ctx, s, pod, obs)
 	}
-	if !drainEligible(s, pod, t.Revision()) {
+	if !drainEligible(s, pod, drainRevision(t)) {
 		return false, ctrl.Result{}, false, nil
 	}
 	// observe writes Draining at the end of the reconcile that first notices
