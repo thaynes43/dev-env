@@ -22,9 +22,16 @@ restart and generation floor, two workers, cancellation on each side of the
 HTTP dispatch boundary, and negative redaction checks. A safe unsent rollback
 uses a one-minute in-process backoff; a restart does not retain that delay.
 All post-dispatch errors remain possibly spent. A successful response is saved
-on a cancellation-detached context. The request deadline begins before the
-second fence; 3 seconds request, 2 seconds save and 2 seconds margin remain
-within the existing 10-second lease freshness limit.
+on a cancellation-detached context. The POST's deadline begins after the
+dispatch commit and the Lease fence that follows it: `claude_transport.go:156`
+starts a fresh 3-second timeout on a context detached from shutdown, and
+`claude_transport.go:158` sends on it. The earlier deadlines
+(`claude_worker.go:263`, `claude_transport.go:144`) bound only the checks
+before the commit. That fence after the commit (`claude_worker.go:370`) needs
+3 seconds request, 2 seconds save and 2 seconds margin, within the existing
+10-second lease freshness limit. (Corrected 2026-11-04: this paragraph first
+said the request deadline begins before the second fence, which was true
+before the dispatch commit was added; see correction round 2 below.)
 
 Go 1.27.3 was downloaded from go.dev and checked against its published SHA-256
 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`.
