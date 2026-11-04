@@ -131,9 +131,10 @@ func SyncClaudeAccess(s Settings, now time.Time) error {
 		return ErrClaudeAccess
 	}
 
-	if recordClaudeAccount(s, a) != nil {
-		return ErrClaudeAccess
-	}
+	// A record that cannot be written must not stop the pod following new
+	// generations: the credentials still merge, and the missing record keeps the
+	// automatic continue off until a later poll writes it.
+	_ = recordClaudeAccount(s, a)
 
 	// Persist the generation fence first: if the credentials write fails, an
 	// older projection cannot overwrite the newer generation on restart. The

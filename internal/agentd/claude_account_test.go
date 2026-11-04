@@ -165,3 +165,57 @@ func TestClaudeAccountUnreadableRecordIsConservative(t *testing.T) {
 		t.Error("a temporary file was left behind")
 	}
 }
+
+// The organization is part of the account: the same account UUID under another
+// organization is an account change.
+func TestClaudeAccountOrganizationChangeIsAnAccountChange(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	rg.revoke(2 * time.Hour)
+	rg.pollProduction()
+	a := projAccess(3, 9*time.Hour)
+	a.OrganizationUUID = "44444444-4444-4444-8444-444444444444"
+	publish(t, rg.live, a)
+	rg.pollProduction()
+	if rg.continues() != 0 || !strings.Contains(rg.status(), "account changed at generation 3") {
+		t.Errorf("a changed organization was not an account change: %d %q", rg.continues(), rg.status())
+	}
+}
+
+// A record that cannot be written must not stop the pod following new generations
+// (a failed sync reads as login-required). The credentials merge, the receipt moves,
+// the sync does not fail, and only the automatic continue stays off, shown as unconfirmed.
+func TestClaudeAccountRecordWriteFailureStillMergesButSendsNoContinue(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	rg.revoke(2 * time.Hour)
+	rg.pollProduction()
+	record := rg.s.statePath(testAccountFile)
+	if err := os.Remove(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(record, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rg.publishAs(3, projAccount)
+	rg.pollProduction()
+	if rg.d.claudeSyncErr != nil {
+		t.Fatalf("a record that cannot be written failed the sync: %v", rg.d.claudeSyncErr)
+	}
+	creds, err := readClaudeCredentials(rg.s)
+	if err != nil || !strings.Contains(string(creds), projToken(3)) {
+		t.Fatalf("generation 3 was not merged: %v", err)
+	}
+	var receipt claudeReceipt
+	if err := readJSONFile(rg.s.statePath("claude-access-generation.json"), &receipt); err != nil || receipt.Generation != 3 {
+		t.Errorf("the receipt did not move to generation 3: %+v %v", receipt, err)
+	}
+	if rg.continues() != 0 {
+		t.Error("a continue was sent without a confirmed account record")
+	}
+	if !strings.Contains(rg.status(), "account unconfirmed") {
+		t.Errorf("the missing record is not shown: %q", rg.status())
+	}
+}

@@ -100,46 +100,59 @@ func recordClaudeAccount(s Settings, a claudeauth.Access) error {
 	return nil
 }
 
-// accountChangedFor reports whether the generation was marked changed, or the
-// record cannot be believed (then there is no generation to attach it to).
-func accountChangedFor(s Settings, generation uint64) (changed, unreadable bool) {
+// accountConfirmed reads the record against the applied generation. A record is
+// confirmed only when it is valid, current for that generation and does not mark it changed.
+// A record that is absent, unreadable or behind the receipt (its write failed) is not.
+type accountVerdict int
+
+const (
+	accountOK accountVerdict = iota
+	accountChanged
+	accountUnconfirmed
+)
+
+func accountVerdictFor(s Settings, generation uint64) (accountVerdict, claudeAccount) {
 	cur, state := readAccountFile(s)
-	switch state {
-	case accountInvalid:
-		return false, true
-	case accountValid:
-		return cur.Changed != 0 && cur.Changed == generation, false
+	switch {
+	case state != accountValid || cur.Generation != generation:
+		return accountUnconfirmed, cur
+	case cur.Changed != 0 && cur.Changed == generation:
+		return accountChanged, cur
 	}
-	return false, false
+	return accountOK, cur
 }
 
 // accountStatusNote is appended to the projection status line.
 func accountStatusNote(s Settings) string {
-	cur, state := readAccountFile(s)
+	var receipt claudeReceipt
+	if readJSONFile(s.statePath("claude-access-generation.json"), &receipt) != nil || receipt.Generation == 0 {
+		return ""
+	}
+	verdict, cur := accountVerdictFor(s, receipt.Generation)
+	g := strconv.FormatUint(cur.Changed, 10)
 	switch {
-	case state == accountInvalid:
-		return "; account unconfirmed: the account record cannot be read, so no automatic continue is sent"
-	case state == accountValid && cur.Changed != 0 && cur.Basis == "unreadable":
-		return "; account unconfirmed since generation " + strconv.FormatUint(cur.Changed, 10) + ": the earlier account record could not be read, so no automatic continue is sent for it"
-	case state == accountValid && cur.Changed != 0:
-		return "; account changed at generation " + strconv.FormatUint(cur.Changed, 10) + ": the keeper projected a different account, so no automatic continue is sent for it"
+	case verdict == accountUnconfirmed:
+		return "; account unconfirmed: the account record is not current for generation " + strconv.FormatUint(receipt.Generation, 10) + ", so no automatic continue is sent"
+	case verdict == accountChanged && cur.Basis == "unreadable":
+		return "; account unconfirmed since generation " + g + ": the earlier account record could not be read, so no automatic continue is sent for it"
+	case verdict == accountChanged:
+		return "; account changed at generation " + g + ": the keeper projected a different account, so no automatic continue is sent for it"
 	}
 	return ""
 }
 
-// skipContinueForAccount writes the continue receipt for a changed generation so
-// the old account's error is not retried by a later generation, and reports
-// whether the continue must not run.
+// skipContinueForAccount reports whether the automatic continue must not run. A
+// changed generation also gets its continue receipt, so the old account's error is
+// not retried by a later generation. An unconfirmed one writes nothing: the next
+// poll looks again, after the record has been rewritten.
 func skipContinueForAccount(s Settings, generation uint64, now time.Time, havePrev bool, prev continueReceipt) bool {
-	changed, unreadable := accountChangedFor(s, generation)
-	if unreadable {
-		return true
-	}
-	if !changed {
+	switch verdict, _ := accountVerdictFor(s, generation); verdict {
+	case accountOK:
 		return false
-	}
-	if !havePrev || prev.Generation < generation || prev.Outcome == "waiting" {
-		_ = writeJSONFile(s.statePath(continueReceiptFile), continueReceipt{Generation: generation, Outcome: continueOutcomeAccountChanged, EvaluatedAt: now})
+	case accountChanged:
+		if !havePrev || prev.Generation < generation || prev.Outcome == "waiting" {
+			_ = writeJSONFile(s.statePath(continueReceiptFile), continueReceipt{Generation: generation, Outcome: continueOutcomeAccountChanged, EvaluatedAt: now})
+		}
 	}
 	return true
 }

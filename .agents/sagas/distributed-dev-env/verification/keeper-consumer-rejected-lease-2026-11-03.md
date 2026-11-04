@@ -280,6 +280,12 @@ agentd ignores the new file.
   (unreadable is shown as "unconfirmed"). No automatic continue is sent for it, its continue receipt reads
   `account-changed`, and the status line says so. Later generations do not retry the old account's error.
 - A flip back (A, B, A) is another change; only a later generation that matches the recorded account clears.
+- The organization is part of the fingerprint: the same account under another organization is a change.
+- A record that cannot be written does not fail the sync (a failed sync stops the pod following new
+  generations and reads as login-required). The credentials and the generation receipt still merge, the
+  record stays behind the receipt, and the status says "account unconfirmed". Only the automatic continue
+  stays off: it needs a record that is current for the applied generation. A record the operator deletes
+  is read as a first run and seeded, so a change that happened while the record was missing is not seen.
 - Same-account behaviour is unchanged. The only existing test changed is the #915 characterization of the
   old behaviour, inverted on purpose.
 
