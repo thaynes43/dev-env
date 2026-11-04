@@ -447,7 +447,10 @@ func TestClaudeWorkerTwoWorkersOneLeaseOnePOSTPerCycle(t *testing.T) {
 	}
 }
 
-func TestClaudeWorkerCrashAfterIntentIsNeedsLoginNeverReplayed(t *testing.T) {
+// The seeded intent has no unsent marker, as one left by an older keeper or one
+// whose dispatch commit was stored before a crash: it may have been sent, so it
+// tombstones without a POST or a publication.
+func TestClaudeWorkerUnmarkedIntentIsNeedsLoginNeverReplayed(t *testing.T) {
 	f := newClaudeFix(t)
 	r := syntheticClaudeRecord(1)
 	r.Stage, r.AttemptUID = claudeIntent, claudeUID
