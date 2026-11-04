@@ -79,6 +79,7 @@ homeHeadroom: {
 |---|---|---|
 | bytes available / total | < 15% | < 3% (0 included) |
 | inodes free / total | < 10% | < 2% (0 included) |
+
 Integer 128-bit comparison (math/bits), no float, no overflow. They report state; they trigger
 nothing. A later consumer decides actions.
 

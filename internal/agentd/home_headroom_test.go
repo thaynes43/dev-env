@@ -407,25 +407,26 @@ func TestHomeHeadroomVanishingHomeAndEntryChurn(t *testing.T) {
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	stop := make(chan struct{})
+	// One bounded burst of churn runs alongside each sample: the churn is paced by the
+	// sample loop and has a fixed size, so it can neither spin nor miss the sampler.
+	const churnPerSample = 50
+	tick := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; ; i++ {
-			select {
-			case <-stop:
-				return
-			default:
+		for range tick {
+			for i := 0; i < churnPerSample; i++ {
+				p := filepath.Join(home, "f"+string(rune('a'+i%20)))
+				_ = os.WriteFile(p, []byte("x"), 0o600)
+				_ = os.Remove(p)
 			}
-			p := filepath.Join(home, "f"+string(rune('a'+i%20)))
-			_ = os.WriteFile(p, []byte("x"), 0o600)
-			_ = os.Remove(p)
 		}
 	}()
 	at := headroomT0
 	for i := 0; i < 20; i++ {
 		at = at.Add(homeHeadroomEvery)
+		tick <- struct{}{}
 		h := SampleHomeHeadroom(home, at)
 		if h == nil || !h.Valid() || h.State == protocol.HeadroomUnreadable {
 			t.Fatalf("churn: %+v", h)
@@ -434,7 +435,7 @@ func TestHomeHeadroomVanishingHomeAndEntryChurn(t *testing.T) {
 			t.Fatalf("figures: %+v", h.Bytes)
 		}
 	}
-	close(stop)
+	close(tick)
 	wg.Wait()
 	if err := os.RemoveAll(home); err != nil {
 		t.Fatal(err)
