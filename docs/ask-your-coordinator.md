@@ -37,7 +37,9 @@ Session must have no workspace. `spec.project` alone is not what is checked.
 - A recipient without a matching snapshot is hidden: the ask gets **404**. For
   example, an interactive or remote coordinator started without `--project`
   cannot be asked, even by its own children. Ask a project-bound Session by name
-  with `--to`, or have the coordinator start as a project task.
+  with `--to`, or have the coordinator start as a project task. Such a
+  coordinator still gets its headless children's results back: see
+  [the return route for a parent without a project](#return-route-for-a-parent-without-a-project).
 - Session depth is limited to two levels (DESIGN-001 3.4). A Session at depth 2
   cannot start children, so it cannot coordinate workers it would start itself.
 - Proven on 2026-10-31 through the live operator (OpenProject #321):
@@ -151,3 +153,60 @@ and sends it unchanged. The server enforces every rule above; agentd adds none.
 - The record keeps the authenticated sender, recipient, executor Pod, provider,
   requested model and catalog provenance. That is who asked, not proof that a
   model or a person read anything: an acknowledgement is an API record only.
+
+## Return route for a parent without a project
+
+*OpenProject #402, 2026-11-04. Checked against source at `801de50d`.*
+
+A Remote Control coordinator, or any interactive coordinator started without
+`--project`, has project null and no accepted project snapshot. It can still
+start project-bound headless children (`agent-run --project P -p ...`; see
+[the workflow guide](workflow-guide.md#launch-a-project-bound-child-on-another-provider)).
+Their results come back by the parent reading the child, not by the child
+reaching the parent. These routes need no inbox, no enrollment and no grant:
+
+1. **`agent-run show CHILD`**, and `-o json` for the fields. It prints the
+   child's real task exit (`task: exit N at ...`), the verdict
+   (`task result: ...`) and the retained outcome (`Task outcome:` with the PR
+   URLs and heads the child recorded). It does so in every phase, after the pod
+   is gone too (`internal/agentrun/sessions.go:192-194,227-235,285-293`,
+   pinned by `TestShowReportsAFailedTaskChildsRealExitAndRetainedOutcome`). A
+   session can read any Session by name; a configured coordinator host can read
+   only its own children (`internal/apiserver/sessions.go:420-437`).
+2. **`agent-run log CHILD --tail 200`**, while the child's pod is running and
+   Ready. After that, `log` is refused with 409 and names the copy on the shared
+   volume, `logs/<name>.log`, which session pods mount at `~/.shared`
+   (`internal/apiserver/podcmd.go:51-63,160-195`, `internal/agentrun/help.go:474-477`).
+   Do not count on that volume from another harness or host
+   ([ADR-003](../.agents/sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)).
+3. **The outcome file.** The work order tells the child to write
+   `~/work/<session>.outcome.json` before it returns, with its PR URL, head and
+   a one-line summary. agentd validates it at the task's exit and the operator
+   keeps the first valid record, which `show` reads back
+   ([format](workflow-guide.md#retain-a-tasks-pr-and-handoff-after-pod-reclaim)).
+   The parent never reads the file in the child's pod.
+4. **The PR.** `gh pr view N --json headRefOid,state,statusCheckRollup`, then
+   the deliverable at that head.
+
+Put the deliverable, the outcome-file instruction and the deadline in the work
+order. Track the wait with a custody record and a bounded wait
+([timer-checkin](../.agents/skills/timer-checkin/SKILL.md)).
+
+**Delivery is not consumption.** A retained outcome, a pushed branch or an open
+PR says a result is available. The parent has consumed it only when it has read
+the deliverable at the stated head and recorded that in its custody record and
+on the tracker. The retained outcome is the child's own claim: check it. Exit
+0, `Running` or a final message is not a finished review; only the accepted
+deliverable is.
+
+### The inbox gap is separate
+
+The 404 above is a different problem: a parent with project null cannot be the
+recipient of an `inbox ask`, because the server hides any recipient whose
+project snapshot does not match the request's project
+(`internal/apiserver/inbox.go:28,140-153`). The return route above does not
+depend on the inbox and does not close that gap. The gap is recorded as a
+follow-up on OpenProject #402. This guide proposes no enrollment, grant or
+policy change for it. Until it is closed, a headless child of such a parent
+does not wait on an answer: it records the open question in its PR body and its
+outcome summary, and follows its work order's fallback.

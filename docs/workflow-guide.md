@@ -399,6 +399,142 @@ removed the variable from a Codex session's environment. Exit 0 is fine, 1 is ex
 login's own roughly 30-day lifetime lives with the keeper and is not in the
 projection.
 
+### Launch a project-bound child on another provider
+
+*OpenProject #402, 2026-11-04. Checked against source at `801de50d` and
+against `agent-run help run` from the installed v2.89.0 client. Paths below
+are in this repository unless they name haynes-ops.*
+
+A coordinator on one provider sometimes needs a child on the other one: for
+example, a Claude Remote Control coordinator that wants a Codex review. The
+supported route is a managed project task started with `agent-run`. The child
+is its own Session in its own pod, with its own record, project rules, timeout
+and retained result.
+
+```bash
+agent-run --project haynes-studio --agent codex \
+  --model gpt-6-astra --effort max \
+  --prompt-file work-order.md --timeout 2h \
+  --idempotency-key op401-codex-review-1 --wait 3m
+```
+
+| Flag | What it does | Source |
+| --- | --- | --- |
+| `--project <name>` | Names a project in the operator's accepted catalog. The client sends only the name; the server picks the repository, base and rules. A managed Codex task needs it. | `internal/agentrun/create.go:74,108-118`; `internal/apiserver/validate.go:105-120,149-150` |
+| `--repo <name>` | Optional. Picks one repository of a project that has several. | `internal/agentrun/help.go:393-397` |
+| `--agent codex --model <id>` | Codex needs a full model ID. The server checks the model and the effort. | `create.go:201-205`; `internal/agentd/protocol/session.go:316-344`; `validate.go:190-194` |
+| `--prompt-file <path>` | Reads the work order from a file, or from stdin with `-`. At most 64 KiB. | `create.go:163-176,381-395` |
+| `--timeout <d>` | Stops the task after this long. Leave out `--max-turns`: the server refuses it for Codex. | `create.go:215-226`; `validate.go:227` |
+| `--idempotency-key <k>` | The same command run again with the same key returns the first Session instead of starting a second one, while that Session is unfinished. A different request under the same key is refused with 409. | `create.go:242-248,327-328`; `internal/apiserver/sessions.go:98-111` |
+| `--wait <d>` | How long agent-run waits for the **pod to start**. It does not wait for the task. Exit 0 with "Running on NODE" means the pod started, and nothing more. | `create.go:21-29,335,397-448`; `help.go:446-447` |
+
+Record the printed name. Then read `agent-run show NAME -o json` once and keep
+`uid`, `parent`, `agent`, `model`, `effort`, `repo`, `base`, `revision` and
+`createdAt` in the status record. `model` is the requested model, a launch
+setting. The `Actual model` row of `show` stays Unknown until the provider
+reports a served model (`internal/agentrun/sessions.go:299`).
+
+#### Refusals and what to do
+
+agent-run retries only a transport failure or a 502, 503 or 504, at most twice,
+with the same idempotency key (`internal/agentrun/client.go:20-30,155-156`). It
+sends a refused create once and maps the refusal to an exit code
+(`client.go:268-319`, `internal/agentrun/agentrun.go:36-64`; one request for a
+422 is pinned by `TestProjectCatalogRefusalsRemainServerAuthoritative`). A
+refusal creates no Session. Do not retry it, change flags to get past it, or
+switch to another route.
+
+| What agent-run prints | Exit | What it means | What to do |
+| --- | --- | --- | --- |
+| `the API refused the request (422 invalid):` then `--agent: managed codex tasks require the enabled feature and an accepted project snapshot` | 1 | The Codex task has no accepted project snapshot: `--project` is missing, the mode is not task, or the operator's managed-Codex feature is off (`validate.go:149-150`). A request with `--repo` and no `--project` gets this. | Add `--project` only when the work record names an authorized project. If the project is right and this still appears, the feature is off: record it and stop this launch. Never try to turn a feature on, change the profile or use another host. |
+| `the API refused the request (422 invalid):` then `project: accepted project/repository is unavailable or invalid`, or `project: accepted project catalog is not configured` | 1 | The operator's catalog does not have that project, or does not have that repository in it, or no catalog is configured (`validate.go:105-114`). | Stop this launch. The fix is the reviewed catalog path: a haynes-ops pull request that changes only `kubernetes/main/apps/dev-env-system/projects/app/catalog.json`, which kustomize turns into the `dev-env-project-catalog` ConfigMap the operator reads ([shared project catalog](shared-project-catalog.md)). haynes-ops #4645 added `haynes-studio` that way. Open it only inside the story's authorized scope. Once it is merged and Flux has applied it, the launch is a new attempt with the cause fixed. `--repo`, a local clone or a reachable repository is not a substitute. |
+| `not allowed (403 forbidden): dry-run requires a configured exact sealed pilot request` | 3 | `--dry-run=server` posts to `/v1/private-pilot/preflight` (`create.go:281-305`, `internal/apiserver/apiv1/types.go:21`). The server answers there only for the one configured sealed private pilot. Without that configuration it refuses every request with 403 (`internal/apiserver/sessions.go:66-67`). Exit 3 means retrying the same call will not help. | Keep the refusal as evidence and do not retry it. It says nothing about whether your create would be admitted. |
+
+**`--dry-run=server` is not a general preflight.** It is for the exact sealed
+pilot only. Its help line, "admission only, never creates or falls back"
+(`help.go:400`), describes that pilot route. An ordinary create has no server
+dry run. The checks before a launch are reading checks: the work record names
+the project and the provider, `agent-run help run` gives the flags, and the
+[launch-profile preflight](launch-profile-preflight.md) covers the profile. The
+create is the admission check.
+
+#### Never run another provider inside your own pod
+
+The agent image carries both `claude` and `codex`. Running the other provider
+inside your own pod, for example `codex exec` in a Claude session pod, is not a
+managed session and never stands in for one:
+
+- it runs with your Session's identity, pod, profile and sandbox, not a child's;
+- it has no Session record, project snapshot, project rules, timeout, task
+  result or retained outcome, so nobody else can read how it ended;
+- its usage is not attributed to a child Session.
+
+In the OP402 incident, an in-pod `codex exec --sandbox workspace-write` hit a
+bwrap namespace failure. It reported exit 0 and wrote no files; its final
+response said it was blocked. Use the managed route above. If that route is
+refused, the refusal is the answer: handle it as the table says. The global
+rules say the same: do not start a cross-provider session as a fallback, and
+start a separate session with `agent-run` (haynes-ops
+`kubernetes/main/apps/dev-env-system/session-config/app/config/claude/CLAUDE.md`,
+"Subagent dispatch rules"). Managed Codex execution is not a fallback route
+either ([launch-profile preflight](launch-profile-preflight.md#managed-codex-task-admission)).
+
+#### Read how the child ended
+
+Four facts can each look like "done". Keep them apart:
+
+1. **The provider process or turn completed.** agentd records the provider's
+   real exit code, or 128 plus the signal when a signal ended it
+   (`internal/agentd/runagent.go:507-549`). The heartbeat carries it into the
+   Session's status (`internal/apiserver/heartbeat.go:187`), which keeps it
+   after the pod is gone. `agent-run show` prints it as `task: exit N at ...`
+   and the verdict as `task result:` (`internal/agentrun/sessions.go:192-194,227-235`,
+   `internal/apiserver/apiv1/types.go:385-428`). In JSON it is
+   `agentStatus.task.exitCode`. This proves the process ended, and how.
+2. **A tool command failed inside the turn.** A provider can end its turn with
+   exit 0 after one of its own commands failed. Exit 0 then means only that the
+   provider ended normally.
+3. **A wrapper masked the exit.** `cmd | tail` returns `tail`'s status, and a
+   trailing `echo` returns 0. Then even the process exit is lost. Use the
+   pattern below.
+4. **The accepted deliverable is missing.** The work order names the
+   deliverable: a `review.md`, a commit, a PR head. If it is missing or not yet
+   reviewed, the work is not done, whatever the first three say.
+
+**Exit 0, `Running` or a final message is not a successful review. Only the
+accepted deliverable is.**
+
+The phase is the pod's, not the task's. The phases are Pending, Running, Idle,
+Draining, Suspended, Archived and Failed
+(`api/v1alpha1/agentsession_types.go:90`); there is no Succeeded. A task's pod
+keeps running after its task ends, until the idle suspend. Watch
+`agentStatus.state`: `exited` means the task finished and `agentStatus.task`
+says how; `failed` means agentd could not start it; `interrupted` means its
+process is gone without a result (`internal/agentd/protocol/status.go:26-42`).
+`show` reports the child's exit as data and itself exits 0
+(`TestShowReportsAFailedTaskChildsRealExitAndRetainedOutcome` in
+`internal/agentrun/task_exit_test.go`). agent-run does not turn a child's exit
+into its own exit code: read it.
+
+Keep each command's own exit status:
+
+```bash
+# Wrong: the status is tail's, or echo's.
+agent-run show "$CHILD" -o json | tail -5
+agent-run show "$CHILD" -o json; echo done
+
+# Right: save the output, keep the status, then read the child's exit.
+agent-run show "$CHILD" -o json > child.json; rc=$?
+echo "agent-run show exit=$rc"
+if [ "$rc" -eq 0 ]; then
+  jq -r '[.agentStatus.state // "none", (.agentStatus.task.exitCode // "none")] | @tsv' child.json
+fi
+
+# In a pipeline, set pipefail or read PIPESTATUS before anything else runs.
+set -o pipefail
+agent-run log "$CHILD" --tail 40 | tail -n 20; rc=$?
+```
+
 ## 4. The everyday workflow
 
 ```mermaid
@@ -673,6 +809,46 @@ it. Avoid replacing a real product outcome with an infrastructure benchmark.
 Keep decisions in the ADR, tasks in durable issues and actual workflow evidence
 in delivery records. The guide is the owner’s product map; update it whenever a
 scope decision changes the experience.
+
+### Where the agent-loop skills load
+
+*Checked 2026-11-04 in one Claude session pod for OpenProject #402. Merged
+source is not loaded runtime.* The three skills (`supervised-dispatch`,
+`worker-qa-loop`, `timer-checkin`) are files under `.agents/skills/` on `main`
+from `801de50d` (#908). A running session does not get them because they
+merged:
+
+- **Claude Code** loads skills from `~/.claude/skills/`, from a project's
+  `.claude/skills/` and from installed plugins. This repository has no `.claude/skills/`. In the installed
+  Claude Code 2.1.312, the string `.agents/skills` appears only in its config
+  import code, which copies such skills into `.claude/skills/` when a user runs
+  the import. That is a string search of the binary, not a load test.
+- **`~/.claude/skills/`** in the checked pod holds only the account-synced skills
+  (under `synced/`), none of these three. **`~/.codex/skills/`** does not exist
+  there.
+- **The reference clone** `~/repos/dev-env` in that pod has `main` checked out
+  at `2828fa9f` (#895), older than `801de50d`, so it has no `.agents/skills/`
+  even though `origin/main` does. A reference clone's checkout is not kept at
+  the latest `main`. A Remote Control session's clone, in its own pod, was
+  reported the same way by the OP402 investigator; that is not re-verified here.
+- **Codex** 0.160.1, installed in the same image, contains the string
+  `.agents/skills`. Whether a Codex session loads these skills is not verified
+  here.
+- **The global rules**, `~/.claude/CLAUDE.md`, come from haynes-ops GitOps
+  (`kubernetes/main/apps/dev-env-system/session-config/app/config/claude/CLAUDE.md`).
+  At haynes-ops `83df979c` that file is byte-identical to the checked pod's
+  copy. Its lines 534-551 make a Remote Control session a coordinator, and lines
+  559-561 forbid a cross-provider session as a fallback and send a separate
+  session through `agent-run`. Its launcher table (lines 321-328) has no
+  `--project` and still lists `--agent codex` under "plan 04". Its Traps section
+  (lines 594-597) says how to run `codex exec` from a tool shell without a hang,
+  and does not say that this never stands in for a managed session. The
+  proposed edits are an OP402 follow-up in haynes-ops; this repository does not
+  change that file.
+
+Until the skills are installed where a provider loads them, read them as files:
+open `.agents/skills/<name>/SKILL.md` in a checkout at or after `801de50d`, or
+run `git show origin/main:.agents/skills/<name>/SKILL.md` after a fetch.
 
 ### Read retained session metadata
 

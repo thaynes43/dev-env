@@ -30,8 +30,47 @@ The durable platform timers are different, and neither one is a check-in:
 
 Do not invent a scheduler: no busy loops, no unbounded sleep loops, no cron in the
 pod, no CronJob. A bounded wait is fine: a `Monitor` with a timeout, or a
-`run_in_background` until-loop that polls at a sensible interval and exits when
-its condition is met.
+`run_in_background` until-loop that polls at a sensible interval and exits on
+its condition **or at its deadline**, whichever comes first. A loop with no
+deadline is unbounded even when it greps for a phase: a task's phase stays
+Running after its task ends, and there is no Succeeded phase, so such a loop
+can wait forever.
+
+A bounded wait for one headless child. It ends when the child ends, when reads
+keep failing, or at the deadline, and prints one line for each of those and for
+each failed read, so a `Monitor` filter on `END|READ-FAIL` sees failures too:
+
+```bash
+# The deadline is absolute, from the custody record, so a re-armed wait keeps it.
+child=CHILD-NAME; dir=$HOME/work/OP000; deadline=$(date -u -d 2026-11-04T15:00:00Z +%s); fails=0
+while :; do
+  if agent-run show "$child" -o json > "$dir/child.json.tmp"; then
+    fails=0; mv "$dir/child.json.tmp" "$dir/child.json"
+    st=$(jq -r '.agentStatus.state // "none"' "$dir/child.json")
+    ph=$(jq -r '.phase // "none"' "$dir/child.json")
+    case "$st/$ph" in
+      exited/* | failed/* | interrupted/* | */Failed | */Suspended | */Archived)
+        echo "END child state=$st phase=$ph"; exit 0 ;;
+    esac
+  else
+    rc=$?; fails=$((fails + 1)); echo "READ-FAIL exit=$rc count=$fails"
+    case "$rc" in 3 | 4) echo "END read refused exit=$rc"; exit 3 ;; esac
+    [ "$fails" -ge 5 ] && { echo "END reads failing exit=$rc"; exit 3; }
+  fi
+  [ "$(date +%s)" -ge "$deadline" ] && { echo "END deadline state=${st:-unknown}"; exit 4; }
+  sleep 120
+done
+```
+
+Save it as a script and run it with `bash` through Bash `run_in_background`,
+which reports once when it exits, or under a `Monitor` for at most 30 minutes,
+then re-arm it with the same deadline. Never run it in the foreground
+(section 4). Take the deadline from the work order. The script's
+exit is its own: 0 means the child ended, not that it succeeded. Read the
+child's task exit, verdict and outcome from `child.json` next, then the
+deliverable (supervised-dispatch, section 4). The states and phases it stops
+on are in `internal/agentd/protocol/status.go` and
+`api/v1alpha1/agentsession_types.go`.
 
 **The tool reality, in Claude Code 2.1.312 as installed here (2026-11-04).** The
 coordinator's own session has `CronCreate` and `ScheduleWakeup`. A native
@@ -61,6 +100,45 @@ a supported route (see supervised-dispatch, section 2). It holds:
 - `lastCheck`: time and result;
 - `stop`: reason, time and evidence, once the work ends.
 
+When the work is a child in another pod, for example a headless task started
+by a Remote Control coordinator, this file is also the custody record. It names
+the owner, the deadline, the checkpoints, the handoff and the outcome evidence,
+so a successor can continue without the coordinator's context. A template;
+values are placeholders, `null` means not observed yet:
+
+```json
+{
+  "schema": "custody.v1",
+  "story": "OP000",
+  "custodian": "COORDINATOR-SESSION",
+  "custody": [{"from": null, "to": "COORDINATOR-SESSION", "at": "2026-11-04T12:00:00Z", "reason": "launched the child"}],
+  "child": {
+    "name": "CHILD-NAME", "uid": "CHILD-UID", "parent": "COORDINATOR-SESSION",
+    "agent": "codex", "requestedModel": "gpt-6-astra", "effort": "max", "servedModel": "Unknown",
+    "project": "PROJECT", "repo": "REPO", "base": "main", "revision": "TEMPLATE-REVISION",
+    "createdAt": "2026-11-04T12:00:00Z", "idempotencyKey": "op000-child-1",
+    "launch": {"command": "agent-run --project PROJECT --agent codex ...", "exit": 0}
+  },
+  "deliverable": {"what": "review.md and a draft PR on the claimed branch", "acceptance": "the story's acceptance checks"},
+  "deadline": {"wait": "2026-11-04T15:00:00Z", "budget": "as recorded on the story"},
+  "timer": {"mechanism": "CronCreate", "jobId": null, "schedule": "7,27,47 * * * *", "nextCheck": null, "expires": null},
+  "checkpoints": [
+    {"rung": "launch accepted", "at": "2026-11-04T12:00:00Z", "evidence": "create exit 0; show -o json uid"}
+  ],
+  "lastCheck": {"at": null, "result": null},
+  "handoff": {"route": "this file plus the tracker comment", "readableBy": "the coordinator's own session after a resume", "nextSafeStep": "read the child with agent-run show"},
+  "outcome": {"taskExit": null, "verdict": null, "taskOutcome": null, "pr": null, "head": null, "ci": null, "deliverableAccepted": false},
+  "stop": null
+}
+```
+
+`checkpoints` follow the evidence ladder in supervised-dispatch, section 4: one
+entry per rung reached, with its time and evidence reference. `outcome` holds
+what you read back from `agent-run show` and GitHub. The retained task outcome
+is the child's own claim: record it as that, not as acceptance.
+`deliverableAccepted` turns true only when the coordinator, or a QA agent other
+than the child, has checked the deliverable.
+
 Create the job, then write its job ID into the file. The fired prompt names the
 state file and says what to do, because the context may have been compacted by
 the time it fires. For example: "Timer check-in for OP385: read
@@ -78,7 +156,11 @@ minutes :00 and :30. The keeper pilot (OP385) uses `7,27,47 * * * *`.
 2. Check the evidence (see supervised-dispatch, section 5). Steer or correct.
    Quiet time or repeated failures trigger the stall rule in
    supervised-dispatch, section 5. They never end supervision or the timer.
-3. Update `lastCheck`, `nextCheck`, `stage` and the evidence references.
+   For a child in another pod, read `agent-run show NAME -o json` into a file
+   and keep its exit status. A failed read is "unknown", not a stop
+   (supervised-dispatch, section 4, "Waiting for a child").
+3. Update `lastCheck`, `nextCheck`, `stage`, the evidence references and, for
+   each new rung of the evidence ladder, a `checkpoints` entry.
 4. Mirror a meaningful change on the tracker.
 
 ## 4. Recover after an interruption

@@ -14,9 +14,14 @@ This skill is for the session that hands work to a coordinator and then supervis
 it. The coordinator runs the build loop with [worker-qa-loop](../worker-qa-loop/SKILL.md).
 Both check in on a timer with [timer-checkin](../timer-checkin/SKILL.md). This skill
 grants no scope, access or approval. Read the linked rules; do not copy them here.
+These skills are repository files: a session loads them only from where its provider
+looks, so read them by path until they are installed there
+([where the skills load](../../../docs/workflow-guide.md#where-the-agent-loop-skills-load)).
 
 - Ground rules, delivery gates, model and subagent tiers: [CLAUDE.md](../../../CLAUDE.md) and `~/.claude/CLAUDE.md`
 - Session routes, task results and outcome files: [workflow guide](../../../docs/workflow-guide.md), sections 3 and 9
+- A child on the other provider, its refusals, and how to read how it ended: [launch a project-bound child on another provider](../../../docs/workflow-guide.md#launch-a-project-bound-child-on-another-provider)
+- What a headless child's parent reads when the inbox cannot reach it: [ask your coordinator](../../../docs/ask-your-coordinator.md#return-route-for-a-parent-without-a-project)
 - Keeping custody of a result when its worker exits: [coordinator result handoff](../../../docs/coordinator-result-handoff.md)
 - Routine questions between sessions: [ask your coordinator](../../../docs/ask-your-coordinator.md)
 
@@ -50,7 +55,10 @@ file in the same directory, then a rename. Record at least: the goal, each
 acceptance check with its state and evidence reference, the coordinator, each
 worker, the stage, holds, blockers and the next step. Mirror the same facts on the
 tracker with `opwork comment` or `opwork checkpoint`. The file is for steering;
-the tracker is the durable queue. They must agree.
+the tracker is the durable queue. They must agree. While a child runs in another
+pod, keep its custody record too: owner, deadline, checkpoints, handoff and
+outcome evidence, in the template in
+[timer-checkin, section 2](../timer-checkin/SKILL.md#2-persist-the-state-first).
 
 Keep the record short. Keep secrets, prompts, transcripts and raw logs out of it,
 and point to logs instead.
@@ -79,6 +87,21 @@ may not reach. So:
   from `agent-run show NAME -o json`. A headless task runs its prompt once and does
   not take messages. It reports through its PR and the outcome file
   `~/work/<session>.outcome.json`, which `agent-run show` reads back.
+- **Provenance.** Keep, from that same `show -o json` read: `uid`, `parent`,
+  `agent`, `model` and `effort` (requested launch settings), `repo`, `base`,
+  `revision` and `createdAt`; and later the child's branch and head
+  (`agentStatus.branch`, `agentStatus.head`). The served model is the `Actual
+  model` row, Unknown until the provider reports it. Never copy the requested
+  model into the served model.
+- **A child on the other provider.** Start it as a managed project task:
+  `agent-run --project P --agent codex --model <full id> --prompt-file F ...`.
+  The [workflow guide](../../../docs/workflow-guide.md#launch-a-project-bound-child-on-another-provider)
+  has the exact flags and what each refusal means: a 422 without `--project`, a
+  422 for a project the catalog lacks (fixed only through the reviewed catalog
+  path), and a 403 from `--dry-run=server`, which serves the exact sealed pilot
+  only and is not a general preflight. Do not retry a refusal or route around
+  it. Never run the other provider inside your own pod, such as `codex exec` in
+  a Claude pod, as a stand-in for a managed session.
 - **Native subagent.** Its task title and the launch settings you asked for, such
   as `subagent_type: opus-worker`. Label the model as the launch setting, not as a
   verified fact, unless you observed it.
@@ -101,9 +124,68 @@ claimed branch, a test log, a CI run on the exact head, or a PR state read from
 GitHub. Record "assigned", "acknowledged" and "first concrete work seen" as
 separate stages.
 
-If no ACK arrives by the first check-in, read the receiver's state
-(`agent-run show`, or the subagent's notification) before you send anything else.
-Delivery is not acknowledgement. Do not resend blindly.
+### The evidence ladder
+
+Climb it one rung at a time. Each rung proves only itself, and none stands in
+for a later one. Record each rung in the status record with its time and an
+evidence reference.
+
+| Rung | What proves it | How to read it |
+|---|---|---|
+| 1. Launch accepted | The create printed the Session name and exited 0; the Session has a `uid` | the create's output and exit status; `agent-run show NAME -o json` |
+| 2. Running | `phase` Running and `agentStatus.state` busy | `agent-run show NAME` |
+| 3. Semantic ACK | The receiver's ACK restates the scope and names its worktree, branch, base and the routes it read | the ACK route (section 2) |
+| 4. First work | A commit on the claimed branch, or the first piece of the deliverable | `git ls-remote`, the child's branch and head in `show`, the artifact |
+| 5. Reviewed artifact | The deliverable exists at a stated head and you read it. For a review, that is its `review.md` | read the file at that head |
+| 6. PR | The PR is open on the claimed branch with the exact head | `gh pr view N --json headRefOid,state` |
+| 7. Required CI | `CI - Success` passed on that exact head | `gh pr view N --json statusCheckRollup` |
+| 8. Delivery or native return | The authorized merge at that head, or, for work that is not merged here, the result returned: a native subagent's final result, or a headless child's task exit, verdict and retained outcome | `gh pr view N --json mergedAt,mergeCommit`; the subagent's notification; `agent-run show NAME` |
+
+Exit 0, `Running` or a final message is not a successful review. Only the
+accepted deliverable is (rung 5 and above). The
+[workflow guide](../../../docs/workflow-guide.md#read-how-the-child-ended)
+separates a finished provider turn, a failed command inside it, a masked exit
+and a missing deliverable.
+
+Keep each command's own exit status in the evidence. A pipe into `tail`, or a
+final `echo`, replaces it. Save the output to a file and read `$?` right after
+the command, or `set -o pipefail`:
+
+```bash
+agent-run show "$CHILD" -o json > child.json; rc=$?
+echo "agent-run show exit=$rc"
+```
+
+### Waiting for a child
+
+Never wait with an open-ended shell loop. Use what exists: a check-in timer
+from [timer-checkin](../timer-checkin/SKILL.md) with its state file, a `Monitor`
+or background until-loop that has a deadline (timer-checkin, section 1), and
+`agent-run show` and `agent-run log` reads. Every wait handles these:
+
+- **API failure.** A failed read is "unknown", not stopped and not done. Record
+  agent-run's exit code. Exit 3 (auth, or 403) and 4 (not found) do not get
+  better on retry: end the wait and check the name and your identity. Other
+  non-zero exits, such as 5 (API unavailable after agent-run's own retries), can
+  be transient: count them, and after a few in a row end the wait with "child
+  state unknown since T". Never start a replacement child because reads failed:
+  the first one may still be working.
+- **Deadline.** The wait has a deadline from the work order. At the deadline,
+  read the child once more, record its last known state, and run a check-in.
+  The deadline ends the wait, not the work: steer by section 5, and re-arm a new
+  bounded wait while work continues.
+- **Lost ACK.** No ACK by the first check-in: read the receiver's state
+  (`agent-run show` and `agent-run log`, or the subagent's notification) before
+  you send anything. Delivery is not acknowledgement. A headless child takes no
+  messages. Do not resend the work order or start a duplicate. If it is busy,
+  look for first work. If it has exited, read its task result and outcome; a
+  further pass needs its own identity and authorization.
+- **Context handoff.** Before your context fills or your session stops, bring
+  the custody record up to date (timer-checkin, sections 2 and 5) so a
+  successor can continue from it.
+- **Final outcome.** When the child ends, read `agent-run show` (task exit,
+  verdict, retained outcome), the log while its pod still runs, and the PR.
+  Then check the deliverable itself (rung 5).
 
 ## 5. Steer live
 
@@ -179,7 +261,8 @@ a time with AskUserQuestion, at the moment they arise.
 
 ## 6. Close
 
-Check the outcome yourself against every acceptance check. Then complete the
+Check the outcome yourself against every acceptance check, and record the
+highest rung of the evidence ladder (section 4) that each one reached. Then complete the
 tracker item with its evidence (`opwork complete --evidence`), write the final
 status record with the stop reason, delete the timer, and report. A report says
 what was proved, how, and what is still open with its reason.
