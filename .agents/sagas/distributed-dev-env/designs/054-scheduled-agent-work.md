@@ -334,7 +334,15 @@ stateDiagram-v2
   (`controller/pod.go`). agentd checks it **before any boot side effect**, as
   `armTaskBudgetDeadline` does (`agentd/task_budget.go`). It applies **only to the
   first launch**: agentd checks it only when the session has no launch record yet
-  (`~/.agentd/launch.json` on the persistent volume, `agentd/launch.go`). A session
+  (`~/.agentd/launch.json` on the persistent volume, `agentd/launch.go`). agentd
+  checks again at the first launch itself, because a boot that starts before the
+  deadline can reach the launch after it (a slow clone, the project bootstrap, a
+  remote session's login wait). Codex remote sessions never write `launch.json`, so
+  the controller refuses the annotation on them: scheduled sessions are Claude, or
+  Codex task mode. The value must be RFC 3339 UTC ending in `Z`, at most 64 bytes,
+  parsed by one shared `protocol.ParseStartDeadline`. It reaches the pod as
+  `AGENTD_START_DEADLINE`, set only when the annotation is present, so other pods are
+  byte-identical (pinned by golden digests). A session
   that started in time and boots again later (a drain onto a new revision, a
   preempted pod, Tom resuming it after an idle suspend) is never refused. If the
   deadline has passed before the first launch, agentd never launches the agent and
