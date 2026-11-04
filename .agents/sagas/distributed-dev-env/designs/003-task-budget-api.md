@@ -75,7 +75,15 @@ not relabelled, and `Continue` re-evaluates every limit before it advances
 an epoch.
 
 A ledger that an operator from before this change already latched `Stalled`
-stays latched. Nothing is unlatched automatically. During a rolling upgrade
+stays latched. Nothing is unlatched automatically, and `Continue` refuses it
+even after the original guard's proven stop: only `NativeRootStopped` is
+continuable.
+
+The first observation after the rollout records the cap on any ledger already
+latched on a policy reason past its cap. For example, a `Checkpoint`-latched
+pilot ledger past its 45-minute deadline reads as `OverallBudget` from then
+on. No source keys on `Checkpoint` or `RepeatedFailure`; only
+`NativeRootStopped` is matched, and it keeps its reason. During a rolling upgrade
 an older replica can still latch `Stalled`; that latch also stays (fail
 closed). An older agent or `agent-run` binary refuses a status with the new
 `stall` field as an unknown field, so it fails closed while an unlatched
