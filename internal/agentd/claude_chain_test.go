@@ -132,6 +132,10 @@ func TestClaudeChainRefusedMaterialNeverRetries(t *testing.T) {
 		if rg.continues() != 0 {
 			t.Error("a rolled-back generation started a continue")
 		}
+		var receipt claudeReceipt
+		if err := readJSONFile(rg.s.statePath("claude-access-generation.json"), &receipt); err != nil || receipt.Generation != 2 {
+			t.Errorf("a lower generation was merged: receipt %+v %v", receipt, err)
+		}
 	})
 	t.Run("refresh material in the document", func(t *testing.T) {
 		rg := setup(t)
