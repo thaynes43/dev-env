@@ -40,16 +40,30 @@ goal is not ready. Fix the goal before you dispatch anything.
 
 ## 2. Keep one status record
 
-The working record is a small JSON file in a handoff directory, for example
-`~/.shared/handoffs/<slug>/WORK-STATUS.json`. Write it atomically: a temporary
+The working record is a small JSON file that the coordinator owns, for example
+`WORK-STATUS.json` in its handoff directory. Write it atomically: a temporary
 file in the same directory, then a rename. Record at least: the goal, each
 acceptance check with its state and evidence reference, the coordinator, each
 worker, the stage, holds, blockers and the next step. Mirror the same facts on the
 tracker with `opwork comment` or `opwork checkpoint`. The file is for steering;
 the tracker is the durable queue. They must agree.
 
-`~/.shared` is read by every session. Keep the record short and keep secrets,
-prompts, transcripts and raw logs out of it. Point to logs by path instead.
+Keep the record short. Keep secrets, prompts, transcripts and raw logs out of it,
+and point to logs instead.
+
+**Do not assume a shared filesystem.**
+[ADR-003](../../sagas/distributed-dev-env/adrs/003-session-coordination-private-repositories.md)
+keeps repositories and worktrees per pod, and shared Git or RWX storage is not
+required. `~/.shared` is a convenience that a receiver in another pod or harness
+may not reach. So:
+
+- For each handoff artifact (status record, ACK, RESULT, state file), record its
+  route: the path or URL, its owner, and who can read it. Before you rely on it,
+  verify that the receiver can actually read it.
+- Subagents in the same session and pod may use the real local paths.
+- Across pods, hand off through the supported routes: `agent-run inbox` or
+  `agent-run msg`, the tracker, and PRs.
+- Never read another pod's private files.
 
 ## 3. Record identities
 

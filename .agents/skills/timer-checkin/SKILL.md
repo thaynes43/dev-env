@@ -42,9 +42,12 @@ subagents and tasks from there.
 
 ## 2. Persist the state first
 
-Write a state file in the handoff directory, for example
-`~/.shared/handoffs/<slug>/<NAME>-STATE.json`, atomically (temporary file, then
-rename). It holds:
+Write a state file, for example `<NAME>-STATE.json` in the coordinator's handoff
+directory, atomically (temporary file, then rename). Put it where the
+coordinator itself can read it after a resume on a new pod, which keeps the same
+volume. Do not assume another pod can read it: mirror the task identity, stage and
+next check on the tracker, so a successor elsewhere can pick up custody through
+a supported route (see supervised-dispatch, section 2). It holds:
 
 - `coordinator`: the session that has custody;
 - the task identity: tracker item, PR, branch, worker and QA identities;

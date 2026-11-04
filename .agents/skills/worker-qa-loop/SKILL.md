@@ -23,6 +23,11 @@ claims, `accepted` and the next milestone. Read the ACK, then check that the
 worktree and branch exist and the base matches. An ACK is not work; wait for a
 commit.
 
+Pick ACK and RESULT routes that both sides can really use. A subagent in the same
+session and pod can write a local path. A receiver in another pod reports through
+the supported routes instead: `agent-run inbox`, the tracker, its PR, or a
+headless task's outcome file. See supervised-dispatch, section 2.
+
 Claims are disjoint. Each worker writes only its named paths, in its own worktree
 on its own branch. A shared file (CLAUDE.md's Layout block, generated CRDs, a
 design document) has exactly one named owner. When two stories must touch the same
