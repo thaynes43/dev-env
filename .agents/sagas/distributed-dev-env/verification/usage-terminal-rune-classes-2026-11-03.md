@@ -104,7 +104,11 @@ so the privacy floor set above (the checkmark class) is kept; all 8 code points 
 longer emitted and stays valid only to decode older diagnostics. Nothing is qualified: an unqualified
 character still refuses before it is rendered, and the glyph is qualified only by a separate reviewed
 change with its own evidence. Cycles 163 and 164 (operator log, 2026-11-04T14:40:58Z and 14:51:11Z) again refused Cursor at stage
-`builtin` with this reason, so the Cursor slot is configured and the terminal reader is reached. The
-report's `sourceStatuses[cursor]` shows `freshness.reason` "source not configured" beside a real
-`lastAttempt` (result `error`, code `acquisition_unavailable`); that wording is the read projection's
-default when no observation was ever held, not evidence of a missing configuration.
+`builtin` with this reason, so the Cursor slot is configured and the terminal reader is reached.
+
+Open anomaly, cause not identified. On operator image `sha-2828fa9` the slot report's
+`sourceStatuses[cursor]` showed `freshness.reason` "source not configured" (basis `none`, `asOf`
+2026-11-04T14:20:25Z in a read at 14:33Z) beside a real `lastAttempt` (result `error`, code
+`acquisition_unavailable`, 14:30:41Z). `statusFor` in `internal/providerallowance/collection.go`, as
+read at that image, does not produce that combination, so another path did. No explanation is offered
+here; tracing it is a later item.
