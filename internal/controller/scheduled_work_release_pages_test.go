@@ -404,3 +404,33 @@ func TestScheduledWorkReleasePageRecordRetriesAConflict(t *testing.T) {
 	}
 	f.wantReleasePage(t, v1alpha1.PageEventResult, 0)
 }
+
+// A skipped page is final: a later pass of the releaser, while the finalizer
+// still holds the derived name, creates no second Reminder for it.
+func TestScheduledWorkReleaseASkippedPageIsFinal(t *testing.T) {
+	var ahead atomic.Int64
+	var failing *reminderCreateFails
+	op := startOperator(t, aheadClock(&ahead), func(r *Reconciler) {
+		failing = &reminderCreateFails{Client: r.Client, err: errors.New("injected: the create failed")}
+		r.Client = failing
+	})
+	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDelivered)
+	deadline := time.Now().Add(30 * time.Second).Truncate(time.Second)
+	s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
+		suspendedAtCreate(s)
+		s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
+	})
+	f.waitOccurrence(t, v1alpha1.OccurrenceEnded)
+	holdsFinalizer(t, s.Name, time.Second, op.passes.held(s.Name, func(p releasePass) bool { return p.requeue > scheduledwork.ReleaseMargin }))
+	if p := releasePage(f.occurrence(t), v1alpha1.PageEventResult, 0); p == nil || p.State != "skipped" {
+		t.Fatalf("pages %+v", f.occurrence(t).Pages)
+	}
+	poke(t, s.Name)
+	holdsFinalizer(t, s.Name, time.Second, op.passes.held(s.Name, func(p releasePass) bool { return p.requeue > scheduledwork.ReleaseMargin }))
+	ahead.Store(int64(time.Until(deadline) + scheduledwork.ReleaseMargin + 10*time.Second))
+	poke(t, s.Name)
+	waitReleased(t, s.Name)
+	if n := failing.calls.Load(); n != 1 {
+		t.Errorf("%d Reminder creates, want 1: a skipped page was tried again", n)
+	}
+}

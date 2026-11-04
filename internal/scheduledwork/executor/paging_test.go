@@ -493,3 +493,25 @@ func TestThePagesCapKeepsTheNewestAttempt(t *testing.T) {
 	f.wantPage(key, day0, v1alpha1.PageEventParked, 3)
 	f.wantReminders(1)
 }
+
+// A transition replayed onto an occurrence that already records its page
+// (an approve or retry that reopens the same attempt, or any future path
+// that repeats one) records no second intent and sends no second page.
+func TestAReplayedTransitionSendsNoSecondPage(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	sent := []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventDue, Attempt: 0, Reminder: "swp-earlier-due-0", State: "sent"}}
+	claimed := metav1.NewTime(day0)
+	w := f.get(key)
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(day0), State: v1alpha1.OccurrenceClaimed,
+		ClaimedAt: &claimed, SpecHash: scheduledwork.SpecHash(w.Spec), Pages: sent}}
+	if err := cluster(t).Status().Update(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	f.at(f.paging(), day0.Add(time.Minute))
+	o := f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, "")
+	if !slices.Equal(o.Pages, sent) {
+		t.Errorf("pages %+v, want the recorded page unchanged", o.Pages)
+	}
+	f.wantReminders(0)
+}
