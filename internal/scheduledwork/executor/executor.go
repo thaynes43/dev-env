@@ -60,6 +60,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/reminders"
 	"github.com/thaynes43/dev-env/internal/scheduledwork"
+	"github.com/thaynes43/dev-env/internal/scheduledwork/pages"
 )
 
 // The defaults of DESIGN-054.
@@ -271,7 +272,10 @@ type Executor struct {
 	// (MetricSchemaReadFailures). Nil counts nothing.
 	SchemaMissing      prometheus.Counter
 	SchemaReadFailures prometheus.Counter
-	Log                logr.Logger
+	// Pager creates the page Reminders (DESIGN-054 Decision 5, S4b); NewPager
+	// builds the operator's. Nil pages nothing and records no page.
+	Pager *pages.Pager
+	Log   logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 
