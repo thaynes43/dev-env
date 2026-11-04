@@ -641,8 +641,11 @@ unresolvable blocker, an exhausted authorized budget (its recorded budget spent,
 or a budget checkpoint or stop threshold recorded on the story reached; never a
 stall threshold, [ADR-019](../.agents/sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)),
 or a required safety or permission decision, each with specific evidence. A
-limit the platform enforces is a stop that agents never bypass. The agent-loop
-skills in [`.agents/skills/`](../.agents/skills/) apply this rule.
+latch the platform has actually set, read with
+`agent-run budget show <task-uid>` (`latched: true` and its reason), is a
+platform denial that agents never bypass; an expected or estimated latch is not
+a stop. The agent-loop skills in [`.agents/skills/`](../.agents/skills/) apply
+this rule.
 
 *Adopted 2026-11-04 and recorded as decision 94, on Tom's words relayed by
 session dev-env-1027-010058 (parent coordinator) as trusted conversation
@@ -656,8 +659,9 @@ further attempts at a threshold and asked one owner question. Decision 55's
 ledger, budget history, carried counters and child accounting stay. Decision 55,
 its [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
 and ADR-003 are not edited; ADR-019 amends ADR-003's restatement. Source that
-latches the old stop, such as `internal/taskbudget`'s 60-minute `Stalled` latch,
-changes only by its own reviewed PR.*
+latches the old stop, `internal/taskbudget`'s 60-minute `Stalled` and
+three-failure `RepeatedFailure` latches, changes only by its own reviewed PR
+(#400).*
 
 The stopped NFS helper and observer remain historical. They demonstrated
 problems in our test tooling, not a NAS failure. Shared-Git trials no longer gate

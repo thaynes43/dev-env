@@ -54,9 +54,17 @@ actually spent, or when a budget checkpoint or stop threshold recorded on the
 story (its proposed budget and stop criteria) is reached. A stall threshold of
 decision 55 (60 minutes without progress, three failed attempts at the same
 blocker) is never a budget checkpoint or stop threshold, and a story cannot
-record one as either, restated or renamed: reaching it triggers the response
-below, never a stop. A budget checkpoint is a fence on the story's budget; it is
-not the saved checkpoint that steering writes.
+record one as either, restated or renamed. A budget checkpoint is a fence on the
+story's budget; it is not the saved checkpoint that steering writes.
+
+An agent never stops because a stall threshold is reached or expected; reaching
+one triggers the response below. A latch the platform has actually set is a
+different thing: it is a platform denial, which the agent does not bypass. Until
+follow-up #400 changes them, that includes the old stop clause's `Stalled` and
+`RepeatedFailure` latches. Read the latch from the platform with
+`agent-run budget show <task-uid>`: `latched: true` and its `reason` (with
+`-o json`, the `latched` and `reason` fields). An expected or estimated latch is
+not a stop.
 
 The time and attempt thresholds trigger diagnosis, steering, a checkpoint and
 continuity. One owner question is asked only when real input or a permission
@@ -75,10 +83,11 @@ platform's deterministic API, controllers and supervisor (item 6).
 - Budgets still bound the work. An exhausted budget, including a budget
   checkpoint or stop threshold recorded on the story (never a decision 55 stall
   threshold), stops it.
-- A limit the platform enforces stays a stop that agents never bypass: a budget
-  campaign latch such as `OverallBudget`, `EffortBudget` or `Checkpoint`, and,
-  until its own change, the old stop clause's `Stalled` and `RepeatedFailure`
-  latches.
+- A latch the platform has actually set, read with
+  `agent-run budget show <task-uid>`, is a platform denial that agents never
+  bypass: a budget campaign latch such as `OverallBudget`, `EffortBudget` or
+  `Checkpoint`, and, until #400, the old stop clause's `Stalled` and
+  `RepeatedFailure` latches. An expected latch is not a stop.
 - Decision 55, its budget contract, DESIGN-001 D-84 and ADR-003 are not edited.
   Read them with this ADR.
 - No source, flag or runtime behavior changes here. Source that enforces the old

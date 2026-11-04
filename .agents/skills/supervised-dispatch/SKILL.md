@@ -135,9 +135,11 @@ The work stops only on one of these, each backed by specific evidence:
 - **An exhausted authorized budget.** The budget recorded for the story is
   actually spent, or a budget checkpoint or stop threshold recorded on the story
   is reached, read from its record (ADR-019). A decision 55 stall threshold is
-  never a budget checkpoint or stop threshold. A limit the platform enforces,
-  such as a budget campaign latch, is a stop you never bypass. A feared or
-  estimated overrun is not exhaustion.
+  never a budget checkpoint or stop threshold. A latch the platform has actually
+  set, read with `agent-run budget show <task-uid>` (`latched: true` and its
+  reason), is a platform denial you never bypass; until #400 that includes the
+  old `Stalled` and `RepeatedFailure` latches. An expected or estimated latch is
+  not a stop, and neither is a feared or estimated overrun.
 - **A genuine unresolvable blocker.** An input only someone else can supply, with
   no authorized repair left. Record the missing artifact and why no repair
   remains.
