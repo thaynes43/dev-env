@@ -659,6 +659,9 @@ func TestEnsureIntoKeepsRealPagesFromAnInvalidCall(t *testing.T) {
 		{"attempt past the last", v1alpha1.PageEventParked, v1alpha1.ScheduledWorkMaxAttempt + 2},
 		{"negative attempt", v1alpha1.PageEventParked, -1},
 		{"unknown event", "bogus", 1},
+		// No skipped/2 entry exists, so the keep rule cannot mask a missing
+		// event check: only the guard keeps a made-up skipped page out.
+		{"unknown event at an attempt with no skipped page", "bogus", 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			in := slices.Clone(real)
@@ -727,6 +730,11 @@ func TestEnsureIntoKeepsARecordedPageWhenTheReadFails(t *testing.T) {
 	other := recorded[1:]
 	if got := p.EnsureInto(context.Background(), slices.Clone(other), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); len(got) != 2 || got[1] != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}) {
 		t.Errorf("another page's entry kept this one from being recorded: %+v", got)
+	}
+	// The same event at another attempt does not count either.
+	otherAttempt := []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventDue, Attempt: 0, Reminder: "swp-due-0", State: "sent"}}
+	if got := p.EnsureInto(context.Background(), slices.Clone(otherAttempt), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); len(got) != 2 || got[0] != otherAttempt[0] || got[1] != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}) {
+		t.Errorf("the same event's page at another attempt kept this one from being recorded: %+v", got)
 	}
 	// With the read working, the replay confirms the Reminder and records its
 	// state.
