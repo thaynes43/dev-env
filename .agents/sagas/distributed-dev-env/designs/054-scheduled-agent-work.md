@@ -253,8 +253,10 @@ stateDiagram-v2
 - **The session-end rule.** A scheduled session has ended when **any** of these
   holds:
   - its operating mode is Suspended, or its phase is Suspended, Failed or Archived;
-  - for task mode, the durable `status.taskResult` or the retained task outcome is
-    set;
+  - for task mode, a task verdict exists: `status.taskResult`, or until the
+    reconciler writes it, the same verdict derived from `agent.task` (a test pins the
+    two derivations together). The retained outcome alone is not an end, because it
+    can be written before the verdict;
   - its phase is Running or Idle and `standby.AgentEnded` holds with the pod-age
     proof (`unprovenAgentEnd` false). That keeps its booting and drain guard: an
     agent restarted by a drain onto a new revision is not an end.
@@ -271,18 +273,33 @@ stateDiagram-v2
   session that carries the finalizer and has ended by the session-end rule, or that is
   being deleted. It never deletes, suspends or changes a session in any other way, so
   active user work is untouched. For each such session it:
-  1. reads the owning ScheduledWork, uncached, by the name in the session's
-     annotation `dev-env.haynesops.com/scheduled-work-name`, and checks its UID
+  1. reads the owning ScheduledWork, uncached, in the operator's namespace
+     (`dev-env-system`, where the Reminders are; the executor and API create items
+     there), by the name in the session's annotation
+     `dev-env.haynesops.com/scheduled-work-name`, and checks its UID
      against the label (a Get by UID does not exist). A UID mismatch means the item
      was deleted and recreated under the same name, which counts as deleted;
   2. if the occurrence has no terminal state yet, writes one with a compare-and-set:
-     the headless outcome from Session status, `Ended` for interactive, or `Failed`
-     with reason `session reaped before it ended` when deletion came first. This is
-     the exit for every non-terminal state, including `Delivered` and a delivery
-     marked `ambiguous`;
+     the headless outcome from Session status, `Ended` ("participation not
+     observed") for interactive even when reaped, or `Failed` "session reaped before
+     it ended" for a headless session being deleted with no task verdict (unless its
+     operating mode is Suspended). Status cannot show whether deletion or the end came
+     first, so the verdict decides. A session that never started (no agent ever
+     reported, or agentd reported `protocol.StartDeadlinePassed` in `agent.message`)
+     past its start deadline is `Failed` "not started before grace ended" in both
+     modes. The session's own mode, not the item's current `spec.mode`, decides
+     headless or interactive. Because the heartbeat writes the task's exit and its
+     reported outcome separately, the releaser keeps the finalizer up to 2 minutes
+     after a task verdict so that a late `reported` is copied into the terminal
+     record. This is the exit for every non-terminal state, including `Delivered`
+     and a delivery marked `ambiguous`. An occurrence that is absent, or that names
+     another session, is released with no record; a missing or unreadable label or
+     annotation keeps the finalizer;
   3. if the ScheduledWork no longer exists (a person deleted it; the API offers only
      cancel), there is nothing to record, and nothing can redispatch it. It logs that
-     and goes on. If the read fails because the kind is not served (`NoKindMatch` or a
+     and goes on. A NotFound counts as deleted only after an uncached read shows the
+     CRD still exists: once the CRD is removed, a cached mapping returns a plain
+     NotFound, and that case follows the unserved-kind rule below. If the read fails because the kind is not served (`NoKindMatch` or a
      discovery error), that is **not** proof the objects are gone. It releases only
      when **both** of these hold: the session's own start-deadline annotation has
      passed (due plus grace, or `retriedAt` plus grace for a retried occurrence), so
@@ -291,8 +308,12 @@ stateDiagram-v2
      blocked metric;
   4. removes the finalizer.
 
-  A periodic sweep in the same reconciler lists sessions by the label (uncached) so
-  that a missed event cannot strand one. The releaser starts **no** watch or
+  A leader-only sweep lists labelled sessions uncached every 5 minutes and queues
+  them to the reconciler, so a missed event cannot strand one. Metrics:
+  `dev_env_scheduled_work_release_blocked` (a gauge computed at scrape time: sessions
+  that still hold the finalizer after they ended or while being deleted; the S6 page
+  source) and `dev_env_scheduled_work_release_holds_total{reason}` (diagnosis only).
+  Pages from the releaser are S4; S3a creates no Reminders. The releaser starts **no** watch or
   informer on ScheduledWork: S3a ships before S6 installs the CRD, and a watch on an
   absent kind would stop the manager from starting. The guard test that pins every finalizer
   removal site (`guard_test.go`) gains this site, and nothing else may remove it.
@@ -368,7 +389,8 @@ stateDiagram-v2
   preempted pod, Tom resuming it after an idle suspend) is never refused. If the
   deadline has passed before the first launch, agentd never launches the agent and
   does not exit, so the pod does not crash-loop. It reports boot as complete and the
-  agent state as `failed` with reason `start deadline passed`, so `AgentEnded`
+  agent state as `failed` with `agent.message` = `protocol.StartDeadlinePassed`
+  ("start deadline passed"), so `AgentEnded`
   (which is false while boot reads `booting`) and the session-end rule see an end
   once the 5-minute pod-age proof holds. The guarantee needs **an S3c operator and
   an S3c agent image**: the operator passes the deadline into the pod and the
