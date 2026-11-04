@@ -585,9 +585,15 @@ func (p *pass) step(ctx context.Context, w *v1alpha1.ScheduledWork, lg logr.Logg
 		sch = nil
 	}
 	if sch != nil && w.Status.PlanHash != planHash(w.Spec) {
-		plan(w, sch, now)
+		if o := plan(w, sch, now); o != nil {
+			p.intendFor(w, o)
+		}
 		lg.Info("planned the next occurrence", "nextDue", timeOrNone(w.Status.NextDue))
 		return true, e.write(ctx, w)
+	}
+	// The pages of transitions already stored go out before the next one.
+	if wrote, err := p.deliver(ctx, w, now, lg); wrote || err != nil {
+		return wrote, err
 	}
 	for i := range w.Status.Occurrences {
 		o := w.Status.Occurrences[i]
@@ -652,6 +658,7 @@ func (p *pass) due(ctx context.Context, w *v1alpha1.ScheduledWork, sch *reminder
 		if n > 1 {
 			rec.Missed = int32(n)
 		}
+		p.intendFor(w, &rec)
 		record(w, rec)
 		w.Status.Counts.Skipped += int32(n)
 		setNext(w, next, ok)
@@ -678,6 +685,7 @@ func (p *pass) due(ctx context.Context, w *v1alpha1.ScheduledWork, sch *reminder
 			rec.State, rec.ClaimedAt, rec.SpecHash = v1alpha1.OccurrenceClaimed, &claimedAt, scheduledwork.SpecHash(w.Spec)
 		}
 	}
+	p.intendFor(w, &rec)
 	record(w, rec)
 	setNext(w, next, ok)
 	logOccurrence(lg, at, "", rec.State, rec.Reason)
@@ -747,6 +755,9 @@ func (p *pass) pending(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 			}
 		}
 	}
+	if o.State != from {
+		p.intendFor(w, o)
+	}
 	logOccurrence(lg, at, from, o.State, o.Reason)
 	return true, p.e.write(ctx, w)
 }
@@ -761,6 +772,7 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 	name, err := scheduledwork.SessionName(string(w.UID), at)
 	if err != nil {
 		park(w, o, err.Error())
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	}
@@ -774,6 +786,7 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		return p.dispatched(ctx, w, o, name, sess.UID, true, lg)
 	case err == nil:
 		ambiguous(w, o)
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	case !apierrors.IsNotFound(err):
@@ -853,6 +866,7 @@ func (p *pass) end(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.S
 	} else {
 		w.Status.Counts.Skipped++
 	}
+	p.intendFor(w, o)
 	logOccurrence(lg, at, from, o.State, o.Reason)
 	return true, p.e.write(ctx, w)
 }
@@ -879,6 +893,7 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 	at := o.At.Time
 	parked := func(reason string) (bool, error) {
 		park(w, o, reason)
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	}
@@ -953,6 +968,7 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 		return p.end(ctx, w, o, v1alpha1.OccurrenceSkipped, ReasonNotCreated, lg)
 	case errors.Is(err, scheduledwork.ErrCollision):
 		ambiguous(w, o)
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	case errors.As(err, &refused):
@@ -970,9 +986,9 @@ func (p *pass) dispatched(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1a
 	if o.SessionUID == "" {
 		o.SessionUID = string(uid)
 	}
-	// TODO(S4): page the due event and, for interactive work, deliver the
-	// work order once the pod is Ready and page the link once Remote Control
-	// is registered.
+	p.intendFor(w, o)
+	// TODO(S4): for interactive work, deliver the work order once the pod is
+	// Ready and page the link once Remote Control is registered.
 	at := o.At.Time
 	lg.Info("scheduled work occurrence", "occurrence", at.UTC().Format(time.RFC3339), "from", from,
 		"to", v1alpha1.OccurrenceDispatched, "session", name, "adopted", adopted)
@@ -1191,7 +1207,7 @@ func (p *pass) parked(ctx context.Context, w *v1alpha1.ScheduledWork, at time.Ti
 	}
 	if now.Before(end) {
 		// TODO(S5): a human approve or retry claims it again, from
-		// retriedAt. TODO(S4): the parked page.
+		// retriedAt. The parked page went out with the park.
 		return false, nil
 	}
 	return p.end(ctx, w, o, v1alpha1.OccurrenceSkipped, ReasonParkedExpired, lg)
@@ -1288,18 +1304,24 @@ func record(w *v1alpha1.ScheduledWork, o v1alpha1.ScheduledWorkOccurrence) {
 // occurrences missed while the executor was down are found and none from
 // before the item existed is run. An edit re-plans from now; an occurrence
 // that was due and not yet decided is recorded Skipped first, so every
-// occurrence keeps a record.
-func plan(w *v1alpha1.ScheduledWork, sch *reminders.Schedule, now time.Time) {
+// occurrence keeps a record. It returns that Skipped record, or nil.
+func plan(w *v1alpha1.ScheduledWork, sch *reminders.Schedule, now time.Time) *v1alpha1.ScheduledWorkOccurrence {
 	notBefore := now
+	var replanned *metav1.Time
 	if w.Status.PlanHash == "" {
 		notBefore = w.CreationTimestamp.Truncate(time.Minute)
 	} else if d := w.Status.NextDue; d != nil && !d.After(now) && scheduledwork.Find(w, d.Time) == nil {
-		record(w, v1alpha1.ScheduledWorkOccurrence{At: *d.DeepCopy(), State: v1alpha1.OccurrenceSkipped, Reason: ReasonReplanned})
+		replanned = d.DeepCopy()
+		record(w, v1alpha1.ScheduledWorkOccurrence{At: *replanned, State: v1alpha1.OccurrenceSkipped, Reason: ReasonReplanned})
 		w.Status.Counts.Skipped++
 	}
 	w.Status.PlanHash = planHash(w.Spec)
 	next, ok := firstFrom(w, sch, notBefore)
 	setNext(w, next, ok)
+	if replanned == nil {
+		return nil
+	}
+	return scheduledwork.Find(w, replanned.Time)
 }
 
 // planHash identifies the fields NextDue is computed from: the shared schedule
