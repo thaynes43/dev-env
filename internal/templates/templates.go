@@ -71,10 +71,12 @@ var reservedVolumeNames = []string{"home", "shared", "tmp", "api-token", "grants
 // supply them. The exception is CLAUDE_CODE_OAUTH_TOKEN outside task and local
 // mode: an empty value is not the same as an unset one to every program, so the
 // operator leaves it out there, and agentd's remote mode unsets it (plan 03).
-// The original-HOME binding is also omitted when unused to preserve legacy Pod
-// bytes; it is reserved in explicit template env, but not masked in envFrom.
+// The original-HOME binding and a scheduled session's start deadline are also
+// omitted when unused to preserve legacy Pod bytes; they are reserved in
+// explicit template env, but not masked in envFrom.
 var ReservedEnv = []string{
 	homeguard.Env,
+	protocol.StartDeadlineEnv,
 	"AGENTD_ENABLE_RETAINED_COMMON_RULES",
 	"HOME",
 	"XDG_RUNTIME_DIR",

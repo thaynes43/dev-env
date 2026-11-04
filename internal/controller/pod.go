@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -368,6 +369,10 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		}
 		budgetEnv = string(encoded)
 	}
+	startDeadline, err := startDeadlineEnv(s, hold)
+	if err != nil {
+		return nil, err
+	}
 	if staticTokenFor(s) && !hold {
 		env = append(env, corev1.EnvVar{Name: "CLAUDE_CODE_OAUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
@@ -396,6 +401,10 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_RETAINED_COMMON_RULES", Value: fmt.Sprint(s.Spec.CommonRules != nil && !hold)})
 	// Controller-owned deadline and feature gates follow template/profile env.
 	env = append(env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: budgetEnv})
+	// Added only when set: an empty value would change every other pod.
+	if startDeadline != "" {
+		env = append(env, corev1.EnvVar{Name: protocol.StartDeadlineEnv, Value: startDeadline})
+	}
 	// Controller-owned feature gate cannot be widened by template/profile env.
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: fmt.Sprint(childDecisions && managedCodex && !hold && s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace != nil)})
@@ -549,6 +558,28 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		return nil, projectcanary.ErrRefused
 	}
 	return pod, nil
+}
+
+// startDeadlineEnv is the value of the pod's start-deadline env var: the
+// session's scheduled-work start deadline (DESIGN-054), which agentd enforces
+// on the first launch. A session without the annotation gets none, so its pod
+// keeps its bytes; a hold pod runs no agent and never gets one, so a bad value
+// cannot keep a volume from its rescue. A value agentd would not parse, or a
+// session whose agentd records no first launch (a Codex remote session's agent
+// is the phone daemon), refuses the pod as an invalid task budget does: the
+// session stays Pending and never boots without its deadline.
+func startDeadlineEnv(s *v1alpha1.AgentSession, hold bool) (string, error) {
+	raw, ok := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]
+	if !ok || hold {
+		return "", nil
+	}
+	if _, err := protocol.ParseStartDeadline(raw); err != nil {
+		return "", fmt.Errorf("invalid scheduled-work start deadline: %w", err)
+	}
+	if s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeRemote {
+		return "", errors.New("a scheduled-work start deadline needs a first launch record, which a Codex remote session does not keep")
+	}
+	return raw, nil
 }
 
 // staticTokenFor reports whether the pod gets the static Claude token: Claude in

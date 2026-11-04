@@ -172,6 +172,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("private task budget: %w", err)
 	}
 	defer stopBudgetWatch()
+	// The start deadline is checked after the budget is armed, so a refused
+	// session still ends at its budget, and before every other boot step.
+	if why := startDeadlineRefusal(d.S.StartDeadline, firstLaunchRecorded(d.S), d.now()); why != "" {
+		return d.refuseFirstLaunch(ctx, why)
+	}
 	d.expireCredentials()
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)
@@ -380,6 +385,12 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 			notes = append(notes, "the task's prompt is not run again (D-42); "+ended)
 		}
 		return newStep(name, notes, nil), ""
+	}
+	// No launch record: this is the first launch. The start deadline bounds
+	// the launch itself, not only the boot that reached it: a clone or a login
+	// wait can carry a boot that began in time past the deadline.
+	if why := startDeadlineRefusal(d.S.StartDeadline, false, d.now()); why != "" {
+		return newStep(name, nil, errors.New(why)), why
 	}
 	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
 	if err != nil {
