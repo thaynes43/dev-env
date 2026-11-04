@@ -29,8 +29,12 @@ A narrow implementation has no defensible input today:
    hashed email. Window and reset arithmetic cannot be derived from it: the period is not exposed.
 2. The Sand ("Grok Bot") fields (`usagePercent`, `nextResetTimestampUtc`, `currentPeriodStart`,
    `includedLimitZero`, `usesPooledEnterpriseAllowance`, `isUnified`) come from a private
-   DashboardService RPC. Calling it needs a delivered user token and creates a second refresher.
-   That is forbidden here and is not proposed.
+   DashboardService RPC, which no source in this repo is authorized to call. Two access routes
+   differ and must not be conflated: (a) a read of that RPC under an existing read scope that
+   gains new endpoint authority, and (b) a new login or a new refresh owner. The public code shows
+   only that OpenUsage uses (b); it does not prove that every read-only call needs a new refresher,
+   and this plan does not claim a new credential is the only route. Neither route is authorized or
+   proposed here, and token or private-route access stays forbidden in this scope.
 3. Whether the built-in display shows any Sand or Grok line at all is not known. A mapper written
    against the JSON shape would be dead code or a guess about the display.
 
@@ -43,6 +47,11 @@ A narrow implementation has no defensible input today:
 - E3: an owner decision on whether any first-party but undocumented route is acceptable. The
   research file lists the options (terminal readers only, a new solely owned login, accept
   Unknown for Grok). Not decided here.
+
+## Independence from the Included repair
+
+Sand is a separate product, not per-model Grok usage through Cursor. Optional Sand evidence (E2, E3)
+must never block repairing the normal Cursor Included read (E1 and the glyph qualification).
 
 ## Existing Sand machinery (already in the repo)
 
@@ -82,7 +91,19 @@ the pool relationship stays Unknown until E2 or E3 provide evidence. Nothing her
 
 ## Future LIVE acceptance gate
 
-Not met, not claimed. Accepted only when, with a granted collection window, two natural cycles
-each show Codex, Claude and Cursor usable with known values and provider-time provenance, the API
-read and the UI agree, and source, merged, installed and accepted are recorded separately with an
-external clock. Grok stays Unknown until E3 and its own evidence exist.
+Not met, not claimed. Accepted only with a granted collection window, field by field:
+
+- Codex and Claude: known values as their captures provide them. Provider time stays honestly
+  Unknown where the capture lacks it (`providerObservedAt` null); freshness is then not promoted.
+- Cursor Included: the integer percent as displayed (`includedPercentDisplay`, rounded display
+  precision), a displayed 0% kept as display evidence but not a known quota observation, the plan
+  label, and the vendor reset month/day kept as a label (`billingResetDisplayText`).
+- Cursor provenance: the qualified display has `providerObservedAt` null and `period`
+  `not_exposed`. The local acquisition start is recorded as `captureTimeBasis`
+  `local_acquisition_start`; it and the month/day label are never promoted to the provider
+  measurement clock. If stronger provenance is a real requirement, this source cannot meet it and
+  that is the exact gap: the built-in display exposes no provider timestamp or period.
+- Two natural cycles each show those fields for Codex, Claude and Cursor; the API read and the UI
+  agree with them; source, merged, installed and accepted are recorded separately with an external
+  clock.
+- Grok and Sand stay Unknown until E3 and their own evidence exist, and do not block the above.
