@@ -348,3 +348,108 @@ func TestClaudeUnsentProofBounds(t *testing.T) {
 		})
 	}
 }
+
+// The detached rollback is bounded: it runs on a context that shutdown does
+// not cancel but that carries the 6 s claudeRollbackTime deadline, which the
+// Lease fence honours (G1).
+func TestClaudeRollbackRunsWithinItsDeadline(t *testing.T) {
+	if claudeRollbackTime != 6*time.Second {
+		t.Fatal("the rollback bound is not 6 s")
+	}
+	if 2*claudeSaveTimeout+claudeSafetyMargin != claudeRollbackTime {
+		t.Fatal("the rollback bound is not 2 s load + 2 s save + 2 s margin")
+	}
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.notSent(cancel)
+	var seen bool
+	var left time.Duration
+	var cancelled bool
+	f.w.Fence = func(c context.Context, budget time.Duration) error {
+		if budget == claudeSaveTimeout+claudeSafetyMargin {
+			dl, ok := c.Deadline()
+			seen, left, cancelled = ok, time.Until(dl), c.Err() != nil
+		}
+		return nil
+	}
+	f.w.tick(ctx)
+	if !seen || left <= 0 || left > claudeRollbackTime || cancelled {
+		t.Fatalf("rollback context: deadline=%v left=%v cancelled=%v", seen, left, cancelled)
+	}
+	if r := f.journal(t); r.Stage != claudeReady || f.tr.Calls != 0 {
+		t.Fatalf("stage=%s calls=%d", r.Stage, f.tr.Calls)
+	}
+}
+
+// A rollback needs Lease budget for its save: with less than 4 s left on the
+// real fence it is refused, and the intent and the proof are kept until the
+// Lease is renewed (G1).
+func TestClaudeRollbackRefusedWithoutLeaseBudget(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	f.notSent(func() { f.c.Fail.Store(true) })
+	f.tick()
+	f.c.Fail.Store(false)
+	f.tr.Prepare = nil
+	if f.journal(t).Stage != claudeIntent || f.w.unsent.attempt == "" {
+		t.Fatal("setup: no retained proof")
+	}
+	f.holdLease(t, "keeper-a")
+	f.w.Fence = f.leaseFence(t, "keeper-a")
+	f.clk.Step(7 * time.Second) // 3 s left of the 10 s freshness bound
+	f.tick()
+	if r := f.journal(t); r.Stage != claudeIntent || f.w.unsent.attempt != r.AttemptUID || f.tr.Calls != 0 {
+		t.Fatalf("rollback ran without Lease budget: stage=%s", r.Stage)
+	}
+	f.holdLease(t, "keeper-a")
+	f.tick()
+	if r := f.journal(t); r.Stage != claudeReady || f.tr.Calls != 0 {
+		t.Fatalf("rollback after renewal: stage=%s calls=%d", r.Stage, f.tr.Calls)
+	}
+}
+
+// claudeRecreatingClient answers the numbered Get of the journal as if the
+// Secret had been recreated with its data copied: same data, a new UID.
+type claudeRecreatingClient struct {
+	client.Client
+	name string
+	at   int
+	gets int
+}
+
+func (c *claudeRecreatingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	err := c.Client.Get(ctx, key, obj, opts...)
+	if err == nil && key.Name == c.name {
+		if c.gets++; c.gets == c.at {
+			obj.SetUID("synthetic-recreated-incarnation")
+		}
+	}
+	return err
+}
+
+// The rollback re-reads the journal and requires the incarnation the proof
+// was made against, so a recreated journal with copied data is not rolled
+// back (G4).
+func TestClaudeRollbackRequiresTheSameJournalIncarnation(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	f.notSent(func() { f.c.Fail.Store(true) })
+	f.tick()
+	f.c.Fail.Store(false)
+	f.tr.Prepare = nil
+	if f.journal(t).Stage != claudeIntent || f.w.unsent.attempt == "" || f.w.unsent.marked {
+		t.Fatal("setup: no in-memory proof")
+	}
+	// Journal Gets: the tick's load (the proof's incarnation), then the
+	// rollback's own load (recreated).
+	f.w.Journal = &claudeJournal{Client: &claudeRecreatingClient{Client: f.c, name: f.w.Journal.Secret.Name, at: 2}, Secret: f.w.Journal.Secret}
+	f.tick()
+	if r := f.journal(t); r.Stage != claudeIntent || f.tr.Calls != 0 {
+		t.Fatalf("rolled back a different journal incarnation: stage=%s", r.Stage)
+	}
+}
