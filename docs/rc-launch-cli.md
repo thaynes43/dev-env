@@ -45,7 +45,7 @@ recover a previous invocation's timing or handoff receipt.
 | `pod_scheduled` | Session conditions: PodScheduled true, PodReady true, or a node-bound PodReady false condition reporting Starting/container startup; 60s |
 | `pod_ready` | PodReady condition true; 120s after `api_accepted`, including scheduling time |
 | `agent_started` | Agent running with nonempty conversation ID; 90s |
-| `provider_auth_ok` | Always unknown: `provider_readiness_unavailable` |
+| `provider_auth_ok` | Always unknown. Reason `provider_readiness_unavailable`, or, while the session's agent message starts with `login-rejected:` or `login-unverified:` (agentd saw the provider refuse the applied keeper generation, or cannot tell), `login_rejected_pending` or `login_rejection_unverifiable`. Information only: no gate, no new outcome, exit code or error code; the one handoff attempt is unchanged |
 | `rc_ready` | Always unknown: `provider_readiness_unavailable`; `rcRegistered` separately records registration; 90s |
 | `link_available` | URL matches the existing portal Remote Control URL pattern; 10s after registration |
 | `pairing_required` | Not applicable for Claude |
@@ -87,12 +87,16 @@ including a rejected or unconfirmed handoff.
 | `login_conflict` | Recognized agent conflict requires immediate owner action; no login is attempted |
 | `auth_projection_unavailable` | Keeper projection warning persisted for 30s within agent startup; a transient warning can clear; one status read cannot establish persistence |
 | `auth_refresh_pending` | The pod reported `refreshing:` (the access token expired under 3 minutes ago and the keeper's next generation is pending) when the 90s agent-start budget ended; outcome `timed_out`, exit pending, session handle retained. While the status is `refreshing:` the 30s owner-action rule does not run, and no sign-in is requested; if the status returns to the login-required text, that rule runs from that moment, and only within the remaining agent-start budget |
+| `login_rejected_pending` | Not an error code: the `provider_auth_ok` phase reason while the agent message starts with `login-rejected:` (agentd saw the provider reject the applied keeper token while it was unexpired). The phase stays `unknown`; no outcome, exit code, error code or owner action changes, and the one handoff attempt is unchanged. A newer generation may or may not arrive; if the wait outlasts agent start, the ordinary `agent_start_timeout` applies |
+| `login_rejection_unverifiable` | Not an error code: the `provider_auth_ok` phase reason while the agent message starts with `login-unverified:` (the pod's rejection record is unreadable or inconsistent, so agentd cannot tell). Same effect as above: reason text only |
 | `rc_registration_timeout`, `link_unavailable` | Registration or validated link did not appear in its budget |
 | `session_ended` | Session is Failed, Suspended, Archived or being reaped; start/status return `failed`, exit 1, even with a retained link |
 | `handoff_rejected` | Message refused, including 409 when not addressable |
 | `handoff_unconfirmed` | Message attempt had no confirmed transport result, or the create reused a key; never resent |
 | `launch_deadline` | Overall wait expired; retain the handle and observe status |
 | `status_unavailable` | Session observation or create response unavailable/unconfirmed |
+
+**The `login_rejected_pending` and `login_rejection_unverifiable` rows are phase reasons, not error codes.** When the session's agent message starts with `login-rejected:` (agentd saw the provider reject the applied keeper generation while its access token was unexpired) or `login-unverified:` (agentd cannot tell), `rc start` and `rc status` set the `provider_auth_ok` phase reason (state `unknown`, evidence `session_agent_status`). They never create an owner action, outcome, exit code or error code, and never change the one-shot handoff: unlike a persistent projection outage, a rejected login is waited out, because a newer generation may or may not arrive and this tool requests no sign-in. When a later agent message no longer starts with either prefix, the reason returns to `provider_readiness_unavailable` (evidence `session_view`). A just-expired token with a recorded rejection still starts with `refreshing:` and maps to `auth_refresh_pending`; the rejection is appended to the text. Unproven live: agentd's rejection signal has never been observed in a real session; it is tested only against synthetic transcripts.
 
 Exit 1 means failure/blocker; 2 means local invalid input; 3 means API
 authentication/authorization; 5 means nothing was sent; 6 means an unconfirmed

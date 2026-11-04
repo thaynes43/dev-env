@@ -193,6 +193,8 @@ var agentdLayout = []historyRule{
 	{"codex-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"claude-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"claude-continue.json", protocol.HistoryClassNotHistory, kindAny},
+	{"claude-rejected.json", protocol.HistoryClassNotHistory, kindAny},
+	{"claude-rejected.lock", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-config.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-host-start-intent.json", protocol.HistoryClassNotHistory, kindAny},
 	// Story110 T17: the Codex phone daemon's last start attempt and the time a

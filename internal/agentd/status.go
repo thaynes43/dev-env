@@ -219,6 +219,14 @@ func CollectStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sess
 		}
 		st.RemoteControl = rc
 	}
+	// A projected Claude session whose login the provider refused: say so in the
+	// existing message. The state word is unchanged.
+	if sess.Agent == protocol.AgentClaude && st.Agent.Error == "" {
+		switch st.Agent.State {
+		case protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting:
+			st.Agent.Error = rejectionHeartbeatText(s, now)
+		}
+	}
 	return st
 }
 

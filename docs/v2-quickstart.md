@@ -544,6 +544,16 @@ nobody signs in per session.
   access token. Exit 0 is fine, 1 is expiring or expired, 2 means it cannot
   tell. Proven from a session. Since 2.39.0 it also shows when the Claude login
   lapses (see "Lapse date and notices" below).
+- **A rejected login (Claude only; not yet proven live).** `agent-run auth status`
+  shows **Rejected** (exit 1) when this pod saw the provider reject the generation
+  it holds before that token expired. A 401 cannot say whether the keeper is late
+  or the login was revoked: a newer generation may or may not arrive, this tool
+  requests no sign-in, and after ten minutes the reason says to check the keeper.
+  Exit 1 here is not "renew the login", so a script that treats exit 1 as "renew"
+  will misfire; read the state first. Age alone never turns it back into Ready. If
+  the pod's rejection record is unreadable or inconsistent the row is **Unknown**
+  (exit 2). A newer generation shows as Ready only in the sense "no rejection
+  seen", not "proved accepted".
 - **Refresh is automatic.** The keeper renews the Claude access token at about
   two thirds of its 8-hour life. Proven at 00:29 on 2026-10-20: generation 2
   reached the session pods and every session stayed on the phone. Generation 3

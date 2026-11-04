@@ -28,8 +28,9 @@ import (
 // holds no turn record of its own for a TUI, so the transcript is the only
 // source. The CLI's exact error text is Unknown until the real checkpoint:
 // the match below is for the shape a synthetic fixture uses (an assistant
-// entry flagged isApiErrorMessage, or text starting "API Error", naming a
-// revoked or expired OAuth token) and is the one thing to confirm there.
+// entry flagged isApiErrorMessage, or one without a real model response whose
+// text starts "API Error", naming a revoked or expired OAuth token) and is the
+// one thing to confirm there.
 //
 // Never twice: claude-continue.json records the generation, outcome and evaluation
 // cutoff. A first healthy evaluation establishes a skipped baseline. A newer
@@ -69,7 +70,23 @@ type lastTurn struct {
 	Revoked bool
 	// User: the last entry is a user turn, a request that may still be in flight.
 	User bool
-	At   time.Time
+	// APIError: the last entry is an assistant API-error entry of any kind
+	// (Revoked is the authentication kind).
+	APIError bool
+	// Accepted: the last entry is an assistant entry that is not an API error and
+	// carries a real model response: a model name other than the CLI's synthetic
+	// placeholder and a usage record. That is the only thing that counts as proof
+	// the provider accepted a request; a user turn, an error or an entry without
+	// them proves nothing. The shape is the synthetic fixture's: the real CLI's is
+	// Unknown until a checkpoint, and if it lacks these fields nothing is Accepted
+	// and a marker clears only by a newer generation.
+	Accepted bool
+	At       time.Time
+	// RequestAt: for an assistant entry, the timestamp of the nearest earlier
+	// non-sidechain user entry (the prompt or the tool_result that triggered the
+	// request); zero when none is in the tail. The rejection marker attributes a
+	// 401 by it. Only set for an auth error.
+	RequestAt time.Time
 }
 
 type transcriptEntry struct {
@@ -82,6 +99,35 @@ type transcriptEntry struct {
 	Error          json.RawMessage `json:"error"`
 	Timestamp      string          `json:"timestamp"`
 	Message        json.RawMessage `json:"message"`
+}
+
+// acceptedResponse: the message names a model other than "<synthetic>" and
+// carries a usage record, as a response the provider returned does.
+func acceptedResponse(msg json.RawMessage) bool {
+	var m struct {
+		Model string          `json:"model"`
+		Usage json.RawMessage `json:"usage"`
+	}
+	if json.Unmarshal(msg, &m) != nil {
+		return false
+	}
+	if m.Model == "" || m.Model == "<synthetic>" {
+		return false
+	}
+	// A real response used tokens. An all-zero or empty record is what a locally
+	// built error entry carries, so it is not proof the provider answered.
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(m.Usage, &raw) != nil {
+		return false
+	}
+	var total int64
+	for _, k := range []string{"input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"} {
+		var n int64
+		if json.Unmarshal(raw[k], &n) == nil && n > 0 {
+			total += n
+		}
+	}
+	return total > 0
 }
 
 // entryText joins the text blocks of a message.
@@ -115,7 +161,13 @@ func entryText(msg json.RawMessage) string {
 
 // classifyTranscript scans the tail from the end for the last user or
 // assistant entry outside a sidechain.
-func classifyTranscript(tail []byte) lastTurn {
+func classifyTranscript(tail []byte) lastTurn { return classifyEntries(tail, false) }
+
+// classifyLastAssistant is the same scan for the most recent assistant entry,
+// looking past trailing user and tool_result entries.
+func classifyLastAssistant(tail []byte) lastTurn { return classifyEntries(tail, true) }
+
+func classifyEntries(tail []byte, assistantOnly bool) lastTurn {
 	lines := bytes.Split(tail, []byte("\n"))
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := bytes.TrimSpace(lines[i])
@@ -126,11 +178,18 @@ func classifyTranscript(tail []byte) lastTurn {
 		if json.Unmarshal(line, &e) != nil || e.IsSidechain || (e.Type != "user" && e.Type != "assistant") {
 			continue
 		}
+		if assistantOnly && e.Type != "assistant" {
+			continue
+		}
 		t := lastTurn{User: e.Type == "user"}
 		t.At, _ = time.Parse(time.RFC3339Nano, e.Timestamp)
 		if e.Type == "assistant" {
 			text := strings.ToLower(entryText(e.Message))
-			if e.IsAPIError || strings.HasPrefix(strings.TrimSpace(text), "api error") {
+			// The "API Error" text prefix marks an error only on an entry without a
+			// real model response: a reply that quotes an error is still a reply.
+			response := acceptedResponse(e.Message)
+			if e.IsAPIError || (!response && strings.HasPrefix(strings.TrimSpace(text), "api error")) {
+				t.APIError = true
 				if string(e.APIErrorStatus) == "401" || string(e.Error) == `"`+authErrorCode+`"` {
 					t.Revoked = true
 				}
@@ -140,10 +199,32 @@ func classifyTranscript(tail []byte) lastTurn {
 					}
 				}
 			}
+			t.Accepted = !t.APIError && !t.Revoked && response
+			if t.Revoked {
+				t.RequestAt = requestTime(lines[:i])
+			}
 		}
 		return t
 	}
 	return lastTurn{}
+}
+
+// requestTime is the timestamp of the nearest user entry before the given lines'
+// end, outside a sidechain; zero when there is none or it has no timestamp.
+func requestTime(before [][]byte) time.Time {
+	for i := len(before) - 1; i >= 0; i-- {
+		line := bytes.TrimSpace(before[i])
+		if len(line) == 0 {
+			continue
+		}
+		var e transcriptEntry
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.Type != "user" {
+			continue
+		}
+		at, _ := time.Parse(time.RFC3339Nano, e.Timestamp)
+		return at
+	}
+	return time.Time{}
 }
 
 // readTranscriptTail returns the last transcriptTailBytes of the session's

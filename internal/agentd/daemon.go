@@ -58,6 +58,12 @@ type Daemon struct {
 	loginLocked bool
 	// claudeSyncErr is the last projection outcome logged (nil: applied).
 	claudeSyncErr error
+	// rejectionFaults are the failure classes of the rejection marker already
+	// logged (cleared when the class succeeds); unpersisted is a rejection agentd
+	// saw but could not write, shown in the heartbeat so a failed write does not
+	// read as a healthy login.
+	rejectionFaults map[string]bool
+	unpersisted     *claudeRejection
 	// crm supervises a Codex remote session's phone daemon (Story110 T17).
 	crm *codexRemote
 
@@ -530,6 +536,7 @@ func (d *Daemon) supervise(ctx context.Context) error {
 				d.Log.Warn("managed child decision continuation is unavailable or uncertain")
 			}
 			d.syncClaudeAccess()
+			d.observeClaudeRejection()
 			d.pollRemoteLogin(ctx)
 			d.pollCodexRemote(ctx)
 			d.continueAfterRenewal(ctx)
@@ -651,6 +658,7 @@ func (d *Daemon) beat(ctx context.Context) {
 	}
 	st := CollectStatus(ctx, d.R, d.S, d.Session, d.now())
 	st.ConversationUsage = d.conversationUsage()
+	d.overlayRejection(&st)
 	st.HomeHeadroom = d.homeHeadroom.Sample(d.S.Home, d.now(), d.Log)
 	d.sendHeartbeat(ctx, st)
 }

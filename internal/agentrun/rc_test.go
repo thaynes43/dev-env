@@ -761,3 +761,73 @@ func TestRCStageTimeoutCodeUsesTheLastObservedRefreshStatus(t *testing.T) {
 		}
 	}
 }
+
+// A refused login is shown in the provider_auth_ok phase only. rc keeps its
+// outcome, exit code and one-shot handoff exactly as without the message: the
+// text is information, never a new gate.
+func TestRCRejectedLoginIsAPhaseReasonOnly(t *testing.T) {
+	for name, c := range map[string][2]string{
+		"pending":     {"login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod", "login_rejected_pending"},
+		"late":        {"login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z and no newer generation has arrived; check the keeper; no login is run in this pod", "login_rejected_pending"},
+		"cannot tell": {"login-unverified: this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider refused the keeper's login; no login is run in this pod", "login_rejection_unverifiable"},
+	} {
+		msg, reason := c[0], c[1]
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+				v := rcView(5)
+				v.AgentStatus = &apiv1.AgentStatus{State: "running", ConversationID: "c1", Message: msg}
+				return v
+			}, http.StatusAccepted)
+			h.mustRun(ExitOK, rcArgs(h)...)
+			r := rcResult(t, h)
+			ph := r.Phases["provider_auth_ok"]
+			if ph.State != "unknown" || ph.Reason != reason || ph.EvidenceSource != "session_agent_status" {
+				t.Errorf("provider_auth_ok = %+v", ph)
+			}
+			if r.Outcome != "link_available" || r.Error != nil || rcCountMessages(h) != 1 {
+				t.Errorf("rc changed course: outcome %q error %v messages %d", r.Outcome, r.Error, rcCountMessages(h))
+			}
+		})
+	}
+}
+
+// `login-rejected:` is information, not an owner action. While agent start waits,
+// rc start does not ask for action after 30 seconds (unlike a persistent
+// projection outage), recovers when the status clears, and if it never clears
+// ends with the ordinary agent-start timeout, not an auth code.
+func TestRCRejectedLoginDuringAgentStartIsNotAnOwnerAction(t *testing.T) {
+	const msg = "login-rejected: the provider rejected keeper generation 3 at 2026-10-06T20:59:00Z; a newer generation may or may not arrive; no login is run in this pod"
+	t.Run("recovers", func(t *testing.T) {
+		h := newHarness(t)
+		rcServe(h, http.StatusCreated, func(poll int) apiv1.Session {
+			v := rcView(5)
+			if poll < 25 {
+				v.AgentStatus = &apiv1.AgentStatus{Message: msg}
+			}
+			return v
+		}, http.StatusAccepted)
+		h.mustRun(ExitOK, rcArgs(h)...)
+		r := rcResult(t, h)
+		if r.Outcome != "link_available" || r.Error != nil || r.TotalMs < 30000 {
+			t.Fatal("a refused login was treated as an owner action", r)
+		}
+		// The message cleared, so the phase reason returns to its default.
+		if ph := r.Phases["provider_auth_ok"]; ph.State != "unknown" || ph.Reason != "provider_readiness_unavailable" || ph.EvidenceSource != "session_view" {
+			t.Errorf("provider_auth_ok after the message cleared = %+v", ph)
+		}
+	})
+	t.Run("never clears", func(t *testing.T) {
+		h := newHarness(t)
+		rcServe(h, http.StatusCreated, func(int) apiv1.Session {
+			v := rcView(5)
+			v.AgentStatus = &apiv1.AgentStatus{Message: msg}
+			return v
+		}, http.StatusAccepted)
+		h.mustRun(ExitPending, rcArgs(h)...)
+		r := rcResult(t, h)
+		if r.Outcome != "timed_out" || r.Error == nil || r.Error.Code != "agent_start_timeout" || rcCountMessages(h) != 0 {
+			t.Fatal("a refused login produced an auth outcome", r)
+		}
+	})
+}
