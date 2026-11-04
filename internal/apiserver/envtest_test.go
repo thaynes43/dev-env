@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +82,8 @@ type live struct {
 	cs   kubernetes.Interface
 	base string
 	http *http.Client
+	// caFile is the PEM of the API's own CA, for a real agent-run client.
+	caFile string
 }
 
 func startLive(t *testing.T) *live {
@@ -169,7 +172,7 @@ func startLiveWith(t *testing.T, configure func(*Server)) *live {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return &live{
-		t: t, k8s: k8s, cs: cs, base: "https://" + runner.boundAddr(),
+		t: t, k8s: k8s, cs: cs, base: "https://" + runner.boundAddr(), caFile: filepath.Join(dir, "tls.crt"),
 		http: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}}},
 	}
 }
