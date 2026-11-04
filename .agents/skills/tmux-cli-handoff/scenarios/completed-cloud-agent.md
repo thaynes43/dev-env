@@ -21,8 +21,9 @@ terminal on the author's host. Names, IDs and SHAs below are synthetic.
   - `tmux list-panes -a` (names, commands, working directories only): worker
     bridges, shells and an unrelated task; no Cursor or Grok chat pane for this
     task.
-- The correction is staged in the task's worktree. The work order forbids a new
-  worker, branch, PR or provider route.
+- The correction is staged in the handoff directory the work order names, not
+  in the task's worktree. The work order forbids a new worker, branch, PR or
+  provider route.
 
 ## Expected decision
 
@@ -48,7 +49,8 @@ Stop with `no-live-session` and ask for a recorded decision:
    verified follow-up interface for the cloud agent. Because the work order
    forbids a new worker or provider route, the decision belongs to whoever set
    that constraint.
-6. The correction stays staged where the custodian can read it.
+6. The correction stays staged in that handoff directory, where the custodian
+   can read it; never in a tracked path in another worktree (skill step 3).
 
 On 2026-11-04 the parent made that decision for PR #917: one controlled CLI
 successor in its own tmux session, same worktree and branch, with exclusive
