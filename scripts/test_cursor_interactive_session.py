@@ -953,6 +953,8 @@ class AnswerTests(AnswerFixture):
             "a composer replaced the prompt": {"capture": "S8 answered\n>"},
             "a new prompt with another path": {"capture": TRUST_SCREEN.replace("example-task", "other-task")},
             "the pane process was replaced": {"env": {"FAKE_PID": "999"}},
+            # The prompt is still current, but the screen is not the one that was verified.
+            "another row changed while the prompt stayed": {"capture": TRUST_SCREEN.replace("Tip: You can", "Tip: Now you can")},
         }
         for label, change in changes.items():
             with self.subTest(label=label):
