@@ -750,7 +750,7 @@ func TestScheduleApprove(t *testing.T) {
 			withTerminal(t, h, "y\n")
 			h.mustRun(ExitFailed, args...)
 			contains(t, "stderr", h.stderr.String(), "the occurrence of sched-0123456789abcdef0123 at 2026-10-06T19:00:00Z was claimed with an earlier spec (hash "+testOldHash+
-				"); the API retries only an occurrence claimed with the current spec. Approve without --at to approve the current spec for later occurrences. No approval was sent")
+				"); the API does not retry an occurrence claimed with an earlier spec. Approve without --at to approve the current spec for later occurrences. No approval was sent")
 			if d.posts() != 0 {
 				t.Errorf("an approval the API refuses was sent: %s", d.approve)
 			}
@@ -1024,7 +1024,7 @@ func TestScheduleRetry(t *testing.T) {
 			withTerminal(t, h, "y\n")
 			h.mustRun(ExitFailed, args...)
 			contains(t, "stderr", h.stderr.String(), "the occurrence of sched-0123456789abcdef0123 at 2026-10-06T19:00:00Z was claimed with an earlier spec (hash "+testOldHash+
-				"); the API retries only an occurrence claimed with the current spec. Approve the current spec for the next occurrence instead. No retry was sent")
+				"); the API does not retry an occurrence claimed with an earlier spec. Approve the current spec for the next occurrence instead. No retry was sent")
 			if d.posts() != 0 {
 				t.Errorf("a retry the API refuses was sent: %s", d.retry)
 			}

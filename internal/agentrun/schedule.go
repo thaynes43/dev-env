@@ -1043,7 +1043,7 @@ func scheduleParked(w apiv1.ScheduledWork, verb string, at *time.Time) (*apiv1.S
 		if verb == "approve" {
 			instead = "Approve without --at to approve the current spec for later occurrences"
 		}
-		return nil, fail(ExitFailed, "the occurrence of %s at %s was claimed with an earlier spec (hash %s); the API retries only an occurrence claimed with the current spec. %s. No %s was sent",
+		return nil, fail(ExitFailed, "the occurrence of %s at %s was claimed with an earlier spec (hash %s); the API does not retry an occurrence claimed with an earlier spec. %s. No %s was sent",
 			name, o.At.UTC().Format(time.RFC3339), shown(o.SpecHash, false), instead, noun)
 	}
 	return o, nil
