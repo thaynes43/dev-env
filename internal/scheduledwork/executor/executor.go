@@ -162,14 +162,20 @@ type Template struct {
 	IdleSuspendAfter time.Duration
 	// Admits are the bases the template admits.
 	Admits []Basis
+	// Modes are the modes of work the template serves: headless,
+	// interactive, or both (v1alpha1.ScheduledWorkHeadless and
+	// ScheduledWorkInteractive). An item whose mode is not among them parks.
+	Modes []string
 }
 
 // TemplateResolver reads a dispatch template at the due time. S3b2 implements
 // it over the dev-env-scheduled-work ConfigMap.
 type TemplateResolver interface {
-	// Resolve returns the named template. A *Refusal (a missing or invalid
-	// template) parks the occurrence; any other error is a failed read, tried
-	// again while the occurrence is inside its grace.
+	// Resolve returns the named template. A missing or invalid templates
+	// document, or a missing or invalid template in it, is a *Refusal, which
+	// parks the occurrence. Only a failed read (the ConfigMap could not be
+	// read) is a plain error, tried again while the occurrence is inside its
+	// grace.
 	Resolve(ctx context.Context, name string) (Template, error)
 }
 
@@ -847,7 +853,7 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 	case a.Basis == BasisSession && a.Owner == nil:
 		return parked("the live owner session is not named")
 	}
-	// Check 3: the template, its repo and its basis, now. The create checks
+	// Check 3: the template, its basis, its mode and its repo, now. The create checks
 	// the profile against dev-env-templates and the model id's form and
 	// effort; that the model is one the template still allows is the
 	// resolver's (TODO(S3b2)).
@@ -860,6 +866,8 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 		return retry(err, "read the dispatch template")
 	case !slices.Contains(t.Admits, a.Basis):
 		return parked(fmt.Sprintf("template %s does not admit %s work", w.Spec.Work.Template, a.Basis))
+	case !slices.Contains(t.Modes, w.Spec.Mode):
+		return parked(fmt.Sprintf("template %s does not serve %s work", w.Spec.Work.Template, w.Spec.Mode))
 	case !slices.Contains(t.Repos, w.Spec.Work.Repo):
 		return parked(fmt.Sprintf("template %s does not allow repo %s", w.Spec.Work.Template, w.Spec.Work.Repo))
 	}

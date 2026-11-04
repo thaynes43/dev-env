@@ -133,7 +133,8 @@ func (r resolver) Resolve(_ context.Context, name string) (Template, error) {
 
 // opsAudit is the fixtures' headless template.
 var opsAudit = Template{Agent: "claude", Model: "claude-opus-5-5", Effort: "xhigh", Profile: "dev",
-	Repos: []string{"haynes-ops"}, MaxDuration: 40 * time.Minute, Admits: []Basis{BasisHuman, BasisApproved, BasisSession}}
+	Repos: []string{"haynes-ops"}, MaxDuration: 40 * time.Minute, Admits: []Basis{BasisHuman, BasisApproved, BasisSession},
+	Modes: []string{v1alpha1.ScheduledWorkHeadless, v1alpha1.ScheduledWorkInteractive}}
 
 // creator wraps the API's real fixed-name entry, counting calls and the
 // sessions it really created, with hooks a test sets to interleave another

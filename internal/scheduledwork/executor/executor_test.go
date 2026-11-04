@@ -961,6 +961,25 @@ func TestProductionDefaultsParkAndDispatchNothing(t *testing.T) {
 	})
 }
 
+// A template serves the modes it names. An interactive item that names a
+// headless-only template parks at revalidation check 3 with the reason, and
+// no remote session is built.
+func TestATemplateServesOnlyItsModes(t *testing.T) {
+	f := newFixture(t)
+	headlessOnly := opsAudit
+	headlessOnly.Modes = []string{v1alpha1.ScheduledWorkHeadless}
+	f.tmpl["headless-only"] = headlessOnly
+	sp := spec()
+	sp.Mode, sp.Work.Template = v1alpha1.ScheduledWorkInteractive, "headless-only"
+	key := f.item("interactive", sp)
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.at(f.executor(), day0)
+	f.wantOcc(key, day0, v1alpha1.OccurrenceParked, "template headless-only does not serve interactive work")
+	if calls, _, _ := f.create.counts(); calls != 0 || len(f.sessionsOf()) != 0 {
+		t.Errorf("calls %d sessions %d: a session was built for a mode the template does not serve", calls, len(f.sessionsOf()))
+	}
+}
+
 // A recurring item moves to its next occurrence once one is decided, and
 // each occurrence gets its own derived session.
 func TestRecurringItemMovesToItsNextOccurrence(t *testing.T) {
