@@ -277,6 +277,7 @@ func cursorRuneClassReason(r rune) string {
 }
 
 // cursorMiscWindows labels U+2600 to U+26FF in eight windows of 32 code points each.
+// Index 5 (window 6) is never returned: cursorMiscWin6Parts names that window.
 var cursorMiscWindows = [8]string{
 	"builtin_terminal_miscwin1_unqualified", "builtin_terminal_miscwin2_unqualified",
 	"builtin_terminal_miscwin3_unqualified", "builtin_terminal_miscwin4_unqualified",

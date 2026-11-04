@@ -40,7 +40,7 @@ that matches it, not to a block it happens to sit in.
 | 15 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
 | 16 | `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only
 
-Class sizes are not uniform. The checkmark class is the smallest and most guessable (8 code points: U+2705, U+2714 to U+2718, U+274C, U+274E), then quote (about 22), dash (about 26) and star (about 45). The eight Miscellaneous Symbols windows hold 30 to 32 characters each (window 6 is now four parts of 8, the same size as the checkmark class) (window 1 loses the two stars, window 4 loses U+266F); the remaining classes are larger. A label still names a class of at least that many characters, never one character. This round makes the split below the earlier dash and quote classes deliberately, because the refusal sits in a family where no coarser label can find the glyph; a finer split than the checkmark class is not made.
+Class sizes are not uniform. The checkmark class is the most guessable and, with the four window-6 parts added in Round 4, is tied for the smallest at 8 code points (U+2705, U+2714 to U+2718, U+274C, U+274E), then quote (about 22), dash (about 26) and star (about 45). The eight Miscellaneous Symbols windows hold 30 to 32 characters each (window 1 loses the two stars, window 4 loses U+266F); the remaining classes are larger. A label still names a class of at least that many characters, never one character. This round makes the split below the earlier dash and quote classes deliberately, because the refusal sits in a family where no coarser label can find the glyph; a finer split than the checkmark class is not made.
 
 The existing precedence is unchanged: encoding, combining, spacing, format and
 the fixed dot set come first. Every label covers at least several characters (the checkmark class, 8, is the smallest), so it cannot
@@ -100,8 +100,7 @@ looks transient; it is not addressed here.
 Cycle 87 refused Cursor at `builtin_terminal_miscwin6_unqualified`, the window U+26A0 to U+26BF. Window 6 is
 split into four aligned parts of 8 code points: `miscwin6a` U+26A0 to U+26A7, `miscwin6b` U+26A8 to
 U+26AF, `miscwin6c` U+26B0 to U+26B7, `miscwin6d` U+26B8 to U+26BF. Eight code points is the smallest label,
-so the privacy floor set above (the checkmark class) is kept; no finer split is made. Plain `miscwin6` is no
+so the privacy floor set above (the checkmark class) is kept; all 8 code points in each part are assigned symbols; no finer split is made. Plain `miscwin6` is no
 longer emitted and stays valid only to decode older diagnostics. Nothing is qualified: an unqualified
 character still refuses before it is rendered, and the glyph is qualified only by a separate reviewed
-change with its own evidence. Cycle 162 reported Cursor as "source not configured", a collector
-configuration blocker that is separate and not addressed here.
+change with its own evidence. Separately, the slot ConfigMap `dev-env-system/dev-env-provider-allowances`, `report.json` `sourceStatuses[cursor]`, read 2026-11-04T14:33Z (cycle 162), showed `lastAttempt` result `error`, code `acquisition_unavailable` and `freshness.reason` "source not configured". That is a collector configuration blocker, not addressed here.
