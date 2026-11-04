@@ -962,6 +962,34 @@ func TestScheduleRetry(t *testing.T) {
 			t.Error("retried past the attempt limit")
 		}
 	})
+	// The API refuses a retry of an occurrence claimed with an earlier spec
+	// (RetryScheduledWorkRequest), so no y/N is asked and nothing is sent.
+	for name, args := range map[string][]string{
+		"claimed with an earlier spec, --yes":    decideArgs("retry", "--at", "2026-10-06T19:00:00Z"),
+		"claimed with an earlier spec, terminal": {"schedule", "retry", testWorkName},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			d := &decisionAPI{view: testScheduledWork()}
+			d.view.Occurrences[2].SpecHash = testOldHash
+			d.handle(t, h)
+			withTerminal(t, h, "y\n")
+			h.mustRun(ExitFailed, args...)
+			contains(t, "stderr", h.stderr.String(), "the occurrence of sched-0123456789abcdef0123 at 2026-10-06T19:00:00Z was claimed with an earlier spec (hash "+testOldHash+
+				"); the API retries only an occurrence claimed with the current spec. Approve the current spec for the next occurrence instead. No retry was sent")
+			if d.posts() != 0 {
+				t.Errorf("a retry the API refuses was sent: %s", d.retry)
+			}
+			for _, r := range h.api.requests() {
+				if r.method != http.MethodGet {
+					t.Errorf("sent %s %s", r.method, r.path)
+				}
+			}
+			if strings.Contains(h.stderr.String(), "[y/N]") || strings.Contains(h.stdout.String()+h.stderr.String(), "skips it") {
+				t.Errorf("asked or explained a retry it must refuse:\n%s%s", h.stdout.String(), h.stderr.String())
+			}
+		})
+	}
 	t.Run("a lost answer is not repeated", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork(), answer: func(w http.ResponseWriter) bool {

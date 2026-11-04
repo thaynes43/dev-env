@@ -775,7 +775,7 @@ library only. S5a ships them with the client; S5b serves the routes.
 | `PATCH .../{name}` | owner or human | the changed fields; the server sets `editor` in the same write |
 | `POST .../{name}/cancel` | owner, human or coordinator | an item already cancelled answers 200 |
 | `POST .../{name}/approve` | human only | `{specHash, at?}`: 409 unless `specHash` is the current spec's. With `at`, it also retries that occurrence: 409 unless it is Parked and under 3 attempts. `status.approval.by` is the authenticated caller, never a body value |
-| `POST .../{name}/retry` | human only | `{at, specHash}`, with the same checks. It grants no authority |
+| `POST .../{name}/retry` | human only | `{at, specHash}`, with the same checks, and 409 unless the occurrence was claimed with the current spec (agent-run refuses that case before it asks). It grants no authority |
 
 `agent-run schedule create|list|show|edit|cancel|approve|retry` mirrors
 `agent-run remind`, with the standard library only. It checks a request before

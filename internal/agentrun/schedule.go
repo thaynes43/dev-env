@@ -116,7 +116,8 @@ Tom's own token.
            retry also needs --at: the hash pins the spec, not the occurrence.
            It grants no authority: the occurrence is checked again as at its
            due time. On a terminal, --at picks one of several parked
-           occurrences.
+           occurrences. An occurrence claimed with an earlier spec cannot be
+           retried; approve the current spec for the next one instead.
 An occurrence can be approved or retried at most 3 times. Without --yes and
 without a terminal, approve and retry refuse and send nothing.
 `
@@ -987,7 +988,8 @@ func parkedOccurrences(w apiv1.ScheduledWork) []*apiv1.ScheduledWorkOccurrence {
 
 // scheduleParked picks the parked occurrence a decision retries: the one at
 // at, or for a retry the only one. An approval retries one only when at names
-// it. An occurrence that has used its retries is refused.
+// it. An occurrence that has used its retries is refused, and so is a retry of
+// one claimed with an earlier spec, which the API would refuse.
 func scheduleParked(w apiv1.ScheduledWork, verb string, at *time.Time) (*apiv1.ScheduledWorkOccurrence, error) {
 	noun, name := decisionNoun[verb], shown(w.Name, false)
 	var o *apiv1.ScheduledWorkOccurrence
@@ -1026,6 +1028,12 @@ func scheduleParked(w apiv1.ScheduledWork, verb string, at *time.Time) (*apiv1.S
 		return nil, fail(ExitFailed, "the occurrence of %s at %s has used its %d retries; a fourth is refused. No %s was sent",
 			name, o.At.UTC().Format(time.RFC3339), apiv1.MaxScheduledWorkAttempt, noun)
 	}
+	if verb == "retry" && o.SpecHash != "" && o.SpecHash != w.SpecHash {
+		// The API answers such a retry 409 (RetryScheduledWorkRequest), so
+		// asking the person to confirm it would confirm a refusal.
+		return nil, fail(ExitFailed, "the occurrence of %s at %s was claimed with an earlier spec (hash %s); the API retries only an occurrence claimed with the current spec. Approve the current spec for the next occurrence instead. No retry was sent",
+			name, o.At.UTC().Format(time.RFC3339), shown(o.SpecHash, false))
+	}
 	return o, nil
 }
 
@@ -1043,7 +1051,8 @@ func (a *app) printDecision(out io.Writer, verb string, w apiv1.ScheduledWork, p
 	if parked != nil {
 		pf(out, "Parked occurrence %s: %s; attempt %d of at most %d\n", parked.At.UTC().Format(time.RFC3339),
 			shown(firstOf(parked.Reason, "no reason given"), false), parked.Attempt, apiv1.MaxScheduledWorkAttempt)
-		if parked.SpecHash != "" && parked.SpecHash != w.SpecHash {
+		if verb == "approve" && parked.SpecHash != "" && parked.SpecHash != w.SpecHash {
+			// approve only: a retry of such an occurrence is refused before this.
 			pf(out, "It was claimed with an earlier spec (hash %s), so the API skips it instead of running it.\n", shown(parked.SpecHash, false))
 		}
 	}
