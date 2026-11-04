@@ -11,6 +11,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -691,4 +692,53 @@ func TestAnUnconfirmedPageStaysPending(t *testing.T) {
 	f.at(ex(), day0.Add(time.Minute))
 	f.wantPage(key, day0, v1alpha1.PageEventDue, 0)
 	f.wantReminders(1)
+}
+
+// An unconfirmed page is tried once per pass, however many steps the pass
+// takes: here the other occurrence's page is recorded after it, a write that
+// starts another step, and the unconfirmed one is not tried again.
+func TestAnUnconfirmedPageIsTriedOncePerPass(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("daily", daily(spec()))
+	w := f.get(key)
+	a, b := day0.Add(-48*time.Hour), day0.Add(-24*time.Hour)
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{
+		{At: metav1.NewTime(a), State: v1alpha1.OccurrenceSkipped, Reason: ReasonPreviousRunning, Pages: []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventSkipped}}},
+		{At: metav1.NewTime(b), State: v1alpha1.OccurrenceSkipped, Reason: ReasonPreviousRunning, Pages: []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventSkipped}}},
+	}
+	if err := cluster(t).Status().Update(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	w = f.get(key)
+	earlier, err := pages.Build(w, a, v1alpha1.PageEventSkipped, 0, "Scheduled work skipped: "+w.Spec.Title, key.Name, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cluster(t).Create(context.Background(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	var readFails atomic.Bool
+	readFails.Store(true)
+	var mu sync.Mutex
+	creates := map[string]int{}
+	e := f.executor()
+	writer := interceptor.NewClient(e.Client.(client.WithWatch), interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if r, ok := obj.(*v1alpha1.Reminder); ok {
+			mu.Lock()
+			creates[r.Name]++
+			mu.Unlock()
+		}
+		return c.Create(ctx, obj, opts...)
+	}})
+	e.Pager = NewPager(writer, reminderReadFails{Reader: e.Reader, fail: &readFails})
+	f.at(e, day0.Add(-time.Hour))
+	if p := pageOf(f.occ(key, a), v1alpha1.PageEventSkipped, 0); p == nil || !pendingPage(*p) {
+		t.Errorf("the unconfirmed page was settled: %+v", f.occ(key, a).Pages)
+	}
+	f.wantPage(key, b, v1alpha1.PageEventSkipped, 0)
+	mu.Lock()
+	defer mu.Unlock()
+	if n := creates[earlier.Name]; n != 1 {
+		t.Errorf("the unconfirmed page was tried %d times in one pass, want 1", n)
+	}
 }
