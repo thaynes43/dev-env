@@ -320,6 +320,13 @@ AgentSession CRD rollout.
 - **Worktree per task, never push to main.** Branch `agent/<task>`, open a ready PR,
   squash-merge it yourself once required checks are green and the review findings
   are handled.
+- **Agent-loop skills.** Before you dispatch or supervise long-running work, read
+  [`.agents/skills/supervised-dispatch/SKILL.md`](.agents/skills/supervised-dispatch/SKILL.md).
+  A coordinator that runs coding workers and QA reads
+  [`.agents/skills/worker-qa-loop/SKILL.md`](.agents/skills/worker-qa-loop/SKILL.md).
+  Timed check-ins follow
+  [`.agents/skills/timer-checkin/SKILL.md`](.agents/skills/timer-checkin/SKILL.md).
+  No provider is known to load these files automatically: open them yourself.
 - **Plain writing.** Short sentences, concrete nouns, no filler. Use Mermaid for editable
   engineering diagrams; SVG/PNG workflow drawings are also supported.
 

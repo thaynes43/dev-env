@@ -17,11 +17,16 @@ for the check-ins. This skill grants no scope, access or approval.
 ## 1. Dispatch with ACK files and disjoint claims
 
 Give each receiver a work order with its claims, its worktree and branch, the
-acceptance checks, an ACK path and a RESULT path. The receiver writes the ACK
+acceptance checks, an ACK route and a RESULT route. The receiver writes the ACK
 first, atomically: receiver, accountable session, worktree, branch, base commit,
-claims, `accepted` and the next milestone. Read the ACK, then check that the
-worktree and branch exist and the base matches. An ACK is not work; wait for a
-commit.
+claims, the paths or routes it read, `accepted` and the next milestone.
+
+Check the ACK without reaching into another pod. Use the receiver's own reported
+evidence (worktree, branch and base in its ACK) plus GitHub: once the branch is
+pushed, `git ls-remote` or `gh pr view --json headRefOid,baseRefName` shows the
+branch and head, and `git merge-base` against the fetched branch shows the base. A
+subagent in your own session and pod can also be checked locally. Until a commit
+appears, the ACK is a claim, not work.
 
 Pick ACK and RESULT routes that both sides can really use. A subagent in the same
 session and pod can write a local path. A receiver in another pod reports through
@@ -82,12 +87,18 @@ acceptance checks, not the worker's conclusions. Each finding states severity,
 file and line, why it is wrong, and how to prove the fix.
 
 Send the findings to the same coding owner as a correction. Continue that subagent
-with `SendMessage`, so it keeps its context. Do not fix it yourself and do not add
-a second writer. The owner adds a test for each finding (RED, then GREEN), commits
-and reports the new head. QA then re-reviews that exact new head: the delta and
-every earlier finding. Repeat until no finding is open. Failed tests and
-repeated findings are the loop working, not a reason to stop; supervised-dispatch,
-section 5, says what to do when the same failure keeps coming back.
+with `SendMessage`, so it keeps its context. A coding owner in another pod gets
+the findings through `agent-run inbox` or its PR, and through `agent-run msg` only
+for a live TUI session when delivery is safe, never while a native question
+prompt is pending. Do not fix it yourself and do not add a second writer. The
+owner adds a test for each finding (RED, then GREEN), commits and reports the new
+head. QA then re-reviews that exact new head: the delta and every earlier
+finding. Repeat until no finding is open.
+
+Failed tests and repeated findings are the loop working, not a reason to stop.
+When the same blocker fails three times, the stall rule in supervised-dispatch,
+section 5, applies: diagnose, send a correction that changes the approach,
+checkpoint, and keep the loop going.
 
 Example: #903, the scheduled-work executor core, went through six adversarial
 native review rounds this way. Each round's findings went back to its one coding

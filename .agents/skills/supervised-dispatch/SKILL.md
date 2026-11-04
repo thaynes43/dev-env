@@ -1,13 +1,14 @@
 ---
 name: supervised-dispatch
-description: Hand long-running work to a coordinator and supervise it live until a proved outcome, a genuine cancellation, an exhausted authorized budget or a permission or input barrier. Use when the work needs more than one session turn, needs workers, or must keep going while you steer. Skip for a lookup, a single bounded edit you can finish yourself, or any task you cannot give an acceptance check.
+description: Hand long-running work to a coordinator and supervise it live until a proved outcome or a recorded stop (a genuine cancellation, a pause or hold from Tom or his coordinator, an exhausted authorized budget, or a permission or input barrier). Use when the work needs more than one session turn, needs workers, or must keep going while you steer. Skip for a lookup, a single bounded edit you can finish yourself, or any task you cannot give an acceptance check.
 ---
 
 # Supervised dispatch
 
-Tom's rule (2026-11-04): "You should just be reviewing what the agents are doing
-and steering live, not fire and forget sets of instructions that do not have goals
-the agents have to demonstrate to stop working."
+Tom's direction (2026-11-04, as relayed by the coordinator): "You should just be
+reviewing what the agents are doing and steering live, not fire and forget sets
+of instructions that do not have goals the agents have to demonstrate to stop
+working."
 
 This skill is for the session that hands work to a coordinator and then supervises
 it. The coordinator runs the build loop with [worker-qa-loop](../worker-qa-loop/SKILL.md).
@@ -31,8 +32,9 @@ Write down:
   or usable. Keep those four states apart.
 - **Boundaries.** Repositories, worktrees, files and runtime resources the
   coordinator may change. Everything else is out of scope.
-- **Budget.** The authorized elapsed time, usage or cost cap, and concurrency,
-  as recorded on the story. Record an unknown amount as unknown.
+- **Budget.** The authorized elapsed time, usage or cost cap, concurrency, and any
+  checkpoint or stop threshold, as recorded on the story. Record an unknown
+  amount as unknown.
 - **Holds and stops.** Every hold that applies, and the stop rules in section 5.
 
 If you cannot name a check that fails today and passes when the work is done, the
@@ -58,11 +60,13 @@ required. `~/.shared` is a convenience that a receiver in another pod or harness
 may not reach. So:
 
 - For each handoff artifact (status record, ACK, RESULT, state file), record its
-  route: the path or URL, its owner, and who can read it. Before you rely on it,
-  verify that the receiver can actually read it.
+  route: the path or URL, its owner, and who can read it.
+- Before you rely on a route, verify that the receiver can read it: the
+  receiver's ACK names each path or route it actually read. An ACK that does not
+  name it, or names another path, means the route is not proved.
 - Subagents in the same session and pod may use the real local paths.
-- Across pods, hand off through the supported routes: `agent-run inbox` or
-  `agent-run msg`, the tracker, and PRs.
+- Across pods, hand off through the supported routes: `agent-run inbox`, the
+  tracker, and PRs, and `agent-run msg` only where section 5 allows it.
 - Never read another pod's private files.
 
 ## 3. Record identities
@@ -84,10 +88,10 @@ Never record an identity, model or result you did not observe as verified. Write
 ## 4. Dispatch, then wait for real work
 
 The work order states the goal, the acceptance checks, the claims, the boundaries,
-the holds, the stop rules, the status record path and an ACK file path. The
-receiver's first action is to write that ACK file atomically: schema, time,
-receiver, accountable session, worktree, branch, base commit, claims, `accepted`
-and the next milestone.
+the budget, the holds, the stop rules, the status record route and an ACK route.
+The receiver's first action is to write that ACK atomically: schema, time,
+receiver, accountable session, worktree, branch, base commit, claims, the paths
+or routes it read, `accepted` and the next milestone.
 
 **An assignment or an ACK is not proof of execution.** An assignment says you
 asked. An ACK says the receiver accepted the scope. Proof is a commit on the
@@ -103,56 +107,60 @@ Delivery is not acknowledgement. Do not resend blindly.
 
 At every check-in (see [timer-checkin](../timer-checkin/SKILL.md)):
 
-1. Read the status record and the newest ACK and RESULT files.
+1. Read the status record and the newest ACK and RESULT.
 2. Check each claim against its evidence yourself: `git log` on the claimed
    branch, `gh pr view N --json headRefOid,statusCheckRollup`, the test log the
    claim cites. A claim you cannot check stays "unverified", not "done".
 3. Compare progress with the goal. Look for drift, scope creep, a stale head or a
    repeated failure.
-4. Correct course. Continue a native subagent with `SendMessage`. Use
-   `agent-run msg SESSION -` only for a TUI session when delivery is safe, never
-   while a question prompt is open; otherwise use `agent-run inbox`. Record each
-   correction and the evidence that prompted it.
+4. Correct course, and record each correction and the evidence that prompted it.
+   Continue a native subagent with `SendMessage`. For a session in another pod,
+   prefer `agent-run inbox`. Use `agent-run msg SESSION -` only for a live TUI
+   session when delivery is safe, and never while a native question prompt is
+   pending in it. A headless task takes no messages.
 
 The work stops only on one of these, each backed by specific evidence:
 
 - **A proved outcome.** Every acceptance check passes, with evidence checked by
   someone other than the agent that did the work.
 - **A genuine cancellation.** Tom, or his verified coordinator, cancels this
-  work. Record who, when and through which channel. Check a relayed or quoted
-  "stop" against its actual source first.
+  work. Record who, when and through which channel.
+- **A pause, stop or hold from a human or coordinator.** A pause or stop from
+  Tom, a "wait for Meatball" (mark the work "Awaiting Meatball context"), or an
+  explicit hold pauses or ends the relevant work. Save a checkpoint, and do not
+  poll while waiting.
 - **An exhausted authorized budget.** The budget recorded for the story is
-  actually spent, read from its record. A feared or estimated overrun is not
-  exhaustion.
-- **A permission or input barrier.** A denial, a missing required approval, a
-  hold, or an input only someone else can supply. Record the evidence: the exact
-  denial, the hold's record, the missing artifact. Never bypass it.
+  actually spent, or its recorded stop threshold is reached, read from its
+  record. A feared or estimated overrun is not exhaustion.
+- **A permission or input barrier.** A denial, a missing required approval, or
+  an input only someone else can supply. Record the evidence: the exact denial,
+  the approval that is missing, the missing artifact. Never bypass it.
 
-These four are the only stop reasons; the last two are the exact blockers.
-Nothing else ends the work.
+Check a relayed or quoted "stop" or "cancel" against its actual source and
+chronology first. The last two are the exact blockers. Nothing else ends the work.
 
-**Time, attempts and context size are signals, not stop reasons.** Sixty quiet
-minutes, three failed attempts or tests, or a filling context window each trigger
-the same response while authorized repair remains:
+**Time, attempts and context size are signals, not stop reasons.** The
+[workflow guide](../../../docs/workflow-guide.md), section 9, sets the stall
+thresholds: 60 minutes without progress or three failed attempts at the same
+blocker. Reaching one, or filling a worker's context window, triggers this while
+authorized repair remains:
 
-1. **Diagnose.** Read the evidence and find out why there is no progress.
-2. **Steer.** Send a correction that changes the approach. Never repeat the same
-   failed attempt; the stall and three-failure default in the
-   [workflow guide](../../../docs/workflow-guide.md), section 9, forbids that and
-   its counters carry across agents and methods. If that default calls for an
-   owner question, ask it and keep the rest of the loop running.
+1. **Diagnose.** Read the evidence and name the blocker.
+2. **Steer.** Send the owner a correction that changes the approach. Repeating
+   the same failed attempt is not steering. The counters carry across agents,
+   pods, methods and resumes, so a threshold reached again stays visible.
 3. **Checkpoint.** Update the status record and the tracker.
-4. **Keep continuity.** When a worker's context is full or its session is gone,
-   start a fresh worker from the handoff: branch, head, open findings, next step.
-   Keep the timer armed.
+4. **Keep continuity.** The same owner continues. When its context is full or its
+   session is gone, start a fresh worker from the handoff: branch, head, open
+   findings, next step. Keep the timer armed.
 
-If no authorized repair remains, name what prevents it, with its evidence. That
-barrier or that exhausted budget is the stop reason, not the elapsed time or the
-count.
+Ask Tom one actionable question, with a concrete bounded next option, only when a
+real input or permission is missing. Then that missing input or permission is the
+stop reason for the work that needs it, not the elapsed time or the count.
 
 "Waiting", "looks done", "the worker said so", a finished turn and an expired
-timer are not stop reasons either. At an exact blocker, save a checkpoint with
-the next safe step, end only the work that depends on it, and keep doing
+timer are not stop reasons either. At any stop, save a checkpoint with the next
+safe step, end or pause only the work that depends on it, and keep doing
 independent authorized work. A hold gates only its own action. Do not route
 around a denial. Running agent sessions are sacred. Ask Tom real decisions one at
 a time with AskUserQuestion, at the moment they arise.

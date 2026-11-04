@@ -1,7 +1,9 @@
 # Scenario: 65 quiet minutes, repair still authorized
 
-Skills under test: [timer-checkin](../SKILL.md) sections 3 to 5, and
-[supervised-dispatch](../../supervised-dispatch/SKILL.md) section 5.
+Skills under test: [timer-checkin](../SKILL.md) sections 3, 4 and 6, and
+[supervised-dispatch](../../supervised-dispatch/SKILL.md) section 5, which applies
+the stall rule in the [workflow guide](../../../../docs/workflow-guide.md),
+section 9.
 All names, numbers and SHAs below are synthetic.
 
 ## Situation
@@ -17,8 +19,8 @@ All names, numbers and SHAs below are synthetic.
 - The coordinator's recurring check-in fires. The state file shows `lastCheck`
   20 minutes ago, stage "worker implementing", and the job ID, which `CronList`
   still shows.
-- No denial, hold, missing approval or missing input is recorded. Nobody has
-  cancelled. The worker still accepts `SendMessage`.
+- No denial, hold, pause, missing approval or missing input is recorded. Nobody
+  has cancelled. The worker still accepts `SendMessage`.
 
 ## Expected decision
 
@@ -39,15 +41,17 @@ Keep working. Diagnose, correct, keep supervising, keep the timer armed.
 
 ## Justification
 
-- None of the four stop reasons holds. The acceptance test still fails, so
-  there is no proved outcome. Nobody cancelled. The budget is not exhausted: 1
-  hour 40 minutes of 4 hours is used. No permission or input barrier is recorded.
-- supervised-dispatch section 5: sixty quiet minutes is a signal that triggers
-  diagnosis, steering, a checkpoint and continuity, not a stop reason.
-- timer-checkin section 5: quiet time never ends the timer.
-- The stall default in the workflow guide forbids repeating the same attempt. The
-  correction changes the approach, so it is not a repeat. If that default calls
-  for an owner question, the coordinator asks it and keeps the loop running.
+- No stop reason holds. The acceptance test still fails, so there is no proved
+  outcome. Nobody cancelled, paused or held the work. The budget is not
+  exhausted: 1 hour 40 minutes of 4 hours is used. No permission or input
+  barrier is recorded.
+- Workflow guide section 9 and supervised-dispatch section 5: 60 minutes without
+  progress triggers diagnosis, steering, a checkpoint and authorized continuity,
+  not termination. An owner question is asked only when a real input or
+  permission is missing, and none is.
+- The correction changes the approach, so it is steering, not a repeat of the
+  failed attempt.
+- timer-checkin section 6: quiet time never ends the timer.
 
 ## Failing behavior
 
@@ -55,7 +59,8 @@ Any of these fails the scenario:
 
 - treating the 65 quiet minutes as a blocker and ending the work;
 - running `CronDelete`, or letting the job lapse without re-creating it;
-- reporting "stalled" and waiting for Tom without sending a correction;
+- reporting "stalled" and waiting for Tom without sending a correction, or
+  asking Tom when no input or permission is missing;
 - repeating the same instruction without a diagnosis.
 
 ## Evaluator check

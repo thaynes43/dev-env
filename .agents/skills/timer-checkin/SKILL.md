@@ -1,6 +1,6 @@
 ---
 name: timer-checkin
-description: Check in on supervised work on a timer, with the session timers Claude Code already has and a persisted state file, so a coordinator keeps custody across restarts and stops the timer only on a proved outcome, a genuine cancellation, an exhausted authorized budget or a permission or input barrier. Use while supervising long-running work. Skip for one wait you can cover with a single background command, and never build a new scheduler.
+description: Check in on supervised work on a timer, with the session timers Claude Code already has and a persisted state file, so one custodian keeps it across restarts and handoffs and stops it only on a proved outcome or a recorded stop (a genuine cancellation, a pause or hold from Tom or his coordinator, an exhausted authorized budget, or a permission or input barrier). Use while supervising long-running work. Skip for one wait you can cover with a single background command, and never build a new scheduler.
 ---
 
 # Timer check-in
@@ -28,7 +28,10 @@ The durable platform timers are different, and neither one is a check-in:
 - **ScheduledWork** ([DESIGN-054](../../sagas/distributed-dev-env/designs/054-scheduled-agent-work.md))
   is source only and default off. It is not deployed. Do not plan on it.
 
-Do not invent a scheduler: no sleep loops, no cron in the pod, no CronJob.
+Do not invent a scheduler: no busy loops, no unbounded sleep loops, no cron in the
+pod, no CronJob. A bounded wait is fine: a `Monitor` with a timeout, or a
+`run_in_background` until-loop that polls at a sensible interval and exits when
+its condition is met.
 
 **The tool reality, in Claude Code 2.1.312 as installed here (2026-11-04).** The
 coordinator's own session has `CronCreate` and `ScheduleWakeup`. A native
@@ -49,7 +52,8 @@ volume. Do not assume another pod can read it: mirror the task identity, stage a
 next check on the tracker, so a successor elsewhere can pick up custody through
 a supported route (see supervised-dispatch, section 2). It holds:
 
-- `coordinator`: the session that has custody;
+- `custodian`: the one session that holds custody and the only one with a timer
+  for this task, and `custody`, the history of handoffs (section 5);
 - the task identity: tracker item, PR, branch, worker and QA identities;
 - the goal and a reference to its acceptance checks;
 - `timer`: the mechanism, job ID, schedule, next check, created time and expiry;
@@ -60,8 +64,8 @@ a supported route (see supervised-dispatch, section 2). It holds:
 Create the job, then write its job ID into the file. The fired prompt names the
 state file and says what to do, because the context may have been compacted by
 the time it fires. For example: "Timer check-in for OP385: read
-`<state file>`, verify evidence, steer, update the state file; stop only for one of
-the four stop reasons in supervised-dispatch section 5."
+`<state file>`, verify evidence, steer, update the state file; stop only for a
+stop reason in supervised-dispatch section 5."
 
 Pick a cadence that matches what you wait for: one check near the end of an
 8-minute CI run rather than eight, 20 to 30 minutes for idle supervision. Avoid
@@ -82,32 +86,57 @@ A session-only job does not survive a restart, a resume on a new pod, or the
 session's end. After any of these, and whenever `lastCheck` is more than two
 intervals old:
 
-1. Read the state file. If it names another coordinator, do not create a second
-   timer; report what you see to that coordinator.
+1. Read the state file. If it names another custodian, do not create a timer:
+   only the current custodian holds one. Report what you see to that custodian
+   or to the parent.
 2. Run `CronList`. If the recorded job ID is missing, create the job again with
    the same prompt.
 3. Write the new job ID and a recovery note: time, old job ID, and why.
 4. Run one check-in now instead of waiting for the next fire.
 
-Custody stays with the coordinator named in the file. Re-create a recurring job
+Custody stays with the custodian named in the file. Re-create a recurring job
 before its 7-day expiry if the work will run longer, and record it the same way.
 A long foreground command delays every fire until the turn ends, so keep turns
 short while a timer is armed.
 
-## 5. Complete
+## 5. Hand custody over
 
-Stop the timer only on a proved outcome, a genuine cancellation, an exhausted
-authorized budget, or a permission or input barrier, each backed by evidence, as
-supervised-dispatch section 5 defines them. Quiet time, failed attempts, a full
-context window and a 7-day expiry never end the timer. They trigger diagnosis
-and steering, and the job is re-armed or re-created. Waiting for an event a check
-can observe, such as a natural keeper refresh, is pending, not blocked: keep the
-timer and report it pending. When the work ends:
+Only the current custodian holds a timer for the task. When it hands off,
+because its context is filling, its session is stopping, or the parent reassigns
+the work:
+
+1. The custodian writes the successor into the state file: `custodian` becomes
+   the successor, and `custody` gains an entry with the old and new owner, the
+   time and the reason. It mirrors this on the tracker, and sends the successor
+   the handoff through a route the successor can read (supervised-dispatch,
+   section 2).
+2. The old custodian runs `CronDelete` on its own job and records that.
+3. The successor re-creates the timer under its own session, writes the new job
+   ID, and reports to the parent: the new custodian, the job ID and the next check.
+4. Until that report arrives, the parent treats custody as in transit and checks
+   it at its own next check-in.
+
+If the custodian's session ended before step 1, the parent names the successor
+and records the transfer. No session takes custody or creates a timer on its own.
+
+## 6. Complete or pause
+
+Stop the timer only for a stop reason in supervised-dispatch section 5, backed by
+evidence: a proved outcome, a genuine cancellation, a pause, stop or hold from Tom
+or his verified coordinator (including "wait for Meatball"), an exhausted
+authorized budget or its recorded stop threshold, or a permission or input
+barrier. Quiet time, failed attempts, a full context window and a 7-day expiry
+never end the timer. They trigger diagnosis and steering, and the job is re-armed
+or re-created. Waiting for an event a check can observe, such as a natural keeper
+refresh, is pending, not blocked: keep the timer and report it pending. When the
+work ends or pauses:
 
 1. `CronDelete` the job (or `ScheduleWakeup` with `stop: true`), then `CronList`
-   to confirm it is gone.
-2. Write `stop` in the state file with the reason, time and evidence.
-3. Record the end on the tracker.
+   to confirm it is gone. Do not keep polling during a pause.
+2. Write `stop` in the state file with the reason, time and evidence, and for a
+   pause the condition that resumes it.
+3. Record the end or the pause on the tracker. A verified resume re-creates the
+   timer from the state file.
 
 This text is not operational proof. A real wake, re-arm, recovery and completion
 are proved by the keeper pilot (OP385), not by this file.
