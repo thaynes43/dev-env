@@ -104,7 +104,9 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
                          5.1 (no owner reference to the operator; no pod or volume write or delete outside the guards;
                          delete and suspend wait for rescue); a fake rescuer stands in for exec. The one Pod write
                          besides create and the guarded deletes is DESIGN-025's stop request (private_stop.go), pinned
-                         by TestOnlyStopPrivateExecutorPatchesPods
+                         by TestOnlyStopPrivateExecutorPatchesPods. DESIGN-054's scheduled-work releaser
+                         (scheduled_work_release.go, no flag): records an ended or reaped scheduled session's occurrence
+                         in its ScheduledWork (uncached reads, no watch) and lifts only the scheduled-work finalizer
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
                          heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers;
                          also decisions, project canaries and their results, task claims, the inbox, published contexts, the
@@ -115,6 +117,7 @@ internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort t
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
 internal/reminders/      the reminder engine (DESIGN-032, #206): schedule arithmetic with explicit DST rules, target allowlist, a CalendarAdapter interface with a fake, and the leader-only Scheduler over the Reminder CRD; the keeper hosts it behind `--enable-reminders` (default off), the operator serves `/v1/reminders` behind `--enable-reminders-api` (default off)
 internal/maintenancecontract/ bounded offline upgrade-shepherd envelope validator and correlation evaluator; a candidate is not operational deferral
+internal/scheduledwork/  DESIGN-054's pure scheduled-session rules: the session-end rule, the terminal record an ended or reaped session gives its occurrence, and its write into a ScheduledWork's status; no I/O
 internal/standby/       the leader-only standby runnable (Story110 T25, plan 03): keeps one `remote` Claude AgentSession ready, found by its label, behind `--enable-standby-session` (default off); a ConfigMap-backed circuit breaker allows three creations in 30 minutes
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);

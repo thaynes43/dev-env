@@ -29,11 +29,12 @@ import (
 // 6.5): deleteExpiryExecutor, the ended executor of a private Session in
 // Rescuing, deleteExpiryHold, the expiry's own hold pod, and deleteExpiryHome,
 // a private HOME in Deleting after its archive verified again. Each deletes by
-// UID; releaseSession, releaseVolume, releaseExpiryHome and a few named
-// release helpers are the only ones that lift a finalizer or rewrite owner
-// references, and releaseSession lifts a private Session's only for an
-// Expired record (expiryReleaseAllowed). A test (TestOnlyTheGuardDeletes)
-// keeps it that way.
+// UID; releaseSession, releaseVolume, releaseExpiryHome,
+// releaseScheduledWorkFinalizer (DESIGN-054's releaser, which lifts only the
+// scheduled-work finalizer) and a few named release helpers are the only ones
+// that lift a finalizer or rewrite owner references, and releaseSession lifts
+// a private Session's only for an Expired record (expiryReleaseAllowed). A
+// test (TestOnlyTheGuardDeletes) keeps it that way.
 
 // Finalizer holds a session, and its volume, until the session is rescued. A
 // deleted AgentSession is a reap (D-45): the API server keeps the object while the

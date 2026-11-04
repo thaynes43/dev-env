@@ -175,20 +175,31 @@ type operator struct {
 
 func startOperator(t *testing.T, opts ...func(*Reconciler)) *operator {
 	t.Helper()
-	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+	return startOperatorWith(t, nil, opts...)
+}
+
+// startOperatorWith is startOperator with a change to the manager's options
+// first (nil changes nothing), such as a RESTMapper that does not serve a kind.
+func startOperatorWith(t *testing.T, mgrOpts func(*ctrl.Options), opts ...func(*Reconciler)) *operator {
+	t.Helper()
+	o := ctrl.Options{
 		Scheme:                 scheme,
 		Cache:                  CacheOptions(sessionNS, templatesKey),
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
 		// Each test starts its own manager in this one process.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
-	})
+	}
+	if mgrOpts != nil {
+		mgrOpts(&o)
+	}
+	mgr, err := ctrl.NewManager(restCfg, o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := &recordingClient{Client: mgr.GetClient()}
 	r := &Reconciler{Client: rec, Templates: templatesKey, APIReader: mgr.GetAPIReader(),
-		Rescuer: rescuer, Recorder: mgr.GetEventRecorder("dev-env-operator")}
+		Rescuer: rescuer, Recorder: mgr.GetEventRecorder("dev-env-operator"), SessionNamespace: sessionNS}
 	for _, o := range opts {
 		o(r)
 	}
@@ -282,11 +293,35 @@ func (c *recordingClient) note(verb string, o client.Object) {
 	switch o.(type) {
 	case *corev1.Pod, *corev1.PersistentVolumeClaim:
 	default:
-		if verb != "delete" && verb != "deleteAllOf" {
+		if verb != "delete" && verb != "deleteAllOf" && verb != "cached read" {
 			return
 		}
 	}
 	c.record = append(c.record, entry)
+}
+
+// errCachedScheduledWork refuses a ScheduledWork read through the manager's
+// cache, which would start an informer on a kind S6 may not have installed
+// (DESIGN-054). The releaser reads it with the API reader only; any such read
+// lands in the record, so every write assertion catches it.
+var errCachedScheduledWork = errors.New("a ScheduledWork read through the cache would start an informer on it")
+
+func (c *recordingClient) Get(ctx context.Context, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+	if _, ok := o.(*v1alpha1.ScheduledWork); ok {
+		c.note("cached read", o)
+		return errCachedScheduledWork
+	}
+	return c.Client.Get(ctx, key, o, opts...)
+}
+
+func (c *recordingClient) List(ctx context.Context, l client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := l.(*v1alpha1.ScheduledWorkList); ok {
+		c.mu.Lock()
+		c.record = append(c.record, "cached read *v1alpha1.ScheduledWorkList")
+		c.mu.Unlock()
+		return errCachedScheduledWork
+	}
+	return c.Client.List(ctx, l, opts...)
 }
 
 func (c *recordingClient) orderLog() []string {

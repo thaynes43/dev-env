@@ -97,3 +97,30 @@ const (
 	// AnnotationScheduledWorkStartDeadline is a scheduled session's start deadline, RFC 3339 UTC (DESIGN-054).
 	AnnotationScheduledWorkStartDeadline = LabelPrefix + "scheduled-work-start-deadline"
 )
+
+// The finalizer, label and annotations a scheduled session carries (DESIGN-054
+// "Occurrence lifecycle"). The executor sets all of them in the session's
+// atomic Create; nothing changes them afterwards. The releaser in the
+// AgentSession reconciler reads them and is the one place that removes the
+// finalizer (TestOnlyTheGuardDeletes).
+const (
+	// ScheduledWorkFinalizer holds a scheduled session until its occurrence's
+	// terminal state and result are in the ScheduledWork's status, so a session
+	// with the derived name never vanishes unrecorded.
+	ScheduledWorkFinalizer = LabelPrefix + "scheduled-work-retained"
+	// LabelScheduledWork is the full UID of the ScheduledWork that dispatched
+	// the session. The releaser checks it against the item it reads by name,
+	// because a Get by UID does not exist: a mismatch is an item deleted and
+	// recreated under the same name.
+	LabelScheduledWork = LabelPrefix + "scheduled-work"
+	// AnnotationScheduledWorkName is the name of that ScheduledWork, in the
+	// session's namespace.
+	AnnotationScheduledWorkName = LabelPrefix + "scheduled-work-name"
+	// AnnotationScheduledWorkOccurrence is the occurrence's instant (its `at`)
+	// in Unix seconds, decimal.
+	AnnotationScheduledWorkOccurrence = LabelPrefix + "scheduled-work-occurrence"
+	// AnnotationScheduledWorkStartDeadline is the latest time the session's
+	// agent may first launch, RFC 3339: the due time plus grace, or retriedAt
+	// plus grace for a retried occurrence.
+	AnnotationScheduledWorkStartDeadline = LabelPrefix + "scheduled-work-start-deadline"
+)
