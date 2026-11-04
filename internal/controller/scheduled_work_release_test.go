@@ -141,7 +141,7 @@ func (f swFixture) waitOccurrence(t *testing.T, state string) v1alpha1.Scheduled
 // scheduledSession creates the session the executor would dispatch for f: the
 // derived name, the label, the three annotations and the finalizer, all in the
 // Create. Its start deadline is an hour away unless edit changes it.
-func scheduledSession(t *testing.T, f swFixture, edit func(*v1alpha1.AgentSession)) *v1alpha1.AgentSession {
+func releaseFixtureSession(t *testing.T, f swFixture, edit func(*v1alpha1.AgentSession)) *v1alpha1.AgentSession {
 	t.Helper()
 	return newSession(t, func(s *v1alpha1.AgentSession) {
 		s.Name = f.name
@@ -305,7 +305,7 @@ func TestScheduledWorkReleaserNeedsNoExecutor(t *testing.T) {
 	blocked := NewScheduledWorkReleaseHoldsCounter()
 	op := startOperator(t, withBlockedCounter(blocked))
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-	s := scheduledSession(t, f, nil)
+	s := releaseFixtureSession(t, f, nil)
 	waitClaim(t, s.Name)
 	pod := markRunning(t, waitPod(t, s.Name), "talosw02")
 	waitStatus(t, s.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
@@ -345,7 +345,7 @@ func TestScheduledWorkReleaserNeedsNoExecutor(t *testing.T) {
 func TestScheduledWorkReleaseRecordsAFastHeadlessSuccess(t *testing.T) {
 	first := startOperator(t)
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceDispatched)
-	s := scheduledSession(t, f, nil)
+	s := releaseFixtureSession(t, f, nil)
 	pod := waitPod(t, s.Name)
 	first.stop()
 	// While no operator runs, the task succeeds and its pod ends, and the
@@ -398,7 +398,7 @@ func TestScheduledWorkReleaseWaitsForTheReportedOutcome(t *testing.T) {
 	}
 	t.Run("the outcome lands after the exit", func(t *testing.T) {
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-		s := scheduledSession(t, f, nil)
+		s := releaseFixtureSession(t, f, nil)
 		pod := markRunning(t, waitPod(t, s.Name), "talosw02")
 		setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.Now()}, nil)
 		if o := f.waitOccurrence(t, v1alpha1.OccurrenceSucceeded); o.Reported != nil {
@@ -424,7 +424,7 @@ func TestScheduledWorkReleaseWaitsForTheReportedOutcome(t *testing.T) {
 	})
 	t.Run("no outcome", func(t *testing.T) {
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-		s := scheduledSession(t, f, nil)
+		s := releaseFixtureSession(t, f, nil)
 		markRunning(t, waitPod(t, s.Name), "talosw02")
 		setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.Now()}, nil)
 		f.waitOccurrence(t, v1alpha1.OccurrenceSucceeded)
@@ -445,7 +445,7 @@ func TestScheduledWorkReleaseWaitsForTheReportedOutcome(t *testing.T) {
 func TestScheduledWorkReleaseRecordsUnknownAsEnded(t *testing.T) {
 	startOperator(t)
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-	s := scheduledSession(t, f, nil)
+	s := releaseFixtureSession(t, f, nil)
 	markRunning(t, waitPod(t, s.Name), "talosw02")
 	// It finished longer ago than the wait for a reported outcome.
 	setTask(t, s.Name, v1alpha1.TaskStatus{FinishedAt: metav1.NewTime(time.Now().Add(-2 * scheduledwork.ReportWait))}, nil)
@@ -468,7 +468,7 @@ func TestScheduledWorkReleaseKeepsATerminalOccurrence(t *testing.T) {
 		st.Occurrences[0].State, st.Occurrences[0].Reason = v1alpha1.OccurrenceFailed, "not Running by due + grace"
 		st.Counts.Failed = 1
 	})
-	s := scheduledSession(t, f, nil)
+	s := releaseFixtureSession(t, f, nil)
 	markRunning(t, waitPod(t, s.Name), "talosw02")
 	setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.NewTime(time.Now().Add(-2 * scheduledwork.ReportWait))}, nil)
 	waitReleased(t, s.Name)
@@ -496,7 +496,7 @@ func TestScheduledWorkReleaseWithTheItemGone(t *testing.T) {
 		if err := k8s.Delete(context.Background(), f.item(t)); err != nil {
 			t.Fatal(err)
 		}
-		s := scheduledSession(t, f, suspendedAtCreate)
+		s := releaseFixtureSession(t, f, suspendedAtCreate)
 		waitReleased(t, s.Name)
 	})
 	t.Run("recreated under the same name", func(t *testing.T) {
@@ -515,7 +515,7 @@ func TestScheduledWorkReleaseWithTheItemGone(t *testing.T) {
 		next.setStatus(t, func(st *v1alpha1.ScheduledWorkStatus) {
 			st.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(f.at), State: v1alpha1.OccurrenceRunning, Session: next.name}}
 		})
-		s := scheduledSession(t, f, suspendedAtCreate)
+		s := releaseFixtureSession(t, f, suspendedAtCreate)
 		waitReleased(t, s.Name)
 		if o := next.occurrence(t); o.State != v1alpha1.OccurrenceRunning || o.Session != next.name {
 			t.Errorf("the recreated item's occurrence changed: %+v", o)
@@ -603,7 +603,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 		// Whole seconds, as the annotation stores it, so the check below
 		// compares with the deadline the releaser reads.
 		deadline := time.Now().Add(5 * time.Second).Truncate(time.Second)
-		s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+		s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 			suspendedAtCreate(s)
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
 		})
@@ -627,7 +627,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 				itemErr: apierrors.NewNotFound(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "scheduledworks"}, f.key.Name)}
 		})
 		deadline := time.Now().Add(5 * time.Second).Truncate(time.Second)
-		s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+		s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 			suspendedAtCreate(s)
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
 		})
@@ -660,7 +660,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 			startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
 				r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: itemErr}
 			})
-			s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+			s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 				suspendedAtCreate(s)
 				s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 			})
@@ -679,7 +679,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 				crdErr: apierrors.NewForbidden(schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, scheduledWorkCRD, errors.New("the test forbids the CRD read"))}
 		})
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-		s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+		s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 			suspendedAtCreate(s)
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 		})
@@ -694,7 +694,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 			r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: discoveryDown}
 		})
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-		s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+		s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 			suspendedAtCreate(s)
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 		})
@@ -739,7 +739,7 @@ func TestScheduledWorkReleaseLetsTheOperatorStartWithoutTheKind(t *testing.T) {
 	waitPod(t, plain.Name)
 
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-	s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+	s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 		suspendedAtCreate(s)
 		s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 	})
@@ -752,7 +752,7 @@ func TestScheduledWorkReleaseLetsTheOperatorStartWithoutTheKind(t *testing.T) {
 func TestScheduledWorkReleaseAnIdleSuspendedInteractiveSession(t *testing.T) {
 	op := startOperator(t)
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceOpened)
-	s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+	s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 		s.Spec.Lifecycle = &v1alpha1.Lifecycle{IdleSuspendAfter: &metav1.Duration{Duration: 2 * time.Second}}
 	})
 	waitClaim(t, s.Name)
@@ -786,7 +786,7 @@ func TestScheduledWorkReleaseWaitsOutADrainOrBoot(t *testing.T) {
 	clock := func(r *Reconciler) { r.Now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) } }
 	op := startOperator(t, clock)
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDispatched)
-	s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+	s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 		s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	})
 	waitClaim(t, s.Name)
@@ -831,7 +831,7 @@ func TestScheduledWorkReleaseWaitsOutADrainOrBoot(t *testing.T) {
 func TestScheduledWorkReleaseAReapedSessionWithItsRescue(t *testing.T) {
 	op := startOperator(t)
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-	s := scheduledSession(t, f, nil)
+	s := releaseFixtureSession(t, f, nil)
 	waitClaim(t, s.Name)
 	pod := markRunning(t, waitPod(t, s.Name), "talosw02")
 	waitStatus(t, s.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
@@ -909,7 +909,7 @@ func TestScheduledWorkReleaseHoldsWhileTheStatusWriteFails(t *testing.T) {
 		r.Client = failing
 	})
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-	s := scheduledSession(t, f, nil)
+	s := releaseFixtureSession(t, f, nil)
 	waitClaim(t, s.Name)
 	pod := markRunning(t, waitPod(t, s.Name), "talosw02")
 	waitStatus(t, s.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
@@ -949,7 +949,7 @@ func TestScheduledWorkReleaseIsIdempotentAcrossARestart(t *testing.T) {
 		r.Client = failing
 	})
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDelivered)
-	s := scheduledSession(t, f, suspendedAtCreate)
+	s := releaseFixtureSession(t, f, suspendedAtCreate)
 	recorded := f.waitOccurrence(t, v1alpha1.OccurrenceEnded)
 	eventually(t, "the failed patch is counted", func() error {
 		if terminalCount(blocked, releaseBlockedPatch) == 0 {
@@ -1000,7 +1000,7 @@ func TestScheduledWorkReleaseHoldsWithoutItsMetadata(t *testing.T) {
 			blocked := NewScheduledWorkReleaseHoldsCounter()
 			op := startOperator(t, withBlockedCounter(blocked))
 			f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-			s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+			s := releaseFixtureSession(t, f, func(s *v1alpha1.AgentSession) {
 				suspendedAtCreate(s)
 				c.edit(s, f)
 			})

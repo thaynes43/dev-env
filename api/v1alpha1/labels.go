@@ -94,8 +94,6 @@ const (
 	// for its child, 2 for a grandchild. A session at depth 2 creates no children
 	// (DESIGN-001 3.4: two levels deep).
 	LabelDepth = LabelPrefix + "depth"
-	// AnnotationScheduledWorkStartDeadline is a scheduled session's start deadline, RFC 3339 UTC (DESIGN-054).
-	AnnotationScheduledWorkStartDeadline = LabelPrefix + "scheduled-work-start-deadline"
 )
 
 // The finalizer, label and annotations a scheduled session carries (DESIGN-054
@@ -123,7 +121,8 @@ const (
 	// in Unix seconds, decimal.
 	AnnotationScheduledWorkOccurrence = LabelPrefix + "scheduled-work-occurrence"
 	// AnnotationScheduledWorkStartDeadline is the latest time the session's
-	// agent may first launch, RFC 3339: the due time plus grace, or retriedAt
-	// plus grace for a retried occurrence.
+	// agent may first launch, RFC 3339 UTC ending in Z: the due time plus grace,
+	// or retriedAt plus grace for a retried occurrence. agentd enforces it
+	// (DESIGN-054 S3c).
 	AnnotationScheduledWorkStartDeadline = LabelPrefix + "scheduled-work-start-deadline"
 )

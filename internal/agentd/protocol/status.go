@@ -46,13 +46,6 @@ const (
 	AgentLoginRequired = "login-required"
 )
 
-// StartDeadlinePassed is the Error agentd reports, with AgentFailed and boot
-// complete, when a scheduled session's first launch would come after its start
-// deadline (DESIGN-054 S3c): agentd never launches the agent then. The
-// scheduled-work releaser binds to this exact text to record the occurrence as
-// not started before grace ended.
-const StartDeadlinePassed = "start deadline passed"
-
 // Remote Control entry states (backlog 03, Story110 T03). The operator copies
 // them to status.remoteControl.state as free text.
 const (

@@ -14,7 +14,10 @@ import (
 // refuses a boot after the first launch.
 const StartDeadlineEnv = "AGENTD_START_DEADLINE"
 
-// The agent error agentd reports when it refuses a first launch.
+// The agent error agentd reports when it refuses a first launch. The
+// scheduled-work releaser binds to StartDeadlinePassed's exact text, read from
+// status.agent.message, to record an occurrence as not started before grace
+// ended (DESIGN-054 S3a).
 const (
 	StartDeadlinePassed  = "start deadline passed"
 	StartDeadlineInvalid = "invalid start deadline"
