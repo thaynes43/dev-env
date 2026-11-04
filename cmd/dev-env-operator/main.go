@@ -58,6 +58,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/inbox"
 	"github.com/thaynes43/dev-env/internal/podexec"
 	"github.com/thaynes43/dev-env/internal/projectcanary"
+	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
 	"github.com/thaynes43/dev-env/internal/sessiondirectory"
 	"github.com/thaynes43/dev-env/internal/shelf"
 	"github.com/thaynes43/dev-env/internal/standby"
@@ -178,6 +179,7 @@ type options struct {
 	managedChildDecisions         bool
 	coordinatorHosts              []apiserver.CoordinatorHost
 	standbyEnabled                bool
+	scheduledWork                 scheduledWorkOptions
 	childUsageCapture             bool
 	standbyRepo, standbyModel     string
 	standbyProfile, standbyEffort string
@@ -228,6 +230,11 @@ func parseFlags(args []string) (options, error) {
 	legacyDelegates := fs.String("grant-legacy-delegates", "", "HELD: exact existing baseline Claude actors ns/sa:saUID:session:sessionUID:pod:podUID, at most four; requires both delegate lists. Default empty")
 	fs.BoolVar(&o.asksEnabled, "enable-asks", false, "serve /v1/asks and /v1/portal/asks and run the leader-only expiry sweeper (OpenProject Epic #254); default off, asks live in dev-agents, and v1 does not deliver answers through the inbox")
 	fs.BoolVar(&o.standbyEnabled, "enable-standby-session", false, "keep one standby remote Claude session ready: the leader creates it on start and again when the last one is gone; three creations in 30 minutes trip a circuit breaker (Story110 T25, plan 03); needs the API")
+	fs.BoolVar(&o.scheduledWork.enabled, "enable-scheduled-work", false, "run the leader-only scheduled-work executor (DESIGN-054 S3b): it claims each due ScheduledWork occurrence with a compare-and-set and creates its session through the API's creation path under a derived name; default off; needs the API and leader election. Until S3b2 wires the authority and dispatch-template sources it has none: every claimed occurrence parks with its reason and nothing dispatches, even with this flag on")
+	fs.IntVar(&o.scheduledWork.maxHeadless, "scheduled-work-max-headless", executor.DefaultMaxHeadless, "most unfinished headless scheduled-work occurrences at once (1 to 16), checked before the claim; one at the cap stays Pending until its grace ends, then is Skipped")
+	fs.IntVar(&o.scheduledWork.maxInteractive, "scheduled-work-max-interactive", executor.DefaultMaxInteractive, "most unfinished interactive scheduled-work occurrences at once (1 to 16), checked before the claim")
+	fs.DurationVar(&o.scheduledWork.headlessGrace, "scheduled-work-headless-grace", executor.DefaultHeadlessGrace, "how late a headless scheduled-work occurrence may still start (1m to 12h); later it is Skipped, and it is the session's start deadline")
+	fs.DurationVar(&o.scheduledWork.interactiveGrace, "scheduled-work-interactive-grace", executor.DefaultInteractiveGrace, "how late an interactive scheduled-work occurrence may still start (1m to 12h)")
 	fs.BoolVar(&o.childUsageCapture, "enable-child-usage-capture", false, "copy an accepted direct child's initial usage observation onto its parent Session; default off (OpenProject #109)")
 	fs.StringVar(&o.standbyRepo, "standby-repo", "haynes-ops", "repository of the standby remote session")
 	fs.StringVar(&o.standbyModel, "standby-model", "claude-opus-5-5", "full model id of the standby remote session")
@@ -664,6 +671,9 @@ func parseFlags(args []string) (options, error) {
 	if o.standbyEnabled && o.apiAddr == "0" {
 		return o, errors.New("--enable-standby-session requires the API (--api-bind-address): the standby is created through its creation path")
 	}
+	if err := o.scheduledWork.validate(o.apiAddr, o.leaderElect); err != nil {
+		return o, err
+	}
 	if o.asksEnabled && o.apiAddr == "0" {
 		return o, errors.New("--enable-asks requires the API (--api-bind-address)")
 	}
@@ -1065,6 +1075,13 @@ func run(args []string) error {
 				Create: api.CreateStandby,
 				Log:    ctrl.Log.WithName("standby"),
 			}); err != nil {
+				return err
+			}
+		}
+		// The scheduled-work executor is default off (DESIGN-054 S3b). It
+		// creates through the API's fixed-name entry, so it needs the API.
+		if ex := newScheduledWorkExecutor(o, mgr.GetClient(), mgr.GetAPIReader(), api, ctrl.Log.WithName("scheduled-work")); ex != nil {
+			if err := mgr.Add(ex); err != nil {
 				return err
 			}
 		}
