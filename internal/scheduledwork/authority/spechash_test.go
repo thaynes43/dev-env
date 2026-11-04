@@ -1,6 +1,9 @@
 package authority
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"strings"
@@ -55,6 +58,14 @@ func TestSpecHashGolden(t *testing.T) {
 		`"notify":["pushover:default","pushover:phone"],"calendar":"calendar:haynesnetwork"}`
 	if got := string(specHashInput(goldenSpec())); got != wantInput {
 		t.Errorf("canonical input changed:\n got %s\nwant %s", got, wantInput)
+	}
+	// The documented encoding is the one SpecHash (scheduledwork.SpecHash)
+	// hashes: the restatement below and the alias agree on every fixture.
+	for _, s := range []v1alpha1.ScheduledWorkSpec{goldenSpec(), pr903Fixture(), {}} {
+		sum := sha256.Sum256(specHashInput(s))
+		if got := hex.EncodeToString(sum[:]); got != SpecHash(s) {
+			t.Errorf("the documented encoding hashes to %s, SpecHash gives %s", got, SpecHash(s))
+		}
 	}
 	for name, c := range map[string]struct {
 		spec v1alpha1.ScheduledWorkSpec
@@ -251,4 +262,20 @@ func TestSpecHashSetReorderInvariance(t *testing.T) {
 			t.Errorf("reversing %s changed the hash: %s, want %s", l.path, got, h)
 		}
 	}
+}
+
+// specHashInput restates the canonical encoding SpecHash's documentation
+// gives; TestSpecHashGolden checks that it is what SpecHash hashes.
+func specHashInput(spec v1alpha1.ScheduledWorkSpec) []byte {
+	s := *spec.DeepCopy()
+	s.Editor, s.Cancelled = "", false
+	slices.Sort(s.Notify)
+	if s.Recurrence != nil {
+		slices.Sort(s.Recurrence.ByDay)
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
