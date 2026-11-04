@@ -174,8 +174,11 @@ type ApproveScheduledWorkRequest struct {
 	SpecHash string `json:"specHash"`
 	// At names a Parked occurrence the client showed. When set, the approval
 	// also retries that occurrence, and the API refuses it with 409 unless that
-	// occurrence is still Parked and under MaxScheduledWorkAttempt. Absent, the
-	// approval applies from the next occurrence and no Parked one is retried.
+	// occurrence is still Parked and under MaxScheduledWorkAttempt, and with
+	// 409 when it was claimed with an earlier spec; an occurrence parked before
+	// any claim has no claim hash and may be retried. A refusal records
+	// nothing. Absent, the approval applies from the next occurrence and no
+	// Parked one is retried.
 	At *time.Time `json:"at,omitempty"`
 }
 

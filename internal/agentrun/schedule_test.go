@@ -735,13 +735,49 @@ func TestScheduleApprove(t *testing.T) {
 		h.mustRun(ExitOK, decideArgs("approve")...)
 		contains(t, "stdout", h.stdout.String(), "stays parked (no standing authority; attempt 3 of at most 3): it has used its retries")
 	})
-	t.Run("a parked occurrence claimed with an earlier spec", func(t *testing.T) {
+	// The API answers approve --at on an occurrence claimed with an earlier
+	// spec 409 (ApproveScheduledWorkRequest), so no y/N is asked and only the
+	// read is sent.
+	for name, args := range map[string][]string{
+		"approve --at on an earlier claim, --yes":    decideArgs("approve", "--at", "2026-10-06T19:00:00Z"),
+		"approve --at on an earlier claim, terminal": {"schedule", "approve", testWorkName, "--at", "2026-10-06T19:00:00Z"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			d := &decisionAPI{view: testScheduledWork()}
+			d.view.Occurrences[2].SpecHash = testOldHash
+			d.handle(t, h)
+			withTerminal(t, h, "y\n")
+			h.mustRun(ExitFailed, args...)
+			contains(t, "stderr", h.stderr.String(), "the occurrence of sched-0123456789abcdef0123 at 2026-10-06T19:00:00Z was claimed with an earlier spec (hash "+testOldHash+
+				"); the API retries only an occurrence claimed with the current spec. Approve without --at to approve the current spec for later occurrences. No approval was sent")
+			if d.posts() != 0 {
+				t.Errorf("an approval the API refuses was sent: %s", d.approve)
+			}
+			for _, r := range h.api.requests() {
+				if r.method != http.MethodGet {
+					t.Errorf("sent %s %s", r.method, r.path)
+				}
+			}
+			if out := h.stdout.String() + h.stderr.String(); strings.Contains(out, "[y/N]") || strings.Contains(out, "skips it") {
+				t.Errorf("asked or explained an approval it must refuse:\n%s", out)
+			}
+		})
+	}
+	t.Run("a plain approve leaves an earlier claim parked", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.view.Occurrences[2].SpecHash = testOldHash
 		d.handle(t, h)
-		h.mustRun(ExitOK, decideArgs("approve", "--at", "2026-10-06T19:00:00Z")...)
-		contains(t, "stdout", h.stdout.String(), "It was claimed with an earlier spec (hash "+testOldHash+"), so the API skips it instead of running it.")
+		h.mustRun(ExitOK, decideArgs("approve")...)
+		if req := decodeAs[apiv1.ApproveScheduledWorkRequest](t, d.approve); req.At != nil || req.SpecHash != testSpecHash {
+			t.Errorf("request %+v", req)
+		}
+		out := h.stdout.String()
+		contains(t, "stdout", out, "Parked occurrence 2026-10-06T19:00:00Z stays parked (no standing authority; attempt 1 of at most 3): it was claimed with an earlier spec (hash "+testOldHash+"), so it cannot be retried")
+		if strings.Contains(out, "add --at") || strings.Contains(out, "skips it") {
+			t.Errorf("offered a retry the API refuses:\n%s", out)
+		}
 	})
 	t.Run("json keeps stdout for the answer", func(t *testing.T) {
 		h := newHarness(t)
@@ -1321,6 +1357,7 @@ func TestScheduleHelp(t *testing.T) {
 		"The y/N and --yes guard against a slip; they prove nothing about who you are. The API accepts approve and retry only from Tom's own token.",
 		"--yes needs --spec-hash", "retries a parked occurrence only when --at names it",
 		"With --yes, retry also needs --at: the hash pins the spec, not the occurrence.",
+		"Neither approve --at nor retry runs an occurrence claimed with an earlier spec; a plain approve still approves the current spec for later occurrences.",
 		"Interactive work needs at least one", "at most 8192 bytes", "at most 180 days after creation",
 		"Without --yes and without a terminal, approve and retry refuse and send nothing")
 	for _, gone := range []string{"never loses", "starts it twice"} {
