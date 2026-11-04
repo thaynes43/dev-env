@@ -163,7 +163,9 @@ stateDiagram-v2
   Pending --> Parked: grace ended while the live-owner basis stayed unproven
   Pending --> Cancelled: cancel before claim
   Pending --> Skipped: missed beyond grace, notAfter passed, previous still running, or at capacity until grace ends
-  Claimed --> Parked: revalidation fails
+  Claimed --> Parked: revalidation check 2 or later fails
+  Claimed --> Cancelled: item cancelled at revalidation
+  Claimed --> Skipped: notAfter passed at revalidation
   Claimed --> Dispatched: session created or adopted
   Claimed --> Skipped: no session and grace ended before a create
   Claimed --> Ambiguous: derived-name session lacks the matching UID label or occurrence annotation
