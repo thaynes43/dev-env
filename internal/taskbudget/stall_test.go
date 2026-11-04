@@ -660,3 +660,24 @@ func TestCallerCannotSuppressAStallRecord(t *testing.T) {
 		t.Fatalf("stall window suppressed: %+v", records)
 	}
 }
+
+// Stall records stop at their own cap; the stall is still shown.
+func TestStallRecordsStopAtTheirCap(t *testing.T) {
+	ctx := context.Background()
+	s, m, now, b, _ := defaultStalledCampaign(t)
+	created := *now
+	l, rv, _ := m.Read(ctx, b.TaskUID)
+	for i := 0; i < MaxStallSignals; i++ {
+		id := fmt.Sprintf("stall:%d", created.Add(-time.Duration(i+1)).UnixNano())
+		l.Events = append(l.Events, Event{At: created, Request: apiv1.TaskBudgetEvent{Binding: b, ID: id, Kind: "activity", Evidence: apiv1.TaskBudgetEvidence{ID: id, Kind: "stall-signal"}}})
+	}
+	if err := m.Update(ctx, l, rv); err != nil {
+		t.Fatal(err)
+	}
+	*now = created.Add(StallLimit)
+	writes := m.updates
+	l, err := s.Observe(ctx, b)
+	if err != nil || l.Latched || l.Status().Stall == nil || l.Status().Stall.Signals != MaxStallSignals || len(stallRecords(l)) != MaxStallSignals || m.updates != writes || l.historyEvents() != 1 {
+		t.Fatalf("cap: %+v records=%d writes=%d %v", l.Status().Stall, len(stallRecords(l)), m.updates-writes, err)
+	}
+}

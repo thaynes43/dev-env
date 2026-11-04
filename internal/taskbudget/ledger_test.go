@@ -752,6 +752,11 @@ func TestProductionShapedHistoryFitsLedgerBytes(t *testing.T) {
 			l.Events = append(l.Events, Event{Request: e, At: now})
 		}
 	}
+	// Stall records (saga decision 94) have their own bound outside MaxEvents.
+	for i := 0; i < MaxStallSignals; i++ {
+		id := stallID(now.Add(time.Duration(i)))
+		l.Events = append(l.Events, Event{At: now, Request: apiv1.TaskBudgetEvent{Binding: b, ID: id, Kind: "activity", Evidence: apiv1.TaskBudgetEvidence{ID: id, Kind: stallSignalKind}}})
+	}
 	data, err := encodeLedger(l)
 	if err != nil || len(data) > MaxLedgerBytes {
 		t.Fatalf("production-shaped history does not fit: %d bytes, %v", len(data), err)

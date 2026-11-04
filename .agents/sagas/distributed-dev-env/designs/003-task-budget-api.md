@@ -23,19 +23,24 @@ PR #908) supersedes the stop clause of decision 55: time and attempt
 thresholds trigger diagnosis, steering, a checkpoint and continuity, not
 stopping. The ledger therefore no longer latches `Stalled`.
 
-When `StallLimit` (60 minutes) passes since the stall anchor, the ledger
-records one stall signal for that window. The anchor is the last validated
-progress or resolution, or an authorized extension; heartbeats and activity
-still do not move it. The record is a server-appended inert `activity` event
-with evidence kind `stall-signal` and ID `stall:<anchor in Unix nanoseconds>`,
-in the existing `Events` field, which older replicas preserve. Public activity
-is never retained, so a caller cannot forge one. A signal counts toward the
-512-event bound but never takes the last two slots, so it never causes
-`HistoryBound` or takes a reserved native intent's consume slot. At that edge
-it is shown but not recorded.
+When `StallLimit` (60 minutes) passes since the stall anchor on a campaign
+that is not latched, the ledger records one stall signal for that window. The
+anchor is the last validated progress or resolution, or an authorized
+extension; heartbeats and activity still do not move it. The record is a
+server-appended inert `activity` event with evidence kind `stall-signal` and
+ID `stall:<anchor in Unix nanoseconds>`, in the existing `Events` field, which
+older replicas preserve. Public activity is never retained, and `Record`
+refuses any caller event ID with the `stall:` prefix, so a caller can neither
+forge nor suppress one. Stall records sit outside the 512-event bound, with
+their own bound of 32 (`MaxStallSignals`), so a signal never takes a slot that
+evidence or an owner's native request (`host/stop` included) needs, and never
+brings `HistoryBound` closer. Past 32 a stall is shown but not recorded. An
+older replica counts these records as history, so at a full history it fails
+closed on that ledger.
 
-While the current window is stalled, status carries
-`stall: {id, since, at, signals}`. `since` is the anchor, `at` is the anchor
+While the current window of an unlatched campaign is stalled, status carries
+`stall: {id, since, at, signals}`. A latched campaign reports its stop
+instead: a later read records no stall, writes nothing and adds no field. `since` is the anchor, `at` is the anchor
 plus 60 minutes, and `signals` counts the windows recorded, this one included.
 The signal adds no latch and no owner escalation, resets no counter and
 changes no limit. The same owner keeps its binding and epoch: admission,
@@ -73,8 +78,8 @@ A ledger that an operator from before this change already latched `Stalled`
 stays latched. Nothing is unlatched automatically. During a rolling upgrade
 an older replica can still latch `Stalled`; that latch also stays (fail
 closed). An older agent or `agent-run` binary refuses a status with the new
-`stall` field as an unknown field, so it fails closed while a window is
-stalled. Upgrade the task image and the CLI with the operator.
+`stall` field as an unknown field, so it fails closed while an unlatched
+campaign is stalled. Upgrade the task image and the CLI with the operator.
 
 One logical campaign is assigned externally to one host. The API cannot replace
 that assignment, delete the ledger, reset history, extend its own deadline or
