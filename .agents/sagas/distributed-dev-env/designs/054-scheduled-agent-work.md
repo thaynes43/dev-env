@@ -94,7 +94,7 @@ status:
     by: human/...
     at: ...
     specHash: <sha256 of every spec field except editor and cancelled>
-    templateDigest: <sha256 of the dispatch template it was approved under>  # S5; void once the template's digest differs
+    templateDigest: <sha256 of the dispatch template it was approved under>  # S5; void when absent or when the template's digest differs
   nextDue: ...                               # as DESIGN-032
   planHash: ...                              # as DESIGN-032; an edit re-plans from now
   counts: {succeeded, failed, parked, skipped, ended, ambiguous, cancelled}  # lifetime; skipped adds `missed`
@@ -181,8 +181,12 @@ records `status.approval.templateDigest`: the `TemplateDigest` (SHA-256 of every
 template field, with repos, modes and admits sorted) of the template the spec
 names, as the human approved it. At the due time the executor treats an approval
 whose digest differs from the current template's as void, like a stale
-`specHash`: the occurrence parks and Tom approves again. S5 and the wiring
-implement this; S3b2 provides the function.
+`specHash`: the occurrence parks and Tom approves again. An approval with no
+recorded digest is void too, so neither S5 nor the wiring can skip the check by
+leaving the field out. The check is part of the approval rule itself:
+`authority.Decide` takes the current and recorded digests (`TemplateBinding`), and
+until S5 adds the status field the caller passes the recorded one. S5 records the
+digest and the wiring reads both.
 
 ## Authority (R7, R9)
 
@@ -211,9 +215,12 @@ is unproven, not live:
 - no pod;
 - a heartbeat that is missing or older than the pod (a report of the previous pod).
 
-A failed boot ends a task or local owner. A remote owner's failed boot is only
-unproven, because agentd starts a held remote agent again in the same pod once a
-login window ends. An unproven owner keeps the occurrence `Pending` within its grace.
+A failed boot ends a task or local owner, but only when the current pod reported it:
+a pod exists and the heartbeat is not older than it. The previous pod's failed
+boot is only unproven, because the owner may have moved to a new pod. A remote
+owner's failed boot is only unproven too: agentd may start a remote agent again
+after a failed boot, for a held launch only, once a login window ends in the same
+pod. An unproven owner keeps the occurrence `Pending` within its grace.
 
 **Suspend and resume.** A suspended owner session has no basis while it is
 suspended. Suspending revokes nothing: once it is resumed with the same UID and
