@@ -334,16 +334,52 @@ stateDiagram-v2
   (`controller/pod.go`). agentd checks it **before any boot side effect**, as
   `armTaskBudgetDeadline` does (`agentd/task_budget.go`). It applies **only to the
   first launch**: agentd checks it only when the session has no launch record yet
-  (`~/.agentd/launch.json` on the persistent volume, `agentd/launch.go`). A session
+  (`~/.agentd/launch.json` on the persistent volume, `agentd/launch.go`). agentd
+  checks again at the first launch itself, because a boot that starts before the
+  deadline can reach the launch after it (a slow clone, the project bootstrap). The
+  last check follows workspace admission, which can wait up to
+  `sharedGitAdminBudget` for the workspace's lock, and comes right before
+  `StartAgent` writes `launch.json`. **The deadline bounds the launch record.**
+  Once `launch.json` exists the session counts as launched: run-agent does not
+  check the deadline again, and no later boot is refused. A remote session whose
+  boot holds its agent (no usable login, or a login ceremony opening) has no
+  launch record yet. The login poll checks the deadline while it holds; past it,
+  agentd records the same failed boot (`start deadline passed`) and starts
+  nothing, even when a login lands later. Codex remote sessions never write
+  `launch.json`, so the controller refuses the annotation on them and agentd skips
+  the check for them: scheduled sessions are Claude, or Codex task mode. The value
+  must be RFC 3339 UTC ending in `Z`, at most 64 bytes, parsed by one shared
+  `protocol.ParseStartDeadline`. A bad value, or the annotation on a Codex remote
+  session, is a session agentd would refuse: the API's precheck
+  (`CheckAgentdSession`) refuses it before a create, and the reconciler fails it
+  (`SessionInvalid`, no pod, no volume), so its occurrence ends instead of
+  waiting in `Pending`. The deadline reaches the pod as `AGENTD_START_DEADLINE`, set
+  only when the annotation is present, so other pods are byte-identical. Golden
+  digests, generated on the commit before S3c, pin the builder's pods and the
+  reconciler's own (`sessionPod`: shared workspace, task budget, child decision,
+  private history, original HOME, and each pilot and instruction image). A
+  scheduled session runs only on the templates image: a pilot or instruction
+  image may predate S3c, so on every pod build the reconciler keeps the
+  templates image for a scheduled session. A build never fails for this, because
+  a rebuild after the first launch must not end the session. The API refuses a
+  scheduled session that asks for coordinator instructions, so nothing is lost
+  silently. A session
   that started in time and boots again later (a drain onto a new revision, a
   preempted pod, Tom resuming it after an idle suspend) is never refused. If the
   deadline has passed before the first launch, agentd never launches the agent and
   does not exit, so the pod does not crash-loop. It reports boot as complete and the
   agent state as `failed` with reason `start deadline passed`, so `AgentEnded`
   (which is false while boot reads `booting`) and the session-end rule see an end
-  once the 5-minute pod-age proof holds. The
-  guarantee therefore holds without a running executor: flag off, operator down or
-  rolled back. A pod that was unschedulable or stuck pulling its image until after
+  once the 5-minute pod-age proof holds. The guarantee needs **an S3c operator and
+  an S3c agent image**: the operator passes the deadline into the pod and the
+  agent image checks it. With both at S3c or later it holds without a running
+  executor: flag off, or the operator down. A rollback of either below S3c is
+  covered by the rollout rule: S3c ships before the executor that sets the
+  annotation (S3b) is enabled (S6), and rolling either back below S3c has the
+  precondition of a rollback below S3a, an empty `kubectl get agentsessions -n
+  dev-agents -l dev-env.haynesops.com/scheduled-work`, because every session the
+  executor creates carries that label with its deadline. A pod that was
+  unschedulable or stuck pulling its image until after
   the deadline starts no work. The session-end rule sees an ended agent, and the
   releaser records `Failed` ("not started before grace ended") and pages
   (best-effort; see Decision 5). The executor, when it is running, does the same
@@ -514,7 +550,7 @@ library only.
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
 | S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), the kind unserved before and after due plus grace, a page Reminder that cannot be created (release not blocked), and a never-launched agent past its start deadline reaching the end rule through the pod-age proof. Shipped in a release before S3b | PR, CI, native review, release |
-| S3c | agentd's first-launch start deadline (controller passes the annotation into the pod; agentd refuses a late first launch and reports boot complete, agent `failed`), with unit tests. Ships in an **agent image release** that haynes-ops installs **before** S3b's executor is enabled (S6), so no executor-created session can run on an image without the check | PR, CI, release, haynes-ops agent image pin |
+| S3c | agentd's first-launch start deadline (controller passes the annotation into the pod, fails a session with a bad value or a Codex remote session, and keeps a scheduled session on the templates image; agentd refuses a late first launch, including after admission and while a remote boot holds its agent, and reports boot complete, agent `failed`), with unit tests and golden pod digests. Ships in an **operator release and an agent image release** that haynes-ops installs **before** S3b's executor is enabled (S6), so no executor-created session can run without the check | PR, CI, release, haynes-ops operator and agent image pins |
 | S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, approve of a Parked occurrence after grace running from retriedAt, an unapproved Parked occurrence expiring to Skipped, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |

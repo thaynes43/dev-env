@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/thaynes43/dev-env/internal/agentd/protocol"
 )
 
 // Settings is the pod-level configuration agentd reads from its environment.
@@ -115,6 +117,9 @@ type Settings struct {
 	APICAFile string
 	// Getenv reads the pod's environment, for ${VAR} references in mcp.json.
 	Getenv func(string) string
+	// StartDeadline is a scheduled session's start deadline, as the controller
+	// passed it (AGENTD_START_DEADLINE, DESIGN-054). Empty is none.
+	StartDeadline string
 	// writer is held only by the daemon, never inferred from the owner JSON.
 	writer *writerLease
 	// privateProjectGit applies the catalog's administrative Git policy only
@@ -172,6 +177,7 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		APITokenFile:            or("AGENTD_API_TOKEN_FILE", "/var/run/secrets/dev-env/token"),
 		APICAFile:               getenv("AGENTD_API_CA_FILE"),
 		Getenv:                  getenv,
+		StartDeadline:           getenv(protocol.StartDeadlineEnv),
 	}
 	s.CoordinatorInstructions = getenv("AGENTD_ENABLE_COORDINATOR_INSTRUCTIONS") == "true"
 	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {

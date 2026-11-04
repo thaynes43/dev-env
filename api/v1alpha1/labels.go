@@ -94,4 +94,6 @@ const (
 	// for its child, 2 for a grandchild. A session at depth 2 creates no children
 	// (DESIGN-001 3.4: two levels deep).
 	LabelDepth = LabelPrefix + "depth"
+	// AnnotationScheduledWorkStartDeadline is a scheduled session's start deadline, RFC 3339 UTC (DESIGN-054).
+	AnnotationScheduledWorkStartDeadline = LabelPrefix + "scheduled-work-start-deadline"
 )

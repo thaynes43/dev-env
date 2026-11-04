@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -188,6 +189,10 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err != nil {
 		return nil, err
 	}
+	templatesImage := agentImage(pod)
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && (s.Spec.CoordinatorInstructions || s.Spec.CoordinatorInstructionPublisher) {
+		return nil, sessionInvalidError{errScheduledInstructions}
+	}
 	// Legacy selectors retain their precedence on overlap; startup flags refuse
 	// equal parent/key tuples where applicable. Task and remote selectors are
 	// disjoint by mode. Explicit instruction enrollment instead refuses an
@@ -199,7 +204,36 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	if err := r.applyInstructionAgentImage(pod, s); err != nil {
 		return nil, err
 	}
+	// A scheduled session's start deadline needs agentd's check, which the
+	// templates image carries by the rollout rule (DESIGN-054 S3c). A pilot or
+	// instruction image may predate it, so a scheduled session always runs on
+	// the templates image. This holds on every pod build, never fails a build
+	// (a rebuild after the first launch must not end the session), and the API
+	// refuses a scheduled session that asks for coordinator instructions.
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled {
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == ContainerName {
+				pod.Spec.Containers[i].Image = templatesImage
+			}
+		}
+	}
 	return pod, nil
+}
+
+// errScheduledInstructions refuses a scheduled-work session that asks for
+// coordinator instructions: it runs on the templates image, so it could not
+// receive them. The API refuses it at create and the reconciler fails it before
+// any launch, so nothing is lost silently.
+var errScheduledInstructions = errors.New("a scheduled-work session runs on the templates image and takes no coordinator instructions")
+
+// agentImage is the image of the pod's agent container, or "" without one.
+func agentImage(pod *corev1.Pod) string {
+	for _, c := range pod.Spec.Containers {
+		if c.Name == ContainerName {
+			return c.Image
+		}
+	}
+	return ""
 }
 
 // Finite reviewed executors retain their full review identity for directory and
@@ -368,6 +402,10 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 		}
 		budgetEnv = string(encoded)
 	}
+	startDeadline, err := startDeadlineEnv(s, hold)
+	if err != nil {
+		return nil, err
+	}
 	if staticTokenFor(s) && !hold {
 		env = append(env, corev1.EnvVar{Name: "CLAUDE_CODE_OAUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
@@ -396,6 +434,10 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_RETAINED_COMMON_RULES", Value: fmt.Sprint(s.Spec.CommonRules != nil && !hold)})
 	// Controller-owned deadline and feature gates follow template/profile env.
 	env = append(env, corev1.EnvVar{Name: protocol.TaskBudgetEnv, Value: budgetEnv})
+	// Added only when set: an empty value would change every other pod.
+	if startDeadline != "" {
+		env = append(env, corev1.EnvVar{Name: protocol.StartDeadlineEnv, Value: startDeadline})
+	}
 	// Controller-owned feature gate cannot be widened by template/profile env.
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CODEX_TASKS", Value: fmt.Sprint(managedCodex && !hold)})
 	env = append(env, corev1.EnvVar{Name: "AGENTD_ENABLE_CHILD_DECISIONS", Value: fmt.Sprint(childDecisions && managedCodex && !hold && s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeTask && s.Spec.Workspace != nil)})
@@ -551,6 +593,30 @@ func buildSessionPod(s *v1alpha1.AgentSession, t *templates.Templates, apiURL st
 	return pod, nil
 }
 
+// startDeadlineEnv is the value of the pod's start-deadline env var: the
+// session's scheduled-work start deadline (DESIGN-054), which agentd enforces
+// on the first launch. A session without the annotation gets none, so its pod
+// keeps its bytes; a hold pod runs no agent and never gets one, so a bad value
+// cannot keep a volume from its rescue. A value agentd would not parse, or a
+// session whose agentd records no first launch (a Codex remote session's agent
+// is the phone daemon), is a session agentd would refuse: the annotation is
+// fixed at create, so the session fails (SessionInvalid) instead of staying
+// Pending, which would never end its occurrence, and the API's precheck
+// refuses it before a create.
+func startDeadlineEnv(s *v1alpha1.AgentSession, hold bool) (string, error) {
+	raw, ok := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]
+	if !ok || hold {
+		return "", nil
+	}
+	if _, err := protocol.ParseStartDeadline(raw); err != nil {
+		return "", sessionInvalidError{fmt.Errorf("invalid scheduled-work start deadline: %w", err)}
+	}
+	if s.Spec.Agent == v1alpha1.AgentCodex && s.Spec.Mode == v1alpha1.ModeRemote {
+		return "", sessionInvalidError{errors.New("a scheduled-work start deadline needs a first launch record, which a Codex remote session does not keep")}
+	}
+	return raw, nil
+}
+
 // staticTokenFor reports whether the pod gets the static Claude token: Claude in
 // task or local mode (DESIGN-001 6.1). Remote pods run on the keeper's access
 // token and must not have it (6.2, "Environment rules").
@@ -647,7 +713,13 @@ func (e sessionInvalidError) Unwrap() error { return e.err }
 // session that could never start is refused to its caller instead of failing
 // later.
 func CheckAgentdSession(s *v1alpha1.AgentSession) error {
-	_, err := sessionDocument(s, false)
+	if _, err := sessionDocument(s, false); err != nil {
+		return err
+	}
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && (s.Spec.CoordinatorInstructions || s.Spec.CoordinatorInstructionPublisher) {
+		return errScheduledInstructions
+	}
+	_, err := startDeadlineEnv(s, false)
 	return err
 }
 

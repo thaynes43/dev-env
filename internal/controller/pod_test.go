@@ -312,8 +312,8 @@ func TestPodMeetsAgentdsSettings(t *testing.T) {
 
 // Every variable the operator owns is in the container's env, which Kubernetes
 // ranks above envFrom, so no Secret in a profile's envFrom can supply it (D-44).
-// The static token outside task and local mode and the unused original-HOME
-// binding are left out, not set empty.
+// The static token outside task and local mode, the unused original-HOME
+// binding and the unused start deadline are left out, not set empty.
 func TestTheOperatorSetsEveryReservedVariable(t *testing.T) {
 	tmpl := exampleTemplates(t)
 	for _, mode := range []v1alpha1.SessionMode{v1alpha1.ModeTask, v1alpha1.ModeRemote} {
@@ -328,7 +328,7 @@ func TestTheOperatorSetsEveryReservedVariable(t *testing.T) {
 		}
 		for _, name := range templates.ReservedEnv {
 			e := envOf(pod.Spec.Containers[0], name)
-			if name == homeguard.Env || name == "CLAUDE_CODE_OAUTH_TOKEN" && mode == v1alpha1.ModeRemote {
+			if name == homeguard.Env || name == protocol.StartDeadlineEnv || name == "CLAUDE_CODE_OAUTH_TOKEN" && mode == v1alpha1.ModeRemote {
 				if e != nil {
 					t.Errorf("%s: %s is set", mode, name)
 				}

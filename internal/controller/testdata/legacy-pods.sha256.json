@@ -1,0 +1,21 @@
+{
+  "claude-local": "8776eabb4e32da1359b40d65d7b4491c87da2bbaf5b55ea9351683fe2aff137a",
+  "claude-remote": "e9138a131663d8aa7b8f03e87de0bade8b4bc673d1adfa6c5bd36c938483594a",
+  "claude-task": "5b27adad13c2a8391a1727fc3bf48f832893fa9a9ad56d8dd19a26e599e10e45",
+  "claude-task-no-api": "c91e28583563011e5e83da0056e2965be4d79bc44212d4dafd2d494029e75e1c",
+  "codex-remote": "4e25f7f1adac3b747680c97d1187fb8e4955e9d164e977b4eba2cd59455ca629",
+  "codex-task-managed": "8ef5bcfb02fc3cc83479a42614adf9935cd7d1b02c35f4f3cecd6dd86dfa26b1",
+  "coordinator-opt-in": "a861d0993ae0f806555716111a1039b96cab905b5761f8a6d1e034b8297d6904",
+  "hold": "2286a1ca2bfed9a93ab0e9115c2fecc67faefab54419d4b66ef912c5fbd12b94",
+  "session-child-decision": "13e4fe74f43d4ed7fdcfb095129220faa08f1b81df579ab5aa9b83a2203bbc8a",
+  "session-codex-rc": "498f274f86b53ba57160534a823d419b5217bc8be5e05496bb09222bd53e0331",
+  "session-instruction-publisher": "0bd633d6b5de78ae6d99f54e6b12c980cccbf49dfd37fc9323fa733b9a84fa72",
+  "session-instruction-receiver": "573cdf3a0448a576a76c04f04c459c470b30c6b664ada956eead4ebfe9e62787",
+  "session-original-home": "a386728818c01dda4cb4746ade6683a77f46f3e4acb9a5bdbac1582006f281ec",
+  "session-pilot": "058f8471a0f79d7d3e98b4451ce08ffe5fa9b8ea62ec370a274771a88024d207",
+  "session-private-history": "8cd8230bea33b37141a093b1f622eb7bf201e96108332b1fa08257fa667c9171",
+  "session-remote-pilot": "47cf77c06a90a181f3e89f76e4b1560ade3b030982ba8fa9c931bc3aacebd5c7",
+  "session-task-budget": "005b06b494c6ba212e9dd31cbb557520caea4d93b383d8374d40eb68a9851435",
+  "session-task-pilot": "aa2b1b7ba328b3e505bb44ee39c7c163172455c35d6be5d3d3d032d0a3a65be0",
+  "session-workspace": "7e1a51e68e5dc609c1d0e460471cfdf794182747051a8ff91f92f4e5e0fa7910"
+}

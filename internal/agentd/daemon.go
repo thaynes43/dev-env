@@ -42,6 +42,10 @@ type Daemon struct {
 	// grants is a focused test seam for the boot and maintenance refresh hook.
 	// Production always derives grants from the pod environment.
 	grants func(func(string) string) Grants
+	// admitLaunch reserves a shared workspace's launch before tmux starts; nil
+	// means admitWorkspaceLaunch. It is a test seam: admission can wait up to
+	// sharedGitAdminBudget for the workspace's administrative lock.
+	admitLaunch func(context.Context, Settings, protocol.Session, *Launch) error
 
 	failures int
 	// copying is set while a copy of the log to the shared volume runs, so a
@@ -172,6 +176,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("private task budget: %w", err)
 	}
 	defer stopBudgetWatch()
+	// The start deadline is checked after the budget is armed, so a refused
+	// session still ends at its budget, and before every other boot step.
+	if why := d.firstLaunchRefusal(); why != "" {
+		return d.refuseFirstLaunch(ctx, why)
+	}
 	d.expireCredentials()
 	if err := os.MkdirAll(d.S.StateDir, 0o700); err != nil {
 		return fmt.Errorf("state dir: %w", err)
@@ -364,7 +373,7 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		if err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
-		if err := admitWorkspaceLaunch(ctx, d.S, d.Session, &l); err != nil {
+		if err := d.admitWorkspace(ctx, &l); err != nil {
 			return newStep(name, nil, err), err.Error()
 		}
 		if err := StartAgent(ctx, d.R, d.S, l, d.Self); err != nil {
@@ -381,12 +390,25 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		}
 		return newStep(name, notes, nil), ""
 	}
+	// No launch record: this is the first launch. The start deadline bounds
+	// the launch itself, not only the boot that reached it: a clone or a login
+	// wait can carry a boot that began in time past the deadline.
+	if why := startDeadlineRefusal(d.S.StartDeadline, false, d.now()); why != "" {
+		return newStep(name, nil, errors.New(why)), why
+	}
 	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
 	if err != nil {
 		return newStep(name, nil, err), err.Error()
 	}
-	if err := admitWorkspaceLaunch(ctx, d.S, d.Session, &launch); err != nil {
+	if err := d.admitWorkspace(ctx, &launch); err != nil {
 		return newStep(name, nil, err), err.Error()
+	}
+	// Admission can wait up to sharedGitAdminBudget for the workspace's lock,
+	// so the deadline is checked again after it, right before StartAgent writes
+	// launch.json. The deadline bounds that record: once it exists, the session
+	// counts as launched, and run-agent does not check the deadline again.
+	if why := startDeadlineRefusal(d.S.StartDeadline, false, d.now()); why != "" {
+		return newStep(name, nil, errors.New(why)), why
 	}
 	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
 		return newStep(name, nil, err), err.Error()
@@ -396,6 +418,14 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		what = "claude TUI"
 	}
 	return newStep(name, []string{fmt.Sprintf("%s started in tmux session %q, conversation %s", what, TmuxSession, launch.ConversationID)}, nil), ""
+}
+
+// admitWorkspace admits a launch through the admitLaunch seam.
+func (d *Daemon) admitWorkspace(ctx context.Context, l *Launch) error {
+	if d.admitLaunch != nil {
+		return d.admitLaunch(ctx, d.S, d.Session, l)
+	}
+	return admitWorkspaceLaunch(ctx, d.S, d.Session, l)
 }
 
 // waitForLogin holds a remote session's agent until the pod has a usable
@@ -442,7 +472,7 @@ const loginSettle = 30 * time.Second
 // never while the agent's CLI is alive (one owner for the login).
 func (d *Daemon) pollRemoteLogin(ctx context.Context) {
 	w := d.remote
-	if w == nil || d.writerRefused || !remoteLoginUsable(d.S, d.Session, d.now()) {
+	if w == nil || d.writerRefused || d.refuseHeldLaunchPastDeadline(ctx, w) || !remoteLoginUsable(d.S, d.Session, d.now()) {
 		return
 	}
 	// The pid check, the window's end and the agent start are one critical
@@ -476,23 +506,57 @@ func (d *Daemon) pollRemoteLogin(ctx context.Context) {
 	}
 	step, agentErr := d.startAgent(ctx, w.ws, w.repo, w.boot)
 	LogSteps(d.Log, []Step{step})
+	d.recordAgentStep(w.boot, step, agentErr)
+	d.beat(ctx)
+}
+
+// refuseHeldLaunchPastDeadline ends a remote session's held first launch once
+// its start deadline passes (DESIGN-054). The boot held the agent (no usable
+// login, or a login ceremony opening) before startAgent reached its deadline
+// check, so only this poll looks at it again. Past the deadline, with no
+// launch record, it writes the failed boot record that the launch's own
+// refusal writes and drops the held launch, so nothing starts the agent
+// afterwards: the status reads failed, not login-required, and the session
+// ends.
+func (d *Daemon) refuseHeldLaunchPastDeadline(ctx context.Context, w *remoteWait) bool {
+	if !w.waiting && !w.deferred {
+		return false
+	}
+	why := d.firstLaunchRefusal()
+	if why == "" {
+		return false
+	}
+	d.remote = nil
+	if !d.projectsClaude() {
+		StopLoginWindow(ctx, d.R, d.S)
+	}
+	d.Log.Warn("first launch refused", "session", d.Session.Name, "reason", why)
+	d.recordAgentStep(w.boot, newStep("agent", nil, errors.New(why)), why)
+	d.beat(ctx)
+	return true
+}
+
+// recordAgentStep replaces boot's agent step and outcome in the boot record
+// after the boot itself wrote it: a held remote agent that started or was
+// refused later.
+func (d *Daemon) recordAgentStep(boot string, step Step, agentErr string) {
 	var rec bootRecord
-	if readJSONFile(d.S.statePath(bootFile), &rec) == nil && rec.BootID == w.boot {
-		for i := range rec.Steps {
-			if rec.Steps[i].Name == step.Name {
-				rec.Steps[i] = step
-			}
-		}
-		rec.AgentError = agentErr
-		rec.Boot = protocol.BootReady
-		if agentErr != "" {
-			rec.Boot = protocol.BootFailed
-		}
-		if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
-			d.Log.Error("boot record", "err", err)
+	if readJSONFile(d.S.statePath(bootFile), &rec) != nil || rec.BootID != boot {
+		return
+	}
+	for i := range rec.Steps {
+		if rec.Steps[i].Name == step.Name {
+			rec.Steps[i] = step
 		}
 	}
-	d.beat(ctx)
+	rec.AgentError = agentErr
+	rec.Boot = protocol.BootReady
+	if agentErr != "" {
+		rec.Boot = protocol.BootFailed
+	}
+	if err := writeJSONFile(d.S.statePath(bootFile), rec); err != nil {
+		d.Log.Error("boot record", "err", err)
+	}
 }
 
 func (d *Daemon) supervise(ctx context.Context) error {
