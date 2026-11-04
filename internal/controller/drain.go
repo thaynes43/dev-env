@@ -37,8 +37,10 @@ func summonedSession(s *v1alpha1.AgentSession) bool {
 }
 
 // sessionIdle reports the idle moment drain waits for (DESIGN-001 4.2, Q-03).
-// The agent has reported idle or waiting, and no tmux client is attached. Busy,
+// The agent has reported idle, and no tmux client is attached. Busy, waiting,
 // pending, exited, and a client that is still attached are not that moment.
+// Waiting can be a question or a permission prompt a person has not answered,
+// so the turn has not ended (DESIGN-001 5.2, 2026-11-04 note).
 // This is not D-09's suspend window: drain rolls the session at the next idle
 // moment, and the suspend timer is the separate park.
 func sessionIdle(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
@@ -46,18 +48,23 @@ func sessionIdle(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
 		pod.Status.Phase != corev1.PodRunning || !podReady(pod) {
 		return false
 	}
+	return agentIdleForDrain(s)
+}
+
+// agentIdleForDrain is the agent half of sessionIdle: the stored heartbeat
+// reports the agent idle with no attached client. recordRestart checks it
+// again on the fresh session read before a proof or a stop is written.
+func agentIdleForDrain(s *v1alpha1.AgentSession) bool {
 	a := s.Status.Agent
-	if a == nil || a.Attached > 0 {
-		return false
-	}
-	return a.Status == protocol.AgentIdle || a.Status == protocol.AgentWaiting
+	return a != nil && a.Attached == 0 && a.Status == protocol.AgentIdle
 }
 
 // drainEligible is the only time the operator marks a session Draining
 // (DESIGN-001 5.2): it still wants its pod, the pod's template revision is
 // not the current one, the session is idle, and it is not summoned, shared,
 // private-history protected, a canary original, or a user remote session.
-// A busy or remote session stays Running during automatic revision updates.
+// A busy, waiting, attached or remote session stays Running during automatic
+// revision updates.
 func drainEligible(s *v1alpha1.AgentSession, pod *corev1.Pod, currentRevision string) bool {
 	if s == nil || pod == nil || currentRevision == "" || !s.DeletionTimestamp.IsZero() ||
 		s.Spec.OperatingMode != v1alpha1.OperatingModeRunning || s.Spec.Workspace != nil ||
@@ -259,7 +266,12 @@ func (r *Reconciler) prepareRestart(ctx context.Context, pod *corev1.Pod) (proto
 
 // recordRestart writes the prepare-restart proof before the pod is deleted
 // (DESIGN-001 5.2, the same record-first rule as rescue). It writes only while
-// this is still the session the report was for.
+// this is still the session the report was for and its fresh read still shows
+// an idle agent with no attached client. That read is as fresh as the stored
+// heartbeat (agentd posts every 60 s): a heartbeat stored before the Stopped
+// write that reports waiting, busy or attached stops nothing, but a change
+// since the last stored heartbeat, or a heartbeat stored between the Stopped
+// write and the stop exec, is not seen here (DESIGN-001 5.2, 2026-11-04 note).
 func (r *Reconciler) recordRestart(ctx context.Context, s *v1alpha1.AgentSession, rec *v1alpha1.RestartStatus) (bool, error) {
 	if r.APIReader == nil || rec == nil || rec.ConversationID == "" {
 		return false, errors.New("drain needs an uncached session read and a conversation id")
@@ -271,7 +283,8 @@ func (r *Reconciler) recordRestart(ctx context.Context, s *v1alpha1.AgentSession
 		}
 		if fresh.UID != s.UID || fresh.Generation != rec.Generation || !fresh.DeletionTimestamp.IsZero() ||
 			fresh.Spec.OperatingMode != v1alpha1.OperatingModeRunning || fresh.Spec.Workspace != nil ||
-			privateHistoryProtected(&fresh) || summonedSession(&fresh) || fresh.Spec.Mode == v1alpha1.ModeRemote {
+			privateHistoryProtected(&fresh) || summonedSession(&fresh) || fresh.Spec.Mode == v1alpha1.ModeRemote ||
+			!agentIdleForDrain(&fresh) {
 			return false, nil
 		}
 		fresh.Status.Restart = rec
