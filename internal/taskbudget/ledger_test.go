@@ -137,6 +137,8 @@ func record(t *testing.T, s *Service, b Binding, id, kind string) (*Ledger, erro
 	return s.Record(context.Background(), apiv1.TaskBudgetEvent{Binding: b, ID: id, Kind: kind})
 }
 
+// The stall still trips while heartbeats and activity continue. Under saga
+// decision 94 it is a signal, not a latch: stall_test.go covers the rest.
 func TestStallDespiteHeartbeatsAndActivity(t *testing.T) {
 	s, _, now, b := setup(t, 2*time.Hour, 2*time.Hour, 2*time.Hour)
 	base := *now
@@ -146,19 +148,19 @@ func TestStallDespiteHeartbeatsAndActivity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if i < 2 && l.Latched {
-			t.Fatal("latched early")
+		if l.Latched || l.Escalation != nil {
+			t.Fatal("stall latched or asked the owner")
 		}
-		if i == 2 && (!l.Latched || l.Reason != "Stalled" || l.Escalation == nil) {
-			t.Fatalf("stall missing: %+v", l.Status())
+		if (i == 2) != (l.Status().Stall != nil) {
+			t.Fatalf("stall signal at %s: %+v", d, l.Status().Stall)
 		}
-		if len(l.Events) != 0 {
+		if len(l.Events) != len(stallRecords(l)) {
 			t.Fatal("heartbeat retained as history")
 		}
 	}
 	l, err := s.Admit(context.Background(), b)
-	if !errors.Is(err, ErrDenied) || !l.Latched {
-		t.Fatal("stalled task admitted")
+	if err != nil || l.Latched || l.Status().Stall == nil {
+		t.Fatal("stalled task refused its owner", err)
 	}
 }
 

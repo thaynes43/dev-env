@@ -16,9 +16,15 @@ import (
 
 // stallAuthority is a synthetic Ready original guard whose policy allows the
 // one continuation. Each field is that check's result.
-type stallAuthority struct{ admission, continuation error }
+type stallAuthority struct {
+	admission, continuation error
+	during                  func()
+}
 
 func (a *stallAuthority) InspectNativeAdmission(context.Context, *Ledger, Binding) error {
+	if a.during != nil {
+		a.during()
+	}
 	return a.admission
 }
 func (a *stallAuthority) InspectNativeContinuation(context.Context, *Ledger, Binding) error {
@@ -110,6 +116,9 @@ func TestStallSignalIsObservableRetainedAndNotALatch(t *testing.T) {
 	want := apiv1.TaskBudgetStall{ID: fmt.Sprintf("stall:%d", created.UnixNano()), Since: created, At: created.Add(StallLimit), Signals: 1}
 	if !sameStall(st.Stall, want) {
 		t.Fatalf("stall signal = %+v, want %+v", st.Stall, want)
+	}
+	if st.LastEvidence == nil || st.LastEvidence.ID != "receipt:attempt-1" {
+		t.Fatalf("a stall signal became evidence: %+v", st.LastEvidence)
 	}
 	stored, _, _ := m.Read(ctx, b.TaskUID)
 	records := stallRecords(stored)
@@ -431,5 +440,70 @@ func TestStalledContinuationNeverDuplicatesExecutorOrDispatch(t *testing.T) {
 	stored, _, _ = m.Read(ctx, b.TaskUID)
 	if len(stored.Workers) != 2 || len(stallRecords(stored)) != 1 {
 		t.Fatalf("duplicate executor or signal: %+v", stored.Workers)
+	}
+}
+
+// The record is written in the same operation that first sees the stall: a
+// late progress receipt still leaves the quiet window on record.
+func TestStallRecordedWhenProgressArrivesLate(t *testing.T) {
+	ctx := context.Background()
+	s, m, now, b, _ := defaultStalledCampaign(t)
+	created := *now
+	*now = created.Add(StallLimit + time.Minute)
+	progress := apiv1.TaskBudgetEvent{Binding: b, ID: "late", Kind: "progress", Evidence: apiv1.TaskBudgetEvidence{ID: "late", Kind: "verified-result", Reference: "fixture:verified:late"}}
+	l, err := s.Record(ctx, progress)
+	if err != nil || l.Latched || l.Status().Stall != nil || !l.StallAnchor.Equal(*now) {
+		t.Fatalf("late progress: %+v %v", l.Status(), err)
+	}
+	stored, _, _ := m.Read(ctx, b.TaskUID)
+	records := stallRecords(stored)
+	if len(records) != 1 || records[0].Request.ID != fmt.Sprintf("stall:%d", created.UnixNano()) || stored.Events[len(stored.Events)-1].Request.ID != "late" {
+		t.Fatalf("quiet window before late progress not recorded first: %+v", records)
+	}
+}
+
+// A clock that crosses the limit during an independent probe is recorded in
+// that same write, matching the status it returns.
+func TestStallCrossedDuringAProbeIsRecordedInTheSameWrite(t *testing.T) {
+	ctx := context.Background()
+	s, m, now, b, auth := defaultStalledCampaign(t)
+	created := *now
+	*now = created.Add(StallLimit - time.Second)
+	auth.during = func() { *now = created.Add(StallLimit) }
+	l, err := s.Admit(ctx, b)
+	if err != nil || l.Latched || l.Status().Stall == nil {
+		t.Fatalf("probe crossing the limit: %+v %v", l.Status(), err)
+	}
+	stored, _, _ := m.Read(ctx, b.TaskUID)
+	if len(stallRecords(stored)) != 1 {
+		t.Fatal("status showed a stall the write did not record")
+	}
+}
+
+// A signal never takes the last history slots: an owner intent reserved at the
+// edge stays consumable, and the stall is shown without a HistoryBound stop.
+func TestStallSignalNeverTakesTheLastHistorySlots(t *testing.T) {
+	ctx := context.Background()
+	s, m, now, b, _ := defaultStalledCampaign(t)
+	created := *now
+	l, rv, _ := m.Read(ctx, b.TaskUID)
+	for i := l.historyEvents(); i < MaxEvents-3; i++ {
+		l.Events = append(l.Events, Event{At: created, Request: apiv1.TaskBudgetEvent{Binding: b, ID: fmt.Sprintf("filler-%d", i), Kind: "activity"}})
+	}
+	if err := m.Update(ctx, l, rv); err != nil {
+		t.Fatal(err)
+	}
+	r := apiv1.NativeControlRequest{Binding: b, ID: "edge-steer", Operation: "turn/start", ThreadID: "thread-a", Text: "owner"}
+	*now = created.Add(StallLimit - time.Minute)
+	if _, err := s.ReserveNativeControl(ctx, r, "owner"); err != nil {
+		t.Fatal("reserve at the edge", err)
+	}
+	*now = created.Add(StallLimit)
+	l, err := s.Observe(ctx, b)
+	if err != nil || l.Latched || l.Status().Stall == nil || l.Status().Stall.Signals != 0 || len(stallRecords(l)) != 0 || l.historyEvents() != MaxEvents-2 {
+		t.Fatalf("stall at the history edge: latched=%t reason=%q stall=%+v events=%d %v", l.Latched, l.Reason, l.Status().Stall, l.historyEvents(), err)
+	}
+	if l, err = s.ConsumeNativeControl(ctx, r); err != nil || l.Latched {
+		t.Fatal("stall took the reserved intent's consume slot", err)
 	}
 }

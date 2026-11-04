@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -18,6 +19,10 @@ import (
 )
 
 const (
+	// StallLimit is the accepted threshold of time without independently
+	// validated progress. Under saga decision 94 (ADR-019) reaching it is a
+	// diagnostic and checkpoint signal for the supervisor: it never latches,
+	// stops work or asks the owner. Every budget limit still stops.
 	StallLimit   = 60 * time.Minute
 	FailureLimit = 3
 	// MaxEvents bounds retained history. Worker stop receipts sit outside it:
@@ -254,8 +259,6 @@ func (l *Ledger) evaluate(now time.Time) {
 		l.latch(now, "OverallBudget")
 	case l.EffortMilliseconds >= l.EffortCeilingMilliseconds:
 		l.latch(now, "EffortBudget")
-	case !now.Before(l.StallAnchor.Add(StallLimit)):
-		l.latch(now, "Stalled")
 	case !now.Before(l.NextCheckpoint):
 		l.latch(now, "Checkpoint")
 	case l.historyEvents() >= MaxEvents || len(l.Workers) >= MaxWorkers:
@@ -280,6 +283,49 @@ func (l *Ledger) evaluate(now time.Time) {
 	}
 }
 
+// stallSignalKind marks the server-appended inert activity event that records
+// one stall window. Public activity is never retained, so a caller cannot
+// forge one. Like native owner intents it lives in Events, which an older
+// replica preserves when it rewrites the ledger.
+const stallSignalKind = "stall-signal"
+
+// stallID names one stall window by its anchor: the last validated progress,
+// resolution or authorized extension. A continuation keeps the window.
+func stallID(anchor time.Time) string { return "stall:" + strconv.FormatInt(anchor.UnixNano(), 10) }
+
+// stalled reports whether StallLimit has passed since the anchor at the
+// ledger's accounted time.
+func (l *Ledger) stalled() bool { return !l.AccountedAt.Before(l.StallAnchor.Add(StallLimit)) }
+
+func (l *Ledger) stallSignals() int {
+	n := 0
+	for _, e := range l.Events {
+		if e.Request.Kind == "activity" && e.Request.Evidence.Kind == stallSignalKind {
+			n++
+		}
+	}
+	return n
+}
+
+// signalStall records the current stall window once (saga decision 94). It
+// never latches, asks the owner, moves the anchor, resets a counter or changes
+// a limit. It leaves the last two history slots to other records, a reserved
+// native intent's consume included, so a signal never fills the history or
+// causes HistoryBound. A stall at that edge is shown in Status, not recorded.
+func (l *Ledger) signalStall() {
+	if !l.stalled() || l.historyEvents() >= MaxEvents-2 {
+		return
+	}
+	id := stallID(l.StallAnchor)
+	for _, e := range l.Events {
+		if e.Request.ID == id {
+			return
+		}
+	}
+	l.Events = append(l.Events, Event{At: l.AccountedAt, Request: apiv1.TaskBudgetEvent{Binding: l.Binding, ID: id, Kind: "activity",
+		Evidence: apiv1.TaskBudgetEvidence{ID: id, Kind: stallSignalKind}}})
+}
+
 func (s *Service) mutate(ctx context.Context, b Binding, fn func(*Ledger, time.Time) error) (*Ledger, error) {
 	if s == nil || s.Store == nil || !validBinding(b) {
 		return nil, ErrUnavailable
@@ -298,10 +344,12 @@ func (s *Service) mutate(ctx context.Context, b Binding, fn func(*Ledger, time.T
 			return nil, err
 		}
 		l.evaluate(now)
+		l.signalStall()
 		// Refusals are persisted too: an expired task must latch before any
 		// caller requests a stop. A stale binding never changes the new epoch.
 		operationErr := fn(l, now)
 		l.evaluate(now)
+		l.signalStall()
 		// An observation, replay or refusal that changes nothing durable writes
 		// nothing, so frequent observers do not contend with real writers.
 		if read.onlyAccounted(l) {
@@ -609,6 +657,9 @@ func (l *Ledger) Status() apiv1.TaskBudgetStatus {
 		NativeStopRequested: l.NativeStopRequested(),
 		EffortMilliseconds:  l.EffortMilliseconds, UsageAccounting: "SupervisorElapsedEstimate; provider usage unavailable",
 		LastProgress: l.LastProgress, NextCheckpoint: l.NextCheckpoint, Escalation: l.Escalation, StopConfirmed: l.stopped()}
+	if l.stalled() {
+		st.Stall = &apiv1.TaskBudgetStall{ID: stallID(l.StallAnchor), Since: l.StallAnchor, At: l.StallAnchor.Add(StallLimit), Signals: l.stallSignals()}
+	}
 	blockers := map[string]apiv1.TaskBudgetBlocker{}
 	for _, e := range l.Events {
 		if e.Request.Kind == "failure" || e.Request.Kind == "resolved" {
