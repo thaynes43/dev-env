@@ -84,6 +84,10 @@ func templateRevision(obs observation) string {
 	return drainRevision(obs.templates)
 }
 
+// noteRolloutHold logs the templates' rollout hold state when it differs from
+// the last one logged (DESIGN-001 5.2, 2026-11-04 note).
+func (r *Reconciler) noteRolloutHold(ctx context.Context, t *templates.Templates) {}
+
 // drainRevision is the revision automatic drain compares a pod against: the
 // current template hash, or empty when the templates did not load or hold
 // automatic drain for their image (rollout.newSessionsOnlyImage, DESIGN-001

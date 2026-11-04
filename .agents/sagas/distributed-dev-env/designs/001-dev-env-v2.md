@@ -2079,23 +2079,43 @@ They are never drained; each runs to its outcome on the revision it started on
 (V-13).
 
 **New-sessions-only rollout, source mechanism 2026-11-04 (OpenProject #385, DR1
-round 2; default off).** The templates may name one image in
-`rollout.newSessionsOnlyImage`. While that value equals the templates' `image`,
-automatic revision drain is off for every session: no session is marked
-`Draining`, no dry-run or stop runs, and a pending `Draining` mark without a
-recorded stop is cancelled. A matching already-stopped proof still finishes its
-recovery. New sessions start on the current revision as always, outdated
-sessions are still reported `Outdated`, and each one moves to the new revision
-only through its own suspend and resume (D-09's idle suspend included) or a
-reap. The field is not part of the revision, so adding or removing it marks no
-session `Outdated`. It is bounded to the image it names: once `image` changes
-(a later bump), the value no longer matches and Q-03's drain on idle applies
-again to every outdated session, the ones the hold kept included. Removing the
-field resumes Q-03 at once, so a PR that removes it, or bumps the image past
-it, is a rollout and needs the same review. An operator older than this field
-refuses templates that carry it (strict parsing), which blocks new sessions and
-leaves running ones alone, so the operator that knows it must be installed
-first.
+rounds 2 and 3; default off).** The templates may name one image in
+`rollout.newSessionsOnlyImage`, and it must equal the templates' `image`. While
+it is set, automatic revision drain is off for every session: no session is
+marked `Draining`, no dry-run or stop runs, and a pending `Draining` mark
+without a recorded stop is cancelled at the next reconcile. A matching
+already-stopped proof still finishes its recovery. A reconcile that read the
+templates before the hold landed can still finish its own stop in that one
+pass. New sessions start on the current revision as always, and each outdated
+session moves to the new revision only through its own suspend and resume
+(D-09's idle suspend included) or a reap. The field is not part of the
+revision, so adding or removing it marks no session `Outdated`.
+
+It fails safe and is visible:
+
+- A set value that differs from `image`, by even one character, makes the
+  templates invalid. The parse error names both values. Every session with a
+  pod then reports `Outdated` as `Unknown` / `TemplatesInvalid` with that
+  error, new sessions wait `Pending`, and nothing drains. So a set field never
+  silently stops holding: a later image bump must either set the field to the
+  new image (hold again) or remove it (resume Q-03).
+- While the hold is active, every outdated session reports `Outdated` `True`
+  with reason `OlderRevisionHeld` and a message that names the field, and the
+  operator logs once, when it loads templates whose hold state differs from
+  the last it logged, whether the hold is active and for which image.
+
+Deploy order and rollback:
+
+1. The operator that knows the field runs on both replicas before any
+   templates file carries it. An older operator refuses the file (strict
+   parsing): new sessions wait `Pending`, running ones are left alone.
+2. The field lands with the image bump it holds, or before it with the
+   current image; never in the same change as the operator pin.
+3. While the field is set, the operator is never rolled back below this
+   change; the older one refuses the file.
+4. Removing the field resumes Q-03 at once for every outdated session, the
+   ones the hold kept included. So does a templates revert that removes it. A
+   PR that removes it is a rollout and needs the same review.
 
 This is **not** Q-03 as published. For the image it names it is option B ("new
 sessions only"), which Tom did not choose; Q-03's default, option A, is

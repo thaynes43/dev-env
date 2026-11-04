@@ -406,8 +406,10 @@ func TestProfileMayNameTheWorkbenchAccount(t *testing.T) {
 }
 
 // DESIGN-001 5.2, 2026-11-04 note: rollout.newSessionsOnlyImage holds
-// automatic drain only while it names the templates' own image, is digest
-// pinned, and is not part of the revision.
+// automatic drain. It must equal the templates' own image and be digest
+// pinned, and it is not part of the revision. A value that names any other
+// image makes the templates invalid, so a set field never silently stops
+// holding (OpenProject #385, round 3).
 func TestRolloutNewSessionsOnlyImage(t *testing.T) {
 	plain, err := parse(t, example(t))
 	if err != nil {
@@ -435,12 +437,11 @@ func TestRolloutNewSessionsOnlyImage(t *testing.T) {
 	if other == plain.Image {
 		t.Fatal("the example image digest changed")
 	}
-	stale, err := parse(t, example(t)+"\nrollout:\n  newSessionsOnlyImage: "+other+"\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stale.NewSessionsOnly() {
-		t.Fatal("a rollout naming another image held drain; the next bump must drain again")
+	for _, mismatch := range []string{other, plain.Image + " ", strings.Replace(plain.Image, "2.0.0", "2.0.1", 1)} {
+		_, err := parse(t, example(t)+"\nrollout:\n  newSessionsOnlyImage: \""+mismatch+"\"\n")
+		if err == nil || !strings.Contains(err.Error(), "does not match image") || !strings.Contains(err.Error(), plain.Image) {
+			t.Errorf("a hold for %q was not refused naming both images: %v", mismatch, err)
+		}
 	}
 	for _, bad := range []string{
 		"\nrollout:\n  newSessionsOnlyImage: ghcr.io/thaynes43/dev-env:2.0.0\n",
