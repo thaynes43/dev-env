@@ -509,6 +509,9 @@ func TestEnsureAfterAnAmbiguousCreateError(t *testing.T) {
 		{"forbidden", apierrors.NewForbidden(gr, "x", errors.New("no")), false, "", 0},
 		{"invalid", apierrors.NewInvalid(schema.GroupKind{Group: gr.Group, Kind: "Reminder"}, "x", nil), false, "", 0},
 		{"bad request", apierrors.NewBadRequest("injected"), false, "", 0},
+		{"unauthorized", apierrors.NewUnauthorized("injected"), false, "", 0},
+		{"namespace not found", apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "dev-env-system"), false, "", 0},
+		{"method not supported", apierrors.NewMethodNotSupported(gr, "create"), false, "", 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -595,4 +598,42 @@ func TestEnsureRecordsOnlyItsOwnExistingReminder(t *testing.T) {
 			t.Fatalf("an existing Reminder that cannot be read was recorded: %+v", got)
 		}
 	})
+}
+
+// The verifying read after an ambiguous create error runs under its own short
+// deadline, not the caller's: when the caller's deadline is what ended the
+// create (a create stored just as the caller's time ran out), the read still
+// finds the stored Reminder and records it.
+func TestEnsureVerifiesUnderItsOwnDeadline(t *testing.T) {
+	var readDeadline time.Duration
+	var readHadDeadline bool
+	cl := fakeClient(t, interceptor.Funcs{
+		Create: func(_ context.Context, w client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+			if err := w.Create(context.Background(), o, opts...); err != nil {
+				return err
+			}
+			return context.DeadlineExceeded
+		},
+		Get: func(ctx context.Context, w client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var dl time.Time
+			dl, readHadDeadline = ctx.Deadline()
+			readDeadline = time.Until(dl)
+			return w.Get(ctx, key, o, opts...)
+		},
+	})
+	p := &Pager{Client: cl}
+	w := item("pushover:default")
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	got := p.Ensure(ctx, w, occAt, v1alpha1.PageEventResult, 0, "Result", "body", nowAt)
+	if want := (v1alpha1.ScheduledWorkPage{Event: "result", Attempt: 0, Reminder: Key(w, occAt, v1alpha1.PageEventResult, 0)}); got != want {
+		t.Fatalf("page = %+v, want %+v: the stored Reminder was not found after the caller's deadline", got, want)
+	}
+	// About 3 seconds: short, so a dead API server cannot hold the caller.
+	if !readHadDeadline || readDeadline <= 0 || readDeadline > 3*time.Second {
+		t.Errorf("the verifying read had deadline %v (set %v), want one within 3s", readDeadline, readHadDeadline)
+	}
 }
