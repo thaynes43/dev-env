@@ -55,7 +55,31 @@ import (
 const (
 	MetricScheduledWorkReleaseBlocked = "dev_env_scheduled_work_release_blocked"
 	MetricScheduledWorkReleaseHolds   = "dev_env_scheduled_work_release_holds_total"
+	// MetricScheduledWorkLateSessions counts the releases of a session whose
+	// occurrence was already final without naming it.
+	MetricScheduledWorkLateSessions = "dev_env_scheduled_work_late_sessions_total"
+	// MetricScheduledWorkGateReadFailures counts the launch gate's failed
+	// reads of a scheduled session's ScheduledWork.
+	MetricScheduledWorkGateReadFailures = "dev_env_scheduled_work_launch_gate_read_failures_total"
 )
+
+// NewScheduledWorkGateReadFailuresCounter returns the counter of
+// MetricScheduledWorkGateReadFailures. Register it once per process.
+func NewScheduledWorkGateReadFailuresCounter() prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name: MetricScheduledWorkGateReadFailures,
+		Help: "Failed reads of a scheduled session's ScheduledWork by the launch gate before its first pod (DESIGN-054). The session waits, and fails as invalid once its start deadline plus the release margin has passed.",
+	})
+}
+
+// NewScheduledWorkLateSessionsCounter returns the counter of
+// MetricScheduledWorkLateSessions. Register it once per process.
+func NewScheduledWorkLateSessionsCounter() prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name: MetricScheduledWorkLateSessions,
+		Help: "Scheduled sessions released whose occurrence was already final without naming them: a create that landed after another leader's final record (DESIGN-054). The launch gate refuses such a session's first pod; one that started anyway ran unrecorded.",
+	})
+}
 
 // The blocked counter's reason label values.
 const (
@@ -180,6 +204,12 @@ func scheduledWorkReleaseAllowed(s *v1alpha1.AgentSession, ev scheduledWorkRelea
 	case uid == "":
 		return errors.New("the session has no scheduled-work label")
 	}
+	// Whatever the reason, the finalizer holds the derived name until the
+	// start deadline plus the margin, so a late create of the name cannot
+	// launch an agent (DESIGN-054, scheduledwork.ReleaseMargin).
+	if until, err := scheduledwork.ReleaseHeldUntil(s); err != nil || !ev.now.After(until) {
+		return errors.New("the scheduled-work finalizer stays until the session's start deadline plus the release margin has passed")
+	}
 	matching := ev.read == itemFound && ev.work != nil && string(ev.work.UID) == uid
 	switch ev.why {
 	case swReleaseRecorded:
@@ -190,7 +220,7 @@ func scheduledWorkReleaseAllowed(s *v1alpha1.AgentSession, ev scheduledWorkRelea
 		}
 	case swReleaseNotTracked:
 		if matching {
-			if o := scheduledwork.Find(ev.work, ev.at); o == nil || (o.Session != "" && o.Session != s.Name) {
+			if o := scheduledwork.Find(ev.work, ev.at); o == nil || (o.Session != "" && o.Session != s.Name) || (o.SessionUID != "" && o.SessionUID != string(s.UID)) {
 				return nil
 			}
 		}
@@ -353,6 +383,20 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 			return false, ctrl.Result{RequeueAfter: until.Sub(now) + time.Second}
 		}
 	}
+	// The record is in (or there is none to write). The finalizer still
+	// holds the derived name until the start deadline plus the margin, so a
+	// stalled or deposed leader's late create of the same name cannot
+	// succeed before agentd would refuse its first launch. The wait is
+	// expected: it is not counted as a hold, and the blocked gauge leaves
+	// it out.
+	until, err := scheduledwork.ReleaseHeldUntil(&s)
+	if err != nil {
+		return false, r.releaseBlocked(lg, releaseBlockedMetadata, fmt.Errorf("the start deadline is unknown, so the finalizer keeps the derived name: %w", err))
+	}
+	if !now.After(until) {
+		lg.V(1).Info("the occurrence is recorded; the finalizer keeps the derived name until the start deadline plus the margin", "until", until.UTC().Format(time.RFC3339))
+		return false, ctrl.Result{RequeueAfter: until.Sub(now) + time.Second}
+	}
 	if err := releaseScheduledWorkFinalizer(ctx, r.Client, &s, ev); err != nil {
 		switch {
 		case apierrors.IsNotFound(err):
@@ -366,6 +410,16 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 	if ev.work != nil {
 		if o := scheduledwork.Find(ev.work, at); o != nil {
 			state = o.State
+			if (result == scheduledwork.AlreadyTerminal && o.Session == "") || (o.SessionUID != "" && o.SessionUID != string(s.UID)) {
+				// A create that landed after another leader's final record,
+				// or a second session object of the name: the occurrence
+				// never records this session. The launch gate refuses its
+				// first pod; one that started anyway ran unrecorded.
+				lg.Info("released a scheduled session whose occurrence was already final without it; its run, if any, is not recorded", "occurrence", at.Format(time.RFC3339), "state", o.State)
+				if r.ScheduledWorkLateSessions != nil {
+					r.ScheduledWorkLateSessions.Inc()
+				}
+			}
 		}
 	}
 	lg.Info("released a scheduled session", "ended", why, "release", string(ev.why), "record", string(result), "occurrence", at.Format(time.RFC3339), "state", state)
@@ -589,6 +643,11 @@ func (c *ScheduledWorkReleaseCollector) Collect(ch chan<- prometheus.Metric) {
 			}
 			pod = p
 		}
+		if until, err := scheduledwork.ReleaseHeldUntil(s); err == nil && !now.After(until) {
+			// The expected hold of the derived name until the start
+			// deadline plus the margin is not blocked.
+			continue
+		}
 		if !s.DeletionTimestamp.IsZero() || sessionEnded(s, pod, now) {
 			held++
 		}
@@ -610,4 +669,47 @@ func (c *ScheduledWorkReleaseCollector) cachedPod(ctx context.Context, s *v1alph
 		return nil, nil
 	}
 	return &pod, nil
+}
+
+// scheduledLaunchGate is DESIGN-054's launch gate: before the first pod of a
+// session that carries the scheduled-work label (its volume does not exist
+// yet), it reads the ScheduledWork uncached and refuses the session, as one
+// agentd would refuse (sessionInvalidError: phase Failed, no pod, no volume),
+// when its occurrence would never record it (scheduledwork.LaunchRefusal). A
+// session without the label is not read and its pod is unchanged. A read that
+// fails, or a kind whose CRD still exists but is not served, is counted and
+// returned so the reconcile retries; nothing starts in the meantime. Once the
+// session's start deadline plus the release margin has passed, such a session
+// fails as invalid: agentd would refuse its first launch anyway.
+func (r *Reconciler) scheduledLaunchGate(ctx context.Context, s *v1alpha1.AgentSession) error {
+	if _, ok := s.Labels[v1alpha1.LabelScheduledWork]; !ok {
+		return nil
+	}
+	name := s.Annotations[v1alpha1.AnnotationScheduledWorkName]
+	if name == "" {
+		return sessionInvalidError{fmt.Errorf("a scheduled session needs annotation %s", v1alpha1.AnnotationScheduledWorkName)}
+	}
+	if r.APIReader == nil {
+		return errors.New("the launch gate of a scheduled session needs the uncached reader")
+	}
+	w, read, err := r.readScheduledWork(ctx, r.scheduledWorkNamespace(), name)
+	if err != nil {
+		if r.ScheduledWorkGateReadFailures != nil {
+			r.ScheduledWorkGateReadFailures.Inc()
+		}
+		// Past the start deadline plus the margin agentd would refuse the
+		// launch anyway; the session fails instead of waiting for good.
+		if until, uerr := scheduledwork.ReleaseHeldUntil(s); uerr == nil && r.clock().After(until) {
+			return sessionInvalidError{fmt.Errorf("the scheduled session cannot start: its ScheduledWork could not be read before its start deadline plus the release margin passed: %w", err)}
+		}
+		return fmt.Errorf("the launch gate of a scheduled session: %w", err)
+	}
+	if read != itemFound {
+		w = nil
+	}
+	if reason, refuse := scheduledwork.LaunchRefusal(s, w); refuse {
+		log.FromContext(ctx).Info("refused a scheduled session's first pod", "scheduledWork", name, "reason", reason)
+		return sessionInvalidError{fmt.Errorf("the scheduled session cannot start: %s", reason)}
+	}
+	return nil
 }

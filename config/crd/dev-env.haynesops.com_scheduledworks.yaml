@@ -367,6 +367,16 @@ spec:
                       - refused
                       - ambiguous
                       type: string
+                    ending:
+                      description: |-
+                        Ending marks an occurrence the executor is about to end without a
+                        session: written, by itself and while the occurrence is not final,
+                        before the executor's last read of the session, and followed by the
+                        final record. The launch gate refuses a session that such an
+                        occurrence does not name, so a create that lands after the mark never
+                        starts, and one that lands before it is found by that last read and
+                        adopted. It is never removed.
+                      type: boolean
                     execution:
                       description: |-
                         Execution is how a headless task ended, copied from the session's
@@ -513,6 +523,15 @@ spec:
                       maxLength: 28
                       pattern: ^sw-[0-9a-f]{12}-[0-9]{12}$
                       type: string
+                    sessionUID:
+                      description: |-
+                        SessionUID is the UID of the session object the occurrence records:
+                        set once, by the executor's Dispatched record or the releaser's
+                        terminal record. A session of the same name with another UID (a second
+                        create after the first was deleted, which comes only after its record)
+                        is refused at its first pod by the launch gate.
+                      maxLength: 64
+                      type: string
                     specHash:
                       description: |-
                         SpecHash is the hash of the spec the occurrence was claimed with, in the
@@ -569,6 +588,16 @@ spec:
                       > 0)'
                   - message: missed is set only on a Skipped occurrence
                     rule: '!has(self.missed) || self.state == ''Skipped'''
+                  - message: an occurrence's sessionUID never changes once set
+                    rule: '!has(oldSelf.sessionUID) || (has(self.sessionUID) && self.sessionUID
+                      == oldSelf.sessionUID)'
+                  - message: an occurrence's ending mark is never removed
+                    rule: '!has(oldSelf.ending) || !oldSelf.ending || (has(self.ending)
+                      && self.ending)'
+                  - message: an occurrence is marked ending only while it is not final
+                    rule: '!has(self.ending) || !self.ending || (has(oldSelf.ending)
+                      && oldSelf.ending) || !(oldSelf.state in [''Succeeded'', ''Failed'',
+                      ''Ended'', ''Skipped'', ''Ambiguous'', ''Cancelled''])'
                 maxItems: 64
                 type: array
                 x-kubernetes-list-map-keys:

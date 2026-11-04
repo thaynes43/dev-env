@@ -22,7 +22,8 @@ const (
 	// session, and prunes only terminal ones, so the session is not one the
 	// item tracks (or its record was pruned long after it ended).
 	NoOccurrence RecordResult = "no occurrence"
-	// OtherSession: the occurrence names another session. Nothing changed.
+	// OtherSession: the occurrence names another session, or another session
+	// object of this name (its sessionUID). Nothing changed.
 	OtherSession RecordResult = "other session"
 	// ReportedAdded: the occurrence was already terminal for this session and
 	// had no reported outcome; the session's outcome, which landed after the
@@ -50,19 +51,30 @@ func Record(w *v1alpha1.ScheduledWork, at time.Time, session string, t Terminal)
 		if !o.At.Time.Equal(at) {
 			continue
 		}
+		otherObject := o.SessionUID != "" && t.SessionUID != "" && o.SessionUID != t.SessionUID
 		if v1alpha1.OccurrenceTerminal(o.State) {
-			if o.Session == session && o.Reported == nil && t.Reported != nil {
+			if o.Session == session && !otherObject && o.Reported == nil && t.Reported != nil {
 				o.Reported = t.Reported.DeepCopy()
 				return ReportedAdded
 			}
 			return AlreadyTerminal
 		}
-		if o.Session != "" && o.Session != session {
+		if (o.Session != "" && o.Session != session) || otherObject {
 			return OtherSession
 		}
-		o.State, o.Reason = t.State, clip(t.Reason, maxReason)
+		state, reason := t.State, t.Reason
+		if o.Ending && t.NeverLaunched && !dispatchedOrLater(o.State) {
+			// The executor was ending the occurrence when this late session
+			// was refused before its launch: the mark's reason stands. Once
+			// the occurrence was Dispatched, the outcome is the normal one.
+			state, reason = EndingState(o.Reason), o.Reason
+		}
+		o.State, o.Reason = state, clip(reason, maxReason)
 		if o.Session == "" && sessionNamePattern.MatchString(session) {
 			o.Session = session
+		}
+		if o.SessionUID == "" && o.Session == session {
+			o.SessionUID = t.SessionUID
 		}
 		if t.Execution != nil {
 			o.Execution = t.Execution.DeepCopy()
@@ -70,7 +82,7 @@ func Record(w *v1alpha1.ScheduledWork, at time.Time, session string, t Terminal)
 		if o.Reported == nil && t.Reported != nil {
 			o.Reported = t.Reported.DeepCopy()
 		}
-		count(&w.Status.Counts, t.State)
+		count(&w.Status.Counts, state)
 		return Recorded
 	}
 	return NoOccurrence
@@ -86,8 +98,39 @@ func Find(w *v1alpha1.ScheduledWork, at time.Time) *v1alpha1.ScheduledWorkOccurr
 	return nil
 }
 
+// The cancel reasons of the executor's final records (DESIGN-054); an ending
+// mark that carries one of them ends the occurrence Cancelled.
+const (
+	ReasonCancelledBeforeClaim    = "cancelled before claim"
+	ReasonCancelledAtRevalidation = "cancelled at revalidation"
+	ReasonCancelledWhileParked    = "cancelled while parked"
+)
+
+// dispatchedOrLater reports an occurrence state at or after Dispatched.
+func dispatchedOrLater(state string) bool {
+	switch state {
+	case v1alpha1.OccurrenceDispatched, v1alpha1.OccurrenceDelivered, v1alpha1.OccurrenceOpened, v1alpha1.OccurrenceRunning:
+		return true
+	}
+	return false
+}
+
+// EndingState is the final state an ending mark's reason stands for:
+// Cancelled for a cancel reason, else Skipped.
+func EndingState(reason string) string {
+	switch reason {
+	case ReasonCancelledBeforeClaim, ReasonCancelledAtRevalidation, ReasonCancelledWhileParked:
+		return v1alpha1.OccurrenceCancelled
+	}
+	return v1alpha1.OccurrenceSkipped
+}
+
 func count(c *v1alpha1.ScheduledWorkCounts, state string) {
 	switch state {
+	case v1alpha1.OccurrenceSkipped:
+		c.Skipped++
+	case v1alpha1.OccurrenceCancelled:
+		c.Cancelled++
 	case v1alpha1.OccurrenceSucceeded:
 		c.Succeeded++
 	case v1alpha1.OccurrenceFailed:

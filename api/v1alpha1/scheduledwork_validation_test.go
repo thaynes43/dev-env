@@ -538,6 +538,22 @@ func TestScheduledWorkOccurrenceTransitionsAccept(t *testing.T) {
 			}
 		}
 	})
+	t.Run("the session's UID is set once, and an ending mark before the final record", func(t *testing.T) {
+		w := withOccurrence(t, bare(v1alpha1.OccurrenceClaimed))
+		got := &w.Status.Occurrences[0]
+		got.Ending = true
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatalf("the ending mark on a Claimed occurrence: %v", err)
+		}
+		got.State, got.Session, got.SessionUID = v1alpha1.OccurrenceDispatched, "sw-1a2b3c4d5e6f-202612031400", "0f0e0d0c-0b0a-0908-0706-050403020100"
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatalf("the adoption after the mark: %v", err)
+		}
+		got.State, got.Reason = v1alpha1.OccurrenceSucceeded, "the task exited 0"
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatalf("the final record keeps the mark and the UID: %v", err)
+		}
+	})
 	t.Run("a reported outcome is set once on a running occurrence", func(t *testing.T) {
 		w := withOccurrence(t, bare(v1alpha1.OccurrenceRunning))
 		w.Status.Occurrences[0].Reported = &v1alpha1.TaskOutcomeRecordStatus{Summary: "done"}
@@ -601,6 +617,26 @@ func TestScheduledWorkOccurrenceTransitionsRefuse(t *testing.T) {
 			},
 			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Reported = nil },
 			"an occurrence's reported outcome never changes once set",
+		},
+		"a session UID changed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SessionUID = "0f0e0d0c-0b0a-0908-0706-050403020100" },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SessionUID = "ffffffff-0b0a-0908-0706-050403020100" },
+			"an occurrence's sessionUID never changes once set",
+		},
+		"a session UID removed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SessionUID = "0f0e0d0c-0b0a-0908-0706-050403020100" },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SessionUID = "" },
+			"an occurrence's sessionUID never changes once set",
+		},
+		"an ending mark removed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Ending = true },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Ending = false },
+			"an occurrence's ending mark is never removed",
+		},
+		"an ending mark on a final occurrence": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.State = v1alpha1.OccurrenceSkipped },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Ending = true },
+			"an occurrence is marked ending only while it is not final",
 		},
 		"attempt 2 back to 1": {
 			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Attempt, o.RetriedAt = 2, &retriedAt },

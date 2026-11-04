@@ -110,14 +110,16 @@ internal/controller/     the AgentSession reconciler: each session's pod and vol
 internal/apiserver/      the operator's /v1 API (D-46): HTTPS runnable, TokenReview auth, caller classes, sessions,
                          heartbeat, suspend and resume (D-60), fleet, grants (D-56), activities (D-66) and rescues (D-67) handlers;
                          also decisions, project canaries and their results, task claims, the inbox, published contexts, the
-                         session directory, task budgets and archived history (DESIGN-025 8). Unit tests use the fake client; its envtest suite mints real
+                         session directory, task budgets and archived history (DESIGN-025 8); CreateScheduledSession, the scheduled-work executor's fixed-name
+                         creation entry beside CreateStandby, with createSessionMode's checks (DESIGN-054 S3b). Unit tests use the fake client; its envtest suite mints real
                          tokens and serves through a manager wired as the operator's
 internal/podexec/        the one pods/exec client (WebSocket, SPDY fallback): the rescue, and the API's log and message routes (D-65)
 internal/apiserver/apiv1/  the API's wire types, error codes and Claude effort table, standard library and agentd's standard-library protocol only, for agent-run
 internal/activity/       the reaper of expired declare-activity declarations (D-66), a leader-only runnable in the operator
 internal/reminders/      the reminder engine (DESIGN-032, #206): schedule arithmetic with explicit DST rules, target allowlist, a CalendarAdapter interface with a fake, and the leader-only Scheduler over the Reminder CRD; the keeper hosts it behind `--enable-reminders` (default off), the operator serves `/v1/reminders` behind `--enable-reminders-api` (default off)
 internal/maintenancecontract/ bounded offline upgrade-shepherd envelope validator and correlation evaluator; a candidate is not operational deferral
-internal/scheduledwork/  DESIGN-054's pure scheduled-session rules: the session-end rule, the terminal record an ended or reaped session gives its occurrence, and its write into a ScheduledWork's status; no I/O
+internal/scheduledwork/  DESIGN-054's pure scheduled-session rules: the session-end rule, the terminal record an ended or reaped session gives its occurrence, and its write into a ScheduledWork's status; the fixed-name entry's Dispatch, collision and refusal types and the spec hash; no I/O
+internal/scheduledwork/executor/  DESIGN-054's leader-only scheduled-work executor (S3b), behind `--enable-scheduled-work` (default off): claims each due occurrence by compare-and-set on the uncached ScheduledWork, checks the caps and revalidates, and creates through apiserver.Server.CreateScheduledSession under the derived name; no ScheduledWork informer; DenyAll and NoTemplates until S3b2
 internal/standby/       the leader-only standby runnable (Story110 T25, plan 03): keeps one `remote` Claude AgentSession ready, found by its label, behind `--enable-standby-session` (default off); a ConfigMap-backed circuit breaker allows three creations in 30 minutes
 internal/scheduledwork/authority/  DESIGN-054 S3b2's pure authority and template rules: SpecHash (every spec field but editor and cancelled), Decide (the standing basis or wait, and the human approval) and Choose (the narrower admitted one), TemplateDigest, and the strict fail-closed dev-env-scheduled-work templates parser and Resolve; no I/O, no executor import
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is

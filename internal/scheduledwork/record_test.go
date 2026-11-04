@@ -5,6 +5,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -284,4 +285,87 @@ func TestAwaitsReportStopsForAFarFutureFinish(t *testing.T) {
 	if wait, until := AwaitsReport(s, o, t0.Add(ReportWait+time.Second)); wait {
 		t.Fatalf("still waits at t0+%v, until %v, for a finish an hour ahead", ReportWait+time.Second, until)
 	}
+}
+
+// The record names the session object by its UID: it is set with the record,
+// and a session object of the same name with another UID (a second create
+// after the first was deleted) records nothing and copies no outcome.
+func TestRecordKeepsTheSessionObject(t *testing.T) {
+	at := time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-203006031400"
+	first := Terminal{State: v1alpha1.OccurrenceSucceeded, Reason: "done", SessionUID: "uid-first"}
+	w := &v1alpha1.ScheduledWork{}
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceClaimed}}
+	if r := Record(w, at, name, first); r != Recorded || w.Status.Occurrences[0].SessionUID != "uid-first" || w.Status.Occurrences[0].Session != name {
+		t.Fatalf("%s: %+v", r, w.Status.Occurrences[0])
+	}
+	second := Terminal{State: v1alpha1.OccurrenceFailed, Reason: "refused", SessionUID: "uid-second", Reported: &v1alpha1.TaskOutcomeRecordStatus{Summary: "not mine"}}
+	if r := Record(w, at, name, second); r != AlreadyTerminal || w.Status.Occurrences[0].Reported != nil {
+		t.Errorf("a second session object: %s, %+v", r, w.Status.Occurrences[0])
+	}
+	open := &v1alpha1.ScheduledWork{}
+	open.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceDispatched, Session: name, SessionUID: "uid-first"}}
+	if r := Record(open, at, name, second); r != OtherSession || open.Status.Occurrences[0].State != v1alpha1.OccurrenceDispatched {
+		t.Errorf("a second session object on an open occurrence: %s, %+v", r, open.Status.Occurrences[0])
+	}
+	if o := Outcome(&v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{UID: "uid-x"}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeRemote}}, at); o.SessionUID != "uid-x" {
+		t.Errorf("Outcome's session UID %q", o.SessionUID)
+	}
+}
+
+// A session that never launched, recorded into an occurrence the executor
+// was ending, gets the mark's record: its reason, and Skipped or Cancelled.
+func TestRecordIntoAnEndingOccurrence(t *testing.T) {
+	at := time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-203006031400"
+	for reason, want := range map[string]string{ReasonCancelledAtRevalidation: v1alpha1.OccurrenceCancelled, "notAfter passed": v1alpha1.OccurrenceSkipped} {
+		w := &v1alpha1.ScheduledWork{}
+		w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceClaimed, Ending: true, Reason: reason}}
+		refused := refusedSession(name, "uid-late")
+		if r := Record(w, at, name, Outcome(refused, at)); r != Recorded {
+			t.Fatalf("%s", r)
+		}
+		o := w.Status.Occurrences[0]
+		if o.State != want || o.Reason != reason || o.Session != name || o.SessionUID != "uid-late" {
+			t.Errorf("%q: %+v", reason, o)
+		}
+		if c := w.Status.Counts; c.Failed != 0 || c.Cancelled+c.Skipped != 1 {
+			t.Errorf("counts %+v", c)
+		}
+	}
+	// Without positive evidence, or once the occurrence was Dispatched, the
+	// outcome is the normal one.
+	noTelemetry := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, UID: "uid-quiet"}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask}}
+	noTelemetry.Status.Phase = v1alpha1.PhaseFailed
+	hadPod := refusedSession(name, "uid-pod")
+	hadPod.Status.PodName = name
+	// An earlier pod ran and reported, then the session lost it and was
+	// refused on a rebuild: no pod now, but it did run.
+	ranThenRefused := refusedSession(name, "uid-ran")
+	hb := metav1.NewTime(at)
+	ranThenRefused.Status.Agent = &v1alpha1.AgentStatus{Status: "running", LastHeartbeat: &hb}
+	for what, c := range map[string]struct {
+		s     *v1alpha1.AgentSession
+		state string
+	}{
+		"failed with no agent report, no refusal condition": {noTelemetry, v1alpha1.OccurrenceClaimed},
+		"refused, but a pod is recorded":                    {hadPod, v1alpha1.OccurrenceClaimed},
+		"refused on a rebuild after an agent report":        {ranThenRefused, v1alpha1.OccurrenceClaimed},
+		"refused, but the occurrence was Dispatched":        {refusedSession(name, "uid-late"), v1alpha1.OccurrenceDispatched},
+	} {
+		w := &v1alpha1.ScheduledWork{}
+		w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: c.state, Ending: true, Reason: ReasonCancelledAtRevalidation}}
+		Record(w, at, name, Outcome(c.s, at))
+		if o := w.Status.Occurrences[0]; o.State != v1alpha1.OccurrenceFailed {
+			t.Errorf("%s: %+v", what, o)
+		}
+	}
+}
+
+// refusedSession is a session the reconciler refused before its first pod.
+func refusedSession(name string, uid types.UID) *v1alpha1.AgentSession {
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, UID: uid}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask}}
+	s.Status.Phase = v1alpha1.PhaseFailed
+	s.Status.Conditions = []metav1.Condition{{Type: PodReadyCondition, Status: metav1.ConditionFalse, Reason: SessionInvalidReason, Message: "refused"}}
+	return s
 }

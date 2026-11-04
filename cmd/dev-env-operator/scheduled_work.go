@@ -1,0 +1,80 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/go-logr/logr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
+)
+
+// scheduledWorkOptions are the scheduled-work executor's flags (DESIGN-054
+// S3b).
+type scheduledWorkOptions struct {
+	enabled                         bool
+	maxHeadless, maxInteractive     int
+	headlessGrace, interactiveGrace time.Duration
+}
+
+// The bounds of the executor's flags. A grace stays well under a day, so at
+// most one occurrence of a daily series is inside its grace at a time.
+const (
+	maxScheduledWorkCap   = 16
+	minScheduledWorkGrace = time.Minute
+	maxScheduledWorkGrace = 12 * time.Hour
+)
+
+func (o scheduledWorkOptions) validate(apiAddr string, leaderElect bool) error {
+	for name, v := range map[string]int{"--scheduled-work-max-headless": o.maxHeadless, "--scheduled-work-max-interactive": o.maxInteractive} {
+		if v < 1 || v > maxScheduledWorkCap {
+			return fmt.Errorf("%s %d is not 1 to %d", name, v, maxScheduledWorkCap)
+		}
+	}
+	for name, v := range map[string]time.Duration{"--scheduled-work-headless-grace": o.headlessGrace, "--scheduled-work-interactive-grace": o.interactiveGrace} {
+		if v < minScheduledWorkGrace || v > maxScheduledWorkGrace {
+			return fmt.Errorf("%s %s is not %s to %s", name, v, minScheduledWorkGrace, maxScheduledWorkGrace)
+		}
+	}
+	switch {
+	case !o.enabled:
+		return nil
+	case apiAddr == "0":
+		return errors.New("--enable-scheduled-work requires the API (--api-bind-address): the executor creates sessions through its creation path")
+	case !leaderElect:
+		return errors.New("--enable-scheduled-work requires leader election: the executor runs in the leader only")
+	}
+	return nil
+}
+
+// newScheduledWorkExecutor builds the default-off scheduled-work executor. A
+// false flag returns nil, so the operator adds no runnable. It reads the
+// ScheduledWorks in the operator's own namespace, where the releaser reads
+// them (Reconciler.ScheduledWorkNamespace), with the uncached reader only, and
+// creates through creator, the API's fixed-name entry. Until S3b2 it has no
+// authority or template source: DenyAll and NoTemplates park every claimed
+// occurrence and nothing dispatches, so the flag must stay off until S3b2:
+// with it on, every real occurrence is recorded Parked and then Skipped.
+func newScheduledWorkExecutor(o options, c client.Client, reader client.Reader, creator executor.Creator, log logr.Logger) *executor.Executor {
+	if !o.scheduledWork.enabled {
+		return nil
+	}
+	return &executor.Executor{
+		Client:             c,
+		Reader:             reader,
+		Namespace:          o.templatesNamespace,
+		SessionNamespace:   o.sessionNamespace,
+		Creator:            creator,
+		Authorizer:         executor.DenyAll{},
+		Templates:          executor.NoTemplates{},
+		HeadlessGrace:      o.scheduledWork.headlessGrace,
+		InteractiveGrace:   o.scheduledWork.interactiveGrace,
+		MaxHeadless:        o.scheduledWork.maxHeadless,
+		MaxInteractive:     o.scheduledWork.maxInteractive,
+		SchemaMissing:      executor.NewSchemaMissingCounter(),
+		SchemaReadFailures: executor.NewSchemaReadFailuresCounter(),
+		Log:                log,
+	}
+}

@@ -44,11 +44,8 @@ func (s *Server) preflightPrivatePilot(ctx context.Context, w http.ResponseWrite
 	return s.createSessionMode(ctx, w, r, c, true)
 }
 func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r *http.Request, c *caller, dryRun bool) (int, any, error) {
-	// A canary is one retained executor. Its projected session token keeps
-	// heartbeats/observation but cannot dispatch a second task through the
-	// legacy create route either.
-	if c.kind == kindSession && c.session != nil && (c.session.Spec.ProjectCanary != nil || projectcanary.IsPilot(c.session)) {
-		return 0, nil, forbidden("a retained private pilot or managed canary cannot create another executor")
+	if err := refuseRetainedExecutor(c); err != nil {
+		return 0, nil, err
 	}
 	var raw json.RawMessage
 	if err := decodeJSON(w, r, maxCreateBody, &raw, true); err != nil {
@@ -113,52 +110,8 @@ func (s *Server) createSessionMode(ctx context.Context, w http.ResponseWriter, r
 			return http.StatusOK, view(existing, false), nil
 		}
 	}
-	// Image rollback blocks only new enrollment. An accepted create whose
-	// response was lost must still be recoverable through its same stable key.
-	// Authentication, project and parent binding were checked by newSession.
-	if (sess.Spec.CoordinatorInstructions || sess.Spec.CoordinatorInstructionPublisher) && controller.ValidateInstructionAgentImage(s.CoordinatorInstructionAgentImage) != nil {
-		if sess.Spec.CoordinatorInstructionPublisher {
-			return 0, nil, invalid(fieldError("coordinatorInstructionPublisher", "a qualified instruction publisher image is not configured"))
-		}
-		return 0, nil, invalid(fieldError("coordinatorInstructions", "a qualified coordinator instruction receiver image is not configured"))
-	}
-	if sess.Spec.CoordinatorInstructionPublisher && controller.ValidateInstructionPublisherImage(s.CoordinatorInstructionAgentImage) != nil {
-		return 0, nil, invalid(fieldError("coordinatorInstructionPublisher", "a qualified instruction publisher image with the per-launch receiver client is not configured"))
-	}
-	if !s.PrivateProjectTasks && sess.Spec.Workspace == nil && sess.Annotations[v1alpha1.AnnotationProjectSnapshot] != "" {
-		return 0, nil, invalid(fieldError("project", "private project tasks are not enabled"))
-	}
-
-	if c.kind == kindPortalLaunch {
-		// Inside the create lock, after the repeat of a key above, so a repeat
-		// returns its session at the cap. The lock is per replica: launches that
-		// race on two replicas can exceed the cap by one each, like the child
-		// limit and the idempotency dedupe.
-		n, err := s.unfinishedPortalLaunches(ctx)
-		if err != nil {
-			return 0, nil, err
-		}
-		if n >= s.portalLaunchCap() {
-			return 0, nil, tooManyRequests("%d portal launches are still unfinished, the most at a time; one must finish first", n)
-		}
-	}
-
-	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
+	if err := s.admitCreate(ctx, c, sess); err != nil {
 		return 0, nil, err
-	}
-
-	if c.kind == kindSession {
-		if c.depth > maxSessionDepth {
-			return 0, nil, forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
-		}
-		n, err := s.runningChildren(ctx, c.parent, sess.Spec.Agent)
-		if err != nil {
-			return 0, nil, err
-		}
-		if n >= maxRunningChildrenPerAgent {
-			return 0, nil, newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded,
-				"session %s already has %d unfinished %s children, the limit per agent (DESIGN-001 3.4); one must finish first", c.parent, n, sess.Spec.Agent)
-		}
 	}
 
 	base := generatedName(sess.Spec.Repo, s.now())
@@ -555,4 +508,74 @@ func (s *Server) reapSession(ctx context.Context, _ http.ResponseWriter, r *http
 	v := view(&sess, false)
 	v.Reaping = true
 	return http.StatusAccepted, v, nil
+}
+
+// refuseRetainedExecutor refuses a caller that is a retained executor: a
+// managed canary or a private pilot session creates no other session through
+// any create path (createSessionMode, CreateScheduledSession).
+func refuseRetainedExecutor(c *caller) error {
+	// A canary is one retained executor. Its projected session token keeps
+	// heartbeats/observation but cannot dispatch a second task through the
+	// legacy create route either.
+	if c.kind == kindSession && c.session != nil && (c.session.Spec.ProjectCanary != nil || projectcanary.IsPilot(c.session)) {
+		return forbidden("a retained private pilot or managed canary cannot create another executor")
+	}
+	return nil
+}
+
+// admitCreate is the part of a create's admission that reads the session it
+// would make and the sessions already there: the instruction image, the
+// private project gate, the portal launch cap, the named coordinator rule and
+// a session caller's depth and child cap. Every create path that makes an
+// ordinary session runs it under the create lock, after a repeat of the same
+// create has had its answer (createSessionMode, CreateScheduledSession).
+func (s *Server) admitCreate(ctx context.Context, c *caller, sess *v1alpha1.AgentSession) error {
+	// Image rollback blocks only new enrollment. An accepted create whose
+	// response was lost must still be recoverable through its same stable key.
+	// Authentication, project and parent binding were checked by newSession.
+	if (sess.Spec.CoordinatorInstructions || sess.Spec.CoordinatorInstructionPublisher) && controller.ValidateInstructionAgentImage(s.CoordinatorInstructionAgentImage) != nil {
+		if sess.Spec.CoordinatorInstructionPublisher {
+			return invalid(fieldError("coordinatorInstructionPublisher", "a qualified instruction publisher image is not configured"))
+		}
+		return invalid(fieldError("coordinatorInstructions", "a qualified coordinator instruction receiver image is not configured"))
+	}
+	if sess.Spec.CoordinatorInstructionPublisher && controller.ValidateInstructionPublisherImage(s.CoordinatorInstructionAgentImage) != nil {
+		return invalid(fieldError("coordinatorInstructionPublisher", "a qualified instruction publisher image with the per-launch receiver client is not configured"))
+	}
+	if !s.PrivateProjectTasks && sess.Spec.Workspace == nil && sess.Annotations[v1alpha1.AnnotationProjectSnapshot] != "" {
+		return invalid(fieldError("project", "private project tasks are not enabled"))
+	}
+
+	if c.kind == kindPortalLaunch {
+		// Inside the create lock, after the repeat of a key above, so a repeat
+		// returns its session at the cap. The lock is per replica: launches that
+		// race on two replicas can exceed the cap by one each, like the child
+		// limit and the idempotency dedupe.
+		n, err := s.unfinishedPortalLaunches(ctx)
+		if err != nil {
+			return err
+		}
+		if n >= s.portalLaunchCap() {
+			return tooManyRequests("%d portal launches are still unfinished, the most at a time; one must finish first", n)
+		}
+	}
+
+	if err := s.admitNamedCoordinator(ctx, sess); err != nil {
+		return err
+	}
+
+	if c.kind == kindSession {
+		if c.depth > maxSessionDepth {
+			return forbidden("session %s is %d levels deep and may not start sessions: two levels is the limit (DESIGN-001 3.4)", c.parent, c.depth-1)
+		}
+		n, err := s.runningChildren(ctx, c.parent, sess.Spec.Agent)
+		if err != nil {
+			return err
+		}
+		if n >= maxRunningChildrenPerAgent {
+			return newError(http.StatusTooManyRequests, apiv1.CodeLimitExceeded,
+				"session %s already has %d unfinished %s children, the limit per agent (DESIGN-001 3.4); one must finish first", c.parent, n, sess.Spec.Agent)
+		}
+	}
+	return nil
 }
