@@ -538,6 +538,13 @@ func TestScheduledWorkOccurrenceTransitionsAccept(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a reported outcome is set once on a running occurrence", func(t *testing.T) {
+		w := withOccurrence(t, bare(v1alpha1.OccurrenceRunning))
+		w.Status.Occurrences[0].Reported = &v1alpha1.TaskOutcomeRecordStatus{Summary: "done"}
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("an old terminal occurrence is pruned and a new one appended", func(t *testing.T) {
 		o := bare(v1alpha1.OccurrenceSucceeded)
 		o.Session = "sw-1a2b3c4d5e6f-202612031400"
@@ -578,6 +585,22 @@ func TestScheduledWorkOccurrenceTransitionsRefuse(t *testing.T) {
 			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SpecHash = swHash },
 			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SpecHash = "" },
 			"an occurrence's specHash never changes once set",
+		},
+		"a reported outcome changed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) {
+				o.Reported = &v1alpha1.TaskOutcomeRecordStatus{Summary: "first"}
+			},
+			func(o *v1alpha1.ScheduledWorkOccurrence) {
+				o.Reported = &v1alpha1.TaskOutcomeRecordStatus{Summary: "second"}
+			},
+			"an occurrence's reported outcome never changes once set",
+		},
+		"a reported outcome removed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) {
+				o.Reported = &v1alpha1.TaskOutcomeRecordStatus{Summary: "first"}
+			},
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Reported = nil },
+			"an occurrence's reported outcome never changes once set",
 		},
 		"attempt 2 back to 1": {
 			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Attempt, o.RetriedAt = 2, &retriedAt },

@@ -352,6 +352,7 @@ type ScheduledWorkExecution struct {
 // +kubebuilder:validation:XValidation:rule="!(oldSelf.state in ['Succeeded', 'Failed', 'Ended', 'Skipped', 'Ambiguous', 'Cancelled']) || self.state == oldSelf.state",message="a terminal occurrence never changes state"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.session) || (has(self.session) && self.session == oldSelf.session)",message="an occurrence's session never changes once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.specHash) || (has(self.specHash) && self.specHash == oldSelf.specHash)",message="an occurrence's specHash never changes once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.reported) || (has(self.reported) && self.reported == oldSelf.reported)",message="an occurrence's reported outcome never changes once set"
 // +kubebuilder:validation:XValidation:rule="(has(self.attempt) ? self.attempt : 0) >= (has(oldSelf.attempt) ? oldSelf.attempt : 0)",message="an occurrence's attempt never decreases"
 // +kubebuilder:validation:XValidation:rule="!has(self.retriedAt) || (has(self.attempt) && self.attempt > 0)",message="retriedAt is set only on a retried attempt, attempt 1 or more"
 // +kubebuilder:validation:XValidation:rule="!has(self.missed) || self.state == 'Skipped'",message="missed is set only on a Skipped occurrence"

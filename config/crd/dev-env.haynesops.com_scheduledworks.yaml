@@ -557,6 +557,9 @@ spec:
                   - message: an occurrence's specHash never changes once set
                     rule: '!has(oldSelf.specHash) || (has(self.specHash) && self.specHash
                       == oldSelf.specHash)'
+                  - message: an occurrence's reported outcome never changes once set
+                    rule: '!has(oldSelf.reported) || (has(self.reported) && self.reported
+                      == oldSelf.reported)'
                   - message: an occurrence's attempt never decreases
                     rule: '(has(self.attempt) ? self.attempt : 0) >= (has(oldSelf.attempt)
                       ? oldSelf.attempt : 0)'
