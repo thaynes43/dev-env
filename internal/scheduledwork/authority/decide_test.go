@@ -58,15 +58,38 @@ func unprovenReason(why string) string { return ReasonOwnerUnproven + ": " + why
 
 var sessionRef = &SessionRef{Name: "coord-1", UID: "uid-1"}
 
+// The digests of two real templates, and an approval's template check that
+// holds: approved under the template the item names now.
+var (
+	auditDigest = TemplateDigest(wantValid()["ops-audit"])
+	deskDigest  = TemplateDigest(wantValid()["ops-desk"])
+	boundTmpl   = TemplateBinding{Current: auditDigest, Recorded: auditDigest}
+)
+
 func sameRef(a, b *SessionRef) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
 
 func TestDecide(t *testing.T) {
 	for name, c := range map[string]struct {
 		w     *v1alpha1.ScheduledWork
 		owner OwnerState
+		tmpl  *TemplateBinding
 		stale time.Duration
 		want  Decision
 	}{
+		// The approval's template check: an empty recorded digest never holds.
+		"approval records no template digest": {w: approved(item(clientV1, clientV1), humanTom), tmpl: &TemplateBinding{Current: auditDigest},
+			want: Decision{StandingReason: ReasonClientNeedsApproval, ApprovalReason: ReasonApprovalNoTemplate}},
+		"approval, no digest on either side": {w: approved(item(clientV1, clientV1), humanTom), tmpl: &TemplateBinding{},
+			want: Decision{StandingReason: ReasonClientNeedsApproval, ApprovalReason: ReasonApprovalNoTemplate}},
+		"approval under another template": {w: approved(item(clientV1, clientV1), humanTom), tmpl: &TemplateBinding{Current: deskDigest, Recorded: auditDigest},
+			want: Decision{StandingReason: ReasonClientNeedsApproval, ApprovalReason: ReasonApprovalTemplate}},
+		"approval, current template unknown": {w: approved(item(clientV1, clientV1), humanTom), tmpl: &TemplateBinding{Recorded: auditDigest},
+			want: Decision{StandingReason: ReasonClientNeedsApproval, ApprovalReason: ReasonApprovalTemplate}},
+		"human owner, template changed": {w: approved(item(humanTom, humanTom), humanTom), tmpl: &TemplateBinding{Current: deskDigest, Recorded: auditDigest},
+			want: Decision{Standing: BasisHuman, ApprovalReason: ReasonApprovalTemplate}},
+		"stale spec beats template": {w: edited(approved(item(clientV1, clientV1), humanTom)), tmpl: &TemplateBinding{},
+			want: Decision{StandingReason: ReasonClientNeedsApproval, ApprovalReason: ReasonApprovalStale}},
+
 		// Human owner.
 		"human owner wrote the spec":        {w: item(humanTom, humanTom), want: Decision{Standing: BasisHuman}},
 		"human owner, another human edited": {w: item(humanTom, humanOther), want: Decision{StandingReason: ReasonEditorNotOwner}},
@@ -154,7 +177,11 @@ func TestDecide(t *testing.T) {
 			case -1:
 				s = 0
 			}
-			got := Decide(c.w, c.owner, decideNow, s)
+			tmpl := boundTmpl
+			if c.tmpl != nil {
+				tmpl = *c.tmpl
+			}
+			got := Decide(c.w, c.owner, tmpl, decideNow, s)
 			if got.Standing != c.want.Standing || got.Wait != c.want.Wait || got.StandingReason != c.want.StandingReason ||
 				got.Approved != c.want.Approved || got.ApprovalReason != c.want.ApprovalReason || !sameRef(got.Owner, c.want.Owner) {
 				t.Errorf("Decide = %+v (owner %v), want %+v (owner %v)", got, got.Owner, c.want, c.want.Owner)
@@ -185,9 +212,15 @@ func TestChoose(t *testing.T) {
 	for name, c := range map[string]struct {
 		w      *v1alpha1.ScheduledWork
 		owner  OwnerState
+		tmpl   *TemplateBinding
 		admits []Basis
 		want   Choice
 	}{
+		"client, approval, template edited since": {w: approved(item(clientV1, clientV1), humanTom), tmpl: &TemplateBinding{Current: deskDigest, Recorded: auditDigest},
+			admits: []Basis{BasisApproved}, want: Choice{Reason: ReasonClientNeedsApproval + "; " + ReasonApprovalTemplate}},
+		"client, approval, no recorded digest": {w: approved(item(clientV1, clientV1), humanTom), tmpl: &TemplateBinding{Current: auditDigest},
+			admits: []Basis{BasisApproved}, want: Choice{Reason: ReasonClientNeedsApproval + "; " + ReasonApprovalNoTemplate}},
+
 		// The two rulings of the S3b2 review.
 		"human-owned, matching approval, [human]": {w: approved(item(humanTom, humanTom), humanTom), admits: []Basis{BasisHuman}, want: Choice{Basis: BasisHuman}},
 		"live owner, leftover approval, [session, approved]": {w: approved(item(ownerSess, ownerSess), humanTom), owner: liveOwner(),
@@ -213,7 +246,11 @@ func TestChoose(t *testing.T) {
 		"BasisNone is never admitted":               {w: item(clientV1, clientV1), admits: []Basis{BasisNone}, want: Choice{Reason: ReasonClientNeedsApproval}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := Decide(c.w, c.owner, decideNow, DefaultHeartbeatStaleAfter)
+			tmpl := boundTmpl
+			if c.tmpl != nil {
+				tmpl = *c.tmpl
+			}
+			d := Decide(c.w, c.owner, tmpl, decideNow, DefaultHeartbeatStaleAfter)
 			got := Choose(d, c.admits)
 			if got.Basis != c.want.Basis || got.Wait != c.want.Wait || got.Reason != c.want.Reason || !sameRef(got.Owner, c.want.Owner) {
 				t.Errorf("Choose = %+v (owner %v), want %+v (owner %v)", got, got.Owner, c.want, c.want.Owner)
@@ -243,7 +280,7 @@ func TestDecideLeavesItem(t *testing.T) {
 	w.Spec.Notify = []string{"pushover:phone", "pushover:default"}
 	w.Status.Approval.SpecHash = SpecHash(w.Spec)
 	before := w.DeepCopy()
-	if d := Decide(w, OwnerState{}, decideNow, DefaultHeartbeatStaleAfter); !d.Approved {
+	if d := Decide(w, OwnerState{}, boundTmpl, decideNow, DefaultHeartbeatStaleAfter); !d.Approved {
 		t.Fatalf("Decide = %+v", d)
 	}
 	if w.Spec.Notify[0] != before.Spec.Notify[0] || w.Status.Approval.SpecHash != before.Status.Approval.SpecHash {
@@ -330,6 +367,17 @@ func TestOwnerStateOf(t *testing.T) {
 		"task boot failed": {s: func(s *v1alpha1.AgentSession) {
 			s.Spec.Mode, s.Status.Agent.Boot, s.Status.Agent.Status = v1alpha1.ModeTask, protocol.BootFailed, protocol.AgentPending
 		}, want: Decision{StandingReason: ReasonOwnerBootFailed}},
+		"task boot failed, previous pod": {s: func(s *v1alpha1.AgentSession) {
+			s.Spec.Mode, s.Status.Agent.Boot, s.Status.Agent.Status = v1alpha1.ModeTask, protocol.BootFailed, protocol.AgentPending
+			heartbeatAt(-60 * time.Second)(s)
+		}, pod: podCreatedAt(-30 * time.Second), want: Decision{Wait: true, StandingReason: unprovenReason("booting")}},
+		"task boot failed, no pod": {s: func(s *v1alpha1.AgentSession) {
+			s.Spec.Mode, s.Status.Agent.Boot, s.Status.Agent.Status = v1alpha1.ModeTask, protocol.BootFailed, protocol.AgentPending
+		}, noPod: true, want: Decision{Wait: true, StandingReason: unprovenReason("booting")}},
+		"local boot failed, no heartbeat": {s: func(s *v1alpha1.AgentSession) {
+			s.Spec.Mode, s.Status.Agent.Boot, s.Status.Agent.Status = v1alpha1.ModeLocal, protocol.BootFailed, protocol.AgentPending
+			s.Status.Agent.LastHeartbeat = nil
+		}, want: Decision{Wait: true, StandingReason: unprovenReason("booting")}},
 		"local boot failed": {s: func(s *v1alpha1.AgentSession) {
 			s.Spec.Mode, s.Status.Agent.Boot, s.Status.Agent.Status = v1alpha1.ModeLocal, protocol.BootFailed, protocol.AgentPending
 		}, want: Decision{StandingReason: ReasonOwnerBootFailed}},
@@ -370,7 +418,7 @@ func TestOwnerStateOf(t *testing.T) {
 					c.pod(pod)
 				}
 			}
-			got := Decide(w, OwnerStateOf(s, pod, decideNow), decideNow, DefaultHeartbeatStaleAfter)
+			got := Decide(w, OwnerStateOf(s, pod, decideNow), TemplateBinding{}, decideNow, DefaultHeartbeatStaleAfter)
 			if got.Standing != c.want.Standing || got.Wait != c.want.Wait || got.StandingReason != c.want.StandingReason || !sameRef(got.Owner, c.want.Owner) {
 				t.Errorf("Decide = %+v (owner %v), want %+v", got, got.Owner, c.want)
 			}

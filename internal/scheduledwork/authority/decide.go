@@ -60,6 +60,8 @@ const (
 	ReasonEditorNotOwner      = "editor is not the owner"
 	ReasonApprovalStale       = "approval does not match the current spec"
 	ReasonApprovalNotHuman    = "approval is not by a human"
+	ReasonApprovalNoTemplate  = "approval records no template digest"
+	ReasonApprovalTemplate    = "approval does not match the current template"
 	ReasonClientNeedsApproval = "client owners need approval"
 	ReasonCoordNeedsApproval  = "coordinator owners need approval"
 	ReasonOwnerNotFound       = "owner session not found"
@@ -135,7 +137,7 @@ type OwnerState struct {
 	// Ended is DESIGN-054's session-end rule (scheduledwork.SessionEnded).
 	Ended bool
 	// BootFailed is agentd's report of a failed boot that cannot recover in
-	// the same pod: an end for an owner session.
+	// the same pod, made by the current pod: an end for an owner session.
 	BootFailed bool
 	// Booting is a session whose current pod has not proven a running agent:
 	// agentd has made no report, its boot is not ready, its heartbeat is
@@ -147,10 +149,13 @@ type OwnerState struct {
 // OwnerStateOf reads an OwnerState from the owner session s and its pod, both
 // read uncached at now: s nil is a session not found, pod nil is no pod.
 //
-// A failed boot ends a task or local owner, which agentd never starts again
-// in the same pod. A remote owner's failed boot is Booting instead: agentd's
-// poll starts a remote session's held agent again after a login window ends,
-// and then reports the boot ready (agentd recordAgentStep).
+// A failed boot reported by the current pod (a pod exists and the heartbeat is
+// not older than it) ends a task or local owner, which agentd never starts
+// again in the same pod. The previous pod's failed boot is only Booting: the
+// owner may have moved to a new pod. A remote owner's failed boot is Booting
+// too: agentd may start a remote agent again after a failed boot, for a held
+// launch only, once a login window ends, and then reports the boot ready
+// (agentd recordAgentStep).
 func OwnerStateOf(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) OwnerState {
 	if s == nil {
 		return OwnerState{}
@@ -173,7 +178,8 @@ func OwnerStateOf(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) Owne
 	if a.LastHeartbeat != nil {
 		st.LastHeartbeat = a.LastHeartbeat.Time
 	}
-	st.BootFailed = a.Boot == protocol.BootFailed && s.Spec.Mode != v1alpha1.ModeRemote
+	thisPod := pod != nil && a.LastHeartbeat != nil && !a.LastHeartbeat.Time.Before(pod.CreationTimestamp.Time)
+	st.BootFailed = a.Boot == protocol.BootFailed && s.Spec.Mode != v1alpha1.ModeRemote && thisPod
 	st.Booting = a.Boot != protocol.BootReady || pod == nil || !pod.DeletionTimestamp.IsZero() ||
 		a.LastHeartbeat == nil || a.LastHeartbeat.Time.Before(pod.CreationTimestamp.Time)
 	return st
@@ -201,21 +207,34 @@ type Decision struct {
 	Wait bool
 	// StandingReason says why there is no standing basis.
 	StandingReason string
-	// Approved is a human approval of the current spec's hash that holds.
+	// Approved is a human approval of the current spec's hash, under the
+	// current template, that holds.
 	Approved bool
 	// ApprovalReason says why the item's approval does not hold; empty when
 	// it holds or the item has none.
 	ApprovalReason string
 }
 
+// TemplateBinding is what an approval's template check compares: Current is
+// TemplateDigest of the template the item names, read now; Recorded is the
+// digest the approval recorded when the human approved. S5 adds that field to
+// status.approval (templateDigest; the S2 type has none), so until then the
+// caller passes what S5 stores. An empty Recorded voids the approval, so
+// neither S5 nor the wiring can skip the check by leaving it out.
+type TemplateBinding struct {
+	Current, Recorded string
+}
+
 // Decide is DESIGN-054's two candidate bases of w at now, from what is true
 // now (R7). owner is the owner session as read at now, used only for a
-// session owner, and staleAfter bounds the age of its heartbeat.
+// session owner; tmpl is the approval's template check; staleAfter bounds
+// the age of the owner's heartbeat.
 //
-// The approval holds when status.approval is by a human and its specHash is
-// SpecHash of the current spec. The owner's class is not checked, because a
-// human approved this exact spec; that is how client and coordinator owners
-// run.
+// The approval holds when status.approval is by a human, its specHash is
+// SpecHash of the current spec, and its recorded template digest is the
+// current template's (an empty recorded digest never matches). The owner's
+// class is not checked, because a human approved this exact spec under this
+// exact template; that is how client and coordinator owners run.
 //
 // The standing basis, in order:
 //  1. a client or coordinator owner has none: it needs approval;
@@ -228,18 +247,18 @@ type Decision struct {
 //     phase Running or Idle, and a heartbeat no older than staleAfter and not
 //     later than now. A session that has not ended but is not proven live is
 //     Wait, with ReasonOwnerUnproven.
-func Decide(w *v1alpha1.ScheduledWork, owner OwnerState, now time.Time, staleAfter time.Duration) Decision {
+func Decide(w *v1alpha1.ScheduledWork, owner OwnerState, tmpl TemplateBinding, now time.Time, staleAfter time.Duration) Decision {
 	if w == nil {
 		return Decision{StandingReason: ReasonNoItem}
 	}
 	d := standing(w, owner, now, staleAfter)
-	d.Approved, d.ApprovalReason = approval(w)
+	d.Approved, d.ApprovalReason = approval(w, tmpl)
 	return d
 }
 
-// approval reports whether w's approval holds, and why not when w has one
-// that does not; refusal is empty when w has no approval.
-func approval(w *v1alpha1.ScheduledWork) (holds bool, refusal string) {
+// approval reports whether w's approval holds under tmpl, and why not when w
+// has one that does not; refusal is empty when w has no approval.
+func approval(w *v1alpha1.ScheduledWork, tmpl TemplateBinding) (holds bool, refusal string) {
 	a := w.Status.Approval
 	switch {
 	case a == nil:
@@ -248,6 +267,10 @@ func approval(w *v1alpha1.ScheduledWork) (holds bool, refusal string) {
 		return false, ReasonApprovalNotHuman
 	case a.SpecHash != SpecHash(w.Spec):
 		return false, ReasonApprovalStale
+	case tmpl.Recorded == "":
+		return false, ReasonApprovalNoTemplate
+	case tmpl.Recorded != tmpl.Current:
+		return false, ReasonApprovalTemplate
 	}
 	return true, ""
 }
