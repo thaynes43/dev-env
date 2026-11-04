@@ -96,9 +96,23 @@ type TaskBudgetStatus struct {
 	LastProgress        time.Time             `json:"lastProgress"`
 	NextCheckpoint      time.Time             `json:"nextCheckpoint"`
 	Escalation          *TaskBudgetEscalation `json:"escalation,omitempty"`
+	Stall               *TaskBudgetStall      `json:"stall,omitempty"`
 	StopConfirmed       bool                  `json:"stopConfirmed"`
 	Blockers            []TaskBudgetBlocker   `json:"blockers,omitempty"`
 	LastEvidence        *TaskBudgetEvidence   `json:"lastEvidence,omitempty"`
+}
+
+// TaskBudgetStall is present while the stall limit has passed since the last
+// independently validated progress (saga decision 94). It is a diagnostic and
+// checkpoint signal for the supervisor. It is never a latch, a stop or an
+// owner question, and it resets no counter. Since is the stall anchor; At is
+// Since plus the limit. Signals counts the stall windows the ledger recorded,
+// this one included; a stall at the history bound is shown but not recorded.
+type TaskBudgetStall struct {
+	ID      string    `json:"id"`
+	Since   time.Time `json:"since"`
+	At      time.Time `json:"at"`
+	Signals int       `json:"signals"`
 }
 
 type TaskBudgetBlocker struct {

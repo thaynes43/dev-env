@@ -223,6 +223,9 @@ Show reads the retained ledger through the existing caller policy. Observation
 can record a due stop latch. Create/show report authority; neither admits or
 launches work, resets an epoch, extends a deadline or clears a latch. Native
 launch still requires the owned executor's independent admission checks.
+The stall line reports 60 minutes without validated progress (saga decision
+94): a signal to diagnose, steer and checkpoint. It is not a latch and stops
+nothing; the budget limits still do.
 
 Native control: agent-run budget native TASK --once < request.json
 The existing authenticated human sends a complete original binding, explicit ID

@@ -178,3 +178,28 @@ func TestOwnedStopRequiresCanonicalEvidenceAcknowledgement(t *testing.T) {
 		})
 	}
 }
+
+// Saga decision 94: a stall signal in the status is not a latch. The host gate
+// keeps admitting and observing; only latched or a stop request stops it.
+func TestBudgetGateTreatsStallSignalAsRunning(t *testing.T) {
+	b := TaskBudgetBinding{TaskUID: "task-a", Epoch: 1, Deadline: time.Date(2026, 10, 10, 3, 0, 0, 0, time.UTC), HostID: "host-a", PodUID: "pod-a"}
+	since := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	for _, latched := range []bool{false, true} {
+		st := TaskBudgetStatus{Binding: b, Observed: true, Admitted: true, Latched: latched,
+			Stall: &TaskBudgetStall{ID: "stall:1", Since: since, At: since.Add(time.Hour), Signals: 1}}
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(st) }))
+		g := &HTTPTaskBudgetGate{BaseURL: srv.URL, Client: srv.Client(), Token: func(context.Context) (string, error) { return "synthetic-token", nil }}
+		if err := g.Admit(context.Background(), b); (err == nil) == latched {
+			t.Fatalf("admit latched=%t: %v", latched, err)
+		}
+		stop, err := g.Observe(context.Background(), b)
+		if err != nil || stop != latched {
+			t.Fatalf("observe latched=%t: stop=%t %v", latched, stop, err)
+		}
+		read, err := g.ReadOwnedStatus(context.Background(), b.TaskUID)
+		if err != nil || read.Stall == nil || read.Stall.Signals != 1 {
+			t.Fatalf("owned status lost the stall: %+v %v", read.Stall, err)
+		}
+		srv.Close()
+	}
+}

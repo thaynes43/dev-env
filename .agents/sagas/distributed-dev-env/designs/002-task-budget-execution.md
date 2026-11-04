@@ -34,6 +34,7 @@ flowchart TB
     Task --> Evidence[Verified result and attempt receipts]
     Evidence --> Ledger
     Gate -->|No| Stop[No launch, continuation or dispatch]
+    Ledger -->|60 min without progress| Signal[Record a stall signal; work continues]
     Ledger -->|Limit reached| Latch[Persist one stop and escalation]
     Latch --> Stop
     Latch --> Supervisor[Stop owned executor; verify termination]
@@ -68,6 +69,13 @@ worker-effort budget and next checkpoint. The initial test uses explicit finite
 values rather than an unlimited campaign. The accepted stall default remains
 60 minutes without evidenced progress, or three failed attempts at the same
 unresolved blocker, whichever comes first.
+
+Since saga decision 94 ([ADR-019](../adrs/019-stalled-work-steers-not-stops.md),
+2026-11-04), reaching the 60-minute stall is a diagnostic and checkpoint signal
+for the supervisor, not a stop. The ledger records it and keeps the owner's
+binding, counters and budget, and the work continues. The budget limits still
+stop. The attempt and checkpoint latches are unchanged for now. See
+[DESIGN-003](003-task-budget-api.md#stall-signal-saga-decision-94-2026-11-04-op400).
 
 Heartbeats and activity do not move the progress timestamp, and the ledger does
 not retain them, so they cannot fill its bounded history. A progress update

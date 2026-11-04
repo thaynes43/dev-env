@@ -16,6 +16,79 @@ the accepted requirement, not a replacement owner policy. Without independently
 validated progress, the 10-minute checkpoint stops the campaign before its
 45-minute overall ceiling. Provider token and cost accounting is unavailable.
 
+### Stall signal, saga decision 94 (2026-11-04, OP400)
+
+Saga decision 94 ([ADR-019](../adrs/019-stalled-work-steers-not-stops.md),
+PR #908) supersedes the stop clause of decision 55: time and attempt
+thresholds trigger diagnosis, steering, a checkpoint and continuity, not
+stopping. The ledger therefore no longer latches `Stalled`.
+
+When `StallLimit` (60 minutes) passes since the stall anchor on a campaign
+that is not latched, the ledger records one stall signal for that window. The
+anchor is the last validated progress or resolution, or an authorized
+extension; heartbeats and activity still do not move it. The record is a
+server-appended inert `activity` event with evidence kind `stall-signal` and
+ID `stall:<anchor in Unix nanoseconds>`, in the existing `Events` field, which
+older replicas preserve. Public activity is never retained, and `Record`
+refuses any caller event ID with the `stall:` prefix, so a caller can neither
+forge nor suppress one. Stall records sit outside the 512-event bound, with
+their own bound of 32 (`MaxStallSignals`), so a signal never takes a slot that
+evidence or an owner's native request (`host/stop` included) needs, and never
+brings `HistoryBound` closer. Past 32 a stall is shown but not recorded. An
+older replica counts these records as history, so at a full history it fails
+closed on that ledger.
+
+While the current window of an unlatched campaign is stalled, status carries
+`stall: {id, since, at, signals}`. A latched campaign reports its stop
+instead: a later read records no stall, writes nothing and adds no field. `since` is the anchor, `at` is the anchor
+plus 60 minutes, and `signals` counts the windows recorded, this one included.
+The signal adds no latch and no owner escalation, resets no counter and
+changes no limit. The same owner keeps its binding and epoch: admission,
+child dispatch, managed launch, native owner control, progress receipts and
+the one `NativeRootStopped` continuation all proceed. Validated progress
+moves the anchor and ends the window; a later quiet hour is a new signal.
+Elapsed effort, failed attempts, blockers, workers, receipts and the binding
+are unchanged.
+
+Every other stop is unchanged: `OverallBudget` and `EffortBudget` (the real
+spend caps), `HistoryBound` (the storage bound), `NativeAuthorityUnavailable`,
+`NativeRootStopped`, the owner's `host/stop` intent, a missing validator or
+inspector, and every binding fence. `RepeatedFailure` and `Checkpoint` still
+latch. `RepeatedFailure` is decision 55's attempt threshold, which decision 94
+also makes a signal. `Checkpoint` is this pilot's progress-cadence bound (time
+since validated progress), not one of decision 55's thresholds; whether it
+stays a stop needs a ruling. Each is a separate story. The managed child's
+immutable Pod deadline and agentd's hard timer also use the first checkpoint.
+In the API pilot (45 minutes overall, a checkpoint of at most 10 minutes and no
+production progress validator), `Checkpoint` or `OverallBudget` still fires
+before 60 minutes, so this change does not alter what stops a pilot campaign.
+
+A latch is first-wins, and evaluation stops at it. A policy-threshold latch
+(`Checkpoint`, `RepeatedFailure`, or `Stalled` from an older operator) must
+not hide an authorized budget cap reached later. When the overall deadline
+passes or the effort budget is spent while one of those is latched, the
+latch reason becomes `OverallBudget` or `EffortBudget`. The latch stays. The
+pending escalation keeps the reason it was raised for, and counters,
+deadline, epoch and workers are unchanged. `NativeAuthorityUnavailable` and
+`NativeRootStopped` keep their reasons: a safety hold and a proven stop are
+not relabelled, and `Continue` re-evaluates every limit before it advances
+an epoch.
+
+A ledger that an operator from before this change already latched `Stalled`
+stays latched. Nothing is unlatched automatically, and `Continue` refuses it
+even after the original guard's proven stop: only `NativeRootStopped` is
+continuable.
+
+The first observation after the rollout records the cap on any ledger already
+latched on a policy reason past its cap. For example, a `Checkpoint`-latched
+pilot ledger past its 45-minute deadline reads as `OverallBudget` from then
+on. No source keys on `Checkpoint` or `RepeatedFailure`; only
+`NativeRootStopped` is matched, and it keeps its reason. During a rolling upgrade
+an older replica can still latch `Stalled`; that latch also stays (fail
+closed). An older agent or `agent-run` binary refuses a status with the new
+`stall` field as an unknown field, so it fails closed while an unlatched
+campaign is stalled. Upgrade the task image and the CLI with the operator.
+
 One logical campaign is assigned externally to one host. The API cannot replace
 that assignment, delete the ledger, reset history, extend its own deadline or
 automatically rearm a stopped host. `TaskUID`, epoch, deadline, HostID and exact
@@ -107,7 +180,8 @@ counts. There is no native owner-decision adapter in this source unit.
 
 Status includes `observed`, `admitted`, exact `binding`, `latched`, `reason`,
 `effortMilliseconds`, `usageAccounting`, `lastProgress`, `nextCheckpoint`,
-`escalation`, `stopConfirmed`, blocker counts and last evidence. HTTP success alone
+`escalation`, `stall` (decision 94, above), `stopConfirmed`, blocker counts and
+last evidence. HTTP success alone
 does not admit work: the client checks positive exact binding confirmation and
 `observed`; Admit additionally requires `admitted` and an unlatched ledger.
 
@@ -272,8 +346,9 @@ The checkpoint cannot exceed the overall limit. The server must already assign
 this campaign to the caller's exact live coordinator host/Pod.
 
 `agent-run budget show TASK_UID [-o json]` reads retained identity, epoch,
-deadlines, latch, stop confirmation and elapsed-effort accounting. Reading may
-persist a due latch. Neither command admits or launches an executor, resets a
+deadlines, latch, the stall signal (`stall: since <anchor>, signals <n>`, or
+`-`), stop confirmation and elapsed-effort accounting. Reading may persist a
+due latch or a stall signal. Neither command admits or launches an executor, resets a
 campaign, extends limits or clears a latch. Repeating create conflicts; it does
 not silently retrieve or replace the original campaign. Use show to inspect it.
 
@@ -367,7 +442,8 @@ state until the ORIGINAL deadline while awaiting one explicit trusted-human
 TASK`). Coordinator/model callers are refused. The request includes the exact old
 binding and decision ID. All original native/child stops must be confirmed, the
 latch must be NativeRootStopped at epoch1, and the unchanged deadline, effort,
-checkpoint, stall and failure limits must still permit work. The service records
+checkpoint and failure limits must still permit work. A stall signal does not
+block it (decision 94). The service records
 the prior binding/owner/decision and advances epoch1 to2 exactly once; it retains
 all old counters, workers, events, stop receipts, intent and limits. It grants no
 extra quota and cannot resume an exhausted or unknown-stop campaign. The existing

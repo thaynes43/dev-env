@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -94,10 +95,14 @@ func (a *app) budget(ctx context.Context, args []string) error {
 	if cmd.c.output == outputJSON {
 		return a.printJSON(out)
 	}
-	a.outf("task: %s\nhost: %s\npod UID: %s\nepoch: %d\ndeadline: %s\ncheckpoint: %s\nlatched: %t\nreason: %s\nadmitted: %t\neffort milliseconds: %d\naccounting: %s\nstop confirmed: %t\n",
+	stall := "-"
+	if out.Stall != nil {
+		stall = fmt.Sprintf("since %s, signals %d", out.Stall.Since.UTC().Format(time.RFC3339Nano), out.Stall.Signals)
+	}
+	a.outf("task: %s\nhost: %s\npod UID: %s\nepoch: %d\ndeadline: %s\ncheckpoint: %s\nlatched: %t\nreason: %s\nstall: %s\nadmitted: %t\neffort milliseconds: %d\naccounting: %s\nstop confirmed: %t\n",
 		out.Binding.TaskUID, out.Binding.HostID, out.Binding.PodUID, out.Binding.Epoch,
 		out.Binding.Deadline.UTC().Format(time.RFC3339Nano), out.NextCheckpoint.UTC().Format(time.RFC3339Nano),
-		out.Latched, firstOf(out.Reason, "-"), out.Admitted, out.EffortMilliseconds, out.UsageAccounting, out.StopConfirmed)
+		out.Latched, firstOf(out.Reason, "-"), stall, out.Admitted, out.EffortMilliseconds, out.UsageAccounting, out.StopConfirmed)
 	return nil
 }
 

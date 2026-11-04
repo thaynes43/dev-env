@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -18,12 +20,20 @@ import (
 )
 
 const (
+	// StallLimit is the accepted threshold of time without independently
+	// validated progress. Under saga decision 94 (ADR-019) reaching it is a
+	// diagnostic and checkpoint signal for the supervisor: it never latches,
+	// stops work or asks the owner. Every budget limit still stops.
 	StallLimit   = 60 * time.Minute
 	FailureLimit = 3
 	// MaxEvents bounds retained history. Worker stop receipts sit outside it:
 	// each worker has at most one, so at most MaxWorkers.
 	MaxEvents  = 512
 	MaxWorkers = 64
+	// MaxStallSignals bounds the stall records (saga decision 94). They sit
+	// outside MaxEvents, so a signal never takes a slot that evidence or an
+	// owner's native request needs; past the cap a stall is shown, not recorded.
+	MaxStallSignals = 32
 	// MaxClockSkew is how far a replica's clock may trail the ledger's
 	// AccountedAt, which the last writing replica stamped from its own clock.
 	MaxClockSkew = 5 * time.Second
@@ -196,11 +206,12 @@ func (l *Ledger) account(now time.Time) (time.Time, error) {
 }
 
 // historyEvents counts the retained events that consume MaxEvents: all but
-// worker stop receipts, so a full history can still record every stop.
+// worker stop receipts, so a full history can still record every stop, and
+// stall records, which have their own bound.
 func (l *Ledger) historyEvents() int {
 	n := 0
 	for _, e := range l.Events {
-		if e.Request.Kind != "worker-stop" {
+		if e.Request.Kind != "worker-stop" && !isStallRecord(e) {
 			n++
 		}
 	}
@@ -245,17 +256,42 @@ func (l *Ledger) latch(now time.Time, reason string) {
 		Epoch: l.Binding.Epoch, Reason: reason, At: now, Delivery: "Pending"}
 }
 
-func (l *Ledger) evaluate(now time.Time) {
-	if l.Latched {
-		return
-	}
+// hardCap names the authorized budget limit reached at now: the overall
+// deadline or the effort budget. Empty when neither is reached.
+func (l *Ledger) hardCap(now time.Time) string {
 	switch {
 	case !now.Before(l.Binding.Deadline):
-		l.latch(now, "OverallBudget")
+		return "OverallBudget"
 	case l.EffortMilliseconds >= l.EffortCeilingMilliseconds:
-		l.latch(now, "EffortBudget")
-	case !now.Before(l.StallAnchor.Add(StallLimit)):
-		l.latch(now, "Stalled")
+		return "EffortBudget"
+	}
+	return ""
+}
+
+// policyLatch reports a latch reason that records a policy threshold rather
+// than an exhausted budget, a safety hold or a proven stop. Stalled comes
+// only from an operator before saga decision 94.
+func policyLatch(reason string) bool {
+	return reason == "Stalled" || reason == "Checkpoint" || reason == "RepeatedFailure"
+}
+
+func (l *Ledger) evaluate(now time.Time) {
+	if l.Latched {
+		// A policy-threshold latch never masks a budget cap reached later: the
+		// stop is then recorded as the exhausted budget. The latch stays, and
+		// the escalation, counters, deadline, epoch and workers are unchanged.
+		// Safety holds and proven stops keep their reasons; Continue still
+		// re-evaluates every limit.
+		if policyLatch(l.Reason) {
+			if r := l.hardCap(now); r != "" {
+				l.Reason = r
+			}
+		}
+		return
+	}
+	switch r := l.hardCap(now); {
+	case r != "":
+		l.latch(now, r)
 	case !now.Before(l.NextCheckpoint):
 		l.latch(now, "Checkpoint")
 	case l.historyEvents() >= MaxEvents || len(l.Workers) >= MaxWorkers:
@@ -280,6 +316,61 @@ func (l *Ledger) evaluate(now time.Time) {
 	}
 }
 
+// stallSignalKind marks the server-appended inert activity event that records
+// one stall window. Public activity is never retained, and Record refuses the
+// stall ID prefix, so a caller can neither forge nor suppress one. Like native
+// owner intents it lives in Events, which an older replica preserves.
+const (
+	stallSignalKind = "stall-signal"
+	stallIDPrefix   = "stall:"
+)
+
+// stallID names one stall window by its anchor: the last validated progress,
+// resolution or authorized extension. A continuation keeps the window.
+func stallID(anchor time.Time) string {
+	return stallIDPrefix + strconv.FormatInt(anchor.UnixNano(), 10)
+}
+
+func isStallRecord(e Event) bool {
+	return e.Request.Kind == "activity" && e.Request.Evidence.Kind == stallSignalKind
+}
+
+// stalled reports whether StallLimit has passed since the anchor at the
+// ledger's accounted time, on a campaign that can still work. A latched
+// campaign reports its stop instead.
+func (l *Ledger) stalled() bool {
+	return !l.Latched && !l.AccountedAt.Before(l.StallAnchor.Add(StallLimit))
+}
+
+func (l *Ledger) stallSignals() int {
+	n := 0
+	for _, e := range l.Events {
+		if isStallRecord(e) {
+			n++
+		}
+	}
+	return n
+}
+
+// signalStall records the current stall window once (saga decision 94). It
+// never latches, asks the owner, moves the anchor, resets a counter or changes
+// a limit. Stall records sit outside MaxEvents, so a signal never takes a slot
+// that evidence or an owner's native request needs and never brings
+// HistoryBound closer. Past MaxStallSignals a stall is shown, not recorded.
+func (l *Ledger) signalStall() {
+	if !l.stalled() || l.stallSignals() >= MaxStallSignals {
+		return
+	}
+	id := stallID(l.StallAnchor)
+	for _, e := range l.Events {
+		if e.Request.ID == id {
+			return
+		}
+	}
+	l.Events = append(l.Events, Event{At: l.AccountedAt, Request: apiv1.TaskBudgetEvent{Binding: l.Binding, ID: id, Kind: "activity",
+		Evidence: apiv1.TaskBudgetEvidence{ID: id, Kind: stallSignalKind}}})
+}
+
 func (s *Service) mutate(ctx context.Context, b Binding, fn func(*Ledger, time.Time) error) (*Ledger, error) {
 	if s == nil || s.Store == nil || !validBinding(b) {
 		return nil, ErrUnavailable
@@ -298,10 +389,12 @@ func (s *Service) mutate(ctx context.Context, b Binding, fn func(*Ledger, time.T
 			return nil, err
 		}
 		l.evaluate(now)
+		l.signalStall()
 		// Refusals are persisted too: an expired task must latch before any
 		// caller requests a stop. A stale binding never changes the new epoch.
 		operationErr := fn(l, now)
 		l.evaluate(now)
+		l.signalStall()
 		// An observation, replay or refusal that changes nothing durable writes
 		// nothing, so frequent observers do not contend with real writers.
 		if read.onlyAccounted(l) {
@@ -429,7 +522,9 @@ func validEvidence(e apiv1.TaskBudgetEvidence) bool {
 }
 
 func (s *Service) Record(ctx context.Context, e apiv1.TaskBudgetEvent) (*Ledger, error) {
-	if !validEvent(e) {
+	// Stall record IDs are the server's: a caller cannot claim one to suppress
+	// a window's record.
+	if !validEvent(e) || strings.HasPrefix(e.ID, stallIDPrefix) {
 		return nil, ErrDenied
 	}
 	// Heartbeat and activity are observations, never evidence. They are not
@@ -609,6 +704,9 @@ func (l *Ledger) Status() apiv1.TaskBudgetStatus {
 		NativeStopRequested: l.NativeStopRequested(),
 		EffortMilliseconds:  l.EffortMilliseconds, UsageAccounting: "SupervisorElapsedEstimate; provider usage unavailable",
 		LastProgress: l.LastProgress, NextCheckpoint: l.NextCheckpoint, Escalation: l.Escalation, StopConfirmed: l.stopped()}
+	if l.stalled() {
+		st.Stall = &apiv1.TaskBudgetStall{ID: stallID(l.StallAnchor), Since: l.StallAnchor, At: l.StallAnchor.Add(StallLimit), Signals: l.stallSignals()}
+	}
 	blockers := map[string]apiv1.TaskBudgetBlocker{}
 	for _, e := range l.Events {
 		if e.Request.Kind == "failure" || e.Request.Kind == "resolved" {
