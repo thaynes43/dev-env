@@ -32,7 +32,10 @@ A narrow implementation has no defensible input today:
    DashboardService RPC, which no source in this repo is authorized to call. Two access routes
    differ and must not be conflated: (a) a read of that RPC under an existing read scope that
    gains new endpoint authority, and (b) a new login or a new refresh owner. The public code shows
-   only that OpenUsage uses (b); it does not prove that every read-only call needs a new refresher,
+   OpenUsage using (b); CodexBar instead reads another tool's Cursor token in place and never
+   refreshes it. That supports the point that a read need not create a new refresher, but it is still
+   a token read, so it is not proposed here. The code does not prove that every read-only call needs a
+   new refresher,
    and this plan does not claim a new credential is the only route. Neither route is authorized or
    proposed here, and token or private-route access stays forbidden in this scope.
 3. Whether the built-in display shows any Sand or Grok line at all is not known. A mapper written
@@ -50,7 +53,8 @@ A narrow implementation has no defensible input today:
 
 ## Independence from the Included repair
 
-Sand is a separate product, not per-model Grok usage through Cursor. Optional Sand evidence (E2, E3)
+The public code treats Sand as a separate line; whether it equals Grok used through Cursor is not
+proven, and the pool relationship stays Unknown. No per-model Grok semantics are assumed. Optional Sand evidence (E2, E3)
 must never block repairing the normal Cursor Included read (E1 and the glyph qualification).
 
 ## Existing Sand machinery (already in the repo)
