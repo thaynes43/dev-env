@@ -113,8 +113,11 @@ const (
 	// because a Get by UID does not exist: a mismatch is an item deleted and
 	// recreated under the same name.
 	LabelScheduledWork = LabelPrefix + "scheduled-work"
-	// AnnotationScheduledWorkName is the name of that ScheduledWork, in the
-	// session's namespace.
+	// AnnotationScheduledWorkName is the name of that ScheduledWork. The item
+	// lives in the operator's own namespace (dev-env-system, beside the
+	// Reminders), not the session's: the releaser reads it there
+	// (Reconciler.ScheduledWorkNamespace), and the executor (S3b) and the API
+	// (S5) must create it there too.
 	AnnotationScheduledWorkName = LabelPrefix + "scheduled-work-name"
 	// AnnotationScheduledWorkOccurrence is the occurrence's instant (its `at`)
 	// in Unix seconds, decimal.

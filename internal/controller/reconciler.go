@@ -227,10 +227,10 @@ type Reconciler struct {
 	// HoldRetry is how soon a failed rescue in a hold pod runs again; zero
 	// means HoldRescueRetry (D-55).
 	HoldRetry time.Duration
-	// ScheduledWorkReleaseBlocked counts the scheduled-work releases held back
-	// (MetricScheduledWorkReleaseBlocked, DESIGN-054 S3a); nil counts nothing.
-	// The releaser itself always runs: it has no flag.
-	ScheduledWorkReleaseBlocked *prometheus.CounterVec
+	// ScheduledWorkReleaseHolds counts the scheduled-work release attempts held
+	// back (MetricScheduledWorkReleaseHolds, DESIGN-054 S3a); nil counts
+	// nothing. The releaser itself always runs: it has no flag.
+	ScheduledWorkReleaseHolds *prometheus.CounterVec
 	// SessionNamespace is where the sessions live. The scheduled-work sweep
 	// lists the labelled sessions there from the API server; empty, or with no
 	// APIReader, the sweep does not run and the releaser still acts on every

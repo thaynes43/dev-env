@@ -193,7 +193,7 @@ func holdsFinalizer(t *testing.T, name string, d time.Duration) {
 }
 
 func withBlockedCounter(c *prometheus.CounterVec) func(*Reconciler) {
-	return func(r *Reconciler) { r.ScheduledWorkReleaseBlocked = c }
+	return func(r *Reconciler) { r.ScheduledWorkReleaseHolds = c }
 }
 
 // setTask writes what agentd's last heartbeat of a task would: the agent
@@ -239,7 +239,7 @@ func endPod(t *testing.T, pod *corev1.Pod) {
 // kept (no rescue answers, so the guard keeps the pod), no pod or volume write,
 // and no ScheduledWork read through the cache.
 func TestScheduledWorkReleaserNeedsNoExecutor(t *testing.T) {
-	blocked := NewScheduledWorkReleaseBlockedCounter()
+	blocked := NewScheduledWorkReleaseHoldsCounter()
 	op := startOperator(t, withBlockedCounter(blocked))
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
 	s := scheduledSession(t, f, nil)
@@ -320,6 +320,58 @@ func TestScheduledWorkReleaseRecordsAFastHeadlessSuccess(t *testing.T) {
 	}
 }
 
+// The heartbeat stores the task's exit first and the agent's retained outcome
+// after it, in a separate write. The occurrence is recorded at the exit; the
+// finalizer stays for scheduledwork.ReportWait so the outcome, when it lands,
+// is copied into the terminal record (once, with no second count). With no
+// outcome, the session is released when the wait ends.
+func TestScheduledWorkReleaseWaitsForTheReportedOutcome(t *testing.T) {
+	var ahead atomic.Int64
+	startOperator(t, func(r *Reconciler) { r.Now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) } })
+	t.Run("the outcome lands after the exit", func(t *testing.T) {
+		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+		s := scheduledSession(t, f, nil)
+		pod := markRunning(t, waitPod(t, s.Name), "talosw02")
+		setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.Now()}, nil)
+		if o := f.waitOccurrence(t, v1alpha1.OccurrenceSucceeded); o.Reported != nil {
+			t.Fatalf("reported before the outcome landed: %+v", o.Reported)
+		}
+		holdsFinalizer(t, s.Name, 2*time.Second)
+		eventually(t, "the retained outcome", func() error {
+			live := session(t, s.Name)
+			live.Status.TaskOutcome = &v1alpha1.TaskOutcomeStatus{SessionUID: string(live.UID), PodUID: string(pod.UID),
+				Record: v1alpha1.TaskOutcomeRecordStatus{Summary: "opened the audit PR"}}
+			return k8s.Status().Update(context.Background(), live)
+		})
+		eventually(t, "the reported outcome copied", func() error {
+			if o := f.occurrence(t); o.Reported == nil || o.Reported.Summary != "opened the audit PR" || o.State != v1alpha1.OccurrenceSucceeded {
+				return fmt.Errorf("occurrence %+v", o)
+			}
+			return nil
+		})
+		waitReleased(t, s.Name)
+		if c := f.item(t).Status.Counts; c != (v1alpha1.ScheduledWorkCounts{Succeeded: 1}) {
+			t.Errorf("counts %+v", c)
+		}
+	})
+	t.Run("no outcome", func(t *testing.T) {
+		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+		s := scheduledSession(t, f, nil)
+		markRunning(t, waitPod(t, s.Name), "talosw02")
+		setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.Now()}, nil)
+		f.waitOccurrence(t, v1alpha1.OccurrenceSucceeded)
+		holdsFinalizer(t, s.Name, 2*time.Second)
+		ahead.Store(int64(scheduledwork.ReportWait + time.Minute))
+		t.Cleanup(func() { ahead.Store(0) })
+		// The next heartbeat finds the wait over.
+		setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.Now()}, nil)
+		waitReleased(t, s.Name)
+		if o := f.occurrence(t); o.Reported != nil || o.State != v1alpha1.OccurrenceSucceeded {
+			t.Errorf("occurrence %+v", o)
+		}
+	})
+}
+
 // A task that exited 0 with no success event has taskResult Unknown: the
 // occurrence is Ended, not Succeeded.
 func TestScheduledWorkReleaseRecordsUnknownAsEnded(t *testing.T) {
@@ -327,7 +379,8 @@ func TestScheduledWorkReleaseRecordsUnknownAsEnded(t *testing.T) {
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
 	s := scheduledSession(t, f, nil)
 	markRunning(t, waitPod(t, s.Name), "talosw02")
-	setTask(t, s.Name, v1alpha1.TaskStatus{FinishedAt: metav1.Now()}, nil)
+	// It finished longer ago than the wait for a reported outcome.
+	setTask(t, s.Name, v1alpha1.TaskStatus{FinishedAt: metav1.NewTime(time.Now().Add(-2 * scheduledwork.ReportWait))}, nil)
 	o := f.waitOccurrence(t, v1alpha1.OccurrenceEnded)
 	if o.Execution == nil || o.Execution.State != v1alpha1.TaskResultUnknown || !strings.Contains(o.Reason, "no success result event") {
 		t.Errorf("occurrence %+v", o)
@@ -349,7 +402,7 @@ func TestScheduledWorkReleaseKeepsATerminalOccurrence(t *testing.T) {
 	})
 	s := scheduledSession(t, f, nil)
 	markRunning(t, waitPod(t, s.Name), "talosw02")
-	setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.Now()}, nil)
+	setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.NewTime(time.Now().Add(-2 * scheduledwork.ReportWait))}, nil)
 	waitReleased(t, s.Name)
 	w := f.item(t)
 	o := scheduledwork.Find(w, f.at)
@@ -439,7 +492,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 	noKind := &meta.NoKindMatchError{GroupKind: scheduledWorkGK, SearchedVersions: []string{"v1alpha1"}}
 	discoveryDown := &apiutil.ErrResourceDiscoveryFailed{v1alpha1.GroupVersion: errors.New("the server is currently unable to handle the request")}
 	t.Run("before and after the start deadline", func(t *testing.T) {
-		blocked := NewScheduledWorkReleaseBlockedCounter()
+		blocked := NewScheduledWorkReleaseHoldsCounter()
 		startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
 			r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: noKind, crdGone: true}
 		})
@@ -462,7 +515,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 		}
 	})
 	t.Run("a discovery error with the CRD present", func(t *testing.T) {
-		blocked := NewScheduledWorkReleaseBlockedCounter()
+		blocked := NewScheduledWorkReleaseHoldsCounter()
 		startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
 			r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: discoveryDown}
 		})
@@ -503,7 +556,7 @@ func (m unservedMapper) RESTMappings(gk schema.GroupKind, versions ...string) ([
 // the items are not proven gone) and every other session is reconciled as
 // before.
 func TestScheduledWorkReleaseLetsTheOperatorStartWithoutTheKind(t *testing.T) {
-	blocked := NewScheduledWorkReleaseBlockedCounter()
+	blocked := NewScheduledWorkReleaseHoldsCounter()
 	op := startOperatorWith(t, func(o *ctrl.Options) {
 		o.MapperProvider = func(c *rest.Config, h *http.Client) (meta.RESTMapper, error) {
 			m, err := apiutil.NewDynamicRESTMapper(c, h)
@@ -674,7 +727,7 @@ func (s failingStatus) Update(ctx context.Context, o client.Object, opts ...clie
 // finalizer, holding nothing but the record. Once the write works (here a
 // fresh operator), the record lands and the session goes.
 func TestScheduledWorkReleaseHoldsWhileTheStatusWriteFails(t *testing.T) {
-	blocked := NewScheduledWorkReleaseBlockedCounter()
+	blocked := NewScheduledWorkReleaseHoldsCounter()
 	var failing *failingClient
 	first := startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
 		failing = &failingClient{Client: r.Client}
@@ -718,7 +771,7 @@ func TestScheduledWorkReleaseHoldsWhileTheStatusWriteFails(t *testing.T) {
 // one finds the occurrence terminal, writes nothing and counts nothing again,
 // and releases.
 func TestScheduledWorkReleaseIsIdempotentAcrossARestart(t *testing.T) {
-	blocked := NewScheduledWorkReleaseBlockedCounter()
+	blocked := NewScheduledWorkReleaseHoldsCounter()
 	first := startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
 		failing := &failingClient{Client: r.Client}
 		failing.failRelease.Store(true)

@@ -47,7 +47,7 @@ func TestRecord(t *testing.T) {
 			Recorded, v1alpha1.OccurrenceSucceeded, "", v1alpha1.ScheduledWorkCounts{Succeeded: 5, Failed: 2, Ended: 1}},
 		{"parked with a session", item(occ(at, v1alpha1.OccurrenceParked, name)), name, succeeded,
 			Recorded, v1alpha1.OccurrenceSucceeded, name, v1alpha1.ScheduledWorkCounts{Succeeded: 5, Failed: 2, Ended: 1}},
-		{"already terminal is not overwritten", item(occ(at, v1alpha1.OccurrenceFailed, name)), name, succeeded,
+		{"already terminal is not overwritten", item(occ(at, v1alpha1.OccurrenceFailed, name)), name, Terminal{State: succeeded.State, Reason: succeeded.Reason, Execution: succeeded.Execution},
 			AlreadyTerminal, v1alpha1.OccurrenceFailed, name, v1alpha1.ScheduledWorkCounts{Succeeded: 4, Failed: 2, Ended: 1}},
 		{"already skipped", item(occ(at, v1alpha1.OccurrenceSkipped, "")), name, succeeded,
 			AlreadyTerminal, v1alpha1.OccurrenceSkipped, "", v1alpha1.ScheduledWorkCounts{Succeeded: 4, Failed: 2, Ended: 1}},
@@ -127,4 +127,106 @@ func equalWork(a, b *v1alpha1.ScheduledWork) bool {
 		}
 	}
 	return true
+}
+
+// A terminal occurrence of this session with no reported outcome takes one
+// that lands after the record; nothing else changes, and no count is added.
+func TestRecordAddsALateReportedOutcome(t *testing.T) {
+	at := time.Date(2026, 12, 3, 14, 0, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-202612031400"
+	late := Terminal{State: v1alpha1.OccurrenceSucceeded, Reason: "the task exited 0 (success)", Reported: &v1alpha1.TaskOutcomeRecordStatus{Summary: "late"}}
+	for _, c := range []struct {
+		name    string
+		occ     v1alpha1.ScheduledWorkOccurrence
+		term    Terminal
+		want    RecordResult
+		summary string
+	}{
+		{"late outcome", v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceSucceeded, Session: name, Reason: "ok"}, late, ReportedAdded, "late"},
+		{"already reported", v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceSucceeded, Session: name, Reported: &v1alpha1.TaskOutcomeRecordStatus{Summary: "first"}}, late, AlreadyTerminal, "first"},
+		{"no outcome yet", v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceSucceeded, Session: name}, Terminal{State: v1alpha1.OccurrenceSucceeded}, AlreadyTerminal, ""},
+		{"another session's record", v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceFailed, Session: "sw-ffffffffffff-202612031400"}, late, AlreadyTerminal, ""},
+		{"a record with no session", v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceSkipped}, late, AlreadyTerminal, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			c.occ.At = metav1.NewTime(at)
+			w := &v1alpha1.ScheduledWork{}
+			w.Status.Counts.Succeeded = 1
+			w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{c.occ}
+			state, reason := c.occ.State, c.occ.Reason
+			if got := Record(w, at, name, c.term); got != c.want {
+				t.Fatalf("Record = %q, want %q", got, c.want)
+			}
+			o := w.Status.Occurrences[0]
+			if o.State != state || o.Reason != reason || w.Status.Counts.Succeeded != 1 {
+				t.Errorf("occurrence %+v, counts %+v", o, w.Status.Counts)
+			}
+			if got := ""; o.Reported != nil {
+				got = o.Reported.Summary
+				if got != c.summary {
+					t.Errorf("reported %q, want %q", got, c.summary)
+				}
+			} else if c.summary != "" {
+				t.Errorf("reported none, want %q", c.summary)
+			}
+		})
+	}
+}
+
+func TestAwaitsReport(t *testing.T) {
+	now := time.Date(2026, 12, 3, 14, 10, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-202612031400"
+	finished := func(ago time.Duration) func(*v1alpha1.AgentSession) {
+		return func(s *v1alpha1.AgentSession) {
+			s.Status.Agent = &v1alpha1.AgentStatus{Task: &v1alpha1.TaskStatus{FinishedAt: metav1.NewTime(now.Add(-ago))}}
+		}
+	}
+	for _, c := range []struct {
+		name  string
+		edit  func(*v1alpha1.AgentSession, *v1alpha1.ScheduledWorkOccurrence)
+		wait  bool
+		until time.Time
+	}{
+		{"just finished", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(10 * time.Second)(s) }, true, now.Add(-10*time.Second + ReportWait)},
+		{"finished long ago", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(ReportWait)(s) }, false, time.Time{}},
+		{"a finish in the future", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(-time.Hour)(s) }, true, now.Add(ReportWait)},
+		{"a private session's retained finish", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) {
+			s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{TaskTerminal: &v1alpha1.PrivateTaskTerminalStatus{Task: v1alpha1.TaskStatus{FinishedAt: metav1.NewTime(now.Add(-time.Minute))}}}
+		}, true, now.Add(-time.Minute + ReportWait)},
+		{"no recorded finish", func(*v1alpha1.AgentSession, *v1alpha1.ScheduledWorkOccurrence) {}, false, time.Time{}},
+		{"outcome retained", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) {
+			finished(time.Second)(s)
+			s.Status.TaskOutcome = &v1alpha1.TaskOutcomeStatus{}
+		}, false, time.Time{}},
+		{"already reported", func(s *v1alpha1.AgentSession, o *v1alpha1.ScheduledWorkOccurrence) {
+			finished(time.Second)(s)
+			o.Reported = &v1alpha1.TaskOutcomeRecordStatus{Summary: "x"}
+		}, false, time.Time{}},
+		{"being deleted", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) {
+			finished(time.Second)(s)
+			d := metav1.NewTime(now)
+			s.DeletionTimestamp = &d
+		}, false, time.Time{}},
+		{"interactive", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) {
+			finished(time.Second)(s)
+			s.Spec.Mode = v1alpha1.ModeRemote
+		}, false, time.Time{}},
+		{"another session's record", func(s *v1alpha1.AgentSession, o *v1alpha1.ScheduledWorkOccurrence) {
+			finished(time.Second)(s)
+			o.Session = "sw-ffffffffffff-202612031400"
+		}, false, time.Time{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask}}
+			o := &v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceSucceeded, Session: name}
+			c.edit(s, o)
+			wait, until := AwaitsReport(s, o, now)
+			if wait != c.wait || (wait && !until.Equal(c.until)) {
+				t.Errorf("wait %v until %v, want %v until %v", wait, until, c.wait, c.until)
+			}
+		})
+	}
+	if wait, _ := AwaitsReport(&v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask}}, nil, now); wait {
+		t.Error("waits with no occurrence")
+	}
 }

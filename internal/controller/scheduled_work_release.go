@@ -41,12 +41,21 @@ import (
 // session, and never touches another finalizer; the rescue and archive keep
 // theirs, and neither waits on the other.
 
-// MetricScheduledWorkReleaseBlocked counts the releases the releaser held back,
-// by reason: a session that has ended (or is being deleted) whose finalizer
-// stays because a read or write failed or the item's state is unknown. The
-// DESIGN-054 name gains the counter suffix every counter here carries. A
-// haynes-ops PrometheusRule pages on it (S6).
-const MetricScheduledWorkReleaseBlocked = "dev_env_scheduled_work_release_blocked_total"
+// The releaser's metrics. MetricScheduledWorkReleaseBlocked is DESIGN-054's
+// page source: a gauge of the scheduled sessions whose finalizer is still on
+// although they are being deleted or have ended, read from the cache at
+// scrape time (ScheduledWorkReleaseCollector), so every replica reports the
+// same value and a deposed leader leaves nothing stale. The releaser lifts the
+// finalizer within seconds, so a session that stays counted for long is
+// blocked; a haynes-ops PrometheusRule (S6) pages on it with a `for:` longer
+// than the expected waits (the reported-outcome wait, scheduledwork.ReportWait,
+// and an unserved kind's wait for the start deadline).
+// MetricScheduledWorkReleaseHolds counts each held attempt by reason, for the
+// diagnosis; it is not the page.
+const (
+	MetricScheduledWorkReleaseBlocked = "dev_env_scheduled_work_release_blocked"
+	MetricScheduledWorkReleaseHolds   = "dev_env_scheduled_work_release_holds_total"
+)
 
 // The blocked counter's reason label values.
 const (
@@ -68,13 +77,13 @@ const (
 
 var releaseBlockedReasons = []string{releaseBlockedMetadata, releaseBlockedRead, releaseBlockedKindUnserved, releaseBlockedStatusWrite, releaseBlockedPatch}
 
-// NewScheduledWorkReleaseBlockedCounter returns the counter of
-// MetricScheduledWorkReleaseBlocked, with each reason's series present at 0.
+// NewScheduledWorkReleaseHoldsCounter returns the counter of
+// MetricScheduledWorkReleaseHolds, with each reason's series present at 0.
 // Register it once per process.
-func NewScheduledWorkReleaseBlockedCounter() *prometheus.CounterVec {
+func NewScheduledWorkReleaseHoldsCounter() *prometheus.CounterVec {
 	c := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: MetricScheduledWorkReleaseBlocked,
-		Help: "Scheduled sessions whose scheduled-work finalizer the releaser kept although they ended or are being deleted (DESIGN-054 S3a), by reason: metadata, read, kind_unserved, status_write, finalizer_patch. Each held attempt counts once.",
+		Name: MetricScheduledWorkReleaseHolds,
+		Help: "Release attempts the scheduled-work releaser held back although the session ended or is being deleted (DESIGN-054 S3a), by reason: metadata, read, kind_unserved, status_write, finalizer_patch. Each held attempt counts once; page on dev_env_scheduled_work_release_blocked instead.",
 	}, []string{"reason"})
 	for _, reason := range releaseBlockedReasons {
 		c.WithLabelValues(reason)
@@ -138,21 +147,24 @@ const (
 // caller says the finalizer may go, and the reads that must show it.
 type scheduledWorkRelease struct {
 	why scheduledWorkReleaseWhy
-	// ended is the session-end rule on the uncached session and pod.
-	ended bool
+	// pod is the uncached pod of the session's name for the session-end
+	// rule's pod-age proof; nil when none was read or there is none.
+	pod *corev1.Pod
 	// read and work are the uncached read of the item; work is nil unless
 	// read is itemFound, and holds the stored record after a write.
 	read itemRead
 	work *v1alpha1.ScheduledWork
 	// at is the occurrence instant from the session's annotation.
 	at time.Time
-	// now is the releaser's clock, for the start deadline.
+	// now is the releaser's clock, for the session-end rule and the start
+	// deadline.
 	now time.Time
 }
 
 // scheduledWorkReleaseAllowed is nil only when the releaser may lift
-// v1alpha1.ScheduledWorkFinalizer from s: s carries it, has ended or is being
-// deleted, and the evidence shows the reason the caller gives. A recorded or
+// v1alpha1.ScheduledWorkFinalizer from s: s carries it, is being deleted or has
+// ended by the session-end rule (judged here, on s and the evidence's pod),
+// and the evidence shows the reason the caller gives. A recorded or
 // untracked occurrence needs the item read with the UID of the session's
 // label; a replaced item another UID; a gone item the missing read; an
 // unserved kind its CRD gone and the start deadline in s passed.
@@ -161,7 +173,7 @@ func scheduledWorkReleaseAllowed(s *v1alpha1.AgentSession, ev scheduledWorkRelea
 	switch {
 	case !controllerutil.ContainsFinalizer(s, v1alpha1.ScheduledWorkFinalizer):
 		return errors.New("the session does not carry the scheduled-work finalizer")
-	case !ev.ended && s.DeletionTimestamp.IsZero():
+	case s.DeletionTimestamp.IsZero() && !sessionEnded(s, ev.pod, ev.now):
 		return errors.New("the session has not ended and is not being deleted, so the scheduled-work finalizer stays")
 	case uid == "":
 		return errors.New("the session has no scheduled-work label")
@@ -241,21 +253,23 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 		// The cache is behind; the newer version's event reconciles again.
 		return false, ctrl.Result{}
 	}
+	ev := scheduledWorkRelease{now: now}
 	ended, why := scheduledwork.SessionEnded(&s, nil, now)
-	if !ended && scheduledwork.NeedsPodProof(&s) {
+	switch {
+	case !s.DeletionTimestamp.IsZero():
+		// A deletion alone allows the release: no pod proof is needed.
+		why = "the session is being deleted"
+	case !ended && scheduledwork.NeedsPodProof(&s):
 		pod, err := r.uncachedSessionPod(ctx, &s)
 		if err != nil {
 			return false, r.releaseBlocked(lg, releaseBlockedRead, err)
 		}
-		if ended, why = scheduledwork.SessionEnded(&s, pod, now); !ended && s.DeletionTimestamp.IsZero() {
+		if ended, why = scheduledwork.SessionEnded(&s, pod, now); !ended {
 			return false, ctrl.Result{RequeueAfter: scheduledWorkProofRetry}
 		}
-	}
-	if !ended && s.DeletionTimestamp.IsZero() {
+		ev.pod = pod
+	case !ended:
 		return false, ctrl.Result{}
-	}
-	if !ended {
-		why = "the session is being deleted"
 	}
 
 	name, uid := s.Annotations[v1alpha1.AnnotationScheduledWorkName], s.Labels[v1alpha1.LabelScheduledWork]
@@ -267,7 +281,7 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 		return false, r.releaseBlocked(lg, releaseBlockedMetadata, fmt.Errorf("the session lacks annotation %s or label %s", v1alpha1.AnnotationScheduledWorkName, v1alpha1.LabelScheduledWork))
 	}
 
-	ev := scheduledWorkRelease{ended: ended, at: at, now: now}
+	ev.at = at
 	var result scheduledwork.RecordResult
 	for range 5 {
 		result = ""
@@ -298,7 +312,7 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 		default:
 			result = scheduledwork.Record(w, at, s.Name, scheduledwork.Outcome(&s, now))
 			switch result {
-			case scheduledwork.Recorded:
+			case scheduledwork.Recorded, scheduledwork.ReportedAdded:
 				if err := r.Client.Status().Update(ctx, w); err != nil {
 					if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
 						continue
@@ -316,6 +330,14 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 	}
 	if ev.why == "" {
 		return false, r.releaseBlocked(lg, releaseBlockedStatusWrite, errors.New("the terminal record met a conflict five times in a row"))
+	}
+	if ev.why == swReleaseRecorded {
+		// The record is in; the finalizer stays a little longer while the
+		// agent's retained outcome may still land, so it is copied.
+		if wait, until := scheduledwork.AwaitsReport(&s, scheduledwork.Find(ev.work, at), now); wait {
+			lg.V(1).Info("the occurrence is recorded; waiting for the agent's reported outcome", "until", until.UTC().Format(time.RFC3339))
+			return false, ctrl.Result{RequeueAfter: until.Sub(now) + time.Second}
+		}
 	}
 	if err := releaseScheduledWorkFinalizer(ctx, r.Client, &s, ev); err != nil {
 		switch {
@@ -406,8 +428,8 @@ func (r *Reconciler) uncachedSessionPod(ctx context.Context, s *v1alpha1.AgentSe
 
 // releaseBlocked counts and logs a held release and asks to be called back.
 func (r *Reconciler) releaseBlocked(lg logr.Logger, reason string, err error) ctrl.Result {
-	if r.ScheduledWorkReleaseBlocked != nil {
-		r.ScheduledWorkReleaseBlocked.WithLabelValues(reason).Inc()
+	if r.ScheduledWorkReleaseHolds != nil {
+		r.ScheduledWorkReleaseHolds.WithLabelValues(reason).Inc()
 	}
 	lg.Info("the scheduled-work finalizer stays", "reason", reason, "error", err.Error())
 	return ctrl.Result{RequeueAfter: scheduledWorkReleaseRetry}
@@ -463,4 +485,56 @@ func (w *scheduledWorkSweep) pass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// sessionEnded is the session-end rule the guard judges by.
+func sessionEnded(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool {
+	ended, _ := scheduledwork.SessionEnded(s, pod, now)
+	return ended
+}
+
+var scheduledWorkReleaseBlockedDesc = prometheus.NewDesc(MetricScheduledWorkReleaseBlocked,
+	"Scheduled sessions that still carry the scheduled-work finalizer although they are being deleted or have ended by the session-end rule (DESIGN-054), from the cache at scrape time. The releaser lifts it within seconds, or after scheduledwork.ReportWait for a headless agent's reported outcome; a session that stays counted is blocked.",
+	nil, nil)
+
+// ScheduledWorkReleaseCollector is a prometheus.Collector of
+// MetricScheduledWorkReleaseBlocked over the sessions in one namespace. It
+// judges the session-end rule without the pod (an end only a pod could prove
+// is not counted). Register it with controller-runtime's metrics registry.
+type ScheduledWorkReleaseCollector struct {
+	// Reader lists sessions; the manager's cache in the operator.
+	Reader client.Reader
+	// Namespace is where the sessions live (dev-agents).
+	Namespace string
+	// Now is the clock; nil is time.Now.
+	Now func() time.Time
+}
+
+// Describe implements prometheus.Collector.
+func (c *ScheduledWorkReleaseCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- scheduledWorkReleaseBlockedDesc
+}
+
+// Collect implements prometheus.Collector. A failed list reports an invalid
+// metric, which fails the scrape, as the session metrics do (D-57).
+func (c *ScheduledWorkReleaseCollector) Collect(ch chan<- prometheus.Metric) {
+	ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
+	defer cancel()
+	var list v1alpha1.AgentSessionList
+	if err := c.Reader.List(ctx, &list, client.InNamespace(c.Namespace), client.HasLabels{v1alpha1.LabelScheduledWork}); err != nil {
+		ch <- prometheus.NewInvalidMetric(scheduledWorkReleaseBlockedDesc, err)
+		return
+	}
+	now := time.Now()
+	if c.Now != nil {
+		now = c.Now()
+	}
+	held := 0
+	for i := range list.Items {
+		s := &list.Items[i]
+		if controllerutil.ContainsFinalizer(s, v1alpha1.ScheduledWorkFinalizer) && (!s.DeletionTimestamp.IsZero() || sessionEnded(s, nil, now)) {
+			held++
+		}
+	}
+	ch <- prometheus.MustNewConstMetric(scheduledWorkReleaseBlockedDesc, prometheus.GaugeValue, float64(held))
 }
