@@ -390,16 +390,47 @@ func TestEnvtestTaskOutcomeRetention(t *testing.T) {
 		}
 	})
 
-	// Release the other Sessions the suite held.
+	// Delete the other Sessions and their pods, and wait until they are gone,
+	// so later tests in the shared envtest store do not see them.
 	for _, o := range []outcomeTask{failed, missing, partial} {
-		var s v1alpha1.AgentSession
-		if err := l.k8s.Get(ctx, types.NamespacedName{Namespace: sessionNS, Name: o.name}, &s); err == nil {
-			controllerutil.RemoveFinalizer(&s, controller.Finalizer)
-			if err := l.k8s.Update(ctx, &s); err != nil && !apierrors.IsNotFound(err) {
-				t.Error(err)
-			}
+		removeOutcomeTask(t, l, o)
+	}
+}
+
+// removeOutcomeTask deletes the task's pod and Session, lifting the rescue
+// finalizer the suite added, and waits until the store has neither.
+func removeOutcomeTask(t *testing.T, l *live, o outcomeTask) {
+	t.Helper()
+	ctx := context.Background()
+	zero := int64(0)
+	if err := l.k8s.Delete(ctx, o.pod, &client.DeleteOptions{GracePeriodSeconds: &zero}); err != nil && !apierrors.IsNotFound(err) {
+		t.Error(err)
+	}
+	key := types.NamespacedName{Namespace: sessionNS, Name: o.name}
+	var s v1alpha1.AgentSession
+	if err := l.k8s.Get(ctx, key, &s); err == nil {
+		controllerutil.RemoveFinalizer(&s, controller.Finalizer)
+		if err := l.k8s.Update(ctx, &s); err != nil && !apierrors.IsNotFound(err) {
+			t.Error(err)
 		}
-		_ = l.k8s.Delete(ctx, o.pod)
+		if err := l.k8s.Delete(ctx, &s); err != nil && !apierrors.IsNotFound(err) {
+			t.Error(err)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		t.Error(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		sessErr := l.k8s.Get(ctx, key, &v1alpha1.AgentSession{})
+		podErr := l.k8s.Get(ctx, client.ObjectKeyFromObject(o.pod), &corev1.Pod{})
+		if apierrors.IsNotFound(sessErr) && apierrors.IsNotFound(podErr) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("session %s or its pod is still in the store: %v, %v", o.name, sessErr, podErr)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
