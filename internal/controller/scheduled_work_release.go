@@ -38,10 +38,12 @@ import (
 // (scheduledwork.SessionEnded), or that is being deleted. It reads the
 // ScheduledWork with the uncached API reader only, so the operator starts no
 // watch or informer on a kind S6 may not have installed yet. It writes the
-// occurrence's terminal record with a compare-and-set status Update, then lifts
-// only its own finalizer. It never deletes, suspends or otherwise changes a
-// session, and never touches another finalizer; the rescue and archive keep
-// theirs, and neither waits on the other.
+// occurrence's terminal record with a compare-and-set status Update, pages the
+// outcome through a keyed Reminder (S4b, best effort: see
+// sendScheduledWorkPages), then lifts only its own finalizer. It never
+// deletes, suspends or otherwise changes a session, and never touches another
+// finalizer; the rescue and archive keep theirs, and neither waits on the
+// other.
 
 // The releaser's metrics. MetricScheduledWorkReleaseBlocked is DESIGN-054's
 // page source: a gauge of the sessions, labelled or not, whose finalizer is

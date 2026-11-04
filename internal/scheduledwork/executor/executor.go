@@ -32,6 +32,10 @@
 // dispatch templates ConfigMap and the owner session, read uncached, decided
 // by internal/scheduledwork/authority. Without the ConfigMap, or without a
 // basis its template admits, an occurrence parks and nothing is dispatched.
+//
+// Pages (S4b, paging.go) go through Pager: a transition that pages records
+// its intent in its own status write, and a later step creates the keyed
+// page Reminder and records it. A page never holds a state change.
 package executor
 
 import (
