@@ -111,8 +111,23 @@ func acceptedResponse(msg json.RawMessage) bool {
 	if json.Unmarshal(msg, &m) != nil {
 		return false
 	}
-	usage := strings.TrimSpace(string(m.Usage))
-	return m.Model != "" && m.Model != "<synthetic>" && usage != "" && usage != "null" && usage != "{}"
+	if m.Model == "" || m.Model == "<synthetic>" {
+		return false
+	}
+	// A real response used tokens. An all-zero or empty record is what a locally
+	// built error entry carries, so it is not proof the provider answered.
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(m.Usage, &raw) != nil {
+		return false
+	}
+	var total int64
+	for _, k := range []string{"input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"} {
+		var n int64
+		if json.Unmarshal(raw[k], &n) == nil && n > 0 {
+			total += n
+		}
+	}
+	return total > 0
 }
 
 // entryText joins the text blocks of a message.

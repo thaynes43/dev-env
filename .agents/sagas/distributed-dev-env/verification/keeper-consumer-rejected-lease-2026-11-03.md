@@ -256,3 +256,9 @@ shows".
   newer generation has resolved until a later poll holds the lock.
 - I could not map "limits 1, 4, 5 and 9" of the review literally (that numbering was not in the message
   I received); every limit raised in the re-review is covered above.
+
+## Revision 6: second independent review (fix delta 159fc03)
+
+Fixed: `acceptedResponse` now requires a non-zero token count, so an unflagged error entry with a real model name and zero or empty usage is not proof of acceptance (new cases in the synthetic-entry table); the in-memory overlay stays visible when the applied receipt cannot be read (fail closed, RED before the fix).
+
+Known limitation, not fixed here: the receipt is written before the credentials. If the credentials write fails after a new receipt generation N+1 is written, a marker for N reads as older while the pod still holds N's rejected token, so `agent-run auth status` can show Ready for N+1 until the credentials sync succeeds. Also: a session view with no agent status resets the rc reason (state stays unknown, gates nothing); `beat()` reads the marker twice across CollectStatus and overlayRejection (single writer, not reachable today).

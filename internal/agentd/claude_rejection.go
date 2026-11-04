@@ -297,7 +297,7 @@ func (d *Daemon) overlayRejection(st *protocol.Status) {
 	}
 	now := d.now()
 	v := lookupRejection(d.S, now)
-	if v.kind != rejectionNone || v.applied == 0 || d.unpersisted.Generation != v.applied {
+	if v.kind != rejectionNone || (v.applied != 0 && d.unpersisted.Generation != v.applied) {
 		return
 	}
 	v.extra = d.unpersisted

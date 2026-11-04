@@ -1223,9 +1223,11 @@ func TestRejectionAcceptedReplyStartingWithAPIErrorIsNotARefusal(t *testing.T) {
 		}
 	})
 	for name, extra := range map[string][3]string{
-		"no flag, no model or usage": {"", "", ""},
-		"no flag, synthetic model":   {"", "<synthetic>", `{"input_tokens":0,"output_tokens":0}`},
-		"flagged, synthetic model":   {`,"isApiErrorMessage":true`, "<synthetic>", `{"input_tokens":0,"output_tokens":0}`},
+		"no flag, no model or usage":       {"", "", ""},
+		"no flag, synthetic model":         {"", "<synthetic>", `{"input_tokens":0,"output_tokens":0}`},
+		"flagged, synthetic model":         {`,"isApiErrorMessage":true`, "<synthetic>", `{"input_tokens":0,"output_tokens":0}`},
+		"no flag, real model, zero usage":  {"", "claude-sonnet-5-5", `{"input_tokens":0,"output_tokens":0}`},
+		"no flag, real model, empty usage": {"", "claude-sonnet-5-5", `{}`},
 	} {
 		t.Run("a synthetic API-error entry still records: "+name, func(t *testing.T) {
 			rr := newRejectionRig(t)
@@ -1376,6 +1378,20 @@ func TestRejectionInMemoryOverlayIsBoundToTheAppliedGeneration(t *testing.T) {
 			}
 		})
 	}
+	t.Run("an unreadable receipt keeps the in-memory rejection visible", func(t *testing.T) {
+		rr := revokedCase(t)
+		m, _ := rr.marker()
+		_ = os.Remove(rr.markerPath())
+		rr.d.unpersisted = &m
+		if err := os.Remove(rr.s.statePath("claude-access-generation.json")); err != nil {
+			t.Fatal(err)
+		}
+		st := protocol.Status{Agent: protocol.AgentState{State: protocol.AgentIdle}}
+		rr.d.overlayRejection(&st)
+		if !strings.HasPrefix(st.Agent.Error, "login-rejected:") {
+			t.Errorf("text %q; an unreadable receipt hid the rejection", st.Agent.Error)
+		}
+	})
 	t.Run("the applied generation still shows", func(t *testing.T) {
 		rr := revokedCase(t)
 		m, _ := rr.marker()
