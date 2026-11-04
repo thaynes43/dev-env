@@ -1,6 +1,9 @@
 package authority
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -58,22 +61,56 @@ var repoName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // Template is one dispatch template: what a session of it runs, fixed by the
 // template and never raised by the request. Its fields are the executor's
-// Template's, plus Modes.
+// Template's, plus Modes. The JSON names are TemplateDigest's encoding.
 type Template struct {
-	Agent, Model, Effort, Size, Profile string
+	Agent   string `json:"agent"`
+	Model   string `json:"model"`
+	Effort  string `json:"effort"`
+	Size    string `json:"size"`
+	Profile string `json:"profile"`
 	// Repos are the repositories the template allows.
-	Repos []string
+	Repos []string `json:"repos"`
 	// Modes are the ScheduledWork modes the template serves.
-	Modes []string
+	Modes []string `json:"modes"`
 	// MaxDuration bounds a headless task: set exactly when Modes has
 	// headless.
-	MaxDuration time.Duration
+	MaxDuration time.Duration `json:"maxDuration"`
 	// IdleSuspendAfter suspends an interactive session once idle this long;
 	// zero takes the executor's default. Set only when Modes has
 	// interactive.
-	IdleSuspendAfter time.Duration
+	IdleSuspendAfter time.Duration `json:"idleSuspendAfter"`
 	// Admits are the bases the template admits.
-	Admits []Basis
+	Admits []Basis `json:"admits"`
+}
+
+// TemplateDigest is the SHA-256, in lowercase hex, of every field of t: what
+// a human approval records of the template it was given under (DESIGN-054
+// "Dispatch templates"), so an edit of the template voids the approval as an
+// edit of the spec does. S5 records it and the wiring checks it; this
+// package only computes it.
+//
+// The bytes hashed are encoding/json's encoding of t after sorting its sets
+// (repos, modes, admits), keys in declaration order:
+//
+//	agent, model, effort, size, profile, repos (sorted), modes (sorted),
+//	maxDuration (integer nanoseconds), idleSuspendAfter (integer
+//	nanoseconds), admits (sorted)
+//
+// TestTemplateDigestGolden pins the bytes, and
+// TestTemplateDigestCoversEveryField fails on a field that is not hashed.
+func TemplateDigest(t Template) string {
+	sum := sha256.Sum256(templateDigestInput(t))
+	return hex.EncodeToString(sum[:])
+}
+
+func templateDigestInput(t Template) []byte {
+	c := t.clone()
+	slices.Sort(c.Repos)
+	slices.Sort(c.Modes)
+	slices.Sort(c.Admits)
+	// A template of strings, integers and string lists always marshals.
+	b, _ := json.Marshal(c)
+	return b
 }
 
 // AllowsMode reports whether the template serves ScheduledWork mode mode.

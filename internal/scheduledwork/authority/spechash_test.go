@@ -23,6 +23,11 @@ var (
 		"notAfter", "mode", "work.template", "work.repo", "work.prompt", "notify", "calendar",
 	}
 	excludedFields = []string{"editor", "cancelled"}
+	// setFields are the list fields that are sets: their order is not
+	// hashed. Every list field of the spec is listed here or in
+	// orderedFields.
+	setFields     = []string{"recurrence.byDay", "notify"}
+	orderedFields = []string{}
 )
 
 func goldenSpec() v1alpha1.ScheduledWorkSpec {
@@ -61,6 +66,30 @@ func TestSpecHashGolden(t *testing.T) {
 		if got := SpecHash(c.spec); got != c.want {
 			t.Errorf("%s: SpecHash = %s, want %s", name, got, c.want)
 		}
+	}
+}
+
+// pr903Fixture is the spec of TestSpecHash in #903's
+// internal/scheduledwork/dispatch_test.go (4700069), copied as it is.
+func pr903Fixture() v1alpha1.ScheduledWorkSpec {
+	return v1alpha1.ScheduledWorkSpec{
+		Title: "audit", Owner: "human/dev-env-system/tom", Editor: "human/dev-env-system/tom",
+		Due: "2030-06-03T14:00", TimeZone: "UTC", NotAfter: metav1.NewTime(time.Date(2030, 9, 1, 0, 0, 0, 0, time.UTC)),
+		Mode: v1alpha1.ScheduledWorkHeadless, Recurrence: &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderWeekly, ByDay: []string{"MO", "TH"}},
+		Work:   v1alpha1.ScheduledWorkOrder{Template: "ops-audit", Repo: "haynes-ops", Prompt: "p"},
+		Notify: []string{"pushover:default", "pushover:phone"},
+	}
+}
+
+// The hash #903's scheduledwork.SpecHash gives on #903's own fixture: #903
+// pins no golden value, so this one was computed by #903's function at
+// 4700069, extracted unchanged into a throwaway test. A drift of this copy from
+// #903's algorithm fails here. After #903 merges, SpecHash becomes an alias of
+// scheduledwork.SpecHash and this test guards the alias.
+func TestSpecHashPR903Golden(t *testing.T) {
+	const want = "f9f2d1185b848b8d8acb50553173415e0fd8b687c18f2cc0c4e2282b456ed788"
+	if got := SpecHash(pr903Fixture()); got != want {
+		t.Errorf("SpecHash(#903's fixture) = %s, want %s, the hash #903's scheduledwork.SpecHash gives", got, want)
 	}
 }
 
@@ -122,9 +151,9 @@ func leaves(t reflect.Type, prefix string, index []int) []leaf {
 	return out
 }
 
-// mutate changes the leaf at index of the struct v points to.
-func mutate(t *testing.T, v reflect.Value, l leaf) {
-	t.Helper()
+// field returns the leaf at index of the struct v points to, allocating
+// nil pointers on the way.
+func field(v reflect.Value, l leaf) reflect.Value {
 	for _, i := range l.index {
 		if v.Kind() == reflect.Pointer {
 			if v.IsNil() {
@@ -134,6 +163,13 @@ func mutate(t *testing.T, v reflect.Value, l leaf) {
 		}
 		v = v.Field(i)
 	}
+	return v
+}
+
+// mutate changes the leaf at index of the struct v points to.
+func mutate(t *testing.T, v reflect.Value, l leaf) {
+	t.Helper()
+	v = field(v, l)
 	later := metav1.NewTime(time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC))
 	switch {
 	case v.Type() == timeType:
@@ -177,6 +213,42 @@ func TestSpecHashCoversEveryField(t *testing.T) {
 			t.Errorf("%s is excluded, but an edit of it changed the hash", l.path)
 		case !excluded && !changed:
 			t.Errorf("an edit of %s kept the hash", l.path)
+		}
+	}
+}
+
+// A set field's order is not hashed: reversing each one alone keeps the hash.
+// Every list field is classified, so a new list field fails here until it is
+// declared a set or ordered.
+func TestSpecHashSetReorderInvariance(t *testing.T) {
+	var lists []string
+	probe := v1alpha1.ScheduledWorkSpec{}
+	for _, l := range leaves(reflect.TypeFor[v1alpha1.ScheduledWorkSpec](), "", nil) {
+		if field(reflect.ValueOf(&probe).Elem(), l).Kind() == reflect.Slice {
+			lists = append(lists, l.path)
+		}
+	}
+	if want := slices.Concat(setFields, orderedFields); !slices.Equal(slices.Sorted(slices.Values(lists)), slices.Sorted(slices.Values(want))) {
+		t.Fatalf("the spec's list fields are %v; setFields and orderedFields list %v", lists, want)
+	}
+	base := goldenSpec()
+	h := SpecHash(base)
+	for _, l := range leaves(reflect.TypeFor[v1alpha1.ScheduledWorkSpec](), "", nil) {
+		if !slices.Contains(setFields, l.path) {
+			continue
+		}
+		s := *base.DeepCopy()
+		v := field(reflect.ValueOf(&s).Elem(), l)
+		if v.Len() < 2 {
+			t.Fatalf("%s: the golden spec needs two values to reorder", l.path)
+		}
+		reversed := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		for i := range v.Len() {
+			reversed.Index(i).Set(v.Index(v.Len() - 1 - i))
+		}
+		v.Set(reversed)
+		if got := SpecHash(s); got != h {
+			t.Errorf("reversing %s changed the hash: %s, want %s", l.path, got, h)
 		}
 	}
 }

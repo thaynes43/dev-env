@@ -2,6 +2,7 @@ package authority
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,9 +44,16 @@ const (
 // session's liveness.
 const DefaultHeartbeatStaleAfter = 3 * time.Minute
 
-// The reasons Decide gives. A reason with no basis and no wait is a refusal
-// the executor parks with; ReasonOwnerUnproven, with Wait, keeps the
-// occurrence Pending within its grace.
+// liveAgentStatuses are the agent statuses that count as a running agent, as
+// the rescue notification's owner check reads them
+// (controller/rescue_notification.go): busy, idle and waiting. Every other
+// status, pending, login-required, the end statuses, none and any unknown
+// one, is not proof of a live agent.
+var liveAgentStatuses = []string{protocol.AgentBusy, protocol.AgentIdle, protocol.AgentWaiting}
+
+// The reasons Decide and Choose give. A reason with no basis and no wait is
+// a refusal the executor parks with; ReasonOwnerUnproven, with Wait, keeps
+// the occurrence Pending within its grace.
 const (
 	ReasonNoItem              = "no scheduled work"
 	ReasonOwnerInvalid        = "owner is not a valid principal"
@@ -60,6 +68,7 @@ const (
 	ReasonOwnerDeleting       = "owner session is being deleted"
 	ReasonOwnerSuspended      = "owner session is suspended"
 	ReasonOwnerEnded          = "owner session ended"
+	ReasonOwnerBootFailed     = "owner session's boot failed"
 	ReasonOwnerUnproven       = "owner liveness unproven"
 )
 
@@ -113,29 +122,35 @@ type OwnerState struct {
 	// Deleting is a deletion timestamp on the session.
 	Deleting bool
 	// OperatingMode and Phase are the session's spec.operatingMode and
-	// status.phase.
+	// status.phase. Phase Draining is a drain onto a new revision: neither
+	// live nor ended.
 	OperatingMode v1alpha1.OperatingMode
 	Phase         v1alpha1.SessionPhase
+	// AgentStatus is agentd's last agent status (status.agent.status). Only
+	// busy, idle and waiting count as live.
+	AgentStatus string
 	// LastHeartbeat is when the operator last accepted a heartbeat from the
 	// session's pod (status.agent.lastHeartbeat); zero is none.
 	LastHeartbeat time.Time
 	// Ended is DESIGN-054's session-end rule (scheduledwork.SessionEnded).
 	Ended bool
-	// Booting is a session whose agent cannot be proven running yet: agentd
-	// has made no report, its boot is not ready (agentd has reported its boot
-	// phase since plan 01), or the session has no pod or a pod being deleted.
+	// BootFailed is agentd's report of a failed boot that cannot recover in
+	// the same pod: an end for an owner session.
+	BootFailed bool
+	// Booting is a session whose current pod has not proven a running agent:
+	// agentd has made no report, its boot is not ready, its heartbeat is
+	// absent or older than the pod (a report of the previous pod), or the
+	// session has no pod or a pod being deleted.
 	Booting bool
-	// Draining is a drain onto a new revision in progress: neither live nor
-	// ended.
-	Draining bool
-	// AgentStopped is agentd's report that the agent exited, failed or was
-	// interrupted, which the session-end rule has not proven an end (a young
-	// pod): not ended, and not live either.
-	AgentStopped bool
 }
 
 // OwnerStateOf reads an OwnerState from the owner session s and its pod, both
 // read uncached at now: s nil is a session not found, pod nil is no pod.
+//
+// A failed boot ends a task or local owner, which agentd never starts again
+// in the same pod. A remote owner's failed boot is Booting instead: agentd's
+// poll starts a remote session's held agent again after a login window ends,
+// and then reports the boot ready (agentd recordAgentStep).
 func OwnerStateOf(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) OwnerState {
 	if s == nil {
 		return OwnerState{}
@@ -147,20 +162,20 @@ func OwnerStateOf(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) Owne
 		Deleting:      !s.DeletionTimestamp.IsZero(),
 		OperatingMode: s.Spec.OperatingMode,
 		Phase:         s.Status.Phase,
-		Draining:      s.Status.Phase == v1alpha1.PhaseDraining,
 	}
 	st.Ended, _ = scheduledwork.SessionEnded(s, pod, now)
 	a := s.Status.Agent
-	if a != nil && a.LastHeartbeat != nil {
+	if a == nil {
+		st.Booting = true
+		return st
+	}
+	st.AgentStatus = a.Status
+	if a.LastHeartbeat != nil {
 		st.LastHeartbeat = a.LastHeartbeat.Time
 	}
-	st.Booting = a == nil || a.Boot != protocol.BootReady || pod == nil || !pod.DeletionTimestamp.IsZero()
-	if a != nil {
-		switch a.Status {
-		case protocol.AgentExited, protocol.AgentFailed, protocol.AgentInterrupted:
-			st.AgentStopped = true
-		}
-	}
+	st.BootFailed = a.Boot == protocol.BootFailed && s.Spec.Mode != v1alpha1.ModeRemote
+	st.Booting = a.Boot != protocol.BootReady || pod == nil || !pod.DeletionTimestamp.IsZero() ||
+		a.LastHeartbeat == nil || a.LastHeartbeat.Time.Before(pod.CreationTimestamp.Time)
 	return st
 }
 
@@ -170,57 +185,55 @@ type SessionRef struct {
 	Name, UID string
 }
 
-// Decision is Decide's answer for one item at one time.
+// Decision holds both candidate bases of one item at one time, the owner's
+// standing basis and a human approval. Choose picks the one an occurrence
+// dispatches on, against the template's admitted bases.
 type Decision struct {
-	// Basis is the authority the occurrence may dispatch on, or BasisNone.
-	Basis Basis
-	// Owner is the live owner session, set exactly for BasisSession.
+	// Standing is the owner's standing basis, BasisHuman or BasisSession, or
+	// BasisNone.
+	Standing Basis
+	// Owner is the live owner session, set exactly when Standing is
+	// BasisSession.
 	Owner *SessionRef
-	// Wait is an owner session whose liveness is not proven now (booting,
-	// draining, a stale heartbeat). It never comes with a basis. The
-	// executor keeps the occurrence Pending within its grace, and parks it
-	// when grace ends or after the claim.
+	// Wait is a session owner who wrote the current spec but whose liveness
+	// is not proven now (booting, draining, an agent status that is not live,
+	// a stale heartbeat). It never comes with a standing basis.
 	Wait bool
-	// Reason says why there is no basis; empty with a basis.
-	Reason string
+	// StandingReason says why there is no standing basis.
+	StandingReason string
+	// Approved is a human approval of the current spec's hash that holds.
+	Approved bool
+	// ApprovalReason says why the item's approval does not hold; empty when
+	// it holds or the item has none.
+	ApprovalReason string
 }
 
-// Decide is DESIGN-054's authority basis of w at now, from what is true now
-// (R7): owner is the owner session as read at now, used only for a session
-// owner, and staleAfter bounds the age of its heartbeat. In order:
+// Decide is DESIGN-054's two candidate bases of w at now, from what is true
+// now (R7). owner is the owner session as read at now, used only for a
+// session owner, and staleAfter bounds the age of its heartbeat.
 //
-//  1. human approval: status.approval is by a human and its specHash is
-//     SpecHash of the current spec. The owner's class is not checked, because
-//     a human approved this exact spec; that is how client and coordinator
-//     owners run. It comes first, so a matching approval holds whatever the
-//     owner's state.
-//  2. a client or coordinator owner has no standing basis: it needs
-//     approval.
-//  3. a standing basis holds only while spec.editor is the owner.
-//  4. human owner: BasisHuman.
-//  5. live session owner: the session read is the owner's (name and UID), not
-//     being deleted, not suspended, not ended by the session-end rule, and
-//     proven live: not draining or booting, no stopped agent, operating mode
-//     Running, phase Running or Idle, and a heartbeat no older than
-//     staleAfter and not later than now. Proven live is BasisSession.
-//     Draining, booting, a stopped agent not proven ended, another operating
-//     mode or phase that is not an end, or a missing, stale or future
-//     heartbeat is Wait, with ReasonOwnerUnproven.
+// The approval holds when status.approval is by a human and its specHash is
+// SpecHash of the current spec. The owner's class is not checked, because a
+// human approved this exact spec; that is how client and coordinator owners
+// run.
 //
-// Without a basis, Reason is the standing basis's refusal, and an approval
-// that does not hold adds its own reason after "; ".
+// The standing basis, in order:
+//  1. a client or coordinator owner has none: it needs approval;
+//  2. it holds only while spec.editor is the owner;
+//  3. a human owner is BasisHuman;
+//  4. a session owner is BasisSession when the session read is the owner's
+//     (name and UID), not being deleted, suspended, ended by the session-end
+//     rule or failed at boot, and is proven live: not draining or booting,
+//     an agent status of busy, idle or waiting, operating mode Running,
+//     phase Running or Idle, and a heartbeat no older than staleAfter and not
+//     later than now. A session that has not ended but is not proven live is
+//     Wait, with ReasonOwnerUnproven.
 func Decide(w *v1alpha1.ScheduledWork, owner OwnerState, now time.Time, staleAfter time.Duration) Decision {
 	if w == nil {
-		return Decision{Reason: ReasonNoItem}
-	}
-	holds, refusal := approval(w)
-	if holds {
-		return Decision{Basis: BasisApproved}
+		return Decision{StandingReason: ReasonNoItem}
 	}
 	d := standing(w, owner, now, staleAfter)
-	if d.Basis == BasisNone && refusal != "" {
-		d.Reason += "; " + refusal
-	}
+	d.Approved, d.ApprovalReason = approval(w)
 	return d
 }
 
@@ -249,32 +262,35 @@ func isHuman(by string) bool {
 func standing(w *v1alpha1.ScheduledWork, owner OwnerState, now time.Time, staleAfter time.Duration) Decision {
 	p, err := ParsePrincipal(w.Spec.Owner)
 	if err != nil {
-		return Decision{Reason: ReasonOwnerInvalid}
+		return Decision{StandingReason: ReasonOwnerInvalid}
 	}
 	switch p.Class {
 	case ClassClient:
-		return Decision{Reason: ReasonClientNeedsApproval}
+		return Decision{StandingReason: ReasonClientNeedsApproval}
 	case ClassCoordinator:
-		return Decision{Reason: ReasonCoordNeedsApproval}
+		return Decision{StandingReason: ReasonCoordNeedsApproval}
 	}
 	if w.Spec.Editor != w.Spec.Owner {
-		return Decision{Reason: ReasonEditorNotOwner}
+		return Decision{StandingReason: ReasonEditorNotOwner}
 	}
 	if p.Class == ClassHuman {
-		return Decision{Basis: BasisHuman}
+		return Decision{Standing: BasisHuman}
 	}
 	if why := ownerEnded(p, owner); why != "" {
-		return Decision{Reason: why}
+		return Decision{StandingReason: why}
 	}
 	if why := unproven(owner, now, staleAfter); why != "" {
-		return Decision{Wait: true, Reason: ReasonOwnerUnproven + ": " + why}
+		return Decision{Wait: true, StandingReason: ReasonOwnerUnproven + ": " + why}
 	}
-	return Decision{Basis: BasisSession, Owner: &SessionRef{Name: p.Name, UID: p.UID}}
+	return Decision{Standing: BasisSession, Owner: &SessionRef{Name: p.Name, UID: p.UID}}
 }
 
-// ownerEnded is the refusal, or "", for an owner session that is not the owner's, or
-// that will not come back: absent, recreated, being deleted, suspended or
-// ended. A suspended or ended session's authority does not outlive it.
+// ownerEnded is the refusal, or "", for an owner session that is not the
+// owner's or has no basis now: absent, recreated (another UID is another
+// owner), being deleted, suspended, ended or failed at boot. A suspended
+// owner has no basis while it is suspended. Its authority was not revoked:
+// once it is resumed with the same UID and proven live, it has its basis
+// again.
 func ownerEnded(p Principal, o OwnerState) string {
 	switch {
 	case !o.Found:
@@ -292,8 +308,11 @@ func ownerEnded(p Principal, o OwnerState) string {
 	case v1alpha1.PhaseSuspended, v1alpha1.PhaseArchived, v1alpha1.PhaseFailed:
 		return fmt.Sprintf("%s (phase %s)", ReasonOwnerEnded, o.Phase)
 	}
-	if o.Ended {
+	switch {
+	case o.Ended:
 		return ReasonOwnerEnded
+	case o.BootFailed:
+		return ReasonOwnerBootFailed
 	}
 	return ""
 }
@@ -301,12 +320,12 @@ func ownerEnded(p Principal, o OwnerState) string {
 // unproven is why a session that has not ended is not proven live, or "".
 func unproven(o OwnerState, now time.Time, staleAfter time.Duration) string {
 	switch {
-	case o.Draining || o.Phase == v1alpha1.PhaseDraining:
+	case o.Phase == v1alpha1.PhaseDraining:
 		return "draining"
 	case o.Booting:
 		return "booting"
-	case o.AgentStopped:
-		return "the agent is not running"
+	case !slices.Contains(liveAgentStatuses, o.AgentStatus):
+		return fmt.Sprintf("agent status %q is not busy, idle or waiting", o.AgentStatus)
 	case o.OperatingMode != v1alpha1.OperatingModeRunning:
 		return fmt.Sprintf("operating mode %q is not Running", o.OperatingMode)
 	case o.Phase != v1alpha1.PhaseRunning && o.Phase != v1alpha1.PhaseIdle:
@@ -321,4 +340,63 @@ func unproven(o OwnerState, now time.Time, staleAfter time.Duration) string {
 		return fmt.Sprintf("heartbeat older than %s", staleAfter)
 	}
 	return ""
+}
+
+// Choice is the one basis an occurrence dispatches on under one template.
+type Choice struct {
+	// Basis is the chosen basis, or BasisNone.
+	Basis Basis
+	// Owner is the live owner session, set exactly for BasisSession.
+	Owner *SessionRef
+	// Wait keeps the occurrence Pending within its grace: the owner's
+	// liveness is unproven, the template admits session work, and no admitted
+	// approval holds. It never comes with a basis.
+	Wait bool
+	// Reason says why there is no basis; empty with a basis.
+	Reason string
+}
+
+// Choose picks d's basis under a template that admits admits. The standing
+// basis comes first when it holds and the template admits it, because it is
+// the narrower one: a session owner's child stays within the owner's own
+// limits, where an approval dispatches as the fixed client. Otherwise a
+// holding approval is chosen when the template admits approved work.
+// Otherwise there is no basis, with the reasons joined by "; ", and Wait when
+// the standing basis is unproven and the template admits session work.
+func Choose(d Decision, admits []Basis) Choice {
+	admitted := func(b Basis) bool { return b != BasisNone && slices.Contains(admits, b) }
+	if admitted(d.Standing) {
+		c := Choice{Basis: d.Standing}
+		if d.Standing == BasisSession && d.Owner != nil {
+			ref := *d.Owner
+			c.Owner = &ref
+		}
+		return c
+	}
+	if d.Approved && admitted(BasisApproved) {
+		return Choice{Basis: BasisApproved}
+	}
+	var reasons []string
+	wait := false
+	switch {
+	case d.Standing != BasisNone:
+		reasons = append(reasons, fmt.Sprintf("the template does not admit %s work", d.Standing))
+	case d.Wait && !admitted(BasisSession):
+		reasons = append(reasons, "the template does not admit session work")
+	case d.Wait:
+		wait = true
+		reasons = append(reasons, d.StandingReason)
+	case d.StandingReason != "":
+		reasons = append(reasons, d.StandingReason)
+	}
+	switch {
+	case d.Approved:
+		reasons = append(reasons, "the template does not admit approved work")
+	case d.ApprovalReason != "":
+		reasons = append(reasons, d.ApprovalReason)
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "no basis")
+	}
+	return Choice{Wait: wait, Reason: strings.Join(reasons, "; ")}
 }

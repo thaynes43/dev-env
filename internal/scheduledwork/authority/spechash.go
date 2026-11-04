@@ -33,7 +33,11 @@ import (
 //
 // It is byte-for-byte the algorithm of scheduledwork.SpecHash in S3b1 (PR
 // #903), which the executor uses for an occurrence's specHash; the two must
-// agree, or a human approval could never match a claim.
+// agree, or a human approval could never match a claim. TestSpecHashPR903Golden
+// pins the hash #903's function gives on #903's own fixture, so drift fails
+// here. After #903 merges, this copy becomes an alias of
+// scheduledwork.SpecHash (this package may import scheduledwork; scheduledwork
+// must not import this package).
 func SpecHash(spec v1alpha1.ScheduledWorkSpec) string {
 	sum := sha256.Sum256(specHashInput(spec))
 	return hex.EncodeToString(sum[:])
