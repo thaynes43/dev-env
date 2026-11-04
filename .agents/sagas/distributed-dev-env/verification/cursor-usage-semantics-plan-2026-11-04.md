@@ -6,14 +6,16 @@ collect. It adds no credential, private route or provider call.
 ## Problem
 
 Cursor is refused by the built-in terminal reader at one unqualified glyph in U+26A0 to U+26BF
-(cycles 163 to 168, `builtin_terminal_miscwin6_unqualified`). PR #910 split that window into four
+(`builtin_terminal_miscwin6_unqualified`; operator log diagnostic lines for cycles 163 to 168). PR #910 split that window into four
 8-code-point labels (`miscwin6a` to `miscwin6d`); no cycle has read them yet. The collector window
-ended 2026-11-04T15:33:23Z. Nothing below changes that refusal.
+ended 2026-11-04T15:33:23Z; that and the cycle-168 final state are recorded in the
+COLLECTOR-EXPIRY-VERIFICATION artifacts in the OP323 session's private handoff directory (not in the
+repo). Nothing below changes that refusal.
 
 ## What the public comparison gives
 
 Source: the coordinator's research file `OPENUSAGE-CODEXBAR-RESEARCH.json` (openusage `629f1740`,
-CodexBar `897bff31`; MIT). Both call Cursor HTTP routes with a token and never read a terminal, so
+CodexBar `897bff31`; MIT), which lives in the coordinator's private handoff directory, not in the repo. Both call Cursor HTTP routes with a token and never read a terminal, so
 neither explains the glyph. They give field semantics only, and every fixture is synthetic.
 
 ## Choice: a plan, not an implementation
@@ -42,18 +44,36 @@ A narrow implementation has no defensible input today:
   research file lists the options (terminal readers only, a new solely owned login, accept
   Unknown for Grok). Not decided here.
 
-## Steps that are feasible now (source only)
+## Existing Sand machinery (already in the repo)
+
+`internal/providerallowance/cursor_display.go` already separates a direct xAI/Grok reading from the
+Cursor pool: route `xai_direct` with `CursorDisplayXAICapability` (line 23), the `finishXAI` rules
+(lines 565 to 576: product `grok`, availability `unsupported`, no plan, account, window, used, reset
+or spend), and the registry extension that must be caller-trusted before such measures validate
+(line 72). So a Sand reading is not a new measure in the plan capture; it would be its own item.
+
+Account binding, reconciled: the plan capture binds by hashed email (`accountRef`), while `xai_direct`
+requires binding `Unknown` and no `accountRef` (`finishXAI`). A Sand item therefore cannot claim the
+Cursor account by identity. Their link is co-collection in one cycle only, never a shared binding, and
+the pool relationship stays Unknown until E2 or E3 provide evidence. Nothing here weakens that rule.
+
+## Steps (source only; 1 and 2 are gated, 3 to 6 are feasible now)
 
 1. Qualification harness: a table test that, given the part label from E1, asserts the exact glyph
    is accepted only in the exact context where the display places it, refuses every other member
    of the part, and keeps all other classes unchanged. Written after E1, never from a guess.
-2. Sand as a separate measure, only if E2 shows the line: a distinct measure id, never folded into
-   the plan percent; `Unknown` for absent, pooled-enterprise and zero-limit states; the trial
-   expiry is not a recurring reset; no per-model Grok semantics are assumed.
+2. Gated on E2. Sand as a separate `xai_direct` item, never folded into the plan percent; `Unknown`
+   for absent, pooled-enterprise and zero-limit states; a displayed 0% is display evidence but not a
+   known quota observation, the same rule as `cursor_cli_capture.go:59-65`; the trial expiry is not a
+   recurring reset; no per-model Grok semantics are assumed.
 3. Reset arithmetic: use the display's month/day only as a label (as today). Epoch arithmetic
    (`reset = end`, `period = end - start`) applies only to a source that exposes both ends.
-4. Closed errors: keep the existing closed diagnostic vocabulary. An optional line missing never
-   fails the primary read; a present but malformed line refuses with a closed code.
+4. Closed errors: keep the existing closed diagnostic vocabulary. Today the parser ignores any row
+   other than Included, Auto and API (`cursor_protocol.go:136-156`), so an extra Sand row neither
+   fails nor enters the capture. A future Sand parser must decide separately whether a malformed
+   Sand row refuses; that is not assumed here.
+   Pinned now by `TestCursorProtocolIgnoresRowsOtherThanIncludedAutoAndAPI` (RED against a mutation
+   that refuses any extra `% used` row).
 5. Privacy floors: no rune, count, text or hash in logs; labels no finer than 8 code points; no
    raw response excerpt in an error (the public code embeds 200 characters; do not copy that).
 
