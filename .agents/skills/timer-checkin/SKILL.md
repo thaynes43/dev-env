@@ -247,7 +247,10 @@ Quiet time, failed attempts, a full context window and a 7-day expiry never end
 the timer. They trigger the stall rule in supervised-dispatch section 5, and the
 job is re-armed or re-created. Waiting for an event a check can observe, such as
 a natural keeper refresh, is pending, not blocked: keep the timer and report it
-pending. When the work ends or pauses:
+pending. A handoff paused for a pending prompt decision
+([tmux-cli-handoff](../tmux-cli-handoff/SKILL.md), step 4) is pending in the
+same way: keep the timer if one exists, and never create one for it. When the
+work ends or pauses:
 
 1. `CronDelete` the job (or `ScheduleWakeup` with `stop: true`), then `CronList`
    to confirm it is gone. Do not keep polling during a pause.

@@ -26,7 +26,9 @@ classes and closed errors from the skill's step 1 table.
 Field notes:
 
 - `state`: `blocked` ends the handoff and its timer; `paused` (a prompt awaiting
-  a requested approval) keeps both, and resumes with a fresh `inspect`.
+  a decision or its permitted presser) keeps the handoff and its timer, if one
+  exists, and resumes with re-checked custody and route and a fresh read of the
+  pane.
 
 - `staged`: where the correction waits, and who can read it there.
 - `unknown`: checks that could not run, for example host checks after
@@ -36,5 +38,7 @@ Field notes:
 - `decisionNeeded`: what would clear each blocker and who decides. For
   `no-live-session`, an explicit single-writer successor or a verified follow-up
   interface, after evidence that the author ended or released custody. For
-  `modal-pending`, the specific approval of the access-decision owner (Tom,
-  unless a recorded rule delegates it) for exactly that answer and path.
+  `modal-pending`, the decider (for a trust or permission prompt, Tom unless a
+  recorded rule delegates it; for a command approval, the custodian or its
+  supervisor) and the permitted presser (Tom or the pane's recorded owner,
+  never an agent's raw tmux keys).
