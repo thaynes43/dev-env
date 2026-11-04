@@ -184,6 +184,14 @@ work order says so.
   work. The keeper has no Google egress. The real adapter needs the identity, the
   calendar ID, the ExternalSecret and the egress listed in DESIGN-032, each approved
   by Tom. Until then calendar targets are `skipped`, reason `calendar: unconfigured`.
+- **Ruling, 2026-11-04 (Tom, phone prompt from `dev-env-1104-010332`):** the
+  identity is a **DWD service account**, limited to the `calendar.events` scope and
+  impersonating admin@haynesnetwork.com. Tom creates it in the haynesnetwork.com
+  Workspace admin console and stores the key in 1Password. The agent then wires the
+  ExternalSecret `dev-env-keeper-calendar` and the keeper's egress to
+  `oauth2.googleapis.com` and `www.googleapis.com` through a reviewed haynes-ops
+  PR. There is no refresh token, so no single-owner rotation risk. This chooses the
+  method only. Creating the account and its first live write are still Tom's steps.
 
 ## API and CLI
 
