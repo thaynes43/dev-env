@@ -190,6 +190,9 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 		return nil, err
 	}
 	templatesImage := agentImage(pod)
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && (s.Spec.CoordinatorInstructions || s.Spec.CoordinatorInstructionPublisher) {
+		return nil, sessionInvalidError{errScheduledInstructions}
+	}
 	// Legacy selectors retain their precedence on overlap; startup flags refuse
 	// equal parent/key tuples where applicable. Task and remote selectors are
 	// disjoint by mode. Explicit instruction enrollment instead refuses an
@@ -216,6 +219,12 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	}
 	return pod, nil
 }
+
+// errScheduledInstructions refuses a scheduled-work session that asks for
+// coordinator instructions: it runs on the templates image, so it could not
+// receive them. The API refuses it at create and the reconciler fails it before
+// any launch, so nothing is lost silently.
+var errScheduledInstructions = errors.New("a scheduled-work session runs on the templates image and takes no coordinator instructions")
 
 // agentImage is the image of the pod's agent container, or "" without one.
 func agentImage(pod *corev1.Pod) string {
@@ -708,7 +717,7 @@ func CheckAgentdSession(s *v1alpha1.AgentSession) error {
 		return err
 	}
 	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && (s.Spec.CoordinatorInstructions || s.Spec.CoordinatorInstructionPublisher) {
-		return errors.New("a scheduled-work session runs on the templates image and takes no coordinator instructions")
+		return errScheduledInstructions
 	}
 	_, err := startDeadlineEnv(s, false)
 	return err

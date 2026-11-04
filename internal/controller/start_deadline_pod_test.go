@@ -174,11 +174,6 @@ func TestAScheduledSessionKeepsTheTemplatesImage(t *testing.T) {
 	}{
 		"pilot":      {&Reconciler{APIURL: "https://api", PilotAgent: pilotTestAgent()}, pilotTestSession},
 		"task pilot": {&Reconciler{APIURL: "https://api", ManagedCodexTasks: true, TaskPilotAgent: pilotTestAgent()}, func() *v1alpha1.AgentSession { return taskPilotSession(t) }},
-		"instruction receiver": {&Reconciler{APIURL: "https://api", CoordinatorInstructionAgentImage: instructionImage}, func() *v1alpha1.AgentSession {
-			s := ordinaryOptInSession(t)
-			s.Spec.CoordinatorInstructions = true
-			return s
-		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if pod, err := c.r.sessionPod(c.session(), tmpl); err != nil || pod.Spec.Containers[0].Image == tmpl.Image {
@@ -194,10 +189,18 @@ func TestAScheduledSessionKeepsTheTemplatesImage(t *testing.T) {
 			}
 		})
 	}
-	s := scheduledSession(ordinaryOptInSession(t), deadline)
-	s.Spec.CoordinatorInstructions = true
-	if err := CheckAgentdSession(s); err == nil || !strings.Contains(err.Error(), "no coordinator instructions") {
-		t.Fatalf("the API precheck took a scheduled session with coordinator instructions: %v", err)
+	for _, publisher := range []bool{false, true} {
+		s := scheduledSession(ordinaryOptInSession(t), deadline)
+		s.Spec.CoordinatorInstructions, s.Spec.CoordinatorInstructionPublisher = !publisher, publisher
+		if err := CheckAgentdSession(s); err == nil || !strings.Contains(err.Error(), "no coordinator instructions") {
+			t.Fatalf("the API precheck took a scheduled session with coordinator instructions (publisher %v): %v", publisher, err)
+		}
+		// A creator that skips the API precheck is refused by the reconciler,
+		// before any launch, as invalid.
+		r := &Reconciler{APIURL: "https://api", CoordinatorInstructionAgentImage: instructionImage}
+		if pod, err := r.sessionPod(s, tmpl); err == nil || pod != nil || !errors.As(err, new(sessionInvalidError)) {
+			t.Fatalf("the reconciler built a scheduled session with coordinator instructions (publisher %v): pod %v, %v", publisher, pod != nil, err)
+		}
 	}
 	// Not selected: the scheduled session builds on the templates image.
 	other := scheduledSession(pilotTestSession(), deadline)
