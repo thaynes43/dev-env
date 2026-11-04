@@ -80,7 +80,9 @@ Send the findings to the same coding owner as a correction. Continue that subage
 with `SendMessage`, so it keeps its context. Do not fix it yourself and do not add
 a second writer. The owner adds a test for each finding (RED, then GREEN), commits
 and reports the new head. QA then re-reviews that exact new head: the delta and
-every earlier finding. Repeat until no finding is open.
+every earlier finding. Repeat until no finding is open. Failed tests and
+repeated findings are the loop working, not a reason to stop; supervised-dispatch,
+section 5, says what to do when the same failure keeps coming back.
 
 Example: #903, the scheduled-work executor core, went through six adversarial
 native review rounds this way. Each round's findings went back to its one coding
@@ -101,8 +103,17 @@ RESULT file is a claim to check, not proof.
 3. Read the advisory Claude review for that head. It is optional; if it did not
    run, record it as unavailable. Fix each finding, or answer it on the PR with a
    concrete reason.
-4. Squash-merge with `gh pr merge N --squash --match-head-commit <sha>`, unless the
-   work order holds the PR as a draft or a runtime hold applies. Record an
-   unmerged PR in the handoff.
+4. Satisfy every approval and hold that applies to this merge. If the action
+   requires a human approval at action time, such as Tom's own approval of this
+   PR, get it before merging. If an existing publication hold covers the change,
+   it must be released by its actual required approval. A draft state or a
+   runtime hold does not stand in for either one. Where standing authority covers
+   the merge (CLAUDE.md: agents squash-merge their own green PRs within the
+   story's scope), no extra approval is needed; do not invent one.
+5. Squash-merge with `gh pr merge N --squash --match-head-commit <sha>`. If the
+   work order keeps the PR a draft, or a runtime hold applies, do not merge;
+   record the unmerged PR and the reason in the handoff.
 
 Record merge, publication, deployment and usable acceptance as separate facts.
+
+Behavior scenario for an evaluator: [scenarios/three-failed-tests.md](scenarios/three-failed-tests.md).

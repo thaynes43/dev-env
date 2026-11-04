@@ -1,6 +1,6 @@
 ---
 name: supervised-dispatch
-description: Hand long-running work to a coordinator and supervise it live until a proved outcome, a cancellation or an exact blocker. Use when the work needs more than one session turn, needs workers, or must keep going while you steer. Skip for a lookup, a single bounded edit you can finish yourself, or any task you cannot give an acceptance check.
+description: Hand long-running work to a coordinator and supervise it live until a proved outcome, a genuine cancellation, an exhausted authorized budget or a permission or input barrier. Use when the work needs more than one session turn, needs workers, or must keep going while you steer. Skip for a lookup, a single bounded edit you can finish yourself, or any task you cannot give an acceptance check.
 ---
 
 # Supervised dispatch
@@ -31,6 +31,8 @@ Write down:
   or usable. Keep those four states apart.
 - **Boundaries.** Repositories, worktrees, files and runtime resources the
   coordinator may change. Everything else is out of scope.
+- **Budget.** The authorized elapsed time, usage or cost cap, and concurrency,
+  as recorded on the story. Record an unknown amount as unknown.
 - **Holds and stops.** Every hold that applies, and the stop rules in section 5.
 
 If you cannot name a check that fails today and passes when the work is done, the
@@ -98,22 +100,48 @@ At every check-in (see [timer-checkin](../timer-checkin/SKILL.md)):
    while a question prompt is open; otherwise use `agent-run inbox`. Record each
    correction and the evidence that prompted it.
 
-The work does not stop until one of these is true:
+The work stops only on one of these, each backed by specific evidence:
 
 - **A proved outcome.** Every acceptance check passes, with evidence checked by
   someone other than the agent that did the work.
-- **A cancellation.** Tom, or his verified coordinator, cancels. Record who and when.
-- **An exact blocker.** A named, evidenced condition that stops the next step: a
-  denial, a missing approval, a hold, a prerequisite that is not ready, the
-  recorded budget or context threshold, or 60 minutes without progress or three
-  failed attempts at the same blocker.
+- **A genuine cancellation.** Tom, or his verified coordinator, cancels this
+  work. Record who, when and through which channel. Check a relayed or quoted
+  "stop" against its actual source first.
+- **An exhausted authorized budget.** The budget recorded for the story is
+  actually spent, read from its record. A feared or estimated overrun is not
+  exhaustion.
+- **A permission or input barrier.** A denial, a missing required approval, a
+  hold, or an input only someone else can supply. Record the evidence: the exact
+  denial, the hold's record, the missing artifact. Never bypass it.
+
+These four are the only stop reasons; the last two are the exact blockers.
+Nothing else ends the work.
+
+**Time, attempts and context size are signals, not stop reasons.** Sixty quiet
+minutes, three failed attempts or tests, or a filling context window each trigger
+the same response while authorized repair remains:
+
+1. **Diagnose.** Read the evidence and find out why there is no progress.
+2. **Steer.** Send a correction that changes the approach. Never repeat the same
+   failed attempt; the stall and three-failure default in the
+   [workflow guide](../../../docs/workflow-guide.md), section 9, forbids that and
+   its counters carry across agents and methods. If that default calls for an
+   owner question, ask it and keep the rest of the loop running.
+3. **Checkpoint.** Update the status record and the tracker.
+4. **Keep continuity.** When a worker's context is full or its session is gone,
+   start a fresh worker from the handoff: branch, head, open findings, next step.
+   Keep the timer armed.
+
+If no authorized repair remains, name what prevents it, with its evidence. That
+barrier or that exhausted budget is the stop reason, not the elapsed time or the
+count.
 
 "Waiting", "looks done", "the worker said so", a finished turn and an expired
-timer are not stop reasons. At an exact blocker, save a checkpoint with the next
-safe step, end only the work that depends on it, and keep doing independent
-authorized work. A hold gates only its own action. Do not route around a denial.
-Running agent sessions are sacred. Ask Tom real decisions one at a time with
-AskUserQuestion, at the moment they arise.
+timer are not stop reasons either. At an exact blocker, save a checkpoint with
+the next safe step, end only the work that depends on it, and keep doing
+independent authorized work. A hold gates only its own action. Do not route
+around a denial. Running agent sessions are sacred. Ask Tom real decisions one at
+a time with AskUserQuestion, at the moment they arise.
 
 ## 6. Close
 
@@ -121,3 +149,5 @@ Check the outcome yourself against every acceptance check. Then complete the
 tracker item with its evidence (`opwork complete --evidence`), write the final
 status record with the stop reason, delete the timer, and report. A report says
 what was proved, how, and what is still open with its reason.
+
+Behavior scenario for an evaluator: [scenarios/permission-barrier.md](scenarios/permission-barrier.md).
