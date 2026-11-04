@@ -2133,11 +2133,11 @@ question or a permission prompt waits for a person, so stopping it then cuts
 the turn and drops the pending question. The drain moment is therefore the
 agent reporting `idle` with no attached client, for every session type that
 drains. The fresh session read before the proof write and before the stop
-checks it again. A heartbeat stored before the stop is recorded (the
-`Stopped` write) that reports the agent waiting, busy or attached therefore
-stops nothing: the pending `Draining` mark is cancelled and the pod stays. Two
-windows remain. A heartbeat stored after the `Stopped` write and before the
-stop exec is not seen; that is milliseconds. And the check is only as fresh as
+checks it again. If the last heartbeat stored before the stop is recorded
+(the `Stopped` write) shows the agent waiting or busy, or a client attached,
+the agent is not stopped: the pending `Draining` mark is cancelled and the pod
+stays. Two windows remain. A heartbeat stored after the `Stopped` write and
+before the stop exec is not seen; that is milliseconds. And the check is only as fresh as
 the stored heartbeat, which agentd posts every 60 s: the dry-run reads the
 live attach count but not Claude's live status, so an agent that starts a turn
 and asks a question after its last heartbeat and before the stop is still
