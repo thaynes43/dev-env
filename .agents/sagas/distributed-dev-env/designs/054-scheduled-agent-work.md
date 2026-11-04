@@ -273,14 +273,25 @@ stateDiagram-v2
   The launch gate refuses a session that an occurrence with the mark does not
   name. A gate read after the mark refuses. A gate read before it means the
   create came before the leader's read after the mark, so the leader adopts
-  the session. A session found after the mark that was refused before its
-  launch (Failed with no agent report) never ran. The occurrence then ends with
+  the session. A session found after the mark may have been refused before
+  its launch. That needs positive evidence: phase Failed, the PodReady
+  condition's reason `SessionInvalid`, and no pod recorded. Missing telemetry
+  alone is not evidence. Such a session never ran, so the occurrence ends with
   the mark's reason (Skipped or Cancelled) and names that session, whether the
-  executor finds it or the releaser records it first. After writing the mark or
-  `sessionUID`, the executor checks the stored object the API server returns.
-  If the field is missing (an older CRD prunes it), it counts
-  `dev_env_scheduled_work_schema_missing_total` and stops that item's pass,
-  rather than looping on the write.
+  executor finds it or the releaser records it first. This applies only while
+  the occurrence is not yet Dispatched; otherwise the outcome is the normal one.
+- **Schema preflight.** An older CRD would silently prune `ending` and
+  `sessionUID`: the two-phase end would become one phase, and the session UID
+  would be lost. The client decodes a write's answer into its own copy in
+  place, so that copy cannot show the pruning. So, before any work in a pass,
+  the executor reads the ScheduledWork CRD uncached. It reads the metadata each
+  pass, and the full object when the CRD's resourceVersion changes or every 5
+  minutes. It requires the served v1alpha1 status schema to carry both fields.
+  Without them it does nothing at all, counts the pass in
+  `dev_env_scheduled_work_schema_missing_total` and logs once. After each mark
+  or UID write, it also reads the item back into a fresh object and stops the
+  item's pass, with a count, if the field is not there. S6's ClusterRole `get`
+  on the CRD object covers the executor too.
 - **Launch gate.** Before the first pod of a session that carries the
   scheduled-work label (its volume does not exist yet), the reconciler reads the
   ScheduledWork uncached. It refuses the session as invalid (`SessionInvalid`:
