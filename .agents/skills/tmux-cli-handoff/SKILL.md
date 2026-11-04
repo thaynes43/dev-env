@@ -268,23 +268,27 @@ Handle it like this:
 4. **If the decider declines** (for example Tom chooses `[q]`, which quits the
    CLI): press nothing, record the refusal with state `blocked` (closed error
    `modal-declined`), and leave the successor question to your parent.
-5. **Resume** after the press is recorded. First re-check custody, a second
-   writer (step 3) and the route (step 1); the recorded, approved press is not
-   "someone else typing". Any blocker other than the pending decision makes the
-   state `blocked`, not `paused`. Then read the pane again: `inspect` for a
-   helper-started session, or the visible screen only
-   (`tmux capture-pane -p -t <pane-id>`) for a plain-tmux pane such as a Codex
-   CLI. Nothing carries over from earlier reads or receipts.
+5. **Resume** after the press is recorded. If the timer was deleted while the
+   decision was pending, re-create it from the state file now if the work still
+   needs one. First re-check custody, a second writer (step 3) and the route
+   (step 1); the recorded, approved press is not "someone else typing". Any
+   blocker other than the pending decision makes the state `blocked`, not
+   `paused`. Then read the pane again: `inspect` for a helper-started session,
+   or the visible screen only (`tmux capture-pane -p -t <pane-id>`) for a
+   plain-tmux pane such as a Codex CLI. Nothing carries over from earlier reads
+   or receipts.
 6. **Send** only by the session's route in this step, after that read shows a
    normal empty prompt: through `reply` for a helper-started session, or the
    literal send-keys line of route 3 for a plain-tmux pane. If the read still
    shows the prompt (old text can stay in the helper's capture window), do not
    override it: send no keys at all (route 3 included), no `--observed-ready`,
-   nothing to clear the screen. Read once more at the next check-in of the
-   timer, or, with no timer, at the next coordinator check-in or work-order
-   read. If it still shows the prompt, record `modal-unknown` together with the
-   helper's own label (for example `modal-trust`) as evidence, set the state to
-   `blocked`, and stop.
+   nothing to clear the screen. This re-read comes only after the press is
+   recorded, so no decision is pending any more and step 2's no-timer rule no
+   longer applies. Read once more at the next check-in of a timer that the
+   resume re-created from the state file, or, with no timer, at the next
+   coordinator check-in or work-order read. If it still shows the prompt,
+   record `modal-unknown` together with the helper's own label (for example
+   `modal-trust`) as evidence, set the state to `blocked`, and stop.
 
 ## 5. Prove consumption
 
