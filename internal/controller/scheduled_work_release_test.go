@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -181,9 +183,13 @@ func waitReleased(t *testing.T, name string) {
 	})
 }
 
-// holdsFinalizer checks, for d, that the session still carries the finalizer.
-func holdsFinalizer(t *testing.T, name string, d time.Duration) {
+// holdsFinalizer waits until ran shows that the releaser judged the session
+// and held it, then checks, for d, that the session still carries the
+// finalizer. ran is the positive signal that keeps the check from passing
+// only because the releaser never looked.
+func holdsFinalizer(t *testing.T, name string, d time.Duration, ran func() error) {
 	t.Helper()
+	eventually(t, "the releaser judges "+name+" and holds it", ran)
 	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
 		s := session(t, name)
 		if !controllerutil.ContainsFinalizer(s, v1alpha1.ScheduledWorkFinalizer) {
@@ -194,6 +200,63 @@ func holdsFinalizer(t *testing.T, name string, d time.Duration) {
 
 func withBlockedCounter(c *prometheus.CounterVec) func(*Reconciler) {
 	return func(r *Reconciler) { r.ScheduledWorkReleaseHolds = c }
+}
+
+// counted is holdsFinalizer's signal for a hold the releaser counts: the
+// counter's reason has risen above zero.
+func counted(c *prometheus.CounterVec, reason string) func() error {
+	return func() error {
+		if terminalCount(c, reason) == 0 {
+			return fmt.Errorf("no %s hold counted yet", reason)
+		}
+		return nil
+	}
+}
+
+// releasePasses records every releaser pass of one operator
+// (Reconciler.releaseJudged).
+type releasePasses struct {
+	mu     sync.Mutex
+	passes []releasePass
+}
+
+// releasePass is one pass: what the cached session showed, and what the
+// releaser did.
+type releasePass struct {
+	name                 string
+	phase                v1alpha1.SessionPhase
+	boot, agent, message string
+	released             bool
+	requeue              time.Duration
+}
+
+func (p *releasePasses) record(s *v1alpha1.AgentSession, released bool, res ctrl.Result) {
+	pass := releasePass{name: s.Name, phase: s.Status.Phase, released: released, requeue: res.RequeueAfter}
+	if a := s.Status.Agent; a != nil {
+		pass.boot, pass.agent, pass.message = a.Boot, a.Status, a.Message
+	}
+	p.mu.Lock()
+	p.passes = append(p.passes, pass)
+	p.mu.Unlock()
+}
+
+// held is holdsFinalizer's signal for a hold the releaser does not count: a
+// pass over name that kept the finalizer and that match accepts.
+func (p *releasePasses) held(name string, match func(releasePass) bool) func() error {
+	return func() error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, pass := range p.passes {
+			if pass.name == name && !pass.released && match(pass) {
+				return nil
+			}
+		}
+		return fmt.Errorf("no releaser pass over %s that held it as expected", name)
+	}
+}
+
+func inPhase(phase v1alpha1.SessionPhase) func(releasePass) bool {
+	return func(p releasePass) bool { return p.phase == phase }
 }
 
 // setTask writes what agentd's last heartbeat of a task would: the agent
@@ -246,7 +309,7 @@ func TestScheduledWorkReleaserNeedsNoExecutor(t *testing.T) {
 	waitClaim(t, s.Name)
 	pod := markRunning(t, waitPod(t, s.Name), "talosw02")
 	waitStatus(t, s.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
-	holdsFinalizer(t, s.Name, 2*time.Second)
+	holdsFinalizer(t, s.Name, 2*time.Second, op.passes.held(s.Name, inPhase(v1alpha1.PhaseRunning)))
 	if o := f.occurrence(t); o.State != v1alpha1.OccurrenceRunning {
 		t.Fatalf("a running session's occurrence changed: %+v", o)
 	}
@@ -327,7 +390,12 @@ func TestScheduledWorkReleaseRecordsAFastHeadlessSuccess(t *testing.T) {
 // outcome, the session is released when the wait ends.
 func TestScheduledWorkReleaseWaitsForTheReportedOutcome(t *testing.T) {
 	var ahead atomic.Int64
-	startOperator(t, func(r *Reconciler) { r.Now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) } })
+	op := startOperator(t, func(r *Reconciler) { r.Now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) } })
+	// The releaser held the session for the reported outcome: the task had
+	// ended, and it asked to look again within the wait.
+	awaiting := func(p releasePass) bool {
+		return p.agent == protocol.AgentExited && p.requeue > 0 && p.requeue <= scheduledwork.ReportWait+scheduledwork.ReportClockSkew+time.Second
+	}
 	t.Run("the outcome lands after the exit", func(t *testing.T) {
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
 		s := scheduledSession(t, f, nil)
@@ -336,7 +404,7 @@ func TestScheduledWorkReleaseWaitsForTheReportedOutcome(t *testing.T) {
 		if o := f.waitOccurrence(t, v1alpha1.OccurrenceSucceeded); o.Reported != nil {
 			t.Fatalf("reported before the outcome landed: %+v", o.Reported)
 		}
-		holdsFinalizer(t, s.Name, 2*time.Second)
+		holdsFinalizer(t, s.Name, 2*time.Second, op.passes.held(s.Name, awaiting))
 		eventually(t, "the retained outcome", func() error {
 			live := session(t, s.Name)
 			live.Status.TaskOutcome = &v1alpha1.TaskOutcomeStatus{SessionUID: string(live.UID), PodUID: string(pod.UID),
@@ -360,7 +428,7 @@ func TestScheduledWorkReleaseWaitsForTheReportedOutcome(t *testing.T) {
 		markRunning(t, waitPod(t, s.Name), "talosw02")
 		setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.Now()}, nil)
 		f.waitOccurrence(t, v1alpha1.OccurrenceSucceeded)
-		holdsFinalizer(t, s.Name, 2*time.Second)
+		holdsFinalizer(t, s.Name, 2*time.Second, op.passes.held(s.Name, awaiting))
 		ahead.Store(int64(scheduledwork.ReportWait + time.Minute))
 		t.Cleanup(func() { ahead.Store(0) })
 		// The next heartbeat finds the wait over.
@@ -462,12 +530,14 @@ func TestScheduledWorkReleaseWithTheItemGone(t *testing.T) {
 // unservedReader plays an API server that does not serve ScheduledWork, as the
 // operator's uncached reader would see it before S6 installs the CRD or after a
 // rollback removes it: every read of an item fails with itemErr, and a read of
-// the CRD is NotFound while crdGone. Everything else is the real API server.
-// envtest cannot remove the CRD under the running suite, so this stands in.
+// the CRD is NotFound while crdGone, or fails with crdErr when that is set.
+// Everything else is the real API server. envtest cannot remove the CRD under
+// the running suite, so this stands in.
 type unservedReader struct {
 	client.Reader
 	itemErr error
 	crdGone bool
+	crdErr  error
 }
 
 func (u *unservedReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -475,11 +545,44 @@ func (u *unservedReader) Get(ctx context.Context, key client.ObjectKey, obj clie
 	case *v1alpha1.ScheduledWork:
 		return u.itemErr
 	case *metav1.PartialObjectMetadata:
-		if o.GroupVersionKind().Kind == "CustomResourceDefinition" && u.crdGone {
+		switch {
+		case o.GroupVersionKind().Kind != "CustomResourceDefinition":
+		case u.crdErr != nil:
+			return u.crdErr
+		case u.crdGone:
 			return apierrors.NewNotFound(schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, key.Name)
 		}
 	}
 	return u.Reader.Get(ctx, key, obj, opts...)
+}
+
+// unservedVersionNotFound is what the real API server answers a read of an
+// item through a version of its group that it does not serve: a plain-text
+// 404, which client-go turns into a NotFound whose details name the resource
+// and the item from the request, with an UnexpectedServerResponse cause.
+func unservedVersionNotFound(t *testing.T, name string) error {
+	t.Helper()
+	cfg := rest.CopyConfig(restCfg)
+	cfg.APIPath = "/apis"
+	cfg.GroupVersion = &schema.GroupVersion{Group: v1alpha1.GroupVersion.Group, Version: "v1alpha9"}
+	cfg.NegotiatedSerializer = serializer.NewCodecFactory(scheme).WithoutConversion()
+	rc, err := rest.RESTClientFor(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = rc.Get().Namespace(systemNS).Resource("scheduledworks").Name(name).Do(context.Background()).Error()
+	// Its details name the item and the resource as a real NotFound's do, so
+	// only the cause tells the two apart.
+	var status apierrors.APIStatus
+	if !apierrors.IsNotFound(err) || !errors.As(err, &status) {
+		t.Fatalf("the API server's answer for an unserved version is %v, not a NotFound", err)
+	}
+	d := status.Status().Details
+	if d == nil || d.Name != name || d.Kind != "scheduledworks" || d.Group != v1alpha1.GroupVersion.Group ||
+		!slices.ContainsFunc(d.Causes, func(c metav1.StatusCause) bool { return c.Type == metav1.CauseTypeUnexpectedServerResponse }) {
+		t.Fatalf("the API server's NotFound for an unserved version has details %+v", d)
+	}
+	return err
 }
 
 // The kind not served: the releaser cannot prove the items gone, so it waits
@@ -497,21 +600,92 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 			r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: noKind, crdGone: true}
 		})
 		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
-		deadline := time.Now().Add(5 * time.Second)
+		// Whole seconds, as the annotation stores it, so the check below
+		// compares with the deadline the releaser reads.
+		deadline := time.Now().Add(5 * time.Second).Truncate(time.Second)
 		s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
 			suspendedAtCreate(s)
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
 		})
-		holdsFinalizer(t, s.Name, 2*time.Second)
-		if n := terminalCount(blocked, releaseBlockedKindUnserved); n == 0 {
-			t.Error("the held release was not counted")
-		}
+		holdsFinalizer(t, s.Name, 2*time.Second, counted(blocked, releaseBlockedKindUnserved))
 		waitReleased(t, s.Name)
 		if time.Now().Before(deadline) {
 			t.Error("released before the start deadline")
 		}
 		if o := f.occurrence(t); o.State != v1alpha1.OccurrenceRunning {
 			t.Errorf("an unserved kind was written: %+v", o)
+		}
+	})
+	// A cached mapping of a removed CRD answers a plain NotFound for the
+	// item. With the CRD read NotFound too, that is the unserved kind: held
+	// until the start deadline, then released without a record.
+	t.Run("the item NotFound with its CRD gone, before and after the start deadline", func(t *testing.T) {
+		blocked := NewScheduledWorkReleaseHoldsCounter()
+		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+		startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
+			r.APIReader = &unservedReader{Reader: r.APIReader, crdGone: true,
+				itemErr: apierrors.NewNotFound(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "scheduledworks"}, f.key.Name)}
+		})
+		deadline := time.Now().Add(5 * time.Second).Truncate(time.Second)
+		s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+			suspendedAtCreate(s)
+			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = deadline.UTC().Format(time.RFC3339)
+		})
+		holdsFinalizer(t, s.Name, 2*time.Second, counted(blocked, releaseBlockedKindUnserved))
+		waitReleased(t, s.Name)
+		if time.Now().Before(deadline) {
+			t.Error("released before the start deadline")
+		}
+		if o := f.occurrence(t); o.State != v1alpha1.OccurrenceRunning {
+			t.Errorf("an unserved kind was written: %+v", o)
+		}
+	})
+	// A NotFound proves the item missing only when the API server says so of
+	// this item. One without details, or the API server's own answer for a
+	// version it does not serve, while the CRD still reads, is held like any
+	// unserved kind, even past the start deadline.
+	for _, c := range []struct {
+		name    string
+		itemErr func(t *testing.T, item string) error
+	}{
+		{"a NotFound without details, with the CRD present", func(*testing.T, string) error {
+			return &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: http.StatusNotFound, Reason: metav1.StatusReasonNotFound}}
+		}},
+		{"the API server's 404 for an unserved version, with the CRD present", unservedVersionNotFound},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			blocked := NewScheduledWorkReleaseHoldsCounter()
+			f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+			itemErr := c.itemErr(t, f.key.Name)
+			startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
+				r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: itemErr}
+			})
+			s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+				suspendedAtCreate(s)
+				s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+			})
+			holdsFinalizer(t, s.Name, 3*time.Second, counted(blocked, releaseBlockedKindUnserved))
+			if o := f.occurrence(t); o.State != v1alpha1.OccurrenceRunning {
+				t.Errorf("occurrence %+v", o)
+			}
+		})
+	}
+	// A CRD read that fails for any other reason proves nothing: held and
+	// counted as a failed read, even past the start deadline.
+	t.Run("a Forbidden CRD read", func(t *testing.T) {
+		blocked := NewScheduledWorkReleaseHoldsCounter()
+		startOperator(t, withBlockedCounter(blocked), func(r *Reconciler) {
+			r.APIReader = &unservedReader{Reader: r.APIReader, itemErr: noKind,
+				crdErr: apierrors.NewForbidden(schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, scheduledWorkCRD, errors.New("the test forbids the CRD read"))}
+		})
+		f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+		s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+			suspendedAtCreate(s)
+			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+		})
+		holdsFinalizer(t, s.Name, 3*time.Second, counted(blocked, releaseBlockedRead))
+		if n := terminalCount(blocked, releaseBlockedKindUnserved); n != 0 {
+			t.Errorf("a failed CRD read counted as an unserved kind %v times", n)
 		}
 	})
 	t.Run("a discovery error with the CRD present", func(t *testing.T) {
@@ -524,10 +698,7 @@ func TestScheduledWorkReleaseWithTheKindNotServed(t *testing.T) {
 			suspendedAtCreate(s)
 			s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 		})
-		holdsFinalizer(t, s.Name, 3*time.Second)
-		if n := terminalCount(blocked, releaseBlockedKindUnserved); n == 0 {
-			t.Error("the held release was not counted")
-		}
+		holdsFinalizer(t, s.Name, 3*time.Second, counted(blocked, releaseBlockedKindUnserved))
 	})
 }
 
@@ -572,17 +743,14 @@ func TestScheduledWorkReleaseLetsTheOperatorStartWithoutTheKind(t *testing.T) {
 		suspendedAtCreate(s)
 		s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 	})
-	holdsFinalizer(t, s.Name, 3*time.Second)
-	if n := terminalCount(blocked, releaseBlockedKindUnserved); n == 0 {
-		t.Error("the held release was not counted")
-	}
+	holdsFinalizer(t, s.Name, 3*time.Second, counted(blocked, releaseBlockedKindUnserved))
 	assertNoPodOrVolumeWrites(t, op)
 }
 
 // An interactive session that its template's idle suspend ends is recorded
 // Ended, "participation not observed", and released.
 func TestScheduledWorkReleaseAnIdleSuspendedInteractiveSession(t *testing.T) {
-	startOperator(t)
+	op := startOperator(t)
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceOpened)
 	s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
 		s.Spec.Lifecycle = &v1alpha1.Lifecycle{IdleSuspendAfter: &metav1.Duration{Duration: 2 * time.Second}}
@@ -590,7 +758,7 @@ func TestScheduledWorkReleaseAnIdleSuspendedInteractiveSession(t *testing.T) {
 	waitClaim(t, s.Name)
 	markRunning(t, waitPod(t, s.Name), "talosw02")
 	waitStatus(t, s.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
-	holdsFinalizer(t, s.Name, time.Second)
+	holdsFinalizer(t, s.Name, time.Second, op.passes.held(s.Name, inPhase(v1alpha1.PhaseRunning)))
 	setAgent(t, s.Name, protocol.AgentIdle, time.Now().Add(-time.Hour))
 	eventually(t, "the idle timer suspends it", func() error {
 		if live := session(t, s.Name); live.Annotations[v1alpha1.AnnotationSuspendedBy] != IdleTimerSuspender {
@@ -616,7 +784,7 @@ func TestScheduledWorkReleaseAnIdleSuspendedInteractiveSession(t *testing.T) {
 func TestScheduledWorkReleaseWaitsOutADrainOrBoot(t *testing.T) {
 	var ahead atomic.Int64
 	clock := func(r *Reconciler) { r.Now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) } }
-	startOperator(t, clock)
+	op := startOperator(t, clock)
 	f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDispatched)
 	s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
 		s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
@@ -632,12 +800,18 @@ func TestScheduledWorkReleaseWaitsOutADrainOrBoot(t *testing.T) {
 			return k8s.Status().Update(context.Background(), live)
 		})
 	}
-	// A drained pod boots and reports the previous boot's interrupted agent.
+	// A drained pod boots and reports the previous boot's interrupted agent:
+	// the releaser judges that report and finds no end.
 	report(protocol.BootBooting, protocol.AgentInterrupted, "")
-	holdsFinalizer(t, s.Name, 2*time.Second)
-	// Boot complete, agentd refused the late first launch, but the pod is young.
+	holdsFinalizer(t, s.Name, 2*time.Second, op.passes.held(s.Name, func(p releasePass) bool {
+		return p.boot == protocol.BootBooting && p.agent == protocol.AgentInterrupted && p.requeue == 0
+	}))
+	// Boot complete, agentd refused the late first launch, but the pod is
+	// young: the releaser reads the pod and waits for the pod-age proof.
 	report(protocol.BootReady, protocol.AgentFailed, protocol.StartDeadlinePassed)
-	holdsFinalizer(t, s.Name, 2*time.Second)
+	holdsFinalizer(t, s.Name, 2*time.Second, op.passes.held(s.Name, func(p releasePass) bool {
+		return p.boot == protocol.BootReady && p.agent == protocol.AgentFailed && p.message == protocol.StartDeadlinePassed && p.requeue == scheduledWorkProofRetry
+	}))
 	if o := f.occurrence(t); o.State != v1alpha1.OccurrenceDispatched {
 		t.Fatalf("an unproven end was recorded: %+v", o)
 	}
@@ -750,10 +924,7 @@ func TestScheduledWorkReleaseHoldsWhileTheStatusWriteFails(t *testing.T) {
 		}
 		return nil
 	})
-	holdsFinalizer(t, s.Name, time.Second)
-	if n := terminalCount(blocked, releaseBlockedStatusWrite); n == 0 {
-		t.Error("the failed status write was not counted")
-	}
+	holdsFinalizer(t, s.Name, time.Second, counted(blocked, releaseBlockedStatusWrite))
 	if o := f.occurrence(t); o.State != v1alpha1.OccurrenceRunning {
 		t.Errorf("occurrence %+v", o)
 	}
@@ -786,7 +957,7 @@ func TestScheduledWorkReleaseIsIdempotentAcrossARestart(t *testing.T) {
 		}
 		return nil
 	})
-	holdsFinalizer(t, s.Name, time.Second)
+	holdsFinalizer(t, s.Name, time.Second, counted(blocked, releaseBlockedPatch))
 	first.stop()
 
 	second := startOperator(t)
@@ -802,4 +973,65 @@ func TestScheduledWorkReleaseIsIdempotentAcrossARestart(t *testing.T) {
 	if slices.Contains(second.writes.orderLog(), "update status *v1alpha1.ScheduledWork "+f.key.Name) {
 		t.Errorf("the second operator wrote the item again: %v", second.writes.orderLog())
 	}
+}
+
+// A finalizer holder whose metadata does not say which occurrence it holds
+// keeps its finalizer and is counted, even once it has ended: a missing name
+// or occurrence annotation, a missing label (the sweep lists by the label, so
+// such a session is held from its own events), or a name that is not the one
+// its label and occurrence derive. Nothing of the item is written.
+func TestScheduledWorkReleaseHoldsWithoutItsMetadata(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edit func(*v1alpha1.AgentSession, swFixture)
+	}{
+		{"no name annotation", func(s *v1alpha1.AgentSession, _ swFixture) {
+			delete(s.Annotations, v1alpha1.AnnotationScheduledWorkName)
+		}},
+		{"no occurrence annotation", func(s *v1alpha1.AgentSession, _ swFixture) {
+			delete(s.Annotations, v1alpha1.AnnotationScheduledWorkOccurrence)
+		}},
+		{"no label", func(s *v1alpha1.AgentSession, _ swFixture) { s.Labels = nil }},
+		{"a name its label and occurrence do not derive", func(s *v1alpha1.AgentSession, f swFixture) {
+			s.Name = derivedName(f.uid, f.at.Add(time.Hour))
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			blocked := NewScheduledWorkReleaseHoldsCounter()
+			op := startOperator(t, withBlockedCounter(blocked))
+			f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+			s := scheduledSession(t, f, func(s *v1alpha1.AgentSession) {
+				suspendedAtCreate(s)
+				c.edit(s, f)
+			})
+			// No later test should meet this session: the test lifts the
+			// finalizer itself when it is done.
+			t.Cleanup(func() { stripScheduledWorkFinalizer(t, s.Name) })
+			holdsFinalizer(t, s.Name, 2*time.Second, counted(blocked, releaseBlockedMetadata))
+			if o := f.occurrence(t); o.State != v1alpha1.OccurrenceRunning || o.Session != f.name {
+				t.Errorf("occurrence %+v", o)
+			}
+			if slices.Contains(op.writes.orderLog(), "update status *v1alpha1.ScheduledWork "+f.key.Name) {
+				t.Errorf("the releaser wrote the item: %v", op.writes.orderLog())
+			}
+		})
+	}
+}
+
+// stripScheduledWorkFinalizer lifts the scheduled-work finalizer as a test
+// fixture's cleanup, outside the operator.
+func stripScheduledWorkFinalizer(t *testing.T, name string) {
+	t.Helper()
+	eventually(t, "strip the scheduled-work finalizer of "+name, func() error {
+		s, err := get(t, sessionNS, name, &v1alpha1.AgentSession{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if !controllerutil.RemoveFinalizer(s, v1alpha1.ScheduledWorkFinalizer) {
+			return nil
+		}
+		return k8s.Update(context.Background(), s)
+	})
 }

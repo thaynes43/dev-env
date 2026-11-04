@@ -42,9 +42,9 @@ import (
 // theirs, and neither waits on the other.
 
 // The releaser's metrics. MetricScheduledWorkReleaseBlocked is DESIGN-054's
-// page source: a gauge of the scheduled sessions whose finalizer is still on
-// although they are being deleted or have ended, read from the cache at
-// scrape time (ScheduledWorkReleaseCollector), so every replica reports the
+// page source: a gauge of the sessions, labelled or not, whose finalizer is
+// still on although they are being deleted or have ended, read from the cache
+// at scrape time (ScheduledWorkReleaseCollector), so every replica reports the
 // same value and a deposed leader leaves nothing stale. The releaser lifts the
 // finalizer within seconds, so a session that stays counted for long is
 // blocked; a haynes-ops PrometheusRule (S6) pages on it with a `for:` longer
@@ -60,14 +60,16 @@ const (
 // The blocked counter's reason label values.
 const (
 	// releaseBlockedMetadata: the session's label or annotations are missing or
-	// unreadable, so the releaser cannot tell which occurrence it holds.
+	// unreadable, or its name is not the one they derive, so the releaser
+	// cannot tell which occurrence it holds.
 	releaseBlockedMetadata = "metadata"
 	// releaseBlockedRead: a read of the session, its pod, the ScheduledWork or
 	// its CustomResourceDefinition failed.
 	releaseBlockedRead = "read"
-	// releaseBlockedKindUnserved: the kind is not served, and either its CRD
-	// still exists (discovery lags) or the session's start deadline has not
-	// passed, so an executor could still create for it.
+	// releaseBlockedKindUnserved: the kind is not served, or a NotFound does
+	// not name the item, and either its CRD still exists (discovery lags) or
+	// the session's start deadline has not passed, so an executor could still
+	// create for it.
 	releaseBlockedKindUnserved = "kind_unserved"
 	// releaseBlockedStatusWrite: the terminal record could not be written.
 	releaseBlockedStatusWrite = "status_write"
@@ -229,6 +231,9 @@ func releaseScheduledWorkFinalizer(ctx context.Context, c client.Client, s *v1al
 // held release is counted, logged and retried, and the rest of the reconcile
 // goes on, so the rescue and archive never wait on it.
 func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.AgentSession) (released bool, res ctrl.Result) {
+	if r.releaseJudged != nil {
+		defer func() { r.releaseJudged(cached, released, res) }()
+	}
 	lg := log.FromContext(ctx).WithValues("scheduledWork", cached.Annotations[v1alpha1.AnnotationScheduledWorkName])
 	now := r.clock()
 	// The cached copy screens out the sessions with nothing to release, so a
@@ -279,6 +284,15 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 		return false, r.releaseBlocked(lg, releaseBlockedMetadata, err)
 	case name == "" || uid == "":
 		return false, r.releaseBlocked(lg, releaseBlockedMetadata, fmt.Errorf("the session lacks annotation %s or label %s", v1alpha1.AnnotationScheduledWorkName, v1alpha1.LabelScheduledWork))
+	}
+
+	// The name is the one the label and occurrence derive, so the occurrence
+	// this session holds is the one its name says.
+	if want, err := scheduledwork.SessionName(uid, at); err != nil || s.Name != want {
+		if err == nil {
+			err = fmt.Errorf("the session's name is not %s, the one its label and occurrence annotation derive", want)
+		}
+		return false, r.releaseBlocked(lg, releaseBlockedMetadata, err)
 	}
 
 	ev.at = at
@@ -370,14 +384,16 @@ func (r *Reconciler) scheduledWorkNamespace() string {
 	return r.Templates.Namespace
 }
 
-// errKindUnservedCRDPresent is a read of an unserved kind whose CRD still
-// exists: discovery lags, so the objects are not proven gone.
-var errKindUnservedCRDPresent = errors.New("the ScheduledWork kind is not served, but its CustomResourceDefinition exists")
+// errKindUnservedCRDPresent is a read of an unserved kind, or a NotFound that
+// does not name the item, while the CRD still exists: discovery lags, or the
+// version is not served, so the objects are not proven gone.
+var errKindUnservedCRDPresent = errors.New("the ScheduledWork kind is not served, or the NotFound does not name the item, but its CustomResourceDefinition exists")
 
 // readScheduledWork reads the session's ScheduledWork from the API server. A
-// NotFound counts as a missing item only while the CRD exists: with the CRD
-// gone it is an unserved kind, like a no-match or discovery error. Any other
-// error is returned.
+// NotFound counts as a missing item only when it is the API server's answer
+// for this item (itemNotFound) and the CRD exists. With the CRD present, any
+// other NotFound is an unserved kind; with the CRD gone, every NotFound is,
+// like a no-match or discovery error. Any other error is returned.
 func (r *Reconciler) readScheduledWork(ctx context.Context, namespace, name string) (*v1alpha1.ScheduledWork, itemRead, error) {
 	var w v1alpha1.ScheduledWork
 	err := r.APIReader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &w)
@@ -391,7 +407,7 @@ func (r *Reconciler) readScheduledWork(ctx context.Context, namespace, name stri
 	crd.SetGroupVersionKind(crdKind)
 	crdErr := r.APIReader.Get(ctx, types.NamespacedName{Name: scheduledWorkCRD}, crd)
 	switch {
-	case crdErr == nil && apierrors.IsNotFound(err):
+	case crdErr == nil && itemNotFound(err, name):
 		return nil, itemMissing, nil
 	case crdErr == nil:
 		return nil, 0, fmt.Errorf("%w: %w", errKindUnservedCRDPresent, err)
@@ -399,6 +415,29 @@ func (r *Reconciler) readScheduledWork(ctx context.Context, namespace, name stri
 		return nil, itemKindGone, nil
 	}
 	return nil, 0, fmt.Errorf("read CustomResourceDefinition %s after %w: %w", scheduledWorkCRD, err, crdErr)
+}
+
+// itemNotFound reports a NotFound the API server gave for the item itself:
+// its status details name the item, in the scheduledworks resource of this
+// group, and it came as a Status. A NotFound without those details is not
+// proof, and neither is the plain-text 404 the API server answers for a
+// version it does not serve: client-go fills that one's details from the
+// request, so only its UnexpectedServerResponse cause tells it apart.
+func itemNotFound(err error, name string) bool {
+	var status apierrors.APIStatus
+	if !apierrors.IsNotFound(err) || !errors.As(err, &status) {
+		return false
+	}
+	d := status.Status().Details
+	if d == nil || d.Name != name || d.Group != v1alpha1.GroupVersion.Group || d.Kind != "scheduledworks" {
+		return false
+	}
+	for _, c := range d.Causes {
+		if c.Type == metav1.CauseTypeUnexpectedServerResponse {
+			return false
+		}
+	}
+	return true
 }
 
 // kindUnserved reports a read that failed because the API server does not
@@ -438,7 +477,9 @@ func (r *Reconciler) releaseBlocked(lg logr.Logger, reason string, err error) ct
 // scheduledWorkSweep lists, from the API server, the sessions that carry the
 // scheduled-work label and finalizer, and queues each for the reconciler, so a
 // missed event cannot strand one (DESIGN-054). It runs in the leader only, as
-// the reconciler does, and reads nothing else.
+// the reconciler does, and reads nothing else. A finalizer holder that lost
+// its label is not listed: its own events still bring it to the releaser,
+// which holds it for its metadata, and the blocked gauge counts it.
 type scheduledWorkSweep struct {
 	reader    client.Reader
 	namespace string
@@ -494,15 +535,19 @@ func sessionEnded(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool
 }
 
 var scheduledWorkReleaseBlockedDesc = prometheus.NewDesc(MetricScheduledWorkReleaseBlocked,
-	"Scheduled sessions that still carry the scheduled-work finalizer although they are being deleted or have ended by the session-end rule (DESIGN-054), from the cache at scrape time. The releaser lifts it within seconds, or after scheduledwork.ReportWait for a headless agent's reported outcome; a session that stays counted is blocked.",
+	"Sessions that still carry the scheduled-work finalizer, with or without the scheduled-work label, although they are being deleted or have ended by the session-end rule judged with their cached pod (DESIGN-054), from the cache at scrape time. The releaser lifts it within seconds, or after scheduledwork.ReportWait for a headless agent's reported outcome; a session that stays counted is blocked.",
 	nil, nil)
 
 // ScheduledWorkReleaseCollector is a prometheus.Collector of
 // MetricScheduledWorkReleaseBlocked over the sessions in one namespace. It
-// judges the session-end rule without the pod (an end only a pod could prove
-// is not counted). Register it with controller-runtime's metrics registry.
+// lists every session and counts each finalizer holder, labelled or not, so a
+// holder that lost its label still counts. It judges the session-end rule
+// with the cached pod of the session's name when the rule needs one, so an
+// agent end the pod-age proof shows counts as the releaser would judge it.
+// Register it with controller-runtime's metrics registry.
 type ScheduledWorkReleaseCollector struct {
-	// Reader lists sessions; the manager's cache in the operator.
+	// Reader lists sessions and reads their pods; the manager's cache in the
+	// operator.
 	Reader client.Reader
 	// Namespace is where the sessions live (dev-agents).
 	Namespace string
@@ -515,13 +560,13 @@ func (c *ScheduledWorkReleaseCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- scheduledWorkReleaseBlockedDesc
 }
 
-// Collect implements prometheus.Collector. A failed list reports an invalid
-// metric, which fails the scrape, as the session metrics do (D-57).
+// Collect implements prometheus.Collector. A failed list or pod read reports
+// an invalid metric, which fails the scrape, as the session metrics do (D-57).
 func (c *ScheduledWorkReleaseCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), collectTimeout)
 	defer cancel()
 	var list v1alpha1.AgentSessionList
-	if err := c.Reader.List(ctx, &list, client.InNamespace(c.Namespace), client.HasLabels{v1alpha1.LabelScheduledWork}); err != nil {
+	if err := c.Reader.List(ctx, &list, client.InNamespace(c.Namespace)); err != nil {
 		ch <- prometheus.NewInvalidMetric(scheduledWorkReleaseBlockedDesc, err)
 		return
 	}
@@ -532,9 +577,37 @@ func (c *ScheduledWorkReleaseCollector) Collect(ch chan<- prometheus.Metric) {
 	held := 0
 	for i := range list.Items {
 		s := &list.Items[i]
-		if controllerutil.ContainsFinalizer(s, v1alpha1.ScheduledWorkFinalizer) && (!s.DeletionTimestamp.IsZero() || sessionEnded(s, nil, now)) {
+		if !controllerutil.ContainsFinalizer(s, v1alpha1.ScheduledWorkFinalizer) {
+			continue
+		}
+		var pod *corev1.Pod
+		if s.DeletionTimestamp.IsZero() && scheduledwork.NeedsPodProof(s) {
+			p, err := c.cachedPod(ctx, s)
+			if err != nil {
+				ch <- prometheus.NewInvalidMetric(scheduledWorkReleaseBlockedDesc, err)
+				return
+			}
+			pod = p
+		}
+		if !s.DeletionTimestamp.IsZero() || sessionEnded(s, pod, now) {
 			held++
 		}
 	}
 	ch <- prometheus.MustNewConstMetric(scheduledWorkReleaseBlockedDesc, prometheus.GaugeValue, float64(held))
+}
+
+// cachedPod is the pod of the session's name from the collector's reader,
+// when the session controls it; nil when there is none.
+func (c *ScheduledWorkReleaseCollector) cachedPod(ctx context.Context, s *v1alpha1.AgentSession) (*corev1.Pod, error) {
+	var pod corev1.Pod
+	if err := c.Reader.Get(ctx, client.ObjectKeyFromObject(s), &pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read the pod of session %s: %w", s.Name, err)
+	}
+	if !metav1.IsControlledBy(&pod, s) {
+		return nil, nil
+	}
+	return &pod, nil
 }

@@ -324,15 +324,19 @@ func TestScheduledWorkTaskResultMatchesTheReconcilers(t *testing.T) {
 	}
 }
 
-// The blocked gauge counts, from the cache, the labelled sessions that still
-// carry the finalizer although they are being deleted or have ended; a
-// running one, a released one, and one whose end only a pod could prove do
-// not count.
+// The blocked gauge counts, from the cache, every session that still carries
+// the finalizer although it is being deleted or has ended, with or without the
+// label. An end that only the agent's report and its pod can prove is judged
+// with the cached pod, as the releaser judges it with the API server's. A
+// running session, a released one, and an agent end with no pod, a young pod
+// or another owner's pod do not count.
 func TestScheduledWorkReleaseCollectorCountsHeldSessions(t *testing.T) {
 	now := time.Date(2026, 12, 3, 15, 0, 0, 0, time.UTC)
 	deleted := metav1.NewTime(now)
+	hb := metav1.NewTime(now.Add(-time.Minute))
 	mk := func(name string, fin bool, edit func(*v1alpha1.AgentSession)) *v1alpha1.AgentSession {
-		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name, Labels: map[string]string{v1alpha1.LabelScheduledWork: "item-uid"}},
+		s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name, UID: types.UID(name + "-uid"),
+			Labels: map[string]string{v1alpha1.LabelScheduledWork: "item-uid"}},
 			Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask, OperatingMode: v1alpha1.OperatingModeRunning}, Status: v1alpha1.AgentSessionStatus{Phase: v1alpha1.PhaseRunning}}
 		if fin {
 			s.Finalizers = []string{v1alpha1.ScheduledWorkFinalizer}
@@ -342,15 +346,38 @@ func TestScheduledWorkReleaseCollectorCountsHeldSessions(t *testing.T) {
 		}
 		return s
 	}
+	agentExited := func(s *v1alpha1.AgentSession) {
+		s.Status.Agent = &v1alpha1.AgentStatus{Boot: "ready", Status: "exited", LastHeartbeat: &hb}
+	}
+	pod := func(owner *v1alpha1.AgentSession, name string, age time.Duration) *corev1.Pod {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: sessionNS, Name: name, CreationTimestamp: metav1.NewTime(now.Add(-age))}}
+		if owner != nil {
+			p.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(owner, v1alpha1.GroupVersion.WithKind("AgentSession"))}
+		}
+		return p
+	}
+	proven := mk("agent-ended-proven", true, agentExited)
+	young := mk("agent-ended-young-pod", true, agentExited)
+	foreign := mk("agent-ended-foreign-pod", true, agentExited)
 	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 		mk("suspended", true, func(s *v1alpha1.AgentSession) { s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended }),
 		mk("deleting", true, func(s *v1alpha1.AgentSession) { s.DeletionTimestamp = &deleted }),
 		mk("pod-ended", true, func(s *v1alpha1.AgentSession) { s.Status.Phase = v1alpha1.PhaseFailed }),
-		mk("running", true, nil),
-		mk("agent-ended-unproven", true, func(s *v1alpha1.AgentSession) {
-			s.Status.Agent = &v1alpha1.AgentStatus{Boot: "ready", Status: "exited"}
+		mk("unlabelled-suspended", true, func(s *v1alpha1.AgentSession) {
+			s.Labels = nil
+			s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
 		}),
+		proven, pod(proven, proven.Name, time.Hour),
+		mk("running", true, nil),
+		mk("agent-ended-no-pod", true, agentExited),
+		young, pod(young, young.Name, time.Minute),
+		foreign, pod(nil, foreign.Name, time.Hour),
+		mk("unlabelled-running", true, func(s *v1alpha1.AgentSession) { s.Labels = nil }),
 		mk("released", false, func(s *v1alpha1.AgentSession) { s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended }),
+		mk("unlabelled-released", false, func(s *v1alpha1.AgentSession) {
+			s.Labels = nil
+			s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended
+		}),
 	).Build()
 	c := &ScheduledWorkReleaseCollector{Reader: reader, Namespace: sessionNS, Now: func() time.Time { return now }}
 	ch := make(chan prometheus.Metric, 4)
@@ -364,7 +391,7 @@ func TestScheduledWorkReleaseCollectorCountsHeldSessions(t *testing.T) {
 		}
 		got = append(got, d.GetGauge().GetValue())
 	}
-	if len(got) != 1 || got[0] != 3 {
-		t.Fatalf("blocked %v, want [3]", got)
+	if len(got) != 1 || got[0] != 5 {
+		t.Fatalf("blocked %v, want [5]", got)
 	}
 }

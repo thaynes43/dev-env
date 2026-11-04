@@ -284,22 +284,43 @@ stateDiagram-v2
      observed") for interactive even when reaped, or `Failed` "session reaped before
      it ended" for a headless session being deleted with no task verdict (unless its
      operating mode is Suspended). Status cannot show whether deletion or the end came
-     first, so the verdict decides. A session that never started (no agent ever
-     reported, or agentd reported `protocol.StartDeadlinePassed` in `agent.message`)
-     past its start deadline is `Failed` "not started before grace ended" in both
-     modes. The session's own mode, not the item's current `spec.mode`, decides
-     headless or interactive. Because the heartbeat writes the task's exit and its
-     reported outcome separately, the releaser keeps the finalizer up to 2 minutes
-     after a task verdict so that a late `reported` is copied into the terminal
-     record. This is the exit for every non-terminal state, including `Delivered`
-     and a delivery marked `ambiguous`. An occurrence that is absent, or that names
-     another session, is released with no record; a missing or unreadable label or
-     annotation keeps the finalizer;
+     first, so the verdict decides. A session past its start deadline is `Failed`
+     "not started before grace ended" in both modes only on positive evidence from
+     agentd: its report of `agent.status` `failed` with `agent.message` =
+     `protocol.StartDeadlinePassed`, the refused first launch (the heartbeat copies
+     agentd's agent error into `agent.message`). Missing telemetry never counts: a
+     session with no agent report is not proof that the agent never launched,
+     because a heartbeat can be lost or late while the agent runs. Such a session
+     gets the reason it would get anyway: "session reaped before it ended",
+     "ended without a task result", or `Ended` "participation not observed" for
+     interactive. The session's own mode, not the item's current `spec.mode`,
+     decides headless or interactive. Because the heartbeat writes the task's exit
+     and its reported outcome separately, the releaser keeps the finalizer a little
+     longer after a task verdict so that a late `reported` is copied into the
+     terminal record. The wait is one fixed window of the operator's clock, read
+     from the session alone: from 10 seconds before to 2 minutes after the task's
+     recorded finish (`agent.task.finishedAt`). No reconcile moves its end, so the
+     wait lasts at most 2 minutes 10 seconds however often the session is judged,
+     and a fresh operator reads the same window after a restart. A finish more than
+     10 seconds ahead of the operator's clock (pod clock skew, a bad heartbeat) is
+     not trusted: the releaser does not wait for it, and a late `reported` is then
+     not copied. This is the exit for every non-terminal state, including
+     `Delivered` and a delivery marked `ambiguous`. An occurrence that is absent, or
+     that names another session, is released with no record. A missing or
+     unreadable label or annotation keeps the finalizer, and so does a session name
+     that is not the one its label and occurrence annotation derive
+     (`sw-<first 12 hex of the item UID>-<occurrence UTC YYYYMMDDHHMM>`);
   3. if the ScheduledWork no longer exists (a person deleted it; the API offers only
      cancel), there is nothing to record, and nothing can redispatch it. It logs that
-     and goes on. A NotFound counts as deleted only after an uncached read shows the
-     CRD still exists: once the CRD is removed, a cached mapping returns a plain
-     NotFound, and that case follows the unserved-kind rule below. If the read fails because the kind is not served (`NoKindMatch` or a
+     and goes on. A NotFound counts as deleted only when it is the API server's
+     answer for this item and an uncached read shows the CRD still exists. The
+     answer must be a Status whose details name the item in the `scheduledworks`
+     resource of this group. A NotFound without those details does not count, and
+     neither does the plain-text 404 the API server gives for a version it does not
+     serve: client-go fills that error's details from the request, so only its
+     `UnexpectedServerResponse` cause tells it apart. With the CRD present, either
+     one is held as an unserved kind. Once the CRD is removed, a cached mapping
+     returns a plain NotFound, and that case follows the unserved-kind rule below. If the read fails because the kind is not served (`NoKindMatch` or a
      discovery error), that is **not** proof the objects are gone. It releases only
      when **both** of these hold: the session's own start-deadline annotation has
      passed (due plus grace, or `retriedAt` plus grace for a retried occurrence), so
@@ -309,10 +330,15 @@ stateDiagram-v2
   4. removes the finalizer.
 
   A leader-only sweep lists labelled sessions uncached every 5 minutes and queues
-  them to the reconciler, so a missed event cannot strand one. Metrics:
-  `dev_env_scheduled_work_release_blocked` (a gauge computed at scrape time: sessions
-  that still hold the finalizer after they ended or while being deleted; the S6 page
-  source) and `dev_env_scheduled_work_release_holds_total{reason}` (diagnosis only).
+  them to the reconciler, so a missed event cannot strand one. A finalizer holder
+  that lost its label is not listed; its own events still bring it to the
+  releaser, which holds it for its metadata and counts the hold. Metrics:
+  `dev_env_scheduled_work_release_blocked` (a gauge computed from the cache at
+  scrape time, the S6 page source: every session in the namespace that still holds
+  the finalizer, with or without the label, after it ended or while being deleted.
+  The end is judged with the cached pod where the session-end rule needs one, so an
+  agent end the pod-age proof shows is counted) and
+  `dev_env_scheduled_work_release_holds_total{reason}` (diagnosis only).
   Pages from the releaser are S4; S3a creates no Reminders. The releaser starts **no** watch or
   informer on ScheduledWork: S3a ships before S6 installs the CRD, and a watch on an
   absent kind would stop the manager from starting. The guard test that pins every finalizer

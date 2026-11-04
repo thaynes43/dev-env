@@ -103,12 +103,24 @@ func count(c *v1alpha1.ScheduledWorkCounts, state string) {
 // outcome after it, best effort, and offers it again on the next beat.
 const ReportWait = 2 * time.Minute
 
+// ReportClockSkew is how far ahead of the operator's clock a pod's recorded
+// finish may be and still be trusted, for the ordinary skew between node
+// clocks. A finish further ahead (a pod clock far off, a bad heartbeat) is
+// not waited for at all.
+const ReportClockSkew = 10 * time.Second
+
 // AwaitsReport reports whether the releaser should keep the finalizer of s a
 // little longer, though o is terminal, so the agent's reported outcome can
-// still be copied: s is a task session not being deleted, o names s and has no reported
-// outcome and s has none retained yet, and its task finished less than
-// ReportWait before now. until is when the wait ends. A session with no
-// recorded finish (an eviction, a task that never ran) is never waited for.
+// still be copied: s is a task session not being deleted, o names s and has no
+// reported outcome and s has none retained yet, and now lies in the window
+// [finished - ReportClockSkew, finished + ReportWait), where finished is the
+// task's recorded finish. until is when the wait ends, finished + ReportWait.
+// The window comes from the session alone, never from now, so no judgement
+// moves its end: however often the releaser judges a session, the wait lasts
+// at most ReportWait + ReportClockSkew in all, and a fresh operator computes
+// the same window. A session with no recorded finish (an eviction, a task that
+// never ran) is never waited for, nor is one whose finish is more than
+// ReportClockSkew ahead of now: its late outcome is then not copied.
 func AwaitsReport(s *v1alpha1.AgentSession, o *v1alpha1.ScheduledWorkOccurrence, now time.Time) (wait bool, until time.Time) {
 	if s.Spec.Mode != v1alpha1.ModeTask || !s.DeletionTimestamp.IsZero() || o == nil || o.Session != s.Name || o.Reported != nil || s.Status.TaskOutcome != nil {
 		return false, time.Time{}
@@ -120,12 +132,8 @@ func AwaitsReport(s *v1alpha1.AgentSession, o *v1alpha1.ScheduledWorkOccurrence,
 	if h := s.Status.PrivateHistory; h != nil && h.TaskTerminal != nil {
 		finished = h.TaskTerminal.Task.FinishedAt.Time
 	}
-	if finished.IsZero() {
+	if finished.IsZero() || now.Before(finished.Add(-ReportClockSkew)) {
 		return false, time.Time{}
-	}
-	// A finish the pod's clock puts in the future still waits only ReportWait.
-	if finished.After(now) {
-		finished = now
 	}
 	until = finished.Add(ReportWait)
 	return now.Before(until), until

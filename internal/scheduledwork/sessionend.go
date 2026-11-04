@@ -9,6 +9,7 @@ package scheduledwork
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -84,8 +85,8 @@ const (
 	ReasonNoTaskResult = "ended without a task result"
 	// ReasonReaped is a headless session deleted before it ended.
 	ReasonReaped = "session reaped before it ended"
-	// ReasonNotStarted is a session whose agent never launched before its
-	// start deadline (DESIGN-054 "Start deadline").
+	// ReasonNotStarted is a session whose agent agentd reported it refused to
+	// launch, its start deadline passed (DESIGN-054 "Start deadline").
 	ReasonNotStarted = "not started before grace ended"
 	// ReasonParticipationNotObserved is every interactive end: the platform
 	// has no signal that Tom joined, so the record claims nothing about it.
@@ -133,9 +134,11 @@ type Terminal struct {
 // ended it, a reap included.
 //
 // Either mode with no task result is Failed, "not started before grace
-// ended", when its start deadline has passed and its agent never launched: no
-// heartbeat ever reported it, or agentd refused the late first launch
-// (protocol.StartDeadlinePassed).
+// ended", when its start deadline has passed and agentd reported that it
+// refused the late first launch (protocol.StartDeadlinePassed). Only that
+// positive report counts: a session with no agent report, or with any other,
+// gets the reason above, because missing telemetry never proves that an
+// agent did not launch.
 func Outcome(s *v1alpha1.AgentSession, now time.Time) Terminal {
 	headless := s.Spec.Mode == v1alpha1.ModeTask
 	var t Terminal
@@ -202,15 +205,17 @@ func TaskResult(s *v1alpha1.AgentSession) *v1alpha1.TaskResultStatus {
 }
 
 // notStarted reports a session whose start deadline has passed and whose agent
-// never launched: no heartbeat ever reported an agent, or agentd reported the
-// refused late first launch.
+// agentd reported it never launched: AgentFailed with
+// protocol.StartDeadlinePassed, the refused late first launch. No agent
+// report is not that proof: a heartbeat can be lost or late while the agent
+// runs, so missing telemetry never counts.
 func notStarted(s *v1alpha1.AgentSession, now time.Time) bool {
 	deadline, err := StartDeadline(s)
 	if err != nil || !now.After(deadline) {
 		return false
 	}
 	a := s.Status.Agent
-	return a == nil || (a.Status == protocol.AgentFailed && a.Message == protocol.StartDeadlinePassed)
+	return a != nil && a.Status == protocol.AgentFailed && a.Message == protocol.StartDeadlinePassed
 }
 
 // reported copies the session's retained outcome, when it came from this
@@ -234,6 +239,18 @@ func OccurrenceAt(s *v1alpha1.AgentSession) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("annotation %s is not Unix seconds: %q", v1alpha1.AnnotationScheduledWorkOccurrence, raw)
 	}
 	return time.Unix(sec, 0).UTC(), nil
+}
+
+// SessionName is DESIGN-054's name for the session of an occurrence:
+// sw-<the first 12 hex digits of the item's UID>-<the occurrence instant in
+// UTC, YYYYMMDDHHMM>. A UID that does not start with 12 hex digits, once its
+// dashes are dropped, derives no name.
+func SessionName(itemUID string, at time.Time) (string, error) {
+	digits := strings.ReplaceAll(itemUID, "-", "")
+	if len(digits) < 12 || strings.Trim(digits[:12], "0123456789abcdef") != "" {
+		return "", fmt.Errorf("the ScheduledWork UID %q does not start with 12 hex digits", itemUID)
+	}
+	return "sw-" + digits[:12] + "-" + at.UTC().Format("200601021504"), nil
 }
 
 // StartDeadline is the start deadline in the session's annotation.

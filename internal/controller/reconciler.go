@@ -242,6 +242,11 @@ type Reconciler struct {
 	// ScheduledWorkNamespace holds the ScheduledWork objects; empty means the
 	// templates' namespace (dev-env-system), where the Reminders live.
 	ScheduledWorkNamespace string
+	// releaseJudged, when set, sees every pass of the scheduled-work releaser:
+	// the cached session it judged, whether it released, and when it asked to
+	// look again. Tests set it to prove the releaser ran; the operator leaves
+	// it nil.
+	releaseJudged func(cached *v1alpha1.AgentSession, released bool, res ctrl.Result)
 
 	// expiryCounted rate-limits the refusals no record holds (countExpiryOnce).
 	expiryMu      sync.Mutex

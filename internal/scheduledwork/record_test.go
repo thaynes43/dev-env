@@ -189,7 +189,11 @@ func TestAwaitsReport(t *testing.T) {
 	}{
 		{"just finished", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(10 * time.Second)(s) }, true, now.Add(-10*time.Second + ReportWait)},
 		{"finished long ago", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(ReportWait)(s) }, false, time.Time{}},
-		{"a finish in the future", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(-time.Hour)(s) }, true, now.Add(ReportWait)},
+		{"a finish far in the future is not trusted", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(-time.Hour)(s) }, false, time.Time{}},
+		{"a finish just ahead, within the clock skew", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) { finished(-ReportClockSkew)(s) }, true, now.Add(ReportClockSkew + ReportWait)},
+		{"a finish beyond the clock skew", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) {
+			finished(-ReportClockSkew - time.Second)(s)
+		}, false, time.Time{}},
 		{"a private session's retained finish", func(s *v1alpha1.AgentSession, _ *v1alpha1.ScheduledWorkOccurrence) {
 			s.Status.PrivateHistory = &v1alpha1.PrivateHistoryStatus{TaskTerminal: &v1alpha1.PrivateTaskTerminalStatus{Task: v1alpha1.TaskStatus{FinishedAt: metav1.NewTime(now.Add(-time.Minute))}}}
 		}, true, now.Add(-time.Minute + ReportWait)},
@@ -228,5 +232,56 @@ func TestAwaitsReport(t *testing.T) {
 	}
 	if wait, _ := AwaitsReport(&v1alpha1.AgentSession{Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask}}, nil, now); wait {
 		t.Error("waits with no occurrence")
+	}
+}
+
+// The wait for a reported outcome is one fixed window of the operator's clock,
+// [finishedAt - ReportClockSkew, finishedAt + ReportWait), read from the
+// session alone. However often the releaser judges the same session, and
+// whatever finish its pod's clock reports, the wait's end never moves and the
+// whole wait is at most ReportWait + ReportClockSkew. A fresh operator reads
+// the same window, so a restart neither extends nor cuts it.
+func TestAwaitsReportWindowNeverMoves(t *testing.T) {
+	t0 := time.Date(2026, 12, 3, 14, 10, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-202612031400"
+	for _, ahead := range []time.Duration{-time.Minute, 0, time.Second, ReportClockSkew, ReportClockSkew + time.Second, time.Hour, 24 * time.Hour} {
+		t.Run("finish "+ahead.String()+" after the first judgement", func(t *testing.T) {
+			s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask},
+				Status: v1alpha1.AgentSessionStatus{Agent: &v1alpha1.AgentStatus{Task: &v1alpha1.TaskStatus{FinishedAt: metav1.NewTime(t0.Add(ahead))}}}}
+			o := &v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceSucceeded, Session: name}
+			var first, last, end time.Time
+			for step := time.Duration(0); step <= 48*time.Hour; step += 7 * time.Second {
+				now := t0.Add(step)
+				wait, until := AwaitsReport(s, o, now)
+				if !wait {
+					continue
+				}
+				if end.IsZero() {
+					end, first = until, now
+				}
+				if !until.Equal(end) {
+					t.Fatalf("at t0+%v the wait ends %v; it ended %v before", step, until, end)
+				}
+				last = now
+			}
+			if !end.IsZero() && last.Sub(first) > ReportWait+ReportClockSkew {
+				t.Errorf("waited from %v to %v, longer than %v", first, last, ReportWait+ReportClockSkew)
+			}
+		})
+	}
+}
+
+// A finish an hour after the operator's clock (pod clock skew, a bad
+// heartbeat) holds nothing for long: the same fixture judged at t0 and again
+// at t0 + ReportWait + 1s is not waited for at the second judgement.
+func TestAwaitsReportStopsForAFarFutureFinish(t *testing.T) {
+	t0 := time.Date(2026, 12, 3, 14, 10, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-202612031400"
+	s := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask},
+		Status: v1alpha1.AgentSessionStatus{Agent: &v1alpha1.AgentStatus{Task: &v1alpha1.TaskStatus{FinishedAt: metav1.NewTime(t0.Add(time.Hour))}}}}
+	o := &v1alpha1.ScheduledWorkOccurrence{State: v1alpha1.OccurrenceSucceeded, Session: name}
+	AwaitsReport(s, o, t0)
+	if wait, until := AwaitsReport(s, o, t0.Add(ReportWait+time.Second)); wait {
+		t.Fatalf("still waits at t0+%v, until %v, for a finish an hour ahead", ReportWait+time.Second, until)
 	}
 }

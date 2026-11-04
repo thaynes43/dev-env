@@ -192,10 +192,14 @@ func TestOutcome(t *testing.T) {
 		{"interactive ended", []func(*v1alpha1.AgentSession){remote}, v1alpha1.OccurrenceEnded, ReasonParticipationNotObserved, "", false},
 		{"interactive reaped", []func(*v1alpha1.AgentSession){reaped, remote}, v1alpha1.OccurrenceEnded, ReasonParticipationNotObserved, "", false},
 		{"interactive ignores a task outcome", []func(*v1alpha1.AgentSession){remote, outcome("session-uid")}, v1alpha1.OccurrenceEnded, ReasonParticipationNotObserved, "", false},
+		// Missing telemetry is not proof that the agent never launched: only
+		// agentd's own report of the refused first launch is.
 		{"headless never reported, deadline passed", []func(*v1alpha1.AgentSession){deadline(deadlinePassed), noAgent},
-			v1alpha1.OccurrenceFailed, ReasonNotStarted, "", false},
+			v1alpha1.OccurrenceFailed, ReasonNoTaskResult, "", false},
+		{"headless reaped, never reported, deadline passed", []func(*v1alpha1.AgentSession){reaped, deadline(deadlinePassed), noAgent},
+			v1alpha1.OccurrenceFailed, ReasonReaped, "", false},
 		{"interactive never reported, deadline passed", []func(*v1alpha1.AgentSession){reaped, remote, deadline(deadlinePassed), noAgent},
-			v1alpha1.OccurrenceFailed, ReasonNotStarted, "", false},
+			v1alpha1.OccurrenceEnded, ReasonParticipationNotObserved, "", false},
 		{"agentd refused the late first launch", []func(*v1alpha1.AgentSession){deadline(deadlinePassed), func(s *v1alpha1.AgentSession) {
 			s.Status.Agent.Status, s.Status.Agent.Message = protocol.AgentFailed, protocol.StartDeadlinePassed
 		}}, v1alpha1.OccurrenceFailed, ReasonNotStarted, "", false},
@@ -341,5 +345,29 @@ func TestTaskResultReadsTheHeartbeatsTask(t *testing.T) {
 				t.Errorf("outcome %+v", o)
 			}
 		})
+	}
+}
+
+// SessionName derives DESIGN-054's session name from the item's UID and the
+// occurrence instant, in UTC to the minute.
+func TestSessionName(t *testing.T) {
+	at := time.Date(2026, 12, 3, 9, 5, 59, 0, time.FixedZone("EST", -5*3600))
+	for _, c := range []struct {
+		uid, want string
+	}{
+		{"0123abcd-ef01-4567-89ab-cdef01234567", "sw-0123abcdef01-202612031405"},
+		{"0123abcdef01", "sw-0123abcdef01-202612031405"},
+		{"0123abcd-ef0", ""},
+		{"0123ABCD-EF01-4567-89ab-cdef01234567", ""},
+		{"item-uid-not-hex-at-all", ""},
+		{"", ""},
+	} {
+		got, err := SessionName(c.uid, at)
+		if got != c.want || (err == nil) != (c.want != "") {
+			t.Errorf("SessionName(%q) = %q, %v; want %q", c.uid, got, err, c.want)
+		}
+		if c.want != "" && !sessionNamePattern.MatchString(got) {
+			t.Errorf("%q does not fit the schema's pattern", got)
+		}
 	}
 }

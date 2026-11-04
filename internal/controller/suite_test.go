@@ -169,6 +169,7 @@ func setup(ctx context.Context) error {
 type operator struct {
 	t      *testing.T
 	writes *recordingClient
+	passes *releasePasses
 	cancel context.CancelFunc
 	done   chan error
 }
@@ -200,6 +201,8 @@ func startOperatorWith(t *testing.T, mgrOpts func(*ctrl.Options), opts ...func(*
 	rec := &recordingClient{Client: mgr.GetClient()}
 	r := &Reconciler{Client: rec, Templates: templatesKey, APIReader: mgr.GetAPIReader(),
 		Rescuer: rescuer, Recorder: mgr.GetEventRecorder("dev-env-operator"), SessionNamespace: sessionNS}
+	passes := &releasePasses{}
+	r.releaseJudged = passes.record
 	for _, o := range opts {
 		o(r)
 	}
@@ -207,7 +210,7 @@ func startOperatorWith(t *testing.T, mgrOpts func(*ctrl.Options), opts ...func(*
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	op := &operator{t: t, writes: rec, cancel: cancel, done: make(chan error, 1)}
+	op := &operator{t: t, writes: rec, passes: passes, cancel: cancel, done: make(chan error, 1)}
 	go func() { op.done <- mgr.Start(ctx) }()
 	t.Cleanup(op.stop)
 	return op
