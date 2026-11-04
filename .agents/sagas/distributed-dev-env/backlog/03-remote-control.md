@@ -244,9 +244,114 @@ latency through the kubelet's Secret propagation, and many pods on one account.
 
 Increment 3 status (2026-10-19): the keeper's Claude transport, private journal and access-only publisher (`internal/keeper/claude_*.go`) are source and unit tests only. Nothing calls them yet: no worker, flag or wiring (increment 4), and they are not released, installed or accepted.
 
-Increment 4 status (2026-10-19): the keeper's Claude refresh worker (`internal/keeper/claude_worker.go`) and its wiring are source and unit tests only, behind `--enable-claude-auth` (default off; `Options.ClaudeAuth`), so deploying the binary changes nothing. The worker is a leader-only runnable using the same uncached client as Codex's, so RBAC stays get+patch by name. Per cycle: Lease budget check, journal `RefreshIntent` (CAS), budget check again, one POST, journal the replacement (CAS), budget check, publish the access-only projection. Due once per access-token life, with the last third as lead. A `RefreshIntent` found at the start of a tick (a crash or a lost save after a POST) becomes `NeedsLogin` with the refresh credential dropped; the POST is never replayed. After a successful POST the save runs with no Lease check (the old refresh token is spent; the journal compare-and-swap is the guard against a newer leader) and, with the publication, on a context detached from shutdown (each step keeps its own 2 s timeout), so a keeper stopping right then still keeps the replacement; a stop during the POST itself, or an API server that is unreachable, still ends in `NeedsLogin`. Excluded and still open: the login ceremony (increment 5), haynes-ops flags, RBAC, mounts and image pins, the console, metrics, and the live-provider checkpoint (increment 6). Not released, installed or accepted.
+Increment 4 status (2026-10-19): the keeper's Claude refresh worker (`internal/keeper/claude_worker.go`) and its wiring are source and unit tests only, behind `--enable-claude-auth` (default off; `Options.ClaudeAuth`), so deploying the binary changes nothing. The worker is a leader-only runnable using the same uncached client as Codex's, so RBAC stays get+patch by name. Per cycle: Lease budget check, journal `RefreshIntent` (CAS), budget check again, one POST, journal the replacement (CAS), budget check, publish the access-only projection. Due once per access-token life, with the last third as lead. A `RefreshIntent` found at the start of a tick (a crash or a lost save after a POST) becomes `NeedsLogin` with the refresh credential dropped; the POST is never replayed. (Amended 2026-11-04, see *Keeper refresh-failure prevention* below: an intent that the journal's unsent marker, or the keeper's own in-memory proof, shows was never dispatched returns to `Ready` instead; every other intent still becomes `NeedsLogin`.) After a successful POST the save runs with no Lease check (the old refresh token is spent; the journal compare-and-swap is the guard against a newer leader) and, with the publication, on a context detached from shutdown (each step keeps its own 2 s timeout), so a keeper stopping right then still keeps the replacement; a stop during the POST itself, or an API server that is unreachable, still ends in `NeedsLogin`. Excluded and still open: the login ceremony (increment 5), haynes-ops flags, RBAC, mounts and image pins, the console, metrics, and the live-provider checkpoint (increment 6). Not released, installed or accepted.
 
 Increment 5 status (2026-10-19): the keeper-owned Claude login ceremony is source and unit tests only, and changes nothing until the haynes-ops activation (increment 6). Shape (it mirrors the Codex ceremony): `agentd claude-login` (and `claude-login-status`, a fixed-word status check; `claude-login-idle` is the container entrypoint) in a `claude-login` container of the keeper pod runs the pinned `claude auth login --claudeai` with HOME in a memory-backed directory shared with the keeper, prints one JSON line with the validated sign-in link (nothing else from the CLI), reads the one-time code on stdin, and asks the keeper's private unix-socket control (`begin`, `adopt`, `cancel`, `status`; mode 0600; leader only) to adopt. The keeper parses the staged `.credentials.json` (0600 regular file, no symlink, both tokens, access valid at least 5 minutes, `user:profile` and `user:inference`), reads the account, organization and subscription from the provider's profile for that access token, then journals a Ready record at a generation above both the journal's and the published one, publishes the access-only projection and wipes the staging. The control socket answers Busy while a refresh holds the worker's mutex, so adoption never overlaps one (the helper waits and retries); a refusal on `AccountMismatch` mirrors Codex. A fresh login also recovers a `NeedsLogin` or `RefreshIntent` journal. The helper image is the existing signed agent image (it already holds the pinned claude CLI), so there is no new image pipeline; the keeper binary is not in it, which is why the helper side is an `agentd` subcommand and the shared wire code is `internal/claudelogin`. Fixed codes cross the socket and the helper's output. Staging and the attempt are in memory and tmpfs only. Open, not proven here: that `claude auth login` prints its link and reads the code with stdout piped and stdin a terminal (the Codex shape), the real profile response, and the 2.1.296 CLI itself; all are checked at the increment 6 checkpoint. Not released, installed or accepted.
+
+
+### Keeper refresh-failure prevention (2026-11-04): source only, PR #885
+
+This amends the increment 4 refresh cycle above. The owning decision is
+[DESIGN-001 D-11](../designs/001-dev-env-v2.md#62-claude-max-login-and-its-monthly-renewal)
+(the keeper is the only owner of the Max login and its rotating refresh
+token); this plan holds the cycle, and the
+[verification record](../verification/keeper-refresh-failure-prevention-2026-11-03.md)
+holds the tests and evidence. It is source and synthetic tests only: not
+released, installed or accepted, and no provider, login, credential, cluster or
+deployment was exercised.
+
+The cycle, per refresh:
+
+1. Lease fence with `claudeRequestBudget` (7 s).
+2. One compare-and-swap writes the `RefreshIntent` record in `state.json` and
+   the unsent marker in a second data key of the same journal Secret,
+   `unsent-attempt`.
+3. Re-read the intent; Lease fence with 7 s, which covers the commit's 2 s
+   save and the 2 s margin.
+4. The transport runs every check that can prove the request unsent, then
+   calls the dispatch commit: one compare-and-swap, on the Secret as re-read in
+   step 3, that removes the marker. A lost acknowledgement is read back: the
+   commit holds only if the same Secret (same UID) still holds this attempt's
+   intent and no marker.
+5. Lease fence with 7 s again: the 3 s request, the 2 s replacement save and
+   the 2 s margin. Each fence budget is under the fence's 10-second freshness
+   bound.
+6. One POST, on a context that shutdown does not cancel, within its own
+   3-second bound. From the commit on, nothing is "not sent".
+7. Save the replacement by compare-and-swap with no Lease check (the old
+   token is spent), which also removes any marker; then fence and publish the
+   access-only projection.
+
+The marker's value is `{"version":1,"journalUID":"<Secret UID>","attemptUID":"<attempt UID>"}`.
+It holds no credential. `state.json` and its strict decoder are unchanged, so
+older keepers read the journal as before, never write the marker, and their
+merge patches leave the key alone. Every save other than the intent removes the
+marker. No new RBAC, resource or store: the keeper already gets and patches
+the named journal Secret, which Flux creates once and never re-applies.
+
+What a tick does with a `RefreshIntent` it finds:
+
+- The marker names this Secret's UID and the intent's attempt: the journal
+  proves nothing was dispatched, so any keeper returns it to `Ready` by fenced
+  compare-and-swap, with no provider call. The rollback re-reads the journal
+  and requires the marker again. The successor's rollback and the owner's
+  dispatch commit are compare-and-swaps on the same resourceVersion, so only
+  one wins. If that rollback write fails, it is retried within the same
+  5-minute bound as below.
+- This process proved the attempt unsent (it stopped before the commit, or
+  the commit or the fence after it refused) but its rollback write did not
+  commit: it retries the rollback each tick for at most 5 minutes, then
+  tombstones, which pages.
+- Anything else (no marker, a marker for another attempt or Secret UID, a
+  corrupt marker, an intent written by an older keeper or after the commit):
+  `NeedsLogin` with the refresh credential dropped, as before. The POST is
+  never replayed.
+
+Unchanged from increment 4: every failure after the commit is possibly spent
+and tombstones; nothing possibly sent, spent or unknown is ever sent again; a
+rolled-back token is sent again only through a new intent with a new attempt
+UID. The 1-minute backoff is set only after two rollbacks: the one that follows
+the transport's not-sent result (which includes a refused commit or a refused
+fence after it), and a successful retry from the tick. The three earlier
+unsent exits (the intent save fails, the re-read does not match, the fence
+before the commit refuses) roll back without it, so the next due tick, at most
+30 s later, may write a new intent; that is safe because the token was never
+sent. Also in this change: refresh failures are fenced by the originating
+attempt, and the notifier checks a hub `NeedsLogin` against the durable
+journal behind the leader fence before it pages.
+
+Residuals, as in the verification record:
+
+- RES-1. A crash, or any stop that is not a not-sent path, after the commit
+  is stored and before the POST: a successor tombstones a token that may be
+  unspent.
+- RES-2. A lost commit acknowledgement whose read back also fails: only the
+  proving process can roll back; a restart before that tombstones.
+- RES-3. The fence after the commit refuses: nothing is sent; as in RES-2.
+- RES-4. The provider has no refresh idempotency, so RES-1 cannot be closed
+  on the keeper side.
+- RES-5. The 5-minute proof bound is per process; a restart within it starts
+  a new one from the marker.
+- RES-6. An in-place restore of an old journal copy (same UID) can bring
+  back an old token: an old `Ready` copy before this change, and now an old
+  marked `RefreshIntent` copy too. A recreated Secret is refused.
+- RES-7. A stall longer than the remaining fence budget between the third
+  fence and the end of the POST: the POST can complete after the Lease is
+  lost (the provider takes no fencing token). Not new. The successor
+  tombstones; the stale owner's replacement compare-and-swap fails.
+- RES-8. Every failure after the commit, including dial, DNS and TLS
+  failures before any byte is written and 429 or 5xx answers, tombstones and
+  pages although the token may be unspent: the main remaining source of a
+  false login-required.
+- RES-9. Anyone who can patch the journal Secret can forge or copy a marker
+  naming the current intent. The journal is trusted state.
+- RES-10. Any other write to the journal Secret between the intent's re-read
+  and the commit fails the commit, and nothing is sent. If that write left
+  this attempt's intent in place, the intent rolls back with the 1-minute
+  delay (availability only); if it replaced the intent, nothing is rolled
+  back and the next tick handles what the journal then holds.
+- RES-11. On a downgrade, an older keeper tombstones marked intents and
+  leaves stale markers, which name old attempts and are harmless.
 
 Story110 T25 status (2026-10-19): the standby (`internal/standby`, `apiserver.Server.CreateStandby`) is source and unit tests only, behind `--enable-standby-session` (default off, refused without the API), so deploying the binary changes nothing. It is a leader-only runnable. Each minute it lists AgentSessions labelled `dev-env.haynesops.com/standby=true` in the session namespace and, if none is alive, creates one through the API's own creation path (the same checks and numbered name as a client's create, depth 0, parent `dev-env-system/dev-env-operator-standby`): claude, `remote`, `--standby-model` (default `claude-opus-5-5`), `--standby-repo` (default `haynes-ops`), `--standby-profile` (default `full`; `workbench` later), `--standby-effort` (default `xhigh`). It reads, changes and deletes no other session. Rulings: a **suspended** standby counts as the standby (it resumes as the same phone entry with its history, so replacing it would leave two); a session being reaped, Archived, Failed, or whose agent exited, failed or was interrupted does not, so a replacement is created. The standby is one labelled session whether Tom has opened it or not (v1 post-ready's "already there"): opening it creates no second; a fresh one appears when it ends, is reaped or fails. A tripped breaker is reported as one `loop suspected` operator log line. Circuit breaker, as in v1 post-ready: creation times are kept in the ConfigMap `dev-env-standby` in the templates namespace (resourceVersion-checked update, survives an operator restart); each creation is recorded before it is made, so a failing create still spends a slot; three creations in 30 minutes are allowed and a fourth is refused until the oldest ages out of the window. Excluded and still open: the haynes-ops change (flag, and `get/create/update` on that one ConfigMap in the operator's Role), the console, archive on reap. Not released, installed or accepted.
 
