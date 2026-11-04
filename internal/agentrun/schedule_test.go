@@ -951,6 +951,25 @@ func TestScheduleRetry(t *testing.T) {
 			t.Error("retried past the attempt limit")
 		}
 	})
+	t.Run("a lost answer is not repeated", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork(), answer: func(w http.ResponseWriter) bool {
+			apiError(w, http.StatusBadGateway, apiv1.CodeUnavailable, "synthetic")
+			return true
+		}}
+		d.handle(t, h)
+		h.mustRun(ExitUnconfirmed, decideArgs("retry")...)
+		posts := 0
+		for _, r := range h.api.requests() {
+			if r.method == http.MethodPost {
+				posts++
+			}
+		}
+		if posts != 1 || len(h.sleeps) != 0 {
+			t.Errorf("%d posts, sleeps %v", posts, h.sleeps)
+		}
+		contains(t, "stderr", h.stderr.String(), "do not repeat it")
+	})
 	t.Run("--at", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
