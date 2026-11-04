@@ -133,7 +133,7 @@ ServiceAccount only. The keeper and every other identity get no write.
 `dev-env-system/dev-env-scheduled-work`, not in `dev-env-templates`. Putting them
 there would change the templates revision and drain every idle session, and an
 older operator would refuse the whole document. Each template fixes the agent,
-model id, effort, size, profile, allowed repos, maximum duration (headless), and the owner classes it admits (`human`, `session`). The
+model id, effort, size, profile, allowed repos, maximum duration (headless), and the bases it admits (`human`, `session`, `approved`). The
 request names a template; it cannot raise any of these. With no ConfigMap, the
 executor dispatches nothing. A template for "dev-env-ops style" interactive work
 uses the existing `ops` profile. The operator image that reads the ConfigMap ships
@@ -146,7 +146,7 @@ An occurrence dispatches on exactly one of these, checked at the due time:
 | Basis | Condition at due time | Session is created as |
 |---|---|---|
 | **Human owner** | `spec.editor` is the owner, and the template admits `human` | the operator's client identity `client/dev-env-system/scheduled-work`, within the template's fixed bounds |
-| **Human approval** | `status.approval.specHash` equals the current spec's hash, and the template admits the owner's class | the same client identity |
+| **Human approval** | `status.approval.specHash` equals the current spec's hash, and the template admits `approved` work (a template's admitted classes are `human`, `session` and `approved`). The owner's own class is not checked, because Tom approved this exact spec; that is how client and coordinator owners run | the same client identity, within the template's fixed bounds |
 | **Live session owner** | `spec.editor` is the owner; the owner session (by UID) is **proven live**: operating mode Running, phase Running or Idle, a heartbeat within the staleness bound, and not ended by the session-end rule below. A drain onto a new revision is neither live nor ended. This basis is checked **before the claim**, like the caps: while the owner is unproven the occurrence stays `Pending`, and when grace ends it goes to `Parked`. An unproven state never grants authority; the template admits `session` | **a child of the owner**, through the same validation as if the owner created it now: its profile, depth, per-parent child cap and mode rules all apply |
 
 Anything else parks with reason `no standing authority`, and Tom is paged. He can
