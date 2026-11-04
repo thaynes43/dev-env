@@ -99,8 +99,22 @@ closed during a stall. Nothing else changes: the ledger records the same stall
 signal, and `latched`, `reason` and every other field are the same for every
 reader. `agent-run` sends the header from this change on; the 2.90.0 client
 does not, so its `budget show` prints `stall: -` against an operator with this
-change. agentd does not read `stall` and does not ask for it. Mixed operator
-and client versions are therefore safe in both directions for this field.
+change. agentd does not read `stall` and does not ask for it.
+
+Which mixes are safe for this field:
+
+- An operator with this change, with any agentd or `agent-run`: safe. A client
+  that does not ask never gets `stall`.
+- An operator from before decision 94 (for example the deployed `sha-2828fa9`,
+  which does not contain #909), with any client: safe. It never sends `stall`;
+  a new client that asks gets nothing extra.
+- An operator built from main after #909 and before this change: **not safe**.
+  It sends `stall` to every client, and agentd or `agent-run` up to 2.89.x
+  fails closed while an unlatched campaign is stalled. Do not deploy one.
+- During a rolling update the API is served by every replica. A replica that
+  runs such an in-between build is unsafe in the same way, so a rollout must go
+  from a build without #909 straight to one with this change, never through an
+  in-between build.
 
 One logical campaign is assigned externally to one host. The API cannot replace
 that assignment, delete the ledger, reset history, extend its own deadline or
