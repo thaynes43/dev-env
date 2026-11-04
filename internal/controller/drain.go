@@ -51,9 +51,9 @@ func sessionIdle(s *v1alpha1.AgentSession, pod *corev1.Pod) bool {
 	return agentIdleForDrain(s)
 }
 
-// agentIdleForDrain is the agent half of sessionIdle: the heartbeat reports
-// the agent idle with no attached client. recordRestart checks it again on the
-// fresh session read before a proof or a stop is written.
+// agentIdleForDrain is the agent half of sessionIdle: the stored heartbeat
+// reports the agent idle with no attached client. recordRestart checks it
+// again on the fresh session read before a proof or a stop is written.
 func agentIdleForDrain(s *v1alpha1.AgentSession) bool {
 	a := s.Status.Agent
 	return a != nil && a.Attached == 0 && a.Status == protocol.AgentIdle
@@ -267,8 +267,10 @@ func (r *Reconciler) prepareRestart(ctx context.Context, pod *corev1.Pod) (proto
 // recordRestart writes the prepare-restart proof before the pod is deleted
 // (DESIGN-001 5.2, the same record-first rule as rescue). It writes only while
 // this is still the session the report was for and its fresh read still shows
-// an idle agent with no attached client: an agent that started waiting or
-// working after the dry-run read is not stopped.
+// an idle agent with no attached client. That read is as fresh as the stored
+// heartbeat (agentd posts every 60 s): a heartbeat that reported waiting, busy
+// or attached after the dry-run read stops nothing, but a change since the
+// last heartbeat is not seen here (DESIGN-001 5.2, 2026-11-04 note).
 func (r *Reconciler) recordRestart(ctx context.Context, s *v1alpha1.AgentSession, rec *v1alpha1.RestartStatus) (bool, error) {
 	if r.APIReader == nil || rec == nil || rec.ConversationID == "" {
 		return false, errors.New("drain needs an uncached session read and a conversation id")

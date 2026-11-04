@@ -994,52 +994,78 @@ func TestAutomaticDrainLeavesWaitingSessions(t *testing.T) {
 	}
 }
 
-// The agent can start waiting after the drain read its conversation. The fresh
-// session read before the stop sees that, so the agent is not stopped and the
-// pod stays.
-func TestDrainRevalidatesWaitingBeforeStop(t *testing.T) {
-	tmpl := currentTemplates(t)
-	s := drainFixture("race-waiting")
-	s.Spec.Mode, s.Spec.Agent = v1alpha1.ModeLocal, v1alpha1.AgentClaude
-	s.Status.Phase = v1alpha1.PhaseDraining
-	pod := readyDrainPod(s.Name, "old-revision")
-	c, stored, storedPod := drainClient(t, s, pod)
-	reads := 0
-	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
-		reads++
-		if reads == 2 {
-			var fresh v1alpha1.AgentSession
-			if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), &fresh); err != nil {
-				t.Fatal(err)
-			}
-			fresh.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentWaiting}
-			if err := c.Status().Update(context.Background(), &fresh); err != nil {
-				t.Fatal(err)
-			}
+// The heartbeat can report the agent waiting, busy or attached after the drain
+// read its conversation. The fresh session read before the proof write (flip at
+// read 1) and before the stop write (flip at read 2) sees that: the agent is
+// not stopped, the pod stays, and the next pass cancels the pending drain.
+// This is as fresh as the stored heartbeat (DESIGN-001 5.2, 2026-11-04 note).
+func TestDrainRevalidatesTheAgentBeforeStop(t *testing.T) {
+	for _, flip := range []int{1, 2} {
+		for _, c := range []struct {
+			name  string
+			agent v1alpha1.AgentStatus
+		}{
+			{"waiting", v1alpha1.AgentStatus{Status: protocol.AgentWaiting}},
+			{"busy", v1alpha1.AgentStatus{Status: protocol.AgentBusy}},
+			{"attached", v1alpha1.AgentStatus{Status: protocol.AgentIdle, Attached: 1}},
+		} {
+			t.Run(fmt.Sprintf("read %d %s", flip, c.name), func(t *testing.T) {
+				tmpl := currentTemplates(t)
+				s := drainFixture("race-agent")
+				s.Spec.Mode, s.Spec.Agent = v1alpha1.ModeLocal, v1alpha1.AgentClaude
+				s.Status.Phase = v1alpha1.PhaseDraining
+				pod := readyDrainPod(s.Name, "old-revision")
+				cl, stored, storedPod := drainClient(t, s, pod)
+				calls := 0
+				rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+					calls++
+					if calls == flip {
+						var fresh v1alpha1.AgentSession
+						if err := cl.Get(context.Background(), client.ObjectKeyFromObject(s), &fresh); err != nil {
+							t.Fatal(err)
+						}
+						agent := c.agent
+						fresh.Status.Agent = &agent
+						if err := cl.Status().Update(context.Background(), &fresh); err != nil {
+							t.Fatal(err)
+						}
+					}
+					return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+				}}
+				r := &Reconciler{Client: cl, APIReader: cl, Restarter: rt}
+				obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+				if _, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs); err != nil {
+					t.Fatal(err)
+				}
+				if rt.stopCount(pod.Name) != 0 {
+					t.Fatal("the agent was stopped after the heartbeat said it was no longer idle")
+				}
+				var fresh v1alpha1.AgentSession
+				if err := cl.Get(context.Background(), client.ObjectKeyFromObject(s), &fresh); err != nil {
+					t.Fatal(err)
+				}
+				if flip == 1 && fresh.Status.Restart != nil {
+					t.Fatalf("a proof was written after read 1: %+v", fresh.Status.Restart)
+				}
+				if fresh.Status.Restart != nil && fresh.Status.Restart.Stopped {
+					t.Fatal("a stop was recorded")
+				}
+				var got corev1.Pod
+				if err := cl.Get(context.Background(), client.ObjectKeyFromObject(pod), &got); err != nil || got.UID != pod.UID || !got.DeletionTimestamp.IsZero() {
+					t.Fatal("the pod was removed", err)
+				}
+				// The next pass sees the new state: no drain, no exec, phase Running.
+				reads := rt.readCount(pod.Name)
+				obs = observation{pod: owned[*corev1.Pod]{obj: &got}, templates: tmpl}
+				hold, _, stop, err := r.drainIdle(context.Background(), &fresh, tmpl, &obs)
+				if err != nil || hold || stop || rt.readCount(pod.Name) != reads || rt.stopCount(pod.Name) != 0 {
+					t.Fatalf("next pass hold %v stop %v err %v reads %d to %d", hold, stop, err, reads, rt.readCount(pod.Name))
+				}
+				if phase, _ := podPhase(&fresh, obs); phase != v1alpha1.PhaseRunning {
+					t.Fatalf("next pass phase %s, want Running", phase)
+				}
+			})
 		}
-		return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
-	}}
-	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
-	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
-	if _, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs); err != nil {
-		t.Fatal(err)
-	}
-	if rt.stopCount(pod.Name) != 0 {
-		t.Fatal("the agent was stopped after it started waiting")
-	}
-	if reads != 2 {
-		t.Fatalf("prepare-restart calls %d, want the two dry-run reads", reads)
-	}
-	var got corev1.Pod
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &got); err != nil || got.UID != pod.UID || !got.DeletionTimestamp.IsZero() {
-		t.Fatal("waiting race removed the pod", err)
-	}
-	var fresh v1alpha1.AgentSession
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), &fresh); err != nil {
-		t.Fatal(err)
-	}
-	if fresh.Status.Restart != nil && fresh.Status.Restart.Stopped {
-		t.Fatal("a stop was recorded for a waiting agent")
 	}
 }
 

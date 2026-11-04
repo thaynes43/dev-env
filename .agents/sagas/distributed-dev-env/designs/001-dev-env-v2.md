@@ -991,7 +991,7 @@ per session from `dev-env-templates`, and never changes either after create.**
   otherwise only reads them: it never updates or deletes a pod or a volume. A
   template change marks a running session `Outdated` (a condition) and changes
   nothing else; plan 04's drain acts on it (5.2: only at an idle moment, and an
-  agent reporting `waiting` is not idle, 2026-11-04 note). A pod that is gone is replaced on the same
+  agent reporting `waiting` is not a drain moment, 2026-11-04 note). A pod that is gone is replaced on the same
   volume, so a preempted session resumes (D-20). A pod that ended, for example by
   eviction, is kept and the session is `Failed`. A pod or volume with the session's
   name that the session does not control is left alone and reported.
@@ -2133,10 +2133,16 @@ question or a permission prompt waits for a person, so stopping it then cuts
 the turn and drops the pending question. The drain moment is therefore the
 agent reporting `idle` with no attached client, for every session type that
 drains. The fresh session read before the proof write and before the stop
-checks it again: an agent that starts waiting or working after the dry-run
-read is not stopped, the pending `Draining` mark is cancelled, and the pod
-stays. A matching already-stopped proof still finishes its recovery, as for
-remote sessions. Idle task and idle local sessions still drain.
+checks it again. A heartbeat that reports the agent waiting, busy or attached
+after the dry-run read therefore stops nothing: the pending `Draining` mark is
+cancelled and the pod stays. That check is only as fresh as the stored
+heartbeat, which agentd posts every 60 s. The dry-run reads the live attach
+count but not Claude's live status, so an agent that starts a turn and asks a
+question between its last heartbeat and the stop is still stopped. Busy has
+had the same window since the 2026-10-17 note. Closing it needs the dry-run to
+report the live status; that is an agentd change and a follow-up. A matching
+already-stopped proof still finishes its recovery, as for remote sessions.
+Idle task and idle local sessions still drain.
 
 **Proposed, not ruled (2026-11-04, OpenProject #385, DR1): no automatic drain
 for running local sessions.** An idle local coordinator can still have native
