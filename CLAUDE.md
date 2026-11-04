@@ -68,7 +68,7 @@ historical first-build order. Deploys remain GitOps.
 ```
 .agents/HANDOFF.md       the front door: state, next steps, rulings, inside vs outside
 .agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
-.agents/skills/          repo-native agent skills, one SKILL.md each: supervised-dispatch, worker-qa-loop, timer-checkin
+.agents/skills/          repo-native agent skills, one SKILL.md each: supervised-dispatch, worker-qa-loop, timer-checkin, tmux-cli-handoff
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), publish-git-wait.yml (the git-wait trial fixture's
                          git-wait-sha-<sha> tag from main, signed), release-please.yml, Claude review + @claude
 .github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
@@ -327,6 +327,9 @@ AgentSession CRD rollout.
   [`.agents/skills/worker-qa-loop/SKILL.md`](.agents/skills/worker-qa-loop/SKILL.md).
   Timed check-ins follow
   [`.agents/skills/timer-checkin/SKILL.md`](.agents/skills/timer-checkin/SKILL.md).
+  Delivering work or a correction into an existing provider CLI session in tmux
+  follows
+  [`.agents/skills/tmux-cli-handoff/SKILL.md`](.agents/skills/tmux-cli-handoff/SKILL.md).
   No provider is known to load these files automatically: open them yourself.
 - **Plain writing.** Short sentences, concrete nouns, no filler. Use Mermaid for editable
   engineering diagrams; SVG/PNG workflow drawings are also supported.

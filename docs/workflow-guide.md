@@ -895,12 +895,16 @@ outcome, Tom's cancellation or pause (or his verified coordinator's), a genuine
 unresolvable blocker, an exhausted authorized budget (its recorded budget spent,
 or a budget checkpoint or stop threshold recorded on the story reached; never a
 stall threshold, [ADR-019](../.agents/sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)),
-or a required safety or permission decision, each with specific evidence. A
+or a required safety or permission decision, each with specific evidence (a
+denied decision ends the dependent work; one that is asked but not yet answered
+stops only the action that depends on it, with a checkpoint and no timer or
+poll for it, per budget-contract item 5, and resumes on the verified answer). A
 latch the platform has actually set, read with
 `agent-run budget show <task-uid>` (`latched: true` and its reason), is a
 platform denial that agents never bypass; an expected or estimated latch is not
 a stop. The agent-loop skills in [`.agents/skills/`](../.agents/skills/) apply
-this rule.
+this rule. Steering an existing provider CLI session in tmux follows
+[tmux-cli-handoff](../.agents/skills/tmux-cli-handoff/SKILL.md).
 
 *Adopted 2026-11-04 and recorded as decision 94, on Tom's words relayed by
 session dev-env-1027-010058 (parent coordinator) as trusted conversation
@@ -932,10 +936,11 @@ scope decision changes the experience.
 ### Where the agent-loop skills load
 
 *Checked 2026-11-04 in one Claude session pod for OpenProject #402. Merged
-source is not loaded runtime.* The three skills (`supervised-dispatch`,
-`worker-qa-loop`, `timer-checkin`) are files under `.agents/skills/` on `main`
-from `801de50d` (#908). A running session does not get them because they
-merged:
+source is not loaded runtime.* The three agent-loop skills
+(`supervised-dispatch`, `worker-qa-loop`, `timer-checkin`) are files under
+`.agents/skills/` on `main` from `801de50d` (#908); a fourth,
+`tmux-cli-handoff`, arrives with #920 and loads the same way. A running session
+does not get them because they merged:
 
 - **Claude Code** loads skills from `~/.claude/skills/`, from a project's
   `.claude/skills/` and from installed plugins. This repository has no `.claude/skills/`. In the installed
@@ -943,7 +948,7 @@ merged:
   import code, which copies such skills into `.claude/skills/` when a user runs
   the import. That is a string search of the binary, not a load test.
 - **`~/.claude/skills/`** in the checked pod holds only the account-synced skills
-  (under `synced/`), none of these three. **`~/.codex/skills/`** does not exist
+  (under `synced/`), none of these skills. **`~/.codex/skills/`** does not exist
   there.
 - **The reference clone** `~/repos/dev-env` in that pod has `main` checked out
   at `2828fa9f` (#895), older than `801de50d`, so it has no `.agents/skills/`
