@@ -68,6 +68,7 @@ historical first-build order. Deploys remain GitOps.
 ```
 .agents/HANDOFF.md       the front door: state, next steps, rulings, inside vs outside
 .agents/sagas/<saga>/    saga README (vision, decision log), KICKOFF, adrs/, designs/, backlog/, research/
+.agents/skills/          repo-native agent skills, one SKILL.md each: supervised-dispatch, worker-qa-loop, timer-checkin
 .github/workflows/       ci.yml (lint, test, build, check-generated, image builds; aggregate `CI - Success`), publish.yml (operator image from main, signed), publish-agent.yml (agent image from a v2.x.y tag, signed), publish-git-wait.yml (the git-wait trial fixture's
                          git-wait-sha-<sha> tag from main, signed), release-please.yml, Claude review + @claude
 .github/renovate.json5   Renovate config (gomod, Actions SHA pins, Dockerfile digests, ARG and Makefile pins)
