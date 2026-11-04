@@ -40,8 +40,9 @@ Hold at `modal-pending` (`modal-trust`) and send nothing:
    with Tom's phone route asks him itself, with AskUserQuestion). It says what
    trusting allows and whether that persists, or that it is unknown.
 5. After a specific approval arrives through a verified channel: the actor does
-   not press `a`. The pane was launched by the helper, so it is agent-owned and
-   only Tom presses. The actor gives Tom the exact choice, the pane and the
+   not press `a`. The pane was launched by the helper, so it is agent-owned, and
+   under the coordinator's interim choice (until the helper's answer command
+   exists) only Tom presses. The actor gives Tom the exact choice, the pane and the
    approval reference, and stays paused until he records what was pressed,
    when, and the approval reference. A helper command that answers prompts is a
    code follow-up, not available. If Tom declines (for example `[q]`), the actor

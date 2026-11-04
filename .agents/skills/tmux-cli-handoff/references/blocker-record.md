@@ -40,8 +40,8 @@ Field notes:
   interface, after evidence that the author ended or released custody. For
   `modal-pending`, the decider (for a trust or permission prompt, Tom unless a
   recorded rule delegates it; for a command approval, the custodian or its
-  supervisor) and the permitted presser (the pane's recorded owner only when it
-  is a person; Tom for an agent-owned pane, which is any pane the helper
-  launched; never an agent's raw tmux keys). For a lingering prompt, record
-  `modal-unknown` with the helper's own label as evidence; for a refusal,
-  `modal-declined` with state `blocked`.
+  supervisor) and the permitted presser (under the coordinator's interim choice:
+  the pane's recorded owner only when it is a person, Tom for an agent-owned
+  pane, which is any pane the helper launched; never an agent's raw tmux
+  keys). For a lingering prompt, record `modal-unknown` with the helper's own
+  label as evidence; for a refusal, `modal-declined` with state `blocked`.
