@@ -291,27 +291,27 @@ func TestEnsureExistingReminderGivesItsState(t *testing.T) {
 func TestEnsureNeverUpdatesOrDeletes(t *testing.T) {
 	w := item("pushover:default")
 	existing := &v1alpha1.Reminder{ObjectMeta: metav1.ObjectMeta{Namespace: w.Namespace, Name: Key(w, occAt, v1alpha1.PageEventDue, 0)}}
-	forbid := func(verb string) error { return errors.New("forbidden " + verb) }
+	var calls []string
+	record := func(verb string) error { calls = append(calls, verb); return errors.New("forbidden " + verb) }
 	c := fakeClient(t, interceptor.Funcs{
-		Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error {
-			return forbid("update")
-		},
-		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
-			return forbid("patch")
-		},
-		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
-			return forbid("delete")
-		},
-		DeleteAllOf: func(context.Context, client.WithWatch, client.Object, ...client.DeleteAllOfOption) error {
-			return forbid("deleteallof")
-		},
+		Update:      func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error { return record("update") },
+		Patch:       func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error { return record("patch") },
+		Delete:      func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error { return record("delete") },
+		DeleteAllOf: func(context.Context, client.WithWatch, client.Object, ...client.DeleteAllOfOption) error { return record("deleteallof") },
 		SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
-			return forbid("status update")
+			return record("status update")
+		},
+		SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+			return record("status patch")
 		},
 	}, existing)
 	p := &Pager{Client: c}
 	for range 2 {
 		p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, 0, "Due", "", nowAt)
+		p.Refresh(context.Background(), w, v1alpha1.ScheduledWorkPage{Event: "due", Reminder: existing.Name})
+	}
+	if len(calls) != 0 {
+		t.Fatalf("the pager wrote an existing reminder: %v", calls)
 	}
 	if got := list(t, c); len(got) != 1 || got[0].Spec.Title != "" {
 		t.Fatalf("the existing reminder was changed: %+v", got)
