@@ -690,8 +690,9 @@ func TestEnsureIntoKeepsARecordedPageWhenTheReadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	existing.Status.State = v1alpha1.ReminderSent
+	// Recorded while the Reminder was pending; it has been sent since.
 	recorded := []v1alpha1.ScheduledWorkPage{
-		{Event: v1alpha1.PageEventDue, Attempt: 1, Reminder: existing.Name, State: "sent"},
+		{Event: v1alpha1.PageEventDue, Attempt: 1, Reminder: existing.Name},
 		{Event: v1alpha1.PageEventParked, Attempt: 0, Reminder: "swp-other", State: "sent"},
 	}
 	var readFails atomic.Bool
@@ -716,10 +717,22 @@ func TestEnsureIntoKeepsARecordedPageWhenTheReadFails(t *testing.T) {
 	if !slices.Equal(got, recorded) {
 		t.Fatalf("pages = %+v, want the recorded page kept with its name and state %+v", got, recorded)
 	}
-	// With the read working, the replay confirms the Reminder and records it.
+	// Only an entry of the same event and attempt that names a Reminder is
+	// kept: a stored intent (no name yet) is settled skipped, and another
+	// page's entry does not stop this one being recorded.
+	intent := []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventDue, Attempt: 1}}
+	if got := p.EnsureInto(context.Background(), intent, w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); !slices.Equal(got, []v1alpha1.ScheduledWorkPage{{Event: "due", Attempt: 1, State: "skipped"}}) {
+		t.Errorf("a stored intent with the read failing: %+v", got)
+	}
+	other := recorded[1:]
+	if got := p.EnsureInto(context.Background(), slices.Clone(other), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); len(got) != 2 || got[1] != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}) {
+		t.Errorf("another page's entry kept this one from being recorded: %+v", got)
+	}
+	// With the read working, the replay confirms the Reminder and records its
+	// state.
 	readFails.Store(false)
 	got = p.EnsureInto(context.Background(), slices.Clone(recorded), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt)
-	if len(got) != 2 || got[0] != recorded[0] {
-		t.Fatalf("a confirmed replay: %+v", got)
+	if want := (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, Reminder: existing.Name, State: "sent"}); len(got) != 2 || got[0] != want {
+		t.Fatalf("a confirmed replay: %+v, want %+v first", got, want)
 	}
 }
