@@ -74,6 +74,11 @@ type swFixture struct {
 	onStatus func(*v1alpha1.ScheduledWork) error
 	// onUpdate, when set, may refuse a spec write first.
 	onUpdate func(*v1alpha1.ScheduledWork) error
+	// afterGet, when set, runs once after the first read of a ScheduledWork
+	// that reaches the fake client: another writer between a handler's
+	// read and its write.
+	afterGet func(name string)
+	gets     atomic.Int32
 	// pruneStoredDigest stores each status write without the approval's
 	// template digest, as an older CRD would, and leaves the written copy
 	// as the client would: still carrying it.
@@ -106,7 +111,13 @@ func scheduledWorkFixture(t *testing.T) *swFixture {
 					sf.crd.DeepCopyInto(u)
 					return nil
 				}
-				return c.Get(ctx, key, obj, opts...)
+				if err := c.Get(ctx, key, obj, opts...); err != nil {
+					return err
+				}
+				if _, ok := obj.(*v1alpha1.ScheduledWork); ok && sf.afterGet != nil && sf.gets.Add(1) == 1 {
+					sf.afterGet(key.Name)
+				}
+				return nil
 			},
 			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
 				if sw, ok := obj.(*v1alpha1.ScheduledWork); ok {
@@ -604,25 +615,23 @@ func TestScheduledWorkEditIsCompareAndSet(t *testing.T) {
 	f := scheduledWorkFixture(t)
 	one := f.sessionPod("s-one", "full", 0)
 	item := f.create(one, newWork())
-	var calls atomic.Int32
-	f.onUpdate = func(sw *v1alpha1.ScheduledWork) error {
-		if calls.Add(1) == 1 {
-			// Another writer gets there between the read and the write: its
-			// title lands, and the API server (the fake client) refuses the
-			// write that carries the older resourceVersion.
-			cur := f.stored(sw.Name)
-			cur.Spec.Title = "raced"
-			if err := f.c.Update(context.Background(), cur); err != nil {
-				t.Fatal(err)
-			}
+	// Another writer gets there between the handler's read and its write:
+	// its title lands, and the API server (the fake client) refuses the
+	// write that carries the older resourceVersion.
+	f.gets.Store(0)
+	f.afterGet = func(name string) {
+		cur := f.stored(name)
+		cur.Spec.Title = "raced"
+		if err := f.c.Update(context.Background(), cur); err != nil {
+			t.Fatal(err)
 		}
-		return nil
 	}
 	prompt := "new prompt"
 	v := decode[apiv1.ScheduledWork](t, f.do(http.MethodPatch, apiv1.ScheduledWorkItemPath(item.Name), one, apiv1.EditScheduledWorkRequest{Work: &apiv1.EditScheduledWorkOrder{Prompt: &prompt}}))
 	if v.Spec.Title != "raced" || v.Spec.Work.Prompt != prompt {
 		t.Fatalf("the retried edit lost the other write: %+v", v.Spec)
 	}
+	f.afterGet = nil
 	f.onUpdate = func(sw *v1alpha1.ScheduledWork) error {
 		return apierrors.NewConflict(schema.GroupResource{Resource: "scheduledworks"}, sw.Name, errors.New("injected"))
 	}
@@ -815,17 +824,16 @@ func TestScheduledWorkDecisionsAreCompareAndSet(t *testing.T) {
 		t.Run(verb+" against a concurrent ending mark", func(t *testing.T) {
 			f := scheduledWorkFixture(t)
 			item := parkedItem(t, f, nil)
-			var calls atomic.Int32
-			f.onStatus = func(sw *v1alpha1.ScheduledWork) error {
-				if calls.Add(1) == 1 {
-					cur := f.stored(sw.Name)
-					cur.Status.Occurrences[0].Ending = true
-					cur.Status.Occurrences[0].Reason = "cancelled while parked"
-					if err := f.c.Status().Update(context.Background(), cur); err != nil {
-						t.Fatal(err)
-					}
+			// The executor marks the occurrence ending between the
+			// handler's read and its write.
+			f.gets.Store(0)
+			f.afterGet = func(name string) {
+				cur := f.stored(name)
+				cur.Status.Occurrences[0].Ending = true
+				cur.Status.Occurrences[0].Reason = "cancelled while parked"
+				if err := f.c.Status().Update(context.Background(), cur); err != nil {
+					t.Fatal(err)
 				}
-				return nil
 			}
 			at := parkedAt
 			var w *httptest.ResponseRecorder
@@ -846,16 +854,13 @@ func TestScheduledWorkDecisionsAreCompareAndSet(t *testing.T) {
 	t.Run("approve keeps a concurrent count", func(t *testing.T) {
 		f := scheduledWorkFixture(t)
 		item := f.create(tokClient, newWork())
-		var calls atomic.Int32
-		f.onStatus = func(sw *v1alpha1.ScheduledWork) error {
-			if calls.Add(1) == 1 {
-				cur := f.stored(sw.Name)
-				cur.Status.Counts.Skipped = 5
-				if err := f.c.Status().Update(context.Background(), cur); err != nil {
-					t.Fatal(err)
-				}
+		f.gets.Store(0)
+		f.afterGet = func(name string) {
+			cur := f.stored(name)
+			cur.Status.Counts.Skipped = 5
+			if err := f.c.Status().Update(context.Background(), cur); err != nil {
+				t.Fatal(err)
 			}
-			return nil
 		}
 		decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(item.Name), tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash}))
 		if st := f.stored(item.Name).Status; st.Counts.Skipped != 5 || st.Approval == nil {
