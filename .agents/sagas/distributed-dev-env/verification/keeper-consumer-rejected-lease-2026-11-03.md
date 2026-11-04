@@ -12,8 +12,17 @@ message all read ready or logged in until the local expiry.
 
 ## What the pod can see
 
-One signal: the most recent assistant turn in the session transcript is a 401 API-error entry (the
-classifier the continue already uses; user and tool_result entries after it do not hide it). No refresh, CLI login, or credential read is added.
+One signal: the most recent assistant turn in the session transcript is an authentication API error
+(the classifier the continue already uses; user and tool_result entries after it do not hide it). An
+entry is an API error when it is flagged `isApiErrorMessage`, or when it carries no real model response
+(see "Explicit proof" below) and its text starts with "API Error". It is an authentication error when it
+has `apiErrorStatus` 401 or error code `authentication_failed`, or when its text contains one of the
+text markers `oauth token has been revoked`, `oauth token has expired`, `authentication_error` or
+`please run /login`: the classifier fires on those text markers too, not only on a 401 status. No
+refresh, CLI login, or credential read is added.
+
+**Unproven live.** This signal has never been observed in a real session. Every test uses synthetic
+transcript entries; the real CLI's shapes are the existing Unknown.
 
 ## The marker
 
@@ -41,7 +50,11 @@ Design choices, not proved prevention (none was exercised against a real revocat
   Nothing else clears it. The real CLI shape is Unknown; if it lacks these fields a marker clears only
   by a newer generation.
 
-## Surfaces (text only, the state word never changes)
+## Surfaces (agentd's state word never changes; agent-run's state list gains Rejected)
+
+agentd adds text only: its agent state word is unchanged and the rejection rides in the existing status
+message. `agent-run auth status` is different: its list of state words gains `Rejected` (beside Ready,
+Refreshing, NeedsLogin, Unknown and NotConfigured), with exit 1.
 
 | Surface | Rejected | Cannot tell |
 |---|---|---|
@@ -113,6 +126,24 @@ and `login-required:` to `auth_projection_unavailable`, with the rejection appen
 - agent-run does not apply the pod's marker to a `--claude-file` that is not the pod's projection, and
   says so on stderr; with HOME unset and no `--rejected-file` it says the record was not checked.
 
+## Revision 5 rules (review of b9c9e8b)
+
+- The "API Error" text prefix marks an API error only on an entry without a real model response. A
+  reply that has a model other than `<synthetic>` and a usage record (Accepted) is a reply even when its
+  text starts "API Error: 401 authentication_error ..."; it records nothing and counts as proof. A
+  flagged entry, or a synthetic one (no model, or `<synthetic>`) with that text, still records. The
+  continue shares the classifier, so it no longer treats such a reply as an error either.
+- A lock that cannot be had no longer skips the poll. The lock opens read-only when an existing regular
+  lock file cannot be opened for writing (flock needs only a descriptor). If it still cannot be had
+  (busy excepted), the poll observes but writes and removes nothing, and keeps a new rejection in memory
+  for the heartbeat, so a lock path that cannot be created does not read as logged in.
+- The in-memory rejection follows observe's rule in the heartbeat too: it applies only while its
+  generation is the applied receipt generation, so a newer receipt retires it before the next poll.
+- One status line is built from one read of the marker and receipt (the heartbeat used to read twice
+  and could print "logged in" when the marker changed between the reads).
+- rc: when a later agent message no longer starts with `login-rejected:` or `login-unverified:`, the
+  `provider_auth_ok` reason returns to `provider_readiness_unavailable` (evidence `session_view`).
+
 ## Exit code meaning (scripts)
 
 `agent-run auth status` exits 1 for a Rejected row, and exit 1 was documented as expiring or expired.
@@ -163,8 +194,21 @@ marker with a newer generation published, and the wording and merged-state tests
 before (pinned behaviour, not RED): `PinnedAttributionLimits` (4 subtests), agentd's reader already
 bound to the receipt.
 
+Against b9c9e8b (revision 5 tests, run in place before the fixes): agentd
+`AcceptedReplyStartingWithAPIErrorIsNotARefusal` (2 subtests: a real reply recorded as a refusal and did
+not clear one; classified Revoked, APIError, not Accepted), `LockFailureStillReachesTheHeartbeat` (3
+subtests: blank heartbeat message after a lock failure; a read-only lock file reported as a lock
+failure), `StatusLineReadsTheMarkerOnce` (2 subtests: two reads; the heartbeat text "logged in on the
+keeper's projection" after the marker changed between them),
+`InMemoryOverlayIsBoundToTheAppliedGeneration` (2 subtests: a generation 1 or 3 rejection shown with
+generation 2 applied); agent-run
+`RCRejectedLoginDuringAgentStartIsNotAnOwnerAction/recovers` (reason stayed `login_rejected_pending`).
+Guards that passed before: the three synthetic API-error subtests and "the applied generation still
+shows".
+
 ## Limits
 
+- Unproven live: the signal has never been observed in a real session (see above).
 - Detection needs a 401 as the last assistant turn at a poll (every 5 s). A 401 followed by a retry that
   completes inside one poll window is never seen; retry-recovered rejections are invisible.
 - The real CLI's 401 and response transcript shapes are the existing Unknown; tests use the synthetic
@@ -197,5 +241,18 @@ bound to the receipt.
 - agent-run reads the receipt and marker at different moments from agentd's clear: a proof-clear race can
   show Unknown for a moment (it fails closed), as can the few seconds while a newly published generation
   is not yet applied and the marker is unreadable.
+- Transcript rotation: agentd reads the transcript named by the launch record's conversation ID. If the
+  CLI moves to another transcript file (for example after `/clear` or `/resume`), a refusal or a proof
+  written there is not seen, and a recorded marker then clears only by a newer generation. Not handled.
+- rc and the `running` state word: rc's tests pair a `login-rejected:` message with agent state
+  `running`, but agentd sends that message only with `busy`, `idle` or `waiting`, and the API passes
+  agentd's word through. rc reads the reason from the message whatever the state, so the reason is set;
+  rc's `agent_started` check on `running` predates this change and is not changed here.
+- A marker above the receipt generation reads cannot-tell in both readers; the writer neither replaces
+  nor removes it, and if the receipt later reaches that generation the marker is read as a rejection of
+  it. Not changed.
+- A poll that cannot take the lock keeps a new rejection in memory only (lost on an agentd restart, not
+  seen by `agent-run auth status` or `agentd ctl status`), and cannot remove a marker that a proof or a
+  newer generation has resolved until a later poll holds the lock.
 - I could not map "limits 1, 4, 5 and 9" of the review literally (that numbering was not in the message
   I received); every limit raised in the re-review is covered above.

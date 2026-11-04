@@ -307,17 +307,11 @@ func (r *rcRun) observe(v apiv1.Session) string {
 		if authCode == "" && (strings.Contains(msg, "auth_projection_unavailable") || strings.Contains(msg, "claude authentication requires a current keeper projection") || strings.Contains(msg, "login-required: waiting for the keeper's claude projection")) {
 			authCode = "auth_projection_unavailable"
 		}
-		// agentd's fixed prefix for a login the provider rejected while its access
-		// token was unexpired. Information only: no gate, no new outcome.
-		if strings.HasPrefix(strings.TrimSpace(msg), "login-rejected:") {
-			r.unobserved("provider_auth_ok", "session_agent_status", "login_rejected_pending")
-		} else if strings.HasPrefix(strings.TrimSpace(msg), "login-unverified:") {
-			r.unobserved("provider_auth_ok", "session_agent_status", "login_rejection_unverifiable")
-		}
 		if v.AgentStatus.State == "running" && strings.TrimSpace(v.AgentStatus.ConversationID) != "" {
 			r.phase("agent_started", "ok", "session_agent_status", "running_with_conversation_id")
 		}
 	}
+	r.observeRejectedLogin(v.AgentStatus)
 	if v.RemoteControl != nil {
 		if v.RemoteControl.State == "registered" {
 			r.result.RCRegistered = true
@@ -331,6 +325,29 @@ func (r *rcRun) observe(v apiv1.Session) string {
 		}
 	}
 	return authCode
+}
+
+// observeRejectedLogin sets the provider_auth_ok reason while the latest agent
+// message starts with agentd's fixed prefix for a login the provider rejected
+// while its access token was unexpired (or for a record it cannot believe), and
+// returns it to the default once a later message no longer does. Information
+// only: no gate, no new outcome.
+func (r *rcRun) observeRejectedLogin(a *apiv1.AgentStatus) {
+	msg := ""
+	if a != nil {
+		msg = strings.ToLower(strings.TrimSpace(a.Message))
+	}
+	switch {
+	case strings.HasPrefix(msg, "login-rejected:"):
+		r.unobserved("provider_auth_ok", "session_agent_status", "login_rejected_pending")
+	case strings.HasPrefix(msg, "login-unverified:"):
+		r.unobserved("provider_auth_ok", "session_agent_status", "login_rejection_unverifiable")
+	default:
+		switch r.result.Phases["provider_auth_ok"].Reason {
+		case "login_rejected_pending", "login_rejection_unverifiable":
+			r.unobserved("provider_auth_ok", "session_view", "provider_readiness_unavailable")
+		}
+	}
 }
 
 func (r *rcRun) stageDone(name string) bool {

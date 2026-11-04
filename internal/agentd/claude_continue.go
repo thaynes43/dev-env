@@ -28,8 +28,9 @@ import (
 // holds no turn record of its own for a TUI, so the transcript is the only
 // source. The CLI's exact error text is Unknown until the real checkpoint:
 // the match below is for the shape a synthetic fixture uses (an assistant
-// entry flagged isApiErrorMessage, or text starting "API Error", naming a
-// revoked or expired OAuth token) and is the one thing to confirm there.
+// entry flagged isApiErrorMessage, or one without a real model response whose
+// text starts "API Error", naming a revoked or expired OAuth token) and is the
+// one thing to confirm there.
 //
 // Never twice: claude-continue.json records the generation, outcome and evaluation
 // cutoff. A first healthy evaluation establishes a skipped baseline. A newer
@@ -169,7 +170,10 @@ func classifyEntries(tail []byte, assistantOnly bool) lastTurn {
 		t.At, _ = time.Parse(time.RFC3339Nano, e.Timestamp)
 		if e.Type == "assistant" {
 			text := strings.ToLower(entryText(e.Message))
-			if e.IsAPIError || strings.HasPrefix(strings.TrimSpace(text), "api error") {
+			// The "API Error" text prefix marks an error only on an entry without a
+			// real model response: a reply that quotes an error is still a reply.
+			response := acceptedResponse(e.Message)
+			if e.IsAPIError || (!response && strings.HasPrefix(strings.TrimSpace(text), "api error")) {
 				t.APIError = true
 				if string(e.APIErrorStatus) == "401" || string(e.Error) == `"`+authErrorCode+`"` {
 					t.Revoked = true
@@ -180,7 +184,7 @@ func classifyEntries(tail []byte, assistantOnly bool) lastTurn {
 					}
 				}
 			}
-			t.Accepted = !t.APIError && !t.Revoked && acceptedResponse(e.Message)
+			t.Accepted = !t.APIError && !t.Revoked && response
 			if t.Revoked {
 				t.RequestAt = requestTime(lines[:i])
 			}

@@ -812,6 +812,10 @@ func TestRCRejectedLoginDuringAgentStartIsNotAnOwnerAction(t *testing.T) {
 		if r.Outcome != "link_available" || r.Error != nil || r.TotalMs < 30000 {
 			t.Fatal("a refused login was treated as an owner action", r)
 		}
+		// The message cleared, so the phase reason returns to its default.
+		if ph := r.Phases["provider_auth_ok"]; ph.State != "unknown" || ph.Reason != "provider_readiness_unavailable" || ph.EvidenceSource != "session_view" {
+			t.Errorf("provider_auth_ok after the message cleared = %+v", ph)
+		}
 	})
 	t.Run("never clears", func(t *testing.T) {
 		h := newHarness(t)

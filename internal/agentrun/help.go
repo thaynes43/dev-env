@@ -177,6 +177,8 @@ believed makes the row Unknown ("cannot tell"), never Ready. Rejected exits 1,
 which does not mean "renew the login": a script that treats exit 1 as "renew"
 should read the state first. The marker is read for the pod's own projection only;
 with another --claude-file, or no HOME, a note on stderr says it was not applied.
+The Rejected state is not yet proven live: agentd's signal has been tested only
+against synthetic transcripts, never observed in a real session.
 
 For Claude it also prints when the whole login lapses (about 30 days after each sign-in) and the days left,
 from the non-secret login.json the keeper publishes beside the projection. A

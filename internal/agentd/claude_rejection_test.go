@@ -1181,3 +1181,210 @@ func TestRejectionFlockErrorIsLoggedAndBusyIsNot(t *testing.T) {
 		t.Errorf("a busy lock was logged:\n%s", rr.logs.String())
 	}
 }
+
+// replyWithText is an assistant entry with the given text, model and usage
+// ("" omits usage) and any extra top-level fields.
+func replyWithText(at time.Time, extra, model, usage, text string) string {
+	msg := fmt.Sprintf(`{"role":"assistant","model":%q,"content":[{"type":"text","text":%q}]`, model, text)
+	if usage != "" {
+		msg += `,"usage":` + usage
+	}
+	msg += `}`
+	return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"isSidechain":false%s,"message":%s}`, at.Format(time.RFC3339Nano), extra, msg)
+}
+
+// Review fix 1: a real model reply whose text merely starts with "API Error" is
+// a reply, not an API error. The text prefix marks an error only on an entry that
+// carries no real model response; a synthetic API-error entry still records.
+func TestRejectionAcceptedReplyStartingWithAPIErrorIsNotARefusal(t *testing.T) {
+	const quoted = "API Error: 401 authentication_error means the OAuth token has been revoked; please run /login"
+	const usage = `{"input_tokens":3,"output_tokens":9}`
+	t.Run("a real accepted reply records nothing", func(t *testing.T) {
+		rr := newRejectionRig(t)
+		rr.publishGeneration(1)
+		rr.advance(time.Minute)
+		reply := replyWithText(rr.clk, "", "claude-sonnet-5-5", usage, quoted)
+		rr.transcript(userTurn(rr.clk.Add(-time.Second)), reply)
+		rr.poll()
+		if rr.markerExists() {
+			t.Error("a real model reply quoting an API error was recorded as a refusal")
+		}
+		if got := classifyTranscript([]byte(reply + "\n")); got.APIError || got.Revoked || !got.Accepted {
+			t.Errorf("classified %+v; want an accepted reply", got)
+		}
+	})
+	t.Run("a real accepted reply clears a recorded refusal", func(t *testing.T) {
+		rr := revokedCase(t)
+		rr.advance(time.Minute)
+		rr.appendTurn(replyWithText(rr.clk, "", "claude-sonnet-5-5", usage, quoted))
+		rr.poll()
+		if rr.markerExists() {
+			t.Error("a real model reply after the refusal did not count as proof of acceptance")
+		}
+	})
+	for name, extra := range map[string][3]string{
+		"no flag, no model or usage": {"", "", ""},
+		"no flag, synthetic model":   {"", "<synthetic>", `{"input_tokens":0,"output_tokens":0}`},
+		"flagged, synthetic model":   {`,"isApiErrorMessage":true`, "<synthetic>", `{"input_tokens":0,"output_tokens":0}`},
+	} {
+		t.Run("a synthetic API-error entry still records: "+name, func(t *testing.T) {
+			rr := newRejectionRig(t)
+			rr.publishGeneration(1)
+			rr.advance(time.Minute)
+			rr.transcript(userTurn(rr.clk.Add(-time.Second)), replyWithText(rr.clk, extra[0], extra[1], extra[2], quoted))
+			rr.poll()
+			if m, ok := rr.marker(); !ok || m.Generation != 1 || !m.ObservedAt.Equal(rr.clk) {
+				t.Errorf("marker %+v %v; want generation 1 at the refused turn", m, ok)
+			}
+		})
+	}
+}
+
+// Review fix 2: when the lock cannot be had, the poll still observes, writes
+// nothing, and keeps the rejection in memory so the heartbeat shows it.
+func TestRejectionLockFailureStillReachesTheHeartbeat(t *testing.T) {
+	setup := func(t *testing.T) (*rejectionRig, *[]protocol.Status) {
+		rr := newRejectionRig(t)
+		rr.publishGeneration(1) // the poll creates the lock file
+		rr.advance(10 * time.Minute)
+		rr.transcript(revokedTurn(rr.clk))
+		beats := &[]protocol.Status{}
+		rr.d.Send = func(_ context.Context, st protocol.Status) error { *beats = append(*beats, st); return nil }
+		if err := writeJSONFile(rr.s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(rr.s.statePath(rejectionLock)); err != nil {
+			t.Fatal(err)
+		}
+		return rr, beats
+	}
+	check := func(t *testing.T, rr *rejectionRig, beats *[]protocol.Status) {
+		t.Helper()
+		rr.d.observeClaudeRejection()
+		if got := strings.Count(rr.logs.String(), "Claude rejection record could not be locked"); got != 1 {
+			t.Errorf("lock failure logged %d times:\n%s", got, rr.logs.String())
+		}
+		if rr.markerExists() {
+			t.Error("a marker was written without the lock")
+		}
+		rr.d.beat(context.Background())
+		if len(*beats) != 1 || (*beats)[0].Agent.State != protocol.AgentBusy ||
+			!strings.HasPrefix((*beats)[0].Agent.Error, "login-rejected:") || !strings.Contains((*beats)[0].Agent.Error, "rejected keeper generation 1") {
+			t.Errorf("heartbeat after a lock failure: %+v", *beats)
+		}
+	}
+	t.Run("lock path cannot be created", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root writes into a read-only directory")
+		}
+		rr, beats := setup(t)
+		if err := os.Chmod(rr.s.StateDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(rr.s.StateDir, 0o700) })
+		check(t, rr, beats)
+		_ = os.Chmod(rr.s.StateDir, 0o700)
+		rr.d.observeClaudeRejection()
+		if m, ok := rr.marker(); !ok || m.Generation != 1 || rr.d.unpersisted != nil {
+			t.Errorf("once lockable: marker %+v %v, in-memory %+v", m, ok, rr.d.unpersisted)
+		}
+	})
+	t.Run("lock path is a directory", func(t *testing.T) {
+		rr, beats := setup(t)
+		if err := os.Mkdir(rr.s.statePath(rejectionLock), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		check(t, rr, beats)
+	})
+	t.Run("an existing lock file that is read-only is still locked", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root opens a read-only file for writing")
+		}
+		rr := newRejectionRig(t)
+		rr.publishGeneration(1)
+		if err := os.Chmod(rr.s.statePath(rejectionLock), 0o400); err != nil {
+			t.Fatal(err)
+		}
+		rr.advance(10 * time.Minute)
+		rr.transcript(revokedTurn(rr.clk))
+		rr.d.observeClaudeRejection()
+		if m, ok := rr.marker(); !ok || m.Generation != 1 {
+			t.Errorf("marker %+v %v; want it written under a read-only lock", m, ok)
+		}
+		if strings.Contains(rr.logs.String(), "could not be locked") {
+			t.Errorf("a read-only lock file was reported as a lock failure:\n%s", rr.logs.String())
+		}
+	})
+}
+
+// Review fix 4: one status line is built from one read of the marker, so a
+// marker that changes while the line is built never yields "logged in".
+func TestRejectionStatusLineReadsTheMarkerOnce(t *testing.T) {
+	t.Cleanup(func() { rejectionAfterLookup = nil })
+	t.Run("heartbeat text", func(t *testing.T) {
+		rr := revokedCase(t)
+		reads := 0
+		rejectionAfterLookup = func() {
+			reads++
+			if reads == 1 {
+				_ = os.Remove(rr.markerPath()) // the proof-clear lands mid-build
+			}
+		}
+		got := rejectionHeartbeatText(rr.s, rr.clk)
+		rejectionAfterLookup = nil
+		if reads != 1 || !strings.HasPrefix(got, "login-rejected:") {
+			t.Errorf("reads %d, text %q; want one read and the rejection", reads, got)
+		}
+	})
+	t.Run("in-memory overlay", func(t *testing.T) {
+		rr := revokedCase(t)
+		m, _ := rr.marker()
+		_ = os.Remove(rr.markerPath())
+		rr.d.unpersisted = &m
+		reads := 0
+		rejectionAfterLookup = func() { reads++ }
+		st := protocol.Status{Agent: protocol.AgentState{State: protocol.AgentBusy}}
+		rr.d.overlayRejection(&st)
+		rejectionAfterLookup = nil
+		if reads != 1 || !strings.HasPrefix(st.Agent.Error, "login-rejected:") {
+			t.Errorf("reads %d, text %q; want one read and the rejection", reads, st.Agent.Error)
+		}
+	})
+}
+
+// Review fix 5: the in-memory overlay follows observe's rule. It applies only to
+// the generation agentd has applied; a newer applied generation retires it even
+// before the next poll drops it.
+func TestRejectionInMemoryOverlayIsBoundToTheAppliedGeneration(t *testing.T) {
+	for name, gen := range map[string]uint64{"older than the receipt": 1, "above the receipt": 3} {
+		t.Run(name, func(t *testing.T) {
+			rr := revokedCase(t) // generation 1 applied and refused
+			_ = os.Remove(rr.markerPath())
+			rr.d.unpersisted = &claudeRejection{Version: 1, Generation: gen, ObservedAt: rr.clk}
+			rr.advance(time.Minute)
+			publish(t, rr.live, projAccess(2, rr.life))
+			rr.d.syncClaudeAccess() // generation 2 applied; no observe has run since
+			rr.stampReceipt()
+			var beats []protocol.Status
+			rr.d.Send = func(_ context.Context, st protocol.Status) error { beats = append(beats, st); return nil }
+			if err := writeJSONFile(rr.s.statePath(bootFile), bootRecord{BootID: "b1", Boot: protocol.BootReady}); err != nil {
+				t.Fatal(err)
+			}
+			rr.d.beat(context.Background())
+			if len(beats) != 1 || beats[0].Agent.Error != "" {
+				t.Errorf("a stale in-memory rejection reached the heartbeat: %+v", beats)
+			}
+		})
+	}
+	t.Run("the applied generation still shows", func(t *testing.T) {
+		rr := revokedCase(t)
+		m, _ := rr.marker()
+		_ = os.Remove(rr.markerPath())
+		rr.d.unpersisted = &m
+		st := protocol.Status{Agent: protocol.AgentState{State: protocol.AgentIdle}}
+		rr.d.overlayRejection(&st)
+		if !strings.HasPrefix(st.Agent.Error, "login-rejected:") {
+			t.Errorf("text %q", st.Agent.Error)
+		}
+	})
+}

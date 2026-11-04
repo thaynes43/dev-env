@@ -24,7 +24,9 @@ import (
 // N is the keeper generation applied when the rejection was seen; observedAt is
 // the time of the rejected turn in the pod's own transcript. The marker holds no
 // token, no hash, no error text and no transcript text. agentd's poll is its
-// only writer, under a non-blocking file lock. It never sends, never touches the
+// only writer, under a non-blocking file lock; a poll that cannot take the lock
+// writes nothing and keeps the rejection in memory for the heartbeat (lost on
+// an agentd restart). It never sends, never touches the
 // continue receipt and never changes a state word: the text rides in the
 // existing status message.
 //
@@ -62,6 +64,10 @@ const (
 // rejectionAfterRead is a test seam: called inside the critical section right
 // after the marker is read. Nil in production.
 var rejectionAfterRead func()
+
+// rejectionAfterLookup is a test seam: called after each reader's lookup of the
+// marker. Nil in production.
+var rejectionAfterLookup func()
 
 // rejectionFlock is syscall.Flock; a test seam for lock errors.
 var rejectionFlock = func(fd, how int) error { return syscall.Flock(fd, how) }
@@ -113,35 +119,53 @@ const (
 	rejectionUnverifiable                      // a marker exists that cannot be believed: cannot tell
 )
 
+// rejectionView is one read of the marker and the applied receipt. A status line
+// is built from one view, so a marker that changes while it is built cannot mix
+// two answers (for example "rejected" checked, then "logged in" printed).
+type rejectionView struct {
+	m    claudeRejection // set when kind is rejectionRejected
+	kind rejectionKind
+	// applied is the applied receipt's generation; 0 when it cannot be read.
+	applied uint64
+	// extra is a rejection agentd saw but could not write (nil otherwise); only
+	// the in-memory overlay sets it, and only for the applied generation.
+	extra *claudeRejection
+}
+
 // lookupRejection is what every agentd reader applies. It only reads.
-func lookupRejection(s Settings, now time.Time) (claudeRejection, rejectionKind) {
-	m, st, mtime := readRejectionFile(s, now)
-	if st == rejectionAbsent {
-		return claudeRejection{}, rejectionNone
+func lookupRejection(s Settings, now time.Time) rejectionView {
+	if rejectionAfterLookup != nil {
+		defer rejectionAfterLookup()
 	}
-	// A marker exists. Without a readable applied generation nothing can say
-	// what it describes: cannot tell, not "none".
+	var v rejectionView
 	var applied claudeReceipt
 	receipt := s.statePath("claude-access-generation.json")
-	if readJSONFile(receipt, &applied) != nil || applied.Generation == 0 {
-		return claudeRejection{}, rejectionUnverifiable
+	if readJSONFile(receipt, &applied) == nil {
+		v.applied = applied.Generation
 	}
-	if st == rejectionInvalid {
+	m, st, mtime := readRejectionFile(s, now)
+	switch {
+	case st == rejectionAbsent:
+		return v
+	case v.applied == 0:
+		// A marker exists. Without a readable applied generation nothing can say
+		// what it describes: cannot tell, not "none".
+		v.kind = rejectionUnverifiable
+	case st == rejectionInvalid:
 		// A file last written before the applied generation arrived cannot be
 		// about it, whatever it holds. Anything else cannot be told.
 		if fi, err := os.Lstat(receipt); err == nil && !mtime.IsZero() && mtime.Before(fi.ModTime()) {
-			return claudeRejection{}, rejectionNone
+			return v
 		}
-		return claudeRejection{}, rejectionUnverifiable
-	}
-	switch {
-	case m.Generation == applied.Generation:
-		return m, rejectionRejected
-	case m.Generation < applied.Generation:
-		return claudeRejection{}, rejectionNone // about an older generation
+		v.kind = rejectionUnverifiable
+	case m.Generation == v.applied:
+		v.m, v.kind = m, rejectionRejected
+	case m.Generation < v.applied:
+		// About an older generation: none.
 	default:
-		return claudeRejection{}, rejectionUnverifiable // above the applied generation: inconsistent
+		v.kind = rejectionUnverifiable // above the applied generation: inconsistent
 	}
+	return v
 }
 
 // rejectionText is the status sentence for a rejected current generation. It
@@ -165,54 +189,64 @@ func rejectionHeartbeatText(s Settings, now time.Time) string {
 	if s.ClaudeLiveFile == "" {
 		return ""
 	}
-	if _, kind := lookupRejection(s, now); kind == rejectionNone {
+	v := lookupRejection(s, now)
+	if v.kind == rejectionNone {
 		return ""
 	}
-	return projectionLoginStatus(s, now)
+	return projectionStatusWith(s, now, v)
 }
 
-// rejectionUsableText is the text for an unexpired token, or "". extra is a
-// rejection agentd saw but could not write (nil otherwise).
-func rejectionUsableText(s Settings, now time.Time, extra *claudeRejection) string {
-	m, kind := lookupRejection(s, now)
+// rejectionUsableText is the text for an unexpired token, or "".
+func rejectionUsableText(v rejectionView, now time.Time) string {
 	switch {
-	case kind == rejectionRejected:
-		return rejectionText(m, now)
-	case kind == rejectionUnverifiable:
+	case v.kind == rejectionRejected:
+		return rejectionText(v.m, now)
+	case v.kind == rejectionUnverifiable:
 		return rejectionUnverifiableText
-	case extra != nil:
-		return rejectionText(*extra, now)
+	case v.extra != nil:
+		return rejectionText(*v.extra, now)
 	}
 	return ""
 }
 
 // rejectionExpiredNote is appended to the expired-token text.
-func rejectionExpiredNote(s Settings, now time.Time, extra *claudeRejection) string {
+func rejectionExpiredNote(s Settings, v rejectionView) string {
 	if s.ClaudeLiveFile == "" {
 		return ""
 	}
 	note := func(m claudeRejection) string {
 		return fmt.Sprintf("; the provider had rejected keeper generation %d at %s", m.Generation, m.ObservedAt.UTC().Format(time.RFC3339))
 	}
-	m, kind := lookupRejection(s, now)
 	switch {
-	case kind == rejectionRejected:
-		return note(m)
-	case kind == rejectionUnverifiable:
+	case v.kind == rejectionRejected:
+		return note(v.m)
+	case v.kind == rejectionUnverifiable:
 		return "; this pod's rejection record is unreadable or inconsistent, so it cannot tell whether the provider rejected the login"
-	case extra != nil:
-		return note(*extra)
+	case v.extra != nil:
+		return note(*v.extra)
 	}
 	return ""
 }
 
 // lockRejection takes the marker's lock without blocking. busy means another
 // writer is in its critical section (normal: this poll does nothing); err is a
-// failure to open the lock at all.
+// failure to open or lock it at all.
 func lockRejection(s Settings) (unlock func(), busy bool, err error) {
-	f, err := os.OpenFile(s.statePath(rejectionLock), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	path := s.statePath(rejectionLock)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return nil, false, err
+		// flock needs only an open descriptor: an existing regular lock file that
+		// cannot be opened for writing (a read-only file or file system) still
+		// locks. O_NONBLOCK keeps a FIFO in its place from blocking the open.
+		ro, rerr := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if rerr != nil {
+			return nil, false, err
+		}
+		if fi, serr := ro.Stat(); serr != nil || !fi.Mode().IsRegular() {
+			_ = ro.Close()
+			return nil, false, err
+		}
+		f = ro
 	}
 	if err := rejectionFlock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
@@ -247,9 +281,11 @@ func (d *Daemon) removeRejection(path string) {
 	d.rejectionFault("remove", "Claude rejection record could not be removed", err != nil && !errors.Is(err, os.ErrNotExist))
 }
 
-// overlayRejection puts a rejection that could not be written into the
-// heartbeat, at every boundary of the access token, so a full volume does not
-// turn it into "logged in". It is in memory only: an agentd restart loses it.
+// overlayRejection puts a rejection that could not be written (or was seen by a
+// poll that could not lock the marker) into the heartbeat, at every boundary of
+// the access token, so a full volume does not turn it into "logged in". It is in
+// memory only: an agentd restart loses it. Like observe, it applies only to the
+// applied receipt generation: a newer (or inconsistent) receipt retires it at once.
 func (d *Daemon) overlayRejection(st *protocol.Status) {
 	if d.unpersisted == nil || !d.projectsClaude() || st.Agent.Error != "" {
 		return
@@ -260,28 +296,37 @@ func (d *Daemon) overlayRejection(st *protocol.Status) {
 		return
 	}
 	now := d.now()
-	if _, kind := lookupRejection(d.S, now); kind == rejectionNone {
-		st.Agent.Error = projectionStatusWith(d.S, now, d.unpersisted)
+	v := lookupRejection(d.S, now)
+	if v.kind != rejectionNone || v.applied == 0 || d.unpersisted.Generation != v.applied {
+		return
 	}
+	v.extra = d.unpersisted
+	st.Agent.Error = projectionStatusWith(d.S, now, v)
 }
 
 // observeClaudeRejection runs on the poll after the projection sync and before
 // the continue. It records a 401 turn that happened after the current
 // generation was applied, and removes a marker that a newer generation or an
 // explicit proof of acceptance has resolved. It sends nothing and writes
-// nothing but the marker and its lock.
+// nothing but the marker and its lock. When the lock cannot be had (busy is
+// different: another writer is in its critical section), it still observes but
+// writes and removes nothing, and keeps a new rejection in memory for the
+// heartbeat, so a lock that cannot be created does not read as logged in.
 func (d *Daemon) observeClaudeRejection() {
 	if !d.projectsClaude() || d.claudeSyncErr != nil || d.Session.Mode == protocol.ModeTask {
 		return
 	}
 	unlock, busy, err := lockRejection(d.S)
 	d.rejectionFault("lock", "Claude rejection record could not be locked", err != nil)
-	if busy || err != nil {
+	if busy {
 		return
 	}
-	defer unlock()
-	// Everything below is read under the lock, so a decision is never made on a
-	// view another writer has since changed.
+	locked := err == nil
+	if locked {
+		defer unlock()
+	}
+	// With the lock, everything below is read under it, so a decision is never
+	// made on a view another writer has since changed.
 	receipt := d.S.statePath("claude-access-generation.json")
 	var applied claudeReceipt
 	if readJSONFile(receipt, &applied) != nil || applied.Generation == 0 {
@@ -301,7 +346,9 @@ func (d *Daemon) observeClaudeRejection() {
 		switch {
 		case m.Generation < applied.Generation:
 			// Parsed, and about an older generation: resolved by the newer one.
-			d.removeRejection(path)
+			if locked {
+				d.removeRejection(path)
+			}
 		case m.Generation == applied.Generation:
 			have = true
 		default:
@@ -330,7 +377,7 @@ func (d *Daemon) observeClaudeRejection() {
 		d.unpersisted = nil
 	}
 	if have {
-		if proof(m.ObservedAt) {
+		if locked && proof(m.ObservedAt) {
 			d.removeRejection(path)
 		}
 		return
@@ -352,6 +399,10 @@ func (d *Daemon) observeClaudeRejection() {
 		return
 	}
 	obs := claudeRejection{Version: 1, Generation: applied.Generation, ObservedAt: turn.At.UTC()}
+	if !locked {
+		d.unpersisted = &obs // memory only until a poll holds the lock
+		return
+	}
 	if err := writeJSONFile(path, obs); err != nil {
 		d.rejectionFault("write", "Claude rejection record could not be written", true)
 		d.unpersisted = &obs
