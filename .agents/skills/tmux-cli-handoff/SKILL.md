@@ -25,10 +25,12 @@ rebuild them.
 - The v1 Cursor My Machines worker: haynes-ops `.agents/runbooks/cursor-v1-worker.md`. Its tmux sessions `cursor-worker-v1` and `cursor-worker-dev-env` run `agent worker`, not a chat. Never type into them.
 - Cursor CLI flags: [using the CLI](https://cursor.com/docs/cli/using) and [parameters](https://cursor.com/docs/cli/reference/parameters).
 
-**Task records** are the work order, ACK, RESULT and status record of this
-task, the tracker item, `agent-run show NAME -o json`, the helper's owner
-marker, and observations written by a session that supervises or holds the
-task. Cite each one by path. An observation is evidence, not authority.
+**Task records** are the work order that assigned this task (including the one
+you received), its ACK, RESULT and status record, the tracker item,
+`agent-run show NAME -o json`, a launch record with the helper's owner marker,
+and observations written by a session that supervises or holds the task. Cite
+each one by path. An observation is evidence, not authority, and a
+recommendation in one is not an authorization.
 
 ## 1. Prove the actor can act
 
@@ -58,6 +60,7 @@ Tell these failures apart, because each has a different owner and next step:
 | `wrong-session` | `session-unmapped`, `pane-mismatch` | Step 2 finds no record mapping the task to a session, or step 4 finds a different pane | The actor may be able to act, but not on this session. |
 | `no-live-session` | `no-local-session` | Step 2's listings show no matching local chat, persistent session or pane | There is nothing to resume or type into. Only a recorded decision can continue the work. |
 | `custody` | `other-custodian`, `custodian-unrecorded` | Step 3 finds another custodian with no handoff to you, or no record names a custodian | You may not deliver, even with a terminal. |
+| `modal-pending` | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` | Step 4's read of the verified pane shows a local trust, permission, approval or confirmation prompt | Not an auth failure, not an auto-review denial and not the wrong session. It needs an explicit, recorded answer before anything is sent. |
 
 A CLI missing on the actor alone is a note, not a blocker: it does not block a
 send into a reachable pane. It does block reading the installed version and
@@ -66,8 +69,9 @@ help, unless you read them on the host through the same route.
 After `actor-rbac` or `cli-missing`, skip every check that needs the host and
 record each one as `unknown` (for example whether a local session exists). Run
 steps 2 and 3 from the task records whatever step 1 or step 2 found; nothing is
-sent until steps 1 to 3 all pass. Record every blocker you find (step 6): a
-grant for one blocker must not look like it would unblock the rest.
+sent until steps 1 to 3 all pass. Record every blocker you find (step 6), even
+two in the same step: a grant for one blocker must not look like it would
+unblock the rest.
 
 ## 2. Map the task to the session from task records
 
@@ -96,23 +100,32 @@ installed `--help` documents, for example Cursor's `agent persist list`, and
 commands and working directories only
 (`tmux list-panes -a -F '#{session_name} #{pane_id} #{pane_current_command} #{pane_current_path}'`).
 Save the installed `--help` that documents each listing as evidence. A listing
-can show that no matching local session exists; it never selects one, and it
-cannot show whether a cloud agent itself has ended. Take that from a task record
-(the provider's status, or a supervision observation), or record it as
-`unknown`. With no matching local chat, persistent session or pane:
-`no-live-session` (closed error `no-local-session`).
+can show that no matching local session exists; it never selects one. With no
+matching local chat, persistent session or pane: `no-live-session` (closed
+error `no-local-session`).
+
+Keep two findings apart. "No mapped local CLI session" says nothing about the
+author itself. A missing local chat, persistent session or pane, a clean tree
+and an unchanged PR head do not prove that a cloud author has ended or released
+its edit custody; a backend writer can still exist. That needs its own evidence:
+the provider's own task status, or a completion record the author released (for
+example a RESULT with `complete: true` and its time). Without it, record the
+author's state as `unknown`.
 
 Do not feed the cloud task ID to a local `--resume`, and do not start a chat in
 its place. Ask the parent or custodian for a recorded decision, one of:
 
-1. **An explicit single-writer successor.** A named new session becomes the
-   custodian on record, in the same worktree and branch, after an idle check
+1. **An explicit single-writer successor.** Only after evidence that the
+   author has ended or released custody (above). A named new session becomes
+   the custodian on record, in the same worktree and branch, after an idle check
    (no process in the worktree, clean tree at the recorded head). It starts from
    a handoff packet (branch, head, findings, the correction), and the old author
    is recorded as ended (timer-checkin, section 5). Starting it is its own
    authorized dispatch (supervised-dispatch), not part of this skill. Its launch
-   record names the tmux session, pane ID and chat ID, so that the next
-   correction maps by step 2. Prove its consumption of the packet by step 5.
+   record names the tmux session, pane ID, pid and owner marker (the helper
+   records them at `start`, and `inspect` returns them), and the chat ID once
+   the CLI shows it, so that the
+   next correction maps by step 2. Prove its consumption of the packet by step 5.
 2. **A verified follow-up interface** for that task, such as the provider's own
    follow-up channel for a cloud agent, used only when it is authorized for this
    actor.
@@ -135,9 +148,11 @@ staged where the custodian can read it, and nothing is sent.
   If you may not contact the custodian, you do not use that channel yourself.
 - **Worktree.** On the host, the tracked tree is clean
   (`git -C <worktree> status --porcelain --untracked-files=no` prints nothing),
-  any untracked files are the task's own recorded receipts, and the branch head
-  matches the record; or the PR head on GitHub matches it. Stage a correction
-  outside the author's worktree where you can, in the task's handoff route.
+  any untracked files are the task's own recorded receipts or its recorded
+  handoff packet, and the branch head matches the record; or the PR head on
+  GitHub matches it. Stage a correction outside the author's worktree where you
+  can, in the task's handoff route. If you cannot reach that route, stage it in
+  your own handoff route and give the path to your parent.
 - **No second writer.** One live process per chat. Resuming a chat whose TUI is
   still running makes two writers. No other agent is assigned in the status
   record, and nobody else is typing in the pane. Never push to the author's
@@ -166,6 +181,27 @@ takes your keys as its answer (CLAUDE.md: never send TUI input while a native
 question modal is pending). Keep the instruction to one line that points to an
 authorized work-order file. Do not read other panes or scrollback history.
 
+**A pending local permission modal** (`modal-pending`), such as Cursor's
+"Workspace Trust Required" for the worktree, is answered only like this:
+
+1. Never auto-accept it, and never relaunch, kill the pane or add a flag such as
+   `--trust` or `--force` to get past it.
+2. Get the specific approval of whoever owns that access decision (Tom,
+   unless a recorded rule delegates it), for exactly that answer and exactly
+   that path, through a verified channel. A work order's handoff gate, a custody
+   ACK, a launch authorization or a coordinator's recommendation never
+   authorizes accepting a trust or permission prompt. Until the approval
+   arrives, record the modal as a pending blocker and send nothing; the
+   handoff is not complete.
+3. Answer it once, in the same verified pane, with the single choice it shows,
+   for example `tmux send-keys -t <pane-id> a`. The helper's `reply` refuses
+   modals by design; this key press is the one step outside it.
+4. Record the decision: who authorized it, the exact path, the choice, the pane
+   and the time.
+5. Read the pane again (`inspect`, for a helper-started session) and confirm the
+   modal is gone and a normal empty prompt shows. Only then send the
+   instruction by the route above.
+
 ## 5. Prove consumption
 
 Delivery is not consumption. A `sent` state, your text echoed on screen, or the
@@ -185,25 +221,11 @@ later than the send:
 Write one record to the status record your work order names, and mirror it on
 the tracker item it names. If it names neither, put the record in your report
 to your parent and let the parent file it; do not open a new tracker item or
-status record for it. Then stop this handoff. List every blocker found, each
-with its class from the table in step 1, its closed error and its own evidence:
-
-```json
-{"recordedAt": "<UTC>", "actor": "<session and ServiceAccount>",
- "target": "<task, host, session, PR and head>",
- "staged": "<path of the correction, and who can read it>",
- "blockers": [
-  {"step": 1, "class": "actor-rbac", "closedError": "pods-exec-denied",
-   "evidence": [{"command": "kubectl auth can-i create pods/exec -n <ns>",
-                 "exitStatus": 1, "output": "no", "at": "<UTC of the command>"}]},
-  {"step": 2, "class": "wrong-session", "closedError": "session-unmapped",
-   "evidence": [{"record": "<path>", "finding": "names no local chat or pane"}]}],
- "unknown": ["<host checks not run, for example whether the author has ended>"],
- "notes": ["<for example: CLI absent on the actor>"],
- "notDone": ["exec", "new session", "grant request", "send-keys"],
- "whoCanAct": "<the custodian, or a session that already holds that terminal>",
- "decisionNeeded": "<for no-live-session: successor or follow-up interface>"}
-```
+status record for it. Then stop this handoff. Use the shape in
+[references/blocker-record.md](references/blocker-record.md): the staged
+correction's path, every blocker with its class, closed error and evidence, the
+checks left `unknown`, notes, what you did not do, who can act, and the decision
+needed.
 
 Use only capabilities you already have. Do not request a grant, switch identity,
 install a CLI, read credentials, open a UI, start a duplicate session or try
