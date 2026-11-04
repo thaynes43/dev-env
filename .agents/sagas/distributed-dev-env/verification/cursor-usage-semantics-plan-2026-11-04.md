@@ -57,7 +57,7 @@ requires binding `Unknown` and no `accountRef` (`finishXAI`). A Sand item theref
 Cursor account by identity. Their link is co-collection in one cycle only, never a shared binding, and
 the pool relationship stays Unknown until E2 or E3 provide evidence. Nothing here weakens that rule.
 
-## Steps (source only; 1 and 2 are gated, 3 to 6 are feasible now)
+## Steps (source only; 1 and 2 are gated, 3 to 5 are feasible now)
 
 1. Qualification harness: a table test that, given the part label from E1, asserts the exact glyph
    is accepted only in the exact context where the display places it, refuses every other member
