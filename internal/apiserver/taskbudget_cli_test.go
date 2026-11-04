@@ -125,7 +125,8 @@ func TestBudgetCLIShowsStallAndOwnerContinues(t *testing.T) {
 	b := created.Binding
 	admit := func() apiv1.TaskBudgetStatus {
 		t.Helper()
-		w := f.do(http.MethodPost, apiv1.TaskBudgetPath(b.TaskUID)+"/admit", tokCoordinator, apiv1.TaskBudgetRequest{Binding: b})
+		// A host client that reads the stall asks for it (OpenProject #385, C3).
+		w := f.doHeader(http.MethodPost, apiv1.TaskBudgetPath(b.TaskUID)+"/admit", tokCoordinator, apiv1.TaskBudgetRequest{Binding: b}, http.Header{apiv1.TaskBudgetStallHeader: {apiv1.TaskBudgetStallV1}})
 		if w.Code != http.StatusOK {
 			t.Fatalf("owner admission refused: %d %s", w.Code, w.Body.String())
 		}

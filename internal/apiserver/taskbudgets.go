@@ -365,7 +365,22 @@ func (s *Server) continueTaskBudget(ctx context.Context, w http.ResponseWriter, 
 }
 
 // withoutTaskBudgetStall is the body for a client that did not ask for the
-// stall field with apiv1.TaskBudgetStallHeader.
+// stall field with apiv1.TaskBudgetStallHeader (OpenProject #385, C3). Such a
+// client may be agentd or agent-run up to 2.89.x, which refuse an unknown
+// field. The stall is a diagnostic only: Latched, Reason and every other field
+// are unchanged, and the ledger is not touched.
 func withoutTaskBudgetStall(body any) any {
+	switch b := body.(type) {
+	case apiv1.TaskBudgetStatus:
+		b.Stall = nil
+		return b
+	case *apiv1.TaskBudgetStatus:
+		if b == nil {
+			return body
+		}
+		c := *b
+		c.Stall = nil
+		return &c
+	}
 	return body
 }
