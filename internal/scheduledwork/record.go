@@ -62,7 +62,13 @@ func Record(w *v1alpha1.ScheduledWork, at time.Time, session string, t Terminal)
 		if (o.Session != "" && o.Session != session) || otherObject {
 			return OtherSession
 		}
-		o.State, o.Reason = t.State, clip(t.Reason, maxReason)
+		state, reason := t.State, t.Reason
+		if o.Ending && t.NeverLaunched {
+			// The executor was ending the occurrence when this late session
+			// was refused before its launch: the mark's reason stands.
+			state, reason = EndingState(o.Reason), o.Reason
+		}
+		o.State, o.Reason = state, clip(reason, maxReason)
 		if o.Session == "" && sessionNamePattern.MatchString(session) {
 			o.Session = session
 		}
@@ -75,7 +81,7 @@ func Record(w *v1alpha1.ScheduledWork, at time.Time, session string, t Terminal)
 		if o.Reported == nil && t.Reported != nil {
 			o.Reported = t.Reported.DeepCopy()
 		}
-		count(&w.Status.Counts, t.State)
+		count(&w.Status.Counts, state)
 		return Recorded
 	}
 	return NoOccurrence
@@ -91,8 +97,30 @@ func Find(w *v1alpha1.ScheduledWork, at time.Time) *v1alpha1.ScheduledWorkOccurr
 	return nil
 }
 
+// The cancel reasons of the executor's final records (DESIGN-054); an ending
+// mark that carries one of them ends the occurrence Cancelled.
+const (
+	ReasonCancelledBeforeClaim    = "cancelled before claim"
+	ReasonCancelledAtRevalidation = "cancelled at revalidation"
+	ReasonCancelledWhileParked    = "cancelled while parked"
+)
+
+// EndingState is the final state an ending mark's reason stands for:
+// Cancelled for a cancel reason, else Skipped.
+func EndingState(reason string) string {
+	switch reason {
+	case ReasonCancelledBeforeClaim, ReasonCancelledAtRevalidation, ReasonCancelledWhileParked:
+		return v1alpha1.OccurrenceCancelled
+	}
+	return v1alpha1.OccurrenceSkipped
+}
+
 func count(c *v1alpha1.ScheduledWorkCounts, state string) {
 	switch state {
+	case v1alpha1.OccurrenceSkipped:
+		c.Skipped++
+	case v1alpha1.OccurrenceCancelled:
+		c.Cancelled++
 	case v1alpha1.OccurrenceSucceeded:
 		c.Succeeded++
 	case v1alpha1.OccurrenceFailed:

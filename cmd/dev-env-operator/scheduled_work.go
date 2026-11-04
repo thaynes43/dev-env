@@ -73,6 +73,7 @@ func newScheduledWorkExecutor(o options, c client.Client, reader client.Reader, 
 		InteractiveGrace: o.scheduledWork.interactiveGrace,
 		MaxHeadless:      o.scheduledWork.maxHeadless,
 		MaxInteractive:   o.scheduledWork.maxInteractive,
+		SchemaMissing:    executor.NewSchemaMissingCounter(),
 		Log:              log,
 	}
 }

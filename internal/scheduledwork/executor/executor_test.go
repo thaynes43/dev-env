@@ -558,6 +558,103 @@ func TestASecondSessionObjectIsRefusedAtTheGate(t *testing.T) {
 	}
 }
 
+// A late session the launch gate refused before its first pod, found after
+// the ending mark, never ran: the occurrence ends with the mark's reason, not
+// Failed, and names that session. Either the executor's read after the mark
+// finds it, or the releaser records it first; both give the mark's record.
+func TestAnEndingOccurrenceEndsWithItsReasonForARefusedSession(t *testing.T) {
+	for _, releaserFirst := range []bool{false, true} {
+		name := "the executor finds it"
+		if releaserFirst {
+			name = "the releaser records it first"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			key := f.item("audit", spec())
+			f.at(f.executor(), day0.Add(-time.Minute))
+			f.create.hooks(func() error { return errTransient }, nil)
+			f.at(f.executor(), day0)
+			f.create.hooks(nil, nil)
+			f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
+			// The late create lands with the ending mark, and the gate refuses
+			// it: the session fails before its first pod.
+			hook := func() {
+				f.otherLeaderCreates(key, day0)
+				s := f.session(f.derived(key, day0))
+				s.Status.Phase = v1alpha1.PhaseFailed
+				if err := cluster(t).Status().Update(context.Background(), s); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.beforeWriteAt.Store(f.writes.Load() + 1)
+			f.beforeWrite.Store(&hook)
+			if releaserFirst {
+				// Only the mark this pass: the next write stops at the hook.
+				f.failStatus.Store(0)
+				stop := func(client.Object) { f.failStatus.Store(1) }
+				f.afterWrite.Store(&stop)
+			}
+			f.at(f.executor(), day0.Add(time.Minute))
+			f.afterWrite.Store(nil)
+			f.failStatus.Store(0)
+			if releaserFirst {
+				f.release(f.derived(key, day0), false)
+				f.at(f.executor(), day0.Add(2*time.Minute))
+			}
+			o := f.wantOcc(key, day0, v1alpha1.OccurrenceCancelled, ReasonCancelledAtRevalidation)
+			if s := f.session(f.derived(key, day0)); o.Session != s.Name || o.SessionUID != string(s.UID) || !o.Ending {
+				t.Errorf("occurrence %+v, session %s %s", o, s.Name, s.UID)
+			}
+			if c := f.get(key).Status.Counts; c.Cancelled != 1 || c.Failed != 0 {
+				t.Errorf("counts %+v", c)
+			}
+		})
+	}
+}
+
+// Against an older CRD that prunes the ending mark or the session UID, the
+// executor fails closed: when the stored object it gets back lacks the field,
+// it counts it and writes nothing more for the item in that pass.
+func TestAMissingSchemaFieldStopsTheItem(t *testing.T) {
+	t.Run("the ending mark", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("audit", spec())
+		f.at(f.executor(), day0.Add(-time.Minute))
+		f.create.hooks(func() error { return errTransient }, nil)
+		f.at(f.executor(), day0)
+		f.create.hooks(nil, nil)
+		f.edit(key, func(s *v1alpha1.ScheduledWorkSpec) { s.Cancelled = true })
+		strip := func(obj client.Object) {
+			for i := range obj.(*v1alpha1.ScheduledWork).Status.Occurrences {
+				obj.(*v1alpha1.ScheduledWork).Status.Occurrences[i].Ending = false
+			}
+		}
+		f.afterWrite.Store(&strip)
+		sent := f.writes.Load()
+		f.at(f.executor(), day0.Add(time.Minute))
+		if n := f.writes.Load() - sent; n != 1 || counted(t, f.schemaMissing) != 1 {
+			t.Fatalf("%d status writes, %v counted; want the one mark write, then a stop", n, counted(t, f.schemaMissing))
+		}
+		f.wantOcc(key, day0, v1alpha1.OccurrenceClaimed, "")
+	})
+	t.Run("the session UID", func(t *testing.T) {
+		f := newFixture(t)
+		key := f.item("audit", daily(spec()))
+		f.at(f.executor(), day0.Add(-time.Minute))
+		strip := func(obj client.Object) {
+			for i := range obj.(*v1alpha1.ScheduledWork).Status.Occurrences {
+				obj.(*v1alpha1.ScheduledWork).Status.Occurrences[i].SessionUID = ""
+			}
+		}
+		f.afterWrite.Store(&strip)
+		f.at(f.executor(), day0)
+		if counted(t, f.schemaMissing) != 1 {
+			t.Fatalf("%v counted", counted(t, f.schemaMissing))
+		}
+		f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, "")
+	})
+}
+
 // The cap counts a running scheduled session that no slot-holding record
 // covers: here one whose item is cancelled, so its occurrence was never
 // recorded. It fills the cap like any claimed occurrence.

@@ -311,3 +311,36 @@ func TestRecordKeepsTheSessionObject(t *testing.T) {
 		t.Errorf("Outcome's session UID %q", o.SessionUID)
 	}
 }
+
+// A session that never launched, recorded into an occurrence the executor
+// was ending, gets the mark's record: its reason, and Skipped or Cancelled.
+func TestRecordIntoAnEndingOccurrence(t *testing.T) {
+	at := time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC)
+	const name = "sw-0123456789ab-203006031400"
+	for reason, want := range map[string]string{ReasonCancelledAtRevalidation: v1alpha1.OccurrenceCancelled, "notAfter passed": v1alpha1.OccurrenceSkipped} {
+		w := &v1alpha1.ScheduledWork{}
+		w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceClaimed, Ending: true, Reason: reason}}
+		refused := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, UID: "uid-late"}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask}}
+		refused.Status.Phase = v1alpha1.PhaseFailed
+		if r := Record(w, at, name, Outcome(refused, at)); r != Recorded {
+			t.Fatalf("%s", r)
+		}
+		o := w.Status.Occurrences[0]
+		if o.State != want || o.Reason != reason || o.Session != name || o.SessionUID != "uid-late" {
+			t.Errorf("%q: %+v", reason, o)
+		}
+		if c := w.Status.Counts; c.Failed != 0 || c.Cancelled+c.Skipped != 1 {
+			t.Errorf("counts %+v", c)
+		}
+	}
+	// A session that did run keeps its own outcome.
+	w := &v1alpha1.ScheduledWork{}
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceClaimed, Ending: true, Reason: ReasonCancelledAtRevalidation}}
+	ran := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: name, UID: "uid-ran"}, Spec: v1alpha1.AgentSessionSpec{Mode: v1alpha1.ModeTask}}
+	ran.Status.Phase = v1alpha1.PhaseFailed
+	ran.Status.Agent = &v1alpha1.AgentStatus{Status: "exited"}
+	Record(w, at, name, Outcome(ran, at))
+	if o := w.Status.Occurrences[0]; o.State != v1alpha1.OccurrenceFailed {
+		t.Errorf("a session that ran: %+v", o)
+	}
+}

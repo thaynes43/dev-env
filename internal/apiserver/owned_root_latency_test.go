@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/testr"
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
@@ -56,6 +57,37 @@ func (e latencyOwnedExec) Run(ctx context.Context, ns, pod, container string, ar
 		}
 	}
 	return e.ownedWorkflowExec.Run(ctx, ns, pod, container, args, in, out, stderr)
+}
+
+// ownedRootOnly passes on the Info lines of the logger named owned-root, and
+// nothing else: no Error line, and no line of another logger.
+type ownedRootOnly struct {
+	logr.LogSink
+	name string
+}
+
+func (s ownedRootOnly) Enabled(level int) bool {
+	return s.name == "owned-root" && s.LogSink.Enabled(level)
+}
+
+func (s ownedRootOnly) Info(level int, msg string, kv ...any) {
+	if s.name == "owned-root" {
+		s.LogSink.Info(level, msg, kv...)
+	}
+}
+
+func (s ownedRootOnly) Error(error, string, ...any) {}
+
+func (s ownedRootOnly) WithName(name string) logr.LogSink {
+	full := name
+	if s.name != "" {
+		full = s.name + "/" + name
+	}
+	return ownedRootOnly{LogSink: s.LogSink.WithName(name), name: full}
+}
+
+func (s ownedRootOnly) WithValues(kv ...any) logr.LogSink {
+	return ownedRootOnly{LogSink: s.LogSink.WithValues(kv...), name: s.name}
 }
 
 // latencyRoundtrip is one slow observation: how long the handler took and the
@@ -154,8 +186,10 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 	handler := f.srv.Handler()
 	var connections atomic.Int32
 	// Diagnostics only: the owned-root refusal logs (fixed stage and category
-	// names) reach the test output through the request's logger.
-	logger := testr.New(t)
+	// names) reach the test output through the request's logger. Only Info
+	// lines of the owned-root logger pass, so no other log, and no error
+	// value, reaches CI output.
+	logger := logr.New(ownedRootOnly{LogSink: testr.New(t).GetSink()})
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(log.IntoContext(r.Context(), logger))
 		slow := armed.Load() && r.URL.Path == apiv1.TaskBudgetPath("campaign-a")+"/observe"

@@ -247,7 +247,10 @@ stateDiagram-v2
      margin** (`scheduledwork.ReleaseMargin`, 2 minutes), whatever the reason
      for the release. It writes the record at once; only the release waits.
      This is defence in depth: a late create of the name inside the window
-     finds it taken and adopts that session.
+     finds it taken and adopts that session. It is kept for that reason
+     (coordinator decision, 2026-11-04), at a cost: a reaped scheduled
+     session stays Terminating until its start deadline plus 2 minutes, and
+     the blocked gauge leaves it out during that window.
   3. **The fixed-name entry checks the API's clock right before the Create.**
      Past the start deadline it creates nothing (`ErrPastStartDeadline`), and
      the occurrence is `Skipped` ("not created before grace ended").
@@ -270,8 +273,14 @@ stateDiagram-v2
   The launch gate refuses a session that an occurrence with the mark does not
   name. A gate read after the mark refuses. A gate read before it means the
   create came before the leader's read after the mark, so the leader adopts
-  the session. If the releaser records a refused session's end into the open
-  occurrence first, the final state is that record (`Failed`).
+  the session. A session found after the mark that was refused before its
+  launch (Failed with no agent report) never ran. The occurrence then ends with
+  the mark's reason (Skipped or Cancelled) and names that session, whether the
+  executor finds it or the releaser records it first. After writing the mark or
+  `sessionUID`, the executor checks the stored object the API server returns.
+  If the field is missing (an older CRD prunes it), it counts
+  `dev_env_scheduled_work_schema_missing_total` and stops that item's pass,
+  rather than looping on the write.
 - **Launch gate.** Before the first pod of a session that carries the
   scheduled-work label (its volume does not exist yet), the reconciler reads the
   ScheduledWork uncached. It refuses the session as invalid (`SessionInvalid`:

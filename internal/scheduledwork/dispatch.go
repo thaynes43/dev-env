@@ -178,3 +178,10 @@ func LaunchRefusal(s *v1alpha1.AgentSession, w *v1alpha1.ScheduledWork) (string,
 	}
 	return "", false
 }
+
+// RefusedBeforeLaunch reports a session that failed before any agent report:
+// refused by the launch gate (or invalid) before its first pod, or a pod that
+// failed before agentd reported. Its agent never ran.
+func RefusedBeforeLaunch(s *v1alpha1.AgentSession) bool {
+	return s.Status.Phase == v1alpha1.PhaseFailed && s.Status.Agent == nil
+}

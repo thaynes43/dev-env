@@ -46,6 +46,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,9 +97,9 @@ const (
 
 	ReasonPreviousRunning         = "previous still running"
 	ReasonNotAfter                = "notAfter passed"
-	ReasonCancelledBeforeClaim    = "cancelled before claim"
-	ReasonCancelledAtRevalidation = "cancelled at revalidation"
-	ReasonCancelledWhileParked    = "cancelled while parked"
+	ReasonCancelledBeforeClaim    = scheduledwork.ReasonCancelledBeforeClaim
+	ReasonCancelledAtRevalidation = scheduledwork.ReasonCancelledAtRevalidation
+	ReasonCancelledWhileParked    = scheduledwork.ReasonCancelledWhileParked
 	ReasonNotCreated              = "not created before grace ended"
 	ReasonSpecChanged             = "spec changed after claim"
 	ReasonParkedExpired           = "parked, not approved in time"
@@ -246,7 +247,10 @@ type Executor struct {
 	// DecisionWindow is how long a Parked occurrence waits; zero is
 	// DefaultDecisionWindow.
 	DecisionWindow time.Duration
-	Log            logr.Logger
+	// SchemaMissing counts the writes whose stored object lacked a field the
+	// executor wrote (MetricSchemaMissing); nil counts nothing.
+	SchemaMissing prometheus.Counter
+	Log           logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 
@@ -518,7 +522,7 @@ func (p *pass) item(ctx context.Context, w *v1alpha1.ScheduledWork) {
 			*w = *fresh
 			p.slots[w.UID] = slotsOf(w, p.modes)
 			continue
-		case apierrors.IsNotFound(err):
+		case apierrors.IsNotFound(err), errors.Is(err, errSchemaMissing):
 			return
 		case err != nil:
 			lg.Error(err, "write the ScheduledWork status")
@@ -731,6 +735,8 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 	var sess v1alpha1.AgentSession
 	err = e.Reader.Get(ctx, types.NamespacedName{Namespace: e.SessionNamespace, Name: name}, &sess)
 	switch {
+	case err == nil && scheduledwork.CreatedFor(&sess, w.Name, w.UID, at) && o.Ending && scheduledwork.RefusedBeforeLaunch(&sess):
+		return p.endNaming(ctx, w, o, &sess, lg)
 	case err == nil && scheduledwork.CreatedFor(&sess, w.Name, w.UID, at):
 		return p.dispatched(ctx, w, o, name, sess.UID, true, lg)
 	case err == nil:
@@ -803,7 +809,13 @@ func (p *pass) end(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.S
 	if !o.Ending {
 		o.Ending, o.Reason = true, clip(reason, 256)
 		lg.Info("scheduled work occurrence", "occurrence", at.UTC().Format(time.RFC3339), "from", from, "to", from, "ending", true, "reason", o.Reason)
-		return true, p.e.write(ctx, w)
+		if err := p.e.write(ctx, w); err != nil {
+			return true, err
+		}
+		if stored := scheduledwork.Find(w, at); stored == nil || !stored.Ending {
+			return true, p.schemaMissing(lg, "ending")
+		}
+		return true, nil
 	}
 	o.State, o.Reason = state, reason
 	if state == v1alpha1.OccurrenceCancelled {
@@ -815,14 +827,21 @@ func (p *pass) end(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.S
 	return true, p.e.write(ctx, w)
 }
 
-// endingState is the final state an ending mark's reason stands for.
-func endingState(reason string) string {
-	switch reason {
-	case ReasonCancelledBeforeClaim, ReasonCancelledAtRevalidation, ReasonCancelledWhileParked:
-		return v1alpha1.OccurrenceCancelled
+// endNaming ends an occurrence that carries the ending mark, and whose
+// late session was refused before its first pod, with the mark's reason (not
+// Failed): the session never ran. The record names that session and its UID.
+func (p *pass) endNaming(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, sess *v1alpha1.AgentSession, lg logr.Logger) (bool, error) {
+	if o.Session == "" {
+		o.Session = sess.Name
 	}
-	return v1alpha1.OccurrenceSkipped
+	if o.SessionUID == "" {
+		o.SessionUID = string(sess.UID)
+	}
+	return p.end(ctx, w, o, endingState(o.Reason), o.Reason, lg)
 }
+
+// endingState is the final state an ending mark's reason stands for.
+func endingState(reason string) string { return scheduledwork.EndingState(reason) }
 
 // create runs revalidation checks 2 to 5 and creates the session.
 func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, name, hash string, now time.Time, grace time.Duration, lg logr.Logger) (bool, error) {
@@ -916,9 +935,45 @@ func (p *pass) dispatched(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1a
 	// TODO(S4): page the due event and, for interactive work, deliver the
 	// work order once the pod is Ready and page the link once Remote Control
 	// is registered.
-	lg.Info("scheduled work occurrence", "occurrence", o.At.UTC().Format(time.RFC3339), "from", from,
+	at := o.At.Time
+	lg.Info("scheduled work occurrence", "occurrence", at.UTC().Format(time.RFC3339), "from", from,
 		"to", v1alpha1.OccurrenceDispatched, "session", name, "adopted", adopted)
-	return true, p.e.write(ctx, w)
+	if err := p.e.write(ctx, w); err != nil {
+		return true, err
+	}
+	if stored := scheduledwork.Find(w, at); uid != "" && (stored == nil || stored.SessionUID == "") {
+		return true, p.schemaMissing(lg, "sessionUID")
+	}
+	return true, nil
+}
+
+// errSchemaMissing stops an item's pass: the API server's stored object
+// lacks a field the executor just wrote, so the installed CRD is older than
+// the executor and prunes it. The guarantee rests on those fields, so the
+// executor writes nothing more for the item in this pass, and never loops
+// rewriting it.
+var errSchemaMissing = errors.New("the stored ScheduledWork lacks a field the executor wrote: the installed CRD is older than the executor")
+
+// schemaMissing logs and counts a field the stored object lacks.
+func (p *pass) schemaMissing(lg logr.Logger, field string) error {
+	lg.Error(errSchemaMissing, "stopping the item's pass", "field", field)
+	if p.e.SchemaMissing != nil {
+		p.e.SchemaMissing.Inc()
+	}
+	return errSchemaMissing
+}
+
+// MetricSchemaMissing counts the writes whose stored object lacked a field the
+// executor wrote (an older CRD).
+const MetricSchemaMissing = "dev_env_scheduled_work_schema_missing_total"
+
+// NewSchemaMissingCounter returns the counter of MetricSchemaMissing.
+// Register it once per process.
+func NewSchemaMissingCounter() prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name: MetricSchemaMissing,
+		Help: "Scheduled-work status writes whose stored object lacked a field the executor wrote (the ending mark or the session UID): the installed ScheduledWork CRD is older than the executor (DESIGN-054). The executor stops that item's pass.",
+	})
 }
 
 // parked ends a Parked occurrence nobody acted on: Cancelled when the item is
@@ -933,6 +988,8 @@ func (p *pass) parked(ctx context.Context, w *v1alpha1.ScheduledWork, at time.Ti
 		var sess v1alpha1.AgentSession
 		err := p.e.Reader.Get(ctx, types.NamespacedName{Namespace: p.e.SessionNamespace, Name: name}, &sess)
 		switch {
+		case err == nil && scheduledwork.CreatedFor(&sess, w.Name, w.UID, at) && o.Ending && scheduledwork.RefusedBeforeLaunch(&sess):
+			return p.endNaming(ctx, w, o, &sess, lg)
 		case err == nil && scheduledwork.CreatedFor(&sess, w.Name, w.UID, at):
 			mode := v1alpha1.ScheduledWorkHeadless
 			if sess.Spec.Mode != v1alpha1.ModeTask {

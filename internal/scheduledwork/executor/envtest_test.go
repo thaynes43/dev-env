@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -207,6 +209,11 @@ type fixture struct {
 	// the API server; beforeWriteAt zero is the next write.
 	beforeWrite   atomic.Pointer[func()]
 	beforeWriteAt atomic.Int32
+	// schemaMissing is the executors' MetricSchemaMissing counter.
+	schemaMissing prometheus.Counter
+	// afterWrite, when set, edits the object a successful status write
+	// returns, as an older CRD's pruning would.
+	afterWrite atomic.Pointer[func(client.Object)]
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -214,7 +221,8 @@ func newFixture(t *testing.T) *fixture {
 	c := cluster(t)
 	n := nsSeq.Add(1)
 	f := &fixture{t: t, items: fmt.Sprintf("sw-items-%d", n), sessions: fmt.Sprintf("sw-sessions-%d", n),
-		clock: &clock{now: day0.Add(-time.Hour)}, auth: &authorizer{}, tmpl: resolver{"ops-audit": opsAudit}}
+		clock: &clock{now: day0.Add(-time.Hour)}, auth: &authorizer{}, tmpl: resolver{"ops-audit": opsAudit},
+		schemaMissing: NewSchemaMissingCounter()}
 	for _, ns := range []string{f.items, f.sessions} {
 		if err := c.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
 			t.Fatal(err)
@@ -266,14 +274,21 @@ func (f *fixture) executor() *Executor {
 				f.failStatus.Add(-1)
 				return apierrors.NewServiceUnavailable("injected status write failure")
 			}
-			return c.SubResource(sub).Update(ctx, obj, opts...)
+			if err := c.SubResource(sub).Update(ctx, obj, opts...); err != nil {
+				return err
+			}
+			if edit := f.afterWrite.Load(); edit != nil {
+				(*edit)(obj)
+			}
+			return nil
 		},
 	})
 	return &Executor{
 		Client: writer, Reader: cluster(f.t),
 		Namespace: f.items, SessionNamespace: f.sessions,
 		Creator: f.create, Authorizer: f.auth, Templates: f.tmpl,
-		Log: logr.Discard(), Now: f.clock.Now,
+		SchemaMissing: f.schemaMissing,
+		Log:           logr.Discard(), Now: f.clock.Now,
 	}
 }
 
@@ -436,4 +451,14 @@ func (f *fixture) derived(key types.NamespacedName, at time.Time) string {
 func (f *fixture) at(e *Executor, t time.Time) {
 	f.clock.Set(t)
 	e.Tick(context.Background())
+}
+
+// counted is a counter's value.
+func counted(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	return m.GetCounter().GetValue()
 }

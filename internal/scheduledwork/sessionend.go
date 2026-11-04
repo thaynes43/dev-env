@@ -111,6 +111,10 @@ type Terminal struct {
 	Reported *v1alpha1.TaskOutcomeRecordStatus
 	// SessionUID is the UID of the session the record comes from.
 	SessionUID string
+	// NeverLaunched is a session that failed before any agent report
+	// (RefusedBeforeLaunch). Into an occurrence that carries the ending mark
+	// its record is the mark's, not Failed: the session never ran.
+	NeverLaunched bool
 }
 
 // Outcome maps a session that ended, or that is being deleted, to its
@@ -141,7 +145,7 @@ type Terminal struct {
 // agent did not launch.
 func Outcome(s *v1alpha1.AgentSession, now time.Time) Terminal {
 	headless := s.Spec.Mode == v1alpha1.ModeTask
-	t := Terminal{SessionUID: string(s.UID)}
+	t := Terminal{SessionUID: string(s.UID), NeverLaunched: RefusedBeforeLaunch(s)}
 	if headless {
 		t.Reported = reported(s)
 	}
