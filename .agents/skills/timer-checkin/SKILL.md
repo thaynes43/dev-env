@@ -250,7 +250,8 @@ a natural keeper refresh, is pending, not blocked: keep the timer and report it
 pending. A handoff paused for a pending prompt decision
 ([tmux-cli-handoff](../tmux-cli-handoff/SKILL.md), step 4) is pending in the
 same way: keep the timer if one exists, and never create one for it. When the
-work ends or pauses:
+work ends or pauses (except a handoff paused for a pending prompt decision,
+above):
 
 1. `CronDelete` the job (or `ScheduleWakeup` with `stop: true`), then `CronList`
    to confirm it is gone. Do not keep polling during a pause.

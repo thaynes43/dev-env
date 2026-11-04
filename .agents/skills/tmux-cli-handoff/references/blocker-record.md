@@ -26,9 +26,9 @@ classes and closed errors from the skill's step 1 table.
 Field notes:
 
 - `state`: `blocked` ends the handoff and its timer; `paused` (a prompt awaiting
-  a decision or its permitted presser) keeps the handoff and its timer, if one
-  exists, and resumes with re-checked custody and route and a fresh read of the
-  pane.
+  a decision or the permitted person's press) keeps the handoff and its timer,
+  if one exists, and resumes with re-checked custody and route and a fresh read
+  of the pane.
 
 - `staged`: where the correction waits, and who can read it there.
 - `unknown`: checks that could not run, for example host checks after
@@ -40,5 +40,8 @@ Field notes:
   interface, after evidence that the author ended or released custody. For
   `modal-pending`, the decider (for a trust or permission prompt, Tom unless a
   recorded rule delegates it; for a command approval, the custodian or its
-  supervisor) and the permitted presser (Tom or the pane's recorded owner,
-  never an agent's raw tmux keys).
+  supervisor) and the permitted presser (the pane's recorded owner only when it
+  is a person; Tom for an agent-owned pane, which is any pane the helper
+  launched; never an agent's raw tmux keys). For a lingering prompt, record
+  `modal-unknown` with the helper's own label as evidence; for a refusal,
+  `modal-declined` with state `blocked`.

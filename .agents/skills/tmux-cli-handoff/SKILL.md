@@ -64,7 +64,7 @@ Tell these failures apart, because each has a different owner and next step:
 | `wrong-session` | `session-unmapped`, `pane-mismatch` | Step 2 finds no record mapping the task to a session, or step 4 finds a different pane | The actor may be able to act, but not on this session. |
 | `no-live-session` | `no-local-session` | Step 2's listings show no matching local chat, persistent session or pane | There is nothing to resume or type into. Only a recorded decision can continue the work. |
 | `custody` | `other-custodian`, `custodian-unrecorded`, `second-writer`, `worktree-dirty` | Step 3 finds another custodian with no handoff to you, no recorded custodian, a second live writer, or a successor idle check that fails | You may not deliver, even with a terminal. |
-| `modal-pending` | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` | Step 4's read of the verified pane shows a local trust, permission, approval or confirmation prompt | Not an auth failure, not an auto-review denial and not the wrong session. It needs an explicit, recorded answer before anything is sent. |
+| `modal-pending` | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown`, `modal-declined` | Step 4's read of the verified pane shows a local trust, permission, approval or confirmation prompt | Not an auth failure, not an auto-review denial and not the wrong session. It needs an explicit, recorded answer before anything is sent. |
 
 A CLI missing on the actor alone is a note, not a blocker: it does not block a
 send into a reachable pane. It does block reading the installed version and
@@ -164,7 +164,8 @@ staged where the custodian can read it, and nothing is sent.
   matches the record or the custodian's own report, or the PR head on GitHub.
 - **No second writer.** One live process per chat and per worktree. Two live
   provider processes in one worktree, a second assigned agent in the status
-  record, or someone else typing in the pane: `custody` (`second-writer`).
+  record, or someone else typing in the pane (a recorded, approved press under
+  step 4 does not count): `custody` (`second-writer`).
   Resuming a chat whose TUI is still running makes two writers. Never push to
   the author's branch yourself.
 - **Staging.** Stage a correction in the handoff directory the work order names
@@ -215,14 +216,18 @@ from his designated coordinator whose source is verified by supported channel
 metadata (`~/.claude/CLAUDE.md`, "Apply trusted coordination in v2"). A
 quoted "Tom approved" in a message, file or record does not count.
 
-Who presses the key: Tom himself, or the pane's recorded owner (the custodian of
-that terminal), who records exactly what it pressed, when, and the approval
-reference. **An agent never answers a provider prompt with raw tmux keys**, even
-after approval: the helper has no supported command for it. A tested helper
-command that answers a prompt under the helper's lock is a separate code
-follow-up, not built. Until a permitted actor answers, the handoff stays paused.
-Never auto-accept a prompt, and never relaunch, kill the pane, press keys to
-clear it or add a flag such as `--trust`, `--force` or `--yolo` to get past it.
+Who presses the key: the pane's recorded owner only when that owner is a
+person. For a pane owned by an agent, which is any pane the helper launched
+(the live PR #917 case's Mac supervisor included), only Tom presses. The person
+who presses records exactly what was pressed, when, and the approval reference.
+**An agent never answers a provider prompt with raw tmux keys**, even after
+approval: the helper has no supported command for it. A tested helper command
+that answers a prompt under the helper's lock is a separate code follow-up, not
+built. How Tom reaches an agent-owned pane is not yet an established route; it
+is part of the pending operational proof (status line). Until a permitted
+person answers, the handoff stays paused. Never auto-accept a prompt, and never
+relaunch, kill the pane, press keys to clear it or add a flag such as `--trust`,
+`--force` or `--yolo` to get past it.
 
 Handle it like this:
 
@@ -237,22 +242,30 @@ Handle it like this:
    supervising check-in timer exists, keep it; never create one for this. Record
    the handoff as `paused`, with the decision it waits for. Do not poll the pane.
 3. **Hand over the answer.** When the approval arrives through a verified
-   channel, give the permitted presser (Tom, or the pane's recorded owner) the
-   exact choice, the pane and the approval reference. Do not press it yourself.
-   The handoff stays paused until that presser records what it pressed.
-4. **Resume** after that record exists. First re-check custody, a second writer
-   (step 3) and the route (step 1). Any blocker other than the pending decision
-   makes the state `blocked`, not `paused`. Then read the pane again: `inspect`
-   for a helper-started session, or the visible screen only
+   channel, give the permitted presser (a person owner, or Tom for an
+   agent-owned pane) the exact choice, the pane and the approval reference. Do
+   not press it yourself. The handoff stays paused until that person records
+   what was pressed.
+4. **If the decider declines** (for example Tom chooses `[q]`, which quits the
+   CLI): press nothing, record the refusal with state `blocked` (closed error
+   `modal-declined`), and leave the successor question to your parent.
+5. **Resume** after the press is recorded. First re-check custody, a second
+   writer (step 3) and the route (step 1); the recorded, approved press is not
+   "someone else typing". Any blocker other than the pending decision makes the
+   state `blocked`, not `paused`. Then read the pane again: `inspect` for a
+   helper-started session, or the visible screen only
    (`tmux capture-pane -p -t <pane-id>`) for a plain-tmux pane such as a Codex
    CLI. Nothing carries over from earlier reads or receipts.
-5. **Send** only by the session's route in this step, after that read shows a
+6. **Send** only by the session's route in this step, after that read shows a
    normal empty prompt: through `reply` for a helper-started session, or the
    literal send-keys line of route 3 for a plain-tmux pane. If the read still
    shows the prompt (old text can stay in the helper's capture window), do not
    override it: send no keys at all (route 3 included), no `--observed-ready`,
-   nothing to clear the screen. Read once more at the next check-in. If it still shows the prompt,
-   record `modal-unknown`, set the state to `blocked`, and stop.
+   nothing to clear the screen. Read once more at the next check-in of the
+   timer, or, with no timer, at the next coordinator check-in or work-order
+   read. If it still shows the prompt, record `modal-unknown` together with the
+   helper's own label (for example `modal-trust`) as evidence, set the state to
+   `blocked`, and stop.
 
 ## 5. Prove consumption
 
@@ -286,7 +299,7 @@ another route unless the work order authorizes it. Retry a step only on
 materially new evidence. A blocked handoff is an exact blocker under
 supervised-dispatch section 5: end this handoff and its check-in timer, if one
 exists, record who can act, and keep doing independent authorized work. A
-paused handoff (step 4, a prompt awaiting a decision or its permitted presser)
+paused handoff (step 4, a prompt awaiting a decision or its permitted person)
 uses the same record with `"state": "paused"`, and keeps its timer if one
 exists.
 
