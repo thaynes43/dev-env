@@ -1,6 +1,6 @@
 ---
 name: timer-checkin
-description: Check in on supervised work on a timer, with the session timers Claude Code already has and a persisted state file, so one custodian keeps it across restarts and handoffs and stops it only on a demonstrated outcome or a recorded stop (a cancellation or pause from Tom or his verified coordinator, an exhausted authorized budget, a genuine unresolvable blocker, or a required safety or permission decision). Use while supervising long-running work. Skip for one wait you can cover with a single background command, and never build a new scheduler.
+description: Check in on supervised work on a timer, with the session timers Claude Code already has and a persisted state file, so one custodian keeps it across restarts and handoffs and stops it only on a demonstrated outcome or a recorded stop (a cancellation or pause from Tom or his verified coordinator, an exhausted authorized budget, a genuine unresolvable blocker, or a denied safety or permission decision; a pending one pauses). Use while supervising long-running work. Skip for one wait you can cover with a single background command, and never build a new scheduler.
 ---
 
 # Timer check-in
@@ -242,16 +242,16 @@ Stop the timer only for a stop reason in supervised-dispatch section 5
 pause from Tom or his verified coordinator (including "wait for Meatball" and an
 explicit hold), an exhausted authorized budget (including a budget checkpoint or
 stop threshold recorded on the story, never a stall threshold), a genuine
-unresolvable blocker, or a required safety or permission decision.
+unresolvable blocker, or a denied safety or permission decision.
 Quiet time, failed attempts, a full context window and a 7-day expiry never end
 the timer. They trigger the stall rule in supervised-dispatch section 5, and the
 job is re-armed or re-created. Waiting for an event a check can observe, such as
 a natural keeper refresh, is pending, not blocked: keep the timer and report it
-pending. A handoff paused for a pending prompt decision
-([tmux-cli-handoff](../tmux-cli-handoff/SKILL.md), step 4) is pending in the
+pending. Work paused for a pending approval or safety decision
+(supervised-dispatch section 5; for example a prompt decision in
+[tmux-cli-handoff](../tmux-cli-handoff/SKILL.md), step 4) is pending in the
 same way: keep the timer if one exists, and never create one for it. When the
-work ends or pauses (except a handoff paused for a pending prompt decision,
-above):
+work ends or pauses (except work paused for a pending decision, above):
 
 1. `CronDelete` the job (or `ScheduleWakeup` with `stop: true`), then `CronList`
    to confirm it is gone. Do not keep polling during a pause.
