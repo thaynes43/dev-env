@@ -191,6 +191,7 @@ var agentdLayout = []historyRule{
 	{"instruction-end-unconfirmed.json", protocol.HistoryClassNotHistory, kindAny},
 	{"native-started.json", protocol.HistoryClassNotHistory, kindAny},
 	{"codex-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
+	{"claude-access-account.json", protocol.HistoryClassNotHistory, kindAny},
 	{"claude-access-generation.json", protocol.HistoryClassNotHistory, kindAny},
 	{"claude-continue.json", protocol.HistoryClassNotHistory, kindAny},
 	{"claude-rejected.json", protocol.HistoryClassNotHistory, kindAny},

@@ -296,6 +296,9 @@ func (d *Daemon) continueAfterRenewal(ctx context.Context) {
 		// An unreadable receipt could hide a send already made: do nothing.
 		return
 	}
+	if skipContinueForAccount(d.S, applied.Generation, d.now(), havePrev, prev) {
+		return
+	}
 	// Nothing is decided until the agent runs: Deliver would refuse anyway, and
 	// no receipt for this generation means the next poll looks again.
 	l, ok := currentLaunch(d.S)
