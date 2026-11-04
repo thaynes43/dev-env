@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -186,6 +187,17 @@ func TestRolloutHoldIsLoggedWhenItChanges(t *testing.T) {
 		if step.says != "" && !strings.Contains(lines[len(lines)-1], step.says) {
 			t.Fatalf("log %q does not say %s", lines[len(lines)-1], step.says)
 		}
+	}
+
+	// The operator's own templates load reports it.
+	lines = nil
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: templatesKey.Name, Namespace: templatesKey.Namespace}, Data: map[string]string{templates.Key: rolloutDoc(t, rolloutDigest2, rolloutDigest2)}}
+	loader := &Reconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build(), Templates: templatesKey}
+	if _, err := loader.loadTemplates(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], `"held"=true`) {
+		t.Fatalf("loadTemplates did not log the hold: %q", lines)
 	}
 }
 

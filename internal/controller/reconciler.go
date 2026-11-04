@@ -258,6 +258,10 @@ type Reconciler struct {
 	// expiryCounted rate-limits the refusals no record holds (countExpiryOnce).
 	expiryMu      sync.Mutex
 	expiryCounted map[string]time.Time
+
+	// rolloutHoldLogged is the last rollout hold state noteRolloutHold logged.
+	rolloutHoldMu     sync.Mutex
+	rolloutHoldLogged string
 }
 
 func (r *Reconciler) holdRetry() time.Duration {
@@ -1427,6 +1431,7 @@ func (r *Reconciler) loadTemplates(ctx context.Context) (*templates.Templates, e
 	if err != nil {
 		return nil, fmt.Errorf("templates %s: %w", r.Templates, err)
 	}
+	r.noteRolloutHold(ctx, t)
 	return t, nil
 }
 
@@ -1571,6 +1576,12 @@ func observe(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessio
 		if st.Revision != cur {
 			c.Status, c.Reason = metav1.ConditionTrue, "OlderRevision"
 			c.Message = fmt.Sprintf("the pod runs template revision %s; the current one is %s", st.Revision, cur)
+			if obs.templates.NewSessionsOnly() {
+				// DESIGN-001 5.2, 2026-11-04 note: the hold is visible on every
+				// session it keeps.
+				c.Reason = "OlderRevisionHeld"
+				c.Message += fmt.Sprintf("; automatic drain is held for image %s (templates rollout.newSessionsOnlyImage), so this session moves only by its own suspend and resume", obs.templates.Image)
+			}
 		}
 		if revisionErr != nil {
 			c.Status, c.Reason = metav1.ConditionUnknown, "TemplatesInvalid"

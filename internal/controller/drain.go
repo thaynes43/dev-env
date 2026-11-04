@@ -85,8 +85,29 @@ func templateRevision(obs observation) string {
 }
 
 // noteRolloutHold logs the templates' rollout hold state when it differs from
-// the last one logged (DESIGN-001 5.2, 2026-11-04 note).
-func (r *Reconciler) noteRolloutHold(ctx context.Context, t *templates.Templates) {}
+// the last one logged: once at the first load, then whenever the hold starts,
+// ends or names another image (DESIGN-001 5.2, 2026-11-04 note).
+func (r *Reconciler) noteRolloutHold(ctx context.Context, t *templates.Templates) {
+	if t == nil {
+		return
+	}
+	state := "off"
+	if t.NewSessionsOnly() {
+		state = "held " + t.Image
+	}
+	r.rolloutHoldMu.Lock()
+	changed := r.rolloutHoldLogged != state
+	r.rolloutHoldLogged = state
+	r.rolloutHoldMu.Unlock()
+	if !changed {
+		return
+	}
+	if t.NewSessionsOnly() {
+		log.FromContext(ctx).Info("the templates hold automatic revision drain for their image (rollout.newSessionsOnlyImage, DESIGN-001 5.2): new sessions only", "held", true, "image", t.Image, "revision", t.Revision())
+		return
+	}
+	log.FromContext(ctx).Info("automatic revision drain applies: the templates hold no rollout (DESIGN-001 5.2)", "held", false, "revision", t.Revision())
+}
 
 // drainRevision is the revision automatic drain compares a pod against: the
 // current template hash, or empty when the templates did not load or hold

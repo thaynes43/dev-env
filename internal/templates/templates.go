@@ -208,10 +208,14 @@ type Templates struct {
 
 // Rollout is how running sessions meet a new revision (DESIGN-001 5.2).
 type Rollout struct {
-	// NewSessionsOnlyImage, while it equals Image, turns automatic revision
-	// drain off: new sessions get the current revision, running ones keep
-	// their pods until their own suspend and resume. A value that names
-	// another image does nothing, so the next image bump drains again (Q-03).
+	// NewSessionsOnlyImage must equal Image; it turns automatic revision drain
+	// off: new sessions get the current revision, running ones keep their pods
+	// until their own suspend and resume. A value that names another image
+	// makes the templates invalid, so a later image bump must set it again or
+	// remove it; removing it resumes drain on idle (Q-03). Deploy order: the
+	// operator that knows the field first, on every replica; the field with
+	// or before the image bump, never with the operator pin; no operator
+	// rollback below this field while it is set (DESIGN-001 5.2).
 	NewSessionsOnlyImage string `json:"newSessionsOnlyImage,omitempty"`
 }
 
@@ -493,6 +497,8 @@ func (t *Templates) Validate() error {
 			add("rollout.newSessionsOnlyImage is empty")
 		} else if !strings.Contains(r.NewSessionsOnlyImage, "@sha256:") {
 			add("rollout.newSessionsOnlyImage %q is not pinned by digest (name:tag@sha256:...)", r.NewSessionsOnlyImage)
+		} else if r.NewSessionsOnlyImage != t.Image {
+			add("rollout.newSessionsOnlyImage %q does not match image %q: set it to the image to keep holding automatic drain, or remove it to resume drain on idle (DESIGN-001 5.2)", r.NewSessionsOnlyImage, t.Image)
 		}
 	}
 
