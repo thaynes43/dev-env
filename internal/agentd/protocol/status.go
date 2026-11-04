@@ -114,7 +114,11 @@ type Status struct {
 	// ProjectBootstrap is the boot's private catalog bootstrap, when it ran:
 	// catalog names, states, steps and reason codes only (DESIGN-006).
 	ProjectBootstrap *ProjectBootstrap `json:"projectBootstrap,omitempty"`
-	ObservedAt       time.Time         `json:"observedAt"`
+	// HomeHeadroom is agentd's bounded statfs observation of the filesystem
+	// holding $HOME: numbers and a closed state word, never a path. Absent means
+	// not measured. An operator that does not know the field ignores it.
+	HomeHeadroom *HomeHeadroom `json:"homeHeadroom,omitempty"`
+	ObservedAt   time.Time     `json:"observedAt"`
 }
 
 // Workspace is the session's clone and worktree (D-15).

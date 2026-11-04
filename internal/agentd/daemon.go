@@ -66,6 +66,8 @@ type Daemon struct {
 	measure  func(Settings, protocol.Session, string, string, time.Time) protocol.ConversationUsage
 	usage    conversationUsageCache
 	tmpUsage tmpUsageMonitor
+	// homeHeadroom samples the HOME filesystem's bytes and inodes (home_headroom.go).
+	homeHeadroom homeHeadroomMonitor
 }
 
 // conversationUsageEvery is how often an interactive session's conversation
@@ -649,6 +651,7 @@ func (d *Daemon) beat(ctx context.Context) {
 	}
 	st := CollectStatus(ctx, d.R, d.S, d.Session, d.now())
 	st.ConversationUsage = d.conversationUsage()
+	st.HomeHeadroom = d.homeHeadroom.Sample(d.S.Home, d.now(), d.Log)
 	d.sendHeartbeat(ctx, st)
 }
 
