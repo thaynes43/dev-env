@@ -88,6 +88,7 @@ spec:
   notify: [pushover:default]                 # DESIGN-032 targets
   calendar: calendar:haynesnetwork           # optional projection, through a companion Reminder
   editor: human/... | session/<name>/<uid>   # written by the API in the same write as every spec change
+  cancelled: false                           # set by cancel; a schema rule stops it being undone
 status:
   approval:                                  # written only by the API's human approve route
     by: human/...
@@ -343,7 +344,10 @@ stateDiagram-v2
   finalizer, only while its agent container has never started (no `startedAt` and
   a restart count of 0 in the pod's container status, read uncached), and is never a
   delete. If that read cannot prove the container never started, the executor does
-  not suspend; agentd's first-launch check is the guarantee either way.
+  not suspend **and records nothing**. The occurrence then ends only through the
+  session-end rule and the releaser, which records the real `taskResult` (a task
+  launched just before the deadline is not marked `Failed` while it runs).
+  agentd's first-launch check is the guarantee either way.
 - **Missed occurrences.** An occurrence found more than a grace period late (default
   15 minutes for headless, 2 hours for interactive) is `Skipped` with a reason, and
   is not run late without a person. This deliberately differs from DESIGN-032,
@@ -497,6 +501,7 @@ library only.
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
 | S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), the kind unserved before and after due plus grace, a page Reminder that cannot be created (release not blocked), and a never-launched agent past its start deadline reaching the end rule through the pod-age proof. Shipped in a release before S3b | PR, CI, native review, release |
+| S3c | agentd's first-launch start deadline (controller passes the annotation into the pod; agentd refuses a late first launch and reports boot complete, agent `failed`), with unit tests. Ships in an **agent image release** that haynes-ops installs **before** S3b's executor is enabled (S6), so no executor-created session can run on an image without the check | PR, CI, release, haynes-ops agent image pin |
 | S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, a fast headless success before Running (phase Failed, taskResult Succeeded → Succeeded), taskResult Unknown → Ended, approve of a Parked occurrence after grace running from retriedAt, an unapproved Parked occurrence expiring to Skipped, the start deadline: suspend before the Failed record; agentd refusing a late first launch with no executor running, and never refusing a later boot of a session that started in time) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
