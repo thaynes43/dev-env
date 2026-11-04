@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -103,4 +104,76 @@ func TestBudgetCLIAuthenticatedRetainedWorkflow(t *testing.T) {
 		}
 	}
 	t.Log("CLI -> authenticated TLS API -> retained ledger: custom finite bounds, caller refusal, duplicate refusal, restart-safe checkpoint latch; zero native/provider actors")
+}
+
+// Saga decision 94 (OpenProject #400): through TLS, caller policy and the
+// retained ledger, a stalled campaign reports its stall signal and still admits
+// its exact owner. The ledger allows a longer budget than the API's initial
+// pilot ceilings; the stall is reachable only with one.
+func TestBudgetCLIShowsStallAndOwnerContinues(t *testing.T) {
+	ctx := context.Background()
+	f := coordinatorFixture(t)
+	f.srv.AssignedTaskBudgets = map[string]string{"host-a": "campaign-a"}
+	store := taskbudget.KubeStore{Client: f.c, Live: f.c, Namespace: "budget-system"}
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return f.now }
+	f.srv.TaskBudgets = &taskbudget.Service{Store: store, Now: clock, Validator: apiBudgetValidator{}, NativeInspector: apiBudgetValidator{}}
+	created, err := f.srv.TaskBudgets.Create(ctx, "campaign-a", "host-a", "host-pod-uid", coordinatorSA, apiv1.TaskBudgetSpec{SuccessCondition: "result", OverallSeconds: 3 * 3600, EffortSeconds: 3 * 3600, CheckpointSeconds: 2 * 3600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := created.Binding
+	admit := func() apiv1.TaskBudgetStatus {
+		t.Helper()
+		w := f.do(http.MethodPost, apiv1.TaskBudgetPath(b.TaskUID)+"/admit", tokCoordinator, apiv1.TaskBudgetRequest{Binding: b})
+		if w.Code != http.StatusOK {
+			t.Fatalf("owner admission refused: %d %s", w.Code, w.Body.String())
+		}
+		return decode[apiv1.TaskBudgetStatus](t, w)
+	}
+	admit()
+	handler := f.srv.Handler()
+	server := httptest.NewTLSServer(handler)
+	defer server.Close()
+	dir := t.TempDir()
+	ca, token := filepath.Join(dir, "ca.crt"), filepath.Join(dir, "token")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(token, []byte(tokCoordinator), 0600); err != nil {
+		t.Fatal(err)
+	}
+	show := func(args ...string) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		env := agentrun.DefaultEnv()
+		env.Stdout, env.Stderr = &stdout, &stderr
+		env.Getenv = func(string) string { return "" }
+		env.SessionTokenFile, env.ServiceAccountDir = filepath.Join(dir, "absent-session"), filepath.Join(dir, "absent-sa")
+		args = append([]string{"budget", "show", "campaign-a"}, append(args, "--api-url", server.URL, "--token-file", token, "--ca-file", ca)...)
+		if code := agentrun.Run(ctx, args, env); code != agentrun.ExitOK {
+			t.Fatalf("%v: exit=%d stdout=%s stderr=%s", args, code, &stdout, &stderr)
+		}
+		return stdout.String()
+	}
+	mu.Lock()
+	f.now = f.now.Add(taskbudget.StallLimit + time.Minute)
+	mu.Unlock()
+	var st apiv1.TaskBudgetStatus
+	if err := json.Unmarshal([]byte(show("-o", "json")), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Latched || st.Reason != "" || st.Escalation != nil || st.Stall == nil || st.Stall.Signals != 1 || !st.Stall.Since.Equal(created.CreatedAt) || st.Binding != b {
+		t.Fatalf("stall not reported as a signal: %+v", st)
+	}
+	if text := show(); !strings.Contains(text, "latched: false") || !strings.Contains(text, "stall: since "+created.CreatedAt.UTC().Format(time.RFC3339Nano)+", signals 1") {
+		t.Fatalf("text status lacks the stall line:\n%s", text)
+	}
+	if again := admit(); !again.Admitted || again.Latched || again.Binding != b || again.Stall == nil {
+		t.Fatalf("stalled owner not admitted: %+v", again)
+	}
+	l, _, err := store.Read(ctx, b.TaskUID)
+	if err != nil || len(l.Workers) != 1 || l.Latched || !l.StallAnchor.Equal(created.CreatedAt) {
+		t.Fatalf("ledger changed: %+v %v", l, err)
+	}
 }

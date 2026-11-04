@@ -577,3 +577,50 @@ func TestManagedNeverLaunchedReceiptNeedsUnreservedLaunchAndAbsentPod(t *testing
 		}
 	})
 }
+
+// Saga decision 94 (OpenProject #400): the 60-minute stall is a signal, so the
+// controller keeps a bound child running through it. An exhausted budget still
+// suspends it.
+func TestManagedBudgetStallDoesNotSuspendButExhaustionDoes(t *testing.T) {
+	ctx := context.Background()
+	f := stoppedWorkspaceFixture()
+	c := f.client()
+	clock := f.now
+	svc := &taskbudget.Service{Store: taskbudget.KubeStore{Client: c, Live: c, Namespace: "protected-budgets"}, Validator: ManagedBudgetEvidenceValidator{Reader: c, Now: func() time.Time { return clock }}, Now: func() time.Time { return clock }}
+	l, err := svc.Create(ctx, "campaign", "host", "root-pod", "system/parent", taskbudget.Spec{SuccessCondition: "verified preservation", OverallSeconds: 3 * 3600, EffortSeconds: 8 * 3600, CheckpointSeconds: 2 * 3600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := l.Binding
+	f.s.Annotations = budgetAnnotations(b, "child")
+	f.s.Spec.Parent = "system/parent"
+	f.s.Spec.OperatingMode = v1alpha1.OperatingModeRunning
+	if err := c.Update(ctx, f.s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Record(ctx, apiv1.TaskBudgetEvent{Binding: b, ID: "start-child", Kind: "worker-start", WorkerID: "child"}); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: c, APIReader: c, TaskBudgets: svc}
+	mode := func() v1alpha1.OperatingMode {
+		t.Helper()
+		var live v1alpha1.AgentSession
+		if err := c.Get(ctx, client.ObjectKeyFromObject(f.s), &live); err != nil {
+			t.Fatal(err)
+		}
+		return live.Spec.OperatingMode
+	}
+	clock = clock.Add(taskbudget.StallLimit + time.Minute)
+	changed, err := r.enforceTaskBudget(ctx, f.s, f.pod)
+	if err != nil || changed || mode() != v1alpha1.OperatingModeRunning {
+		t.Fatalf("stall suspended the child: changed=%t mode=%s err=%v", changed, mode(), err)
+	}
+	stalled, err := svc.Observe(ctx, b)
+	if err != nil || stalled.Latched || stalled.Status().Stall == nil {
+		t.Fatal("stall signal missing", err)
+	}
+	clock = b.Deadline
+	if changed, err = r.enforceTaskBudget(ctx, f.s, f.pod); err != nil || !changed || mode() != v1alpha1.OperatingModeSuspended {
+		t.Fatalf("exhausted budget kept the child running: changed=%t mode=%s err=%v", changed, mode(), err)
+	}
+}

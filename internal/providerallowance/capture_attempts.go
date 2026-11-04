@@ -87,6 +87,12 @@ func AssembleCaptureAttempts(raw []byte, trust AggregateTrust, attempts []Captur
 		started, completed := attempt.StartedAt.UTC().Format(time.RFC3339Nano), attempt.CompletedAt.UTC().Format(time.RFC3339Nano)
 		status.LastAttempt = LastAttempt{AttemptedAt: started, CompletedAt: &completed, Result: AttemptError, Code: codePtr(codeAcquisitionUnavailable)}
 		status.Availability = AvailabilityUnavailable
+		if status.Freshness.Reason == reasonUnconfigured {
+			// A real failed attempt is not an unconfigured source. Only the freshness
+			// default for a provider with no retained capture is replaced; a held
+			// observation keeps the freshness it already carries.
+			status.Freshness = Freshness{State: FreshUnknown, AsOf: completed, Basis: BasisNone, Reason: reasonAttempt}
+		}
 		if attempt.Success {
 			status.LastAttempt.Result, status.LastAttempt.Code = AttemptSuccess, nil
 			status.Availability = availability

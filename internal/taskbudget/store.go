@@ -38,7 +38,7 @@ func ledgerName(uid string) string {
 
 func encodeLedger(l *Ledger) ([]byte, error) {
 	if l.Version != 1 || !validBinding(l.Binding) || !validSpec(l.Spec) || l.Parent == "" ||
-		l.historyEvents() > MaxEvents || len(l.Events)-l.historyEvents() > MaxWorkers ||
+		l.historyEvents() > MaxEvents || l.stallSignals() > MaxStallSignals || len(l.Events)-l.historyEvents()-l.stallSignals() > MaxWorkers ||
 		len(l.Workers) > MaxWorkers || len(l.Continuations) > 1 || len(l.Extensions) > 32 || len(l.Escalations) > 32 ||
 		l.CreatedAt.IsZero() || l.AccountedAt.Before(l.CreatedAt) || l.LastProgress.Before(l.CreatedAt) ||
 		l.LastProgress.After(l.AccountedAt) || l.StallAnchor.Before(l.CreatedAt) || l.StallAnchor.After(l.AccountedAt) ||

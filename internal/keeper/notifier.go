@@ -490,6 +490,13 @@ type Notifier struct {
 	Hub    *LoginHub
 	Store  NoticeStore
 	Sender NoticeSender
+	// VerifyClaude reads the current durable journal when a hub reports
+	// NeedsLogin. It returns Unknown on an unavailable or in-flight record.
+	// Nil preserves the unversioned standalone notifier behavior.
+	VerifyClaude func(context.Context) claudeNoticeDecision
+	// ClaudeFence is the usual leader budget check; it cannot make an HTTP
+	// delivery atomic with a later journal write.
+	ClaudeFence func(context.Context, time.Duration) error
 	// Enabled reports whether credentials exist right now. It is checked every
 	// tick, so credentials that arrive later switch the notifier on.
 	Enabled     func() bool
@@ -545,6 +552,38 @@ func NewNotifier(o NoticeOptions, hub *LoginHub, store NoticeStore, sender Notic
 	return n, nil
 }
 
+// claudeNoticeDecision retains the opaque identity and local time bounds of the
+// authoritative journal read. These are not metric labels or notification text.
+type claudeNoticeDecision struct {
+	status                    LoginStatus
+	resourceVersion           string
+	readStarted, readFinished time.Time
+}
+
+// verifyClaudeJournal returns only status and read metadata, never journal
+// material. The decision linearizes during the uncached read, between its
+// local time bounds. A later adoption can still overlap delivery.
+func verifyClaudeJournal(j *claudeJournal) func(context.Context) claudeNoticeDecision {
+	return func(ctx context.Context) claudeNoticeDecision {
+		d := claudeNoticeDecision{status: LoginStatus{State: LoginUnknown}, readStarted: time.Now()}
+		c, cancel := context.WithTimeout(ctx, claudeSaveTimeout)
+		defer cancel()
+		secret, r, err := j.load(c)
+		d.readFinished = time.Now()
+		if err != nil {
+			return d
+		}
+		d.resourceVersion = secret.ResourceVersion
+		switch r.Stage {
+		case claudeReady:
+			d.status = LoginStatus{State: LoginReady, LapsesAt: r.RefreshExpiresAt.UTC()}
+		case claudeNeedsLogin:
+			d.status = LoginStatus{State: LoginNeedsLogin}
+		}
+		return d
+	}
+}
+
 func (*Notifier) NeedLeaderElection() bool { return true }
 
 // Start ticks until ctx ends.
@@ -593,8 +632,21 @@ func (n *Notifier) Tick(ctx context.Context) {
 	}
 	sort.Strings(providers)
 	for _, p := range providers {
-		n.incidents(ctx, p, snap[p], now)
-		n.warning(ctx, p, snap[p], now)
+		obs := snap[p]
+		if p == ProviderClaude && obs.State == LoginNeedsLogin && n.VerifyClaude != nil {
+			if n.ClaudeFence != nil && n.ClaudeFence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
+				obs = LoginStatus{State: LoginUnknown}
+			} else {
+				obs = n.VerifyClaude(ctx).status
+			}
+		}
+		// Leader loss cancels this context. HTTP delivery also carries it, but
+		// cancellation cannot retract a notice already accepted by the sender.
+		if ctx.Err() != nil {
+			return
+		}
+		n.incidents(ctx, p, obs, now)
+		n.warning(ctx, p, obs, now)
 	}
 	n.persist(ctx)
 }

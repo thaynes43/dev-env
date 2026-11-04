@@ -43,6 +43,45 @@ anyone called them integrated.
 Pick the tier by the work: `opus-worker` for hard or user-visible work and for
 reviews of risky changes, `sonnet-worker` for routine work.
 
+A worker on the other provider is a managed project task started with
+`agent-run --project`, never the other provider's CLI run inside your own pod.
+The flags and refusals are in the
+[workflow guide](../../../docs/workflow-guide.md#launch-a-project-bound-child-on-another-provider).
+
+### Track the evidence ladder
+
+Each worker climbs the ladder in
+[supervised-dispatch, section 4](../supervised-dispatch/SKILL.md#the-evidence-ladder),
+one rung at a time, and the status record holds each rung with its time and
+evidence reference:
+
+1. launch accepted (the create's exit 0 and the Session's `uid`, or the
+   subagent's task title);
+2. Running;
+3. semantic ACK (section 1);
+4. first work: a commit on the claimed branch, such as the RED test (section 2);
+5. reviewed artifact: the deliverable at an exact head, read by QA (section 5);
+6. PR on that head;
+7. required CI on that head: the repository's required checks, or "no required
+   checks configured" recorded as not met, never an advisory review in its place;
+8. delivery or native return (section 7).
+
+A rung proves only itself. Exit 0, `Running` or a final message is not a
+passed review; only the accepted deliverable is.
+
+Keep provenance for every worker: session name and UID, parent, base commit,
+branch and head, and the model and effort as requested launch settings. Record
+the served model only when you observed it.
+
+Keep each command's own exit status in the evidence. A test run piped into
+`tail`, or followed by `echo`, reports the wrong status. Write the output to a
+log and read `$?` straight after the command:
+
+```bash
+GOMAXPROCS=2 nice -n 19 go test -p 2 ./internal/agentrun/ > "$log" 2>&1; rc=$?
+echo "go test exit=$rc log=$log"
+```
+
 ## 2. RED, then GREEN
 
 Write the test first. Run it on the unfixed code and record it failing, with the
@@ -111,7 +150,9 @@ no findings.
 
 The coordinator, or a fresh QA agent, checks every acceptance check against
 evidence: the tests run on the exact head, or the CI run for that head. A worker's
-RESULT file is a claim to check, not proof.
+RESULT file is a claim to check, not proof. So is a headless worker's retained
+task outcome in `agent-run show`: read its task exit and verdict there too, then
+check the deliverable itself.
 
 ## 7. Deliver through the gates
 

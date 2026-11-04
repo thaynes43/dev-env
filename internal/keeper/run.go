@@ -199,14 +199,7 @@ func Run(ctx context.Context, cfg *rest.Config, o Options) error {
 	// A bad notice flag sets Disabled. NewNotifier would return that validation
 	// error and stop the credential keeper, so the notifier stays off.
 	if noticesStart(len(providers), o.Notices) {
-		notices := o.Notices.withDefaults()
-		clk := o.Clock
-		if clk == nil {
-			clk = clock.RealClock{}
-		}
-		nf, err := NewNotifier(notices, hub,
-			&ConfigMapNoticeStore{Client: c, Name: types.NamespacedName{Namespace: o.Namespace, Name: notices.StateConfigMap}},
-			&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile}, clk, o.Log.WithName("notices"))
+		nf, err := loginNotifier(o, hub, c, credentialFence)
 		if err != nil {
 			return err
 		}
@@ -354,4 +347,32 @@ func registerLoginCollector(c *LoginCollector) error {
 		err = metrics.Registry.Register(c)
 	}
 	return err
+}
+
+// loginNotifier builds the notifier Run registers for the login gauges. With
+// Claude auth on, a NeedsLogin from the hub is checked behind the leader fence
+// against the durable journal before anything is sent, so a stale in-memory
+// observation cannot page. Claude auth requires leader election, so fence is
+// set whenever ClaudeAuth is enabled.
+func loginNotifier(o Options, hub *LoginHub, c client.Client, fence *LeaseFence) (*Notifier, error) {
+	notices := o.Notices.withDefaults()
+	clk := o.Clock
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+	nf, err := NewNotifier(notices, hub,
+		&ConfigMapNoticeStore{Client: c, Name: types.NamespacedName{Namespace: o.Namespace, Name: notices.StateConfigMap}},
+		&PushoverSender{URL: notices.URL, TokenFile: notices.TokenFile, UserFile: notices.UserFile}, clk, o.Log.WithName("notices"))
+	if err != nil {
+		return nil, err
+	}
+	if o.ClaudeAuth.Enabled {
+		name := o.ClaudeAuth.JournalSecret
+		if name == "" {
+			name = DefaultClaudeJournalSecret
+		}
+		nf.VerifyClaude = verifyClaudeJournal(&claudeJournal{Client: c, Secret: types.NamespacedName{Namespace: o.Namespace, Name: name}})
+		nf.ClaudeFence = fence.CheckBudget
+	}
+	return nf, nil
 }
