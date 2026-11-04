@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+
+	"github.com/thaynes43/dev-env/internal/claudelogin"
 )
 
 // claudeSpentClasses are the transport outcomes after dispatch. Each may have
@@ -91,5 +95,52 @@ func TestClaudeShutdownAfterDispatchTombstonesAtOnce(t *testing.T) {
 				t.Fatalf("successor sent the possibly spent token: calls=%d stage=%s", f.tr.Calls, f.journal(t).Stage)
 			}
 		})
+	}
+}
+
+// stageClaudeLogin writes a synthetic staged login for attempt uid and gives
+// the worker that attempt, as the login helper would.
+func (f *claudeFix) stageClaudeLogin(t *testing.T, uid string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, uid, ".claude"), 0o700); err != nil {
+		t.Fatal("synthetic staging setup failed")
+	}
+	if err := os.WriteFile(filepath.Join(dir, uid, claudelogin.StagedCredentials), loginCredentials(t, nil), 0o600); err != nil {
+		t.Fatal("synthetic staging setup failed")
+	}
+	r := syntheticClaudeRecord(1)
+	f.tr.Prof = &claudeProfile{AccountUUID: r.Access.AccountUUID, OrganizationUUID: r.Access.OrganizationUUID}
+	f.w.LoginDir = dir
+	f.w.attempt = claudeAttempt{uid: uid, until: f.clk.Now().Add(time.Minute)}
+}
+
+// An adoption reports under the journal's own incarnation. After the worker
+// has observed the tombstone of this journal, the adopted Ready must replace
+// it in the hub; an adoption that reported an unverified empty UID would be
+// refused there and leave NeedsLogin showing.
+func TestClaudeAdoptionReportsTheJournalIncarnation(t *testing.T) {
+	f := newClaudeFix(t)
+	hub := NewLoginHub(ProviderClaude)
+	f.w.Obs = hub
+	r := syntheticClaudeRecord(1)
+	r.Stage, r.Refresh, r.RefreshExpiresAt = claudeNeedsLogin, secretValue{}, time.Time{}
+	f.seed(t, r)
+	f.tick()
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginNeedsLogin {
+		t.Fatalf("tombstone not observed: %s", got)
+	}
+	f.stageClaudeLogin(t, claudeUID)
+	if result := f.w.adopt(context.Background(), claudeUID); !result.OK || result.Generation != 2 {
+		t.Fatal("synthetic staged adoption failed")
+	}
+	if got := hub.Snapshot()[ProviderClaude].State; got != LoginReady {
+		t.Fatalf("adopted Ready not reported: %s", got)
+	}
+	hub.mu.Lock()
+	uid := hub.claudeUID
+	hub.mu.Unlock()
+	if uid != claudeFixJournalUID {
+		t.Fatal("adoption was not reported under the journal's incarnation")
 	}
 }

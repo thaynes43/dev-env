@@ -85,6 +85,10 @@ type claudeFix struct {
 	lease types.NamespacedName
 }
 
+// claudeFixJournalUID is the synthetic incarnation of the fixture journal, so
+// ordinary observation tests exercise the hub's UID checks too.
+const claudeFixJournalUID = "synthetic-journal-incarnation"
+
 func newClaudeFix(t *testing.T) *claudeFix {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -95,7 +99,7 @@ func newClaudeFix(t *testing.T) *claudeFix {
 	ln := types.NamespacedName{Namespace: "agents", Name: DefaultClaudeLiveSecret}
 	lease := types.NamespacedName{Namespace: "system", Name: LeaderElectionID}
 	c := &failPatchClient{Name: jn.Name, Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: jn.Namespace, Name: jn.Name}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: jn.Namespace, Name: jn.Name, UID: claudeFixJournalUID}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ln.Namespace, Name: ln.Name, UID: "synthetic-live"}},
 	).Build()}
 	clk := clocktesting.NewFakeClock(claudeNow)
