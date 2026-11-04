@@ -28,7 +28,10 @@ import (
 //     records the returned entry with v1alpha1.AppendPage in its own
 //     compare-and-set write (deliver). Ensure never fails: a Reminder kind the
 //     API server does not serve, or any create error, is a skipped entry,
-//     and a skipped entry is final.
+//     and a skipped entry is final. An answer Ensure cannot confirm (its
+//     Reminder may exist but the read back failed, Pager.EnsureChecked) is
+//     not recorded: the intent stays pending, is tried once per pass, and a
+//     later pass whose read works records the Reminder.
 //
 // An item with no notify target, or an executor with no Pager, records no
 // intent and so pages nothing. Neither step updates or deletes a Reminder.
@@ -143,13 +146,20 @@ func (p *pass) deliver(ctx context.Context, w *v1alpha1.ScheduledWork, now time.
 	for i := range w.Status.Occurrences {
 		o := &w.Status.Occurrences[i]
 		for _, pg := range o.Pages {
-			if !pendingPage(pg) || !executorSends(o, pg) {
+			key := pageTryKey(o, pg)
+			if !pendingPage(pg) || !executorSends(o, pg) || p.pagesTried[key] {
 				continue
 			}
 			title, body := pageText(w, o, pg.Event)
 			pctx, cancel := context.WithTimeout(ctx, positiveOr(p.e.PageTimeout, DefaultPageTimeout))
-			got := p.e.Pager.Ensure(pctx, w, o.At.Time, pg.Event, pg.Attempt, title, body, now)
+			got, settled := p.e.Pager.EnsureChecked(pctx, w, o.At.Time, pg.Event, pg.Attempt, title, body, now)
 			cancel()
+			if !settled {
+				// The Reminder may exist; a later pass reads it again.
+				p.pagesTried[key] = true
+				lg.Info("a page Reminder could not be confirmed; it is tried again next pass", "occurrence", o.At.UTC().Format(time.RFC3339), "event", pg.Event)
+				continue
+			}
 			o.Pages = settle(o.Pages, pg, got)
 			sent++
 		}
@@ -159,6 +169,11 @@ func (p *pass) deliver(ctx context.Context, w *v1alpha1.ScheduledWork, now time.
 	}
 	lg.Info("recorded the scheduled work's pages", "pages", sent)
 	return true, p.e.write(ctx, w)
+}
+
+// pageTryKey names an occurrence's page for the pass's set of pages tried.
+func pageTryKey(o *v1alpha1.ScheduledWorkOccurrence, pg v1alpha1.ScheduledWorkPage) string {
+	return fmt.Sprintf("%d/%s/%d", o.At.Unix(), pg.Event, pg.Attempt)
 }
 
 // settle records got, Ensure's entry for the intent pg, in pages. An entry

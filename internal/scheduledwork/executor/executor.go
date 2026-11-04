@@ -524,6 +524,9 @@ type pass struct {
 	extra      slots
 	extraNames map[string]bool
 	tried      map[int64]bool
+	// pagesTried are the item's pages whose Ensure could not be confirmed in
+	// this pass; they stay pending and are not tried again until the next.
+	pagesTried map[string]bool
 }
 
 func (p *pass) used(mode string) int {
@@ -544,7 +547,7 @@ func (p *pass) item(ctx context.Context, w *v1alpha1.ScheduledWork) {
 	if !w.DeletionTimestamp.IsZero() {
 		return
 	}
-	p.tried = map[int64]bool{}
+	p.tried, p.pagesTried = map[int64]bool{}, map[string]bool{}
 	lg := p.e.Log.WithValues("scheduledWork", w.Name)
 	for range maxSteps {
 		wrote, err := p.step(ctx, w, lg)

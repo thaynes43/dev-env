@@ -800,13 +800,19 @@ func releaserSends(pg v1alpha1.ScheduledWorkPage) bool {
 // nothing: a write that fails leaves the intent stored, and a later pass for
 // this session, while its finalizer holds, finds the Reminder Ensure made.
 //
+// An answer Ensure cannot confirm (pages.Pager.EnsureChecked: the Reminder
+// may exist but the read back failed) is not recorded: the intent stays
+// pending for a later pass, which the finalizer's hold usually gives.
+//
 // A residual, by Decision 5's best effort: when the write fails (any error
-// but a conflict, or five conflicts in a row) and the finalizer is then
-// lifted, no later pass comes, and the executor never sends a failed or
-// result page. The intent then stays pending in status for good, whether or
-// not its Reminder was created and sent; it means "page not confirmed".
+// but a conflict, or five conflicts in a row), or the answer is still
+// unconfirmed, and the finalizer is then lifted, no later pass comes, and the
+// executor never sends a failed or result page. The intent then stays
+// pending in status for good, whether or not its Reminder was created and
+// sent; it means "page not confirmed".
 func (r *Reconciler) sendScheduledWorkPages(ctx context.Context, lg logr.Logger, s *v1alpha1.AgentSession, at time.Time, w *v1alpha1.ScheduledWork, now time.Time) *v1alpha1.ScheduledWork {
 	pager := &pages.Pager{Client: uncachedPageReads{Client: r.Client, reader: r.APIReader}}
+	tried := map[string]bool{}
 	for range 5 {
 		o := scheduledwork.Find(w, at)
 		if o == nil || o.Session != s.Name || (o.SessionUID != "" && o.SessionUID != string(s.UID)) {
@@ -816,13 +822,21 @@ func (r *Reconciler) sendScheduledWorkPages(ctx context.Context, lg logr.Logger,
 		no := scheduledwork.Find(&next, at)
 		sent := 0
 		for _, pg := range o.Pages {
-			if !releaserSends(pg) {
+			key := pg.Event + "/" + fmt.Sprint(pg.Attempt)
+			if !releaserSends(pg) || tried[key] {
 				continue
 			}
 			title, body := releasePageText(w, o, pg.Event)
 			pctx, cancel := context.WithTimeout(ctx, scheduledWorkPageTimeout)
-			got := pager.Ensure(pctx, w, at, pg.Event, pg.Attempt, title, body, now)
+			got, settled := pager.EnsureChecked(pctx, w, at, pg.Event, pg.Attempt, title, body, now)
 			cancel()
+			if !settled {
+				// The Reminder may exist but could not be read back: the
+				// intent stays pending for a later pass of this session.
+				tried[key] = true
+				lg.Info("a page Reminder could not be confirmed; it is tried again on the next pass", "occurrence", at.Format(time.RFC3339), "event", pg.Event)
+				continue
+			}
 			if got.Event != pg.Event || got.Attempt != pg.Attempt {
 				got = v1alpha1.ScheduledWorkPage{Event: pg.Event, Attempt: pg.Attempt, State: "skipped"}
 			}

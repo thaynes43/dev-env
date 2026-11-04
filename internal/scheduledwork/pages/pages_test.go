@@ -744,3 +744,63 @@ func TestEnsureIntoKeepsARecordedPageWhenTheReadFails(t *testing.T) {
 		t.Fatalf("a confirmed replay: %+v, want %+v first", got, want)
 	}
 }
+
+// EnsureChecked reports an answer it cannot confirm: the create met
+// AlreadyExists, or an error after which the Reminder may be stored, and the
+// verifying read failed. Every other answer is settled, a refusal, a read
+// that finds no Reminder and another's Reminder included.
+func TestEnsureCheckedReportsAnUnconfirmedRead(t *testing.T) {
+	w := item("pushover:default")
+	own, err := Build(w, occAt, v1alpha1.PageEventDue, 0, "Due", "body", nowAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := own.DeepCopy()
+	foreign.Labels[v1alpha1.LabelScheduledWork] = "other-uid"
+	readErr := apierrors.NewServiceUnavailable("injected: the read failed")
+	gr := schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "reminders"}
+	for _, c := range []struct {
+		name     string
+		existing *v1alpha1.Reminder
+		create   error
+		read     error
+		named    bool
+		settled  bool
+	}{
+		{"created", nil, nil, nil, true, true},
+		{"exists, read works", own, nil, nil, true, true},
+		{"exists, read fails", own, nil, readErr, false, false},
+		{"exists as another's", foreign, nil, nil, false, true},
+		{"ambiguous create, read fails", nil, errors.New("injected: connection reset"), readErr, false, false},
+		{"ambiguous create, nothing stored", nil, errors.New("injected: connection reset"), nil, false, true},
+		{"refused", nil, apierrors.NewForbidden(gr, "x", errors.New("no")), readErr, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var objs []client.Object
+			if c.existing != nil {
+				objs = append(objs, c.existing.DeepCopy())
+			}
+			p := &Pager{Client: fakeClient(t, interceptor.Funcs{
+				Create: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+					if c.create != nil {
+						return c.create
+					}
+					return cl.Create(ctx, o, opts...)
+				},
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+					if c.read != nil {
+						return c.read
+					}
+					return cl.Get(ctx, key, o, opts...)
+				},
+			}, objs...)}
+			got, settled := p.EnsureChecked(context.Background(), w, occAt, v1alpha1.PageEventDue, 0, "Due", "body", nowAt)
+			if settled != c.settled || (got.Reminder != "") != c.named {
+				t.Fatalf("EnsureChecked = %+v, settled %v; want named %v settled %v", got, settled, c.named, c.settled)
+			}
+			if plain := p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, 0, "Due", "body", nowAt); (plain.Reminder != "") != c.named && c.name != "created" {
+				t.Errorf("Ensure = %+v differs from EnsureChecked", plain)
+			}
+		})
+	}
+}
