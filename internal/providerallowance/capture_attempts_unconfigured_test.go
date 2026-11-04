@@ -2,6 +2,7 @@ package providerallowance
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -64,6 +65,9 @@ func TestFailedAttemptAfterHeldCaptureKeepsFreshnessAndLastGood(t *testing.T) {
 	left, right := pick(before), pick(after)
 	if right.LastAttempt.Result != AttemptError || right.LastGood == nil || left.LastGood == nil || *right.LastGood != *left.LastGood {
 		t.Fatal("failed attempt replaced last-good history", right)
+	}
+	if !reflect.DeepEqual(right.Binding, left.Binding) || !reflect.DeepEqual(right.Validation, left.Validation) {
+		t.Fatal("failed attempt rewrote the held observation's binding or validation", left.Binding, right.Binding, left.Validation, right.Validation)
 	}
 	if right.Freshness != left.Freshness || right.Freshness.Reason == "acquisition failed" || right.Freshness.Reason == "source not configured" {
 		t.Fatal("failed attempt rewrote the held observation's freshness", left.Freshness, right.Freshness)
