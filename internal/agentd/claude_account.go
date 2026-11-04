@@ -104,9 +104,13 @@ func recordClaudeAccount(s Settings, a claudeauth.Access) error {
 	default:
 		// The same fingerprint as a record that is BEHIND the receipt proves nothing about the
 		// generation in between: a failed write can hide an account hop (A, B, A). Mark the
-		// incoming generation, as for a missing record.
+		// incoming generation, as for a missing record. The record is behind when the receipt is
+		// past it and at least one generation lies between the record and the incoming one (a later
+		// generation arrives, or the writes recover while the latest is re-synced). A generation the
+		// pod merely never saw (the receipt equals the record) is no gap, and the generation whose own
+		// write failed is checked by its own fingerprint.
 		var old claudeReceipt
-		if readJSONFile(s.statePath("claude-access-generation.json"), &old) == nil && cur.Generation < old.Generation && old.Generation < a.Generation {
+		if readJSONFile(s.statePath("claude-access-generation.json"), &old) == nil && cur.Generation < old.Generation && cur.Generation+1 < a.Generation {
 			next.Changed, next.Basis = a.Generation, "missing"
 		}
 	}

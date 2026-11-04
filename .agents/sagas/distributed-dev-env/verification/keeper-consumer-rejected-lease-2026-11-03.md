@@ -287,7 +287,10 @@ agentd ignores the new file.
   stays off: it needs a record that is current for the applied generation. A record that is
   valid but behind the receipt is not confirmed either, and a later generation whose fingerprint matches such
   a record is still marked (a failed write can hide a hop: A, then B while writes fail, then A again;
-  found by the advisory review of the final head). A record gone when a NEW generation arrives is
+  found by the advisory review of the final head). The same holds when the writes recover while the latest
+  generation is re-synced and the receipt already equals the incoming one (found by QA round 4): the record
+  must be at most one generation behind. Not covered, tamper-only: a deleted generation receipt takes away
+  the receipt's own rollback fence as well, so the account guard reads a pod with no receipt as a first run. A record gone when a NEW generation arrives is
   seeded again and marks that generation unconfirmed ("missing"), so its continue is skipped; the same
   holds for an agentd upgraded in place when a new generation arrives before its first poll. A record gone
   while the receipt's own generation is current is read as a first run and seeded without a mark.

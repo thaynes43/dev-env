@@ -335,3 +335,48 @@ func TestClaudeAccountHiddenHopThroughFailedWritesIsNotRetried(t *testing.T) {
 		t.Errorf("the mark did not clear on the next generation: %q", rg.status())
 	}
 }
+
+// QA918-10: the same hop, but the writes recover while the LATEST generation is re-synced,
+// so the receipt already equals the incoming generation. Record at 2 (A); generation 3 (B)
+// and 4 (A) are applied while the writes fail; they recover during a re-sync of 4.
+func TestClaudeAccountHiddenHopSurvivesNoRecoveryDuringAResync(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	restore := failAccountWrites(t)
+	rg.publishAs(3, otherAccount)
+	rg.revoke(4 * time.Hour)
+	rg.pollProduction()
+	rg.publishAs(4, projAccount)
+	rg.pollProduction()
+	if rg.continues() != 0 {
+		t.Fatal("a continue was sent while the record was behind")
+	}
+	restore()
+	rg.pollProduction()
+	rg.pollProduction()
+	if rg.continues() != 0 {
+		t.Fatal("B's error was retried under A after the writes recovered during a re-sync")
+	}
+	if !strings.Contains(rg.status(), "account unconfirmed since generation 4") {
+		t.Errorf("the hidden hop is not shown: %q", rg.status())
+	}
+}
+
+// Generations the pod never saw are no gap: a pod that resumes after several keeper
+// refreshes, with its record in step with its receipt, still gets the ordinary continue.
+func TestClaudeAccountSkippedGenerationsAreNoGap(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	rg.revoke(2 * time.Hour)
+	rg.pollProduction()
+	rg.publishAs(9, projAccount)
+	rg.pollProduction()
+	if rg.continues() != 1 {
+		t.Fatalf("a resume across several generations lost its continue: %d", rg.continues())
+	}
+	if strings.Contains(rg.status(), "account") {
+		t.Errorf("the status mentions the account: %q", rg.status())
+	}
+}
