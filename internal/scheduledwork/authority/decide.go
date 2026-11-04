@@ -124,8 +124,9 @@ type OwnerState struct {
 	// Deleting is a deletion timestamp on the session.
 	Deleting bool
 	// OperatingMode and Phase are the session's spec.operatingMode and
-	// status.phase. Phase Draining is a drain onto a new revision: neither
-	// live nor ended.
+	// status.phase. Phase Draining is a drain onto a new revision, and phase
+	// Suspended with operating mode Running is the resume window (resumed,
+	// its pod not yet up): neither is live or ended.
 	OperatingMode v1alpha1.OperatingMode
 	Phase         v1alpha1.SessionPhase
 	// AgentStatus is agentd's last agent status (status.agent.status). Only
@@ -134,7 +135,10 @@ type OwnerState struct {
 	// LastHeartbeat is when the operator last accepted a heartbeat from the
 	// session's pod (status.agent.lastHeartbeat); zero is none.
 	LastHeartbeat time.Time
-	// Ended is DESIGN-054's session-end rule (scheduledwork.SessionEnded).
+	// Ended is DESIGN-054's session-end rule (scheduledwork.SessionEnded). In
+	// the resume window its Suspended-phase clause does not count: the owner
+	// has been resumed. Its other clauses, a reclaimed task's verdict
+	// included, still end the owner.
 	Ended bool
 	// BootFailed is agentd's report of a failed boot that cannot recover in
 	// the same pod, made by the current pod: an end for an owner session.
@@ -168,7 +172,15 @@ func OwnerStateOf(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) Owne
 		OperatingMode: s.Spec.OperatingMode,
 		Phase:         s.Status.Phase,
 	}
-	st.Ended, _ = scheduledwork.SessionEnded(s, pod, now)
+	ended := s
+	if s.Spec.OperatingMode == v1alpha1.OperatingModeRunning && s.Status.Phase == v1alpha1.PhaseSuspended {
+		// The resume window: judge the session-end rule without the phase
+		// the resume has not replaced yet.
+		c := *s
+		c.Status.Phase = ""
+		ended = &c
+	}
+	st.Ended, _ = scheduledwork.SessionEnded(ended, pod, now)
 	a := s.Status.Agent
 	if a == nil {
 		st.Booting = true
@@ -313,7 +325,8 @@ func standing(w *v1alpha1.ScheduledWork, owner OwnerState, now time.Time, staleA
 // owner), being deleted, suspended, ended or failed at boot. A suspended
 // owner has no basis while it is suspended. Its authority was not revoked:
 // once it is resumed with the same UID and proven live, it has its basis
-// again.
+// again. In between, the resume window (operating mode Running, phase still
+// Suspended) is not an end: unproven decides it, and the occurrence waits.
 func ownerEnded(p Principal, o OwnerState) string {
 	switch {
 	case !o.Found:
@@ -327,8 +340,11 @@ func ownerEnded(p Principal, o OwnerState) string {
 	case o.OperatingMode == v1alpha1.OperatingModeSuspended:
 		return ReasonOwnerSuspended
 	}
-	switch o.Phase {
-	case v1alpha1.PhaseSuspended, v1alpha1.PhaseArchived, v1alpha1.PhaseFailed:
+	switch {
+	case o.Phase == v1alpha1.PhaseArchived || o.Phase == v1alpha1.PhaseFailed,
+		// Phase Suspended ends an owner unless it has been resumed
+		// (operating mode Running): that is the resume window, unproven.
+		o.Phase == v1alpha1.PhaseSuspended && o.OperatingMode != v1alpha1.OperatingModeRunning:
 		return fmt.Sprintf("%s (phase %s)", ReasonOwnerEnded, o.Phase)
 	}
 	switch {
@@ -345,6 +361,9 @@ func unproven(o OwnerState, now time.Time, staleAfter time.Duration) string {
 	switch {
 	case o.Phase == v1alpha1.PhaseDraining:
 		return "draining"
+	case o.Phase == v1alpha1.PhaseSuspended:
+		// Reached only with operating mode Running (ownerEnded ends the rest).
+		return "resuming: operating mode Running, phase still Suspended"
 	case o.Booting:
 		return "booting"
 	case !slices.Contains(liveAgentStatuses, o.AgentStatus):

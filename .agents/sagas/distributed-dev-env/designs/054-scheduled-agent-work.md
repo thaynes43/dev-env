@@ -225,6 +225,10 @@ pod. An unproven owner keeps the occurrence `Pending` within its grace.
 **Suspend and resume.** A suspended owner session has no basis while it is
 suspended. Suspending revokes nothing: once it is resumed with the same UID and
 proven live, it has its basis again. A session with another UID is another owner.
+The resume window between the two (operating mode Running again, phase still
+Suspended) is not an end: the owner is unproven, and the occurrence waits within
+its grace. A reclaimed task still ends there through the session-end rule's task
+verdict.
 
 **When both hold.** When the owner's standing basis and a human approval both hold,
 the occurrence dispatches on the standing basis if the template admits it, because

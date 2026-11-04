@@ -56,6 +56,9 @@ func owner(edit func(*OwnerState)) OwnerState {
 
 func unprovenReason(why string) string { return ReasonOwnerUnproven + ": " + why }
 
+// resumingWhy is the unproven reason of an owner in the resume window.
+const resumingWhy = "resuming: operating mode Running, phase still Suspended"
+
 var sessionRef = &SessionRef{Name: "coord-1", UID: "uid-1"}
 
 // The digests of two real templates, and an approval's template check that
@@ -138,13 +141,21 @@ func TestDecide(t *testing.T) {
 		"session owner, other session":  {w: item(ownerSess, "session/coord-1/uid-2"), owner: liveOwner(), want: Decision{StandingReason: ReasonEditorNotOwner}},
 
 		// An owner session with no basis now: no wait.
-		"owner not found":            {w: item(ownerSess, ownerSess), owner: OwnerState{}, want: Decision{StandingReason: ReasonOwnerNotFound}},
-		"owner name misread":         {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Name = "coord-2" }), want: Decision{StandingReason: ReasonOwnerMisread}},
-		"owner UID mismatch":         {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.UID = "uid-2" }), want: Decision{StandingReason: ReasonOwnerUIDMismatch}},
-		"owner deleting":             {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Deleting = true }), want: Decision{StandingReason: ReasonOwnerDeleting}},
-		"owner suspended":            {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.OperatingMode = v1alpha1.OperatingModeSuspended }), want: Decision{StandingReason: ReasonOwnerSuspended}},
-		"owner phase Failed":         {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Phase = v1alpha1.PhaseFailed }), want: Decision{StandingReason: ReasonOwnerEnded + " (phase Failed)"}},
-		"owner phase Suspended":      {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Phase = v1alpha1.PhaseSuspended }), want: Decision{StandingReason: ReasonOwnerEnded + " (phase Suspended)"}},
+		"owner not found":    {w: item(ownerSess, ownerSess), owner: OwnerState{}, want: Decision{StandingReason: ReasonOwnerNotFound}},
+		"owner name misread": {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Name = "coord-2" }), want: Decision{StandingReason: ReasonOwnerMisread}},
+		"owner UID mismatch": {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.UID = "uid-2" }), want: Decision{StandingReason: ReasonOwnerUIDMismatch}},
+		"owner deleting":     {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Deleting = true }), want: Decision{StandingReason: ReasonOwnerDeleting}},
+		"owner suspended":    {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.OperatingMode = v1alpha1.OperatingModeSuspended }), want: Decision{StandingReason: ReasonOwnerSuspended}},
+		"owner phase Failed": {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Phase = v1alpha1.PhaseFailed }), want: Decision{StandingReason: ReasonOwnerEnded + " (phase Failed)"}},
+		"owner phase Suspended, mode unset": {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Phase, o.OperatingMode = v1alpha1.PhaseSuspended, "" }),
+			want: Decision{StandingReason: ReasonOwnerEnded + " (phase Suspended)"}},
+		"owner suspended, phase Suspended": {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) {
+			o.Phase, o.OperatingMode = v1alpha1.PhaseSuspended, v1alpha1.OperatingModeSuspended
+		}), want: Decision{StandingReason: ReasonOwnerSuspended}},
+		// The resume window: operatingMode is Running again while the phase is
+		// still Suspended. The owner is unproven, not ended.
+		"resume window": {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Phase = v1alpha1.PhaseSuspended }),
+			want: Decision{Wait: true, StandingReason: unprovenReason(resumingWhy)}},
 		"owner phase Archived":       {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Phase = v1alpha1.PhaseArchived }), want: Decision{StandingReason: ReasonOwnerEnded + " (phase Archived)"}},
 		"owner ended by rule":        {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Ended = true }), want: Decision{StandingReason: ReasonOwnerEnded}},
 		"owner ended while draining": {w: item(ownerSess, ownerSess), owner: owner(func(o *OwnerState) { o.Ended, o.Phase = true, v1alpha1.PhaseDraining }), want: Decision{StandingReason: ReasonOwnerEnded}},
@@ -359,6 +370,23 @@ func TestOwnerStateOf(t *testing.T) {
 		"recreated": {s: func(s *v1alpha1.AgentSession) { s.UID = "uid-2" }, want: Decision{StandingReason: ReasonOwnerUIDMismatch}},
 		"deleting":  {s: func(s *v1alpha1.AgentSession) { s.DeletionTimestamp = &deleting }, want: Decision{StandingReason: ReasonOwnerDeleting}},
 		"suspended": {s: func(s *v1alpha1.AgentSession) { s.Spec.OperatingMode = v1alpha1.OperatingModeSuspended }, want: Decision{StandingReason: ReasonOwnerSuspended}},
+		"suspended, phase Suspended, no pod": {s: func(s *v1alpha1.AgentSession) {
+			s.Spec.OperatingMode, s.Status.Phase = v1alpha1.OperatingModeSuspended, v1alpha1.PhaseSuspended
+		}, noPod: true, want: Decision{StandingReason: ReasonOwnerSuspended}},
+		// Resumed: operatingMode Running, the phase still Suspended, no pod yet,
+		// and the last agent report from before the suspend.
+		"resume window, no pod yet": {s: func(s *v1alpha1.AgentSession) {
+			s.Status.Phase, s.Status.Agent.Status = v1alpha1.PhaseSuspended, protocol.AgentExited
+			heartbeatAt(-2 * time.Hour)(s)
+		}, noPod: true, want: Decision{Wait: true, StandingReason: unprovenReason(resumingWhy)}},
+		"resume window, old pod still present": {s: func(s *v1alpha1.AgentSession) { s.Status.Phase = v1alpha1.PhaseSuspended },
+			want: Decision{Wait: true, StandingReason: unprovenReason(resumingWhy)}},
+		// A reclaimed task still ends through the session-end rule's verdict
+		// clause in the same window.
+		"resume window, task with verdict": {s: func(s *v1alpha1.AgentSession) {
+			s.Spec.Mode, s.Status.Phase = v1alpha1.ModeTask, v1alpha1.PhaseSuspended
+			s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}
+		}, noPod: true, want: Decision{StandingReason: ReasonOwnerEnded}},
 		"task with verdict": {s: func(s *v1alpha1.AgentSession) {
 			s.Spec.Mode = v1alpha1.ModeTask
 			s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}
