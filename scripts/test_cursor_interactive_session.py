@@ -616,6 +616,9 @@ class AnswerTests(AnswerFixture):
         self.assertNotIn("Do you trust", json.dumps(answered))
         code, again = self.invoke("answer", self.answer_args(inspected["receipt"]))
         self.assertIn((code, again["state"]), {(2, "stale-receipt"), (2, "approval-spent")})
+        # The receipt is spent too: another approval cannot reuse it.
+        code, reused = self.invoke("answer", self.answer_args(inspected["receipt"], approval=SECOND_APPROVAL))
+        self.assertEqual((code, reused["state"]), (2, "stale-receipt"))
         self.assertEqual(len(self.sends()), 1)
 
     def test_answer_refuses_prompt_text_mismatch_without_spending(self):
@@ -696,9 +699,14 @@ class AnswerTests(AnswerFixture):
     def test_answer_validates_input_before_any_tmux_call(self):
         inspected = self.start_and_inspect()
         bad_expect = {
-            "empty": b"", "blank": b"\n \n", "control": b"Workspace Trust Required\x1b[2J\n",
-            "not-utf8": b"\xff\xfe\n", "oversize": b"x" * 4097,
+            "empty": b"", "blank": b"\n \n", "control": b"[a] Trust this workspace\x1b[2J\n",
+            "not-utf8": b"[a] Trust \xff\xfe\n", "oversize": b"[a] Trust this workspace\n" + b"x" * 4097,
+            "too many lines": b"[a] Trust this workspace\n" * 21,
         }
+        two_keys = self.root / "expect-two-keys"
+        two_keys.write_text("[ab] Trust this workspace\n")
+        blank_key = self.root / "expect-blank-key"
+        blank_key.write_text("[ ] Trust this workspace\n")
         cases = [
             ("approval empty", self.answer_args(inspected["receipt"], approval="")),
             ("approval short", self.answer_args(inspected["receipt"], approval="tom-ok")),
@@ -707,8 +715,8 @@ class AnswerTests(AnswerFixture):
             ("kind unknown", self.answer_args(inspected["receipt"], kind="modal-unknown")),
             ("kind other", self.answer_args(inspected["receipt"], kind="active")),
             ("choice empty", self.answer_args(inspected["receipt"], choice="")),
-            ("choice two", self.answer_args(inspected["receipt"], choice="ab")),
-            ("choice space", self.answer_args(inspected["receipt"], choice=" ")),
+            ("choice two", self.answer_args(inspected["receipt"], choice="ab", expect=two_keys)),
+            ("choice space", self.answer_args(inspected["receipt"], choice=" ", expect=blank_key)),
             ("choice escape", self.answer_args(inspected["receipt"], choice="\x1b")),
             ("choice key name", self.answer_args(inspected["receipt"], choice="Enter")),
             ("choice not offered", self.answer_args(inspected["receipt"], choice="q")),
@@ -753,6 +761,8 @@ class AnswerTests(AnswerFixture):
             first = pool.submit(self.invoke, "answer", extra, env=barrier)
             self.await_send(descriptor)
             try:
+                # The approval is spent durably before the key is sent.
+                self.assertEqual(json.loads(self.ledger().read_text())["outcome"], "sending")
                 code, second = self.invoke("answer", extra)
                 self.assertEqual((code, second["state"]), (2, "lock-busy"))
             finally:
@@ -858,9 +868,11 @@ class AnswerTests(AnswerFixture):
         self.assertEqual(len(self.sends()), 1)
 
     def test_active_composer_under_an_old_prompt_is_refused(self):
+        rows = len(TRUST_CAPTURE.splitlines())
         cases = {
             "composer is the bottom row": (TRUST_CAPTURE + "> ", None),
-            "cursor sits on a composer row": (TRUST_CAPTURE + ">\n\n", len(TRUST_CAPTURE.splitlines())),
+            "composer row below, cursor on a blank row": (TRUST_CAPTURE + ">\n\n", rows + 1),
+            "cursor on a composer row above the prompt": (">\n" + TRUST_SCREEN, 0),
         }
         for label, (capture, cursor) in cases.items():
             with self.subTest(label=label):
@@ -904,6 +916,15 @@ class AnswerTests(AnswerFixture):
                 code, refused = self.invoke("answer", self.answer_args(inspected["receipt"]))
                 self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
                 self.assertEqual(self.sends(), [])
+
+    def test_spend_approval_is_exclusive(self):
+        path = self.root / "ledger-unit" / "approvals" / "entry"
+        helper.spend_approval(path, {"approval_ref": APPROVAL})
+        with self.assertRaises(helper.Refusal) as caught:
+            helper.spend_approval(path, {"approval_ref": APPROVAL})
+        self.assertEqual(caught.exception.state, "approval-spent")
+        self.assertEqual(json.loads(path.read_text()), {"approval_ref": APPROVAL})
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,

@@ -619,17 +619,91 @@ def validate_answer(args):
     return choice, raw, lines
 
 
-def expected_lines_shown(text, lines):
-    shown = [line.casefold() for line in text.splitlines()]
-    position = 0
+def match_expected(rows, lines):
+    """Index of the row that matched the last expected line, or None.
+
+    Every expected line must appear, in order, inside one row (case folded)."""
+    shown = [row.casefold() for row in rows]
+    position, last = 0, None
     for expected in lines:
         folded = expected.casefold()
         while position < len(shown) and folded not in shown[position]:
             position += 1
         if position == len(shown):
-            return False
+            return None
+        last = position
         position += 1
-    return True
+    return last
+
+
+def modal_kinds(rows):
+    kinds = set()
+    for row in rows:
+        folded = row.casefold()
+        for kind, phrases in MODALS:
+            if any(phrase in folded for phrase in phrases):
+                kinds.add(kind)
+    return kinds
+
+
+def current_prompt(text, truncated, cursor_y, height, expect_kind, lines):
+    """Require the expected prompt to be the current bottom-of-pane state.
+
+    tmux prints the requested history, then every visible row. The visible
+    screen is therefore the last pane_height rows of the capture. It must be
+    complete, show exactly one prompt kind (the expected one), show every
+    expected line in order, and have no composer row after the prompt or under
+    the cursor. Anything else fails closed."""
+    rows = text.split("\n")
+    rows_needed = int(height)
+    if len(rows) < rows_needed or (truncated and len(rows) == rows_needed):
+        raise Refusal("prompt-unclear", "The visible screen cannot be established from the bounded capture. Nothing was sent.")
+    visible = rows[-rows_needed:]
+    kinds = modal_kinds(visible)
+    # The expected prompt exists in the capture, but maybe not as the current state.
+    stale = expect_kind in modal_kinds(rows) and match_expected(rows, lines) is not None
+    if not kinds:
+        if stale:
+            raise Refusal("stale-prompt", "The expected prompt is only in older captured text, not on the visible screen. Nothing was sent.")
+        raise Refusal("no-modal", "No prompt is showing in the inspected pane. Nothing was sent.")
+    if len(kinds) > 1:
+        raise Refusal("prompt-unclear", "More than one prompt kind is on the visible screen. Nothing was sent.")
+    (kind,) = kinds
+    if kind != expect_kind:
+        raise Refusal("modal-mismatch", "The visible prompt is " + kind + ", not " + expect_kind + ". Nothing was sent.")
+    last = match_expected(visible, lines)
+    if last is None:
+        if stale:
+            raise Refusal("stale-prompt", "The expected prompt text is not all on the visible screen. Nothing was sent.")
+        raise Refusal("modal-mismatch", "The expected prompt text is not shown, in order, on the visible screen. Nothing was sent.")
+    cursor = int(cursor_y)
+    below = visible[last + 1:]
+    if any(COMPOSER.match(row) for row in below) or (0 <= cursor < len(visible) and COMPOSER.match(visible[cursor])):
+        raise Refusal("stale-prompt", "A composer row follows the prompt or holds the cursor, so the prompt is not current. Nothing was sent.")
+    return kind
+
+
+def approval_path(name, approval_ref):
+    digest = hashlib.sha256(approval_ref.encode("utf-8")).hexdigest()
+    return state_path(name).parent / "approvals" / digest
+
+
+def spend_approval(path, entry):
+    """Create the approval's ledger entry once. An existing entry refuses."""
+    state_directory(path)
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        raise Refusal("approval-spent", "This approval reference was already used. One approval answers one prompt once. Nothing was sent.")
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(json.dumps(entry, sort_keys=True).encode("utf-8"))
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def utc_now():
@@ -644,6 +718,9 @@ def answer_session(args):
 
 
 def answer_locked(args, choice, raw, lines):
+    ledger = approval_path(args.name, args.approval_ref)
+    if ledger.exists():
+        raise Refusal("approval-spent", "This approval reference was already used. One approval answers one prompt once. Nothing was sent.")
     path, state = load_owned(args.name, args.tmux)
     receipt = parse_receipt(args.receipt)
     if not state.get("receipt_id") or receipt["id"] != state["receipt_id"]:
@@ -656,29 +733,27 @@ def answer_locked(args, choice, raw, lines):
     digest = snapshot_hash(ident, text, truncated)
     if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
         raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
-    kind = classify(text, ident["cursor_y"], ident["height"])
-    if not kind.startswith("modal-"):
-        raise Refusal("no-modal", "No prompt is showing in the inspected pane. Nothing was sent.")
-    if kind != args.expect_kind:
-        raise Refusal("modal-mismatch", "The pane shows " + kind + ", not " + args.expect_kind + ". Nothing was sent.")
-    if not expected_lines_shown(text, lines):
-        raise Refusal("modal-mismatch", "The expected prompt text is not shown, in order, in the inspected pane. Nothing was sent.")
+    kind = current_prompt(text, truncated, ident["cursor_y"], ident["height"], args.expect_kind, lines)
     record = {
         "answered_at": utc_now(), "approval_ref": args.approval_ref, "kind": kind, "choice": choice,
         "expected_text_sha256": hashlib.sha256(raw).hexdigest(), "pane_id": ident["pane"],
         "pane_pid": ident["pid"], "owner": state["owner"], "outcome": "sending",
     }
+    entry = dict(record, name=state["name"])
+    # Spend the approval durably, then the receipt, before the key is sent.
+    spend_approval(ledger, entry)
     answers = state.get("answers") if isinstance(state.get("answers"), list) else []
     state["answers"] = (answers + [record])[-MAX_ANSWERS:]
-    # Spend the receipt and record the answer before the key is sent.
     clear_receipt(path, state)
     try:
         sent = run([state["tmux"], "send-keys", "-t", state["pane_id"], "-l", "--", choice])
         failed = sent.returncode != 0
     except (subprocess.TimeoutExpired, OSError, UnicodeError):
         failed = True
-    record["outcome"] = "unconfirmed" if failed else "sent"
+    # An unknown outcome stays uncertain. It is never answered again under this approval.
+    record["outcome"] = entry["outcome"] = "uncertain" if failed else "sent"
     write_state(path, state)
+    write_state(ledger, entry)
     if failed:
         raise Refusal("answer-unconfirmed", "The key's outcome is unknown. Do not retry this receipt or send another key. Re-inspect.", 3)
     return {
@@ -718,12 +793,17 @@ def build_parser():
     reply.add_argument("--observed-ready", action="store_true",
                        help="manual confirmation of this exact unclassified receipt; not a Cursor trust flag")
 
-    answer = sub.add_parser("answer", help="send one approved prompt choice to the inspected pane")
+    answer = sub.add_parser(
+        "answer", help="send one approved prompt choice to the inspected pane",
+        description=(
+            "Send one key that answers the current prompt in the inspected pane, once per approval. "
+            "The caller is responsible for a verified approval of this exact action, choice and target. "
+            "The helper does not verify any approval: --approval-ref is audit metadata, not proof."))
     answer.add_argument("--name", required=True)
     answer.add_argument("--tmux", required=True)
     answer.add_argument("--receipt", required=True)
     answer.add_argument("--approval-ref", required=True,
-                        help="reference to an approval obtained through a verified channel; recorded, not verified")
+                        help="audit reference to the caller's verified approval; recorded once, never verified")
     answer.add_argument("--expect-kind", required=True, help="modal-trust, modal-permission or modal-approval")
     answer.add_argument("--expect-text-file", required=True, help="exact prompt lines that must be shown, in order")
     answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text")

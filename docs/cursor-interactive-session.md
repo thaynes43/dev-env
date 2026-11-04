@@ -141,10 +141,15 @@ composer or control characters, and it is not a trust, approval, or permission g
 ## Answering one approved prompt
 
 `answer` sends one approved, specific prompt choice, and nothing else. `reply`
-still refuses every prompt. Neither command verifies an approval: get it
-first through a verified channel (Tom's own answer, or a relay from his
-designated coordinator verified by channel metadata), then pass its reference.
-The helper records the reference for audit; a quoted "approved" grants nothing.
+still refuses every prompt.
+
+**The caller is responsible for a verified approval of this exact action,
+choice and target.** Nothing in the helper verifies an approval.
+`--approval-ref` is audit metadata, not proof: the helper records it and uses
+it to refuse a second answer, but a reference, a quoted "approved" or a
+recommendation grants nothing. Get the approval first through a verified
+channel (for dev-env work, Tom's own answer, or a relay from his designated
+coordinator verified by channel metadata).
 
 Before the lock and before any tmux call, `answer` checks its input:
 
@@ -158,25 +163,62 @@ Before the lock and before any tmux call, `answer` checks its input:
   expected text.
 - `--receipt`: the exact token from the latest `inspect`.
 
-Then it takes the task's lock without waiting. If another helper call holds
-it, the state is `lock-busy` and nothing is sent. Under the lock it requires,
-like `reply`, the latest receipt, the same pane id, pid, worktree, session,
-command and owner marker, and a capture unchanged since that inspect (a
-changed screen, including someone typing, is `stale-receipt`). The pane must
-classify as exactly the expected kind, and every expected line must appear,
-in order, inside a line of the bounded capture (case folded; the prompt is
-drawn in a box, so capture lines carry border characters).
+Then it takes the task's lock without waiting: if another helper call holds
+it, the state is `lock-busy` and nothing is sent.
 
-It then spends the receipt and records the answer in the 0600 state file
-before the key: `answered_at` (UTC), `approval_ref`, `kind`, `choice`,
-`expected_text_sha256`, `pane_id`, `pane_pid`, `owner` and `outcome`. It sends
-exactly `tmux send-keys -t <pane> -l -- <key>`, without Enter or any other key,
-and sets `outcome` to `sent`, or `unconfirmed` when tmux failed or timed out.
-The state keeps the last 32 answers. Prompt text and instructions are not
-stored or printed.
+### One answer per approval
 
-After an answer, inspect again. Old prompt text can stay in the capture
-window; `reply` keeps refusing while it is there.
+Each approval reference is spent once, across receipts, task names and
+restarts. The ledger is
+`$XDG_STATE_HOME/cursor-interactive-session/approvals/<sha256 of the reference>`
+(directory 0700, file 0600). A reference that already has an entry is
+`approval-spent`, checked first and again by an exclusive create just before
+the key, so two callers cannot both spend it. A new `inspect` and a new
+receipt with the same prompt still showing do not allow a second answer.
+
+The entry records `answered_at` (UTC), `approval_ref`, `name`, `kind`,
+`choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner` and
+`outcome`. The task's state file keeps the same record in `answers` (the last
+32). `outcome` is `sent`, or `uncertain` when tmux failed or timed out. An
+uncertain answer stays uncertain until a supported observation settles it; it
+is never answered again under the same approval. No prompt text or
+instruction is stored or printed.
+
+### The prompt must be the current screen
+
+The capture holds up to 80 rows: the requested history, then every visible
+row. The last `pane_height` rows are the visible screen. `answer` goes ahead
+only when:
+
+1. the capture has at least `pane_height` rows, and is not truncated into
+   the visible screen (otherwise `prompt-unclear`);
+2. the visible screen shows exactly one prompt kind, the expected one (none
+   is `no-modal`, or `stale-prompt` when the expected prompt is only in older
+   rows; two kinds is `prompt-unclear`; another kind is `modal-mismatch`);
+3. every expected line appears, in order, inside a visible row, case folded
+   (the prompt is drawn in a box, so rows carry border characters). If the
+   lines are only in older rows, it is `stale-prompt`; if they are nowhere,
+   `modal-mismatch`;
+4. no composer row (`>`, `›` or `❯` at the start of a row) follows the last
+   expected line, and the cursor row is not a composer row (otherwise
+   `stale-prompt`).
+
+Like `reply`, it also requires the latest receipt, the same pane id, pid,
+worktree, session, command and owner marker, and a capture unchanged since
+that inspect (a changed screen, including someone typing, is `stale-receipt`).
+
+Limits: this rule reads tmux text only. A prompt whose phrasing is not in the
+helper's phrase list is not answerable. If tmux does not print the blank rows
+at the bottom of the pane, the visible screen cannot be established and the
+answer is refused. A prompt drawn with a composer below it is refused even if
+it is live. When the helper cannot tell which prompt is current, it refuses.
+
+### Sending and after
+
+The helper spends the approval, then the receipt, then sends exactly
+`tmux send-keys -t <pane> -l -- <key>`, without Enter or any other key. After
+an answer, inspect again: old prompt text can stay in the captured rows, and
+`reply` keeps refusing while it is there.
 
 This command is source only. It is not deployed to any host. Using it on a
 live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
@@ -218,8 +260,8 @@ closed as `pane-replaced`.
 | `inspected` | 0 | Bounded text and a fresh receipt. |
 | `sent` | 0 | Literal text went to the matching pane. `submitted` says whether one Enter followed. |
 | `answered` | 0 | One approved prompt key went to the matching pane, without Enter, and was recorded. |
-| `modal-mismatch`, `no-modal`, `lock-busy` | 2 | `answer` sent nothing: the prompt kind or text did not match, no prompt is showing, or another helper call holds the lock. |
-| `answer-unconfirmed` | 3 | The answer key's outcome is unknown. The receipt is spent; do not retry or send another key. |
+| `modal-mismatch`, `no-modal`, `stale-prompt`, `prompt-unclear`, `approval-spent`, `lock-busy` | 2 | `answer` sent nothing: the prompt kind or text did not match, no prompt is showing, the expected prompt is not the current screen, the screen is unclear, the approval was already used, or another helper call holds the lock. |
+| `answer-unconfirmed` | 3 | The answer key's outcome is unknown and is recorded as `uncertain`. The approval and the receipt are spent; do not retry or send another key. |
 | `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui` | 2 | Nothing was sent. Correct the input or re-inspect. |
 | `launch-unconfirmed`, `client-not-running`, `inspect-unconfirmed`, `send-unconfirmed` | 3 | The outcome is unknown or the pane did not stay up. Do not retry automatically. |
 
