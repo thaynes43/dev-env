@@ -12,6 +12,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
+	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
 )
 
 // jsonFields lists a struct type's JSON field names, in order.
@@ -82,7 +83,7 @@ func TestScheduledWorkWireFieldSets(t *testing.T) {
 // carries each one.
 func TestScheduledWorkViewCopiesEveryField(t *testing.T) {
 	at := func(d int) metav1.Time { return metav1.NewTime(time.Date(2026, 12, d, 14, 0, 0, 0, time.UTC)) }
-	until, claimed, retried, next := at(30), at(3), at(4), at(10)
+	until, claimed, retried, next := at(30), at(6), at(4), at(10)
 	sw := &v1alpha1.ScheduledWork{
 		ObjectMeta: metav1.ObjectMeta{Name: "sched-0123456789abcdef0123", CreationTimestamp: at(1)},
 		Spec: v1alpha1.ScheduledWorkSpec{
@@ -117,13 +118,14 @@ func TestScheduledWorkViewCopiesEveryField(t *testing.T) {
 		`"succeeded":101`, `"failed":102`, `"parked":103`, `"skipped":104`, `"ended":105`, `"ambiguous":106`, `"cancelled":107`,
 		"t-reason", `"attempt":2`, "2026-12-04T14:00:00Z", "sw-0123456789ab-202612031400", strings.Repeat("3", 64), `"delivery":"accepted"`,
 		`"state":"Succeeded"`, "t-exec-reason", "t-summary", "pull/1", strings.Repeat("4", 40), `"event":"link"`, "t-reminder", `"missed":9`,
-		`"createdAt":"2026-12-01T14:00:00Z"`, `"name":"sched-0123456789abcdef0123"`,
+		`"createdAt":"2026-12-01T14:00:00Z"`, `"name":"sched-0123456789abcdef0123"`, `"claimedAt":"2026-12-06T14:00:00Z"`,
+		`"retriedAt":"2026-12-04T14:00:00Z"`, `"attempt":1,"reminder":"t-reminder"`, `"at":"2026-12-03T14:00:00Z"`, `"at":"2026-12-05T14:00:00Z"`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("the view has no %s:\n%s", want, b)
 		}
 	}
-	if v.SpecHash != scheduledWorkView(sw, at(1).Time).SpecHash || len(v.SpecHash) != 64 {
+	if v.SpecHash != authority.SpecHash(sw.Spec) {
 		t.Errorf("spec hash %q", v.SpecHash)
 	}
 }

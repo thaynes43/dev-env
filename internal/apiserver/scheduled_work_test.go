@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/scheduledwork/authority"
+	"github.com/thaynes43/dev-env/internal/scheduledwork/executor"
 )
 
 // The scheduled-work routes on the fake client (DESIGN-054 S5b). The fake
@@ -72,6 +74,10 @@ type swFixture struct {
 	onStatus func(*v1alpha1.ScheduledWork) error
 	// onUpdate, when set, may refuse a spec write first.
 	onUpdate func(*v1alpha1.ScheduledWork) error
+	// pruneStoredDigest stores each status write without the approval's
+	// template digest, as an older CRD would, and leaves the written copy
+	// as the client would: still carrying it.
+	pruneStoredDigest bool
 }
 
 func scheduledWorkFixture(t *testing.T) *swFixture {
@@ -121,6 +127,15 @@ func scheduledWorkFixture(t *testing.T) *swFixture {
 						}
 					}
 					sf.statusWrites.Add(1)
+					if sf.pruneStoredDigest && sw.Status.Approval != nil {
+						cp := sw.DeepCopy()
+						cp.Status.Approval.TemplateDigest = ""
+						if err := c.SubResource(sub).Update(ctx, cp, opts...); err != nil {
+							return err
+						}
+						sw.ResourceVersion = cp.ResourceVersion
+						return nil
+					}
 				}
 				return c.SubResource(sub).Update(ctx, obj, opts...)
 			},
@@ -299,6 +314,13 @@ func TestScheduledWorkRoutesAreOffByDefault(t *testing.T) {
 	if c := ScheduledWorkAPI(true, swNS); c == nil || c.Namespace != swNS {
 		t.Fatalf("the flag on made %+v", c)
 	}
+	if ScheduledWorkAPI(true, "") != nil {
+		t.Fatal("the flag on without a namespace made a config")
+	}
+	unscoped := scheduledWorkFixture(t)
+	unscoped.srv.ScheduledWork = &ScheduledWorkConfig{}
+	unscoped.h = unscoped.srv.Handler()
+	wantError(t, unscoped.do(http.MethodGet, apiv1.ScheduledWorkPath, tokHuman, nil), http.StatusNotFound, apiv1.CodeNotFound)
 	for _, c := range []struct{ method, path string }{
 		{http.MethodPost, apiv1.ScheduledWorkPath}, {http.MethodGet, apiv1.ScheduledWorkPath},
 		{http.MethodGet, apiv1.ScheduledWorkItemPath("sched-a")}, {http.MethodPatch, apiv1.ScheduledWorkItemPath("sched-a")},
@@ -338,13 +360,14 @@ func TestScheduledWorkCreateTakesTheOwnerFromTheToken(t *testing.T) {
 	other.Title = "something else"
 	wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkPath, tok, other), http.StatusConflict, apiv1.CodeConflict)
 	// A replay after the due time has passed still answers the item: the
-	// lookup comes before the clock's checks. Another spec then is a 422.
+	// lookup comes before the clock's checks. Another spec under the key is
+	// still a 409, not the 422 its past due time would get.
 	saved := f.now
 	f.now = time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
 	if w := f.do(http.MethodPost, apiv1.ScheduledWorkPath, tok, newWork()); w.Code != http.StatusOK || decode[apiv1.ScheduledWork](t, w).Name != got.Name {
 		t.Fatalf("a late replay: %d %s", w.Code, w.Body.String())
 	}
-	wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkPath, tok, other), http.StatusUnprocessableEntity, apiv1.CodeInvalid)
+	wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkPath, tok, other), http.StatusConflict, apiv1.CodeConflict)
 	f.now = saved
 	var list v1alpha1.ScheduledWorkList
 	if err := f.c.List(context.Background(), &list); err != nil || len(list.Items) != 1 {
@@ -581,17 +604,17 @@ func TestScheduledWorkEditIsCompareAndSet(t *testing.T) {
 	f := scheduledWorkFixture(t)
 	one := f.sessionPod("s-one", "full", 0)
 	item := f.create(one, newWork())
-	var refused atomic.Int32
+	var calls atomic.Int32
 	f.onUpdate = func(sw *v1alpha1.ScheduledWork) error {
-		if refused.Add(1) == 1 {
-			// Another writer got there first: its title lands, then the
-			// stale write is refused.
+		if calls.Add(1) == 1 {
+			// Another writer gets there between the read and the write: its
+			// title lands, and the API server (the fake client) refuses the
+			// write that carries the older resourceVersion.
 			cur := f.stored(sw.Name)
 			cur.Spec.Title = "raced"
 			if err := f.c.Update(context.Background(), cur); err != nil {
 				t.Fatal(err)
 			}
-			return apierrors.NewConflict(schema.GroupResource{Resource: "scheduledworks"}, sw.Name, errors.New("injected"))
 		}
 		return nil
 	}
@@ -760,17 +783,91 @@ func TestScheduledWorkApproveFailsClosedOnAnOlderSchema(t *testing.T) {
 	if f.statusWrites.Load() != 0 || f.stored(item.Name).Status.Approval != nil {
 		t.Fatal("a refused approval wrote")
 	}
-	// The preflight passes, but the API server prunes the digest.
+	// The preflight passes, but the API server prunes the digest: only a
+	// fresh read shows it, since the written copy still carries it.
 	f.crdErr = nil
-	f.onStatus = func(sw *v1alpha1.ScheduledWork) error {
-		if sw.Status.Approval != nil {
-			sw.Status.Approval.TemplateDigest = ""
-		}
-		return nil
-	}
+	f.pruneStoredDigest = true
 	e = wantError(t, f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(item.Name), tokHuman, req), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
-	if !strings.Contains(e.Message, "authorises nothing") {
+	if !strings.Contains(e.Message, "authorises nothing") || strings.Contains(e.Message, "retry the occurrence") {
 		t.Errorf("refusal %q", e.Message)
+	}
+	// With at, the answer says the retry in the same write stands.
+	g := scheduledWorkFixture(t)
+	parked := parkedItem(t, g, nil)
+	g.pruneStoredDigest = true
+	at := parkedAt
+	e = wantError(t, g.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(parked.Name), tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: parked.SpecHash, At: &at}), http.StatusServiceUnavailable, apiv1.CodeUnavailable)
+	if !strings.Contains(e.Message, "did retry the occurrence at 2026-10-06T13:00:00Z (now Pending, attempt 1)") {
+		t.Errorf("refusal %q", e.Message)
+	}
+	if o := g.stored(parked.Name).Status.Occurrences[0]; o.State != v1alpha1.OccurrencePending || o.Attempt != 1 {
+		t.Errorf("the stored occurrence %+v", o)
+	}
+}
+
+// approve and retry write status with the resourceVersion they read: an
+// executor write between the read and the write is never overwritten. The
+// request is decided again on the new state, so an occurrence the executor
+// marked ending meanwhile is refused, and a write that changed something
+// else keeps it.
+func TestScheduledWorkDecisionsAreCompareAndSet(t *testing.T) {
+	for _, verb := range []string{"approve", "retry"} {
+		t.Run(verb+" against a concurrent ending mark", func(t *testing.T) {
+			f := scheduledWorkFixture(t)
+			item := parkedItem(t, f, nil)
+			var calls atomic.Int32
+			f.onStatus = func(sw *v1alpha1.ScheduledWork) error {
+				if calls.Add(1) == 1 {
+					cur := f.stored(sw.Name)
+					cur.Status.Occurrences[0].Ending = true
+					cur.Status.Occurrences[0].Reason = "cancelled while parked"
+					if err := f.c.Status().Update(context.Background(), cur); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return nil
+			}
+			at := parkedAt
+			var w *httptest.ResponseRecorder
+			if verb == "approve" {
+				w = f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(item.Name), tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash, At: &at})
+			} else {
+				w = f.do(http.MethodPost, apiv1.ScheduledWorkRetryPath(item.Name), tokHuman, apiv1.RetryScheduledWorkRequest{At: at, SpecHash: item.SpecHash})
+			}
+			if e := wantError(t, w, http.StatusConflict, apiv1.CodeConflict); !strings.Contains(e.Message, "ending") {
+				t.Errorf("refusal %q", e.Message)
+			}
+			o := f.stored(item.Name).Status.Occurrences[0]
+			if !o.Ending || o.State != v1alpha1.OccurrenceParked || o.Attempt != 0 || o.RetriedAt != nil || f.stored(item.Name).Status.Approval != nil {
+				t.Fatalf("the concurrent mark was overwritten: %+v", o)
+			}
+		})
+	}
+	t.Run("approve keeps a concurrent count", func(t *testing.T) {
+		f := scheduledWorkFixture(t)
+		item := f.create(tokClient, newWork())
+		var calls atomic.Int32
+		f.onStatus = func(sw *v1alpha1.ScheduledWork) error {
+			if calls.Add(1) == 1 {
+				cur := f.stored(sw.Name)
+				cur.Status.Counts.Skipped = 5
+				if err := f.c.Status().Update(context.Background(), cur); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return nil
+		}
+		decode[apiv1.ScheduledWork](t, f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(item.Name), tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash}))
+		if st := f.stored(item.Name).Status; st.Counts.Skipped != 5 || st.Approval == nil {
+			t.Fatalf("status %+v", st)
+		}
+	})
+}
+
+// The API's decision window is the executor's.
+func TestScheduledWorkDecisionWindowIsTheExecutors(t *testing.T) {
+	if defaultScheduledWorkDecisionWindow != executor.DefaultDecisionWindow {
+		t.Fatalf("the API's default decision window %s is not the executor's %s", defaultScheduledWorkDecisionWindow, executor.DefaultDecisionWindow)
 	}
 }
 
@@ -853,6 +950,15 @@ func TestScheduledWorkRetryRefusals(t *testing.T) {
 			})
 		}, want: "one occurrence runs at a time"},
 		"after notAfter": {setup: func(f *swFixture, _ apiv1.ScheduledWork) { f.now = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC) }, want: "notAfter"},
+		// The next daily occurrence, 24 hours on, ends the window.
+		"its decision window ended": {setup: func(f *swFixture, _ apiv1.ScheduledWork) { f.now = parkedAt.Add(24 * time.Hour) }, want: "waited for a decision until 2026-10-07T13:00:00Z"},
+		"a configured window ended": {setup: func(f *swFixture, _ apiv1.ScheduledWork) {
+			f.srv.ScheduledWork.DecisionWindow = 4 * time.Hour
+			f.now = parkedAt.Add(4 * time.Hour)
+		}, want: "waited for a decision until 2026-10-06T17:00:00Z"},
+		"a retried window ended": {edit: func(o *v1alpha1.ScheduledWorkOccurrence) {
+			o.Attempt, o.RetriedAt = 1, &metav1.Time{Time: parkedAt.Add(-25 * time.Hour)}
+		}, setup: func(f *swFixture, _ apiv1.ScheduledWork) { f.srv.ScheduledWork.DecisionWindow = 2 * time.Hour }, want: "waited for a decision until 2026-10-05T14:00:00Z"},
 	} {
 		for _, verb := range []string{"approve", "retry"} {
 			t.Run(name+"/"+verb, func(t *testing.T) {
@@ -866,9 +972,11 @@ func TestScheduledWorkRetryRefusals(t *testing.T) {
 					at = parkedAt
 				}
 				before := f.stored(item.Name)
-				var w = f.do(http.MethodPost, apiv1.ScheduledWorkRetryPath(item.Name), tokHuman, apiv1.RetryScheduledWorkRequest{At: at, SpecHash: item.SpecHash})
+				var w *httptest.ResponseRecorder
 				if verb == "approve" {
 					w = f.do(http.MethodPost, apiv1.ScheduledWorkApprovePath(item.Name), tokHuman, apiv1.ApproveScheduledWorkRequest{SpecHash: item.SpecHash, At: &at})
+				} else {
+					w = f.do(http.MethodPost, apiv1.ScheduledWorkRetryPath(item.Name), tokHuman, apiv1.RetryScheduledWorkRequest{At: at, SpecHash: item.SpecHash})
 				}
 				e := wantError(t, w, http.StatusConflict, apiv1.CodeConflict)
 				if !strings.Contains(e.Message, c.want) {

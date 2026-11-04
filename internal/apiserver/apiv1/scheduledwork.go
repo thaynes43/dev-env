@@ -5,9 +5,9 @@ import "time"
 // The scheduled-work routes (DESIGN-054 S5, OpenProject #397). A scheduled
 // item is agent work that starts at a due time: a headless task session or an
 // interactive remote session. These are the wire types only; the operator
-// serves the routes (S5b, internal/apiserver/scheduled_work.go) behind its
-// default-off --enable-scheduled-work-api flag, and with the flag off every
-// route answers 404.
+// serves the routes (S5b, internal/apiserver/scheduled_work.go) only when its
+// Server is given a scheduled-work config, which a proposed, default-off
+// --enable-scheduled-work-api flag sets; without it every route answers 404.
 //
 //	POST   /v1/scheduled-work                  create one; the owner and editor are the caller's token
 //	GET    /v1/scheduled-work                  the caller's own (all=true: a human's or coordinator's, everyone's)

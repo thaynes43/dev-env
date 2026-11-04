@@ -25,7 +25,10 @@ import (
 
 // The real agent-run schedule client (S5a, internal/agentrun/schedule.go)
 // over TLS into these handlers on the fake client: every command it has
-// decodes the route's answer, and its refusals map the routes' statuses.
+// decodes the route's answer, and the API's own refusals (403, 404, 409 and
+// 422) reach the person through the client's refusal mapping. Some of its
+// refusals are the client's own checks, made before anything is sent; the
+// test says which.
 func TestScheduledWorkCLIRun(t *testing.T) {
 	f := scheduledWorkFixture(t)
 	owner := f.sessionPod("dev-env-1104-010332", "full", 0)
@@ -154,15 +157,17 @@ func TestScheduledWorkCLIRun(t *testing.T) {
 	if a := approved.Approval; a == nil || a.By != humanPrincipal || a.SpecHash != edited.SpecHash || a.TemplateDigest != f.templateDigest("ops-audit") {
 		t.Fatalf("approve: %+v", approved.Approval)
 	}
-	// A hash the client read before an edit is refused before anything is sent.
+	// The client's own check: a hash read before an edit is refused after the
+	// GET, before any approval is sent.
 	before := requests.Load()
 	_, stderr = run(tokHuman, agentrun.ExitFailed, "schedule", "approve", created.Name, "--spec-hash", created.SpecHash, "--yes")
 	if !strings.Contains(stderr, "changed after you saw it") || requests.Load() != before+1 {
 		t.Errorf("a stale hash: %d requests, %s", requests.Load()-before, stderr)
 	}
 
-	// retry, of an occurrence the executor parked.
-	at := time.Date(2026, 10, 1, 13, 0, 0, 0, time.UTC)
+	// retry, of an occurrence the executor parked this morning, within its
+	// decision window.
+	at := time.Date(2026, 10, 6, 13, 0, 0, 0, time.UTC)
 	f.setStatus(created.Name, func(st *v1alpha1.ScheduledWorkStatus) {
 		st.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(at), State: v1alpha1.OccurrenceParked, Reason: "no standing authority"}}
 	})
@@ -171,14 +176,35 @@ func TestScheduledWorkCLIRun(t *testing.T) {
 	if len(retried.Occurrences) != 1 || retried.Occurrences[0].State != apiv1.ScheduledOccurrencePending || retried.Occurrences[0].Attempt != 1 {
 		t.Fatalf("retry: %+v", retried.Occurrences)
 	}
-	// The same retry again is refused: it is no longer Parked.
+	// Parked again, but a session of its derived name is still held: only
+	// the API knows, and its 409 reaches the person with the client's hint.
 	f.setStatus(created.Name, func(st *v1alpha1.ScheduledWorkStatus) {
 		st.Occurrences[0].State = v1alpha1.OccurrenceParked
-		st.Occurrences[0].Attempt = v1alpha1.ScheduledWorkMaxAttempt
 	})
+	uid := strings.ReplaceAll(string(f.stored(created.Name).UID), "-", "")
+	held := &v1alpha1.AgentSession{ObjectMeta: metav1.ObjectMeta{Name: "sw-" + uid[:12] + "-" + at.Format("200601021504"), Namespace: sessionNS},
+		Spec: v1alpha1.AgentSessionSpec{Repo: "haynes-ops", Agent: "claude", Mode: "task", Model: "claude-opus-5-5", Prompt: "p", Parent: "client/dev-env-system/scheduled-work"}}
+	if err := f.c.Create(context.Background(), held); err != nil {
+		t.Fatal(err)
+	}
+	before = requests.Load()
 	_, stderr = run(tokHuman, agentrun.ExitFailed, "schedule", "retry", created.Name, "--at", at.Format(time.RFC3339), "--spec-hash", edited.SpecHash, "--yes")
-	if !strings.Contains(stderr, "used its 3 retries") {
-		t.Errorf("a fourth retry: %s", stderr)
+	if !strings.Contains(stderr, "still exists") || !strings.Contains(stderr, "the API refuses a retry when") || requests.Load() != before+2 {
+		t.Errorf("a retry the API refuses: %d requests, %s", requests.Load()-before, stderr)
+	}
+	// The client's own check: a fourth retry is never sent.
+	f.setStatus(created.Name, func(st *v1alpha1.ScheduledWorkStatus) { st.Occurrences[0].Attempt = v1alpha1.ScheduledWorkMaxAttempt })
+	before = requests.Load()
+	_, stderr = run(tokHuman, agentrun.ExitFailed, "schedule", "retry", created.Name, "--at", at.Format(time.RFC3339), "--spec-hash", edited.SpecHash, "--yes")
+	if !strings.Contains(stderr, "used its 3 retries") || requests.Load() != before+1 {
+		t.Errorf("a fourth retry: %d requests, %s", requests.Load()-before, stderr)
+	}
+	// An approval under a template that does not admit approved work is the
+	// API's 409.
+	f.setTemplates(strings.Replace(swTemplatesDoc, "admits: [human, session, approved]", "admits: [human, session]", 1))
+	_, stderr = run(tokHuman, agentrun.ExitFailed, "schedule", "approve", created.Name, "--spec-hash", edited.SpecHash, "--yes")
+	if !strings.Contains(stderr, "does not admit approved work") {
+		t.Errorf("an approval the API refuses: %s", stderr)
 	}
 
 	// cancel, then a second cancel, then show the cancelled item.

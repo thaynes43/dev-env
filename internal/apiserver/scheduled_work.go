@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -39,6 +40,10 @@ import (
 //	POST   /v1/scheduled-work/{name}/approve   a human only: binds the spec hash and the template digest
 //	POST   /v1/scheduled-work/{name}/retry     a human only: one Parked occurrence again, from now
 //
+// They are served only when Server.ScheduledWork is set, which the
+// operator's proposed --enable-scheduled-work-api flag does; nil, the
+// default, leaves every route 404.
+//
 // Every read is uncached (Live) and every write carries the resourceVersion it
 // read, so a write that races the executor or another request loses with a
 // conflict and is decided again on the new state; nothing is overwritten
@@ -48,21 +53,40 @@ import (
 // whose it is.
 
 // ScheduledWorkConfig turns on /v1/scheduled-work. A nil
-// Server.ScheduledWork registers none of the routes: each answers 404.
+// Server.ScheduledWork, or one with no Namespace, registers none of the
+// routes: each answers 404.
 type ScheduledWorkConfig struct {
 	// Namespace holds the ScheduledWork objects and the dispatch templates
 	// ConfigMap (authority.TemplatesConfigMap): the operator's own
 	// namespace, where the executor and the releaser read them.
 	Namespace string
+	// DecisionWindow is how long a Parked occurrence waits for a human, as
+	// the executor's (executor.Executor.DecisionWindow); zero is its
+	// default, 24 hours. A retry after it ends is refused: the executor
+	// records the occurrence Skipped.
+	DecisionWindow time.Duration
 }
 
-// ScheduledWorkAPI is the Server's setting for the operator's default-off
-// --enable-scheduled-work-api flag: nil while the flag is off.
+// ScheduledWorkAPI is the Server's setting for the operator's proposed,
+// default-off --enable-scheduled-work-api flag: nil while the flag is off,
+// and nil without a namespace, so the routes are never served unscoped.
 func ScheduledWorkAPI(enabled bool, namespace string) *ScheduledWorkConfig {
-	if !enabled {
+	if !enabled || namespace == "" {
 		return nil
 	}
 	return &ScheduledWorkConfig{Namespace: namespace}
+}
+
+// defaultScheduledWorkDecisionWindow is the executor's DefaultDecisionWindow
+// (TestScheduledWorkDecisionWindowIsTheExecutors pins the two together; this
+// package cannot import the executor, whose tests import it).
+const defaultScheduledWorkDecisionWindow = 24 * time.Hour
+
+func (c *ScheduledWorkConfig) decisionWindow() time.Duration {
+	if c.DecisionWindow > 0 {
+		return c.DecisionWindow
+	}
+	return defaultScheduledWorkDecisionWindow
 }
 
 const (
@@ -99,7 +123,7 @@ var (
 )
 
 func (s *Server) registerScheduledWork(mux *http.ServeMux) {
-	if s.ScheduledWork == nil {
+	if s.ScheduledWork == nil || s.ScheduledWork.Namespace == "" {
 		return
 	}
 	// A coordinator may create, list everyone's, show and cancel; each
@@ -373,14 +397,15 @@ func (s *Server) createScheduledWork(ctx context.Context, w http.ResponseWriter,
 	}
 	// A retried create answers with what the first one made, before the
 	// checks that depend on the clock: its due time may have passed since.
-	if existing != nil && sameScheduledWork(existing.Spec, spec) {
+	// Another spec under the key is a 409 whether or not it would pass.
+	switch {
+	case existing != nil && sameScheduledWork(existing.Spec, spec):
 		return http.StatusOK, s.scheduledWorkAnswer(existing, now), nil
+	case existing != nil:
+		return 0, nil, conflict("key %q already names scheduled work %s of yours with another spec, or one edited or cancelled since", req.Key, name)
 	}
 	if fields := validateScheduledWork(&spec, now, now, true, true); len(fields) > 0 {
 		return 0, nil, invalid(fields...)
-	}
-	if existing != nil {
-		return 0, nil, conflict("key %q already names scheduled work %s of yours with another spec, or one edited or cancelled since", req.Key, name)
 	}
 	if held >= maxLiveScheduledWorkPerOwner {
 		return 0, nil, tooManyRequests("you hold %d active scheduled items, the most allowed; cancel one first", held)
@@ -656,7 +681,7 @@ func (s *Server) approveScheduledWork(ctx context.Context, w http.ResponseWriter
 			}
 			return 0, nil, fromKubeError(err, "scheduled work "+sw.Name)
 		}
-		fresh, err := s.approvalKept(ctx, sw)
+		fresh, err := s.approvalKept(ctx, sw, o)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -757,6 +782,9 @@ func (s *Server) retryableOccurrence(ctx context.Context, sw *v1alpha1.Scheduled
 	case now.After(sw.Spec.NotAfter.Time):
 		return nil, conflict("scheduled work %s ended at its notAfter, %s; nothing runs after it", sw.Name, sw.Spec.NotAfter.UTC().Format(time.RFC3339))
 	}
+	if end := s.decisionEnd(sw, o); !now.Before(end) {
+		return nil, conflict("the occurrence of %s at %s waited for a decision until %s; it is no longer retried, and the executor records it Skipped", sw.Name, when, end.UTC().Format(time.RFC3339))
+	}
 	for i := range sw.Status.Occurrences {
 		other := &sw.Status.Occurrences[i]
 		if other != o && !v1alpha1.OccurrenceTerminal(other.State) && other.State != v1alpha1.OccurrenceParked {
@@ -775,6 +803,23 @@ func (s *Server) retryableOccurrence(ctx context.Context, sw *v1alpha1.Scheduled
 		return nil, fromKubeError(err, "session "+name)
 	}
 	return o, nil
+}
+
+// decisionEnd is when o, Parked, stops waiting for a human, as the executor
+// reckons it (executor.go, parked): the decision window from its due time or
+// its last retriedAt, or the item's next occurrence if that comes first.
+func (s *Server) decisionEnd(sw *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence) time.Time {
+	start := o.At.Time
+	if o.RetriedAt != nil {
+		start = o.RetriedAt.Time
+	}
+	end := start.Add(s.ScheduledWork.decisionWindow())
+	if sch, err := reminders.ScheduleOfWork(sw.Spec); err == nil {
+		if next, ok := sch.Next(o.At.Add(time.Nanosecond)); ok && next.At.Before(end) {
+			end = next.At
+		}
+	}
+	return end
 }
 
 // retryOccurrence opens a fresh window for o from now: Pending again, its
@@ -827,17 +872,24 @@ func approvalDigestServed(crd *unstructured.Unstructured) bool {
 }
 
 // approvalKept reads sw back from the API server after an approval's write,
-// into a fresh object, and refuses when the stored approval lost its
-// template digest: a CRD that changed between the preflight and the write
-// prunes it. That approval is void, and the answer says so.
-func (s *Server) approvalKept(ctx context.Context, sw *v1alpha1.ScheduledWork) (*v1alpha1.ScheduledWork, error) {
+// into a fresh object (the written copy keeps a value the API server pruned),
+// and refuses when the stored approval lost its template digest: a CRD that
+// changed between the preflight and the write prunes it. That approval is
+// void, and the answer says so, and says when the same write retried the
+// occurrence retried, which stands.
+func (s *Server) approvalKept(ctx context.Context, sw *v1alpha1.ScheduledWork, retried *v1alpha1.ScheduledWorkOccurrence) (*v1alpha1.ScheduledWork, error) {
+	also := ""
+	if retried != nil {
+		also = fmt.Sprintf("; the same write did retry the occurrence at %s (now Pending, attempt %d), which is checked again on its own basis: cancel %s if it must not run",
+			retried.At.UTC().Format(time.RFC3339), retried.Attempt, sw.Name)
+	}
 	fresh := &v1alpha1.ScheduledWork{}
 	if err := s.Live.Get(ctx, client.ObjectKeyFromObject(sw), fresh); err != nil {
-		return nil, unavailable("the approval of %s was written but could not be read back; agent-run schedule show %s says whether it holds", sw.Name, sw.Name)
+		return nil, unavailable("the approval of %s was written but could not be read back; agent-run schedule show %s says whether it holds%s", sw.Name, sw.Name, also)
 	}
 	if a := fresh.Status.Approval; a == nil || a.TemplateDigest == "" {
 		s.Log.Error(nil, "the stored approval has no template digest: the installed ScheduledWork CRD prunes it", "scheduledWork", sw.Name)
-		return nil, unavailable("the API server did not keep the approval's template digest (the installed ScheduledWork CRD prunes it), so the approval of %s binds no template and authorises nothing", sw.Name)
+		return nil, unavailable("the API server did not keep the approval's template digest (the installed ScheduledWork CRD prunes it), so the approval of %s binds no template and authorises nothing%s", sw.Name, also)
 	}
 	return fresh, nil
 }
