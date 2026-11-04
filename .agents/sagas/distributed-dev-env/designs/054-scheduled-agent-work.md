@@ -755,18 +755,20 @@ receiver session would route agent-written text into sessions the owner does not
   `scheduledworks`, so it cannot keep sync state there. With `calendar:` set, the
   executor keeps one companion `Reminder` per ScheduledWork, with a calendar-only
   target and the same schedule. It updates the Reminder when the item is edited and
-  cancels it when the item is cancelled. A projection Reminder always has an
-  `until`, set to the item's `notAfter`, one-shot items included. A `notAfter`
-  before the first occurrence is refused. The Reminder stays pending until that
-  `until` or a cancel. That is its retention end. The calendar event's
-  own series still ends at the last occurrence. A count-based series is first
-  converted to the end of its last occurrence, because DESIGN-032 refuses `count`
-  and `until` together. That conversion sets the event's series end, not the
-  Reminder's retention. So an edit or cancel between the last occurrence and
-  `notAfter` still reaches the event. When `until` passes, the scheduler deletes
-  the event and finishes the Reminder itself. The `projection` marker cannot change
-  after creation. (Rulings for G1, PR 917, 2026-11-04, from its independent review
-  F1 to F5.) Today a
+  cancels it when the item is cancelled. **Ruling 2026-11-04 for G1 (PR 917), not yet
+  implemented:**
+  - R1: a projection Reminder carries a separate retention end, `projection.retainUntil`,
+    always set to the item's `notAfter`, one-shot items included. A `notAfter` before the
+    first occurrence is refused. `recurrence.until` (when there is a recurrence) stays the
+    calendar event's own series end, the end of the last occurrence; a count-based series is
+    converted to it, because DESIGN-032 refuses `count` and `until` together.
+  - R2: the Reminder stays pending until `projection.retainUntil` or a cancel, so an edit or
+    cancel between the last occurrence and `notAfter` still reaches the event.
+  - R3: when `retainUntil` passes, the scheduler deletes the event and finishes the Reminder
+    itself. This intentionally removes past runs from the calendar at the end of the item's
+    window.
+  - R4: the `projection` marker cannot change after creation.
+  Today a
   Reminder with no Pushover target finishes at its last occurrence, and a finished
   Reminder can be neither edited nor cancelled, nor does its calendar entry sync. So
   S4 amends DESIGN-032 with a **projection** Reminder: calendar targets only, it stays
@@ -861,9 +863,9 @@ These are the server routes' exact rules, recorded from the implementation; wher
 3. **Create.**
    - The same key and spec answer 200 with the first item, even after its due time has passed.
    - The same key with another spec is a 409, decided before the clock checks.
-   - Only a key over 128 bytes, or recurrence integers out of range (byMonthDay 0 to 31, count 0 to 1000, at most 7 byDay entries), are refused with 422 first.
+   - Before the key comparison, the only 422s are a key over 128 bytes and recurrence integers out of range (byMonthDay 0 to 31, count 0 to 1000, at most 7 byDay entries).
 4. **Notify and calendar.** Notify may hold only `pushover:default`, with no duplicates and at most 8 entries; interactive work needs one. Calendar is checked only against `^calendar:[a-z0-9][a-z0-9-]{0,62}$`.
-5. **Bounds.** The body is at most 64 KiB, the title 1 to 120 characters, and the prompt 1 to 8192 bytes. notAfter is required, in the future, at most 180 days after creation, and not before the next occurrence. A one-shot due time may not be in the past (5-minute grace), and a series must have an occurrence ahead.
+5. **Bounds.** (On an edit, the future-time and next-occurrence checks run only when notAfter or the schedule changes; the 180-day bound always applies.) The body is at most 64 KiB, the title 1 to 120 characters, and the prompt 1 to 8192 bytes. notAfter is required, in the future, at most 180 days after creation, and not before the next occurrence. A one-shot due time may not be in the past (5-minute grace), and a series must have an occurrence ahead.
 6. **Visibility.**
    - Show and cancel: the owner, a human or a coordinator. Edit: the owner or a human; a coordinator that is not the owner gets 403.
    - Anyone else gets 404.
@@ -876,8 +878,8 @@ These are the server routes' exact rules, recorded from the implementation; wher
    - Human only; anyone else gets 403.
    - `specHash` must equal the current hash, else 409. A cancelled item is 409.
    - The optional `templateDigest` must equal the digest the API reads, else 409; a malformed one is 422.
-   - The template is read uncached from `dev-env-system/dev-env-scheduled-work`. An absent ConfigMap, an invalid document, an unknown template, a repo the template does not allow, a mode it does not serve, or a template that does not admit `approved` is a 409.
-   - The approval records by (from the token), at (now, to the second), specHash and templateDigest (as read) in one compare-and-set status write. An approval identical to the stored one writes nothing.
+   - The template is read uncached from ConfigMap `dev-env-scheduled-work` in the configured namespace (dev-env-system in production). An absent ConfigMap, an invalid document, an unknown template, a repo the template does not allow, a mode it does not serve, or a template that does not admit `approved` is a 409.
+   - The approval records by (from the token), at (now, to the second), specHash and templateDigest (as read) in one compare-and-set status write. An approval identical to the stored one writes nothing when there is no `at`; with `at`, the retry is still written.
 9. **Schema preflight and read-back.**
    - Before an approval, the route reads the CRD `scheduledworks.dev-env.haynesops.com` uncached and requires the served v1alpha1 `status.approval.properties.templateDigest`. A missing field or an unreadable CRD is a 503 that writes nothing.
    - After the write, a fresh read without the digest is a 503, and the message says when a retry in the same write stands.
@@ -894,7 +896,9 @@ These are the server routes' exact rules, recorded from the implementation; wher
       - notAfter has passed;
       - its decision window has ended, which is retriedAt (or the due time) plus the window (24 hours by default, `ScheduledWorkConfig.DecisionWindow`), or the next occurrence if that comes first;
       - another occurrence is neither final nor Parked;
-      - an AgentSession of the derived name exists.
+      - an AgentSession of the derived name exists;
+      - the item is cancelled;
+      - `specHash` does not match the current spec.
 11. **Writes.** Every write carries the resourceVersion it read. On a conflict the request is re-read and decided again, at most 4 times, then 409.
 
 
