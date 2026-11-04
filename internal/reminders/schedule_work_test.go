@@ -71,6 +71,34 @@ func TestScheduleOfWorkMatchesScheduleOf(t *testing.T) {
 	}
 }
 
+// The plan hash a Reminder stores is pinned to the bytes it had before S2
+// generalised the schedule (computed at 8b98dac). A stored planHash that
+// changes makes every live reminder re-plan, so the refactor must keep these.
+func TestPlanHashIsUnchangedForReminders(t *testing.T) {
+	until := metav1.NewTime(utc("2027-01-01T04:59:59Z"))
+	for name, c := range map[string]struct {
+		sp   v1alpha1.ReminderSpec
+		want string
+	}{
+		"a one-shot": {spec("2026-10-31T09:00", "UTC", nil), "ef21ff3c0e1a462b9cd1bcf91b192ab8"},
+		"weekly by day with until": {spec("2026-10-28T09:00", "America/New_York", &v1alpha1.ReminderRecurrence{
+			Freq: v1alpha1.ReminderWeekly, ByDay: []string{"TH", "MO"}, Until: &until,
+		}), "70f7ac2dc3487c9db70054bec77e2f92"},
+		"monthly by month day with count": {spec("2026-01-31T09:00", "UTC", &v1alpha1.ReminderRecurrence{
+			Freq: v1alpha1.ReminderMonthly, ByMonthDay: 31, Count: 7,
+		}), "76df25ee335f54ff6b6763726316400d"},
+		"daily": {spec("2026-03-07T02:30", "America/New_York", &v1alpha1.ReminderRecurrence{
+			Freq: v1alpha1.ReminderDaily,
+		}), "3c52ccfd18beec218cb9d1be76c19699"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := PlanHash(c.sp); got != c.want {
+				t.Errorf("PlanHash = %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
 // DESIGN-032's DST rules hold for scheduled work: the reminder case of a daily
 // 02:30 across the spring-forward gap, and 01:30 across the fold.
 func TestScheduleOfWorkKeepsTheDSTRules(t *testing.T) {

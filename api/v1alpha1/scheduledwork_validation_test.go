@@ -1,9 +1,11 @@
 package v1alpha1_test
 
 // The envtest cases of the ScheduledWork CRD (DESIGN-054): bounds on every
-// string and list, the reference grammar of notify and calendar, an 8 KiB
-// prompt counted in bytes, an owner that never changes, a cancel that cannot be
-// undone, and the bounded occurrence record in status.
+// string and list, the reference grammar of notify and calendar, the caller
+// form of owner and editor, an 8 KiB prompt counted in bytes, an owner that
+// never changes, a cancel that cannot be undone by any write, a page target
+// for interactive work, and the bounded occurrence record in status with its
+// transition rules.
 
 import (
 	"fmt"
@@ -12,6 +14,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 )
@@ -49,10 +53,22 @@ func TestScheduledWorkAccepts(t *testing.T) {
 	interactive.Spec.Owner = "session/dev-env-1104-010332/0f5e6a3c-1b2d-4e5f-8a9b-0c1d2e3f4a5b"
 	interactive.Spec.Editor = interactive.Spec.Owner
 	interactive.Spec.Recurrence = &v1alpha1.ReminderRecurrence{Freq: v1alpha1.ReminderWeekly, ByDay: []string{"MO", "TH"}, Count: 10}
-	interactive.Spec.Notify = nil
 	interactive.Spec.Calendar = ""
 	if err := k8s.Create(ctx(t), interactive); err != nil {
-		t.Fatalf("an interactive weekly item with no notify and no calendar: %v", err)
+		t.Fatalf("an interactive weekly item with one notify target and no calendar: %v", err)
+	}
+	quiet := scheduledWork()
+	quiet.Spec.Notify = nil
+	quiet.Spec.Calendar = ""
+	if err := k8s.Create(ctx(t), quiet); err != nil {
+		t.Fatalf("a headless item with no notify and no calendar: %v", err)
+	}
+	for _, caller := range []string{"client/dev-env/workbench", "coordinator/dev-agents/dev-env-1027-010058"} {
+		w := scheduledWork()
+		w.Spec.Owner, w.Spec.Editor = caller, caller
+		if err := k8s.Create(ctx(t), w); err != nil {
+			t.Fatalf("owner and editor %s: %v", caller, err)
+		}
 	}
 	ascii := scheduledWork()
 	ascii.Spec.Work.Prompt = strings.Repeat("x", 8192)
@@ -80,12 +96,29 @@ func TestScheduledWorkRefuses(t *testing.T) {
 		edit func(*v1alpha1.ScheduledWork)
 		want string
 	}{
-		"no title":          {func(w *v1alpha1.ScheduledWork) { w.Spec.Title = "" }, "spec.title"},
-		"a long title":      {func(w *v1alpha1.ScheduledWork) { w.Spec.Title = long(121) }, "spec.title"},
-		"no owner":          {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = "" }, "spec.owner"},
-		"a long owner":      {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = long(257) }, "spec.owner"},
-		"no editor":         {func(w *v1alpha1.ScheduledWork) { w.Spec.Editor = "" }, "spec.editor"},
-		"a long editor":     {func(w *v1alpha1.ScheduledWork) { w.Spec.Editor = long(257) }, "spec.editor"},
+		"no title":      {func(w *v1alpha1.ScheduledWork) { w.Spec.Title = "" }, "spec.title"},
+		"a long title":  {func(w *v1alpha1.ScheduledWork) { w.Spec.Title = long(121) }, "spec.title"},
+		"no owner":      {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = "" }, "spec.owner"},
+		"a long owner":  {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = long(257) }, "spec.owner"},
+		"no editor":     {func(w *v1alpha1.ScheduledWork) { w.Spec.Editor = "" }, "spec.editor"},
+		"a long editor": {func(w *v1alpha1.ScheduledWork) { w.Spec.Editor = long(257) }, "spec.editor"},
+		"an owner of an unknown class": {func(w *v1alpha1.ScheduledWork) {
+			w.Spec.Owner = "robot/dev-env-system/tom"
+		}, "spec.owner"},
+		"an owner with two parts":     {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = "human/tom" }, "spec.owner"},
+		"an owner with four parts":    {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = "session/a/b/c" }, "spec.owner"},
+		"an owner with an empty part": {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = "human//tom" }, "spec.owner"},
+		"a miscased owner class":      {func(w *v1alpha1.ScheduledWork) { w.Spec.Owner = "Human/dev-env-system/tom" }, "spec.owner"},
+		"an editor of an unknown class": {func(w *v1alpha1.ScheduledWork) {
+			w.Spec.Editor = "operator/dev-env-system/dev-env-operator"
+		}, "spec.editor"},
+		"an editor with two parts":     {func(w *v1alpha1.ScheduledWork) { w.Spec.Editor = "session/x" }, "spec.editor"},
+		"an editor with four parts":    {func(w *v1alpha1.ScheduledWork) { w.Spec.Editor = "human/a/b/c" }, "spec.editor"},
+		"an editor with an empty part": {func(w *v1alpha1.ScheduledWork) { w.Spec.Editor = "client/dev-env/" }, "spec.editor"},
+		"interactive with no notify": {func(w *v1alpha1.ScheduledWork) {
+			w.Spec.Mode = v1alpha1.ScheduledWorkInteractive
+			w.Spec.Notify = nil
+		}, "interactive scheduled work needs a notify target"},
 		"a due with a zone": {func(w *v1alpha1.ScheduledWork) { w.Spec.Due = "2026-12-03T09:00Z" }, "spec.due"},
 		"a spaced zone":     {func(w *v1alpha1.ScheduledWork) { w.Spec.TimeZone = "New York" }, "spec.timeZone"},
 		"no notAfter":       {func(w *v1alpha1.ScheduledWork) { w.Spec.NotAfter = metav1.Time{} }, "spec.notAfter"},
@@ -168,6 +201,26 @@ func TestScheduledWorkCancelCannotBeUndone(t *testing.T) {
 	wantInvalid(t, k8s.Update(ctx(t), w), "cancelled scheduled work stays cancelled")
 }
 
+// No patch form undoes a cancel either: setting it false, setting it null or
+// removing it with a merge or JSON patch is the same transition to the rule.
+func TestScheduledWorkCancelCannotBePatchedAway(t *testing.T) {
+	for name, patch := range map[string]client.Patch{
+		"merge patch false": client.RawPatch(types.MergePatchType, []byte(`{"spec":{"cancelled":false}}`)),
+		"merge patch null":  client.RawPatch(types.MergePatchType, []byte(`{"spec":{"cancelled":null}}`)),
+		"JSON patch remove": client.RawPatch(types.JSONPatchType, []byte(`[{"op":"remove","path":"/spec/cancelled"}]`)),
+		"JSON patch false":  client.RawPatch(types.JSONPatchType, []byte(`[{"op":"replace","path":"/spec/cancelled","value":false}]`)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := scheduledWork()
+			w.Spec.Cancelled = true
+			if err := k8s.Create(ctx(t), w); err != nil {
+				t.Fatal(err)
+			}
+			wantInvalid(t, k8s.Patch(ctx(t), w, patch), "cancelled scheduled work stays cancelled")
+		})
+	}
+}
+
 func occurrence(at time.Time) v1alpha1.ScheduledWorkOccurrence {
 	claimed := metav1.NewTime(at.Add(time.Second))
 	return v1alpha1.ScheduledWorkOccurrence{
@@ -219,12 +272,24 @@ func TestScheduledWorkStatusAccepts(t *testing.T) {
 	}
 	retried := &w.Status.Occurrences[3]
 	retriedAt := metav1.NewTime(start.Add(3*24*time.Hour + 2*time.Hour))
-	retried.RetriedAt = &retriedAt
+	retried.RetriedAt, retried.Attempt = &retriedAt, 1
 	retried.State, retried.Reason = v1alpha1.OccurrenceRunning, "approved after park"
 	parked := &w.Status.Occurrences[4]
+	parkedAt := metav1.NewTime(start.Add(4*24*time.Hour + 2*time.Hour))
 	parked.State, parked.Reason, parked.Session = v1alpha1.OccurrenceParked, "no standing authority", ""
+	parked.RetriedAt, parked.Attempt = &parkedAt, v1alpha1.ScheduledWorkMaxAttempt
 	parked.Execution, parked.Reported = nil, nil
-	parked.Pages = []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventParked, Reminder: "sw-x-parked"}, {Event: v1alpha1.PageEventParked, Attempt: 1, Reminder: "sw-x-parked-1"}, {Event: v1alpha1.PageEventSkipped, Attempt: 1, State: v1alpha1.DeliverySkipped}}
+	parked.Pages = nil
+	for attempt := range int32(v1alpha1.ScheduledWorkMaxAttempt + 1) {
+		for _, event := range []string{v1alpha1.PageEventParked, v1alpha1.PageEventSkipped} {
+			parked.Pages = v1alpha1.AppendPage(parked.Pages, v1alpha1.ScheduledWorkPage{
+				Event: event, Attempt: attempt, Reminder: fmt.Sprintf("sw-x-%s-%d", event, attempt), State: v1alpha1.DeliverySent,
+			})
+		}
+	}
+	if len(parked.Pages) != v1alpha1.ScheduledWorkMaxPages {
+		t.Fatalf("AppendPage kept %d pages, want %d", len(parked.Pages), v1alpha1.ScheduledWorkMaxPages)
+	}
 	skipped := &w.Status.Occurrences[2]
 	skipped.State, skipped.Reason, skipped.Missed = v1alpha1.OccurrenceSkipped, "missed beyond grace", 7
 	if err := k8s.Status().Update(ctx(t), w); err != nil {
@@ -255,8 +320,31 @@ func TestScheduledWorkStatusRefuses(t *testing.T) {
 		"an unknown state": {func(s *v1alpha1.ScheduledWorkStatus) { s.Occurrences[0].State = "Done" }, "status.occurrences[0].state"},
 		"a long reason":    {func(s *v1alpha1.ScheduledWorkStatus) { s.Occurrences[0].Reason = strings.Repeat("r", 257) }, "status.occurrences[0].reason"},
 		"a negative missed count": {func(s *v1alpha1.ScheduledWorkStatus) {
-			s.Occurrences[0].Missed = -1
+			s.Occurrences[0].State, s.Occurrences[0].Missed = v1alpha1.OccurrenceSkipped, -1
 		}, "status.occurrences[0].missed"},
+		"a missed count of 100001": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences[0].State, s.Occurrences[0].Missed = v1alpha1.OccurrenceSkipped, 100001
+		}, "status.occurrences[0].missed"},
+		"a missed count on a Succeeded occurrence": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences[0].Missed = 2
+		}, "missed is set only on a Skipped occurrence"},
+		"attempt 4": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences[0].Attempt = v1alpha1.ScheduledWorkMaxAttempt + 1
+		}, "status.occurrences[0].attempt"},
+		"attempt -1": {func(s *v1alpha1.ScheduledWorkStatus) { s.Occurrences[0].Attempt = -1 }, "status.occurrences[0].attempt"},
+		"a page of attempt 4": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences[0].Pages[0].Attempt = v1alpha1.ScheduledWorkMaxAttempt + 1
+		}, "status.occurrences[0].pages[0].attempt"},
+		"a page of attempt -1": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences[0].Pages[0].Attempt = -1
+		}, "status.occurrences[0].pages[0].attempt"},
+		"retriedAt on attempt 0": {func(s *v1alpha1.ScheduledWorkStatus) {
+			at := metav1.NewTime(time.Date(2026, 12, 3, 16, 0, 0, 0, time.UTC))
+			s.Occurrences[0].RetriedAt = &at
+		}, "retriedAt is set only on a retried attempt"},
+		"two occurrences at one time": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences = append(s.Occurrences, s.Occurrences[0])
+		}, "status.occurrences[1]"},
 		"a session name not derived": {func(s *v1alpha1.ScheduledWorkStatus) {
 			s.Occurrences[0].Session = "sw-1A2B3C4D5E6F-202612031400"
 		}, "status.occurrences[0].session"},
@@ -285,6 +373,12 @@ func TestScheduledWorkStatusRefuses(t *testing.T) {
 			h := "0123456789abcdef0123456789abcdef01234567"
 			s.Occurrences[0].Reported.HeadSHAs = []string{h, h, h, h}
 		}, "status.occurrences[0].reported.headSHAs"},
+		"four reported PRs": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences[0].Reported.PRURLs = nil
+			for i := range 4 {
+				s.Occurrences[0].Reported.PRURLs = append(s.Occurrences[0].Reported.PRURLs, fmt.Sprintf("https://github.com/thaynes43/haynes-ops/pull/%d", 4100+i))
+			}
+		}, "status.occurrences[0].reported.prURLs"},
 		"an unknown page event": {func(s *v1alpha1.ScheduledWorkStatus) {
 			s.Occurrences[0].Pages[0].Event = "reminder"
 		}, "status.occurrences[0].pages[0].event"},
@@ -340,5 +434,168 @@ func TestOccurrenceTerminal(t *testing.T) {
 	}
 	if v1alpha1.OccurrenceTerminal("") || v1alpha1.OccurrenceTerminal("succeeded") {
 		t.Error("an empty or miscased state is terminal")
+	}
+}
+
+// withOccurrence creates a ScheduledWork and writes status with the one
+// occurrence o, so the next status write is a transition of that occurrence.
+func withOccurrence(t *testing.T, o v1alpha1.ScheduledWorkOccurrence) *v1alpha1.ScheduledWork {
+	t.Helper()
+	w := scheduledWork()
+	if err := k8s.Create(ctx(t), w); err != nil {
+		t.Fatal(err)
+	}
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{o}
+	if err := k8s.Status().Update(ctx(t), w); err != nil {
+		t.Fatalf("the first status write: %v", err)
+	}
+	return w
+}
+
+// bare is an occurrence with no session, hash, result or pages yet.
+func bare(state string) v1alpha1.ScheduledWorkOccurrence {
+	return v1alpha1.ScheduledWorkOccurrence{
+		At:    metav1.NewTime(time.Date(2026, 12, 3, 14, 0, 0, 0, time.UTC)),
+		State: state,
+	}
+}
+
+// The schema's terminal states are OccurrenceTerminal's: a terminal state
+// never changes, and every other state may move on.
+func TestScheduledWorkOccurrenceTerminalStateIsFinal(t *testing.T) {
+	all := []string{
+		v1alpha1.OccurrencePending, v1alpha1.OccurrenceClaimed, v1alpha1.OccurrenceDispatched,
+		v1alpha1.OccurrenceDelivered, v1alpha1.OccurrenceOpened, v1alpha1.OccurrenceRunning,
+		v1alpha1.OccurrenceSucceeded, v1alpha1.OccurrenceFailed, v1alpha1.OccurrenceEnded,
+		v1alpha1.OccurrenceParked, v1alpha1.OccurrenceSkipped, v1alpha1.OccurrenceAmbiguous,
+		v1alpha1.OccurrenceCancelled,
+	}
+	for _, from := range all {
+		t.Run(from, func(t *testing.T) {
+			w := withOccurrence(t, bare(from))
+			to := v1alpha1.OccurrenceFailed
+			if from == to {
+				to = v1alpha1.OccurrenceSucceeded
+			}
+			w.Status.Occurrences[0].State = to
+			err := k8s.Status().Update(ctx(t), w)
+			if v1alpha1.OccurrenceTerminal(from) {
+				wantInvalid(t, err, "a terminal occurrence never changes state")
+			} else if err != nil {
+				t.Fatalf("%s to %s: %v", from, to, err)
+			}
+		})
+	}
+}
+
+// A terminal occurrence still takes its result and page records; the
+// executor prunes old terminal occurrences and appends new ones; a Parked
+// occurrence is claimed again on a new attempt.
+func TestScheduledWorkOccurrenceTransitionsAccept(t *testing.T) {
+	t.Run("a terminal occurrence takes its pages and result", func(t *testing.T) {
+		o := bare(v1alpha1.OccurrenceFailed)
+		o.Session, o.SpecHash = "sw-1a2b3c4d5e6f-202612031400", swHash
+		w := withOccurrence(t, o)
+		got := &w.Status.Occurrences[0]
+		got.Reason = "ended without a task result"
+		got.Execution = &v1alpha1.ScheduledWorkExecution{State: v1alpha1.TaskResultFailed, Reason: "TaskExitedNonZero"}
+		got.Pages = v1alpha1.AppendPage(got.Pages, v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventFailed, Reminder: "sw-x-failed"})
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatal(err)
+		}
+		got.Pages = v1alpha1.AppendPage(got.Pages, v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventFailed, Reminder: "sw-x-failed", State: v1alpha1.DeliverySent})
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatalf("the page's delivery state: %v", err)
+		}
+	})
+	t.Run("a claim sets the session and spec hash once", func(t *testing.T) {
+		w := withOccurrence(t, bare(v1alpha1.OccurrencePending))
+		got := &w.Status.Occurrences[0]
+		claimed := metav1.NewTime(got.At.Add(time.Second))
+		got.State, got.ClaimedAt, got.SpecHash = v1alpha1.OccurrenceClaimed, &claimed, swHash
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatal(err)
+		}
+		got.State, got.Session = v1alpha1.OccurrenceDispatched, "sw-1a2b3c4d5e6f-202612031400"
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatalf("the session after the spec hash: %v", err)
+		}
+	})
+	t.Run("a parked occurrence is retried up to attempt 3", func(t *testing.T) {
+		o := bare(v1alpha1.OccurrenceParked)
+		o.SpecHash, o.Reason = swHash, "no standing authority"
+		w := withOccurrence(t, o)
+		got := &w.Status.Occurrences[0]
+		for attempt := int32(1); attempt <= v1alpha1.ScheduledWorkMaxAttempt; attempt++ {
+			retried := metav1.NewTime(got.At.Add(time.Duration(attempt) * time.Hour))
+			got.State, got.Attempt, got.RetriedAt = v1alpha1.OccurrenceClaimed, attempt, &retried
+			if err := k8s.Status().Update(ctx(t), w); err != nil {
+				t.Fatalf("the claim of attempt %d: %v", attempt, err)
+			}
+			got.State = v1alpha1.OccurrenceParked
+			if err := k8s.Status().Update(ctx(t), w); err != nil {
+				t.Fatalf("the park of attempt %d: %v", attempt, err)
+			}
+		}
+	})
+	t.Run("an old terminal occurrence is pruned and a new one appended", func(t *testing.T) {
+		o := bare(v1alpha1.OccurrenceSucceeded)
+		o.Session = "sw-1a2b3c4d5e6f-202612031400"
+		w := withOccurrence(t, o)
+		next := bare(v1alpha1.OccurrencePending)
+		next.At = metav1.NewTime(o.At.Add(7 * 24 * time.Hour))
+		w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{next}
+		if err := k8s.Status().Update(ctx(t), w); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestScheduledWorkOccurrenceTransitionsRefuse(t *testing.T) {
+	const other = "sw-1a2b3c4d5e6f-202612031500"
+	retriedAt := metav1.NewTime(time.Date(2026, 12, 3, 16, 0, 0, 0, time.UTC))
+	for name, c := range map[string]struct {
+		from func(*v1alpha1.ScheduledWorkOccurrence)
+		edit func(*v1alpha1.ScheduledWorkOccurrence)
+		want string
+	}{
+		"a session renamed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Session = "sw-1a2b3c4d5e6f-202612031400" },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Session = other },
+			"an occurrence's session never changes once set",
+		},
+		"a session removed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Session = "sw-1a2b3c4d5e6f-202612031400" },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Session = "" },
+			"an occurrence's session never changes once set",
+		},
+		"a spec hash changed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SpecHash = swHash },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SpecHash = strings.Repeat("f", 64) },
+			"an occurrence's specHash never changes once set",
+		},
+		"a spec hash removed": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SpecHash = swHash },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.SpecHash = "" },
+			"an occurrence's specHash never changes once set",
+		},
+		"attempt 2 back to 1": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Attempt, o.RetriedAt = 2, &retriedAt },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Attempt = 1 },
+			"an occurrence's attempt never decreases",
+		},
+		"attempt 1 back to 0": {
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Attempt, o.RetriedAt = 1, &retriedAt },
+			func(o *v1alpha1.ScheduledWorkOccurrence) { o.Attempt, o.RetriedAt = 0, nil },
+			"an occurrence's attempt never decreases",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := bare(v1alpha1.OccurrenceClaimed)
+			c.from(&o)
+			w := withOccurrence(t, o)
+			c.edit(&w.Status.Occurrences[0])
+			wantInvalid(t, k8s.Status().Update(ctx(t), w), c.want)
+		})
 	}
 }

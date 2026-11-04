@@ -118,6 +118,7 @@ type ScheduledWorkOrder struct {
 
 // ScheduledWorkSpec is what the owner asked for.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.cancelled) || !oldSelf.cancelled || (has(self.cancelled) && self.cancelled)",message="cancelled scheduled work stays cancelled"
+// +kubebuilder:validation:XValidation:rule="self.mode != 'interactive' || (has(self.notify) && size(self.notify) > 0)",message="interactive scheduled work needs a notify target: Tom is paged the session link"
 type ScheduledWorkSpec struct {
 	// Title names the work in pages, the calendar projection and listings.
 	// +kubebuilder:validation:MinLength=1
@@ -125,10 +126,12 @@ type ScheduledWorkSpec struct {
 	Title string `json:"title"`
 
 	// Owner is the caller that created it, from its token, in the form a
-	// Reminder records: session/<name>/<uid>, client/<namespace>/<name> or
-	// human/<namespace>/<name>. It never changes.
+	// Reminder records: session/<name>/<uid>, client/<namespace>/<name>,
+	// coordinator/<namespace>/<name> or human/<namespace>/<name>. It never
+	// changes.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern=`^(human|client|coordinator|session)/[^/]+/[^/]+$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="the owner of scheduled work never changes"
 	Owner string `json:"owner"`
 
@@ -139,6 +142,7 @@ type ScheduledWorkSpec struct {
 	// approval of that exact spec.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern=`^(human|client|coordinator|session)/[^/]+/[^/]+$`
 	Editor string `json:"editor"`
 
 	// Due is the local wall time of the first occurrence, YYYY-MM-DDTHH:MM,
@@ -207,8 +211,9 @@ type ScheduledWorkApproval struct {
 
 	At metav1.Time `json:"at"`
 
-	// SpecHash is the SHA-256, in hex, of the owner, mode, work, schedule and
-	// notAfter the human approved.
+	// SpecHash is the SHA-256, in hex, of the spec the human approved: every
+	// spec field except editor and cancelled. Any other edit, notify, calendar
+	// and title included, changes it, so the approval no longer matches.
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
 	SpecHash string `json:"specHash"`
@@ -252,6 +257,45 @@ const (
 // ScheduledWorkMaxPages bounds the pages of one occurrence.
 const ScheduledWorkMaxPages = 8
 
+// ScheduledWorkMaxAttempt is the highest attempt of an occurrence: the first
+// try is 0 and each human approve or retry adds one, so a fourth retry is
+// refused.
+const ScheduledWorkMaxAttempt = 3
+
+// AppendPage records page p in pages and returns the new list; it never
+// modifies pages. An entry with the same event and attempt is replaced in
+// place; otherwise p is appended. Then, while the list is longer than
+// ScheduledWorkMaxPages, the entry of the lowest attempt that comes first in
+// list order is dropped (an appended p is the last entry, so it is dropped
+// only when its attempt is below every other entry's). The result is never
+// over the limit and the call never fails. A dropped entry's Reminder is not
+// touched.
+func AppendPage(pages []ScheduledWorkPage, p ScheduledWorkPage) []ScheduledWorkPage {
+	out := make([]ScheduledWorkPage, 0, len(pages)+1)
+	out = append(out, pages...)
+	replaced := false
+	for i := range out {
+		if out[i].Event == p.Event && out[i].Attempt == p.Attempt {
+			out[i] = p
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		out = append(out, p)
+	}
+	for len(out) > ScheduledWorkMaxPages {
+		oldest := 0
+		for i := range out {
+			if out[i].Attempt < out[oldest].Attempt {
+				oldest = i
+			}
+		}
+		out = append(out[:oldest], out[oldest+1:]...)
+	}
+	return out
+}
+
 // ScheduledWorkPage is one page an occurrence sent. Each page is its own
 // one-shot Reminder, keyed by the occurrence, the event and the attempt, and a sent Reminder
 // is never reused. Pages are best effort: a page Reminder that cannot be
@@ -264,9 +308,10 @@ type ScheduledWorkPage struct {
 	Event string `json:"event"`
 
 	// Attempt is the occurrence's attempt the page belongs to: 0, then one
-	// more for each human approve or retry, so a second park can be paged.
+	// more for each human approve or retry, so a second park can be paged. At
+	// most ScheduledWorkMaxAttempt, as on the occurrence.
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:validation:Maximum=3
 	// +kubebuilder:default=0
 	Attempt int32 `json:"attempt"`
 
@@ -298,10 +343,25 @@ type ScheduledWorkExecution struct {
 }
 
 // ScheduledWorkOccurrence is one due time and what the executor did with it.
+// Occurrences are keyed by At, so an update is checked against the stored
+// record with the same At: a terminal state is final, the session and spec
+// hash are set once, and the attempt only grows. Whether a delivery note
+// belongs to interactive work is not checked here: the mode is in the spec,
+// which a rule on an occurrence cannot read, and an edit may change it after
+// the occurrence was claimed.
+// +kubebuilder:validation:XValidation:rule="!(oldSelf.state in ['Succeeded', 'Failed', 'Ended', 'Skipped', 'Ambiguous', 'Cancelled']) || self.state == oldSelf.state",message="a terminal occurrence never changes state"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.session) || (has(self.session) && self.session == oldSelf.session)",message="an occurrence's session never changes once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.specHash) || (has(self.specHash) && self.specHash == oldSelf.specHash)",message="an occurrence's specHash never changes once set"
+// +kubebuilder:validation:XValidation:rule="(has(self.attempt) ? self.attempt : 0) >= (has(oldSelf.attempt) ? oldSelf.attempt : 0)",message="an occurrence's attempt never decreases"
+// +kubebuilder:validation:XValidation:rule="!has(self.retriedAt) || (has(self.attempt) && self.attempt > 0)",message="retriedAt is set only on a retried attempt, attempt 1 or more"
+// +kubebuilder:validation:XValidation:rule="!has(self.missed) || self.state == 'Skipped'",message="missed is set only on a Skipped occurrence"
 type ScheduledWorkOccurrence struct {
 	// At is the occurrence's instant, its due time resolved in the zone.
 	At metav1.Time `json:"at"`
 
+	// State is where the occurrence is in its lifecycle. A terminal state
+	// (OccurrenceTerminal) never changes.
+	// +kubebuilder:validation:MaxLength=10
 	// +kubebuilder:validation:Enum=Pending;Claimed;Dispatched;Delivered;Opened;Running;Succeeded;Failed;Ended;Parked;Skipped;Ambiguous;Cancelled
 	State string `json:"state"`
 
@@ -314,7 +374,7 @@ type ScheduledWorkOccurrence struct {
 
 	// Missed is how many due times this one Skipped record stands for, when
 	// the executor found several missed at once after an outage. Absent means
-	// one.
+	// one. Only a Skipped occurrence carries it.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100000
 	// +optional
@@ -327,18 +387,21 @@ type ScheduledWorkOccurrence struct {
 	// RetriedAt is when a human approved or retried this occurrence while it
 	// was Parked. It opens a fresh window for this occurrence only: its grace,
 	// the claim-without-session rule and the start deadline count from here,
-	// not from At.
+	// not from At. It is set only with an attempt of 1 or more.
 	// +optional
 	RetriedAt *metav1.Time `json:"retriedAt,omitempty"`
 
-	// Attempt is 0, then one more for each human approve or retry.
+	// Attempt is 0, then one more for each human approve or retry, at most
+	// ScheduledWorkMaxAttempt: the API refuses a fourth retry. It never
+	// decreases.
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:validation:Maximum=3
 	// +optional
 	Attempt int32 `json:"attempt,omitempty"`
 
 	// Session is the derived session name:
 	// sw-<first 12 hex of the ScheduledWork UID>-<occurrence UTC YYYYMMDDHHMM>.
+	// Once set it never changes.
 	// +kubebuilder:validation:MaxLength=28
 	// +kubebuilder:validation:Pattern=`^sw-[0-9a-f]{12}-[0-9]{12}$`
 	// +optional
@@ -346,7 +409,8 @@ type ScheduledWorkOccurrence struct {
 
 	// SpecHash is the hash of the spec the occurrence was claimed with, in the
 	// form of status.approval.specHash. An edit applies from the next
-	// occurrence; this one runs on the spec it was claimed with.
+	// occurrence; this one runs on the spec it was claimed with. Once set it
+	// never changes.
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
 	// +optional
@@ -372,7 +436,9 @@ type ScheduledWorkOccurrence struct {
 	Reported *TaskOutcomeRecordStatus `json:"reported,omitempty"`
 
 	// Pages are the pages this occurrence sent, at most one per event and
-	// attempt.
+	// attempt and at most ScheduledWorkMaxPages. Write them with AppendPage,
+	// which drops the oldest attempt's entries when the list is full (their
+	// Reminders remain).
 	// +kubebuilder:validation:MaxItems=8
 	// +listType=map
 	// +listMapKey=event
@@ -403,8 +469,11 @@ type ScheduledWorkStatus struct {
 
 	// Occurrences are the recorded occurrences, oldest first: the newest
 	// ScheduledWorkTerminalKept terminal ones and every non-terminal one.
+	// They are keyed by At, so each update is checked against the stored
+	// occurrence with the same At (ScheduledWorkOccurrence's rules).
 	// +kubebuilder:validation:MaxItems=64
-	// +listType=atomic
+	// +listType=map
+	// +listMapKey=at
 	// +optional
 	Occurrences []ScheduledWorkOccurrence `json:"occurrences,omitempty"`
 }
