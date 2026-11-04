@@ -274,6 +274,31 @@ func TestClaudeFailedCommitSendsNothing(t *testing.T) {
 	}
 }
 
+// The commit's read back accepts only this attempt's intent. If another
+// writer replaced it with a different attempt's unmarked intent, the commit
+// fails, the read back refuses that intent, and nothing is sent or written.
+func TestClaudeCommitReadBackRefusesAnotherAttempt(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	other := &claudeJournal{Client: f.c, Secret: f.w.Journal.Secret}
+	f.w.Journal = &claudeJournal{Client: &claudeCommitHookClient{Client: f.c, hook: func() {
+		s, r, err := other.load(context.Background())
+		if err != nil || r.Stage != claudeIntent {
+			t.Error("setup: no intent to replace")
+			return
+		}
+		r.AttemptUID = claudeUID // another attempt's intent, saved without a marker
+		if err := other.save(context.Background(), s, r); err != nil {
+			t.Error(err)
+		}
+	}}, Secret: f.w.Journal.Secret}
+	f.tick()
+	if r := f.journal(t); f.tr.Calls != 0 || r.Stage != claudeIntent || r.AttemptUID != claudeUID {
+		t.Fatalf("calls=%d stage=%s: the read back accepted another attempt", f.tr.Calls, r.Stage)
+	}
+}
+
 // claudeGetHookClient runs hook once, before the numbered Get of the journal.
 type claudeGetHookClient struct {
 	client.Client
