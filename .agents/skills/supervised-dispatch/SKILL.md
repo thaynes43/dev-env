@@ -131,8 +131,9 @@ The work stops only on one of these, each backed by specific evidence:
   when and through which channel. Save a checkpoint, and do not poll while
   waiting.
 - **An exhausted authorized budget.** The budget recorded for the story is
-  actually spent, or its recorded stop threshold is reached, read from its
-  record. A feared or estimated overrun is not exhaustion.
+  actually spent, or its recorded budget stop threshold is reached, read from
+  its record (ADR-019). A decision 55 stall threshold is never a budget stop
+  threshold. A feared or estimated overrun is not exhaustion.
 - **A genuine unresolvable blocker.** An input only someone else can supply, with
   no authorized repair left. Record the missing artifact and why no repair
   remains.

@@ -49,6 +49,13 @@ verified coordinator's), a genuine unresolvable blocker, an exhausted authorized
 budget, or a required safety or permission decision. Each stop is backed by
 specific evidence.
 
+An authorized budget is exhausted when the budget recorded on the story is
+actually spent, or when the budget checkpoint or stop threshold recorded on the
+story (its proposed budget and stop criteria) is reached. A stall threshold of
+decision 55 (the time or attempt counters) is never a budget stop threshold, and
+a story cannot record one as such: reaching it triggers diagnosis and steering
+only.
+
 The time and attempt thresholds trigger diagnosis, steering, a checkpoint and
 continuity. One owner question is asked only when real input or a permission
 decision is missing.
@@ -63,8 +70,8 @@ platform's deterministic API, controllers and supervisor (item 6).
   must change the approach; repeating a failed attempt is still not progress.
 - The counters stay, so a threshold reached again is visible to the supervisor
   and in the record.
-- Budgets still bound the work. An exhausted budget, or its recorded stop
-  threshold, stops it.
+- Budgets still bound the work. An exhausted budget, including its recorded
+  budget stop threshold (never a decision 55 stall threshold), stops it.
 - Decision 55, its budget contract, DESIGN-001 D-84 and ADR-003 are not edited.
   Read them with this ADR.
 - No source, flag or runtime behavior changes here. Source that enforces the old
