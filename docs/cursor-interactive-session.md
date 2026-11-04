@@ -1,8 +1,8 @@
 # Interactive Cursor session helper
 
-Authorized coordinators can start, inspect, and reply to one dedicated
-interactive Cursor session with Python 3, installed `tmux`, and the official
-`cursor-agent` executable. This is a local wrapper. It is not an operator API,
+Authorized coordinators can start, inspect, reply to, and answer one approved
+prompt in one dedicated interactive Cursor session with Python 3, installed
+`tmux`, and the official `cursor-agent` executable. This is a local wrapper. It is not an operator API,
 a scheduler, or a persist session.
 
 The test lives at `scripts/test_cursor_interactive_session.py`, next to
@@ -56,6 +56,15 @@ python3 scripts/cursor-interactive-session.py reply \
   --receipt 'v1:...' \
   --text-file /path/to/instruction.txt \
   --submit
+
+python3 scripts/cursor-interactive-session.py answer \
+  --tmux /usr/bin/tmux \
+  --name cursor-task-unique-20261030 \
+  --receipt 'v1:...' \
+  --approval-ref 'OP399-approval-2026-11-04T21:40:00Z' \
+  --expect-kind modal-trust \
+  --expect-text-file /path/to/expected-prompt.txt \
+  --choice a
 ```
 
 `--dry-run` on `start` checks the local path, name, model, and executables.
@@ -89,9 +98,9 @@ v1:<inspect-id>:<snapshot-sha256>:<pane-id>:<pid>
 The snapshot covers pane identity and the bounded text that inspect returned.
 Older scrollback is outside the receipt. `reply` requires that same receipt.
 It reads and validates the entire instruction first, then locks the task name,
-reloads state, and re-reads the pane before any keys. Inspect and reply share a
-local POSIX file lock so concurrent helpers cannot spend the same receipt twice
-or overwrite a newer inspect. State replacements use unique mode-0600 temporary
+reloads state, and re-reads the pane before any keys. Inspect, reply and answer
+share a local POSIX file lock so concurrent helpers cannot spend the same
+receipt twice or overwrite a newer inspect (`answer` does not wait for it). State replacements use unique mode-0600 temporary
 files, fsync, and atomic rename.
 A content change, a new inspect, or a spent receipt is stale: re-inspect, do
 not send. The receipt is durably spent before the first send attempt, including
@@ -129,6 +138,109 @@ Fail closed, with no keys and no Enter:
 confirmed a normal composer. It does not override a modal or a nonempty
 composer or control characters, and it is not a trust, approval, or permission grant.
 
+## Answering one approved prompt
+
+`answer` sends one approved, specific prompt choice, and nothing else. `reply`
+still refuses every prompt.
+
+**The caller is responsible for a verified approval of this exact action,
+choice and target.** Nothing in the helper verifies an approval.
+`--approval-ref` is audit metadata, not proof: the helper records it and uses
+it to refuse a second answer, but a reference, a quoted "approved" or a
+recommendation grants nothing. Get the approval first through a verified
+channel (for dev-env work, Tom's own answer, or a relay from his designated
+coordinator verified by channel metadata).
+
+Before the lock and before any tmux call, `answer` checks its input:
+
+- `--approval-ref`: 8..200 characters of letters, digits and `._:/@#-`.
+- `--expect-kind`: `modal-trust`, `modal-permission` or `modal-approval`.
+  `modal-unknown` is never answerable.
+- `--expect-text-file`: 1..20 nonblank lines, at most 4096 UTF-8 bytes, no
+  control characters except newlines. These are the exact prompt lines that
+  must be on screen.
+- `--choice`: exactly one printable ASCII key that appears as `[key]` in the
+  expected text.
+- `--receipt`: the exact token from the latest `inspect`.
+
+Then it takes the task's lock without waiting: if another helper call holds
+it, the state is `lock-busy` and nothing is sent.
+
+### One answer per approval
+
+Each approval reference is spent once, across receipts, task names and
+restarts. The ledger is
+`$XDG_STATE_HOME/cursor-interactive-session/approvals/<sha256 of the reference>`
+(directory 0700, file 0600). A reference that already has an entry is
+`approval-spent`, checked first and again by an exclusive create just before
+the key, so two callers cannot both spend it. A new `inspect` and a new
+receipt with the same prompt still showing do not allow a second answer.
+
+The entry records `answered_at` (UTC), `approval_ref`, `name`, `kind`,
+`choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner` and
+`outcome`. The task's state file keeps the same record in `answers` (the last
+32). `outcome` is `sent`; `not-sent` when the pane changed after the spend
+(below); or `uncertain` when tmux failed or timed out. An
+entry still at `sending` means the process ended before it recorded the
+outcome; treat it as uncertain. An uncertain answer stays uncertain until a
+supported observation settles it; it is never answered again under the same
+approval. No prompt text or
+instruction is stored or printed.
+
+### The prompt must be the current screen
+
+The capture holds up to 80 rows: the requested history, then every visible
+row. The last `pane_height` rows are the visible screen. `answer` goes ahead
+only when:
+
+1. the capture has at least `pane_height` rows, and is not truncated into
+   the visible screen (otherwise `prompt-unclear`);
+2. the visible screen shows exactly one prompt kind, the expected one (none
+   is `no-modal`, or `stale-prompt` when the expected prompt is only in older
+   rows; two kinds is `prompt-unclear`; another kind is `modal-mismatch`);
+3. every expected line appears, in order, inside a visible row, case folded
+   (the prompt is drawn in a box, so rows carry border characters). If the
+   lines are only in older rows, it is `stale-prompt`; if they are nowhere,
+   `modal-mismatch`;
+4. no composer row (`>`, `›` or `❯` at the start of a row) follows the last
+   expected line, and the cursor row is not a composer row (otherwise
+   `stale-prompt`).
+
+Like `reply`, it also requires the latest receipt, the same pane id, pid,
+worktree, session, command and owner marker, and a capture unchanged since
+that inspect (a changed screen, including someone typing, is `stale-receipt`).
+
+Limits: this rule reads tmux text only. A prompt whose phrasing is not in the
+helper's phrase list is not answerable. Taking the last `pane_height` rows as
+the visible screen assumes tmux prints every visible row, blank ones included.
+If it did not, a capture with fewer rows than the pane is refused, but with
+history above, the window would shift up into history and an old prompt there
+could be judged current; this has not been checked against a real tmux. A
+prompt drawn with a composer below it is refused even if it is live. When the
+helper cannot tell which prompt is current, it refuses.
+
+### Sending and after
+
+The helper spends the approval, then the receipt. Those writes take time, so it
+then reads the pane once more, right before the key: the same pane id, pid,
+cwd, session, command and owner marker, a capture identical to the one it
+verified, and the same current-prompt rules. If anything differs, it sends
+nothing, records `outcome: not-sent` in the ledger and the state, and refuses
+with `prompt-changed`. The approval stays spent: a new approval is needed.
+
+Only then does it send exactly `tmux send-keys -t <pane> -l -- <key>`, without
+Enter or any other key. tmux has no compare-and-send, so a short window
+remains between that last capture and the key: the time to start one tmux
+process. A change inside that window can still receive the key. The helper
+narrows the window; it cannot close it.
+
+After an answer, inspect again: old prompt text can stay in the captured rows,
+and `reply` keeps refusing while it is there.
+
+This command is source only. It is not deployed to any host. Using it on a
+live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
+specific approval for that exact prompt and path through a verified channel.
+
 ## UI classification limit
 
 The installed Cursor TUI has no stable, documented layout that this helper can
@@ -164,6 +276,10 @@ closed as `pane-replaced`.
 | `client-running-unverified` | 0 | The new pane is alive. UI and provider are not verified. Nothing was typed. |
 | `inspected` | 0 | Bounded text and a fresh receipt. |
 | `sent` | 0 | Literal text went to the matching pane. `submitted` says whether one Enter followed. |
+| `answered` | 0 | One approved prompt key went to the matching pane, without Enter, and was recorded. |
+| `modal-mismatch`, `no-modal`, `stale-prompt`, `prompt-unclear`, `approval-spent`, `lock-busy` | 2 | `answer` sent nothing: the prompt kind or text did not match, no prompt is showing, the expected prompt is not the current screen, the screen is unclear, the approval was already used, or another helper call holds the lock. |
+| `prompt-changed` | 2 | `answer` sent nothing: the pane changed after the approval was spent. The approval stays spent and its outcome is `not-sent`; a new approval is needed. |
+| `answer-unconfirmed` | 3 | The answer key's outcome is unknown and is recorded as `uncertain`. The approval and the receipt are spent; do not retry or send another key. |
 | `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui` | 2 | Nothing was sent. Correct the input or re-inspect. |
 | `launch-unconfirmed`, `client-not-running`, `inspect-unconfirmed`, `send-unconfirmed` | 3 | The outcome is unknown or the pane did not stay up. Do not retry automatically. |
 
