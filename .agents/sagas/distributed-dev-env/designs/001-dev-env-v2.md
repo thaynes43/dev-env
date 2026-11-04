@@ -2133,13 +2133,15 @@ question or a permission prompt waits for a person, so stopping it then cuts
 the turn and drops the pending question. The drain moment is therefore the
 agent reporting `idle` with no attached client, for every session type that
 drains. The fresh session read before the proof write and before the stop
-checks it again. A heartbeat that reports the agent waiting, busy or attached
-after the dry-run read therefore stops nothing: the pending `Draining` mark is
-cancelled and the pod stays. That check is only as fresh as the stored
-heartbeat, which agentd posts every 60 s. The dry-run reads the live attach
-count but not Claude's live status, so an agent that starts a turn and asks a
-question between its last heartbeat and the stop is still stopped. Busy has
-had the same window since the 2026-10-17 note. Closing it needs the dry-run to
+checks it again. A heartbeat stored before the stop is recorded (the
+`Stopped` write) that reports the agent waiting, busy or attached therefore
+stops nothing: the pending `Draining` mark is cancelled and the pod stays. Two
+windows remain. A heartbeat stored after the `Stopped` write and before the
+stop exec is not seen; that is milliseconds. And the check is only as fresh as
+the stored heartbeat, which agentd posts every 60 s: the dry-run reads the
+live attach count but not Claude's live status, so an agent that starts a turn
+and asks a question after its last heartbeat and before the stop is still
+stopped. Busy has had the same windows since the 2026-10-17 note. Closing it needs the dry-run to
 report the live status; that is an agentd change and a follow-up. A matching
 already-stopped proof still finishes its recovery, as for remote sessions.
 Idle task and idle local sessions still drain.

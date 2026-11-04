@@ -268,9 +268,10 @@ func (r *Reconciler) prepareRestart(ctx context.Context, pod *corev1.Pod) (proto
 // (DESIGN-001 5.2, the same record-first rule as rescue). It writes only while
 // this is still the session the report was for and its fresh read still shows
 // an idle agent with no attached client. That read is as fresh as the stored
-// heartbeat (agentd posts every 60 s): a heartbeat that reported waiting, busy
-// or attached after the dry-run read stops nothing, but a change since the
-// last heartbeat is not seen here (DESIGN-001 5.2, 2026-11-04 note).
+// heartbeat (agentd posts every 60 s): a heartbeat stored before the Stopped
+// write that reports waiting, busy or attached stops nothing, but a change
+// since the last stored heartbeat, or a heartbeat stored between the Stopped
+// write and the stop exec, is not seen here (DESIGN-001 5.2, 2026-11-04 note).
 func (r *Reconciler) recordRestart(ctx context.Context, s *v1alpha1.AgentSession, rec *v1alpha1.RestartStatus) (bool, error) {
 	if r.APIReader == nil || rec == nil || rec.ConversationID == "" {
 		return false, errors.New("drain needs an uncached session read and a conversation id")
