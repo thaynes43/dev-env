@@ -156,9 +156,10 @@ func TestClaudeUnsentMarkerLetsASuccessorRollBack(t *testing.T) {
 // then lose its acknowledgement.
 type claudeCommitHookClient struct {
 	client.Client
-	hook    func()
-	loseAck bool
-	done    bool
+	hook       func()
+	loseAck    bool
+	failCommit bool // fail without applying
+	done       bool
 }
 
 func claudeIsCommitPatch(obj client.Object, p client.Patch) bool {
@@ -181,6 +182,9 @@ func (c *claudeCommitHookClient) Patch(ctx context.Context, obj client.Object, p
 	c.done = true
 	if c.hook != nil {
 		c.hook()
+	}
+	if c.failCommit {
+		return errors.New("synthetic commit failure")
 	}
 	err := c.Client.Patch(ctx, obj, p, opts...)
 	if err == nil && c.loseAck {
@@ -254,6 +258,57 @@ func TestClaudeDispatchCommitLostAck(t *testing.T) {
 				t.Fatalf("stage=%s calls=%d, want %s and no request", got, f.tr.Calls, tc.want)
 			}
 		})
+	}
+}
+
+// A commit that failed without applying leaves the marker, which the read back
+// sees: nothing is sent, and the attempt is rolled back.
+func TestClaudeFailedCommitSendsNothing(t *testing.T) {
+	f := newClaudeFix(t)
+	f.seed(t, syntheticClaudeRecord(1))
+	f.clk.Step(6 * time.Hour)
+	f.w.Journal = &claudeJournal{Client: &claudeCommitHookClient{Client: f.c, failCommit: true}, Secret: f.w.Journal.Secret}
+	f.tick()
+	if r := f.journal(t); f.tr.Calls != 0 || r.Stage != claudeReady || r.Refresh.Reveal() != claudeOldRefreshCanary || r.Access.Generation != 1 {
+		t.Fatalf("calls=%d stage=%s, want no request and a rollback", f.tr.Calls, r.Stage)
+	}
+}
+
+// claudeGetHookClient runs hook once, before the numbered Get of the journal.
+type claudeGetHookClient struct {
+	client.Client
+	name string
+	at   int
+	gets int
+	hook func()
+}
+
+func (c *claudeGetHookClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if key.Name == c.name {
+		if c.gets++; c.gets == c.at && c.hook != nil {
+			c.hook()
+		}
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+// A rollback on the strength of the marker alone needs the marker on its own
+// read: if the owner's dispatch commit lands between the successor's tick and
+// its rollback, the request may be in flight, and the successor writes
+// nothing.
+func TestClaudeMarkedRollbackNeedsTheMarkerOnItsRead(t *testing.T) {
+	f := newClaudeFix(t)
+	f.markedUnsent(t)
+	s := f.successorWorker()
+	// Journal Gets: the successor's tick load, then its rollback's load.
+	s.Journal = &claudeJournal{Client: &claudeGetHookClient{Client: f.c, name: f.w.Journal.Secret.Name, at: 2, hook: func() {
+		if _, err := f.w.Journal.clearUnsent(context.Background(), f.journalSecret(t)); err != nil {
+			t.Error(err)
+		}
+	}}, Secret: f.w.Journal.Secret}
+	s.tick(context.Background())
+	if r := f.journal(t); r.Stage != claudeIntent || f.tr.Calls != 0 {
+		t.Fatalf("stage=%s: a successor rolled back an attempt whose commit had landed", r.Stage)
 	}
 }
 
