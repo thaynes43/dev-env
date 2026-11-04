@@ -303,8 +303,10 @@ func TestStallNeverMasksExhaustionOrABarrier(t *testing.T) {
 					t.Fatalf("limit did not stop: latched=%t reason=%q %v", l.Latched, l.Reason, err)
 				}
 			}
-			if l == nil || l.Status().Stall == nil {
-				t.Fatal("stop hid the stall signal")
+			// A stopped campaign reports its stop, not a signal to steer; the
+			// stall recorded before the stop stays in its history.
+			if l == nil || (l.Status().Stall == nil) != l.Latched || len(stallRecords(l)) != 1 {
+				t.Fatalf("stall after the stop: latched=%t stall=%+v records=%d", l.Latched, l.Status().Stall, len(stallRecords(l)))
 			}
 			if scenario == "permission" {
 				return // a readiness refusal gates admission only
@@ -480,8 +482,8 @@ func TestStallCrossedDuringAProbeIsRecordedInTheSameWrite(t *testing.T) {
 	}
 }
 
-// A signal never takes the last history slots: an owner intent reserved at the
-// edge stays consumable, and the stall is shown without a HistoryBound stop.
+// A signal never takes a history slot: an owner intent reserved at the edge
+// stays consumable, and the stall is recorded without a HistoryBound stop.
 func TestStallSignalNeverTakesTheLastHistorySlots(t *testing.T) {
 	ctx := context.Background()
 	s, m, now, b, _ := defaultStalledCampaign(t)
@@ -500,7 +502,7 @@ func TestStallSignalNeverTakesTheLastHistorySlots(t *testing.T) {
 	}
 	*now = created.Add(StallLimit)
 	l, err := s.Observe(ctx, b)
-	if err != nil || l.Latched || l.Status().Stall == nil || l.Status().Stall.Signals != 0 || len(stallRecords(l)) != 0 || l.historyEvents() != MaxEvents-2 {
+	if err != nil || l.Latched || l.Status().Stall == nil || l.Status().Stall.Signals != 1 || len(stallRecords(l)) != 1 || l.historyEvents() != MaxEvents-2 {
 		t.Fatalf("stall at the history edge: latched=%t reason=%q stall=%+v events=%d %v", l.Latched, l.Reason, l.Status().Stall, l.historyEvents(), err)
 	}
 	if l, err = s.ConsumeNativeControl(ctx, r); err != nil || l.Latched {
@@ -584,5 +586,77 @@ func TestAdvisoryLatchNeverMasksAHardCap(t *testing.T) {
 				t.Fatalf("stored reason %q", stored.Reason)
 			}
 		})
+	}
+}
+
+// Stall first, owner control second: the record never takes the slot that
+// an owner's host/stop needs, and never brings HistoryBound closer.
+func TestStallFirstThenOwnerStopStillReserves(t *testing.T) {
+	for _, observed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("observed-first-%t", observed), func(t *testing.T) {
+			ctx := context.Background()
+			s, m, now, b, _ := defaultStalledCampaign(t)
+			created := *now
+			l, rv, _ := m.Read(ctx, b.TaskUID)
+			for i := l.historyEvents(); i < MaxEvents-3; i++ {
+				l.Events = append(l.Events, Event{At: created, Request: apiv1.TaskBudgetEvent{Binding: b, ID: fmt.Sprintf("filler-%d", i), Kind: "activity"}})
+			}
+			if err := m.Update(ctx, l, rv); err != nil {
+				t.Fatal(err)
+			}
+			*now = created.Add(StallLimit)
+			if observed {
+				if l, err := s.Observe(ctx, b); err != nil || len(stallRecords(l)) != 1 {
+					t.Fatal("stall not recorded", err)
+				}
+			}
+			stop := apiv1.NativeControlRequest{Binding: b, ID: "owner-stop", Operation: "host/stop"}
+			l, err := s.ReserveNativeControl(ctx, stop, "owner")
+			if err != nil || !l.NativeStopRequested() || len(stallRecords(l)) != 1 || l.historyEvents() != MaxEvents-2 {
+				t.Fatalf("owner stop refused after a stall: %v", err)
+			}
+		})
+	}
+}
+
+// A stopped ledger gets no stall record or signal on a later read: no write,
+// and no new field for an older reader of a finished campaign.
+func TestStoppedCampaignCarriesNoStallSignal(t *testing.T) {
+	ctx := context.Background()
+	s, m, now, b, _ := defaultStalledCampaign(t)
+	created := *now
+	*now = created.Add(2 * time.Hour)
+	l, err := s.Observe(ctx, b)
+	if err != nil || !l.Latched || l.Reason != "Checkpoint" {
+		t.Fatal("checkpoint latch", l.Reason, err)
+	}
+	stored, _, _ := m.Read(ctx, b.TaskUID)
+	if l.Status().Stall != nil || len(stallRecords(stored)) != 0 {
+		t.Fatalf("stopped campaign carries a stall: %+v", l.Status().Stall)
+	}
+	writes := m.updates
+	*now = created.Add(2*time.Hour + time.Minute)
+	if l, err = s.Observe(ctx, b); err != nil || l.Status().Stall != nil || m.updates != writes {
+		t.Fatalf("read of a stopped campaign wrote or showed a stall: %d writes %v", m.updates-writes, err)
+	}
+}
+
+// No caller can claim a stall record's ID, so none can suppress a window.
+func TestCallerCannotSuppressAStallRecord(t *testing.T) {
+	ctx := context.Background()
+	s, m, now, b, _ := defaultStalledCampaign(t)
+	created := *now
+	id := fmt.Sprintf("stall:%d", created.UnixNano())
+	squat := failureEvent(b, id, "attempt-2", "blocker")
+	if _, err := s.Record(ctx, squat); !errors.Is(err, ErrDenied) {
+		t.Fatal("caller claimed a stall record ID", err)
+	}
+	*now = created.Add(StallLimit)
+	if _, err := s.Observe(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ := m.Read(ctx, b.TaskUID)
+	if records := stallRecords(stored); len(records) != 1 || records[0].Request.ID != id {
+		t.Fatalf("stall window suppressed: %+v", records)
 	}
 }
