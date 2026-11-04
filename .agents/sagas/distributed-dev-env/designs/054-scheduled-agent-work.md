@@ -192,7 +192,10 @@ occurrence parks at once and never waits on an owner it could not run for. The
 decision carries its template's digest (`Authority.TemplateDigest`), and the build
 that follows (revalidation check 3) reads the template again with its own digest
 (`Template.Digest`). When the two differ, the executor retries rather than build
-from a template the decision did not see. `Sources` keeps no state between calls. A session owner's child runs on the owner's profile, so a
+from a template the decision did not see. When either is empty, it parks the
+occurrence ("no template digest to match the decision against"): a source that
+cannot name its template's content is a defect, not an edit, and two empty
+digests never match. `Sources` keeps no state between calls. A session owner's child runs on the owner's profile, so a
 template that admits `session` dispatches only for owners on the profile it names.
 
 **RBAC the executor needs (S6).** Read from haynes-ops `main`

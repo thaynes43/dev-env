@@ -109,6 +109,9 @@ const (
 	ReasonCollision               = "a session of the derived name exists that this occurrence did not create"
 	ReasonNoAuthority             = "no standing authority"
 	ReasonReplanned               = "the schedule was edited before it was claimed"
+	// ReasonNoTemplateDigest parks an occurrence whose decision or template
+	// carries no digest: the two cannot be matched, so nothing is built.
+	ReasonNoTemplateDigest = "no template digest to match the decision against"
 )
 
 // Basis is the authority an occurrence dispatches on (DESIGN-054
@@ -142,10 +145,11 @@ type Authority struct {
 	// Reason says why there is no basis, for the Parked record.
 	Reason string
 	// TemplateDigest is the digest of the template the basis was decided
-	// under (Template.Digest), or empty. Revalidation check 3 builds the
-	// session only from a template of the same digest, and tries again
-	// otherwise, so an edit between the two reads never builds from a
-	// template the decision did not see.
+	// under (Template.Digest). Revalidation check 3 builds the session only
+	// from a template of the same, non-empty digest: it tries again when they
+	// differ, so an edit between the two reads never builds from a template
+	// the decision did not see, and it parks when either is empty
+	// (ReasonNoTemplateDigest). An Authority with no basis needs none.
 	TemplateDigest string
 }
 
@@ -176,8 +180,10 @@ type Template struct {
 	// interactive, or both (v1alpha1.ScheduledWorkHeadless and
 	// ScheduledWorkInteractive). An item whose mode is not among them parks.
 	Modes []string
-	// Digest identifies the template's content (authority.TemplateDigest),
-	// or is empty; it must equal the Authority's TemplateDigest.
+	// Digest identifies the template's content (authority.TemplateDigest).
+	// It is required: check 3 builds only when it equals the Authority's
+	// TemplateDigest, parks the occurrence (ReasonNoTemplateDigest) when
+	// either is empty, and tries again when they differ.
 	Digest string
 }
 
@@ -904,7 +910,12 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 		return parked(fmt.Sprintf("template %s: %s", w.Spec.Work.Template, refusal.Reason))
 	case err != nil:
 		return retry(err, "read the dispatch template")
+	case t.Digest == "" || a.TemplateDigest == "":
+		// A source that cannot name its template's content is a defect, not
+		// an edit: it parks with the reason rather than retry until grace.
+		return parked(fmt.Sprintf("template %s: %s", w.Spec.Work.Template, ReasonNoTemplateDigest))
 	case t.Digest != a.TemplateDigest:
+		// An edit between the decision and this read: decide again.
 		return retry(fmt.Errorf("template %s changed after the authority was decided", w.Spec.Work.Template), "check the dispatch template against the decision")
 	case !slices.Contains(t.Admits, a.Basis):
 		return parked(fmt.Sprintf("template %s does not admit %s work", w.Spec.Work.Template, a.Basis))

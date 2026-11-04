@@ -366,3 +366,45 @@ func TestSourcesSessionOwnerOnAnotherProfileIsRefused(t *testing.T) {
 		t.Errorf("%d sessions: only the owner should exist", len(f.sessionsOf()))
 	}
 }
+
+// rawResolver is a TemplateResolver that gives its templates as they are,
+// without the digest a real source gives.
+type rawResolver map[string]Template
+
+func (r rawResolver) Resolve(_ context.Context, name string) (Template, error) {
+	t, ok := r[name]
+	if !ok {
+		return Template{}, &Refusal{Reason: "no such template"}
+	}
+	return t, nil
+}
+
+// Check 3 builds only when the decision and the template carry the same,
+// non-empty digest. An empty digest on either side, both included, can match
+// nothing: the occurrence parks with the reason and nothing is created.
+func TestCheck3RefusesAnEmptyTemplateDigest(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		auth      func(f *fixture) Authorizer
+		templates func(f *fixture) TemplateResolver
+	}{
+		{"both empty", func(*fixture) Authorizer { return &authorizer{} }, func(f *fixture) TemplateResolver { return rawResolver(f.tmpl) }},
+		{"template empty", func(f *fixture) Authorizer { return f.auth }, func(f *fixture) TemplateResolver { return rawResolver(f.tmpl) }},
+		{"decision empty", func(*fixture) Authorizer { return &authorizer{} }, func(f *fixture) TemplateResolver { return f.tmpl }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			ex := func() *Executor {
+				e := f.executor()
+				e.Authorizer, e.Templates = c.auth(f), c.templates(f)
+				return e
+			}
+			key := f.item("audit", spec())
+			f.due(ex)
+			f.wantOcc(key, day0, v1alpha1.OccurrenceParked, "template ops-audit: "+ReasonNoTemplateDigest)
+			if calls, _, _ := f.create.counts(); calls != 0 || len(f.sessionsOf()) != 0 {
+				t.Errorf("calls %d sessions %d", calls, len(f.sessionsOf()))
+			}
+		})
+	}
+}
