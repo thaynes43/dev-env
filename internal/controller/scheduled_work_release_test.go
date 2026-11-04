@@ -1184,13 +1184,15 @@ func TestScheduledWorkLaunchGate(t *testing.T) {
 		refused(t, f, "records another session object of this name")
 	})
 	t.Run("ending without it", func(t *testing.T) {
-		f := gateFixture(t, v1alpha1.OccurrenceClaimed, "", func(o *v1alpha1.ScheduledWorkOccurrence) { o.Ending = true })
+		f := gateFixture(t, v1alpha1.OccurrenceClaimed, "", func(o *v1alpha1.ScheduledWorkOccurrence) { o.Ending, o.Reason = true, "notAfter passed" })
 		// The releaser may record its end before the first look, and the
 		// refusal's reason then reads "already failed before its first pod".
 		s := refused(t, f, "cannot start")
 		// The releaser records the refused session's end into the open
-		// occurrence, which then names it; the refusal still stands.
-		if o := f.waitOccurrence(t, v1alpha1.OccurrenceFailed); o.Session != s.Name {
+		// occurrence, which then names it: the session never launched, so the
+		// record is the mark's (Skipped, its reason), not Failed. The refusal
+		// still stands.
+		if o := f.waitOccurrence(t, v1alpha1.OccurrenceSkipped); o.Session != s.Name || o.Reason != "notAfter passed" {
 			t.Fatalf("occurrence %+v", o)
 		}
 		poke(t, s.Name)
