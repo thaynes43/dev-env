@@ -34,13 +34,13 @@ that matches it, not to a block it happens to sit in.
 | 9 | `builtin_terminal_currency_unqualified` | currency symbols (Sc) |
 | 10 | `builtin_terminal_checkmark_unqualified` | the remaining check and cross marks: U+2714 to U+2718, U+2705, U+274C, U+274E (U+2713 is accepted earlier and is never refused) |
 | 11 | `builtin_terminal_star_unqualified` | stars, asterisks and flower dingbats: U+2605, U+2606, U+2721 to U+274B (spinner-style asterisks included) |
-| 12 | `builtin_terminal_miscwin1_unqualified` ... `builtin_terminal_miscwin8_unqualified` | what is left of the Miscellaneous Symbols block (U+2600 to U+26FF) in eight aligned windows of 32 code points, after rows 2, 8 and 9 and the star and check rows: win1 U+2600 to U+261F, win2 U+2620 to U+263F, win3 U+2640 to U+265F, win4 U+2660 to U+267F, win5 U+2680 to U+269F, win6 U+26A0 to U+26BF, win7 U+26C0 to U+26DF, win8 U+26E0 to U+26FF |
+| 12 | `builtin_terminal_miscwin1_unqualified` ... `builtin_terminal_miscwin8_unqualified` | what is left of the Miscellaneous Symbols block (U+2600 to U+26FF) in eight aligned windows of 32 code points, after rows 2, 8 and 9 and the star and check rows: win1 U+2600 to U+261F, win2 U+2620 to U+263F, win3 U+2640 to U+265F, win4 U+2660 to U+267F, win5 U+2680 to U+269F, win6 U+26A0 to U+26BF (since Round 4 in four parts of 8: `miscwin6a` U+26A0 to U+26A7, `miscwin6b` U+26A8 to U+26AF, `miscwin6c` U+26B0 to U+26B7, `miscwin6d` U+26B8 to U+26BF; plain `miscwin6` is no longer emitted but still decodes), win7 U+26C0 to U+26DF, win8 U+26E0 to U+26FF |
 | 13 | `builtin_terminal_dingbat_unqualified` | what is left of the Dingbats block, U+2700 to U+27BF (ornaments, crosses, dingbat arrows) |
 | 14 | `builtin_terminal_pictograph_unqualified` | the remaining symbols from U+1F000 up (emoji and other pictographs; the number and math code points in that range, such as U+1F100 and U+1F8D0, are taken by rows 2 and 8) |
 | 15 | `builtin_terminal_symbol_unqualified` | every remaining symbol (including braille patterns outside the dot set) |
 | 16 | `builtin_terminal_rune_unqualified` | private-use, unassigned and noncharacter code points only
 
-Class sizes are not uniform. The checkmark class is the smallest and most guessable (8 code points: U+2705, U+2714 to U+2718, U+274C, U+274E), then quote (about 22), dash (about 26) and star (about 45). The eight Miscellaneous Symbols windows hold 30 to 32 characters each (window 1 loses the two stars, window 4 loses U+266F); the remaining classes are larger. A label still names a class of at least that many characters, never one character. This round makes the split below the earlier dash and quote classes deliberately, because the refusal sits in a family where no coarser label can find the glyph; a finer split than the checkmark class is not made.
+Class sizes are not uniform. The checkmark class is the smallest and most guessable (8 code points: U+2705, U+2714 to U+2718, U+274C, U+274E), then quote (about 22), dash (about 26) and star (about 45). The eight Miscellaneous Symbols windows hold 30 to 32 characters each (window 6 is now four parts of 8, the same size as the checkmark class) (window 1 loses the two stars, window 4 loses U+266F); the remaining classes are larger. A label still names a class of at least that many characters, never one character. This round makes the split below the earlier dash and quote classes deliberately, because the refusal sits in a family where no coarser label can find the glyph; a finer split than the checkmark class is not made.
 
 The existing precedence is unchanged: encoding, combining, spacing, format and
 the fixed dot set come first. Every label covers at least several characters (the checkmark class, 8, is the smallest), so it cannot
@@ -94,3 +94,14 @@ widened: an unqualified character still refuses before it is rendered, and the a
 unchanged. A glyph, once localized, is qualified only by a separate reviewed change with its own evidence.
 Cycle 70 stopped earlier, at `identity_before` with reason `deadline`, which is a different stage and
 looks transient; it is not addressed here.
+
+## Round 4 (2026-11-04, after cycle 87)
+
+Cycle 87 refused Cursor at `builtin_terminal_miscwin6_unqualified`, the window U+26A0 to U+26BF. Window 6 is
+split into four aligned parts of 8 code points: `miscwin6a` U+26A0 to U+26A7, `miscwin6b` U+26A8 to
+U+26AF, `miscwin6c` U+26B0 to U+26B7, `miscwin6d` U+26B8 to U+26BF. Eight code points is the smallest label,
+so the privacy floor set above (the checkmark class) is kept; no finer split is made. Plain `miscwin6` is no
+longer emitted and stays valid only to decode older diagnostics. Nothing is qualified: an unqualified
+character still refuses before it is rendered, and the glyph is qualified only by a separate reviewed
+change with its own evidence. Cycle 162 reported Cursor as "source not configured", a collector
+configuration blocker that is separate and not addressed here.

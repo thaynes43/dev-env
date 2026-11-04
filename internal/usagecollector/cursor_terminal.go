@@ -259,12 +259,13 @@ func cursorRuneClassReason(r rune) string {
 	case unicode.IsSymbol(r) && r >= 0x2600 && r <= 0x26ff:
 		// Miscellaneous Symbols, in eight aligned windows of 32 code points. A label names
 		// the window, never the character; the table in the verification note maps them.
-		if w := (r - 0x2600) >> 5; w == 5 {
-			// Window 6 was observed live (cycle 87); name its eight 4-code-point quarters
-			// so the next read narrows the character class. Naming is not qualifying.
-			return cursorMiscWin6Parts[(r&0x1f)>>2]
+		w := (r - 0x2600) >> 5
+		if w == 5 {
+			// Window 6 was observed live (cycle 87); name its four 8-code-point parts, the
+			// smallest label the privacy floor allows. Naming is not qualifying.
+			return cursorMiscWin6Parts[(r&0x1f)>>3]
 		}
-		return cursorMiscWindows[(r-0x2600)>>5]
+		return cursorMiscWindows[w]
 	case unicode.IsSymbol(r) && r >= 0x2700 && r <= 0x27bf:
 		return "builtin_terminal_dingbat_unqualified"
 	case unicode.IsSymbol(r) && r >= 0x1f000:
@@ -283,10 +284,8 @@ var cursorMiscWindows = [8]string{
 	"builtin_terminal_miscwin7_unqualified", "builtin_terminal_miscwin8_unqualified",
 }
 
-// cursorMiscWin6Parts labels U+26A0 to U+26BF in eight parts of four code points each.
-var cursorMiscWin6Parts = [8]string{
+// cursorMiscWin6Parts labels U+26A0 to U+26BF in four parts of eight code points each.
+var cursorMiscWin6Parts = [4]string{
 	"builtin_terminal_miscwin6a_unqualified", "builtin_terminal_miscwin6b_unqualified",
 	"builtin_terminal_miscwin6c_unqualified", "builtin_terminal_miscwin6d_unqualified",
-	"builtin_terminal_miscwin6e_unqualified", "builtin_terminal_miscwin6f_unqualified",
-	"builtin_terminal_miscwin6g_unqualified", "builtin_terminal_miscwin6h_unqualified",
 }
