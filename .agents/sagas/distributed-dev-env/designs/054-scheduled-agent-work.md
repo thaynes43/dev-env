@@ -92,7 +92,7 @@ status:
   counts: {succeeded: 0, failed: 0, parked: 0, skipped: 0}
   occurrences:                               # newest 50 kept; counts are lifetime
   - at: "2026-12-03T14:00:00Z"
-    state: Pending|Claimed|Dispatched|Running|Succeeded|Failed|Parked|Skipped|Ambiguous|Expired|Cancelled
+    state: Pending|Claimed|Dispatched|Delivered|Opened|Running|Succeeded|Failed|Ended|Parked|Skipped|Ambiguous|Cancelled
     reason: "..."
     claimedAt: ...
     session: sw-1a2b3c4d-202612031400
@@ -110,8 +110,7 @@ ServiceAccount only. The keeper and every other identity get no write.
 `dev-env-system/dev-env-scheduled-work`, not in `dev-env-templates`. Putting them
 there would change the templates revision and drain every idle session, and an
 older operator would refuse the whole document. Each template fixes the agent,
-model id, effort, size, profile, allowed repos, maximum duration (headless) or join
-window (interactive), and the owner classes it admits (`human`, `session`). The
+model id, effort, size, profile, allowed repos, maximum duration (headless), and the owner classes it admits (`human`, `session`). The
 request names a template; it cannot raise any of these. With no ConfigMap, the
 executor dispatches nothing. A template for "dev-env-ops style" interactive work
 uses the existing `ops` profile. The operator image that reads the ConfigMap ships
@@ -147,9 +146,12 @@ stateDiagram-v2
   Claimed --> Ambiguous: no session and the retry window passed
   Dispatched --> Running: session Running
   Dispatched --> Failed: session Failed or reaped before Running
-  Running --> Succeeded: agent ended, outcome read
+  Running --> Succeeded: headless agent ended, outcome read
   Running --> Failed: agent failed or maxDuration
-  Running --> Expired: interactive, Tom did not join in the window
+  Dispatched --> Delivered: interactive, work order accepted
+  Delivered --> Opened: Remote Control registered, link paged
+  Opened --> Ended: session no longer unfinished
+  Dispatched --> Ambiguous: interactive delivery exec error
   Parked --> Claimed: human approves or retries
 ```
 
@@ -163,11 +165,34 @@ stateDiagram-v2
   `dev-env.haynesops.com/scheduled-work=<uid>`. This needs a creation entry point
   that takes a fixed name; `CreateStandby` generates names and ignores idempotency
   keys, so S3 adds a sibling.
-- **Claimed without a session** (a crash between claim and create). Any leader
-  retries the create within a retry window (10 minutes after `claimedAt`); a
-  derived name makes the retry safe. After the window the occurrence is
-  `Ambiguous`, never re-run without a person. That covers a session created and
-  already reaped and deleted, which the name can no longer prove.
+- **A created session cannot vanish unrecorded.** The session is created with the
+  finalizer `dev-env.haynesops.com/scheduled-work-retained` in the same atomic
+  Create, as `ProjectCanaryFinalizer` does (`apiserver/project_canaries.go`). Only
+  the executor removes it, and only after it has written that occurrence's terminal
+  state and result to the ScheduledWork status with a compare-and-set. So whenever a
+  session with the derived name has ever existed, either it still exists or its
+  occurrence already carries a recorded outcome. A reaped session's rescue and
+  archive run first and are unchanged; the finalizer only holds the object until the
+  record is written.
+- **Claimed without a session** (a crash between claim and create, or a lost create
+  response). The claimer reads with the uncached API reader, never a listing cache.
+  If the derived name is absent **and** the occurrence still has no recorded
+  outcome, then by the rule above no session was ever created, and the create is
+  retried. The retry is bounded to 10 minutes after `claimedAt`, because the
+  revalidation at claim time goes stale. After that the occurrence is `Ambiguous`
+  and needs a person. A recorded outcome is never followed by a new create, and an
+  ended session is never recreated or resumed.
+- **Finalizer removed by hand.** No operator path strips the finalizer. If a person
+  strips it, and the session is then deleted within the 10-minute window, the
+  executor cannot tell that from a create that never happened. This is the one stated
+  limit. A haynes-ops admission rule (S6) admits removal of this finalizer from the
+  operator's ServiceAccount only, so a person must first override that rule.
+- **Acceptance tests (S3).** Envtest cases for: a lost create response
+  (`AlreadyExists` → adopt); a session completed and reaped inside the retry window
+  (outcome recorded first, no second create); session idempotence only while
+  unfinished (no reliance on it); a stale cached listing (the uncached read is used);
+  two leaders overlapping (one create wins, the other adopts); and an executor
+  restart at every state.
 - **Missed occurrences.** An occurrence found more than a grace period late (default
   15 minutes for headless, 2 hours for interactive) is `Skipped` with a reason, and
   is not run late without a person. This deliberately differs from DESIGN-032,
@@ -210,10 +235,22 @@ A parked occurrence pages Tom with the reason and waits for a human retry or can
 | | Headless | Interactive |
 |---|---|---|
 | Session | `task` mode, prompt = work order, `maxDuration` from the template | `remote` mode (Remote Control); the schema allows no prompt |
-| Work order | the prompt | delivered after the pod is Ready through the existing message route. A 409 while it boots is retried until the join window ends. An exec error makes the delivery `Ambiguous` and it is not re-sent; the page says so |
-| Tom | not needed | paged: title, session name and how to open it. The work order says the session waits for Tom before it acts |
-| Ends | agent exits; outcome file read from Session status | Tom ends it. If Tom has not joined within the join window (default 2 hours), the executor suspends the session through the normal suspend path and the occurrence is `Expired` |
-| Result | `summary`, `prURLs`, `headSHAs` copied to the occurrence; paged per `notify` | `Succeeded` when the session ends with Tom having joined; the session's own handoff is the result, with no outcome capture (task mode only) |
+| Work order | the prompt | delivered after the pod is Ready through the existing message route. A 409 while it boots is retried for up to the grace period, then the occurrence is `Failed`. An exec error makes the delivery `Ambiguous` and it is not re-sent; the page says so |
+| Tom | not needed | paged: title, session name and the session's claude.ai link once `status.remoteControl.url` is set. The work order says the session waits for Tom before it acts |
+| Ends | agent exits; outcome file read from Session status | the session leaves `unfinished()` by any normal path: Tom ends or suspends it, or the normal idle suspend |
+| Result | `summary`, `prURLs`, `headSHAs` copied to the occurrence; paged per `notify` | `Ended`, with the result `participation not observed`. The session's own handoff is the work's result. There is no outcome capture (task mode only) |
+
+**What the executor can observe about interactive work.** The platform has no
+signal that Tom joined. `status.remoteControl.state` is Remote Control
+*registration*, not a person in the session. `status.agent.attached` counts tmux
+clients, not phone participants. So the executor claims only what it observes:
+`Dispatched` (session created), `Delivered` (work order accepted by the message
+route), `Opened` (registered, link paged), `Ended` (session no longer
+unfinished). It never records that Tom joined or that the work succeeded, and it
+does not read the session's conversation to find out. The interactive cap counts an
+occurrence until `Ended`. The executor does not suspend a session Tom has not
+joined, because it cannot tell. A real participation signal would be a separate
+item, and none is assumed here.
 
 **Receiver.** The result goes to the owner. A human owner is paged. A session owner
 reads it with `agent-run schedule show`; and when the child was created as its
@@ -241,14 +278,18 @@ receiver session would route agent-written text into sessions the owner does not
   work. The keeper has no Google egress. The real adapter needs the identity, the
   calendar ID, the ExternalSecret and the egress listed in DESIGN-032, each approved
   by Tom. Until then calendar targets are `skipped`, reason `calendar: unconfigured`.
-- **Ruling, 2026-11-04 (Tom, phone prompt from `dev-env-1104-010332`):** the
-  identity is a **DWD service account**, limited to the `calendar.events` scope and
+- **Ruling, 2026-11-04 (Tom's answer to the phone prompt from
+  `dev-env-1104-010332`; canonical record OpenProject #206 comment 5604):** the
+  method is a **DWD service account**, limited to the `calendar.events` scope and
   impersonating admin@haynesnetwork.com. Tom creates it in the haynesnetwork.com
   Workspace admin console and stores the key in 1Password. The agent then wires the
   ExternalSecret `dev-env-keeper-calendar` and the keeper's egress to
   `oauth2.googleapis.com` and `www.googleapis.com` through a reviewed haynes-ops
   PR. There is no refresh token, so no single-owner rotation risk. This chooses the
-  method only. Creating the account and its first live write are still Tom's steps.
+  method only. It is not access and not a credential: no such account exists yet,
+  and live access is Unknown until it is created and one read is tested. Creating
+  the account, the ExternalSecret and egress PR, and the first live calendar write
+  each still need Tom's action-specific approval.
 - **DWD reach, recorded risk.** Domain-wide delegation authorises the client for
   the scope across the whole domain. Impersonating admin@ is the caller's choice,
   not a limit Google enforces, so the key could reach any haynesnetwork.com user's
@@ -270,9 +311,9 @@ library only.
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
 | S3 | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, retry window, park per authority basis, skip, caps) | PR, CI, native review |
-| S4 | outcome collection; pages through keyed Reminders; interactive work-order delivery and join window | PR, CI |
+| S4 | outcome collection; pages through keyed Reminders; interactive work-order delivery and the observable states | PR, CI |
 | S5 | API and CLI, including human approve with specHash | PR, CI |
-| S6 | haynes-ops: CRD copy, Roles, the admission policy, the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
+| S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
 | S7 | live: one headless and one interactive test occurrence | Tom approves the first real run |
 | C1 | real calendar adapter | Tom provisions the DWD identity (OP206) |
 
