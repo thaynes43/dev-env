@@ -11,8 +11,9 @@
 //     record. It is best effort: it never returns an error, and an unserved
 //     Reminder kind, a refused create or a missing notify target is a
 //     skipped page. After AlreadyExists, or a create error that may have
-//     come after the Reminder was stored, one read decides: only this page's
-//     own Reminder is recorded. It never updates or deletes a Reminder.
+//     come after the Reminder was stored, one read under its own
+//     VerifyTimeout decides: only this page's own Reminder is recorded. It
+//     never updates or deletes a Reminder.
 //
 // The package has no caller yet. The executor and the releaser (S4b) call
 // Pager.EnsureInto when an occurrence reaches a page event, and Pager.Refresh
@@ -64,6 +65,11 @@ const (
 	TimeZone = "UTC"
 
 	dueLayout = "2006-01-02T15:04"
+
+	// VerifyTimeout bounds the one verifying read after AlreadyExists or an
+	// ambiguous create error. The read runs on a fresh deadline, not the
+	// caller's: the caller's deadline may be what ended the create.
+	VerifyTimeout = 3 * time.Second
 )
 
 // ErrNoNotify is Build's error for an item with no usable notify target.
@@ -274,10 +280,13 @@ func refused(err error) bool {
 // stored reads the Reminder of want's name once and returns its page entry,
 // with its state so far, when it is want's page: the same Owner and the same
 // item UID, occurrence, event and attempt labels. A failed read, an absent
-// Reminder and anyone else's Reminder are not.
+// Reminder and anyone else's Reminder are not. The read keeps ctx's values
+// but not its cancellation, under its own VerifyTimeout.
 func (p *Pager) stored(ctx context.Context, want *v1alpha1.Reminder) (v1alpha1.ScheduledWorkPage, bool) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), VerifyTimeout)
+	defer cancel()
 	var got v1alpha1.Reminder
-	if err := p.Client.Get(ctx, client.ObjectKeyFromObject(want), &got); err != nil {
+	if err := p.Client.Get(rctx, client.ObjectKeyFromObject(want), &got); err != nil {
 		return v1alpha1.ScheduledWorkPage{}, false
 	}
 	if got.Spec.Owner != want.Spec.Owner {
