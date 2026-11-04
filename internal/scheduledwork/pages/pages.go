@@ -305,8 +305,14 @@ func (p *Pager) stored(ctx context.Context, want *v1alpha1.Reminder) (v1alpha1.S
 }
 
 // EnsureInto is Ensure, recorded in pages with v1alpha1.AppendPage. It returns
-// the new list and leaves pages unchanged.
+// the new list and leaves pages unchanged. An unknown event or an attempt
+// outside 0..ScheduledWorkMaxAttempt records nothing and returns pages as
+// they are: Ensure's held, skipped entry for it would replace a real page of
+// the same event and attempt, and drop that page's Reminder name.
 func (p *Pager) EnsureInto(ctx context.Context, pages []v1alpha1.ScheduledWorkPage, work *v1alpha1.ScheduledWork, at time.Time, event string, attempt int32, title, body string, now time.Time) []v1alpha1.ScheduledWorkPage {
+	if !slices.Contains(events, event) || attempt < 0 || attempt > v1alpha1.ScheduledWorkMaxAttempt {
+		return pages
+	}
 	return v1alpha1.AppendPage(pages, p.Ensure(ctx, work, at, event, attempt, title, body, now))
 }
 
