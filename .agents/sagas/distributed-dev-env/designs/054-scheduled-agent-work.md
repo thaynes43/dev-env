@@ -103,13 +103,13 @@ status:
     reason: "..."
     claimedAt: ...
     retriedAt: ...                           # set by a human approve or retry of a Parked occurrence
-    attempt: 0                               # 0, then +1 on each approve or retry
+    attempt: 0                               # 0, then +1 on each approve or retry; at most 3 (a fourth retry is refused)
     missed: 1                                # how many due times one Skipped record stands for (outage collapse)
     session: sw-1a2b3c4d5e6f-202612031400
     specHash: <sha256>                       # the authority-carrying spec fields at claim (as approval.specHash)
     execution: {state, reason}               # headless: copied from Session status.taskResult (Succeeded|Failed|TimedOut|Unknown)
     reported: {summary, prURLs, headSHAs}    # headless: the agent's own retained outcome; a claim, not validated
-    pages:                                   # at most 8, keyed by (event, attempt)
+    pages:                                   # at most 8, keyed by (event, attempt); when full, the oldest attempt's entries are dropped (their Reminders remain)
     - {event: due|link|parked|failed|result|skipped, attempt: 0, reminder: <name>, state: sent|failed|ambiguous|skipped}
 ```
 
@@ -364,9 +364,12 @@ stateDiagram-v2
 
 ## Due-time revalidation (R7)
 
-Before dispatch, the claimer checks, in order, and parks on the first failure:
+Before dispatch, the claimer checks, in order. The first check ends the occurrence;
+every later failure parks it:
 
-1. The item is not cancelled and `notAfter` has not passed.
+1. The item is not cancelled and `notAfter` has not passed. A cancelled item makes
+   the occurrence `Cancelled`, and a passed `notAfter` makes it `Skipped`. Approval
+   cannot change either, so neither parks.
 2. The authority basis above, checked again after the claim (the live-owner basis is also a pre-claim condition).
 3. The template still exists. Its repo, model id and profile are still in it, and
    in `dev-env-templates` now, not at creation.
