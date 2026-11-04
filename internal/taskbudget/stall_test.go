@@ -373,7 +373,8 @@ func TestStallSurvivesRestartAndCustodyStaysFenced(t *testing.T) {
 }
 
 // 5, upgrade: a Stalled latch an older operator wrote stays a stop. Nothing is
-// unlatched automatically; the old executor was already stopped by it.
+// unlatched automatically, and even after the original guard's proven stop
+// the one continuation refuses it: only NativeRootStopped is continuable.
 func TestLegacyStalledLatchStaysStopped(t *testing.T) {
 	ctx := context.Background()
 	s, m, now, b, _ := defaultStalledCampaign(t)
@@ -387,8 +388,17 @@ func TestLegacyStalledLatchStaysStopped(t *testing.T) {
 	if !errors.Is(err, ErrDenied) || !got.Latched || got.Reason != "Stalled" || got.Escalation == nil {
 		t.Fatal("legacy stall latch released", err)
 	}
+	// The guard's proven stop first, so only the latch reason can refuse.
+	stopped, err := s.Record(ctx, ownedStop(b))
+	if err != nil || !stopped.Status().StopConfirmed || stopped.Reason != "Stalled" {
+		t.Fatalf("proven stop on a legacy latch: confirmed=%t reason=%q %v", stopped.Status().StopConfirmed, stopped.Reason, err)
+	}
 	if _, err = s.Continue(ctx, apiv1.ContinueTaskBudgetRequest{Binding: b, DecisionID: "legacy"}, "owner"); !errors.Is(err, ErrDenied) {
-		t.Fatal("legacy stall latch continued", err)
+		t.Fatal("legacy stall latch continued after a proven stop", err)
+	}
+	stored, _, _ := m.Read(ctx, b.TaskUID)
+	if stored.Binding != b || !stored.Latched || stored.Reason != "Stalled" || len(stored.Continuations) != 0 {
+		t.Fatalf("legacy latch changed: %+v", stored.Status())
 	}
 }
 
@@ -428,6 +438,12 @@ func TestStalledContinuationNeverDuplicatesExecutorOrDispatch(t *testing.T) {
 	second.AttemptID = "server-attempt-b"
 	if _, err := s.Record(ctx, second); !errors.Is(err, ErrConflict) {
 		t.Fatal("second attempt shared one reservation", err)
+	}
+	// A fresh event ID cannot start a second worker under an existing worker ID.
+	reuse := start
+	reuse.ID = "dispatch:other"
+	if l, err := s.Record(ctx, reuse); !errors.Is(err, ErrDenied) || len(l.Workers) != 2 {
+		t.Fatal("stalled campaign started a duplicate worker ID", err)
 	}
 	s.ManagedInspector = fixtureManagedAdmission{}
 	if _, err := s.BindManagedWorker(ctx, b, "child:stable", ManagedWorkerRef{Namespace: "ns", Name: "child", SessionUID: "session-a"}); err != nil {
