@@ -614,6 +614,20 @@ reconciler or kubelet):
 Not proved there: a real operator restart, the real reconciler's reap and
 release, a real pod's agentd, the timing of any of them, or any served model.
 
+Already covered elsewhere, and not repeated: the fake-client unit tests in
+`internal/apiserver/task_outcome_test.go` (a controller-runtime fake client,
+`internal/apiserver/fake_test.go:113-118`, not a real API server) cover the
+first write and its replay, second, omitted and wrong-pod heartbeats, and a
+Suspended read (`TestTaskOutcomeHeartbeat`); thirteen refusals
+(`TestTaskOutcomeHeartbeatRefusals`); a concurrent first write
+(`TestTaskOutcomeConcurrentFirstWrite`); the opt-in read
+(`TestTaskOutcomeNegotiatedRead`); and a schema refusal as no record
+(`TestTaskOutcomeSchemaRefusalKeepsHeartbeatAndChildUsage`). The CRD's change
+and erasure rules are proved on a real API server by `TestTaskOutcomeSchema`
+(`api/v1alpha1/task_outcome_validation_test.go`). The new envtest adds the
+real store, a second server, the real agent-run client, pod deletion, the
+Archived phase, a reap and the release.
+
 **After a reap, the outcome can be gone.** The Session object is its only
 durable copy. When a reaped Session has no pod and no volume left, the
 controller lifts its finalizer (`internal/controller/reconciler.go:1150-1197`)
