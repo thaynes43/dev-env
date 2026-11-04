@@ -283,15 +283,23 @@ stateDiagram-v2
   unfinished (no reliance on it); a stale cached listing (the uncached read is used);
   two leaders overlapping (one create wins, the other adopts); and an executor
   restart at every state.
-- **Start deadline.** If the session is not Running (headless), or its pod is not
-  Ready (interactive), by the due time plus grace, the occurrence is `Failed`
-  ("not started before grace ended"), and Tom is paged. An unschedulable pod or a
-  stuck image pull can cause this, since session pods never preempt. The executor
-  then suspends that session through the normal suspend path (rescue first). This is
-  its one session write besides create: only on a session that carries its label
-  and finalizer, only before that session has started, and never a delete. The
-  releaser then ends the occurrence as usual. So "no work starts later than due plus
-  grace" holds, and the occurrence frees its item and the global slot.
+- **Start deadline, enforced in the pod.** The executor creates each scheduled
+  session with a start deadline, the due time plus grace, as a session annotation.
+  The controller passes it into the pod as it passes the task-budget deadline
+  (`controller/pod.go`). agentd checks it **before any boot side effect**, as
+  `armTaskBudgetDeadline` does (`agentd/task_budget.go`). If the deadline has
+  passed, agentd never launches the agent, does not exit (so the pod does not
+  crash-loop), and reports the agent ended with reason `start deadline passed`. The
+  guarantee therefore holds without a running executor: flag off, operator down or
+  rolled back. A pod that was unschedulable or stuck pulling its image until after
+  the deadline starts no work. The session-end rule sees an ended agent, and the
+  releaser records `Failed` ("not started before grace ended") and pages through
+  the occurrence's page Reminder. The executor, when it is running, does the same
+  earlier: at the deadline it first suspends the unstarted session through the
+  normal suspend path (rescue first), then records `Failed`. If it dies between the
+  two writes, agentd's check still stops the late start. Suspending is its one
+  session write besides create. It applies only to a session with its label and
+  finalizer, only before that session has started, and is never a delete.
 - **Missed occurrences.** An occurrence found more than a grace period late (default
   15 minutes for headless, 2 hours for interactive) is `Skipped` with a reason, and
   is not run late without a person. This deliberately differs from DESIGN-032,
@@ -432,7 +440,7 @@ library only.
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
 | S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release, a transient discovery error (finalizer kept), and the kind unserved before and after due plus grace. Shipped in a release before S3b | PR, CI, native review, release |
-| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, the start deadline suspending an unstarted session) | PR, CI, native review |
+| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim, the start deadline: suspend before the Failed record; agentd refusing a late start with no executor running) | PR, CI, native review |
 | S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
 | S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
 | S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
