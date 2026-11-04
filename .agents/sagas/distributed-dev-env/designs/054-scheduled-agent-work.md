@@ -94,6 +94,7 @@ status:
     by: human/...
     at: ...
     specHash: <sha256 of every spec field except editor and cancelled>
+    templateDigest: <sha256 of the dispatch template it was approved under>  # S5; void when absent or when the template's digest differs
   nextDue: ...                               # as DESIGN-032
   planHash: ...                              # as DESIGN-032; an edit re-plans from now
   counts: {succeeded, failed, parked, skipped, ended, ambiguous, cancelled}  # lifetime; skipped adds `missed`
@@ -150,6 +151,43 @@ executor dispatches nothing. A template for "dev-env-ops style" interactive work
 uses the existing `ops` profile. The operator image that reads the ConfigMap ships
 before the data (S6).
 
+**The templates document (S3b2).** The ConfigMap's one data key is `templates.yaml`,
+YAML or JSON, decoded strictly: an unknown, repeated or case-variant field is an
+error. It holds `version: 1` and a `templates` map keyed by DNS-label names. Each
+template sets:
+
+- `agent`: `claude` only. A Codex remote session keeps no first launch record for
+  the start deadline, and a Codex task needs a project snapshot that a scheduled
+  session never carries.
+- `model`: a full model id, never an alias.
+- `effort`: one the model takes; empty only for a model with no effort control.
+- `size` and `profile`.
+- `repos`: 1 to 32 repository names.
+- `modes`: `headless`, `interactive` or both. The template decides which work it
+  serves, so a template for a bounded headless audit cannot open an interactive
+  session.
+- `maxDuration`: required exactly when `modes` has `headless`; at most 24h.
+- `idleSuspendAfter`: optional, interactive only; at most 72h.
+- `admits`: a subset of `human`, `session` and `approved`.
+
+One invalid template refuses the whole document, so nothing dispatches until it is
+fixed. An absent ConfigMap is no templates. `internal/scheduledwork/authority`
+parses it.
+
+**An approval binds the template as well as the spec.** A template edit can change
+what an approved spec runs with, such as another model, a longer maximum duration
+or another profile, and the spec hash does not see it. So S5's approve route
+records `status.approval.templateDigest`: the `TemplateDigest` (SHA-256 of every
+template field, with repos, modes and admits sorted) of the template the spec
+names, as the human approved it. At the due time the executor treats an approval
+whose digest differs from the current template's as void, like a stale
+`specHash`: the occurrence parks and Tom approves again. An approval with no
+recorded digest is void too, so neither S5 nor the wiring can skip the check by
+leaving the field out. The check is part of the approval rule itself:
+`authority.Decide` takes the current and recorded digests (`TemplateBinding`), and
+until S5 adds the status field the caller passes the recorded one. S5 records the
+digest and the wiring reads both.
+
 ## Authority (R7, R9)
 
 An occurrence dispatches on exactly one of these, checked at the due time:
@@ -166,6 +204,37 @@ coordinator's authority does not outlive it. Client and coordinator owners (the 
 pod's agents are clients) have no basis of their own and always need approval. The
 client identity is never a way around a session's limits, because a session owner
 without approval dispatches as its own child.
+
+**Proven live, exactly (S3b2).** The owner's agent status is `busy`, `idle` or
+`waiting`, the statuses the rescue notification's owner check accepts. Each of these
+is unproven, not live:
+
+- `pending`, `login-required`, no status or an unknown one;
+- an end status the session-end rule has not proven;
+- a boot that is not `ready`;
+- no pod;
+- a heartbeat that is missing or older than the pod (a report of the previous pod).
+
+A failed boot ends a task or local owner, but only when the current pod reported it:
+a pod exists and the heartbeat is not older than it. The previous pod's failed
+boot is only unproven, because the owner may have moved to a new pod. A remote
+owner's failed boot is only unproven too: agentd may start a remote agent again
+after a failed boot, for a held launch only, once a login window ends in the same
+pod. An unproven owner keeps the occurrence `Pending` within its grace.
+
+**Suspend and resume.** A suspended owner session has no basis while it is
+suspended. Suspending revokes nothing: once it is resumed with the same UID and
+proven live, it has its basis again. A session with another UID is another owner.
+The resume window between the two (operating mode Running again, phase still
+Suspended) is not an end: the owner is unproven, and the occurrence waits within
+its grace. A reclaimed task still ends there through the session-end rule's task
+verdict.
+
+**When both hold.** When the owner's standing basis and a human approval both hold,
+the occurrence dispatches on the standing basis if the template admits it, because
+it is the narrower one: a session owner's child stays within the owner's own limits.
+Otherwise it dispatches on the approval if the template admits `approved`.
+`authority.Choose` makes this choice against the template's `admits`.
 
 ## Occurrence lifecycle
 
