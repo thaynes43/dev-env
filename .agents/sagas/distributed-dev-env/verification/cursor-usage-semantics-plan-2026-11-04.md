@@ -50,7 +50,8 @@ A narrow implementation has no defensible input today:
 Cursor pool: route `xai_direct` with `CursorDisplayXAICapability` (line 23), the `finishXAI` rules
 (lines 565 to 576: product `grok`, availability `unsupported`, no plan, account, window, used, reset
 or spend), and the registry extension that must be caller-trusted before such measures validate
-(line 72). So a Sand reading is not a new measure in the plan capture; it would be its own item.
+(line 72). So a Sand reading is not a new measure in the plan capture; it would be its own item, and since
+`xai_direct` carries no value, a value needs a new route (step 2).
 
 Account binding, reconciled: the plan capture binds by hashed email (`accountRef`), while `xai_direct`
 requires binding `Unknown` and no `accountRef` (`finishXAI`). A Sand item therefore cannot claim the
@@ -62,7 +63,9 @@ the pool relationship stays Unknown until E2 or E3 provide evidence. Nothing her
 1. Qualification harness: a table test that, given the part label from E1, asserts the exact glyph
    is accepted only in the exact context where the display places it, refuses every other member
    of the part, and keeps all other classes unchanged. Written after E1, never from a guess.
-2. Gated on E2. Sand as a separate `xai_direct` item, never folded into the plan percent; `Unknown`
+2. Gated on E2. Sand as its own item on a NEW route modelled on `xai_direct` (the existing route
+   carries no value: `finishXAI` refuses used, plan, account, window, reset and spend, and emits no
+   measures), never folded into the plan percent; `Unknown`
    for absent, pooled-enterprise and zero-limit states; a displayed 0% is display evidence but not a
    known quota observation, the same rule as `cursor_cli_capture.go:59-65`; the trial expiry is not a
    recurring reset; no per-model Grok semantics are assumed.

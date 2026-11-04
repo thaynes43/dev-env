@@ -332,7 +332,7 @@ func TestCursorDashboardFooterDoesNotHideQuestionsOrAuthorizeInput(t *testing.T)
 // behaviour so a later capture with an extra row (for example a Sand line) can
 // be read against it. It qualifies no such row.
 func TestCursorProtocolIgnoresRowsOtherThanIncludedAutoAndAPI(t *testing.T) {
-	for _, extra := range []string{"Grok Bot 12% used\r\n", "Sand 12% used\r\n", "On-demand $0.00 used\r\n"} {
+	for _, extra := range []string{"Grok Bot 12% used\r\n", "Sand 12% used\r\n", "On-demand $0.00 used\r\n", "Autopilot 9% used\r\n"} {
 		p := cursorProtocol{state: 3}
 		body := strings.Replace(cursorScreen, "Esc to close", extra+"Esc to close", 1)
 		input, report, err := feedCursorFrame(&p, body)
