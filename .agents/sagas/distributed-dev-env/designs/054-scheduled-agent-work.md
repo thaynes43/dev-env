@@ -768,6 +768,7 @@ receiver session would route agent-written text into sessions the owner does not
     itself. This intentionally removes past runs from the calendar at the end of the item's
     window.
   - G1-R4: `spec.projection` (the boolean that marks a projection Reminder) cannot change after creation. The retention end is a separate field, `spec.projectionRetainUntil`; `projection` stays a boolean.
+
   Today a
   Reminder with no Pushover target finishes at its last occurrence, and a finished
   Reminder can be neither edited nor cancelled, nor does its calendar entry sync. So
