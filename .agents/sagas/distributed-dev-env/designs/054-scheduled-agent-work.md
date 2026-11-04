@@ -81,8 +81,9 @@ spec:
     repo: haynes-ops                         # must be allowed by the template
     prompt: "..."                            # <= 8 KiB, the work order
   notify: [pushover:default]                 # DESIGN-032 targets
-  calendar: calendar:haynesnetwork           # optional projection
+  calendar: calendar:haynesnetwork           # optional projection, through a companion Reminder
 status:
+  lastEditor: human/... | session/<name>/<uid> # written by the API on create and on every spec edit
   approval:                                  # written only by the API's human approve route
     by: human/...
     at: ...
@@ -90,19 +91,26 @@ status:
   nextDue: ...                               # as DESIGN-032
   planHash: ...                              # as DESIGN-032; an edit re-plans from now
   counts: {succeeded: 0, failed: 0, parked: 0, skipped: 0}
-  occurrences:                               # newest 50 kept; counts are lifetime
+  occurrences:                               # newest 50 terminal ones kept; non-terminal ones are never pruned
   - at: "2026-12-03T14:00:00Z"
     state: Pending|Claimed|Dispatched|Delivered|Opened|Running|Succeeded|Failed|Ended|Parked|Skipped|Ambiguous|Cancelled
+    delivery: accepted|refused|ambiguous     # interactive work-order delivery; a note, not a state
     reason: "..."
     claimedAt: ...
-    session: sw-1a2b3c4d-202612031400
+    session: sw-1a2b3c4d5e6f-202612031400
     result: {summary, prURLs, headSHAs}      # from the session's retained outcome (headless)
     page: {reminder: <name>, state: sent|failed|ambiguous|skipped}
 ```
 
 `approval` is in **status**, not spec. Only the operator's `POST .../approve`
 route, for a human caller, writes it. Any spec edit changes `specHash`, so the
-approval no longer matches and is void. A haynes-ops ValidatingAdmissionPolicy
+approval no longer matches and is void.
+
+**Who may edit.** Only the owner or a human may edit a spec. A coordinator may
+cancel, but not edit (unlike the reminder routes, where any coordinator may edit).
+The API records the editor in `status.lastEditor`. A standing basis (below) holds
+only while the last editor is that basis's own principal. So an edit by anyone but
+the owner turns the item into one that needs Tom's approval for that exact spec. A haynes-ops ValidatingAdmissionPolicy
 admits create, update and status writes on `scheduledworks` from the operator's
 ServiceAccount only. The keeper and every other identity get no write.
 
@@ -122,9 +130,9 @@ An occurrence dispatches on exactly one of these, checked at the due time:
 
 | Basis | Condition at due time | Session is created as |
 |---|---|---|
-| **Human owner** | the template admits `human` | the operator's client identity `client/dev-env-system/scheduled-work`, within the template's fixed bounds |
+| **Human owner** | `lastEditor` is the owner, and the template admits `human` | the operator's client identity `client/dev-env-system/scheduled-work`, within the template's fixed bounds |
 | **Human approval** | `status.approval.specHash` equals the current spec's hash, and the template admits the owner's class | the same client identity |
-| **Live session owner** | the owner session (by UID) is `unfinished()` exactly as `sessions.go` defines it (not reaped, suspended, archived or failed, and its agent not ended); the template admits `session` | **a child of the owner**, through the same validation as if the owner created it now: its profile, depth, per-parent child cap and mode rules all apply |
+| **Live session owner** | `lastEditor` is the owner; the owner session (by UID) exists, is not reaped, archived or failed, is not suspended by an operating-mode change, and its agent has not ended by `standby.AgentEnded`'s booting- and drain-safe rule (with the pod-age proof, `unprovenAgentEnd`), so a drain onto a new revision does not count as ended; the template admits `session` | **a child of the owner**, through the same validation as if the owner created it now: its profile, depth, per-parent child cap and mode rules all apply |
 
 Anything else parks with reason `no standing authority`, and Tom is paged. He can
 approve it, which binds his approval to the spec he saw. A suspended or ended
@@ -140,36 +148,47 @@ stateDiagram-v2
   [*] --> Pending
   Pending --> Claimed: due, CAS on resourceVersion
   Pending --> Cancelled: cancel before claim
-  Pending --> Skipped: missed beyond grace, notAfter passed, or previous still running
+  Pending --> Skipped: missed beyond grace, notAfter passed, previous still running, or at capacity until grace ends
   Claimed --> Parked: revalidation fails
   Claimed --> Dispatched: session created or adopted
-  Claimed --> Ambiguous: no session and the retry window passed
-  Dispatched --> Running: session Running
-  Dispatched --> Failed: session Failed or reaped before Running
+  Claimed --> Skipped: no session and grace ended before a create
+  Claimed --> Ambiguous: derived-name session lacks the matching UID label or occurrence annotation
+  Dispatched --> Running: headless session Running
   Running --> Succeeded: headless agent ended, outcome read
-  Running --> Failed: agent failed or maxDuration
-  Dispatched --> Delivered: interactive, work order accepted
-  Delivered --> Opened: Remote Control registered, link paged
-  Opened --> Ended: session no longer unfinished
-  Dispatched --> Ambiguous: interactive delivery exec error
+  Running --> Failed: agent failed, maxDuration, or session reaped
+  Dispatched --> Failed: session Failed or reaped before Running
+  Dispatched --> Delivered: interactive, delivery attempted (accepted or ambiguous)
+  Dispatched --> Failed: interactive delivery refused (409) for 10 minutes after Dispatched
+  Dispatched --> Ended: interactive session ended before delivery
+  Delivered --> Opened: Remote Control state registered, link paged
+  Delivered --> Failed: Remote Control state login-required
+  Delivered --> Ended: session ended (never registered)
+  Opened --> Ended: session ended
   Parked --> Claimed: human approves or retries
 ```
 
 - **Claim.** The leader changes `Pending` to `Claimed` with a compare-and-set on the
   object's resourceVersion, as DESIGN-032 claims a reminder occurrence.
 - **Exactly-once dispatch.** The session name is derived, not generated:
-  `sw-<first 8 hex of the ScheduledWork UID>-<occurrence UTC YYYYMMDDHHMM>`. The
+  `sw-<first 12 hex of the ScheduledWork UID>-<occurrence UTC YYYYMMDDHHMM>`. The
   create itself refuses a duplicate (`AlreadyExists`). A deposed leader's late
   create and a new leader's create cannot both succeed; the loser adopts the
   winner's session. The session also carries the label
-  `dev-env.haynesops.com/scheduled-work=<uid>`. This needs a creation entry point
-  that takes a fixed name; `CreateStandby` generates names and ignores idempotency
-  keys, so S3 adds a sibling.
+  `dev-env.haynesops.com/scheduled-work=<full uid>` and the annotation
+  `dev-env.haynesops.com/scheduled-work-occurrence=<unix seconds>`. Adoption checks
+  both. A derived-name session whose label or annotation does not match (a prefix
+  collision) is never adopted: the occurrence is `Ambiguous`. A matching session
+  found while its occurrence is already terminal is left alone (no redispatch; the
+  releaser handles its finalizer). The fixed-name entry point is new. It must run
+  everything `createSessionMode` runs (canary and pilot refusal, named-coordinator
+  admission, depth and child caps), not only `newSession`, which is all
+  `CreateStandby` calls.
 - **A created session cannot vanish unrecorded.** The session is created with the
   finalizer `dev-env.haynesops.com/scheduled-work-retained` in the same atomic
-  Create, as `ProjectCanaryFinalizer` does (`apiserver/project_canaries.go`). Only
-  the executor removes it, and only after it has written that occurrence's terminal
-  state and result to the ScheduledWork status with a compare-and-set. So whenever a
+  Create, as `ProjectCanaryFinalizer` does (`apiserver/project_canaries.go`). It is
+  removed only by the **releaser** (below), and only after that occurrence's terminal
+  state and result are in the ScheduledWork status, written with a compare-and-set.
+  So whenever a
   session with the derived name has ever existed, either it still exists or its
   occurrence already carries a recorded outcome. A reaped session's rescue and
   archive run first and are unchanged; the finalizer only holds the object until the
@@ -177,13 +196,54 @@ stateDiagram-v2
 - **Claimed without a session** (a crash between claim and create, or a lost create
   response). The claimer reads with the uncached API reader, never a listing cache.
   If the derived name is absent **and** the occurrence still has no recorded
-  outcome, then by the rule above no session was ever created, and the create is
-  retried. The retry is bounded to 10 minutes after `claimedAt`, because the
-  revalidation at claim time goes stale. After that the occurrence is `Ambiguous`
-  and needs a person. A recorded outcome is never followed by a new create, and an
-  ended session is never recreated or resumed.
+  outcome, then by the rule above no session was ever created. The claimer runs the
+  revalidation again (it may be stale) and creates, while the occurrence is still
+  inside its grace period, counted from the due time. After grace it is `Skipped`
+  ("not created before grace ended"). Nothing is unknown here, so it is not
+  `Ambiguous`. The latest any work starts is the due time plus grace. A recorded
+  outcome is never followed by a new create, and an ended session is never recreated
+  or resumed.
+- **The releaser, and why the finalizer cannot strand a session.** The release path
+  is part of the AgentSession reconciler, which always runs. It is **not** behind
+  `--enable-scheduled-work`, and it is not the executor runnable. It acts only on a
+  session that carries the finalizer and whose agent has ended (the drain-safe rule
+  above), or that is being deleted. It never deletes, suspends or changes a session in any other way, so
+  active user work is untouched. For each such session it:
+  1. reads the owning ScheduledWork by the UID in the session's label, uncached;
+  2. if the occurrence has no terminal state yet, writes one with a compare-and-set:
+     the headless outcome from Session status, `Ended` for interactive, or `Failed`
+     with reason `session reaped before it ended` when deletion came first. This is
+     the exit for every non-terminal state, including `Delivered` and a delivery
+     marked `ambiguous`;
+  3. if the ScheduledWork no longer exists (a person deleted it; the API offers only
+     cancel), there is nothing to record, so it logs that and goes on;
+  4. removes the finalizer.
+
+  A periodic sweep in the same reconciler lists sessions by the label (uncached) so
+  that a missed event cannot strand one. The guard test that pins every finalizer
+  removal site (`guard_test.go`) gains this site, and nothing else may remove it.
+
+  The existing rescue and archive guards keep their own finalizer and order. The
+  releaser waits on nothing they do, so neither waits on the other. Its cases:
+
+  | Situation | Behaviour |
+  |---|---|
+  | Flag off, or executor never ran | the releaser still runs in the reconciler and releases |
+  | ScheduledWork deleted | step 3: release without a record; nothing can redispatch it |
+  | Status write keeps failing | the finalizer stays and the session stays Terminating; a metric and a page report it. Releasing without the record would break the exactly-once rule |
+  | Operator rolled back to an image without the releaser | see the rollout order below |
+
+  **Rollout order and rollback rule.** The releaser ships in an operator release
+  (S3a) **before** any image that can set the finalizer (the executor, S3b). So no
+  image sets a finalizer that the running image cannot release. Rolling the operator
+  back below S3a is supported only while no session carries the finalizer. The S6
+  runbook gives the read-only check (`kubectl get agentsessions -n dev-agents -l
+  dev-env.haynesops.com/scheduled-work`, which must be empty) and makes it a
+  precondition of such a rollback. If someone rolls back anyway, the stranded
+  sessions are released when the operator is rolled forward through GitOps. This
+  design adds no manual finalizer patch and no new deletion authority.
 - **Finalizer removed by hand.** No operator path strips the finalizer. If a person
-  strips it, and the session is then deleted within the 10-minute window, the
+  strips it, and the session is then deleted before the occurrence's grace ends, the
   executor cannot tell that from a create that never happened. This is the one stated
   limit. A haynes-ops admission rule (S6) admits removal of this finalizer from the
   operator's ServiceAccount only, so a person must first override that rule.
@@ -203,8 +263,11 @@ stateDiagram-v2
 - **Concurrency.** One unfinished occurrence per ScheduledWork; a later occurrence
   that comes due while one runs is `Skipped` ("previous still running"). Separate
   global caps: `--scheduled-work-max-headless` (default 2) and
-  `--scheduled-work-max-interactive` (default 1). An occurrence at a cap waits up to
-  its grace period, then is `Skipped` ("at capacity").
+  `--scheduled-work-max-interactive` (default 1). The cap is checked **before** the
+  claim: an occurrence at a cap stays `Pending` until its grace ends, then is
+  `Skipped` ("at capacity"). Interactive templates must set
+  `spec.lifecycle.idleSuspendAfter` (default 4 hours), so an unjoined session frees
+  the interactive slot through the normal idle suspend, not after 3 days.
 - **Edits.** An edit while an occurrence is `Claimed`, `Dispatched` or `Running`
   applies from the next occurrence; the one in flight runs to its end on the spec it
   was claimed with (its `specHash` is recorded on the occurrence). An edit voids a
@@ -221,9 +284,10 @@ Before dispatch, the claimer checks, in order, and parks on the first failure:
    in `dev-env-templates` now, not at creation.
 4. **Provider availability, honestly bounded.** Headless Claude tasks run on the
    static `CLAUDE_CODE_OAUTH_TOKEN` (`controller/pod.go`); interactive sessions run
-   on the keeper's login. For an interactive Claude template, the executor checks the
-   keeper login projection's recorded expiry through metadata the operator already
-   reads. No supported quota reading exists for the operator. A quota or credit wall
+   on the keeper's login. The operator reads no login state before dispatch. After
+   dispatch, the session reports it: agentd sets `status.remoteControl.state` to
+   `login-required` (`agentd/remote.go`), and the occurrence fails fast on it. No
+   supported quota reading exists for the operator. A quota or credit wall
    therefore shows up as a failed or idle session, which is recorded as `Failed` with
    the session's own reason. It is not predicted.
 5. The normal session creation limits for the chosen basis (above).
@@ -234,10 +298,10 @@ A parked occurrence pages Tom with the reason and waits for a human retry or can
 
 | | Headless | Interactive |
 |---|---|---|
-| Session | `task` mode, prompt = work order, `maxDuration` from the template | `remote` mode (Remote Control); the schema allows no prompt |
-| Work order | the prompt | delivered after the pod is Ready through the existing message route. A 409 while it boots is retried for up to the grace period, then the occurrence is `Failed`. An exec error makes the delivery `Ambiguous` and it is not re-sent; the page says so |
+| Session | `task` mode, prompt = work order, `maxDuration` from the template | `remote` mode (Remote Control); the schema allows no prompt; `idleSuspendAfter` from the template |
+| Work order | the prompt | delivered after the pod is Ready through the existing message route. A 409 while it boots is retried for 10 minutes from `Dispatched`, then the occurrence is `Failed`. An exec error marks the delivery `ambiguous` and it is not re-sent; the page says so, and the occurrence still ends through the session |
 | Tom | not needed | paged: title, session name and the session's claude.ai link once `status.remoteControl.url` is set. The work order says the session waits for Tom before it acts |
-| Ends | agent exits; outcome file read from Session status | the session leaves `unfinished()` by any normal path: Tom ends or suspends it, or the normal idle suspend |
+| Ends | agent exits; outcome file read from Session status | the agent ends by the drain-safe rule (Tom ends it, or the template's idle suspend), or the session is reaped |
 | Result | `summary`, `prURLs`, `headSHAs` copied to the occurrence; paged per `notify` | `Ended`, with the result `participation not observed`. The session's own handoff is the work's result. There is no outcome capture (task mode only) |
 
 **What the executor can observe about interactive work.** The platform has no
@@ -245,11 +309,15 @@ signal that Tom joined. `status.remoteControl.state` is Remote Control
 *registration*, not a person in the session. `status.agent.attached` counts tmux
 clients, not phone participants. So the executor claims only what it observes:
 `Dispatched` (session created), `Delivered` (work order accepted by the message
-route), `Opened` (registered, link paged), `Ended` (session no longer
-unfinished). It never records that Tom joined or that the work succeeded, and it
-does not read the session's conversation to find out. The interactive cap counts an
-occurrence until `Ended`. The executor does not suspend a session Tom has not
-joined, because it cannot tell. A real participation signal would be a separate
+route, or `ambiguous`), `Opened` (state `registered`, link paged), `Ended`
+(agent ended by the drain-safe rule, so a drain onto a new revision is not an end).
+It binds to the agentd protocol's state constants (`registered`,
+`login-required`), not to free text; the CRD's values are still marked
+`TODO(plan 03)`, so S4 pins them in a test. It never records that Tom joined or
+that the work succeeded, and it does not read the session's conversation to find
+out. The interactive cap counts an occurrence until `Ended`. The executor itself
+does not suspend a session, because it cannot tell whether Tom joined; the
+template's `idleSuspendAfter` bounds how long an unjoined session holds the slot. A real participation signal would be a separate
 item, and none is assumed here.
 
 **Receiver.** The result goes to the owner. A human owner is paged. A session owner
@@ -260,10 +328,15 @@ receiver session would route agent-written text into sessions the owner does not
 
 ## Calendar (R2, R3)
 
-- **Projection.** With `calendar:` set, the keeper writes one event per series, with
-  an RRULE for a recurring item, keyed by namespace and name. That is DESIGN-032's
-  existing adapter contract (`calendar.go`). The event description carries the item's
-  state. Losing the calendar never changes the CRD.
+- **Projection, through a companion Reminder.** The keeper has no write on
+  `scheduledworks`, so it cannot keep sync state there. With `calendar:` set, the
+  executor keeps one companion `Reminder` per ScheduledWork, with a calendar-only
+  target and the same schedule. It updates the Reminder when the item is edited and
+  cancels it when the item is cancelled. DESIGN-032's scheduler then owns the event:
+  one event per series, with an RRULE, keyed by the Reminder's namespace and name.
+  The event ID, spec hash, failure backoff and delete-on-cancel stay in the
+  Reminder's status, as they do today (`scheduler.go`). Losing the calendar never
+  changes the ScheduledWork.
 - **Intake (reminders only, later item).** The adapter has no list call today. Intake
   needs a read interface, filtering on the organiser (accepted invitations bring
   outside events), and skipping events the projection wrote (or it loops). It creates
@@ -310,9 +383,10 @@ library only.
 |---|---|---|
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
-| S3 | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, retry window, park per authority basis, skip, caps) | PR, CI, native review |
-| S4 | outcome collection; pages through keyed Reminders; interactive work-order delivery and the observable states | PR, CI |
-| S5 | API and CLI, including human approve with specHash | PR, CI |
+| S3a | the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted, a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release. Shipped in a release before S3b | PR, CI, native review, release |
+| S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim) | PR, CI, native review |
+| S4 | outcome collection; pages and the calendar projection through keyed companion Reminders; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
+| S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `lastEditor`) | PR, CI |
 | S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
 | S7 | live: one headless and one interactive test occurrence | Tom approves the first real run |
 | C1 | real calendar adapter | Tom provisions the DWD identity (OP206) |
