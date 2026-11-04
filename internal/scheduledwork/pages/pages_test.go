@@ -226,6 +226,15 @@ func TestPageState(t *testing.T) {
 		{"failed, one sent one ambiguous", rem(v1alpha1.ReminderFailed, v1alpha1.DeliverySent, v1alpha1.DeliveryAmbiguous), "ambiguous"},
 		{"skipped", rem(v1alpha1.ReminderSkipped, v1alpha1.DeliverySkipped), "skipped"},
 		{"cancelled", rem(v1alpha1.ReminderCancelled), "skipped"},
+		// A cancel can land while a delivery is claimed and unresolved, or
+		// after one target was sent: the deliveries say what reached Tom.
+		{"cancelled with a sent delivery", rem(v1alpha1.ReminderCancelled, v1alpha1.DeliverySkipped, v1alpha1.DeliverySent), "sent"},
+		{"cancelled with a sent and an ambiguous delivery", rem(v1alpha1.ReminderCancelled, v1alpha1.DeliveryAmbiguous, v1alpha1.DeliverySent), "sent"},
+		{"cancelled with an unresolved claim", rem(v1alpha1.ReminderCancelled, v1alpha1.DeliveryClaimed), "ambiguous"},
+		{"cancelled with an ambiguous delivery", rem(v1alpha1.ReminderCancelled, v1alpha1.DeliveryAmbiguous), "ambiguous"},
+		{"cancelled with a skipped delivery", rem(v1alpha1.ReminderCancelled, v1alpha1.DeliverySkipped, v1alpha1.DeliveryFailed), "skipped"},
+		{"skipped with a sent delivery", rem(v1alpha1.ReminderSkipped, v1alpha1.DeliverySent), "sent"},
+		{"skipped with an unresolved claim", rem(v1alpha1.ReminderSkipped, v1alpha1.DeliveryClaimed), "ambiguous"},
 	}
 	for _, c := range cases {
 		if got := PageState(c.r); got != c.want {
@@ -277,10 +286,11 @@ func TestEnsureCreatesOnceAndIsIdempotent(t *testing.T) {
 func TestEnsureExistingReminderGivesItsState(t *testing.T) {
 	w := item("pushover:default")
 	name := Key(w, occAt, v1alpha1.PageEventResult, 0)
-	existing := &v1alpha1.Reminder{
-		ObjectMeta: metav1.ObjectMeta{Namespace: w.Namespace, Name: name, Labels: map[string]string{v1alpha1.LabelScheduledWork: itemUID}},
-		Status:     v1alpha1.ReminderStatus{State: v1alpha1.ReminderSent},
+	existing, err := Build(w, occAt, v1alpha1.PageEventResult, 0, "Result", "", nowAt.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
 	}
+	existing.Status.State = v1alpha1.ReminderSent
 	p := &Pager{Client: fakeClient(t, interceptor.Funcs{}, existing)}
 	got := p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventResult, 0, "Result", "", nowAt)
 	if got.Reminder != name || got.State != "sent" {
@@ -383,12 +393,31 @@ func TestEnsureKeepsTheEntryValid(t *testing.T) {
 	if got != (v1alpha1.ScheduledWorkPage{Event: "skipped", Attempt: 3, State: "skipped"}) {
 		t.Fatalf("unknown event and attempt: %+v", got)
 	}
+	// An attempt outside 0..ScheduledWorkMaxAttempt is held to the range in
+	// the entry only: it creates nothing, so it never takes the key of a
+	// real attempt's page.
 	got = p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, -2, "t", "", nowAt)
-	if got.Attempt != 0 || got.Reminder != Key(w, occAt, v1alpha1.PageEventDue, 0) {
+	if got != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 0, State: "skipped"}) {
 		t.Fatalf("negative attempt: %+v", got)
 	}
-	if n := len(list(t, p.Client)); n != 1 {
-		t.Fatalf("reminders = %d; an unknown event must create none", n)
+	got = p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, v1alpha1.ScheduledWorkMaxAttempt+1, "t", "", nowAt)
+	if got != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: v1alpha1.ScheduledWorkMaxAttempt, State: "skipped"}) {
+		t.Fatalf("attempt past the last: %+v", got)
+	}
+	if n := len(list(t, p.Client)); n != 0 {
+		t.Fatalf("reminders = %d; an unknown event or an attempt out of range must create none", n)
+	}
+	// The real attempts' pages are then their own.
+	for _, attempt := range []int32{0, v1alpha1.ScheduledWorkMaxAttempt} {
+		got = p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, attempt, "real", "", nowAt)
+		if got.Reminder != Key(w, occAt, v1alpha1.PageEventDue, attempt) || got.State != "" {
+			t.Fatalf("attempt %d: %+v", attempt, got)
+		}
+	}
+	for _, r := range list(t, p.Client) {
+		if r.Spec.Title != "real" {
+			t.Errorf("reminder %s has title %q, made by an out-of-range attempt", r.Name, r.Spec.Title)
+		}
 	}
 }
 
@@ -456,4 +485,114 @@ func TestRefresh(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A create error that may have come after the API server stored the
+// Reminder (a timeout, a server error, a lost connection) is followed by one
+// read of the page's key: a stored Reminder of this page is recorded, so a
+// page that will be sent is not recorded skipped. A definite refusal reads
+// nothing.
+func TestEnsureAfterAnAmbiguousCreateError(t *testing.T) {
+	gr := schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "reminders"}
+	cases := []struct {
+		name   string
+		err    error
+		stored bool
+		want   string // "" is skipped; else the entry names the Reminder
+		reads  int
+	}{
+		{"timeout after the store", apierrors.NewTimeoutError("injected", 1), true, "named", 1},
+		{"server error after the store", apierrors.NewInternalError(errors.New("injected")), true, "named", 1},
+		{"connection lost after the store", errors.New("injected: connection reset by peer"), true, "named", 1},
+		{"deadline before the store", context.DeadlineExceeded, false, "", 1},
+		{"kind not served", &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: gr.Group, Kind: "Reminder"}, SearchedVersions: []string{"v1alpha1"}}, false, "", 0},
+		{"forbidden", apierrors.NewForbidden(gr, "x", errors.New("no")), false, "", 0},
+		{"invalid", apierrors.NewInvalid(schema.GroupKind{Group: gr.Group, Kind: "Reminder"}, "x", nil), false, "", 0},
+		{"bad request", apierrors.NewBadRequest("injected"), false, "", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reads := 0
+			cl := fakeClient(t, interceptor.Funcs{
+				Create: func(ctx context.Context, w client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+					if c.stored {
+						if err := w.Create(ctx, o, opts...); err != nil {
+							return err
+						}
+					}
+					return c.err
+				},
+				Get: func(ctx context.Context, w client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+					reads++
+					return w.Get(ctx, key, o, opts...)
+				},
+			})
+			p := &Pager{Client: cl}
+			w := item("pushover:default")
+			got := p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventResult, 2, "Result", "body", nowAt)
+			want := v1alpha1.ScheduledWorkPage{Event: "result", Attempt: 2, State: "skipped"}
+			if c.want != "" {
+				want = v1alpha1.ScheduledWorkPage{Event: "result", Attempt: 2, Reminder: Key(w, occAt, v1alpha1.PageEventResult, 2)}
+			}
+			if got != want {
+				t.Fatalf("page = %+v, want %+v", got, want)
+			}
+			if reads != c.reads {
+				t.Fatalf("%d reads after the create error, want %d", reads, c.reads)
+			}
+		})
+	}
+}
+
+// AlreadyExists records the existing Reminder only when it is this page's:
+// owned by Owner and labelled with the item UID, the occurrence, the event
+// and the attempt. A Reminder of the same name that is not (made by another
+// identity, or another item's) is never recorded, and the entry is skipped.
+func TestEnsureRecordsOnlyItsOwnExistingReminder(t *testing.T) {
+	w := item("pushover:default")
+	own := func(edit func(*v1alpha1.Reminder)) *v1alpha1.Reminder {
+		r, err := Build(w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Status.State = v1alpha1.ReminderSent
+		if edit != nil {
+			edit(r)
+		}
+		return r
+	}
+	cases := []struct {
+		name  string
+		r     *v1alpha1.Reminder
+		named bool
+	}{
+		{"its own", own(nil), true},
+		{"another item's", own(func(r *v1alpha1.Reminder) { r.Labels[v1alpha1.LabelScheduledWork] = "other-uid" }), false},
+		{"another occurrence's", own(func(r *v1alpha1.Reminder) { r.Labels[v1alpha1.AnnotationScheduledWorkOccurrence] = "1" }), false},
+		{"another event's", own(func(r *v1alpha1.Reminder) { r.Labels[LabelEvent] = v1alpha1.PageEventParked }), false},
+		{"another attempt's", own(func(r *v1alpha1.Reminder) { r.Labels[LabelAttempt] = "0" }), false},
+		{"another owner's", own(func(r *v1alpha1.Reminder) { r.Spec.Owner = "human/dev-env-system/tom" }), false},
+		{"no labels", own(func(r *v1alpha1.Reminder) { r.Labels = nil }), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := &Pager{Client: fakeClient(t, interceptor.Funcs{}, c.r)}
+			got := p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, 1, "Due again", "body", nowAt)
+			want := v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}
+			if c.named {
+				want = v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, Reminder: c.r.Name, State: "sent"}
+			}
+			if got != want {
+				t.Fatalf("page = %+v, want %+v", got, want)
+			}
+		})
+	}
+	t.Run("unreadable", func(t *testing.T) {
+		p := &Pager{Client: fakeClient(t, interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("injected: read failed")
+		}}, own(nil))}
+		if got := p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); got != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}) {
+			t.Fatalf("an existing Reminder that cannot be read was recorded: %+v", got)
+		}
+	})
 }
