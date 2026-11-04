@@ -335,7 +335,7 @@ stateDiagram-v2
   rolled back. A pod that was unschedulable or stuck pulling its image until after
   the deadline starts no work. The session-end rule sees an ended agent, and the
   releaser records `Failed` ("not started before grace ended") and pages
-  (best-effort; see "Pages" below). The executor, when it is running, does the same
+  (best-effort; see Decision 5). The executor, when it is running, does the same
   earlier: at the deadline it first suspends the unstarted session through the
   normal suspend path (rescue first), then records `Failed`. If it dies between the
   two writes, agentd's check still stops the late start. Suspending is its one
