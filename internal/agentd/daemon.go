@@ -60,6 +60,11 @@ type Daemon struct {
 	// loginLocked is set while this daemon holds the pod's login lock, so the
 	// agent start inside pollRemoteLogin does not take it a second time.
 	loginLocked bool
+	// loginStopPending is set from a refused held launch (DESIGN-054) until
+	// its login window is stopped under the login lock: a ceremony opener
+	// holding the lock may still create its window, so the poll stops it once
+	// the lock is free (stopRefusedLoginWindow).
+	loginStopPending bool
 	// claudeSyncErr is the last projection outcome logged (nil: applied).
 	claudeSyncErr error
 	// rejectionFaults are the failure classes of the rejection marker already
@@ -471,6 +476,7 @@ const loginSettle = 30 * time.Second
 // once the login window has ended, so the CLI has written the whole login, and
 // never while the agent's CLI is alive (one owner for the login).
 func (d *Daemon) pollRemoteLogin(ctx context.Context) {
+	d.stopRefusedLoginWindow(ctx)
 	w := d.remote
 	if w == nil || d.writerRefused || d.refuseHeldLaunchPastDeadline(ctx, w) || !remoteLoginUsable(d.S, d.Session, d.now()) {
 		return
@@ -528,12 +534,34 @@ func (d *Daemon) refuseHeldLaunchPastDeadline(ctx context.Context, w *remoteWait
 	}
 	d.remote = nil
 	if !d.projectsClaude() {
-		StopLoginWindow(ctx, d.R, d.S)
+		d.loginStopPending = true
+		d.stopRefusedLoginWindow(ctx)
 	}
 	d.Log.Warn("first launch refused", "session", d.Session.Name, "reason", why)
 	d.recordAgentStep(w.boot, newStep("agent", nil, errors.New(why)), why)
 	d.beat(ctx)
 	return true
+}
+
+// stopRefusedLoginWindow ends the login window of a refused held launch, under
+// the login lock. A ceremony opener (agentd ctl login url) checks for and
+// creates the window under that lock, so a stop without it could run before
+// the opener's window exists and leave that window behind. The stop never
+// waits for the lock: while an opener holds it, the stop stays pending, and a
+// later poll makes it once the opener has released the lock, after its window
+// exists. The refusal dropped the held launch, so a ceremony that finishes in
+// that window starts no agent either.
+func (d *Daemon) stopRefusedLoginWindow(ctx context.Context) {
+	if !d.loginStopPending {
+		return
+	}
+	release, ok := d.lockLogin()
+	if !ok {
+		return
+	}
+	defer release()
+	StopLoginWindow(ctx, d.R, d.S)
+	d.loginStopPending = false
 }
 
 // recordAgentStep replaces boot's agent step and outcome in the boot record
