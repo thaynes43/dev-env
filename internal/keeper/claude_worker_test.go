@@ -285,10 +285,27 @@ func TestClaudeWorkerLeaseLostBeforePOST(t *testing.T) {
 		if f.tr.Calls != 0 || f.journal(t).Stage != claudeIntent {
 			t.Fatal("expected an unsent RefreshIntent left in the journal")
 		}
-		f.w.Fence = func(context.Context, time.Duration) error { return nil }
-		f.tick() // the next leader refuses to replay it
+		f.successorWorker().tick(context.Background()) // the next leader has no proof and refuses to replay it
 		if r := f.journal(t); f.tr.Calls != 0 || r.Stage != claudeNeedsLogin || !r.Refresh.Empty() {
 			t.Fatal("a recovered intent must become NeedsLogin without a POST")
+		}
+	})
+	t.Run("lost after the intent, the same process leads again", func(t *testing.T) {
+		f := newClaudeFix(t)
+		f.seed(t, syntheticClaudeRecord(1))
+		f.clk.Step(6 * time.Hour)
+		calls := 0
+		f.w.Fence = func(context.Context, time.Duration) error {
+			if calls++; calls >= 2 {
+				return errors.New("synthetic: lease lost")
+			}
+			return nil
+		}
+		f.tick()
+		f.w.Fence = func(context.Context, time.Duration) error { return nil }
+		f.tick() // this process proved the attempt unsent, so it rolls it back
+		if r := f.journal(t); f.tr.Calls != 0 || r.Stage != claudeReady || r.Refresh.Reveal() != claudeOldRefreshCanary || r.Access.Generation != 1 {
+			t.Fatal("the process that proved the attempt unsent did not roll it back")
 		}
 	})
 }

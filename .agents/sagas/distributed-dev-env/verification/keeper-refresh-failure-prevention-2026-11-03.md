@@ -98,8 +98,8 @@ by mutation. This round adds tests for them and fixes one false-login path.
   the journal save refuse it, and the intent stayed; the successor then
   marked NeedsLogin although the refresh token was unspent. These rollbacks
   now run on a context detached from cancellation, like the existing
-  not-sent rollback. Load, fence and save keep their own 2 s timeouts, and
-  the fence still refuses a writer that lost leadership. A synthetic test
+  not-sent rollback, and the fence still refuses a writer that lost
+  leadership. A synthetic test
   cancels at each exit with the real Lease fence: before the fix the journal
   held RefreshIntent; after it, Ready, and the successor does not mark
   NeedsLogin.
@@ -117,7 +117,21 @@ by mutation. This round adds tests for them and fixes one false-login path.
   reach the hub's incarnation checks, and a test pins that an adoption
   reports under the journal's UID.
 
-Still open: when a proven-unsent rollback write itself fails, the intent
-stays and the next tick marks NeedsLogin. Detaching the context does not
-change that; it needs an owner decision. No provider, login, credential,
-cluster or deployment was exercised.
+- A failed rollback write after a proven-unsent outcome (fix). The worker
+  now keeps, in memory under its mutex, the journal UID and attempt UID it
+  proved unsent, with a 5-minute bound. While the journal still holds that
+  exact intent, each tick retries the fenced, CAS-guarded rollback and sends
+  nothing; the 1-minute unsent backoff then applies. A lost acknowledgement
+  is read back as Ready on the next tick. Any other journal state, another
+  attempt or journal UID, a restart, a new leader, or the bound expiring
+  drops the proof, and the intent is tombstoned as before. Every rollback
+  (shutdown exits, not-sent and retry) runs detached from cancellation
+  within a 6-second deadline, and the Lease fence refuses it past the lease
+  budget. Tests cover the retry, the lost acknowledgement and each bound.
+
+One case stays conservative by design: a keeper that did not itself see the
+not-sent outcome (a restart or another leader) has no proof, so it marks
+NeedsLogin for an intent whose rollback never committed. Rolling that intent
+back would need durable proof written after the not-sent outcome, which is
+the write that failed. No provider, login, credential, cluster or deployment
+was exercised.

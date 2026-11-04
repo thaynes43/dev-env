@@ -49,7 +49,9 @@ type claudePublisher interface {
 // The journal is the only memory that matters: a Ready record is safe to act
 // on, and a RefreshIntent found at the start of a tick means a POST may have
 // spent the refresh token without its replacement being saved, so the login is
-// marked NeedsLogin. A fresh login (increment 5) is the only way back.
+// marked NeedsLogin. A fresh login (increment 5) is the only way back. The one
+// exception is an attempt this process itself proved unsent whose rollback
+// write did not commit (claudeUnsentProof): it retries that rollback instead.
 type claudeWorker struct {
 	Journal   *claudeJournal
 	Transport claudeRefreshTransport
@@ -71,7 +73,27 @@ type claudeWorker struct {
 	last       string        // last state logged
 	attempt    claudeAttempt // the one staging directory a helper may have open
 	retryAfter time.Time     // bounded delay after a provably unsent attempt
+	// unsent is this process's proof that an attempt still journaled as
+	// RefreshIntent was never sent, kept when its rollback write did not
+	// commit. A restart or a new leader does not have it and tombstones.
+	unsent claudeUnsentProof
 }
+
+// claudeUnsentProof names one attempt this process proved unsent: the journal
+// incarnation it was written to and its attempt UID. It holds no credential.
+type claudeUnsentProof struct {
+	journal, attempt string
+	until            time.Time // after this the proof is dropped and the intent tombstoned
+}
+
+// claudeUnsentProofLife bounds how long a failing rollback is retried before
+// the worker falls back to the conservative tombstone, which pages.
+const claudeUnsentProofLife = 5 * time.Minute
+
+// claudeRollbackTime bounds one rollback: a load and a save of 2 s each and the
+// fence's safety margin. The rollback is detached from shutdown cancellation
+// but not from this deadline, and the fence refuses it past the Lease budget.
+const claudeRollbackTime = 2*claudeSaveTimeout + claudeSafetyMargin
 
 func (*claudeWorker) NeedLeaderElection() bool { return true }
 
@@ -129,8 +151,26 @@ func (w *claudeWorker) tick(ctx context.Context) {
 	if r.Stage != claudeIntent {
 		w.observe(ctx, string(secret.UID), r)
 	}
+	proof := w.unsent
+	if r.Stage != claudeIntent || r.AttemptUID != proof.attempt || string(secret.UID) != proof.journal || !w.Clock.Now().Before(proof.until) {
+		w.unsent = claudeUnsentProof{}
+	}
 	switch r.Stage {
 	case claudeIntent:
+		if w.unsent.attempt != "" {
+			// This process proved the attempt was never sent, but the rollback
+			// write did not commit. Retry the fenced, CAS-guarded rollback of
+			// this exact attempt instead of tombstoning an unspent token.
+			ready := r
+			ready.Stage, ready.AttemptUID = claudeReady, ""
+			if w.rollbackUnsent(ctx, string(secret.UID), ready, r.AttemptUID) {
+				w.retryAfter = w.Clock.Now().Add(time.Minute)
+				w.note("rolled-back")
+			} else {
+				w.note("rollback-pending")
+			}
+			return
+		}
 		w.needsLogin(ctx, r.AttemptUID)
 		return
 	case claudeNeedsLogin:
@@ -170,6 +210,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		w.note("journal-unavailable")
 		return claudeRecord{}, errClaudeJournal
 	}
+	journalUID := string(secret.UID)
 	floor, err := w.Publisher.generation(ctx)
 	if err != nil {
 		w.note("publish-failed")
@@ -189,7 +230,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	intent.Stage, intent.AttemptUID = claudeIntent, string(uuid.NewUUID())
 	if w.Journal.save(ctx, secret, intent) != nil {
 		// A lost acknowledgement may still have stored the intent.
-		w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID)
+		w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID)
 		return claudeRecord{}, errClaudeJournal
 	}
 	// Re-read the stored intent and the Lease; POST only if both still hold.
@@ -197,13 +238,13 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 	if err != nil || stored.Stage != claudeIntent || stored.AttemptUID != intent.AttemptUID {
 		// Nothing has been sent yet: return our own intent to Ready if it is
 		// still what the journal holds.
-		w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID)
+		w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID)
 		return claudeRecord{}, errClaudeJournal
 	}
 	requestCtx, cancelRequest := context.WithDeadline(ctx, time.Now().Add(claudeRequestTime))
 	defer cancelRequest()
 	if w.Fence(ctx, claudeRequestBudget) != nil {
-		w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID)
+		w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID)
 		w.note("leadership-unavailable")
 		return claudeRecord{}, errClaudeLeadership
 	}
@@ -213,7 +254,7 @@ func (w *claudeWorker) refresh(ctx context.Context) (claudeRecord, error) {
 		phase, class := claudeFailureLabels(err)
 		w.Log.Info("claude refresh failed", "phase", phase, "class", class, "duration_ms", time.Since(started).Milliseconds())
 		if errors.Is(err, errClaudeNotSent) {
-			if w.abandon(context.WithoutCancel(ctx), prev, intent.AttemptUID) {
+			if w.rollbackUnsent(ctx, journalUID, prev, intent.AttemptUID) {
 				w.retryAfter = w.Clock.Now().Add(time.Minute)
 			}
 			return claudeRecord{}, errClaudeRefresh
@@ -263,16 +304,32 @@ func (w *claudeWorker) observe(ctx context.Context, uid string, r claudeRecord) 
 	})
 }
 
+// rollbackUnsent returns an attempt this process proved unsent to Ready. When
+// the write does not commit, it keeps the proof so the next tick retries this
+// rollback instead of tombstoning; a commit, a restart, any other journal
+// state or the proof's lifetime ends it.
+func (w *claudeWorker) rollbackUnsent(ctx context.Context, journalUID string, ready claudeRecord, uid string) bool {
+	if w.abandon(ctx, journalUID, ready, uid) {
+		w.unsent = claudeUnsentProof{}
+		return true
+	}
+	if w.unsent.attempt != uid || w.unsent.journal != journalUID {
+		w.unsent = claudeUnsentProof{journal: journalUID, attempt: uid, until: w.Clock.Now().Add(claudeUnsentProofLife)}
+	}
+	return false
+}
+
 // abandon returns an intent that was never sent to Ready, if this attempt's
-// intent is still what the journal holds and leadership can still write. When
-// it cannot, the intent stays and the next tick marks NeedsLogin. Callers pass
-// a context detached from cancellation: the outcome is proven unsent, so a
-// shutdown must not leave the intent for a successor to tombstone. Each step
-// (load, fence, save) carries its own 2 s timeout, and the fence still refuses
-// a writer that has lost leadership.
-func (w *claudeWorker) abandon(ctx context.Context, ready claudeRecord, uid string) bool {
+// intent is still what this journal incarnation holds and leadership can still
+// write. When it cannot, the intent stays. The outcome is proven unsent, so
+// the rollback runs detached from shutdown cancellation, within
+// claudeRollbackTime; the fence still refuses a writer that lost leadership or
+// whose Lease budget does not cover the save.
+func (w *claudeWorker) abandon(ctx context.Context, journalUID string, ready claudeRecord, uid string) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claudeRollbackTime)
+	defer cancel()
 	secret, r, err := w.load(ctx)
-	if err != nil || r.Stage != claudeIntent || r.AttemptUID != uid || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
+	if err != nil || string(secret.UID) != journalUID || r.Stage != claudeIntent || r.AttemptUID != uid || w.Fence(ctx, claudeSaveTimeout+claudeSafetyMargin) != nil {
 		return false
 	}
 	return w.Journal.save(ctx, secret, ready) == nil
