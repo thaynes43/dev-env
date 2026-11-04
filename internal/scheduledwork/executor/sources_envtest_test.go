@@ -13,6 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -51,6 +52,16 @@ templates:
     effort: xhigh
     size: M
     profile: ops
+    repos: [haynes-ops]
+    modes: [headless]
+    maxDuration: 40m
+    admits: [session]
+  dev-child:
+    agent: claude
+    model: claude-opus-5-5
+    effort: xhigh
+    size: M
+    profile: dev
     repos: [haynes-ops]
     modes: [headless]
     maxDuration: 40m
@@ -264,5 +275,94 @@ func TestSourcesNoOrInvalidTemplatesDispatchNothing(t *testing.T) {
 				t.Errorf("calls %d sessions %d", calls, len(f.sessionsOf()))
 			}
 		})
+	}
+}
+
+// editingResolver edits the templates ConfigMap once, right before the first
+// Resolve (revalidation check 3, after check 2's decision), then reads.
+type editingResolver struct {
+	src  *Sources
+	once func()
+}
+
+func (r *editingResolver) Resolve(ctx context.Context, name string) (Template, error) {
+	if r.once != nil {
+		r.once()
+		r.once = nil
+	}
+	return r.src.Resolve(ctx, name)
+}
+
+// A template edited between the decision (check 2) and the build (check 3)
+// is not built from: the digests differ, so the occurrence stays Claimed and
+// is tried again; the next pass decides under the edited template and builds
+// from it.
+func TestSourcesTemplateEditedBetweenDecisionAndBuildRetries(t *testing.T) {
+	f := newFixture(t)
+	src, _ := f.withSources(e2eTemplates)
+	edited := false
+	r := &editingResolver{src: src, once: func() {
+		ctx := context.Background()
+		var cm corev1.ConfigMap
+		if err := cluster(t).Get(ctx, types.NamespacedName{Namespace: f.items, Name: authority.TemplatesConfigMap}, &cm); err != nil {
+			t.Fatal(err)
+		}
+		cm.Data[authority.TemplatesKey] = strings.Replace(e2eTemplates, "maxDuration: 40m\n    admits: [human]", "maxDuration: 3h\n    admits: [human]", 1)
+		if err := cluster(t).Update(ctx, &cm); err != nil {
+			t.Fatal(err)
+		}
+		edited = true
+	}}
+	ex := func() *Executor {
+		e := f.executor()
+		e.Authorizer, e.Templates = src, r
+		return e
+	}
+	key := f.item("audit", spec())
+	f.due(ex)
+	if o := f.wantOcc(key, day0, v1alpha1.OccurrenceClaimed, ""); !edited || o.Session != "" {
+		t.Fatalf("edited %v, occurrence %+v: the build should have been tried again", edited, o)
+	}
+	if calls, _, _ := f.create.counts(); calls != 0 {
+		t.Fatalf("%d creates from a template the decision did not see", calls)
+	}
+	f.at(ex(), day0.Add(time.Minute))
+	o := f.wantOcc(key, day0, v1alpha1.OccurrenceDispatched, "")
+	if s := f.session(o.Session); s.Spec.Limits == nil || s.Spec.Limits.Timeout == nil || s.Spec.Limits.Timeout.Duration != 3*time.Hour {
+		t.Errorf("session limits %+v: want the edited template's 3h, decided and built under it", s.Spec.Limits)
+	}
+}
+
+// A session owner whose template is missing parks at once with the
+// template's reason: no wait on the owner, however its liveness reads.
+func TestSourcesSessionOwnerWithMissingTemplateParksAtOnce(t *testing.T) {
+	f := newFixture(t)
+	_, ex := f.withSources(e2eTemplates)
+	owner := f.ownerSession("coordinator-1", "1")
+	f.liveOwner(owner, day0.Add(-time.Hour))
+	key := f.item("owned", ownedSpec(owner, "no-such-template"))
+	f.due(ex)
+	f.wantOcc(key, day0, v1alpha1.OccurrenceParked, "template no-such-template: no such dispatch template")
+	if calls, _, _ := f.create.counts(); calls != 0 {
+		t.Errorf("calls %d", calls)
+	}
+}
+
+// A live session owner on a profile other than the template's is refused at
+// the create: its child runs on its own profile. The occurrence parks with
+// the API's reason.
+func TestSourcesSessionOwnerOnAnotherProfileIsRefused(t *testing.T) {
+	f := newFixture(t)
+	_, ex := f.withSources(e2eTemplates)
+	owner := f.ownerSession("coordinator-1", "1")
+	f.liveOwner(owner, day0.Add(-30*time.Second))
+	key := f.item("owned", ownedSpec(owner, "dev-child"))
+	f.due(ex)
+	o := f.wantOcc(key, day0, v1alpha1.OccurrenceParked, "")
+	if !strings.Contains(o.Reason, "a session's child runs on its parent's profile ops, not dev") {
+		t.Errorf("reason %q, want the profile refusal", o.Reason)
+	}
+	if len(f.sessionsOf()) != 1 {
+		t.Errorf("%d sessions: only the owner should exist", len(f.sessionsOf()))
 	}
 }

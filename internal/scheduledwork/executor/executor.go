@@ -141,6 +141,12 @@ type Authority struct {
 	Unproven bool
 	// Reason says why there is no basis, for the Parked record.
 	Reason string
+	// TemplateDigest is the digest of the template the basis was decided
+	// under (Template.Digest), or empty. Revalidation check 3 builds the
+	// session only from a template of the same digest, and tries again
+	// otherwise, so an edit between the two reads never builds from a
+	// template the decision did not see.
+	TemplateDigest string
 }
 
 // Authorizer decides an item's authority basis at the due time, from what is
@@ -170,6 +176,9 @@ type Template struct {
 	// interactive, or both (v1alpha1.ScheduledWorkHeadless and
 	// ScheduledWorkInteractive). An item whose mode is not among them parks.
 	Modes []string
+	// Digest identifies the template's content (authority.TemplateDigest),
+	// or is empty; it must equal the Authority's TemplateDigest.
+	Digest string
 }
 
 // TemplateResolver reads a dispatch template at the due time. Sources
@@ -895,6 +904,8 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 		return parked(fmt.Sprintf("template %s: %s", w.Spec.Work.Template, refusal.Reason))
 	case err != nil:
 		return retry(err, "read the dispatch template")
+	case t.Digest != a.TemplateDigest:
+		return retry(fmt.Errorf("template %s changed after the authority was decided", w.Spec.Work.Template), "check the dispatch template against the decision")
 	case !slices.Contains(t.Admits, a.Basis):
 		return parked(fmt.Sprintf("template %s does not admit %s work", w.Spec.Work.Template, a.Basis))
 	case !slices.Contains(t.Modes, w.Spec.Mode):

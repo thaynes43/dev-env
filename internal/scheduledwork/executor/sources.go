@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -30,16 +29,18 @@ import (
 //     plain error, tried again inside the grace.
 //   - Authorize resolves the item's template, reads the owner session and
 //     its pod when the owner is a session, and decides with authority.Decide
-//     and authority.Choose against the template's admitted bases. The
+//     and authority.Choose against the template's admitted bases. A template
+//     refusal is no basis, with the template's reason: the occurrence parks
+//     at once and never waits on an owner it could not run for. The
 //     approval's template check compares the template's digest with the one
 //     the approval recorded, which S5 adds to status.approval; until then
 //     none is recorded, so every approval is void by design.
 //
-// Authorize remembers the digest of the template it decided under, per
-// template name, and the Resolve that follows (revalidation check 3) returns
-// a plain error, tried again, when the template it reads has another digest:
-// an edit between the two reads never builds a session from a template the
-// decision did not see.
+// Authorize returns the digest of the template it decided under
+// (Authority.TemplateDigest) and Resolve the digest of the template it reads
+// (Template.Digest); the executor builds only when they are equal, and tries
+// again otherwise. Sources keeps no state between calls, so concurrent
+// callers cannot cross.
 type Sources struct {
 	// Reader reads from the API server, never a cache.
 	Reader client.Reader
@@ -57,21 +58,12 @@ type Sources struct {
 	// none: S5 adds status.approval.templateDigest and reads it here; tests
 	// set it to exercise a matching or a stale digest.
 	recordedDigest func(*v1alpha1.ScheduledWork) string
-
-	mu sync.Mutex
-	// decided is the digest Authorize decided under, by template name; ""
-	// is a template that was absent then.
-	decided map[string]string
 }
 
 var (
 	_ Authorizer       = (*Sources)(nil)
 	_ TemplateResolver = (*Sources)(nil)
 )
-
-// errTemplateChanged is Resolve's answer when the template changed after the
-// decision: a failed read, so the executor tries again.
-var errTemplateChanged = errors.New("the dispatch template changed after the authority was decided; trying again")
 
 // refusalClip bounds a refusal's reason, inside the 256 bytes of a record.
 const refusalClip = 200
@@ -122,31 +114,23 @@ func (s *Sources) Resolve(ctx context.Context, name string) (Template, error) {
 	if err != nil {
 		return Template{}, err
 	}
-	s.mu.Lock()
-	decided, ok := s.decided[name]
-	s.mu.Unlock()
-	if ok && decided != authority.TemplateDigest(t) {
-		return Template{}, errTemplateChanged
-	}
 	return executorTemplate(t), nil
 }
 
 // Authorize implements Authorizer.
 func (s *Sources) Authorize(ctx context.Context, w *v1alpha1.ScheduledWork, now time.Time) (Authority, error) {
 	name := w.Spec.Work.Template
-	admits := []authority.Basis{authority.BasisHuman, authority.BasisSession, authority.BasisApproved}
-	digest := ""
 	t, err := s.template(ctx, name)
 	var refusal *Refusal
 	switch {
-	case err == nil:
-		admits, digest = t.Admits, authority.TemplateDigest(t)
 	case errors.As(err, &refusal):
-		// No template: every basis is considered and no approval holds (no
-		// digest), and revalidation check 3 parks on the template's refusal.
-	default:
+		// No template, no basis: the occurrence parks on the template's
+		// reason at once, and never waits on an owner it could not run for.
+		return Authority{Reason: fmt.Sprintf("template %s: %s", name, refusal.Reason)}, nil
+	case err != nil:
 		return Authority{}, err
 	}
+	digest := authority.TemplateDigest(t)
 	owner, err := s.owner(ctx, w, now)
 	if err != nil {
 		return Authority{}, err
@@ -160,14 +144,9 @@ func (s *Sources) Authorize(ctx context.Context, w *v1alpha1.ScheduledWork, now 
 		stale = authority.DefaultHeartbeatStaleAfter
 	}
 	d := authority.Decide(w, owner, authority.TemplateBinding{Current: digest, Recorded: recorded}, now, stale)
-	c := authority.Choose(d, admits)
-	s.mu.Lock()
-	if s.decided == nil {
-		s.decided = map[string]string{}
-	}
-	s.decided[name] = digest
-	s.mu.Unlock()
-	return authorityOf(c), nil
+	a := authorityOf(authority.Choose(d, t.Admits))
+	a.TemplateDigest = digest
+	return a, nil
 }
 
 // owner reads the owner session and its pod, uncached, when w's owner is a
@@ -220,5 +199,6 @@ func executorTemplate(t authority.Template) Template {
 		Agent: t.Agent, Model: t.Model, Effort: t.Effort, Size: t.Size, Profile: t.Profile,
 		Repos: slices.Clone(t.Repos), Modes: slices.Clone(t.Modes),
 		MaxDuration: t.MaxDuration, IdleSuspendAfter: t.IdleSuspendAfter, Admits: admits,
+		Digest: authority.TemplateDigest(t),
 	}
 }

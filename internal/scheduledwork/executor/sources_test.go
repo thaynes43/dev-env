@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -197,7 +198,9 @@ func TestSourcesAuthorize(t *testing.T) {
 		"human owner, template admits only approval": {w: unitItem("human/dev-env-system/tom", "human/dev-env-system/tom", "approved-only"), objs: []client.Object{templatesCM(sourcesTemplates)},
 			want: Authority{Reason: ReasonNoAuthority + ": the template does not admit human work"}},
 		"human owner, no ConfigMap": {w: unitItem("human/dev-env-system/tom", "human/dev-env-system/tom", "ops-audit"),
-			want: Authority{Basis: BasisHuman}},
+			want: Authority{Reason: "template ops-audit: no dispatch templates: ConfigMap dev-env-system/dev-env-scheduled-work does not exist"}},
+		"session owner, unknown template": {w: unitItem(unitOwner, unitOwner, "ops-auditor"), objs: []client.Object{templatesCM(sourcesTemplates)},
+			want: Authority{Reason: "template ops-auditor: no such dispatch template"}},
 		"live session owner": {w: unitItem(unitOwner, unitOwner, "ops-audit"), objs: append(liveOwnerObjects(), templatesCM(sourcesTemplates)),
 			want: Authority{Basis: BasisSession, Owner: owner}},
 		"session owner not found": {w: unitItem(unitOwner, unitOwner, "ops-audit"), objs: []client.Object{templatesCM(sourcesTemplates)},
@@ -219,7 +222,7 @@ func TestSourcesAuthorize(t *testing.T) {
 			want:     Authority{Reason: ReasonNoAuthority + ": " + authority.ReasonClientNeedsApproval + "; " + authority.ReasonApprovalTemplate}},
 		"approval, no ConfigMap": {w: approve(unitItem("client/dev/dev-env", "client/dev/dev-env", "approved-only")),
 			recorded: func(t *testing.T) string { return digestOf(t, "approved-only") },
-			want:     Authority{Reason: ReasonNoAuthority + ": " + authority.ReasonClientNeedsApproval + "; " + authority.ReasonApprovalTemplate}},
+			want:     Authority{Reason: "template approved-only: no dispatch templates: ConfigMap dev-env-system/dev-env-scheduled-work does not exist"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _ := sources(t, c.funcs, c.objs...)
@@ -241,21 +244,34 @@ func TestSourcesAuthorize(t *testing.T) {
 				(got.Owner == nil) != (c.want.Owner == nil) || (got.Owner != nil && *got.Owner != *c.want.Owner) {
 				t.Errorf("Authorize = %+v (owner %v), want %+v (owner %v)", got, got.Owner, c.want, c.want.Owner)
 			}
+			// The decision carries the digest of the template it was made
+			// under, and none when the template was refused.
+			want := ""
+			if !strings.HasPrefix(got.Reason, "template ") {
+				want = digestOf(t, c.w.Spec.Work.Template)
+			}
+			if got.TemplateDigest != want {
+				t.Errorf("TemplateDigest %q, want %q", got.TemplateDigest, want)
+			}
 		})
 	}
 }
 
-// A template edited between the decision and the build is never built from:
-// Resolve reports a failed read, so the executor decides again.
-func TestSourcesTemplateChangedAfterTheDecision(t *testing.T) {
+// The decision and the build each carry their template's digest, read on
+// their own: an edit between the two shows as two digests, which the
+// executor's check 3 turns into a retry (TestSourcesTemplateEditedBetween...
+// in the envtest suite). Sources keeps no state between calls.
+func TestSourcesCarryTheirTemplateDigests(t *testing.T) {
 	ctx := context.Background()
 	s, c := sources(t, nil, templatesCM(sourcesTemplates))
 	w := unitItem("human/dev-env-system/tom", "human/dev-env-system/tom", "ops-audit")
-	if a, err := s.Authorize(ctx, w, unitNow); err != nil || a.Basis != BasisHuman {
-		t.Fatalf("Authorize = %+v, %v", a, err)
+	before := digestOf(t, "ops-audit")
+	a, err := s.Authorize(ctx, w, unitNow)
+	if err != nil || a.Basis != BasisHuman || a.TemplateDigest != before {
+		t.Fatalf("Authorize = %+v, %v; want human with digest %s", a, err, before)
 	}
-	if _, err := s.Resolve(ctx, "ops-audit"); err != nil {
-		t.Fatalf("Resolve under the decided template = %v", err)
+	if got, err := s.Resolve(ctx, "ops-audit"); err != nil || got.Digest != before {
+		t.Fatalf("Resolve = %+v, %v; want digest %s", got, err, before)
 	}
 	var cm corev1.ConfigMap
 	if err := c.Get(ctx, types.NamespacedName{Namespace: unitItems, Name: authority.TemplatesConfigMap}, &cm); err != nil {
@@ -265,27 +281,19 @@ func TestSourcesTemplateChangedAfterTheDecision(t *testing.T) {
 	if err := c.Update(ctx, &cm); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.Resolve(ctx, "ops-audit")
-	var refusal *Refusal
-	if !errors.Is(err, errTemplateChanged) || errors.As(err, &refusal) {
-		t.Fatalf("Resolve after the edit = %v, want errTemplateChanged (a failed read, not a refusal)", err)
+	got, err := s.Resolve(ctx, "ops-audit")
+	if err != nil || got.Digest == before || got.Digest == "" || got.MaxDuration != 4*time.Hour {
+		t.Fatalf("Resolve after the edit = %+v, %v; want the edited template with a new digest", got, err)
 	}
-	if _, err := s.Authorize(ctx, w, unitNow); err != nil {
-		t.Fatal(err)
+	if a2, err := s.Authorize(ctx, w, unitNow); err != nil || a2.TemplateDigest != got.Digest {
+		t.Fatalf("Authorize after the edit = %+v, %v; want digest %s", a2, err, got.Digest)
 	}
-	if got, err := s.Resolve(ctx, "ops-audit"); err != nil || got.MaxDuration != 4*time.Hour {
-		t.Fatalf("Resolve after deciding again = %+v, %v", got, err)
+	// No state between calls: only configuration and the test hook.
+	var fields []string
+	for i := range reflect.TypeFor[Sources]().NumField() {
+		fields = append(fields, reflect.TypeFor[Sources]().Field(i).Name)
 	}
-	// A template that appears after a decision made without one is not built
-	// from either.
-	s2, c2 := sources(t, nil)
-	if _, err := s2.Authorize(ctx, w, unitNow); err != nil {
-		t.Fatal(err)
-	}
-	if err := c2.Create(ctx, templatesCM(sourcesTemplates)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s2.Resolve(ctx, "ops-audit"); !errors.Is(err, errTemplateChanged) {
-		t.Fatalf("Resolve of a template that appeared after the decision = %v", err)
+	if want := "Reader,SessionNamespace,TemplatesNamespace,TemplatesName,StaleAfter,recordedDigest"; strings.Join(fields, ",") != want {
+		t.Errorf("Sources has fields %v, want only %s: shared state would let concurrent callers cross", fields, want)
 	}
 }

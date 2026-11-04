@@ -186,10 +186,13 @@ API reader:
   read error is retried.
 
 It decides with `authority.Decide` and `authority.Choose` against the template's
-`admits`, and takes the template digest from the same read. The build that follows
-(revalidation check 3) reads the template again, and if that template's digest is
-not the one the decision used, it retries rather than build from a template the
-decision did not see. A session owner's child runs on the owner's profile, so a
+`admits`, and takes the template digest from the same read. A template refusal
+(absent, invalid or unknown) is no basis, with the template's reason, so the
+occurrence parks at once and never waits on an owner it could not run for. The
+decision carries its template's digest (`Authority.TemplateDigest`), and the build
+that follows (revalidation check 3) reads the template again with its own digest
+(`Template.Digest`). When the two differ, the executor retries rather than build
+from a template the decision did not see. `Sources` keeps no state between calls. A session owner's child runs on the owner's profile, so a
 template that admits `session` dispatches only for owners on the profile it names.
 
 **RBAC the executor needs (S6).** Read from haynes-ops `main`
