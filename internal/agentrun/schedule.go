@@ -47,22 +47,22 @@ const scheduleHelp = `Usage: agent-run schedule create "<title>" --due <YYYY-MM-
        agent-run schedule show <name> [-o json]
        agent-run schedule edit <name> [flags]
        agent-run schedule cancel <name>
-       agent-run schedule approve <name> [--spec-hash <hash>] [--at <time>] [--yes]
-       agent-run schedule retry <name> [--at <time>] [--yes]
+       agent-run schedule approve <name> [--at <time>] [--spec-hash <hash> --yes]
+       agent-run schedule retry <name> [--at <time>] [--spec-hash <hash> --yes]
 
 Scheduled work starts agent work at a set time: a headless task session that
 reports a result, or an interactive remote session that Tom joins from his
-phone. The operator records every occurrence, so a restart or a retried request
-never loses one or starts it twice.
+phone. The operator records each occurrence and what became of it.
 
 Scheduling grants no authority. At each due time the operator checks again that
 the work may run, on one of three grounds: Tom owns the item and made its last
 edit; the owner session made the last edit and is still running; or Tom approved
 this exact spec. The dispatch template must admit that ground too. If none
-holds, the occurrence is parked and Tom is paged. A client or coordinator owner
-always needs Tom's approval. Nothing runs until the operator has the dispatch
-template the item names, and every command here fails with 404 until the
-operator serves the scheduled-work API.
+holds, the occurrence is parked, and Tom is paged if it has a notify target. A
+client or coordinator owner always needs Tom's approval. Nothing runs until the
+operator is started with --enable-scheduled-work and has the dispatch template
+the item names, and every command here fails with 404 until the operator serves
+the scheduled-work API.
 
 Flags of create and edit:
   --due <YYYY-MM-DDTHH:MM>   local time of the first occurrence, read in --tz
@@ -80,7 +80,7 @@ Flags of create and edit:
                              a month lacks falls on that month's last day
   --count <n> | --until <t>  end the series (--until is an RFC 3339 instant)
   --once                     (edit) make a repeating item one-shot
-  --notify pushover:<ref>    page this target; repeat the flag for more.
+  --notify pushover:<ref>    page this target; repeat the flag for up to 8.
                              Interactive work needs at least one
   --no-notify                (edit) remove every notify target
   --calendar calendar:<ref>  also show the item in a calendar; the operator's
@@ -101,15 +101,20 @@ reap <session> stops that). list shows your own items; --all, for a human or a
 coordinator, shows everyone's.
 
 approve and retry are for a human (Tom) only; the API refuses them from a
-session, client or coordinator.
-  approve  prints the exact spec and its hash, then asks y/N on a terminal, or
-           takes --yes. It sends that hash, and the API refuses it if the spec
-           changed in the meantime. With --spec-hash <hash> it approves only if
-           the spec still has that hash. Approving also retries the item's
-           parked occurrence, if it has one (--at <time> picks one of several).
+session, client or coordinator. The y/N and --yes guard against a slip; they
+prove nothing about who you are. The API accepts approve and retry only from
+Tom's own token.
+  approve  prints the exact spec and its hash, asks y/N on a terminal, and
+           sends that hash; the API refuses it if the spec changed in the
+           meantime. Without a terminal, read the hash with schedule show and
+           give it: --spec-hash <hash> --yes (--yes needs --spec-hash). The
+           hash binds the approval to the spec shown; it does not record that
+           anyone read it. approve retries a parked occurrence only when --at
+           names it; otherwise parked occurrences stay parked.
   retry    runs one parked occurrence again now, late on purpose, after the
-           same y/N or --yes. It grants no authority: the occurrence is checked
-           again as at its due time.
+           same y/N or --spec-hash <hash> --yes. It grants no authority: the
+           occurrence is checked again as at its due time. --at picks one of
+           several parked occurrences.
 An occurrence can be approved or retried at most 3 times. Without --yes and
 without a terminal, approve and retry refuse and send nothing.
 `
@@ -151,7 +156,9 @@ var (
 
 // scheduleStdinIsTerminal reports whether stdin is a terminal a person can
 // answer y/N on. A pipe, a file and a character device such as /dev/null are
-// not. A variable, so a test can stand in a terminal.
+// not. The terminal guards against a slip, such as a script that pipes "y";
+// it proves nothing about who is at it: the API identifies the human from the
+// token. A variable, so a test can stand in a terminal.
 var scheduleStdinIsTerminal = func(r io.Reader) bool {
 	f, ok := r.(*os.File)
 	return ok && isTerminal(f)
@@ -216,8 +223,13 @@ func checkScheduleMode(mode string) error {
 }
 
 func checkScheduleNotify(targets []string) error {
-	for _, t := range targets {
+	if len(targets) > apiv1.MaxScheduledWorkNotify {
+		return usageError("--notify takes at most %d targets, not %d", apiv1.MaxScheduledWorkNotify, len(targets))
+	}
+	for i, t := range targets {
 		switch {
+		case slices.Contains(targets[:i], t):
+			return usageError("--notify %s is given twice", t)
 		case strings.HasPrefix(t, "calendar:"):
 			return usageError("--notify %q: a calendar is not a page; give it with --calendar", t)
 		case !scheduleNotifyRef.MatchString(t):
@@ -374,20 +386,26 @@ func (a *app) scheduleCreate(ctx context.Context, args []string) error {
 		return err
 	}
 	var w apiv1.ScheduledWork
-	if status, err := a.call(ctx, c, http.MethodPost, apiv1.ScheduledWorkPath, nil, req, &w); err != nil {
-		return scheduleRefusal("create", "", status, err)
+	retried := false
+	status, err := a.callWithRetryObserver(ctx, c, http.MethodPost, apiv1.ScheduledWorkPath, nil, req, &w, true, func(int, error) { retried = true })
+	if err != nil {
+		err = scheduleRefusal("create", "", status, err)
+		if retried && status == http.StatusConflict {
+			err = withNote(err, "agent-run sent this create again after an attempt it could not confirm; the first attempt may have made the item, so check agent-run schedule list before you create it again")
+		}
+		return withNote(err, fmt.Sprintf("the create used key %s: run the same command with --key %s to retry it without making a second item", shown(key, false), shown(key, false)))
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(w)
 	}
-	a.outf("created %s: %q, %s, %s; nothing runs after %s\n", shown(w.Name, false), w.Spec.Title, shown(w.Spec.Mode, false),
+	a.outf("created %s: \"%s\", %s, %s; nothing runs after %s\n", shown(w.Name, false), shown(w.Spec.Title, false), shown(w.Spec.Mode, false),
 		describeWorkSchedule(w.Spec), w.Spec.NotAfter.UTC().Format(time.RFC3339))
 	if w.Message != "" {
 		a.outf("note: %s\n", shown(w.Message, false))
 	}
-	a.outf("key %s: a create retried with --key %s makes no second item\n", key, key)
-	a.outf("show it with: agent-run schedule show %s\n", w.Name)
-	a.outf("cancel it with: agent-run schedule cancel %s\n", w.Name)
+	a.outf("key %s: a create retried with --key %s makes no second item\n", shown(key, false), shown(key, false))
+	a.outf("show it with: agent-run schedule show %s\n", shown(w.Name, false))
+	a.outf("cancel it with: agent-run schedule cancel %s\n", shown(w.Name, false))
 	return nil
 }
 
@@ -456,6 +474,9 @@ func (a *app) scheduleShow(ctx context.Context, args []string) error {
 	if status, err := a.call(ctx, c, http.MethodGet, apiv1.ScheduledWorkItemPath(url.PathEscape(pos[0])), nil, nil, &w); err != nil {
 		return scheduleRefusal("show", pos[0], status, err)
 	}
+	if w.Name != pos[0] {
+		return fail(ExitFailed, "the API answered for \"%s\", not \"%s\"", shown(w.Name, false), shown(pos[0], false))
+	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(w)
 	}
@@ -486,8 +507,10 @@ func (a *app) scheduleShow(ctx context.Context, args []string) error {
 	return nil
 }
 
-// printScheduleSpec prints every field of the spec, so a person who approves
-// has seen all of what the hash covers.
+// printScheduleSpec prints every field of the spec (a test pins the field
+// list), so the hash an approval sends binds it to exactly the spec shown. That
+// is not evidence that anyone read it, nor of who approved: the API identifies
+// the human from the token.
 func printScheduleSpec(out io.Writer, w apiv1.ScheduledWork) {
 	s := w.Spec
 	pf(out, "  title:      %s\n", shown(s.Title, false))
@@ -514,6 +537,7 @@ func printScheduleSpec(out io.Writer, w apiv1.ScheduledWork) {
 	for _, line := range strings.Split(shown(s.Work.Prompt, true), "\n") {
 		pf(out, "    | %s\n", line)
 	}
+	pf(out, "  end of prompt (%d bytes)\n", len(s.Work.Prompt))
 }
 
 func printScheduleApproval(out io.Writer, w apiv1.ScheduledWork) {
@@ -707,15 +731,20 @@ func (a *app) scheduleEdit(ctx context.Context, args []string) error {
 		return err
 	}
 	var w apiv1.ScheduledWork
-	if status, err := a.call(ctx, c, http.MethodPatch, apiv1.ScheduledWorkItemPath(url.PathEscape(pos[0])), nil, req, &w); err != nil {
+	// Sent once: the edit carries no precondition, so a repeat after a lost
+	// answer could overwrite a change made in between.
+	if status, err := a.callOnce(ctx, c, http.MethodPatch, apiv1.ScheduledWorkItemPath(url.PathEscape(pos[0])), req, &w); err != nil {
 		return scheduleRefusal("edit", pos[0], status, err)
+	}
+	if err := answerNames(w, pos[0], "edit"); err != nil {
+		return err
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(w)
 	}
-	a.outf("edited %s: %q, %s, %s; spec hash now %s\n", shown(w.Name, false), w.Spec.Title, shown(w.Spec.Mode, false), describeWorkSchedule(w.Spec), shown(w.SpecHash, false))
+	a.outf("edited %s: \"%s\", %s, %s; spec hash now %s\n", shown(w.Name, false), shown(w.Spec.Title, false), shown(w.Spec.Mode, false), describeWorkSchedule(w.Spec), shown(w.SpecHash, false))
 	if ap := w.Approval; ap != nil && ap.SpecHash != w.SpecHash {
-		a.outf("the approval by %s was of the earlier spec and no longer applies: it needs approving again (agent-run schedule approve %s)\n", shown(ap.By, false), w.Name)
+		a.outf("the approval by %s was of the earlier spec and no longer applies: it needs approving again (agent-run schedule approve %s)\n", shown(ap.By, false), shown(w.Name, false))
 	}
 	if w.Message != "" {
 		a.outf("note: %s\n", shown(w.Message, false))
@@ -740,14 +769,17 @@ func (a *app) scheduleCancel(ctx context.Context, args []string) error {
 	if status, err := a.call(ctx, c, http.MethodPost, apiv1.ScheduledWorkCancelPath(url.PathEscape(pos[0])), nil, nil, &w); err != nil {
 		return scheduleRefusal("cancel", pos[0], status, err)
 	}
+	if err := answerNames(w, pos[0], "cancel"); err != nil {
+		return err
+	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(w)
 	}
-	a.outf("cancelled %s: no later occurrence runs\n", w.Name)
+	a.outf("cancelled %s: no later occurrence runs\n", shown(w.Name, false))
 	for _, o := range w.Occurrences {
 		if o.Session != "" && scheduleInFlight(o.State) {
 			a.outf("session %s (occurrence %s, %s) keeps running; a cancel does not stop it: agent-run reap %s stops it\n",
-				shown(o.Session, false), o.At.UTC().Format(time.RFC3339), o.State, shown(o.Session, false))
+				shown(o.Session, false), o.At.UTC().Format(time.RFC3339), shown(o.State, false), shown(o.Session, false))
 		}
 	}
 	if w.Warning != "" {
@@ -770,15 +802,15 @@ func scheduleInFlight(state string) bool {
 // decisionNoun names what approve and retry send.
 var decisionNoun = map[string]string{"approve": "approval", "retry": "retry"}
 
-// scheduleDecide is approve and retry: a human's decision bound to the exact
-// spec this command printed.
+// scheduleDecide is approve and retry. The hash it sends binds the decision
+// to the exact spec this command printed, so an edit made after the fetch is
+// never approved or retried. The hash is not evidence of who decided or that
+// anyone read the spec: the API identifies the human from the token.
 func (a *app) scheduleDecide(ctx context.Context, verb string, args []string) error {
 	cmd := newCommand("schedule", outputJSON)
 	var specHash, at string
 	var yes bool
-	if verb == "approve" {
-		cmd.fs.StringVar(&specHash, "spec-hash", "", "")
-	}
+	cmd.fs.StringVar(&specHash, "spec-hash", "", "")
 	cmd.fs.StringVar(&at, "at", "", "")
 	cmd.fs.BoolVar(&yes, "yes", false, "")
 	pos, err := cmd.parse(a, args)
@@ -800,8 +832,13 @@ func (a *app) scheduleDecide(ctx context.Context, verb string, args []string) er
 		}
 		atT = &t
 	}
-	if !yes && !scheduleStdinIsTerminal(a.env.Stdin) {
-		return usageError("schedule %s asks y/N on a terminal, and there is none: read the spec with agent-run schedule show %s, then give --yes. Nothing was sent", verb, name)
+	how := fmt.Sprintf("agent-run schedule show %s, then agent-run schedule %s %s --spec-hash <hash> --yes. Nothing was sent", name, verb, name)
+	switch {
+	case yes && specHash == "":
+		// --yes alone would approve whatever spec the API holds at the fetch.
+		return usageError("--yes needs --spec-hash, the hash you read: run %s", how)
+	case !yes && !scheduleStdinIsTerminal(a.env.Stdin):
+		return usageError("schedule %s asks y/N on a terminal, and there is none. Run %s", verb, how)
 	}
 	c, err := a.connect(ctx, cmd.c.conn)
 	if err != nil {
@@ -811,28 +848,30 @@ func (a *app) scheduleDecide(ctx context.Context, verb string, args []string) er
 	if err != nil {
 		return err
 	}
+	noun := decisionNoun[verb]
 	if w.Spec.Cancelled {
-		return fail(ExitFailed, "%s is cancelled; there is nothing to %s. No %s was sent", name, verb, decisionNoun[verb])
+		return fail(ExitFailed, "%s is cancelled; there is nothing to %s. No %s was sent", shown(name, false), verb, noun)
 	}
 	if specHash != "" && specHash != w.SpecHash {
-		return fail(ExitFailed, "the spec of %s changed after you saw it: its hash is now %s, not %s. Read it again with agent-run schedule show %s. No approval was sent", name, w.SpecHash, specHash, name)
+		return fail(ExitFailed, "the spec of %s changed after you saw it: its hash is now %s, not %s. Read it again with agent-run schedule show %s. No %s was sent",
+			shown(name, false), w.SpecHash, specHash, shown(name, false), noun)
 	}
 	parked, err := scheduleParked(w, verb, atT)
 	if err != nil {
 		return err
 	}
-	// In JSON mode stdout carries only the answer; the spec is still shown.
+	// A question goes with the whole decision on stderr, the stream a person
+	// answers on; with --yes, stdout carries it unless it carries JSON.
 	out := a.env.Stdout
-	if cmd.c.output == outputJSON {
+	if !yes || cmd.c.output == outputJSON {
 		out = a.env.Stderr
 	}
 	question := a.printDecision(out, verb, w, parked)
 	if !yes && !a.scheduleConfirm(question) {
-		return fail(ExitFailed, "not %s; no %s was sent", map[string]string{"approve": "approved", "retry": "retried"}[verb], decisionNoun[verb])
+		return fail(ExitFailed, "not %s; no %s was sent", map[string]string{"approve": "approved", "retry": "retried"}[verb], noun)
 	}
 	var res apiv1.ScheduledWork
 	var status int
-	path := apiv1.ScheduledWorkApprovePath(url.PathEscape(name))
 	// callOnce: either one may start work, so a lost answer is reported, not
 	// repeated.
 	if verb == "approve" {
@@ -841,21 +880,24 @@ func (a *app) scheduleDecide(ctx context.Context, verb string, args []string) er
 			t := parked.At
 			req.At = &t
 		}
-		status, err = a.callOnce(ctx, c, http.MethodPost, path, req, &res)
+		status, err = a.callOnce(ctx, c, http.MethodPost, apiv1.ScheduledWorkApprovePath(url.PathEscape(name)), req, &res)
 	} else {
-		path = apiv1.ScheduledWorkRetryPath(url.PathEscape(name))
-		status, err = a.callOnce(ctx, c, http.MethodPost, path, apiv1.RetryScheduledWorkRequest{At: parked.At, SpecHash: w.SpecHash}, &res)
+		req := apiv1.RetryScheduledWorkRequest{At: parked.At, SpecHash: w.SpecHash}
+		status, err = a.callOnce(ctx, c, http.MethodPost, apiv1.ScheduledWorkRetryPath(url.PathEscape(name)), req, &res)
 	}
 	if err != nil {
 		return scheduleRefusal(verb, name, status, err)
+	}
+	if err := answerNames(res, name, noun); err != nil {
+		return err
 	}
 	if cmd.c.output == outputJSON {
 		return a.printJSON(res)
 	}
 	if verb == "approve" {
-		a.outf("approved %s: spec hash %s\n", name, w.SpecHash)
+		a.outf("approved %s: spec hash %s\n", shown(name, false), w.SpecHash)
 	} else {
-		a.outf("retried %s\n", name)
+		a.outf("retried %s\n", shown(name, false))
 	}
 	if parked != nil {
 		// What the API recorded, not a promise: an occurrence claimed with an
@@ -869,7 +911,7 @@ func (a *app) scheduleDecide(ctx context.Context, verb string, args []string) er
 				}
 			}
 		}
-		a.outf("the occurrence at %s is now %s; agent-run schedule show %s follows it\n", parked.At.UTC().Format(time.RFC3339), state, name)
+		a.outf("the occurrence at %s is now %s; agent-run schedule show %s follows it\n", parked.At.UTC().Format(time.RFC3339), state, shown(name, false))
 	}
 	if res.Message != "" {
 		a.outf("note: %s\n", shown(res.Message, false))
@@ -877,10 +919,21 @@ func (a *app) scheduleDecide(ctx context.Context, verb string, args []string) er
 	return nil
 }
 
-// scheduleForDecision reads the item to approve or retry. It refuses a view
-// whose spec has a field this agent-run does not know, since it could not
-// show it, and a view without a spec hash.
+// answerNames refuses an answer for another item than the one asked for. A
+// write may already have been applied to the item asked for.
+func answerNames(w apiv1.ScheduledWork, name, what string) error {
+	if w.Name == name {
+		return nil
+	}
+	return fail(ExitFailed, "the API's answer names \"%s\", not \"%s\"; the %s may have taken effect: check agent-run schedule show %s", shown(w.Name, false), shown(name, false), what, shown(name, false))
+}
+
+// scheduleForDecision reads the item to approve or retry, so the spec this
+// command prints is the one the hash it sends was computed from. It refuses an
+// answer for another item, a spec with a field this agent-run does not know
+// (it could not print it), and a view without a spec hash.
 func (a *app) scheduleForDecision(ctx context.Context, c *conn, verb, name string) (apiv1.ScheduledWork, error) {
+	noun := decisionNoun[verb]
 	var w apiv1.ScheduledWork
 	var raw json.RawMessage
 	if status, err := a.call(ctx, c, http.MethodGet, apiv1.ScheduledWorkItemPath(url.PathEscape(name)), nil, nil, &raw); err != nil {
@@ -890,68 +943,90 @@ func (a *app) scheduleForDecision(ctx context.Context, c *conn, verb, name strin
 		Spec json.RawMessage `json:"spec"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil || json.Unmarshal(raw, &doc) != nil {
-		return w, fail(ExitFailed, "the API's view of %s is not the expected JSON; no %s was sent", name, decisionNoun[verb])
+		return w, fail(ExitFailed, "the API's view of %s is not the expected JSON; no %s was sent", shown(name, false), noun)
+	}
+	if w.Name != name {
+		return w, fail(ExitFailed, "the API answered for \"%s\", not \"%s\"; no %s was sent", shown(w.Name, false), shown(name, false), noun)
 	}
 	spec := bytes.TrimSpace(doc.Spec)
 	dec := json.NewDecoder(bytes.NewReader(spec))
 	dec.DisallowUnknownFields()
 	var strict apiv1.ScheduledWorkSpec
 	if len(spec) == 0 || bytes.Equal(spec, []byte("null")) {
-		return w, fail(ExitFailed, "the API showed no spec for %s, so there is nothing to %s; no %s was sent", name, verb, decisionNoun[verb])
+		return w, fail(ExitFailed, "the API showed no spec for %s, so there is nothing to %s; no %s was sent", shown(name, false), verb, noun)
 	}
 	if err := dec.Decode(&strict); err != nil {
-		return w, fail(ExitFailed, "the API's spec of %s has a field this agent-run cannot show (%v): upgrade agent-run before you %s it, so you see all of what you %s. No %s was sent", name, err, verb, verb, decisionNoun[verb])
+		return w, fail(ExitFailed, "the API's spec of %s has a field this agent-run cannot show (%v): upgrade agent-run before you %s it, so you see all of what you %s. No %s was sent",
+			shown(name, false), err, verb, verb, noun)
 	}
 	if !scheduleSpecHash.MatchString(w.SpecHash) {
-		return w, fail(ExitFailed, "the API gave no spec hash for %s, so a %s could not name what you saw; no %s was sent", name, decisionNoun[verb], decisionNoun[verb])
+		return w, fail(ExitFailed, "the API gave no spec hash for %s, so a %s could not name the spec shown; no %s was sent", shown(name, false), noun, noun)
 	}
 	return w, nil
 }
 
-// scheduleParked picks the parked occurrence: the one at at, or the only one.
-// A retry needs one; an approval retries it when there is one.
-func scheduleParked(w apiv1.ScheduledWork, verb string, at *time.Time) (*apiv1.ScheduledWorkOccurrence, error) {
-	if at != nil {
-		for i := range w.Occurrences {
-			o := &w.Occurrences[i]
-			if !o.At.Equal(*at) {
-				continue
-			}
-			if o.State != apiv1.ScheduledOccurrenceParked {
-				return nil, fail(ExitFailed, "the occurrence of %s at %s is %s, not Parked; only a parked occurrence is retried. No %s was sent", w.Name, at.Format(time.RFC3339), o.State, decisionNoun[verb])
-			}
-			return o, nil
-		}
-		return nil, fail(ExitFailed, "%s has no occurrence at %s; agent-run schedule show %s lists them. No %s was sent", w.Name, at.Format(time.RFC3339), w.Name, decisionNoun[verb])
-	}
+func parkedOccurrences(w apiv1.ScheduledWork) []*apiv1.ScheduledWorkOccurrence {
 	var parked []*apiv1.ScheduledWorkOccurrence
 	for i := range w.Occurrences {
 		if w.Occurrences[i].State == apiv1.ScheduledOccurrenceParked {
 			parked = append(parked, &w.Occurrences[i])
 		}
 	}
+	return parked
+}
+
+// scheduleParked picks the parked occurrence a decision retries: the one at
+// at, or for a retry the only one. An approval retries one only when at names
+// it. An occurrence that has used its retries is refused.
+func scheduleParked(w apiv1.ScheduledWork, verb string, at *time.Time) (*apiv1.ScheduledWorkOccurrence, error) {
+	noun, name := decisionNoun[verb], shown(w.Name, false)
+	var o *apiv1.ScheduledWorkOccurrence
 	switch {
-	case len(parked) == 1:
-		return parked[0], nil
-	case len(parked) > 1:
-		ats := make([]string, 0, len(parked))
-		for _, o := range parked {
-			ats = append(ats, o.At.UTC().Format(time.RFC3339))
+	case at != nil:
+		for i := range w.Occurrences {
+			if w.Occurrences[i].At.Equal(*at) {
+				o = &w.Occurrences[i]
+				break
+			}
 		}
-		return nil, fail(ExitFailed, "%s has %d parked occurrences (%s); name one with --at. No %s was sent", w.Name, len(parked), strings.Join(ats, ", "), decisionNoun[verb])
-	case verb == "retry":
-		return nil, fail(ExitFailed, "%s has no parked occurrence, so there is nothing to retry. No retry was sent", w.Name)
+		if o == nil {
+			return nil, fail(ExitFailed, "%s has no occurrence at %s; agent-run schedule show %s lists them. No %s was sent", name, at.Format(time.RFC3339), name, noun)
+		}
+		if o.State != apiv1.ScheduledOccurrenceParked {
+			return nil, fail(ExitFailed, "the occurrence of %s at %s is %s, not Parked; only a parked occurrence is retried. No %s was sent", name, at.Format(time.RFC3339), shown(o.State, false), noun)
+		}
+	case verb == "approve":
+		return nil, nil
+	default:
+		parked := parkedOccurrences(w)
+		switch len(parked) {
+		case 0:
+			return nil, fail(ExitFailed, "%s has no parked occurrence, so there is nothing to retry. No retry was sent", name)
+		case 1:
+			o = parked[0]
+		default:
+			ats := make([]string, 0, len(parked))
+			for _, p := range parked {
+				ats = append(ats, p.At.UTC().Format(time.RFC3339))
+			}
+			return nil, fail(ExitFailed, "%s has %d parked occurrences (%s); name one with --at. No retry was sent", name, len(parked), strings.Join(ats, ", "))
+		}
 	}
-	return nil, nil
+	if o.Attempt >= apiv1.MaxScheduledWorkAttempt {
+		return nil, fail(ExitFailed, "the occurrence of %s at %s has used its %d retries; a fourth is refused. No %s was sent",
+			name, o.At.UTC().Format(time.RFC3339), apiv1.MaxScheduledWorkAttempt, noun)
+	}
+	return o, nil
 }
 
 // printDecision shows what an approve or retry binds to and returns the y/N
 // question.
 func (a *app) printDecision(out io.Writer, verb string, w apiv1.ScheduledWork, parked *apiv1.ScheduledWorkOccurrence) string {
+	name := shown(w.Name, false)
 	if verb == "approve" {
-		pf(out, "You are approving this exact spec of %s:\n", shown(w.Name, false))
+		pf(out, "You are approving this exact spec of %s:\n", name)
 	} else {
-		pf(out, "You are retrying an occurrence of %s, with this spec:\n", shown(w.Name, false))
+		pf(out, "You are retrying an occurrence of %s, with this spec:\n", name)
 	}
 	printScheduleSpec(out, w)
 	printScheduleApproval(out, w)
@@ -962,16 +1037,28 @@ func (a *app) printDecision(out io.Writer, verb string, w apiv1.ScheduledWork, p
 			pf(out, "It was claimed with an earlier spec (hash %s), so the API skips it instead of running it.\n", shown(parked.SpecHash, false))
 		}
 	}
-	if verb == "approve" {
-		pf(out, "The approval binds to spec hash %s (every field above but editor and cancelled). Any later edit voids it.\n", w.SpecHash)
-		if parked != nil {
-			pf(out, "Approving also runs the parked occurrence again now, late on purpose.\n")
-			return fmt.Sprintf("Approve spec %s of %s and retry the parked occurrence? [y/N] ", w.SpecHash, w.Name)
-		}
-		return fmt.Sprintf("Approve spec %s of %s? [y/N] ", w.SpecHash, w.Name)
+	if verb == "retry" {
+		pf(out, "A retry runs it again now, late on purpose, and grants no authority: it is checked again as at its due time.\n")
+		return fmt.Sprintf("Retry the occurrence of %s at %s now? [y/N] ", name, parked.At.UTC().Format(time.RFC3339))
 	}
-	pf(out, "A retry runs it again now, late on purpose, and grants no authority: it is checked again as at its due time.\n")
-	return fmt.Sprintf("Retry the occurrence of %s at %s now? [y/N] ", w.Name, parked.At.UTC().Format(time.RFC3339))
+	if parked == nil {
+		for _, o := range parkedOccurrences(w) {
+			at := o.At.UTC().Format(time.RFC3339)
+			what := "add --at " + at + " to retry it with this approval"
+			if o.Attempt >= apiv1.MaxScheduledWorkAttempt {
+				what = "it has used its retries"
+			}
+			pf(out, "Parked occurrence %s stays parked (%s; attempt %d of at most %d): %s.\n", at,
+				shown(firstOf(o.Reason, "no reason given"), false), o.Attempt, apiv1.MaxScheduledWorkAttempt, what)
+		}
+	}
+	pf(out, "The approval binds to spec hash %s (every field above but editor and cancelled). Any later edit voids it.\n", w.SpecHash)
+	if parked != nil {
+		at := parked.At.UTC().Format(time.RFC3339)
+		pf(out, "Approving also runs the occurrence at %s again now, late on purpose.\n", at)
+		return fmt.Sprintf("Approve spec %s of %s and retry the occurrence at %s? [y/N] ", w.SpecHash, name, at)
+	}
+	return fmt.Sprintf("Approve spec %s of %s? [y/N] ", w.SpecHash, name)
 }
 
 // scheduleConfirm asks question on stderr and reads one line of stdin; only y
@@ -989,12 +1076,34 @@ func (a *app) scheduleConfirm(question string) bool {
 	return false
 }
 
-// scheduleRefusal adds what to do next to an API refusal, by route and
-// status. The exit code stays the refusal's.
+// scheduleFieldFlags name a refusal's request fields by the flags that set
+// them. The shared refusal prints these JSON paths as they are.
+var scheduleFieldFlags = []struct{ field, flag string }{
+	{"work.prompt", "--prompt or --prompt-file"}, {"work.template", "--template"}, {"work.repo", "--repo"},
+	{"notAfter", "--not-after"}, {"timeZone", "--tz"}, {"due", "--due"}, {"mode", "--mode"},
+	{"recurrence", "--repeat"}, {"notify", "--notify"}, {"calendar", "--calendar"}, {"key", "--key"},
+	{"specHash", "--spec-hash"}, {"at", "--at"},
+}
+
+// withNote adds a line to a command's error, keeping its exit code.
+func withNote(err error, note string) error {
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		return err
+	}
+	return &exitError{code: ee.code, msg: ee.msg + "\n" + note}
+}
+
+// scheduleRefusal names the fields of an API refusal by their flags and adds
+// what to do next, by route and status. The exit code stays the refusal's.
 func scheduleRefusal(verb, name string, status int, err error) error {
 	var ee *exitError
 	if err == nil || status == 0 || !errors.As(err, &ee) {
 		return err
+	}
+	msg := ee.msg
+	for _, f := range scheduleFieldFlags {
+		msg = strings.ReplaceAll(msg, "\n  "+f.field+": ", "\n  "+f.flag+" ("+f.field+"): ")
 	}
 	var hint string
 	switch status {
@@ -1018,21 +1127,30 @@ func scheduleRefusal(verb, name string, status int, err error) error {
 		case "create":
 			hint = "a --key names one item of yours: the same key with other settings is refused; use another key, or edit the item"
 		case "approve":
-			hint = fmt.Sprintf("the item changed after you saw it; read it again with agent-run schedule show %s, and approve what it shows", name)
+			hint = fmt.Sprintf("the API refuses an approval when the item is cancelled, the occurrence named by --at is no longer Parked or has used its %d retries, or the spec changed after you saw it; read it again with agent-run schedule show %s",
+				apiv1.MaxScheduledWorkAttempt, shown(name, false))
+		case "retry":
+			hint = fmt.Sprintf("the API refuses a retry when the item is cancelled, the occurrence is no longer Parked or has used its %d retries, or the spec changed after you saw it; agent-run schedule show %s shows which",
+				apiv1.MaxScheduledWorkAttempt, shown(name, false))
 		default:
-			hint = fmt.Sprintf("agent-run schedule show %s shows where it stands now", name)
+			hint = fmt.Sprintf("agent-run schedule show %s shows where it stands now", shown(name, false))
 		}
 	}
-	if hint == "" {
-		return err
+	if hint != "" {
+		msg += "\n" + hint
 	}
-	return &exitError{code: ee.code, msg: ee.msg + "\n" + hint}
+	return &exitError{code: ee.code, msg: msg}
 }
 
+// scheduleInvisible are characters that render as nothing and are in neither
+// the format category nor the default-ignorable properties shown checks.
+var scheduleInvisible = []rune{'\u2028', '\u2029', '\u034f', '\u115f', '\u1160', '\u3164', '\uffa0', '\u180b', '\u180c', '\u180d'}
+
 // shown renders API text for a terminal. A control or format character (an
-// escape sequence, a carriage return, a bidirectional override) and a byte
-// that is not UTF-8 are printed as escapes rather than passed to the
-// terminal, so what a person reads is what the item holds. multiline keeps
+// escape sequence, a carriage return, a bidirectional override), a variation
+// selector, a default-ignorable or filler character that renders as nothing,
+// and a byte that is not UTF-8 are printed as escapes rather than passed to
+// the terminal, so what a person reads is what the item holds. multiline keeps
 // newlines and tabs.
 func shown(s string, multiline bool) string {
 	var b strings.Builder
@@ -1043,7 +1161,8 @@ func shown(s string, multiline bool) string {
 			fmt.Fprintf(&b, `\x%02x`, s[i])
 		case multiline && (r == '\n' || r == '\t'):
 			b.WriteRune(r)
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029':
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Variation_Selector, r) ||
+			unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) || slices.Contains(scheduleInvisible, r):
 			if r > 0xffff {
 				fmt.Fprintf(&b, `\U%08x`, r)
 			} else {

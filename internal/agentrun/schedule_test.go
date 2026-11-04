@@ -2,9 +2,11 @@ package agentrun
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -522,40 +524,60 @@ func (d *decisionAPI) posts() int {
 
 var shownHash = regexp.MustCompile(`(?m)^  spec hash:  ([0-9a-f]{64})$`)
 
+// yes are the flags of a non-interactive decision: --yes needs the hash read.
+var scheduleYes = []string{"--yes", "--spec-hash", strings.Repeat("ab", 32)}
+
+func decideArgs(verb string, extra ...string) []string {
+	return append(append([]string{"schedule", verb, testWorkName}, scheduleYes...), extra...)
+}
+
 func TestScheduleApprove(t *testing.T) {
-	t.Run("yes sends the hash shown and the parked occurrence", func(t *testing.T) {
+	t.Run("yes with spec-hash and at sends both", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.handle(t, h)
-		h.mustRun(ExitOK, "schedule", "approve", testWorkName, "--yes")
+		h.mustRun(ExitOK, decideArgs("approve", "--at", "2026-10-06T19:00:00Z")...)
 		out := h.stdout.String()
-		m := shownHash.FindStringSubmatch(out)
-		if m == nil {
-			t.Fatalf("no spec hash shown:\n%s", out)
-		}
 		req := decodeAs[apiv1.ApproveScheduledWorkRequest](t, d.approve)
-		if req.SpecHash != m[1] || req.SpecHash != testSpecHash || req.At == nil || !req.At.Equal(testParkedAt) {
-			t.Errorf("approve request %+v, shown hash %s", req, m[1])
+		if req.SpecHash != testSpecHash || req.At == nil || !req.At.Equal(testParkedAt) {
+			t.Errorf("approve request %+v", req)
 		}
 		contains(t, "stdout", out, "You are approving this exact spec of sched-0123456789abcdef0123:",
 			"title:      Loki retention trend audit", "    | Audit Loki retention.", "notify:     pushover:default", "calendar:   calendar:haynesnetwork",
-			"approval:   VOID: by human/dev-env-system/tom",
+			"spec hash:  "+testSpecHash, "approval:   VOID: by human/dev-env-system/tom",
 			"Parked occurrence 2026-10-06T19:00:00Z: no standing authority; attempt 1 of at most 3",
-			"The approval binds to spec hash "+testSpecHash, "Approving also runs the parked occurrence again now",
+			"The approval binds to spec hash "+testSpecHash, "Approving also runs the occurrence at 2026-10-06T19:00:00Z again now",
 			"approved sched-0123456789abcdef0123: spec hash "+testSpecHash,
 			"the occurrence at 2026-10-06T19:00:00Z is now Claimed; agent-run schedule show sched-0123456789abcdef0123 follows it")
 		if strings.Contains(h.stderr.String(), "[y/N]") {
 			t.Errorf("--yes still asked: %s", h.stderr.String())
 		}
 	})
+	t.Run("approve retries a parked occurrence only when --at names it", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork()}
+		d.handle(t, h)
+		h.mustRun(ExitOK, decideArgs("approve")...)
+		var keys map[string]any
+		if err := json.Unmarshal(d.approve, &keys); err != nil || len(keys) != 1 || keys["specHash"] != testSpecHash {
+			t.Errorf("approve body %s: %v", d.approve, err)
+		}
+		contains(t, "stdout", h.stdout.String(), "Parked occurrence 2026-10-06T19:00:00Z stays parked (no standing authority; attempt 1 of at most 3): add --at 2026-10-06T19:00:00Z to retry it with this approval")
+		if strings.Contains(h.stdout.String(), "is now") {
+			t.Errorf("reported a retry it did not ask for:\n%s", h.stdout.String())
+		}
+	})
+	t.Run("yes needs spec-hash", func(t *testing.T) {
+		h := newHarness(t)
+		refuseAll(t, h)
+		h.mustRun(ExitUsage, "schedule", "approve", testWorkName, "--yes")
+		contains(t, "stderr", h.stderr.String(), "--yes needs --spec-hash, the hash you read: run agent-run schedule show sched-0123456789abcdef0123, then agent-run schedule approve sched-0123456789abcdef0123 --spec-hash <hash> --yes. Nothing was sent")
+	})
 	t.Run("no terminal and no yes refuses before anything is sent", func(t *testing.T) {
 		h := newHarness(t)
 		refuseAll(t, h)
-		h.mustRun(ExitUsage, "schedule", "approve", testWorkName)
-		contains(t, "stderr", h.stderr.String(), "asks y/N on a terminal, and there is none", "give --yes", "Nothing was sent")
-		if n := len(h.api.requests()); n != 0 {
-			t.Errorf("%d requests", n)
-		}
+		h.mustRun(ExitUsage, "schedule", "approve", testWorkName, "--spec-hash", testSpecHash)
+		contains(t, "stderr", h.stderr.String(), "schedule approve asks y/N on a terminal, and there is none. Run agent-run schedule show sched-0123456789abcdef0123, then agent-run schedule approve sched-0123456789abcdef0123 --spec-hash <hash> --yes. Nothing was sent")
 	})
 	for _, answer := range []string{"y\n", "Yes\n", " y "} {
 		t.Run("terminal agrees "+strings.TrimSpace(answer), func(t *testing.T) {
@@ -564,9 +586,19 @@ func TestScheduleApprove(t *testing.T) {
 			d := &decisionAPI{view: testScheduledWork()}
 			d.handle(t, h)
 			h.mustRun(ExitOK, "schedule", "approve", testWorkName)
-			contains(t, "stderr", h.stderr.String(), "Approve spec "+testSpecHash+" of sched-0123456789abcdef0123 and retry the parked occurrence? [y/N] ")
-			if req := decodeAs[apiv1.ApproveScheduledWorkRequest](t, d.approve); req.SpecHash != testSpecHash {
-				t.Errorf("request %+v", req)
+			stderr := h.stderr.String()
+			// The whole decision is on the stream the question is on.
+			contains(t, "stderr", stderr, "You are approving this exact spec", "    | Open a PR with the trend.", "Approve spec "+testSpecHash+" of sched-0123456789abcdef0123? [y/N] ")
+			if strings.Index(stderr, "You are approving") > strings.Index(stderr, "[y/N]") {
+				t.Errorf("the question came before the spec:\n%s", stderr)
+			}
+			if strings.Contains(h.stdout.String(), "You are approving") {
+				t.Errorf("the decision went to stdout:\n%s", h.stdout.String())
+			}
+			m := shownHash.FindStringSubmatch(stderr)
+			req := decodeAs[apiv1.ApproveScheduledWorkRequest](t, d.approve)
+			if m == nil || req.SpecHash != m[1] || req.At != nil {
+				t.Errorf("request %+v, shown %v", req, m)
 			}
 		})
 	}
@@ -592,9 +624,11 @@ func TestScheduleApprove(t *testing.T) {
 		if d.posts() != 0 {
 			t.Errorf("a stale approval was sent: %s", d.approve)
 		}
-		h.mustRun(ExitOK, "schedule", "approve", testWorkName, "--yes", "--spec-hash", testSpecHash)
-		if req := decodeAs[apiv1.ApproveScheduledWorkRequest](t, d.approve); req.SpecHash != testSpecHash {
-			t.Errorf("request %+v", req)
+		// On a terminal too.
+		withTerminal(t, h, "y\n")
+		h.mustRun(ExitFailed, "schedule", "approve", testWorkName, "--spec-hash", testOldHash)
+		if d.posts() != 0 {
+			t.Errorf("a stale approval was sent: %s", d.approve)
 		}
 	})
 	t.Run("bad spec-hash", func(t *testing.T) {
@@ -614,7 +648,7 @@ func TestScheduleApprove(t *testing.T) {
 		doc["templateDigest"] = "elsewhere is fine"
 		d.raw = []byte(mustJSON(t, doc))
 		d.handle(t, h)
-		h.mustRun(ExitFailed, "schedule", "approve", testWorkName, "--yes")
+		h.mustRun(ExitFailed, decideArgs("approve")...)
 		contains(t, "stderr", h.stderr.String(), `has a field this agent-run cannot show (json: unknown field "profile")`, "upgrade agent-run")
 		if d.posts() != 0 {
 			t.Errorf("approved a spec it could not show: %s", d.approve)
@@ -622,13 +656,13 @@ func TestScheduleApprove(t *testing.T) {
 		// A field outside the spec is not part of what the hash covers.
 		delete(doc["spec"].(map[string]any)["work"].(map[string]any), "profile")
 		d.raw = []byte(mustJSON(t, doc))
-		h.mustRun(ExitOK, "schedule", "approve", testWorkName, "--yes")
+		h.mustRun(ExitOK, decideArgs("approve")...)
 	})
 	t.Run("no spec", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork(), raw: []byte(`{"name":"` + testWorkName + `","specHash":"` + testSpecHash + `","spec":null}`)}
 		d.handle(t, h)
-		h.mustRun(ExitFailed, "schedule", "approve", testWorkName, "--yes")
+		h.mustRun(ExitFailed, decideArgs("approve")...)
 		contains(t, "stderr", h.stderr.String(), "the API showed no spec")
 		if d.posts() != 0 {
 			t.Error("approved with no spec")
@@ -640,72 +674,97 @@ func TestScheduleApprove(t *testing.T) {
 			d := &decisionAPI{view: testScheduledWork()}
 			d.view.SpecHash = hash
 			d.handle(t, h)
-			h.mustRun(ExitFailed, "schedule", "approve", testWorkName, "--yes")
+			h.mustRun(ExitFailed, decideArgs("approve")...)
 			contains(t, "stderr", h.stderr.String(), "the API gave no spec hash")
 			if d.posts() != 0 {
 				t.Error("approved without a hash")
 			}
 		})
 	}
+	t.Run("another name in the answer", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork()}
+		d.handle(t, h)
+		other := testScheduledWork()
+		other.Name = "sched-other"
+		d.raw = []byte(mustJSON(t, other))
+		h.mustRun(ExitFailed, decideArgs("approve")...)
+		contains(t, "stderr", h.stderr.String(), `the API answered for "sched-other", not "sched-0123456789abcdef0123"; no approval was sent`)
+		if d.posts() != 0 {
+			t.Error("approved another item")
+		}
+	})
 	t.Run("cancelled", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.view.Spec.Cancelled = true
 		d.handle(t, h)
-		h.mustRun(ExitFailed, "schedule", "approve", testWorkName, "--yes")
+		h.mustRun(ExitFailed, decideArgs("approve")...)
 		contains(t, "stderr", h.stderr.String(), "is cancelled; there is nothing to approve")
 		if d.posts() != 0 {
 			t.Error("approved a cancelled item")
 		}
 	})
-	t.Run("no parked occurrence approves the spec only", func(t *testing.T) {
-		h := newHarness(t)
-		d := &decisionAPI{view: testScheduledWork()}
-		d.view.Occurrences = d.view.Occurrences[:2]
-		d.handle(t, h)
-		h.mustRun(ExitOK, "schedule", "approve", testWorkName, "--yes")
-		var keys map[string]any
-		if err := json.Unmarshal(d.approve, &keys); err != nil || len(keys) != 1 || keys["specHash"] != testSpecHash {
-			t.Errorf("approve body %s: %v", d.approve, err)
-		}
-		if strings.Contains(h.stdout.String(), "parked") {
-			t.Errorf("mentions a parked occurrence:\n%s", h.stdout.String())
-		}
-	})
-	t.Run("several parked occurrences need --at", func(t *testing.T) {
+	t.Run("several parked occurrences", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		other := testNow.Add(-90 * time.Minute)
 		d.view.Occurrences = append(d.view.Occurrences, apiv1.ScheduledWorkOccurrence{At: other, State: apiv1.ScheduledOccurrenceParked, Reason: "template missing"})
 		d.handle(t, h)
-		h.mustRun(ExitFailed, "schedule", "approve", testWorkName, "--yes")
-		contains(t, "stderr", h.stderr.String(), "has 2 parked occurrences (2026-10-06T19:00:00Z, 2026-10-06T19:30:00Z); name one with --at")
-		if d.posts() != 0 {
-			t.Error("approved without choosing")
+		h.mustRun(ExitOK, decideArgs("approve")...)
+		contains(t, "stdout", h.stdout.String(), "Parked occurrence 2026-10-06T19:00:00Z stays parked", "Parked occurrence 2026-10-06T19:30:00Z stays parked (template missing")
+		if req := decodeAs[apiv1.ApproveScheduledWorkRequest](t, d.approve); req.At != nil {
+			t.Errorf("request %+v", req)
 		}
-		h.mustRun(ExitOK, "schedule", "approve", testWorkName, "--yes", "--at", "2026-10-06T19:30:00Z")
+		h.mustRun(ExitOK, decideArgs("approve", "--at", "2026-10-06T19:30:00Z")...)
 		if req := decodeAs[apiv1.ApproveScheduledWorkRequest](t, d.approve); req.At == nil || !req.At.Equal(other) {
 			t.Errorf("request %+v", req)
 		}
+	})
+	t.Run("an occurrence at the attempt limit is not retried", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork()}
+		d.view.Occurrences[2].Attempt = apiv1.MaxScheduledWorkAttempt
+		d.handle(t, h)
+		h.mustRun(ExitFailed, decideArgs("approve", "--at", "2026-10-06T19:00:00Z")...)
+		contains(t, "stderr", h.stderr.String(), "the occurrence of sched-0123456789abcdef0123 at 2026-10-06T19:00:00Z has used its 3 retries; a fourth is refused. No approval was sent")
+		if d.posts() != 0 {
+			t.Error("retried past the attempt limit")
+		}
+		// The spec alone can still be approved.
+		h.mustRun(ExitOK, decideArgs("approve")...)
+		contains(t, "stdout", h.stdout.String(), "stays parked (no standing authority; attempt 3 of at most 3): it has used its retries")
 	})
 	t.Run("a parked occurrence claimed with an earlier spec", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.view.Occurrences[2].SpecHash = testOldHash
 		d.handle(t, h)
-		h.mustRun(ExitOK, "schedule", "approve", testWorkName, "--yes")
+		h.mustRun(ExitOK, decideArgs("approve", "--at", "2026-10-06T19:00:00Z")...)
 		contains(t, "stdout", h.stdout.String(), "It was claimed with an earlier spec (hash "+testOldHash+"), so the API skips it instead of running it.")
 	})
 	t.Run("json keeps stdout for the answer", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.handle(t, h)
-		h.mustRun(ExitOK, "schedule", "approve", testWorkName, "--yes", "-o", "json")
+		h.mustRun(ExitOK, decideArgs("approve", "-o", "json")...)
 		var res apiv1.ScheduledWork
 		if err := json.Unmarshal(h.stdout.Bytes(), &res); err != nil || res.Approval == nil || res.Approval.SpecHash != testSpecHash {
 			t.Errorf("json %q: %v", h.stdout.String(), err)
 		}
 		contains(t, "stderr", h.stderr.String(), "You are approving this exact spec", "spec hash:  "+testSpecHash)
+	})
+	t.Run("an answer for another item after the write", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork(), answer: func(w http.ResponseWriter) bool {
+			other := testScheduledWork()
+			other.Name = "sched-other"
+			writeTestJSON(w, http.StatusOK, other)
+			return true
+		}}
+		d.handle(t, h)
+		h.mustRun(ExitFailed, decideArgs("approve")...)
+		contains(t, "stderr", h.stderr.String(), `the API's answer names "sched-other", not "sched-0123456789abcdef0123"; the approval may have taken effect: check agent-run schedule show sched-0123456789abcdef0123`)
 	})
 	t.Run("a lost answer is not repeated", func(t *testing.T) {
 		h := newHarness(t)
@@ -714,7 +773,7 @@ func TestScheduleApprove(t *testing.T) {
 			return true
 		}}
 		d.handle(t, h)
-		h.mustRun(ExitUnconfirmed, "schedule", "approve", testWorkName, "--yes")
+		h.mustRun(ExitUnconfirmed, decideArgs("approve")...)
 		posts := 0
 		for _, r := range h.api.requests() {
 			if r.method == http.MethodPost {
@@ -751,26 +810,73 @@ func TestScheduleStdinTerminal(t *testing.T) {
 			t.Errorf("%s counts as a terminal", name)
 		}
 	}
-	h := newHarness(t)
-	refuseAll(t, h)
-	h.env.Stdin = null
-	h.mustRun(ExitUsage, "schedule", "approve", testWorkName)
-	if n := len(h.api.requests()); n != 0 {
-		t.Errorf("stdin /dev/null: %d requests", n)
+}
+
+// TestScheduleDecisionWithoutTerminal: approve and retry from /dev/null, a file
+// that says y, or a pipe that says y refuse before any request, and run
+// nothing.
+func TestScheduleDecisionWithoutTerminal(t *testing.T) {
+	stdins := map[string]func(t *testing.T) *os.File{
+		"dev-null": func(t *testing.T) *os.File {
+			f, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return f
+		},
+		"file-y": func(t *testing.T) *os.File {
+			f, err := os.CreateTemp(t.TempDir(), "stdin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("y\n"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				t.Fatal(err)
+			}
+			return f
+		},
+		"pipe-y": func(t *testing.T) *os.File {
+			pr, pw, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pw.WriteString("y\n"); err != nil {
+				t.Fatal(err)
+			}
+			_ = pw.Close()
+			return pr
+		},
+	}
+	for _, verb := range []string{"approve", "retry"} {
+		for name, open := range stdins {
+			t.Run(verb+"/"+name, func(t *testing.T) {
+				h := newHarness(t)
+				refuseAll(t, h)
+				f := open(t)
+				defer func() { _ = f.Close() }()
+				h.env.Stdin = f
+				h.mustRun(ExitUsage, "schedule", verb, testWorkName)
+				contains(t, "stderr", h.stderr.String(), "Nothing was sent")
+				if n := len(h.api.requests()); n != 0 || len(h.ran) != 0 {
+					t.Errorf("%d requests, ran %v", n, h.ran)
+				}
+			})
+		}
 	}
 }
 
 func TestScheduleRetry(t *testing.T) {
-	t.Run("yes sends the parked occurrence and the hash shown", func(t *testing.T) {
+	t.Run("yes sends the parked occurrence and the hash", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.handle(t, h)
-		h.mustRun(ExitOK, "schedule", "retry", testWorkName, "--yes")
+		h.mustRun(ExitOK, decideArgs("retry")...)
 		out := h.stdout.String()
-		m := shownHash.FindStringSubmatch(out)
 		req := decodeAs[apiv1.RetryScheduledWorkRequest](t, d.retry)
-		if m == nil || req.SpecHash != m[1] || req.SpecHash != testSpecHash || !req.At.Equal(testParkedAt) {
-			t.Errorf("retry request %+v, shown %v", req, m)
+		if req.SpecHash != testSpecHash || !req.At.Equal(testParkedAt) {
+			t.Errorf("retry request %+v", req)
 		}
 		if d.approve != nil {
 			t.Error("a retry sent an approval")
@@ -785,61 +891,94 @@ func TestScheduleRetry(t *testing.T) {
 		d := &decisionAPI{view: testScheduledWork()}
 		d.handle(t, h)
 		h.mustRun(ExitFailed, "schedule", "retry", testWorkName)
-		contains(t, "stderr", h.stderr.String(), "Retry the occurrence of sched-0123456789abcdef0123 at 2026-10-06T19:00:00Z now? [y/N] ", "not retried; no retry was sent")
+		contains(t, "stderr", h.stderr.String(), "You are retrying an occurrence", "Retry the occurrence of sched-0123456789abcdef0123 at 2026-10-06T19:00:00Z now? [y/N] ", "not retried; no retry was sent")
 		if d.posts() != 0 {
 			t.Error("a declined retry was sent")
 		}
 		h.env.Stdin = strings.NewReader("y\n")
 		h.mustRun(ExitOK, "schedule", "retry", testWorkName)
-		if d.retry == nil {
-			t.Error("an agreed retry was not sent")
+		m := shownHash.FindStringSubmatch(h.stderr.String())
+		if req := decodeAs[apiv1.RetryScheduledWorkRequest](t, d.retry); m == nil || req.SpecHash != m[1] {
+			t.Errorf("an agreed retry sent %+v, shown %v", req, m)
 		}
 	})
-	t.Run("no terminal and no yes", func(t *testing.T) {
+	t.Run("yes needs spec-hash", func(t *testing.T) {
 		h := newHarness(t)
 		refuseAll(t, h)
-		h.mustRun(ExitUsage, "schedule", "retry", testWorkName)
-		contains(t, "stderr", h.stderr.String(), "schedule retry asks y/N on a terminal")
+		h.mustRun(ExitUsage, "schedule", "retry", testWorkName, "--yes")
+		contains(t, "stderr", h.stderr.String(), "then agent-run schedule retry sched-0123456789abcdef0123 --spec-hash <hash> --yes. Nothing was sent")
+	})
+	t.Run("spec-hash pins what was seen", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork()}
+		d.handle(t, h)
+		h.mustRun(ExitFailed, "schedule", "retry", testWorkName, "--yes", "--spec-hash", testOldHash)
+		contains(t, "stderr", h.stderr.String(), "changed after you saw it", "No retry was sent")
+		if d.posts() != 0 {
+			t.Error("a stale retry was sent")
+		}
 	})
 	t.Run("nothing parked", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.view.Occurrences = d.view.Occurrences[:2]
 		d.handle(t, h)
-		h.mustRun(ExitFailed, "schedule", "retry", testWorkName, "--yes")
+		h.mustRun(ExitFailed, decideArgs("retry")...)
 		contains(t, "stderr", h.stderr.String(), "has no parked occurrence, so there is nothing to retry")
 		if d.posts() != 0 {
 			t.Error("retried nothing")
 		}
 	})
+	t.Run("several parked need --at", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork()}
+		d.view.Occurrences = append(d.view.Occurrences, apiv1.ScheduledWorkOccurrence{At: testNow.Add(-90 * time.Minute), State: apiv1.ScheduledOccurrenceParked})
+		d.handle(t, h)
+		h.mustRun(ExitFailed, decideArgs("retry")...)
+		contains(t, "stderr", h.stderr.String(), "has 2 parked occurrences (2026-10-06T19:00:00Z, 2026-10-06T19:30:00Z); name one with --at")
+		if d.posts() != 0 {
+			t.Error("retried without choosing")
+		}
+	})
+	t.Run("the attempt limit", func(t *testing.T) {
+		h := newHarness(t)
+		d := &decisionAPI{view: testScheduledWork()}
+		d.view.Occurrences[2].Attempt = apiv1.MaxScheduledWorkAttempt
+		d.handle(t, h)
+		h.mustRun(ExitFailed, decideArgs("retry")...)
+		contains(t, "stderr", h.stderr.String(), "has used its 3 retries; a fourth is refused. No retry was sent")
+		if d.posts() != 0 {
+			t.Error("retried past the attempt limit")
+		}
+	})
 	t.Run("--at", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
+		d.view.Occurrences[0].State = apiv1.ScheduledOccurrenceSucceeded + "\x1b[2J"
 		d.handle(t, h)
-		h.mustRun(ExitFailed, "schedule", "retry", testWorkName, "--yes", "--at", "2026-09-29T21:00:00Z")
-		contains(t, "stderr", h.stderr.String(), "is Succeeded, not Parked")
-		h.mustRun(ExitFailed, "schedule", "retry", testWorkName, "--yes", "--at", "2026-09-29T21:01:00Z")
+		h.mustRun(ExitFailed, decideArgs("retry", "--at", "2026-09-29T21:00:00Z")...)
+		contains(t, "stderr", h.stderr.String(), `is Succeeded\u001b[2J, not Parked`)
+		if strings.Contains(h.stderr.String(), "\x1b") {
+			t.Errorf("a control character reached the terminal: %q", h.stderr.String())
+		}
+		h.mustRun(ExitFailed, decideArgs("retry", "--at", "2026-09-29T21:01:00Z")...)
 		contains(t, "stderr", h.stderr.String(), "has no occurrence at 2026-09-29T21:01:00Z")
 		if d.posts() != 0 {
 			t.Error("retried an occurrence that is not parked")
 		}
-		h.mustRun(ExitUsage, "schedule", "retry", testWorkName, "--yes", "--at", "yesterday")
+		h.mustRun(ExitUsage, decideArgs("retry", "--at", "yesterday")...)
 		contains(t, "stderr", h.stderr.String(), `--at "yesterday" is not an RFC 3339 instant`)
-		h.mustRun(ExitOK, "schedule", "retry", testWorkName, "--yes", "--at", "2026-10-06T15:00:00-04:00")
+		h.mustRun(ExitOK, decideArgs("retry", "--at", "2026-10-06T15:00:00-04:00")...)
 		if req := decodeAs[apiv1.RetryScheduledWorkRequest](t, d.retry); !req.At.Equal(testParkedAt) {
 			t.Errorf("request %+v", req)
 		}
-	})
-	t.Run("spec-hash is approve's", func(t *testing.T) {
-		h := newHarness(t)
-		refuseAll(t, h)
-		h.mustRun(ExitUsage, "schedule", "retry", testWorkName, "--yes", "--spec-hash", testSpecHash)
 	})
 }
 
 // TestScheduleRefusals: 400, 403, 404 and 409 keep the refusal's exit code and
 // say what to do next.
 func TestScheduleRefusals(t *testing.T) {
+	approve, retry := decideArgs("approve")[1:], decideArgs("retry")[1:]
 	cases := []struct {
 		name   string
 		args   []string
@@ -848,21 +987,27 @@ func TestScheduleRefusals(t *testing.T) {
 		exit   int
 		want   []string
 	}{
-		{"approve 403", []string{"approve", testWorkName, "--yes"}, 403, apiv1.CodeForbidden, ExitAuth,
+		{"approve 403", approve, 403, apiv1.CodeForbidden, ExitAuth,
 			[]string{"not allowed (403 forbidden): only a human", "approve and retry are for a human (Tom) only; a session, client or coordinator cannot approve"}},
-		{"retry 403", []string{"retry", testWorkName, "--yes"}, 403, apiv1.CodeForbidden, ExitAuth, []string{"cannot retry"}},
-		{"approve 409", []string{"approve", testWorkName, "--yes"}, 409, apiv1.CodeConflict, ExitFailed,
-			[]string{"(409 conflict): the spec hash does not match", "the item changed after you saw it; read it again with agent-run schedule show sched-0123456789abcdef0123"}},
-		{"retry 409", []string{"retry", testWorkName, "--yes"}, 409, apiv1.CodeConflict, ExitFailed, []string{"agent-run schedule show sched-0123456789abcdef0123 shows where it stands now"}},
+		{"retry 403", retry, 403, apiv1.CodeForbidden, ExitAuth, []string{"cannot retry"}},
+		{"approve 409", approve, 409, apiv1.CodeConflict, ExitFailed,
+			[]string{"(409 conflict): the spec hash does not match",
+				"the API refuses an approval when the item is cancelled, the occurrence named by --at is no longer Parked or has used its 3 retries, or the spec changed after you saw it; read it again with agent-run schedule show sched-0123456789abcdef0123"}},
+		{"retry 409", retry, 409, apiv1.CodeConflict, ExitFailed,
+			[]string{"the API refuses a retry when the item is cancelled, the occurrence is no longer Parked or has used its 3 retries, or the spec changed after you saw it; agent-run schedule show sched-0123456789abcdef0123 shows which"}},
 		{"edit 403", []string{"edit", testWorkName, "--title", "x"}, 403, apiv1.CodeForbidden, ExitAuth, []string{"only the owner or a human may edit scheduled work; a coordinator may cancel it"}},
 		{"edit 409", []string{"edit", testWorkName, "--title", "x"}, 409, apiv1.CodeConflict, ExitFailed, []string{"shows where it stands now"}},
 		{"cancel 403", []string{"cancel", testWorkName}, 403, apiv1.CodeForbidden, ExitAuth, []string{"only the owner, a human or a coordinator may cancel"}},
 		{"show 404", []string{"show", testWorkName}, 404, apiv1.CodeNotFound, ExitNotFound,
 			[]string{"(404 not_found)", "agent-run schedule list shows your scheduled work; an operator that does not serve the scheduled-work API answers 404 on every route"}},
 		{"list 403", []string{"list", "--all"}, 403, apiv1.CodeForbidden, ExitAuth, []string{"list --all is for a human or a coordinator"}},
-		{"create 409", scheduleCreateArgs()[1:], 409, apiv1.CodeConflict, ExitFailed, []string{"a --key names one item of yours"}},
-		{"create 400", scheduleCreateArgs()[1:], 400, apiv1.CodeBadRequest, ExitFailed, []string{"(400 bad_request)", "agent-run and the operator may be different versions"}},
-		{"create 422", scheduleCreateArgs()[1:], 422, apiv1.CodeInvalid, ExitFailed, []string{"work.template: no such template"}},
+		{"create 409", scheduleCreateArgs("--key", "loki")[1:], 409, apiv1.CodeConflict, ExitFailed,
+			[]string{"a --key names one item of yours", "the create used key loki: run the same command with --key loki to retry it without making a second item"}},
+		{"create 400", scheduleCreateArgs()[1:], 400, apiv1.CodeBadRequest, ExitFailed,
+			[]string{"(400 bad_request)", "agent-run and the operator may be different versions", "the create used key agent-run-testkey"}},
+		{"create 422", scheduleCreateArgs()[1:], 422, apiv1.CodeInvalid, ExitFailed,
+			[]string{"--template (work.template): no such template", "--prompt or --prompt-file (work.prompt): too long", "--not-after (notAfter): more than 180 days ahead",
+				"--tz (timeZone): unknown zone", "--due (due): in the past"}},
 	}
 	for _, tc := range cases {
 		t.Run(strings.ReplaceAll(tc.name, " ", "_"), func(t *testing.T) {
@@ -874,7 +1019,12 @@ func TestScheduleRefusals(t *testing.T) {
 					return
 				}
 				msg := map[int]string{403: "only a human", 409: "the spec hash does not match", 404: "no scheduled work " + testWorkName, 400: "unknown field", 422: "invalid"}[tc.status]
-				apiError(w, tc.status, tc.code, msg, map[bool][]apiv1.FieldError{true: {{Field: "work.template", Message: "no such template"}}}[tc.status == 422]...)
+				var fields []apiv1.FieldError
+				if tc.status == 422 {
+					fields = []apiv1.FieldError{{Field: "work.template", Message: "no such template"}, {Field: "work.prompt", Message: "too long"},
+						{Field: "notAfter", Message: "more than 180 days ahead"}, {Field: "timeZone", Message: "unknown zone"}, {Field: "due", Message: "in the past"}}
+				}
+				apiError(w, tc.status, tc.code, msg, fields...)
 			}
 			h.mustRun(tc.exit, append([]string{"schedule"}, tc.args...)...)
 			contains(t, "stderr", h.stderr.String(), tc.want...)
@@ -882,15 +1032,231 @@ func TestScheduleRefusals(t *testing.T) {
 	}
 }
 
+// TestScheduleCreateRetriedThenConflict: a 409 after agent-run's own retry
+// says the first attempt may have made the item.
+func TestScheduleCreateRetriedThenConflict(t *testing.T) {
+	h := newHarness(t)
+	calls := 0
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		calls++
+		if calls == 1 {
+			apiError(w, http.StatusServiceUnavailable, apiv1.CodeUnavailable, "synthetic")
+			return
+		}
+		apiError(w, http.StatusConflict, apiv1.CodeConflict, "key names a different item of yours")
+	}
+	h.mustRun(ExitFailed, scheduleCreateArgs("--key", "loki")...)
+	contains(t, "stderr", h.stderr.String(), "agent-run sent this create again after an attempt it could not confirm; the first attempt may have made the item, so check agent-run schedule list before you create it again",
+		"the create used key loki")
+	if calls != 2 {
+		t.Errorf("%d calls", calls)
+	}
+	// Without a retry, no such note.
+	calls = 1
+	h.mustRun(ExitFailed, scheduleCreateArgs("--key", "loki")...)
+	if strings.Contains(h.stderr.String(), "sent this create again") {
+		t.Errorf("a first-try 409 claimed a retry: %s", h.stderr.String())
+	}
+}
+
+// TestScheduleEditIsSentOnce: an edit has no precondition, so a lost answer is
+// reported, not repeated.
+func TestScheduleEditIsSentOnce(t *testing.T) {
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		apiError(w, http.StatusServiceUnavailable, apiv1.CodeUnavailable, "synthetic")
+	}
+	h.mustRun(ExitUnconfirmed, "schedule", "edit", testWorkName, "--title", "x")
+	if n := len(h.api.requests()); n != 1 || len(h.sleeps) != 0 {
+		t.Errorf("%d requests, sleeps %v", n, h.sleeps)
+	}
+	contains(t, "stderr", h.stderr.String(), "do not repeat it")
+}
+
+// TestScheduleAnswerNamesTheItem: show, edit and cancel refuse an answer for
+// another item.
+func TestScheduleAnswerNamesTheItem(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"show", testWorkName}, `the API answered for "sched-other", not "sched-0123456789abcdef0123"`},
+		{[]string{"edit", testWorkName, "--title", "x"}, `the API's answer names "sched-other", not "sched-0123456789abcdef0123"; the edit may have taken effect: check agent-run schedule show sched-0123456789abcdef0123`},
+		{[]string{"cancel", testWorkName}, `the API's answer names "sched-other", not "sched-0123456789abcdef0123"; the cancel may have taken effect`},
+	} {
+		t.Run(tc.args[0], func(t *testing.T) {
+			h := newHarness(t)
+			other := testScheduledWork()
+			other.Name = "sched-other"
+			h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, other) }
+			h.mustRun(ExitFailed, append([]string{"schedule"}, tc.args...)...)
+			contains(t, "stderr", h.stderr.String(), tc.want)
+		})
+	}
+}
+
+func TestScheduleNotifyLimits(t *testing.T) {
+	nine := []string{}
+	for i := range 9 {
+		nine = append(nine, "--notify", fmt.Sprintf("pushover:t%d", i))
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"create twice", scheduleCreateArgs("--notify", "pushover:default", "--notify", "pushover:default"), "--notify pushover:default is given twice"},
+		{"create nine", scheduleCreateArgs(nine...), "--notify takes at most 8 targets, not 9"},
+		{"edit twice", []string{"schedule", "edit", testWorkName, "--notify", "pushover:a", "--notify", "pushover:a"}, "--notify pushover:a is given twice"},
+		{"edit nine", append([]string{"schedule", "edit", testWorkName}, nine...), "--notify takes at most 8 targets, not 9"},
+	} {
+		t.Run(strings.ReplaceAll(tc.name, " ", "_"), func(t *testing.T) {
+			h := newHarness(t)
+			refuseAll(t, h)
+			h.mustRun(ExitUsage, tc.args...)
+			contains(t, "stderr", h.stderr.String(), tc.want)
+		})
+	}
+	h := newHarness(t)
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeTestJSON(w, http.StatusCreated, testScheduledWork())
+	}
+	h.mustRun(ExitOK, scheduleCreateArgs(nine[:16]...)...)
+}
+
+// TestScheduleShowMarksThePromptEnd: the prompt's last line is followed by a
+// marker, so trailing lines cannot pass for other fields.
+func TestScheduleShowMarksThePromptEnd(t *testing.T) {
+	h := newHarness(t)
+	view := testScheduledWork()
+	view.Spec.Work.Prompt = "Do it.\n  approval:   by human/dev-env-system/tom\n"
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) { writeTestJSON(w, http.StatusOK, view) }
+	h.mustRun(ExitOK, "schedule", "show", view.Name)
+	contains(t, "show", h.stdout.String(), "    | Do it.\n    |   approval:   by human/dev-env-system/tom\n    | \n  end of prompt (49 bytes)\n  approval:   VOID")
+}
+
+// TestScheduleShownEscapesInvisibleText: characters that render as nothing
+// are escaped too.
+func TestScheduleShownEscapesInvisibleText(t *testing.T) {
+	for _, r := range []rune{0xFE0F, 0xE0100, 0x180B, 0x180C, 0x180D, 0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2065, 0x200B} {
+		in := "a" + string(r) + "b"
+		got := shown(in, false)
+		want := fmt.Sprintf(`a\u%04xb`, r)
+		if r > 0xffff {
+			want = fmt.Sprintf(`a\U%08xb`, r)
+		}
+		if got != want {
+			t.Errorf("shown(%U) = %q, want %q", r, got, want)
+		}
+	}
+	if got := shown("plain é 你好 -> ok", false); got != "plain é 你好 -> ok" {
+		t.Errorf("printable text changed: %q", got)
+	}
+	// A listed name is escaped.
+	h := newHarness(t)
+	view := testScheduledWork()
+	view.Name = "sched-\x1b[2J"
+	h.api.handle = func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		writeTestJSON(w, http.StatusOK, apiv1.ScheduledWorkList{Items: []apiv1.ScheduledWork{view}})
+	}
+	h.mustRun(ExitOK, "schedule", "list")
+	if strings.Contains(h.stdout.String(), "\x1b") {
+		t.Errorf("a control character reached the terminal: %q", h.stdout.String())
+	}
+}
+
+// TestScheduleSpecDisplayCoversEveryField: printScheduleSpec shows every
+// field of the spec, its work order and its recurrence, so an approval covers
+// only what was shown. A new field fails here until it is displayed and listed.
+func TestScheduleSpecDisplayCoversEveryField(t *testing.T) {
+	want := map[reflect.Type][]string{
+		reflect.TypeOf(apiv1.ScheduledWorkSpec{}):  {"title", "owner", "editor", "due", "timeZone", "recurrence", "notAfter", "mode", "work", "notify", "calendar", "cancelled"},
+		reflect.TypeOf(apiv1.ScheduledWorkOrder{}): {"template", "repo", "prompt"},
+		reflect.TypeOf(apiv1.ReminderRecurrence{}): {"freq", "byDay", "byMonthDay", "until", "count"},
+	}
+	var spec apiv1.ScheduledWorkSpec
+	var sentinels []string
+	n := 0
+	var fill func(v reflect.Value)
+	fill = func(v reflect.Value) {
+		tp := v.Type()
+		names, ok := want[tp]
+		if !ok {
+			t.Fatalf("no field list for %s", tp)
+		}
+		var got []string
+		for i := range tp.NumField() {
+			f := tp.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			got = append(got, name)
+			fv := v.Field(i)
+			n++
+			switch {
+			case f.Type == reflect.TypeOf(time.Time{}):
+				at := time.Date(2030, 1, n, 0, 0, 0, 0, time.UTC)
+				fv.Set(reflect.ValueOf(at))
+				sentinels = append(sentinels, at.Format(time.RFC3339))
+			case f.Type == reflect.TypeOf(&time.Time{}):
+				at := time.Date(2031, 1, n, 0, 0, 0, 0, time.UTC)
+				fv.Set(reflect.ValueOf(&at))
+				sentinels = append(sentinels, at.Format(time.RFC3339))
+			case f.Type.Kind() == reflect.String:
+				s := fmt.Sprintf("sentinel-%s-%d", name, n)
+				fv.SetString(s)
+				sentinels = append(sentinels, s)
+			case f.Type.Kind() == reflect.Slice && f.Type.Elem().Kind() == reflect.String:
+				s := fmt.Sprintf("sentinel-%s-%d", name, n)
+				fv.Set(reflect.ValueOf([]string{s}))
+				sentinels = append(sentinels, s)
+			case f.Type.Kind() == reflect.Int:
+				fv.SetInt(int64(900 + n))
+				sentinels = append(sentinels, fmt.Sprint(900+n))
+			case f.Type.Kind() == reflect.Bool:
+				fv.SetBool(true)
+				sentinels = append(sentinels, name+":  yes")
+			case f.Type.Kind() == reflect.Struct:
+				fill(fv)
+			case f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct:
+				fv.Set(reflect.New(f.Type.Elem()))
+				fill(fv.Elem())
+			default:
+				t.Fatalf("%s.%s: no sentinel for %s", tp, f.Name, f.Type)
+			}
+		}
+		if !slices.Equal(got, names) {
+			t.Errorf("%s fields %v, the display list has %v: show the new field in printScheduleSpec, then list it here", tp, got, names)
+		}
+	}
+	fill(reflect.ValueOf(&spec).Elem())
+	var b strings.Builder
+	printScheduleSpec(&b, apiv1.ScheduledWork{Spec: spec, SpecHash: testSpecHash})
+	for _, s := range sentinels {
+		if !strings.Contains(b.String(), s) {
+			t.Errorf("printScheduleSpec does not show %q:\n%s", s, b.String())
+		}
+	}
+}
+
 func TestScheduleHelp(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun(ExitOK, "help", "schedule")
 	help := strings.Join(strings.Fields(h.stdout.String()), " ")
-	contains(t, "help", help, "agent-run schedule create", "agent-run schedule approve <name> [--spec-hash <hash>] [--at <time>] [--yes]",
-		"Scheduling grants no authority", "Nothing runs until the operator has the dispatch template",
+	contains(t, "help", help, "agent-run schedule create",
+		"agent-run schedule approve <name> [--at <time>] [--spec-hash <hash> --yes]",
+		"agent-run schedule retry <name> [--at <time>] [--spec-hash <hash> --yes]",
+		"Scheduling grants no authority",
+		"the occurrence is parked, and Tom is paged if it has a notify target",
+		"Nothing runs until the operator is started with --enable-scheduled-work and has the dispatch template the item names",
 		"every command here fails with 404 until the operator serves the scheduled-work API", "approve and retry are for a human (Tom) only",
+		"The y/N and --yes guard against a slip; they prove nothing about who you are. The API accepts approve and retry only from Tom's own token.",
+		"--yes needs --spec-hash", "retries a parked occurrence only when --at names it",
 		"Interactive work needs at least one", "at most 8192 bytes", "at most 180 days after creation",
 		"Without --yes and without a terminal, approve and retry refuse and send nothing")
+	for _, gone := range []string{"never loses", "starts it twice"} {
+		if strings.Contains(help, gone) {
+			t.Errorf("help still promises %q", gone)
+		}
+	}
 	h.mustRun(ExitOK, "schedule", "approve", "-h")
 	contains(t, "-h", h.stdout.String(), "agent-run schedule approve")
 	h.mustRun(ExitOK, "schedule", "help")

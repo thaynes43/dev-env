@@ -163,16 +163,19 @@ type EditScheduledWorkRequest struct {
 }
 
 // ApproveScheduledWorkRequest is the body of POST .../approve, a human's
-// approval of one exact spec.
+// approval of one exact spec. The API identifies the approving human from the
+// caller's token, never from this body.
 type ApproveScheduledWorkRequest struct {
-	// SpecHash is the hash of the spec the human saw, the view's SpecHash.
-	// The API refuses it with 409 unless it equals the current spec's hash, so
-	// an edit made after the human looked is never approved.
+	// SpecHash is the hash of the spec the client showed, the view's
+	// SpecHash. It binds the approval to that spec: the API refuses it with
+	// 409 unless it equals the current spec's hash, so an edit made after the
+	// client fetched the spec is never approved. It is not evidence of who
+	// approved or that anyone read the spec.
 	SpecHash string `json:"specHash"`
-	// At names the Parked occurrence the human saw. When set, the approval
+	// At names a Parked occurrence the client showed. When set, the approval
 	// also retries that occurrence, and the API refuses it with 409 unless that
-	// occurrence is still Parked. Absent, the approval applies from the next
-	// occurrence and no Parked one is retried.
+	// occurrence is still Parked and under MaxScheduledWorkAttempt. Absent, the
+	// approval applies from the next occurrence and no Parked one is retried.
 	At *time.Time `json:"at,omitempty"`
 }
 
@@ -184,8 +187,10 @@ type RetryScheduledWorkRequest struct {
 	// occurrence is Parked, under MaxScheduledWorkAttempt, and claimed with the
 	// current spec.
 	At time.Time `json:"at"`
-	// SpecHash is the hash of the spec the human saw. The API refuses it with
-	// 409 unless it equals the current spec's hash.
+	// SpecHash is the hash of the spec the client showed. It binds the retry
+	// to that spec: the API refuses it with 409 unless it equals the current
+	// spec's hash. It is not evidence of who retried or that anyone read the
+	// spec; the API identifies the human from the caller's token.
 	SpecHash string `json:"specHash"`
 }
 
@@ -214,6 +219,8 @@ type ScheduledWorkSpec struct {
 // ScheduledWorkApproval is a human's approval of one exact spec. It is void
 // once the spec's hash differs from SpecHash.
 type ScheduledWorkApproval struct {
+	// By is the human the API authenticated from the approving request's
+	// token, never a value from a request body.
 	By       string    `json:"by"`
 	At       time.Time `json:"at"`
 	SpecHash string    `json:"specHash"`
@@ -286,8 +293,9 @@ type ScheduledWork struct {
 	Name string            `json:"name"`
 	Spec ScheduledWorkSpec `json:"spec"`
 	// SpecHash is the SHA-256, in lowercase hex, of Spec without editor and
-	// cancelled: the hash an approval must name. The API computes it from
-	// the same stored spec it shows in Spec.
+	// cancelled: the hash an approval must name, which binds the approval to
+	// the spec the client showed. The API computes it from the same stored
+	// spec it shows in Spec. It identifies no one.
 	SpecHash string `json:"specHash"`
 	// State is active, cancelled or ended.
 	State    string                 `json:"state"`
