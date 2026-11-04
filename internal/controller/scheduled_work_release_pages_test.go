@@ -434,3 +434,89 @@ func TestScheduledWorkReleaseASkippedPageIsFinal(t *testing.T) {
 		t.Errorf("%d Reminder creates, want 1: a skipped page was tried again", n)
 	}
 }
+
+// reminderCreateHangs blocks every Reminder create until its context ends,
+// and records the deadline it was given; every other call goes through.
+type reminderCreateHangs struct {
+	client.Client
+	hang  bool
+	left  atomic.Int64
+	calls atomic.Int32
+}
+
+func (c *reminderCreateHangs) Create(ctx context.Context, o client.Object, opts ...client.CreateOption) error {
+	if _, ok := o.(*v1alpha1.Reminder); ok {
+		c.calls.Add(1)
+		if dl, ok := ctx.Deadline(); ok {
+			c.left.Store(int64(time.Until(dl)))
+		}
+		if c.hang {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+	}
+	return c.Client.Create(ctx, o, opts...)
+}
+
+// Each page's Ensure has its own deadline: by default within
+// scheduledWorkPageTimeout (10s), and a create that hangs is cut off there,
+// recorded skipped, and the release goes on.
+func TestScheduledWorkReleasePageCallIsBounded(t *testing.T) {
+	t.Run("default deadline", func(t *testing.T) {
+		var c *reminderCreateHangs
+		startOperator(t, func(r *Reconciler) { c = &reminderCreateHangs{Client: r.Client}; r.Client = c })
+		f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDelivered)
+		s := releaseFixtureSession(t, f, suspendedAtCreate)
+		waitReleased(t, s.Name)
+		f.wantReleasePage(t, v1alpha1.PageEventResult, 0)
+		if d := time.Duration(c.left.Load()); d <= 0 || d > 10*time.Second {
+			t.Errorf("the page create had %v left, want a deadline within 10s", d)
+		}
+	})
+	t.Run("a hanging create", func(t *testing.T) {
+		old := scheduledWorkPageTimeout
+		scheduledWorkPageTimeout = 300 * time.Millisecond
+		t.Cleanup(func() { scheduledWorkPageTimeout = old })
+		var c *reminderCreateHangs
+		startOperator(t, func(r *Reconciler) { c = &reminderCreateHangs{Client: r.Client, hang: true}; r.Client = c })
+		f := newScheduledWork(t, v1alpha1.ScheduledWorkInteractive, v1alpha1.OccurrenceDelivered)
+		s := releaseFixtureSession(t, f, suspendedAtCreate)
+		f.waitOccurrence(t, v1alpha1.OccurrenceEnded)
+		start := time.Now()
+		waitReleased(t, s.Name)
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("the release took %v after the record with a hanging page create; the page should be cut off at %v", took, scheduledWorkPageTimeout)
+		}
+		o := f.occurrence(t)
+		if p := releasePage(o, v1alpha1.PageEventResult, 0); p == nil || p.State != "skipped" || p.Reminder != "" || c.calls.Load() == 0 {
+			t.Errorf("pages %+v, creates %d", o.Pages, c.calls.Load())
+		}
+	})
+}
+
+// A terminal record stored without a page intent (by an operator before S4b,
+// or before notify was set) gets none from a later ReportedAdded write: the
+// agent's outcome is copied, and no page is sent for the earlier record.
+func TestScheduledWorkReleaseNoPageWhenOnlyTheReportIsAdded(t *testing.T) {
+	op := startOperator(t)
+	f := newScheduledWork(t, v1alpha1.ScheduledWorkHeadless, v1alpha1.OccurrenceRunning)
+	s := releaseFixtureSession(t, f, nil)
+	f.setStatus(t, func(st *v1alpha1.ScheduledWorkStatus) {
+		st.Occurrences[0].State, st.Occurrences[0].Reason = v1alpha1.OccurrenceSucceeded, "recorded before S4b"
+		st.Counts.Succeeded = 1
+	})
+	pod := markRunning(t, waitPod(t, s.Name), "talosw02")
+	setTask(t, s.Name, v1alpha1.TaskStatus{Subtype: "success", FinishedAt: metav1.NewTime(time.Now().Add(-2 * scheduledwork.ReportWait))},
+		&v1alpha1.TaskOutcomeStatus{PodUID: string(pod.UID), Record: v1alpha1.TaskOutcomeRecordStatus{Summary: "opened the audit PR"}})
+	waitReleased(t, s.Name)
+	o := f.occurrence(t)
+	if o.Reported == nil || o.Reported.Summary != "opened the audit PR" {
+		t.Fatalf("the reported outcome was not added: %+v", o)
+	}
+	if len(o.Pages) != 0 || len(f.pageReminders(t)) != 0 {
+		t.Errorf("pages %+v reminders %d", o.Pages, len(f.pageReminders(t)))
+	}
+	if !slices.Contains(op.writes.orderLog(), "update status *v1alpha1.ScheduledWork "+f.key.Name) {
+		t.Errorf("the reported outcome write did not happen: %v", op.writes.orderLog())
+	}
+}

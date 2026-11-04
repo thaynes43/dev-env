@@ -738,9 +738,10 @@ func (r *Reconciler) scheduledLaunchGate(ctx context.Context, s *v1alpha1.AgentS
 // cannot be created is recorded skipped. The releaser runs without
 // --enable-scheduled-work, so its pages do too.
 
-// scheduledWorkPageTimeout bounds one page's Ensure: its create and its one
-// read.
-const scheduledWorkPageTimeout = 10 * time.Second
+// scheduledWorkPageTimeout bounds one page's Ensure create; the pager's
+// verifying read has its own pages.VerifyTimeout. A variable only so a test
+// can shorten it before it starts an operator.
+var scheduledWorkPageTimeout = 10 * time.Second
 
 // releasePageEvent is the page a terminal record the releaser writes sends:
 // failed for Failed, result for Succeeded and Ended, skipped for Skipped.
@@ -798,6 +799,12 @@ func releaserSends(pg v1alpha1.ScheduledWorkPage) bool {
 // the release guard; the terminal record is in it either way. It holds
 // nothing: a write that fails leaves the intent stored, and a later pass for
 // this session, while its finalizer holds, finds the Reminder Ensure made.
+//
+// A residual, by Decision 5's best effort: when the write fails (any error
+// but a conflict, or five conflicts in a row) and the finalizer is then
+// lifted, no later pass comes, and the executor never sends a failed or
+// result page. The intent then stays pending in status for good, whether or
+// not its Reminder was created and sent; it means "page not confirmed".
 func (r *Reconciler) sendScheduledWorkPages(ctx context.Context, lg logr.Logger, s *v1alpha1.AgentSession, at time.Time, w *v1alpha1.ScheduledWork, now time.Time) *v1alpha1.ScheduledWork {
 	pager := &pages.Pager{Client: uncachedPageReads{Client: r.Client, reader: r.APIReader}}
 	for range 5 {

@@ -606,8 +606,8 @@ func TestAPageCallIsBounded(t *testing.T) {
 		})
 		f.at(e, day0)
 		f.wantPage(key, day0, v1alpha1.PageEventDue, 0)
-		if d := time.Duration(left.Load()); d <= 0 || d > DefaultPageTimeout {
-			t.Errorf("the page create had %v left, want a deadline within %v", d, DefaultPageTimeout)
+		if d := time.Duration(left.Load()); d <= 0 || d > 10*time.Second {
+			t.Errorf("the page create had %v left, want a deadline within 10s", d)
 		}
 	})
 	t.Run("a hanging create", func(t *testing.T) {

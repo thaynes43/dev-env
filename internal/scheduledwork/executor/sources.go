@@ -33,8 +33,8 @@ import (
 //     refusal is no basis, with the template's reason: the occurrence parks
 //     at once and never waits on an owner it could not run for. The
 //     approval's template check compares the template's digest with the one
-//     the approval recorded, which S5 adds to status.approval; until then
-//     none is recorded, so every approval is void by design.
+//     the approval recorded in status.approval.templateDigest (the API's
+//     approve route writes it); an approval without one is void.
 //
 // Authorize returns the digest of the template it decided under
 // (Authority.TemplateDigest) and Resolve the digest of the template it reads

@@ -147,7 +147,7 @@ func (p *pass) deliver(ctx context.Context, w *v1alpha1.ScheduledWork, now time.
 				continue
 			}
 			title, body := pageText(w, o, pg.Event)
-			pctx, cancel := context.WithTimeout(ctx, DefaultPageTimeout)
+			pctx, cancel := context.WithTimeout(ctx, positiveOr(p.e.PageTimeout, DefaultPageTimeout))
 			got := p.e.Pager.Ensure(pctx, w, o.At.Time, pg.Event, pg.Attempt, title, body, now)
 			cancel()
 			o.Pages = settle(o.Pages, pg, got)
@@ -172,7 +172,7 @@ func settle(pages []v1alpha1.ScheduledWorkPage, pg, got v1alpha1.ScheduledWorkPa
 }
 
 // pageText is the title and body of the executor's page for event on o.
-// The keeper cuts both to the Reminder's limits.
+// pages.Build cuts both to the Reminder's limits.
 func pageText(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, event string) (title, body string) {
 	head := map[string]string{
 		v1alpha1.PageEventDue:     "Scheduled work started",
