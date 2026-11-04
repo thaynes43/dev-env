@@ -9,6 +9,7 @@
 //	DELETE /v1/sessions/{name}             reap: rescue, suspend, archive (D-45)
 //	POST   /v1/sessions/{name}/heartbeat   agentd's status (D-41), the session's own pod only
 //	GET    /v1/fleet                       what runs and waits, and on which revision
+//	/v1/scheduled-work[/{name}[/cancel|/approve|/retry]]  scheduled agent work (DESIGN-054); off unless ScheduledWork is set
 //	POST   /v1/asks                        create an ask (session); off unless Asks is set
 //	GET    /v1/asks                        the caller's asks (?mine=true)
 //	GET    /v1/asks/{id}                   the caller's ask
@@ -92,6 +93,9 @@ type Server struct {
 	PortalLaunchProfile string
 	// Reminders turns on /v1/reminders (DESIGN-032); nil leaves the routes off.
 	Reminders *ReminderConfig
+	// ScheduledWork turns on /v1/scheduled-work (DESIGN-054 S5,
+	// --enable-scheduled-work-api); nil leaves every route off (404).
+	ScheduledWork *ScheduledWorkConfig
 	// PortalLaunchMaxUnfinished caps the unfinished sessions whose parent starts
 	// with "portal/". Zero or less means the default.
 	PortalLaunchMaxUnfinished int
@@ -275,6 +279,7 @@ func (s *Server) Handler() http.Handler {
 	s.registerPortalTaskClaims(mux)
 	s.registerCodexRC(mux)
 	s.registerReminders(mux)
+	s.registerScheduledWork(mux)
 	s.registerAsks(mux)
 	mux.Handle(apiv1.CanariesPath+"/{id}/result", s.canaryResultRoute())
 	mux.Handle(apiv1.SessionDirectoryPath, s.serve(route{directory: true, coordinator: true, methods: map[string]handler{http.MethodGet: s.listDirectory}}))

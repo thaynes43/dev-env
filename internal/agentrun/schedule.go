@@ -25,8 +25,9 @@ import (
 
 // agent-run schedule (DESIGN-054 S5, OpenProject #397): create, list, show,
 // edit and cancel scheduled agent work through /v1/scheduled-work, and a
-// human's approve and retry. The operator serves the routes in S5b; until then
-// every one answers 404.
+// human's approve and retry. The operator serves the routes (S5b,
+// internal/apiserver/scheduled_work.go) behind its default-off
+// --enable-scheduled-work-api flag; with the flag off every one answers 404.
 //
 //	schedule create "<title>" --due <local time> --tz <zone> --not-after <instant>
 //	      --mode headless|interactive --template <name> --repo <repo> (--prompt <text> | --prompt-file <path>)
