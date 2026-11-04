@@ -241,25 +241,34 @@ type ScheduledWorkCounts struct {
 
 // Page events: the moment of an occurrence a page reports.
 const (
-	PageEventDue    = "due"
-	PageEventLink   = "link"
-	PageEventParked = "parked"
-	PageEventFailed = "failed"
-	PageEventResult = "result"
+	PageEventDue     = "due"
+	PageEventLink    = "link"
+	PageEventParked  = "parked"
+	PageEventFailed  = "failed"
+	PageEventResult  = "result"
+	PageEventSkipped = "skipped"
 )
 
 // ScheduledWorkMaxPages bounds the pages of one occurrence.
-const ScheduledWorkMaxPages = 4
+const ScheduledWorkMaxPages = 8
 
 // ScheduledWorkPage is one page an occurrence sent. Each page is its own
-// one-shot Reminder, keyed by the occurrence and the event, and a sent Reminder
+// one-shot Reminder, keyed by the occurrence, the event and the attempt, and a sent Reminder
 // is never reused. Pages are best effort: a page Reminder that cannot be
 // created, or a Reminder kind that is not served, is recorded as skipped and
 // never holds a finalizer, a claim or a state change.
 type ScheduledWorkPage struct {
-	// Event is what the page reports: due, link, parked, failed or result.
-	// +kubebuilder:validation:Enum=due;link;parked;failed;result
+	// Event is what the page reports: due, link, parked, failed, result or
+	// skipped.
+	// +kubebuilder:validation:Enum=due;link;parked;failed;result;skipped
 	Event string `json:"event"`
+
+	// Attempt is the occurrence's attempt the page belongs to: 0, then one
+	// more for each human approve or retry, so a second park can be paged.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=0
+	Attempt int32 `json:"attempt"`
 
 	// Reminder is the name of the Reminder that carries the page; absent when
 	// none was created.
@@ -322,6 +331,12 @@ type ScheduledWorkOccurrence struct {
 	// +optional
 	RetriedAt *metav1.Time `json:"retriedAt,omitempty"`
 
+	// Attempt is 0, then one more for each human approve or retry.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	Attempt int32 `json:"attempt,omitempty"`
+
 	// Session is the derived session name:
 	// sw-<first 12 hex of the ScheduledWork UID>-<occurrence UTC YYYYMMDDHHMM>.
 	// +kubebuilder:validation:MaxLength=28
@@ -356,10 +371,12 @@ type ScheduledWorkOccurrence struct {
 	// +optional
 	Reported *TaskOutcomeRecordStatus `json:"reported,omitempty"`
 
-	// Pages are the pages this occurrence sent, at most one per event.
-	// +kubebuilder:validation:MaxItems=4
+	// Pages are the pages this occurrence sent, at most one per event and
+	// attempt.
+	// +kubebuilder:validation:MaxItems=8
 	// +listType=map
 	// +listMapKey=event
+	// +listMapKey=attempt
 	// +optional
 	Pages []ScheduledWorkPage `json:"pages,omitempty"`
 }

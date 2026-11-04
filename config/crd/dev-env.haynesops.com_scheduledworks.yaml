@@ -329,6 +329,13 @@ spec:
                         in the zone.
                       format: date-time
                       type: string
+                    attempt:
+                      description: Attempt is 0, then one more for each human approve
+                        or retry.
+                      format: int32
+                      maximum: 100
+                      minimum: 0
+                      type: integer
                     claimedAt:
                       description: ClaimedAt is when the executor claimed the occurrence.
                       format: date-time
@@ -375,25 +382,37 @@ spec:
                       minimum: 1
                       type: integer
                     pages:
-                      description: Pages are the pages this occurrence sent, at most
-                        one per event.
+                      description: |-
+                        Pages are the pages this occurrence sent, at most one per event and
+                        attempt.
                       items:
                         description: |-
                           ScheduledWorkPage is one page an occurrence sent. Each page is its own
-                          one-shot Reminder, keyed by the occurrence and the event, and a sent Reminder
+                          one-shot Reminder, keyed by the occurrence, the event and the attempt, and a sent Reminder
                           is never reused. Pages are best effort: a page Reminder that cannot be
                           created, or a Reminder kind that is not served, is recorded as skipped and
                           never holds a finalizer, a claim or a state change.
                         properties:
+                          attempt:
+                            default: 0
+                            description: |-
+                              Attempt is the occurrence's attempt the page belongs to: 0, then one
+                              more for each human approve or retry, so a second park can be paged.
+                            format: int32
+                            maximum: 100
+                            minimum: 0
+                            type: integer
                           event:
-                            description: 'Event is what the page reports: due, link,
-                              parked, failed or result.'
+                            description: |-
+                              Event is what the page reports: due, link, parked, failed, result or
+                              skipped.
                             enum:
                             - due
                             - link
                             - parked
                             - failed
                             - result
+                            - skipped
                             type: string
                           reminder:
                             description: |-
@@ -413,12 +432,14 @@ spec:
                             - skipped
                             type: string
                         required:
+                        - attempt
                         - event
                         type: object
-                      maxItems: 4
+                      maxItems: 8
                       type: array
                       x-kubernetes-list-map-keys:
                       - event
+                      - attempt
                       x-kubernetes-list-type: map
                     reason:
                       description: |-

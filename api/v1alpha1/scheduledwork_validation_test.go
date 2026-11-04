@@ -224,7 +224,7 @@ func TestScheduledWorkStatusAccepts(t *testing.T) {
 	parked := &w.Status.Occurrences[4]
 	parked.State, parked.Reason, parked.Session = v1alpha1.OccurrenceParked, "no standing authority", ""
 	parked.Execution, parked.Reported = nil, nil
-	parked.Pages = []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventParked, Reminder: "sw-x-parked"}}
+	parked.Pages = []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventParked, Reminder: "sw-x-parked"}, {Event: v1alpha1.PageEventParked, Attempt: 1, Reminder: "sw-x-parked-1"}, {Event: v1alpha1.PageEventSkipped, Attempt: 1, State: v1alpha1.DeliverySkipped}}
 	skipped := &w.Status.Occurrences[2]
 	skipped.State, skipped.Reason, skipped.Missed = v1alpha1.OccurrenceSkipped, "missed beyond grace", 7
 	if err := k8s.Status().Update(ctx(t), w); err != nil {
@@ -297,11 +297,14 @@ func TestScheduledWorkStatusRefuses(t *testing.T) {
 		"two pages for one event": {func(s *v1alpha1.ScheduledWorkStatus) {
 			s.Occurrences[0].Pages[1].Event = v1alpha1.PageEventDue
 		}, "status.occurrences[0].pages[1]"},
-		"five pages": {func(s *v1alpha1.ScheduledWorkStatus) {
+		"nine pages": {func(s *v1alpha1.ScheduledWorkStatus) {
 			s.Occurrences[0].Pages = nil
-			for _, e := range []string{v1alpha1.PageEventDue, v1alpha1.PageEventLink, v1alpha1.PageEventParked, v1alpha1.PageEventFailed, v1alpha1.PageEventResult} {
-				s.Occurrences[0].Pages = append(s.Occurrences[0].Pages, v1alpha1.ScheduledWorkPage{Event: e, State: v1alpha1.DeliverySkipped})
+			for i := int32(0); i < 9; i++ {
+				s.Occurrences[0].Pages = append(s.Occurrences[0].Pages, v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventParked, Attempt: i, State: v1alpha1.DeliverySkipped})
 			}
+		}, "status.occurrences[0].pages"},
+		"two pages for one event and attempt": {func(s *v1alpha1.ScheduledWorkStatus) {
+			s.Occurrences[0].Pages = []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventDue, Attempt: 1}, {Event: v1alpha1.PageEventDue, Attempt: 1}}
 		}, "status.occurrences[0].pages"},
 	} {
 		t.Run(name, func(t *testing.T) {
