@@ -990,7 +990,8 @@ per session from `dev-env-templates`, and never changes either after create.**
   session as controller (D-03). The operator creates them when they are missing and
   otherwise only reads them: it never updates or deletes a pod or a volume. A
   template change marks a running session `Outdated` (a condition) and changes
-  nothing else; plan 04's drain acts on it. A pod that is gone is replaced on the same
+  nothing else; plan 04's drain acts on it (5.2: only at an idle moment, and an
+  agent reporting `waiting` is not idle, 2026-11-04 note). A pod that is gone is replaced on the same
   volume, so a preempted session resumes (D-20). A pod that ended, for example by
   eviction, is kept and the session is `Failed`. A pod or volume with the session's
   name that the session does not control is left alone and reported.
@@ -2092,7 +2093,7 @@ survive the restart; they are rare in an idle session and the agent restarts the
 Active grants and leases survive a drain: they belong to the session, not the pod,
 and the operator re-labels the new pod and agentd re-installs grant tokens.
 
-**Source note, 2026-10-17.** Q-03 is unchanged. This slice's idle moment is the
+**Source note, 2026-10-17 (superseded for `waiting` by the 2026-11-04 note below).** Q-03 is unchanged. This slice's idle moment is the
 agent reporting idle or waiting, with no attached client. `status.agent.attached`
 is the heartbeat's client count. `status.restart` stores the conversation id, the
 pod UID, the session generation, and whether the stop was attempted, from a
@@ -2124,6 +2125,31 @@ proof: sync the CRD copy in haynes-ops first (it was missing `status.restart` an
 `status.agent.attached` on 2026-10-19).
 
 **Remote upgrade source ruling, 2026-10-28.** An automatic CLI, image or template revision alone does not stop user remote-control sessions for being idle, waiting or disconnected. A pending drain without a recorded stop is cancelled; a matching already-stopped proof continues the existing recovery path. Explicit owner-authorized checkpoint and suspend/resume remain the existing manual adoption mechanism; this ruling adds no command or grant. Actual history and Remote Control pairing retention require separate acceptance and are not proven by this source change.
+
+**Waiting is not idle, source note 2026-11-04 (OpenProject #385, DR1).** Q-03
+is unchanged: drain waits for an idle moment, and a busy turn is never cut. An
+agent that reports `waiting` has not ended its turn. Claude reports it while a
+question or a permission prompt waits for a person, so stopping it then cuts
+the turn and drops the pending question. The drain moment is therefore the
+agent reporting `idle` with no attached client, for every session type that
+drains. The fresh session read before the proof write and before the stop
+checks it again: an agent that starts waiting or working after the dry-run
+read is not stopped, the pending `Draining` mark is cancelled, and the pod
+stays. A matching already-stopped proof still finishes its recovery, as for
+remote sessions. Idle task and idle local sessions still drain.
+
+**Proposed, not ruled (2026-11-04, OpenProject #385, DR1): no automatic drain
+for running local sessions.** An idle local coordinator can still have native
+background subagents or shells running, and a drain kills them. Excluding
+running `local` sessions from automatic revision drain, as remote sessions are,
+would move them to option C of Q-03 ("only on explicit restart"), which Tom
+did not choose, and would change ADR-001's ratified rolling-update rule
+("running sessions move on their next idle moment and resume"). That needs
+Tom's ruling and a new ADR; the source does not do it. A narrower change that
+keeps Q-03 is to count live native background work as busy, which needs an
+agentd signal that does not exist yet. Until one of these lands, an outdated
+idle local session drains at its next unattached idle moment, so a template
+change still needs its owners ready (or a client attached) before it merges.
 
 ### 5.3 What this changes for Renovate
 

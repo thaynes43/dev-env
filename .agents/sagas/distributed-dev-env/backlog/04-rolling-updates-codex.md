@@ -103,7 +103,8 @@ management UI or v1/auth migration is selected by this plan update.
 
 Idle drain (DESIGN-001 5.2, Q-03) is in the operator source. Q-03 is unchanged.
 This slice's idle moment is the agent reporting idle or waiting, with no
-attached client. `status.agent.attached` is the heartbeat's client count.
+attached client (2026-11-04, OpenProject #385: `waiting` is no longer a drain
+moment; see DESIGN-001 5.2). `status.agent.attached` is the heartbeat's client count.
 `status.restart` stores the conversation id, the pod UID, and the session
 generation. That proof comes only from `agentd ctl prepare-restart --dry-run`,
 which reads the launch record and the live attach count and does not stop the
