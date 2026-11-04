@@ -179,7 +179,7 @@ stateDiagram-v2
   Delivered --> Failed: Remote Control state login-required
   Delivered --> Ended: session ended (never registered)
   Opened --> Ended: session ended
-  Parked --> Claimed: human approves or retries (opens a fresh window from retriedAt)
+  Parked --> Claimed: human approves or retries (opens a fresh window from retriedAt; the cap check applies as for any claim)
   Parked --> Skipped: no human action within the decision window
 ```
 
@@ -266,9 +266,9 @@ stateDiagram-v2
      cancel), there is nothing to record, and nothing can redispatch it. It logs that
      and goes on. If the read fails because the kind is not served (`NoKindMatch` or a
      discovery error), that is **not** proof the objects are gone. It releases only
-     when **both** of these hold: the occurrence's due time plus grace (from the
-     session's occurrence annotation and the template) has passed, so no executor
-     will create for it again; and an uncached read of the CustomResourceDefinition
+     when **both** of these hold: the session's own start-deadline annotation has
+     passed (due plus grace, or `retriedAt` plus grace for a retried occurrence), so
+     no executor will create for it again; and an uncached read of the CustomResourceDefinition
      returns NotFound. On any other error it keeps the finalizer and raises the
      blocked metric;
   4. removes the finalizer.
