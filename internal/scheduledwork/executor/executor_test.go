@@ -1002,6 +1002,29 @@ func TestCapIsCheckedBeforeTheClaim(t *testing.T) {
 	})
 }
 
+// A retried occurrence the executor never got to inside its fresh grace
+// (counted from retriedAt; the executor was down, say) is Skipped for the
+// grace it missed, not "at capacity": it never waited on a cap.
+func TestARetriedOccurrenceThatMissesItsGraceSaysSo(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	retried := metav1.NewTime(day0.Add(time.Hour))
+	w := f.get(key)
+	w.Status.Occurrences = []v1alpha1.ScheduledWorkOccurrence{{At: metav1.NewTime(day0), State: v1alpha1.OccurrencePending,
+		Attempt: 1, RetriedAt: &retried}}
+	if err := cluster(t).Status().Update(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	f.at(f.executor(), retried.Add(grace+time.Minute))
+	o := f.wantOcc(key, day0, v1alpha1.OccurrenceSkipped, "missed beyond grace (15m0s) after a retry")
+	if o.Reason == ReasonAtCapacity || f.get(key).Status.Counts.Skipped != 1 {
+		t.Errorf("occurrence %+v counts %+v", o, f.get(key).Status.Counts)
+	}
+	if calls, _, _ := f.create.counts(); calls != 0 {
+		t.Errorf("a missed retry was created: %d calls", calls)
+	}
+}
+
 // One unfinished occurrence per item: the next occurrence of a daily item
 // that comes due while the previous one runs is Skipped, and the item moves
 // on to the one after.
