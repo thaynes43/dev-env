@@ -102,9 +102,10 @@ func TestScheduledWorkRefuses(t *testing.T) {
 		"8194 bytes in 4097 characters": {func(w *v1alpha1.ScheduledWork) {
 			w.Spec.Work.Prompt = strings.Repeat("é", 4097)
 		}, "prompt is at most 8192 bytes"},
-		"a notify address":  {func(w *v1alpha1.ScheduledWork) { w.Spec.Notify = []string{"pushover:tom@example.com"} }, "spec.notify[0]"},
-		"a notify provider": {func(w *v1alpha1.ScheduledWork) { w.Spec.Notify = []string{"email:default"} }, "spec.notify[0]"},
-		"a bare notify key": {func(w *v1alpha1.ScheduledWork) { w.Spec.Notify = []string{"uQiRzpo4DXghDmr9QzzfQu27cmVRsG"} }, "spec.notify[0]"},
+		"a notify address":     {func(w *v1alpha1.ScheduledWork) { w.Spec.Notify = []string{"pushover:tom@example.com"} }, "spec.notify[0]"},
+		"a notify provider":    {func(w *v1alpha1.ScheduledWork) { w.Spec.Notify = []string{"email:default"} }, "spec.notify[0]"},
+		"a calendar in notify": {func(w *v1alpha1.ScheduledWork) { w.Spec.Notify = []string{"calendar:haynesnetwork"} }, "spec.notify[0]"},
+		"a bare notify key":    {func(w *v1alpha1.ScheduledWork) { w.Spec.Notify = []string{"uQiRzpo4DXghDmr9QzzfQu27cmVRsG"} }, "spec.notify[0]"},
 		"a notify duplicate": {func(w *v1alpha1.ScheduledWork) {
 			w.Spec.Notify = []string{"pushover:default", "pushover:default"}
 		}, "spec.notify[1]"},

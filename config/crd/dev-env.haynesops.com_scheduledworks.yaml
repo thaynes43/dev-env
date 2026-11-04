@@ -102,12 +102,12 @@ spec:
                 type: string
               notify:
                 description: |-
-                  Notify are the page references, in Reminder target form:
-                  pushover:<ref> or calendar:<ref>. Pages go through keyed one-shot
-                  Reminders, which the keeper sends.
+                  Notify are the page references, pushover:<ref> in Reminder target form.
+                  Pages go through keyed one-shot Reminders, which the keeper sends. A
+                  calendar is not a page: it is the separate Calendar projection.
                 items:
                   maxLength: 128
-                  pattern: ^(pushover|calendar):[a-z0-9][a-z0-9-]{0,62}$
+                  pattern: ^pushover:[a-z0-9][a-z0-9-]{0,62}$
                   type: string
                 maxItems: 8
                 type: array
@@ -282,6 +282,18 @@ spec:
                 description: ScheduledWorkCounts counts occurrences by outcome, over
                   the item's life.
                 properties:
+                  ambiguous:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  cancelled:
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  ended:
+                    format: int32
+                    minimum: 0
+                    type: integer
                   failed:
                     format: int32
                     minimum: 0

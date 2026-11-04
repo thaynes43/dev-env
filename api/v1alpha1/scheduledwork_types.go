@@ -170,12 +170,12 @@ type ScheduledWorkSpec struct {
 	// Work is the work order and its dispatch template.
 	Work ScheduledWorkOrder `json:"work"`
 
-	// Notify are the page references, in Reminder target form:
-	// pushover:<ref> or calendar:<ref>. Pages go through keyed one-shot
-	// Reminders, which the keeper sends.
+	// Notify are the page references, pushover:<ref> in Reminder target form.
+	// Pages go through keyed one-shot Reminders, which the keeper sends. A
+	// calendar is not a page: it is the separate Calendar projection.
 	// +kubebuilder:validation:MaxItems=8
 	// +kubebuilder:validation:items:MaxLength=128
-	// +kubebuilder:validation:items:Pattern=`^(pushover|calendar):[a-z0-9][a-z0-9-]{0,62}$`
+	// +kubebuilder:validation:items:Pattern=`^pushover:[a-z0-9][a-z0-9-]{0,62}$`
 	// +listType=set
 	// +optional
 	Notify []string `json:"notify,omitempty"`
@@ -228,6 +228,15 @@ type ScheduledWorkCounts struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Skipped int32 `json:"skipped,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Ended int32 `json:"ended,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Ambiguous int32 `json:"ambiguous,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Cancelled int32 `json:"cancelled,omitempty"`
 }
 
 // Page events: the moment of an occurrence a page reports.
