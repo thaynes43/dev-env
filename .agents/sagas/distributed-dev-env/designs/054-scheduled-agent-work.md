@@ -851,6 +851,53 @@ proves anything about who decided: the API authenticates the human from the
 token and refuses approve and retry from any other caller. The approval's
 template digest (Data contract) is S5b's, with the route.
 
+
+### S5b routes as implemented (PR 916, merged 14160aad, 2026-11-04)
+
+These are the server routes' exact rules, recorded from the implementation; where they differ, they refine the API text above.
+
+1. **Flag.** `--enable-scheduled-work-api` is proposed, default off, and not wired. `Server.ScheduledWork` nil, or a config with an empty Namespace, leaves every route 404. `apiserver.ScheduledWorkAPI(enabled, namespace)` builds the config.
+2. **Names and the per-owner cap.** An item's name is `sched-` plus the first 20 hex characters of SHA-256(owner, NUL, key), or 20 random hex characters without a key. An owner may hold at most 32 active items (neither cancelled nor ended); one more is a 429.
+3. **Create.**
+   - The same key and spec answer 200 with the first item, even after its due time has passed.
+   - The same key with another spec is a 409, decided before the clock checks.
+   - Only a key over 128 bytes, or recurrence integers out of range (byMonthDay 0 to 31, count 0 to 1000, at most 7 byDay entries), are refused with 422 first.
+4. **Notify and calendar.** Notify may hold only `pushover:default`, with no duplicates and at most 8 entries; interactive work needs one. Calendar is checked only against `^calendar:[a-z0-9][a-z0-9-]{0,62}$`.
+5. **Bounds.** The body is at most 64 KiB, the title 1 to 120 characters, and the prompt 1 to 8192 bytes. notAfter is required, in the future, at most 180 days after creation, and not before the next occurrence. A one-shot due time may not be in the past (5-minute grace), and a series must have an occurrence ahead.
+6. **Visibility.**
+   - Show and cancel: the owner, a human or a coordinator. Edit: the owner or a human; a coordinator that is not the owner gets 403.
+   - Anyone else gets 404.
+   - List returns the caller's own items; `all=true` is for a human or a coordinator, and anyone else gets 403.
+7. **Edit and cancel.**
+   - Every spec write sets editor to the caller in the same write.
+   - Editing a cancelled item is a 409, and a no-op edit writes nothing.
+   - Cancel is idempotent (200) and warns when an occurrence is Claimed, Dispatched, Delivered, Opened or Running.
+8. **Approve.**
+   - Human only; anyone else gets 403.
+   - `specHash` must equal the current hash, else 409. A cancelled item is 409.
+   - The optional `templateDigest` must equal the digest the API reads, else 409; a malformed one is 422.
+   - The template is read uncached from `dev-env-system/dev-env-scheduled-work`. An absent ConfigMap, an invalid document, an unknown template, a repo the template does not allow, a mode it does not serve, or a template that does not admit `approved` is a 409.
+   - The approval records by (from the token), at (now, to the second), specHash and templateDigest (as read) in one compare-and-set status write. An approval identical to the stored one writes nothing.
+9. **Schema preflight and read-back.**
+   - Before an approval, the route reads the CRD `scheduledworks.dev-env.haynesops.com` uncached and requires the served v1alpha1 `status.approval.properties.templateDigest`. A missing field or an unreadable CRD is a 503 that writes nothing.
+   - After the write, a fresh read without the digest is a 503, and the message says when a retry in the same write stands.
+10. **Retry, by approve with at or by retry.**
+    - The occurrence moves Parked to Pending, with attempt+1, retriedAt now, and the reason "retried by <human>" or "approved and retried by <human>".
+    - The retry body needs both `at` and `specHash`, else 422. A retry needs no template or preflight and writes no approval.
+    - Each of these refusals is a 409 that writes nothing:
+      - there is no occurrence at `at`;
+      - it is not Parked;
+      - it is ending;
+      - its attempt is 3 or more;
+      - it records a session;
+      - it was claimed with an earlier spec;
+      - notAfter has passed;
+      - its decision window has ended, which is retriedAt (or the due time) plus the window (24 hours by default, `ScheduledWorkConfig.DecisionWindow`), or the next occurrence if that comes first;
+      - another occurrence is neither final nor Parked;
+      - an AgentSession of the derived name exists.
+11. **Writes.** Every write carries the resourceVersion it read. On a conflict the request is re-read and decided again, at most 4 times, then 409.
+
+
 ## Delivery
 
 | Step | Content | Gate |
