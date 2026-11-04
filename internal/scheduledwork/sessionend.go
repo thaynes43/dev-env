@@ -25,8 +25,9 @@ import (
 // when any of these holds:
 //   - its operating mode is Suspended (a user or idle suspend), or its phase is
 //     Suspended, Failed or Archived;
-//   - in task mode, status.taskResult (TaskResult, which also reads agent.task
-//     before the reconciler derives it) or the retained task outcome is set;
+//   - in task mode, status.taskResult is set (TaskResult, which also reads
+//     agent.task before the reconciler derives it). The retained task outcome
+//     alone is not an end: it can be written before the verdict;
 //   - its phase is Running or Idle, standby.AgentEnded holds, and the pod-age
 //     proof holds (standby.UnprovenAgentEnd is false for pod).
 //
@@ -47,9 +48,6 @@ func SessionEnded(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) (end
 	if s.Spec.Mode == v1alpha1.ModeTask {
 		if r := TaskResult(s); r != nil {
 			return true, fmt.Sprintf("the task result is recorded (%s)", r.State)
-		}
-		if s.Status.TaskOutcome != nil {
-			return true, "the task's retained outcome is recorded"
 		}
 	}
 	if agentEndClaimed(s) && !standby.UnprovenAgentEnd(s, pod, now) {

@@ -74,9 +74,12 @@ func TestSessionEnded(t *testing.T) {
 		{name: "task result recorded while the pod runs", edit: func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
 			s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}
 		}, want: true, whyPrefix: "the task result is recorded"},
-		{name: "task outcome recorded", edit: func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
+		// The retained outcome can be written before the task verdict, so on
+		// its own it is no end: ending here would record a running task as
+		// ended without a result, irreversibly (DESIGN-054).
+		{name: "a retained outcome alone is not an end", edit: func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
 			s.Status.TaskOutcome = &v1alpha1.TaskOutcomeStatus{SessionUID: "session-uid", PodUID: "p", Record: v1alpha1.TaskOutcomeRecordStatus{Summary: "done"}}
-		}, want: true},
+		}, want: false},
 		{name: "a task result does not end a remote session", edit: both(remote, func(s *v1alpha1.AgentSession, _ *corev1.Pod) {
 			s.Status.TaskResult = &v1alpha1.TaskResultStatus{State: v1alpha1.TaskResultSucceeded}
 		}), want: false},
@@ -369,5 +372,23 @@ func TestSessionName(t *testing.T) {
 		if c.want != "" && !sessionNamePattern.MatchString(got) {
 			t.Errorf("%q does not fit the schema's pattern", got)
 		}
+	}
+}
+
+// An outcome reported before the task's verdict leaves the occurrence open;
+// the verdict that follows ends it as Succeeded with that outcome, once.
+func TestAnOutcomeBeforeTheVerdictWaitsForIt(t *testing.T) {
+	s, pod := fixture(nil)
+	s.Status.TaskOutcome = &v1alpha1.TaskOutcomeStatus{SessionUID: string(s.UID), PodUID: "p", Record: v1alpha1.TaskOutcomeRecordStatus{Summary: "done"}}
+	if ended, why := SessionEnded(s, pod, now); ended {
+		t.Fatalf("an outcome before the verdict ended the session: %s", why)
+	}
+	s.Status.Agent.Task = &v1alpha1.TaskStatus{ExitCode: 0, Subtype: "success", NumTurns: 2, FinishedAt: metav1.NewTime(now.Add(-time.Minute))}
+	if ended, _ := SessionEnded(s, pod, now); !ended {
+		t.Fatal("the verdict did not end the session")
+	}
+	got := Outcome(s, now)
+	if got.State != v1alpha1.OccurrenceSucceeded || got.Reported == nil || got.Reported.Summary != "done" {
+		t.Fatalf("outcome %s %q, reported %+v; want Succeeded with the reported outcome", got.State, got.Reason, got.Reported)
 	}
 }
