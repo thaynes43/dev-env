@@ -307,3 +307,31 @@ func TestClaudeAccountMissingRecordAtANewGenerationSkipsThatContinue(t *testing.
 		t.Errorf("the mark did not clear on the next generation: %q", rg.status())
 	}
 }
+
+// A failed record write across a hop must not hide it: the record stays at generation 2
+// (account A), generation 3 (account B) is applied while the writes fail, and when
+// generation 4 (A) arrives and the writes recover, the fingerprint matches the OLD record.
+// Generation 4 is still marked, so B's error is not retried under A.
+func TestClaudeAccountHiddenHopThroughFailedWritesIsNotRetried(t *testing.T) {
+	rg := newContinueRig(t, protocol.ModeRemote, true, true)
+	rg.transcript(userTurn(loginNow), healthyTurn(loginNow.Add(time.Minute)))
+	rg.publishAs(2, projAccount)
+	restore := failAccountWrites(t)
+	rg.publishAs(3, otherAccount)
+	rg.revoke(4 * time.Hour)
+	rg.pollProduction()
+	restore()
+	rg.publishAs(4, projAccount)
+	rg.pollProduction()
+	if rg.continues() != 0 {
+		t.Fatal("B's error was retried under A after a hidden hop")
+	}
+	if !strings.Contains(rg.status(), "account unconfirmed since generation 4") {
+		t.Errorf("the hidden hop is not shown: %q", rg.status())
+	}
+	rg.publishAs(5, projAccount)
+	rg.pollProduction()
+	if strings.Contains(rg.status(), "account") {
+		t.Errorf("the mark did not clear on the next generation: %q", rg.status())
+	}
+}

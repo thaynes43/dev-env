@@ -285,7 +285,9 @@ agentd ignores the new file.
   generations and reads as login-required). The credentials and the generation receipt still merge, the
   record stays behind the receipt, and the status says "account unconfirmed". Only the automatic continue
   stays off: it needs a record that is current for the applied generation. A record that is
-  valid but behind the receipt is not confirmed either. A record gone when a NEW generation arrives is
+  valid but behind the receipt is not confirmed either, and a later generation whose fingerprint matches such
+  a record is still marked (a failed write can hide a hop: A, then B while writes fail, then A again;
+  found by the advisory review of the final head). A record gone when a NEW generation arrives is
   seeded again and marks that generation unconfirmed ("missing"), so its continue is skipped; the same
   holds for an agentd upgraded in place when a new generation arrives before its first poll. A record gone
   while the receipt's own generation is current is read as a first run and seeded without a mark.

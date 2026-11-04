@@ -20,7 +20,7 @@ import (
 // The file holds only a fingerprint of the account and organization, never the
 // identifiers. Rules, applied when a generation is merged:
 //   - no file: seed it from this generation; an unknown earlier account is not a change
-//     (but a file that is gone when a NEW generation arrives marks that generation);
+//     (but a file that is gone, or behind the receipt, when a NEW generation arrives marks that generation);
 //   - same fingerprint at a later generation: the change mark clears;
 //   - a different fingerprint at a later generation, or an unreadable file: the
 //     generation is marked changed. A flip back (A, B, A) is another change, never
@@ -101,6 +101,14 @@ func recordClaudeAccount(s Settings, a claudeauth.Access) error {
 		return nil
 	case cur.Fingerprint != fp:
 		next.Changed, next.Basis = a.Generation, "changed"
+	default:
+		// The same fingerprint as a record that is BEHIND the receipt proves nothing about the
+		// generation in between: a failed write can hide an account hop (A, B, A). Mark the
+		// incoming generation, as for a missing record.
+		var old claudeReceipt
+		if readJSONFile(s.statePath("claude-access-generation.json"), &old) == nil && cur.Generation < old.Generation && old.Generation < a.Generation {
+			next.Changed, next.Basis = a.Generation, "missing"
+		}
 	}
 	raw, err := json.Marshal(next)
 	if err != nil {
@@ -146,7 +154,7 @@ func accountStatusNote(s Settings) string {
 	case verdict == accountUnconfirmed:
 		return "; account unconfirmed: the account record is not current for generation " + strconv.FormatUint(receipt.Generation, 10) + ", so no automatic continue is sent"
 	case verdict == accountChanged && cur.Basis == "missing":
-		return "; account unconfirmed since generation " + g + ": the account record was missing when it arrived, so no automatic continue is sent for it"
+		return "; account unconfirmed since generation " + g + ": the account record was missing or behind when it arrived, so no automatic continue is sent for it"
 	case verdict == accountChanged && cur.Basis == "unreadable":
 		return "; account unconfirmed since generation " + g + ": the earlier account record could not be read, so no automatic continue is sent for it"
 	case verdict == accountChanged:
