@@ -217,6 +217,17 @@ type ScheduledWorkApproval struct {
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
 	SpecHash string `json:"specHash"`
+
+	// TemplateDigest is the SHA-256, in hex, of the dispatch template the
+	// spec named when the human approved it (authority.TemplateDigest): the
+	// API's approve route reads the template and records it in the same write
+	// as the approval. An edit of the template changes it, so the approval no
+	// longer matches and is void, as for a spec edit. An approval without it
+	// is void too, so an older writer that leaves it out authorises nothing.
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{64}$`
+	// +optional
+	TemplateDigest string `json:"templateDigest,omitempty"`
 }
 
 // ScheduledWorkCounts counts occurrences by outcome, over the item's life.

@@ -281,6 +281,17 @@ spec:
                     maxLength: 64
                     pattern: ^[0-9a-f]{64}$
                     type: string
+                  templateDigest:
+                    description: |-
+                      TemplateDigest is the SHA-256, in hex, of the dispatch template the
+                      spec named when the human approved it (authority.TemplateDigest): the
+                      API's approve route reads the template and records it in the same write
+                      as the approval. An edit of the template changes it, so the approval no
+                      longer matches and is void, as for a spec edit. An approval without it
+                      is void too, so an older writer that leaves it out authorises nothing.
+                    maxLength: 64
+                    pattern: ^[0-9a-f]{64}$
+                    type: string
                 required:
                 - at
                 - by
