@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/scheduledwork"
+	"github.com/thaynes43/dev-env/internal/scheduledwork/pages"
 )
 
 // The scheduled-work releaser (DESIGN-054 "Occurrence lifecycle", S3a). A
@@ -36,10 +38,12 @@ import (
 // (scheduledwork.SessionEnded), or that is being deleted. It reads the
 // ScheduledWork with the uncached API reader only, so the operator starts no
 // watch or informer on a kind S6 may not have installed yet. It writes the
-// occurrence's terminal record with a compare-and-set status Update, then lifts
-// only its own finalizer. It never deletes, suspends or otherwise changes a
-// session, and never touches another finalizer; the rescue and archive keep
-// theirs, and neither waits on the other.
+// occurrence's terminal record with a compare-and-set status Update, pages the
+// outcome through a keyed Reminder (S4b, best effort: see
+// sendScheduledWorkPages), then lifts only its own finalizer. It never
+// deletes, suspends or otherwise changes a session, and never touches another
+// finalizer; the rescue and archive keep theirs, and neither waits on the
+// other.
 
 // The releaser's metrics. MetricScheduledWorkReleaseBlocked is DESIGN-054's
 // page source: a gauge of the sessions, labelled or not, whose finalizer is
@@ -357,6 +361,11 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 			result = scheduledwork.Record(w, at, s.Name, scheduledwork.Outcome(&s, now))
 			switch result {
 			case scheduledwork.Recorded, scheduledwork.ReportedAdded:
+				if result == scheduledwork.Recorded {
+					// The page goes out with this record or not at all: its
+					// intent is written in the record's own compare-and-set.
+					intendReleasePage(w, at)
+				}
 				if err := r.Client.Status().Update(ctx, w); err != nil {
 					if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
 						continue
@@ -382,6 +391,8 @@ func (r *Reconciler) releaseScheduledWork(ctx context.Context, cached *v1alpha1.
 			lg.V(1).Info("the occurrence is recorded; waiting for the agent's reported outcome", "until", until.UTC().Format(time.RFC3339))
 			return false, ctrl.Result{RequeueAfter: until.Sub(now) + time.Second}
 		}
+		// The reported outcome is in, or will not come: the page carries it.
+		ev.work = r.sendScheduledWorkPages(ctx, lg, &s, at, ev.work, now)
 	}
 	// The record is in (or there is none to write). The finalizer still
 	// holds the derived name until the start deadline plus the margin, so a
@@ -712,4 +723,196 @@ func (r *Reconciler) scheduledLaunchGate(ctx context.Context, s *v1alpha1.AgentS
 		return sessionInvalidError{fmt.Errorf("the scheduled session cannot start: %s", reason)}
 	}
 	return nil
+}
+
+// The releaser's pages (DESIGN-054 Decision 5, S4b): a session's outcome
+// pages failed (Failed, "not started before grace ended" among them), result
+// (Succeeded or Ended) or skipped (an ending mark's Skipped), each through
+// one keyed, one-shot Reminder the keeper sends. As in the executor, a page
+// goes out in two steps: the terminal record's own compare-and-set write
+// carries the intent (intendReleasePage), and once the record is stored and
+// the wait for the agent's reported outcome is over, sendScheduledWorkPages
+// creates the Reminder with pages.Pager.Ensure and records the entry in a
+// second compare-and-set write. Pages are best effort: nothing about them
+// holds the record, the release or the finalizer, and a page Reminder that
+// cannot be created is recorded skipped. The releaser runs without
+// --enable-scheduled-work, so its pages do too.
+
+// scheduledWorkPageTimeout bounds one page's Ensure create; the pager's
+// verifying read has its own pages.VerifyTimeout. A variable only so a test
+// can shorten it before it starts an operator.
+var scheduledWorkPageTimeout = 10 * time.Second
+
+// releasePageEvent is the page a terminal record the releaser writes sends:
+// failed for Failed, result for Succeeded and Ended, skipped for Skipped.
+// Cancelled sends none.
+func releasePageEvent(state string) string {
+	switch state {
+	case v1alpha1.OccurrenceFailed:
+		return v1alpha1.PageEventFailed
+	case v1alpha1.OccurrenceSucceeded, v1alpha1.OccurrenceEnded:
+		return v1alpha1.PageEventResult
+	case v1alpha1.OccurrenceSkipped:
+		return v1alpha1.PageEventSkipped
+	}
+	return ""
+}
+
+// intendReleasePage adds to w's occurrence at at, which Record has just made
+// terminal, the intent to page its event: an entry with the event and the
+// occurrence's attempt and no Reminder or state. An item with no notify
+// target gets none, and nor does an occurrence that already has one.
+func intendReleasePage(w *v1alpha1.ScheduledWork, at time.Time) {
+	o := scheduledwork.Find(w, at)
+	if o == nil || len(w.Spec.Notify) == 0 {
+		return
+	}
+	event := releasePageEvent(o.State)
+	if event == "" {
+		return
+	}
+	for _, pg := range o.Pages {
+		if pg.Event == event && pg.Attempt == o.Attempt {
+			return
+		}
+	}
+	o.Pages = v1alpha1.AppendPage(o.Pages, v1alpha1.ScheduledWorkPage{Event: event, Attempt: o.Attempt})
+}
+
+// releaserSends reports the pending intents the releaser sends: the events
+// its records carry. The executor sends its own (due, parked and the rest).
+func releaserSends(pg v1alpha1.ScheduledWorkPage) bool {
+	if pg.Reminder != "" || pg.State != "" {
+		return false
+	}
+	switch pg.Event {
+	case v1alpha1.PageEventFailed, v1alpha1.PageEventResult, v1alpha1.PageEventSkipped:
+		return true
+	}
+	return false
+}
+
+// sendScheduledWorkPages sends the pending pages of s's own occurrence at at
+// in w, the stored item with its terminal record, and records what Ensure
+// returns in one compare-and-set status write, reading the item again on a
+// conflict (at most five times). It returns the item as it now knows it, for
+// the release guard; the terminal record is in it either way. It holds
+// nothing: a write that fails leaves the intent stored, and a later pass for
+// this session, while its finalizer holds, finds the Reminder Ensure made.
+//
+// An answer Ensure cannot confirm (pages.Pager.EnsureChecked: the Reminder
+// may exist but the read back failed) is not recorded: the intent stays
+// pending for a later pass, which the finalizer's hold usually gives.
+//
+// A residual, by Decision 5's best effort: when the write fails (any error
+// but a conflict, or five conflicts in a row), or the answer is still
+// unconfirmed, and the finalizer is then lifted, no later pass comes, and the
+// executor never sends a failed or result page. The intent then stays
+// pending in status for good, whether or not its Reminder was created and
+// sent; it means "page not confirmed".
+func (r *Reconciler) sendScheduledWorkPages(ctx context.Context, lg logr.Logger, s *v1alpha1.AgentSession, at time.Time, w *v1alpha1.ScheduledWork, now time.Time) *v1alpha1.ScheduledWork {
+	pager := &pages.Pager{Client: uncachedPageReads{Client: r.Client, reader: r.APIReader}}
+	tried := map[string]bool{}
+	for range 5 {
+		o := scheduledwork.Find(w, at)
+		if o == nil || o.Session != s.Name || (o.SessionUID != "" && o.SessionUID != string(s.UID)) {
+			return w
+		}
+		next := *w.DeepCopy()
+		no := scheduledwork.Find(&next, at)
+		sent := 0
+		for _, pg := range o.Pages {
+			key := pg.Event + "/" + fmt.Sprint(pg.Attempt)
+			if !releaserSends(pg) || tried[key] {
+				continue
+			}
+			title, body := releasePageText(w, o, pg)
+			pctx, cancel := context.WithTimeout(ctx, scheduledWorkPageTimeout)
+			got, settled := pager.EnsureChecked(pctx, w, at, pg.Event, pg.Attempt, title, body, now)
+			cancel()
+			if !settled {
+				// The Reminder may exist but could not be read back: the
+				// intent stays pending for a later pass of this session.
+				tried[key] = true
+				lg.Info("a page Reminder could not be confirmed; it is tried again on the next pass", "occurrence", at.Format(time.RFC3339), "event", pg.Event)
+				continue
+			}
+			if got.Event != pg.Event || got.Attempt != pg.Attempt {
+				got = v1alpha1.ScheduledWorkPage{Event: pg.Event, Attempt: pg.Attempt, State: "skipped"}
+			}
+			no.Pages = v1alpha1.AppendPage(no.Pages, got)
+			sent++
+		}
+		if sent == 0 {
+			return w
+		}
+		err := r.Client.Status().Update(ctx, &next)
+		switch {
+		case err == nil:
+			lg.Info("recorded the scheduled work's pages", "occurrence", at.Format(time.RFC3339), "pages", sent)
+			return &next
+		case !apierrors.IsConflict(err):
+			lg.Info("the scheduled work's pages could not be recorded; the release goes on", "error", err.Error())
+			return w
+		}
+		fresh := &v1alpha1.ScheduledWork{}
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(w), fresh); err != nil || fresh.UID != w.UID {
+			return w
+		}
+		w = fresh
+	}
+	return w
+}
+
+// uncachedPageReads is the pager's client: writes through the reconciler's
+// client, reads through the uncached API reader, so the pager starts no
+// informer on Reminders.
+type uncachedPageReads struct {
+	client.Client
+	reader client.Reader
+}
+
+func (c uncachedPageReads) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return c.reader.Get(ctx, key, obj, opts...)
+}
+
+func (c uncachedPageReads) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	return c.reader.List(ctx, list, opts...)
+}
+
+// releasePageText is the title and body of the releaser's page pg on o,
+// built from the intent: pg's event and attempt. Every releaser page reports
+// a terminal record, which never changes, so o's state, reason, execution and
+// reported outcome are those the event recorded. A result says what the task
+// process and the agent reported, never that the work is done.
+func releasePageText(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, pg v1alpha1.ScheduledWorkPage) (title, body string) {
+	event := pg.Event
+	head := "Scheduled work " + strings.ToLower(o.State)
+	switch {
+	case event == v1alpha1.PageEventResult && o.State == v1alpha1.OccurrenceSucceeded:
+		head = "Scheduled work reported success"
+	case event == v1alpha1.PageEventResult:
+		head = "Scheduled work ended"
+	}
+	lines := []string{fmt.Sprintf("%s, due %s, attempt %d.", w.Name, o.At.UTC().Format("2006-01-02 15:04 UTC"), pg.Attempt)}
+	state := o.State
+	if o.Reason != "" {
+		state += ": " + o.Reason
+	}
+	lines = append(lines, state+".")
+	if o.Session != "" {
+		lines = append(lines, "Session "+o.Session+".")
+	}
+	if x := o.Execution; x != nil {
+		lines = append(lines, fmt.Sprintf("Task result %s (%s).", x.State, x.Reason))
+	}
+	if rep := o.Reported; rep != nil {
+		if rep.Summary != "" {
+			lines = append(lines, "The agent reported, not verified: "+rep.Summary)
+		}
+		if len(rep.PRURLs) > 0 {
+			lines = append(lines, "PRs: "+strings.Join(rep.PRURLs, " "))
+		}
+	}
+	return head + ": " + w.Spec.Title, strings.Join(lines, "\n")
 }

@@ -59,7 +59,10 @@ func (o scheduledWorkOptions) validate(apiAddr string, leaderElect bool) error {
 // uncached reader: the dispatch templates ConfigMap
 // (authority.TemplatesConfigMap) in that namespace, and the owner session and
 // its pod in the sessions' namespace. Without that ConfigMap, or without a
-// basis the template admits, an occurrence parks and nothing dispatches.
+// basis the template admits, an occurrence parks and nothing dispatches. Its
+// pager (DESIGN-054 Decision 5, S4b) creates the page Reminders, in the
+// items' namespace, through c and reads them through the same uncached
+// reader; the keeper sends them.
 func newScheduledWorkExecutor(o options, c client.Client, reader client.Reader, creator executor.Creator, log logr.Logger) *executor.Executor {
 	if !o.scheduledWork.enabled {
 		return nil
@@ -85,6 +88,7 @@ func newScheduledWorkExecutor(o options, c client.Client, reader client.Reader, 
 		MaxInteractive:     o.scheduledWork.maxInteractive,
 		SchemaMissing:      executor.NewSchemaMissingCounter(),
 		SchemaReadFailures: executor.NewSchemaReadFailuresCounter(),
+		Pager:              executor.NewPager(c, reader),
 		Log:                log,
 	}
 }

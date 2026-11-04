@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +95,51 @@ func TestRequestFromTheTemplate(t *testing.T) {
 	}
 	if got := missedReason(3, time.Date(2030, 6, 5, 14, 0, 0, 0, time.UTC), DefaultHeadlessGrace); got != fmt.Sprintf("missed beyond grace (15m0s): 3 occurrences, the last at %s", "2030-06-05T14:00:00Z") {
 		t.Errorf("missed reason %q", got)
+	}
+}
+
+// A page's text comes from its intent: its attempt, and the state and reason
+// its event recorded. A page whose moment is over (another attempt, or a
+// park no longer parked) is not current, so it is never sent with the
+// occurrence's new state.
+func TestPageTextComesFromTheIntent(t *testing.T) {
+	w := &v1alpha1.ScheduledWork{ObjectMeta: metav1.ObjectMeta{Name: "audit"}, Spec: v1alpha1.ScheduledWorkSpec{Title: "Audit"}}
+	at := metav1.NewTime(time.Date(2030, 6, 3, 14, 0, 0, 0, time.UTC))
+	occ := func(state, reason string, attempt int32) *v1alpha1.ScheduledWorkOccurrence {
+		return &v1alpha1.ScheduledWorkOccurrence{At: at, State: state, Reason: reason, Attempt: attempt, Session: "sw-0123456789ab-203006031400"}
+	}
+	for _, c := range []struct {
+		name    string
+		o       *v1alpha1.ScheduledWorkOccurrence
+		pg      v1alpha1.ScheduledWorkPage
+		current bool
+		want    []string
+	}{
+		{"a park, still parked", occ(v1alpha1.OccurrenceParked, "no standing authority", 1), v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventParked, Attempt: 1}, true,
+			[]string{"attempt 1.", "Parked: no standing authority.", "approve, retry or cancel"}},
+		{"a park a human retried", occ(v1alpha1.OccurrencePending, "retried by human/dev-env-system/tom", 2), v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventParked, Attempt: 1}, false, nil},
+		{"a park that ended", occ(v1alpha1.OccurrenceSkipped, ReasonParkedExpired, 1), v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventParked, Attempt: 1}, false, nil},
+		{"a due page after the session moved on", occ(v1alpha1.OccurrenceRunning, "", 0), v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventDue}, true,
+			[]string{"attempt 0.", "Dispatched.", "Session sw-0123456789ab-203006031400."}},
+		{"a due page of another attempt", occ(v1alpha1.OccurrenceDispatched, "", 1), v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventDue}, false, nil},
+		{"a skip", occ(v1alpha1.OccurrenceSkipped, ReasonNotCreated, 0), v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventSkipped}, true,
+			[]string{"attempt 0.", "Skipped: " + ReasonNotCreated + "."}},
+		{"an ambiguous occurrence", occ(v1alpha1.OccurrenceAmbiguous, ReasonCollision, 0), v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventFailed}, true,
+			[]string{"Ambiguous: " + ReasonCollision + "."}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			title, body, current := pageText(w, c.o, c.pg)
+			if current != c.current {
+				t.Fatalf("current = %v, want %v (title %q body %q)", current, c.current, title, body)
+			}
+			for _, s := range c.want {
+				if !strings.Contains(body, s) {
+					t.Errorf("body %q lacks %q", body, s)
+				}
+			}
+			if c.current && !strings.HasSuffix(title, ": Audit") {
+				t.Errorf("title %q", title)
+			}
+		})
 	}
 }

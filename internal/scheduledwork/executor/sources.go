@@ -33,8 +33,8 @@ import (
 //     refusal is no basis, with the template's reason: the occurrence parks
 //     at once and never waits on an owner it could not run for. The
 //     approval's template check compares the template's digest with the one
-//     the approval recorded, which S5 adds to status.approval; until then
-//     none is recorded, so every approval is void by design.
+//     the approval recorded in status.approval.templateDigest (the API's
+//     approve route writes it); an approval without one is void.
 //
 // Authorize returns the digest of the template it decided under
 // (Authority.TemplateDigest) and Resolve the digest of the template it reads
@@ -54,9 +54,9 @@ type Sources struct {
 	// authority.DefaultHeartbeatStaleAfter.
 	StaleAfter time.Duration
 
-	// recordedDigest is the approval's recorded template digest. Nil is
-	// none: S5 adds status.approval.templateDigest and reads it here; tests
-	// set it to exercise a matching or a stale digest.
+	// recordedDigest overrides the approval's recorded template digest, for
+	// tests. Nil reads status.approval.templateDigest (approvalDigest), which
+	// the API's approve route writes with the approval.
 	recordedDigest func(*v1alpha1.ScheduledWork) string
 }
 
@@ -117,6 +117,16 @@ func (s *Sources) Resolve(ctx context.Context, name string) (Template, error) {
 	return executorTemplate(t), nil
 }
 
+// approvalDigest is the template digest the stored approval recorded: ""
+// without an approval or without the digest, which authority.Decide holds
+// void (authority.ReasonApprovalNoTemplate).
+func approvalDigest(w *v1alpha1.ScheduledWork) string {
+	if w.Status.Approval == nil {
+		return ""
+	}
+	return w.Status.Approval.TemplateDigest
+}
+
 // Authorize implements Authorizer.
 func (s *Sources) Authorize(ctx context.Context, w *v1alpha1.ScheduledWork, now time.Time) (Authority, error) {
 	name := w.Spec.Work.Template
@@ -135,7 +145,7 @@ func (s *Sources) Authorize(ctx context.Context, w *v1alpha1.ScheduledWork, now 
 	if err != nil {
 		return Authority{}, err
 	}
-	recorded := ""
+	recorded := approvalDigest(w)
 	if s.recordedDigest != nil {
 		recorded = s.recordedDigest(w)
 	}

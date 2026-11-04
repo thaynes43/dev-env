@@ -15,9 +15,12 @@
 //     VerifyTimeout decides: only this page's own Reminder is recorded. It
 //     never updates or deletes a Reminder.
 //
-// The package has no caller yet. The executor and the releaser (S4b) call
-// Pager.EnsureInto when an occurrence reaches a page event, and Pager.Refresh
-// to copy a Reminder's final state onto its page.
+// The executor and the releaser (S4b) call Pager.EnsureChecked for an
+// occurrence's stored page intent. They record a settled entry with
+// v1alpha1.AppendPage and leave an unconfirmed one pending for a later pass
+// (the executor up to a bounded number of passes). Ensure and EnsureInto have
+// no caller there; nor has Pager.Refresh, which copies a Reminder's final
+// state onto its page.
 package pages
 
 import (
@@ -241,31 +244,48 @@ type Pager struct {
 // held to that range in the skipped entry only: it creates nothing, so it
 // never takes the key of a real attempt's page.
 func (p *Pager) Ensure(ctx context.Context, work *v1alpha1.ScheduledWork, at time.Time, event string, attempt int32, title, body string, now time.Time) v1alpha1.ScheduledWorkPage {
+	page, _ := p.EnsureChecked(ctx, work, at, event, attempt, title, body, now)
+	return page
+}
+
+// EnsureChecked is Ensure that also reports whether its answer is settled.
+// It is false only when a Reminder of this page may exist but could not be
+// read back: the create met AlreadyExists, or an error after which the
+// Reminder may be stored, and the verifying read failed (it did not answer,
+// as opposed to finding no Reminder or another's). The entry is then the
+// skipped one, and a caller that keeps an intent can leave it pending and
+// try again later, instead of recording skipped for a page that will most
+// likely be sent.
+func (p *Pager) EnsureChecked(ctx context.Context, work *v1alpha1.ScheduledWork, at time.Time, event string, attempt int32, title, body string, now time.Time) (v1alpha1.ScheduledWorkPage, bool) {
 	if !slices.Contains(events, event) {
 		event = v1alpha1.PageEventSkipped
 		title, body = "", ""
 	}
 	skipped := v1alpha1.ScheduledWorkPage{Event: event, Attempt: min(max(attempt, 0), v1alpha1.ScheduledWorkMaxAttempt), State: "skipped"}
 	if p == nil || p.Client == nil {
-		return skipped
+		return skipped, true
 	}
 	// Build refuses an attempt out of range, so nothing is created for it.
 	rem, err := Build(work, at, event, attempt, title, body, now)
 	if err != nil {
-		return skipped
+		return skipped, true
 	}
 	err = p.Client.Create(ctx, rem)
 	switch {
 	case err == nil:
-		return v1alpha1.ScheduledWorkPage{Event: event, Attempt: attempt, Reminder: rem.Name}
+		return v1alpha1.ScheduledWorkPage{Event: event, Attempt: attempt, Reminder: rem.Name}, true
 	case refused(err):
-		return skipped
+		return skipped, true
 	}
 	// AlreadyExists, or an error after which the Reminder may be stored.
-	if page, ok := p.stored(ctx, rem); ok {
-		return page
+	page, ok, read := p.stored(ctx, rem)
+	switch {
+	case ok:
+		return page, true
+	case !read:
+		return skipped, false
 	}
-	return skipped
+	return skipped, true
 }
 
 // refused reports a create error that proves nothing was stored: the kind is
@@ -281,27 +301,28 @@ func refused(err error) bool {
 // with its state so far, when it is want's page: the same Owner and the same
 // item UID, occurrence, event and attempt labels. A failed read, an absent
 // Reminder and anyone else's Reminder are not. The read keeps ctx's values
-// but not its cancellation, under its own VerifyTimeout.
-func (p *Pager) stored(ctx context.Context, want *v1alpha1.Reminder) (v1alpha1.ScheduledWorkPage, bool) {
+// but not its cancellation, under its own VerifyTimeout. read is false when
+// the read itself failed (anything but NotFound), so nothing is known.
+func (p *Pager) stored(ctx context.Context, want *v1alpha1.Reminder) (page v1alpha1.ScheduledWorkPage, ok, read bool) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), VerifyTimeout)
 	defer cancel()
 	var got v1alpha1.Reminder
 	if err := p.Client.Get(rctx, client.ObjectKeyFromObject(want), &got); err != nil {
-		return v1alpha1.ScheduledWorkPage{}, false
+		return v1alpha1.ScheduledWorkPage{}, false, apierrors.IsNotFound(err)
 	}
 	if got.Spec.Owner != want.Spec.Owner {
-		return v1alpha1.ScheduledWorkPage{}, false
+		return v1alpha1.ScheduledWorkPage{}, false, true
 	}
 	for _, k := range []string{v1alpha1.LabelScheduledWork, v1alpha1.AnnotationScheduledWorkOccurrence, LabelEvent, LabelAttempt} {
 		if got.Labels[k] == "" || got.Labels[k] != want.Labels[k] {
-			return v1alpha1.ScheduledWorkPage{}, false
+			return v1alpha1.ScheduledWorkPage{}, false, true
 		}
 	}
 	attempt, err := strconv.ParseInt(want.Labels[LabelAttempt], 10, 32)
 	if err != nil {
-		return v1alpha1.ScheduledWorkPage{}, false
+		return v1alpha1.ScheduledWorkPage{}, false, true
 	}
-	return v1alpha1.ScheduledWorkPage{Event: want.Labels[LabelEvent], Attempt: int32(attempt), Reminder: want.Name, State: PageState(&got)}, true
+	return v1alpha1.ScheduledWorkPage{Event: want.Labels[LabelEvent], Attempt: int32(attempt), Reminder: want.Name, State: PageState(&got)}, true, true
 }
 
 // EnsureInto is Ensure, recorded in pages with v1alpha1.AppendPage. It returns

@@ -32,6 +32,10 @@
 // dispatch templates ConfigMap and the owner session, read uncached, decided
 // by internal/scheduledwork/authority. Without the ConfigMap, or without a
 // basis its template admits, an occurrence parks and nothing is dispatched.
+//
+// Pages (S4b, paging.go) go through Pager: a transition that pages records
+// its intent in its own status write, and a later step creates the keyed
+// page Reminder and records it. A page never holds a state change.
 package executor
 
 import (
@@ -60,6 +64,7 @@ import (
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
 	"github.com/thaynes43/dev-env/internal/reminders"
 	"github.com/thaynes43/dev-env/internal/scheduledwork"
+	"github.com/thaynes43/dev-env/internal/scheduledwork/pages"
 )
 
 // The defaults of DESIGN-054.
@@ -271,7 +276,15 @@ type Executor struct {
 	// (MetricSchemaReadFailures). Nil counts nothing.
 	SchemaMissing      prometheus.Counter
 	SchemaReadFailures prometheus.Counter
-	Log                logr.Logger
+	// Pager creates the page Reminders (DESIGN-054 Decision 5, S4b); NewPager
+	// builds the operator's. Nil pages nothing and records no page.
+	Pager *pages.Pager
+	// PageTimeout bounds one page's Ensure; zero is DefaultPageTimeout.
+	PageTimeout time.Duration
+	// MaxUnconfirmedPageTries bounds the passes an unconfirmed page is tried
+	// in; zero is DefaultMaxUnconfirmedPageTries.
+	MaxUnconfirmedPageTries int
+	Log                     logr.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 
@@ -281,6 +294,13 @@ type Executor struct {
 	schemaOK, schemaLogged bool
 	schemaRV               string
 	schemaAt               time.Time
+
+	// unconfirmed counts, per item UID and page, the passes whose Ensure
+	// could not be confirmed (MaxUnconfirmedPageTries); pagesSeen are the
+	// pages tried in the current Tick, so the counts of pages no longer
+	// pending are dropped at its end.
+	unconfirmed map[string]int
+	pagesSeen   map[string]bool
 }
 
 // NeedLeaderElection makes the executor run in the leader only.
@@ -351,6 +371,17 @@ func (e *Executor) Tick(ctx context.Context) {
 	if !e.schemaReady(ctx) {
 		return
 	}
+	if e.unconfirmed == nil {
+		e.unconfirmed = map[string]int{}
+	}
+	e.pagesSeen = map[string]bool{}
+	defer func() {
+		for k := range e.unconfirmed {
+			if !e.pagesSeen[k] {
+				delete(e.unconfirmed, k)
+			}
+		}
+	}()
 	items := list.Items
 	slices.SortFunc(items, func(a, b v1alpha1.ScheduledWork) int {
 		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
@@ -514,6 +545,9 @@ type pass struct {
 	extra      slots
 	extraNames map[string]bool
 	tried      map[int64]bool
+	// pagesTried are the item's pages whose Ensure could not be confirmed in
+	// this pass; they stay pending and are not tried again until the next.
+	pagesTried map[string]bool
 }
 
 func (p *pass) used(mode string) int {
@@ -534,7 +568,7 @@ func (p *pass) item(ctx context.Context, w *v1alpha1.ScheduledWork) {
 	if !w.DeletionTimestamp.IsZero() {
 		return
 	}
-	p.tried = map[int64]bool{}
+	p.tried, p.pagesTried = map[int64]bool{}, map[string]bool{}
 	lg := p.e.Log.WithValues("scheduledWork", w.Name)
 	for range maxSteps {
 		wrote, err := p.step(ctx, w, lg)
@@ -581,9 +615,15 @@ func (p *pass) step(ctx context.Context, w *v1alpha1.ScheduledWork, lg logr.Logg
 		sch = nil
 	}
 	if sch != nil && w.Status.PlanHash != planHash(w.Spec) {
-		plan(w, sch, now)
+		if o := plan(w, sch, now); o != nil {
+			p.intendFor(w, o)
+		}
 		lg.Info("planned the next occurrence", "nextDue", timeOrNone(w.Status.NextDue))
 		return true, e.write(ctx, w)
+	}
+	// The pages of transitions already stored go out before the next one.
+	if wrote, err := p.deliver(ctx, w, now, lg); wrote || err != nil {
+		return wrote, err
 	}
 	for i := range w.Status.Occurrences {
 		o := w.Status.Occurrences[i]
@@ -648,6 +688,7 @@ func (p *pass) due(ctx context.Context, w *v1alpha1.ScheduledWork, sch *reminder
 		if n > 1 {
 			rec.Missed = int32(n)
 		}
+		p.intendFor(w, &rec)
 		record(w, rec)
 		w.Status.Counts.Skipped += int32(n)
 		setNext(w, next, ok)
@@ -674,6 +715,7 @@ func (p *pass) due(ctx context.Context, w *v1alpha1.ScheduledWork, sch *reminder
 			rec.State, rec.ClaimedAt, rec.SpecHash = v1alpha1.OccurrenceClaimed, &claimedAt, scheduledwork.SpecHash(w.Spec)
 		}
 	}
+	p.intendFor(w, &rec)
 	record(w, rec)
 	setNext(w, next, ok)
 	logOccurrence(lg, at, "", rec.State, rec.Reason)
@@ -711,11 +753,18 @@ func (p *pass) pending(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		o.State, o.Reason = v1alpha1.OccurrenceSkipped, ReasonNotAfter
 		w.Status.Counts.Skipped++
 	case now.After(windowStart(o).Add(grace)):
-		if o.Reason == ReasonOwnerUnproven || o.Reason == ReasonAuthorityUnread {
+		switch o.Reason {
+		case ReasonOwnerUnproven, ReasonAuthorityUnread:
 			o.State = v1alpha1.OccurrenceParked
 			w.Status.Counts.Parked++
-		} else {
-			o.State, o.Reason = v1alpha1.OccurrenceSkipped, ReasonAtCapacity
+		case ReasonAtCapacity:
+			o.State = v1alpha1.OccurrenceSkipped
+			w.Status.Counts.Skipped++
+		default:
+			// It never waited on a cap or the owner: no pass reached it
+			// inside its grace (a retried occurrence while the executor was
+			// down, say).
+			o.State, o.Reason = v1alpha1.OccurrenceSkipped, graceMissedReason(o, grace)
 			w.Status.Counts.Skipped++
 		}
 	case previousUnfinished(w, at):
@@ -743,6 +792,9 @@ func (p *pass) pending(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 			}
 		}
 	}
+	if o.State != from {
+		p.intendFor(w, o)
+	}
 	logOccurrence(lg, at, from, o.State, o.Reason)
 	return true, p.e.write(ctx, w)
 }
@@ -757,6 +809,7 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 	name, err := scheduledwork.SessionName(string(w.UID), at)
 	if err != nil {
 		park(w, o, err.Error())
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	}
@@ -770,6 +823,7 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		return p.dispatched(ctx, w, o, name, sess.UID, true, lg)
 	case err == nil:
 		ambiguous(w, o)
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	case !apierrors.IsNotFound(err):
@@ -849,6 +903,7 @@ func (p *pass) end(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha1.S
 	} else {
 		w.Status.Counts.Skipped++
 	}
+	p.intendFor(w, o)
 	logOccurrence(lg, at, from, o.State, o.Reason)
 	return true, p.e.write(ctx, w)
 }
@@ -875,6 +930,7 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 	at := o.At.Time
 	parked := func(reason string) (bool, error) {
 		park(w, o, reason)
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	}
@@ -949,6 +1005,7 @@ func (p *pass) create(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1alpha
 		return p.end(ctx, w, o, v1alpha1.OccurrenceSkipped, ReasonNotCreated, lg)
 	case errors.Is(err, scheduledwork.ErrCollision):
 		ambiguous(w, o)
+		p.intendFor(w, o)
 		logOccurrence(lg, at, v1alpha1.OccurrenceClaimed, o.State, o.Reason)
 		return true, e.write(ctx, w)
 	case errors.As(err, &refused):
@@ -966,9 +1023,9 @@ func (p *pass) dispatched(ctx context.Context, w *v1alpha1.ScheduledWork, o *v1a
 	if o.SessionUID == "" {
 		o.SessionUID = string(uid)
 	}
-	// TODO(S4): page the due event and, for interactive work, deliver the
-	// work order once the pod is Ready and page the link once Remote Control
-	// is registered.
+	p.intendFor(w, o)
+	// TODO(S4): for interactive work, deliver the work order once the pod is
+	// Ready and page the link once Remote Control is registered.
 	at := o.At.Time
 	lg.Info("scheduled work occurrence", "occurrence", at.UTC().Format(time.RFC3339), "from", from,
 		"to", v1alpha1.OccurrenceDispatched, "session", name, "adopted", adopted)
@@ -1187,7 +1244,7 @@ func (p *pass) parked(ctx context.Context, w *v1alpha1.ScheduledWork, at time.Ti
 	}
 	if now.Before(end) {
 		// TODO(S5): a human approve or retry claims it again, from
-		// retriedAt. TODO(S4): the parked page.
+		// retriedAt. The parked page went out with the park.
 		return false, nil
 	}
 	return p.end(ctx, w, o, v1alpha1.OccurrenceSkipped, ReasonParkedExpired, lg)
@@ -1284,18 +1341,24 @@ func record(w *v1alpha1.ScheduledWork, o v1alpha1.ScheduledWorkOccurrence) {
 // occurrences missed while the executor was down are found and none from
 // before the item existed is run. An edit re-plans from now; an occurrence
 // that was due and not yet decided is recorded Skipped first, so every
-// occurrence keeps a record.
-func plan(w *v1alpha1.ScheduledWork, sch *reminders.Schedule, now time.Time) {
+// occurrence keeps a record. It returns that Skipped record, or nil.
+func plan(w *v1alpha1.ScheduledWork, sch *reminders.Schedule, now time.Time) *v1alpha1.ScheduledWorkOccurrence {
 	notBefore := now
+	var replanned *metav1.Time
 	if w.Status.PlanHash == "" {
 		notBefore = w.CreationTimestamp.Truncate(time.Minute)
 	} else if d := w.Status.NextDue; d != nil && !d.After(now) && scheduledwork.Find(w, d.Time) == nil {
-		record(w, v1alpha1.ScheduledWorkOccurrence{At: *d.DeepCopy(), State: v1alpha1.OccurrenceSkipped, Reason: ReasonReplanned})
+		replanned = d.DeepCopy()
+		record(w, v1alpha1.ScheduledWorkOccurrence{At: *replanned, State: v1alpha1.OccurrenceSkipped, Reason: ReasonReplanned})
 		w.Status.Counts.Skipped++
 	}
 	w.Status.PlanHash = planHash(w.Spec)
 	next, ok := firstFrom(w, sch, notBefore)
 	setNext(w, next, ok)
+	if replanned == nil {
+		return nil
+	}
+	return scheduledwork.Find(w, replanned.Time)
 }
 
 // planHash identifies the fields NextDue is computed from: the shared schedule
@@ -1331,6 +1394,16 @@ func setNext(w *v1alpha1.ScheduledWork, next time.Time, ok bool) {
 		return
 	}
 	w.Status.NextDue = &metav1.Time{Time: next.UTC()}
+}
+
+// graceMissedReason is the reason of a Pending occurrence no pass reached
+// inside its grace, which counts from retriedAt for a retried one.
+func graceMissedReason(o *v1alpha1.ScheduledWorkOccurrence, grace time.Duration) string {
+	reason := missedReason(1, o.At.Time, grace)
+	if o.RetriedAt != nil {
+		reason += " after a retry"
+	}
+	return reason
 }
 
 func missedReason(n int, last time.Time, grace time.Duration) string {

@@ -659,6 +659,9 @@ func TestEnsureIntoKeepsRealPagesFromAnInvalidCall(t *testing.T) {
 		{"attempt past the last", v1alpha1.PageEventParked, v1alpha1.ScheduledWorkMaxAttempt + 2},
 		{"negative attempt", v1alpha1.PageEventParked, -1},
 		{"unknown event", "bogus", 1},
+		// No skipped/2 entry exists, so the keep rule cannot mask a missing
+		// event check: only the guard keeps a made-up skipped page out.
+		{"unknown event at an attempt with no skipped page", "bogus", 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			in := slices.Clone(real)
@@ -728,11 +731,90 @@ func TestEnsureIntoKeepsARecordedPageWhenTheReadFails(t *testing.T) {
 	if got := p.EnsureInto(context.Background(), slices.Clone(other), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); len(got) != 2 || got[1] != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}) {
 		t.Errorf("another page's entry kept this one from being recorded: %+v", got)
 	}
+	// The same event at another attempt does not count either.
+	otherAttempt := []v1alpha1.ScheduledWorkPage{{Event: v1alpha1.PageEventDue, Attempt: 0, Reminder: "swp-due-0", State: "sent"}}
+	if got := p.EnsureInto(context.Background(), slices.Clone(otherAttempt), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt); len(got) != 2 || got[0] != otherAttempt[0] || got[1] != (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, State: "skipped"}) {
+		t.Errorf("the same event's page at another attempt kept this one from being recorded: %+v", got)
+	}
 	// With the read working, the replay confirms the Reminder and records its
 	// state.
 	readFails.Store(false)
 	got = p.EnsureInto(context.Background(), slices.Clone(recorded), w, occAt, v1alpha1.PageEventDue, 1, "Due", "body", nowAt)
 	if want := (v1alpha1.ScheduledWorkPage{Event: "due", Attempt: 1, Reminder: existing.Name, State: "sent"}); len(got) != 2 || got[0] != want {
 		t.Fatalf("a confirmed replay: %+v, want %+v first", got, want)
+	}
+}
+
+// EnsureChecked reports an answer it cannot confirm: the create met
+// AlreadyExists, or an error after which the Reminder may be stored, and the
+// verifying read failed. Every other answer is settled, a refusal, a read
+// that finds no Reminder and another's Reminder included.
+func TestEnsureCheckedReportsAnUnconfirmedRead(t *testing.T) {
+	w := item("pushover:default")
+	own, err := Build(w, occAt, v1alpha1.PageEventDue, 0, "Due", "body", nowAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := own.DeepCopy()
+	foreign.Labels[v1alpha1.LabelScheduledWork] = "other-uid"
+	readErr := apierrors.NewServiceUnavailable("injected: the read failed")
+	gr := schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "reminders"}
+	for _, c := range []struct {
+		name     string
+		existing *v1alpha1.Reminder
+		create   error
+		read     error
+		named    bool
+		settled  bool
+	}{
+		{"created", nil, nil, nil, true, true},
+		{"exists, read works", own, nil, nil, true, true},
+		{"exists, read fails", own, nil, readErr, false, false},
+		{"exists as another's", foreign, nil, nil, false, true},
+		{"ambiguous create, read fails", nil, errors.New("injected: connection reset"), readErr, false, false},
+		{"ambiguous create, nothing stored", nil, errors.New("injected: connection reset"), nil, false, true},
+		{"refused", nil, apierrors.NewForbidden(gr, "x", errors.New("no")), readErr, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var objs []client.Object
+			if c.existing != nil {
+				objs = append(objs, c.existing.DeepCopy())
+			}
+			p := &Pager{Client: fakeClient(t, interceptor.Funcs{
+				Create: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+					if c.create != nil {
+						return c.create
+					}
+					return cl.Create(ctx, o, opts...)
+				},
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+					if c.read != nil {
+						return c.read
+					}
+					return cl.Get(ctx, key, o, opts...)
+				},
+			}, objs...)}
+			got, settled := p.EnsureChecked(context.Background(), w, occAt, v1alpha1.PageEventDue, 0, "Due", "body", nowAt)
+			if settled != c.settled || (got.Reminder != "") != c.named {
+				t.Fatalf("EnsureChecked = %+v, settled %v; want named %v settled %v", got, settled, c.named, c.settled)
+			}
+			if plain := p.Ensure(context.Background(), w, occAt, v1alpha1.PageEventDue, 0, "Due", "body", nowAt); (plain.Reminder != "") != c.named && c.name != "created" {
+				t.Errorf("Ensure = %+v differs from EnsureChecked", plain)
+			}
+		})
+	}
+}
+
+// A page Build refuses (the item has no notify target any more) is settled:
+// nothing is created, and there is nothing to read again.
+func TestEnsureCheckedSettlesABuildRefusal(t *testing.T) {
+	creates := 0
+	p := &Pager{Client: fakeClient(t, interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+		creates++
+		return cl.Create(ctx, o, opts...)
+	}})}
+	got, settled := p.EnsureChecked(context.Background(), item(), occAt, v1alpha1.PageEventSkipped, 0, "Skipped", "body", nowAt)
+	if !settled || got != (v1alpha1.ScheduledWorkPage{Event: "skipped", Attempt: 0, State: "skipped"}) || creates != 0 {
+		t.Fatalf("EnsureChecked = %+v, settled %v, %d creates", got, settled, creates)
 	}
 }

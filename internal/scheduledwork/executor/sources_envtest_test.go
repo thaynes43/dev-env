@@ -128,8 +128,8 @@ func TestSourcesHumanOwnerDispatches(t *testing.T) {
 }
 
 // A human approval of the exact spec dispatches a client-owned item only
-// while its recorded template digest is the template's: with none recorded
-// (until S5 adds the field) it is void.
+// while its recorded template digest (here set through the test hook) is the
+// template's: with none recorded it is void.
 func TestSourcesApprovedItem(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -166,6 +166,57 @@ func TestSourcesApprovedItem(t *testing.T) {
 				}
 			} else if calls, _, _ := f.create.counts(); calls != 0 {
 				t.Errorf("a void approval reached the create: %d calls", calls)
+			}
+		})
+	}
+}
+
+// An approval stored the way the API's approve route stores it (by, at,
+// specHash and templateDigest, with no test hook) is honoured while its
+// digest is the template's, and void with another template's digest or with
+// none.
+func TestSourcesReadTheStoredApprovalDigest(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		stored string
+		state  string
+		reason string
+	}{
+		{"stored digest matches", "approved-only", v1alpha1.OccurrenceDispatched, ""},
+		{"stored under another template", "ops-audit", v1alpha1.OccurrenceParked,
+			ReasonNoAuthority + ": " + authority.ReasonClientNeedsApproval + "; " + authority.ReasonApprovalTemplate},
+		{"no stored digest", "", v1alpha1.OccurrenceParked,
+			ReasonNoAuthority + ": " + authority.ReasonClientNeedsApproval + "; " + authority.ReasonApprovalNoTemplate},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			src, ex := f.withSources(e2eTemplates)
+			if src.recordedDigest != nil {
+				t.Fatal("the fixture set the recorded-digest hook; this case reads the stored approval")
+			}
+			sp := spec()
+			sp.Owner, sp.Editor, sp.Work.Template = "client/dev/dev-env", "client/dev/dev-env", "approved-only"
+			key := f.item("approved", sp)
+			w := f.get(key)
+			approval := &v1alpha1.ScheduledWorkApproval{By: "human/dev-env-system/tom", At: metav1.NewTime(day0.Add(-2 * time.Hour)), SpecHash: scheduledwork.SpecHash(w.Spec)}
+			if c.stored != "" {
+				approval.TemplateDigest = e2eDigest(t, c.stored)
+			}
+			w.Status.Approval = approval
+			if err := cluster(t).Status().Update(context.Background(), w); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.get(key).Status.Approval; got == nil || got.TemplateDigest != approval.TemplateDigest {
+				t.Fatalf("the API server stored approval %+v", got)
+			}
+			f.due(ex)
+			o := f.wantOcc(key, day0, c.state, c.reason)
+			if c.state != v1alpha1.OccurrenceDispatched {
+				if calls, _, _ := f.create.counts(); calls != 0 {
+					t.Errorf("a void approval reached the create: %d calls", calls)
+				}
+			} else if s := f.session(o.Session); s.Spec.Parent != apiserver.ScheduledWorkParent {
+				t.Errorf("session %+v", s.Spec)
 			}
 		})
 	}
