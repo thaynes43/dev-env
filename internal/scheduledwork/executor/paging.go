@@ -37,6 +37,11 @@ import (
 //     process only, so a restart or a new leader starts it again: still a
 //     bound, per process.
 //
+// A page's text is built from its intent, not from what the occurrence is
+// now (pageText): the intent's attempt, and the state and reason its event
+// recorded. A page whose moment is over before it is sent (a park a human
+// has since retried, or that has ended) is settled skipped unsent.
+//
 // An item with no notify target, or an executor with no Pager, records no
 // intent and so pages nothing. Neither step updates or deletes a Reminder.
 // Each Ensure gets its own deadline (Executor.PageTimeout), so a slow API
@@ -159,7 +164,16 @@ func (p *pass) deliver(ctx context.Context, w *v1alpha1.ScheduledWork, now time.
 			if !pendingPage(pg) || !executorSends(o, pg) || p.pagesTried[key] {
 				continue
 			}
-			title, body := pageText(w, o, pg.Event)
+			title, body, current := pageText(w, o, pg)
+			if !current {
+				// What it reports is over and its reason gone: not sent.
+				p.pagesTried[key] = true
+				delete(p.e.unconfirmed, string(w.UID)+"/"+key)
+				o.Pages = settle(o.Pages, pg, v1alpha1.ScheduledWorkPage{Event: pg.Event, Attempt: pg.Attempt, State: "skipped"})
+				sent++
+				lg.Info("a page whose moment is over is settled skipped unsent", "occurrence", o.At.UTC().Format(time.RFC3339), "event", pg.Event, "attempt", pg.Attempt)
+				continue
+			}
 			pctx, cancel := context.WithTimeout(ctx, positiveOr(p.e.PageTimeout, DefaultPageTimeout))
 			got, settled := p.e.Pager.EnsureChecked(pctx, w, o.At.Time, pg.Event, pg.Attempt, title, body, now)
 			cancel()
@@ -202,29 +216,48 @@ func settle(pages []v1alpha1.ScheduledWorkPage, pg, got v1alpha1.ScheduledWorkPa
 	return v1alpha1.AppendPage(pages, got)
 }
 
-// pageText is the title and body of the executor's page for event on o.
-// pages.Build cuts both to the Reminder's limits.
-func pageText(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, event string) (title, body string) {
+// pageState is the occurrence state the event pg reports was recorded in,
+// for the events whose state is the occurrence's own while it lasts.
+var pageState = map[string]string{
+	v1alpha1.PageEventParked:  v1alpha1.OccurrenceParked,
+	v1alpha1.PageEventSkipped: v1alpha1.OccurrenceSkipped,
+	v1alpha1.PageEventFailed:  v1alpha1.OccurrenceAmbiguous,
+}
+
+// pageText is the title and body of the executor's page pg on o, built from
+// the intent: pg's attempt, and the state and reason pg's event recorded.
+// current is false when that moment is over, so the text could only be
+// wrong: o is at another attempt (a human retried it), or o is no longer in
+// the state the event recorded (a park that was retried or ended; skipped and
+// failed are final and always current). A due page reports the dispatch
+// (Dispatched, and the session, which never changes) and stays current at
+// its attempt. pages.Build cuts the title and body to the Reminder's limits.
+func pageText(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, pg v1alpha1.ScheduledWorkPage) (title, body string, current bool) {
+	if o.Attempt != pg.Attempt {
+		return "", "", false
+	}
+	state := v1alpha1.OccurrenceDispatched
+	if want, ok := pageState[pg.Event]; ok {
+		if o.State != want {
+			return "", "", false
+		}
+		state = o.State
+		if o.Reason != "" {
+			state += ": " + o.Reason
+		}
+	}
 	head := map[string]string{
 		v1alpha1.PageEventDue:     "Scheduled work started",
 		v1alpha1.PageEventParked:  "Scheduled work parked",
 		v1alpha1.PageEventSkipped: "Scheduled work skipped",
-		v1alpha1.PageEventFailed:  "Scheduled work failed",
-	}[event]
-	if o.State == v1alpha1.OccurrenceAmbiguous {
-		head = "Scheduled work ambiguous"
-	}
-	lines := []string{fmt.Sprintf("%s, due %s, attempt %d.", w.Name, o.At.UTC().Format("2006-01-02 15:04 UTC"), o.Attempt)}
-	state := o.State
-	if o.Reason != "" {
-		state += ": " + o.Reason
-	}
-	lines = append(lines, state+".")
+		v1alpha1.PageEventFailed:  "Scheduled work ambiguous",
+	}[pg.Event]
+	lines := []string{fmt.Sprintf("%s, due %s, attempt %d.", w.Name, o.At.UTC().Format("2006-01-02 15:04 UTC"), pg.Attempt), state + "."}
 	if o.Session != "" {
 		lines = append(lines, "Session "+o.Session+".")
 	}
-	if event == v1alpha1.PageEventParked {
+	if pg.Event == v1alpha1.PageEventParked {
 		lines = append(lines, "It waits for a human to approve, retry or cancel it.")
 	}
-	return head + ": " + w.Spec.Title, strings.Join(lines, "\n")
+	return head + ": " + w.Spec.Title, strings.Join(lines, "\n"), true
 }

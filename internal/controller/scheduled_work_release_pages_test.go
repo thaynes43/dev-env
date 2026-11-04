@@ -640,3 +640,17 @@ func (c *reminderCreateCount) Create(ctx context.Context, o client.Object, opts 
 	}
 	return c.Client.Create(ctx, o, opts...)
 }
+
+// The releaser's page text carries the intent's attempt: a terminal record
+// never changes, so its state and reason are the ones the event recorded.
+func TestReleasePageTextUsesTheIntentsAttempt(t *testing.T) {
+	w := &v1alpha1.ScheduledWork{ObjectMeta: metav1.ObjectMeta{Name: "audit"}, Spec: v1alpha1.ScheduledWorkSpec{Title: "Audit"}}
+	o := &v1alpha1.ScheduledWorkOccurrence{At: metav1.NewTime(swBase), State: v1alpha1.OccurrenceEnded, Reason: scheduledwork.ReasonParticipationNotObserved, Attempt: 3}
+	title, body := releasePageText(w, o, v1alpha1.ScheduledWorkPage{Event: v1alpha1.PageEventResult, Attempt: 2})
+	if !strings.Contains(body, "attempt 2.") || strings.Contains(body, "attempt 3") || !strings.Contains(body, "Ended: "+scheduledwork.ReasonParticipationNotObserved) {
+		t.Errorf("body %q", body)
+	}
+	if title != "Scheduled work ended: Audit" {
+		t.Errorf("title %q", title)
+	}
+}

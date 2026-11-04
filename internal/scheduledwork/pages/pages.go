@@ -15,10 +15,12 @@
 //     VerifyTimeout decides: only this page's own Reminder is recorded. It
 //     never updates or deletes a Reminder.
 //
-// The executor and the releaser (S4b) call Pager.Ensure for an occurrence's
-// stored page intent and record the entry with v1alpha1.AppendPage.
-// Pager.Refresh, which copies a Reminder's final state onto its page, has no
-// caller yet.
+// The executor and the releaser (S4b) call Pager.EnsureChecked for an
+// occurrence's stored page intent. They record a settled entry with
+// v1alpha1.AppendPage and leave an unconfirmed one pending for a later pass
+// (the executor up to a bounded number of passes). Ensure and EnsureInto have
+// no caller there; nor has Pager.Refresh, which copies a Reminder's final
+// state onto its page.
 package pages
 
 import (

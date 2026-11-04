@@ -826,7 +826,7 @@ func (r *Reconciler) sendScheduledWorkPages(ctx context.Context, lg logr.Logger,
 			if !releaserSends(pg) || tried[key] {
 				continue
 			}
-			title, body := releasePageText(w, o, pg.Event)
+			title, body := releasePageText(w, o, pg)
 			pctx, cancel := context.WithTimeout(ctx, scheduledWorkPageTimeout)
 			got, settled := pager.EnsureChecked(pctx, w, at, pg.Event, pg.Attempt, title, body, now)
 			cancel()
@@ -880,10 +880,13 @@ func (c uncachedPageReads) List(ctx context.Context, list client.ObjectList, opt
 	return c.reader.List(ctx, list, opts...)
 }
 
-// releasePageText is the title and body of the releaser's page for event on
-// o. A result says what the task process and the agent reported, never that
-// the work is done.
-func releasePageText(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, event string) (title, body string) {
+// releasePageText is the title and body of the releaser's page pg on o,
+// built from the intent: pg's event and attempt. Every releaser page reports
+// a terminal record, which never changes, so o's state, reason, execution and
+// reported outcome are those the event recorded. A result says what the task
+// process and the agent reported, never that the work is done.
+func releasePageText(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurrence, pg v1alpha1.ScheduledWorkPage) (title, body string) {
+	event := pg.Event
 	head := "Scheduled work " + strings.ToLower(o.State)
 	switch {
 	case event == v1alpha1.PageEventResult && o.State == v1alpha1.OccurrenceSucceeded:
@@ -891,7 +894,7 @@ func releasePageText(w *v1alpha1.ScheduledWork, o *v1alpha1.ScheduledWorkOccurre
 	case event == v1alpha1.PageEventResult:
 		head = "Scheduled work ended"
 	}
-	lines := []string{fmt.Sprintf("%s, due %s, attempt %d.", w.Name, o.At.UTC().Format("2006-01-02 15:04 UTC"), o.Attempt)}
+	lines := []string{fmt.Sprintf("%s, due %s, attempt %d.", w.Name, o.At.UTC().Format("2006-01-02 15:04 UTC"), pg.Attempt)}
 	state := o.State
 	if o.Reason != "" {
 		state += ": " + o.Reason
