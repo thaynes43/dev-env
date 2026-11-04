@@ -138,6 +138,10 @@ provider, login, credential, cluster or deployment was exercised.
 
 ### 2026-11-04 correction round 2 (source only)
 
+The cycle below, the marker format and the residuals are also the plan's text:
+[plan 03, *Keeper refresh-failure prevention*](../backlog/03-remote-control.md#keeper-refresh-failure-prevention-2026-11-04-source-only-pr-885),
+under [DESIGN-001 D-11](../designs/001-dev-env-v2.md#62-claude-max-login-and-its-monthly-renewal).
+
 The independent review of round 1 passed the source and found four gaps
 (G1 to G4). Its read-only check of haynes-ops `d481703e` found that the
 keeper Role already has get and patch on the named journal Secret, that Flux
