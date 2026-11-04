@@ -417,8 +417,9 @@ func (p *pass) item(ctx context.Context, w *v1alpha1.ScheduledWork) {
 	lg.Info("the item took the most writes one pass gives it; the next pass goes on", "writes", maxSteps)
 }
 
-// step takes the item's next action and reports whether it wrote the status.
-// It writes at most once. The order: plan the next due time, then each stored
+// step takes the item's next action and reports whether the item changed: it
+// wrote the status, or it found the stored item newer than w and took it. It
+// writes at most once. The order: plan the next due time, then each stored
 // occurrence that is not final (oldest first), then the next due occurrence.
 func (p *pass) step(ctx context.Context, w *v1alpha1.ScheduledWork, lg logr.Logger) (bool, error) {
 	e := p.e
@@ -621,9 +622,25 @@ func (p *pass) claimed(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		p.tried[at.Unix()] = true
 		return false, nil
 	}
-	// No session of the derived name, and the occurrence has no recorded
-	// outcome: none was ever created (the finalizer holds a created one
-	// until the releaser records it).
+	// No session of the derived name now. Read the item again, after that
+	// read: the finalizer holds a created session until the releaser has
+	// recorded its outcome, so an item that still shows this occurrence with
+	// no outcome means no session was ever created. The listing this pass
+	// started from may be older than a record. Any change since restarts
+	// the step on the stored state.
+	fresh := &v1alpha1.ScheduledWork{}
+	if err := e.Reader.Get(ctx, client.ObjectKeyFromObject(w), fresh); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, err
+		}
+		lg.Error(err, "read the ScheduledWork again before the create")
+		p.tried[at.Unix()] = true
+		return false, nil
+	}
+	if fresh.ResourceVersion != w.ResourceVersion {
+		*w = *fresh
+		return true, nil
+	}
 	hash := scheduledwork.SpecHash(w.Spec)
 	switch {
 	case now.After(windowStart(o).Add(grace)):

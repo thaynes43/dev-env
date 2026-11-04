@@ -338,6 +338,38 @@ func TestReapedSessionIsNeverRecreated(t *testing.T) {
 	})
 }
 
+// A pass starts from a listing that can be older than the releaser's record.
+// A Claimed occurrence with no session in that listing is created only after
+// an uncached read of the item, made after the session read, still shows no
+// outcome: a session that ran, was recorded and was reaped meanwhile is not
+// created again.
+func TestStaleListingIsNotTrusted(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.executor(), day0.Add(-time.Minute))
+	f.create.hooks(nil, func(name string, adopted bool, err error) (string, bool, error) {
+		f.failStatus.Store(1)
+		return name, adopted, err
+	})
+	f.at(f.executor(), day0)
+	f.wantOcc(key, day0, v1alpha1.OccurrenceClaimed, "")
+	f.create.hooks(nil, nil)
+	var stale v1alpha1.ScheduledWorkList
+	if err := cluster(t).List(context.Background(), &stale, client.InNamespace(f.items)); err != nil {
+		t.Fatal(err)
+	}
+	name := f.derived(key, day0)
+	f.finish(name, v1alpha1.TaskResultSucceeded)
+	f.release(name, true)
+	e := f.executor()
+	e.Reader = staleList{Reader: cluster(t), list: &stale, reads: &atomic.Int32{}}
+	f.at(e, day0.Add(2*time.Minute))
+	f.wantOcc(key, day0, v1alpha1.OccurrenceSucceeded, "")
+	if calls, _, _ := f.create.counts(); calls != 1 || len(f.sessionsOf()) != 0 {
+		t.Errorf("calls %d sessions %d: a stale listing created a reaped session again", calls, len(f.sessionsOf()))
+	}
+}
+
 // The global cap is checked before the claim: an occurrence at the cap stays
 // Pending (never Claimed, never Parked), is claimed when a slot frees inside
 // its grace, and is Skipped "at capacity" when its grace ends first.
