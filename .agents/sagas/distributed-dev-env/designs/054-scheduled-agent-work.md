@@ -59,8 +59,8 @@ From that statement and OP206/OP396/OP397:
    never holds or reuses a caller's token. It never dispatches with more reach than
    the owner could have used itself at the due time (see "Authority").
 5. **Pages go through Reminders.** The operator has no Pushover sender; the keeper
-   does. Each page is its own one-shot `Reminder`, keyed by (occurrence, event):
-   `due`, `link`, `parked`, `failed` or `result`. A sent Reminder is final and is
+   does. Each page is its own one-shot `Reminder`, keyed by (occurrence, event,
+   attempt): `due`, `link`, `parked`, `failed`, `result` or `skipped`. A sent Reminder is final and is
    never reused. The keeper sends it with DESIGN-032's claim-before-send. The
    occurrence keeps a bounded `pages` list with each Reminder's name and delivery
    state (`sent`, `failed`, `ambiguous`). **Pages are best-effort.** Failing to
@@ -92,7 +92,7 @@ status:
   approval:                                  # written only by the API's human approve route
     by: human/...
     at: ...
-    specHash: <sha256 of owner, mode, work, schedule, notAfter>
+    specHash: <sha256 of every spec field except editor and cancelled>
   nextDue: ...                               # as DESIGN-032
   planHash: ...                              # as DESIGN-032; an edit re-plans from now
   counts: {succeeded, failed, parked, skipped, ended, ambiguous, cancelled}  # lifetime; skipped adds `missed`
@@ -114,7 +114,9 @@ status:
 ```
 
 `approval` is in **status**, not spec. Only the operator's `POST .../approve`
-route, for a human caller, writes it. Any spec edit changes `specHash`, so the
+route, for a human caller, writes it. `specHash` covers every spec field except
+`editor` and `cancelled`, so any edit Tom did not see (including `notify`,
+`calendar` and `title`) changes it, and the
 approval no longer matches and is void.
 
 **Who may edit.** Only the owner or a human may edit a spec. A coordinator may
