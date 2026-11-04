@@ -293,9 +293,9 @@ func TestScheduledWorkReleaseNoPageWithoutItsRecordOrTarget(t *testing.T) {
 			return k8s.Update(context.Background(), w)
 		})
 		s := releaseFixtureSession(t, f, suspendedAtCreate)
-		o := f.waitOccurrence(t, v1alpha1.OccurrenceFailed)
+		f.waitOccurrence(t, v1alpha1.OccurrenceFailed)
 		waitReleased(t, s.Name)
-		if o = f.occurrence(t); len(o.Pages) != 0 || len(f.pageReminders(t)) != 0 {
+		if o := f.occurrence(t); len(o.Pages) != 0 || len(f.pageReminders(t)) != 0 {
 			t.Errorf("pages %+v reminders %d", o.Pages, len(f.pageReminders(t)))
 		}
 	})
