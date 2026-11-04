@@ -82,8 +82,8 @@ spec:
     prompt: "..."                            # <= 8 KiB, the work order
   notify: [pushover:default]                 # DESIGN-032 targets
   calendar: calendar:haynesnetwork           # optional projection, through a companion Reminder
+  editor: human/... | session/<name>/<uid>   # written by the API in the same write as every spec change
 status:
-  lastEditor: human/... | session/<name>/<uid> # written by the API on create and on every spec edit
   approval:                                  # written only by the API's human approve route
     by: human/...
     at: ...
@@ -108,8 +108,10 @@ approval no longer matches and is void.
 
 **Who may edit.** Only the owner or a human may edit a spec. A coordinator may
 cancel, but not edit (unlike the reminder routes, where any coordinator may edit).
-The API records the editor in `status.lastEditor`. A standing basis (below) holds
-only while the last editor is that basis's own principal. So an edit by anyone but
+The API sets `spec.editor` to the caller in the same write as the spec change, so
+the two cannot diverge. Admission lets only the operator's ServiceAccount write
+`scheduledworks`, so no one else can set `editor`. A standing basis (below) holds
+only while `spec.editor` is that basis's own principal. So an edit by anyone but
 the owner turns the item into one that needs Tom's approval for that exact spec. A haynes-ops ValidatingAdmissionPolicy
 admits create, update and status writes on `scheduledworks` from the operator's
 ServiceAccount only. The keeper and every other identity get no write.
@@ -130,9 +132,9 @@ An occurrence dispatches on exactly one of these, checked at the due time:
 
 | Basis | Condition at due time | Session is created as |
 |---|---|---|
-| **Human owner** | `lastEditor` is the owner, and the template admits `human` | the operator's client identity `client/dev-env-system/scheduled-work`, within the template's fixed bounds |
+| **Human owner** | `spec.editor` is the owner, and the template admits `human` | the operator's client identity `client/dev-env-system/scheduled-work`, within the template's fixed bounds |
 | **Human approval** | `status.approval.specHash` equals the current spec's hash, and the template admits the owner's class | the same client identity |
-| **Live session owner** | `lastEditor` is the owner; the owner session (by UID) exists, is not reaped, archived or failed, is not suspended by an operating-mode change, and its agent has not ended by `standby.AgentEnded`'s booting- and drain-safe rule (with the pod-age proof, `unprovenAgentEnd`), so a drain onto a new revision does not count as ended; the template admits `session` | **a child of the owner**, through the same validation as if the owner created it now: its profile, depth, per-parent child cap and mode rules all apply |
+| **Live session owner** | `spec.editor` is the owner; the owner session (by UID) is **proven live**: operating mode Running, phase Running or Idle, a heartbeat within the staleness bound, and not ended by the session-end rule below. A drain onto a new revision is neither live nor ended: the occurrence waits in `Pending` within grace, then parks. An unproven state never grants authority; the template admits `session` | **a child of the owner**, through the same validation as if the owner created it now: its profile, depth, per-parent child cap and mode rules all apply |
 
 Anything else parks with reason `no standing authority`, and Tom is paged. He can
 approve it, which binds his approval to the spec he saw. A suspended or ended
@@ -203,24 +205,46 @@ stateDiagram-v2
   `Ambiguous`. The latest any work starts is the due time plus grace. A recorded
   outcome is never followed by a new create, and an ended session is never recreated
   or resumed.
+- **The session-end rule.** A scheduled session has ended when **any** of these
+  holds:
+  - its operating mode is Suspended, or its phase is Suspended, Failed or Archived;
+  - for task mode, the durable `status.taskResult` or the retained task outcome is
+    set;
+  - its phase is Running or Idle and `standby.AgentEnded` holds with the pod-age
+    proof (`unprovenAgentEnd` false). That keeps its booting and drain guard: an
+    agent restarted by a drain onto a new revision is not an end.
+
+  `standby.AgentEnded` alone is not enough, because it returns false for every
+  suspended session. Without the first clause, an idle suspend would never end an
+  occurrence, free a slot or release a finalizer. The executor (`Ended`, `Succeeded`,
+  `Failed`, the caps) and the releaser use this one rule. A suspended interactive
+  session that Tom resumes later is outside the occurrence; its outcome stays
+  `Ended`.
 - **The releaser, and why the finalizer cannot strand a session.** The release path
   is part of the AgentSession reconciler, which always runs. It is **not** behind
   `--enable-scheduled-work`, and it is not the executor runnable. It acts only on a
-  session that carries the finalizer and whose agent has ended (the drain-safe rule
-  above), or that is being deleted. It never deletes, suspends or changes a session in any other way, so
+  session that carries the finalizer and has ended by the session-end rule, or that is
+  being deleted. It never deletes, suspends or changes a session in any other way, so
   active user work is untouched. For each such session it:
-  1. reads the owning ScheduledWork by the UID in the session's label, uncached;
+  1. reads the owning ScheduledWork, uncached, by the name in the session's
+     annotation `dev-env.haynesops.com/scheduled-work-name`, and checks its UID
+     against the label (a Get by UID does not exist). A UID mismatch means the item
+     was deleted and recreated under the same name, which counts as deleted;
   2. if the occurrence has no terminal state yet, writes one with a compare-and-set:
      the headless outcome from Session status, `Ended` for interactive, or `Failed`
      with reason `session reaped before it ended` when deletion came first. This is
      the exit for every non-terminal state, including `Delivered` and a delivery
      marked `ambiguous`;
   3. if the ScheduledWork no longer exists (a person deleted it; the API offers only
-     cancel), there is nothing to record, so it logs that and goes on;
+     cancel), or the ScheduledWork kind is not served at all (the CRD was removed:
+     `NoKindMatch` or a discovery error, not NotFound), there is nothing to record,
+     and nothing can redispatch it. It logs that and goes on;
   4. removes the finalizer.
 
   A periodic sweep in the same reconciler lists sessions by the label (uncached) so
-  that a missed event cannot strand one. The guard test that pins every finalizer
+  that a missed event cannot strand one. The releaser starts **no** watch or
+  informer on ScheduledWork: S3a ships before S6 installs the CRD, and a watch on an
+  absent kind would stop the manager from starting. The guard test that pins every finalizer
   removal site (`guard_test.go`) gains this site, and nothing else may remove it.
 
   The existing rescue and archive guards keep their own finalizer and order. The
@@ -230,7 +254,7 @@ stateDiagram-v2
   |---|---|
   | Flag off, or executor never ran | the releaser still runs in the reconciler and releases |
   | ScheduledWork deleted | step 3: release without a record; nothing can redispatch it |
-  | Status write keeps failing | the finalizer stays and the session stays Terminating; a metric and a page report it. Releasing without the record would break the exactly-once rule |
+  | Status write keeps failing | the finalizer stays and the session stays Terminating. The reconciler exports `dev_env_scheduled_work_release_blocked`; a PrometheusRule in haynes-ops (S6) pages through the existing Alertmanager Pushover receiver. Releasing without the record would break the exactly-once rule |
   | Operator rolled back to an image without the releaser | see the rollout order below |
 
   **Rollout order and rollback rule.** The releaser ships in an operator release
@@ -301,7 +325,7 @@ A parked occurrence pages Tom with the reason and waits for a human retry or can
 | Session | `task` mode, prompt = work order, `maxDuration` from the template | `remote` mode (Remote Control); the schema allows no prompt; `idleSuspendAfter` from the template |
 | Work order | the prompt | delivered after the pod is Ready through the existing message route. A 409 while it boots is retried for 10 minutes from `Dispatched`, then the occurrence is `Failed`. An exec error marks the delivery `ambiguous` and it is not re-sent; the page says so, and the occurrence still ends through the session |
 | Tom | not needed | paged: title, session name and the session's claude.ai link once `status.remoteControl.url` is set. The work order says the session waits for Tom before it acts |
-| Ends | agent exits; outcome file read from Session status | the agent ends by the drain-safe rule (Tom ends it, or the template's idle suspend), or the session is reaped |
+| Ends | agent exits; outcome file read from Session status | the session ends by the session-end rule (Tom ends or suspends it, or the template's idle suspend), or it is reaped |
 | Result | `summary`, `prURLs`, `headSHAs` copied to the occurrence; paged per `notify` | `Ended`, with the result `participation not observed`. The session's own handoff is the work's result. There is no outcome capture (task mode only) |
 
 **What the executor can observe about interactive work.** The platform has no
@@ -310,7 +334,7 @@ signal that Tom joined. `status.remoteControl.state` is Remote Control
 clients, not phone participants. So the executor claims only what it observes:
 `Dispatched` (session created), `Delivered` (work order accepted by the message
 route, or `ambiguous`), `Opened` (state `registered`, link paged), `Ended`
-(agent ended by the drain-safe rule, so a drain onto a new revision is not an end).
+(the session-end rule, under which a drain onto a new revision is not an end).
 It binds to the agentd protocol's state constants (`registered`,
 `login-required`), not to free text; the CRD's values are still marked
 `TODO(plan 03)`, so S4 pins them in a test. It never records that Tom joined or
@@ -332,11 +356,18 @@ receiver session would route agent-written text into sessions the owner does not
   `scheduledworks`, so it cannot keep sync state there. With `calendar:` set, the
   executor keeps one companion `Reminder` per ScheduledWork, with a calendar-only
   target and the same schedule. It updates the Reminder when the item is edited and
-  cancels it when the item is cancelled. DESIGN-032's scheduler then owns the event:
+  cancels it when the item is cancelled. Its `until` is capped at `notAfter`. Today a
+  Reminder with no Pushover target finishes at its last occurrence, and a finished
+  Reminder can be neither edited nor cancelled, nor does its calendar entry sync. So
+  S4 amends DESIGN-032 with a **projection** Reminder: calendar targets only, it stays
+  pending until it is cancelled or its `until` passes, and the scheduler keeps
+  syncing and deleting its event. DESIGN-032's scheduler then owns the event:
   one event per series, with an RRULE, keyed by the Reminder's namespace and name.
   The event ID, spec hash, failure backoff and delete-on-cancel stay in the
   Reminder's status, as they do today (`scheduler.go`). Losing the calendar never
-  changes the ScheduledWork.
+  changes the ScheduledWork. The projection depends on the keeper's reminder
+  scheduler, which starts only with its Pushover credential (DESIGN-032); that
+  dependency is stated, not removed.
 - **Intake (reminders only, later item).** The adapter has no list call today. Intake
   needs a read interface, filtering on the organiser (accepted invitations bring
   outside events), and skipping events the projection wrote (or it loops). It creates
@@ -383,10 +414,10 @@ library only.
 |---|---|---|
 | S1 | this design | PR |
 | S2 | CRD types, validation tests, shared schedule package | PR, CI |
-| S3a | the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted, a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release. Shipped in a release before S3b | PR, CI, native review, release |
+| S3a | the session-end rule and the releaser in the AgentSession reconciler, with envtest: flag off, ScheduledWork deleted or recreated under the same name, kind not served, an idle-suspended session, a drained session (not ended), a reaped session with the rescue finalizer present, a status write failing, an operator restart mid-release. Shipped in a release before S3b | PR, CI, native review, release |
 | S3b | executor runnable with fake creator, fake clock and envtest (claim, derived-name adoption after leader change, prefix-collision refusal, re-revalidation within grace, a terminal occurrence's session left alone, a drain not counted as an end, park per authority basis, skip, caps checked before claim) | PR, CI, native review |
-| S4 | outcome collection; pages and the calendar projection through keyed companion Reminders; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
-| S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `lastEditor`) | PR, CI |
+| S4 | outcome collection; pages and the calendar projection through keyed companion Reminders, with the DESIGN-032 projection-Reminder amendment; interactive work-order delivery and the observable states, pinned to agentd's state constants | PR, CI |
+| S5 | API and CLI, including human approve with specHash and edit rights (owner or human only; `spec.editor` in the same write) | PR, CI |
 | S6 | haynes-ops: CRD copy, Roles, the admission policies (status writes, finalizer removal), the operator pin, then the templates ConfigMap, then the flag | Tom approves activation |
 | S7 | live: one headless and one interactive test occurrence | Tom approves the first real run |
 | C1 | real calendar adapter | Tom provisions the DWD identity (OP206) |
