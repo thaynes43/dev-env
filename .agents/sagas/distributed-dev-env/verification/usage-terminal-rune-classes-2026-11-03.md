@@ -103,4 +103,8 @@ U+26AF, `miscwin6c` U+26B0 to U+26B7, `miscwin6d` U+26B8 to U+26BF. Eight code p
 so the privacy floor set above (the checkmark class) is kept; all 8 code points in each part are assigned symbols; no finer split is made. Plain `miscwin6` is no
 longer emitted and stays valid only to decode older diagnostics. Nothing is qualified: an unqualified
 character still refuses before it is rendered, and the glyph is qualified only by a separate reviewed
-change with its own evidence. Separately, the slot ConfigMap `dev-env-system/dev-env-provider-allowances`, `report.json` `sourceStatuses[cursor]`, read 2026-11-04T14:33Z (cycle 162), showed `lastAttempt` result `error`, code `acquisition_unavailable` and `freshness.reason` "source not configured". That is a collector configuration blocker, not addressed here.
+change with its own evidence. Cycles 163 and 164 (operator log, 2026-11-04T14:40:58Z and 14:51:11Z) again refused Cursor at stage
+`builtin` with this reason, so the Cursor slot is configured and the terminal reader is reached. The
+report's `sourceStatuses[cursor]` shows `freshness.reason` "source not configured" beside a real
+`lastAttempt` (result `error`, code `acquisition_unavailable`); that wording is the read projection's
+default when no observation was ever held, not evidence of a missing configuration.
