@@ -13,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/testr"
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/thaynes43/dev-env/internal/agentd/hostexecutor"
 	"github.com/thaynes43/dev-env/internal/apiserver/apiv1"
@@ -55,6 +57,41 @@ func (e latencyOwnedExec) Run(ctx context.Context, ns, pod, container string, ar
 	}
 	return e.ownedWorkflowExec.Run(ctx, ns, pod, container, args, in, out, stderr)
 }
+
+// latencyRoundtrip is one slow observation: how long the handler took and the
+// status it answered.
+type latencyRoundtrip struct {
+	elapsed time.Duration
+	status  int
+}
+
+// latencyStatusWriter records the status a handler writes.
+type latencyStatusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *latencyStatusWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *latencyStatusWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *latencyStatusWriter) code() int {
+	if w.status == 0 {
+		return http.StatusOK
+	}
+	return w.status
+}
+
 func ownedLatencyWait(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -112,11 +149,15 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 	f.srv.Policy.Coordinators[0].ServiceAccount = "dev-agents/codex-host-a"
 	f.srv.TaskBudgets = service
 	f.srv.AssignedTaskBudgets = map[string]string{"host-a": "campaign-a"}
-	completed := make(chan time.Duration, 1)
+	completed := make(chan latencyRoundtrip, 1)
 	var canceled atomic.Bool
 	handler := f.srv.Handler()
 	var connections atomic.Int32
+	// Diagnostics only: the owned-root refusal logs (fixed stage and category
+	// names) reach the test output through the request's logger.
+	logger := testr.New(t)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(log.IntoContext(r.Context(), logger))
 		slow := armed.Load() && r.URL.Path == apiv1.TaskBudgetPath("campaign-a")+"/observe"
 		started := time.Now()
 		if slow {
@@ -126,13 +167,14 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 				return
 			}
 		}
-		handler.ServeHTTP(w, r)
+		recorded := &latencyStatusWriter{ResponseWriter: w}
+		handler.ServeHTTP(recorded, r)
 		if slow {
 			if r.Context().Err() != nil {
 				canceled.Store(true)
 			}
 			select {
-			case completed <- time.Since(started):
+			case completed <- latencyRoundtrip{elapsed: time.Since(started), status: recorded.code()}:
 			default:
 			}
 		}
@@ -174,8 +216,12 @@ func TestEnvtestOwnedAuthorityLatencyComposition(t *testing.T) {
 	// observation must reconnect with the same authority, never replay a mutation.
 	for pass := 0; pass < 2; pass++ {
 		select {
-		case elapsed := <-completed:
-			t.Logf("complete authority roundtrip=%v probes=%d callerCanceled=%v", elapsed, probes.Load(), canceled.Load())
+		case rt := <-completed:
+			elapsed := rt.elapsed
+			t.Logf("complete authority roundtrip=%v status=%d probes=%d callerCanceled=%v", elapsed, rt.status, probes.Load(), canceled.Load())
+			if rt.status != http.StatusOK {
+				t.Fatalf("observation refused, status=%d (pass %d)", rt.status, pass)
+			}
 			if elapsed < time.Second || elapsed >= 2*time.Second || probes.Load() < 1 || canceled.Load() {
 				t.Fatal("latency composition not successfully exercised")
 			}
