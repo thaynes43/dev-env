@@ -850,8 +850,10 @@ func TestStoppedProofKeepsDrainingAfterTheAgentExits(t *testing.T) {
 	}
 }
 
-// Idle for drain is the agent's not-working state with no attached client.
-// Waiting counts. Busy, a client, and a current revision do not.
+// Idle for drain is the agent reporting idle with no attached client. Waiting
+// does not count: it can be a question or a permission prompt that a person
+// has not answered yet (DESIGN-001 5.2, 2026-11-04 note). Busy, a client, and a
+// current revision do not count either.
 func TestDrainIdleMoment(t *testing.T) {
 	tmpl := currentTemplates(t)
 	pod := readyDrainPod("s", "old-revision")
@@ -862,7 +864,7 @@ func TestDrainIdleMoment(t *testing.T) {
 		want bool
 	}{
 		{"idle", func(s *v1alpha1.AgentSession) { s.Status.Agent.Status = protocol.AgentIdle }, true},
-		{"waiting", func(s *v1alpha1.AgentSession) { s.Status.Agent.Status = protocol.AgentWaiting }, true},
+		{"waiting", func(s *v1alpha1.AgentSession) { s.Status.Agent.Status = protocol.AgentWaiting }, false},
 		{"busy", func(s *v1alpha1.AgentSession) { s.Status.Agent.Status = protocol.AgentBusy }, false},
 		{"attached", func(s *v1alpha1.AgentSession) { s.Status.Agent.Attached = 1 }, false},
 		{"unreported", func(s *v1alpha1.AgentSession) { s.Status.Agent = nil }, false},
@@ -913,6 +915,170 @@ func TestDrainRemoteSessions(t *testing.T) {
 				t.Fatalf("eligible %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// Automatic revision drain by session mode and agent state (DESIGN-001 5.2,
+// 2026-11-04 note). Waiting is never drained, whatever the mode. An idle task
+// or local session still drains under Q-03; remote never does.
+func TestAutomaticDrainByModeAndState(t *testing.T) {
+	tmpl := currentTemplates(t)
+	pod := readyDrainPod("s", "old-revision")
+	for _, c := range []struct {
+		mode  v1alpha1.SessionMode
+		state string
+		want  bool
+	}{
+		{v1alpha1.ModeTask, protocol.AgentIdle, true},
+		{v1alpha1.ModeTask, protocol.AgentWaiting, false},
+		{v1alpha1.ModeLocal, protocol.AgentIdle, true},
+		{v1alpha1.ModeLocal, protocol.AgentWaiting, false},
+		{v1alpha1.ModeRemote, protocol.AgentIdle, false},
+		{v1alpha1.ModeRemote, protocol.AgentWaiting, false},
+	} {
+		t.Run(string(c.mode)+" "+c.state, func(t *testing.T) {
+			s := drainFixture("s")
+			s.Spec.Mode, s.Spec.Agent = c.mode, v1alpha1.AgentClaude
+			s.Status.Agent.Status = c.state
+			if got := drainEligible(s, pod, tmpl.Revision()); got != c.want {
+				t.Fatalf("eligible %v, want %v", got, c.want)
+			}
+			phase, _ := podPhase(s, observation{pod: owned[*corev1.Pod]{obj: pod}, templates: tmpl})
+			if want := map[bool]v1alpha1.SessionPhase{true: v1alpha1.PhaseDraining, false: v1alpha1.PhaseRunning}[c.want]; phase != want {
+				t.Fatalf("phase %s, want %s", phase, want)
+			}
+		})
+	}
+}
+
+// A waiting session is not stopped and keeps its pod and volume, both when the
+// drain has not started and when a Draining mark without a recorded stop is
+// already there (that pending drain is cancelled, as for remote).
+func TestAutomaticDrainLeavesWaitingSessions(t *testing.T) {
+	for _, mode := range []v1alpha1.SessionMode{v1alpha1.ModeLocal, v1alpha1.ModeTask} {
+		for _, phase := range []v1alpha1.SessionPhase{v1alpha1.PhaseRunning, v1alpha1.PhaseDraining} {
+			t.Run(string(mode)+" "+string(phase), func(t *testing.T) {
+				tmpl := currentTemplates(t)
+				s := drainFixture("waiting-safe")
+				s.Spec.Mode, s.Spec.Agent = mode, v1alpha1.AgentClaude
+				s.Status.Agent.Status = protocol.AgentWaiting
+				s.Status.Phase = phase
+				pod := readyDrainPod(s.Name, "old-revision")
+				c, stored, storedPod := drainClient(t, s, pod)
+				rt := &fakeRestarter{fn: func(*corev1.Pod) (protocol.RestartReport, error) {
+					t.Error("unexpected restart read")
+					return protocol.RestartReport{}, errors.New("unexpected")
+				}}
+				r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+				obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+				hold, _, stop, err := r.drainIdle(context.Background(), stored, tmpl, &obs)
+				if err != nil || hold || stop {
+					t.Fatalf("drainIdle hold %v stop %v err %v", hold, stop, err)
+				}
+				if got, _ := podPhase(stored, obs); got != v1alpha1.PhaseRunning {
+					t.Fatalf("phase %s, want Running", got)
+				}
+				var got corev1.Pod
+				if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &got); err != nil || got.UID != pod.UID || !got.DeletionTimestamp.IsZero() {
+					t.Fatal("waiting pod changed", err)
+				}
+				var pvc corev1.PersistentVolumeClaim
+				if err := c.Get(context.Background(), client.ObjectKey{Namespace: sessionNS, Name: HomeClaimName(s.Name)}, &pvc); err != nil || pvc.UID != "vol-1" || !pvc.DeletionTimestamp.IsZero() {
+					t.Fatal("waiting volume changed", err)
+				}
+				if rt.readCount(pod.Name) != 0 || rt.stopCount(pod.Name) != 0 {
+					t.Fatalf("reads %d stops %d, want 0", rt.readCount(pod.Name), rt.stopCount(pod.Name))
+				}
+			})
+		}
+	}
+}
+
+// The agent can start waiting after the drain read its conversation. The fresh
+// session read before the stop sees that, so the agent is not stopped and the
+// pod stays.
+func TestDrainRevalidatesWaitingBeforeStop(t *testing.T) {
+	tmpl := currentTemplates(t)
+	s := drainFixture("race-waiting")
+	s.Spec.Mode, s.Spec.Agent = v1alpha1.ModeLocal, v1alpha1.AgentClaude
+	s.Status.Phase = v1alpha1.PhaseDraining
+	pod := readyDrainPod(s.Name, "old-revision")
+	c, stored, storedPod := drainClient(t, s, pod)
+	reads := 0
+	rt := &fakeRestarter{fn: func(p *corev1.Pod) (protocol.RestartReport, error) {
+		reads++
+		if reads == 2 {
+			var fresh v1alpha1.AgentSession
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), &fresh); err != nil {
+				t.Fatal(err)
+			}
+			fresh.Status.Agent = &v1alpha1.AgentStatus{Status: protocol.AgentWaiting}
+			if err := c.Status().Update(context.Background(), &fresh); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return protocol.RestartReport{Session: p.Name, ConversationID: "conv-1", Resumable: true}, nil
+	}}
+	r := &Reconciler{Client: c, APIReader: c, Restarter: rt}
+	obs := observation{pod: owned[*corev1.Pod]{obj: storedPod}, templates: tmpl}
+	if _, _, _, err := r.drainIdle(context.Background(), stored, tmpl, &obs); err != nil {
+		t.Fatal(err)
+	}
+	if rt.stopCount(pod.Name) != 0 {
+		t.Fatal("the agent was stopped after it started waiting")
+	}
+	if reads != 2 {
+		t.Fatalf("prepare-restart calls %d, want the two dry-run reads", reads)
+	}
+	var got corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(pod), &got); err != nil || got.UID != pod.UID || !got.DeletionTimestamp.IsZero() {
+		t.Fatal("waiting race removed the pod", err)
+	}
+	var fresh v1alpha1.AgentSession
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(s), &fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Status.Restart != nil && fresh.Status.Restart.Stopped {
+		t.Fatal("a stop was recorded for a waiting agent")
+	}
+}
+
+// An envtest local session that waits on a person is not drained by a template
+// change: Outdated, still Running, the same pod, and prepare-restart never runs.
+func TestDrainLeavesAWaitingOutdatedLocalSession(t *testing.T) {
+	rt := &fakeRestarter{fn: func(*corev1.Pod) (protocol.RestartReport, error) {
+		return protocol.RestartReport{}, errors.New("should not run")
+	}}
+	startOperator(t, func(r *Reconciler) { r.Restarter = rt })
+	live := newSession(t, func(s *v1alpha1.AgentSession) {
+		s.Spec.Mode, s.Spec.Prompt = v1alpha1.ModeLocal, ""
+	})
+	leaveBusy(t, live.Name)
+	markRunning(t, waitPod(t, live.Name), "talosw02")
+	waitStatus(t, live.Name, "Running", phaseIs(v1alpha1.PhaseRunning))
+	before := waitPod(t, live.Name)
+	setAgent(t, live.Name, protocol.AgentWaiting, time.Now())
+	bumpTemplates(t)
+	waitStatus(t, live.Name, "waiting and outdated stays Running", func(st *v1alpha1.AgentSessionStatus) error {
+		c := condition(st, ConditionOutdated)
+		if c == nil || c.Status != metav1.ConditionTrue {
+			return fmt.Errorf("Outdated %+v", c)
+		}
+		if st.Phase != v1alpha1.PhaseRunning {
+			return fmt.Errorf("phase %s", st.Phase)
+		}
+		return nil
+	})
+	time.Sleep(2 * time.Second)
+	if got := session(t, live.Name); got.Status.Phase != v1alpha1.PhaseRunning || got.Status.Restart != nil {
+		t.Fatalf("phase %s restart %+v", got.Status.Phase, got.Status.Restart)
+	}
+	after := waitPod(t, live.Name)
+	if after.UID != before.UID || !after.DeletionTimestamp.IsZero() {
+		t.Fatal("the waiting pod was deleted")
+	}
+	if rt.readCount(live.Name) != 0 || rt.stopCount(live.Name) != 0 {
+		t.Fatalf("prepare-restart reads %d stops %d, want 0", rt.readCount(live.Name), rt.stopCount(live.Name))
 	}
 }
 
