@@ -810,3 +810,172 @@ func TestANotifyRemovedAfterTheIntentSettlesIt(t *testing.T) {
 	}
 	f.wantReminders(0)
 }
+
+// A parked page still pending when a human retries the occurrence (its
+// Ensure was unconfirmed) is not sent with the new attempt's state: the park
+// it reports is over, so it is settled skipped and no Reminder is made for
+// it. The retried attempt's own park pages with its attempt and reason.
+func TestAParkedPageWhoseParkIsOverIsNotSent(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.paging(), day0.Add(-time.Minute))
+	var unconfirmed atomic.Bool
+	unconfirmed.Store(true)
+	ex := func() *Executor {
+		e := f.executor()
+		e.Templates = NoTemplates{}
+		writer := interceptor.NewClient(e.Client.(client.WithWatch), interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*v1alpha1.Reminder); ok && unconfirmed.Load() {
+				return errTransient
+			}
+			return c.Create(ctx, obj, opts...)
+		}})
+		e.Pager = NewPager(writer, reminderReadFails{Reader: e.Reader, fail: &unconfirmed})
+		return e
+	}
+	f.at(ex(), day0)
+	o := f.wantOcc(key, day0, v1alpha1.OccurrenceParked, "")
+	if p := pageOf(o, v1alpha1.PageEventParked, 0); p == nil || !pendingPage(*p) {
+		t.Fatalf("the park's page should be pending, unconfirmed: %+v", o.Pages)
+	}
+	// A human retry, written the way the API's retry route writes it.
+	retried := metav1.NewTime(day0.Add(10 * time.Minute))
+	w := f.get(key)
+	r := scheduledwork.Find(w, day0)
+	r.State, r.Attempt, r.RetriedAt, r.Reason = v1alpha1.OccurrencePending, 1, &retried, "retried by human/dev-env-system/tom"
+	if err := cluster(t).Status().Update(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+	unconfirmed.Store(false)
+	f.at(ex(), retried.Add(time.Minute))
+	o = f.wantOcc(key, day0, v1alpha1.OccurrenceParked, "")
+	if o.Attempt != 1 {
+		t.Fatalf("occurrence %+v", o)
+	}
+	if p := pageOf(o, v1alpha1.PageEventParked, 0); p == nil || p.State != "skipped" || p.Reminder != "" {
+		t.Errorf("the attempt-0 park's page should be settled skipped, unsent: %+v", o.Pages)
+	}
+	var old v1alpha1.Reminder
+	if err := cluster(t).Get(context.Background(), types.NamespacedName{Namespace: key.Namespace, Name: pages.Key(w, day0, v1alpha1.PageEventParked, 0)}, &old); !apierrors.IsNotFound(err) {
+		t.Errorf("a Reminder was made for the attempt-0 park after the retry (title %q, body %q): %v", old.Spec.Title, old.Spec.Body, err)
+	}
+	cur := f.wantPage(key, day0, v1alpha1.PageEventParked, 1)
+	if !strings.Contains(cur.Spec.Body, "attempt 1") || !strings.Contains(cur.Spec.Body, NoTemplatesReason) {
+		t.Errorf("the attempt-1 park's page body %q", cur.Spec.Body)
+	}
+	f.wantReminders(1)
+}
+
+// unconfirmedDue makes the due page of key's occurrence at day0 one whose
+// Ensure cannot be confirmed: its Reminder already exists, and the pager's
+// reads of Reminders fail while fail is set.
+func (f *fixture) unconfirmedDue(key types.NamespacedName) *v1alpha1.Reminder {
+	f.t.Helper()
+	w := f.get(key)
+	r, err := pages.Build(w, day0, v1alpha1.PageEventDue, 0, "Scheduled work started: "+w.Spec.Title, key.Name, day0)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := cluster(f.t).Create(context.Background(), r); err != nil {
+		f.t.Fatal(err)
+	}
+	return r
+}
+
+// The unconfirmed count is kept per item: two items whose pages share the
+// occurrence instant, event and attempt each get the full cap.
+func TestTheUnconfirmedCapIsPerItem(t *testing.T) {
+	f := newFixture(t)
+	a, b := f.item("audit-a", spec()), f.item("audit-b", spec())
+	f.at(f.paging(), day0.Add(-time.Minute))
+	f.unconfirmedDue(a)
+	f.unconfirmedDue(b)
+	var readFails atomic.Bool
+	readFails.Store(true)
+	e := f.executor()
+	e.Pager = NewPager(e.Client, reminderReadFails{Reader: e.Reader, fail: &readFails})
+	e.MaxUnconfirmedPageTries = 3
+	for i := range 2 {
+		f.at(e, day0.Add(time.Duration(i)*time.Minute))
+		for _, key := range []types.NamespacedName{a, b} {
+			if p := pageOf(f.occ(key, day0), v1alpha1.PageEventDue, 0); p == nil || !pendingPage(*p) {
+				t.Fatalf("pass %d: %s's page was settled before its own cap: %+v", i+1, key.Name, f.occ(key, day0).Pages)
+			}
+		}
+	}
+	f.at(e, day0.Add(2*time.Minute))
+	for _, key := range []types.NamespacedName{a, b} {
+		if p := pageOf(f.occ(key, day0), v1alpha1.PageEventDue, 0); p == nil || p.State != "skipped" {
+			t.Errorf("%s's page after its cap: %+v", key.Name, f.occ(key, day0).Pages)
+		}
+	}
+}
+
+// With no cap set, an unconfirmed page is tried in DefaultMaxUnconfirmedPageTries
+// (five) passes and settled in the fifth.
+func TestTheDefaultUnconfirmedCapIsFive(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.paging(), day0.Add(-time.Minute))
+	f.unconfirmedDue(key)
+	var readFails atomic.Bool
+	readFails.Store(true)
+	e := f.executor()
+	e.Pager = NewPager(e.Client, reminderReadFails{Reader: e.Reader, fail: &readFails})
+	for i := range 4 {
+		f.at(e, day0.Add(time.Duration(i)*time.Minute))
+		if p := pageOf(f.occ(key, day0), v1alpha1.PageEventDue, 0); p == nil || !pendingPage(*p) {
+			t.Fatalf("pass %d: settled before the default cap: %+v", i+1, f.occ(key, day0).Pages)
+		}
+	}
+	f.at(e, day0.Add(4*time.Minute))
+	if p := pageOf(f.occ(key, day0), v1alpha1.PageEventDue, 0); p == nil || p.State != "skipped" {
+		t.Errorf("after the fifth pass: %+v", f.occ(key, day0).Pages)
+	}
+}
+
+// Every page tried in a pass is marked for it, settled or not: a page whose
+// record write meets a conflict is not tried again in the same pass, and the
+// next pass records it under the Reminder the first try made.
+func TestATriedPageWaitsForTheNextPass(t *testing.T) {
+	f := newFixture(t)
+	key := f.item("audit", spec())
+	f.at(f.paging(), day0.Add(-time.Minute))
+	var creates, raced atomic.Int32
+	e := f.pagingWith(func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if _, ok := obj.(*v1alpha1.Reminder); ok {
+			creates.Add(1)
+		}
+		return c.Create(ctx, obj, opts...)
+	})
+	e.Client = interceptor.NewClient(e.Client.(client.WithWatch), interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if w, ok := obj.(*v1alpha1.ScheduledWork); ok {
+				if o := scheduledwork.Find(w, day0); o != nil && slices.ContainsFunc(o.Pages, func(p v1alpha1.ScheduledWorkPage) bool { return p.Reminder != "" }) && raced.Add(1) == 1 {
+					live := f.get(key)
+					if live.Annotations == nil {
+						live.Annotations = map[string]string{}
+					}
+					live.Annotations["test.dev-env.haynesops.com/raced"] = "yes"
+					if err := cluster(t).Update(ctx, live); err != nil {
+						return err
+					}
+				}
+			}
+			return c.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+	f.at(e, day0)
+	if raced.Load() == 0 {
+		t.Fatal("the page record write never met the race")
+	}
+	if p := pageOf(f.occ(key, day0), v1alpha1.PageEventDue, 0); p == nil || !pendingPage(*p) {
+		t.Fatalf("the page should wait for the next pass: %+v", f.occ(key, day0).Pages)
+	}
+	if n := creates.Load(); n != 1 {
+		t.Errorf("%d Reminder creates in the pass, want 1", n)
+	}
+	f.at(e, day0.Add(time.Minute))
+	f.wantPage(key, day0, v1alpha1.PageEventDue, 0)
+	f.wantReminders(1)
+}
