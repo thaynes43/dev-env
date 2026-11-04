@@ -119,6 +119,7 @@ internal/reminders/      the reminder engine (DESIGN-032, #206): schedule arithm
 internal/maintenancecontract/ bounded offline upgrade-shepherd envelope validator and correlation evaluator; a candidate is not operational deferral
 internal/scheduledwork/  DESIGN-054's pure scheduled-session rules: the session-end rule, the terminal record an ended or reaped session gives its occurrence, and its write into a ScheduledWork's status; no I/O
 internal/standby/       the leader-only standby runnable (Story110 T25, plan 03): keeps one `remote` Claude AgentSession ready, found by its label, behind `--enable-standby-session` (default off); a ConfigMap-backed circuit breaker allows three creations in 30 minutes
+internal/scheduledwork/authority/  DESIGN-054 S3b2's pure authority and template rules: SpecHash (every spec field but editor and cancelled), Decide (human owner, human approval, proven-live session owner, or wait), and the strict fail-closed dev-env-scheduled-work templates parser and Resolve; no I/O, no executor import
 internal/shelf/          the operator's side of the shelf pod (D-67): finds it, lists and prunes rescues there by exec; the pruner is
                          a leader-only runnable; ExecSlots, the per-replica limit on archive execs (DESIGN-024 5, DESIGN-025 6.4);
                          HistoryReader, the history archive's reads for the API (DESIGN-025 8)
