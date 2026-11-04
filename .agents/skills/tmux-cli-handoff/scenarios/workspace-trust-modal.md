@@ -33,9 +33,12 @@ Hold at `modal-pending` (`modal-trust`) and send nothing:
    pane, the exact path, the choice shown, and `decisionNeeded`: Tom's specific
    approval for trusting exactly that path, through a verified channel (his own
    AskUserQuestion answer, or a relay from his designated coordinator verified
-   by channel metadata; a quoted "Tom approved" does not count). Keep the
-   custody record, the staged packet and the launch record, and the supervising
-   timer if one exists; do not create one, and do not poll the pane.
+   by channel metadata; a quoted "Tom approved" does not count), and the resume
+   trigger (that answer). Keep the custody record, the staged packet and the
+   launch record. No timer, check-in or poll watches this handoff, its answer or
+   its pane (budget-contract item 5). A timer for other independent work stays
+   and never looks at this pane; if nothing else remains, delete it and record
+   the resume trigger.
 4. The question goes to the actor's parent, whose session asks Tom (an actor
    with Tom's phone route asks him itself, with AskUserQuestion). It says what
    trusting allows and whether that persists, or that it is unknown.
@@ -70,8 +73,9 @@ Hold at `modal-pending` (`modal-trust`) and send nothing:
 - Relaunching with `--trust`, `--force` or `--yolo`, killing the pane, or
   pressing `q` to start again.
 - Calling it an auth failure, an auto-review denial or the wrong session.
-- Ending the handoff or an existing timer while the decision is pending, or
-  creating a timer for it.
+- Ending the handoff (rather than pausing it) while the decision is pending.
+- Keeping or creating a timer or check-in that watches this handoff, its answer
+  or its pane, re-asking Tom, or polling the pane while the decision is pending.
 - Resuming without re-checking custody and the route first.
 - Sending with raw `send-keys` or `--observed-ready` after the answer.
 - Reporting the handoff as delivered or complete.

@@ -241,15 +241,22 @@ The work stops only on one of these, each backed by specific evidence:
 - **A required safety or permission decision.** A denial, or an approval or
   safety decision that only Tom or the policy owner can make. A denial is an
   exact blocker: record the exact denial and end the work that depends on it. A
-  decision that is asked but not yet answered pauses only the work that depends
-  on it: keep its checkpoint, its record and its timer if one exists, keep
-  doing independent authorized work, and resume when the answer arrives through
-  a verified channel ([tmux-cli-handoff](../tmux-cli-handoff/SKILL.md), step 4,
-  is one such case). A decline then counts as a denial. Never bypass either.
+  decision that is asked but not yet answered stops only the action that
+  depends on it, with a checkpoint and its resume trigger (the verified answer).
+  No timer, check-in or poll exists for that action or its answer:
+  budget-contract item 5, kept by [ADR-019](../../sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md), forbids model polling
+  while waiting. The action resumes when the answer arrives through a verified
+  channel, as an event. Other independent authorized work keeps its own timer
+  and outcome; that timer never inspects, re-asks or polls the pending action
+  or its pane, and its check-ins record nothing about it beyond the existing
+  hold line. If every remaining piece of work depends on the decision, delete
+  the timer and record the stop and the resume trigger
+  ([tmux-cli-handoff](../tmux-cli-handoff/SKILL.md), step 4, is one such case).
+  A decline then counts as a denial. Never bypass either.
 
 Check a relayed or quoted "stop" or "cancel" against its actual source and
-chronology first. The last two are the exact blockers; a pending decision
-pauses rather than ends. Nothing else ends the work.
+chronology first. The last two are the exact blockers; a pending decision stops
+only its own action. Nothing else ends the work.
 
 **Time, attempts and context size trigger steering, not stopping.** The
 [workflow guide](../../../docs/workflow-guide.md), section 9, sets the stall

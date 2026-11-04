@@ -251,12 +251,17 @@ Handle it like this:
    coordinator. Say what the choice allows and whether it persists after this
    session; if the provider does not document that, say it is unknown. A
    command approval: send it to the custodian or its supervisor, not to Tom.
-2. **Pause.** While the decision is pending, the handoff is paused, not ended.
-   Keep the custody record, the staged packet and the launch record. If a
-   supervising check-in timer exists, keep it; never create one for this. Record
-   the handoff as `paused`, with the decision it waits for. Do not poll the pane.
+2. **Pause.** While the decision is pending, only this handoff stops; it is not
+   ended. Keep the custody record, the staged packet and the launch record, and
+   record the handoff as `paused` with the decision it waits for and its resume
+   trigger (the verified answer). No timer, check-in or poll exists for this
+   handoff, its answer or its pane: budget-contract item 5, kept by
+   [ADR-019](../../sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md),
+   forbids model polling while waiting. A timer for other independent work
+   stays, but never inspects, re-asks or polls this handoff; if nothing else
+   remains, delete it and record the resume trigger (timer-checkin, section 6).
 3. **Hand over the answer.** When the approval arrives through a verified
-   channel, give the permitted presser (a person owner, or Tom for an
+   channel (an event; nobody polls for it), give the permitted presser (a person owner, or Tom for an
    agent-owned pane) the exact choice, the pane and the approval reference. Do
    not press it yourself. The handoff stays paused until that person records
    what was pressed.
@@ -314,8 +319,8 @@ materially new evidence. A blocked handoff is an exact blocker under
 supervised-dispatch section 5: end this handoff and its check-in timer, if one
 exists, record who can act, and keep doing independent authorized work. A
 paused handoff (step 4, a prompt awaiting a decision or its permitted person)
-uses the same record with `"state": "paused"`, and keeps its timer if one
-exists.
+uses the same record with `"state": "paused"` and a resume trigger. It has no
+timer, check-in or poll of its own, and resumes on the verified answer.
 
 Behavior scenarios for an evaluator:
 [no terminal from a v2 pod](scenarios/no-terminal-from-v2-pod.md),

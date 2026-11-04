@@ -26,9 +26,10 @@ classes and closed errors from the skill's step 1 table.
 Field notes:
 
 - `state`: `blocked` ends the handoff and its timer; `paused` (a prompt awaiting
-  a decision or the permitted person's press) keeps the handoff and its timer,
-  if one exists, and resumes with re-checked custody and route and a fresh read
-  of the pane.
+  a decision or the permitted person's press) stops only this handoff, with a
+  checkpoint and its resume trigger. No timer, check-in or poll watches it
+  (budget-contract item 5, kept by ADR-019). It resumes on the verified answer,
+  with re-checked custody and route and a fresh read of the pane.
 
 - `staged`: where the correction waits, and who can read it there.
 - `unknown`: checks that could not run, for example host checks after

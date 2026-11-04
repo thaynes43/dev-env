@@ -897,7 +897,8 @@ or a budget checkpoint or stop threshold recorded on the story reached; never a
 stall threshold, [ADR-019](../.agents/sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)),
 or a required safety or permission decision, each with specific evidence (a
 denied decision ends the dependent work; one that is asked but not yet answered
-pauses only that work, keeping its checkpoint and timer). A
+stops only the action that depends on it, with a checkpoint and no timer or
+poll for it, per budget-contract item 5, and resumes on the verified answer). A
 latch the platform has actually set, read with
 `agent-run budget show <task-uid>` (`latched: true` and its reason), is a
 platform denial that agents never bypass; an expected or estimated latch is not
