@@ -1,0 +1,140 @@
+package scheduledwork
+
+import (
+	"regexp"
+	"time"
+
+	"github.com/thaynes43/dev-env/api/v1alpha1"
+)
+
+// RecordResult is what Record did with an occurrence.
+type RecordResult string
+
+const (
+	// Recorded: the terminal record is now in the item's status, and its
+	// count was added. The caller writes the status with a compare-and-set.
+	Recorded RecordResult = "recorded"
+	// AlreadyTerminal: the occurrence already has a terminal state. Nothing
+	// changed; a terminal state is final.
+	AlreadyTerminal RecordResult = "already terminal"
+	// NoOccurrence: the item records no occurrence at that instant. Nothing
+	// changed. The executor claims an occurrence before it creates the
+	// session, and prunes only terminal ones, so the session is not one the
+	// item tracks (or its record was pruned long after it ended).
+	NoOccurrence RecordResult = "no occurrence"
+	// OtherSession: the occurrence names another session. Nothing changed.
+	OtherSession RecordResult = "other session"
+	// ReportedAdded: the occurrence was already terminal for this session and
+	// had no reported outcome; the session's outcome, which landed after the
+	// terminal record, is now copied into it. Its state and counts are
+	// unchanged. The caller writes the status with a compare-and-set.
+	ReportedAdded RecordResult = "reported added"
+)
+
+// sessionNamePattern is the schema's pattern for an occurrence's session.
+var sessionNamePattern = regexp.MustCompile(`^sw-[0-9a-f]{12}-[0-9]{12}$`)
+
+// Record writes terminal record t into w's occurrence at instant at, for the
+// session named session, and reports what it did. It changes w only when it
+// returns Recorded. It sets the occurrence's state and reason, its session
+// when unset and the name fits the schema, its execution when t has one, and
+// its reported outcome when unset (the schema sets it once). It adds one to the
+// lifetime count of t's state: the writer of a terminal transition counts it,
+// and the compare-and-set write lets only one writer make the transition. A
+// terminal occurrence is never changed, except that one naming this session
+// and lacking a reported outcome gets t's (ReportedAdded): the heartbeat stores
+// the retained outcome after the task's exit, so it can land after the record.
+func Record(w *v1alpha1.ScheduledWork, at time.Time, session string, t Terminal) RecordResult {
+	for i := range w.Status.Occurrences {
+		o := &w.Status.Occurrences[i]
+		if !o.At.Time.Equal(at) {
+			continue
+		}
+		if v1alpha1.OccurrenceTerminal(o.State) {
+			if o.Session == session && o.Reported == nil && t.Reported != nil {
+				o.Reported = t.Reported.DeepCopy()
+				return ReportedAdded
+			}
+			return AlreadyTerminal
+		}
+		if o.Session != "" && o.Session != session {
+			return OtherSession
+		}
+		o.State, o.Reason = t.State, clip(t.Reason, maxReason)
+		if o.Session == "" && sessionNamePattern.MatchString(session) {
+			o.Session = session
+		}
+		if t.Execution != nil {
+			o.Execution = t.Execution.DeepCopy()
+		}
+		if o.Reported == nil && t.Reported != nil {
+			o.Reported = t.Reported.DeepCopy()
+		}
+		count(&w.Status.Counts, t.State)
+		return Recorded
+	}
+	return NoOccurrence
+}
+
+// Find returns w's occurrence at instant at, or nil.
+func Find(w *v1alpha1.ScheduledWork, at time.Time) *v1alpha1.ScheduledWorkOccurrence {
+	for i := range w.Status.Occurrences {
+		if w.Status.Occurrences[i].At.Time.Equal(at) {
+			return &w.Status.Occurrences[i]
+		}
+	}
+	return nil
+}
+
+func count(c *v1alpha1.ScheduledWorkCounts, state string) {
+	switch state {
+	case v1alpha1.OccurrenceSucceeded:
+		c.Succeeded++
+	case v1alpha1.OccurrenceFailed:
+		c.Failed++
+	case v1alpha1.OccurrenceEnded:
+		c.Ended++
+	}
+}
+
+// ReportWait is how long after a headless task finished the releaser keeps the
+// finalizer for the agent's retained outcome, when the terminal record has none
+// yet: two heartbeats. The heartbeat stores the task's exit first and the
+// outcome after it, best effort, and offers it again on the next beat.
+const ReportWait = 2 * time.Minute
+
+// ReportClockSkew is how far ahead of the operator's clock a pod's recorded
+// finish may be and still be trusted, for the ordinary skew between node
+// clocks. A finish further ahead (a pod clock far off, a bad heartbeat) is
+// not waited for at all.
+const ReportClockSkew = 10 * time.Second
+
+// AwaitsReport reports whether the releaser should keep the finalizer of s a
+// little longer, though o is terminal, so the agent's reported outcome can
+// still be copied: s is a task session not being deleted, o names s and has no
+// reported outcome and s has none retained yet, and now lies in the window
+// [finished - ReportClockSkew, finished + ReportWait), where finished is the
+// task's recorded finish. until is when the wait ends, finished + ReportWait.
+// The window comes from the session alone, never from now, so no judgement
+// moves its end: however often the releaser judges a session, the wait lasts
+// at most ReportWait + ReportClockSkew in all, and a fresh operator computes
+// the same window. A session with no recorded finish (an eviction, a task that
+// never ran) is never waited for, nor is one whose finish is more than
+// ReportClockSkew ahead of now: its late outcome is then not copied.
+func AwaitsReport(s *v1alpha1.AgentSession, o *v1alpha1.ScheduledWorkOccurrence, now time.Time) (wait bool, until time.Time) {
+	if s.Spec.Mode != v1alpha1.ModeTask || !s.DeletionTimestamp.IsZero() || o == nil || o.Session != s.Name || o.Reported != nil || s.Status.TaskOutcome != nil {
+		return false, time.Time{}
+	}
+	var finished time.Time
+	if a := s.Status.Agent; a != nil && a.Task != nil {
+		finished = a.Task.FinishedAt.Time
+	}
+	if h := s.Status.PrivateHistory; h != nil && h.TaskTerminal != nil {
+		finished = h.TaskTerminal.Task.FinishedAt.Time
+	}
+	if finished.IsZero() || now.Before(finished.Add(-ReportClockSkew)) {
+		return false, time.Time{}
+	}
+	until = finished.Add(ReportWait)
+	return now.Before(until), until
+}

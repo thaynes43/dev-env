@@ -20,6 +20,11 @@
 //     an AgentSession is a reap, never a cascade (D-45). deleteVolume, the
 //     other guarded delete, archives a reaped session's volume only after a
 //     verified rescue of its last pod (D-10, D-51).
+//   - DESIGN-054's releaser (scheduled_work_release.go) lifts the
+//     scheduled-work finalizer, and no other, once the session has ended or is
+//     being deleted and its occurrence's outcome is in the ScheduledWork's
+//     status. It never changes a session otherwise, and the rescue and archive
+//     never wait on it.
 //   - Reconcile is level-based: everything comes from the AgentSession, its pod,
 //     its volume and the templates, so a fresh operator resumes where the last
 //     one stopped. Nothing lives only in memory.
@@ -48,9 +53,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/thaynes43/dev-env/api/v1alpha1"
 	"github.com/thaynes43/dev-env/internal/agentd/protocol"
@@ -220,6 +227,26 @@ type Reconciler struct {
 	// HoldRetry is how soon a failed rescue in a hold pod runs again; zero
 	// means HoldRescueRetry (D-55).
 	HoldRetry time.Duration
+	// ScheduledWorkReleaseHolds counts the scheduled-work release attempts held
+	// back (MetricScheduledWorkReleaseHolds, DESIGN-054 S3a); nil counts
+	// nothing. The releaser itself always runs: it has no flag.
+	ScheduledWorkReleaseHolds *prometheus.CounterVec
+	// SessionNamespace is where the sessions live. The scheduled-work sweep
+	// lists the labelled sessions there from the API server; empty, or with no
+	// APIReader, the sweep does not run and the releaser still acts on every
+	// event.
+	SessionNamespace string
+	// ScheduledWorkSweepEvery is the sweep's interval; zero means
+	// ScheduledWorkSweepEvery.
+	ScheduledWorkSweepEvery time.Duration
+	// ScheduledWorkNamespace holds the ScheduledWork objects; empty means the
+	// templates' namespace (dev-env-system), where the Reminders live.
+	ScheduledWorkNamespace string
+	// releaseJudged, when set, sees every pass of the scheduled-work releaser:
+	// the cached session it judged, whether it released, and when it asked to
+	// look again. Tests set it to prove the releaser ran; the operator leaves
+	// it nil.
+	releaseJudged func(cached *v1alpha1.AgentSession, released bool, res ctrl.Result)
 
 	// expiryCounted rate-limits the refusals no record holds (countExpiryOnce).
 	expiryMu      sync.Mutex
@@ -244,6 +271,21 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts ...func(*ctrl.Build
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.sessionsForTemplates)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: MaxConcurrentReconciles})
+	if r.SessionNamespace != "" && r.APIReader != nil {
+		// The scheduled-work sweep (DESIGN-054) queues the labelled sessions it
+		// lists from the API server. It watches no ScheduledWork: the kind may
+		// not be installed, and the manager must start without it.
+		events := make(chan event.GenericEvent)
+		every := r.ScheduledWorkSweepEvery
+		if every <= 0 {
+			every = ScheduledWorkSweepEvery
+		}
+		if err := mgr.Add(&scheduledWorkSweep{reader: r.APIReader, namespace: r.SessionNamespace, every: every, events: events,
+			log: mgr.GetLogger().WithName("scheduled-work-sweep")}); err != nil {
+			return err
+		}
+		b = b.WatchesRawSource(source.Channel(events, &handler.EnqueueRequestForObject{}))
+	}
 	for _, o := range opts {
 		o(b)
 	}
@@ -274,6 +316,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (out ctrl.
 	var s v1alpha1.AgentSession
 	if err := r.Client.Get(ctx, req.NamespacedName, &s); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	// DESIGN-054's releaser comes first and on its own: it lifts only the
+	// scheduled-work finalizer, and a held release never stops the rescue and
+	// archive below. A session without that finalizer never reaches it.
+	if controllerutil.ContainsFinalizer(&s, v1alpha1.ScheduledWorkFinalizer) {
+		released, res := r.releaseScheduledWork(ctx, &s)
+		if released {
+			// The patch's event reconciles the newer session.
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		if !s.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(&s, Finalizer) {
+			// Rescue and archive are done (or never had anything to keep):
+			// only the releaser still holds the session, so nothing else runs.
+			return res, nil
+		}
+		defer func() {
+			if outcomeErr == nil {
+				out = sooner(out, res)
+			}
+		}()
 	}
 	if budgetBound(&s) {
 		defer func() {

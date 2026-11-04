@@ -819,6 +819,10 @@ func run(args []string) error {
 	ctrlmetrics.Registry.MustRegister(stopCounter)
 	expiryCounters := controller.NewHomeExpiryCounters()
 	ctrlmetrics.Registry.MustRegister(expiryCounters.Collectors()...)
+	// The scheduled-work releaser has no flag (DESIGN-054 S3a), so its
+	// counter is always there.
+	releaseHolds := controller.NewScheduledWorkReleaseHoldsCounter()
+	ctrlmetrics.Registry.MustRegister(releaseHolds)
 	// The API's log and message routes run agentd in a session's pod (D-65),
 	// and the HOME expiry's relay runs the history export there and the
 	// archive commands in the shelf (DESIGN-025 6.4).
@@ -849,6 +853,9 @@ func run(args []string) error {
 	r.PrivateExecutorTerminal = terminalCounter
 	r.PrivateExecutorStops = stopCounter
 	r.HomeExpiryCounters = expiryCounters
+	r.ScheduledWorkReleaseHolds = releaseHolds
+	r.SessionNamespace = o.sessionNamespace
+	r.ScheduledWorkNamespace = o.templatesNamespace
 	r.HistoryRelay = &controller.ExecHistoryRelay{Exec: podExec, Shelf: rescueShelf, Slots: shelfSlots}
 	r.APIReader = mgr.GetAPIReader()
 	r.Rescuer = rescuer
@@ -871,6 +878,9 @@ func run(args []string) error {
 	// The HOME expiry's gauges, read from the same cache at scrape time
 	// (DESIGN-025 10).
 	ctrlmetrics.Registry.MustRegister(&controller.HomeExpiryCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace, DeleteOn: o.homeExpiryDelete})
+	// The scheduled sessions whose release is held, read from the same cache
+	// at scrape time: DESIGN-054's page source (S6).
+	ctrlmetrics.Registry.MustRegister(&controller.ScheduledWorkReleaseCollector{Reader: mgr.GetCache(), Namespace: o.sessionNamespace})
 	// Standby observations, read from the API reader on every replica at scrape
 	// time. The flag selects enabled or disabled; registration itself is unconditional.
 	if err := standby.RegisterCollector(ctrlmetrics.Registry, standbyCollector(o, mgr.GetAPIReader())); err != nil {

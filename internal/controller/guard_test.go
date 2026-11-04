@@ -284,6 +284,12 @@ var guardedCalls = []struct {
 	{"RemoveFinalizer", "releaseExpiryHome", "expiryVolumeRemovalAllowed"},
 	{"releaseExpiryHome", "deleteExpiryHome", "expiryVolumeRemovalAllowed"},
 	{"deleteExpiryHome", "removeExpiredHome", "noPodUsesHome"},
+	// DESIGN-054's releaser: the scheduled-work finalizer, and only it, lifted
+	// after its own guard, from the one caller that recorded the occurrence's
+	// outcome or proved there is none to record
+	// (TestOnlyTheReleaserRemovesTheScheduledWorkFinalizer).
+	{"RemoveFinalizer", "releaseScheduledWorkFinalizer", "scheduledWorkReleaseAllowed"},
+	{"releaseScheduledWorkFinalizer", "releaseScheduledWork", ""},
 }
 
 // TestOnlyTheGuardDeletes reads this package's source. A Delete or DeleteAllOf

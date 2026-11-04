@@ -170,12 +170,29 @@ func (r *Runnable) unprovenAgentEnd(ctx context.Context, s *v1alpha1.AgentSessio
 	if err != nil {
 		return false, fmt.Errorf("read the pod of standby %s: %w", s.Name, err)
 	}
+	return UnprovenAgentEnd(s, &pod, now), nil
+}
+
+// UnprovenAgentEnd is unprovenAgentEnd's judgement of a pod already read: nil
+// is a missing pod. The caller reads the pod of the session's name from the
+// API server, not a cache. It is true when there is no pod, the pod is younger
+// than PodGrace, or the session's last heartbeat is older than the pod (or
+// absent), so an AgentEnded report cannot be taken as the agent's end. The
+// scheduled-work session-end rule uses it too (DESIGN-054), so a drain is
+// never an end there either.
+func UnprovenAgentEnd(s *v1alpha1.AgentSession, pod *corev1.Pod, now time.Time) bool {
+	if pod == nil {
+		return true
+	}
 	created := pod.CreationTimestamp.Time
 	if now.Sub(created) < PodGrace {
-		return true, nil
+		return true
+	}
+	if s.Status.Agent == nil {
+		return true
 	}
 	hb := s.Status.Agent.LastHeartbeat
-	return hb == nil || hb.Time.Before(created), nil
+	return hb == nil || hb.Time.Before(created)
 }
 
 // Ensure runs one pass. It returns the new session's name when it created one,
