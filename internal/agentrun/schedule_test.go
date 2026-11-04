@@ -872,7 +872,7 @@ func TestScheduleRetry(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.handle(t, h)
-		h.mustRun(ExitOK, decideArgs("retry")...)
+		h.mustRun(ExitOK, decideArgs("retry", "--at", "2026-10-06T19:00:00Z")...)
 		out := h.stdout.String()
 		req := decodeAs[apiv1.RetryScheduledWorkRequest](t, d.retry)
 		if req.SpecHash != testSpecHash || !req.At.Equal(testParkedAt) {
@@ -906,13 +906,22 @@ func TestScheduleRetry(t *testing.T) {
 		h := newHarness(t)
 		refuseAll(t, h)
 		h.mustRun(ExitUsage, "schedule", "retry", testWorkName, "--yes")
-		contains(t, "stderr", h.stderr.String(), "then agent-run schedule retry sched-0123456789abcdef0123 --spec-hash <hash> --yes. Nothing was sent")
+		contains(t, "stderr", h.stderr.String(), "then agent-run schedule retry sched-0123456789abcdef0123 --at <time> --spec-hash <hash> --yes. Nothing was sent")
+	})
+	t.Run("yes needs --at", func(t *testing.T) {
+		h := newHarness(t)
+		refuseAll(t, h)
+		h.mustRun(ExitUsage, decideArgs("retry")...)
+		contains(t, "stderr", h.stderr.String(), "--yes needs --at for a retry: the hash pins the spec, not the occurrence. Run agent-run schedule show sched-0123456789abcdef0123, then agent-run schedule retry sched-0123456789abcdef0123 --at <time> --spec-hash <hash> --yes. Nothing was sent")
+		if n := len(h.api.requests()); n != 0 {
+			t.Errorf("%d requests", n)
+		}
 	})
 	t.Run("spec-hash pins what was seen", func(t *testing.T) {
 		h := newHarness(t)
 		d := &decisionAPI{view: testScheduledWork()}
 		d.handle(t, h)
-		h.mustRun(ExitFailed, "schedule", "retry", testWorkName, "--yes", "--spec-hash", testOldHash)
+		h.mustRun(ExitFailed, "schedule", "retry", testWorkName, "--yes", "--spec-hash", testOldHash, "--at", "2026-10-06T19:00:00Z")
 		contains(t, "stderr", h.stderr.String(), "changed after you saw it", "No retry was sent")
 		if d.posts() != 0 {
 			t.Error("a stale retry was sent")
@@ -923,7 +932,8 @@ func TestScheduleRetry(t *testing.T) {
 		d := &decisionAPI{view: testScheduledWork()}
 		d.view.Occurrences = d.view.Occurrences[:2]
 		d.handle(t, h)
-		h.mustRun(ExitFailed, decideArgs("retry")...)
+		withTerminal(t, h, "y\n")
+		h.mustRun(ExitFailed, "schedule", "retry", testWorkName)
 		contains(t, "stderr", h.stderr.String(), "has no parked occurrence, so there is nothing to retry")
 		if d.posts() != 0 {
 			t.Error("retried nothing")
@@ -934,7 +944,8 @@ func TestScheduleRetry(t *testing.T) {
 		d := &decisionAPI{view: testScheduledWork()}
 		d.view.Occurrences = append(d.view.Occurrences, apiv1.ScheduledWorkOccurrence{At: testNow.Add(-90 * time.Minute), State: apiv1.ScheduledOccurrenceParked})
 		d.handle(t, h)
-		h.mustRun(ExitFailed, decideArgs("retry")...)
+		withTerminal(t, h, "y\n")
+		h.mustRun(ExitFailed, "schedule", "retry", testWorkName)
 		contains(t, "stderr", h.stderr.String(), "has 2 parked occurrences (2026-10-06T19:00:00Z, 2026-10-06T19:30:00Z); name one with --at")
 		if d.posts() != 0 {
 			t.Error("retried without choosing")
@@ -945,7 +956,7 @@ func TestScheduleRetry(t *testing.T) {
 		d := &decisionAPI{view: testScheduledWork()}
 		d.view.Occurrences[2].Attempt = apiv1.MaxScheduledWorkAttempt
 		d.handle(t, h)
-		h.mustRun(ExitFailed, decideArgs("retry")...)
+		h.mustRun(ExitFailed, decideArgs("retry", "--at", "2026-10-06T19:00:00Z")...)
 		contains(t, "stderr", h.stderr.String(), "has used its 3 retries; a fourth is refused. No retry was sent")
 		if d.posts() != 0 {
 			t.Error("retried past the attempt limit")
@@ -958,7 +969,7 @@ func TestScheduleRetry(t *testing.T) {
 			return true
 		}}
 		d.handle(t, h)
-		h.mustRun(ExitUnconfirmed, decideArgs("retry")...)
+		h.mustRun(ExitUnconfirmed, decideArgs("retry", "--at", "2026-10-06T19:00:00Z")...)
 		posts := 0
 		for _, r := range h.api.requests() {
 			if r.method == http.MethodPost {
@@ -997,7 +1008,7 @@ func TestScheduleRetry(t *testing.T) {
 // TestScheduleRefusals: 400, 403, 404 and 409 keep the refusal's exit code and
 // say what to do next.
 func TestScheduleRefusals(t *testing.T) {
-	approve, retry := decideArgs("approve")[1:], decideArgs("retry")[1:]
+	approve, retry := decideArgs("approve")[1:], decideArgs("retry", "--at", "2026-10-06T19:00:00Z")[1:]
 	cases := []struct {
 		name   string
 		args   []string
@@ -1269,6 +1280,7 @@ func TestScheduleHelp(t *testing.T) {
 		"every command here fails with 404 until the operator serves the scheduled-work API", "approve and retry are for a human (Tom) only",
 		"The y/N and --yes guard against a slip; they prove nothing about who you are. The API accepts approve and retry only from Tom's own token.",
 		"--yes needs --spec-hash", "retries a parked occurrence only when --at names it",
+		"With --yes, retry also needs --at: the hash pins the spec, not the occurrence.",
 		"Interactive work needs at least one", "at most 8192 bytes", "at most 180 days after creation",
 		"Without --yes and without a terminal, approve and retry refuse and send nothing")
 	for _, gone := range []string{"never loses", "starts it twice"} {

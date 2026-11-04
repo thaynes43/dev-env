@@ -112,9 +112,11 @@ Tom's own token.
            anyone read it. approve retries a parked occurrence only when --at
            names it; otherwise parked occurrences stay parked.
   retry    runs one parked occurrence again now, late on purpose, after the
-           same y/N or --spec-hash <hash> --yes. It grants no authority: the
-           occurrence is checked again as at its due time. --at picks one of
-           several parked occurrences.
+           same y/N, or --at <time> --spec-hash <hash> --yes. With --yes,
+           retry also needs --at: the hash pins the spec, not the occurrence.
+           It grants no authority: the occurrence is checked again as at its
+           due time. On a terminal, --at picks one of several parked
+           occurrences.
 An occurrence can be approved or retried at most 3 times. Without --yes and
 without a terminal, approve and retry refuse and send nothing.
 `
@@ -832,11 +834,19 @@ func (a *app) scheduleDecide(ctx context.Context, verb string, args []string) er
 		}
 		atT = &t
 	}
-	how := fmt.Sprintf("agent-run schedule show %s, then agent-run schedule %s %s --spec-hash <hash> --yes. Nothing was sent", name, verb, name)
+	pin := "--spec-hash <hash> --yes"
+	if verb == "retry" {
+		pin = "--at <time> " + pin
+	}
+	how := fmt.Sprintf("agent-run schedule show %s, then agent-run schedule %s %s %s. Nothing was sent", name, verb, name, pin)
 	switch {
 	case yes && specHash == "":
 		// --yes alone would approve whatever spec the API holds at the fetch.
 		return usageError("--yes needs --spec-hash, the hash you read: run %s", how)
+	case yes && verb == "retry" && at == "":
+		// The hash pins the spec; without --at, --yes would retry whichever
+		// occurrence is parked at the fetch.
+		return usageError("--yes needs --at for a retry: the hash pins the spec, not the occurrence. Run %s", how)
 	case !yes && !scheduleStdinIsTerminal(a.env.Stdin):
 		return usageError("schedule %s asks y/N on a terminal, and there is none. Run %s", verb, how)
 	}
