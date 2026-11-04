@@ -38,9 +38,9 @@ Stop this work at the exact blocker, and record it.
 
 ## Justification
 
-- A permission or input barrier is one of the stop reasons, an exact blocker.
-  Its evidence is specific: a saved denial, a recorded hold, and a fresh read of
-  the PR.
+- A required permission decision is one of the stop reasons in saga decision 94,
+  an exact blocker. Its evidence is specific: a saved denial, a recorded hold, and
+  a fresh read of the PR.
 - No authorized repair remains for this step. Every other acceptance step is
   done, and the remaining one needs an approval only Tom can give.
 - supervised-dispatch section 5: never bypass a barrier, and end only the work

@@ -617,43 +617,43 @@ source/rule revision and time/attempt budget. Reports distinguish built, deploye
 and accepted; a passing source test does not prove a phone or native-host journey.
 
 The stall thresholds are **60 minutes without progress or three failed attempts
-at the same blocker**. Counters carry across agents, pods, methods and resumes.
-Observed progress must describe a useful result; restarting a tool is not
-progress by itself.
+at the same blocker**
+([saga decision 94](../.agents/sagas/distributed-dev-env/README.md),
+[ADR-019](../.agents/sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)).
+Counters carry across agents, pods, methods and resumes. Observed progress must
+describe a useful result; restarting a tool is not progress by itself.
 
-**Current rule.** Until Tom rules, Q-23 (saga decision 55, ADR-003) governs. At a
-threshold, stop further attempts at that blocker and ask one owner question.
-Supervision, the timer and independent work continue meanwhile. The question
-names the blocker and offers a concrete bounded next option.
-
-**Proposed (pending Tom's ruling on Q-23).** Reaching a threshold does not end
-the work. While authorized repair remains, it triggers:
+Reaching a threshold does not end the work. While authorized repair remains, it
+triggers:
 
 1. **Diagnosis:** read the evidence and name the blocker.
 2. **Steering:** a correction to the owner that changes the approach. Repeating
    the same failed attempt is not steering.
 3. **A checkpoint:** work, evidence and the next step preserved in the status
    record and the tracker.
-4. **Authorized continuity:** the same owner continues, or a fresh worker starts
-   from the handoff when the owner's context or session is gone.
+4. **Continuity:** the same owner continues, or a fresh worker starts from the
+   handoff when the owner's context or session is gone.
 
-Under the proposal, one actionable owner question, with a concrete bounded next
-option, is asked only when a real input or permission is missing. Under either
-rule, work stops only on a proved outcome, a genuine cancellation, a pause, stop
-or hold from Tom or his verified coordinator, an exhausted authorized budget or
-its recorded stop threshold, or a permission or input barrier, each with
-specific evidence. The agent-loop skills in [`.agents/skills/`](../.agents/skills/)
-follow the current rule until Tom rules.
+Ask one actionable owner question, with a concrete bounded next option, only when
+real input or a permission decision is missing. Work stops only on a demonstrated
+outcome, Tom's cancellation or pause (or his verified coordinator's), a genuine
+unresolvable blocker, an exhausted authorized budget or its recorded stop
+threshold, or a required safety or permission decision, each with specific
+evidence. The agent-loop skills in [`.agents/skills/`](../.agents/skills/) apply
+this rule.
 
-*Proposed 2026-11-04, on Tom's direction as relayed by the coordinator:
-"...work in a loop where it doesn't stop until the requirements are met via some
-test feedback... not fire and forget sets of instructions that do not have goals
-the agents have to demonstrate to stop working". The Q-23 records
-([saga decision 55](../.agents/sagas/distributed-dev-env/README.md), its
-[budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md),
-ADR-003) are not edited here. Tom's ruling is pending; the question is recorded
-on PR #908. Record his ruling here. If he accepts the proposal, a new saga
-decision supersedes decision 55.*
+*Adopted 2026-11-04 as decision 94, on Tom's words relayed by the parent
+coordinator as trusted conversation evidence: "...work in a loop where it doesn't
+stop until the requirements are met via some test feedback... not fire and forget
+sets of instructions that do not have goals the agents have to demonstrate to
+stop working" and "Power through harden the mvp test and fix on a loop". It
+supersedes the stop clause of decision 55 (Q-23, 2026-10-09), which stopped
+further attempts at a threshold and asked one owner question. Decision 55's
+ledger, budget history, carried counters and child accounting stay. Decision 55,
+its [budget contract](../.agents/sagas/distributed-dev-env/requirements/2026-10-09-task-budgets.md)
+and ADR-003 are not edited; ADR-019 amends ADR-003's restatement. Source that
+latches the old stop, such as `internal/taskbudget`'s 60-minute `Stalled` latch,
+changes only by its own reviewed PR.*
 
 The stopped NFS helper and observer remain historical. They demonstrated
 problems in our test tooling, not a NAS failure. Shared-Git trials no longer gate

@@ -1,6 +1,6 @@
 ---
 name: supervised-dispatch
-description: Hand long-running work to a coordinator and supervise it live until a proved outcome or a recorded stop (a genuine cancellation, a pause or hold from Tom or his coordinator, an exhausted authorized budget, or a permission or input barrier). Use when the work needs more than one session turn, needs workers, or must keep going while you steer. Skip for a lookup, a single bounded edit you can finish yourself, or any task you cannot give an acceptance check.
+description: Hand long-running work to a coordinator and supervise it live until a demonstrated outcome or a recorded stop (a cancellation or pause from Tom or his verified coordinator, an exhausted authorized budget, a genuine unresolvable blocker, or a required safety or permission decision). Use when the work needs more than one session turn, needs workers, or must keep going while you steer. Skip for a lookup, a single bounded edit you can finish yourself, or any task you cannot give an acceptance check.
 ---
 
 # Supervised dispatch
@@ -119,55 +119,49 @@ At every check-in (see [timer-checkin](../timer-checkin/SKILL.md)):
    session when delivery is safe, and never while a native question prompt is
    pending in it. A headless task takes no messages.
 
+The stop rule is [saga decision 94](../../sagas/distributed-dev-env/README.md)
+([ADR-019](../../sagas/distributed-dev-env/adrs/019-stalled-work-steers-not-stops.md)).
 The work stops only on one of these, each backed by specific evidence:
 
-- **A proved outcome.** Every acceptance check passes, with evidence checked by
-  someone other than the agent that did the work.
-- **A genuine cancellation.** Tom, or his verified coordinator, cancels this
-  work. Record who, when and through which channel.
-- **A pause, stop or hold from Tom or his verified coordinator.** A pause or
-  stop from Tom, a "wait for Meatball" (mark the work "Awaiting Meatball context"), or an
-  explicit hold pauses or ends the relevant work. Save a checkpoint, and do not
-  poll while waiting.
+- **A demonstrated outcome.** Every acceptance check passes, with evidence
+  checked by someone other than the agent that did the work.
+- **A cancellation or pause from Tom or his verified coordinator.** A cancel, a
+  pause or stop, a "wait for Meatball" (mark the work "Awaiting Meatball
+  context"), or an explicit hold ends or pauses the relevant work. Record who,
+  when and through which channel. Save a checkpoint, and do not poll while
+  waiting.
 - **An exhausted authorized budget.** The budget recorded for the story is
   actually spent, or its recorded stop threshold is reached, read from its
   record. A feared or estimated overrun is not exhaustion.
-- **A permission or input barrier.** A denial, a missing required approval, or
-  an input only someone else can supply. Record the evidence: the exact denial,
-  the approval that is missing, the missing artifact. Never bypass it.
+- **A genuine unresolvable blocker.** An input only someone else can supply, with
+  no authorized repair left. Record the missing artifact and why no repair
+  remains.
+- **A required safety or permission decision.** A denial, or an approval or
+  safety decision that only Tom or the policy owner can make. Record the exact
+  denial or the decision needed. Never bypass it.
 
 Check a relayed or quoted "stop" or "cancel" against its actual source and
 chronology first. The last two are the exact blockers. Nothing else ends the work.
 
-**Time, attempts and context size are signals.** The
+**Time, attempts and context size trigger steering, not stopping.** The
 [workflow guide](../../../docs/workflow-guide.md), section 9, sets the stall
 thresholds: 60 minutes without progress or three failed attempts at the same
 blocker. Its counters carry across agents, pods, methods and resumes, so a
-threshold reached again stays visible.
-
-**Current rule.** Until Tom rules, Q-23 (saga decision 55, ADR-003) governs. At a
-threshold, stop further attempts at that blocker and ask one owner question.
-Supervision, the timer and independent work continue meanwhile. Diagnose and
-checkpoint first, so the question names the blocker, the effort and attempts
-spent, the evidence, and a concrete bounded next option. Hold only that
-blocker's attempts until Tom answers.
-
-**Proposed (option A, pending Tom's ruling on Q-23).** Reaching a threshold
-triggers this instead, while authorized repair remains:
+threshold reached again stays visible. Reaching one, or filling a worker's
+context window, triggers this while authorized repair remains:
 
 1. **Diagnose.** Read the evidence and name the blocker.
 2. **Steer.** Send the owner a correction that changes the approach. Repeating
    the same failed attempt is not steering.
 3. **Checkpoint.** Update the status record and the tracker.
-4. **Keep continuity.** The same owner continues, and the timer stays armed.
+4. **Keep continuity.** The same owner continues. When its context is full or its
+   session is gone, start a fresh worker from the handoff: branch, head, open
+   findings, next step. Keep the timer armed.
 
-Under the proposal, ask Tom one actionable question only when a real input or
-permission is missing. Then that missing input or permission is the stop reason
-for the work that needs it, not the elapsed time or the count.
-
-**Context size, under either rule.** When a worker's context is full or its
-session is gone, start a fresh worker from the handoff: branch, head, open
-findings, next step. Keep the timer armed. A full context is not a stop reason.
+Ask Tom one actionable question, with a concrete bounded next option, only when
+real input or a permission decision is missing. Then that missing input or
+decision is the stop reason for the work that needs it, not the elapsed time or
+the count.
 
 "Waiting", "looks done", "the worker said so", a finished turn and an expired
 timer are not stop reasons either. At any stop, save a checkpoint with the next

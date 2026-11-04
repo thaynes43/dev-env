@@ -1,6 +1,6 @@
 ---
 name: timer-checkin
-description: Check in on supervised work on a timer, with the session timers Claude Code already has and a persisted state file, so one custodian keeps it across restarts and handoffs and stops it only on a proved outcome or a recorded stop (a genuine cancellation, a pause or hold from Tom or his coordinator, an exhausted authorized budget, or a permission or input barrier). Use while supervising long-running work. Skip for one wait you can cover with a single background command, and never build a new scheduler.
+description: Check in on supervised work on a timer, with the session timers Claude Code already has and a persisted state file, so one custodian keeps it across restarts and handoffs and stops it only on a demonstrated outcome or a recorded stop (a cancellation or pause from Tom or his verified coordinator, an exhausted authorized budget, a genuine unresolvable blocker, or a required safety or permission decision). Use while supervising long-running work. Skip for one wait you can cover with a single background command, and never build a new scheduler.
 ---
 
 # Timer check-in
@@ -125,15 +125,16 @@ creates a timer on its own.
 
 ## 6. Complete or pause
 
-Stop the timer only for a stop reason in supervised-dispatch section 5, backed by
-evidence: a proved outcome, a genuine cancellation, a pause, stop or hold from Tom
-or his verified coordinator (including "wait for Meatball"), an exhausted
-authorized budget or its recorded stop threshold, or a permission or input
-barrier. Quiet time, failed attempts, a full context window and a 7-day expiry
-never end the timer. They trigger the stall rule in supervised-dispatch section
-5, and the job is re-armed or re-created. Waiting for an event a check can observe, such as a natural keeper
-refresh, is pending, not blocked: keep the timer and report it pending. When the
-work ends or pauses:
+Stop the timer only for a stop reason in supervised-dispatch section 5
+(saga decision 94), backed by evidence: a demonstrated outcome, a cancellation or
+pause from Tom or his verified coordinator (including "wait for Meatball" and an
+explicit hold), an exhausted authorized budget or its recorded stop threshold, a
+genuine unresolvable blocker, or a required safety or permission decision.
+Quiet time, failed attempts, a full context window and a 7-day expiry never end
+the timer. They trigger the stall rule in supervised-dispatch section 5, and the
+job is re-armed or re-created. Waiting for an event a check can observe, such as
+a natural keeper refresh, is pending, not blocked: keep the timer and report it
+pending. When the work ends or pauses:
 
 1. `CronDelete` the job (or `ScheduleWakeup` with `stop: true`), then `CronList`
    to confirm it is gone. Do not keep polling during a pause.

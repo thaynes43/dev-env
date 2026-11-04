@@ -96,12 +96,10 @@ head. QA then re-reviews that exact new head: the delta and every earlier
 finding. Repeat until no finding is open.
 
 Failed tests and repeated findings are the loop working, not a reason to stop.
-When the same blocker fails three times, apply the stall rule in
-supervised-dispatch, section 5. Until Tom rules, Q-23 (saga decision 55, ADR-003)
-governs. At a threshold, stop further attempts at that blocker and ask one owner
-question. Supervision, the timer and independent work continue meanwhile. Under
-the proposed option A, you would diagnose and send a correction that changes the
-approach instead.
+When the same blocker fails three times, the stall rule in supervised-dispatch,
+section 5 (saga decision 94), applies: diagnose, send a correction that changes
+the approach, checkpoint, and keep the loop going. Ask Tom only when real input
+or a permission decision is missing.
 
 Example: #903, the scheduled-work executor core, went through six adversarial
 native review rounds this way. Each round's findings went back to its one coding
