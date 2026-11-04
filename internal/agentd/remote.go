@@ -315,6 +315,10 @@ func LoginStatus(ctx context.Context, r Runner, s Settings, sess protocol.Sessio
 	if s.ClaudeLiveFile != "" {
 		return projectionLoginStatus(s, now)
 	}
+	// A session that will never launch needs no login, and login url refuses it.
+	if why := firstLaunchRefusal(s, sess, now); why != "" {
+		return "first launch refused (" + why + "): the agent will not start, so no login is opened"
+	}
 	c := checkLogin(s)
 	switch {
 	case c.Usable(now):

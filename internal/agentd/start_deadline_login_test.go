@@ -352,3 +352,128 @@ func TestLoginURLRefusesASessionWhoseFirstLaunchIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A first launch refused at the launch itself (the deadline passed while
+// startAgent held the login lock, during workspace admission) drops the held
+// launch and stops the login window as the poll's refusal does. At boot, a
+// window an opener made earlier is stopped at once, under the lock startAgent
+// holds; from the poll, the poll already stopped the ended window. Either way
+// nothing starts the agent later.
+func TestFirstLaunchRefusedAtTheLaunchDropsTheHeldLaunch(t *testing.T) {
+	for _, from := range []string{"boot", "poll"} {
+		t.Run(from, func(t *testing.T) {
+			f := newLoginRaceTmux()
+			daemonTmux := f.runner()
+			d, clock, deadline := loginRaceDaemon(t, daemonTmux)
+			admissions := 0
+			d.admitLaunch = func(ctx context.Context, s Settings, sess protocol.Session, l *Launch) error {
+				admissions++
+				clock.Set(deadline.Add(time.Second))
+				return admitWorkspaceLaunch(ctx, s, sess, l)
+			}
+			ws := protocol.Workspace{Clone: d.S.ClonePath(d.Session.Repo), Worktree: d.S.WorktreePath(d.Session.Name), Branch: "agent/" + d.Session.Name}
+			if from == "boot" {
+				// A ceremony opened before the boot reached the launch: its
+				// window waits for a code, and nobody holds the lock.
+				writeCredentials(t, d.S, 0)
+				openLogin(t, f, d)()
+				step, why := d.startAgent(context.Background(), ws, Step{Name: "repo", State: StepOK}, "b1")
+				if why != protocol.StartDeadlinePassed || step.State != StepFail {
+					t.Fatalf("boot launch: step %+v, why %q", step, why)
+				}
+			} else {
+				holdFirstLaunch(t, d)
+				openLogin(t, f, d)()
+				writeCredentials(t, d.S, 0)
+				f.finishCeremony()
+				pollWithin(t, d)
+				assertLaunchRefused(t, d, daemonTmux)
+			}
+			if admissions != 1 {
+				t.Fatalf("admissions %d, want 1: the launch did not reach its last deadline check", admissions)
+			}
+			if f.window() {
+				t.Fatal("a login window outlived the launch's refusal")
+			}
+			if d.remote != nil {
+				t.Fatalf("the refused launch is still held: %+v", d.remote)
+			}
+			// From the poll, the poll stops the ended window before the launch
+			// and the refusal stops it again (a missing window is no error).
+			// Later polls retry nothing.
+			wantStops := map[string]int{"boot": 1, "poll": 2}[from]
+			pollWithin(t, d)
+			pollWithin(t, d)
+			if n := countLines(daemonTmux, "tmux kill-session -t ="+LoginTmuxSession); admissions != 1 || n != wantStops {
+				t.Fatalf("after the refusal: admissions %d, login window stops %d; want 1 and %d", admissions, n, wantStops)
+			}
+			if exists(d.S.statePath(launchFile)) || countLines(daemonTmux, "tmux new-session") != 0 {
+				t.Fatal("the refused launch started the agent")
+			}
+		})
+	}
+}
+
+// A refusal before boot leaves the daemon observational, so its poll skips
+// the login: a ceremony opener that passed its own check just before the
+// deadline, and holds the lock as the pod boots past it, still has its window
+// stopped once it releases the lock.
+func TestRefusedBootStopsTheWindowOfAnOpenerHoldingTheLock(t *testing.T) {
+	r, clock := deadlineRig(t, protocol.ModeRemote, deadlineNow.Add(time.Minute).Format(time.RFC3339))
+	f := newLoginRaceTmux()
+	fr := f.runner()
+	fr.missing = map[string]bool{"claude": true}
+	r.d.R = muxRunner{git: r.d.R.(muxRunner).git, fake: fr}
+	r.tmux = fr
+	finishOpener := openLogin(t, f, r.d)
+	clock.Set(deadlineNow.Add(time.Minute + time.Second))
+	stop := r.start(t)
+	waitFor(t, func() bool { st, count := r.beats.last(); return st.Boot == protocol.BootFailed && count >= 3 })
+	stopsWhileHeld := countLines(fr, "tmux kill-session -t ="+LoginTmuxSession)
+	finishOpener()
+	_, seen := r.beats.last()
+	waitFor(t, func() bool { _, count := r.beats.last(); return count >= seen+3 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if f.window() {
+		started, stopped := f.counts()
+		t.Fatalf("a login window outlived the refused boot (windows started %d, stop calls %d)", started, stopped)
+	}
+	if n := countLines(fr, "tmux kill-session -t ="+LoginTmuxSession); stopsWhileHeld != 0 || n != 1 {
+		t.Fatalf("daemon stops: %d while the opener held the lock, %d in all; want 0 and 1", stopsWhileHeld, n)
+	}
+	st, _ := r.beats.last()
+	if st.Agent.State != protocol.AgentFailed || st.Agent.Error != protocol.StartDeadlinePassed || exists(r.d.S.statePath(launchFile)) || countLines(fr, "tmux new-session") != 0 {
+		t.Fatalf("the refused boot started the agent, or reads %+v", st.Agent)
+	}
+}
+
+// login status names the refusal instead of advising a login url that would
+// be refused.
+func TestLoginStatusNamesARefusedFirstLaunch(t *testing.T) {
+	passed := deadlineNow.Add(-time.Second).Format(time.RFC3339)
+	for _, c := range []struct {
+		name, deadline string
+		launched       bool
+		want, not      string
+	}{
+		{name: "deadline-passed", deadline: passed, want: protocol.StartDeadlinePassed, not: "run login url"},
+		{name: "deadline-invalid", deadline: "tomorrow", want: protocol.StartDeadlineInvalid, not: "run login url"},
+		{name: "before-deadline", deadline: deadlineNow.Add(time.Minute).Format(time.RFC3339), want: "run login url", not: "refused"},
+		{name: "launched", deadline: passed, launched: true, want: "run login url", not: "refused"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newLoginRaceTmux()
+			d, _, _ := loginRaceDaemon(t, f.runner())
+			d.S.StartDeadline = c.deadline
+			if c.launched {
+				writeFile(t, d.S.statePath(launchFile), "{}")
+			}
+			got := LoginStatus(context.Background(), f.runner(), d.S, d.Session, d.now())
+			if !strings.Contains(got, c.want) || strings.Contains(got, c.not) {
+				t.Fatalf("login status %q, want it to name %q and not %q", got, c.want, c.not)
+			}
+		})
+	}
+}

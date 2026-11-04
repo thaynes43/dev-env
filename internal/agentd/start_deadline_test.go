@@ -108,10 +108,21 @@ func assertRefusedBeforeBoot(t *testing.T, r daemonRig, why string) {
 		exists(r.d.S.ClonePath(r.d.Session.Repo)) || exists(r.d.S.WorktreePath(r.d.Session.Name)) {
 		t.Fatal("a refused first launch started the agent or prepared its repo")
 	}
+	stops := 0
 	for _, line := range r.tmux.lines() {
+		if r.d.Session.Mode == protocol.ModeRemote && line == "tmux kill-session -t ="+LoginTmuxSession {
+			// A remote session's refusal ends any login window, under the
+			// login lock, once: an opener that checked before the deadline
+			// may have made one.
+			stops++
+			continue
+		}
 		if !strings.HasPrefix(line, "tmux list-clients ") && !strings.HasPrefix(line, "tmux display-message ") {
 			t.Fatal("a refused daemon ran a mutation: ", line)
 		}
+	}
+	if want := map[bool]int{true: 1, false: 0}[r.d.Session.Mode == protocol.ModeRemote]; stops != want {
+		t.Fatalf("a refused %s session stopped the login window %d times, want %d", r.d.Session.Mode, stops, want)
 	}
 	if after := homePaths(t, r.d.S); !slices.Equal(after, before) {
 		t.Fatalf("a refused first launch rendered configuration: HOME was %q, is %q", before, after)
@@ -408,12 +419,20 @@ func TestDaemonEndsAHeldRemoteFirstLaunchAtItsDeadline(t *testing.T) {
 			clock.Set(deadline.Add(time.Second))
 			_, seen := r.beats.last()
 			waitFor(t, func() bool { _, count := r.beats.last(); return count >= seen+3 })
+			stopsAtRefusal := countLines(r.tmux, "tmux kill-session -t ="+LoginTmuxSession)
 			// The login lands after the refusal: the agent still never starts.
 			lateLogin()
 			_, seen = r.beats.last()
 			waitFor(t, func() bool { _, count := r.beats.last(); return count >= seen+3 })
 			if err := stop(); err != nil {
 				t.Fatal(err)
+			}
+			// The login window is stopped once, under the login lock: at the
+			// refusal when the lock is free, after its release when an
+			// opener held it.
+			wantAtRefusal := map[bool]int{true: 0, false: 1}[ceremony]
+			if n := countLines(r.tmux, "tmux kill-session -t ="+LoginTmuxSession); stopsAtRefusal != wantAtRefusal || n != 1 {
+				t.Fatalf("login window stops: %d at the refusal, %d in all; want %d and 1", stopsAtRefusal, n, wantAtRefusal)
 			}
 			st, _ := r.beats.last()
 			if st.Boot != protocol.BootFailed || st.Agent.State != protocol.AgentFailed || st.Agent.Error != protocol.StartDeadlinePassed || !agentEnded(st) {

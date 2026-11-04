@@ -399,7 +399,7 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	// the launch itself, not only the boot that reached it: a clone or a login
 	// wait can carry a boot that began in time past the deadline.
 	if why := startDeadlineRefusal(d.S.StartDeadline, false, d.now()); why != "" {
-		return newStep(name, nil, errors.New(why)), why
+		return d.refuseLaunch(ctx, why)
 	}
 	launch, err := BuildLaunch(d.S, d.Session, ws, bootID, d.now())
 	if err != nil {
@@ -413,7 +413,7 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 	// launch.json. The deadline bounds that record: once it exists, the session
 	// counts as launched, and run-agent does not check the deadline again.
 	if why := startDeadlineRefusal(d.S.StartDeadline, false, d.now()); why != "" {
-		return newStep(name, nil, errors.New(why)), why
+		return d.refuseLaunch(ctx, why)
 	}
 	if err := StartAgent(ctx, d.R, d.S, launch, d.Self); err != nil {
 		return newStep(name, nil, err), err.Error()
@@ -423,6 +423,17 @@ func (d *Daemon) startAgent(ctx context.Context, ws protocol.Workspace, repo Ste
 		what = "claude TUI"
 	}
 	return newStep(name, []string{fmt.Sprintf("%s started in tmux session %q, conversation %s", what, TmuxSession, launch.ConversationID)}, nil), ""
+}
+
+// refuseLaunch is a first launch refused at the launch itself. A remote
+// session's held launch is dropped there too, so no later poll retries it,
+// and its login window is stopped: startAgent holds the login lock at both
+// checks, so the stop runs at once.
+func (d *Daemon) refuseLaunch(ctx context.Context, why string) (Step, string) {
+	if d.remote != nil {
+		d.dropRemoteLaunch(ctx)
+	}
+	return newStep("agent", nil, errors.New(why)), why
 }
 
 // admitWorkspace admits a launch through the admitLaunch seam.
@@ -532,21 +543,26 @@ func (d *Daemon) refuseHeldLaunchPastDeadline(ctx context.Context, w *remoteWait
 	if why == "" {
 		return false
 	}
-	// The refusal leaves writerRefused unset: the supervise loop skips
-	// pollRemoteLogin, and with it a pending login-window stop, for an
-	// observational daemon.
-	d.remote = nil
-	if !d.projectsClaude() {
-		d.loginStopPending = true
-		d.stopRefusedLoginWindow(ctx)
-	}
+	d.dropRemoteLaunch(ctx)
 	d.Log.Warn("first launch refused", "session", d.Session.Name, "reason", why)
 	d.recordAgentStep(w.boot, newStep("agent", nil, errors.New(why)), why)
 	d.beat(ctx)
 	return true
 }
 
-// stopRefusedLoginWindow ends the login window of a refused held launch, under
+// dropRemoteLaunch drops a remote session's held launch after its first
+// launch was refused, so nothing starts the agent afterwards, and stops the
+// login window under the login lock (stopRefusedLoginWindow). In projection
+// mode the keeper owns the login and no login window is the daemon's to stop.
+func (d *Daemon) dropRemoteLaunch(ctx context.Context) {
+	d.remote = nil
+	if !d.projectsClaude() {
+		d.loginStopPending = true
+		d.stopRefusedLoginWindow(ctx)
+	}
+}
+
+// stopRefusedLoginWindow ends the login window of a refused first launch, under
 // the login lock. A ceremony opener (agentd ctl login url) checks for and
 // creates the window under that lock, so a stop without it could run before
 // the opener's window exists and leave that window behind. The stop never
@@ -622,6 +638,9 @@ func (d *Daemon) supervise(ctx context.Context) error {
 			}
 			d.expireCredentials()
 			if d.writerRefused {
+				// An observational daemon skips the login poll, but a first
+				// launch refused before boot still stops its login window.
+				d.stopRefusedLoginWindow(ctx)
 				continue
 			}
 			if err := SyncCodexAccess(d.S, d.now()); err != nil {
