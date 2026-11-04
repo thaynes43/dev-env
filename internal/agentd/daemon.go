@@ -527,6 +527,9 @@ func (d *Daemon) refuseHeldLaunchPastDeadline(ctx context.Context, w *remoteWait
 		return false
 	}
 	d.remote = nil
+	if !d.projectsClaude() {
+		StopLoginWindow(ctx, d.R, d.S)
+	}
 	d.Log.Warn("first launch refused", "session", d.Session.Name, "reason", why)
 	d.recordAgentStep(w.boot, newStep("agent", nil, errors.New(why)), why)
 	d.beat(ctx)

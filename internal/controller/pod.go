@@ -203,10 +203,16 @@ func (r *Reconciler) sessionPod(s *v1alpha1.AgentSession, t *templates.Templates
 	}
 	// A scheduled session's start deadline needs agentd's check, which the
 	// templates image carries by the rollout rule (DESIGN-054 S3c). A pilot or
-	// instruction image may predate it, so a scheduled session never runs on
-	// one: the session is refused as invalid, which ends its occurrence.
-	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && agentImage(pod) != templatesImage {
-		return nil, sessionInvalidError{errors.New("a scheduled-work session runs only on the templates image, which carries the start-deadline check; a pilot or instruction image override is refused")}
+	// instruction image may predate it, so a scheduled session always runs on
+	// the templates image. This holds on every pod build, never fails a build
+	// (a rebuild after the first launch must not end the session), and the API
+	// refuses a scheduled session that asks for coordinator instructions.
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled {
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == ContainerName {
+				pod.Spec.Containers[i].Image = templatesImage
+			}
+		}
 	}
 	return pod, nil
 }
@@ -700,6 +706,9 @@ func (e sessionInvalidError) Unwrap() error { return e.err }
 func CheckAgentdSession(s *v1alpha1.AgentSession) error {
 	if _, err := sessionDocument(s, false); err != nil {
 		return err
+	}
+	if _, scheduled := s.Annotations[v1alpha1.AnnotationScheduledWorkStartDeadline]; scheduled && (s.Spec.CoordinatorInstructions || s.Spec.CoordinatorInstructionPublisher) {
+		return errors.New("a scheduled-work session runs on the templates image and takes no coordinator instructions")
 	}
 	_, err := startDeadlineEnv(s, false)
 	return err

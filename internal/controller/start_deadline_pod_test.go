@@ -164,7 +164,7 @@ func TestTheStartDeadlineIsReserved(t *testing.T) {
 // check. A scheduled session runs on the templates image, which the rollout
 // rule keeps at S3c or later; an override that would select another image for
 // it refuses the session as invalid instead.
-func TestAScheduledSessionRefusesAnImageOverride(t *testing.T) {
+func TestAScheduledSessionKeepsTheTemplatesImage(t *testing.T) {
 	tmpl := exampleTemplates(t)
 	const deadline = "2026-11-04T10:05:00Z"
 	instructionImage := "ghcr.io/thaynes43/dev-env:2.86.0@sha256:" + strings.Repeat("a", 64)
@@ -184,11 +184,20 @@ func TestAScheduledSessionRefusesAnImageOverride(t *testing.T) {
 			if pod, err := c.r.sessionPod(c.session(), tmpl); err != nil || pod.Spec.Containers[0].Image == tmpl.Image {
 				t.Fatalf("the fixture does not select an override: %v", err)
 			}
-			pod, err := c.r.sessionPod(scheduledSession(c.session(), deadline), tmpl)
-			if err == nil || pod != nil || !errors.As(err, new(sessionInvalidError)) || !strings.Contains(err.Error(), "templates image") {
-				t.Fatalf("a scheduled session took an image override: pod %v, %v", pod != nil, err)
+			// Every build, the first and any rebuild after a launch, succeeds
+			// on the templates image: a rebuild never fails the session.
+			for build := 0; build < 2; build++ {
+				pod, err := c.r.sessionPod(scheduledSession(c.session(), deadline), tmpl)
+				if err != nil || pod == nil || pod.Spec.Containers[0].Image != tmpl.Image || len(startDeadlineValues(pod)) != 1 {
+					t.Fatalf("build %d of a scheduled session: pod %v, %v", build, pod != nil, err)
+				}
 			}
 		})
+	}
+	s := scheduledSession(ordinaryOptInSession(t), deadline)
+	s.Spec.CoordinatorInstructions = true
+	if err := CheckAgentdSession(s); err == nil || !strings.Contains(err.Error(), "no coordinator instructions") {
+		t.Fatalf("the API precheck took a scheduled session with coordinator instructions: %v", err)
 	}
 	// Not selected: the scheduled session builds on the templates image.
 	other := scheduledSession(pilotTestSession(), deadline)
