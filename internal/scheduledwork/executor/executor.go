@@ -727,11 +727,18 @@ func (p *pass) pending(ctx context.Context, w *v1alpha1.ScheduledWork, at, now t
 		o.State, o.Reason = v1alpha1.OccurrenceSkipped, ReasonNotAfter
 		w.Status.Counts.Skipped++
 	case now.After(windowStart(o).Add(grace)):
-		if o.Reason == ReasonOwnerUnproven || o.Reason == ReasonAuthorityUnread {
+		switch o.Reason {
+		case ReasonOwnerUnproven, ReasonAuthorityUnread:
 			o.State = v1alpha1.OccurrenceParked
 			w.Status.Counts.Parked++
-		} else {
-			o.State, o.Reason = v1alpha1.OccurrenceSkipped, ReasonAtCapacity
+		case ReasonAtCapacity:
+			o.State = v1alpha1.OccurrenceSkipped
+			w.Status.Counts.Skipped++
+		default:
+			// It never waited on a cap or the owner: no pass reached it
+			// inside its grace (a retried occurrence while the executor was
+			// down, say).
+			o.State, o.Reason = v1alpha1.OccurrenceSkipped, graceMissedReason(o, grace)
 			w.Status.Counts.Skipped++
 		}
 	case previousUnfinished(w, at):
@@ -1361,6 +1368,16 @@ func setNext(w *v1alpha1.ScheduledWork, next time.Time, ok bool) {
 		return
 	}
 	w.Status.NextDue = &metav1.Time{Time: next.UTC()}
+}
+
+// graceMissedReason is the reason of a Pending occurrence no pass reached
+// inside its grace, which counts from retriedAt for a retried one.
+func graceMissedReason(o *v1alpha1.ScheduledWorkOccurrence, grace time.Duration) string {
+	reason := missedReason(1, o.At.Time, grace)
+	if o.RetriedAt != nil {
+		reason += " after a retry"
+	}
+	return reason
 }
 
 func missedReason(n int, last time.Time, grace time.Duration) string {
