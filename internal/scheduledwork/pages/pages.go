@@ -9,8 +9,10 @@
 //   - PageState maps a Reminder's delivery status to the page state.
 //   - Pager creates the Reminder if it is absent and returns the page entry to
 //     record. It is best effort: it never returns an error, and an unserved
-//     Reminder kind, a create error or a missing notify target is a skipped
-//     page. It never updates or deletes a Reminder.
+//     Reminder kind, a refused create or a missing notify target is a
+//     skipped page. After AlreadyExists, or a create error that may have
+//     come after the Reminder was stored, one read decides: only this page's
+//     own Reminder is recorded. It never updates or deletes a Reminder.
 //
 // The package has no caller yet. The executor and the releaser (S4b) call
 // Pager.EnsureInto when an occurrence reaches a page event, and Pager.Refresh
@@ -31,6 +33,7 @@ import (
 	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -167,8 +170,12 @@ func cut(s string, n int) string {
 // PageState maps a Reminder's delivery status to a page state: sent, failed,
 // ambiguous (the Reminder failed with a delivery whose request may have
 // reached the provider, or whose claim was never resolved) or skipped (the
-// Reminder delivered nothing and failed nothing, or was cancelled). It returns
-// "" while the Reminder is pending, absent or in a state it does not know.
+// Reminder delivered nothing and failed nothing, or was cancelled). A skipped
+// or cancelled Reminder still reports what its deliveries show, because a
+// cancel can land after a target was sent or while a claim is unresolved:
+// sent when any delivery was sent, else ambiguous when any is ambiguous or
+// claimed. It returns "" while the Reminder is pending, absent or in a state
+// it does not know.
 func PageState(r *v1alpha1.Reminder) string {
 	if r == nil {
 		return ""
@@ -177,16 +184,30 @@ func PageState(r *v1alpha1.Reminder) string {
 	case v1alpha1.ReminderSent:
 		return "sent"
 	case v1alpha1.ReminderFailed:
-		for _, d := range r.Status.Deliveries {
-			if d.State == v1alpha1.DeliveryAmbiguous || d.State == v1alpha1.DeliveryClaimed {
-				return "ambiguous"
-			}
+		if deliveriesShow(r, v1alpha1.DeliveryAmbiguous, v1alpha1.DeliveryClaimed) {
+			return "ambiguous"
 		}
 		return "failed"
 	case v1alpha1.ReminderSkipped, v1alpha1.ReminderCancelled:
+		switch {
+		case deliveriesShow(r, v1alpha1.DeliverySent):
+			return "sent"
+		case deliveriesShow(r, v1alpha1.DeliveryAmbiguous, v1alpha1.DeliveryClaimed):
+			return "ambiguous"
+		}
 		return "skipped"
 	}
 	return ""
+}
+
+// deliveriesShow reports whether any of r's deliveries is in one of states.
+func deliveriesShow(r *v1alpha1.Reminder, states ...string) bool {
+	for _, d := range r.Status.Deliveries {
+		if slices.Contains(states, d.State) {
+			return true
+		}
+	}
+	return false
 }
 
 // Pager creates page Reminders through a controller-runtime client. Give it a
@@ -199,23 +220,30 @@ type Pager struct {
 // Ensure creates the page Reminder if it is absent and returns the page entry
 // to record: the Reminder's name and, when it already exists, its state so far.
 // A Reminder that already exists is success (a retry, or a replay after a
-// restart). It never returns an error that could block the caller: an item
-// with no notify target, an unserved Reminder kind (meta.IsNoMatchError) and
-// any create error give a skipped page with no Reminder. It never updates or
-// deletes a Reminder.
+// restart) when one read shows it is this page's own: owned by Owner and
+// labelled with the item UID, the occurrence, the event and the attempt. A
+// create error that may have come after the API server stored the Reminder
+// (a timeout, a server error, a lost connection) gets the same one read, so
+// a page that will be sent is not recorded skipped. It never returns an error
+// that could block the caller: an item with no notify target, an unserved
+// Reminder kind (meta.IsNoMatchError), a refused create, and a read that
+// finds no Reminder of this page give a skipped page with no Reminder. It
+// never updates or deletes a Reminder.
 //
 // The entry is always valid for the schema: an unknown event becomes a skipped
-// page (event "skipped") and the attempt is held to 0..ScheduledWorkMaxAttempt.
+// page (event "skipped"), and an attempt outside 0..ScheduledWorkMaxAttempt is
+// held to that range in the skipped entry only: it creates nothing, so it
+// never takes the key of a real attempt's page.
 func (p *Pager) Ensure(ctx context.Context, work *v1alpha1.ScheduledWork, at time.Time, event string, attempt int32, title, body string, now time.Time) v1alpha1.ScheduledWorkPage {
 	if !slices.Contains(events, event) {
 		event = v1alpha1.PageEventSkipped
 		title, body = "", ""
 	}
-	attempt = min(max(attempt, 0), v1alpha1.ScheduledWorkMaxAttempt)
-	skipped := v1alpha1.ScheduledWorkPage{Event: event, Attempt: attempt, State: "skipped"}
+	skipped := v1alpha1.ScheduledWorkPage{Event: event, Attempt: min(max(attempt, 0), v1alpha1.ScheduledWorkMaxAttempt), State: "skipped"}
 	if p == nil || p.Client == nil {
 		return skipped
 	}
+	// Build refuses an attempt out of range, so nothing is created for it.
 	rem, err := Build(work, at, event, attempt, title, body, now)
 	if err != nil {
 		return skipped
@@ -224,13 +252,47 @@ func (p *Pager) Ensure(ctx context.Context, work *v1alpha1.ScheduledWork, at tim
 	switch {
 	case err == nil:
 		return v1alpha1.ScheduledWorkPage{Event: event, Attempt: attempt, Reminder: rem.Name}
-	case apierrors.IsAlreadyExists(err):
-		page := v1alpha1.ScheduledWorkPage{Event: event, Attempt: attempt, Reminder: rem.Name}
-		return p.Refresh(ctx, work, page)
-	default:
-		// An unserved kind (meta.IsNoMatchError) and every other create error.
+	case refused(err):
 		return skipped
 	}
+	// AlreadyExists, or an error after which the Reminder may be stored.
+	if page, ok := p.stored(ctx, rem); ok {
+		return page
+	}
+	return skipped
+}
+
+// refused reports a create error that proves nothing was stored: the kind is
+// not served, or the API server refused the request (forbidden, invalid, bad,
+// unauthorized, not found, not supported).
+func refused(err error) bool {
+	return meta.IsNoMatchError(err) || apierrors.IsForbidden(err) || apierrors.IsInvalid(err) ||
+		apierrors.IsBadRequest(err) || apierrors.IsUnauthorized(err) || apierrors.IsNotFound(err) ||
+		apierrors.IsMethodNotSupported(err)
+}
+
+// stored reads the Reminder of want's name once and returns its page entry,
+// with its state so far, when it is want's page: the same Owner and the same
+// item UID, occurrence, event and attempt labels. A failed read, an absent
+// Reminder and anyone else's Reminder are not.
+func (p *Pager) stored(ctx context.Context, want *v1alpha1.Reminder) (v1alpha1.ScheduledWorkPage, bool) {
+	var got v1alpha1.Reminder
+	if err := p.Client.Get(ctx, client.ObjectKeyFromObject(want), &got); err != nil {
+		return v1alpha1.ScheduledWorkPage{}, false
+	}
+	if got.Spec.Owner != want.Spec.Owner {
+		return v1alpha1.ScheduledWorkPage{}, false
+	}
+	for _, k := range []string{v1alpha1.LabelScheduledWork, v1alpha1.AnnotationScheduledWorkOccurrence, LabelEvent, LabelAttempt} {
+		if got.Labels[k] == "" || got.Labels[k] != want.Labels[k] {
+			return v1alpha1.ScheduledWorkPage{}, false
+		}
+	}
+	attempt, err := strconv.ParseInt(want.Labels[LabelAttempt], 10, 32)
+	if err != nil {
+		return v1alpha1.ScheduledWorkPage{}, false
+	}
+	return v1alpha1.ScheduledWorkPage{Event: want.Labels[LabelEvent], Attempt: int32(attempt), Reminder: want.Name, State: PageState(&got)}, true
 }
 
 // EnsureInto is Ensure, recorded in pages with v1alpha1.AppendPage. It returns
