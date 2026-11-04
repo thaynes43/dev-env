@@ -2078,6 +2078,35 @@ belong to an unattended caller, and an escalation that sits idle is waiting on T
 They are never drained; each runs to its outcome on the revision it started on
 (V-13).
 
+**New-sessions-only rollout, source mechanism 2026-11-04 (OpenProject #385, DR1
+round 2; default off).** The templates may name one image in
+`rollout.newSessionsOnlyImage`. While that value equals the templates' `image`,
+automatic revision drain is off for every session: no session is marked
+`Draining`, no dry-run or stop runs, and a pending `Draining` mark without a
+recorded stop is cancelled. A matching already-stopped proof still finishes its
+recovery. New sessions start on the current revision as always, outdated
+sessions are still reported `Outdated`, and each one moves to the new revision
+only through its own suspend and resume (D-09's idle suspend included) or a
+reap. The field is not part of the revision, so adding or removing it marks no
+session `Outdated`. It is bounded to the image it names: once `image` changes
+(a later bump), the value no longer matches and Q-03's drain on idle applies
+again to every outdated session, the ones the hold kept included. Removing the
+field resumes Q-03 at once, so a PR that removes it, or bumps the image past
+it, is a rollout and needs the same review. An operator older than this field
+refuses templates that carry it (strict parsing), which blocks new sessions and
+leaves running ones alone, so the operator that knows it must be installed
+first.
+
+This is **not** Q-03 as published. For the image it names it is option B ("new
+sessions only"), which Tom did not choose; Q-03's default, option A, is
+unchanged for every other image. It exists because, for agents up to 2.89.x,
+the operator cannot prove the idle moment that A's "a busy turn is never cut"
+assumes: the drain checks a heartbeat up to 60 s old, then the existing stop
+runs unconditionally, and a coordinator that is idle can still have native
+background subagents and shells that the drain kills. Setting the field is a
+per-rollout deviation from Q-03 and is recorded in the templates PR that sets
+it; this source change sets nothing.
+
 1. The operator marks the session `Draining` only when it is idle (4.2).
 2. agentd `prepare-restart` records the agent session id, mode, model, effort and
    Remote Control name on the volume.

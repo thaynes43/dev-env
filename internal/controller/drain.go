@@ -87,6 +87,14 @@ func templateRevision(obs observation) string {
 	return obs.templates.Revision()
 }
 
+// drainRevision is the revision automatic drain compares a pod against.
+func drainRevision(t *templates.Templates) string {
+	if t == nil {
+		return ""
+	}
+	return t.Revision()
+}
+
 // restartProofFor reports whether prepare-restart recorded a conversation for
 // this pod at the session's current generation (DESIGN-001 5.2). Anything else
 // keeps the pod.

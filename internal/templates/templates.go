@@ -199,7 +199,26 @@ type Templates struct {
 	// change marks no session Outdated.
 	Lifecycle *Lifecycle `json:"lifecycle,omitempty"`
 
+	// Rollout holds automatic revision drain for one image (DESIGN-001 5.2,
+	// 2026-11-04 note). Like the timers, it is not part of the revision.
+	Rollout *Rollout `json:"rollout,omitempty"`
+
 	revision string
+}
+
+// Rollout is how running sessions meet a new revision (DESIGN-001 5.2).
+type Rollout struct {
+	// NewSessionsOnlyImage, while it equals Image, turns automatic revision
+	// drain off: new sessions get the current revision, running ones keep
+	// their pods until their own suspend and resume. A value that names
+	// another image does nothing, so the next image bump drains again (Q-03).
+	NewSessionsOnlyImage string `json:"newSessionsOnlyImage,omitempty"`
+}
+
+// NewSessionsOnly reports that the templates hold automatic revision drain
+// for their image (DESIGN-001 5.2, 2026-11-04 note).
+func (t *Templates) NewSessionsOnly() bool {
+	return false
 }
 
 // Workspace names a retained, pre-provisioned claim. The operator only mounts it.

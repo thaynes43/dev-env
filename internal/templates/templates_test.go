@@ -404,3 +404,51 @@ func TestProfileMayNameTheWorkbenchAccount(t *testing.T) {
 		t.Errorf("full: %+v %v", p, err)
 	}
 }
+
+// DESIGN-001 5.2, 2026-11-04 note: rollout.newSessionsOnlyImage holds
+// automatic drain only while it names the templates' own image, is digest
+// pinned, and is not part of the revision.
+func TestRolloutNewSessionsOnlyImage(t *testing.T) {
+	plain, err := parse(t, example(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.NewSessionsOnly() {
+		t.Fatal("templates without a rollout hold drain")
+	}
+	held, err := parse(t, example(t)+"\nrollout:\n  newSessionsOnlyImage: "+plain.Image+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !held.NewSessionsOnly() {
+		t.Fatal("a rollout naming the templates' image does not hold drain")
+	}
+	if held.Revision() != plain.Revision() {
+		t.Errorf("the rollout changed the revision: %s, was %s", held.Revision(), plain.Revision())
+	}
+	hr, err1 := held.ReviewRevision()
+	pr, err2 := plain.ReviewRevision()
+	if err1 != nil || err2 != nil || hr != pr {
+		t.Errorf("the rollout changed the review revision: %s, was %s (%v %v)", hr, pr, err1, err2)
+	}
+	other := strings.Replace(plain.Image, "0000000000000000000000000000000000000000000000000000000000000001", "0000000000000000000000000000000000000000000000000000000000000009", 1)
+	if other == plain.Image {
+		t.Fatal("the example image digest changed")
+	}
+	stale, err := parse(t, example(t)+"\nrollout:\n  newSessionsOnlyImage: "+other+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.NewSessionsOnly() {
+		t.Fatal("a rollout naming another image held drain; the next bump must drain again")
+	}
+	for _, bad := range []string{
+		"\nrollout:\n  newSessionsOnlyImage: ghcr.io/thaynes43/dev-env:2.0.0\n",
+		"\nrollout:\n  newSessionsOnly: true\n",
+		"\nrollout:\n  newSessionsOnlyImage: \"\"\n",
+	} {
+		if _, err := parse(t, example(t)+bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
