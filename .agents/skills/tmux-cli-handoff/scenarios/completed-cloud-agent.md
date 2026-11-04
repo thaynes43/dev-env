@@ -45,8 +45,9 @@ Stop with `no-live-session` and ask for a recorded decision:
    and sets `decisionNeeded`: an explicit single-writer successor (a named new
    session made custodian in the same worktree and branch, after the author's
    completion evidence and an idle check, by its own authorized dispatch) or a
-   verified follow-up interface for the cloud agent. Because the work order forbids a new worker or provider route,
-   the decision belongs to whoever set that constraint.
+   verified follow-up interface for the cloud agent. Because the work order
+   forbids a new worker or provider route, the decision belongs to whoever set
+   that constraint.
 6. The correction stays staged where the custodian can read it.
 
 On 2026-11-04 the parent made that decision for PR #917: one controlled CLI

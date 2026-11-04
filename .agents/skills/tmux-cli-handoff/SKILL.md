@@ -9,6 +9,10 @@ Tom (2026-11-04, relayed by the coordinator): "What you need are proven skills
 for how to execute actions you are struggling with", and "You should never need
 cursor UI when you have CLI in dev-env".
 
+**Status (2026-11-04): source-delivered, operational proof pending.** Steps 1
+to 4 have real evidence from the PR #917 continuation. Answering a real trust
+prompt and proving consumption (step 5) are not yet proven on a real handoff.
+
 This skill hands one bounded instruction to a session that already exists and
 already owns the work. Work through the six steps in order. Each step proves one
 thing, and nothing is sent until steps 1 to 3 pass. It never starts, forks,
@@ -59,7 +63,7 @@ Tell these failures apart, because each has a different owner and next step:
 | `actor-rbac` | `pods-exec-denied` | `can-i` answers `no` | The actor has no terminal on that host. It cannot check anything on the host. |
 | `wrong-session` | `session-unmapped`, `pane-mismatch` | Step 2 finds no record mapping the task to a session, or step 4 finds a different pane | The actor may be able to act, but not on this session. |
 | `no-live-session` | `no-local-session` | Step 2's listings show no matching local chat, persistent session or pane | There is nothing to resume or type into. Only a recorded decision can continue the work. |
-| `custody` | `other-custodian`, `custodian-unrecorded` | Step 3 finds another custodian with no handoff to you, or no record names a custodian | You may not deliver, even with a terminal. |
+| `custody` | `other-custodian`, `custodian-unrecorded`, `second-writer`, `worktree-dirty` | Step 3 finds another custodian with no handoff to you, no recorded custodian, a second live writer, or a successor idle check that fails | You may not deliver, even with a terminal. |
 | `modal-pending` | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` | Step 4's read of the verified pane shows a local trust, permission, approval or confirmation prompt | Not an auth failure, not an auto-review denial and not the wrong session. It needs an explicit, recorded answer before anything is sent. |
 
 A CLI missing on the actor alone is a note, not a blocker: it does not block a
@@ -98,7 +102,7 @@ that was closed. Confirm it on the host with the read-only listings that the
 installed `--help` documents, for example Cursor's `agent persist list`, and
 `agent ls` opened and left without selecting a chat. Then read the panes' names,
 commands and working directories only
-(`tmux list-panes -a -F '#{session_name} #{pane_id} #{pane_current_command} #{pane_current_path}'`).
+(`tmux list-panes -a -F '#{session_name} #{pane_id} #{pane_pid} #{pane_current_command} #{pane_current_path}'`).
 Save the installed `--help` that documents each listing as evidence. A listing
 can show that no matching local session exists; it never selects one. With no
 matching local chat, persistent session or pane: `no-live-session` (closed
@@ -139,24 +143,34 @@ staged where the custodian can read it, and nothing is sent.
 
 ## 3. Prove single-writer custody
 
-- **Owner.** The task records name one custodian, and the target session must
-  be it. You deliver only as that custodian, as its recorded supervisor or
-  driver, or on its explicit handoff (timer-checkin, section 5). Otherwise stop with `custody` (closed error `other-custodian`, or
-  `custodian-unrecorded` when no record names one): stage the correction and
-  give it to your parent, who routes it to the custodian through that
-  custodian's recorded channel (its tracker item, its PR, or `agent-run inbox`).
-  If you may not contact the custodian, you do not use that channel yourself.
-- **Worktree.** On the host, the tracked tree is clean
+- **Custodian.** The custodian is the session named in the newest custody
+  record. A newer custody record wins over an older work order's target, and
+  supervision of a previous custodian ends at its transfer. The target is the
+  custodian, or its recorded delegate (for example the pane it launched and
+  recorded). You deliver only as the custodian, as its recorded supervisor or
+  driver, or on its explicit handoff (timer-checkin, section 5). Otherwise stop
+  with `custody` (closed error `other-custodian`, or `custodian-unrecorded` when
+  no record names one): stage the correction and give it to your parent, who
+  routes it to the custodian through that custodian's recorded channel (its
+  tracker item, its PR, or `agent-run inbox`). If you may not contact the
+  custodian, you do not use that channel yourself.
+- **Worktree.** For a successor before its launch (the idle check): the
+  tracked tree is clean
   (`git -C <worktree> status --porcelain --untracked-files=no` prints nothing),
-  any untracked files are the task's own recorded receipts or its recorded
-  handoff packet, and the branch head matches the record; or the PR head on
-  GitHub matches it. Stage a correction outside the author's worktree where you
-  can, in the task's handoff route. If you cannot reach that route, stage it in
-  your own handoff route and give the path to your parent.
-- **No second writer.** One live process per chat. Resuming a chat whose TUI is
-  still running makes two writers. No other agent is assigned in the status
-  record, and nobody else is typing in the pane. Never push to the author's
-  branch yourself.
+  any untracked files are the task's own
+  recorded receipts or handoff packet, and the head matches the record;
+  otherwise `custody` (`worktree-dirty`). For a live custodian that may be
+  mid-work, record the tree state as a note and require only a head that
+  matches the record or the custodian's own report, or the PR head on GitHub.
+- **No second writer.** One live process per chat and per worktree. Two live
+  provider processes in one worktree, a second assigned agent in the status
+  record, or someone else typing in the pane: `custody` (`second-writer`).
+  Resuming a chat whose TUI is still running makes two writers. Never push to
+  the author's branch yourself.
+- **Staging.** Stage a correction in the handoff directory the work order names
+  (normally the coordinator's handoff directory); otherwise in your own
+  `~/work/<session>/handoff`. Never put it in a tracked path in another
+  worktree. Give the path to your parent.
 
 ## 4. Use a supported input path
 
@@ -181,31 +195,47 @@ takes your keys as its answer (CLAUDE.md: never send TUI input while a native
 question modal is pending). Keep the instruction to one line that points to an
 authorized work-order file. Do not read other panes or scrollback history.
 
-**A pending local permission modal** (`modal-pending`), such as Cursor's
-"Workspace Trust Required" for the worktree, is answered only like this:
+**A pending local prompt** (`modal-pending`): a workspace trust or permission
+prompt (for example Cursor's "Workspace Trust Required"), a command approval
+(for example a `git push` with "Yes" preselected), or any other confirmation.
+Who may answer it:
 
-1. Never auto-accept it, and never relaunch, kill the pane or add a flag such as
-   `--trust` or `--force` to get past it.
-2. Get the specific approval of whoever owns that access decision (Tom,
-   unless a recorded rule delegates it), for exactly that answer and exactly
-   that path, through a verified channel. A work order's handoff gate, a custody
-   ACK, a launch authorization or a coordinator's recommendation never
-   authorizes accepting a trust or permission prompt. Send the exact question to
-   your parent: the session with Tom's phone route asks him, one question at a
-   time (CLAUDE.md). Say what the choice allows and whether it persists after
-   this session; if the provider does not document that, say it is unknown.
-   Until the approval arrives, record the modal as a pending blocker and send
-   nothing; the handoff is not complete.
-3. Read the pane again (`inspect`) just before answering, and confirm the same
-   modal, pane, pid and owner marker. Then answer it once, in that pane, with the
-   single choice it shows, for example `tmux send-keys -t <pane-id> a`. The
-   helper's `reply` refuses modals by design; this key press is the one step
-   outside it.
-4. Record the decision: who authorized it, the exact path, the choice, the pane
-   and the time.
-5. Read the pane again (`inspect`, for a helper-started session) and confirm the
-   modal is gone and a normal empty prompt shows. Only then send the
-   instruction by the route above.
+- A trust or permission prompt: only with the specific approval of whoever owns
+  that access decision (Tom, unless a recorded rule delegates it), for exactly
+  that answer and exactly that path, through a verified channel. A work order's
+  handoff gate, a custody ACK, a launch authorization or a coordinator's
+  recommendation never authorizes accepting it.
+- A command approval: the custodian or its supervisor decides, under its own
+  rules; never an actor that is neither, unless a record says otherwise.
+- Never auto-accept a prompt, and never relaunch, kill the pane, press keys to
+  clear it or add a flag such as `--trust`, `--force` or `--yolo` to get past
+  it.
+
+Answer it like this:
+
+1. **Ask.** If you are the session with Tom's phone route, ask him yourself with
+   AskUserQuestion, one question at a time (CLAUDE.md). Otherwise send the exact
+   question to your parent or coordinator. Say what the choice allows and
+   whether it persists after this session; if the provider does not document
+   that, say it is unknown.
+2. **Pause.** While the approval is pending, the handoff is paused, not ended.
+   Keep the custody record, the staged packet and the launch record. Keep the
+   supervising check-in timer and record the handoff as `paused`, with the
+   approval it waits for (timer-checkin: pending on an event a check can
+   observe). Do not poll the pane meanwhile.
+3. **Resume** only when the approval arrives through a verified channel, with a
+   fresh `inspect`: confirm the same prompt, pane, pid and owner marker. Nothing
+   carries over from earlier inspects or receipts. Then answer once, in that
+   pane, with the single choice it shows, for example
+   `tmux send-keys -t <pane-id> a`. The helper's `reply` refuses prompts by
+   design; this key press is the one step outside it.
+4. **Record** who approved it, the exact path, the choice, the pane and the time.
+5. **Send** only through the helper's `reply` for a helper-started session,
+   after a new `inspect` shows a normal empty prompt. If `inspect` still reports
+   the prompt after the answer (its old text can stay in the capture window), do
+   not override it: no raw send-keys, no `--observed-ready`, no keys to clear the
+   screen. Inspect again later; if it still reports the prompt, record
+   `modal-unknown` and stop.
 
 ## 5. Prove consumption
 
@@ -226,7 +256,8 @@ later than the send:
 Write one record to the status record your work order names, and mirror it on
 the tracker item it names. If it names neither, put the record in your report
 to your parent and let the parent file it; do not open a new tracker item or
-status record for it. Then stop this handoff. Use the shape in
+status record for it. Then stop this handoff, or pause it for a pending
+approval (step 4). Use the shape in
 [references/blocker-record.md](references/blocker-record.md): the staged
 correction's path, every blocker with its class, closed error and evidence, the
 checks left `unknown`, notes, what you did not do, who can act, and the decision
@@ -237,8 +268,11 @@ install a CLI, read credentials, open a UI, start a duplicate session or try
 another route unless the work order authorizes it. Retry a step only on
 materially new evidence. A blocked handoff is an exact blocker under
 supervised-dispatch section 5: end this handoff and its check-in timer, if one
-exists, record who can act, and keep doing independent authorized work.
+exists, record who can act, and keep doing independent authorized work. A
+paused handoff (step 4, a prompt awaiting a requested approval) uses the same
+record with `"state": "paused"` and keeps its timer.
 
-Behavior scenarios for an evaluator: [no terminal from a v2 pod](scenarios/no-terminal-from-v2-pod.md),
+Behavior scenarios for an evaluator:
+[no terminal from a v2 pod](scenarios/no-terminal-from-v2-pod.md),
 [completed cloud agent](scenarios/completed-cloud-agent.md) and
 [workspace trust modal](scenarios/workspace-trust-modal.md).

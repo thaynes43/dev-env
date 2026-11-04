@@ -933,10 +933,11 @@ scope decision changes the experience.
 ### Where the agent-loop skills load
 
 *Checked 2026-11-04 in one Claude session pod for OpenProject #402. Merged
-source is not loaded runtime.* The three skills (`supervised-dispatch`,
-`worker-qa-loop`, `timer-checkin`) are files under `.agents/skills/` on `main`
-from `801de50d` (#908). A running session does not get them because they
-merged:
+source is not loaded runtime.* The three agent-loop skills
+(`supervised-dispatch`, `worker-qa-loop`, `timer-checkin`) are files under
+`.agents/skills/` on `main` from `801de50d` (#908); a fourth,
+`tmux-cli-handoff`, arrives with #920 and loads the same way. A running session
+does not get them because they merged:
 
 - **Claude Code** loads skills from `~/.claude/skills/`, from a project's
   `.claude/skills/` and from installed plugins. This repository has no `.claude/skills/`. In the installed
@@ -944,7 +945,7 @@ merged:
   import code, which copies such skills into `.claude/skills/` when a user runs
   the import. That is a string search of the binary, not a load test.
 - **`~/.claude/skills/`** in the checked pod holds only the account-synced skills
-  (under `synced/`), none of these three. **`~/.codex/skills/`** does not exist
+  (under `synced/`), none of these skills. **`~/.codex/skills/`** does not exist
   there.
 - **The reference clone** `~/repos/dev-env` in that pod has `main` checked out
   at `2828fa9f` (#895), older than `801de50d`, so it has no `.agents/skills/`

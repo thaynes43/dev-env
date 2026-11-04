@@ -6,7 +6,8 @@ of the evidence command; `recordedAt` is when you write the record. Use the
 classes and closed errors from the skill's step 1 table.
 
 ```json
-{"recordedAt": "<UTC>", "actor": "<session, and its ServiceAccount if any>",
+{"recordedAt": "<UTC>", "state": "<blocked or paused>",
+ "actor": "<session, and its ServiceAccount if any>",
  "target": "<task, host, session, PR and head>",
  "staged": "<path of the correction, and who can read it>",
  "blockers": [
@@ -23,6 +24,9 @@ classes and closed errors from the skill's step 1 table.
 ```
 
 Field notes:
+
+- `state`: `blocked` ends the handoff and its timer; `paused` (a prompt awaiting
+  a requested approval) keeps both, and resumes with a fresh `inspect`.
 
 - `staged`: where the correction waits, and who can read it there.
 - `unknown`: checks that could not run, for example host checks after
