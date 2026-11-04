@@ -946,6 +946,62 @@ class AnswerTests(AnswerFixture):
         self.assertEqual(json.loads(path.read_text()), {"approval_ref": APPROVAL})
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_pane_change_between_spend_and_send_sends_nothing(self):
+        # QA round 1 (SK3): the key must not land on whatever replaced the prompt
+        # while the approval and receipt were being written.
+        changes = {
+            "a composer replaced the prompt": {"capture": "S8 answered\n>"},
+            "a new prompt with another path": {"capture": TRUST_SCREEN.replace("example-task", "other-task")},
+            "the pane process was replaced": {"env": {"FAKE_PID": "999"}},
+        }
+        for label, change in changes.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                for path in (self.root / "state" / "cursor-interactive-session" / "approvals").glob("*"):
+                    path.unlink()
+                self.screen(TRUST_SCREEN)
+                self.env.pop("FAKE_PID", None)
+                self.env["FAKE_PID"] = "123"
+                inspected = self.start_and_inspect()
+                args = argparse.Namespace(name=self.name, tmux=self.tmux, receipt=inspected["receipt"],
+                                          approval_ref=APPROVAL, expect_kind="modal-trust",
+                                          expect_text_file=str(self.expect_path), choice="a")
+                original_spend = helper.spend_approval
+
+                def spend_then_change(path, entry):
+                    original_spend(path, entry)
+                    if "capture" in change:
+                        self.capture.write_text(change["capture"])
+                    for key, value in change.get("env", {}).items():
+                        os.environ[key] = value
+
+                with mock.patch.dict(os.environ, self.env), \
+                        mock.patch.object(helper, "spend_approval", spend_then_change):
+                    with self.assertRaises(helper.Refusal) as caught:
+                        helper.answer_session(args)
+                self.assertEqual((caught.exception.state, caught.exception.code), ("prompt-changed", 2))
+                self.assertEqual(self.sends(), [])
+                self.assertEqual(json.loads(self.ledger().read_text())["outcome"], "not-sent")
+                self.assertEqual(self.state()["answers"][-1]["outcome"], "not-sent")
+                self.assertEqual(self.state()["receipt_id"], "")
+        # The approval stays spent: a new receipt does not allow a second try.
+        self.screen(TRUST_SCREEN)
+        newer = self.inspect_now()
+        code, spent = self.invoke("answer", self.answer_args(newer["receipt"]))
+        self.assertEqual((code, spent["state"]), (2, "approval-spent"))
+        self.assertEqual(self.sends(), [])
+
+    def test_byte_truncated_visible_screen_is_refused(self):
+        # QA round 1 (SK3), surviving mutant M10: the 8192-byte cap cuts into the
+        # first visible row when the capture has exactly pane_height rows.
+        capture = "x" * 9000 + "\n" + TRUST_SCREEN
+        self.screen(capture)
+        inspected = self.start_and_inspect()
+        self.assertTrue(inspected["truncated"])
+        code, refused = self.invoke("answer", self.answer_args(inspected["receipt"]))
+        self.assertEqual((code, refused["state"]), (2, "prompt-unclear"))
+        self.assertEqual(self.sends(), [])
+
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,
                                 text=True, timeout=10)
