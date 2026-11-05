@@ -59,6 +59,13 @@ PENDING_STATUS = "waiting for approval"
 # and a switch hint after the Skip row. Run (once), y, answers only the approval shown.
 QUEUE_HEADER = re.compile(r"Approval ([1-9][0-9]?) of ([1-9][0-9]?)")
 QUEUE_HINT = "\u2190/\u2192 to switch approval"
+# Rejecting the shown command: one Ctrl+C, which Cursor (raw mode) reads as reject for the
+# active decision only. It is never sent outside the command prompt.
+REJECT_CHOICE = "ctrl-c"
+# The footer Cursor draws under a prompt whose agent turn has ended in this error. Only a
+# rejection may be answered with it showing; approving a command its turn no longer awaits
+# is refused.
+ABORT_FOOTER = "Error: Agent stopped retrying"
 MODALS = (
     ("modal-trust", ("trust this workspace", "trust the contents of", "workspace trust", "do you trust")),
     ("modal-permission", ("permission required", "needs permission", "requesting permission")),
@@ -730,12 +737,17 @@ def prompt_shape(expect_kind, choice, lines):
     """"box" when the expected text shows the choice as [key]; "divider" for Cursor's command
     prompt, a modal-approval whose expected text shows (y) at the end of exactly one row and
     the choice is y; otherwise None."""
-    if any("[" + choice + "]" in line for line in lines):
+    if choice != REJECT_CHOICE and any("[" + choice + "]" in line for line in lines):
         return "box"
-    if expect_kind == "modal-approval" and choice == COMMAND_CHOICE and sum(
+    if expect_kind == "modal-approval" and choice in (COMMAND_CHOICE, REJECT_CHOICE) and sum(
             line.endswith(" (" + COMMAND_CHOICE + ")") for line in lines) == 1:
         return "divider"
     return None
+
+
+def prompt_rows(lines):
+    """The expected lines without the abort footer: the footer starts at its first row."""
+    return lines[:lines.index(ABORT_FOOTER)] if ABORT_FOOTER in lines else lines
 
 
 def check_queue_text(lines):
@@ -760,8 +772,9 @@ def validate_answer(args):
     if args.expect_kind not in ANSWER_KINDS:
         raise Refusal("invalid-input", "Expected kind must be modal-trust, modal-permission or modal-approval. Nothing was sent.")
     choice = args.choice or ""
-    if len(choice) != 1 or not 33 <= ord(choice) <= 126:
-        raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key. Nothing was sent.")
+    if choice != REJECT_CHOICE and (len(choice) != 1 or not 33 <= ord(choice) <= 126):
+        raise Refusal("invalid-input", "Choice must be exactly one printable ASCII key, or ctrl-c to reject Cursor's "
+                                       "shown command. Nothing was sent.")
     raw, lines = read_expected(args.expect_text_file)
     if prompt_shape(args.expect_kind, choice, lines) is None:
         raise Refusal("invalid-input", "Choice must appear as [" + choice + "] in the expected prompt text. For Cursor's "
@@ -771,8 +784,14 @@ def validate_answer(args):
             line.strip(" ") != prompt_text(line) for line in raw.decode("utf-8").split("\n") if line.strip(" ")):
         raise Refusal("invalid-input", "A command prompt's expected rows must not start or end with a box-drawing or "
                                        "non-space whitespace character. Nothing was sent.")
+    if ABORT_FOOTER in lines:
+        footer = lines.index(ABORT_FOOTER)
+        if choice != REJECT_CHOICE or lines.count(ABORT_FOOTER) != 1 or footer == 0 or not lines[footer - 1].endswith(
+                ("(esc or n)", QUEUE_HINT)):
+            raise Refusal("invalid-input", "The abort footer may follow only the Skip row or the switch hint, once, and "
+                                           "only a ctrl-c rejection may be answered under it. Nothing was sent.")
     if prompt_shape(args.expect_kind, choice, lines) == "divider":
-        check_queue_text(lines)
+        check_queue_text(prompt_rows(lines))
     trust_path = getattr(args, "trust_path", None)
     if args.expect_kind == "modal-trust":
         if not trust_path:
@@ -1259,7 +1278,8 @@ def answer_locked(args, choice, raw, lines, trust_path):
         raise Refusal("prompt-changed", "The pane changed after the approval was spent (" + refusal.state + "). "
                       "Nothing was sent. The approval stays spent; a new approval is needed.")
     try:
-        sent = run([state["tmux"], "send-keys", "-t", state["pane_id"], "-l", "--", choice])
+        keys = ["C-c"] if choice == REJECT_CHOICE else ["-l", "--", choice]
+        sent = run([state["tmux"], "send-keys", "-t", state["pane_id"]] + keys)
         failed = sent.returncode != 0
     except (subprocess.TimeoutExpired, OSError, UnicodeError):
         failed = True
@@ -1325,7 +1345,8 @@ def build_parser():
                         help="audit reference to the caller's verified approval; recorded once, never verified")
     answer.add_argument("--expect-kind", required=True, help="modal-trust, modal-permission or modal-approval")
     answer.add_argument("--expect-text-file", required=True, help="exact prompt lines that must be shown, in order")
-    answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text")
+    answer.add_argument("--choice", required=True, help="one key shown as [key] in the expected text; on Cursor's "
+                        "command prompt, y (Run once) or ctrl-c (reject the shown command)")
     answer.add_argument("--trust-path", help="for modal-trust: the one directory the approval covers; must be the recorded worktree")
     return parser
 

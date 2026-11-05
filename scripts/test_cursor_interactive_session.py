@@ -615,6 +615,11 @@ COMMAND_ROWS = COMMAND["capture"].split("\n")
 QUEUE = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-command-approval-queue.json")
                    .read_text(encoding="utf-8"))
 QUEUE_ROWS = QUEUE["capture"].split("\n")
+# The same queue after the agent turn ended (2026-11-05T21:41:47Z): two stale duplicate decisions
+# ("Approval 1 of 2") with Cursor's "Agent stopped retrying" footer under the prompt.
+ABORTED = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-command-approval-aborted.json")
+                     .read_text(encoding="utf-8"))
+ABORTED_ROWS = ABORTED["capture"].split("\n")
 LIVE = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-live-capture.json")
                   .read_text(encoding="utf-8"))
 # The ledger fields every helper before format 2 wrote for a trust answer (5bf24fec and
@@ -2464,6 +2469,139 @@ class AnswerTests(AnswerFixture):
         # The first approval answered elsewhere: the queue now shows 1 of 2.
         self.queue_screen(self.queue_rows({QUEUE["promptRows"]["header"]: " Approval 1 of 2"}))
         code, stale = self.answer_command(inspected["receipt"], text=QUEUE["expectedText"])
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.assertEqual(self.sends(), [])
+
+    # Rejecting the shown command with one Ctrl+C (OP399 SK3, 2026-11-05): Cursor reads it as
+    # reject for the active decision only. Under the "Agent stopped retrying" footer only a
+    # rejection is answered.
+
+    def aborted_rows(self, changes=None):
+        rows = list(ABORTED_ROWS)
+        for index, row in (changes or {}).items():
+            rows[index] = row
+        return rows
+
+    def single_stale_rows(self):
+        """The remaining stale decision alone: no counter row and no switch hint (synthetic,
+        derived from the captured screen: Cursor draws both only for more than one)."""
+        rows = list(ABORTED_ROWS)
+        prompt = ABORTED["promptRows"]
+        del rows[prompt["hint"] - 1:prompt["hint"] + 1]
+        del rows[prompt["header"]:prompt["header"] + 2]
+        return [""] * 4 + rows
+
+    def single_stale_text(self):
+        lines = ABORTED["expectedText"].splitlines(True)
+        return "".join(line for line in lines if not line.startswith(("Approval ", "\u2190/\u2192")))
+
+    def answer_reject(self, receipt, text, approval=APPROVAL, kind="modal-approval"):
+        return self.invoke("answer", self.answer_args(receipt, choice="ctrl-c", kind=kind, approval=approval,
+                                                      expect=self.command_expect(text)))
+
+    def test_aborted_fixture_is_the_captured_shape(self):
+        geometry, prompt = ABORTED["geometry"], ABORTED["promptRows"]
+        self.assertEqual(__import__("hashlib").sha256(ABORTED["capture"].encode("utf-8")).hexdigest(),
+                         ABORTED["captureSha256"])
+        self.assertEqual(len(ABORTED_ROWS), geometry["history_size"] + geometry["pane_height"])
+        self.assertEqual(ABORTED_ROWS[prompt["divider"]], "\u2500" * geometry["pane_width"])
+        self.assertEqual(ABORTED_ROWS[prompt["header"]], " Approval 1 of 2")
+        self.assertEqual(ABORTED_ROWS[prompt["footer"]].strip(" "), "Error: Agent stopped retrying")
+        self.assertEqual([row.strip(" ") for row in ABORTED_ROWS[prompt["divider"] + 1:] if row.strip(" ")],
+                         ABORTED["expectedText"].splitlines())
+
+    def test_reject_sends_only_ctrl_c_to_the_shown_stale_decision(self):
+        cases = {"two stale decisions": (None, ABORTED["expectedText"]),
+                 "the last stale decision": (self.single_stale_rows(), self.single_stale_text())}
+        for label, (rows, text) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.queue_screen(ABORTED_ROWS if rows is None else rows)
+                inspected = self.start_and_inspect()
+                code, answered = self.answer_reject(inspected["receipt"], text, approval=self.case_approval(label))
+                self.assertEqual((code, answered["state"]), (0, "answered"), answered.get("detail"))
+                self.assertEqual(answered["choice"], "ctrl-c")
+                # One Ctrl+C: no y, Enter, n, Escape or arrow key.
+                self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "C-c"]])
+                code, again = self.answer_reject(inspected["receipt"], text, approval=self.case_approval(label))
+                self.assertIn((code, again["state"]), {(2, "stale-receipt"), (2, "approval-spent")})
+                self.assertEqual(len(self.sends()), 1)
+
+    def test_reject_of_a_live_queued_decision_is_bound_the_same_way(self):
+        self.queue_screen()
+        inspected = self.start_and_inspect()
+        code, answered = self.answer_reject(inspected["receipt"], QUEUE["expectedText"])
+        self.assertEqual((code, answered["state"]), (0, "answered"), answered.get("detail"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "C-c"]])
+
+    def test_stale_decisions_are_never_approved_and_rejects_are_bound(self):
+        prompt, expected = ABORTED["promptRows"], ABORTED["expectedText"]
+        lines = expected.splitlines(True)
+        footer = lines.index("Error: Agent stopped retrying\n")
+        without_footer = "".join(lines[:footer])
+        header, divider = prompt["header"], prompt["divider"]
+        cases = {
+            # (choice, screen rows, expected text, state)
+            "y under the footer, footer expected": ("y", None, expected, "invalid-input"),
+            "y under the footer, footer left out": ("y", None, without_footer, "prompt-unclear"),
+            "ctrl-c with the footer left out": ("ctrl-c", None, without_footer, "prompt-unclear"),
+            "another index expected": ("ctrl-c", None, expected.replace("Approval 1 of 2", "Approval 2 of 2"),
+                                       "modal-mismatch"),
+            "a changed count shown": ("ctrl-c", self.aborted_rows({header: " Approval 1 of 3"}), None, "modal-mismatch"),
+            "a changed command shown": ("ctrl-c", self.aborted_rows(
+                {header + 2: ABORTED_ROWS[header + 2].replace("sha256sum", "md5sum   ")}), None, "modal-mismatch"),
+            "a changed footer shown": ("ctrl-c", self.aborted_rows(
+                {prompt["footer"]: "  Error: Agent stopped"}), None, "modal-mismatch"),
+            "the footer before the Skip row": ("ctrl-c", None, "".join(lines[:3] + lines[footer:footer + 1] + lines[3:footer]
+                                                                     + lines[footer + 1:]), "invalid-input"),
+            "the footer twice": ("ctrl-c", None, "".join(lines + lines[footer:footer + 1]), "invalid-input"),
+            "the footer first": ("ctrl-c", None, "".join(lines[footer:footer + 1] + lines[:footer] + lines[footer + 1:]),
+                                 "invalid-input"),
+            "no divider above": ("ctrl-c", self.aborted_rows({divider: ""}), None, "prompt-unclear"),
+            "text after the footer": ("ctrl-c", self.aborted_rows({prompt["footer"] + 4: "  queued: git push"}), None,
+                                      "prompt-unclear"),
+            "a raw Ctrl+C byte": ("\x03", None, expected, "invalid-input"),
+            "a tmux key name": ("C-c", None, expected, "invalid-input"),
+            "a caret form": ("^C", None, expected, "invalid-input"),
+            "n": ("n", None, expected, "invalid-input"),
+        }
+        for label, (choice, screen, text, state) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.queue_screen(ABORTED_ROWS if screen is None else screen)
+                inspected = self.start_and_inspect()
+                approval = self.case_approval(label)
+                code, refused = self.invoke("answer", self.answer_args(
+                    inspected["receipt"], choice=choice, kind="modal-approval", approval=approval,
+                    expect=self.command_expect(expected if text is None else text)))
+                self.assertEqual((code, refused["state"]), (2, state))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
+
+    def test_reject_is_only_for_cursors_command_prompt(self):
+        for kind in ("modal-permission", "modal-trust"):
+            with self.subTest(kind=kind):
+                self.restart_case()
+                self.queue_screen(ABORTED_ROWS)
+                inspected = self.start_and_inspect()
+                code, refused = self.answer_reject(inspected["receipt"], ABORTED["expectedText"], kind=kind,
+                                                   approval=self.case_approval(kind))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.sends(), [])
+        with self.subTest(kind="a boxed approval prompt"):
+            self.restart_case()
+            self.screen(APPROVAL_SCREEN)
+            inspected = self.start_and_inspect()
+            code, refused = self.answer_reject(inspected["receipt"], APPROVAL_EXPECT, approval=self.case_approval("box"))
+            self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+            self.assertEqual(self.sends(), [])
+
+    def test_reject_stale_receipt(self):
+        self.queue_screen(ABORTED_ROWS)
+        inspected = self.start_and_inspect()
+        # One decision rejected elsewhere: the screen now shows the last one alone.
+        self.queue_screen(self.single_stale_rows())
+        code, stale = self.answer_reject(inspected["receipt"], ABORTED["expectedText"])
         self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
         self.assertEqual(self.sends(), [])
 
