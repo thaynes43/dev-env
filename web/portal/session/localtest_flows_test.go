@@ -153,7 +153,7 @@ func TestLocalTestLaunchFlow(t *testing.T) {
 	if w := localTestPost(instance, portalLaunchesPath, origin, changed); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `id="`+LocalTestBannerID+`"`) || strings.Contains(w.Body.String(), "A different fixture task.") {
 		t.Fatalf("conflicting launch %d", w.Code)
 	}
-	if strings.Count(string(serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath)).Body.String()), "fixture-launch-") == 0 {
+	if !strings.Contains(serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath)).Body.String(), "fixture-launch-1") {
 		t.Fatal("launched session missing from Sessions")
 	}
 	// Cross-origin and tampered posts are refused before the operator.
