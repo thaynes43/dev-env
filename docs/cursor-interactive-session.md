@@ -330,7 +330,8 @@ when the expected text shows `(y)` at the end of exactly one row and no
 `[y]`. Rules 1 to 3 and 5 hold as for a box. Rule 4 becomes:
 
 - the expected text is every nonblank row from the first command row to the
-  `Skip` row, with only spaces taken off each row's ends (not the box-drawing
+  `Skip` row (for queued commands, from the `Approval N of M` row to the
+  switch hint; see below), with only spaces taken off each row's ends (not the box-drawing
   and other whitespace characters rule 4 trims, because the command has no
   border: `wc -l ─` is not `wc -l`), exactly, in order and once; expected
   rows that start or end with such a character are `invalid-input`; a different
@@ -338,9 +339,9 @@ when the expected text shows `(y)` at the end of exactly one row and no
   cropped prompt is `modal-mismatch` (or `prompt-unclear` when the rows left
   out are its first or last);
 - the rows are not inside a box;
-- the row directly above the first command row is the divider: `─` repeated
+- the row directly above the first expected row is the divider: `─` repeated
   exactly the pane width, nothing else;
-- every row after the `Skip` row, to the pane bottom, is blank;
+- every row after the last expected row, to the pane bottom, is blank;
 - no other row on the visible screen holds a known prompt phrase, except
   Cursor's own `Waiting for approval...` status line for the pending command,
   which it shows above the divider.
@@ -383,7 +384,8 @@ The expected text then starts with the `Approval N of M` row and ends with the
 `←/→ to switch approval` row, so it binds the index, the count and the shown
 command together. `answer` refuses (`invalid-input`) expected text that has
 one of those rows without the other, has either one twice or out of place, or
-shows N above M or a count below 2. A different index, count or command on the
+shows N above M, a count below 2, or a number above 99 (a longer queue is
+refused). A different index, count or command on the
 screen is `modal-mismatch`. The helper never sends an arrow key, so it answers
 only the approval already shown.
 
@@ -393,8 +395,18 @@ UI code for 2026.10.14-0f9edde, not observed by pressing it: `y` maps to
 whatever option is highlighted. The pending-decision store resolves and
 removes that one id. Run Everything (Shift-Tab, never sent) is the path that
 approves every pending decision. After the answer, the next queued command is
-shown as a new prompt (`Approval 1 of 2`) and needs its own approval and a new
-`inspect`. On another Cursor build, check this again before relying on it.
+shown as a new prompt (approval N of M-1, or the last one if N was M) and
+needs its own approval and a new `inspect`. On another Cursor build, check
+this again before relying on it.
+
+The gap between `answer`'s last capture and its key (see
+[Sending and after](#sending-and-after)) matters more with a queue. If the
+shown approval is answered by someone else inside that gap, Cursor shows the
+next queued command at once, and the `y` approves that one, which may be a
+different command or a second run of the same one. With a single prompt, a
+stray `y` most likely lands in the composer instead. So answer a queue only
+while nothing else can act on the pane, and check the agent's transcript
+after the answer for exactly one run.
 
 #### Lesson: qualify a prompt class on a real capture first
 
