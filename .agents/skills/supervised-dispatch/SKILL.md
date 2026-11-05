@@ -113,7 +113,8 @@ may not reach. So:
 - **Parent.** Who dispatched whom.
 
 Never record an identity, model or result you did not observe as verified. Write
-"owner-reported" or "not re-verified here" instead.
+"owner-reported" or "not re-verified here" instead. A child's report about its
+own launch or work is owner-reported too.
 
 ## 4. Dispatch, then wait for real work
 
@@ -160,7 +161,11 @@ Record each rung when you observe it. A later rung seen first does not prove an
 earlier one: a PR seen before you read its deliverable leaves rung 5 open, and
 a rung you never read stays "not observed". For a deliverable that is a
 message rather than a PR, rungs 4 and 5 are that message as you read it, and
-rungs 6 and 7 do not apply: record them as not applicable.
+rungs 6 and 7 do not apply: record them as not applicable. A deliverable in
+several parts, such as a reply and then a correction, reaches rung 5 only when
+you have read every part. In a repository without required checks, rung 7 is
+recorded as not reachable, and rung 8 still follows that repository's rules
+and the merge authority in the work order.
 
 Keep three more facts apart from the rungs:
 
@@ -204,7 +209,9 @@ example, labelled historical, is in
    `agent-run show NAME -o json` read (section 3). That is rung 1.
 3. **Name the reporting destination in the work order:** where the ACK and
    the result go, and who reads them, the fallback if that route fails, and
-   whether the child's PR is to be merged and by whom. A headless child takes no
+   whether the child's PR is to be merged and by whom. Name supported routes
+   (section 2). A route outside that list is unproved until its receiver
+   confirms reading it. A headless child takes no
    `agent-run msg`, so it reports through durable routes: its outcome file,
    its log, its PR with committed artifacts, and `agent-run inbox` only where
    both ends support it. A parent without a project (no accepted project
@@ -212,24 +219,27 @@ example, labelled historical, is in
    child's inbox: it reads the child instead
    ([return route](../../../docs/ask-your-coordinator.md#return-route-for-a-parent-without-a-project)).
    Do not plan on automatic inbox return; it has not been shown. An inbox
-   reply that does arrive is read with `agent-run inbox read`: its arrival is
-   delivery, and only your read of it is consumption.
+   reply that does arrive is read with `agent-run inbox read` by the Session
+   it was addressed to. Its sender identity is in `agent-run inbox list -o
+   audit`. Its arrival is delivery, and only that read is consumption.
 4. **Wait for the semantic ACK:** the child restates the scope, its branch,
    its base and the routes it read (rung 3). A delivery receipt is not an ACK.
 5. **Observe the same task.** A new pod can be Running while its agent is
    still starting: `agent-run log` can answer not found, and the agent state
    can still be pending. That is the same task starting, not a failure.
-   Re-read that same Session within a bounded observer window. Never launch it
-   again because its log is not ready yet. Never mint or renew a token to keep
-   watching it: a short-lived token minted for the launch was for the launch
-   only. When the observer window ends, record the child's identity and last
+   Re-read that same Session within a bounded observer window. The work order
+   sets the window; if it does not, ask its owner. Re-read with access you
+   already hold. Never launch it again because its log is not ready yet.
+   Never mint or renew a token to keep watching it: a short-lived token minted
+   for the launch was for the launch only. When the observer window ends, record the child's identity and last
    observed state in the custody record (timer-checkin, section 2), and keep
    observing it through later authorized reads of that same task. The window
    ends the observation, not the task or its assignment. If no authorized read
    path is left, for example because the launcher's only credential was that
-   launch token, record the gap and hand the task's identity to a session
-   that can read it (the parent, or the tracker). Never create a credential
-   to fill the gap.
+   launch token, record the gap. Put the task's identity on the tracker, and
+   send it to a session that can read the task, such as the parent. Handing
+   over the identity does not hand over custody: custody moves only as in
+   timer-checkin, section 5. Never create a credential to fill the gap.
 6. **Watch for the return with a bounded PR-or-exit watcher**
    ([timer-checkin, section 1](../timer-checkin/SKILL.md#1-what-exists)). It
    ends when a PR appears on the child's branch, when the child ends, when
@@ -245,9 +255,12 @@ example, labelled historical, is in
    it with its error, report through the work order's fallback (the tracker
    item when none is named, which every session can read), and do not keep
    retrying the dead route. A dead route to the parent can mean the parent
-   has ended: read it with `agent-run show PARENT`. If it is gone, report to
-   whoever names its successor (timer-checkin, section 5). The task's result
-   stands on its own evidence.
+   has ended. If the parent is a Session you can read, check it with
+   `agent-run show PARENT`. If it is gone, or you cannot tell (an unnamed
+   parent, a thread, no read access), record that. Report to the parent's own
+   coordinator, or, for a top-level coordinator, to Tom or his verified
+   coordinator, who names a successor (timer-checkin, section 5). The task's
+   result stands on its own evidence.
 
 ### Waiting for a child
 
