@@ -602,7 +602,8 @@ CURSOR_COMPOSER = "\u2192 Plan, search, build anything"
 ANSWERED_SCREEN = TRUST_TIP + boxed(ANSWERED_BOX_ROWS) + "\n  Cursor Agent\n" + CURSOR_COMPOSER
 if len(ANSWERED_SCREEN.splitlines()) != 24:
     raise AssertionError("ANSWERED_SCREEN is no longer the live 24-row pane")
-# The ledger fields the 8326e2d2 helper wrote for a trust answer.
+# The ledger fields every helper before format 2 wrote for a trust answer (5bf24fec and
+# earlier, 8326e2d2 among them).
 OLD_LEDGER_FIELDS = ("answered_at", "approval_ref", "kind", "choice", "expected_text_sha256", "pane_id",
                      "pane_pid", "owner", "outcome", "trust_path", "name")
 
@@ -1750,7 +1751,6 @@ class AnswerTests(AnswerFixture):
         cases = {
             "Cursor's composer: unclassified, needs --observed-ready": (ANSWERED_SCREEN, "unclassified"),
             "an idle > composer: active": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, ">"), "active"),
-            "the marker kept": (ANSWERED_SCREEN.replace("    [a] Trust", "  \u25b6 [a] Trust"), "unclassified"),
             "no history": (ANSWERED_SCREEN, "unclassified", 0),
         }
         for label, (screen, kind, *history) in cases.items():
@@ -1782,7 +1782,7 @@ class AnswerTests(AnswerFixture):
             "another kind": lambda entry: dict(entry, kind="modal-approval"),
             "an outcome other than sent": lambda entry: dict(entry, outcome="uncertain"),
             "an older ledger format": lambda entry: dict(entry, format=1),
-            "the 8326e2d2 fields only": old_format,
+            "the pre-format-2 fields only": old_format,
             "a malformed box hash": lambda entry: dict(entry, box_rows_sha256="0" * 63),
             "a ledger answer the state record does not show": lambda entry: dict(entry, answered_at="2026-11-05T00:00:00Z"),
         }
@@ -1833,6 +1833,7 @@ class AnswerTests(AnswerFixture):
             "two status rows": box_with(ANSWERED_BOX_ROWS + [STATUS_ROW]),
             "another status text": ANSWERED_SCREEN.replace("Trusting workspace...", "Trusting workspace\u2026"),
             "the marker on another row": box_with(moved),
+            "the marker kept on its row": ANSWERED_SCREEN.replace("    [a] Trust", "  \u25b6 [a] Trust"),
             "a titled box": ANSWERED_SCREEN.replace("\u256d\u2500\u2500\u2500", "\u256d\u2500 Note \u2500", 1),
             "the status row outside the box": (box_with([row for row in ANSWERED_BOX_ROWS if row != STATUS_ROW])
                                                .replace("  Cursor Agent\n", STATUS_ROW + "\n")),
@@ -1865,6 +1866,7 @@ class AnswerTests(AnswerFixture):
                 TRUST_TIP + box + "  Do you trust this folder?\n" + CURSOR_COMPOSER, None, "modal-trust"),
             "a draft at the cursor": (TRUST_TIP + box + "  Cursor Agent\n> typed draft", None, "user-draft"),
             "the cursor inside the box": (ANSWERED_SCREEN, 12, "modal-trust"),
+            "the cursor below the box, on row 22 of 24": (ANSWERED_SCREEN, 22, "modal-trust"),
             "the box top in history": (ANSWERED_SCREEN, None, "modal-trust", 20),
         }
         for label, (screen, cursor, kind, *visible) in cases.items():
@@ -1896,11 +1898,12 @@ class AnswerTests(AnswerFixture):
                 self.assertIn(refused["state"], {"pane-replaced", "not-owned"})
         self.assertEqual(len(self.sends()), 1)
 
-    # A legacy ledger entry (OP399 SK3): written before format 2, it binds the box only by
-    # expected_text_sha256. --answered-text-file supplies that exact file; nothing is written.
+    # A legacy ledger entry (OP399 SK3): written before format 2 (5bf24fec and earlier), it binds
+    # the box only by expected_text_sha256. --answered-text-file supplies that exact file;
+    # nothing is written.
 
     def make_legacy(self, approval=APPROVAL, change=None):
-        """Answer, then rewrite the ledger entry and the state record to the 8326e2d2 fields."""
+        """Answer, then rewrite the ledger entry and the state record to the pre-format-2 fields."""
         self.answer_then_show(ANSWERED_SCREEN, approval=approval)
         entry = {key: value for key, value in json.loads(self.ledger(approval).read_text()).items()
                  if key in OLD_LEDGER_FIELDS}
@@ -1930,8 +1933,9 @@ class AnswerTests(AnswerFixture):
         code, after = self.invoke("inspect", self.with_text(self.expect_path))
         self.assertEqual((code, after["classification"]), (0, "unclassified"))
         self.assertIn(APPROVAL, after["classification_detail"])
+        # A reply without the file would classify differently from this inspect.
         code, refused = self.reply_to(after["receipt"], "--submit", "--observed-ready")
-        self.assertEqual((code, refused["state"]), (2, "modal-trust"))
+        self.assertEqual((code, refused["state"]), (2, "stale-receipt"))
         code, refused = self.reply_to(after["receipt"], *self.with_text(self.expect_path, "--submit"))
         self.assertEqual((code, refused["state"]), (2, "unclassified-ui"))
         code, sent = self.reply_to(after["receipt"], *self.with_text(self.expect_path, "--submit", "--observed-ready"))
@@ -1940,6 +1944,36 @@ class AnswerTests(AnswerFixture):
                                              ["send-keys", "-t", "%7", "Enter"]])
         # Read only: the ledger and the recorded answers are untouched.
         self.assertEqual((self.ledger().read_bytes(), self.state()["answers"]), (ledger, answers))
+
+    def test_reply_needs_the_evidence_its_inspect_used(self):
+        # Review of a8a54c4d: a receipt from an inspect that counted the box as a prompt
+        # must not carry a reply that does not count it.
+        self.make_legacy()
+        plain = self.inspect_now()
+        self.assertEqual(plain["classification"], "modal-trust")
+        code, refused = self.reply_to(plain["receipt"], *self.with_text(self.expect_path, "--submit", "--observed-ready"))
+        self.assertEqual((code, refused["state"]), (2, "stale-receipt"))
+        self.assertEqual(len(self.sends()), 1)
+        state = self.state()
+        self.assertEqual((state["receipt_answered"], state["receipt_id"]),
+                         ("none", helper.parse_receipt(plain["receipt"])["id"]))
+
+    def test_ledger_entry_must_be_a_regular_file(self):
+        # Review of a8a54c4d: never block on, or follow, something other than the entry.
+        for label in ("a FIFO", "a symlink to a copy of the entry"):
+            with self.subTest(label=label):
+                self.restart_case()
+                approval = self.case_approval(label)
+                self.answer_then_show(ANSWERED_SCREEN, approval=approval)
+                ledger = self.ledger(approval)
+                copy = self.root / ("ledger-copy-" + approval)
+                copy.write_bytes(ledger.read_bytes())
+                ledger.unlink()
+                if label == "a FIFO":
+                    os.mkfifo(ledger, 0o600)
+                else:
+                    ledger.symlink_to(copy)
+                self.assert_refused(self.inspect_now(), "modal-trust")
 
     def test_answered_text_file_must_bind_the_legacy_entry(self):
         edits = {

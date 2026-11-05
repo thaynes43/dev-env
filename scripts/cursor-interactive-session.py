@@ -18,6 +18,7 @@ import re
 import secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -93,8 +94,8 @@ ANSWERED_DETAIL = (
     "under approval reference {}, and the box shows that prompt with Cursor's status row. The ledger records "
     "that the key was sent, not that Cursor accepted it."
 )
-# Besides its prompt rows, an answered trust box may show exactly one status row with
-# this text, and may have lost the selection marker from a row that had it. Nothing else.
+# Besides its prompt rows, an answered trust box must show exactly one status row with
+# this text, and no selection marker anywhere. Nothing else may differ.
 ANSWERED_STATUS = "\u23f3 Trusting workspace..."
 SELECTION_MARKER = "\u25b6 "
 LEDGER_FORMAT = 2
@@ -378,7 +379,8 @@ def classify(text, truncated, rows_total, ident, answered=None):
     kind, used = modal_kind(scanned), None
     if kind == "modal-trust" and located and answered:
         box = answered_box(scanned, answered)
-        if box and int(ident["cursor_y"]) > box[1]:
+        cursor = int(ident["cursor_y"])
+        if box and cursor == int(ident["height"]) - 1 and cursor > box[1]:
             kind = modal_kind(scanned[:box[0]] + scanned[box[1] + 1:])
             used = None if kind else answered["approval_ref"]
     kind = kind or composer_kind(rows, ident["cursor_y"], ident["height"])
@@ -576,6 +578,8 @@ def inspect_locked(args, answered_text=None):
     receipt_id = secrets.token_hex(16)
     state["receipt_id"] = receipt_id
     state["snapshot_sha256"] = digest
+    # The answered box this classification relied on, if any: reply must rely on the same.
+    state["receipt_answered"] = used or "none"
     write_state(path, state)
     return {
         "state": "inspected", "name": state["name"], "pane_id": ident["pane"], "pane_pid": ident["pid"],
@@ -610,6 +614,7 @@ def read_instruction(path):
 def clear_receipt(path, state):
     state["receipt_id"] = ""
     state["snapshot_sha256"] = ""
+    state["receipt_answered"] = ""
     write_state(path, state)
 
 
@@ -653,7 +658,11 @@ def reply_locked(args, instruction, answered_text=None):
     digest = snapshot_hash(ident, text, truncated)
     if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
         raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
-    kind, _located, _used = classify(text, truncated, rows_total, ident, answered_evidence(state, answered_text))
+    kind, _located, used = classify(text, truncated, rows_total, ident, answered_evidence(state, answered_text))
+    if (used or "none") != state.get("receipt_answered", "none"):
+        raise Refusal("stale-receipt", "This reply's answered-box evidence differs from the inspect that gave the receipt, "
+                                       "so the classification would differ. Inspect again with the same "
+                                       "--answered-text-file, or none. Nothing was sent.")
     if kind.startswith("modal-"):
         label = kind.split("-", 1)[1]
         raise Refusal(kind, "Refusing to type or send Enter into a " + label + " modal. --observed-ready does not override it. Re-inspect after the pane is clear.")
@@ -946,12 +955,7 @@ def answered_trust(state, answered_text=None):
     ref = record.get("approval_ref") if isinstance(record, dict) else None
     if not isinstance(ref, str) or not APPROVAL_RE.fullmatch(ref):
         return None
-    try:
-        with open(approval_path(state["name"], ref), "rb") as handle:
-            raw = handle.read(MAX_LEDGER + 1)
-        entry = json.loads(raw.decode("utf-8")) if len(raw) <= MAX_LEDGER else None
-    except (OSError, UnicodeError, ValueError):
-        return None
+    entry = read_ledger(approval_path(state["name"], ref))
     required = {
         "kind": "modal-trust", "outcome": "sent", "approval_ref": ref,
         "name": state["name"], "pane_id": state["pane_id"], "pane_pid": state["pane_pid"],
@@ -985,6 +989,31 @@ def answered_trust(state, answered_text=None):
     return {"approval_ref": ref, "box_rows_sha256": digest, "box_marker_rows": marked}
 
 
+def read_ledger(path):
+    """One ledger entry for reading, or None. Only a regular file is read: the open
+    does not follow a symbolic link and does not block (a FIFO, for example)."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        chunks, size = [], 0
+        while size <= MAX_LEDGER:
+            chunk = os.read(descriptor, MAX_LEDGER + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        raw = b"".join(chunks)
+        return json.loads(raw.decode("utf-8")) if len(raw) <= MAX_LEDGER else None
+    except (OSError, UnicodeError, ValueError):
+        return None
+    finally:
+        os.close(descriptor)
+
+
 def read_answered_text(path):
     """--answered-text-file, read and checked like answer's --expect-text-file. None when absent."""
     if path is None:
@@ -1011,8 +1040,8 @@ def answered_box(visible, answered):
     Every border must pair. The box must be the only box with a prompt phrase,
     untitled, neither inside nor around another box, with nothing to its left.
     Its nonblank rows, trimmed as in rule 4, must be the answered prompt's rows
-    plus exactly one ANSWERED_STATUS row; a row may lose the selection marker it
-    had, and no row may gain one."""
+    without the selection marker, plus exactly one ANSWERED_STATUS row. No row
+    may show the marker."""
     texts = [prompt_text(row) for row in visible]
     boxes = visible_boxes(visible, texts)
     phrased = [box for box in boxes or () if modal_kinds(visible[box[0]:box[1] + 1])]
@@ -1027,11 +1056,10 @@ def answered_box(visible, answered):
     if rows.count(ANSWERED_STATUS) != 1:
         return None
     rows.remove(ANSWERED_STATUS)
-    marked = set(answered["box_marker_rows"])
-    if any(text.startswith(SELECTION_MARKER) and index not in marked for index, text in enumerate(rows)):
+    # Cursor drops the selection marker once the answer is taken: it must be gone.
+    if any(SELECTION_MARKER.strip() in text for text in rows):
         return None
-    plain = [text[len(SELECTION_MARKER):] if text.startswith(SELECTION_MARKER) else text for text in rows]
-    if rows_digest(plain) != answered["box_rows_sha256"]:
+    if rows_digest(rows) != answered["box_rows_sha256"]:
         return None
     return top, bottom
 

@@ -131,7 +131,7 @@ Fail closed, with no keys and no Enter:
 | Pane id, pid, cwd, session, or command changed | `pane-replaced` |
 | tmux copy/mode flag set | `pane-in-mode` |
 | Receipt missing, old, or capture changed | `stale-receipt` |
-| Trust, permission, approval, or unrecognized confirmation phrasing on the visible screen (anywhere in the capture when that screen cannot be located) | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
+| Trust, permission, approval, or unrecognized confirmation phrasing on the visible screen (anywhere in the capture when that screen cannot be located), except in a trust box the ledger shows answered ([the answered trust box](#the-answered-trust-box)) | `modal-trust`, `modal-permission`, `modal-approval`, `modal-unknown` |
 | Cursor row, or the row above a blank cursor row, is a nonempty `>`, `›`, or `❯` composer | `user-draft` |
 | Screen is not that composer and has no known modal phrase | `unclassified-ui` unless `--observed-ready` |
 
@@ -364,18 +364,26 @@ counting that box as a prompt only when all of these hold:
    ledger entry has `format` 2, `outcome` `sent`, and this task's name, pane
    id, pane pid, owner marker and worktree (also as `trust_path`). The state's
    record is the entry without its `name`. An unreadable entry or any other
-   outcome is not evidence, and the screen alone never is. An entry written
-   before `format` 2 is evidence only with `--answered-text-file` (below).
+   outcome is not evidence, and the screen alone never is. Only a regular
+   file is read: a symbolic link is not followed, and the open does not block.
+   An entry written before `format` 2 is evidence only with
+   `--answered-text-file` (below).
 2. **Box.** Every border on the visible screen pairs (rule 4). Exactly one box
    holds a prompt phrase. It has no title, holds no other box, is not inside
    one, and has nothing to its left. Its rows, trimmed as in rule 4 and
    without blank rows, are the answered prompt's rows plus exactly one row
    that is exactly `⏳ Trusting workspace...` (U+23F3, a space, the words,
-   three full stops). A row that had the `▶ ` marker
-   may have lost it; no other row may have it. Nothing else may differ:
-   `box_rows_sha256` and `box_marker_rows` decide.
-3. **Below.** The cursor row is below the box, and no row on the visible
-   screen outside the box has a prompt phrase.
+   three full stops). The `▶` marker must be gone from every row, as on the
+   live screen: a box that still shows it stays a prompt. Nothing else may
+   differ: `box_rows_sha256` decides (`box_marker_rows` records which rows
+   had the marker).
+3. **Below.** The cursor is on the last pane row, below the box, and no row
+   on the visible screen outside the box has a prompt phrase.
+
+`inspect` stores with the receipt which ledger answer, if any, its
+classification relied on. `reply` refuses with `stale-receipt` when its own
+reliance differs, for example after an `inspect` without
+`--answered-text-file` and a `reply` with it.
 
 Then the screen is classified as if the box were not there: `active` for an
 empty `>` composer at the cursor, `user-draft` for a draft, and otherwise
@@ -387,8 +395,9 @@ a nested box, another prompt on the screen, a screen that cannot be located,
 a stale receipt or a changed pane. The ledger shows that the key was sent, not
 that Cursor accepted it.
 
-**Ledger entries written before `format` 2** (by the helper at 8326e2d2 and
-earlier) bind the prompt only by `expected_text_sha256`. To use one, pass
+**Ledger entries written before `format` 2** (by every helper before it:
+5bf24fec and earlier, 8326e2d2 among them) bind the prompt only by
+`expected_text_sha256`. To use one, pass
 `--answered-text-file` to both `inspect` and `reply`: the exact
 `--expect-text-file` of that answer. It is read and checked like
 `--expect-text-file` (at most 4096 bytes, 1..20 nonblank lines, no control
