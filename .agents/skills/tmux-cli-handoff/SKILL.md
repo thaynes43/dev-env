@@ -281,11 +281,17 @@ Handle it like this:
    normal empty prompt: through `reply` for a helper-started session, or the
    literal send-keys line of route 3 for a plain-tmux pane. Cursor's normal
    `→` composer row classifies as `unclassified`, so `reply` needs
-   `--observed-ready` there. Before giving that flag, read the inspect's whole
-   `text`, history rows included: any prompt in the history must be the one
-   just answered, not a prompt taller than the pane that is still pending. If
-   the read still shows the prompt (a `modal-*` classification, or the prompt
-   on a plain-tmux screen), do not override it: send no keys at all (route 3
+   `--observed-ready` there. The answered trust box can stay on the screen
+   above that composer. The helper stops counting it as a prompt only when its
+   ledger holds this pane's sent answer and the box rows are that prompt plus
+   Cursor's `⏳ Trusting workspace...` row; `classification_detail` then names
+   the approval reference
+   ([the answered trust box](../../../docs/cursor-interactive-session.md#the-answered-trust-box)).
+   Before giving that flag, read the inspect's whole `text`, history rows
+   included: any prompt there must be the one just answered, not a prompt
+   taller than the pane that is still pending. If the read still shows the
+   prompt (a `modal-*` classification, or the prompt on a plain-tmux screen),
+   do not override it: send no keys at all (route 3
    included), no `--observed-ready`, nothing to clear the screen. The helper
    ignores prompt text in its history rows only when it can locate the visible
    screen; otherwise a prompt anywhere in its capture still blocks (see the

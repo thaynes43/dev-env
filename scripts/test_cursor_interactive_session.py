@@ -592,6 +592,19 @@ APPROVAL_EXPECT = "Allow this command: git status\n\u25b6 [y] Yes\n[n] No\n"
 APPROVAL = "OP399-approval-2026-11-04T21:40:00Z"
 SECOND_APPROVAL = "OP399-approval-2026-11-04T21:55:00Z"
 DEFAULT_TRUST = object()
+# The live shape after a trust answer (OP399 SK3, 2026-11-05, sanitized): Cursor prints a
+# status row inside the same box and drops the selection marker, then its banner and
+# its own composer below. The pane is 24 rows under 11 history rows.
+STATUS_ROW = "  \u23f3 Trusting workspace..."
+ANSWERED_BOX_ROWS = (TRUST_BOX_ROWS[:10] + ["    [a] Trust this workspace", "    [q] Quit", "", STATUS_ROW]
+                     + TRUST_BOX_ROWS[12:])
+CURSOR_COMPOSER = "\u2192 Plan, search, build anything"
+ANSWERED_SCREEN = TRUST_TIP + boxed(ANSWERED_BOX_ROWS) + "\n  Cursor Agent\n" + CURSOR_COMPOSER
+if len(ANSWERED_SCREEN.splitlines()) != 24:
+    raise AssertionError("ANSWERED_SCREEN is no longer the live 24-row pane")
+# The ledger fields the 8326e2d2 helper wrote for a trust answer.
+OLD_LEDGER_FIELDS = ("answered_at", "approval_ref", "kind", "choice", "expected_text_sha256", "pane_id",
+                     "pane_pid", "owner", "outcome", "trust_path", "name")
 
 
 class AnswerFixture(unittest.TestCase):
@@ -1696,6 +1709,192 @@ class AnswerTests(AnswerFixture):
                     self.assertEqual((code, result["state"]), (2, expected))
                     self.assertEqual(self.sends(), [])
                     self.assertFalse(self.ledger(approval_ref).exists())
+
+    # An answered trust box (OP399 SK3, 2026-11-05). inspect and reply do not count a
+    # visible trust box only when this pane's ledger holds the sent answer and the box
+    # is that prompt, plus one status row and minus the selection marker.
+
+    def answer_then_show(self, screen, approval=APPROVAL, history=11, cursor=None, mode="", visible=None):
+        self.screen(TRUST_SCREEN)
+        inspected = self.start_and_inspect()
+        code, answered = self.invoke("answer", self.answer_args(inspected["receipt"], approval=approval), mode=mode)
+        self.assertEqual(code, 3 if mode == "send-fail" else 0, answered)
+        rows = len(screen.splitlines()) if visible is None else visible
+        self.screen("older output\n" * history + screen, visible=rows, cursor=cursor)
+        return self.inspect_now()
+
+    def assert_refused(self, after, kind):
+        self.assertEqual(after["classification"], kind)
+        before = len(self.sends())
+        code, refused = self.reply_to(after["receipt"], "--submit", "--observed-ready")
+        self.assertEqual((code, refused["state"]), (2, kind))
+        self.assertEqual(len(self.sends()), before)
+
+    def edit_ledger(self, approval, change):
+        entry = json.loads(self.ledger(approval).read_text())
+        self.ledger(approval).write_text(json.dumps(change(entry)))
+
+    def test_answer_records_box_evidence_without_prompt_text(self):
+        self.answer_then_show(ANSWERED_SCREEN)
+        entry, record = json.loads(self.ledger().read_text()), self.state()["answers"][-1]
+        self.assertEqual({key: entry[key] for key in ("format", "worktree", "trust_path", "box_marker_rows", "outcome")},
+                         {"format": 2, "worktree": self.worktree, "trust_path": self.worktree,
+                          "box_marker_rows": [4], "outcome": "sent"})
+        self.assertRegex(entry["box_rows_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual({key: record[key] for key in ("format", "worktree", "box_rows_sha256", "box_marker_rows")},
+                         {key: entry[key] for key in ("format", "worktree", "box_rows_sha256", "box_marker_rows")})
+        for text in ("Trust this workspace", "Do you trust", "Quit"):
+            self.assertNotIn(text, self.ledger().read_text())
+
+    def test_answered_trust_box_does_not_block_a_reply(self):
+        cases = {
+            "Cursor's composer: unclassified, needs --observed-ready": (ANSWERED_SCREEN, "unclassified"),
+            "an idle > composer: active": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, ">"), "active"),
+            "the marker kept": (ANSWERED_SCREEN.replace("    [a] Trust", "  \u25b6 [a] Trust"), "unclassified"),
+            "no history": (ANSWERED_SCREEN, "unclassified", 0),
+        }
+        for label, (screen, kind, *history) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                approval = self.case_approval(label)
+                after = self.answer_then_show(screen, approval=approval, history=(history or [11])[0])
+                self.assertEqual(after["classification"], kind)
+                self.assertIn(approval, after["classification_detail"])
+                flags = ("--submit",)
+                if kind == "unclassified":
+                    code, refused = self.reply_to(after["receipt"], "--submit")
+                    self.assertEqual((code, refused["state"]), (2, "unclassified-ui"))
+                    flags += ("--observed-ready",)
+                code, sent = self.reply_to(after["receipt"], *flags)
+                self.assertEqual((code, sent["state"], sent["classification"]), (0, "sent", kind))
+                self.assertEqual(self.sends()[-2:], [["send-keys", "-t", "%7", "-l", "--", "continue"],
+                                                     ["send-keys", "-t", "%7", "Enter"]])
+
+    def test_answered_box_needs_this_panes_sent_ledger_entry(self):
+        old_format = lambda entry: {key: entry[key] for key in OLD_LEDGER_FIELDS}
+        edits = {
+            "another pane": lambda entry: dict(entry, pane_id="%8"),
+            "another pid": lambda entry: dict(entry, pane_pid="999"),
+            "another owner": lambda entry: dict(entry, owner="ci1-" + "0" * 32),
+            "another worktree": lambda entry: dict(entry, worktree=str(self.root / "other-task")),
+            "another trust path": lambda entry: dict(entry, trust_path=str(self.root / "other-task")),
+            "another task name": lambda entry: dict(entry, name="task-unique-2"),
+            "another kind": lambda entry: dict(entry, kind="modal-approval"),
+            "an outcome other than sent": lambda entry: dict(entry, outcome="uncertain"),
+            "an older ledger format": lambda entry: dict(entry, format=1),
+            "the 8326e2d2 fields only": old_format,
+            "a malformed box hash": lambda entry: dict(entry, box_rows_sha256="0" * 63),
+            "a ledger answer the state record does not show": lambda entry: dict(entry, answered_at="2026-11-05T00:00:00Z"),
+        }
+        for label, change in edits.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                approval = self.case_approval(label)
+                self.answer_then_show(ANSWERED_SCREEN, approval=approval)
+                self.edit_ledger(approval, change)
+                self.assert_refused(self.inspect_now(), "modal-trust")
+        with self.subTest(label="the old fields in both the ledger and the state record"):
+            self.restart_case()
+            approval = self.case_approval("old fields in both")
+            self.answer_then_show(ANSWERED_SCREEN, approval=approval)
+            self.edit_ledger(approval, old_format)
+            path = self.root / "state" / "cursor-interactive-session" / self.name
+            state = self.state()
+            state["answers"][-1] = {key: value for key, value in state["answers"][-1].items() if key in OLD_LEDGER_FIELDS}
+            path.write_text(json.dumps(state))
+            self.assert_refused(self.inspect_now(), "modal-trust")
+        for label in ("no ledger entry", "an unreadable ledger entry", "a key that may not have landed"):
+            with self.subTest(label=label):
+                self.restart_case()
+                approval = self.case_approval(label)
+                if label == "no ledger entry":
+                    self.screen("older output\n" * 11 + ANSWERED_SCREEN, visible=24)
+                    after = self.start_and_inspect()
+                elif label == "an unreadable ledger entry":
+                    self.answer_then_show(ANSWERED_SCREEN, approval=approval)
+                    self.ledger(approval).write_bytes(b"{not json")
+                    after = self.inspect_now()
+                else:
+                    after = self.answer_then_show(ANSWERED_SCREEN, approval=approval, mode="send-fail")
+                self.assert_refused(after, "modal-trust")
+
+    def test_answered_box_must_be_the_answered_rows(self):
+        def box_with(rows):
+            return ANSWERED_SCREEN.replace(boxed(ANSWERED_BOX_ROWS), boxed(rows))
+
+        moved = [row.replace("    [q] Quit", "  \u25b6 [q] Quit") for row in ANSWERED_BOX_ROWS]
+        cases = {
+            "a changed row": ANSWERED_SCREEN.replace("this directory?", "every directory?"),
+            "another path": ANSWERED_SCREEN.replace("example-task", "other-task"),
+            "an extra row": box_with(ANSWERED_BOX_ROWS[:3] + ["  Allow network access too"] + ANSWERED_BOX_ROWS[3:]),
+            "a missing row": box_with([row for row in ANSWERED_BOX_ROWS if "arrow keys" not in row]),
+            "no status row": box_with([row for row in ANSWERED_BOX_ROWS if row != STATUS_ROW]),
+            "the unanswered prompt itself": box_with(TRUST_BOX_ROWS),
+            "two status rows": box_with(ANSWERED_BOX_ROWS + [STATUS_ROW]),
+            "another status text": ANSWERED_SCREEN.replace("Trusting workspace...", "Trusting workspace\u2026"),
+            "the marker on another row": box_with(moved),
+            "a titled box": ANSWERED_SCREEN.replace("\u256d\u2500\u2500\u2500", "\u256d\u2500 Note \u2500", 1),
+            "the status row outside the box": (box_with([row for row in ANSWERED_BOX_ROWS if row != STATUS_ROW])
+                                               .replace("  Cursor Agent\n", STATUS_ROW + "\n")),
+        }
+        for label, screen in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.assert_refused(self.answer_then_show(screen, approval=self.case_approval(label)), "modal-trust")
+
+    def test_answered_box_refuses_other_screens(self):
+        box = boxed(ANSWERED_BOX_ROWS)
+        tail = "  Cursor Agent\n" + CURSOR_COMPOSER
+        inner = boxed(["  note"])
+        cases = {
+            "a second trust box": (TRUST_TIP + box + boxed(TRUST_BOX_ROWS) + tail, None, "modal-trust"),
+            "the answered box twice": (TRUST_TIP + box + box + tail, None, "modal-trust"),
+            "a box inside the answered box": (
+                TRUST_TIP + boxed(ANSWERED_BOX_ROWS[:2] + inner.splitlines() + ANSWERED_BOX_ROWS[2:]) + tail,
+                None, "modal-trust"),
+            "the answered box inside another box": (
+                TRUST_TIP + boxed(box.splitlines(), "\u250c", "\u2510", "\u2514", "\u2518") + tail, None, "modal-trust"),
+            "a command prompt below": (
+                TRUST_TIP + box + "  Allow this command: git status [y] Yes [n] No\n" + CURSOR_COMPOSER,
+                None, "modal-approval"),
+            "a permission prompt below": (
+                TRUST_TIP + box + "  Permission required to continue [a] Allow\n" + CURSOR_COMPOSER,
+                None, "modal-permission"),
+            "a confirmation below": (TRUST_TIP + box + "  Are you sure? (y/n)\n" + CURSOR_COMPOSER, None, "modal-unknown"),
+            "a trust phrase below, outside a box": (
+                TRUST_TIP + box + "  Do you trust this folder?\n" + CURSOR_COMPOSER, None, "modal-trust"),
+            "a draft at the cursor": (TRUST_TIP + box + "  Cursor Agent\n> typed draft", None, "user-draft"),
+            "the cursor inside the box": (ANSWERED_SCREEN, 12, "modal-trust"),
+            "the box top in history": (ANSWERED_SCREEN, None, "modal-trust", 20),
+        }
+        for label, (screen, cursor, kind, *visible) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                after = self.answer_then_show(screen, approval=self.case_approval(label), cursor=cursor,
+                                              visible=(visible or [None])[0])
+                self.assert_refused(after, kind)
+        with self.subTest(label="the visible screen cannot be located"):
+            self.restart_case()
+            self.answer_then_show(ANSWERED_SCREEN, approval=self.case_approval("not located"))
+            self.env["FAKE_HISTORY"] = "3"
+            self.assert_refused(self.inspect_now(), "modal-trust")
+
+    def test_answered_box_receipt_and_pane_changes_still_refuse(self):
+        after = self.answer_then_show(ANSWERED_SCREEN)
+        self.assertEqual(after["classification"], "unclassified")
+        self.screen("older output\n" * 11 + ANSWERED_SCREEN.replace("Cursor Agent", "Cursor Agent 2"), visible=24)
+        code, stale = self.reply_to(after["receipt"], "--submit", "--observed-ready")
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.screen("older output\n" * 11 + ANSWERED_SCREEN, visible=24)
+        newer = self.inspect_now()
+        for mode in ("replaced", "new-pane", "foreign-path", "foreign-owner"):
+            with self.subTest(mode=mode):
+                self.text_path.write_text("continue")
+                code, refused = self.invoke("reply", ["--receipt", newer["receipt"], "--text-file", str(self.text_path),
+                                                      "--submit", "--observed-ready"], mode=mode)
+                self.assertEqual(code, 2)
+                self.assertIn(refused["state"], {"pane-replaced", "not-owned"})
+        self.assertEqual(len(self.sends()), 1)
 
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,

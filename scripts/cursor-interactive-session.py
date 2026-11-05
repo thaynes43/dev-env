@@ -88,6 +88,18 @@ UNLOCATED_DETAILS = {
     "modal-unknown": "An unrecognized confirmation prompt is in the captured window.",
 }
 UNLOCATED_DETAIL = " The visible screen cannot be located, so the whole captured window was read."
+ANSWERED_DETAIL = (
+    " A trust prompt box on the visible screen was not counted: this pane's ledger holds a sent answer to it "
+    "under approval reference {}, and the box shows that prompt with Cursor's status row. The ledger records "
+    "that the key was sent, not that Cursor accepted it."
+)
+# Besides its prompt rows, an answered trust box may show exactly one status row with
+# this text, and may have lost the selection marker from a row that had it. Nothing else.
+ANSWERED_STATUS = "\u23f3 Trusting workspace..."
+SELECTION_MARKER = "\u25b6 "
+LEDGER_FORMAT = 2
+MAX_LEDGER = 4096
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class Refusal(Exception):
@@ -349,21 +361,29 @@ def visible_screen(text, truncated, rows_total, ident):
     return rows[-rows_needed:]
 
 
-def classify(text, truncated, rows_total, ident):
-    """(kind, located) for one bounded capture. Transcript lines are never user drafts.
+def classify(text, truncated, rows_total, ident, answered=None):
+    """(kind, located, answered reference) for one bounded capture. Transcript lines are never user drafts.
 
     Modal phrases count only on the visible screen: prompt text in the history
     rows above it is not counted. When the screen cannot be located, the whole
-    capture is scanned, and the result is never active."""
+    capture is scanned, and the result is never active. A trust box counts as
+    answered only with the ledger evidence in `answered` (answered_trust) and
+    only when answered_box binds it; the rest of the screen is still read."""
     rows = text.split("\n")
     try:
         scanned, located = visible_screen(text, truncated, rows_total, ident), True
     except Refusal:
         scanned, located = rows, False
-    kind = modal_kind(scanned) or composer_kind(rows, ident["cursor_y"], ident["height"])
+    kind, used = modal_kind(scanned), None
+    if kind == "modal-trust" and located and answered:
+        box = answered_box(scanned, answered)
+        if box and int(ident["cursor_y"]) > box[1]:
+            kind = modal_kind(scanned[:box[0]] + scanned[box[1] + 1:])
+            used = None if kind else answered["approval_ref"]
+    kind = kind or composer_kind(rows, ident["cursor_y"], ident["height"])
     if not located and kind == "active":
         kind = "unclassified"
-    return kind, located
+    return kind, located, used
 
 
 def composer_kind(rows, cursor_y, pane_height):
@@ -547,7 +567,7 @@ def inspect_locked(args):
     ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
     require_same_pane(state, ident)
     text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
-    kind, located = classify(text, truncated, rows_total, ident)
+    kind, located, used = classify(text, truncated, rows_total, ident, answered_trust(state))
     digest = snapshot_hash(ident, text, truncated)
     receipt_id = secrets.token_hex(16)
     state["receipt_id"] = receipt_id
@@ -557,7 +577,8 @@ def inspect_locked(args):
         "state": "inspected", "name": state["name"], "pane_id": ident["pane"], "pane_pid": ident["pid"],
         "owner": state["owner"], "worktree": state["worktree"], "model_requested": state["model"],
         "classification": kind,
-        "classification_detail": (CLASSIFICATION_DETAILS[kind] if located
+        "classification_detail": (CLASSIFICATION_DETAILS[kind] + (ANSWERED_DETAIL.format(used) if used else "")
+                                  if located
                                   else UNLOCATED_DETAILS.get(kind, CLASSIFICATION_DETAILS[kind]) + UNLOCATED_DETAIL),
         "receipt": make_receipt(receipt_id, digest, ident["pane"], ident["pid"]),
         "truncated": truncated, "text": text,
@@ -627,7 +648,7 @@ def reply_locked(args, instruction):
     digest = snapshot_hash(ident, text, truncated)
     if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
         raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
-    kind, _located = classify(text, truncated, rows_total, ident)
+    kind, _located, _used = classify(text, truncated, rows_total, ident, answered_trust(state))
     if kind.startswith("modal-"):
         label = kind.split("-", 1)[1]
         raise Refusal(kind, "Refusing to type or send Enter into a " + label + " modal. --observed-ready does not override it. Re-inspect after the pane is clear.")
@@ -891,6 +912,87 @@ def approval_path(name, approval_ref):
     return state_path(name).parent / "approvals" / digest
 
 
+def rows_digest(rows):
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+
+
+def box_evidence(lines):
+    """What the ledger keeps to know an answered box again: a hash of the prompt
+    rows with the selection marker taken off, and which rows had it. No prompt text."""
+    marked = [index for index, line in enumerate(lines) if line.startswith(SELECTION_MARKER)]
+    rows = [line[len(SELECTION_MARKER):] if index in marked else line for index, line in enumerate(lines)]
+    return {"box_rows_sha256": rows_digest(rows), "box_marker_rows": marked}
+
+
+def answered_trust(state):
+    """The ledger evidence for this pane's last answer, or None.
+
+    The last answer in the task's state must be a sent trust answer whose ledger
+    entry has this helper's current format and names this task, pane, process,
+    owner marker and worktree. An entry written before the format, or any entry
+    that cannot be read, is not evidence. The screen is never evidence."""
+    answers = state.get("answers")
+    record = answers[-1] if isinstance(answers, list) and answers else None
+    ref = record.get("approval_ref") if isinstance(record, dict) else None
+    if not isinstance(ref, str) or not APPROVAL_RE.fullmatch(ref):
+        return None
+    try:
+        with open(approval_path(state["name"], ref), "rb") as handle:
+            raw = handle.read(MAX_LEDGER + 1)
+        entry = json.loads(raw.decode("utf-8")) if len(raw) <= MAX_LEDGER else None
+    except (OSError, UnicodeError, ValueError):
+        return None
+    required = {
+        "format": LEDGER_FORMAT, "kind": "modal-trust", "outcome": "sent", "approval_ref": ref,
+        "name": state["name"], "pane_id": state["pane_id"], "pane_pid": state["pane_pid"],
+        "owner": state["owner"], "worktree": state["worktree"], "trust_path": state["worktree"],
+    }
+    if not isinstance(entry, dict) or any(entry.get(key) != value for key, value in required.items()):
+        return None
+    digest, marked = entry.get("box_rows_sha256"), entry.get("box_marker_rows")
+    if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+        return None
+    if (not isinstance(marked, list) or not all(type(index) is int for index in marked)
+            or marked != sorted(set(marked)) or any(not 0 <= index < MAX_EXPECT_LINES for index in marked)):
+        return None
+    # The task's own record must be this same answer.
+    if any(record.get(key) != entry.get(key) for key in (*required, "answered_at", "box_rows_sha256", "box_marker_rows")
+           if key != "name"):
+        return None
+    return {"approval_ref": ref, "box_rows_sha256": digest, "box_marker_rows": marked}
+
+
+def answered_box(visible, answered):
+    """(top, bottom) of the answered trust box on the visible screen, or None.
+
+    Every border must pair. The box must be the only box with a prompt phrase,
+    untitled, neither inside nor around another box, with nothing to its left.
+    Its nonblank rows, trimmed as in rule 4, must be the answered prompt's rows
+    plus exactly one ANSWERED_STATUS row; a row may lose the selection marker it
+    had, and no row may gain one."""
+    texts = [prompt_text(row) for row in visible]
+    boxes = visible_boxes(visible, texts)
+    phrased = [box for box in boxes or () if modal_kinds(visible[box[0]:box[1] + 1])]
+    if len(phrased) != 1:
+        return None
+    ((top, bottom, left, _right, titled),) = phrased
+    if titled or any(box != phrased[0] and box[0] <= bottom and top <= box[1] for box in boxes):
+        return None
+    if any(row[:left].strip() for row in visible[top:bottom + 1]):
+        return None
+    rows = [text for text in texts[top + 1:bottom] if text]
+    if rows.count(ANSWERED_STATUS) != 1:
+        return None
+    rows.remove(ANSWERED_STATUS)
+    marked = set(answered["box_marker_rows"])
+    if any(text.startswith(SELECTION_MARKER) and index not in marked for index, text in enumerate(rows)):
+        return None
+    plain = [text[len(SELECTION_MARKER):] if text.startswith(SELECTION_MARKER) else text for text in rows]
+    if rows_digest(plain) != answered["box_rows_sha256"]:
+        return None
+    return top, bottom
+
+
 def spend_approval(path, entry):
     """Create the approval's ledger entry once. An existing entry refuses."""
     state_directory(path)
@@ -947,6 +1049,8 @@ def answer_locked(args, choice, raw, lines, trust_path):
     }
     if trust_path is not None:
         record["trust_path"] = trust_path
+    # Evidence that inspect and reply need to know this box again once it is answered.
+    record.update(box_evidence(lines), format=LEDGER_FORMAT, worktree=state["worktree"])
     entry = dict(record, name=state["name"])
     # Spend the approval durably, then the receipt, before the key is sent.
     spend_approval(ledger, entry)

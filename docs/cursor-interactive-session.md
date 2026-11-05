@@ -187,9 +187,14 @@ receipt with the same prompt still showing do not allow a second answer.
 
 The entry records `answered_at` (UTC), `approval_ref`, `name`, `kind`,
 `choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner`,
-`trust_path` (for a trust answer) and `outcome`. The task's state file keeps the same record in `answers` (the last
-32). `outcome` is `sent`; `not-sent` when the pane changed after the spend
-(below); or `uncertain` when tmux failed or timed out. An
+`trust_path` (for a trust answer) and `outcome`. Since ledger `format` 2 it
+also records `worktree`, `box_rows_sha256` (a SHA-256 of the expected lines,
+with the selection marker `▶ ` taken off) and `box_marker_rows` (which of
+those lines had the marker). `inspect` and `reply` use these to know the
+answered box again ([below](#the-answered-trust-box)). The task's state file
+keeps the same record in `answers` (the last 32). `outcome` is `sent`;
+`not-sent` when the pane changed after the spend (below); or `uncertain` when
+tmux failed or timed out. An
 entry still at `sending` means the process ended before it recorded the
 outcome; treat it as uncertain. An uncertain answer stays uncertain until a
 supported observation settles it; it is never answered again under the same
@@ -346,7 +351,41 @@ narrows the window; it cannot close it.
 
 After an answer, inspect again. Old prompt text can stay in the history rows
 of the capture. `inspect` and `reply` do not count it there; `reply` refuses
-while a prompt is on the visible screen.
+while a prompt is on the visible screen, except an answered trust box (next).
+
+### The answered trust box
+
+After `[a]` answers a trust prompt, Cursor prints `⏳ Trusting workspace...`
+inside the same box, drops the `▶` marker, and draws its banner and composer
+below. The box can stay on the visible screen. `inspect` and `reply` stop
+counting that box as a prompt only when all of these hold:
+
+1. **Ledger.** The last answer in the task's state is a trust answer whose
+   ledger entry has `format` 2, `outcome` `sent`, and this task's name, pane
+   id, pane pid, owner marker and worktree (also as `trust_path`). The state's
+   record and the entry agree. An entry written before `format` 2, an
+   unreadable entry, or any other outcome is not evidence. The screen alone is
+   never evidence.
+2. **Box.** Every border on the visible screen pairs (rule 4). Exactly one box
+   holds a prompt phrase. It has no title, holds no other box, is not inside
+   one, and has nothing to its left. Its rows, trimmed as in rule 4 and
+   without blank rows, are the answered prompt's rows plus exactly one row
+   that is exactly `⏳ Trusting workspace...` (U+23F3, a space, the words,
+   three full stops). A row that had the `▶ ` marker
+   may have lost it; no other row may have it. Nothing else may differ:
+   `box_rows_sha256` and `box_marker_rows` decide.
+3. **Below.** The cursor row is below the box, and no row on the visible
+   screen outside the box has a prompt phrase.
+
+Then the screen is classified as if the box were not there: `active` for an
+empty `>` composer at the cursor, `user-draft` for a draft, and otherwise
+`unclassified`, which still needs `--observed-ready`. Cursor's own `→`
+composer is `unclassified`. `classification_detail` names the approval
+reference. Anything else is refused as before: no ledger entry, an entry for
+another pane, pid, owner or worktree, a box that differs, a second prompt box,
+a nested box, another prompt on the screen, a screen that cannot be located,
+a stale receipt or a changed pane. The ledger shows that the key was sent, not
+that Cursor accepted it.
 
 This command is source only. It is not deployed to any host. Using it on a
 live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
@@ -365,7 +404,8 @@ prove from tmux text. Classification is intentionally narrow:
   workspace trust, permission required, command approval, and generic
   confirmations such as `yes/no` or `are you sure`. A phrase that is only in
   the history rows, such as an answered prompt that scrolled up, does not
-  block.
+  block. Neither does a trust box that the ledger and the box rows show
+  answered ([the answered trust box](#the-answered-trust-box)).
 - When the visible screen cannot be located (the row count does not match, or
   the bounded capture does not hold all of it), the same rules read the whole
   bounded capture, with its last row as the last pane row: a phrase anywhere
