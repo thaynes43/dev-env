@@ -29,6 +29,18 @@ observation remain explicit gaps. After an observation has been stored, retain
 that history when acquisition or trust becomes unavailable, as described below. The separate Codex selected-source slot is
 unchanged and is not used as an aggregate fallback.
 
+A report carries exactly one status each for `cursor`, `anthropic` and
+`openai`. It may also carry one optional `grok` status (OP192 S1): only
+`unconfigured`, with no last-good record, no current freshness, no verified
+binding and no `grok` item. Anything else for Grok is refused. A three-row
+report may replace a stored four-row one and the reverse, so producers can
+move between them in either direction. The served empty-slot document already
+lists Grok as Not connected; no producer emits a Grok row until a later release.
+An operator older than this rule refuses every update once a four-row report is
+stored, so it must not be rolled back while one is stored (see
+[DESIGN-030](../.agents/sagas/distributed-dev-env/designs/030-provider-allowance-contract.md),
+OP192 S1).
+
 The store updates only `report.json` in an existing ConfigMap. It never creates
 or deletes that object. A live resourceVersion comparison protects updates;
 unrelated data and metadata are preserved. Identical replay does not write or

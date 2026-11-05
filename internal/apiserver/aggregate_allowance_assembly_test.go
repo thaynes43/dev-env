@@ -68,7 +68,8 @@ func TestAggregateAllowanceAssemblyPreservesTwoCaptures(t *testing.T) {
 		t.Fatalf("empty get %d %s %s", emptyCode, emptyOut, emptyErr)
 	}
 	empty := assemblyDecode(t, emptyOut)
-	if empty.ServedAt != "1970-01-01T00:00:00Z" || len(empty.Items) != 0 || len(empty.SourceStatuses) != 3 || mem.updates != 0 {
+	// OP192 S1: the empty slot also carries the separate Grok row, Not connected.
+	if empty.ServedAt != "1970-01-01T00:00:00Z" || len(empty.Items) != 0 || len(empty.SourceStatuses) != 4 || empty.SourceStatuses[3].Provider != "grok" || mem.updates != 0 {
 		t.Fatalf("empty slot %+v updates %d", empty, mem.updates)
 	}
 	for _, status := range empty.SourceStatuses {

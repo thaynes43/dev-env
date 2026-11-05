@@ -297,9 +297,10 @@ func TestAllowancePreviewsUseMappedStates(t *testing.T) {
 		if strings.Contains(cursor, "%") || strings.Contains(cursor, "meter-fill") || strings.Contains(cursor, "62") || strings.Contains(cursor, "38") || !strings.Contains(cursor, "No percent allowance reported") {
 			t.Errorf("%s: missing cursor source became a quota: %s", tc.name, cursor)
 		}
-		wantNotConnected := 0
+		// The Grok row (OP192 S1) is Not connected in every preview state.
+		wantNotConnected := 1
 		if tc.disconnected {
-			wantNotConnected = 2
+			wantNotConnected = 3
 		}
 		if strings.Count(block, "Not connected") != wantNotConnected {
 			t.Errorf("%s: Not connected count %d, want %d: %s", tc.name, strings.Count(block, "Not connected"), wantNotConnected, block)
@@ -335,6 +336,12 @@ func TestAllowancePreviewStatesAreUniformAndSeenVariesIsExplicit(t *testing.T) {
 			if allowance.Provider == "Cursor" {
 				if string(allowance.Value) != "Unknown" || len(allowance.Windows) != 0 {
 					t.Errorf("%s cursor: %+v", state, allowance)
+				}
+				continue
+			}
+			if allowance.Provider == "Grok" {
+				if string(allowance.Value) != "Not connected" || len(allowance.Windows) != 0 || len(allowance.LastReported) != 0 {
+					t.Errorf("%s grok: %+v", state, allowance)
 				}
 				continue
 			}

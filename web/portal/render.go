@@ -917,12 +917,44 @@ func (a ProductAllowance) Confidence() string {
 	}
 }
 
-// MissingNote explains Cursor when no account view is connected.
+// MissingNote explains Cursor or Grok when no account view is connected.
 func (a ProductAllowance) MissingNote() string {
-	if a.Provider == "Cursor" && a.Value == AllowanceNotConnected {
-		return "No Cursor account view is connected. Nothing here is estimated."
+	if (a.Provider == "Cursor" || a.Provider == "Grok") && a.Value == AllowanceNotConnected {
+		return "No " + a.Provider + " account view is connected. Nothing here is estimated."
 	}
 	return ""
+}
+
+// RelationNote states, on the Cursor and Grok rows, what is known about their
+// pools: Grok used in Cursor counts toward Cursor's plan usage, and whether
+// Cursor and Grok share one pool is unknown (OP192, research R-07).
+func (a ProductAllowance) RelationNote() string {
+	if a.Provider == "Cursor" || a.Provider == "Grok" {
+		return "Grok used in Cursor counts toward Cursor's plan usage. Whether Cursor and Grok share one pool is unknown."
+	}
+	return ""
+}
+
+// grokAllowanceReasons are the only reasons a Grok row may show. No Grok
+// source is qualified yet (OP192 S1), so any other state becomes Unknown.
+var grokAllowanceReasons = map[string]bool{
+	"Conflicting allowance reports":  true,
+	"Partial allowance read":         true,
+	"Unsupported allowance document": true,
+	"No qualified Grok source":       true,
+}
+
+// grokAllowanceView keeps the Grok row Not connected or Unknown. It never
+// carries a window, a percent or a last-reported value.
+func grokAllowanceView(a ProductAllowance) ProductAllowance {
+	if a.Value == AllowanceNotConnected {
+		return ProductAllowance{Provider: "Grok", Value: AllowanceNotConnected}
+	}
+	reason := a.Reason
+	if a.Value != AllowanceUnknown || !grokAllowanceReasons[reason] {
+		reason = "No qualified Grok source"
+	}
+	return ProductAllowance{Provider: "Grok", Value: AllowanceUnknown, Reason: reason}
 }
 
 func (w ProductAllowanceWindow) reportedPercent() bool {
@@ -1021,19 +1053,25 @@ func withAllowanceAsOf(in []ProductAllowance, now time.Time) []ProductAllowance 
 	return out
 }
 
-// allowanceViews keeps Claude, Codex and Cursor fixed, in that order, fills
-// absent metadata, and never renders a percent for an untrusted state. An
-// absent Cursor row stays Not connected. It does not inspect session usage.
+// allowanceViews keeps Claude, Codex, Cursor and Grok fixed, in that order,
+// fills absent metadata, and never renders a percent for an untrusted state.
+// An absent Cursor or Grok row stays Not connected. It does not inspect
+// session usage.
 func allowanceViews(input []ProductAllowance) []ProductAllowance {
 	out := []ProductAllowance{
 		{Provider: "Claude", Value: AllowanceNotConnected},
 		{Provider: "Codex", Value: AllowanceNotConnected},
 		{Provider: "Cursor", Value: AllowanceNotConnected},
+		{Provider: "Grok", Value: AllowanceNotConnected},
 	}
 	for i := range out {
 		for _, a := range input {
 			if a.Provider != out[i].Provider {
 				continue
+			}
+			if a.Provider == "Grok" {
+				out[i] = grokAllowanceView(a)
+				break
 			}
 			a.Observed, a.Provenance, a.SeenVaries = "", "", false
 			var last []ProductAllowanceLastReported

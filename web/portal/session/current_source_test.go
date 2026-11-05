@@ -268,10 +268,10 @@ func assertCurrentSourceRefused(t *testing.T, rows []portal.ProductAllowance) {
 
 func assertOtherProvidersDisconnected(t *testing.T, rows []portal.ProductAllowance) {
 	t.Helper()
-	if len(rows) != 3 || rows[0].Provider != "Claude" || rows[1].Provider != "Codex" || rows[2].Provider != "Cursor" {
+	if len(rows) != 4 || rows[0].Provider != "Claude" || rows[1].Provider != "Codex" || rows[2].Provider != "Cursor" || rows[3].Provider != "Grok" {
 		t.Fatalf("providers %+v", rows)
 	}
-	for _, row := range []portal.ProductAllowance{rows[0], rows[2]} {
+	for _, row := range []portal.ProductAllowance{rows[0], rows[2], rows[3]} {
 		if row.Value != portal.AllowanceNotConnected || row.Reason != "" || row.Provenance != "" || len(row.Windows) != 0 {
 			t.Fatalf("neighbor %+v", row)
 		}

@@ -53,8 +53,8 @@ func TestAllowanceGlanceKeepsProvidersFixedAndGapsUnknown(t *testing.T) {
 	section := glanceSection(t, body)
 
 	order := regexp.MustCompile(`<h3 class="glance-name">([^<]+)</h3>`).FindAllStringSubmatch(section, -1)
-	if len(order) != 3 || order[0][1] != "Claude" || order[1][1] != "Codex" || order[2][1] != "Cursor" {
-		t.Fatalf("glance providers are not Claude, Codex, Cursor: %v", order)
+	if len(order) != 4 || order[0][1] != "Claude" || order[1][1] != "Codex" || order[2][1] != "Cursor" || order[3][1] != "Grok" {
+		t.Fatalf("glance providers are not Claude, Codex, Cursor, Grok: %v", order)
 	}
 
 	c := glanceTile(t, section, "Claude")

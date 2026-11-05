@@ -228,6 +228,11 @@ func (s *AggregateAllowanceReportStore) accept(doc providerallowance.ReadRespons
 			return err
 		}
 	}
+	for _, provider := range optionalAggregateProviders {
+		if status, ok := statuses[provider]; ok && !notConnectedStatus(status) {
+			return ErrAggregateRejected
+		}
+	}
 	return nil
 }
 
@@ -477,6 +482,12 @@ func canonicalAllowance(raw string) bool {
 
 var aggregateProviders = []string{"cursor", "anthropic", "openai"}
 
+// optionalAggregateProviders may appear only as a typed Not connected status,
+// never with an item (OP192 S1, research R-07, release R1). Accepting it
+// before any producer emits it, and accepting a three-row document after a
+// four-row one, keeps the release order and its rollback safe.
+var optionalAggregateProviders = []string{"grok"}
+
 func indexAllowanceItems(doc providerallowance.ReadResponse) (map[string]providerallowance.ReadItem, error) {
 	out := map[string]providerallowance.ReadItem{}
 	if len(doc.Items) > 8 {
@@ -497,7 +508,7 @@ func indexAllowanceItems(doc providerallowance.ReadResponse) (map[string]provide
 func indexAllowanceStatuses(doc providerallowance.ReadResponse) (map[string]providerallowance.SourceStatus, error) {
 	out := map[string]providerallowance.SourceStatus{}
 	for _, status := range doc.SourceStatuses {
-		if !knownAggregateProvider(status.Provider) {
+		if !knownAggregateProvider(status.Provider) && !optionalAggregateProvider(status.Provider) {
 			return nil, ErrAggregateRejected
 		}
 		if _, dup := out[status.Provider]; dup {
@@ -510,10 +521,22 @@ func indexAllowanceStatuses(doc providerallowance.ReadResponse) (map[string]prov
 			return nil, ErrAggregateRejected
 		}
 	}
-	if len(out) != len(aggregateProviders) {
-		return nil, ErrAggregateRejected
-	}
 	return out, nil
+}
+
+func optionalAggregateProvider(provider string) bool {
+	for _, name := range optionalAggregateProviders {
+		if name == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// notConnectedStatus is the only form an optional provider's status may take:
+// unconfigured, never good, no current freshness, and no verified binding.
+func notConnectedStatus(status providerallowance.SourceStatus) bool {
+	return status.Availability == providerallowance.AvailabilityUnconfigured && gapStatus(status) && status.Binding.State != providerallowance.BindingVerified
 }
 
 func knownAggregateProvider(provider string) bool {
@@ -659,14 +682,17 @@ func cloneAggregateString(in *string) *string {
 	return &value
 }
 
-// UnconfiguredAggregateDocument is the empty slot. All three providers are
-// unknown and unconfigured. It does not use a serving clock or a zero quota.
+// UnconfiguredAggregateDocument is the empty slot. The three required
+// providers and the optional Grok row are unknown and unconfigured, so an
+// empty slot shows Grok as Not connected. It is served, never stored by the
+// operator, and does not use a serving clock or a zero quota.
 func UnconfiguredAggregateDocument() providerallowance.ReadResponse {
 	at := "1970-01-01T00:00:00Z"
 	code := "source_unconfigured"
 	completed := at
-	statuses := make([]providerallowance.SourceStatus, 0, len(aggregateProviders))
-	for _, provider := range aggregateProviders {
+	providers := append(append([]string(nil), aggregateProviders...), optionalAggregateProviders...)
+	statuses := make([]providerallowance.SourceStatus, 0, len(providers))
+	for _, provider := range providers {
 		statuses = append(statuses, providerallowance.SourceStatus{
 			Provider: provider, ProducerRef: "aggregate-unconfigured", Availability: providerallowance.AvailabilityUnconfigured,
 			LastAttempt: providerallowance.LastAttempt{AttemptedAt: at, CompletedAt: &completed, Result: providerallowance.AttemptUnknown, Code: &code},

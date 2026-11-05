@@ -344,6 +344,44 @@ documents still decode. Older strict consumers must be upgraded before they
 receive the new fields. This compatibility change supplies no acquisition,
 account or entitlement trust, provider timestamp, or recurring-ingestion proof.
 
+### OP192 S1: typed Grok row, release R1 — 2026-11-05 (source only)
+
+[Research R-07](../research/R-07-op192-grok-usage-source-plan.md) (OP192 Grok usage source plan) keeps Grok a separate row whose
+relationship to Cursor is Unknown. This source change is release R1 of its S1
+step. No producer emits a Grok row yet, and no collector, acquisition,
+configuration, credential or network change is included.
+
+- The operator store accepts an optional `grok` status that is only
+  `unconfigured`, with no last-good record, no current freshness and no
+  verified binding, and never a `grok` item. It accepts a three-row document
+  after a four-row one and the reverse.
+- The served empty-slot document lists Grok as Not connected.
+- The portal shows a fixed Grok row after Claude, Codex and Cursor. It is Not
+  connected when the Grok status is unconfigured or missing (a stored three-row
+  document), and otherwise Unknown with a fixed reason. It never shows a
+  percent, window or last-reported value, and Grok data never changes another
+  row. The Cursor and Grok account sections state: "Grok used in Cursor counts
+  toward Cursor's plan usage. Whether Cursor and Grok share one pool is
+  unknown."
+- `agent-run usage -o json` prints a four-row document unchanged and invents no
+  Grok row. Its local preflight and `Collection.build` still emit exactly the
+  three required rows.
+
+**Compatibility and rollback rule.** Two producers reach the store: the
+operator's collector (through `AssembleCaptureBundle` and `Collection.build`)
+and `agent-run` in the separately pinned agent image (`usage capture`, and
+`usage --publish-file` where the slot accepts external publication). The store
+checks the stored document as well as the new one (`preserveAllowance` calls
+`indexAllowanceStatuses` on both), so an operator older than R1 refuses every
+update once a four-row document is stored. Order: install R1 and verify it is
+serving; only then ship R2, the producers that emit the Grok row (the operator
+collector change and an agent image whose `agent-run` emits it). The agent image
+pin must not move ahead of R1. To roll back, return every four-row producer to
+three rows first, let a three-row document replace the stored one, confirm it by
+a read, and only then move the operator below R1. A pre-R1 operator that meets a
+stored four-row document fails closed: publication stops and the stored values
+age to stale until an R1-or-later operator is restored.
+
 ### Configured aggregate assembly — 2026-11-02 (source only)
 
 The [aggregate transport contract](../../../../docs/provider-allowance-aggregate.md)

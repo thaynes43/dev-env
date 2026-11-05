@@ -1167,8 +1167,8 @@ func TestAllowanceStripFoldsOnShortWindows(t *testing.T) {
 	if strings.Count(strip, "<details") != 1 || strings.Contains(strip, "<details open") || strings.Contains(strip, " open>") {
 		t.Fatal("the disclosure must start closed so a short window starts folded")
 	}
-	if !strings.HasSuffix(strip, `</ul></details></div>`) || strings.Count(strip, `class="allowance-provider"`) != 3 {
-		t.Fatal("Claude, Codex and Cursor must sit inside the disclosure")
+	if !strings.HasSuffix(strip, `</ul></details></div>`) || strings.Count(strip, `class="allowance-provider"`) != 4 {
+		t.Fatal("Claude, Codex, Cursor and Grok must sit inside the disclosure")
 	}
 	style := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindSubmatch(body)
 	if style == nil {
@@ -1216,8 +1216,8 @@ func TestAllowanceStripWithoutWindowsNeverFolds(t *testing.T) {
 	if strings.Contains(strip, "<details") || strings.Contains(strip, "allowance-toggle") || !strings.HasSuffix(strip, "</ul></div>") {
 		t.Fatalf("a strip without windows must not fold: %s", strip)
 	}
-	if strings.Count(strip, "Not connected") != 3 {
-		t.Fatalf("Claude, Codex and Cursor must stay visible: %s", strip)
+	if strings.Count(strip, "Not connected") != 4 {
+		t.Fatalf("Claude, Codex, Cursor and Grok must stay visible: %s", strip)
 	}
 }
 
@@ -1509,7 +1509,7 @@ func TestRenderCursorMissingAllowanceView(t *testing.T) {
 		t.Fatal(err)
 	}
 	strip := allowanceBlock(t, body, false)
-	if strings.Count(strip, "Not connected") != 3 || !strings.Contains(strip, `<span class="allowance-name">Cursor</span>`) || !strings.Contains(strip, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(strip, "%") || strings.Contains(strip, ">Missing</span>") {
+	if strings.Count(strip, "Not connected") != 4 || !strings.Contains(strip, `<span class="allowance-name">Cursor</span>`) || !strings.Contains(strip, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(strip, "%") || strings.Contains(strip, ">Missing</span>") {
 		t.Fatalf("strip cursor view: %s", strip)
 	}
 	page.Filter.View = "usage"
@@ -1518,7 +1518,7 @@ func TestRenderCursorMissingAllowanceView(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := allowanceBlock(t, body, true)
-	if strings.Count(section, "Not connected") != 3 || !strings.Contains(section, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(section, "%") || strings.Contains(section, "meter-fill") || strings.Contains(section, "<table") {
+	if strings.Count(section, "Not connected") != 4 || !strings.Contains(section, "No Cursor account view is connected. Nothing here is estimated.") || strings.Contains(section, "%") || strings.Contains(section, "meter-fill") || strings.Contains(section, "<table") {
 		t.Fatalf("usage cursor view: %s", section)
 	}
 }

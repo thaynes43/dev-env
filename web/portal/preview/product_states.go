@@ -396,6 +396,14 @@ func allowancePreview(state string) ([]portal.ProductAllowance, error) {
 		}
 		doc.Items = append(doc.Items, item)
 	}
+	if state == "not-connected" {
+		// The empty slot also carries the separate Grok row, Not connected
+		// (OP192 S1). The other states omit it, like a stored three-row document.
+		doc.SourceStatuses = append(doc.SourceStatuses, providerallowance.SourceStatus{Provider: "grok", Availability: providerallowance.AvailabilityUnconfigured,
+			Freshness:  providerallowance.Freshness{State: providerallowance.FreshUnknown, AsOf: doc.ServedAt, Basis: providerallowance.BasisNone},
+			Validation: providerallowance.ValidationRecord{State: providerallowance.ValidationUnverified}, Binding: providerallowance.BindingRecord{State: providerallowance.BindingUnknown},
+			LastAttempt: providerallowance.LastAttempt{AttemptedAt: doc.ServedAt, Result: providerallowance.AttemptUnavailable}})
+	}
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return nil, err

@@ -55,7 +55,7 @@ func TestMapProductAllowanceMeasuredAndStale(t *testing.T) {
 						if !reflect.DeepEqual(got[0], want) {
 							t.Fatalf("got %+v, want %+v", got[0], want)
 						}
-						if len(got) != 3 || got[1].Provider != "Codex" || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 {
+						if len(got) != 4 || got[1].Provider != "Codex" || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 || got[3].Provider != "Grok" || got[3].Value != portal.AllowanceNotConnected {
 							t.Fatalf("missing provider: %+v", got)
 						}
 					})
@@ -194,7 +194,7 @@ func TestMapProductAllowanceDocumentAndAvailability(t *testing.T) {
 	doc := allowanceRead()
 	doc.Items[0].Observation.Provider = "other-provider"
 	got := MapProductAllowance(doc)
-	if len(got) != 3 || got[0].Value != portal.AllowanceUnknown || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 {
+	if len(got) != 4 || got[0].Value != portal.AllowanceUnknown || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 || got[3].Value != portal.AllowanceNotConnected {
 		t.Fatalf("provider set: %+v", got)
 	}
 	for _, availability := range []pa.Availability{pa.AvailabilityConflict, pa.AvailabilityUnavailable, pa.AvailabilityAuthNeeded, pa.AvailabilityThrottled, pa.AvailabilityUnsupported} {
@@ -319,7 +319,7 @@ func TestMapProductAllowanceReadInterfaceExample(t *testing.T) {
 		t.Fatalf("contract HTTP body cannot be strictly decoded: %v", err)
 	}
 	got := MapProductAllowance(doc)
-	if len(got) != 3 || got[0].Value != portal.AllowanceNotConnected || got[1].Value != portal.AllowanceUnknown || len(got[1].Windows) != 0 {
+	if len(got) != 4 || got[0].Value != portal.AllowanceNotConnected || got[1].Value != portal.AllowanceUnknown || len(got[1].Windows) != 0 || got[3].Value != portal.AllowanceNotConnected {
 		t.Fatalf("original cached example: %+v", got)
 	}
 	if got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceUnknown || len(got[2].Windows) != 0 || !strings.Contains(got[2].Reason, "binding") {
@@ -540,6 +540,12 @@ func TestMapProductAllowanceMeasureIDsAreProviderWide(t *testing.T) {
 		// The same ID belongs to a separate namespace for each provider.
 		doc.Items[1].Observation.Provider = "openai"
 		for _, got := range MapProductAllowance(doc) {
+			if got.Provider == "Grok" {
+				if got.Value != portal.AllowanceNotConnected || len(got.Windows) != 0 {
+					t.Fatalf("grok gained a window: %+v", got)
+				}
+				continue
+			}
 			if got.Provider == "Cursor" {
 				if got.Value != portal.AllowanceUnknown || len(got.Windows) != 0 {
 					t.Fatalf("cursor gained a window: %+v", got)
@@ -732,7 +738,7 @@ func TestMapProductAllowanceCursorUsesTypedFields(t *testing.T) {
 	item.CurrentMeasures[0].MeasureID = "five-hour"
 	item.CurrentMeasures[0].Value.Decimal = allowanceString("40")
 	got := MapProductAllowance(doc)
-	if len(got) != 3 || got[0].Value != portal.AllowanceUnknown || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceMeasured || len(got[2].Windows) != 1 {
+	if len(got) != 4 || got[0].Value != portal.AllowanceUnknown || got[1].Value != portal.AllowanceUnknown || got[2].Provider != "Cursor" || got[2].Value != portal.AllowanceMeasured || len(got[2].Windows) != 1 || got[3].Value != portal.AllowanceNotConnected {
 		t.Fatalf("cursor row: %+v", got)
 	}
 	w := got[2].Windows[0]
@@ -948,7 +954,8 @@ func TestMapProductAllowanceLocalPreflightShapeStaysDisconnected(t *testing.T) {
 		})
 	}
 	got := MapProductAllowance(doc)
-	want := []string{"Claude", "Codex", "Cursor"}
+	// The preflight has no Grok status; a missing Grok row is Not connected.
+	want := []string{"Claude", "Codex", "Cursor", "Grok"}
 	if len(got) != len(want) {
 		t.Fatalf("%+v", got)
 	}
