@@ -1401,6 +1401,66 @@ class AnswerTests(AnswerFixture):
                     self.assertEqual(self.sends(), [])
                     self.assertFalse(self.ledger(approval_ref).exists())
 
+    # Nested and paired boxes (QA round 4, MEDIUM): the nearest top and bottom
+    # borders can belong to different boxes, leaving rows of an outer box unchecked.
+
+    def test_the_prompt_binds_to_one_paired_box(self):
+        def inner(rows, width=44):
+            return (["  \u256d" + "\u2500" * width + "\u256e"]
+                    + ["  \u2502" + row.ljust(width) + "\u2502" for row in rows]
+                    + ["  \u2570" + "\u2500" * width + "\u256f"])
+
+        command, options = "  Allow this command: git status", ["  \u25b6 [y] Yes", "    [n] No"]
+        header = "  Allow this command to modify files outside the workspace?"
+        approval_box = boxed([command] + options)
+        nested_a = boxed(["", header, ""] + inner([command]) + [""] + options + [""])
+        nested_b = boxed(["", command, ""] + inner(options) + ["", "  This also grants network access.", ""])
+        nested_c = boxed(["", header, ""] + inner([command] + options) + [""])
+        c_lines = nested_c.splitlines(True)
+        frameless = ("\u256d" + "\u2500" * 76 + "\u256e\n" + header + "\n\n"
+                     + "".join(row + "\n" for row in inner([command] + options)) + "\u2570" + "\u2500" * 76 + "\u256f\n")
+        narrow_bottom = approval_box.rsplit("  \u2570", 1)[0] + "  \u2570" + "\u2500" * 70 + "\u256f\n"
+        lone_top = "  \u256d" + "\u2500" * 20 + "\u256e\n"
+        closed_above = "  \u2502  old output      \u2502\n  \u2570" + "\u2500" * 18 + "\u256f\n"
+        everything = "Allow this command to modify files outside the workspace?\n" + APPROVAL_EXPECT
+        a, ok = "modal-approval", "answered"
+        cases = {
+            "a separate box above the prompt's box": (a, boxed(["  Tip: one box"]) + "\n" + approval_box + "\n",
+                                                      APPROVAL_EXPECT, ok, None),
+            "QA: an outer header left out, the command in an inner box": (
+                a, nested_a + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "QA: an outer footer below an inner box holding the options": (
+                a, nested_b + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "the prompt inside an inner box, the outer header left out": (
+                a, nested_c + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "every row of both boxes expected": (a, nested_a + "\n", everything, "prompt-unclear", None),
+            "an outer box whose borders are off the visible screen": (
+                a, "".join(c_lines[:-1]), APPROVAL_EXPECT, "prompt-unclear", len(c_lines) - 2),
+            "an outer frame without side borders": (a, frameless + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "top and bottom borders of different widths": (a, narrow_bottom + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+            "a box left open above the prompt's box": (a, lone_top + "\n" + approval_box + "\n", APPROVAL_EXPECT,
+                                                       "prompt-unclear", None),
+            "a box closed above the prompt's box, its top off the screen": (
+                a, closed_above + "\n" + approval_box + "\n", APPROVAL_EXPECT, "prompt-unclear", None),
+        }
+        for label, (kind, capture, text, expected, visible) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible)
+                inspected = self.start_and_inspect()
+                expect = self.root / "expect-nested"
+                expect.write_text(text)
+                approval_ref = self.case_approval(label)
+                code, result = self.invoke("answer", self.answer_args(inspected["receipt"], choice="y", kind=kind,
+                                                                      approval=approval_ref, expect=expect))
+                if expected == ok:
+                    self.assertEqual((code, result["state"]), (0, "answered"))
+                    self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "y"]])
+                else:
+                    self.assertEqual((code, result["state"]), (2, expected))
+                    self.assertEqual(self.sends(), [])
+                    self.assertFalse(self.ledger(approval_ref).exists())
+
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,
                                 text=True, timeout=10)
