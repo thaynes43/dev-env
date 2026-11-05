@@ -381,9 +381,12 @@ func privateExecutorUsesHome(pod *corev1.Pod, claim string) bool {
 	return false
 }
 
-func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessionStatus) {
+// setPrivateHistoryConditions sets PrivateHistory for a protected Session and,
+// when it wants its pod gone, RemovalBlocked; removalSet reports the latter, so
+// observe does not remove the condition this sets.
+func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *v1alpha1.AgentSessionStatus) (removalSet bool) {
 	if !privateHistoryProtected(s) {
-		return
+		return false
 	}
 	c := metav1.Condition{Type: ConditionPrivateHistory, Status: metav1.ConditionTrue, Reason: "HomeProtected",
 		Message: "original private HOME and durable Session identity remain protected; private stop state is Unknown", ObservedGeneration: s.Generation}
@@ -421,8 +424,10 @@ func setPrivateHistoryConditions(s *v1alpha1.AgentSession, obs observation, st *
 	if obs.privateStopErr != nil {
 		removal.Message = truncate(removal.Message + "; the stop request for the recorded executor (DESIGN-025 4) failed and is retried: " + obs.privateStopErr.Error())
 	}
-	if wantsPodGone(s) {
-		meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue,
-			Reason: removal.Reason, Message: removal.Message, ObservedGeneration: s.Generation})
+	if !wantsPodGone(s) {
+		return false
 	}
+	meta.SetStatusCondition(&st.Conditions, metav1.Condition{Type: ConditionRemovalBlocked, Status: metav1.ConditionTrue,
+		Reason: removal.Reason, Message: removal.Message, ObservedGeneration: s.Generation})
+	return true
 }
