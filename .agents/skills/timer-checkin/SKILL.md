@@ -291,8 +291,8 @@ short while a timer is armed.
 ## 5. Hand custody over
 
 Only the current custodian holds a timer for the task. When it hands off,
-because its context is filling, its session is stopping, or the parent reassigns
-the work:
+because its context is filling, its session is stopping, it has lost its read
+path to the task, or the parent reassigns the work:
 
 1. The custodian writes the successor into the state file: `custodian` becomes
    the successor, and `custody` gains an entry with the old and new owner, the

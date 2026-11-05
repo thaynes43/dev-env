@@ -159,7 +159,10 @@ exact head.
 
 Record each rung when you observe it. A later rung seen first does not prove an
 earlier one: a PR seen before you read its deliverable leaves rung 5 open, and
-a rung you never read stays "not observed". For a deliverable that is a
+a rung you never read stays "not observed". One read can record several rungs
+when it is each rung's own evidence: a PR read shows a commit on the claimed
+branch (rung 4) and the PR (rung 6), but not the deliverable's contents
+(rung 5). For a deliverable that is a
 message rather than a PR, rungs 4 and 5 are that message as you read it, and
 rungs 6 and 7 do not apply: record them as not applicable. A deliverable in
 several parts, such as a reply and then a correction, reaches rung 5 only when
@@ -229,9 +232,10 @@ example, labelled historical, is in
    can still be pending. That is the same task starting, not a failure.
    Re-read that same Session within a bounded observer window. The work order
    sets the window; if it does not, ask its owner. Re-read with access you
-   already hold. Never launch it again because its log is not ready yet.
-   Never mint or renew a token to keep watching it: a short-lived token minted
-   for the launch was for the launch only. When the observer window ends, record the child's identity and last
+   already hold. A short-lived token minted for the launch serves only within
+   its approval and only while it lasts. Never launch the task again because
+   its log is not ready yet, and never mint another token or renew one to
+   keep watching it. When the observer window ends, record the child's identity and last
    observed state in the custody record (timer-checkin, section 2), and keep
    observing it through later authorized reads of that same task. The window
    ends the observation, not the task or its assignment. If no authorized read
@@ -252,14 +256,16 @@ example, labelled historical, is in
    check the repository's own required checks.
 8. **Report to the destination.** If the report fails (for example, the route
    answers not found), that is a reporting failure, not a task failure. Record
-   it with its error, report through the work order's fallback (the tracker
-   item when none is named, which every session can read), and do not keep
+   it with its error, report through the work order's fallback and, in any
+   case, on the tracker item, which every session can read. Do not keep
    retrying the dead route. A dead route to the parent can mean the parent
    has ended. If the parent is a Session you can read, check it with
    `agent-run show PARENT`. If it is gone, or you cannot tell (an unnamed
    parent, a thread, no read access), record that. Report to the parent's own
    coordinator, or, for a top-level coordinator, to Tom or his verified
-   coordinator, who names a successor (timer-checkin, section 5). The task's
+   coordinator, who names a successor (timer-checkin, section 5). If you cannot
+   tell which applies, report on the tracker and to the coordinator that
+   assigned you the work, and let it decide. The task's
    result stands on its own evidence.
 
 ### Waiting for a child
