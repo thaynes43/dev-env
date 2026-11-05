@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -45,11 +47,47 @@ func (c *localTestCalls) snapshot() []localTestCall {
 	return append([]localTestCall(nil), c.list...)
 }
 
+// localTestLaunchRepos is the fixture launch scope.
+var localTestLaunchRepos = []string{"dev-env", "fixture-repo"}
+
 // localTestWrites is the fixture operator's write side. It records every
 // non-GET request, then answers the wired routes; anything else is refused.
+// Launched sessions join the Sessions listing as Pending rows.
 type localTestWrites struct {
-	calls *localTestCalls
-	now   func() time.Time
+	calls    *localTestCalls
+	now      func() time.Time
+	sessions []byte
+	repos    []string
+
+	mu       sync.Mutex
+	launches map[string]localTestLaunch
+	launched []json.RawMessage
+}
+
+type localTestLaunch struct {
+	body    []byte
+	receipt apiv1.PortalLaunchReceipt
+}
+
+// sessionsBody is the fixture Sessions page plus any launched sessions.
+func (o *localTestWrites) sessionsBody() []byte {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.launched) == 0 {
+		return o.sessions
+	}
+	var page map[string]json.RawMessage
+	var rows []json.RawMessage
+	if json.Unmarshal(o.sessions, &page) != nil || json.Unmarshal(page["sessions"], &rows) != nil {
+		return o.sessions
+	}
+	rows = append(rows, o.launched...)
+	page["sessions"], _ = json.Marshal(rows)
+	raw, err := json.Marshal(page)
+	if err != nil {
+		return o.sessions
+	}
+	return raw
 }
 
 func (o *localTestWrites) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +100,8 @@ func (o *localTestWrites) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == apiv1.PortalSessionMessagesPath:
 		o.send(w, body)
+	case r.Method == http.MethodPost && r.URL.Path == apiv1.PortalLaunchPath:
+		o.launch(w, body)
 	default:
 		http.NotFound(w, r)
 	}
@@ -80,6 +120,45 @@ func (o *localTestWrites) send(w http.ResponseWriter, body []byte) {
 	receipt := apiv1.PortalMessageReceipt{RequestID: request.RequestID, SessionName: request.SessionName, SessionUID: request.SessionUID, ResolvedPodUID: "fixture-pod-" + request.SessionUID, ObservedAt: o.now().UTC(), TransportStatus: apiv1.PortalTransportDelivered, Reason: "delivered"}
 	raw, _ := json.Marshal(receipt)
 	localTestJSON(w, "application/json", raw)
+}
+
+// launch answers like the operator's portal launch route: a new request ID
+// creates one Pending fixture session; the same request again returns the same
+// receipt; other content under that ID is a conflict. It starts nothing.
+func (o *localTestWrites) launch(w http.ResponseWriter, body []byte) {
+	var request apiv1.PortalLaunchRequest
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || !launchRequestID.MatchString(request.RequestID) || !slices.Contains(o.repos, request.Repo) || !slices.Contains([]string{"task", "local", "remote"}, request.Mode) || !slices.Contains(apiv1.PortalLaunchModels(), request.Model) || request.ActorRef == "" {
+		http.Error(w, "fixture operator refused", http.StatusBadRequest)
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if previous, found := o.launches[request.RequestID]; found {
+		if !bytes.Equal(previous.body, body) {
+			http.Error(w, "fixture operator conflict", http.StatusConflict)
+			return
+		}
+		raw, _ := json.Marshal(previous.receipt)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return
+	}
+	n := strconv.Itoa(len(o.launched) + 1)
+	now := o.now().UTC()
+	receipt := apiv1.PortalLaunchReceipt{RequestID: request.RequestID, SessionName: "fixture-launch-" + n, SessionUID: "fixture-uid-launch-" + n, Phase: "Pending", ObservedAt: now}
+	row, _ := json.Marshal(map[string]string{"name": receipt.SessionName, "uid": receipt.SessionUID, "repo": request.Repo, "phase": "Pending", "observedAt": now.Format(time.RFC3339), "freshness": "observed"})
+	if o.launches == nil {
+		o.launches = map[string]localTestLaunch{}
+	}
+	o.launches[request.RequestID] = localTestLaunch{body: append([]byte(nil), body...), receipt: receipt}
+	o.launched = append(o.launched, row)
+	raw, _ := json.Marshal(receipt)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write(raw)
 }
 
 // localTestSend wires the production send handler: every fixture session is a

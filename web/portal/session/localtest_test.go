@@ -306,8 +306,9 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 		s := source(upstreams.dial)
 		tasks := &TaskSource{path: s.path, client: source(upstreams.dial).client, now: now}
 		send := &commandHandler{transport: &commandClient{client: source(upstreams.dial).client}}
+		launch := &launchHandler{transport: &launchClient{client: source(upstreams.dial).client}}
 		return AssemblyConfig{Sessions: s, Tasks: tasks, Pages: newPagesSource(true, now, upstreams.dial),
-			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}, Send: send}
+			Asks: &AsksSource{client: source(upstreams.dial).client}, Claims: &ClaimsSource{client: source(upstreams.dial).client}, Send: send, Launch: launch}
 	}
 	if err := localTestDialersFixtureOnly(good(), upstreams); err != nil {
 		t.Fatalf("fixture-only config refused: %v", err)
@@ -326,6 +327,10 @@ func TestLocalTestRefusesSourcesOffTheFixtureNet(t *testing.T) {
 		},
 		"send other transport": func(c *AssemblyConfig) { c.Send = &commandHandler{transport: &commandTransportFake{}} },
 		"send missing":         func(c *AssemblyConfig) { c.Send = nil },
+		"launch default dialer": func(c *AssemblyConfig) {
+			c.Launch = &launchHandler{transport: &launchClient{client: source(nil).client}}
+		},
+		"launch missing": func(c *AssemblyConfig) { c.Launch = nil },
 	} {
 		c := good()
 		mutate(&c)

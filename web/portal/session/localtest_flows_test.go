@@ -97,3 +97,79 @@ func TestLocalTestSendFlow(t *testing.T) {
 		t.Fatalf("fixture operator saw %d sends, want 1", len(calls))
 	}
 }
+
+var localTestLaunchForm = regexp.MustCompile(`<form class="launch" method="post" action="([^"]+)"><input type="hidden" name="csrf" value="([^"]+)"><input type="hidden" name="requestID" value="([^"]+)">`)
+
+// TestLocalTestLaunchFlow drives the production launch handler: the Sessions
+// page renders the New agent form, a POST reaches the fixture operator, and
+// the redirect selects the new fixture session. A repeated submission reaches
+// the operator again with the same request and gets the same session, as the
+// operator's per-request idempotency answers; other content under the same
+// request ID is a conflict.
+func TestLocalTestLaunchFlow(t *testing.T) {
+	instance := newLocalTestForTest(t)
+	page := serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath))
+	m := localTestLaunchForm.FindStringSubmatch(page.Body.String())
+	if page.Code != http.StatusOK || m == nil || m[1] != portalLaunchesPath {
+		t.Fatalf("no launch form on the Sessions page (status %d)", page.Code)
+	}
+	form := url.Values{"csrf": {m[2]}, "requestID": {m[3]}, "repo": {"dev-env"}, "mode": {"task"}, "model": {"claude-opus-5-5"}, "effort": {""}, "size": {"M"}, "prompt": {"Fixture task from the local test."}}
+	origin := "http://" + localTestListen.String()
+	first := localTestPost(instance, portalLaunchesPath, origin, form)
+	location := first.Header().Get("Location")
+	if first.Code != http.StatusSeeOther || !strings.HasPrefix(location, SessionsPath+"?session=fixture-uid-launch-") {
+		t.Fatalf("launch %d location %q: %.300s", first.Code, location, first.Body.String())
+	}
+	calls := localTestCallsTo(instance, apiv1.PortalLaunchPath)
+	if len(calls) != 1 {
+		t.Fatalf("fixture operator saw %d launches", len(calls))
+	}
+	var sent apiv1.PortalLaunchRequest
+	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent.RequestID != form.Get("requestID") || sent.Repo != "dev-env" || sent.Mode != "task" || sent.Model != "claude-opus-5-5" || sent.Size != "M" || sent.Prompt != form.Get("prompt") || sent.ActorRef == "" {
+		t.Fatalf("fixture operator received %+v", sent)
+	}
+	// The redirect target shows the new session selected.
+	selected := serveLocalTest(instance, localTestRequest(http.MethodGet, location))
+	if selected.Code != http.StatusOK || !strings.Contains(selected.Body.String(), "fixture-launch-1") {
+		t.Fatalf("launched session page %d", selected.Code)
+	}
+	// Double submit: same request again, same session, one launched session.
+	again := localTestPost(instance, portalLaunchesPath, origin, form)
+	if again.Code != http.StatusSeeOther || again.Header().Get("Location") != location {
+		t.Fatalf("repeated launch %d location %q", again.Code, again.Header().Get("Location"))
+	}
+	if calls := localTestCallsTo(instance, apiv1.PortalLaunchPath); len(calls) != 2 || string(calls[1].Body) != string(calls[0].Body) {
+		t.Fatalf("repeated launch reached the operator %d times or changed", len(calls))
+	}
+	// Other content under the same request ID is a conflict page.
+	changed := url.Values{}
+	for k, v := range form {
+		changed[k] = v
+	}
+	changed.Set("prompt", "A different fixture task.")
+	if w := localTestPost(instance, portalLaunchesPath, origin, changed); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `id="`+LocalTestBannerID+`"`) || strings.Contains(w.Body.String(), "A different fixture task.") {
+		t.Fatalf("conflicting launch %d", w.Code)
+	}
+	if strings.Count(string(serveLocalTest(instance, localTestRequest(http.MethodGet, SessionsPath)).Body.String()), "fixture-launch-") == 0 {
+		t.Fatal("launched session missing from Sessions")
+	}
+	// Cross-origin and tampered posts are refused before the operator.
+	before := len(localTestCallsTo(instance, apiv1.PortalLaunchPath))
+	if w := localTestPost(instance, portalLaunchesPath, "https://evil.example", form); w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin launch %d", w.Code)
+	}
+	tampered := url.Values{}
+	for k, v := range form {
+		tampered[k] = v
+	}
+	tampered.Set("repo", "not-in-scope")
+	if w := localTestPost(instance, portalLaunchesPath, origin, tampered); w.Code != http.StatusForbidden {
+		t.Fatalf("out-of-scope repo %d", w.Code)
+	}
+	if after := len(localTestCallsTo(instance, apiv1.PortalLaunchPath)); after != before {
+		t.Fatalf("refused launches reached the operator: %d -> %d", before, after)
+	}
+}
