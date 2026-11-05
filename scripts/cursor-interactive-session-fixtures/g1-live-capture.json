@@ -1,0 +1,37 @@
+{
+  "schema": "g1-live-capture-fixture.v1",
+  "frozenAt": "2026-11-05T18:21:31Z",
+  "source": "helper 6775ec23 inspect --answered-text-file at about 18:20Z (g1-inspect-5.json), geometry read at freeze time with tmux display (read-only)",
+  "sourceFixtureSha256": "9d3f34bbc5b73a1d20e81c50f877da6c579beb557e15e460ea294e8962f67df7",
+  "anonymized": "Same-length synthetic values replace the worktree name (in the identity, the trust path, the capture's path row and status line, and the answered text), the task name, the owner marker and the pane pid. The receipt is omitted. Rows, widths and geometry are unchanged; captureSha256 and expected_text_sha256 are recomputed.",
+  "privacy": "Cursor UI chrome only (trust box, banner, composer, model/branch status line); no auth data, no conversation content, no prompt text",
+  "tmux": "tmux 3.3a",
+  "geometry": {
+    "pane_height": 24,
+    "pane_width": 80,
+    "history_size": 11,
+    "cursor_x": 0,
+    "cursor_y": 23,
+    "pane_in_mode": 0,
+    "pane_pid": 12345,
+    "capture_rows": 35
+  },
+  "identity": {
+    "name": "xxxx-xx-xxxxxxxxxx-1",
+    "pane_id": "%7",
+    "pane_pid": "12345",
+    "owner": "ci1-0123456789abcdef0123456789abcdef",
+    "worktree": "/home/dev/work/xxxx-xx-xxxxxxxxxx-reminder",
+    "classification_with_6775ec23": "modal-trust"
+  },
+  "legacyLedger": {
+    "expected_text_sha256": "2c4cbb5e8aadb7f7ce0db40431463718ef511587f82833732ef984b80774dbd3",
+    "answered_at": "2026-11-05T16:20:24Z",
+    "kind": "modal-trust",
+    "outcome": "sent",
+    "trust_path": "/home/dev/work/xxxx-xx-xxxxxxxxxx-reminder"
+  },
+  "answeredText": "⚠ Workspace Trust Required\nCursor Agent can execute code and access files in this directory.\nDo you trust the contents of this directory?\n/home/dev/work/xxxx-xx-xxxxxxxxxx-reminder\n▶ [a] Trust this workspace\n[q] Quit\nUse arrow keys to navigate, Enter to select, or press the key shown\n",
+  "capture": "Tip: You can start the Cursor CLI with `agent` (same as `cursor-agent`).\n\n  ╭──────────────────────────────────────────────────────────────────────────╮\n  │                                                                          │\n  │  ⚠ Workspace Trust Required                                              │\n  │                                                                          │\n  │  Cursor Agent can execute code and access files in this directory.       │\n  │                                                                          │\n  │  Do you trust the contents of this directory?                            │\n  │                                                                          │\n  │    /home/dev/work/xxxx-xx-xxxxxxxxxx-reminder                            │\n  │                                                                          │\n  │                                                                          │\n  │    [a] Trust this workspace                                              │\n  │    [q] Quit                                                              │\n  │                                                                          │\n  │  ⏳ Trusting workspace...                                                │\n  │                                                                          │\n  ╰──────────────────────────────────────────────────────────────────────────╯\n\n\n  Cursor Agent\n  v2026.10.14-0f9edde\n  Tip: Try Cursor Grok 4.7 via /model, frontier intelligence at a fraction of\n  the cost.\n\n\n\n\n  → Plan, search, build anything\n\n\n  Grok 4.7 256K Extra High\n  ~/work/xxxx-xx-xxxxxxxxxx-reminder · agent/xxxx-xx-xxxxxxxxxx-reminder · #917\n",
+  "captureSha256": "be4aa06e871a5d212a07920af61b406be70a11f4315103fb117a4eb5e8e1ceec"
+}
