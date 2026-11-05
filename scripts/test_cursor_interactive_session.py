@@ -555,7 +555,9 @@ TRUST_SCREEN = TRUST_CAPTURE + "\n\n"
 # Fixture text names this path; each answer test replaces it with its real worktree.
 EXAMPLE_PATH = "/home/dev/work/example-task"
 TRUST_PATH_ROW = "  \u2502    " + EXAMPLE_PATH + "                      \u2502\n"
-assert TRUST_PATH_ROW in TRUST_CAPTURE
+# An explicit check, not assert: CI runs this suite with -O, which strips asserts.
+if TRUST_PATH_ROW not in TRUST_CAPTURE:
+    raise AssertionError("TRUST_CAPTURE no longer shows TRUST_PATH_ROW; the trust-path fixtures would not apply")
 # The whole prompt, row for row, as the screen shows it inside the border.
 TRUST_EXPECT = (
     "\u26a0 Workspace Trust Required\n"
@@ -1076,7 +1078,10 @@ class AnswerTests(AnswerFixture):
 
     def trust_screen(self, path_rows):
         """The trust screen with its path row replaced by `path_rows`."""
-        return self.fix(TRUST_SCREEN).replace(self.fix(TRUST_PATH_ROW), path_rows)
+        screen = self.fix(TRUST_SCREEN)
+        if self.fix(TRUST_PATH_ROW) not in screen:
+            raise AssertionError("the trust screen has no path row to replace")
+        return screen.replace(self.fix(TRUST_PATH_ROW), path_rows)
 
     def test_trust_path_must_be_the_recorded_worktree(self):
         inspected = self.start_and_inspect()

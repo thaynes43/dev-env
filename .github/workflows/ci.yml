@@ -157,7 +157,7 @@ jobs:
       - name: go test -p 2
         run: make test
 
-  # Its own job: the Test job already runs close to its 20-minute limit.
+  # Its own job, so this suite's runtime stays out of the Go Test job's timeout budget.
   cursor-interactive:
     name: Cursor interactive session helper tests
     runs-on: ubuntu-latest
