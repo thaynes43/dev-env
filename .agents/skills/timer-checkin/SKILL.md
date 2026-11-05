@@ -387,9 +387,9 @@ When the work ends or pauses:
    to confirm it is gone. Do not keep polling during a pause.
 2. Write `stop` in the state file with the reason, time and evidence, and for a
    pause the condition that resumes it.
-3. Record the end or the pause on the tracker. A verified resume delivered into this session re-creates the
-   timer from the state file. If the session has ended, a successor acts from
-   the tracker mirror.
+3. Record the end or the pause on the tracker. A verified resume delivered into
+   this session re-creates the timer from the state file. If the session has
+   ended, a successor acts from the tracker mirror.
 
 This text is not operational proof. A real wake, re-arm, recovery and completion
 are proved by the keeper pilot (OP385), not by this file.
