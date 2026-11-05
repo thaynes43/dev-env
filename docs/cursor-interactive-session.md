@@ -224,20 +224,28 @@ when:
      no substring, prefix or case folding;
    - the matched rows must be consecutive, except for rows that trim to
      nothing (borders, padding, empty rows);
-   - the row just above the first matched row and the row just below the
-     last must trim to nothing, so no prompt row is left out;
    - the block must appear exactly once on the visible screen;
-   - it must not start on the first visible row or end on the last, where it
-     might continue out of view.
+   - the block must sit inside one box on the visible screen. Above it is the
+     nearest border row with a top corner (`╭`, `┌`, `╔` or `┏`), and below
+     it the nearest with a bottom corner (`╰`, `└`, `╚` or `┗`). A border
+     row has only box-drawing characters and spaces;
+   - every row between those two borders that does not trim to nothing must
+     be one of the expected lines. The expected text is the whole box, row
+     for row. A Cursor trust box puts a padding row between its rows, so
+     checking only the rows next to the block would not show a row left out.
 
    The states:
    - If the lines are only in older rows, the state is `stale-prompt`.
-   - A block shown twice, or one touching an edge of the screen, is
-     `prompt-unclear`.
-   - Any other difference is `modal-mismatch`. That covers a longer target
-     (`git status && echo EXTRA`), a path with a suffix or in another case, a
-     changed space inside a row, a wrapped continuation row, and a prompt row
-     left out of the expected text.
+   - It is `prompt-unclear` when the block is shown twice, or no box can be
+     found around it. That covers an unboxed prompt, a box that runs off the
+     visible screen, and the other kind of corner met first.
+   - Any other difference is `modal-mismatch`. That covers:
+     - a longer target (`git status && echo EXTRA`);
+     - a path with a suffix or in another case;
+     - a changed space inside a row;
+     - a wrapped continuation row;
+     - any row in the box that the expected text leaves out: the header, the
+       footer, or an unexpected or changed row past a padding row.
 5. no composer row (`>`, `›` or `❯` at the start of a row) follows the last
    expected line, and the cursor row is not a composer row (otherwise
    `stale-prompt`).
@@ -265,8 +273,11 @@ current, it refuses.
 
 A workspace-trust approval covers one directory, so a trust answer is bound
 to it in three places. Under the lock, before any tmux call, `--trust-path`
-must equal the worktree that `start` recorded for this task (the pane's cwd
-must match it too); otherwise the state is `trust-path-mismatch`. The expected
+must equal, exactly as a string, the worktree that `start` recorded for this
+task. `start` records the resolved real path (symlinks resolved, no trailing
+slash, no `.` or `..`), so a symlinked, trailing-slash or dotted spelling of
+the same directory is refused. The pane's cwd must match it too. Otherwise
+the state is `trust-path-mismatch`. The expected
 text must contain it (above). And the visible screen, at the first check and
 again at the re-check right before the key, must name exactly that path:
 
