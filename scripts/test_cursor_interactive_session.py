@@ -1896,6 +1896,147 @@ class AnswerTests(AnswerFixture):
                 self.assertIn(refused["state"], {"pane-replaced", "not-owned"})
         self.assertEqual(len(self.sends()), 1)
 
+    # A legacy ledger entry (OP399 SK3): written before format 2, it binds the box only by
+    # expected_text_sha256. --answered-text-file supplies that exact file; nothing is written.
+
+    def make_legacy(self, approval=APPROVAL, change=None):
+        """Answer, then rewrite the ledger entry and the state record to the 8326e2d2 fields."""
+        self.answer_then_show(ANSWERED_SCREEN, approval=approval)
+        entry = {key: value for key, value in json.loads(self.ledger(approval).read_text()).items()
+                 if key in OLD_LEDGER_FIELDS}
+        entry = change(entry) if change else entry
+        self.ledger(approval).write_text(json.dumps(entry))
+        state = self.state()
+        state["answers"][-1] = {key: value for key, value in entry.items() if key != "name"}
+        (self.root / "state" / "cursor-interactive-session" / self.name).write_text(json.dumps(state))
+
+    def with_text(self, path, *flags):
+        return ["--answered-text-file", str(path), *flags]
+
+    def assert_unaccepted(self, path):
+        code, refused = self.invoke("inspect", self.with_text(path))
+        self.assertEqual((code, refused["state"]), (2, "answered-text-unaccepted"))
+        before = len(self.sends())
+        receipt = self.inspect_now()["receipt"]
+        code, refused = self.reply_to(receipt, *self.with_text(path, "--submit", "--observed-ready"))
+        self.assertEqual((code, refused["state"]), (2, "answered-text-unaccepted"))
+        self.assertEqual(len(self.sends()), before)
+
+    def test_legacy_entry_with_its_answered_text_file(self):
+        self.make_legacy()
+        ledger, answers = self.ledger().read_bytes(), self.state()["answers"]
+        # Without the file a legacy entry is not evidence.
+        self.assert_refused(self.inspect_now(), "modal-trust")
+        code, after = self.invoke("inspect", self.with_text(self.expect_path))
+        self.assertEqual((code, after["classification"]), (0, "unclassified"))
+        self.assertIn(APPROVAL, after["classification_detail"])
+        code, refused = self.reply_to(after["receipt"], "--submit", "--observed-ready")
+        self.assertEqual((code, refused["state"]), (2, "modal-trust"))
+        code, refused = self.reply_to(after["receipt"], *self.with_text(self.expect_path, "--submit"))
+        self.assertEqual((code, refused["state"]), (2, "unclassified-ui"))
+        code, sent = self.reply_to(after["receipt"], *self.with_text(self.expect_path, "--submit", "--observed-ready"))
+        self.assertEqual((code, sent["state"], sent["classification"]), (0, "sent", "unclassified"))
+        self.assertEqual(self.sends()[-2:], [["send-keys", "-t", "%7", "-l", "--", "continue"],
+                                             ["send-keys", "-t", "%7", "Enter"]])
+        # Read only: the ledger and the recorded answers are untouched.
+        self.assertEqual((self.ledger().read_bytes(), self.state()["answers"]), (ledger, answers))
+
+    def test_answered_text_file_must_bind_the_legacy_entry(self):
+        edits = {
+            "another pane": {"pane_id": "%8"},
+            "another pid": {"pane_pid": "999"},
+            "another owner": {"owner": "ci1-" + "0" * 32},
+            "another task name": {"name": "task-unique-2"},
+            "a trust path that is not the worktree": {"trust_path": str(self.root / "other-task")},
+            "an outcome other than sent": {"outcome": "uncertain"},
+            "another kind": {"kind": "modal-approval"},
+            "a format-2 field in a legacy entry": {"worktree": self.worktree},
+        }
+        for label, fields in edits.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.make_legacy(self.case_approval(label), lambda entry: dict(entry, **fields))
+                self.assert_unaccepted(self.expect_path)
+        variants = {
+            "a hash mismatch, the same rows": self.fix(TRUST_EXPECT) + "\n",
+            "a hash mismatch, other rows": self.fix(TRUST_EXPECT).replace("[q] Quit", "[q] Quit now"),
+        }
+        for label, text in variants.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.make_legacy(self.case_approval(label))
+                other = self.root / "answered-variant"
+                other.write_text(text)
+                self.assert_unaccepted(other)
+        with self.subTest(label="not the task's last answer"):
+            self.restart_case()
+            approval = self.case_approval("not last")
+            self.make_legacy(approval)
+            state = self.state()
+            state["answers"].append(dict(state["answers"][-1], approval_ref=SECOND_APPROVAL, outcome="not-sent"))
+            (self.root / "state" / "cursor-interactive-session" / self.name).write_text(json.dumps(state))
+            self.assert_unaccepted(self.expect_path)
+        with self.subTest(label="the ledger and the state record disagree"):
+            self.restart_case()
+            approval = self.case_approval("disagree")
+            self.make_legacy(approval)
+            self.edit_ledger(approval, lambda entry: dict(entry, answered_at="2026-11-05T00:00:00Z"))
+            self.assert_unaccepted(self.expect_path)
+        with self.subTest(label="a format-2 entry with a conflicting file"):
+            self.restart_case()
+            self.answer_then_show(ANSWERED_SCREEN, approval=self.case_approval("format 2 conflict"))
+            other = self.root / "answered-conflict"
+            other.write_text(self.fix(TRUST_EXPECT) + "\n")
+            self.assert_unaccepted(other)
+        with self.subTest(label="a format-2 entry with its own file"):
+            self.restart_case()
+            self.answer_then_show(ANSWERED_SCREEN, approval=self.case_approval("format 2 same"))
+            code, after = self.invoke("inspect", self.with_text(self.expect_path))
+            self.assertEqual((code, after["classification"]), (0, "unclassified"))
+
+    def test_answered_text_file_input_limits(self):
+        self.make_legacy()
+        cases = {
+            "a missing file": self.root / "absent",
+            "over 4096 bytes": b"[a] Trust this workspace\n" + b"x" * 4097,
+            "over 20 lines": b"[a] Trust this workspace\n" * 21,
+            "a control character": b"[a] Trust this workspace\x1b[2J\n",
+        }
+        for label, data in cases.items():
+            with self.subTest(label=label):
+                path = data if isinstance(data, Path) else self.root / ("answered-" + label.replace(" ", "-"))
+                if not isinstance(data, Path):
+                    path.write_bytes(data)
+                self.log.write_text("")
+                code, refused = self.invoke("inspect", self.with_text(path))
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.text_path.write_text("continue")
+                code, refused = self.invoke("reply", ["--receipt", "v1:" + "0" * 32 + ":" + "0" * 64 + ":%7:123",
+                                                      "--text-file", str(self.text_path), *self.with_text(path)])
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.commands("tmux"), [])
+
+    def test_answered_text_file_does_not_loosen_the_box_rules(self):
+        cases = {
+            "a changed row": (ANSWERED_SCREEN.replace("this directory?", "every directory?"), "modal-trust"),
+            "no status row": (ANSWERED_SCREEN.replace(STATUS_ROW.strip(), "x" * len(STATUS_ROW.strip())), "modal-trust"),
+            "a command prompt below": (ANSWERED_SCREEN.replace("\n  Cursor Agent\n", "\n  Allow this command: git status\n"),
+                                       "modal-approval"),
+            "a draft at the cursor": (ANSWERED_SCREEN.replace(CURSOR_COMPOSER, "> typed draft"), "user-draft"),
+        }
+        for label, (screen, kind) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.make_legacy(self.case_approval(label))
+                self.screen("older output\n" * 11 + screen, visible=len(screen.splitlines()))
+                code, after = self.invoke("inspect", self.with_text(self.expect_path))
+                self.assertEqual((code, after["classification"]), (0, kind))
+                before = len(self.sends())
+                code, refused = self.reply_to(after["receipt"], *self.with_text(self.expect_path, "--submit",
+                                                                                "--observed-ready"))
+                self.assertEqual((code, refused["state"]), (2, kind))
+                self.assertEqual(len(self.sends()), before)
+
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,
                                 text=True, timeout=10)

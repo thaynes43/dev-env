@@ -287,6 +287,12 @@ Handle it like this:
    Cursor's `⏳ Trusting workspace...` row; `classification_detail` then names
    the approval reference
    ([the answered trust box](../../../docs/cursor-interactive-session.md#the-answered-trust-box)).
+   For a ledger entry written before format 2 (the helper at 8326e2d2 and
+   earlier), pass that answer's exact `--expect-text-file` as
+   `--answered-text-file` to both `inspect` and `reply`. The helper checks it
+   against the entry's `expected_text_sha256` and the pane, never writes the
+   ledger, and refuses it with `answered-text-unaccepted` when it does not
+   match.
    Before giving that flag, read the inspect's whole `text`, history rows
    included: any prompt there must be the one just answered, not a prompt
    taller than the pane that is still pending. If the read still shows the

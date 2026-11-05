@@ -98,6 +98,7 @@ ANSWERED_DETAIL = (
 ANSWERED_STATUS = "\u23f3 Trusting workspace..."
 SELECTION_MARKER = "\u25b6 "
 LEDGER_FORMAT = 2
+LEDGER_FORMAT_KEYS = ("format", "worktree", "box_rows_sha256", "box_marker_rows")
 MAX_LEDGER = 4096
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
@@ -558,16 +559,19 @@ def start_session(args):
 
 
 def inspect_session(args):
+    # A FIFO may block. Read the answered text before the lock.
+    answered_text = read_answered_text(getattr(args, "answered_text_file", None))
     with state_lock(args.name):
-        return inspect_locked(args)
+        return inspect_locked(args, answered_text)
 
 
-def inspect_locked(args):
+def inspect_locked(args, answered_text=None):
     path, state = load_owned(args.name, args.tmux)
     ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
     require_same_pane(state, ident)
+    answered = answered_evidence(state, answered_text)
     text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
-    kind, located, used = classify(text, truncated, rows_total, ident, answered_trust(state))
+    kind, located, used = classify(text, truncated, rows_total, ident, answered)
     digest = snapshot_hash(ident, text, truncated)
     receipt_id = secrets.token_hex(16)
     state["receipt_id"] = receipt_id
@@ -631,11 +635,12 @@ def send_instruction(tmux, pane, text, submit):
 def reply_session(args):
     # stdin and FIFOs may block. Finish all input reads before final verification.
     instruction = read_instruction(args.text_file)
+    answered_text = read_answered_text(getattr(args, "answered_text_file", None))
     with state_lock(args.name):
-        return reply_locked(args, instruction)
+        return reply_locked(args, instruction, answered_text)
 
 
-def reply_locked(args, instruction):
+def reply_locked(args, instruction, answered_text=None):
     path, state = load_owned(args.name, args.tmux)
     receipt = parse_receipt(args.receipt)
     if not state.get("receipt_id") or receipt["id"] != state["receipt_id"]:
@@ -648,7 +653,7 @@ def reply_locked(args, instruction):
     digest = snapshot_hash(ident, text, truncated)
     if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
         raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
-    kind, _located, _used = classify(text, truncated, rows_total, ident, answered_trust(state))
+    kind, _located, _used = classify(text, truncated, rows_total, ident, answered_evidence(state, answered_text))
     if kind.startswith("modal-"):
         label = kind.split("-", 1)[1]
         raise Refusal(kind, "Refusing to type or send Enter into a " + label + " modal. --observed-ready does not override it. Re-inspect after the pane is clear.")
@@ -924,13 +929,18 @@ def box_evidence(lines):
     return {"box_rows_sha256": rows_digest(rows), "box_marker_rows": marked}
 
 
-def answered_trust(state):
-    """The ledger evidence for this pane's last answer, or None.
+def answered_trust(state, answered_text=None):
+    """The ledger evidence for this pane's last answer, or None. Nothing is written.
 
     The last answer in the task's state must be a sent trust answer whose ledger
-    entry has this helper's current format and names this task, pane, process,
-    owner marker and worktree. An entry written before the format, or any entry
-    that cannot be read, is not evidence. The screen is never evidence."""
+    entry names this task, pane, process and owner marker, has the worktree as
+    its trust path, and is the state's record plus its name. A format-2 entry
+    carries the box evidence and names the worktree. An entry written before
+    format 2 is evidence only with `answered_text`, the (raw, lines) of the exact
+    expected-text file of that answer: its SHA-256 must be the entry's
+    expected_text_sha256, and the box evidence is derived from its lines as
+    answer derives it. An entry that cannot be read is not evidence. The screen
+    is never evidence."""
     answers = state.get("answers")
     record = answers[-1] if isinstance(answers, list) and answers else None
     ref = record.get("approval_ref") if isinstance(record, dict) else None
@@ -943,23 +953,56 @@ def answered_trust(state):
     except (OSError, UnicodeError, ValueError):
         return None
     required = {
-        "format": LEDGER_FORMAT, "kind": "modal-trust", "outcome": "sent", "approval_ref": ref,
+        "kind": "modal-trust", "outcome": "sent", "approval_ref": ref,
         "name": state["name"], "pane_id": state["pane_id"], "pane_pid": state["pane_pid"],
-        "owner": state["owner"], "worktree": state["worktree"], "trust_path": state["worktree"],
+        "owner": state["owner"], "trust_path": state["worktree"],
     }
     if not isinstance(entry, dict) or any(entry.get(key) != value for key, value in required.items()):
         return None
-    digest, marked = entry.get("box_rows_sha256"), entry.get("box_marker_rows")
+    # The task's own record must be this same answer.
+    if {key: value for key, value in entry.items() if key != "name"} != record:
+        return None
+    derived = None
+    if answered_text is not None:
+        text_raw, text_lines = answered_text
+        if hashlib.sha256(text_raw).hexdigest() != entry.get("expected_text_sha256"):
+            return None
+        derived = box_evidence(text_lines)
+    if entry.get("format") == LEDGER_FORMAT and entry.get("worktree") == state["worktree"]:
+        evidence = {"box_rows_sha256": entry.get("box_rows_sha256"), "box_marker_rows": entry.get("box_marker_rows")}
+        if derived is not None and derived != evidence:
+            return None
+    elif derived is not None and not any(key in entry for key in LEDGER_FORMAT_KEYS):
+        evidence = derived
+    else:
+        return None
+    digest, marked = evidence["box_rows_sha256"], evidence["box_marker_rows"]
     if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
         return None
     if (not isinstance(marked, list) or not all(type(index) is int for index in marked)
             or marked != sorted(set(marked)) or any(not 0 <= index < MAX_EXPECT_LINES for index in marked)):
         return None
-    # The task's own record must be this same answer.
-    if any(record.get(key) != entry.get(key) for key in (*required, "answered_at", "box_rows_sha256", "box_marker_rows")
-           if key != "name"):
-        return None
     return {"approval_ref": ref, "box_rows_sha256": digest, "box_marker_rows": marked}
+
+
+def read_answered_text(path):
+    """--answered-text-file, read and checked like answer's --expect-text-file. None when absent."""
+    if path is None:
+        return None
+    try:
+        return read_expected(path)
+    except Refusal as refusal:
+        raise Refusal(refusal.state, "--answered-text-file: " + refusal.detail)
+
+
+def answered_evidence(state, answered_text):
+    answered = answered_trust(state, answered_text)
+    if answered_text is not None and answered is None:
+        raise Refusal("answered-text-unaccepted", (
+            "--answered-text-file is not evidence for this task's last answer. It must be the exact expected-text "
+            "file of a sent trust answer for this task, pane, process and owner, whose trust path is the worktree "
+            "and whose ledger entry matches the task's record. Nothing was sent."))
+    return answered
 
 
 def answered_box(visible, answered):
@@ -1094,6 +1137,10 @@ def answer_locked(args, choice, raw, lines, trust_path):
     }
 
 
+ANSWERED_TEXT_HELP = ("for a ledger entry written before format 2: the exact --expect-text-file of the task's "
+                      "last trust answer; its SHA-256 must match the entry. Read only; it never writes the ledger")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1110,6 +1157,7 @@ def build_parser():
     inspect = sub.add_parser("inspect", help="capture bounded text and a fresh pane receipt")
     inspect.add_argument("--name", required=True)
     inspect.add_argument("--tmux", required=True)
+    inspect.add_argument("--answered-text-file", help=ANSWERED_TEXT_HELP)
 
     reply = sub.add_parser("reply", help="send literal text only to the inspected pane")
     reply.add_argument("--name", required=True)
@@ -1119,6 +1167,7 @@ def build_parser():
     reply.add_argument("--submit", action="store_true", help="send one Enter after literal text")
     reply.add_argument("--observed-ready", action="store_true",
                        help="manual confirmation of this exact unclassified receipt; not a Cursor trust flag")
+    reply.add_argument("--answered-text-file", help=ANSWERED_TEXT_HELP)
 
     answer = sub.add_parser(
         "answer", help="send one approved prompt choice to the inspected pane",

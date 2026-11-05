@@ -363,9 +363,9 @@ counting that box as a prompt only when all of these hold:
 1. **Ledger.** The last answer in the task's state is a trust answer whose
    ledger entry has `format` 2, `outcome` `sent`, and this task's name, pane
    id, pane pid, owner marker and worktree (also as `trust_path`). The state's
-   record and the entry agree. An entry written before `format` 2, an
-   unreadable entry, or any other outcome is not evidence. The screen alone is
-   never evidence.
+   record is the entry without its `name`. An unreadable entry or any other
+   outcome is not evidence, and the screen alone never is. An entry written
+   before `format` 2 is evidence only with `--answered-text-file` (below).
 2. **Box.** Every border on the visible screen pairs (rule 4). Exactly one box
    holds a prompt phrase. It has no title, holds no other box, is not inside
    one, and has nothing to its left. Its rows, trimmed as in rule 4 and
@@ -386,6 +386,29 @@ another pane, pid, owner or worktree, a box that differs, a second prompt box,
 a nested box, another prompt on the screen, a screen that cannot be located,
 a stale receipt or a changed pane. The ledger shows that the key was sent, not
 that Cursor accepted it.
+
+**Ledger entries written before `format` 2** (by the helper at 8326e2d2 and
+earlier) bind the prompt only by `expected_text_sha256`. To use one, pass
+`--answered-text-file` to both `inspect` and `reply`: the exact
+`--expect-text-file` of that answer. It is read and checked like
+`--expect-text-file` (at most 4096 bytes, 1..20 nonblank lines, no control
+characters but newlines; otherwise `invalid-input`). The helper accepts it
+only when:
+
+- its SHA-256 equals the entry's `expected_text_sha256`;
+- the entry is the task's last answer, a trust answer with `outcome` `sent`;
+- the entry names this task, pane id, pane pid and owner marker;
+- its `trust_path` is the recorded worktree;
+- the state's record is the entry without its `name`, and the entry has none
+  of the `format` 2 fields.
+
+It then derives `box_rows_sha256` and `box_marker_rows` from the file as
+`answer` would, and applies rules 2 and 3 unchanged. With a `format` 2 entry,
+the file must give the same evidence as the entry. A file that is not
+accepted is `answered-text-unaccepted`, and nothing is sent. The flag reads
+the ledger and the state and never writes them. It changes nothing else: a
+stale receipt, a changed pane, another prompt or a draft still refuse.
+Without it, an entry written before `format` 2 is not evidence.
 
 This command is source only. It is not deployed to any host. Using it on a
 live pane, such as the PR #917 continuation's Cursor pane, still needs Tom's
@@ -452,7 +475,7 @@ closed as `pane-replaced`.
 | `trust-path-mismatch`, `trust-path-unclear`, `trust-path-missing` | 2 | `answer` sent nothing and did not spend the approval: `--trust-path` is not the recorded worktree, or the visible screen names another path, a path that may continue across rows, or no exact path. |
 | `prompt-changed` | 2 | `answer` sent nothing: the pane changed after the approval was spent. The approval stays spent and its outcome is `not-sent`; a new approval is needed. |
 | `answer-unconfirmed` | 3 | The answer key's outcome is unknown and is recorded as `uncertain`. The approval and the receipt are spent; do not retry or send another key. |
-| `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui` | 2 | Nothing was sent. Correct the input or re-inspect. |
+| `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui`, `answered-text-unaccepted` | 2 | Nothing was sent. Correct the input or re-inspect. |
 | `launch-unconfirmed`, `client-not-running`, `inspect-unconfirmed`, `send-unconfirmed` | 3 | The outcome is unknown or the pane did not stay up. Do not retry automatically. |
 
 Tool calls time out after five seconds. `--observe-seconds` is `0..5` and defaults
