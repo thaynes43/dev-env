@@ -614,7 +614,7 @@ def read_expected(path):
         raise Refusal("invalid-input", "Expected prompt text must be UTF-8. Nothing was sent.")
     if any((ord(character) < 32 and character != "\n") or 127 <= ord(character) <= 159 for character in text):
         raise Refusal("invalid-input", "Expected prompt text must have no control characters except newlines. Nothing was sent.")
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    lines = [prompt_text(line) for line in text.split("\n") if prompt_text(line)]
     if not lines or len(lines) > MAX_EXPECT_LINES:
         raise Refusal("invalid-input", "Expected prompt text must have 1..20 nonblank lines. Nothing was sent.")
     return raw, lines
@@ -647,21 +647,39 @@ def validate_answer(args):
     return choice, raw, lines, trust_path
 
 
-def match_expected(rows, lines):
-    """Index of the row that matched the last expected line, or None.
+def prompt_text(row):
+    """A row without its border and padding: whitespace and box-drawing characters at its ends only."""
+    start, end = 0, len(row)
+    while start < end and is_separator(row[start]):
+        start += 1
+    while end > start and is_separator(row[end - 1]):
+        end -= 1
+    return row[start:end]
 
-    Every expected line must appear, in order, inside one row (case folded)."""
-    shown = [row.casefold() for row in rows]
-    position, last = 0, None
-    for expected in lines:
-        folded = expected.casefold()
-        while position < len(shown) and folded not in shown[position]:
-            position += 1
-        if position == len(shown):
-            return None
-        last = position
-        position += 1
-    return last
+
+def prompt_blocks(texts, lines):
+    """(first, last) for each place the expected lines are consecutive trimmed rows.
+
+    Exact and case-sensitive. Rows that trim to nothing (borders, padding,
+    empty rows) may sit between them."""
+    blocks = []
+    for first, text in enumerate(texts):
+        if text != lines[0]:
+            continue
+        index = first
+        for expected in lines[1:]:
+            index += 1
+            while index < len(texts) and texts[index] == "":
+                index += 1
+            if index == len(texts) or texts[index] != expected:
+                break
+        else:
+            blocks.append((first, index))
+    return blocks
+
+
+def is_separator(character):
+    return character.isspace() or "\u2500" <= character <= "\u257f"
 
 
 def modal_kinds(rows):
@@ -672,10 +690,6 @@ def modal_kinds(rows):
             if any(phrase in folded for phrase in phrases):
                 kinds.add(kind)
     return kinds
-
-
-def is_separator(character):
-    return character.isspace() or "\u2500" <= character <= "\u257f"
 
 
 def row_words(row):
@@ -718,9 +732,10 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     visible row, blank ones included. The row count is checked against tmux's
     own history_size and pane_height, so the last pane_height rows are the
     visible screen. It must be complete, show exactly one prompt kind (the
-    expected one), name exactly the trust path for a trust prompt, show every
-    expected line in order, and have no composer row after the prompt or under
-    the cursor. Anything else fails closed."""
+    expected one), name exactly the trust path for a trust prompt, show the
+    expected lines as the whole prompt, row for row and exactly, once, and
+    have no composer row after the prompt or under the cursor. Anything else
+    fails closed."""
     rows = text.split("\n")
     rows_needed = int(ident["height"])
     if rows_total != min(int(ident["history"]), MAX_LINES) + rows_needed:
@@ -731,7 +746,7 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
     visible = rows[-rows_needed:]
     kinds = modal_kinds(visible)
     # The expected prompt exists in the capture, but maybe not as the current state.
-    stale = expect_kind in modal_kinds(rows) and match_expected(rows, lines) is not None
+    stale = expect_kind in modal_kinds(rows) and bool(prompt_blocks([prompt_text(row) for row in rows], lines))
     if not kinds:
         if stale:
             raise Refusal("stale-prompt", "The expected prompt is only in older captured text, not on the visible screen. Nothing was sent.")
@@ -743,11 +758,22 @@ def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust
         raise Refusal("modal-mismatch", "The visible prompt is " + kind + ", not " + expect_kind + ". Nothing was sent.")
     if expect_kind == "modal-trust":
         check_trust_path(visible, trust_path)
-    last = match_expected(visible, lines)
-    if last is None:
+    # The expected lines are the whole prompt: exact rows, once, with nothing next to them.
+    texts = [prompt_text(row) for row in visible]
+    blocks = prompt_blocks(texts, lines)
+    if not blocks:
         if stale:
             raise Refusal("stale-prompt", "The expected prompt text is not all on the visible screen. Nothing was sent.")
-        raise Refusal("modal-mismatch", "The expected prompt text is not shown, in order, on the visible screen. Nothing was sent.")
+        raise Refusal("modal-mismatch", "The expected prompt rows are not shown exactly, in order, on the visible screen. Nothing was sent.")
+    if len(blocks) > 1:
+        raise Refusal("prompt-unclear", "The expected prompt is shown more than once on the visible screen. Nothing was sent.")
+    ((first, last),) = blocks
+    if first == 0 or last == len(visible) - 1:
+        raise Refusal("prompt-unclear", "The expected prompt touches the top or bottom of the visible screen, so it may "
+                                        "continue out of view. Nothing was sent.")
+    if texts[first - 1] or texts[last + 1]:
+        raise Refusal("modal-mismatch", "Another prompt row is next to the expected rows: the expected text must be the "
+                                        "whole prompt. Nothing was sent.")
     cursor = int(ident["cursor_y"])
     below = visible[last + 1:]
     if any(COMPOSER.match(row) for row in below) or (0 <= cursor < len(visible) and COMPOSER.match(visible[cursor])):
