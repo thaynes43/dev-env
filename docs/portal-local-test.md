@@ -95,10 +95,10 @@ banner, a fixture row, that the page has no horizontal scroll, and that the
 console has no errors. It prints `PASS` or `FAIL` per page and exits non-zero
 on a failure.
 
-The flow smoke drives send, launch, history and the Asks answer form at the
-same widths. For each width it starts a fresh instance from the binary. It
-double-clicks each submit, reloads after submitting, and repeats a launch
-request:
+The flow smoke drives send, launch, history and the Asks answer form in an
+unmodified Chromium at the same widths. For each width it starts a fresh
+instance from the binary. It double-clicks each submit, reloads after
+submitting, and repeats a launch request:
 
 ```sh
 GOTOOLCHAIN=local GOMAXPROCS=2 nice -n 19 \
@@ -109,14 +109,31 @@ NODE_PATH=/usr/local/lib/node_modules/@playwright/mcp/node_modules \
 
 **Chromium sends `Origin: null` on the portal's forms.** Every portal page
 sets `Referrer-Policy: no-referrer`. Under that policy Chromium sends
-`Origin: null` on a same-origin form post, and the production origin check
-refuses it. The local instance shows the same refusal. The flow smoke prints
-it as a `FINDING` line per width. It then runs the flows with a harness-only
-override that serves each page with `Referrer-Policy: same-origin`, so
-Chromium sends the page origin. To post a form by hand in Chromium, apply the
-same override; otherwise every send, launch, answer and logout is refused.
-DESIGN-055 section 9.4 has the details. The production fix is tracked in
+`Origin: null` on a same-origin form post, as the
+[Fetch Standard, "append a request `Origin` header"](https://fetch.spec.whatwg.org/#append-a-request-origin-header) specifies, and the production
+origin check refuses it. The local instance shows the same refusal. The fix
+is tracked in
 [OpenProject #480](https://work.haynesnetwork.com/projects/haynes-engineering/work_packages/480).
+
+So the default run is not green while #480 is open. It prints:
+
+- `NOT ACCEPTED (#480)` for send, launch and the Asks answer at each width;
+- `PASS` for history, which only reads.
+
+It then exits 1. It never reports a refused flow as `PASS`.
+
+`--diagnostic-referrer-same-origin` reruns the flows with a harness-only
+override that serves each page with `Referrer-Policy: same-origin`, so
+Chromium sends the page origin. Every line is labelled `DIAGNOSTIC`, and the
+run exits 3 when its checks hold. It shows what the flows do once #480 is
+fixed. It is not acceptance evidence:
+
+```sh
+NODE_PATH=/usr/local/lib/node_modules/@playwright/mcp/node_modules \
+  nice -n 19 node web/portal/localtest/smoke-flows.cjs --diagnostic-referrer-same-origin ~/.local/bin/portal-localtest
+```
+
+DESIGN-055 section 9.4 has the details.
 
 The Playwright MCP server works too: navigate to the printed URL and check
 for `#portal-localtest-banner`. The page CSP blocks `fetch` from page scripts,
