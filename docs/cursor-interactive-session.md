@@ -163,7 +163,9 @@ Before the lock and before any tmux call, `answer` checks its input:
   way as a screen row: leading and trailing whitespace and box-drawing
   characters only.
 - `--choice`: exactly one printable ASCII key that appears as `[key]` in the
-  expected text.
+  expected text. The one exception is Cursor's command prompt (below): there
+  the choice is `y`, shown once as `(y)` at the end of a row, with
+  `--expect-kind modal-approval`. No other key is accepted for that prompt.
 - `--trust-path`: required with `--expect-kind modal-trust` and refused with
   any other kind. It is the one directory the approval covers: an absolute,
   normalized path of letters, digits and `_.@+-` between single slashes, with
@@ -211,8 +213,9 @@ master) prints every row from the start to the end, blank rows included, one
 per line, when `-J` and `-H` are not given. So the capture has exactly
 `min(history_size, 80) + pane_height` rows, and the last `pane_height` of them
 are the visible screen. `answer` reads `#{history_size}` with the pane's
-identity and checks that count rather than assuming it. It goes ahead only
-when:
+identity and checks that count rather than assuming it. The identity also
+carries `#{pane_width}`, and the receipt binds it: a resize after `inspect`
+is `stale-receipt`. It goes ahead only when:
 
 1. the capture has exactly `min(history_size, 80) + pane_height` rows, the
    bounded text still holds the whole visible screen, and the byte cap did not
@@ -301,6 +304,82 @@ is refused even if it is live. A prompt drawn with a box inside a box is
 refused, and so is any screen whose box borders do not pair, even where the
 odd border is far from the prompt. When the helper cannot tell which prompt is
 current, it refuses.
+
+### Cursor's command prompt
+
+Cursor asks before it runs a command that is not in its allowlist. That
+prompt is not a box (the G1 pane, 2026-11-05; the anonymized capture is
+`scripts/cursor-interactive-session-fixtures/g1-command-approval.json`):
+
+```text
+────────────────────────────────────────────────────────────────────── (pane width)
+ $  sha256sum /home/dev/.local/state/.../XX-XXXXXXXXXX-1.md && wc -l    (the command,
+    ...                                                                  wrapped)
+    .../XX-XXXXXXXXXX-1.md in .
+
+ Run this command?
+ Not in allowlist: sha256sum, wc
+  → Run (once) (y)
+    Add Shell(sha256sum), Shell(wc) to allowlist? (tab)
+    Run Everything (shift+tab)
+    Skip & tell the agent what to do instead (esc or n)
+```
+
+`answer --expect-kind modal-approval --choice y` binds it instead of a box
+when the expected text shows `(y)` at the end of exactly one row and no
+`[y]`. Rules 1 to 3 and 5 hold as for a box. Rule 4 becomes:
+
+- the expected text is every nonblank row from the first command row to the
+  `Skip` row, with only spaces taken off each row's ends (not the box-drawing
+  and other whitespace characters rule 4 trims, because the command has no
+  border: `wc -l ─` is not `wc -l`), exactly, in order and once; expected
+  rows that start or end with such a character are `invalid-input`; a different
+  or longer command, another path, an added, missing or reordered row, or a
+  cropped prompt is `modal-mismatch` (or `prompt-unclear` when the rows left
+  out are its first or last);
+- the rows are not inside a box;
+- the row directly above the first command row is the divider: `─` repeated
+  exactly the pane width, nothing else;
+- every row after the `Skip` row, to the pane bottom, is blank;
+- no other row on the visible screen holds a known prompt phrase, except
+  Cursor's own `Waiting for approval...` status line for the pending command,
+  which it shows above the divider.
+
+The binding is to the rows Cursor draws, not to the command's bytes. Cursor
+wraps a long command and indents the continuation rows, and the trim removes
+that indent, so a newline in the command and a wrap at the same point look the
+same, though bash runs them differently. Characters that Cursor or tmux do not
+draw, such as zero-width characters, are invisible here too. Approve the
+command from its own record, not from what the screen shows.
+
+Anything else is `prompt-unclear`. Only `y`, Run (once), is ever sent, as one
+literal key without Enter. The helper refuses every other choice for this
+prompt (`invalid-input`) and never sends Tab (allowlist), Shift-Tab (Run
+Everything), Escape or `n` (Skip), or Enter. A persistent allowlist or a
+settings change is out of its scope. Each command needs its own recorded
+approval reference, spent once like any other answer.
+
+#### Lesson: qualify a prompt class on a real capture first
+
+- **Observed** (2026-11-05 19:30Z, Cursor 2026.10.14-0f9edde): a
+  command-approval prompt is not a box. It sits below a full-width divider
+  and writes its keys as `(y)`. `answer` refused it: `Choice must appear as
+  [y]`.
+- **Root cause**: the earlier `answer` fixtures and rules assumed every prompt
+  is a bracketed `[key]` inside one paired box. That assumption came from the
+  trust prompt and was never checked against a real command prompt.
+- **Rule**: before promising that the helper can answer a prompt class,
+  capture one real, sanitized example of that class and qualify it: a
+  fixture plus a test that is RED before the change and GREEN after. Until
+  then, report the gap. Do not broaden the matcher to a generic shape, and
+  do not send raw keys.
+
+The command prompt's fixture is
+[`g1-command-approval.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval.json),
+and its regression tests are the `test_command_prompt_*`,
+`test_command_fixture_is_the_captured_shape` and
+`test_answer_sends_only_y_to_cursors_command_prompt` tests in
+[`test_cursor_interactive_session.py`](../scripts/test_cursor_interactive_session.py).
 
 ### A trust answer names one exact path
 

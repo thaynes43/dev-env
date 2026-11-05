@@ -209,7 +209,17 @@ Who decides:
   recommendation never authorizes accepting it.
 - A command approval: the custodian or its supervisor, under its own rules;
   never Tom by default, and never an actor that is neither, unless a record says
-  otherwise.
+  otherwise. On a helper-started Cursor pane, `answer --expect-kind
+  modal-approval --choice y` presses only Run (once) on Cursor's command prompt,
+  once per recorded approval of that exact command; it never adds to the
+  allowlist, runs everything, skips, or sends Enter, Tab or Escape
+  ([Cursor's command prompt](../../../docs/cursor-interactive-session.md#cursors-command-prompt)).
+- Any other prompt class: do not promise that the helper can answer it until
+  one real, sanitized capture of that class is a fixture with a RED-then-GREEN
+  test. Until then, report the gap; never broaden the matcher or send raw keys.
+  The command prompt was assumed to look like the trust box and did not
+  (2026-11-05;
+  [lesson](../../../docs/cursor-interactive-session.md#lesson-qualify-a-prompt-class-on-a-real-capture-first)).
 
 A **verified channel** is one of two things. Tom's own answer to your
 AskUserQuestion, in your session. Or a relay from his designated coordinator
