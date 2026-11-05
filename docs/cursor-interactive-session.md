@@ -63,6 +63,7 @@ python3 scripts/cursor-interactive-session.py answer \
   --receipt 'v1:...' \
   --approval-ref 'OP399-approval-2026-11-04T21:40:00Z' \
   --expect-kind modal-trust \
+  --trust-path /absolute/authorized/worktree \
   --expect-text-file /path/to/expected-prompt.txt \
   --choice a
 ```
@@ -161,6 +162,12 @@ Before the lock and before any tmux call, `answer` checks its input:
   must be on screen.
 - `--choice`: exactly one printable ASCII key that appears as `[key]` in the
   expected text.
+- `--trust-path`: required with `--expect-kind modal-trust` and refused with
+  any other kind. It is the one directory the approval covers: an absolute,
+  normalized path of letters, digits and `_.@+-` between single slashes, with
+  no `.` or `..` component and no trailing slash, at most 1024 bytes. One
+  expected line must contain it as a whole word (bounded by whitespace or the
+  line's ends).
 - `--receipt`: the exact token from the latest `inspect`.
 
 Then it takes the task's lock without waiting: if another helper call holds
@@ -177,8 +184,8 @@ the key, so two callers cannot both spend it. A new `inspect` and a new
 receipt with the same prompt still showing do not allow a second answer.
 
 The entry records `answered_at` (UTC), `approval_ref`, `name`, `kind`,
-`choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner` and
-`outcome`. The task's state file keeps the same record in `answers` (the last
+`choice`, `expected_text_sha256`, `pane_id`, `pane_pid`, `owner`,
+`trust_path` (for a trust answer) and `outcome`. The task's state file keeps the same record in `answers` (the last
 32). `outcome` is `sent`; `not-sent` when the pane changed after the spend
 (below); or `uncertain` when tmux failed or timed out. An
 entry still at `sending` means the process ended before it recorded the
@@ -189,20 +196,30 @@ instruction is stored or printed.
 
 ### The prompt must be the current screen
 
-The capture holds up to 80 rows: the requested history, then every visible
-row. The last `pane_height` rows are the visible screen. `answer` goes ahead
-only when:
+The capture asks tmux for 80 history rows and the visible pane
+(`capture-pane -p -S -80`). tmux's manual numbers the rows: negative numbers
+are history, `0` is the first visible row, and the default end is the end of
+the visible pane. Its source (`cmd-capture-pane.c`, tmux 3.4, 3.5a and
+master) prints every row from the start to the end, blank rows included, one
+per line, when `-J` and `-H` are not given. So the capture has exactly
+`min(history_size, 80) + pane_height` rows, and the last `pane_height` of them
+are the visible screen. `answer` reads `#{history_size}` with the pane's
+identity and checks that count rather than assuming it. It goes ahead only
+when:
 
-1. the capture has at least `pane_height` rows, and is not truncated into
-   the visible screen (otherwise `prompt-unclear`);
+1. the capture has exactly `min(history_size, 80) + pane_height` rows, the
+   bounded text still holds the whole visible screen, and the byte cap did not
+   cut into it (otherwise `prompt-unclear`);
 2. the visible screen shows exactly one prompt kind, the expected one (none
    is `no-modal`, or `stale-prompt` when the expected prompt is only in older
    rows; two kinds is `prompt-unclear`; another kind is `modal-mismatch`);
-3. every expected line appears, in order, inside a visible row, case folded
+3. for a trust prompt, the visible screen names exactly the trust path
+   (below);
+4. every expected line appears, in order, inside a visible row, case folded
    (the prompt is drawn in a box, so rows carry border characters). If the
    lines are only in older rows, it is `stale-prompt`; if they are nowhere,
    `modal-mismatch`;
-4. no composer row (`>`, `›` or `❯` at the start of a row) follows the last
+5. no composer row (`>`, `›` or `❯` at the start of a row) follows the last
    expected line, and the cursor row is not a composer row (otherwise
    `stale-prompt`).
 
@@ -211,13 +228,43 @@ worktree, session, command and owner marker, and a capture unchanged since
 that inspect (a changed screen, including someone typing, is `stale-receipt`).
 
 Limits: this rule reads tmux text only. A prompt whose phrasing is not in the
-helper's phrase list is not answerable. Taking the last `pane_height` rows as
-the visible screen assumes tmux prints every visible row, blank ones included.
-If it did not, a capture with fewer rows than the pane is refused, but with
-history above, the window would shift up into history and an old prompt there
-could be judged current; this has not been checked against a real tmux. A
-prompt drawn with a composer below it is refused even if it is live. When the
-helper cannot tell which prompt is current, it refuses.
+helper's phrase list is not answerable. The row count is checked against
+tmux's own `history_size` and `pane_height`, not against a real tmux run: a
+tmux that dropped blank rows would fail the count and be refused, and output
+that scrolls between the identity read and the capture changes the count or
+the capture and is refused too. The count cannot detect a tmux that printed
+the right number of rows out of order. A prompt drawn with a composer below it
+is refused even if it is live. When the helper cannot tell which prompt is
+current, it refuses.
+
+### A trust answer names one exact path
+
+A workspace-trust approval covers one directory, so a trust answer is bound
+to it in three places. Under the lock, before any tmux call, `--trust-path`
+must equal the worktree that `start` recorded for this task (the pane's cwd
+must match it too); otherwise the state is `trust-path-mismatch`. The expected
+text must contain it (above). And the visible screen, at the first check and
+again at the re-check right before the key, must name exactly that path:
+
+- The helper splits each visible row into words at whitespace and box-drawing
+  characters (U+2500 to U+257F). A word is path-like when it contains `/` or
+  starts with `~`.
+- Every path-like word on the visible screen must be exactly the trust path.
+  Another path, a parent, a child, a longer name that starts with the path
+  (`-old`), a path that ends with it, a trailing `/` or attached punctuation,
+  a `~` form, a shortened form with `…`, or a URL is `trust-path-mismatch`.
+- A path-like word that starts or ends its row might continue on the row
+  above or below (tmux prints a wrapped line as separate rows), so it is
+  `trust-path-unclear`. The trust path must have a separator before and after
+  it in its own row, as the box border gives it.
+- If no visible word is exactly the trust path (no path is shown, or it is
+  split across rows), the state is `trust-path-missing`.
+
+Each of these sends nothing and leaves the approval unspent at the first
+check; at the re-check it is `prompt-changed` with the approval spent. The
+trust path is recorded with the approval reference in the ledger entry and
+the state's `answers`. A worktree path with characters outside the allowed
+set cannot be answered by this helper.
 
 ### Sending and after
 
@@ -278,6 +325,7 @@ closed as `pane-replaced`.
 | `sent` | 0 | Literal text went to the matching pane. `submitted` says whether one Enter followed. |
 | `answered` | 0 | One approved prompt key went to the matching pane, without Enter, and was recorded. |
 | `modal-mismatch`, `no-modal`, `stale-prompt`, `prompt-unclear`, `approval-spent`, `lock-busy` | 2 | `answer` sent nothing: the prompt kind or text did not match, no prompt is showing, the expected prompt is not the current screen, the screen is unclear, the approval was already used, or another helper call holds the lock. |
+| `trust-path-mismatch`, `trust-path-unclear`, `trust-path-missing` | 2 | `answer` sent nothing and did not spend the approval: `--trust-path` is not the recorded worktree, or the visible screen names another path, a path that may continue across rows, or no exact path. |
 | `prompt-changed` | 2 | `answer` sent nothing: the pane changed after the approval was spent. The approval stays spent and its outcome is `not-sent`; a new approval is needed. |
 | `answer-unconfirmed` | 3 | The answer key's outcome is unknown and is recorded as `uncertain`. The approval and the receipt are spent; do not retry or send another key. |
 | `invalid-input`, `prerequisite-unavailable`, `unsupported-client`, `name-consumed`, `not-owned`, `pane-missing`, `pane-dead`, `pane-replaced`, `pane-in-mode`, `stale-receipt`, `modal-*`, `user-draft`, `unclassified-ui` | 2 | Nothing was sent. Correct the input or re-inspect. |
