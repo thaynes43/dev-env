@@ -72,7 +72,9 @@ done
 Save it as a script and run it with `bash` through Bash `run_in_background`,
 which reports once when it exits, or under a `Monitor` for at most 30 minutes,
 then re-arm it with the same deadline. Never run it in the foreground
-(section 4). Take the deadline from the work order. What its exits mean:
+(section 4). Take the deadline from the work order. If it has none, get one
+from whoever owns the work order, and supervise with check-ins until then;
+never run a wait without a deadline. What its exits mean:
 
 - **0** the child ended or stopped. `END child ended` means agentd reported the
   task's end (`exited`), or that it could not start (`failed`), or that its
@@ -99,6 +101,77 @@ recovery of the wait after a coordinator restart or resume, are not
 demonstrated. A Session that a reap releases answers 404, which ends the wait
 with exit 3: keep the child's outcome, PR and head in the custody record
 before that ([where the retained outcome lives](../../../docs/workflow-guide.md#where-the-retained-outcome-lives)).
+
+**A bounded PR-or-exit watcher.** The same wait, for a child whose deliverable
+is a PR (supervised-dispatch, section 4, "The dispatch and return loop"). It
+also ends when a PR, open, merged or closed, appears on the child's branch.
+Take the branch from the work order, or from `agentStatus.branch` in
+`agent-run show`. It counts failed `gh` and `show` reads separately, five in a
+row of either ends it:
+
+```bash
+# The deadline is absolute, from the custody record, so a re-armed wait keeps it.
+child=CHILD-NAME; repo=OWNER/REPO; branch=CHILD-BRANCH; dir=$HOME/work/OP000
+pr_fails=0; show_fails=0
+deadline=$(date -u -d 2026-11-04T15:00:00Z +%s 2>/dev/null)
+case "$deadline" in '' | *[!0-9]*) echo "END bad deadline"; exit 2 ;; esac
+case "$repo" in */?*) ;; *) echo "END bad repo $repo"; exit 2 ;; esac
+[ -n "$branch" ] || { echo "END bad branch"; exit 2; }
+mkdir -p "$dir" || { echo "END bad dir $dir"; exit 2; }
+while :; do
+  if gh pr list --repo "$repo" --head "$branch" --state all --json number,state,headRefOid > "$dir/pr.json.tmp"; then
+    pr_fails=0; mv "$dir/pr.json.tmp" "$dir/pr.json"
+    n=$(jq -r '.[0].number // empty' "$dir/pr.json")
+    if [ -n "$n" ]; then
+      echo "END pr number=$n state=$(jq -r '.[0].state' "$dir/pr.json") head=$(jq -r '.[0].headRefOid' "$dir/pr.json")"
+      exit 0
+    fi
+  else
+    rc=$?; pr_fails=$((pr_fails + 1)); echo "READ-FAIL gh exit=$rc count=$pr_fails"
+  fi
+  if agent-run show "$child" -o json > "$dir/child.json.tmp"; then
+    show_fails=0; mv "$dir/child.json.tmp" "$dir/child.json"
+    st=$(jq -r '.agentStatus.state // "none"' "$dir/child.json")
+    ph=$(jq -r '.phase // "none"' "$dir/child.json")
+    case "$st" in
+      exited | failed | interrupted) echo "END child ended state=$st phase=$ph"; exit 0 ;;
+    esac
+    case "$ph" in
+      Failed | Suspended | Archived) echo "END child stopped state=$st phase=$ph"; exit 0 ;;
+    esac
+  else
+    rc=$?; show_fails=$((show_fails + 1)); echo "READ-FAIL show exit=$rc count=$show_fails"
+    case "$rc" in 2 | 3 | 4) echo "END read refused exit=$rc"; exit 3 ;; esac
+  fi
+  [ "$pr_fails" -ge 5 ] || [ "$show_fails" -ge 5 ] && { echo "END reads failing"; exit 3; }
+  [ "$(date +%s)" -ge "$deadline" ] && { echo "END deadline state=${st:-unknown}"; exit 4; }
+  sleep 120
+done
+```
+
+Its exits mean the same as above: **0** a PR appeared (`END pr`), or the
+child ended or stopped; **2** bad inputs, and nothing was called; **3** reads
+refused or failing; **4** the deadline passed. `END pr` is not the end of the
+task. The child can still be working, so read `agent-run show` once more
+before you take the return. If the child is still busy, wait for its end with
+the first script, on the same deadline. This one would end at once on the PR
+that already exists. If the child's remaining work waits on a decision only
+Tom can make, such as a merge or a trust approval, and the work order or a
+recorded hold confirms it, stop the watcher instead: that work is a pending
+decision. Record a checkpoint with its resume trigger,
+and keep no timer, watcher or poll for it (section 6). A pending agent state is not an end either: a new
+pod can be Running before its agent starts, and the watcher keeps reading the
+same Session. It reads `show`, not `log`, so a log that is not found yet does
+not end it.
+
+**Demonstrated and source only.** The watcher was run against stub
+`agent-run`, `gh` and `sleep` commands that answer from files, never against
+the API or GitHub. The cases were: a PR on the third read; a merged PR after
+pending reads; a closed PR after two failed `gh` reads; the child exiting; the
+pod suspended; a refused `show`; five failed `show` reads; five failed `gh`
+reads; a past deadline; and a bad deadline, repository or branch. Each ended
+with the expected line and exit. Its re-arm and recovery after a restart are
+not demonstrated.
 
 **The tool reality, in Claude Code 2.1.312 as installed here (2026-11-04).** The
 coordinator's own session has `CronCreate` and `ScheduleWakeup`. A native
@@ -143,7 +216,7 @@ values are placeholders, `null` means not observed yet:
   "child": {
     "name": "CHILD-NAME", "uid": "CHILD-UID", "parent": "COORDINATOR-SESSION",
     "agent": "codex", "requestedModel": "gpt-6-astra", "effort": "max", "servedModel": "Unknown",
-    "project": "PROJECT", "repo": "REPO", "base": "main", "revision": "TEMPLATE-REVISION",
+    "project": "PROJECT", "repo": "REPO", "base": "main", "branch": "CHILD-BRANCH", "revision": "TEMPLATE-REVISION",
     "createdAt": "2026-11-04T12:00:00Z", "idempotencyKey": "op000-child-1",
     "launch": {"command": "agent-run --project PROJECT --agent codex ...", "exit": 0}
   },
@@ -155,6 +228,7 @@ values are placeholders, `null` means not observed yet:
   ],
   "lastCheck": {"at": null, "result": null},
   "handoff": {"route": "this file plus the tracker comment", "readableBy": "the coordinator's own session after a resume", "nextSafeStep": "read the child with agent-run show"},
+  "report": {"destination": "where the ACK and the result go, from the work order", "lastAttempt": null, "lastFailure": null},
   "outcome": {"taskExit": null, "verdict": null, "taskOutcome": null, "pr": null, "head": null, "ci": null, "deliverableAccepted": false},
   "stop": null
 }
@@ -165,7 +239,10 @@ entry per rung reached, with its time and evidence reference. `outcome` holds
 what you read back from `agent-run show` and GitHub. The retained task outcome
 is the child's own claim: record it as that, not as acceptance.
 `deliverableAccepted` turns true only when the coordinator, or a QA agent other
-than the child, has checked the deliverable.
+than the child, has checked the deliverable. `report` names the reporting
+destination. A failed report goes into `lastFailure` with its error; it is not
+a task failure, and the next report uses another supported route
+(supervised-dispatch, section 4, step 8).
 
 Create the job, then write its job ID into the file. The fired prompt names the
 state file and says what to do, because the context may have been compacted by
@@ -188,7 +265,10 @@ minutes :00 and :30. The keeper pilot (OP385) uses `7,27,47 * * * *`.
    supervised-dispatch, section 5. They never end supervision or the timer.
    For a child in another pod, read `agent-run show NAME -o json` into a file
    and keep its exit status. A failed read is "unknown", not a stop
-   (supervised-dispatch, section 4, "Waiting for a child").
+   (supervised-dispatch, section 4, "Waiting for a child"). A Running pod
+   whose log is not found yet, or whose agent is still pending, is the same
+   task starting: read it again at the next check. Never launch it again, and
+   never mint or renew a token for it (supervised-dispatch, section 4, step 5).
 3. Update `lastCheck`, `nextCheck`, `stage`, the evidence references and, for
    each new rung of the evidence ladder, a `checkpoints` entry.
 4. Mirror a meaningful change on the tracker.
@@ -215,8 +295,8 @@ short while a timer is armed.
 ## 5. Hand custody over
 
 Only the current custodian holds a timer for the task. When it hands off,
-because its context is filling, its session is stopping, or the parent reassigns
-the work:
+because its context is filling, its session is stopping, it has lost its read
+path to the task, or the parent reassigns the work:
 
 1. The custodian writes the successor into the state file: `custodian` becomes
    the successor, and `custody` gains an entry with the old and new owner, the
@@ -269,4 +349,5 @@ work ends or pauses:
 This text is not operational proof. A real wake, re-arm, recovery and completion
 are proved by the keeper pilot (OP385), not by this file.
 
-Behavior scenario for an evaluator: [scenarios/quiet-65-minutes.md](scenarios/quiet-65-minutes.md).
+Behavior scenarios for an evaluator: [scenarios/quiet-65-minutes.md](scenarios/quiet-65-minutes.md),
+and [new-pod-log-not-found.md](../supervised-dispatch/scenarios/new-pod-log-not-found.md) in supervised-dispatch.

@@ -94,10 +94,13 @@ may not reach. So:
   requested (the Session's `model`), configured (a template, default or UI
   setting) and served (the `Actual model` row, Unknown until the provider
   reports it). Never copy a requested or configured model into the served
-  model; a synthetic fixture cannot attest one either.
-- **A child on the other provider.** Start it as a managed project task:
-  `agent-run --project P --agent codex --model <full id> --prompt-file F ...`.
-  The [workflow guide](../../../docs/workflow-guide.md#launch-a-project-bound-child-on-another-provider)
+  model; a synthetic fixture cannot attest one either. A model that a CLI
+  prints in its own log is client-reported: record it as that, not as served.
+- **A child on the other provider.** Start it as a managed project task, with
+  every setting explicit:
+  `agent-run --project P --agent codex --model <full id> --effort <level> --prompt-file F --wait 3m`.
+  `--wait` bounds only the wait for the pod to start; exit 0 says nothing about
+  the task. The [workflow guide](../../../docs/workflow-guide.md#launch-a-project-bound-child-on-another-provider)
   has the exact flags and what each refusal means: a 422 without `--project`, a
   422 for a project the catalog lacks (fixed only through the reviewed catalog
   path), and a 403 from `--dry-run=server`, which serves the exact sealed pilot
@@ -110,12 +113,14 @@ may not reach. So:
 - **Parent.** Who dispatched whom.
 
 Never record an identity, model or result you did not observe as verified. Write
-"owner-reported" or "not re-verified here" instead.
+"owner-reported" or "not re-verified here" instead. A child's report about its
+own launch or work is owner-reported too.
 
 ## 4. Dispatch, then wait for real work
 
 The work order states the goal, the acceptance checks, the claims, the boundaries,
-the budget, the holds, the stop rules, the status record route and an ACK route.
+the budget, the holds, the stop rules, the status record route, an ACK route and
+the reporting destination ("The dispatch and return loop", below).
 The receiver's first action is to write that ACK atomically: schema, time,
 receiver, accountable session, worktree, branch, base commit, claims, the paths
 or routes it read, `accepted` and the next milestone.
@@ -140,15 +145,42 @@ evidence reference.
 | 4. First work | A commit on the claimed branch, or the first piece of the deliverable | `git ls-remote`, the child's branch and head in `show`, the artifact |
 | 5. Reviewed artifact | The deliverable exists at a stated head and you read it. For a review, that is its `review.md` | read the file at that head |
 | 6. PR | The PR is open on the claimed branch with the exact head | `gh pr view N --json headRefOid,state` |
-| 7. Required CI | The repository's required checks passed on that exact head (in dev-env: `CI - Success`) | `gh pr view N --json statusCheckRollup`; the branch rules (`gh api repos/OWNER/REPO/rules/branches/main`) |
+| 7. Required CI | The repository's required checks passed on that exact head (in dev-env: `CI - Success`) | `gh pr view N --json statusCheckRollup`; the branch's rulesets (`gh api repos/OWNER/REPO/rules/branches/main`) and its classic protection (`gh api repos/OWNER/REPO/branches/main`: `protected` and `protection.required_status_checks`) |
 | 8. Delivery or native return | The authorized merge at that head, or, for work that is not merged here, the result returned: a native subagent's final result, or a headless child's task exit, verdict and retained outcome | `gh pr view N --json mergedAt,mergeCommit`; the subagent's notification; `agent-run show NAME` |
 
 A repository with **no required checks** cannot reach rung 7. Record "no
-required checks configured" with the evidence (the empty branch rules and the
-check rollup), not a pass, and say in the report that rung 7 was not met. An
+required checks configured" with the evidence (no ruleset rules, no classic
+protection, and the check rollup), not a pass, and say in the report that rung 7 was not met. An
 advisory review is never rung 7, and its green does not replace a check. Your
 own verification of the deliverable (rung 5) still stands; state the gap
-beside it.
+beside it. Read each repository's own rules: one repository's lack of required
+checks says nothing about another's. dev-env requires `CI - Success` on the
+exact head.
+
+Record each rung when you observe it. A later rung seen first does not prove an
+earlier one: a PR seen before you read its deliverable leaves rung 5 open, and
+a rung you never read stays "not observed". One read can record several rungs
+when it is each rung's own evidence: a PR read shows a commit on the claimed
+branch (rung 4) and the PR (rung 6), but not the deliverable's contents
+(rung 5). For a deliverable that is a
+message rather than a PR, rungs 4 and 5 are that message as you read it, and
+rungs 6 and 7 do not apply: record them as not applicable. A deliverable in
+several parts, such as a reply and then a correction, reaches rung 5 only when
+you have read every part. In a repository without required checks, rung 7 is
+recorded as not reachable, and rung 8 still follows that repository's rules
+and the merge authority in the work order.
+
+Keep three more facts apart from the rungs:
+
+- **A delivery receipt is not an ACK.** An `agent-run inbox send` result, a
+  `msg` delivery or an API read acknowledgement proves the text arrived. Only
+  the receiver's own semantic ACK (rung 3) proves it understood the work.
+- **An independent review is a separate fact.** It is a review of the rung-5
+  deliverable by someone other than its author, at the same head. The author's
+  own report, its tests and its green CI are not one.
+- **Operational acceptance comes after rung 8.** Installed, usable by its user
+  and accepted is a state of the story's own acceptance checks. A merge or a
+  returned result does not prove it.
 
 Exit 0, `Running` or a final message is not a successful review. Only the
 accepted deliverable is (rung 5 and above). The
@@ -165,6 +197,85 @@ agent-run show "$CHILD" -o json > child.json; rc=$?
 echo "agent-run show exit=$rc"
 ```
 
+### The dispatch and return loop
+
+For a child in its own pod, such as a review on the other provider. A worked
+example, labelled historical, is in
+[references/studio-review-dispatch-2026-11-04.md](references/studio-review-dispatch-2026-11-04.md).
+
+1. **Launch once, with every setting explicit:** `--project`, `--agent`,
+   `--model` (a full ID), `--effort`, `--prompt-file` and a bounded `--wait`
+   (section 3). `--idempotency-key` makes a repeat of the same command find the
+   first Session instead of starting a second one. It is valid in source, but
+   the example did not use it.
+2. **Record the identity at once:** the printed name, then one
+   `agent-run show NAME -o json` read (section 3). That is rung 1.
+3. **Name the reporting destination in the work order:** where the ACK and
+   the result go, and who reads them, the fallback if that route fails, and
+   whether the child's PR is to be merged and by whom. Name supported routes
+   (section 2). A route outside that list is unproved until its receiver
+   confirms reading it. A headless child takes no
+   `agent-run msg`, so it reports through durable routes: its outcome file,
+   its log, its PR with committed artifacts, and `agent-run inbox` only where
+   both ends support it. A parent without a project (no accepted project
+   snapshot), such as a Remote Control coordinator, gets nothing from the
+   child's inbox: it reads the child instead
+   ([return route](../../../docs/ask-your-coordinator.md#return-route-for-a-parent-without-a-project)).
+   Do not plan on automatic inbox return; it has not been shown. An inbox
+   reply that does arrive is read with `agent-run inbox read` by the Session
+   it was addressed to. Its sender identity is in `agent-run inbox list -o
+   audit`. Its arrival is delivery, and only that read is consumption.
+4. **Wait for the semantic ACK:** the child restates the scope, its branch,
+   its base and the routes it read (rung 3). A delivery receipt is not an ACK.
+5. **Observe the same task.** A new pod can be Running while its agent is
+   still starting: `agent-run log` can answer not found, and the agent state
+   can still be pending. That is the same task starting, not a failure.
+   Re-read that same Session within a bounded observer window. The work order
+   sets the window; if it does not, ask its owner. Re-read with other access
+   you already hold. A short-lived bootstrap token minted for the launch serves
+   that one launch only: it is kept in memory only, never renewed, and never
+   reused for observation. Never launch the task again because its log is not
+   ready yet, and never mint a token to keep watching it. When the observer
+   window ends, record the child's identity and last observed state in the
+   custody record (timer-checkin, section 2), and keep
+   observing it through later authorized reads of that same task. The window
+   ends the observation, not the task or its assignment. If no authorized read
+   path is left, for example because the launcher's only credential was that
+   launch token, record the gap and put the task's identity on the tracker.
+   Then hand custody over as in timer-checkin, section 5: name a session that
+   can read the task, usually the parent, as the successor, and send it the
+   handoff. Until it reports, custody is in transit. Never create a
+   credential to fill the gap.
+6. **Watch for the return with a bounded PR-or-exit watcher**
+   ([timer-checkin, section 1](../timer-checkin/SKILL.md#1-what-exists)). It
+   ends when a PR appears on the child's branch, when the child ends, when
+   reads fail or are refused, or at its deadline. If the child's remaining
+   work waits on a decision only Tom can make, such as a merge or a trust
+   approval, end the watcher. First check that claim against the work
+   order's merge authority or a recorded hold: the child's own claim is
+   owner-reported, and agents merge their own PRs unless a hold applies. That work is a pending decision (section 5;
+   timer-checkin, section 6): record a checkpoint with its resume trigger,
+   Tom's verified answer, and keep no timer, watcher or poll for it.
+7. **Take the return:** the task exit, verdict and retained outcome from
+   `agent-run show`, the log while the pod still runs, and the PR with its
+   committed artifacts. Copy them into the custody record at once
+   ("Waiting for a child", below). Then climb the ladder from rung 5: read the
+   deliverable yourself, get the independent review the story requires, and
+   check the repository's own required checks.
+8. **Report to the destination.** If the report fails (for example, the route
+   answers not found), that is a reporting failure, not a task failure. Record
+   it with its error, report through the work order's fallback and, in any
+   case, on the tracker item, which every session can read. Do not keep
+   retrying the dead route. A dead route to the parent can mean the parent
+   has ended. If the parent is a Session you can read, check it with
+   `agent-run show PARENT`. If it is gone, or you cannot tell (an unnamed
+   parent, a thread, no read access), record that. Report to the parent's own
+   coordinator, or, for a top-level coordinator, to Tom or his verified
+   coordinator, who names a successor (timer-checkin, section 5). If you cannot
+   tell which applies, report on the tracker and to the coordinator that
+   assigned you the work, and let it decide. The task's
+   result stands on its own evidence.
+
 ### Waiting for a child
 
 Never wait with an open-ended shell loop. Use what exists: a check-in timer
@@ -173,8 +284,10 @@ or background until-loop that has a deadline (timer-checkin, section 1), and
 `agent-run show` and `agent-run log` reads. Every wait handles these:
 
 - **API failure.** A failed read is "unknown", not stopped and not done. Record
-  agent-run's exit code. Exit 3 (auth, or 403) and 4 (not found) do not get
-  better on retry: end the wait and check the name and your identity. Other
+  agent-run's exit code. Exit 3 (auth, or 403) and 4 (not found) from
+  `agent-run show` do not get better on retry: end the wait and check the name
+  and your identity. A `log` read that answers not found while a new pod starts
+  is different: the Session exists, and the loop's step 5 applies. Other
   non-zero exits, such as 5 (API unavailable after agent-run's own retries), can
   be transient: count them, and after a few in a row end the wait with "child
   state unknown since T". Never start a replacement child because reads failed:
@@ -293,4 +406,6 @@ tracker item with its evidence (`opwork complete --evidence`), write the final
 status record with the stop reason, delete the timer, and report. A report says
 what was proved, how, and what is still open with its reason.
 
-Behavior scenario for an evaluator: [scenarios/permission-barrier.md](scenarios/permission-barrier.md).
+Behavior scenarios for an evaluator: [scenarios/permission-barrier.md](scenarios/permission-barrier.md),
+[scenarios/new-pod-log-not-found.md](scenarios/new-pod-log-not-found.md) and
+[scenarios/historical-review-return.md](scenarios/historical-review-return.md).
