@@ -455,7 +455,7 @@ class CursorInteractiveTests(unittest.TestCase):
         self.text_path.write_text("continue")
         args = self.reply_args(inspected["receipt"])
         captured, release, contended = threading.Event(), threading.Event(), threading.Event()
-        original_capture, original_flock = helper.read_capture, helper.fcntl.flock
+        original_capture, original_flock = helper.read_capture_rows, helper.fcntl.flock
         attempts = []
 
         def tracked_flock(descriptor, operation):
@@ -478,7 +478,7 @@ class CursorInteractiveTests(unittest.TestCase):
                 return error.state
 
         with mock.patch.dict(os.environ, self.env), \
-                mock.patch.object(helper, "read_capture", paused_capture), \
+                mock.patch.object(helper, "read_capture_rows", paused_capture), \
                 mock.patch.object(helper.fcntl, "flock", tracked_flock):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 first = pool.submit(reply)
@@ -911,6 +911,172 @@ class AnswerTests(AnswerFixture):
                                               "--submit", "--observed-ready"])
         self.assertEqual((code, refused["state"]), (2, "modal-trust"))
         self.assertEqual(len(self.sends()), 1)
+
+    # Inspect and reply classify the visible screen only (OP399 SK3 follow-up, 2026-11-05).
+    # After an answer, the old prompt can stay in the history rows above the screen.
+
+    def reply_to(self, receipt, *flags):
+        self.text_path.write_text("continue")
+        return self.invoke("reply", ["--receipt", receipt, "--text-file", str(self.text_path), *flags])
+
+    def test_prompt_only_in_history_does_not_block_a_reply(self):
+        composer = "S8 answered\n>"
+        cases = {
+            "history within the 80 captured rows": (TRUST_SCREEN + composer, None),
+            "history longer than the 80 captured rows": ("older output\n" * 59 + TRUST_SCREEN + composer, 500),
+        }
+        for label, (capture, history) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=2, history=history)
+                inspected = self.start_and_inspect()
+                self.assertIn("Trust this workspace", inspected["text"])
+                self.assertEqual(inspected["classification"], "active")
+                self.assertNotIn("cannot be located", inspected["classification_detail"])
+                code, sent = self.reply_to(inspected["receipt"], "--submit")
+                self.assertEqual((code, sent["state"], sent["submitted"]), (0, "sent", True))
+                self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "continue"],
+                                                ["send-keys", "-t", "%7", "Enter"]])
+
+    def test_prompt_only_in_history_over_another_screen_is_unclassified(self):
+        # The 2026-11-05 screen: Cursor's own composer row under the answered prompt.
+        # The helper does not know that row, so the screen is unclassified, not a
+        # modal: a reply needs --observed-ready, as for any unclassified screen.
+        self.screen(TRUST_SCREEN + "S8 answered\n→ Plan, search, build anything", visible=2)
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "unclassified")
+        code, refused = self.reply_to(inspected["receipt"], "--submit")
+        self.assertEqual((code, refused["state"]), (2, "unclassified-ui"))
+        self.assertEqual(self.sends(), [])
+        code, sent = self.reply_to(inspected["receipt"], "--submit", "--observed-ready")
+        self.assertEqual((code, sent["state"], sent["classification"]), (0, "sent", "unclassified"))
+
+    def test_prompt_on_the_visible_screen_still_blocks_a_reply(self):
+        older = "older output\n" * 5
+        rows = len(TRUST_SCREEN.splitlines())
+        nested = boxed(TRUST_BOX_ROWS[:1] + boxed(TRUST_BOX_ROWS).splitlines() + TRUST_BOX_ROWS[:1])
+        titled = boxed(TRUST_BOX_ROWS).replace("╭───", "╭─ Note ─", 1)
+        cases = {
+            "the prompt fills the screen, older output above": (older + TRUST_SCREEN, rows, None, "modal-trust"),
+            "an empty composer holds the cursor under the prompt": (
+                older + TRUST_CAPTURE + ">", len(TRUST_CAPTURE.splitlines()) + 1, None, "modal-trust"),
+            "a prompt taller than the screen, its header in history": (older + TRUST_SCREEN, 8, None, "modal-trust"),
+            "the cursor is off the last row": (older + TRUST_SCREEN, rows, 0, "modal-trust"),
+            "a prompt in a box inside a box": (older + nested, len(nested.splitlines()), None, "modal-trust"),
+            "a prompt in a box with a titled header": (older + titled, len(titled.splitlines()), None, "modal-trust"),
+            "a command prompt under an old trust prompt": (
+                TRUST_SCREEN + APPROVAL_SCREEN, len(APPROVAL_SCREEN.splitlines()), None, "modal-approval"),
+            "a permission prompt over a composer, old trust prompt above": (
+                TRUST_SCREEN + "Permission required to continue [a] Allow\n>", 2, None, "modal-permission"),
+            "a confirmation over a composer, old trust prompt above": (
+                TRUST_SCREEN + "Are you sure? [y] Yes\n>", 2, None, "modal-unknown"),
+        }
+        for label, (capture, visible, cursor, kind) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible, cursor=cursor)
+                inspected = self.start_and_inspect()
+                self.assertEqual(inspected["classification"], kind)
+                self.assertIn("on the visible screen", inspected["classification_detail"])
+                code, refused = self.reply_to(inspected["receipt"], "--submit", "--observed-ready")
+                self.assertEqual((code, refused["state"]), (2, kind))
+                self.assertEqual(self.sends(), [])
+
+    def test_composer_text_off_the_cursor_row_is_not_active(self):
+        # Composer-looking transcript rows on the visible screen, under an old prompt in history.
+        cases = {
+            "a composer-looking row above a plain last row": (TRUST_SCREEN + "> earlier input\nS8 answered", None),
+            "an empty composer on the last row, cursor elsewhere": (TRUST_SCREEN + "S8 answered\n>", 0),
+            "an empty composer above a blank cursor row": (TRUST_SCREEN + ">\n\n", None),
+        }
+        for label, (capture, cursor) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=2, cursor=cursor)
+                inspected = self.start_and_inspect()
+                self.assertEqual(inspected["classification"], "unclassified")
+                code, refused = self.reply_to(inspected["receipt"], "--submit")
+                self.assertEqual((code, refused["state"]), (2, "unclassified-ui"))
+                self.assertEqual(self.sends(), [])
+
+    def test_stale_receipt_and_pane_changes_refuse_under_an_old_prompt(self):
+        capture = TRUST_SCREEN + "S8 answered\n>"
+        self.screen(capture, visible=2)
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "active")
+        # The receipt binds the history rows too: a change there alone is stale.
+        self.screen(capture.replace("Tip: You can", "Tip: Now you can"), visible=2)
+        code, stale = self.reply_to(inspected["receipt"], "--submit")
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.screen(capture.replace("S8 answered", "S9 answered"), visible=2)
+        code, stale = self.reply_to(inspected["receipt"], "--submit")
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.screen(capture, visible=2)
+        newer = self.inspect_now()
+        code, rotated = self.reply_to(inspected["receipt"], "--submit")
+        self.assertEqual((code, rotated["state"]), (2, "stale-receipt"))
+        for mode in ("replaced", "new-pane", "foreign-path", "foreign-command", "foreign-session"):
+            with self.subTest(mode=mode):
+                self.text_path.write_text("continue")
+                code, refused = self.invoke("reply", ["--receipt", newer["receipt"], "--text-file",
+                                                      str(self.text_path), "--submit"], mode=mode)
+                self.assertEqual((code, refused["state"]), (2, "pane-replaced"))
+        self.assertEqual(self.sends(), [])
+
+    def test_unlocated_visible_screen_is_never_active(self):
+        # Without a located screen the whole capture is classified as before, but a
+        # bare composer is unclassified, never active, and any phrase still blocks.
+        cases = {
+            "history size does not match the capture": ("S8 answered\n>", 2, 3, "unclassified"),
+            "fewer rows than the pane": ("S8 answered\n>", 5, None, "unclassified"),
+            "the byte cap cut into the screen": ("x" * 9000 + "\n>", None, None, "unclassified"),
+            "a prompt anywhere still blocks": (TRUST_SCREEN + "S8 answered\n>", 2, 0, "modal-trust"),
+            "a draft anywhere still blocks": ("S8 answered\n> typed draft", 5, None, "user-draft"),
+        }
+        refusals = {"unclassified": "unclassified-ui", "modal-trust": "modal-trust", "user-draft": "user-draft"}
+        for label, (capture, visible, history, expected) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible, history=history)
+                inspected = self.start_and_inspect()
+                self.assertEqual(inspected["classification"], expected)
+                self.assertIn("cannot be located", inspected["classification_detail"])
+                if expected.startswith("modal-"):
+                    self.assertIn("in the captured window", inspected["classification_detail"])
+                    self.assertNotIn("on the visible screen", inspected["classification_detail"])
+                flags = ("--submit",) if expected == "unclassified" else ("--submit", "--observed-ready")
+                code, refused = self.reply_to(inspected["receipt"], *flags)
+                self.assertEqual((code, refused["state"]), (2, refusals[expected]))
+                self.assertEqual(self.sends(), [])
+
+    def test_draft_above_a_blank_cursor_row_is_refused(self):
+        # Review of f517c561: tmux prints a blank row under the composer. The old
+        # parsing dropped that row, so this draft was refused; keep refusing it.
+        draft = "S8 answered\n> typed draft\n\n"
+        cases = {
+            "located, no history": (draft, 3, None),
+            "located, an old prompt in history": (TRUST_SCREEN + draft, 3, None),
+            "located, a one-row pane under the draft": (draft, 1, None),
+            "not located: fewer rows than the pane": (draft, 5, None),
+            "not located: history size does not match": (draft, 3, 4),
+        }
+        for label, (capture, visible, history) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture, visible=visible, history=history)
+                inspected = self.start_and_inspect()
+                self.assertEqual(inspected["classification"], "user-draft")
+                code, refused = self.reply_to(inspected["receipt"], "--submit", "--observed-ready")
+                self.assertEqual((code, refused["state"]), (2, "user-draft"))
+                self.assertEqual(self.sends(), [])
+
+    def test_draft_under_a_prompt_in_history_is_refused(self):
+        self.screen(TRUST_SCREEN + "S8 answered\n> typed draft", visible=2)
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "user-draft")
+        code, refused = self.reply_to(inspected["receipt"], "--submit", "--observed-ready")
+        self.assertEqual((code, refused["state"]), (2, "user-draft"))
+        self.assertEqual(self.sends(), [])
 
     # Adversarial rules (parent feedback, 2026-11-04). Each was RED against 082170ef.
 

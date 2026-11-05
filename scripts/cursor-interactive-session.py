@@ -60,10 +60,12 @@ CLASSIFICATION_DETAILS = {
     "active": (
         "Cursor row is only an empty composer prefix. This is not proof the UI is idle, "
         "that no modal is hidden, or that the served model matches the request. "
-        "Echoed lines above that row are not a user draft."
+        "Echoed lines above that row are not a user draft. "
+        "Prompt text in the history rows above the visible screen is not counted."
     ),
     "user-draft": (
-        "Cursor row has a nonempty composer. Echoed lines above that row are not a user draft."
+        "Cursor row, or the row above a blank cursor row, has a nonempty composer. "
+        "Echoed lines above that row are not a user draft."
     ),
     "unclassified": (
         "Cursor UI is unclassified. Echoed terminal text is not an unsent user draft. "
@@ -73,11 +75,19 @@ CLASSIFICATION_DETAILS = {
         "Sending requires a fresh receipt and --observed-ready after manual confirmation of this exact receipt. "
         "--observed-ready is not a Cursor trust, approval, or permission grant."
     ),
+    "modal-trust": "Known workspace-trust phrasing is on the visible screen.",
+    "modal-permission": "Known permission phrasing is on the visible screen.",
+    "modal-approval": "Known approval phrasing is on the visible screen.",
+    "modal-unknown": "An unrecognized confirmation prompt is on the visible screen.",
+}
+# When the visible screen cannot be located, a phrase may be anywhere in the capture.
+UNLOCATED_DETAILS = {
     "modal-trust": "Known workspace-trust phrasing is in the captured window.",
     "modal-permission": "Known permission phrasing is in the captured window.",
     "modal-approval": "Known approval phrasing is in the captured window.",
     "modal-unknown": "An unrecognized confirmation prompt is in the captured window.",
 }
+UNLOCATED_DETAIL = " The visible screen cannot be located, so the whole captured window was read."
 
 
 class Refusal(Exception):
@@ -289,11 +299,6 @@ def bound_text(text):
     return body, truncated
 
 
-def read_capture(tmux, pane):
-    text, truncated, _rows = read_capture_rows(tmux, pane)
-    return text, truncated
-
-
 def capture_rows(text):
     """Rows tmux printed, counted the way bound_text splits them."""
     return len(text.replace("\r\n", "\n").replace("\r", "\n").splitlines())
@@ -312,9 +317,9 @@ def read_capture_rows(tmux, pane):
     return text, truncated, capture_rows(result.stdout)
 
 
-def modal_kind(text):
+def modal_kind(rows):
     found = []
-    for line in text.splitlines():
+    for line in rows:
         folded = line.casefold()
         for kind, phrases in MODALS:
             if any(phrase in folded for phrase in phrases):
@@ -326,20 +331,57 @@ def modal_kind(text):
     return None
 
 
-def classify(text, cursor_y, pane_height):
-    """Classify one bounded capture. Transcript lines are never user drafts."""
-    kind = modal_kind(text)
-    if kind:
-        return kind
-    lines = text.splitlines()
+def visible_screen(text, truncated, rows_total, ident):
+    """The visible screen: the last pane_height rows of one bounded capture.
+
+    capture-pane -S -80 prints min(history_size, 80) history rows, then every
+    visible row, blank ones included. The row count is checked against tmux's
+    own history_size and pane_height, so the last pane_height rows are the
+    visible screen, and the bounded text must still hold all of it. Otherwise
+    the screen cannot be located: prompt-unclear."""
+    rows = text.split("\n")
+    rows_needed = int(ident["height"])
+    if rows_total != min(int(ident["history"]), MAX_LINES) + rows_needed:
+        raise Refusal("prompt-unclear", "The capture's row count does not match tmux's history size and pane height, "
+                                        "so the visible screen cannot be located. Nothing was sent.")
+    if len(rows) < rows_needed or (truncated and len(rows) == rows_needed):
+        raise Refusal("prompt-unclear", "The visible screen cannot be established from the bounded capture. Nothing was sent.")
+    return rows[-rows_needed:]
+
+
+def classify(text, truncated, rows_total, ident):
+    """(kind, located) for one bounded capture. Transcript lines are never user drafts.
+
+    Modal phrases count only on the visible screen: prompt text in the history
+    rows above it is not counted. When the screen cannot be located, the whole
+    capture is scanned, and the result is never active."""
+    rows = text.split("\n")
+    try:
+        scanned, located = visible_screen(text, truncated, rows_total, ident), True
+    except Refusal:
+        scanned, located = rows, False
+    kind = modal_kind(scanned) or composer_kind(rows, ident["cursor_y"], ident["height"])
+    if not located and kind == "active":
+        kind = "unclassified"
+    return kind, located
+
+
+def composer_kind(rows, cursor_y, pane_height):
+    """The composer at the cursor. The capture's last row is the last pane row."""
     try:
         cursor = int(cursor_y)
         height = int(pane_height)
     except (TypeError, ValueError):
         return "unclassified"
-    if not lines or height < 1 or cursor != height - 1:
+    if not rows or height < 1 or cursor != height - 1:
         return "unclassified"
-    match = COMPOSER.match(lines[-1])
+    match = COMPOSER.match(rows[-1])
+    if not match and rows[-1] == "" and len(rows) > 1:
+        # tmux prints a blank row under the composer. A draft just above that
+        # blank cursor row is still a draft (older parsing dropped the row).
+        above = COMPOSER.match(rows[-2])
+        if above and above.group(1).strip():
+            return "user-draft"
     if not match:
         return "unclassified"
     if match.group(1).strip():
@@ -504,8 +546,8 @@ def inspect_locked(args):
     path, state = load_owned(args.name, args.tmux)
     ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
     require_same_pane(state, ident)
-    text, truncated = read_capture(state["tmux"], state["pane_id"])
-    kind = classify(text, ident["cursor_y"], ident["height"])
+    text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
+    kind, located = classify(text, truncated, rows_total, ident)
     digest = snapshot_hash(ident, text, truncated)
     receipt_id = secrets.token_hex(16)
     state["receipt_id"] = receipt_id
@@ -514,7 +556,9 @@ def inspect_locked(args):
     return {
         "state": "inspected", "name": state["name"], "pane_id": ident["pane"], "pane_pid": ident["pid"],
         "owner": state["owner"], "worktree": state["worktree"], "model_requested": state["model"],
-        "classification": kind, "classification_detail": CLASSIFICATION_DETAILS[kind],
+        "classification": kind,
+        "classification_detail": (CLASSIFICATION_DETAILS[kind] if located
+                                  else UNLOCATED_DETAILS.get(kind, CLASSIFICATION_DETAILS[kind]) + UNLOCATED_DETAIL),
         "receipt": make_receipt(receipt_id, digest, ident["pane"], ident["pid"]),
         "truncated": truncated, "text": text,
         "detail": "Receipt matches this pane, process, worktree, and bounded capture only. It is stale after the next inspect or any pane change.",
@@ -579,16 +623,16 @@ def reply_locked(args, instruction):
         raise Refusal("stale-receipt", "Pane receipt does not match the stored inspect. Re-inspect. Nothing was sent.")
     ident = read_identity(state["tmux"], state["pane_id"], "inspect-unconfirmed", 3)
     require_same_pane(state, ident)
-    text, truncated = read_capture(state["tmux"], state["pane_id"])
+    text, truncated, rows_total = read_capture_rows(state["tmux"], state["pane_id"])
     digest = snapshot_hash(ident, text, truncated)
     if digest != state["snapshot_sha256"] or digest != receipt["digest"]:
         raise Refusal("stale-receipt", "Pane capture changed since inspect. Re-inspect. Nothing was sent.")
-    kind = classify(text, ident["cursor_y"], ident["height"])
+    kind, _located = classify(text, truncated, rows_total, ident)
     if kind.startswith("modal-"):
         label = kind.split("-", 1)[1]
         raise Refusal(kind, "Refusing to type or send Enter into a " + label + " modal. --observed-ready does not override it. Re-inspect after the pane is clear.")
     if kind == "user-draft":
-        raise Refusal("user-draft", "The cursor row is a nonempty composer. Nothing was sent, and Enter was not sent. Echoed lines above the cursor row are not a draft to submit.")
+        raise Refusal("user-draft", "The cursor row, or the row above a blank cursor row, is a nonempty composer. Nothing was sent, and Enter was not sent. Echoed lines above the cursor row are not a draft to submit.")
     if kind == "unclassified" and not args.observed_ready:
         raise Refusal("unclassified-ui", CLASSIFICATION_DETAILS["unclassified"] + " Nothing was sent.")
     if kind not in {"active", "unclassified"}:
@@ -782,22 +826,13 @@ def check_trust_path(visible, trust_path):
 def current_prompt(text, truncated, rows_total, ident, expect_kind, lines, trust_path=None):
     """Require the expected prompt to be the current bottom-of-pane state.
 
-    capture-pane -S -80 prints min(history_size, 80) history rows, then every
-    visible row, blank ones included. The row count is checked against tmux's
-    own history_size and pane_height, so the last pane_height rows are the
-    visible screen. It must be complete, show exactly one prompt kind (the
-    expected one), name exactly the trust path for a trust prompt, show the
-    expected lines exactly, once, as every row of the one paired box around them, and
-    have no composer row after the prompt or under the cursor. Anything else
-    fails closed."""
+    The visible screen is the one visible_screen locates, and it must be
+    complete. It must show exactly one prompt kind (the expected one), name
+    exactly the trust path for a trust prompt, show the expected lines exactly,
+    once, as every row of the one paired box around them, and have no composer
+    row after the prompt or under the cursor. Anything else fails closed."""
     rows = text.split("\n")
-    rows_needed = int(ident["height"])
-    if rows_total != min(int(ident["history"]), MAX_LINES) + rows_needed:
-        raise Refusal("prompt-unclear", "The capture's row count does not match tmux's history size and pane height, "
-                                        "so the visible screen cannot be located. Nothing was sent.")
-    if len(rows) < rows_needed or (truncated and len(rows) == rows_needed):
-        raise Refusal("prompt-unclear", "The visible screen cannot be established from the bounded capture. Nothing was sent.")
-    visible = rows[-rows_needed:]
+    visible = visible_screen(text, truncated, rows_total, ident)
     kinds = modal_kinds(visible)
     # The expected prompt exists in the capture, but maybe not as the current state.
     stale = expect_kind in modal_kinds(rows) and bool(prompt_blocks([prompt_text(row) for row in rows], lines))
