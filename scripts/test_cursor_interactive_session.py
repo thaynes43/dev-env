@@ -610,6 +610,11 @@ if len(ANSWERED_SCREEN.splitlines()) != 24:
 COMMAND = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-command-approval.json")
                      .read_text(encoding="utf-8"))
 COMMAND_ROWS = COMMAND["capture"].split("\n")
+# The same prompt with three approvals queued (2026-11-05T20:36:55Z, Cursor CLI 2026.10.14-0f9edde),
+# anonymized: "Approval 1 of 3" under the divider and "←/→ to switch approval" after the Skip row.
+QUEUE = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-command-approval-queue.json")
+                   .read_text(encoding="utf-8"))
+QUEUE_ROWS = QUEUE["capture"].split("\n")
 LIVE = json.loads((Path(__file__).with_name("cursor-interactive-session-fixtures") / "g1-live-capture.json")
                   .read_text(encoding="utf-8"))
 # The ledger fields every helper before format 2 wrote for a trust answer (5bf24fec and
@@ -2362,6 +2367,105 @@ class AnswerTests(AnswerFixture):
         self.assertEqual((code, resized["state"]), (2, "stale-receipt"))
         self.assertEqual(self.sends(), [])
         self.assertFalse(self.ledger().exists())
+
+    # Cursor's queued command approvals (2026-11-05T20:36:55Z): the expected text holds the
+    # "Approval N of M" row and the switch hint, so it binds the index and the count; only y,
+    # Run (once) for the shown approval, is ever sent, never an arrow key.
+
+    def queue_rows(self, changes=None, insert=None):
+        rows = list(QUEUE_ROWS)
+        for index, row in (changes or {}).items():
+            rows[index] = row
+        for index, row in (insert or {}).items():
+            rows.insert(index, row)
+            del rows[0]
+        self.assertEqual(len(rows), len(QUEUE_ROWS))
+        return rows
+
+    def queue_screen(self, rows=None):
+        self.screen("\n".join(QUEUE_ROWS if rows is None else rows) + "\n", visible=24)
+
+    def test_queue_fixture_is_the_captured_shape(self):
+        geometry, rows = QUEUE["geometry"], QUEUE["promptRows"]
+        self.assertEqual(__import__("hashlib").sha256(QUEUE["capture"].encode("utf-8")).hexdigest(), QUEUE["captureSha256"])
+        self.assertEqual(len(QUEUE_ROWS), geometry["history_size"] + geometry["pane_height"])
+        self.assertEqual(QUEUE_ROWS[rows["divider"]], "\u2500" * geometry["pane_width"])
+        self.assertEqual(QUEUE_ROWS[rows["header"]], " Approval 1 of 3")
+        self.assertEqual(QUEUE_ROWS[rows["hint"]], " \u2190/\u2192 to switch approval")
+        self.assertEqual([row.strip(" ") for row in QUEUE_ROWS[rows["divider"] + 1:rows["hint"] + 1] if row.strip(" ")],
+                         QUEUE["expectedText"].splitlines())
+        self.assertEqual(QUEUE_ROWS[rows["hint"] + 1:], [""] * 2)
+
+    def test_answer_sends_only_y_to_the_shown_queued_approval(self):
+        self.queue_screen()
+        inspected = self.start_and_inspect()
+        self.assertEqual(inspected["classification"], "modal-approval")
+        code, answered = self.answer_command(inspected["receipt"], text=QUEUE["expectedText"])
+        self.assertEqual((code, answered["state"]), (0, "answered"), answered.get("detail"))
+        self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "y"]])
+
+    def test_queued_approval_must_match_index_count_and_command(self):
+        rows, expected = QUEUE["promptRows"], QUEUE["expectedText"]
+        header, hint, skip = rows["header"], rows["hint"], rows["skip"]
+        lines = expected.splitlines(True)
+        screens = {
+            # (screen rows, expected text, state)
+            "another index expected": (None, expected.replace("Approval 1 of 3", "Approval 2 of 3"), "modal-mismatch"),
+            "another index shown": (self.queue_rows({header: " Approval 2 of 3"}), None, "modal-mismatch"),
+            "a changed count shown": (self.queue_rows({header: " Approval 1 of 2"}), None, "modal-mismatch"),
+            "a changed count expected": (None, expected.replace("of 3", "of 4"), "modal-mismatch"),
+            "a changed command shown": (self.queue_rows({header + 2: QUEUE_ROWS[header + 2].replace("sha256sum", "md5sum   ")}),
+                                        None, "modal-mismatch"),
+            "an appended command shown": (self.queue_rows({header + 5: QUEUE_ROWS[header + 5].replace(" in .", " && rm -rf ~ in .")}),
+                                          None, "modal-mismatch"),
+            "the header left out of the expected text": (None, "".join(lines[1:]), "invalid-input"),
+            "the hint left out of the expected text": (None, "".join(lines[:-1]), "invalid-input"),
+            "the header and hint left out": (None, "".join(lines[1:-1]), "prompt-unclear"),
+            "the header not first": (None, "".join(lines[1:2] + lines[:1] + lines[2:]), "invalid-input"),
+            "the hint not last": (None, "".join(lines[:-2] + lines[-1:] + lines[-2:-1]), "invalid-input"),
+            "a hint in the middle": (None, "".join(lines[:5] + lines[-1:] + lines[5:]), "invalid-input"),
+            "a header over its count": (None, expected.replace("Approval 1 of 3", "Approval 4 of 3"), "invalid-input"),
+            "a queue of one": (None, expected.replace("Approval 1 of 3", "Approval 1 of 1"), "invalid-input"),
+            "two headers": (None, "".join(lines[:1] + lines), "invalid-input"),
+            "no header on screen": (self.queue_rows({header: ""}), None, "modal-mismatch"),
+            "no hint on screen": (self.queue_rows({hint: ""}), None, "modal-mismatch"),
+            "text after the hint": (self.queue_rows({hint + 1: "  queued: git push"}), None, "prompt-unclear"),
+            "a second prompt above the divider": (self.queue_rows({rows["divider"] - 3: " Run this command?"}), None,
+                                                  "prompt-unclear"),
+            "a trailing box-drawing token on the header": (self.queue_rows({header: " Approval 1 of 3 \u2500"}), None,
+                                                           "modal-mismatch"),
+        }
+        self.assertEqual(skip + 2, hint)
+        for label, (screen, text, state) in screens.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.queue_screen(screen)
+                inspected = self.start_and_inspect()
+                approval = self.case_approval(label)
+                code, refused = self.answer_command(inspected["receipt"], text=expected if text is None else text,
+                                                    approval=approval)
+                self.assertEqual((code, refused["state"]), (2, state))
+                self.assertEqual(self.sends(), [])
+                self.assertFalse(self.ledger(approval).exists())
+
+    def test_queued_approval_choices_other_than_y_are_refused(self):
+        self.queue_screen()
+        inspected = self.start_and_inspect()
+        for choice in ("\u2190", "\u2192", "tab", "n", "Y", "\t"):
+            with self.subTest(choice=repr(choice)):
+                self.log.write_text("")
+                code, refused = self.answer_command(inspected["receipt"], choice=choice, text=QUEUE["expectedText"])
+                self.assertEqual((code, refused["state"]), (2, "invalid-input"))
+                self.assertEqual(self.commands("tmux"), [])
+
+    def test_queued_approval_stale_receipt(self):
+        self.queue_screen()
+        inspected = self.start_and_inspect()
+        # The first approval answered elsewhere: the queue now shows 1 of 2.
+        self.queue_screen(self.queue_rows({QUEUE["promptRows"]["header"]: " Approval 1 of 2"}))
+        code, stale = self.answer_command(inspected["receipt"], text=QUEUE["expectedText"])
+        self.assertEqual((code, stale["state"]), (2, "stale-receipt"))
+        self.assertEqual(self.sends(), [])
 
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,

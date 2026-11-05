@@ -359,6 +359,43 @@ Everything), Escape or `n` (Skip), or Enter. A persistent allowlist or a
 settings change is out of its scope. Each command needs its own recorded
 approval reference, spent once like any other answer.
 
+#### Queued commands: Approval N of M
+
+When more than one command waits, Cursor shows them one at a time (G1 pane,
+2026-11-05T20:36:55Z, Cursor 2026.10.14-0f9edde; anonymized capture
+[`g1-command-approval-queue.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval-queue.json)):
+
+```text
+────────────────────────────────────────────────────────────────────── (pane width)
+ Approval 1 of 3
+
+ $  sha256sum ... && wc -l
+    ... in .
+
+ Run this command?
+ ...
+    Skip & tell the agent what to do instead (esc or n)
+
+ ←/→ to switch approval
+```
+
+The expected text then starts with the `Approval N of M` row and ends with the
+`←/→ to switch approval` row, so it binds the index, the count and the shown
+command together. `answer` refuses (`invalid-input`) expected text that has
+one of those rows without the other, has either one twice or out of place, or
+shows N above M or a count below 2. A different index, count or command on the
+screen is `modal-mismatch`. The helper never sends an arrow key, so it answers
+only the approval already shown.
+
+What `y` does there is a property of the Cursor build, read from its installed
+UI code for 2026.10.14-0f9edde, not observed by pressing it: `y` maps to
+`approve` for the shown decision only (`decisions[min(activeIndex, n-1)]`),
+whatever option is highlighted. The pending-decision store resolves and
+removes that one id. Run Everything (Shift-Tab, never sent) is the path that
+approves every pending decision. After the answer, the next queued command is
+shown as a new prompt (`Approval 1 of 2`) and needs its own approval and a new
+`inspect`. On another Cursor build, check this again before relying on it.
+
 #### Lesson: qualify a prompt class on a real capture first
 
 - **Observed** (2026-11-05 19:30Z, Cursor 2026.10.14-0f9edde): a
@@ -376,7 +413,10 @@ approval reference, spent once like any other answer.
 
 The command prompt's fixture is
 [`g1-command-approval.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval.json),
-and its regression tests are the `test_command_prompt_*`,
+the queued form's is
+[`g1-command-approval-queue.json`](../scripts/cursor-interactive-session-fixtures/g1-command-approval-queue.json),
+and their regression tests are the `test_command_prompt_*`, `test_queue*`, `test_queued_*`,
+`test_answer_sends_only_y_to_the_shown_queued_approval`,
 `test_command_fixture_is_the_captured_shape` and
 `test_answer_sends_only_y_to_cursors_command_prompt` tests in
 [`test_cursor_interactive_session.py`](../scripts/test_cursor_interactive_session.py).
