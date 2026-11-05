@@ -55,6 +55,10 @@ ALLOWED_FLAGS = ("--workspace", "--model")
 DIVIDER = "\u2500"
 COMMAND_CHOICE = "y"
 PENDING_STATUS = "waiting for approval"
+# Cursor's command prompt with more than one command waiting: a counter row under the divider
+# and a switch hint after the Skip row. Run (once), y, answers only the approval shown.
+QUEUE_HEADER = re.compile(r"Approval ([1-9][0-9]?) of ([1-9][0-9]?)")
+QUEUE_HINT = "\u2190/\u2192 to switch approval"
 MODALS = (
     ("modal-trust", ("trust this workspace", "trust the contents of", "workspace trust", "do you trust")),
     ("modal-permission", ("permission required", "needs permission", "requesting permission")),
@@ -734,6 +738,22 @@ def prompt_shape(expect_kind, choice, lines):
     return None
 
 
+def check_queue_text(lines):
+    """A queued command prompt's expected text starts with its one "Approval N of M" row and
+    ends with its one switch hint, with 1 <= N <= M and M >= 2; a single prompt has neither."""
+    headers = [index for index, line in enumerate(lines) if QUEUE_HEADER.fullmatch(line)]
+    hints = [index for index, line in enumerate(lines) if line == QUEUE_HINT]
+    if not headers and not hints:
+        return
+    if headers != [0] or hints != [len(lines) - 1]:
+        raise Refusal("invalid-input", "A queued command prompt's expected text must start with its one \"Approval N of "
+                                       "M\" row and end with its one switch hint. Nothing was sent.")
+    shown, count = (int(number) for number in QUEUE_HEADER.fullmatch(lines[0]).groups())
+    if not 1 <= shown <= count or count < 2:
+        raise Refusal("invalid-input", "A queued command prompt shows approval N of M with 1 <= N <= M and M >= 2. "
+                                       "Nothing was sent.")
+
+
 def validate_answer(args):
     if not APPROVAL_RE.fullmatch(args.approval_ref or ""):
         raise Refusal("invalid-input", "Approval reference must be 8..200 characters of letters, digits and ._:/@#-. Nothing was sent.")
@@ -751,6 +771,8 @@ def validate_answer(args):
             line.strip(" ") != prompt_text(line) for line in raw.decode("utf-8").split("\n") if line.strip(" ")):
         raise Refusal("invalid-input", "A command prompt's expected rows must not start or end with a box-drawing or "
                                        "non-space whitespace character. Nothing was sent.")
+    if prompt_shape(args.expect_kind, choice, lines) == "divider":
+        check_queue_text(lines)
     trust_path = getattr(args, "trust_path", None)
     if args.expect_kind == "modal-trust":
         if not trust_path:

@@ -211,7 +211,9 @@ Who decides:
   never Tom by default, and never an actor that is neither, unless a record says
   otherwise. On a helper-started Cursor pane, `answer --expect-kind
   modal-approval --choice y` presses only Run (once) on Cursor's command prompt,
-  once per recorded approval of that exact command; it never adds to the
+  once per recorded approval of that exact command. With commands queued
+  (`Approval N of M`), the expected text includes that row and the switch
+  hint, and `y` answers only the shown one; it never adds to the
   allowlist, runs everything, skips, or sends Enter, Tab or Escape
   ([Cursor's command prompt](../../../docs/cursor-interactive-session.md#cursors-command-prompt)).
 - Any other prompt class: do not promise that the helper can answer it until
