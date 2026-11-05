@@ -17,7 +17,7 @@ RUN mkdir -p /out/licenses/go-stdlib \
       --ignore github.com/thaynes43/dev-env --save_path=/out/licenses/go-modules \
  && cp "$(go env GOROOT)/LICENSE" /out/licenses/go-stdlib/LICENSE
 
-FROM node:24-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+FROM node:26-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072
 # D-78 requires a pinned, reviewed helper; coordinate version changes with the
 # agent guard and login smoke check. Proposals are not an automatic upgrade.
 # renovate: datasource=npm depName=@openai/codex
