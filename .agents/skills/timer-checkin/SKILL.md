@@ -196,9 +196,11 @@ a supported route (see supervised-dispatch, section 2). It holds:
   for this task, and `custody`, the history of handoffs (section 5);
 - the task identity: tracker item, PR, branch, worker and QA identities;
 - the goal and a reference to its acceptance checks;
-- `timer`: the mechanism, job ID, schedule, next check, created time and expiry;
+- `timer`: the mechanism, job ID, schedule, next check, created time, expiry and
+  the prompt (or its scope), which recovery re-creates the job from;
 - `stage`, and evidence references (paths, SHAs, CI run IDs), never raw logs;
 - `lastCheck`: time and result;
+- `lanes`: the lane table of section 6, `[{work, owner, type, nextAction, wake}]`;
 - `stop`: reason, time and evidence, once the work ends.
 
 When the work is a child in another pod, for example a headless task started
@@ -222,7 +224,8 @@ values are placeholders, `null` means not observed yet:
   },
   "deliverable": {"what": "review.md and a draft PR on the claimed branch", "acceptance": "the story's acceptance checks"},
   "deadline": {"wait": "2026-11-04T15:00:00Z", "budget": "as recorded on the story"},
-  "timer": {"mechanism": "CronCreate", "jobId": null, "schedule": "7,27,47 * * * *", "nextCheck": null, "expires": null},
+  "timer": {"mechanism": "CronCreate", "jobId": null, "schedule": "7,27,47 * * * *", "nextCheck": null, "expires": null, "prompt": null},
+  "lanes": [],
   "checkpoints": [
     {"rung": "launch accepted", "at": "2026-11-04T12:00:00Z", "evidence": "create exit 0; show -o json uid"}
   ],
@@ -244,11 +247,12 @@ destination. A failed report goes into `lastFailure` with its error; it is not
 a task failure, and the next report uses another supported route
 (supervised-dispatch, section 4, step 8).
 
-Create the job, then write its job ID into the file. The fired prompt names the
-state file and says what to do, because the context may have been compacted by
-the time it fires. For example: "Timer check-in for OP385: read
-`<state file>`, verify evidence, steer, update the state file; stop only for a
-stop reason in supervised-dispatch section 5."
+Create the job, then write its job ID and the full prompt text into `timer`. The
+fired prompt names the state file and says what to do, because the context may
+have been compacted by the time it fires. For example: "Timer check-in for
+OP385: read `<state file>`, verify evidence, steer, update the state file;
+before any stop, write the lane table (section 6) and stop only for a stop
+reason in supervised-dispatch section 5."
 
 Pick a cadence that matches what you wait for: one check near the end of an
 8-minute CI run rather than eight, 20 to 30 minutes for idle supervision. Avoid
@@ -283,7 +287,7 @@ intervals old:
    only the current custodian holds one. Report what you see to that custodian
    or to the parent.
 2. Run `CronList`. If the recorded job ID is missing, create the job again with
-   the same prompt.
+   the prompt recorded in `timer`, the latest re-scoped one.
 3. Write the new job ID and a recovery note: time, old job ID, and why.
 4. Run one check-in now instead of waiting for the next fire.
 
@@ -336,18 +340,66 @@ its pane (supervised-dispatch section 5; for example a prompt decision in
 authorized work keeps this timer, and its check-ins record nothing about the
 pending action beyond the existing hold line. If every remaining piece of work
 depends on the decision, end the timer as below, recording the stop and the
-resume trigger; the verified answer re-creates it from the state file. When the
-work ends or pauses:
+resume trigger; a verified answer delivered into this session re-creates it from the state file.
+
+Prove "every remaining piece" before you end the timer. The lane table gates
+ending it, by `CronDelete` or `ScheduleWakeup` with `stop: true`. It does not
+gate moving the timer: a custody handoff (section 5) or a re-scope (below) is not
+an end.
+
+Rows are only the authorized work this custodian has claimed, within its
+recorded scope and budget. An unclaimed tracker item or an ungroomed "next" note
+is not a lane; do not start it from here. Write the table into the state file's
+`lanes` (section 2) and mirror it on the tracker, so a successor named under
+section 5 can act if this session ends. Read the open work from the status
+record and the tracker, not from memory. Give each row its owner, its type, its next action and what will
+wake it. Types:
+
+- `none`: authorized work can proceed now. It keeps the timer: do it, or
+  dispatch it to its owner.
+- `dependency`: an event that a read-only check can see and nobody has to decide,
+  such as a CI run, an outage or a running worker. It keeps the timer at a
+  sparse cadence, with a deadline; watch the event itself with a bounded wait
+  (section 1) where one fits, rather than with model check-ins. Past the
+  deadline the stall rule applies; once no repair remains, the row becomes
+  `unresolvable`. A dependency's recovery does not lift a denial or answer a
+  decision.
+- `decision-pending`: waits, directly or through another lane, on a decision by
+  Tom, his verified coordinator or a policy owner. The row names the delivered
+  question (an AskUserQuestion delivery or an Ask ID) and a route that pushes
+  the answer into this session, such as Tom's reply or a verified coordinator's
+  `agent-run msg`. An Ask ID alone is not a push route: in v1 nothing delivers
+  an Ask's answer into the session (DESIGN-034). Never poll `ask_status`. A
+  question not yet delivered, or one with no push route, is a `none` row whose
+  next action is delivering it or arranging the route. Copy the existing hold
+  line; do not re-read the held action, its answer or its pane.
+- `permission-denied`: blocked, directly or through another lane, by an actual
+  denial, or by a latch the platform has actually set (`agent-run budget show`). Not polled, not retried.
+- Stop types: `done` (a demonstrated outcome), `paused` (a pause or cancellation
+  by Tom or his verified coordinator), `budget-exhausted` and `unresolvable`.
+
+End the timer only when every row is `decision-pending`, `permission-denied` or
+a stop type. One `none` or `dependency` row keeps it. Never end it after a number
+of quiet or failed wakes; that is the stall rule above, not a stop reason.
+
+A timer prompt scoped to one loop (one worker, one pilot) can stop only that
+loop. When that loop ends and other rows stay open, re-scope: create a new job
+whose prompt names the state file and the lane table, write its ID and full
+prompt text into `timer`, then `CronDelete` the old job. That is a re-scope, not a stop.
+
+When the work ends or pauses:
 
 1. `CronDelete` the job (or `ScheduleWakeup` with `stop: true`), then `CronList`
    to confirm it is gone. Do not keep polling during a pause.
 2. Write `stop` in the state file with the reason, time and evidence, and for a
    pause the condition that resumes it.
-3. Record the end or the pause on the tracker. A verified resume re-creates the
-   timer from the state file.
+3. Record the end or the pause on the tracker. A verified resume delivered into
+   this session re-creates the timer from the state file. If the session has
+   ended, a successor named under section 5 acts from the tracker mirror.
 
 This text is not operational proof. A real wake, re-arm, recovery and completion
 are proved by the keeper pilot (OP385), not by this file.
 
 Behavior scenarios for an evaluator: [scenarios/quiet-65-minutes.md](scenarios/quiet-65-minutes.md),
+[scenarios/one-lane-held.md](scenarios/one-lane-held.md), [scenarios/all-lanes-held.md](scenarios/all-lanes-held.md),
 and [new-pod-log-not-found.md](../supervised-dispatch/scenarios/new-pod-log-not-found.md) in supervised-dispatch.

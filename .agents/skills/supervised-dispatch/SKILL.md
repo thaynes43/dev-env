@@ -363,7 +363,8 @@ The work stops only on one of these, each backed by specific evidence:
   and outcome; that timer never inspects, re-asks or polls the pending action
   or its pane, and its check-ins record nothing about it beyond the existing
   hold line. If every remaining piece of work depends on the decision, delete
-  the timer and record the stop and the resume trigger
+  the timer and record the stop and the resume trigger, after writing the lane
+  table of [timer-checkin](../timer-checkin/SKILL.md), section 6
   ([tmux-cli-handoff](../tmux-cli-handoff/SKILL.md), step 4, is one such case).
   A decline then counts as a denial. Never bypass either.
 
