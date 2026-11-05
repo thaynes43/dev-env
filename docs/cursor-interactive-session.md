@@ -225,20 +225,33 @@ when:
    - the matched rows must be consecutive, except for rows that trim to
      nothing (borders, padding, empty rows);
    - the block must appear exactly once on the visible screen;
-   - the block must sit inside one box on the visible screen. Above it is the
-     nearest border row with a top corner (`╭`, `┌`, `╔` or `┏`), and below
-     it the nearest with a bottom corner (`╰`, `└`, `╚` or `┗`). A border
-     row has only box-drawing characters and spaces;
-   - every row between those two borders that does not trim to nothing must
-     be one of the expected lines. The expected text is the whole box, row
-     for row. A Cursor trust box puts a padding row between its rows, so
-     checking only the rows next to the block would not show a row left out.
+   - every border on the visible screen must pair into boxes. A border row
+     has only box-drawing characters and spaces, with one left and one right
+     corner. A top border runs from `╭`, `┌`, `╔` or `┏` to `╮`, `┐`, `╗` or
+     `┓`; a bottom border runs from `╰`, `└`, `╚` or `┗` to `╯`, `┘`, `╝` or
+     `┛`. Reading down the screen, each bottom border closes the latest open
+     top border, and the two must have their corners in the same columns.
+     A border that does not pair, or a row with corners of both kinds,
+     leaves the screen unclear;
+   - the prompt is bound to the **outermost** box around the block. That box
+     must hold no other box. Its rows must have nothing to the left of its
+     left corner column: a side border there means it may sit inside a box
+     whose borders are off the visible screen. `answer` does not bind a
+     prompt drawn with a box inside a box;
+   - every row inside the bound box that does not trim to nothing must be
+     one of the expected lines. The expected text is the whole box, row for
+     row. A Cursor trust box puts a padding row between its rows, so checking
+     only the rows next to the block would not show a row left out.
 
    The states:
    - If the lines are only in older rows, the state is `stale-prompt`.
-   - It is `prompt-unclear` when the block is shown twice, or no box can be
-     found around it. That covers an unboxed prompt, a box that runs off the
-     visible screen, and the other kind of corner met first.
+   - It is `prompt-unclear` when the block is shown twice, or cannot be
+     bound to one box. That covers:
+     - an unboxed prompt;
+     - a box that runs off the visible screen;
+     - borders that do not pair, such as different widths, a box left open,
+       or a box closed whose top is off the screen;
+     - a box inside the bound box, or the bound box inside another box.
    - Any other difference is `modal-mismatch`. That covers:
      - a longer target (`git status && echo EXTRA`);
      - a path with a suffix or in another case;
@@ -266,7 +279,9 @@ tmux that dropped blank rows would fail the count and be refused, and output
 that scrolls between the identity read and the capture changes the count or
 the capture and is refused too. The count cannot detect a tmux that printed
 the right number of rows out of order. A prompt drawn with a composer below it
-is refused even if it is live. When the helper cannot tell which prompt is
+is refused even if it is live. A prompt drawn with a box inside a box is
+refused, and so is any screen whose box borders do not pair, even where the
+odd border is far from the prompt. When the helper cannot tell which prompt is
 current, it refuses.
 
 ### A trust answer names one exact path
