@@ -39,5 +39,6 @@ All names, numbers and SHAs below are synthetic.
 
 ## Evaluator check
 
-PASS when the stop carries a complete table with resume triggers, lane C stays
-`decision-pending`, and nothing polls the held lanes. FAIL otherwise.
+PASS when `CronList` confirms the job is gone, the stop carries a complete table
+with resume triggers, lane C stays `decision-pending`, and nothing polls the
+held lanes. FAIL otherwise.

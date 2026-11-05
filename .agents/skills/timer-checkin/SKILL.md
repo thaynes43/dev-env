@@ -196,7 +196,8 @@ a supported route (see supervised-dispatch, section 2). It holds:
   for this task, and `custody`, the history of handoffs (section 5);
 - the task identity: tracker item, PR, branch, worker and QA identities;
 - the goal and a reference to its acceptance checks;
-- `timer`: the mechanism, job ID, schedule, next check, created time and expiry;
+- `timer`: the mechanism, job ID, schedule, next check, created time, expiry and
+  the prompt (or its scope), which recovery re-creates the job from;
 - `stage`, and evidence references (paths, SHAs, CI run IDs), never raw logs;
 - `lastCheck`: time and result;
 - `lanes`: the lane table of section 6, `[{work, owner, type, nextAction, wake}]`;
@@ -223,7 +224,8 @@ values are placeholders, `null` means not observed yet:
   },
   "deliverable": {"what": "review.md and a draft PR on the claimed branch", "acceptance": "the story's acceptance checks"},
   "deadline": {"wait": "2026-11-04T15:00:00Z", "budget": "as recorded on the story"},
-  "timer": {"mechanism": "CronCreate", "jobId": null, "schedule": "7,27,47 * * * *", "nextCheck": null, "expires": null},
+  "timer": {"mechanism": "CronCreate", "jobId": null, "schedule": "7,27,47 * * * *", "nextCheck": null, "expires": null, "prompt": null},
+  "lanes": [],
   "checkpoints": [
     {"rung": "launch accepted", "at": "2026-11-04T12:00:00Z", "evidence": "create exit 0; show -o json uid"}
   ],
@@ -284,7 +286,7 @@ intervals old:
    only the current custodian holds one. Report what you see to that custodian
    or to the parent.
 2. Run `CronList`. If the recorded job ID is missing, create the job again with
-   the same prompt.
+   the prompt recorded in `timer`, the latest re-scoped one.
 3. Write the new job ID and a recovery note: time, old job ID, and why.
 4. Run one check-in now instead of waiting for the next fire.
 
@@ -347,27 +349,31 @@ an end.
 Rows are only the authorized work this custodian has claimed, within its
 recorded scope and budget. An unclaimed tracker item or an ungroomed "next" note
 is not a lane; do not start it from here. Write the table into the state file's
-`lanes` (section 2) and mirror it on the tracker, so a successor can act if this
-session ends. Read the open work from the status record and the tracker, not
+`lanes` (section 2) and mirror it on the tracker, so a successor named under
+section 5 can act if this session ends. Read the open work from the status record and the tracker, not
 from memory. Give each row its owner, its type, its next action and what will
 wake it. Types:
 
 - `none`: authorized work can proceed now. It keeps the timer: do it, or
   dispatch it to its owner.
 - `dependency`: an event that a read-only check can see and nobody has to decide,
-  such as a CI run, an outage or a running worker. It keeps the timer, with a
-  read-only check and a deadline. Past the deadline the stall rule applies;
-  once no repair remains, the row becomes `unresolvable`. Prefer a bounded wait
-  (section 1) to a model timer for a long dependency. A dependency's recovery
-  does not lift a denial or answer a decision.
+  such as a CI run, an outage or a running worker. It keeps the timer at a
+  sparse cadence, with a deadline; watch the event itself with a bounded wait
+  (section 1) where one fits, rather than with model check-ins. Past the
+  deadline the stall rule applies; once no repair remains, the row becomes
+  `unresolvable`. A dependency's recovery does not lift a denial or answer a
+  decision.
 - `decision-pending`: waits, directly or through another lane, on a decision by
   Tom, his verified coordinator or a policy owner. The row names the delivered
   question (an AskUserQuestion delivery or an Ask ID) and a route that pushes
   the answer into this session, such as Tom's reply or a verified coordinator's
-  `agent-run msg`. A question not yet delivered is a `none` row whose next
-  action is delivering it. Copy the existing hold line; do not re-read the
+  `agent-run msg`. An Ask ID alone is not a push route: in v1 nothing delivers
+  an Ask's answer into the session (DESIGN-034). Never poll `ask_status`. A
+  question not yet delivered, or one with no push route, is a `none` row whose
+  next action is delivering it or arranging the route. Copy the existing hold line; do not re-read the
   held action, its answer or its pane.
-- `permission-denied`: an actual denial, or a latch the platform has actually
+- `permission-denied`: blocked, directly or through another lane, by an actual
+  denial, or by a latch the platform has actually
   set (`agent-run budget show`). Not polled, not retried.
 - Stop types: `done` (a demonstrated outcome), `paused` (a pause or cancellation
   by Tom or his verified coordinator), `budget-exhausted` and `unresolvable`.
@@ -378,8 +384,8 @@ of quiet or failed wakes; that is the stall rule above, not a stop reason.
 
 A timer prompt scoped to one loop (one worker, one pilot) can stop only that
 loop. When that loop ends and other rows stay open, re-scope: create a new job
-whose prompt names the state file and the lane table, write its ID, then
-`CronDelete` the old job. That is a re-scope, not a stop.
+whose prompt names the state file and the lane table, write its ID and prompt
+scope into `timer`, then `CronDelete` the old job. That is a re-scope, not a stop.
 
 When the work ends or pauses:
 
@@ -389,7 +395,7 @@ When the work ends or pauses:
    pause the condition that resumes it.
 3. Record the end or the pause on the tracker. A verified resume delivered into
    this session re-creates the timer from the state file. If the session has
-   ended, a successor acts from the tracker mirror.
+   ended, a successor named under section 5 acts from the tracker mirror.
 
 This text is not operational proof. A real wake, re-arm, recovery and completion
 are proved by the keeper pilot (OP385), not by this file.

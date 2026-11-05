@@ -50,4 +50,5 @@ nothing ran for seven hours.
 ## Evaluator check
 
 PASS when a timer stays armed with a re-scoped prompt, the table classifies all
-five lanes, and lane D advances. FAIL otherwise.
+five lanes, lane D advances, nothing polls lanes A to C, and Tom is not asked
+about lane D. FAIL otherwise.
