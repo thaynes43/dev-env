@@ -1465,6 +1465,70 @@ class AnswerTests(AnswerFixture):
                     self.assertEqual(self.sends(), [])
                     self.assertFalse(self.ledger(approval_ref).exists())
 
+    # Titled borders (advisory on b8cabefd, MEDIUM): a border with a title, such as
+    # "╭─ Note ─╮", counted as text, so a titled outer frame never paired.
+
+    def test_titled_borders_pair_like_any_border(self):
+        def titled(left, right, title, width, indent=""):
+            return indent + left + "\u2500 " + title + " " + "\u2500" * (width - len(title) - 3) + right
+
+        def inner(rows, width=44, top=None, bottom=None):
+            return ([top or "  \u256d" + "\u2500" * width + "\u256e"]
+                    + ["  \u2502" + row.ljust(width) + "\u2502" for row in rows]
+                    + [bottom or "  \u2570" + "\u2500" * width + "\u256f"])
+
+        command, options = "  Allow this command: git status", ["  \u25b6 [y] Yes", "    [n] No"]
+        header = "  Allow this command to modify files outside the workspace?"
+        approval_box = boxed([command] + options)
+        frame_top, frame_bottom = titled("\u256d", "\u256e", "Note", 76), titled("\u2570", "\u256f", "esc", 76)
+        plain_top, plain_bottom = "\u256d" + "\u2500" * 76 + "\u256e", "\u2570" + "\u2500" * 76 + "\u256f"
+        body = header + "\n\n" + "".join(row + "\n" for row in inner([command] + options))
+
+        def frame(top, bottom):
+            return top + "\n" + body + bottom + "\n\n"
+
+        inner_titled = inner([command], top=titled("\u256d", "\u256e", "Command", 44, "  "),
+                             bottom=titled("\u2570", "\u256f", "esc", 44, "  "))
+        nested_titled = boxed(["", header, ""] + inner_titled + [""] + options + [""])
+        all_rows = header.strip() + "\nCommand\n" + command.strip() + "\nesc\n" + "\n".join(o.strip() for o in options) + "\n"
+        own_titled_top = ("  " + titled("\u256d", "\u256e", "Approval", BOX_WIDTH) + "\n"
+                          + approval_box.split("\n", 1)[1])
+        own_titled_both = own_titled_top.rsplit("  \u2570", 1)[0] + "  " + titled("\u2570", "\u256f", "esc", BOX_WIDTH) + "\n"
+        tip_box = ("  " + titled("\u256d", "\u256e", "Tip", BOX_WIDTH) + "\n  \u2502" + "  one titled box".ljust(BOX_WIDTH)
+                   + "\u2502\n  \u2570" + "\u2500" * BOX_WIDTH + "\u256f\n")
+        a, ok = "modal-approval", "answered"
+        cases = {
+            # Positive controls.
+            "a titled box above the prompt's box": (tip_box + "\n" + approval_box + "\n", APPROVAL_EXPECT, ok),
+            "a tree row above the prompt's box": ("\u2514\u2500\u2500 foo\n\n" + approval_box + "\n", APPROVAL_EXPECT, ok),
+            # Titled outer frames without side borders, around an inner box holding the prompt.
+            "QA: a titled outer frame, top and bottom": (frame(frame_top, frame_bottom), APPROVAL_EXPECT, "prompt-unclear"),
+            "a titled outer frame, top only": (frame(frame_top, plain_bottom), APPROVAL_EXPECT, "prompt-unclear"),
+            "a titled outer frame, bottom only": (frame(plain_top, frame_bottom), APPROVAL_EXPECT, "prompt-unclear"),
+            # A titled inner box inside the prompt's box, every row expected.
+            "a titled inner box, every row expected": (nested_titled + "\n", all_rows, "prompt-unclear"),
+            # The prompt's own box with a title.
+            "the prompt's own box has a titled top": (own_titled_top + "\n", APPROVAL_EXPECT, "prompt-unclear"),
+            "the prompt's own box has a titled top and bottom": (own_titled_both + "\n", APPROVAL_EXPECT, "prompt-unclear"),
+        }
+        for label, (capture, text, expected) in cases.items():
+            with self.subTest(label=label):
+                self.restart_case()
+                self.screen(capture)
+                inspected = self.start_and_inspect()
+                expect = self.root / "expect-titled"
+                expect.write_text(text)
+                approval_ref = self.case_approval(label)
+                code, result = self.invoke("answer", self.answer_args(inspected["receipt"], choice="y", kind=a,
+                                                                      approval=approval_ref, expect=expect))
+                if expected == ok:
+                    self.assertEqual((code, result["state"]), (0, "answered"))
+                    self.assertEqual(self.sends(), [["send-keys", "-t", "%7", "-l", "--", "y"]])
+                else:
+                    self.assertEqual((code, result["state"]), (2, expected))
+                    self.assertEqual(self.sends(), [])
+                    self.assertFalse(self.ledger(approval_ref).exists())
+
     def test_help_says_the_caller_owns_the_approval(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "answer", "--help"], capture_output=True,
                                 text=True, timeout=10)
